@@ -1129,8 +1129,8 @@ pub(crate) fn is_anonymous_core(payload: &Value) -> bool {
 /// Whether this machine's `gh` is anonymous, read from the exempt
 /// `rate_limit` endpoint. An unreadable answer is not anonymous: it keeps
 /// the existing refusal handling.
-pub(crate) fn local_gh_anonymous() -> bool {
-    let out = std::process::Command::new("gh")
+pub(crate) fn local_gh_anonymous(gh: &str) -> bool {
+    let out = std::process::Command::new(gh)
         .args(["api", "rate_limit"])
         .output();
     match out {

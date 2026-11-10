@@ -419,13 +419,6 @@ pub(crate) fn iso_utc(epoch_secs: i64) -> String {
 /// read) spent it is a memory, not a measurement - on 2026-10-25 the stale
 /// positive held every real core refusal open as secondary for hours, and
 /// no core gate ever engaged. (The `_quota.record_refusal` port.)
-pub(crate) fn record_refusal(stderr: &str) {
-    if !stderr.contains("HTTP 403") && !stderr.contains("HTTP 429") {
-        return;
-    }
-    record_refusal_as(stderr, crate::gh_budget::local_gh_anonymous());
-}
-
 /// The writer with the anonymity verdict supplied. An anonymous machine
 /// (no token, so GitHub's 60-request bucket) refuses for a local reason
 /// only: the refusal names this machine's keychain, not the account, so it
@@ -629,7 +622,9 @@ pub(crate) fn execute_graphql(
     };
     if result.returncode != 0 && result.stderr.to_lowercase().contains("rate limit") {
         // Fail toward backoff, and never record a drained primary bucket.
-        record_refusal(&result.stderr);
+        // The anonymity probe runs the resolved `gh`, never bare `gh`: this
+        // frame holds the quota flock, and bare `gh` re-enters the proxy.
+        record_refusal_as(&result.stderr, crate::gh_budget::local_gh_anonymous(&gh));
     }
     result
 }
