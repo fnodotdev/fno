@@ -339,6 +339,8 @@ pub mod vt;
 #[cfg(feature = "full")]
 pub mod web;
 #[cfg(feature = "full")]
+pub(crate) mod web_agent;
+#[cfg(feature = "full")]
 pub(crate) mod web_answer;
 #[cfg(feature = "full")]
 pub(crate) mod web_hq;

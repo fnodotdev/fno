@@ -1,12 +1,14 @@
 fno doctor: review invocations: no event journal; no sent attempt to lose
+fno doctor: source checkout sync is unknown (source checkout not resolved); freshness against origin/main is unmeasured.
 fno doctor: status unknown (no source checkout to compare against).
 fno doctor: rust fno-agents binary: not found (cargo leg not applicable).
 fno doctor: mux front door: crates/fno not cargo-installed; bare `fno` will not launch the mux. Run `fno doctor update` (or cargo install --path crates/fno).
+fno doctor: gh proxy: <PINHOME>/.fno/install/bin/github-cli/gh is not an fno wrapper; a raw gh or a stale copy sits in the shim dir. Run `fno doctor update` (or run fno; the front door refreshes it).
 fno doctor: control-plane arms readout unknown (fno-agents binary not found); staleness is unmeasured.
 fno doctor: post-merge sync UNKNOWN - could not read merge state (gh unavailable or unauthenticated); run `gh auth status`.
 fno doctor: evals UNKNOWN (no eval history); run `fno doctor evals run --tier regression -y`.
 fno doctor: LaunchAgent health: not applicable (no launchctl on this host).
-fno doctor: think_spawn.enabled is OFF (idle); nothing is happening. Run `fno config set think_spawn.enabled true` to enable.
 fno doctor: plugin stage freshness unknown (no cargo fno-agents binary to run the stage check).
 fno doctor: plugin hook probe skipped ($SHELL unset).
 fno doctor: codex app-server daemon not running (no daemon listening on its control socket); live mail to codex sessions demotes to durable. Start it BEFORE the codex TUI: `codex app-server daemon start` (or `codex app-server daemon bootstrap` for durable SSH-driven use). A session launched before the daemon cannot receive live mail without a restart.
+fno doctor: Claude Code Auto Mode rules are missing from <PINHOME>/.claude/settings.json. Fix: `fno doctor --fix` or `fno config setup run --only claude-auto-mode`.

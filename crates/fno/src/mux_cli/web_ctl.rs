@@ -18,6 +18,18 @@ use crate::web::recorded_pid_is_live;
 pub fn web(op: crate::cli_args::WebOp, args: &[OsString], _env_session: Option<&str>) -> i32 {
     match op {
         crate::cli_args::WebOp::Reap(_) => web_reap(args),
+        crate::cli_args::WebOp::InstallAgent(_) => match crate::web_agent::parse_install_args(args)
+        {
+            Ok(a) => crate::web_agent::install(&a),
+            Err(e) => {
+                eprintln!("fno mux web install-agent: {e}");
+                EXIT_USAGE
+            }
+        },
+        crate::cli_args::WebOp::UninstallAgent(_) => {
+            let json = args.iter().any(|a| a == std::ffi::OsStr::new("--json"));
+            crate::web_agent::uninstall(json)
+        }
     }
 }
 
@@ -26,7 +38,7 @@ pub fn web(op: crate::cli_args::WebOp, args: &[OsString], _env_session: Option<&
 /// every resolved address until one succeeds, so a live bridge can sit on the
 /// second of them. The whole question is bounded in time, not by an address
 /// count - a many-address hostname must not hide its listener past a cap.
-fn bridge_alive(bind: &str, port: u16) -> bool {
+pub(crate) fn bridge_alive(bind: &str, port: u16) -> bool {
     use std::net::ToSocketAddrs;
     use std::time::Instant;
     let Ok(addrs) = (bind, port).to_socket_addrs() else {
@@ -84,18 +96,11 @@ fn reap_partition(dir: &std::path::Path) -> (Vec<String>, Vec<String>, Vec<Strin
             unreadable.push(session);
             continue;
         };
-        let bind = state
-            .get("bind")
-            .and_then(|v| v.as_str())
-            .unwrap_or("127.0.0.1");
-        let Some(port) = state
-            .get("port")
-            .and_then(|v| v.as_u64())
-            .and_then(|p| u16::try_from(p).ok())
-        else {
+        let Ok(marker) = serde_json::from_value::<crate::web::BridgeMarker>(state.clone()) else {
             unreadable.push(session);
             continue;
         };
+        let (bind, port) = (&marker.bind, marker.port);
         // The marker is written only after the listener binds, so a refused
         // port means the listener is gone: this is a corpse. The pid record
         // says so a rung earlier: once the recorded pid is gone or was

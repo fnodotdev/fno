@@ -22,6 +22,17 @@ pub(crate) fn groom_label() -> String {
     format!("sh.fno.groom.{}", launchd_suffix())
 }
 
+/// This HOME's web-bridge launchd label: keeps `fno mux serve --web
+/// --attention-api` up across reboots.
+pub(crate) fn web_bridge_label() -> String {
+    format!("sh.fno.web-bridge.{}", launchd_suffix())
+}
+
+/// The web-bridge plist's fixed filename: the per-HOME LaunchAgents
+/// directory separates files; only the Label inside carries the suffix
+/// (the groom convention).
+pub(crate) const WEB_BRIDGE_PLIST_FILENAME: &str = "sh.fno.web-bridge.plist";
+
 /// This HOME's launchd label suffix: 8 hex chars of sha256(HOME). A missing
 /// or empty HOME reads as `00000000` and logs nothing.
 ///
