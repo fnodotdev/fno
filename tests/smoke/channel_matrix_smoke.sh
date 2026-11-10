@@ -171,9 +171,9 @@ shared_smoke() {
     miss "version" "rc=$RC out: $(printf '%s' "$OUT" | tail -1)"
   fi
 
-  # The agents binary need not sit beside the front door: the cargo channel
-  # lands it in the uv tool bin instead. Search every candidate; fall back to
-  # beside-the-front-door so the miss message names the expected spot.
+  # The agents binary need not sit beside the front door. Search every
+  # candidate; fall back to beside-the-front-door so the miss message names
+  # the expected spot.
   for d in "$@"; do
     if [ -x "$d/fno-agents" ]; then
       agents_bin="$d/fno-agents"
@@ -568,17 +568,14 @@ row_cargo() {
   # lands in scratch instead of the image's own store.
   export CARGO_HOME="$BASE/cargo-home"
   mkdir -p "$CARGO_HOME"
-  run_capture cargo install fno
+  # The front door and the sibling binaries are two crates; one crate alone
+  # leaves `fno-agents` missing and every agents command refusing to exec.
+  run_capture cargo install fno fno-agents
   if [ "$RC" -ne 0 ]; then
     miss "cargo-install" "rc=$RC: $(printf '%s' "$OUT" | tail -2 | tr '\n' ' ')"
     return 0
   fi
-  # cargo install lands the front door here, without fno-agents. `fno backlog`
-  # never provisions, so warm up once, and keep $HOME/.local/bin on PATH for
-  # the front door's bare-name sibling fallback.
-  export PATH="$HOME/.local/bin:$CARGO_HOME/bin:$PATH"
-  run_capture "$CARGO_HOME/bin/fno" config get config.review.posture
-  shared_smoke "$CARGO_HOME/bin" "$HOME/.local/bin"
+  shared_smoke "$CARGO_HOME/bin"
 }
 
 row_skills_sh() {

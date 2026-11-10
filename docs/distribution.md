@@ -21,7 +21,7 @@ exercised for the Phase 7+ deferral.
 
 ### Crate names
 
-`fno-agents` (crates.io) and `fno` (PyPI) are the real publish targets. They live in **separate registries** and do not collide with each other. The supervisor crate is `fno-agents`. The front door crate `fno` publishes on crates.io too, for `cargo install fno`.
+`fno-agents` (crates.io) and `fno` (PyPI) are the real publish targets. They live in **separate registries** and do not collide with each other. The supervisor crate is `fno-agents`. The front door crate `fno` publishes on crates.io too, for `cargo install fno fno-agents`. That command installs the four binaries into one bin dir.
 
 ## The bridge wheel
 

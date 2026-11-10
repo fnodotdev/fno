@@ -17,7 +17,7 @@ fn bootstrap_command(program: impl AsRef<OsStr>) -> Command {
 }
 
 /// The remedy for a missing or broken sibling binary.
-const NO_SIBLING_REMEDY: &str = "run fno update, or set FNO_AGENTS_BIN.";
+const NO_SIBLING_REMEDY: &str = "run fno update, or set FNO_AGENTS_BIN. A cargo install completes with: cargo install fno-agents";
 
 /// Forward the `fno backlog ...` argv to the sibling Rust binary's grouped
 /// dispatcher. One exec, stdio inherited, signals and exit codes pass
