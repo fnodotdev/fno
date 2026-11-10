@@ -802,8 +802,99 @@ pub(super) fn deliver_live(
     from_name: &str,
     sender_entry: Option<&Value>,
     reason_out: &mut Vec<String>,
-    _family1_state: &str,
+    family1_state: &str,
 ) -> DeliveryState {
+    deliver_live_lane(
+        row,
+        wrapped,
+        from_name,
+        sender_entry,
+        reason_out,
+        family1_state,
+    )
+    .0
+}
+
+/// The pane inject's pre-byte refusals the raw door may retry. Never
+/// `option-prompt` (a submit picks the default), the bus-only policy, a
+/// refused body, `not-confirmed` (the bytes may have landed) or a missing ref.
+pub(super) fn pane_raw_retry_safe(reason: &str) -> bool {
+    matches!(
+        reason,
+        "pane-blocked"
+            | "pane-not-ready"
+            | "not-injectable"
+            | "probe-unavailable"
+            | "unreadable"
+            | "io-error"
+    )
+}
+
+/// One fallback after the pane lane misses: the raw door types the wrapped
+/// body once. Returns the state and the receipt status; the status is empty
+/// when no fallback ran, so the caller prints its usual receipt.
+pub(super) fn pane_fallback(
+    kind: LaneKind,
+    state: DeliveryState,
+    pane: i64,
+    raw_door: impl FnOnce() -> bool,
+) -> (DeliveryState, String) {
+    let retry = kind == LaneKind::Pane
+        && !state.reached()
+        && state.reason().is_some_and(pane_raw_retry_safe);
+    if !retry || !raw_door() {
+        return (state, String::new());
+    }
+    (
+        DeliveryState::Injected,
+        format!("typed pane-raw (pane {pane})"),
+    )
+}
+
+fn pane_raw_send(row: &Value, wrapped: &str) -> bool {
+    let session = row
+        .pointer("/mux/session")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let pane = row
+        .pointer("/mux/pane_id")
+        .and_then(Value::as_i64)
+        .unwrap_or(-1);
+    if session.is_empty() || pane < 0 {
+        return false;
+    }
+    let front = crate::mail_remote::fno_binary();
+    let pane = pane.to_string();
+    let argv: Vec<String> = [
+        front.to_string_lossy().as_ref(),
+        "mux",
+        "pane",
+        "send",
+        "--server",
+        session,
+        pane.as_str(),
+        "--stdin",
+        "--raw",
+        "--submit",
+        "--source",
+        "mail",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    run_captured(&argv, wrapped, false, 30.0).status == Some(0)
+}
+
+/// `deliver_live` plus the fallback receipt status (empty when the chosen
+/// lane answered alone).
+pub(super) fn deliver_live_lane(
+    row: &Value,
+    wrapped: &str,
+    from_name: &str,
+    sender_entry: Option<&Value>,
+    reason_out: &mut Vec<String>,
+    _family1_state: &str,
+) -> (DeliveryState, String) {
     // Bus-only bounds EVERY live transport below, this fn's first gate.
     let policy = crate::mail_hold::gate(
         &opt_str_field(row, "name").unwrap_or_default(),
@@ -812,7 +903,7 @@ pub(super) fn deliver_live(
     );
     if !policy.deliver {
         reason_out.push(BUS_ONLY_POLICY.to_string());
-        return DeliveryState::failed(BUS_ONLY_POLICY);
+        return (DeliveryState::failed(BUS_ONLY_POLICY), String::new());
     }
     let cx = LiveCtx {
         row,
@@ -833,10 +924,15 @@ pub(super) fn deliver_live(
             }
         })
         .collect();
-    match first_applicable(&lanes, &target) {
-        Some(lane) => lane.deliver(wrapped, &target, reason_out),
-        None => DeliveryState::failed("no-lane"),
-    }
+    let Some(lane) = first_applicable(&lanes, &target) else {
+        return (DeliveryState::failed("no-lane"), String::new());
+    };
+    let state = lane.deliver(wrapped, &target, reason_out);
+    let pane = row
+        .pointer("/mux/pane_id")
+        .and_then(Value::as_i64)
+        .unwrap_or(-1);
+    pane_fallback(lane.kind(), state, pane, || pane_raw_send(row, wrapped))
 }
 
 /// What a lane needs from the send beside the wrapped text.
@@ -1206,6 +1302,9 @@ pub(super) struct DispatchSendResult {
     pub(super) to_session: Option<String>,
     /// What the live lane reached; `queued` when no live lane ran.
     pub(super) state: DeliveryState,
+    /// The receipt status when the raw pane door carried the send after the
+    /// mail lane missed (`typed pane-raw (pane N)`); `None` otherwise.
+    pub(super) fallback_receipt: Option<String>,
 }
 
 /// Python `_recipient_identity_key`: every field that can select or replace a
@@ -1539,6 +1638,7 @@ pub(super) fn dispatch_send_locked(
     let mut live_attempted = false;
 
     let mut live_state = DeliveryState::Queued;
+    let mut fallback_receipt: Option<String> = None;
     let mut delivery = "durable".to_string();
     let mut demotion_notice: Option<String> = None;
     // A vetoed live lane names the reading; bus-only outranks it below.
@@ -1620,7 +1720,7 @@ pub(super) fn dispatch_send_locked(
         };
         if stage_ok {
             live_attempted = true;
-            let state = deliver_live(
+            let (state, fallback) = deliver_live_lane(
                 &existing,
                 &wrapped,
                 from_name,
@@ -1628,6 +1728,9 @@ pub(super) fn dispatch_send_locked(
                 &mut live_reasons,
                 &family1_state,
             );
+            if !fallback.is_empty() {
+                fallback_receipt = Some(fallback);
+            }
             crate::mail_receipt::record(&msg_id, &state, &mail_ctx.from_, &recipient_for_row);
             let delivered = state.reached();
             live_state = state;
@@ -1715,6 +1818,7 @@ pub(super) fn dispatch_send_locked(
         to_harness: opt_str_field(&existing, "harness"),
         to_session: opt_str_field(&existing, "harness_session_id"),
         state: live_state,
+        fallback_receipt,
     })
 }
 
@@ -1893,6 +1997,7 @@ pub(super) fn dispatch_send_lock_timeout_locked(
         to_harness: opt_str_field(&timeout_entry, "harness"),
         to_session: opt_str_field(&timeout_entry, "harness_session_id"),
         state: DeliveryState::Queued,
+        fallback_receipt: None,
     })
 }
 
@@ -2104,5 +2209,64 @@ mod resolve_pane_entry_tests {
                 super::resolve_pane_entry(None, Some("01a1ad25-f04f-7220-8b8e-6c41a3bad0dd"), None);
             assert!(by_full.is_some(), "a full id still resolves");
         });
+    }
+}
+
+#[cfg(test)]
+mod mail_addr_fallback_tests {
+    use super::*;
+
+    /// A pane worker whose mail inject misses with a retry-safe reason: the
+    /// raw door types it once and the receipt names the lane (AC8-HP).
+    #[test]
+    fn mail_addr_pane_miss_falls_back_to_raw_with_lane_in_receipt() {
+        let mut typed = 0;
+        let (state, receipt) = pane_fallback(
+            LaneKind::Pane,
+            DeliveryState::failed("pane-not-ready"),
+            3,
+            || {
+                typed += 1;
+                true
+            },
+        );
+        assert_eq!(typed, 1, "the raw door types exactly once");
+        assert!(state.reached(), "{state:?}");
+        assert_eq!(receipt, "typed pane-raw (pane 3)");
+        assert!(fno_mail::state::receipt_reached(&receipt), "{receipt}");
+        // A raw door that also misses keeps the lane's own miss.
+        let (state, receipt) =
+            pane_fallback(LaneKind::Pane, DeliveryState::failed("io-error"), 3, || {
+                false
+            });
+        assert_eq!(state.reason(), Some("io-error"));
+        assert!(receipt.is_empty());
+    }
+
+    /// An option prompt, the bus-only policy, an unconfirmed type and a
+    /// non-pane lane never reach the raw door; the miss stands (AC9-ERR).
+    #[test]
+    fn mail_addr_option_prompt_never_falls_back() {
+        for reason in [
+            "option-prompt",
+            BUS_ONLY_POLICY,
+            "not-confirmed",
+            "unsafe-text",
+            "no-pane-ref",
+        ] {
+            let (state, receipt) =
+                pane_fallback(LaneKind::Pane, DeliveryState::failed(reason), 3, || {
+                    panic!("{reason} must never reach the raw door")
+                });
+            assert_eq!(state.reason(), Some(reason));
+            assert!(receipt.is_empty(), "{reason}: {receipt}");
+        }
+        let (state, _) = pane_fallback(
+            LaneKind::ClaudeSwitchboard,
+            DeliveryState::failed("pane-not-ready"),
+            3,
+            || panic!("only the pane lane falls back to the raw door"),
+        );
+        assert_eq!(state.reason(), Some("pane-not-ready"));
     }
 }

@@ -1016,6 +1016,7 @@ mod project_demotion_tests {
             to_harness: None,
             to_session: None,
             state: DeliveryState::Queued,
+            fallback_receipt: None,
         };
         let door = demotion_door_args(&result, "projA", None);
         let pos = door
@@ -1459,7 +1460,10 @@ pub(super) fn run_dispatch_then_name_lane(
                         &result.msg_id,
                         subject,
                         token,
-                        &fno_mail::state::receipt(&result.state, ""),
+                        &result
+                            .fallback_receipt
+                            .clone()
+                            .unwrap_or_else(|| fno_mail::state::receipt(&result.state, "")),
                     )
                 );
                 return 0;
