@@ -40,7 +40,7 @@ A session with no role over the scope does not lead. It runs no check-in, spawns
 
 - Read: `fno backlog get <scope>` and `fno backlog find "<words>"`. `fno agents org --json` lists the roles on this machine only.
 - Report: `fno backlog note <scope> "<what you saw>" --quiet`. With a shared backlog, the note reaches every machine at the next sync.
-- Mail a named peer: `fno agents mail send <name> "<text>"` on this machine. Use `fno agents mail send <name>@<host> "<text>"` for a peer on another machine. Run `fno agents registry register` first, so the peer can answer.
+- Mail a named peer: `fno agents mail send <session-id> "<text>"` on this machine. Use `fno agents mail send <session-id>@<host> "<text>"` for a peer on another machine. Run `fno agents registry register` first, so the peer can answer.
 
 An empty org chart on a machine that shares its backlog means no role on this machine. Roles, the registry, mail and questions stay on one machine. A lead on another machine cannot grant a role here. The grant comes from a lead on this machine. Mail that lead, and never hand the user a grant line.
 
@@ -155,7 +155,7 @@ A `WAITING ON APPROVAL` line is an action item, not a status line. Answer it the
 
 Never answer blind: the check-in line is evidence a prompt is up, never proof of what it asks. If the pane read shows text the line did not capture (a question you cannot judge from the head), read the pane before sending keys.
 
-To pause or redirect a running worker, use `fno agents mail ask <name> "<instruction>"` (or mail). Never steer with `fno agents session stop`: on claude it ends the session, and the worker reads Done.
+To pause or redirect a running worker, use `fno agents mail ask <session-id> "<instruction>"` (or mail). Never steer with `fno agents session stop`: on claude it ends the session, and the worker reads Done.
 
 ### A finding starts a new epic
 

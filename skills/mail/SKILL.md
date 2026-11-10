@@ -81,7 +81,7 @@ the matching section. Messaging is free, so **nothing here confirms** (contrast
 
 | Command | Routes to | Needs normalize | Cost |
 |------|-----------|-----------------|------|
-| `send <name> "<body>"` | `fno agents mail send <name> "<body>"` | yes (refuse empty) | free |
+| `send <session-id> "<body>"` | `fno agents mail send <session-id> "<body>"` | yes (refuse empty) | free |
 | `send project <X> "<body>"` | `fno agents mail send --to-project <X> "<body>"` | yes (one live peer) | free |
 | `reply <msg-id> "<body>"` | `fno agents mail reply --to <msg-id> --body "<body>"` | yes (refuse empty) | free |
 | `unread [name]` | `fno agents mail unread [-n <name>]` | no (read) | free |

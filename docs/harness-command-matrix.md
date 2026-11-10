@@ -133,7 +133,7 @@ Retired creation commands (each prints a pointer and exits non-zero, never a sil
 | Command | claude | codex | gemini | agy | opencode | What it does |
 |------|:---:|:---:|:---:|:---:|:---:|---|
 | `ask <name> <msg>` | id-bearing rows | id-bearing rows | id-bearing rows | no | no | Continue a registered session. A mux follow-up requires a pinned submit contract. Claude has one. Codex does not. Unsupported panes receive no bytes. |
-| `fno agents mail send <name> "<text>"` | yes | daemon or durable | yes | mux pane | mux pane | Send asynchronously. Confirmed live delivery skips the bus. Unsupported or unconfirmed panes use the durable queue. |
+| `fno agents mail send <session-id> "<text>"` | yes | daemon or durable | yes | mux pane | mux pane | Send asynchronously. Confirmed live delivery skips the bus. Unsupported or unconfirmed panes use the durable queue. |
 | `watch <name>` | yes | no | no | no | no | Observe a held stream-json thread's turns in real time. claude-only transport. |
 | `peek <name>` | yes | yes | mux scrollback or status | mux scrollback or status | mux scrollback or status | Read-only. Pane rows use mux scrollback. Paneless rows use transcript or normalized status events. |
 | `attach <name>` | yes | no | no | no | no | Re-exec your terminal into the running session's own TUI (`claude attach <short_id>`). Requires the session to be **live**. |
