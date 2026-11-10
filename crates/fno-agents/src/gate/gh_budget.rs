@@ -1130,6 +1130,10 @@ pub(crate) fn is_anonymous_core(payload: &Value) -> bool {
 /// `rate_limit` endpoint. An unreadable answer is not anonymous: it keeps
 /// the existing refusal handling.
 pub(crate) fn local_gh_anonymous(gh: &str) -> bool {
+    // The probe reads the exempt rate_limit endpoint with the resolved gh.
+    // It runs under the quota lock, and admission would refuse the very read
+    // that diagnoses a held budget, so it spawns directly.
+    #[allow(clippy::disallowed_methods)]
     let out = std::process::Command::new(gh)
         .args(["api", "rate_limit"])
         .output();
