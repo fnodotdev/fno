@@ -126,6 +126,13 @@ impl fmt::Display for SessionId {
 pub struct ShortForm(String);
 
 impl ShortForm {
+    /// The display form of a short id another store already minted (a
+    /// daemon row's head, a registry short id). No parse exists: a short
+    /// form never converts back to a full id.
+    pub fn from_head(raw: &str) -> ShortForm {
+        ShortForm(raw.to_string())
+    }
+
     /// The display form.
     pub fn as_str(&self) -> &str {
         &self.0

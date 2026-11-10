@@ -1,5 +1,8 @@
 // Ported from the single-file draft of send.rs; split by question.
 use super::*;
+use crate::claude_roster::ClaudeAgentRow;
+use fno_mail::directory::Resolution;
+use fno_mail::session::{SessionId, ShortForm};
 
 /// 32-hex or dashed-uuid shape.
 /// `pub(crate)`: the reply leaf's provenance arm reads it.
@@ -319,7 +322,7 @@ fn daemon_list_rows() -> (Vec<crate::claude_roster::ClaudeAgentRow>, bool) {
         return match std::fs::read(&path)
             .ok()
             .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
-            .and_then(|doc| parse_agents_value(&doc))
+            .and_then(|doc| Some(parse_agents_value(&doc)))
         {
             Some(rows) => (rows, true),
             None => (Vec::new(), false),
@@ -632,7 +635,7 @@ pub(crate) fn near_from_daemon_rows(
             if !spelling_near(name, token) {
                 return None;
             }
-            Some((ShortForm(row.short_id.clone()), name.to_string()))
+            Some((ShortForm::from_head(&row.short_id), name.to_string()))
         })
         .collect()
 }
@@ -645,10 +648,10 @@ pub(crate) fn near_from_registry_rows(token: &str, rows: &[Value]) -> Vec<(Short
             let sid = opt_str_field(row, "short_id")?;
             let title =
                 opt_str_field(row, "harness_title").or_else(|| opt_str_field(row, "name"))?;
-            if !spelling_near(title, token) {
+            if !spelling_near(&title, token) {
                 return None;
             }
-            Some((ShortForm(sid.to_string()), title.to_string()))
+            Some((ShortForm::from_head(&sid), title))
         })
         .collect()
 }
