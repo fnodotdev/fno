@@ -915,8 +915,10 @@ pub fn native_lane(params: &Value, name: &str, route: Option<&Route>, cwd: &Path
         );
         return None;
     };
+    // The native lane is claude-only (the ask below hardcodes the harness),
+    // so the seed default is the claude one: `auto`, not the blanket bypass.
     let permission = if crate::spawn_admission::is_command_seed(Some(message)) {
-        crate::backlog::advance_dispatch::SPAWN_PERMISSION_BUILTIN
+        crate::backlog::advance_dispatch::spawn_permission_default("claude")
     } else {
         ""
     };

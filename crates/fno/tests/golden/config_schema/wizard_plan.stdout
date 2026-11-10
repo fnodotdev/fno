@@ -1591,7 +1591,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "",
-      "doc": "Enable the bg-session recovery sweep: provider failover on swap-class deaths plus close-surfacing for finished-but-lingering sessions (rides the pr_watch tick). Assumes bypass workers (the config.agents.defaults.permission_mode built-in for autonomous dispatch); a non-bypass worker cannot run autonomously and is not resumed."
+      "doc": "Enable the bg-session recovery sweep: provider failover on swap-class deaths plus close-surfacing for finished-but-lingering sessions (rides the pr_watch tick). Assumes bypass workers (the config.agents.defaults.permission_mode built-in for autonomous dispatch, answered per harness: claude rides auto, every other harness rides bypassPermissions); a non-bypass worker cannot run autonomously and is not resumed."
     },
     {
       "path": "recovery.watchdog.enabled",

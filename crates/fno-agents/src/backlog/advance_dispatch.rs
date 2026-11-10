@@ -935,8 +935,8 @@ fn resolve_node_spawn_inner(
             )));
         }
     }
-    // Explicit permission_mode > the operator's spawn default > the builtin
-    // unattended answer.
+    // Explicit permission_mode > the operator's spawn default > the
+    // per-harness unattended answer.
     let mode = crate::agents_config::config_lookup(
         Path::new(&cfg_root),
         &["agents", "defaults", "permission_mode"],
@@ -944,7 +944,7 @@ fn resolve_node_spawn_inner(
     .and_then(|v| v.as_str().map(str::to_string))
     .map(|s| s.trim().to_string())
     .filter(|s| !s.is_empty())
-    .unwrap_or_else(|| SPAWN_PERMISSION_BUILTIN.to_string());
+    .unwrap_or_else(|| spawn_permission_default(&resolved.harness).to_string());
     // The resolver's env is AUTHORITATIVE for the merge posture, so a stale
     // inherited TARGET_NO_MERGE never survives into a successor the resolver
     // just granted allow-merge.
@@ -1202,6 +1202,40 @@ fn ambient_scrub_names() -> Vec<&'static str> {
 
 /// fno's builtin unattended permission answer (spawn_compose's constant).
 pub(crate) const SPAWN_PERMISSION_BUILTIN: &str = "bypassPermissions";
+
+/// The claude spawn default: `auto` rides the classifier, and the
+/// PermissionRequest hook (worktree-relocation-allow) auto-allows
+/// EnterWorktree into the fno worktree base, so an unattended worker takes
+/// its worktree with no prompt and no blanket bypass.
+pub(crate) const SPAWN_PERMISSION_CLAUDE: &str = "auto";
+
+/// The per-harness spawn default: claude rides [`SPAWN_PERMISSION_CLAUDE`],
+/// every other harness keeps [`SPAWN_PERMISSION_BUILTIN`] (codex maps that
+/// word to its own bypass flag on the lanes that carry a mode).
+pub(crate) fn spawn_permission_default(harness: &str) -> &'static str {
+    if harness == "claude" {
+        SPAWN_PERMISSION_CLAUDE
+    } else {
+        SPAWN_PERMISSION_BUILTIN
+    }
+}
+
+#[cfg(test)]
+mod permission_default_tests {
+    use super::*;
+
+    #[test]
+    fn claude_defaults_to_auto_and_other_harnesses_keep_the_builtin() {
+        assert_eq!(spawn_permission_default("claude"), "auto");
+        for harness in ["codex", "opencode", "gemini", "agy", "pi", "footnote", ""] {
+            assert_eq!(
+                spawn_permission_default(harness),
+                SPAWN_PERMISSION_BUILTIN,
+                "harness {harness:?} must keep the builtin answer"
+            );
+        }
+    }
+}
 
 /// Emit the one dispatch_spawned row and return the launch identity.
 /// `receipt` mirrors the launch rows into the caller's receipt dict.
