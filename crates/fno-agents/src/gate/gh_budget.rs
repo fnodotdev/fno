@@ -2129,6 +2129,9 @@ mod tests {
             // - fno-agents/src/gate/github_app.rs token_for_read_argv_in: the
             //   Command is never spawned; it exists so injection_decision
             //   can read its env, args and cwd for the token decision.
+            // - fno-agents/src/gh_budget.rs local_gh_anonymous: the anonymity
+            //   probe reads the rate limit under the quota lock. Admission
+            //   could refuse the very read that diagnoses a held budget.
             let allowlist = [
                 ("fno/src/setup_run.rs", "step_gh_auth"),
                 ("fno-agents/src/gate/merge_hold.rs", "disarm_command"),
@@ -2136,6 +2139,7 @@ mod tests {
                     "fno-agents/src/gate/github_app.rs",
                     "token_for_read_argv_in",
                 ),
+                ("fno-agents/src/gate/gh_budget.rs", "local_gh_anonymous"),
             ];
             let allowlisted = allowlist
                 .iter()
