@@ -660,6 +660,7 @@
       "notify_on_done": false,
       "attach_digest": true,
       "attach_digest_threshold_min": 10,
+      "scrollback_lines": 10000,
       "hover_focus": true,
       "status_row": true,
       "load_readout": "simple",
@@ -2158,6 +2159,10 @@
      "default": 10
     },
     {
+     "name": "scrollback_lines",
+     "default": 10000
+    },
+    {
      "name": "hover_focus",
      "default": true
     },
@@ -3433,6 +3438,7 @@
   "mux.notify_on_done",
   "mux.attach_digest",
   "mux.attach_digest_threshold_min",
+  "mux.scrollback_lines",
   "mux.hover_focus",
   "mux.paint_background",
   "mux.restore.hold_workers",

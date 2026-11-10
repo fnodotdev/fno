@@ -1766,6 +1766,12 @@
         "restore": {
           "$ref": "#/$defs/MuxRestoreBlock"
         },
+        "scrollback_lines": {
+          "default": 10000,
+          "minimum": 1,
+          "title": "Scrollback Lines",
+          "type": "integer"
+        },
         "shell_integration": {
           "default": "mux-panes",
           "title": "Shell Integration",

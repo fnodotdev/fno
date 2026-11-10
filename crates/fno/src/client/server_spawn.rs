@@ -44,6 +44,15 @@ pub(super) fn spawn_server(path: &Path) -> Result<(), String> {
             cmd.env("FNO_MUX_WINDOW_SIZE", word);
         }
     }
+    if std::env::var_os("FNO_MUX_SCROLLBACK_LINES").is_none() {
+        // `mux.scrollback_lines` rides the env the same way.
+        if let Some(lines) = crate::config_defaults::lookup_key("mux.scrollback_lines")
+            .as_deref()
+            .and_then(scrollback_lines_value)
+        {
+            cmd.env("FNO_MUX_SCROLLBACK_LINES", lines.to_string());
+        }
+    }
     unsafe {
         use std::os::unix::process::CommandExt;
         cmd.pre_exec(|| {
@@ -127,6 +136,11 @@ pub(crate) fn window_size_word(raw: &str) -> Option<&'static str> {
         .find(|word| *word == raw.trim())
 }
 
+/// A `mux.scrollback_lines` value the server accepts: a positive count.
+pub(crate) fn scrollback_lines_value(raw: &str) -> Option<usize> {
+    raw.trim().parse().ok().filter(|&n: &usize| n > 0)
+}
+
 /// The one off-switch, matched exactly like the Rust pane-spawn side
 /// (`pty::integration_disabled`): only a trimmed `off` disables injection.
 pub(crate) fn config_says_off(stdout: &str) -> bool {
@@ -135,7 +149,7 @@ pub(crate) fn config_says_off(stdout: &str) -> bool {
 
 #[cfg(test)]
 mod spawn_config_tests {
-    use super::{config_says_off, window_size_word};
+    use super::{config_says_off, scrollback_lines_value, window_size_word};
 
     /// The env bridge from config.toml to the interactive server's
     /// latched env: must mirror `pty::integration_disabled` - exactly
@@ -153,5 +167,9 @@ mod spawn_config_tests {
         assert_eq!(window_size_word("largest"), Some("largest"));
         assert_eq!(window_size_word("Latest"), None);
         assert_eq!(window_size_word(""), None);
+        // The scrollback latch passes only a positive count.
+        assert_eq!(scrollback_lines_value(" 20000\n"), Some(20_000));
+        assert_eq!(scrollback_lines_value("0"), None);
+        assert_eq!(scrollback_lines_value("20k"), None);
     }
 }

@@ -1341,6 +1341,9 @@ fn keeper_handshake(
             .map_err(|e| e.to_string())?;
         let n = match stream.read(&mut read_buf) {
             Ok(n) => n,
+            // A signal landing mid-read is not the keeper's answer: read again
+            // inside the same deadline.
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             // A read parked past the deadline surfaces as the expiry, never
             // as a raw OS error.
             Err(e)

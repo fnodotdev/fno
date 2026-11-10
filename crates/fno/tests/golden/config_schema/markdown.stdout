@@ -316,6 +316,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `mux.notify_on_done` | bool | `false` | advanced | Also notify on a terminal 'done' hook transition (default off). |
 | `mux.attach_digest` | bool | `true` | advanced | Show a 'while you were gone' catch-up digest overlay on attach after an absence (default on). |
 | `mux.attach_digest_threshold_min` | int | `10` | advanced | Minutes since last detach before the catch-up digest overlay shows (default 10). |
+| `mux.scrollback_lines` | int | `10000` | advanced | History lines each mux pane keeps (default 10000). Each line costs every column of the pane, about 2 MB per 1k lines at 80 columns, so 48 panes at 100k lines hold several GB. Latched at mux server birth; `fno mux kill-server` re-reads. |
 | `mux.hover_focus` | bool | `true` | advanced | Focus-follows-mouse: hovering a coding pane makes it the keyboard focus after a short settle (default on). |
 | `mux.status_row` | bool | `true` | advanced | Show the mux status row at the bottom of the terminal (default on). |
 | `mux.load_readout` | typing.Literal['simple', 'detailed'] | `simple` | advanced | How the mux shows machine load: simple (default) says it in plain words, e.g. 'CPU 80% busy: agents 58%, everything else 22%'; detailed shows the raw numbers (cores, load averages, GB). Both draw a CPU graph. Latched at mux client start. |

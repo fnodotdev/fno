@@ -181,7 +181,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_MUX_OPENPTY_TIMEOUT_MS` | rs | unclear: crates/fno/src/pty.rs:1341 |
 | `FNO_MUX_PANE_GROUP_MAX` | rs | unclear: crates/fno/src/process_admission.rs:378 |
 | `FNO_MUX_PANIC_PROBE` | rs | Test-only subprocess probe output path for the mux panic-log regression test. |
-| `FNO_MUX_SCROLLBACK_LINES` | rs | unclear: crates/fno/src/vt.rs:68 |
+| `FNO_MUX_SCROLLBACK_LINES` | rs | History lines each mux pane keeps (default 10000). The client latches `mux.scrollback_lines` into it at server spawn. |
 | `FNO_MUX_SHELL_INTEGRATION` | rs | unclear: crates/fno/src/client.rs:577 |
 | `FNO_MUX_STATS_JSON` | rs | The mux server's stats snapshot the front door hands the native scoreboard door (`server_stats::snapshot_for_scoreboard` sets it; `scoreboard/door.rs` reads it): the human_touch emission-failure counter and its measurement window as one JSON object. Unset, the door reports the counter unavailable, never zero. |
 | `FNO_MUX_WINDOW_SIZE` | rs | Which window sizes a tab that several windows view: `smallest`, `latest` (default) or `largest`. The client latches `mux.window_size` into it at server spawn; see docs/architecture/mux-window-size.md. |
