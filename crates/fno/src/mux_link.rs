@@ -83,6 +83,19 @@ pub fn pane_argv(remote: &proto::RemoteRow) -> Result<Vec<String>, String> {
     )
 }
 
+/// The inline attach the far door runs for a paneless row. Ssh forwards `TERM`
+/// but not `COLORTERM`, so the harness would paint 256 colors: the white band
+/// arrives as index 231, which `band_remap` never matches, and the far pane
+/// shows white text on white. The link always paints 24-bit (`frame_ansi`), so
+/// the attach states the same capability, as `pty` does for every pane.
+pub fn attach_command(bin: &Path, name: &str) -> std::process::Command {
+    let mut cmd = std::process::Command::new(bin);
+    cmd.args(["attach", "--inline", name]);
+    cmd.env("COLORTERM", "truecolor");
+    cmd.env_remove("NO_COLOR");
+    cmd
+}
+
 /// The far door: resolve the row, then link its pane or hand back its name.
 pub fn serve(args: &LinkArgs) -> Door {
     const COMMAND: &str = "fno mux serve --link";
@@ -454,6 +467,18 @@ mod tests {
 
     fn text(bytes: &[u8]) -> String {
         String::from_utf8_lossy(bytes).into_owned()
+    }
+
+    /// Ssh drops `COLORTERM`; the attach must state it, or the band reaches the
+    /// far pane as a 256-color index the remap cannot see.
+    #[test]
+    fn the_inline_attach_states_truecolor_whatever_ssh_forwarded() {
+        let cmd = attach_command(Path::new("fno-agents"), "ottoline");
+        let envs: Vec<_> = cmd.get_envs().collect();
+        assert!(envs.contains(&("COLORTERM".as_ref(), Some("truecolor".as_ref()))));
+        assert!(envs.contains(&("NO_COLOR".as_ref(), None)));
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(args, ["attach", "--inline", "ottoline"]);
     }
 
     #[test]
