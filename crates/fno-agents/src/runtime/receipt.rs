@@ -9,10 +9,14 @@
 //! receipt FIRST, then the event, so an auditor never sees a removal
 //! announced with no recovery path beside it.
 
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::paths::AgentsHome;
 use crate::state;
+
+/// The capability-table key for the interactive resume form.
+const INTERACTIVE_RESUME_FORM: &str = "interactive_resume";
 
 /// The door that produced a receipt. The vocabulary is closed: a new
 /// removal door extends this enum, and the compiler then refuses its
@@ -193,6 +197,22 @@ pub fn expire_receipt_details(receipt: &mut ReapReceipt) -> bool {
     changed
 }
 
+impl ReapReceipt {
+    pub(crate) fn resume_unavailable_reason(&self) -> Option<&str> {
+        if !self.resume_argv.is_empty() {
+            return None;
+        }
+        #[derive(serde::Deserialize)]
+        struct Identity<'a> {
+            resume_unavailable: Option<&'a str>,
+        }
+        Identity::deserialize(self.identity.as_ref()?)
+            .ok()?
+            .resume_unavailable
+            .filter(|reason| !reason.trim().is_empty())
+    }
+}
+
 /// Sanitize a receipt filename component: the session id comes from registry
 /// rows and is not guaranteed filename-safe across harnesses.
 pub fn receipt_filename_part(s: &str) -> String {
@@ -208,9 +228,16 @@ pub fn receipt_filename_part(s: &str) -> String {
 }
 
 /// Where reap receipts live: `<agents home>/reap-receipts/`, one file per
-/// reaped row keyed by `<harness>-<session id>`, the resume identity.
+/// reaped row keyed by its resume identity, or row incarnation when absent.
 pub fn reap_receipt_path(home: &AgentsHome, receipt: &ReapReceipt) -> std::path::PathBuf {
-    reap_receipt_path_for(home, &receipt.harness, &receipt.harness_session_id)
+    home.root()
+        .join("reap-receipts")
+        .join(row_receipt_file_name(
+            &receipt.harness,
+            &receipt.harness_session_id,
+            &receipt.row_name,
+            &receipt.created_at,
+        ))
 }
 
 /// The receipt filename for one resume identity: `<harness>-<session id>`
@@ -220,6 +247,17 @@ fn receipt_file_name(harness: &str, session_id: &str) -> String {
         "{}-{}.json",
         receipt_filename_part(harness),
         receipt_filename_part(session_id)
+    )
+}
+
+fn row_receipt_file_name(harness: &str, session_id: &str, name: &str, created_at: &str) -> String {
+    if !session_id.trim().is_empty() {
+        return receipt_file_name(harness, session_id);
+    }
+    let key = format!("{harness}\0{name}\0{created_at}");
+    format!(
+        "unidentified-{}.json",
+        blake3::hash(key.as_bytes()).to_hex()
     )
 }
 
@@ -303,11 +341,9 @@ fn claude_resume_recipe(
 
 /// Build the receipt from the row, or say exactly why it cannot be built.
 ///
-/// The gate's positive requirement: a resume command from the capability
-/// table. A row with no session identity, an empty harness name, a harness
-/// with no capability row, or a harness that declares no interactive resume
-/// form has no record of how to come back - that is the Unknown case, and
-/// unknown never reaps.
+/// Supported identities keep their declared resume command. A missing identity
+/// or an explicitly unsupported resume form keeps a terminal record instead;
+/// an unreadable capability table or unknown harness still refuses.
 pub fn build_reap_receipt(
     e: &state::RegistryEntry,
     ledger: Option<&Value>,
@@ -315,22 +351,36 @@ pub fn build_reap_receipt(
     store_matches: &dyn Fn(&state::RegistryEntry) -> Option<Vec<std::path::PathBuf>>,
 ) -> Result<ReapReceipt, String> {
     let harness = e.harness_name();
-    if harness.is_empty() {
-        return Err("missing harness identity".to_string());
-    }
-    let sid = e
-        .harness_session_id
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| "missing harness session identity".to_string())?;
+    let sid = e.harness_session_id.as_deref().unwrap_or_default();
     let contract = crate::harness_capabilities::HarnessContract::packaged()
         .map_err(|err| format!("capability table unreadable: {err}"))?;
-    let argv = contract
-        .render_session_argv(harness, "interactive_resume", Some(sid))
-        .map_err(|err| format!("no interactive resume form declared: {err}"))?;
+    let unavailable = if harness.trim().is_empty() {
+        Some("missing harness identity")
+    } else {
+        let caps = contract
+            .capabilities(harness)
+            .map_err(|err| format!("capability lookup failed: {err}"))?;
+        if sid.trim().is_empty() {
+            Some("missing harness session identity")
+        } else {
+            let form = caps
+                .resume_strategy
+                .forms
+                .get(INTERACTIVE_RESUME_FORM)
+                .ok_or_else(|| format!("no interactive resume declaration for {harness}"))?;
+            (form.kind == "unsupported").then_some("interactive resume is unsupported")
+        }
+    };
+    let argv = if unavailable.is_some() {
+        Vec::new()
+    } else {
+        contract
+            .render_session_argv(harness, "interactive_resume", Some(sid))
+            .map_err(|err| format!("no interactive resume form declared: {err}"))?
+    };
     // A bare `claude --resume` lands on the account default, so a claude
     // argv asks resume_pin first; every other harness keeps its table form.
-    let argv = if harness == "claude" {
+    let argv = if harness == "claude" && unavailable.is_none() {
         claude_resume_recipe(e, sid, argv, &|m| {
             crate::claude_adopt::provider_from_route_settings(m)
         })
@@ -339,18 +389,24 @@ pub fn build_reap_receipt(
     };
     // The native locator: every transcript candidate the harness's own store
     // holds for this session, supplied by the caller's index. A store read that
-    // fails leaves the locator absent-but-named rather than blocking the
-    // receipt - the resume tokens above already carry the identity.
+    // fails leaves the locator absent rather than inventing a recovery path.
+    // The receipt still preserves the recorded identity and its limits.
     let transcripts = store_matches(e).unwrap_or_default();
-    let identity = serde_json::json!({
-        "harness": harness,
-        "session_id": sid,
-        "short_id": e.short_id,
-        "store_root": store_root_for(harness).map(|p| p.to_string_lossy().to_string()),
-        "cwd": e.cwd,
-        "role_level": e.role_level,
-        "spawned_by_session": e.spawned_by_session,
-    });
+    let mut identity = serde_json::Map::from_iter([
+        ("harness".into(), json!(harness)),
+        ("session_id".into(), json!(sid)),
+        ("short_id".into(), json!(e.short_id)),
+        (
+            "store_root".into(),
+            json!(store_root_for(harness).map(|p| p.to_string_lossy().to_string())),
+        ),
+        ("cwd".into(), json!(e.cwd)),
+        ("role_level".into(), json!(e.role_level)),
+        ("spawned_by_session".into(), json!(e.spawned_by_session)),
+    ]);
+    if let Some(reason) = unavailable {
+        identity.insert("resume_unavailable".into(), json!(reason));
+    }
     Ok(ReapReceipt {
         row_name: e.name.clone(),
         short_id: e.short_id.clone(),
@@ -365,7 +421,9 @@ pub fn build_reap_receipt(
         // whose table form composes a pre_exec `sh -c` script keep the raw
         // join, because the script token is already shell-quoted content and
         // quoting it again would corrupt it. resume_argv stays raw either way.
-        resume: if harness == "claude" {
+        resume: if let Some(reason) = unavailable {
+            format!("not resumable: {reason}")
+        } else if harness == "claude" {
             argv.iter()
                 .map(|t| crate::client_commands::shlex_quote(t))
                 .collect::<Vec<_>>()
@@ -377,7 +435,7 @@ pub fn build_reap_receipt(
         removed_by: writer.surface(),
         removal_trigger: writer.trigger().to_string(),
         schema_version: Some(2),
-        identity: Some(identity),
+        identity: Some(Value::Object(identity)),
         native_locator: Some(serde_json::json!({ "transcripts": transcripts })),
         model_provenance: model_provenance_of(e),
         resume_argv: argv,
@@ -412,7 +470,7 @@ pub fn decide_reap_receipt(ask: &Value) -> Value {
                 }
             }
             json!({
-                "file": receipt_file_name(&receipt.harness, &receipt.harness_session_id),
+                "file": row_receipt_file_name(&receipt.harness, &receipt.harness_session_id, &receipt.row_name, &receipt.created_at),
                 "receipt": receipt,
             })
         }
@@ -491,11 +549,16 @@ pub fn stage_removal_accounting(
     // is then the only durable record of it, and must name it. `None` means
     // no attempt was made, never "attempted, outcome unknown".
     let mut active_surface: Option<&'static str> = None;
-    let already_staged = entry
-        .harness_session_id
-        .as_deref()
-        .filter(|sid| !sid.is_empty())
-        .is_some_and(|sid| reap_receipt_path_for(home, entry.harness_name(), sid).exists());
+    let already_staged = home
+        .root()
+        .join("reap-receipts")
+        .join(row_receipt_file_name(
+            entry.harness_name(),
+            entry.harness_session_id.as_deref().unwrap_or_default(),
+            &entry.name,
+            &entry.created_at,
+        ))
+        .exists();
     let (receipt_staged, reason) = if already_staged {
         (true, "receipt already staged for this session".to_string())
     } else {
@@ -612,18 +675,69 @@ mod tests {
     }
 
     #[test]
-    fn decide_reap_receipt_refuses_a_row_without_a_session_id() {
-        let row: state::RegistryEntry = serde_json::from_str(
-            r#"{"name":"nosid","harness":"claude","cwd":"/tmp/x","created_at":"2026-09-01T00:00:00Z","status":"live"}"#,
-        )
-        .unwrap();
-        let answer = decide_reap_receipt(&json!({"row": row}));
-        assert!(
-            answer["refused"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("missing harness session identity"),
-            "{answer}"
+    fn terminal_receipts_preserve_missing_and_unsupported_resume_identity() {
+        let mut missing_sid = axes_row(
+            "nosid",
+            r#","provider":"zai","requested_model":"glm-5.3-flash[1m]""#,
         );
+        missing_sid.harness_session_id = None;
+        let mut no_harness = missing_sid.clone();
+        no_harness.harness = None;
+        let mut unsupported = sample_row("unsupported");
+        unsupported.harness = Some("footnote".into());
+        for (row, reason) in [
+            (missing_sid, "missing harness session identity"),
+            (no_harness, "missing harness identity"),
+            (unsupported, "interactive resume is unsupported"),
+        ] {
+            let answer = decide_reap_receipt(&json!({"row": row}));
+            assert!(answer.pointer("/refused").is_none(), "{answer}");
+            let receipt = answer.pointer("/receipt").unwrap();
+            assert!(receipt.pointer("/resume_argv").is_none_or(Value::is_null));
+            assert!(receipt
+                .pointer("/resume")
+                .and_then(Value::as_str)
+                .unwrap()
+                .starts_with("not resumable:"));
+            assert_eq!(
+                receipt
+                    .pointer("/identity/resume_unavailable")
+                    .and_then(Value::as_str),
+                Some(reason)
+            );
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let home = AgentsHome::at(dir.path());
+        for (name, stamp) in [
+            ("same-worker", "00"),
+            ("same-worker", "01"),
+            ("other-worker", "00"),
+        ] {
+            let mut row = sample_row(name);
+            row.created_at = format!("2026-01-01T00:00:{stamp}Z");
+            row.harness_session_id = None;
+            let receipt = build_reap_receipt(&row, None, Writer::GcSweep, &|_| None).unwrap();
+            write_reap_receipt(&home, &receipt).unwrap();
+        }
+        assert_eq!(
+            std::fs::read_dir(dir.path().join("reap-receipts"))
+                .unwrap()
+                .count(),
+            3,
+            "unidentified rows and incarnations must not overwrite each other"
+        );
+        let hint = crate::resume_receipt::resume_hint(&home, "same-worker").unwrap();
+        assert_eq!(
+            hint.matches("not resumable: missing harness session identity")
+                .count(),
+            2,
+            "{hint}"
+        );
+        assert!(!hint.contains("resume by the exact session id"), "{hint}");
+        let mut unknown = sample_row("unknown");
+        unknown.harness = Some("harness-no-contract".into());
+        assert!(decide_reap_receipt(&json!({"row": unknown}))
+            .pointer("/refused")
+            .is_some_and(Value::is_string));
     }
 }

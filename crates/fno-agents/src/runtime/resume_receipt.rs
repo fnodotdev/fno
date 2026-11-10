@@ -78,12 +78,31 @@ pub fn resume_hint(home: &AgentsHome, name: &str) -> Option<String> {
             matches.len()
         );
         for receipt in &matches {
-            out.push_str(&format!(
-                "  {} ({})\n",
-                receipt.harness_session_id, receipt.row_name
-            ));
+            if let Some(reason) = receipt.resume_unavailable_reason() {
+                let identity = if receipt.harness_session_id.trim().is_empty() {
+                    "(no session identity)"
+                } else {
+                    &receipt.harness_session_id
+                };
+                out.push_str(&format!(
+                    "  {identity} ({}, {}): not resumable: {reason}\n",
+                    receipt.row_name, receipt.created_at
+                ));
+            } else {
+                out.push_str(&format!(
+                    "  {} ({})\n",
+                    receipt.harness_session_id, receipt.row_name
+                ));
+            }
         }
-        out.push_str("  resume by the exact session id to disambiguate.\n");
+        if matches
+            .iter()
+            .any(|receipt| receipt.resume_unavailable_reason().is_none())
+        {
+            out.push_str("  resume by the exact session id to disambiguate.\n");
+        } else {
+            out.push_str("  these records have no supported resume command.\n");
+        }
         return Some(out);
     } else {
         matches.iter().collect()
@@ -95,6 +114,10 @@ pub fn resume_hint(home: &AgentsHome, name: &str) -> Option<String> {
     out.push_str(&format!("  harness: {}\n", receipt.harness));
     out.push_str(&format!("  session: {}\n", receipt.harness_session_id));
     out.push_str(&format!("  original cwd: {}\n", receipt.cwd));
+    if let Some(reason) = receipt.resume_unavailable_reason() {
+        out.push_str(&format!("  not resumable: {reason}\n"));
+        return Some(out);
+    }
     if !receipt.cwd.is_empty() && !Path::new(&receipt.cwd).exists() {
         out.push_str(
             "  note: the original cwd is gone; resume from a replacement checkout with the command below.\n",

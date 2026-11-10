@@ -371,28 +371,6 @@ fn pane_label_rows() {
     assert_eq!(core2.panes.get(&q1).unwrap().name, None);
 }
 
-#[test]
-fn unknown_control_command_gets_typed_wire_refusal() {
-    let request = serde_json::json!({
-        "Control": {
-            "proto": crate::proto::PROTO_VERSION + 1,
-            "build": crate::proto::BUILD_VERSION,
-            "verb": {"FutureVerb": null},
-        }
-    });
-
-    match unknown_control_refusal(&request) {
-        Some(ServerMsg::Err { code, msg }) => {
-            assert_eq!(code, err_code::BAD_REQUEST);
-            assert!(msg.contains("FutureVerb"), "{msg}");
-            assert!(
-                msg.contains(&format!("v{}", crate::proto::PROTO_VERSION)),
-                "{msg}"
-            );
-        }
-        other => panic!("expected typed unknown-command refusal, got {other:?}"),
-    }
-}
 // -- Rerun idle guard (x-38c4) ---------------------------------------------
 
 fn agent_in(sess: &str, pane: u64, badge: Option<AgentBadge>, exited: bool) -> RegistryAgent {

@@ -426,8 +426,7 @@ fn the_planner_routes_retire_and_rm_the_harness_session() {
     assert!(
         bases
             .iter()
-            .any(|b| b.starts_with("node n-plan-b ready; idle ")
-                && b.ends_with("past the 1200s window")),
+            .any(|b| *b == "node n-plan-b ready; session report says done"),
         "{bases:?}"
     );
     let log = fake_a.argv_log();

@@ -878,37 +878,6 @@ pub(crate) fn share_reading(
     caller: Option<&str>,
     terminal_runs: Option<&Path>,
 ) -> ShareReading {
-    let home = crate::paths::AgentsHome::at(registry_path.parent().unwrap_or(Path::new(".")));
-    share_reading_with(registry_path, cap, caller, terminal_runs, &mut || {
-        crate::gc_sweep::read_graph_entries(&home)
-    })
-}
-
-/// The graph records every node this session names as merged. The reaper's
-/// own verdict decides it, so the gate and the reaper never disagree about
-/// which rows are finished.
-fn named_work_merged(e: &RegistryEntry, sid: &str, graph: &crate::gc_sweep::GraphRead) -> bool {
-    let verdict = crate::gc_sweep::provenance_verdict(e, sid, graph, None, None);
-    if verdict.hold.is_some() {
-        return false;
-    }
-    match &verdict.work {
-        crate::graph_store::WorkState::AllDone { .. } => {
-            !verdict.merge_note.is_empty()
-                && verdict.merge_note.iter().all(|n| n.ends_with(":merged"))
-        }
-        crate::graph_store::WorkState::Open { .. } => verdict.merged_but_open.is_some(),
-        crate::graph_store::WorkState::NoProvenance => false,
-    }
-}
-
-fn share_reading_with(
-    registry_path: &Path,
-    cap: usize,
-    caller: Option<&str>,
-    terminal_runs: Option<&Path>,
-    load_graph: &mut dyn FnMut() -> Option<crate::gc_sweep::GraphRead>,
-) -> ShareReading {
     let registry = match load_registry(registry_path) {
         Ok(registry) => registry,
         Err(_) => {
@@ -928,9 +897,9 @@ fn share_reading_with(
     let mut unattributed: Vec<String> = Vec::new();
     let mut by_spawner: std::collections::HashMap<String, usize> = Default::default();
     let mut fleet = 0usize;
-    let terminal = terminal_runs.map(crate::terminal_run::read_keys);
-    // Read only when a row's turn ended: the graph read is the costly part.
-    let mut graph: Option<Option<crate::gc_sweep::GraphRead>> = None;
+    let terminal = terminal_runs
+        .map(crate::terminal_run::read_keys)
+        .unwrap_or_default();
     for e in &registry.entries {
         // A team counts until it is cleared or its row is permanently dead.
         // A reboot leaves every teamed row reading exited while the team
@@ -947,35 +916,10 @@ fn share_reading_with(
         if !status_is_liveish(&e.status) || e.role_level.is_some() {
             continue;
         }
-        // A finished row still takes a fleet seat; it only stops charging
-        // its lead.
+        if !crate::cap_liveness::holds_capacity(e, &terminal) {
+            continue;
+        }
         fleet += 1;
-        // A row whose run reported a releasing terminal reason is a parked
-        // finished worker, not active work: it stops charging its lead's
-        // share while it stays alive for late review mail. No session id or
-        // an unreadable dir keeps today's counting.
-        if let Some(set) = &terminal {
-            if e.harness_session_id
-                .as_deref()
-                .is_some_and(|sid| set.contains(sid))
-            {
-                continue;
-            }
-        }
-        // A worker whose turn ended (its hook reported `done`) on merged work
-        // is finished, not a held seat. The graph is read only when such a
-        // row exists; an unread graph charges the row.
-        let turn_ended = e
-            .inside_leg
-            .as_ref()
-            .is_some_and(|r| r.state == crate::state::InsideLegState::Done);
-        if let (true, Some(sid)) = (turn_ended, e.harness_session_id.as_deref()) {
-            if let Some(read) = graph.get_or_insert_with(&mut *load_graph) {
-                if named_work_merged(e, sid, read) {
-                    continue;
-                }
-            }
-        }
         match e.current_owner_session() {
             Some(spawner) if Some(spawner) == caller => held_rows.push(e.name.clone()),
             Some(spawner) => *by_spawner.entry(spawner.to_string()).or_default() += 1,
@@ -1512,6 +1456,11 @@ mod tests {
         crate::terminal_run::write_receipt(&home, sid, "DonePRGreen").unwrap();
         let reading = share_reading(&reg, 3, Some("lead-1"), Some(&runs));
         assert_eq!(reading.held, Some(0), "receipt: the finished row skips");
+        assert_eq!(
+            reading.fleet,
+            Some(0),
+            "finished rows free fleet capacity too"
+        );
         assert!(
             reading
                 .held_rows

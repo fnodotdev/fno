@@ -22,6 +22,7 @@
 
 use crate::daemon::CascadeOutcome;
 use crate::opencode_serve::ArchiveOutcome;
+use crate::pane_stop::MuxCallError;
 use crate::receipt::EffectRecord;
 use crate::state::RegistryEntry;
 use std::time::Duration;
@@ -150,10 +151,49 @@ pub(crate) fn cascade_harness_session_result_with(
     read_claude_agents: &dyn Fn() -> crate::claude_roster::ClaudeAgentsSnapshot,
     claude_rm: &dyn Fn(&str) -> Result<(), String>,
 ) -> CascadeOutcome {
+    if crate::pane_stop::requires_pane_stop(e)
+        && e.messaging_socket_path
+            .as_deref()
+            .is_none_or(|path| path.trim().is_empty())
+    {
+        return CascadeOutcome::NotApplicable;
+    }
+    let missing_native_identity = match e.harness_name() {
+        "claude" => crate::daemon::roster_death::claude_row_id(e).is_none(),
+        "codex" => e
+            .harness_session_id
+            .as_deref()
+            .is_none_or(|sid| sid.trim().is_empty()),
+        "cursor-agent" => false,
+        _ => e
+            .harness_session_id
+            .as_deref()
+            .is_none_or(|sid| sid.trim().is_empty()),
+    };
+    if missing_native_identity && e.pid.is_some_and(|pid| !crate::daemon::pid_is_gone(pid)) {
+        return CascadeOutcome::Failed(
+            "native removal has no session identity; registered process is not confirmed gone"
+                .into(),
+        );
+    }
     let row_id = crate::daemon::roster_death::claude_row_id(e).unwrap_or_else(|| e.name.clone());
     match e.harness_name() {
         "claude" => {
             let Some(short_id) = crate::daemon::roster_death::claude_row_id(e) else {
+                if e.mux.is_none()
+                    && e.messaging_socket_path
+                        .as_deref()
+                        .is_none_or(|path| path.trim().is_empty())
+                {
+                    if e.pid.is_none() {
+                        return CascadeOutcome::NotApplicable;
+                    }
+                    if e.pid.is_some_and(crate::daemon::pid_is_gone) {
+                        return CascadeOutcome::AlreadyAbsent(
+                            "unidentified claude process is gone".into(),
+                        );
+                    }
+                }
                 return CascadeOutcome::Failed(
                     "claude cascade has no short id and no session id".into(),
                 );
@@ -278,6 +318,8 @@ pub(crate) fn apply_mux_member_retirement(e: &RegistryEntry) -> CascadeOutcome {
         let harness = e.harness_name();
         let sid = e.harness_session_id.clone().unwrap_or_default();
         run_mux_retire_session(server, &harness, &sid)
+            .map(|receipt| receipt.retired)
+            .map_err(String::from)
     })
 }
 
@@ -337,11 +379,36 @@ pub(crate) fn mux_member_outcome(
     }
 }
 
-/// One bounded `fno mux retire-session` round: `Ok(n)` is the member count
-/// the store reported retired; `Err` names the exit and the first stderr
-/// line. Exit 20 (sent, unanswered) is a failure like any other - an
-/// outcome unknown is not an absence.
-fn run_mux_retire_session(server: &str, harness: &str, session_id: &str) -> Result<u64, String> {
+#[derive(serde::Deserialize)]
+struct MuxRetirement {
+    retired: u64,
+    panes_closed: u64,
+    skipped_typing: u64,
+}
+
+/// Retire attached panes by identity, including views without a stored
+/// member. A numeric pane reference alone cannot identify a thread view.
+pub(crate) fn retire_attached_session(server: &str, e: &RegistryEntry) -> Result<bool, String> {
+    let sid = e
+        .harness_session_id
+        .as_deref()
+        .filter(|sid| !sid.is_empty())
+        .ok_or_else(|| "attached view has no harness session identity".to_string())?;
+    if e.harness_name().is_empty() {
+        return Err("attached view has no harness identity".into());
+    }
+    run_mux_retire_session(server, e.harness_name(), sid)
+        .map(|receipt| receipt.panes_closed > 0)
+        .map_err(String::from)
+}
+
+/// One bounded native retirement read, shared by both callers. An unknown
+/// result or an active typing hold never counts as absence.
+fn run_mux_retire_session(
+    server: &str,
+    harness: &str,
+    session_id: &str,
+) -> Result<MuxRetirement, MuxCallError> {
     let mut child = std::process::Command::new(crate::scrape::fno_bin())
         .args([
             "mux",
@@ -364,15 +431,16 @@ fn run_mux_retire_session(server: &str, harness: &str, session_id: &str) -> Resu
                 let output = child
                     .wait_with_output()
                     .map_err(|error| format!("mux retire-session read failed: {error}"))?;
-                let reply: serde_json::Value = serde_json::from_slice(&output.stdout)
+                let reply: MuxRetirement = serde_json::from_slice(&output.stdout)
                     .map_err(|error| format!("mux retire-session reply unparsable: {error}"))?;
-                let retired = reply
-                    .get("retired")
-                    .and_then(serde_json::Value::as_u64)
-                    .ok_or_else(|| {
-                        "mux retire-session reply carried no retired count".to_string()
-                    })?;
-                return Ok(retired);
+                if reply.skipped_typing > 0 {
+                    return Err(format!(
+                        "mux retire-session held by typing in {} pane(s)",
+                        reply.skipped_typing
+                    )
+                    .into());
+                }
+                return Ok(reply);
             }
             Ok(Some(status)) => {
                 let code = status.code().unwrap_or(-1);
@@ -382,7 +450,7 @@ fn run_mux_retire_session(server: &str, harness: &str, session_id: &str) -> Resu
                     .map(|o| String::from_utf8_lossy(&o.stderr).to_string())
                     .unwrap_or_default();
                 let first = stderr.lines().next().unwrap_or_default().trim();
-                return Err(format!("mux retire-session exited {code}: {first}"));
+                return Err(format!("mux retire-session exited {code}: {first}").into());
             }
             Ok(None) if std::time::Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(20));
@@ -392,7 +460,7 @@ fn run_mux_retire_session(server: &str, harness: &str, session_id: &str) -> Resu
                 let _ = child.wait();
                 return Err("mux retire-session timed out".into());
             }
-            Err(error) => return Err(format!("mux retire-session wait failed: {error}")),
+            Err(error) => return Err(format!("mux retire-session wait failed: {error}").into()),
         }
     }
 }
@@ -584,6 +652,92 @@ mod tests {
             crate::claude_roster::ClaudeAgentsSnapshot::unknown("roster unreadable: boom"),
         );
         assert!(matches!(outcome, CascadeOutcome::NotApplicable));
+        assert_eq!(calls, 0);
+
+        for harness in ["footnote", "muse", "gemini"] {
+            let mut identified = row(harness, Some("pane"), None);
+            identified.harness_session_id = Some("identified-custom-session".into());
+            identified.pid = Some(std::process::id());
+            for substrate in ["pane", "thread"] {
+                identified.substrate = Some(substrate.into());
+                let (outcome, calls) = x1530_cascade(
+                    &identified,
+                    crate::claude_roster::ClaudeAgentsSnapshot::known(Vec::new()),
+                );
+                assert!(matches!(outcome, CascadeOutcome::NotApplicable),
+                    "identified custom sessions have no separate native surface: {harness}/{substrate}");
+                assert_eq!(calls, 0);
+            }
+        }
+        for harness in ["claude", "codex", "footnote"] {
+            for substrate in [None, Some("pane")] {
+                let mut physical = row(
+                    harness,
+                    substrate,
+                    Some(crate::state::MuxRef {
+                        session: "main".into(),
+                        pane_id: 76,
+                    }),
+                );
+                physical.pid = Some(std::process::id());
+                let (outcome, calls) = x1530_cascade(
+                    &physical,
+                    crate::claude_roster::ClaudeAgentsSnapshot::known(Vec::new()),
+                );
+                assert!(
+                    matches!(outcome, CascadeOutcome::NotApplicable),
+                    "physical pane stop belongs to the process reader: {harness}/{substrate:?}"
+                );
+                assert_eq!(calls, 0);
+                physical.messaging_socket_path = Some("/tmp/unidentified-worker.sock".into());
+                let (outcome, calls) = x1530_cascade(
+                    &physical,
+                    crate::claude_roster::ClaudeAgentsSnapshot::known(Vec::new()),
+                );
+                assert!(
+                    matches!(outcome, CascadeOutcome::Failed(_)),
+                    "a live unidentified messaging surface is never waived: {harness}"
+                );
+                assert_eq!(calls, 0);
+            }
+        }
+
+        for harness in ["claude", "codex", "footnote", ""] {
+            let mut unidentified = row(harness, Some("thread"), None);
+            unidentified.pid = Some(std::process::id());
+            let (outcome, calls) = x1530_cascade(
+                &unidentified,
+                crate::claude_roster::ClaudeAgentsSnapshot::known(Vec::new()),
+            );
+            assert!(
+                matches!(outcome, CascadeOutcome::Failed(_)),
+                "a live unidentified process is not an absent surface: {harness}"
+            );
+            assert_eq!(calls, 0);
+            for pid in [None, Some(0x7fff_fff0)] {
+                unidentified.pid = pid;
+                let (outcome, calls) = x1530_cascade(
+                    &unidentified,
+                    crate::claude_roster::ClaudeAgentsSnapshot::known(Vec::new()),
+                );
+                assert!(
+                    outcome.satisfies_applied(),
+                    "an absent process must not hold a terminal row: {harness}"
+                );
+                assert_eq!(calls, 0);
+            }
+        }
+        let mut unidentified = row("claude", Some("thread"), None);
+        unidentified.pid = None;
+        unidentified.messaging_socket_path = Some("/tmp/unidentified-worker.sock".into());
+        let (outcome, calls) = x1530_cascade(
+            &unidentified,
+            crate::claude_roster::ClaudeAgentsSnapshot::known(Vec::new()),
+        );
+        assert!(
+            matches!(outcome, CascadeOutcome::Failed(_)),
+            "a recorded messaging socket is still a native surface"
+        );
         assert_eq!(calls, 0);
     }
 }

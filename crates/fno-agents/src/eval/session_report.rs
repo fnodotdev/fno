@@ -630,7 +630,15 @@ pub(crate) fn handle_session_report(
                 }))
             .then(|| derived)
         };
+        let inherited_node = r
+            .entries
+            .get(idx)
+            .and_then(|entry| crate::native_adopt::inherited_node(entry, &r.entries));
         let entry = &mut r.entries[idx];
+        if let Some(node) = inherited_node {
+            entry.node = Some(node);
+            entry.node_basis = Some("parent".to_string());
+        }
         if entry.status == AgentStatus::Spawning {
             entry.status = AgentStatus::Live;
         }
@@ -1924,6 +1932,7 @@ mod tests {
                 provider: None,
                 cwd: "/repo".into(),
             },
+            node_basis: None,
             launcher_session: "lead-7".into(),
             launcher_harness: Some("claude".into()),
             launcher_cwd: Some("/repo".into()),
@@ -1952,49 +1961,105 @@ mod tests {
     /// precedence, and one `agent_spawned` birth carrying `launch: "native"`.
     #[test]
     fn a_launch_record_child_adopts_with_parent_node_and_birth() {
-        let (_d, home) = temp_home("native");
-        let record = crate::launch_record::Record {
-            launch: crate::launch_record::Launch {
-                harness: "claude".into(),
-                resume: None,
-                name: Some("w1".into()),
-                node: Some("x-aaaa".into()),
-                slot: None,
-                provider: None,
-                cwd: "/repo".into(),
-            },
-            launcher_session: "lead-7".into(),
-            launcher_harness: Some("claude".into()),
-            launcher_cwd: Some("/repo".into()),
-            launched_at_ms: 1_000,
-            command: String::new(),
-            child_session: Some("3228ccad-c078-4f2e-9a51-6d1f0a2b3c4d".into()),
-            claimed_at_ms: Some(2_000),
-        };
-        let params = json!({
-            "harness": "claude",
-            "session_id": "3228ccad-c078-4f2e-9a51-6d1f0a2b3c4d",
-            "launch_record": serde_json::to_value(&record).unwrap(),
-        });
-        let resp = handle_session_report(&home, &emitter(&home), &req(params));
-        let body = response_json(&resp);
-        assert_eq!(body["result"]["stored"], true, "{body}");
-        assert_eq!(body["result"]["minted"], "native");
-        let rows = read_rows(&home);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].origin.as_deref(), Some("spawn"));
-        assert_eq!(rows[0].name, "w1");
-        assert_eq!(rows[0].node.as_deref(), Some("x-aaaa"));
-        assert_eq!(rows[0].spawned_by_session.as_deref(), Some("lead-7"));
-        assert_eq!(rows[0].substrate.as_deref(), Some("thread"));
-        assert_eq!(rows[0].status, AgentStatus::Live);
-        let births = crate::event_store::query_events(
-            &home.events_jsonl(),
-            &crate::event_store::EventQuery::of_types(&["agent_spawned"]),
-        )
-        .unwrap();
-        assert_eq!(births.len(), 1, "{births:?}");
-        assert!(births[0].line.contains("launch"), "{}", births[0].line);
+        for (explicit, parent_harness, expected, basis) in [
+            (Some("x-aaaa"), "claude", Some("x-aaaa"), None),
+            (None, "claude", Some("x-bbbb"), Some("parent")),
+            (None, "codex", None, None),
+        ] {
+            let (_d, home) = temp_home("native");
+            seed_registry(
+                &home,
+                json!({"name": "parent", "cwd": "/repo", "harness": parent_harness,
+                "harness_session_id": "lead-7", "node": "x-bbbb", "status": "live"}),
+            );
+            let record = crate::launch_record::Record {
+                launch: crate::launch_record::Launch {
+                    harness: "claude".into(),
+                    resume: None,
+                    name: Some("w1".into()),
+                    node: explicit.map(str::to_string),
+                    slot: None,
+                    provider: None,
+                    cwd: "/repo".into(),
+                },
+                node_basis: None,
+                launcher_session: "lead-7".into(),
+                launcher_harness: Some("claude".into()),
+                launcher_cwd: Some("/repo".into()),
+                launched_at_ms: 1_000,
+                command: String::new(),
+                child_session: Some("3228ccad-c078-4f2e-9a51-6d1f0a2b3c4d".into()),
+                claimed_at_ms: Some(2_000),
+            };
+            let params = json!({
+                "harness": "claude",
+                "session_id": "3228ccad-c078-4f2e-9a51-6d1f0a2b3c4d",
+                "launch_record": serde_json::to_value(&record).unwrap(),
+            });
+            let resp = handle_session_report(&home, &emitter(&home), &req(params.clone()));
+            let body = response_json(&resp);
+            assert_eq!(body["result"]["stored"], true, "{body}");
+            assert_eq!(body["result"]["minted"], "native");
+            let rows = read_rows(&home);
+            assert_eq!(rows.len(), 2);
+            let rows: Vec<_> = rows.into_iter().filter(|row| row.name == "w1").collect();
+            assert_eq!(rows.len(), 1);
+            let row = rows.first().unwrap();
+            assert_eq!(row.origin.as_deref(), Some("spawn"));
+            assert_eq!(row.name, "w1");
+            assert_eq!(row.node.as_deref(), expected);
+            assert_eq!(row.node_basis.as_deref(), basis);
+            assert_eq!(row.spawned_by_session.as_deref(), Some("lead-7"));
+            assert_eq!(row.substrate.as_deref(), Some("thread"));
+            assert_eq!(row.status, AgentStatus::Live);
+            let births = crate::event_store::query_events(
+                &home.events_jsonl(),
+                &crate::event_store::EventQuery::of_types(&["agent_spawned"]),
+            )
+            .unwrap();
+            assert_eq!(births.len(), 1, "{births:?}");
+            assert!(births[0].line.contains("launch"), "{}", births[0].line);
+            state::update_registry(&home.registry_json(), |reg| {
+                let row = reg.entries.iter_mut().find(|row| row.name == "w1").unwrap();
+                row.node = None;
+                row.node_basis = None;
+            })
+            .unwrap();
+            let resp = handle_session_report(&home, &emitter(&home), &req(params.clone()));
+            assert_eq!(response_json(&resp)["result"]["stored"], true);
+            let rows = read_rows(&home);
+            let child = rows.iter().find(|row| row.name == "w1").unwrap();
+            assert_eq!(
+                child.node.as_deref(),
+                if parent_harness == "claude" {
+                    Some("x-bbbb")
+                } else {
+                    None
+                }
+            );
+            assert_eq!(
+                child.node_basis.as_deref(),
+                if parent_harness == "claude" {
+                    Some("parent")
+                } else {
+                    None
+                }
+            );
+            state::update_registry(&home.registry_json(), |reg| {
+                let row = reg.entries.iter_mut().find(|row| row.name == "w1").unwrap();
+                row.node = None;
+                row.node_basis = None;
+                row.origin = Some("operator".into());
+            })
+            .unwrap();
+            handle_session_report(&home, &emitter(&home), &req(params));
+            assert!(read_rows(&home)
+                .iter()
+                .find(|row| row.name == "w1")
+                .unwrap()
+                .node
+                .is_none());
+        }
     }
 
     /// A `spawn --promote --succeed` transfer leaves the manifest

@@ -89,17 +89,7 @@ pub(crate) fn leg_badge(
     leg: &serde_json::Value,
     now_secs: u64,
 ) -> (Option<AgentBadge>, Option<String>, Option<AnswerablePrompt>) {
-    let live = report_is_live(
-        leg.get("received_at")
-            .and_then(|v| v.as_str())
-            .unwrap_or(""),
-        leg.get("ttl_ms").and_then(|v| v.as_u64()),
-        now_secs,
-    );
-    if !live {
-        return (None, None, None);
-    }
-    let badge = match leg.get("state").and_then(|v| v.as_str()) {
+    let badge = match crate::registry_read::inside_leg_state(leg, now_secs) {
         Some("working") => Some(AgentBadge::Working),
         Some("blocked") => Some(AgentBadge::Blocked),
         Some("done") => Some(AgentBadge::Done),

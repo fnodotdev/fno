@@ -6,7 +6,16 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::session_truth::{injected_record_text, record_parser, tail_records, Signal};
+use crate::session_truth::{
+    classify_tail, injected_record_text, record_parser, tail_records, STALLED_AFTER_S,
+};
+
+pub(crate) fn reported_done(row: &crate::state::RegistryEntry, now_secs: u64) -> bool {
+    row.inside_leg
+        .as_ref()
+        .and_then(|leg| serde_json::to_value(leg).ok())
+        .is_some_and(|leg| crate::registry_read::inside_leg_state(&leg, now_secs) == Some("done"))
+}
 
 /// How many trailing records the tail read folds.
 const TAIL_RECORDS: usize = 40;
@@ -35,11 +44,8 @@ pub(crate) fn tail_done(paths: Option<&[PathBuf]>, harness: &str) -> bool {
             .iter()
             .rev()
             .filter(|r| !(r.role == "user" && injected_record_text(&r.text)))
-            .find_map(|r| match r.role.as_str() {
-                "user" => Some(false),
-                "assistant" if Signal::of(&r.text) == Signal::Promise => Some(true),
-                _ => None,
-            })
+            .find(|r| matches!(r.role.as_str(), "user" | "assistant"))
+            .map(|r| classify_tail(Some(&r.role), &r.text, None, STALLED_AFTER_S) == "done")
             .unwrap_or(false)
     })
 }
@@ -74,6 +80,7 @@ mod tests {
     fn the_head_names_the_skill_and_the_tail_names_the_end() {
         let done = transcript("done", &[TARGET, PLAIN, PROMISE]);
         let reopened = transcript("reopened", &[TARGET, PROMISE, CHAT]);
+        let continued = transcript("continued", &[TARGET, PROMISE, PLAIN]);
         let brainstorm = transcript("brainstorm", &[CHAT, PLAIN]);
         let one = |p: &PathBuf| Some(vec![p.clone()]);
 
@@ -85,6 +92,7 @@ mod tests {
         assert!(tail_done(one(&done).as_deref(), "claude"));
         // A user turn after the promise reopens the session.
         assert!(!tail_done(one(&reopened).as_deref(), "claude"));
+        assert!(!tail_done(one(&continued).as_deref(), "claude"));
         assert!(!tail_done(one(&brainstorm).as_deref(), "claude"));
         assert!(!tail_done(one(&done).as_deref(), "opencode"));
     }

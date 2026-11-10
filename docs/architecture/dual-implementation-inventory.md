@@ -14,6 +14,10 @@ This page answers four questions. Which cross-tree guards mark a real second imp
 
 **The registry skew write.** Single leg now. `crates/fno-agents/src/runtime/registry_commit.rs` is the one registry writer. It holds the shared registry lock and merges unknown row and top-level fields before the atomic publish.
 
+**The inside-leg completion reader.** Single owner, generated artifact. `crates/fno-agents/src/registry_read.rs` owns `inside_leg_state`, including state vocabulary and TTL. The reaper and foreground capacity readers consume it. The sideline consumes the generated `crates/fno/src/registry_read.rs` copy. `generated-artifacts.tsv` records the projection and build command. The generated-artifact freshness check guards the copy against its source.
+
+**The tick timestamp parser.** Single owner. `event_store.rs` owns `parse_rfc3339_ms`. The indexed writer and incremental tick fold share it, so both retain the same millisecond maxima.
+
 ## The discriminator
 
 A parity guard exists because two things can drift. Two implementations do not follow from that.

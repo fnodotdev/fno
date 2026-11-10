@@ -10,6 +10,50 @@ use crate::gc_sweep::{self, GcSummary};
 /// row reads would-retire and the apply-time re-read is what holds it.
 const CLASSIFY_AGE_S: i64 = crate::gc::SPAWN_IDLE_RETIRE_SECS + 100;
 
+#[test]
+fn a_reported_done_child_retires_after_grace_without_a_skill_or_node() {
+    let (dir, home) = staged_graph_home();
+    stage_graph(dir.path(), json!([]));
+    state::update_registry(&home.registry_json(), |r| {
+        let mut row = state::RegistryEntry::default();
+        row.name = "finished-child".into();
+        row.harness = Some("claude".into());
+        row.harness_session_id = Some("finished-child-session".into());
+        row.origin = Some("spawn".into());
+        row.created_at = "2026-01-01T00:00:00Z".into();
+        row.inside_leg = Some(state::InsideLegReport {
+            state: state::InsideLegState::Done,
+            ..Default::default()
+        });
+        r.entries.push(row);
+    })
+    .unwrap();
+    let path = quiet_transcript(dir.path(), "child.jsonl", 1000);
+    std::fs::write(&path, "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"screenshots saved\"}}\n").unwrap();
+    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
+    let summary = gc_sweep::run(
+        &home,
+        &emitter,
+        900,
+        false,
+        7,
+        &crate::gc_sweep::read_graph_entries,
+        &|_| Some(vec![path.clone()]),
+        &uniform_ages(1000),
+        &|_| true,
+        &|_| crate::daemon::CascadeOutcome::NotApplicable,
+        &|_| crate::daemon::CascadeOutcome::NotApplicable,
+        &no_agents,
+        &|_| (None, None),
+        &|_| None,
+    );
+    assert_eq!(summary.retired.len(), 1, "{summary:?}");
+    assert!(state::load_registry(&home.registry_json())
+        .unwrap()
+        .entries
+        .is_empty());
+}
+
 /// The team specimen (2026-09-14): a do-phase claude row whose transcript
 /// ends mid-Edit with the badge still `working` and live. A fresh working
 /// report is a turn plausibly in flight, so it blocks the tick retirement

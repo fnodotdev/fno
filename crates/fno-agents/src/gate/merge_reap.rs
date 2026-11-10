@@ -726,7 +726,7 @@ fn run_request(
             false,
             false,
             &stop,
-            &crate::pane_stop::run_mux_pane_kill,
+            &crate::gc_native::retire_attached_session,
             seams.surface_removal,
             seams.mux_member,
             &mut receipts,

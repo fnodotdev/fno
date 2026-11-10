@@ -2540,12 +2540,7 @@ fn maybe_run_spawn(
         .flat_map(|r| r.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
         .collect();
 
-    // Spawn gate: cap + RAM floor for the CLIENT-SIDE substrates only.
-    // `pane` re-execs into the Python CLI whose mirrored gate is the sole gate
-    // on that path (exactly one gate evaluation per spawn, LD1). The guard is
-    // held across dispatch so the next waiter's count includes the newcomer
-    // (bg: the mutex until the roster/registry row exists; headless: the
-    // worker:<name> slot claim for the call duration), then dropped.
+    // Client-side dispatch holds admission until its row or reservation is visible.
     // (AC19): the codex THREAD spawn's registry row is created by the
     // DAEMON spawn RPC (the ("codex", "bg") arm below returns None), so a
     // guard held here drops before any row exists and two rapid thread spawns
@@ -2592,6 +2587,7 @@ fn maybe_run_spawn(
                         .get("session_phase")
                         .and_then(Value::as_str)
                         .map(str::to_string),
+                    background_job: fno_agents::spawn_contract::background_job(&params, substrate),
                     ..fno_agents::spawn_promote::gate_input(promotion)
                 },
             )

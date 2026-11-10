@@ -26,6 +26,7 @@
 //! pref back on. (v26/ and v67 wire prose for the two commands moved
 //! here from proto.rs, where this module now lives.)
 
+use super::{dead_pane, err_code, ControlReply, ServerMsg};
 use crate::agents_view::RegistryAgent;
 
 /// The pane-table facts a lifecycle decision needs. The label is the same
@@ -194,6 +195,41 @@ pub(crate) fn scan_panes<'a>(
 }
 
 impl super::Core {
+    pub(super) fn kill_pane_checked(
+        &mut self,
+        pane: u64,
+        hand_off_to: Option<String>,
+        expected_child_pid: Option<u32>,
+        reply: ControlReply,
+    ) -> super::Flow {
+        let Some(entry) = self.panes.get(&pane) else {
+            let _ = reply.send(dead_pane(pane));
+            return super::Flow::Continue;
+        };
+        let actual = entry.pty.child_pid();
+        if let Some(expected) = expected_child_pid {
+            if actual != Some(expected) {
+                let actual = actual
+                    .map(|pid| pid.to_string())
+                    .unwrap_or_else(|| "no child".into());
+                let _ = reply.send(ServerMsg::Err {
+                    code: err_code::TARGET_IDENTITY_MISMATCH,
+                    msg: format!("pane {pane} child changed: expected {expected}, found {actual}"),
+                });
+                return super::Flow::Continue;
+            }
+        }
+        // The guard and close run in one core turn; a restart cannot swap
+        // the pane between the comparison and the effect.
+        if let Some(target) = hand_off_to {
+            let _ = reply.send(self.hand_off_pane(pane, &target));
+            return super::Flow::Continue;
+        }
+        let flow = self.close_pane_reasoned(pane, "killed");
+        let _ = reply.send(ServerMsg::Ok);
+        flow
+    }
+
     /// Resolve a sideline lifecycle target by identity, then label.
     /// Fail-closed: absent, any external row sharing the name, or a >1
     /// non-external collision are all refused, so a keypress can only ever

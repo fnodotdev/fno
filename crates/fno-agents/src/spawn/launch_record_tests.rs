@@ -30,33 +30,95 @@ fn reads_and_help_are_not_launches() {
 /// included, and the child claims it.
 #[test]
 fn a_dispatcher_writes_a_record_the_child_claims() {
-    let home = tempfile::tempdir().unwrap();
-    let cwd = home.path().to_string_lossy().into_owned();
-    write_record(
-        home.path(),
-        Launch {
-            harness: "claude".into(),
-            resume: None,
-            name: Some("w9".into()),
-            node: Some("x-ab12".into()),
-            slot: Some("g2".into()),
-            provider: None,
-            cwd: cwd.clone(),
-        },
-        "lead-9",
-        Some("claude"),
-        &cwd,
-        1_000_000,
-    )
-    .unwrap();
-    let got = claim(
-        home.path(),
-        &child("c-9", "claude", &cwd, Some("w9"), 1_001_000),
-    )
-    .unwrap();
-    assert_eq!(got.launch.slot.as_deref(), Some("g2"));
-    assert_eq!(got.launch.node.as_deref(), Some("x-ab12"));
-    assert_eq!(got.launcher_session, "lead-9");
+    for (explicit, parent_harness, parent_nodes, expected, basis) in [
+        (
+            Some("x-ab12"),
+            "claude",
+            vec!["x-bb22"],
+            Some("x-ab12"),
+            None,
+        ),
+        (
+            None,
+            "claude",
+            vec!["x-bb22"],
+            Some("x-bb22"),
+            Some("parent"),
+        ),
+        (None, "codex", vec!["x-bb22"], None, None),
+        (None, "claude", vec!["x-bb22", "x-cc33"], None, None),
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let cwd = home.path().to_string_lossy().into_owned();
+        let entries: Vec<_> = parent_nodes
+            .iter()
+            .enumerate()
+            .map(|(i, node)| {
+                serde_json::json!({"name": format!("parent-{i}"), "cwd": cwd, "harness": parent_harness,
+                "harness_session_id": "lead-9", "node": node, "status": "live"})
+            })
+            .collect();
+        std::fs::write(
+            home.path().join("registry.json"),
+            serde_json::json!({
+                "schema_version": 1, "entries": entries
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let graph = home.path().join("graph.json");
+        let nodes: Vec<_> = ["x-ab12", "x-bb22", "x-cc33"]
+            .into_iter()
+            .map(|id| {
+                serde_json::json!({"id": id, "slug": id, "title": id, "type": "feature",
+                "status": "in_progress", "priority": "p2", "domain": "code",
+                "created_at": "2026-10-09T00:00:00+00:00"})
+            })
+            .collect();
+        graph_store::seed_rows(&graph, &nodes).unwrap();
+        write_record(
+            home.path(),
+            Launch {
+                harness: "claude".into(),
+                resume: None,
+                name: Some("w9".into()),
+                node: explicit.map(str::to_string),
+                slot: Some("g2".into()),
+                provider: None,
+                cwd: cwd.clone(),
+            },
+            "lead-9",
+            Some("claude"),
+            &cwd,
+            1_000_000,
+        )
+        .unwrap();
+        let got = claim_and_stamp(
+            home.path(),
+            &graph,
+            &child("c-9", "claude", &cwd, Some("w9"), 1_001_000),
+        )
+        .unwrap();
+        assert_eq!(got.launch.slot.as_deref(), Some("g2"));
+        assert_eq!(got.launch.node.as_deref(), expected);
+        assert_eq!(
+            serde_json::to_value(&got)
+                .unwrap()
+                .get("node_basis")
+                .and_then(|v| v.as_str()),
+            basis
+        );
+        assert_eq!(got.launcher_session, "lead-9");
+        for row in graph_store::read_rows(&graph).unwrap() {
+            let dispatched =
+                explicit.is_some_and(|node| row.get("id").and_then(Value::as_str) == Some(node));
+            assert_eq!(
+                row.get("spawned_by_session").and_then(Value::as_str),
+                dispatched.then_some("lead-9"),
+                "{row}"
+            );
+        }
+    }
 }
 
 fn child(sid: &str, harness: &str, cwd: &str, name: Option<&str>, at: i64) -> Child {

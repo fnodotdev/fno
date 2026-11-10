@@ -410,7 +410,8 @@ fn default_true() -> bool {
 /// tmux parity commands; floor stays 58.
 /// v125: `PaneMeta.host` + `cwd` (serde default), the pane frame's machine
 /// and working directory; floor stays 58.
-pub const PROTO_VERSION: u32 = 125;
+/// v126: `ControlCommand::PaneKillChecked` binds removal to the observed child.
+pub const PROTO_VERSION: u32 = 126;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -653,6 +654,14 @@ pub enum ControlCommand {
     /// older client's PaneKill still means kill.
     PaneKill {
         pane: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        hand_off_to: Option<String>,
+    },
+    /// A distinct wire command makes older servers refuse the guard instead
+    /// of ignoring an unknown field and closing a replacement child.
+    PaneKillChecked {
+        pane: u64,
+        expected_child_pid: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         hand_off_to: Option<String>,
     },
@@ -4242,7 +4251,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 125);
+        assert_eq!(PROTO_VERSION, 126);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the

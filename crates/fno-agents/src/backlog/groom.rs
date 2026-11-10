@@ -406,6 +406,28 @@ fn spawn_worker(brief: &str, cwd: &str, model: &str, day: &str) -> Result<String
     )
     .unwrap_or_else(|_| format!("groom-{day}"));
     let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
+    let project = crate::law_match::resolve_project(
+        Some(Path::new(cwd)),
+        &crate::law_match::settings_sources(),
+    )
+    .unwrap_or_else(|_| cwd.to_string());
+    cmd.env_remove("FNO_NODE")
+        .env(
+            "FNO_SPAWN_ORIGIN",
+            json!({
+                "kind": "non_session", "source": {
+                    "kind": "daemon", "exe": "fno-agents", "arm": "backlog-groom", "cause": "gr"
+                }
+            })
+            .to_string(),
+        )
+        .env(
+            "FNO_SPAWN_OWNER",
+            json!({
+                "kind": "mission", "project": project, "mission": "backlog-groom"
+            })
+            .to_string(),
+        );
     cmd.args([
         "agents",
         "spawn",
@@ -943,5 +965,23 @@ mod tests {
             staleness(Utc::now().timestamp() as f64),
             Freshness::Ran(_)
         ));
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let capture = dir.path().join("origin.json");
+        crate::write_exec_stub(&bin, "fno", &format!(
+            "#!/bin/sh\nprintf '%s' \"$FNO_SPAWN_ORIGIN\" > '{}'\nprintf '%s\\n' '{{\"short_id\":\"groom-test\"}}'\n",
+            capture.display()
+        ));
+        let _bin = crate::claims::EnvVarGuard::set("FNO_BIN", bin.join("fno").to_str().unwrap());
+        assert_eq!(
+            spawn_worker("daily pass", &root, "sonnet", "2026-07-20").unwrap(),
+            "groom-test"
+        );
+        let origin: Value = serde_json::from_slice(&std::fs::read(capture).unwrap())
+            .expect("groom carries explicit daemon provenance");
+        assert_eq!(
+            origin.pointer("/source/arm").and_then(Value::as_str),
+            Some("backlog-groom")
+        );
     }
 }

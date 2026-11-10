@@ -101,12 +101,13 @@ fi
 
 # 3. The fast path pays neither the bound nor a truncated payload, and the
 #    command's own exit status survives.
-res="$(probe 30 fast 2>/dev/null)"
+fast_bound=30
+res="$(probe "$fast_bound" fast 2>/dev/null)"
 elapsed="${res%%|*}"
 out="${res#*|}"
-[[ "$elapsed" -lt 1000 ]] \
-    && pass "fast path not delayed by the watchdog (${elapsed}ms)" \
-    || fail "fast path took ${elapsed}ms with a 30s bound (watchdog is holding the pipe)"
+[[ "$elapsed" -lt $((fast_bound * 1000 / 2)) ]] \
+    && pass "fast command returned before the watchdog bound (${elapsed}ms, bound ${fast_bound}s)" \
+    || fail "fast command took ${elapsed}ms; expected less than half the ${fast_bound}s watchdog bound"
 [[ "$out" == "ok-payload" ]] \
     && pass "fast path output captured intact" \
     || fail "fast path output was [$out], expected [ok-payload]"
@@ -244,29 +245,102 @@ else
     pass "no job-control noise on the caller's stderr"
 fi
 
-# 5. No orphan `sleep` outlives a fast call. This is the incident
-#    scripts/lib/eval-sweep-throttle.sh was written to prevent; the bound here is
-#    deliberately long so a surviving watchdog sleep is unmistakable.
-if command -v pgrep >/dev/null 2>&1; then
-    # Positive control first. A `0` from pgrep means both "reaped correctly" and
-    # "this pattern never matches anything", and this is the one assertion
-    # covering the orphan incident, so it must not be the second.
-    sleep 47 & ctl_sleep=$!
-    ctl_found="$(pgrep -f 'sleep 47' 2>/dev/null | wc -l | tr -d ' ')"
-    kill "$ctl_sleep" 2>/dev/null; wait "$ctl_sleep" 2>/dev/null
-    [[ "$ctl_found" != "0" ]] \
-        || fail "orphan control: pgrep -f 'sleep 47' cannot see a sleep 47 that IS running, so the survivor count below proves nothing"
-
-    /bin/bash -c 'set -uo pipefail; source "$1"; export PATH="$2:$PATH"; with_timeout 47 fast >/dev/null 2>&1' _ "$LIB" "$TMP"
-    survivors="$(pgrep -f 'sleep 47' 2>/dev/null | wc -l | tr -d ' ')"
-    if [[ "$survivors" == "0" ]]; then
-        pass "watchdog sleep reaped, no orphan survives a fast call"
-    else
-        fail "$survivors orphaned 'sleep 47' process(es) survived the call"
-        pkill -f 'sleep 47' 2>/dev/null
-    fi
+# 5. A fast call releases its watchdog lock. The positive control observes
+# the same lock held by a running sleeper, without a process-table permission.
+if python3 - "$LIB" "$TMP" <<'PY'
+import fcntl, os, pathlib, shlex, subprocess, sys, time
+lib, root = sys.argv[1:]
+case = pathlib.Path(root) / "watchdog-lock"
+case.mkdir()
+lock, ready = case / "lock", case / "ready"
+worker = "import fcntl,pathlib,sys,time; f=open(sys.argv[1], 'w'); fcntl.flock(f, fcntl.LOCK_EX); pathlib.Path(sys.argv[2]).touch(); time.sleep(8); sys.exit(1)"
+def started():
+    until = time.monotonic()+5
+    while not ready.exists() and time.monotonic() < until: time.sleep(.01)
+    assert ready.exists(), "watchdog fixture did not start"
+def locked():
+    with open(lock, "a") as f:
+        try: fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError: return True
+    return False
+control = subprocess.Popen([sys.executable, "-c", worker, str(lock), str(ready)])
+try:
+    started()
+    assert locked(), "positive control must detect a running watchdog"
+finally:
+    control.terminate(); control.wait(timeout=3)
+ready.unlink()
+sleeper = case / "sleep"
+sleeper.write_text("#!/bin/sh\nexec "+shlex.quote(sys.executable)+" -c "+shlex.quote(worker)+" "+shlex.quote(str(lock))+" "+shlex.quote(str(ready))+"\n")
+sleeper.chmod(0o755)
+command = "import pathlib,sys,time\np=pathlib.Path(sys.argv[1])\nend=time.monotonic()+5\nwhile not p.exists() and time.monotonic()<end: time.sleep(.01)\nsys.exit(3 if p.exists() else 2)"
+launcher = 'source "$1"; trap : HUP; trap "" INT; trap "" TERM; before=$(trap -p HUP INT TERM); modes=$-; with_timeout 47 python3 -c "$2" "$3"; status=$?; [[ "$before" == "$(trap -p HUP INT TERM)" && "$modes" == "$-" ]] || exit 21; exit "$status"'
+result = subprocess.run(["/bin/bash", "-c", launcher, "_", lib, command, str(ready)], env=dict(os.environ, PATH=str(case)+os.pathsep+os.environ["PATH"]), capture_output=True, text=True, timeout=7)
+assert result.returncode == 3, f"ordinary status or caller traps changed: {result}"
+assert not locked(), "watchdog survived a completed command"
+PY
+then
+    pass "watchdog reaped; caller traps, shell modes and command status preserved"
 else
-    echo "  note: pgrep absent, orphan-reaping assertion not run"
+    fail "watchdog survived a fast call or caller state changed"
+fi
+
+# A signal to the launcher must release its command lock and watchdog group.
+if python3 - "$LIB" "$TMP" <<'PY'
+import fcntl, os, pathlib, shlex, signal, subprocess, sys, time
+lib, root = sys.argv[1:]
+errors = []
+for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+    case = pathlib.Path(root) / str(sig)
+    case.mkdir()
+    groups = case / "groups"
+    sleeper = case / "sleep"
+    watchdog = case / "watchdog.py"
+    watchdog.write_text("import fcntl,os,sys,time\nf=open(os.environ['WT_WATCHDOG_LOCK'], 'w')\nfcntl.flock(f, fcntl.LOCK_EX)\ngroup=os.environ['WT_GROUP_LOG']\nwith open(group+'.pending', 'w') as log: log.write(str(os.getpgrp())+'\\n')\nos.replace(group+'.pending', group)\ntime.sleep(float(sys.argv[1])); sys.exit(1 if float(sys.argv[1]) == 15 else 0)\n")
+    sleeper.write_text("#!/bin/sh\nexec "+shlex.quote(sys.executable)+" "+shlex.quote(str(watchdog))+' "$@" 2>>'+shlex.quote(str(case / "watchdog.stderr"))+"\n")
+    sleeper.chmod(0o755)
+    child = "import fcntl,os,pathlib,signal,sys,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); f=open(sys.argv[1], 'w'); fcntl.flock(f, fcntl.LOCK_EX); pathlib.Path(sys.argv[2]).write_text(str(os.getpgrp())); time.sleep(15)"
+    launcher = 'source "$1"; trap "printf HUP > \"$5\"; exit 129" HUP; trap "printf INT > \"$5\"; exit 130" INT; trap "printf TERM > \"$5\"; exit 143" TERM; with_timeout 15 python3 -c "$2" "$3" "$4"'
+    env = dict(os.environ, PATH=str(case)+os.pathsep+os.environ["PATH"], WT_GROUP_LOG=str(groups), WT_WATCHDOG_LOCK=str(case / "watchdog.lock"))
+    proc = subprocess.Popen(["/bin/bash", "-c", launcher, "_", lib, child, str(case / "lock"), str(case / "ready"), str(case / "trap")], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    try:
+        until = time.monotonic()+5
+        while not (case / "ready").exists() and time.monotonic() < until: time.sleep(.01)
+        assert (case / "ready").exists(), f"{sig.name}: command not ready; launcher pid={proc.pid} rc={proc.poll()}"
+        until = time.monotonic()+5
+        while not groups.exists() and time.monotonic() < until: time.sleep(.01)
+        child_group = (case / "ready").read_text()
+        context = f"{sig.name}: launcher pid={proc.pid} rc={proc.poll()}, command pgid={child_group}"
+        stderr = (case / "watchdog.stderr").read_text() if (case / "watchdog.stderr").exists() else ""
+        assert groups.exists(), f"{context}: watchdog not ready: {stderr}"
+        context += f", watchdog pgid={groups.read_text().strip()}"
+        os.kill(proc.pid, sig)
+        try: proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired: errors.append(f"{context}: interrupted launcher left its command or pipe alive")
+        with open(case / "lock", "a") as lock:
+            try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError: errors.append(f"{context}: command still owns its private lock")
+        with open(case / "watchdog.lock", "a") as lock:
+            try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError: errors.append(f"{context}: watchdog still owns its private lock")
+        observed = (case / "trap").read_text() if (case / "trap").exists() else ""
+        if observed != sig.name[3:]: errors.append(f"{context}: caller trap was not preserved")
+        if proc.poll() != 128+sig: errors.append(f"{context}: launcher status {proc.poll()} lost signal status")
+    finally:
+        pgids = [proc.pid]
+        if (case / "ready").exists(): pgids.append(int((case / "ready").read_text()))
+        if groups.exists(): pgids += [int(p) for p in groups.read_text().splitlines()]
+        for pgid in set(pgids):
+            try: os.killpg(pgid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError): pass
+        proc.communicate(timeout=20)
+if errors:
+    print("\n".join(errors)); sys.exit(1)
+PY
+then
+    pass "launcher signals release the command lock and watchdog"
+else
+    fail "launcher interruption leaves a command or watchdog alive"
 fi
 
 # 6. Exactly one implementation of the bound exists. No behavioral test on one

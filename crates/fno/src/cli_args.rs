@@ -535,7 +535,7 @@ pub enum PaneOp {
     /// Wait until a pane is idle, matches a pattern, or times out
     #[command(disable_help_flag = true)]
     Wait(MuxTail),
-    /// Kill a pane
+    /// Kill a pane (use --expect-child-pid <pid> to guard against replacement)
     #[command(disable_help_flag = true)]
     Kill(MuxTail),
     /// Claim a pane's writer lock

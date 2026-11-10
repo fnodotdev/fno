@@ -1321,6 +1321,13 @@ if [ "$1" = "mux" ] && [ "$2" = "pane" ] && [ "$3" = "kill" ] && \
   /bin/rm -f "$MUX_STATE"
   exit 0
 fi
+if [ "$1" = "mux" ] && [ "$2" = "retire-session" ] && [ "$3" = "main" ] && \
+   [ "$4" = "--harness" ] && [ "$5" = "claude" ] && \
+   [ "$6" = "--session-id" ] && [ "$7" = "e6f78b98-e594-47ed-ad81-84f8a78b8bb7" ]; then
+  /bin/rm -f "$MUX_STATE"
+  printf '{"retired":0,"panes_closed":1,"skipped_typing":0}\n'
+  exit 0
+fi
 if [ "$1" = "mux" ] && [ "$2" = "pane" ] && [ "$3" = "ls" ]; then
   if [ -f "$MUX_STATE" ]; then
     printf '[{"session":"main","pane_id":10}]\n'

@@ -1247,16 +1247,13 @@ fn fold_refresh_row(state: &mut ArmFoldState, value: &Value) {
             else {
                 return;
             };
-            let Some(ts_unix) = value
+            let Some(ts_ms) = value
                 .get("ts")
                 .and_then(Value::as_str)
-                .and_then(parse_rfc3339_unix)
+                .and_then(crate::event_store::parse_rfc3339_ms)
             else {
                 return;
             };
-            let ts_ms = i64::try_from(ts_unix)
-                .unwrap_or(i64::MAX)
-                .saturating_mul(1000);
             bump_max(&mut state.max_ts, arm, ts_ms);
             let data = value.get("data").and_then(Value::as_object);
             let acted = data
@@ -2348,12 +2345,11 @@ mod tests {
     use super::*;
     use crate::select_read::Kind as SrKind;
 
-    /// RFC3339 UTC stamp `secs` seconds before the wall clock. Fixtures date
-    /// their rows relative to now because prune measures retention on the
-    /// real clock: fixed dates crossed their telemetry TTL a week after they
-    /// were written and the store deleted the rows mid-test.
+    /// One current anchor keeps fixture rows inside retention and preserves
+    /// equal timestamps across setup and assertions.
     fn stamp_ago(secs: u64) -> String {
-        (chrono::Utc::now() - chrono::Duration::seconds(secs as i64))
+        static NOW: std::sync::OnceLock<chrono::DateTime<chrono::Utc>> = std::sync::OnceLock::new();
+        (*NOW.get_or_init(chrono::Utc::now) - chrono::Duration::seconds(secs as i64))
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     }
 
@@ -4360,21 +4356,27 @@ mod tests {
     /// set of maxima.
     #[test]
     fn tail_refresh_matches_a_full_seed() {
+        use chrono::Timelike;
+
         let dir = temp_dir();
         let journal = dir.join("events.jsonl");
+        // Refresh imports apply real-time retention, so these rows stay
+        // current and carry a nonzero millisecond fraction for both folds.
+        let clock = chrono::Utc::now().with_nanosecond(123_000_000).unwrap();
+        let at = |minutes| (clock - chrono::Duration::minutes(minutes)).to_rfc3339();
+        let now = clock.timestamp() as u64;
         append_envelopes(
             &journal,
             &[
-                store_tick(&stamp_ago(10_800), "alpha", 0, json!(null), json!(null)),
-                store_tick(&stamp_ago(7_200), "beta", 0, json!(null), json!(null)),
+                store_tick(&at(180), "alpha", 0, json!(null), json!(null)),
+                store_tick(&at(120), "beta", 0, json!(null), json!(null)),
             ],
         );
-        let now = parse_rfc3339_unix(&stamp_ago(0)).unwrap();
         let journal_list = vec![journal.clone()];
         let (mut state, mut last_seqs) = seed_arm_fold(&journal_list, now).expect("seed");
         let rows2 = [
-            store_tick(&stamp_ago(3_600), "alpha", 0, json!("error"), json!(null)),
-            store_tick(&stamp_ago(1_800), "gamma", 1, json!(null), json!(null)),
+            store_tick(&at(60), "alpha", 0, json!("error"), json!(null)),
+            store_tick(&at(30), "gamma", 1, json!(null), json!(null)),
         ];
         append_envelopes(&journal, &rows2);
         refresh_arm_fold(

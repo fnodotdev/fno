@@ -2,8 +2,31 @@
 //! the registry store. Before the table import `registry.json` is the file;
 //! after it, the path is a fence directory and the rows live in graph.db.
 
+use serde::Deserialize;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+
+/// The authoritative inside-leg state shared by the sideline and worker readers.
+pub fn inside_leg_state(leg: &Value, now_secs: u64) -> Option<&str> {
+    #[derive(serde::Deserialize)]
+    struct Leg<'a> {
+        ttl_ms: Option<u64>,
+        received_at: Option<&'a str>,
+        state: Option<&'a str>,
+    }
+    let leg = Leg::deserialize(leg).ok()?;
+    if let Some(ttl) = leg.ttl_ms {
+        let received = chrono::DateTime::parse_from_rfc3339(leg.received_at?)
+            .ok()?
+            .timestamp();
+        let received = u64::try_from(received).ok()?;
+        if now_secs.saturating_sub(received).saturating_mul(1000) > ttl {
+            return None;
+        }
+    }
+    leg.state
+        .filter(|state| matches!(*state, "working" | "blocked" | "done"))
+}
 
 /// The graph.db that holds the registry table for the registry at `path`.
 pub fn database_path(path: &Path) -> Option<PathBuf> {

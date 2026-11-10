@@ -46,6 +46,8 @@ fn live_rows_with_blocked(
         }
     };
     let now_secs = crate::daemon::now_epoch_secs();
+    let home = crate::paths::AgentsHome::at(registry_path.parent().unwrap_or(Path::new(".")));
+    let terminal = crate::terminal_run::read_keys(&home.terminal_runs_dir());
     let mut rows = Vec::new();
     let mut blocked: Option<std::collections::HashSet<String>> = None;
     let mut dropped_blocked: Vec<String> = Vec::new();
@@ -53,6 +55,9 @@ fn live_rows_with_blocked(
         Ok(Registry { entries, .. }) => {
             for e in entries {
                 if !crate::spawn_gate::status_is_liveish(&e.status) {
+                    continue;
+                }
+                if e.role_level.is_none() && !holds_capacity(&e, &terminal) {
                     continue;
                 }
                 let mut alive = match e.pid {
@@ -110,6 +115,17 @@ fn live_rows_with_blocked(
         ))
     }
     rows
+}
+
+pub(crate) fn holds_capacity(
+    row: &RegistryEntry,
+    terminal: &std::collections::HashSet<String>,
+) -> bool {
+    !crate::reap_evidence::reported_done(row, crate::daemon::now_epoch_secs().max(0) as u64)
+        && !row
+            .harness_session_id
+            .as_deref()
+            .is_some_and(|sid| terminal.contains(sid))
 }
 
 /// How long one session report asserts occupancy for a pid-less row the
@@ -233,7 +249,23 @@ mod tests {
         // so a codex row is outside its jurisdiction.
         let mut codex_native = pidless_reported_row("codex-native", "spawn", "codex");
         codex_native.last_report_at = Some(stamp_ago(3600));
-        let reg = write_reg(&dir, &[op, codex_native]);
+        let mut done = codex_native.clone();
+        done.name = "finished-child".into();
+        done.inside_leg = Some(crate::state::InsideLegReport {
+            state: crate::state::InsideLegState::Done,
+            received_at: stamp_ago(60),
+            ..Default::default()
+        });
+        let mut parked = codex_native.clone();
+        parked.name = "parked-run".into();
+        parked.harness_session_id = Some("parked-run".into());
+        crate::terminal_run::write_receipt(
+            &crate::paths::AgentsHome::at(dir.path()),
+            "parked-run",
+            "DonePRGreen",
+        )
+        .unwrap();
+        let reg = write_reg(&dir, &[op, codex_native, done, parked]);
         let mut warnings = Vec::new();
         let rows = live_rows(&reg, &mut warnings);
         assert_eq!(rows.len(), 2, "{warnings:?}");

@@ -213,6 +213,7 @@ fn gate_native_launch(payload: &Value, cwd: &Path) -> Option<String> {
             holder_pid: Some(std::process::id()),
             seed: None,
             session_phase: None,
+            background_job: false,
         };
         let config_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         match crate::spawn_gate::run_gate(&config_cwd, &home.registry_json(), input) {

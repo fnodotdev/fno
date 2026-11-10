@@ -56,6 +56,18 @@ pub(crate) fn launcher_lineage(r: &crate::launch_record::Record) -> Lineage {
     ))
 }
 
+pub(crate) fn inherited_node(entry: &RegistryEntry, entries: &[RegistryEntry]) -> Option<String> {
+    if entry.node.is_some() || entry.origin.as_deref() == Some("operator") {
+        return None;
+    }
+    let parent = entry.spawned_by_session.as_deref()?;
+    let child = entry.harness_session_id.as_deref()?;
+    if crate::claims::same_session_id(parent, child) {
+        return None;
+    }
+    crate::launch_record::parent_node(entries, parent, entry.spawned_by_harness.as_deref())
+}
+
 pub(crate) fn prepare_mint(
     home: &crate::paths::AgentsHome,
     harness: &str,
@@ -127,6 +139,7 @@ pub(crate) fn prepare_mint(
         harness: Some(harness.to_string()),
         substrate: substrate.map(str::to_string),
         node,
+        node_basis: record.and_then(|r| r.node_basis.clone()),
         transcript_path: transcript_path.map(str::to_string),
         start_source: source.map(str::to_string),
         cwd: cwd.clone().unwrap_or_default(),
@@ -147,6 +160,10 @@ pub(crate) fn prepare_mint(
             },
         )
     };
+    if let Some(node) = inherited_node(&entry, &entries) {
+        entry.node = Some(node);
+        entry.node_basis = Some("parent".to_string());
+    }
     // The record child is a lane-attributed fleet row: the claude transcript
     // states the model, and the provider comes only from the route-settings
     // match, exactly the roster adopt's closure. The operator mint carries no

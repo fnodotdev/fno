@@ -398,6 +398,7 @@ pub fn parse_pane_args(
     let mut provenance: Option<String> = None;
     let mut quiet_ms = None;
     let mut hand_off_to: Option<String> = None;
+    let mut expected_child_pid = None;
     let mut pattern = None;
     let mut timeout_s = None;
     let mut pid = None;
@@ -487,6 +488,14 @@ pub fn parse_pane_args(
             // server's side - this pane stops being ours - and a second
             // command would duplicate the pane-resolution and refusal ladder.
             "--hand-off-to" => hand_off_to = Some(value_of!()),
+            "--expect-child-pid" => {
+                let v = value_of!();
+                let pid = parse_u64(&v, "--expect-child-pid")?;
+                if pid == 0 || pid > i32::MAX as u64 {
+                    return Err("--expect-child-pid needs a positive process id".into());
+                }
+                expected_child_pid = Some(pid as u32);
+            }
             "--timeout" => {
                 let v = value_of!();
                 timeout_s = Some(parse_u64(&v, "--timeout")?);
@@ -592,6 +601,7 @@ pub fn parse_pane_args(
         crate::cli_args::PaneOp::Kill(_) => PaneCmd::Kill {
             pane: pane_arg("kill")?,
             hand_off_to,
+            expected_child_pid,
         },
         crate::cli_args::PaneOp::Claim(_) => PaneCmd::Claim {
             pane: pane_arg("claim")?,
@@ -613,6 +623,9 @@ pub fn parse_pane_args(
     }
     if raw && !matches!(op, crate::cli_args::PaneOp::Send(_)) {
         return Err("--raw pairs only with pane send".into());
+    }
+    if expected_child_pid.is_some() && !matches!(op, crate::cli_args::PaneOp::Kill(_)) {
+        return Err("--expect-child-pid pairs only with pane kill".into());
     }
     if session.is_none() {
         session = selector_session;

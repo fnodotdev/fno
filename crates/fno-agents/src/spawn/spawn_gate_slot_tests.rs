@@ -317,11 +317,30 @@ fn dead_holder_frees_its_headless_slot() {
         4_194_321,
         None,
         false,
+        false,
     )
     .unwrap();
 
     // Assert while the guard holds: release() would delete the claim and
     // read Free, which proves nothing about the classifier.
+    let metadata = serde_json::Map::from_iter([
+        ("background_job".into(), serde_json::json!(true)),
+        ("model_provider".into(), serde_json::json!("zai")),
+    ]);
+    assert!(matches!(
+        claims::acquire(
+            "worker:daily-groom",
+            "background-test",
+            claims::AcquireOpts {
+                pid: Some(std::process::id()),
+                ttl_ms: Some(60_000),
+                metadata: Some(metadata),
+                root: Some(root.clone()),
+                ..Default::default()
+            },
+        ),
+        claims::AcquireOutcome::Acquired(_)
+    ));
     let mut warnings = Vec::new();
     let got = live_worker_slot_claims(&mut warnings);
     assert!(got.is_empty(), "dead holder must free the slot: {got:?}");

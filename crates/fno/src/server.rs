@@ -780,6 +780,7 @@ pub(crate) enum CoreMsg {
     PaneKill {
         pane: u64,
         hand_off_to: Option<String>,
+        expected_child_pid: Option<u32>,
         reply: ControlReply,
     },
     /// Acquire/release the per-pane writer claim (4a-G3, brief Locked 5).
@@ -11040,26 +11041,9 @@ impl Core {
             CoreMsg::PaneKill {
                 pane,
                 hand_off_to,
+                expected_child_pid,
                 reply,
-            } => {
-                if !self.panes.contains_key(&pane) {
-                    let _ = reply.send(dead_pane(pane));
-                    return Flow::Continue;
-                }
-                // A hand-off is the opposite of a kill: it RELEASES the pane
-                // so its keeper keeps the child. It refuses before touching
-                // the layout, so a failed rename leaves the pane as it was.
-                if let Some(target) = hand_off_to {
-                    let _ = reply.send(self.hand_off_pane(pane, &target));
-                    return Flow::Continue;
-                }
-                // Reply Ok BEFORE propagating a possible session-ending
-                // Shutdown, so the client always learns the kill landed even
-                // when it closed the last pane.
-                let flow = self.close_pane_reasoned(pane, "killed");
-                let _ = reply.send(ServerMsg::Ok);
-                flow
-            }
+            } => self.kill_pane_checked(pane, hand_off_to, expected_child_pid, reply),
             CoreMsg::PaneClaim {
                 pane,
                 holder_pid,
@@ -11868,6 +11852,21 @@ async fn handle_control(
                 .send(CoreMsg::PaneKill {
                     pane,
                     hand_off_to,
+                    expected_child_pid: None,
+                    reply: reply_tx,
+                })
+                .await
+        }
+        ControlCommand::PaneKillChecked {
+            pane,
+            hand_off_to,
+            expected_child_pid,
+        } => {
+            core_tx
+                .send(CoreMsg::PaneKill {
+                    pane,
+                    hand_off_to,
+                    expected_child_pid: Some(expected_child_pid),
                     reply: reply_tx,
                 })
                 .await

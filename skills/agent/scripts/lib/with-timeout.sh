@@ -47,6 +47,16 @@ with_timeout() {
   # Each `|| kill ... "$pid"` is the fallback for a host where `set -m` did not
   # take, so the group signal finds no such pgid and the direct target is used
   # instead of the bound silently no-opping.
+  local old_traps monitor_was_on=0 interrupted= interrupt_rc=0 shell_pid
+  old_traps="$(trap -p HUP INT TERM)"
+  # $$ names the parent inside a command substitution; this reads the current shell.
+  shell_pid="${BASHPID:-}"
+  [[ -n "$shell_pid" ]] || shell_pid="$(exec /bin/sh -c 'printf "%s" "$PPID"')"
+  case "$-" in *m*) monitor_was_on=1 ;; esac
+  local trap_lines=$'\n'"$old_traps"$'\n'
+  case "$trap_lines" in *$'\n'"trap -- '' SIGHUP"$'\n'*) ;; *) trap 'interrupted=HUP; interrupt_rc=129' HUP ;; esac
+  case "$trap_lines" in *$'\n'"trap -- '' SIGINT"$'\n'*) ;; *) trap 'interrupted=INT; interrupt_rc=130' INT ;; esac
+  case "$trap_lines" in *$'\n'"trap -- '' SIGTERM"$'\n'*) ;; *) trap 'interrupted=TERM; interrupt_rc=143' TERM ;; esac
   set -m
 
   "$@" <&0 &
@@ -73,30 +83,14 @@ with_timeout() {
     } ) >/dev/null 2>&1 &
   local watchdog=$!
 
-  set +m
+  [[ $monitor_was_on -eq 1 ]] || set +m
 
   # `|| rc=$?` rather than `; rc=$?`: one caller is a `set -e` gate script, where
   # a bare failing `wait` would take the shell down before rc is read.
   local rc=0
-  wait "$pid" 2>/dev/null || rc=$?
-
-  case $rc in
-    143 | 137 )
-      rc=124
-      # `wait` returned the moment the DIRECT child died, which cancels the
-      # watchdog below and the escalation still pending inside it. A group member
-      # that outlived the TERM while holding the capture pipe would keep
-      # `OUTPUT=$(...)` open forever, so finish the group off here. This line is
-      # the actual guarantee against that hang; the watchdog's own group kill
-      # above is belt-and-braces, and dropping it changes no observable behavior.
-      #
-      # Conditional on purpose. Signalling a group after a call we did NOT stop
-      # would reach whatever the command deliberately left running in it. No
-      # caller in this tree is affected either way (every intentional spawn
-      # detaches with setsid), but a shared helper should not signal a group on a
-      # path where its bound never fired.
-      kill -KILL -"$pid" 2>/dev/null || true ;;
-  esac
+  if [[ -z "$interrupted" ]]; then
+    wait "$pid" 2>/dev/null || rc=$?
+  fi
 
   # By group, so the watchdog's `sleep` dies with it rather than reparenting to
   # pid 1 - the orphan incident scripts/lib/eval-sweep-throttle.sh was written to
@@ -104,9 +98,43 @@ with_timeout() {
   # it notes is absent on a minimal image.
   kill -TERM -"$watchdog" 2>/dev/null || kill -TERM "$watchdog" 2>/dev/null || true
 
+  kill -KILL -"$watchdog" 2>/dev/null || kill -KILL "$watchdog" 2>/dev/null || true
+
   # Reap it too. An unwaited job that died by signal makes bash announce
   # "Terminated: 15 ( sleep ... )" at the next command boundary on the CALLER's
   # stderr: session noise for an injection hook, log noise for the parity gate.
   wait "$watchdog" 2>/dev/null || true
+
+  if [[ -n "$interrupted" ]]; then
+    kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+    sleep 1 || true
+    kill -KILL -"$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    rc=$interrupt_rc
+  else
+    case $rc in
+      143 | 137 )
+        rc=124
+        # `wait` returned the moment the DIRECT child died, which cancels the
+        # watchdog below and the escalation still pending inside it. A group member
+        # that outlived the TERM while holding the capture pipe would keep
+        # `OUTPUT=$(...)` open forever, so finish the group off here. This line is
+        # the actual guarantee against that hang; the watchdog's own group kill
+        # above is belt-and-braces, and dropping it changes no observable behavior.
+        #
+        # Conditional on purpose. Signalling a group after a call we did NOT stop
+        # would reach whatever the command deliberately left running in it. No
+        # caller in this tree is affected either way (every intentional spawn
+        # detaches with setsid), but a shared helper should not signal a group on a
+        # path where its bound never fired.
+        kill -KILL -"$pid" 2>/dev/null || true ;;
+    esac
+  fi
+
+  trap - HUP INT TERM
+  [[ -z "$old_traps" ]] || eval "$old_traps"
+  if [[ -n "$interrupted" ]]; then
+    kill -"$interrupted" "$shell_pid"
+  fi
   return $rc
 }

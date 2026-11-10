@@ -737,6 +737,100 @@ fn a_failed_surface_removal_holds_the_row_and_a_confirmation_is_recorded() {
     );
 }
 
+#[test]
+fn retirement_preserves_a_terminal_receipt_when_resume_is_unavailable() {
+    let _env = crate::claims::test_env_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    for (harness, session) in [
+        (Some("footnote"), Some("old-session")),
+        (Some("claude"), None),
+        (None, None),
+    ] {
+        let (dir, home) = staged_graph_home();
+        stage_graph(dir.path(), json!([]));
+        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
+        let mut old = state::RegistryEntry::default();
+        old.name = "old-worker".into();
+        old.harness = harness.map(str::to_string);
+        old.harness_session_id = session.map(str::to_string);
+        old.origin = Some("spawn".into());
+        old.created_at = "2026-01-01T00:00:00Z".into();
+        old.log_path = Some(
+            quiet_transcript(home.root(), "old.log", 7200)
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let mut fresh = old.clone();
+        fresh.name = "fresh-worker".into();
+        fresh.harness_session_id = Some("fresh-session".into());
+        fresh.log_path = Some(
+            quiet_transcript(home.root(), "fresh.log", 0)
+                .to_string_lossy()
+                .into_owned(),
+        );
+        state::update_registry(&home.registry_json(), |r| r.entries.extend([old, fresh])).unwrap();
+        let summary = gc_sweep::run(
+            &home,
+            &emitter,
+            900,
+            false,
+            7,
+            &gc_sweep::read_graph_entries,
+            &|_| None,
+            &|entries| {
+                entries
+                    .iter()
+                    .map(|e| {
+                        (
+                            crate::gc::row_handle(e),
+                            Some(if e.name == "fresh-worker" { 0 } else { 7200 }),
+                        )
+                    })
+                    .collect()
+            },
+            &|_| true,
+            &|e| {
+                crate::gc_native::cascade_harness_session_result_with(
+                    e,
+                    Some(&no_agents()),
+                    &no_agents,
+                    &|_| panic!("no native identity to remove"),
+                )
+            },
+            &|_| crate::daemon::CascadeOutcome::NotApplicable,
+            &no_agents,
+            &|_| (None, None),
+            &|_| None,
+        );
+        assert_eq!(summary.retired.len(), 1, "{summary:?}");
+        let registry = state::load_registry(&home.registry_json()).unwrap();
+        assert_eq!(
+            registry
+                .entries
+                .iter()
+                .map(|e| e.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["fresh-worker"]
+        );
+        let paths = std::fs::read_dir(home.root().join("reap-receipts"))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(paths.len(), 1);
+        let receipt = crate::receipt::read_reap_receipt(paths.first().unwrap()).unwrap();
+        assert!(receipt.resume_argv.is_empty());
+        assert!(receipt.resume.starts_with("not resumable:"));
+        assert_eq!(receipt.harness_session_id, session.unwrap_or_default());
+        assert!(crate::resume_receipt::resume_hint(&home, "old-worker")
+            .unwrap()
+            .contains("not resumable:"));
+        let verified = crate::gc_verify::verify(&home, 3600, &[]);
+        assert_eq!(verified.verified.len(), 1, "{verified:?}");
+        assert!(verified.problems.is_empty(), "{verified:?}");
+    }
+}
+
 /// x-5aef AC3-EDGE: a row whose receipt cannot be built refuses BEFORE any
 /// effect fires - no stop seam call, no surface seam call, no receipt on
 /// disk, row kept under kept_no_receipt.
@@ -881,7 +975,8 @@ fn a_row_without_a_located_transcript_records_failed_resume_evidence() {
 /// as a FILE, so the persist write fails and the sweep keeps the row.
 #[test]
 fn a_row_reaps_only_after_its_receipt_is_durable() {
-    let home = tmp_home("gc-receipt-durability");
+    let (dir, home) = staged_graph_home();
+    stage_graph(dir.path(), json!([]));
     let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
     std::fs::write(home.root().join("reap-receipts"), b"not a directory").unwrap();
     let transcripts = tempfile::tempdir().unwrap();
@@ -889,6 +984,7 @@ fn a_row_reaps_only_after_its_receipt_is_durable() {
     state::update_registry(&home.registry_json(), |r| {
         let mut e = ask_row("undeliverable", None);
         e.short_id = "undeliv".into();
+        e.harness = Some("footnote".into());
         e.origin = Some("spawn".into());
         r.entries.push(e);
     })
@@ -904,7 +1000,7 @@ fn a_row_reaps_only_after_its_receipt_is_durable() {
         &move |_| graph.clone(),
         &move |_| Some(vec![quiet.clone()]),
         &uniform_ages(2 * 3600),
-        &|_| true,
+        &|_| panic!("receipt write failure must precede process stop"),
         &|_| crate::daemon::CascadeOutcome::NotApplicable,
         &|_e| crate::daemon::CascadeOutcome::NotApplicable,
         &no_agents,
@@ -1261,92 +1357,90 @@ fn idle_exit_held_by_an_unreadable_registry() {
 
 #[tokio::test]
 async fn stop_claude_pid_kills_a_real_child_and_spares_a_recycled_pid() {
-    // x-a4b2: a row with a pid and no transport id must actually be stopped
-    // (it used to be refused, leaving a live duplicate worker), and a pid
-    // whose start time no longer matches must be left alone.
+    struct OwnedChild {
+        process: std::sync::Arc<std::sync::Mutex<std::process::Child>>,
+        reaper: Option<std::thread::JoinHandle<()>>,
+    }
+    impl Drop for OwnedChild {
+        fn drop(&mut self) {
+            {
+                let mut child = self.process.lock().unwrap_or_else(|e| e.into_inner());
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            if let Some(reaper) = self.reaper.take() {
+                let _ = reaper.join();
+            }
+        }
+    }
     let mut entry = ask_row("orphan", None);
-
-    // A row with no pid at all has nothing to signal.
     assert!(
         !stop_claude_pid_confirmed(&entry).await,
         "no pid -> nothing to stop"
     );
-
-    // Spawn the sleeper as a DETACHED grandchild: `sh` backgrounds it and
-    // exits, so it is reparented away and is never this test's child. A
-    // direct child would linger as a zombie after SIGTERM until reaped, and
-    // `pid_is_ours` (a bare `kill(pid, 0)` probe) reads a zombie as alive.
-    // The real claude worker is not the daemon's child either, so this also
-    // matches production.
-    let out = std::process::Command::new("sh")
-        .arg("-c")
-        // The redirect is load-bearing: a backgrounded child inherits sh's
-        // stdout pipe, so without it `.output()` blocks for the full sleep
-        // waiting on EOF instead of returning as soon as sh exits.
-        .arg("sleep 60 >/dev/null 2>&1 & echo $!")
-        .output()
-        .expect("spawn detached sleeper");
-    let pid: u32 = String::from_utf8_lossy(&out.stdout)
-        .trim()
-        .parse()
-        .expect("sleeper pid");
-    let start = process_start_time(pid);
-
-    // Independent death oracle. Asserting with `pid_is_ours` would use the
-    // subject's own probe as its judge, and that probe reports EPERM and a
-    // recycled pid as not-ours too, so it can read "gone" over a process
-    // that is still running. `ps` knows nothing about our guards.
-    let ps_says_alive = |pid: u32| {
-        std::process::Command::new("ps")
-            .args(["-p", &pid.to_string()])
-            .output()
-            .map(|o| {
-                String::from_utf8_lossy(&o.stdout)
-                    .lines()
-                    .filter(|l| l.split_whitespace().next() == Some(&pid.to_string()))
-                    .count()
-                    > 0
-            })
-            .unwrap_or(false)
+    let child = std::process::Command::new("sleep")
+        .arg("60")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn owned sleeper");
+    let pid = child.id();
+    let process = std::sync::Arc::new(std::sync::Mutex::new(child));
+    let mut guard = OwnedChild {
+        process,
+        reaper: None,
     };
-
-    // No incarnation token: bare liveness is not a licence to SIGKILL.
+    let reaping = std::sync::Arc::clone(&guard.process);
+    guard.reaper = Some(std::thread::spawn(move || loop {
+        if reaping
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .try_wait()
+            .expect("reap owned sleeper")
+            .is_some()
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }));
+    let start = process_start_time(pid).expect("owned child has a readable start token");
+    let is_alive = || {
+        guard
+            .process
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .try_wait()
+            .expect("observe owned child")
+            .is_none()
+    };
+    assert!(is_alive(), "positive control: sleeper is running");
     entry.pid = Some(pid);
     entry.pid_start_time = None;
     assert!(
         !stop_claude_pid_confirmed(&entry).await,
         "no start token -> refuse"
     );
-    assert!(ps_says_alive(pid), "a refused row must not be signalled");
-
-    // Wrong incarnation token: the pid belongs to someone else now.
-    if let Some(st) = start {
-        entry.pid_start_time = Some(st.wrapping_add(1));
-        assert!(
-            !stop_claude_pid_confirmed(&entry).await,
-            "recycled pid -> refuse"
-        );
-        assert!(
-            ps_says_alive(pid),
-            "an unrelated process must not be signalled"
-        );
-    }
-
-    // Correct token: the process is really killed, not merely reported.
-    entry.pid_start_time = start;
-    if start.is_some() {
-        assert!(
-            stop_claude_pid_confirmed(&entry).await,
-            "owned live pid -> stopped"
-        );
-        assert!(!ps_says_alive(pid), "process is gone");
-    } else {
-        // No readable start time on this platform: the guard above refuses
-        // every row, so reap the sleeper rather than leaking it.
-        unsafe {
-            libc::kill(pid as libc::pid_t, libc::SIGKILL);
-        }
-    }
+    assert!(is_alive(), "a refused row must not be signalled");
+    entry.pid_start_time = Some(start.wrapping_add(1));
+    assert!(
+        !stop_claude_pid_confirmed(&entry).await,
+        "recycled pid -> refuse"
+    );
+    assert!(is_alive(), "an unrelated incarnation must not be signalled");
+    entry.pid_start_time = Some(start);
+    assert!(
+        stop_claude_pid_confirmed(&entry).await,
+        "owned live pid -> stopped"
+    );
+    assert!(
+        !is_alive(),
+        "owned child is reaped, not merely reported gone"
+    );
+    assert!(
+        !stop_claude_pid_confirmed(&entry).await,
+        "a dead pid is not newly stopped"
+    );
 }
 
 #[test]
@@ -2254,19 +2348,26 @@ fn blocked_roster_state_is_not_death_evidence() {
 
 #[test]
 fn dry_run_promises_only_provable_rows() {
-    // A fleet machine carries a live claude roster that cannot list the
-    // fake shorts below; already_gone would then read each row as stopped
-    // on a read this test never staged, and the dry run would prove a stop
-    // it holds no evidence for. Redirect the daemon tree so the roster read
-    // fails closed, the same answer a clean CI runner gives. nextest runs
-    // one process per test, so the swap stays process-local.
-    let old_daemon = std::env::var_os(crate::claude_roster::DAEMON_DIR_ENV);
-    let rosterless = tempfile::tempdir().unwrap();
-    std::env::set_var(
-        crate::claude_roster::DAEMON_DIR_ENV,
-        rosterless.path().join("daemon"),
-    );
+    let _env = crate::claims::test_env_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let (dir, home) = staged_graph_home();
+    let daemon = dir.path().join("daemon");
+    std::fs::create_dir_all(&daemon).unwrap();
+    let _roster =
+        crate::claims::EnvVarGuard::set("FNO_CLAUDE_DAEMON_DIR", daemon.to_str().unwrap());
+    std::fs::write(
+        daemon.join("roster.json"),
+        json!({
+            "proto": 1, "workers": {"aaaa7777": {
+                "sessionId": "aaaa7777-1111-2222-3333-444444444444",
+                "pid": std::process::id(),
+                "procStart": crate::daemon::process_start_time(std::process::id()).unwrap()
+            }}
+        })
+        .to_string(),
+    )
+    .unwrap();
     let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
     let transcripts = tempfile::tempdir().unwrap();
     let quiet_a = quiet_transcript(transcripts.path(), "a.jsonl", 7200);
@@ -2363,10 +2464,6 @@ fn dry_run_promises_only_provable_rows() {
         0,
         "a dry run never invokes the surface removal, not even to ask"
     );
-    match old_daemon {
-        Some(d) => std::env::set_var(crate::claude_roster::DAEMON_DIR_ENV, d),
-        None => std::env::remove_var(crate::claude_roster::DAEMON_DIR_ENV),
-    }
     std::fs::remove_dir_all(home.root()).ok();
 }
 
@@ -2385,7 +2482,7 @@ fn stage_direct(
     home: &AgentsHome,
     e: &state::RegistryEntry,
     stop: &dyn Fn(&state::RegistryEntry) -> bool,
-    kill: &dyn Fn(&str, u64) -> Result<bool, String>,
+    kill: &dyn Fn(&str, &state::RegistryEntry) -> Result<bool, String>,
 ) -> Result<crate::gc_sweep::StagedRetirement, crate::gc_sweep::RetireRefusal> {
     let mut receipts = std::collections::BTreeMap::new();
     crate::gc_sweep::stage_session_retirement(
@@ -2406,10 +2503,9 @@ fn stage_direct(
     )
 }
 
-/// AC7-ERR: a failing pane kill holds the row under `stop refused`, and the
-/// hold detail quotes the kill's reason.
+/// Failed attached-session retirement holds the row with its own reason.
 #[test]
-fn ac7_stage_holds_the_row_when_the_pane_kill_fails() {
+fn ac7_stage_holds_the_row_when_attached_session_retirement_fails() {
     let home = tmp_home("gc-ac7-err");
     let mut row = staged_row("muxrow", "codex");
     row.mux = Some(state::MuxRef {
@@ -2424,7 +2520,10 @@ fn ac7_stage_holds_the_row_when_the_pane_kill_fails() {
     );
     match staged {
         Err(crate::gc_sweep::RetireRefusal::StopRefused(reason)) => {
-            assert!(reason.contains("mux pane main:2 kill failed"), "{reason}");
+            assert!(
+                reason.contains("mux session sess-muxrow retirement failed on main"),
+                "{reason}"
+            );
             assert!(reason.contains("pane server unreachable"), "{reason}");
         }
         other => match other {
@@ -2449,89 +2548,250 @@ fn a_live_claim_keeps_a_quiet_row_the_sweep_would_retire() {
     let _env = crate::claims::test_env_lock()
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    let (dir, home) = staged_graph_home();
-    // Force-pin: the sweep's claims read must see THIS test's root, not a
-    // root an earlier test's set-if-unset pin left behind. The guard
-    // unsets the pin on scope exit, panic included, so an assert failure
-    // never leaks it into a concurrently running test.
-    struct ClaimsRootGuard;
+    struct ClaimsRootGuard(Option<std::ffi::OsString>);
     impl Drop for ClaimsRootGuard {
         fn drop(&mut self) {
-            std::env::remove_var("FNO_CLAIMS_ROOT");
+            if let Some(root) = self.0.take() {
+                std::env::set_var("FNO_CLAIMS_ROOT", root);
+            } else {
+                std::env::remove_var("FNO_CLAIMS_ROOT");
+            }
         }
     }
-    std::env::set_var("FNO_CLAIMS_ROOT", dir.path());
-    let _claims_root_guard = ClaimsRootGuard;
-    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-    let transcripts = tempfile::tempdir().unwrap();
-    let quiet = quiet_transcript(transcripts.path(), "q.jsonl", 2 * 3600);
-    state::update_registry(&home.registry_json(), |r| {
+    let _claims_root_guard = ClaimsRootGuard(std::env::var_os("FNO_CLAIMS_ROOT"));
+    let mut failures = Vec::new();
+    for (case, claim_sid, status, row_sid, open_do, scope, expected) in [
+        (
+            "direct session",
+            Some("s-main"),
+            "in_progress",
+            "s-main",
+            true,
+            "none",
+            "live",
+        ),
+        (
+            "legacy open execution",
+            None,
+            "in_progress",
+            "s-main",
+            true,
+            "none",
+            "live",
+        ),
+        ("done node", None, "done", "s-main", true, "none", "retired"),
+        (
+            "different session",
+            Some("s-other"),
+            "in_progress",
+            "s-main",
+            true,
+            "none",
+            "retired",
+        ),
+        (
+            "child without execution",
+            None,
+            "in_progress",
+            "s-child",
+            true,
+            "none",
+            "retired",
+        ),
+        (
+            "different node",
+            None,
+            "in_progress",
+            "s-main",
+            true,
+            "different-node",
+            "retired",
+        ),
+        (
+            "empty cwd",
+            None,
+            "in_progress",
+            "s-main",
+            false,
+            "empty",
+            "retired",
+        ),
+        (
+            "relative cwd",
+            None,
+            "in_progress",
+            "s-main",
+            false,
+            "relative",
+            "retired",
+        ),
+        (
+            "absent local store",
+            None,
+            "in_progress",
+            "s-main",
+            false,
+            "absent",
+            "retired",
+        ),
+        (
+            "closed execution",
+            None,
+            "in_progress",
+            "s-main",
+            false,
+            "none",
+            "retired",
+        ),
+        (
+            "unrelated local scope",
+            Some("s-main"),
+            "in_progress",
+            "s-main",
+            true,
+            "unrelated",
+            "live",
+        ),
+        (
+            "required local scope",
+            Some("s-other"),
+            "in_progress",
+            "s-main",
+            true,
+            "required",
+            "unread",
+        ),
+        (
+            "global scope",
+            None,
+            "in_progress",
+            "s-main",
+            true,
+            "global",
+            "unread",
+        ),
+    ] {
+        let (dir, home) = staged_graph_home();
+        std::env::set_var("FNO_CLAIMS_ROOT", dir.path());
+        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
+        let quiet = quiet_transcript(home.root(), "q.jsonl", 7200);
+        let mut execution = json!({"phase":"execute", "harness":"claude", "session_id":"s-main", "started_at":"2026-09-01T00:00:00Z"});
+        if !open_do {
+            execution
+                .as_object_mut()
+                .unwrap()
+                .insert("ended_at".into(), json!("2026-09-01T01:00:00Z"));
+        }
+        stage_graph(
+            dir.path(),
+            json!([{"id":"N1", "status":status, "sessions":[execution]}]),
+        );
+        let work = dir.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let bad = dir.path().join("bad");
+        std::fs::write(&bad, "regular file, not a claim root").unwrap();
         let mut row = ask_row("row-claim", None);
         row.short_id = "t-claim".into();
         row.harness = Some("claude".into());
-        row.harness_session_id = Some("s-done".into());
+        row.harness_session_id = Some(row_sid.into());
+        row.node = Some("N1".into());
         row.origin = Some("spawn".into());
-        r.entries.push(row);
-    })
-    .unwrap();
-    // A PID-liveness claim naming s-done: the holder pid is this test
-    // process, so classification reads Live through the same claims
-    // `list` the production sweep calls, in the table `list` scans.
-    let claims_root = dir.path().join(".fno").join("claims");
-    let rec = crate::claims::ClaimRecord {
-        schema_version: crate::claims::SCHEMA_VERSION,
-        key: "node:x-dddd".into(),
-        holder: "spawn-handover:t-x-dddd-glm".into(),
-        acquired_at: crate::claims::now_ms(),
-        pid: Some(std::process::id() as i32),
-        host: crate::claims::hostname(),
-        pid_unavailable: false,
-        expires_at: None,
-        reason: None,
-        harness: Some("claude".into()),
-        session_id: Some("s-done".into()),
-        pid_provenance: Some("session-prover".into()),
-        machine_id: None,
-        metadata: Default::default(),
-    };
-    crate::claim_store::seed_at_path(&claims_root.join("node%3Ax-dddd.lock"), &rec);
-
-    let graph = graph_read(&[("s-done", "N1", "done")], &[]);
-    let summary = gc_sweep::run(
-        &home,
-        &emitter,
-        900,
-        false,
-        7,
-        &move |_| graph.clone(),
-        &|e| match e.harness_session_id.as_deref() {
-            Some("s-done") => Some(vec![quiet.clone()]),
-            _ => None,
-        },
-        &staged_ages_at(
-            crate::daemon::now_epoch_secs(),
-            &|e| match e.harness_session_id.as_deref() {
-                Some("s-done") => Some(vec![quiet.clone()]),
-                _ => None,
-            },
-        ),
-        &|_| true,
-        &|_| crate::daemon::CascadeOutcome::NotApplicable,
-        &|_e| crate::daemon::CascadeOutcome::NotApplicable,
-        &no_agents,
-        &|_| (None, None),
-        &|_| None,
-    );
-    assert!(summary.retired.is_empty(), "{summary:?}");
-    assert_eq!(
-        summary.kept_live_claim,
-        vec![(
-            "t-claim".to_string(),
-            "node:x-dddd (holder spawn-handover:t-x-dddd-glm)".to_string()
-        )],
-        "{summary:?}"
-    );
-    std::fs::remove_dir_all(home.root()).ok();
+        row.cwd = match scope {
+            "required" => bad.clone(),
+            "empty" => PathBuf::new(),
+            "relative" => PathBuf::from("relative-project"),
+            "absent" => dir.path().join("not-created"),
+            _ => work.clone(),
+        }
+        .to_string_lossy()
+        .into_owned();
+        let mut rows = vec![row];
+        if scope == "unrelated" || scope == "global" {
+            let mut other = ask_row("row-other", None);
+            other.harness = Some("claude".into());
+            other.origin = Some("spawn".into());
+            other.node = Some("N1".into());
+            other.cwd = if scope == "unrelated" { &bad } else { &work }
+                .to_string_lossy()
+                .into_owned();
+            rows.push(other);
+        }
+        state::update_registry(&home.registry_json(), |r| r.entries.extend(rows)).unwrap();
+        if scope == "global" {
+            std::env::set_var("FNO_CLAIMS_ROOT", &bad);
+        } else {
+            let rec = crate::claims::ClaimRecord {
+                schema_version: 1,
+                key: if scope == "different-node" {
+                    "node:N2"
+                } else {
+                    "node:N1"
+                }
+                .into(),
+                holder: "opaque-holder".into(),
+                acquired_at: crate::claims::now_ms(),
+                pid: Some(std::process::id() as i32),
+                host: crate::claims::hostname(),
+                pid_unavailable: false,
+                expires_at: None,
+                reason: Some("resume reserve".into()),
+                harness: claim_sid.map(|_| "claude".into()),
+                session_id: claim_sid.map(str::to_string),
+                pid_provenance: None,
+                machine_id: None,
+                metadata: Default::default(),
+            };
+            crate::claim_store::seed_at_path(
+                &crate::claims::claim_path(&rec.key, Some(dir.path())).unwrap(),
+                &rec,
+            );
+        }
+        let summary = gc_sweep::run(
+            &home,
+            &emitter,
+            900,
+            false,
+            7,
+            &gc_sweep::read_graph_entries,
+            &|_| Some(vec![quiet.clone()]),
+            &uniform_ages(7200),
+            &|_| true,
+            &|_| crate::daemon::CascadeOutcome::NotApplicable,
+            &|_| crate::daemon::CascadeOutcome::NotApplicable,
+            &no_agents,
+            &|_| (None, None),
+            &|_| None,
+        );
+        let live = summary
+            .kept_live_claim
+            .iter()
+            .any(|(id, _)| id == "t-claim");
+        let unread = summary
+            .kept_other
+            .iter()
+            .any(|(id, reason)| id == "t-claim" && reason == "claims unreadable");
+        let retired = summary.retired.iter().any(|(id, _)| id == "t-claim");
+        let outcome = match expected {
+            "live" => live,
+            "unread" => unread,
+            _ => retired,
+        };
+        if !outcome {
+            failures.push(format!("{case}: expected {expected}, got {summary:?}"));
+        }
+        if scope == "unrelated" || scope == "global" {
+            if !summary
+                .kept_other
+                .iter()
+                .any(|(id, reason)| id == "row-other" && reason == "claims unreadable")
+            {
+                failures.push(format!(
+                    "{case}: required unread scope did not protect row-other: {summary:?}"
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// The blueprint retirement families, split by the file budget; the

@@ -167,6 +167,7 @@ mod tests {
             holder_pid: None,
             seed: Some(seed.to_string()),
             session_phase: None,
+            background_job: false,
         }
     }
 
