@@ -1,0 +1,47 @@
+# The bridge wheel's build root: a TOML-only hatchling project. The wheel
+# carries the four Rust binaries as shared scripts and nothing else, so
+# `uv tool install fno` lands a working `fno` front door. Law d-df1f42c1 keeps
+# this wheel on PyPI for good: an old wheel install's `fno update` reaches it
+# in one hop, and its front door moves the install to ~/.fno/install/bin on
+# first run. No Python package rides in it.
+#
+# Measured on uv 0.13.5: uv records every shared script in
+# [[tool.entrypoints]], so the first-run move's relink finds `fno` there, and
+# an unpinned by-name receipt stays index-style, so receipt_is_index reads it
+# as a wheel install.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fno"
+# Stamped by scripts/release/sync-version.sh from the release version (PEP 440).
+dynamic = ["version"]
+requires-python = ">=3.11"
+
+[project.scripts]
+# One real entry point. uv's tool upgrade reads the candidate's executables
+# from lazy entry-point metadata and refuses a wheel that declares none, so
+# the shared scripts below never survive an index upgrade on their own.
+# The name stays clear of the four binaries and of the retired fno-py name
+# the bridge-wheel smoke forbids.
+fno-bridge = "fno_launcher:main"
+
+[tool.hatch.version]
+path = "VERSION"
+pattern = "^(?P<version>.+)$"
+
+[tool.hatch.build.targets.wheel]
+# bypass-selection: no auto-discovered packages; the payload is exactly the
+# force-include map plus the shared scripts.
+bypass-selection = true
+# Sources resolve relative to this root, two levels below the repo root.
+# The launcher lives in scripts/release (the ledger's keep home for release
+# CI Python) and force-includes into the wheel at site-packages root.
+force-include = { "../../LICENSE" = "_fno_licenses/LICENSE", "../../NOTICE" = "_fno_licenses/NOTICE", "../../scripts/release/fno_launcher.py" = "fno_launcher.py" }
+
+[tool.hatch.build.targets.wheel.shared-scripts]
+"staged/fno" = "fno"
+"staged/fno-agents" = "fno-agents"
+"staged/fno-agents-daemon" = "fno-agents-daemon"
+"staged/fno-agents-worker" = "fno-agents-worker"

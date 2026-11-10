@@ -1,0 +1,720 @@
+//! The periodic fleet arms, one driver: which arms run on each tick, and on
+//! which home. Extracted verbatim from `run()`'s idle tick (daemon.rs is
+//! shrink-only) so the sandbox guard can gate the whole set at one call site:
+//! a daemon on a sandbox home builds no `FleetArms` at all, because every arm
+//! here resolves its targets from the real cwd, the real graph, the mux, `ps`
+//! and the `fno` porcelain - none from the daemon's own home.
+
+use super::*;
+
+// Declared here, not in daemon.rs: that file is over its line budget and
+// may only shrink. This arm block plus this declaration is the sweep's
+// whole wiring footprint. The #[path] pins resolution beside the sibling
+// daemon modules: a mod declared in fleet_arms.rs otherwise looks for a
+// fleet_arms/ child directory, and the packaged crate fails with E0583.
+#[path = "shell_writers_sweep.rs"]
+pub(crate) mod shell_writers_sweep;
+
+/// Arm state used only by the tick arms. The idle-probe locals
+/// (`idle_probe_in_flight`, `idle_probe_verdict`, `drift_flag`) stay in
+/// `run()`: they serve the idle-exit tail, not the fleet.
+pub(super) struct FleetArms {
+    // Screen-manifest scrape gate: a slow mux stalls only its own sweep.
+    scrape_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    // Terminal-stop gate: a large marker set never serializes inline.
+    terminal_stop_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    worktree_sweep_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    // Orphaned-test-binary reap gate: shells ps + a kill, off the core loop.
+    orphan_sweep_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    last_orphan_sweep: Instant,
+    liveness_sweep_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    last_liveness_sweep: Instant,
+    tool_scan_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    last_tool_scan: Instant,
+    // The periodic arms: each module owns its cadence, gate and memory.
+    build_marks: crate::build_marks::Arm,
+    machine_watch: crate::machine_watch::Arm,
+    claude_restart_watch: crate::claude_restart_watch::Arm,
+    merge_close: crate::merge_close::Arm,
+    symptom_recheck: crate::symptom_recheck::Arm,
+    correction_fold: crate::correction_fold::Arm,
+    golden_drafts: crate::evals_drafts::Arm,
+    refusal_fold: crate::refusal_fold::Arm,
+    eval_traces: crate::evals_traces::Arm,
+    eval_labels: crate::evals_labels::Arm,
+    team_ledger: crate::rundown::Arm,
+    lead_eval: crate::lead_eval::Arm,
+    fleet_beacon: crate::fleet_beacon::Arm,
+    arm_watch: crate::arm_watch::Arm,
+    provider_cap: crate::provider_cap_commands::Arm,
+    usage_refresh: crate::usage_refresh::Arm,
+    slot_cutover: crate::slot_cutover::Arm,
+    attention: crate::attention_arm::Arm,
+    otlp_export: crate::otlp_export::Arm,
+    eval_events: crate::eval_events::Arm,
+    question_judge: crate::question_judge::Arm,
+    burn_watch: crate::burn_watch::Arm,
+    watch_expiry: crate::watch_expiry::Arm,
+    node_liveness: crate::node_liveness::Arm,
+    ci_cadence: crate::ci_cadence::Arm,
+    main_revert: crate::main_revert::Arm,
+    ci_tier: crate::ci_tier::Arm,
+    look_hold: crate::look_hold::Arm,
+    merge_queue: crate::merge_queue::Arm,
+    pr_idle: crate::pr_idle::Arm,
+    codex_watch: crate::codex_watch::Arm,
+    lead_wake: crate::lead_wake::Arm,
+    worker_wake: crate::worker_wake::Arm,
+    pane_loop: crate::pane_loop::Arm,
+    notice_route: crate::notice_route::Arm,
+    help_router: crate::help_router::Arm,
+    first_check: crate::first_check::Arm,
+    spawn_watch: crate::first_check::Arm,
+    prompt_wait: crate::first_check::Arm,
+    lease_heartbeat: crate::lease_heartbeat::Arm,
+    backlog_share: crate::backlog_share::Arm,
+    mail: crate::mail_arm::Arm,
+    numbers: crate::numbers::Arm,
+    // Freed-page return: keeps RSS near live use after a burst.
+    page_relief: crate::page_relief::Arm,
+    // The board render: off the Python write path (law d-bad5a42f), the
+    // daemon ticks it every interval and stamps rendered_version.
+    board_render: crate::board_render_arm::Arm,
+    // Retirement-sweep cadence: the throttle stamp beside the gate,
+    // plus the next interval cell the sweep body hands back (the idle-probe
+    // verdict pattern), so the tick reads a mutex instead of config files.
+    last_gc_sweep: Instant,
+    retire_interval_next: Arc<crate::gc::RetireIntervalCell>,
+    // The state-file sweep: its own hourly stamp and one-in-flight gate.
+    last_state_sweep: Instant,
+    state_sweep_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    // Dead-row GC gate: its dormant check shells out to the truth
+    // probe, so it gets the same one-in-flight discipline as its neighbors.
+    gc_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    // Stale-question reconcile: same one-in-flight discipline as the sweeps
+    // beside it. The command dedupes on outcome identity, so an extra run is a
+    // no-op; the gate exists so a slow fleet probe never stacks.
+    stale_sweep_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    // Park sweep: same one-in-flight discipline. The command is idempotent on a
+    // store nobody touched, so an extra run is a no-op; the gate exists so a
+    // slow head probe never stacks.
+    park_sweep_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    // Sandbox-denial ingest: same one-in-flight discipline. The pass reads
+    // only new transcript bytes since its offset state, so an extra run is
+    // cheap; the gate exists so a large first-contact scan never stacks.
+    sandbox_ingest_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    // Codex folder-trust auto-answer: same one-in-flight discipline. The
+    // pass reads one mux listing plus one grid per joined pane, so an extra
+    // run is cheap; the gate exists so a slow scrape never stacks.
+    trust_sweep_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    // Evals-gate settle: same one-in-flight discipline. The pass costs one
+    // state read when the gate is idle, so an extra run is cheap; the gate
+    // exists so a slow compare-and-post never stacks.
+    evals_settle_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    // Evals launch and scheduled-bank work: bounded client invocation,
+    // independent of pr-watch's saturated tick budget.
+    evals_arm_in_flight: Arc<std::sync::atomic::AtomicBool>,
+    // Legacy shell-writer rendezvous sweep: same one-in-flight discipline.
+    // The pass is a few read_dir walks over the state root and the spaces,
+    // so an extra run is cheap; the gate exists so a machine carrying the
+    // full leaked residue never stacks unbounded passes.
+    shell_writers_sweep_in_flight: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// The merged-cleanup command the sweep arm runs, shared by the apply
+/// pass and the orders probe's dry-run read.
+fn cleanup_command(home: &crate::paths::AgentsHome, root: &str) -> std::process::Command {
+    let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
+    cmd.current_dir(root)
+        .env("FNO_AGENTS_HOME", home.root())
+        .args(["agents", "workspace", "worktree", "cleanup", "--merged"]);
+    cmd
+}
+
+impl FleetArms {
+    pub(super) fn new(opts: &DaemonOptions) -> Self {
+        let now = Instant::now();
+        Self {
+            scrape_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            terminal_stop_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            worktree_sweep_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            orphan_sweep_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            last_orphan_sweep: now
+                .checked_sub(crate::orphan_reap::ORPHAN_SWEEP_SECS)
+                .unwrap_or(now),
+            liveness_sweep_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            last_liveness_sweep: Instant::now(),
+            tool_scan_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            last_tool_scan: Instant::now(),
+            machine_watch: crate::machine_watch::Arm::default(),
+            claude_restart_watch: crate::claude_restart_watch::Arm::default(),
+            build_marks: crate::build_marks::Arm::default(),
+            merge_close: crate::merge_close::Arm::default(),
+            symptom_recheck: crate::symptom_recheck::Arm::default(),
+            correction_fold: crate::correction_fold::Arm::default(),
+            golden_drafts: crate::evals_drafts::Arm::default(),
+            refusal_fold: crate::refusal_fold::Arm::default(),
+            eval_traces: crate::evals_traces::Arm::default(),
+            eval_labels: crate::evals_labels::Arm::default(),
+            team_ledger: crate::rundown::Arm::default(),
+            lead_eval: crate::lead_eval::Arm::default(),
+            fleet_beacon: crate::fleet_beacon::Arm::default(),
+            arm_watch: crate::arm_watch::Arm::new(opts.agents_config_cwd.clone()),
+            provider_cap: crate::provider_cap_commands::Arm::new(opts.agents_config_cwd.clone()),
+            usage_refresh: crate::usage_refresh::Arm::new(opts.agents_config_cwd.clone()),
+            slot_cutover: crate::slot_cutover::Arm::new(opts.agents_config_cwd.clone()),
+            attention: crate::attention_arm::Arm::new(opts.agents_config_cwd.clone()),
+            otlp_export: crate::otlp_export::Arm::new(opts.agents_config_cwd.clone()),
+            eval_events: crate::eval_events::Arm::new(opts.agents_config_cwd.clone()),
+            question_judge: crate::question_judge::Arm::new(opts.agents_config_cwd.clone()),
+            burn_watch: crate::burn_watch::Arm::default(),
+            watch_expiry: crate::watch_expiry::Arm::default(),
+            node_liveness: crate::node_liveness::Arm::default(),
+            ci_cadence: crate::ci_cadence::Arm::default(),
+            main_revert: crate::main_revert::Arm::default(),
+            ci_tier: crate::ci_tier::Arm::default(),
+            look_hold: crate::look_hold::Arm::default(),
+            merge_queue: crate::merge_queue::Arm::default(),
+            pr_idle: crate::pr_idle::Arm::default(),
+            codex_watch: crate::codex_watch::Arm::default(),
+            page_relief: crate::page_relief::Arm::default(),
+            lead_wake: crate::lead_wake::Arm::new(opts.agents_config_cwd.clone()),
+            worker_wake: crate::worker_wake::Arm::default(),
+            pane_loop: crate::pane_loop::Arm::default(),
+            notice_route: crate::notice_route::Arm::new(opts.agents_config_cwd.clone()),
+            help_router: crate::help_router::Arm::new(opts.agents_config_cwd.clone()),
+            first_check: crate::first_check::Arm::default(),
+            spawn_watch: crate::first_check::Arm::new("spawn-watch", crate::spawn_watch::run_pass),
+            prompt_wait: crate::first_check::Arm::new("prompt-wait", crate::prompt_wait::run_pass),
+            lease_heartbeat: crate::lease_heartbeat::Arm::default(),
+            backlog_share: crate::backlog_share::Arm::default(),
+            mail: crate::mail_arm::Arm::default(),
+            numbers: crate::numbers::Arm::default(),
+            board_render: crate::board_render_arm::Arm::default(),
+            last_gc_sweep: Instant::now(),
+            retire_interval_next: crate::gc::seed_retire_interval_cell(&opts.agents_config_cwd),
+            // Due on the first tick, so a daemon that restarts often still sweeps.
+            last_state_sweep: now
+                .checked_sub(crate::gc::STATE_SWEEP_INTERVAL)
+                .unwrap_or(now),
+            state_sweep_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            gc_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            stale_sweep_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            park_sweep_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            sandbox_ingest_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            trust_sweep_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            evals_settle_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            evals_arm_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            shell_writers_sweep_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// One idle tick's worth of fleet arms. Every arm keeps the loop's rule:
+    /// nothing blocking runs INLINE, so each shells out behind
+    /// `spawn_blocking` (or a task) plus its one-in-flight gate.
+    pub(super) fn tick(&mut self, ctx: &Arc<Ctx>) {
+        // Screen-manifest scrape sweep (the badge-lattice fallback
+        // rung): subprocesses + file IO, so it runs off-loop under
+        // spawn_blocking behind the one-in-flight gate.
+        if !self
+            .scrape_in_flight
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            let flag = Arc::clone(&self.scrape_in_flight);
+            let home = ctx.home.clone();
+            let emitter = EventEmitter::new(ctx.home.events_jsonl(), "daemon");
+            let notify_on_blocked = ctx.opts.notify_on_blocked;
+            tokio::task::spawn_blocking(move || {
+                let _gate = SweepGate(flag);
+                crate::scrape::scrape_sweep(&home, &emitter, notify_on_blocked);
+            });
+        }
+        // Retirement sweep: a row leaves when its work is done (reverse
+        // join) and its transcript is quiet past `agents.retire_grace_s`.
+        // The dead team sweep runs first. Throttled to
+        // `agents.retire_interval_s`; off-loop.
+        let retire_interval = crate::gc::retire_interval_snapshot(&self.retire_interval_next);
+        crate::gc::maybe_retirement_sweep(
+            &mut self.last_gc_sweep,
+            &self.gc_in_flight,
+            &self.retire_interval_next,
+            ctx.home.clone(),
+            ctx.opts.agents_config_cwd.clone(),
+            ctx.home.events_jsonl(),
+            retire_interval,
+            {
+                let prune_cwd = ctx.opts.agents_config_cwd.clone();
+                move || crate::gc::mux_tab_sweep(None, &prune_cwd, false, false)
+            },
+            crate::gc::production_roster_sweep,
+            crate::gc::production_team_sweep,
+        );
+        crate::gc::maybe_state_sweep(
+            &mut self.last_state_sweep,
+            &self.state_sweep_in_flight,
+            ctx.home.clone(),
+            ctx.opts.agents_config_cwd.clone(),
+            ctx.home.events_jsonl(),
+        );
+        // Worktree sweep + merge reaper: the sweep backstops
+        // what the reaper cannot reach; the reaper is the merge-triggered
+        // consumer of `merge_cleanup_requested` (60s floor). Both
+        // off-loop; grace and stop order live in merge_reap.rs.
+        if !self
+            .worktree_sweep_in_flight
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            let flag = Arc::clone(&self.worktree_sweep_in_flight);
+            let home = ctx.home.clone();
+            let emitter = EventEmitter::new(ctx.home.events_jsonl(), "daemon");
+            let grace_cwd = ctx.opts.agents_config_cwd.clone();
+            tokio::task::spawn_blocking(move || {
+                let _gate = SweepGate(flag);
+                let roots = worktree_sweep::registry_repo_roots(&home);
+                let now = now_epoch_secs();
+                // The orders probe and the report pass read the same repo in
+                // the same window: the probe's output replays as the report
+                // instead of the command running twice. Misses (a probe that
+                // never ran the command) and apply passes still execute.
+                let probe_runs: std::cell::RefCell<
+                    std::collections::HashMap<String, (Option<i32>, String, String)>,
+                > = std::cell::RefCell::new(Default::default());
+                let probe_runs = &probe_runs;
+                worktree_sweep::worktree_sweep(
+                    &home,
+                    &emitter,
+                    now,
+                    &roots,
+                    &|root| {
+                        // A pending merge-cleanup request is the standing
+                        // order: the pass applies while one waits.
+                        if crate::merge_reap::merge_cleanup_requested(&home, root) {
+                            return true.into();
+                        }
+                        // An outside merge (`gh pr merge`, the web button)
+                        // mints no request. The command's own dry-run judgment
+                        // is the same merge proof in git form: an eligible
+                        // tree reads merged-or-done and clean, and the
+                        // --apply pass re-judges every guard per tree.
+                        match cleanup_command(&home, root).output() {
+                            Ok(output) => {
+                                let out = (
+                                    output.status.code(),
+                                    String::from_utf8_lossy(&output.stdout).into_owned(),
+                                    String::from_utf8_lossy(&output.stderr).into_owned(),
+                                );
+                                probe_runs
+                                    .borrow_mut()
+                                    .insert(root.to_string(), out.clone());
+                                worktree_sweep::apply_authority(false, Some(out.1.as_str())).into()
+                            }
+                            // A probe that cannot run the command is an
+                            // unreadable order probe: skip the repo and let
+                            // the sweep emit, never collapse into report-only.
+                            Err(error) => worktree_sweep::WorktreeSweepOrderRead {
+                                standing: None,
+                                exit_code: None,
+                                stderr: error.to_string(),
+                            },
+                        }
+                    },
+                    &|root, apply| {
+                        let cached = if apply {
+                            None
+                        } else {
+                            probe_runs.borrow_mut().remove(root)
+                        };
+                        if let Some((code, stdout, stderr)) = cached {
+                            return worktree_sweep::WorktreeSweepOutput {
+                                exit_code: code,
+                                stdout,
+                                stderr,
+                            };
+                        }
+                        let mut cmd = cleanup_command(&home, root);
+                        if apply {
+                            cmd.arg("--apply");
+                        }
+                        match cmd.output() {
+                            Ok(output) => worktree_sweep::WorktreeSweepOutput {
+                                exit_code: output.status.code(),
+                                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                            },
+                            Err(error) => worktree_sweep::WorktreeSweepOutput {
+                                exit_code: None,
+                                stdout: String::new(),
+                                stderr: error.to_string(),
+                            },
+                        }
+                    },
+                );
+                let grace_secs = crate::agents_config::retire_grace_secs(&grace_cwd) as i64;
+                crate::merge_reap::consume_merge_cleanup_requests(
+                    &home, &roots, &emitter, grace_secs,
+                );
+                // Daily janitor plus the hourly cargo cap; gates and
+                // receipt in reclaim.rs.
+                crate::reclaim::maybe_run_daily(&home);
+                crate::reclaim::maybe_run_cargo_hourly(&home);
+                // Free space under the floor runs the janitor now, not on its clock.
+                crate::disk_floor::maybe_sweep(
+                    &home,
+                    crate::agents_config::min_free_disk_gb(&grace_cwd),
+                );
+            });
+        }
+        crate::orphan_reap::maybe_sweep(
+            &mut self.last_orphan_sweep,
+            &self.orphan_sweep_in_flight,
+            ctx.home.events_jsonl(),
+        );
+        crate::machine_watch::maybe_tick(&self.machine_watch, ctx.home.clone());
+        crate::claude_restart_watch::maybe_tick(&self.claude_restart_watch, ctx.home.clone());
+        crate::merge_close::maybe_tick(&self.merge_close, ctx.home.clone());
+        crate::symptom_recheck::maybe_tick(&self.symptom_recheck, ctx.home.clone());
+        // Corrections become events: off-loop, byte-budgeted, one in flight.
+        crate::correction_fold::maybe_tick(&self.correction_fold, ctx.home.clone());
+        crate::evals_drafts::maybe_tick(&self.golden_drafts, ctx.home.clone());
+        // Refusal pairs become filed nodes: daily, one in flight, off the
+        // core loop, the evals arms' own cadence.
+        crate::refusal_fold::maybe_tick(&self.refusal_fold, ctx.home.clone());
+        crate::evals_traces::maybe_tick(&self.eval_traces, ctx.home.clone());
+        crate::evals_labels::maybe_tick(&self.eval_labels, ctx.home.clone());
+        // The board render: graph.md plus every configured board target,
+        // once per moved version, off every caller's write path.
+        crate::board_render_arm::maybe_tick(&self.board_render, ctx.home.clone());
+        crate::rundown::maybe_tick(&self.team_ledger, ctx.home.clone());
+        crate::lead_eval::maybe_tick(&self.lead_eval, ctx.home.clone());
+        crate::fleet_beacon::maybe_tick(&self.fleet_beacon, ctx.home.clone());
+        crate::arm_watch::maybe_tick(&self.arm_watch, ctx.home.clone());
+        crate::provider_cap_commands::maybe_tick(&self.provider_cap, ctx.home.clone());
+        // Every account's usage re-measured inside the cache TTL.
+        crate::usage_refresh::maybe_tick(&self.usage_refresh);
+        crate::slot_cutover::maybe_tick(&self.slot_cutover, ctx.home.clone());
+        crate::attention_arm::maybe_tick(&self.attention, ctx.home.clone());
+        crate::otlp_export::maybe_tick(&self.otlp_export, ctx.home.clone());
+        crate::eval_events::maybe_tick(&self.eval_events, ctx.home.clone());
+        crate::question_judge::maybe_tick(&self.question_judge, ctx.home.clone());
+        crate::burn_watch::maybe_tick(&self.burn_watch, ctx.home.clone());
+        crate::watch_expiry::maybe_tick(&self.watch_expiry, ctx.home.clone());
+        // The cargo build marks: every 5s the doors are read once and the
+        // per-session sidecars the mux rows paint from are rewritten.
+        crate::build_marks::maybe_tick(&self.build_marks);
+        // Every claimed node has a live run, a wait or a recovery task.
+        crate::node_liveness::maybe_tick(&self.node_liveness, ctx.home.clone());
+        // The post-push CI reader: each pushed head is read at 1, 15, 30
+        // and 55 minutes; a real red cancels its runs and wakes the pusher.
+        crate::ci_cadence::maybe_tick(&self.ci_cadence, ctx.home.clone());
+        // The main repair: a red main past its window gets the culprit
+        // merge reverted (opt-in, main_revert.rs).
+        crate::main_revert::maybe_tick(&self.main_revert, ctx.home.clone());
+        // The CI tier: open PRs run CI six at a time (opt-in, ci_tier.rs).
+        crate::ci_tier::maybe_tick(&self.ci_tier, ctx.home.clone());
+        // Restore only CI runs cancelled by the former look hold.
+        crate::look_hold::maybe_tick(&self.look_hold, ctx.home.clone());
+        // The merge queue: green PRs land in batches tested on main (opt-in,
+        // merge_queue.rs).
+        crate::merge_queue::maybe_tick(&self.merge_queue, ctx.home.clone());
+        // A PR green, mergeable and reviewed past 2h alarms every lead and the phone.
+        crate::pr_idle::maybe_tick(&self.pr_idle, ctx.home.clone());
+        // The settle waker: on CI settle it wakes the parked session
+        // through its harness lane - codex turn/start, every other harness
+        // the mail lane. Registered beside its expiry sibling.
+        crate::codex_watch::maybe_tick(&self.codex_watch, ctx.home.clone());
+        // The lead waker: a lead past its check-in beat by one minute
+        // gets the daemon's wake, and its rung-up lead is told. Writes
+        // the lead_wake tick row the status table read UNOBSERVED before.
+        crate::lead_wake::maybe_tick(&self.lead_wake, ctx.home.clone());
+        crate::worker_wake::maybe_tick(&self.worker_wake, ctx.home.clone());
+        // The pane looper: one armed schedule per session; each due tick is
+        // typed into the row's pane and lands as a pane_loop_tick event.
+        crate::pane_loop::maybe_tick(&self.pane_loop, ctx.home.clone());
+        // The notice router: lead-scope reconcile warnings become one
+        // deduped mail to the owning lead; the hourly fold turns repeated
+        // failures and banners into one owned node.
+        crate::notice_route::maybe_tick(&self.notice_route, ctx.home.clone());
+        // The help-router sweep: fires wait/budget timers past their
+        // backoff and climbs question deliveries that handed without a
+        // read inside the 10 minute lease (the help-router sweep).
+        crate::help_router::maybe_tick(&self.help_router, ctx.home.clone());
+        self.first_check.tick(ctx.home.clone());
+        // Every launch record reaches its first turn or tells its caller
+        // where it is stuck, by 5 minutes after the call.
+        self.spawn_watch.tick(ctx.home.clone());
+        // A thread worker parked on a permission prompt past 5 minutes mails
+        // its spawner and lead; it has no pane for the check-in to scrape.
+        self.prompt_wait.tick(ctx.home.clone());
+        // With a shared primary set, renew this machine's dispatch leases.
+        crate::lease_heartbeat::maybe_tick(&self.lease_heartbeat);
+        // With the backlog shared, keep this machine's replica fresh.
+        crate::backlog_share::maybe_tick(&self.backlog_share);
+        // With a shared primary set, pull cross-host mail rows, drain the
+        // send-side outbox, and expire rows past their TTL.
+        crate::mail_arm::maybe_tick(&self.mail);
+        // Mint and cache the short numbers for decisions and questions.
+        crate::numbers::maybe_tick(&self.numbers, &ctx.opts.agents_config_cwd);
+        // Return freed pages to the OS once a burst's high-water has been
+        // held past the interval, so RSS tracks live use again.
+        crate::page_relief::maybe_tick(&self.page_relief, ctx.home.clone());
+        // Serve-only liveness tick: the served pair is the sweep's measurement,
+        // refreshed every SERVED_LIVENESS_CADENCE; off-loop, one-in-flight.
+        let codex_threads_for_liveness = Arc::clone(&ctx.codex_threads);
+        crate::liveness_sweep::maybe_sweep(
+            &mut self.last_liveness_sweep,
+            &self.liveness_sweep_in_flight,
+            ctx.home.clone(),
+            ctx.home.events_jsonl(),
+            Arc::new(move |entry: &RegistryEntry| {
+                match codex_threads_for_liveness.try_lock() {
+                    Ok(guard) => guard.contains_key(&entry.name),
+                    // An actor is mid insert/remove: hosted, so a race
+                    // can never settle a thread the map is about to name.
+                    Err(_) => true,
+                }
+            }),
+        );
+        // Tool-activity tail scan: the sideline activity ramp's source. The
+        // 5s counting ceiling, one-in-flight, off-loop; counts land on the
+        // registry row and the fold (offset) stays in daemon memory.
+        crate::tool_activity::maybe_scan(
+            &mut self.last_tool_scan,
+            &self.tool_scan_in_flight,
+            ctx.home.clone(),
+        );
+        // Terminal-stop sweep: exit fire-and-forget `claude --bg`
+        // workers finalize marked terminal, so a shipped bg /target frees
+        // its slot instead of parking at an idle prompt forever. Spawned
+        // off the select arm behind a one-in-flight gate (mirrors the
+        // scrape sweep) so N serialized `claude stop`s never starve
+        // accept()/SIGTERM. Cheap when there are no markers.
+        if !self
+            .terminal_stop_in_flight
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            let flag = Arc::clone(&self.terminal_stop_in_flight);
+            let home = ctx.home.clone();
+            let emitter = EventEmitter::new(ctx.home.events_jsonl(), "daemon");
+            tokio::spawn(async move {
+                let _gate = SweepGate(flag);
+                terminal_stop_sweep(&home, &emitter).await;
+            });
+        }
+        // Stale-question reconcile, the arm above `stale_sweep`: its
+        // doc comment there covers the shape.
+        if !self
+            .stale_sweep_in_flight
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            let flag = Arc::clone(&self.stale_sweep_in_flight);
+            let home = ctx.home.clone();
+            let emitter = EventEmitter::new(ctx.home.events_jsonl(), "daemon");
+            tokio::task::spawn_blocking(move || {
+                let _gate = SweepGate(flag);
+                stale_sweep(&home, &emitter, now_epoch_secs(), &|| {
+                    Some(crate::stale_lane::stale_escalate().to_string())
+                });
+            });
+        }
+        // Park sweep, the arm beside `stale_sweep`: same doc comment
+        // there covers the one-in-flight shape. The run closure walks
+        // every repo root the registry knows, so parked rows of other
+        // repos are un-parked from THEIR checkout (the head probe resolves PR numbers against the repo).
+        if !self
+            .park_sweep_in_flight
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            let flag = Arc::clone(&self.park_sweep_in_flight);
+            let home = ctx.home.clone();
+            let emitter = EventEmitter::new(ctx.home.events_jsonl(), "daemon");
+            tokio::task::spawn_blocking(move || {
+                let _gate = SweepGate(flag);
+                park_sweep(&home, &emitter, now_epoch_secs(), &|| {
+                    sweeps::sweep_all_roots(&home)
+                });
+            });
+        }
+        // Sandbox-denial ingest: codex transcripts -> sandbox_denial rows,
+        // hourly, off-loop. The claude half rides another node; the row
+        // shape's harness field is the seam.
+        if !self
+            .sandbox_ingest_in_flight
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            let flag = Arc::clone(&self.sandbox_ingest_in_flight);
+            let home = ctx.home.clone();
+            let emitter = EventEmitter::new(ctx.home.events_jsonl(), "daemon");
+            tokio::task::spawn_blocking(move || {
+                let _gate = SweepGate(flag);
+                sandbox_ingest::sandbox_ingest(&home, &emitter, now_epoch_secs());
+            });
+        }
+        // Codex folder-trust auto-answer: the arm beside the other sweeps
+        // (same one-in-flight shape, doc comment on the sweep body). The run
+        // closure presses the modal's first option through the pane.
+        if !self
+            .trust_sweep_in_flight
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            let flag = Arc::clone(&self.trust_sweep_in_flight);
+            let home = ctx.home.clone();
+            let emitter = EventEmitter::new(ctx.home.events_jsonl(), "daemon");
+            tokio::task::spawn_blocking(move || {
+                let _gate = SweepGate(flag);
+                sweeps::trust_answer_sweep(&home, &emitter, now_epoch_secs(), &|pane, key| {
+                    std::process::Command::new(crate::scrape::fno_bin())
+                        .args(["mux", "pane", "send", &pane.to_string(), "--raw", key])
+                        .output()
+                        .map(|o| o.status.success())
+                        .unwrap_or(false)
+                });
+            });
+        }
+        // Evals-gate settle: grades a finished gate run within a minute of
+        // its exit, on its own minute clock - never inside a pr-watch tick,
+        // whose budget a fleet-loaded sweep saturates (law d-bad5a42f: the
+        // settle is off-loop background work that never blocks foreground).
+        // One-in-flight like its siblings; the pass is one state read when
+        // the gate idles.
+        if !self
+            .evals_settle_in_flight
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            let flag = Arc::clone(&self.evals_settle_in_flight);
+            let home = ctx.home.clone();
+            let emitter = EventEmitter::new(ctx.home.events_jsonl(), "daemon");
+            tokio::task::spawn_blocking(move || {
+                let _gate = SweepGate(flag);
+                sweeps::evals_settle_sweep(&home, &emitter, now_epoch_secs(), &|| {
+                    let history = crate::evals::history_path();
+                    match crate::evals_arm::any_bank_repo() {
+                        Some(repo) => {
+                            let fno_bin = crate::scrape::fno_bin().to_string_lossy().into_owned();
+                            crate::evals_gate::daemon_settle(&history, &fno_bin, &repo)
+                        }
+                        // No bank anywhere: nothing to settle, ever. Reads
+                        // idle, so the sweep stays silent instead of
+                        // journaling a waiting minute every 60s.
+                        None => "idle".to_string(),
+                    }
+                });
+            });
+        }
+        // Launches due gate and scheduled-bank runs off-loop. The one-in-flight
+        // guard keeps a slow child from stacking; the child itself is bounded.
+        if !self
+            .evals_arm_in_flight
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            let flag = Arc::clone(&self.evals_arm_in_flight);
+            let home = ctx.home.clone();
+            let cwd = ctx.opts.agents_config_cwd.clone();
+            let emitter = EventEmitter::new(ctx.home.events_jsonl(), "daemon");
+            tokio::task::spawn_blocking(move || {
+                let _gate = SweepGate(flag);
+                sweeps::evals_arm_sweep(&home, &emitter, now_epoch_secs(), &|| {
+                    evals_arm_receipt(&home, &cwd)
+                });
+            });
+        }
+        // Legacy shell-writer rendezvous sweep: hourly, off-loop. The module
+        // owns its cadence and stamp, the siblings' shape; the residue is
+        // static, so the pass is a quiet no-op on current machines.
+        if !self
+            .shell_writers_sweep_in_flight
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            let flag = Arc::clone(&self.shell_writers_sweep_in_flight);
+            let home = ctx.home.clone();
+            let emitter = EventEmitter::new(ctx.home.events_jsonl(), "daemon");
+            tokio::task::spawn_blocking(move || {
+                let _gate = SweepGate(flag);
+                shell_writers_sweep::shell_writers_sweep(&home, &emitter, now_epoch_secs());
+            });
+        }
+        crate::question_sweep::daemon_tick(&ctx.home, now_epoch_secs());
+        crate::question_probe::daemon_tick(&ctx.home, now_epoch_secs());
+    }
+}
+
+fn evals_arm_receipt(home: &crate::paths::AgentsHome, cwd: &Path) -> Option<String> {
+    let schedule_days = crate::agents_config::config_lookup(cwd, &["evals", "schedule_days"])
+        .and_then(|value| value.as_integer())
+        .unwrap_or(7);
+    if schedule_days <= 0 {
+        return Some(
+            serde_json::json!({
+                "acted": 0,
+                "skip_reason": "evals_off",
+                "detail": "evals.schedule_days 0"
+            })
+            .to_string(),
+        );
+    }
+    if !crate::backlog::advance_settings::autonomy_master_enabled(Some(cwd)) {
+        return Some(
+            serde_json::json!({
+                "acted": 0,
+                "skip_reason": "autonomy_off",
+                "detail": "config.autonomy.enabled is false"
+            })
+            .to_string(),
+        );
+    }
+    let stale_days = match crate::agents_config::config_lookup(cwd, &["evals", "stale_days"])
+        .and_then(|value| value.as_integer())
+        .unwrap_or(7)
+    {
+        0 => 7,
+        value => value,
+    };
+    let history = crate::evals::history_path();
+    let summary = crate::evals_trend::summary_payload(
+        &history.to_string_lossy(),
+        stale_days,
+        chrono::Utc::now(),
+    );
+    let fno_agents_bin = std::env::var_os("FNO_AGENTS_BIN")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|path| path.parent().map(|dir| dir.join("fno-agents")))
+        })
+        .unwrap_or_else(|| PathBuf::from("fno-agents"));
+    let mut cmd = std::process::Command::new(fno_agents_bin);
+    let args = vec![
+        "evals-arm".to_string(),
+        "--summary-json".to_string(),
+        summary.to_string(),
+        "--history".to_string(),
+        history.to_string_lossy().into_owned(),
+        "--events".to_string(),
+        home.events_jsonl().to_string_lossy().into_owned(),
+        "--fno-bin".to_string(),
+        crate::scrape::fno_bin().to_string_lossy().into_owned(),
+        "--schedule-days".to_string(),
+        schedule_days.to_string(),
+        "--stale-days".to_string(),
+        stale_days.to_string(),
+    ];
+    cmd.current_dir(cwd)
+        .env("FNO_AGENTS_HOME", home.root())
+        .args(args);
+    let budget = crate::bounded_cmd::load_scaled_budget_s(30, 120);
+    match crate::bounded_cmd::output_with_timeout_result(cmd, budget) {
+        Ok(output) if output.status.success() => {
+            Some(String::from_utf8_lossy(&output.stdout).into_owned())
+        }
+        Ok(output) => Some(serde_json::json!({
+            "acted": 0,
+            "skip_reason": "arm_failed",
+            "detail": format!("evals-arm exited {:?}: {}", output.status.code(), String::from_utf8_lossy(&output.stderr).chars().take(500).collect::<String>())
+        }).to_string()),
+        Err(error) => Some(serde_json::json!({
+            "acted": 0,
+            "skip_reason": "arm_failed",
+            "detail": format!("evals-arm could not run: {error}")
+        }).to_string()),
+    }
+}

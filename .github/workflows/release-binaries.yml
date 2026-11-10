@@ -1,0 +1,219 @@
+name: release-binaries
+
+# Build standalone platform binaries (the `fno` front door and all three
+# `fno-agents` binaries) into one tarball per platform. Build-only: this
+# workflow publishes nothing. It runs on manual dispatch (an inspection
+# build) or as a reusable workflow called from release.yml, which owns every
+# publish leg behind the `release` environment approval, and from
+# main-binaries.yml, which feeds the bin-cache `fno update` downloads from.
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: "Release version to stamp (PEP 440); empty builds the checked-out source version"
+        type: string
+        default: ""
+      ref:
+        description: "Commit to build; empty builds the caller's ref"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: binary ${{ matrix.target.name }}
+    runs-on: ${{ matrix.target.runs-on }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - { name: macos-arm64, runs-on: macos-15, rust-target: aarch64-apple-darwin }
+          # macos-x64 is cross-compiled on the Apple Silicon runner (the native
+          # Intel macos-13 image is retired). rustup adds the x86_64 target and
+          # the universal macOS SDK links it; packaging only archives the files,
+          # so nothing here executes the x86_64 binaries.
+          - { name: macos-x64, runs-on: macos-15, rust-target: x86_64-apple-darwin }
+          - { name: linux-x64, runs-on: ubuntu-24.04, rust-target: x86_64-unknown-linux-musl }
+          - { name: linux-arm64, runs-on: ubuntu-24.04-arm, rust-target: aarch64-unknown-linux-musl }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        # No `ref:` argument: a workflow_call checkout taking an input-ref
+        # argument is the untrusted-checkout source of the cache-poisoning
+        # findings, so the pin step below applies inputs.ref through plain git
+        # instead, and checkout keeps the caller's sha when ref is empty.
+        with:
+          fetch-depth: 0
+          # Full history: build.rs bakes in the last commit that touched
+          # crates/. A shallow clone has one commit, so the binaries would
+          # report HEAD and `fno update` would judge them stale forever.
+
+      - name: Pin build ref
+        if: inputs.ref != ''
+        # Plain-git pin: fetches exactly that commit from origin and detaches
+        # on it, so the build runs the pinned source with no action-level ref.
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$REF"
+          git checkout --detach FETCH_HEAD
+
+      - name: Stamp release version
+        if: inputs.version != ''
+        # Workspace-only stamp (never committed): the built binaries report the
+        # release version, not main's. The script is taken from THIS workflow's
+        # commit, never the released checkout: the nightly ships the newest
+        # green rust-ci sha, which can be weeks old and carry a stamp script
+        # that predates the PEP 440 -> semver Cargo conversion, writing a PEP
+        # 440 version into Cargo.toml where cargo refuses to parse it.
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin "${{ github.sha }}"
+          git show "${{ github.sha }}:scripts/release/sync-version.sh" > scripts/release/sync-version.sh
+          bash scripts/release/sync-version.sh "$VERSION"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target.rust-target }}
+
+      - name: Install musl tools (linux)
+        if: startsWith(matrix.target.name, 'linux')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build the fno-agents binaries
+        working-directory: crates/fno-agents
+        run: cargo build --release --target ${{ matrix.target.rust-target }} --bins
+
+      - name: Build the fno front-door binary
+        working-directory: crates/fno
+        run: cargo build --release --target ${{ matrix.target.rust-target }} --bin fno
+
+      - name: Check macOS signing secrets
+        id: signing
+        if: startsWith(matrix.target.name, 'macos')
+        # Secrets are unreadable in `if:`, so they pass through env. A fork or
+        # a caller without `secrets: inherit` holds none; the build then ships
+        # ad hoc signed binaries and says so in one line.
+        shell: bash
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          if [ -n "$CERT_P12" ] && [ -n "$CERT_PASSWORD" ] \
+            && [ -n "$NOTARY_KEY" ] && [ -n "$NOTARY_KEY_ID" ] && [ -n "$NOTARY_ISSUER" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::macOS signing and notarization skipped: Developer ID secrets are not set (see docs/install.md); shipping binaries without a Developer ID signature."
+          fi
+
+      - name: Sign and notarize macOS binaries
+        if: steps.signing.outputs.ready == 'true'
+        shell: bash
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          RUST_TARGET: ${{ matrix.target.rust-target }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/fno-sign.keychain-db"
+          kpass="$(uuidgen)"
+          security create-keychain -p "$kpass" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$kpass" "$keychain"
+          printf '%s' "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -P "$CERT_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kpass" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" login.keychain-db
+          identity="$(security find-identity -v -p codesigning "$keychain" | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
+          if [ -z "$identity" ]; then
+            echo "::error::no Developer ID Application identity in MACOS_CERT_P12_BASE64"
+            exit 1
+          fi
+
+          # The identifiers match crates/fno/src/codesign.rs, so permission
+          # grants keyed on them survive the move from local to CI signing.
+          bins=(
+            "crates/fno-agents/target/$RUST_TARGET/release/fno-agents"
+            "crates/fno-agents/target/$RUST_TARGET/release/fno-agents-daemon"
+            "crates/fno-agents/target/$RUST_TARGET/release/fno-agents-worker"
+            "crates/fno/target/$RUST_TARGET/release/fno"
+          )
+          mkdir -p "$RUNNER_TEMP/notarize"
+          for b in "${bins[@]}"; do
+            codesign --force --timestamp --options runtime \
+              --sign "$identity" --identifier "dev.fno.$(basename "$b")" "$b"
+            codesign --verify --strict "$b"
+            cp "$b" "$RUNNER_TEMP/notarize/"
+          done
+
+          # notarytool takes a zip, not a tarball. A bare Mach-O cannot carry
+          # a stapled ticket, so Gatekeeper checks the notarization online.
+          (cd "$RUNNER_TEMP/notarize" && ditto -c -k . ../notarize.zip)
+          printf '%s' "$NOTARY_KEY" > "$RUNNER_TEMP/notary-key.p8"
+          # notarytool can exit 0 on an Invalid verdict, so read the status.
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" --wait --timeout 30m --output-format json \
+            --key "$RUNNER_TEMP/notary-key.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" \
+            | tee "$RUNNER_TEMP/notary.json"
+          rm -f "$RUNNER_TEMP/notary-key.p8"
+          if [ "$(jq -r '.status' "$RUNNER_TEMP/notary.json")" != "Accepted" ]; then
+            echo "::error::notarization was not accepted; see the notarytool output above"
+            exit 1
+          fi
+          security delete-keychain "$keychain"
+
+      - name: Package tarball
+        shell: bash
+        run: |
+          # tar's -C is cumulative: a second relative -C resolves from inside
+          # the first, so the fno leg chdir'd into
+          # crates/fno-agents/target/.../crates/fno/target/... and failed to
+          # open. Anchor both dirs at the workspace.
+          tar -czf "fno-agents-${{ matrix.target.name }}.tar.gz" \
+            -C "$PWD/crates/fno-agents/target/${{ matrix.target.rust-target }}/release" \
+              "fno-agents" "fno-agents-daemon" "fno-agents-worker" \
+            -C "$PWD/crates/fno/target/${{ matrix.target.rust-target }}/release" "fno"
+
+      # macos-x64 is cross-built on an Apple Silicon runner and cannot run its
+      # binaries here; the arm64 leg proves the identical packaging.
+      - name: fno.sh smoke (the installer adopts this tarball)
+        if: matrix.target.name != 'macos-x64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tgz="fno-agents-${{ matrix.target.name }}.tar.gz"
+          if command -v sha256sum >/dev/null 2>&1; then sha256sum "$tgz" > "$tgz.sha256"; else shasum -a 256 "$tgz" > "$tgz.sha256"; fi
+          bash tests/smoke/fno_sh_smoke.sh "$tgz"
+          rm -f "$tgz.sha256"
+
+      - name: brew-channel smoke (the formula installs this tarball)
+        if: matrix.target.name == 'macos-arm64'
+        shell: bash
+        run: |
+          # CI=true gates the INSTALL tier on: a local-tarball formula is brew
+          # installed, tested and uninstalled. The structural tier always runs.
+          bash tests/smoke/brew_formula_smoke.sh "fno-agents-${{ matrix.target.name }}.tar.gz"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target.name }}
+          path: fno-agents-${{ matrix.target.name }}.tar.gz

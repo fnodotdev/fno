@@ -1,0 +1,119 @@
+# `fno do pr heal`
+
+Everything after a push already had a reader. `fno do pr status` names the failing check and step. `fno do pr logs` spools its log. The stop gate knows whether main's HEAD is red on the same check. Nothing acted on what they read. So a red check cost a hand-driven fix-and-repush round every time. `heal` is the actor.
+
+## What it does
+
+heal reads the PR's failing checks over REST, gets each failing job's log, matches it against a signature table, and applies the mechanical fix. `--playbook` prints the table. This page keeps no copy of the table, because a doc copy drifts and the command's own output cannot.
+
+heal fixes three classes on its own. `rustfmt-drift` runs the pinned `cargo fmt` in each crate that rustfmt named. `ruff-lint` runs `ruff check --fix` over exactly the scope the gate reads. `closure-trailer` adds the generated `Fixes` closure line to the PR body. That edit re-fires the workflow through its `edited` trigger, so it needs no push. Two guards keep the write off a body a person is driving. A last closure line that already claims every id the red demanded is a stale red. The worker's fix (or heal's own write) has landed, and the re-fired run is settling it. Heal writes nothing there. Heal also writes at most once per head. A landed write records `bodywrite:<pr>:<head>` in the tick row's `bodywrite_keys`. A demand unmet again at the same head means the owner rewrote the line on purpose. Heal then stands down behind one deduplicated fleet task instead of fighting them tick after tick.
+
+## The rerun-before-real rule
+
+A red whose verdict a rerun can change is rerun once before anyone calls it real. `cancelled` gets a full `gh run rerun <run>`: it reached no verdict, so the rerun is how it reaches one. One hold comes first: when the run's every job (every page of them) ended `cancelled` with no runner and no start, and the status page names a live Actions incident, the rerun would feed the dead queue, so the row escalates with the incident line, the hold lands a `pr_heal_hold` journal row, and the rerun waits for the incident to clear. The hold row keeps the head out of the unchanged-PR skip, so every tick re-probes the incident and the rerun resumes the moment it clears. Both reads fail open - no casualty shape or no live page, and the rerun issues. The test-shaped classes (`pytest`, `cargo-test`, `shard-rollup`, `smoke-step`) and anything `unknown` get `gh run rerun <run> --failed`. A failure that passes on a second run was never the PR's defect. The deterministic classes (`rustfmt-drift`, `ruff-lint`, `mypy`, `closure-trailer`, `review-gate`, `guard-script`) never rerun: they fail identically every time, and the rerun is pure spend. The dedup key is `(head sha, run id)`, not the check name, because nine failing checks can share one workflow run and one `--failed` rerun covers them all. A second red on the same pair is the verdict: it escalates saying it failed twice on the same sha. A rerun that comes back green lands one `pr_heal_flake` row in the journal. When the log named a failing test, the key is that test. Otherwise the key is the check name. A key's third row files one backlog node. A flake that reruns green forever stays visible by construction. The `--playbook` table carries a `rerunnable` column, and it is the single source for the classification.
+
+Every other signature escalates with the command that reproduces it locally.
+
+## The two rules
+
+**One push, never over a run in flight.** heal commits the fixes once, then reads the checks again. A check still in flight means the commit stays local and the command exits 2, because a push cancels a run in flight. An unreadable second read holds the commit too. Unreadable is not settled.
+
+**A failure inherited from main is never counted against the PR.** heal reports it and changes nothing. A fix applied here puts main's problem in someone else's diff.
+
+`--apply` also refuses unless two things are true. This checkout must be the PR's own branch. Its tree must be clean. So a remedy never lands in a worktree that was not the target.
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | No red check belongs to this PR |
+| 1 | Escalations remain. The report names each repro |
+| 2 | A run is in flight. heal kept the commit local and did not push |
+| 3 | Wrong branch or a dirty worktree. Nothing ran |
+| 4 | A read failed |
+| 127 | The `fno-agents` binary was not found |
+
+The default is a dry run. `--apply` fixes, commits and pushes. `--all` reports every red open PR. `--all --apply` is the drive loop, described next.
+
+## The drive loop
+
+`--all --apply` iterates every open PR with something red of its own and heals each one. The loop lives in Rust beside the classifier. Each PR is healed from its own worktree. The worktree is located by matching the PR's head ref against `git worktree list`. A PR with no worktree is named and skipped. The loop never clones a repo on its own.
+
+Four refusals gate it:
+
+1. **Claim free.** A PR whose branch names a node with a live or suspect claim is skipped as `claim_held`. A healer pushing under a live worker is the two-writers failure. The claim lockfile is the read, never a stored pid.
+2. **Known signature.** Only a failing check the signature table recognizes is healed. An unknown signature becomes one operator question through `fno inbox outstanding ask`, deduplicated on a marker so a 600s tick cannot re-ask it.
+3. **One push per PR per cycle.** Each PR is visited once per invocation. The single-PR rules above hold inside it. A run in flight keeps the commit local.
+4. **Inherited failures are named and skipped.** A check red on `origin/main` too is main's problem. It is never fixed on the branch.
+
+Two rebase triggers run ahead of classification, because a push restarts CI and the old sha's checks are dead once it lands. A PR whose `mergeable` is `false` is conflicting and stuck by definition. A PR holding the `merge-slot:<base>` claim (the one the merge sweep named as next) is behind by the slot's own verdict. Both run `fno do pr push` from the PR's own worktree. They fetch origin/main. Merge-bearing branches use merge. Other branches use rebase. They preflight, push once, lease against the fetched remote head, and emit one receipt. A conflicting PR whose node a live worker holds is never rebased. The claim refusal runs first. A run is capped at six rebases, so a leaked trigger stops the loop instead of restarting CI on the whole fleet. A conflicting PR gets one refresh attempt per 24 hours, receipted `skip_rebase_cap` once spent. The attempt covers the `rebased` and `skip_rebase_noop` outcomes, and rows filter on the checkout root, so one repo's PR 12 never caps another's. A still-conflicting rebase spends the per-run budget instead, so a resolved conflict retries on the next tick. The merge-slot holder is exempt because it is next to merge. A push that moved nothing is receipted `skip_rebase_noop`, never `rebased`. A no-op spends no per-run budget, and the live sha's checks still classify. A conflict files one deduplicated inbox question against the branch's node. It names the conflicting files and applicable door. Rebase conflicts use `fno do pr rebase <n>`. Merge-bearing branches use merge origin/main by hand. Any other push failure falls through to the normal heal path, because a rebase that did not run says nothing about the PR.
+
+One invocation emits one `pr_heal_tick` row into the global `~/.fno/events.jsonl`. The row carries the counts: PRs seen, healed, `rebased`, `reran`, skipped by reason, unknown signatures, escalations, the PRs acted on, and `duration_s`. The `rerun_keys` field is the once-per-(sha, run id) guard's ledger, read back on the next run. Every PR also gets one `pr_heal_pr` row per run. It carries the action taken and the blocking reason, so no PR sits for more than one tick without a receipt saying why. `fno doctor event find --field type=pr_heal_tick --since 24h` reads it. `--all --apply --dry-run` rehearses every refusal and prints the plan without touching a worktree or the inbox.
+
+## Detached from the tick
+
+The tick's heal phase never runs the loop inside its own slice. Armed, the phase calls `pr-heal --all --apply --detach`, and the binary spawns itself (same args minus `--detach`) as a new session with stdio on `/dev/null` and returns 0 at once. The child's pid goes to `<state dir>/pr-heal.<root path>.pid`; a pid file naming a live process (EPERM counts alive) makes the next tick answer `skip_reason=in_flight` instead of spawning a second loop. Every detach decision emits one `control_plane_tick` arm row (`arm=heal`, `acted`, `skip_reason`), and the tick's own gate answers (`unarmed`, `no_binary`, `no_roots`) land in the same row shape, so the journal and the status line agree on why nothing ran.
+
+The pid file is the in-flight guard, so a stale file costs ticks only while the pid it names answers `kill(pid, 0)`: a genuinely dead pid is overwritten on the next spawn. The ceiling: a pid recycled by an unrelated long-lived process reads as alive, and the root keeps answering `in_flight` until that process exits.
+
+## The status line
+
+`fno do pr watch status` prints one `Heal:` line, rendered by `pr-heal --status` (the Python side passes only the arm bit and the journal):
+
+```
+Heal: armed; last run 2026-09-17T12:00:00Z (12m ago); healed 1, rebased 2, reran 1, escalated 3; acted on PR 2155, 2162; in-flight none
+```
+
+Unarmed it names the arm command. Armed with no `pr_heal_tick` row it reads `Heal: armed; never ran`. `fno do pr watch install` and `refresh` print the same line, so a fresh install shows the arm state.
+
+## Arming
+
+`fno config set auto_heal.enabled true`. The key defaults to false; the measurement that justified arming was taken 2026-09-16 over 15 red open PRs: 1 push, 3 cancelled-run reruns, 11 escalations, 0 failures inherited from main. One tick interval later the journal holds a `pr_heal_tick` row and status prints `last run`.
+
+## After a push: the cadence arm
+
+The drive loop skips a PR whose node a worker holds. The daemon's `ci_cadence` arm covers that PR. Each `fno do pr push` that lands writes one `pr_push_landed` row with the branch, the full sha, the checkout and the pushing session. The arm reads the PR's cached status at 1, 15, 30 and 55 minutes after the push. It reads only the newest push on a branch. A daemon that was down reads once, at the latest offset that has passed.
+
+A red is checked against this page's flake ledger first. A red whose every failing check has a `pr_heal_flake` row is a candidate flake. While its runs still test, the arm waits for the next offset. Once they finish, it reruns the failed jobs once. A red after that rerun is real. A red with any check off the ledger is real at once.
+
+Every run cancel from fno code first lands one `ci_cancel_intent` row. The current cancellation callers are wait, push and ci_tier. The look arm only restores its historical cancellations. The row holds the `actor`, the run, the session, the pid and the host. If the row cannot land, the cancel does not go out. A cancelled run with no such row came from a caller outside fno, such as a hand `gh run cancel`. A real red cancels the head's runs still in flight, through the same reader `fno do pr wait` uses. The cancel lands one `ci_wait_cancel` row that names its cause: the failing checks, the head, the PR, and each run's result. The arm then mails the pushing session one line. It names the failing checks and the `fno do pr logs <n>` command that prints the log. Mail refuses a multi-line body, so the log itself does not ride in the wake. A green, a newer head, a closed PR or a delivered wake ends the series. Each read lands one `ci_cadence_check` row. Its `outcome` says what the arm did. Read them with `fno doctor event find --field type=ci_cadence_check --since 2h`. A worker's own `fno do pr wait` stays valid. It wakes sooner, and the arm then finds the series already settled.
+
+## The CI tier
+
+The shared runners serve a few PRs at a time. With 30 PRs open, every push queues behind the rest. The daemon's `ci_tier` arm runs open PRs through CI in tiers instead. It is off by default. Turn it on per repo with `[ci_tier] enabled = true`. The tier holds 6 PRs.
+
+Every 3 minutes the arm ranks the open PRs: a `main-repair` node first, drafts last, then node priority, then the older PR. A PR takes a slot only while it wants a runner: runs in flight, or runs the tier cancelled. A green PR takes no slot. Neither does a PR that waits only on review, or an idle red PR. So a merge frees a slot on the next pass. A PR in the tier gets the runs the tier cancelled rerun in full. A run cancelled by hand stays cancelled. So does a run a `ci_wait_cancel` row names: the head carries the red already, and a rerun burns a slot on a known red. A historical look cancellation is restored by the look recovery arm without waiting for a look. A PR outside it has its runs in flight cancelled, unless 80 percent of its head already passed. A paint PR with approval recorded at its exact head is never cancelled either, and its cancelled runs rerun at once, outside the slot count. A push cannot restart its CI, so a cancel leaves it dark until a slot frees. A `merge-queue-gate` run is never cancelled and holds one slot. A dynamic run is left out of the fold too. GitHub fires a dynamic run itself, on no workflow file, for default-setup code scanning. GitHub refuses run and job retry for it. A cancelled dynamic run comes back only by a new push, and a push restarts every check on the head. The tier never cancels what it cannot rerun. It never cancels a dynamic run and never reruns one. A PR whose only run is dynamic takes no slot. Three things make a pass write one `ci_tier_pass` row: an act on a run, a change to the tier or ranking, and a 10-minute heartbeat. The row names each ranked PR and its branch. A pass row lands in the journal of the agents home whose daemon ran the arm. A tier keeper on another machine never writes here, so a zero `ci_tier_pass` search on one host proves nothing about a second host.
+
+`fno do pr push` reads the newest row before it pushes. Three facts hold a push: the row is under 20 minutes old, the tier is full, and the PR ranks below every PR in it. The held push exits 3. A push into a full tier only queues runs that the next pass cancels. The hold writes one `ci_tier_held` row. When a later pass clears the hold, the arm mails the session to run `fno do pr push` again and writes one `ci_tier_wake` row. A main-repair PR ranks first, so only other main-repair PRs can hold it.
+
+A cancelled-only head gets one more fact. `fno do pr status` reads the repo's `ci_tier.enabled` and this machine's journal for a `ci_tier_pass` row of the slug under 20 minutes old. A fresh row reads hold: a keeper ran the arm here recently, so it will rerun the cancelled runs at the next free tier slot. No fresh row reads rerun while an orphaned run remains: the arm has not run here lately, so a tier hold never resolves. The fact names `gh run rerun <run-id>` in one stderr note, and the orphaned run ids ride the fact. A head whose every cancel is look-named reads hold: the look recovery arm restores only its recorded cancellations. A keeper on another machine never writes this journal, so the pass row speaks for this machine only. The runs list carries the fleet proof instead. A cancelled run whose `run_attempt` is over one was rerun already. A re-cancel of one inside the 20-minute window proves a keeper somewhere in the fleet is live. The fact reads hold on the next status read. The rerun note names that condition: a rerun cancelled again within 20 minutes means hold, not another rerun.
+
+## The tier commands
+
+The arm acts on a 3-minute clock an operator cannot see into. Two commands answer from the same truth the arm reads. `fno do ci tier` prints one JSON line from the arm's newest `ci_tier_pass` row for this repo, under a 24h window. The payload names the config state, slots, gates, the active tier, and the full rank order. `live` means a keeper ran on this machine under 20 minutes ago. The fact speaks for this machine only. `fno do ci tier promote <pr>` moves a PR up the rank. It resolves the PR to its one bound backlog node through the same binding predicate the merge owner reads. Then it bumps the node's priority one step toward p0 through the backlog's own update door. Membership is rank-derived, so a priority bump is the only honest promote. When the tier is off here, the PR binds no single node, or the node already ranks p0, the command refuses with exit 3. A promote on a repo whose keeper runs on another machine still writes. The pass that acts on it reads that machine's config. Check `fno do ci tier` there first.
+
+## The look hold
+
+Missing look evidence does not cancel CI or veto a merge. The `look_hold` daemon arm now restores only runs cancelled by its old behavior. It reads its successful `look_hold_cancel` records and restores matching cancelled run IDs, then records `look_hold_release`. Runs cancelled by a person or another subsystem are left alone. A run GitHub cannot retry is recorded so restoration does not repeat forever. The legacy `merge.visual_shot_workflows` setting no longer filters or cancels workflows.
+
+A user's explicit decline still binds the exact PR head named by the answer. The merge owner reports `visual_declined` at that head. When the head changes, the decline becomes visual evidence and no longer holds by itself. Native PR holds and freezes remain independent authority controls.
+
+Visual screenshots and design critiques continue to inform review and the final architect judgment. The evidence reader no longer creates an automatic approval question. It reports missing or unreadable evidence as warnings. When the user or the work requires artifacts, capture them. When the user asks to stop merging, record an explicit PR hold.
+
+The approval carry preserves the approved head for audit. It compares rendered frames when paint files change, and a design critique can explain a mismatch. Unreadable or unrenderable frames warn. These carry results remain evidence for the architect; only an explicit decline at the current head creates a visual authority hold.
+
+## The idle-PR alarm
+
+On 2026-10-16 the user found 37 open PRs. Several were green and mergeable for days, and nothing raised an alarm. The owning worker merges its own PR. The daemon's `pr_idle` arm is the backstop for a worker that left. Every 15 minutes it lists the open PRs of each registry repo. It reads each non-draft PR through the status door, so the read rides the shared status cache and the account poller. It reads the merge gate's `ready` verdict. A retained code, authority or architect hold prevents ready. Missing coverage or looks produce warning evidence.
+
+The first ready read of a head starts a clock in `<agents home>/pr-idle/`. After 2 hours every live lead gets one mail, and the phone sink gets one `operator_notice`. Each one names the PR, its age and `fno do pr merge <n>`. After 6 hours both go out once more. A new head, a not-ready read or a closed PR resets the clock. A failed send retries the next pass, and only to the recipients it missed.
+
+## How to add a signature
+
+Make two edits, both in `crates/fno-agents/src/runtime/heal.rs`. Add one row to the `SIGNATURES` table. Add one test that carries a real log excerpt.
+
+Write the pattern against a log you fetched. The first three rules assumed the output, and they matched nothing. The fmt job is one check whose name carries `(pinned)`, not the crate. Ruff prints its code above the location, not beside it. Pytest names `tests/...`, because it runs from `cli`. Job logs also carry a timestamp on every line, so the classifier removes it first.
+
+A smoke shard needs more care. It runs dozens of guards, and every guard announces itself on success. So a prefix scan names a guard that passed. The shard runner's own fail-fast line names the failing step, and heal reads that line first.
+
+The checks read is REST for a reason. `gh pr checks` is GraphQL, and the quota broker routes every GraphQL PR read away. A heal built on it can never run.

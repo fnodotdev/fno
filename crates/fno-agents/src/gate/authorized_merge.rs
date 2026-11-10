@@ -1,0 +1,3565 @@
+//! One authorized merge operation for both merge paths.
+//!
+//! Two callers used to answer "may this exact PR head be merged?" on their own.
+//! `fno do pr merge` ran a long guard chain and then merged. `finalize` armed
+//! GitHub's auto-merge queue after a shorter, different chain: it never read the
+//! in-flight review hold, and it dropped the head pin when the covered head was
+//! unreadable, which armed the queue on whatever head landed next.
+//!
+//! This module is the single owner. Both callers hand it a [`Request`] and read
+//! one [`Outcome`] back. The decision is the same for an immediate merge and a
+//! queue arm; only the effect differs, and the receipt keeps them apart:
+//! `Armed` is a queue entry, never proof that a merge landed.
+//!
+//! Authority and integrity probes keep their failure polarity. Process
+//! evidence travels as warnings and never substitutes for a merge decision.
+
+use crate::backlog::row_facts::RowFacts;
+use serde::Serialize;
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use crate::backlog::api::{self as backlog_api, Store as GraphStore};
+use crate::backlog_ready::detect_project;
+use crate::claims::{self, ClaimState};
+use crate::main_ci::main_ci_red_run;
+use crate::org_board::prs::{pr_binding_keys, retarget_binding_refusal};
+use crate::paths::canonical_repo_root;
+
+/// A rebase, this repo's measured rust-ci max (31.3m), and one sweep tick
+/// (600s) round up with margin to 60 minutes.
+const MERGE_SLOT_TTL_MS: i64 = 60 * 60 * 1000;
+/// The receipt text derives its minute count from here, so a retuned TTL
+/// never leaves the wording stale.
+const MERGE_SLOT_TTL_MINUTES: i64 = MERGE_SLOT_TTL_MS / 60_000;
+
+/// What the caller wants to happen once the decision clears.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Effect {
+    Merge,
+    Arm,
+    /// Answer "may this PR head merge now?" and run nothing, write nothing:
+    /// never takes, renews or releases the merge slot. `fno do pr status`
+    /// reads this receipt as `ready`.
+    Preview,
+}
+
+impl Effect {
+    fn word(self) -> &'static str {
+        match self {
+            Effect::Merge => "merge",
+            Effect::Preview => "preview",
+            Effect::Arm => "arm",
+        }
+    }
+
+    fn parse(raw: &str) -> Option<Effect> {
+        match raw {
+            "merge" => Some(Effect::Merge),
+            "preview" => Some(Effect::Preview),
+            "arm" => Some(Effect::Arm),
+            _ => None,
+        }
+    }
+}
+
+/// One gate's answer, named so a reader can key on the word a status read
+/// has always shown (`review_in_flight`, `merge_slot_held`, ...).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Blocker {
+    pub code: String,
+    pub class: BlockerClass,
+    pub detail: String,
+}
+
+/// How a blocked preview reads. The classes mirror the receipt words a
+/// caller already knows, so the verdict doc keeps one vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockerClass {
+    /// Retryable: the same command later can succeed.
+    Held,
+    /// Needs an operator action. Retrying changes nothing.
+    Refused,
+    /// An instrument could not answer. Never a verdict.
+    Unknown,
+}
+
+impl Blocker {
+    pub fn held(code: &str, detail: impl Into<String>) -> Self {
+        Self {
+            code: code.to_string(),
+            class: BlockerClass::Held,
+            detail: detail.into(),
+        }
+    }
+
+    pub fn refused(code: &str, detail: impl Into<String>) -> Self {
+        Self {
+            code: code.to_string(),
+            class: BlockerClass::Refused,
+            detail: detail.into(),
+        }
+    }
+
+    pub fn unknown(code: &str, detail: impl Into<String>) -> Self {
+        Self {
+            code: code.to_string(),
+            class: BlockerClass::Unknown,
+            detail: detail.into(),
+        }
+    }
+}
+
+/// Advisory evidence that never changes whether the merge may proceed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Warning {
+    pub code: String,
+    pub detail: String,
+}
+
+impl From<Blocker> for Warning {
+    fn from(blocker: Blocker) -> Self {
+        Self {
+            code: blocker.code,
+            detail: blocker.detail,
+        }
+    }
+}
+
+impl Warning {
+    pub(crate) fn new(code: &str, detail: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn note(&self) -> String {
+        format!("warn: {}: {}", self.code, self.detail)
+    }
+}
+
+/// The receipt. `Armed` and `Merged` never collapse into one another: a queue
+/// entry is a promise GitHub may keep later, and reporting it as a merge is how
+/// a caller stops watching a PR that has not landed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Outcome {
+    Merged {
+        head: String,
+        /// How the merge landed, when it was not the plain path. The REST
+        /// recovery for a worktree-held branch sets it. The caller renders it
+        /// as the success reason, never as trouble.
+        note: Option<String>,
+        /// Set only when the merge landed and something around it did NOT: a
+        /// local post-merge step that failed after the server-side merge. The
+        /// caller renders it as a partial outcome. Keeping it apart from
+        /// `note` is load-bearing: a recovery that worked is not a failure,
+        /// and reporting it as one made every worktree-first merge read
+        /// partial.
+        cleanup_failure: Option<String>,
+        /// Named on the receipt when a head-scoped operator grant cleared the
+        /// per-run no-merge layer (`merge_grant::HeadGrant::Granted` was the
+        /// only door through `authority_refusal`).
+        merge_grant: Option<String>,
+        warnings: Vec<Warning>,
+    },
+    Armed {
+        head: String,
+        merge_grant: Option<String>,
+        warnings: Vec<Warning>,
+        /// The fno merge queue, not GitHub, owns the landing.
+        queued: bool,
+    },
+    /// The decision cleared and the caller asked to stop there. Nothing ran.
+    Authorized {
+        head: String,
+        warnings: Vec<Warning>,
+    },
+    /// Retryable. The same command later can succeed.
+    Held {
+        reason: String,
+        warnings: Vec<Warning>,
+    },
+    /// Needs an operator action. Retrying changes nothing.
+    Refused {
+        reason: String,
+        warnings: Vec<Warning>,
+    },
+    /// The head moved between validation and the effect.
+    HeadChanged {
+        expected: String,
+        actual: String,
+        warnings: Vec<Warning>,
+    },
+    /// An instrument could not answer. Never a verdict.
+    Unknown {
+        reason: String,
+        warnings: Vec<Warning>,
+    },
+    /// The effect ran and failed.
+    Failed {
+        reason: String,
+        warnings: Vec<Warning>,
+    },
+}
+
+impl Outcome {
+    pub fn word(&self) -> &'static str {
+        match self {
+            Outcome::Merged { .. } => "merged",
+            Outcome::Armed { .. } => "armed",
+            Outcome::Authorized { .. } => "authorized",
+            Outcome::Held { .. } => "held",
+            Outcome::Refused { .. } => "refused",
+            Outcome::HeadChanged { .. } => "head_changed",
+            Outcome::Unknown { .. } => "unknown",
+            Outcome::Failed { .. } => "failed",
+        }
+    }
+
+    /// The reason line, or the head for the arms that carry one.
+    pub fn detail(&self) -> String {
+        match self {
+            Outcome::Merged { head, .. } => head.clone(),
+            Outcome::Armed {
+                head, queued: true, ..
+            } => format!("{head} queued in the fno merge queue, which lands it"),
+            Outcome::Armed { head, .. } | Outcome::Authorized { head, .. } => head.clone(),
+            Outcome::Held { reason, .. }
+            | Outcome::Refused { reason, .. }
+            | Outcome::Unknown { reason, .. }
+            | Outcome::Failed { reason, .. } => reason.clone(),
+            Outcome::HeadChanged {
+                expected, actual, ..
+            } => format!(
+                "the PR head moved from {expected} to {actual} between validation and the effect"
+            ),
+        }
+    }
+
+    pub fn warnings(&self) -> &[Warning] {
+        match self {
+            Self::Merged { warnings, .. }
+            | Self::Armed { warnings, .. }
+            | Self::Authorized { warnings, .. }
+            | Self::Held { warnings, .. }
+            | Self::Refused { warnings, .. }
+            | Self::HeadChanged { warnings, .. }
+            | Self::Unknown { warnings, .. }
+            | Self::Failed { warnings, .. } => warnings,
+        }
+    }
+
+    fn with_warnings(mut self, evidence: Vec<Warning>) -> Self {
+        let warnings = match &mut self {
+            Self::Merged { warnings, .. }
+            | Self::Armed { warnings, .. }
+            | Self::Authorized { warnings, .. }
+            | Self::Held { warnings, .. }
+            | Self::Refused { warnings, .. }
+            | Self::HeadChanged { warnings, .. }
+            | Self::Unknown { warnings, .. }
+            | Self::Failed { warnings, .. } => warnings,
+        };
+        *warnings = evidence;
+        self
+    }
+
+    pub fn to_json(&self) -> Value {
+        let mut out = serde_json::Map::new();
+        out.insert("outcome".into(), json!(self.word()));
+        out.insert("detail".into(), json!(self.detail()));
+        match self {
+            Outcome::Merged {
+                head,
+                note,
+                cleanup_failure,
+                merge_grant,
+                ..
+            } => {
+                out.insert("head".into(), json!(head));
+                if let Some(note) = note {
+                    out.insert("note".into(), json!(note));
+                }
+                if let Some(cleanup_failure) = cleanup_failure {
+                    out.insert("cleanup_failure".into(), json!(cleanup_failure));
+                }
+                if let Some(g) = merge_grant {
+                    out.insert("merge_grant".into(), json!(g));
+                }
+            }
+            Outcome::Armed {
+                head,
+                merge_grant,
+                queued,
+                ..
+            } => {
+                out.insert("head".into(), json!(head));
+                if *queued {
+                    out.insert("queued".into(), json!(true));
+                }
+                if let Some(g) = merge_grant {
+                    out.insert("merge_grant".into(), json!(g));
+                }
+            }
+            Outcome::Authorized { head, .. } => {
+                out.insert("head".into(), json!(head));
+            }
+            Outcome::HeadChanged {
+                expected, actual, ..
+            } => {
+                out.insert("expected_head".into(), json!(expected));
+                out.insert("actual_head".into(), json!(actual));
+            }
+            _ => {}
+        }
+        if !self.warnings().is_empty() {
+            out.insert("warnings".into(), json!(self.warnings()));
+        }
+        Value::Object(out)
+    }
+}
+
+/// One authorized-merge ask.
+#[derive(Debug, Clone)]
+pub struct Request {
+    pub cwd: PathBuf,
+    /// The PR number, or `None` to resolve the current branch's open PR.
+    pub pr: Option<u64>,
+    pub effect: Effect,
+    /// The caller's manifest fold of `auto_merge_approved`. `Some(false)` is a
+    /// per-run refusal and outranks every grant. `None` means no manifest said
+    /// anything, so the live config decides on its own.
+    pub approved: Option<bool>,
+    /// `auto_merge_source` from the same manifest, named in the refusal so an
+    /// operator can see which layer said no.
+    pub auto_merge_source: Option<String>,
+    /// Verify CI before the effect. The queue enforces checks server-side, so
+    /// the arm path leaves this false; `fno do pr merge` sets it from
+    /// `auto_merge.require_checks_pass`.
+    pub require_checks: bool,
+    /// The caller's exact head pin, when supplied. Without one, the owner
+    /// pins its freshly read PR facts even when review coverage is absent.
+    pub covered_head: Option<String>,
+    /// Authorize and stop. The caller runs its own pre-effect side effects (the
+    /// coverage status receipt) and then asks again for the effect, which
+    /// re-runs the whole chain. Nothing is merged or armed on this pass.
+    pub decide_only: bool,
+    /// Which caller asks: `"durable_grant"` (the watcher's merge phase) or
+    /// absent/`"manifest"` (the interactive command). On the durable-grant lane a
+    /// red verdict is the state a working session is in while it pushes fixes,
+    /// so it holds; spending a retry on it parked six open PRs in one
+    /// afternoon. The interactive lane keeps `Failed`, where the
+    /// `merge_status=failed` stamp is the worker's signal to stop.
+    pub authority: Option<String>,
+    /// Merge-side flake acceptance, passed by the merge command (`--accept-flake`).
+    pub accept_flake: bool,
+    /// Preview-supplied facts, so a preview ask never spawns `fno do pr
+    /// status` for what its caller already computed. When a field is absent
+    /// the walk reads its own probes instead.
+    pub supplied_verdict: Option<String>,
+    /// The rollup counts behind `supplied_verdict`, so the walk can name the
+    /// KIND of red (`ci_cancelled_retrigger`, `commit_status_red`) the way
+    /// the status read always has.
+    pub supplied_counts: Option<Value>,
+    pub supplied_rerun_recovered: Option<bool>,
+    /// `Some(Some(n))` = n unresolved; `Some(None)` = the read answered
+    /// unknown; None = not supplied (probe instead).
+    pub supplied_optional_unresolved: Option<Option<i64>>,
+    /// GitHub's own merge-hold words, as status computed them (`github_blocked`,
+    /// `github_behind`, ...). Absent: the walk derives them from `checks_read`.
+    pub supplied_github_blockers: Option<Vec<String>>,
+    /// The dispatch-hold answer the caller (the status read) already probed.
+    /// `Some(None)` = probed clear; `Some(Some(reason))` = held; `None` = not
+    /// supplied (the walk probes, and a real merge NEVER sees a supplied
+    /// value: only the preview walk reads this, decide's own chain always
+    /// probes live).
+    pub supplied_dispatch_hold: Option<Option<String>>,
+    /// The review-hold answer the caller already probed (`review_activity`
+    /// reads the same registry the `review-hold check` command does), as a
+    /// refusal sentence in `review_hold_refusal`'s own shape. `Some(None)` =
+    /// probed clear; `None` = not supplied (probe). Preview-only, same law as
+    /// the dispatch-hold answer above.
+    pub supplied_review_hold: Option<Option<String>>,
+    /// The caller's own PR read (the status payload's projection), parsed by
+    /// [`facts_from_pulls`] in place of the `fno do pr info` spawn. A payload
+    /// too old to parse stays a fallback to the spawn, never a wrong fact.
+    /// Preview-only.
+    pub supplied_facts: Option<Value>,
+    /// The evals/gate row the caller already read from the rollup, tri-state
+    /// like the hold answers: absent key = probe; null = no row at this head;
+    /// object = the `{state, description}` row itself.
+    pub supplied_evals_gate: Option<Option<EvalsGateRead>>,
+}
+
+/// A probe that either cleared, refused, or could not evaluate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProbeOutcome {
+    Refused(String),
+    Clear,
+    /// The probe ran and could not evaluate. NEVER maps to Clear.
+    Inconclusive(String),
+}
+
+impl ProbeOutcome {
+    /// An unevaluated probe refuses. The hold probes take this polarity: a merge
+    /// taken while something unseen was still writing is the whole defect.
+    pub fn fail_closed(self) -> Option<String> {
+        match self {
+            ProbeOutcome::Refused(reason) | ProbeOutcome::Inconclusive(reason) => Some(reason),
+            ProbeOutcome::Clear => None,
+        }
+    }
+
+    /// An unevaluated probe proceeds, with a breadcrumb. The lineage probe takes
+    /// this polarity: refusing on a gh hiccup turns auto-merge into something
+    /// that silently never works, which reads exactly like nobody opting in.
+    pub fn fail_open(self) -> Option<String> {
+        match self {
+            ProbeOutcome::Refused(reason) => Some(reason),
+            ProbeOutcome::Clear | ProbeOutcome::Inconclusive(_) => None,
+        }
+    }
+}
+
+/// What one guarded fetch of the PR says.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PrFacts {
+    pub number: u64,
+    pub head_sha: String,
+    pub head_ref: String,
+    pub base_ref: String,
+    /// The PR page URL, as the payload carried it.
+    pub url: String,
+    /// The PR body, the third binding key's source. `None` only when the
+    /// payload carried no body key at all, which is how an out-of-date
+    /// deployed `fno` looks; a null body reads as an empty string.
+    pub body: Option<String>,
+    /// `OPEN`, `MERGED`, or `CLOSED`.
+    pub state: String,
+    /// GitHub's auto-merge queue already owns this PR. Rides the same pulls
+    /// payload as the head, so no second probe can disagree with it about which
+    /// head it describes.
+    pub armed: bool,
+}
+
+/// One `fno do pr status` read, both facts. `verdict` is the CI word the
+/// checks arm has always matched on. `github_block` is GitHub's own hold on
+/// the merge, named with the context it is missing, from the same payload:
+/// the door used to parse this JSON and keep one key of twenty-six.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChecksRead {
+    pub verdict: String,
+    pub github_block: Option<String>,
+    /// From the same status payload: unresolved OPTIONAL review findings.
+    /// `Some(None)` = the payload answered unknown; None = no answer at all.
+    pub optional_unresolved: Option<Option<i64>>,
+    /// From the same status payload: CI was red, then green on rerun without
+    /// a fresh review. Some(false) or None never holds.
+    pub rerun_recovered: Option<bool>,
+    /// The check names the rerun recovered from, for the hold's own reason.
+    pub rerun_failures: Option<Vec<String>>,
+    /// The evals/gate row at this head: `None` when the daemon never posted
+    /// one. Eval red and CI red are separate facts: the CI verdict judges CI
+    /// alone (a red gate can no longer turn the verdict red and cancel the
+    /// head's runs), and the merge holds on this row instead.
+    pub evals_gate_row: Option<EvalsGateRead>,
+}
+
+/// One evals/gate commit status, as the rollup carried it. `state` is
+/// GitHub's own word (SUCCESS, FAILURE, PENDING, ERROR, ... uppercased).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvalsGateRead {
+    pub state: String,
+    pub description: String,
+}
+
+impl EvalsGateRead {
+    /// The settled-fail states, per the parse that fed the field before it
+    /// carried the whole row.
+    const RED_STATES: [&'static str; 2] = ["FAILURE", "ERROR"];
+
+    fn red(&self) -> Option<&str> {
+        EvalsGateRead::RED_STATES
+            .contains(&self.state.as_str())
+            .then_some(self.description.as_str())
+    }
+
+    fn pending(&self) -> bool {
+        self.state == "PENDING"
+    }
+}
+
+impl ChecksRead {
+    /// Some(why) when the evals gate reads red at this head.
+    pub(crate) fn evals_gate_red(&self) -> Option<&str> {
+        self.evals_gate_row.as_ref().and_then(EvalsGateRead::red)
+    }
+
+    /// True when the gate status exists but is still running. The doc holds
+    /// a merge on it ("pending holds it too"); the field is what proves the
+    /// status exists, so a missing row never reads as pending.
+    pub(crate) fn evals_gate_pending(&self) -> bool {
+        self.evals_gate_row
+            .as_ref()
+            .is_some_and(EvalsGateRead::pending)
+    }
+}
+
+/// The outside world, injectable so the decision is testable without a network.
+pub trait Probes {
+    fn architect_evidence(
+        &self,
+        _cwd: &Path,
+        _facts: &PrFacts,
+        _run: bool,
+        _warnings: &[Warning],
+    ) -> Option<Blocker> {
+        None
+    }
+    fn pr_facts(&self, cwd: &Path, pr: Option<u64>) -> Result<PrFacts, String>;
+    /// Does the graph see this PR? `Refused` when no binding key names a
+    /// node, `Inconclusive` when the graph or the body cannot be read.
+    fn node_binding(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome;
+    fn dispatch_hold(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome;
+    fn review_hold(&self, cwd: &Path, pr: u64) -> ProbeOutcome;
+    fn base_lineage(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome;
+    /// Compile the merge result (merge-tree + the repo-wide static step).
+    fn merge_result(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome;
+    /// `merge_clean` is the merge-result proof: a clean merge clears.
+    fn ci_base(&self, cwd: &Path, facts: &PrFacts, merge_clean: bool) -> ProbeOutcome;
+    fn require_fresh_ci(&self, cwd: &Path) -> bool;
+    /// The PR number holding `merge-slot:<base_ref>` when the claim reads
+    /// `Live` or `Suspect`. `Free`/`Stale` read `Ok(None)`. `Corrupted` or an
+    /// unparseable holder is `Err`.
+    fn slot_holder(&self, cwd: &Path, base_ref: &str) -> Result<Option<u64>, String>;
+    /// Take the merge slot for `pr` on a bounded TTL lease.
+    fn take_slot(&self, cwd: &Path, base_ref: &str, pr: u64) -> Result<(), String>;
+    /// Release the merge slot if `pr` still holds it. Errors are ignored:
+    /// release is best-effort, and the TTL is the backstop.
+    fn release_slot(&self, cwd: &Path, base_ref: &str, pr: u64);
+    /// Has `pr` already had one base-retest this slot hold? `false` on a
+    /// fresh or unreadable claim - every miss re-tries rather than
+    /// wrongly skipping to a merge.
+    fn slot_retested(&self, cwd: &Path, base_ref: &str, pr: u64) -> bool;
+    /// Note that the one retest for this slot hold has been triggered
+    /// (whether or not the `update-branch` call itself succeeded). Never
+    /// touches the lease: see [`crate::claims::mark_metadata`].
+    fn mark_slot_retested(&self, cwd: &Path, base_ref: &str, pr: u64);
+    /// The four verdict words `green` | `red` | `pending` | `unknown`, plus
+    /// GitHub's own ruleset hold when the same payload names one.
+    fn checks_read(&self, cwd: &Path, pr: u64) -> ChecksRead;
+    /// Does this head owe an evals/gate status it does not have? True when
+    /// the diff touches a gated path or a `covers:` prefix of main's bank
+    /// and gate state exists (a head grades on its own pass rate before any
+    /// baseline is seated, so gate state alone puts it on the hook). Default
+    /// false: an impl that cannot answer never manufactures the
+    /// missing-status hold, so pre-existing stubs keep their behavior.
+    fn evals_gate_expected(&self, _cwd: &Path, _facts: &PrFacts) -> bool {
+        false
+    }
+    /// The journal match reads the head being merged from facts, never cwd
+    /// HEAD: a lead merging from the canonical checkout is not checked out
+    /// at the PR head, so a cwd match there can never clear. The match also
+    /// scopes to this PR: the space journal aggregates every PR's rows.
+    fn covered_head(&self, cwd: &Path, pr: u64, pr_head: &str) -> Option<String>;
+    fn auto_merge_enabled(&self, cwd: &Path) -> bool;
+    fn posture_floor_block(&self, cwd: &Path) -> Option<String>;
+    fn strategy(&self, cwd: &Path) -> String;
+    /// Run `gh` with these arguments. `Ok((success, output))` where output
+    /// is stdout alone on success and stdout followed by stderr on failure:
+    /// the JSON-parsing consumers read the success string, and the proxy's
+    /// stderr banner must never ride a 200 read.
+    fn run_gh(&self, cwd: &Path, args: &[String]) -> Result<(bool, String), String>;
+    /// Shell the `fno` CLI for a gate probe: `Ok((exit_code, stdout, stderr))`,
+    /// None code = signal death. The fidelity gate rides this, so Fake-based
+    /// tests answer the gate without a network.
+    fn fno_shell(
+        &self,
+        cwd: &Path,
+        args: &[String],
+    ) -> Result<(Option<i32>, Vec<u8>, Vec<u8>), String>;
+    /// The review-coverage verdict for one PR, answered in process. The merge
+    /// gate reads the verdict instead of shelling the coverage-check command: one
+    /// computation now serves the command, the publisher and the merge, and a
+    /// fake answers it directly so tests need no network.
+    fn coverage_verdict(&self, cwd: &Path, pr: u64)
+        -> crate::loopcheck::coverage_gate::GateVerdict;
+    /// Live parallel-lane claims. The default 0 keeps the overlap gate
+    /// disarmed wherever an impl does not count lanes (the sequential default).
+    fn live_lanes(&self, _cwd: &Path) -> usize {
+        0
+    }
+    /// The base branch `main`'s CI verdict, read by the lead check-in's own
+    /// reduction (`main_ci::main_ci_reading`, behind a short TTL row cache):
+    /// a red object naming the failed workflow and head sha, or the
+    /// `green`/`pending` word. `Err` = the read could not answer, which never
+    /// reads as red. Default `pending` keeps the gate disarmed wherever an
+    /// impl does not read main.
+    fn main_ci_token(&self, _cwd: &Path) -> Result<Value, String> {
+        Ok(Value::String("pending".to_string()))
+    }
+    /// The main-repair exemption: `None` when this PR's node carries the
+    /// `main-repair` tag (the declared repair lands through a red main);
+    /// `Some(lane)` otherwise, the repair-lane sentence the refusal quotes.
+    /// Default `None` = exempt, so an impl that does not read the graph never
+    /// manufactures a refusal.
+    fn main_repair_hold(&self, _cwd: &Path, _facts: &PrFacts) -> Option<String> {
+        None
+    }
+    /// The outside-PR gate: fleet automation never acts on outside code, and
+    /// no admit door exists. Default `Clear` keeps an impl that does not read
+    /// origin facts inert.
+    fn outside_pr(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
+        ProbeOutcome::Clear
+    }
+    /// The owner's per-PR hold, an operator law row at `pr-hold:<slug>#<n>`.
+    /// Default `Clear` keeps an impl that does not read law rows inert.
+    fn pr_hold(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
+        ProbeOutcome::Clear
+    }
+    /// The merge freeze: an off-pin PR holds until the user lifts the pin.
+    /// Default `Clear` keeps an impl that does not read the record inert.
+    fn merge_freeze(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
+        ProbeOutcome::Clear
+    }
+    /// The rule engine's read of this merge: a block verdict holds with
+    /// blocker `rule`. Default `Clear` keeps an impl that does not read
+    /// rule sources inert.
+    fn rules(&self, _cwd: &Path, _facts: &PrFacts) -> ProbeOutcome {
+        ProbeOutcome::Clear
+    }
+    /// Has the round attested at `reviewed_head` (the newest branch
+    /// attestation's own head, not necessarily `facts.head_sha` - a carried
+    /// round never gets a fresh attestation at the new head) landed as a
+    /// GitHub review on `facts.number` yet? `Refused` (not yet - held,
+    /// self-clears once `publish-review` runs) vs `Inconclusive` (the `gh`
+    /// read itself failed) vs `Clear` (found). Default `Clear` keeps an impl
+    /// that does not read GitHub reviews inert.
+    fn review_posted(&self, _cwd: &Path, _facts: &PrFacts, _reviewed_head: &str) -> ProbeOutcome {
+        ProbeOutcome::Clear
+    }
+    /// Queue this head in place of the merge. `None`: no queue owns this
+    /// base (`merge_queue.enabled` off), so the effect merges. `Some(Ok(None))`
+    /// queued; `Some(Ok(Some(reason)))` the queue ejected this head. Default
+    /// `None` keeps every impl that does not read the config merging.
+    fn merge_queue(
+        &self,
+        _cwd: &Path,
+        _facts: &PrFacts,
+        _head: &str,
+    ) -> Option<Result<Option<String>, String>> {
+        None
+    }
+}
+
+/// A cleared decision: the effect may run, pinned to this head.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Authorized {
+    pub facts: PrFacts,
+    pub head: String,
+    pub strategy: String,
+    pub warnings: Vec<Warning>,
+    /// Named when a head-scoped operator grant cleared the per-run no-merge
+    /// layer of `authority_refusal`. Reaches the effect receipt verbatim.
+    pub merge_grant: Option<String>,
+}
+
+/// An explicit caller pin wins. Missing coverage never removes the pin
+/// supplied by fresh PR facts. An explicitly empty pin remains unreadable.
+fn resolved_covered_head<P: Probes>(
+    probes: &P,
+    cwd: &Path,
+    request: &Request,
+    facts: &PrFacts,
+) -> Option<String> {
+    request
+        .covered_head
+        .clone()
+        .or_else(|| probes.covered_head(cwd, facts.number, &facts.head_sha))
+        .or_else(|| Some(facts.head_sha.clone()))
+        .filter(|sha| !sha.is_empty())
+}
+
+/// The whole authorization. Order matters: the refusals that need an operator
+/// come first, then the holds, then the head pin, then the effect's own
+/// preconditions.
+pub fn decide<P: Probes>(probes: &P, request: &Request) -> Result<Authorized, Outcome> {
+    decide_observed(probes, request, &mut None)
+}
+
+fn decide_observed<P: Probes>(
+    probes: &P,
+    request: &Request,
+    observed_head: &mut Option<String>,
+) -> Result<Authorized, Outcome> {
+    let mut warnings = Vec::new();
+    decide_with_warnings(probes, request, observed_head, &mut warnings)
+        .map_err(|outcome| outcome.with_warnings(warnings))
+}
+
+fn decide_with_warnings<P: Probes>(
+    probes: &P,
+    request: &Request,
+    observed_head: &mut Option<String>,
+    warnings: &mut Vec<Warning>,
+) -> Result<Authorized, Outcome> {
+    let cwd = request.cwd.as_path();
+    let facts = probes
+        .pr_facts(cwd, request.pr)
+        .map_err(|reason| Outcome::Unknown {
+            reason,
+            warnings: Vec::new(),
+        })?;
+    *observed_head = Some(facts.head_sha.clone());
+
+    // The preview arm answers the same gates read-only and never reaches an
+    // effect: `fno do pr status` reads its receipt as `ready`.
+    if request.effect == Effect::Preview {
+        return match preview_walk(probes, request, &facts) {
+            PreviewVerdict::Go { warnings, .. } => {
+                let head = facts.head_sha.clone();
+                Ok(Authorized {
+                    facts,
+                    head,
+                    strategy: probes.strategy(cwd),
+                    warnings,
+                    // Preview never runs an effect, so a receipt grant note
+                    // would name nothing; the merge receipt is the one that
+                    // must carry it.
+                    merge_grant: None,
+                })
+            }
+            PreviewVerdict::Blocked {
+                blockers,
+                warnings: preview_warnings,
+            } => {
+                *warnings = preview_warnings;
+                Err(Outcome::Held {
+                    reason: blockers
+                        .iter()
+                        .map(|b| b.detail.as_str())
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                    warnings: Vec::new(),
+                })
+            }
+        };
+    }
+
+    // A merged or closed PR has no would-merge left. Every guard below protects
+    // what WOULD merge, so answering "unreviewed" here sends a caller hunting a
+    // defect that is blocking nothing.
+    if is_terminal_state(&facts.state) {
+        return Err(Outcome::Held {
+            reason: format!(
+                "PR {} is already {}; nothing to merge",
+                facts.number,
+                facts.state.to_lowercase()
+            ),
+            warnings: Vec::new(),
+        });
+    }
+
+    // The outside-PR gate: outside is final. An unreadable origin read is
+    // Unknown (fail closed), never a quiet Clear.
+    match probes.outside_pr(cwd, &facts) {
+        ProbeOutcome::Clear => {}
+        ProbeOutcome::Refused(reason) => {
+            return Err(Outcome::Refused {
+                reason,
+                warnings: Vec::new(),
+            })
+        }
+        ProbeOutcome::Inconclusive(reason) => {
+            return Err(Outcome::Unknown {
+                reason,
+                warnings: Vec::new(),
+            })
+        }
+    }
+
+    if let Some((_, reason)) = authority_refusal(probes, cwd, request, &facts) {
+        return Err(Outcome::Refused {
+            reason,
+            warnings: Vec::new(),
+        });
+    }
+
+    // The graph must see the PR. An unbound PR is Refused (retrying without
+    // binding changes nothing, so Held would be a lie about the remedy); an
+    // unreadable graph is Unknown, never a bound-or-unbound verdict.
+    match probes.node_binding(cwd, &facts) {
+        ProbeOutcome::Clear => {}
+        ProbeOutcome::Refused(reason) => {
+            return Err(Outcome::Refused {
+                reason,
+                warnings: Vec::new(),
+            })
+        }
+        ProbeOutcome::Inconclusive(reason) => {
+            return Err(Outcome::Unknown {
+                reason,
+                warnings: Vec::new(),
+            })
+        }
+    }
+
+    if let Some(outcome) = main_authority_refusal(probes, cwd, &facts) {
+        return Err(outcome);
+    }
+    if let Some(outcome) = authority_hold(probes, cwd, &facts) {
+        return Err(outcome);
+    }
+
+    // A fresh head always pins the effect, independently of review evidence.
+    let Some(head) = resolved_covered_head(probes, cwd, request, &facts) else {
+        return Err(Outcome::Unknown {
+            reason: format!(
+                "no usable head pin for PR {}; refusing an unpinned {}",
+                facts.number,
+                request.effect.word()
+            ),
+            warnings: Vec::new(),
+        });
+    };
+    if head != facts.head_sha {
+        return Err(Outcome::HeadChanged {
+            expected: head,
+            actual: facts.head_sha,
+            warnings: Vec::new(),
+        });
+    }
+
+    if let Some(reason) = probes.base_lineage(cwd, &facts).fail_open() {
+        return Err(Outcome::Refused {
+            reason: format!("stale base: {reason}"),
+            warnings: Vec::new(),
+        });
+    }
+
+    // Two green parents can merge red: git joins hunks that never met on one
+    // machine (3334b826a133 broke main with F821 out of a clean textual
+    // merge). Held, not refused: the remedy is rebase, fix, push, retry.
+    let merge_result_read = probes.merge_result(cwd, &facts);
+    // Clear is the mergeable-with-no-conflict proof: a stale PR whose
+    // merge is proven merges at slot time instead of folding the base in.
+    let merge_proven = merge_result_read == ProbeOutcome::Clear;
+    if let Some(reason) = merge_result_read.fail_open() {
+        return Err(Outcome::Held {
+            reason: format!("red merge result: {reason}"),
+            warnings: Vec::new(),
+        });
+    }
+
+    let mut checks = probes.checks_read(cwd, facts.number);
+    let (evidence, visual_hold) = decision_warnings(probes, request, &facts, &checks);
+    *warnings = evidence;
+    if let Some(blocker) = visual_hold {
+        return Err(Outcome::Held {
+            reason: blocker.detail,
+            warnings: Vec::new(),
+        });
+    }
+    let architect =
+        probes.architect_evidence(cwd, &facts, request.effect != Effect::Preview, warnings);
+    if request.effect != Effect::Preview {
+        checks = probes.checks_read(cwd, facts.number);
+        let (evidence, hold) = decision_warnings(probes, request, &facts, &checks);
+        *warnings = evidence;
+        if let Some(blocker) = hold {
+            return Err(Outcome::Held {
+                reason: blocker.detail,
+                warnings: Vec::new(),
+            });
+        }
+    }
+    if let Some(blocker) = architect {
+        if crate::merge_architect::holds(&blocker) {
+            return Err(Outcome::Held {
+                reason: blocker.detail,
+                warnings: Vec::new(),
+            });
+        }
+        warnings.push(Warning::from(blocker));
+    }
+    if request.effect == Effect::Merge {
+        if let Some(blocker) = walk_entries(cwd).and_then(|entries| {
+            crate::merge_gates::stub_manifest_gate(&repo_root(cwd), &entries, facts.number)
+        }) {
+            return Err(Outcome::Held {
+                reason: blocker.detail,
+                warnings: Vec::new(),
+            });
+        }
+    }
+
+    // The GitHub hold rides the same status read the checks arm already paid
+    // for, and outranks the require_checks flag: a ruleset hold is not a
+    // question about CI greenness, and gating it on that flag repeats the
+    // category error this arm exists to close. Held, not Failed - a required
+    // check that is merely pending still arrives, and the reason names the
+    // missing context so a human can narrow the ruleset when it never can.
+    // Merge only: Arm hands the PR to GitHub's own queue, which is designed
+    // to wait out a missing requirement, so arming on a ruleset hold is the
+    // right move and this hold must not stand in its way.
+    if request.effect == Effect::Merge {
+        if let Some(missing) = &checks.github_block {
+            return Err(Outcome::Held {
+                reason: format!(
+                    "GitHub holds this merge: required checks missing at the head ({missing})"
+                ),
+                warnings: Vec::new(),
+            });
+        }
+    }
+    if request.require_checks {
+        match checks.verdict.as_str() {
+            "green" => {
+                // Arm is gated too: without a ruleset that demands an
+                // up-to-date branch, GitHub merges an armed green PR at once.
+                if request.effect != Effect::Preview && probes.require_fresh_ci(cwd) {
+                    // A proven merge result clears: behind-but-conflict-free
+                    // is not stale, and main CI plus the main-red hold catch a
+                    // combined break. An unreadable read warns without
+                    // manufacturing a stale-base verdict.
+                    let stale = match probes.ci_base(cwd, &facts, merge_proven) {
+                        ProbeOutcome::Inconclusive(reason) => {
+                            warnings.push(Warning::new("ci_base_unreadable", reason));
+                            None
+                        }
+                        outcome => outcome.fail_open(),
+                    };
+                    let n = facts.number;
+                    match probes.slot_holder(cwd, &facts.base_ref) {
+                        // A claims io fault never blocks merges: fall back to
+                        // the pre-slot behavior and take no slot. The hold
+                        // carries the manual remedy, never the auto-retest:
+                        // a faulted read must not side-effect the branch, or
+                        // an unproven merge under a persistent fault restarts
+                        // CI on every settle.
+                        Err(_) => {
+                            if let Some(reason) = stale {
+                                return Err(Outcome::Held {
+                                    reason: format!(
+                                        "{reason}; {}",
+                                        stale_remedy(n, &facts.base_ref)
+                                    ),
+                                    warnings: Vec::new(),
+                                });
+                            }
+                        }
+                        Ok(mut holder) => {
+                            // A holder that merged, closed, went red, or took
+                            // a dispatch hold frees its slot now instead of
+                            // waiting out the TTL. The hold read is fail_open:
+                            // evicting on an unreadable read would collapse the
+                            // ordering the slot exists to keep.
+                            if let Some(m) = holder {
+                                if m != n {
+                                    let stale_holder = match probes.pr_facts(cwd, Some(m)) {
+                                        Ok(holder_facts) => {
+                                            probes
+                                                .dispatch_hold(cwd, &holder_facts)
+                                                .fail_open()
+                                                .is_some()
+                                                || is_terminal_state(&holder_facts.state)
+                                                || probes.checks_read(cwd, m).verdict == "red"
+                                        }
+                                        // Unreadable holder PR keeps the
+                                        // slot; the TTL bounds it.
+                                        Err(_) => false,
+                                    };
+                                    if stale_holder {
+                                        probes.release_slot(cwd, &facts.base_ref, m);
+                                        holder = None;
+                                    }
+                                }
+                            }
+                            match holder {
+                                Some(m) if m != n => {
+                                    return Err(Outcome::Held {
+                                        reason: format!(
+                                            "{ci}merge_slot_held: PR {m} holds the merge slot; \
+                                             PR {n} waits so PR {m}'s rebased CI stays current; \
+                                             the slot frees when PR {m} merges, closes, goes red, \
+                                             takes a dispatch hold, or its {ttl}m lease ends",
+                                            ci = if stale.is_some() {
+                                                "ci_base_stale; "
+                                            } else {
+                                                ""
+                                            },
+                                            ttl = MERGE_SLOT_TTL_MINUTES
+                                        ),
+                                        warnings: Vec::new(),
+                                    });
+                                }
+                                Some(_self_held) => {
+                                    // `stale` is already None above when
+                                    // proven. Otherwise, one retest per
+                                    // hold: a busy base can move faster
+                                    // than CI completes, so a holder that
+                                    // already spent its retest stops
+                                    // chasing it and falls through to the
+                                    // real merge attempt below instead.
+                                    let already_retested =
+                                        probes.slot_retested(cwd, &facts.base_ref, n);
+                                    if let Some(reason) = stale.filter(|_| !already_retested) {
+                                        // Never re-acquire: it could extend
+                                        // the TTL. Marking metadata does not.
+                                        let remedy = retest_on_current_base(probes, cwd, &facts);
+                                        probes.mark_slot_retested(cwd, &facts.base_ref, n);
+                                        return Err(Outcome::Held {
+                                            reason: format!(
+                                                "{reason}; PR {n} holds the merge slot; {remedy}"
+                                            ),
+                                            warnings: Vec::new(),
+                                        });
+                                    }
+                                }
+                                None => {
+                                    if let Some(reason) = stale {
+                                        match probes.take_slot(cwd, &facts.base_ref, n) {
+                                            Ok(()) => {
+                                                let remedy =
+                                                    retest_on_current_base(probes, cwd, &facts);
+                                                probes.mark_slot_retested(cwd, &facts.base_ref, n);
+                                                return Err(Outcome::Held {
+                                                    reason: format!(
+                                                        "{reason}; PR {n} now holds the merge \
+                                                         slot for {ttl}m; {remedy}",
+                                                        ttl = MERGE_SLOT_TTL_MINUTES,
+                                                    ),
+                                                    warnings: Vec::new(),
+                                                });
+                                            }
+                                            Err(_) => {
+                                                return Err(Outcome::Held {
+                                                    reason: format!(
+                                                        "{reason}; {}",
+                                                        stale_remedy(n, &facts.base_ref)
+                                                    ),
+                                                    warnings: Vec::new(),
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            "red" => {
+                return Err(match request.authority.as_deref() {
+                    Some("durable_grant") => Outcome::Held {
+                        reason: "checks are red; the healer or the worker owns the next push"
+                            .to_string(),
+                        warnings: Vec::new(),
+                    },
+                    _ => Outcome::Failed {
+                        reason: "checks are red; require_checks_pass forbids merging without green"
+                            .to_string(),
+                        warnings: Vec::new(),
+                    },
+                })
+            }
+            _ => {}
+        }
+    }
+    let strategy = probes.strategy(cwd);
+    // Reaching here with `approved == Some(false)` means the only door through
+    // `authority_refusal` was a Granted head grant, so the receipt names it.
+    // The grant is the user's voice whichever door recorded it: an operator
+    // row, or a chat_attested row carrying the user's own words.
+    let merge_grant = (request.approved == Some(false)).then(|| {
+        format!(
+            "user head grant {}",
+            facts.head_sha.chars().take(8).collect::<String>()
+        )
+    });
+    // The reader can wait minutes. Recheck live authority and cached
+    // exceptions after that wait, before authorizing any side effect.
+    if let Some(blocker) = probes.architect_evidence(cwd, &facts, false, warnings) {
+        if crate::merge_architect::holds(&blocker) {
+            return Err(Outcome::Held {
+                reason: blocker.detail,
+                warnings: Vec::new(),
+            });
+        }
+    }
+    if let Some((_, reason)) = authority_refusal(probes, cwd, request, &facts) {
+        return Err(Outcome::Refused {
+            reason,
+            warnings: Vec::new(),
+        });
+    }
+    if let Some(outcome) =
+        main_authority_refusal(probes, cwd, &facts).or_else(|| authority_hold(probes, cwd, &facts))
+    {
+        return Err(outcome);
+    }
+    if let Some(blocker) =
+        crate::merge_gates::visual_approval_blocker(probes, cwd, facts.number, &head)
+            .filter(|b| b.code == "visual_declined")
+    {
+        return Err(Outcome::Held {
+            reason: blocker.detail,
+            warnings: Vec::new(),
+        });
+    }
+    Ok(Authorized {
+        facts,
+        head,
+        strategy,
+        warnings: std::mem::take(warnings),
+        merge_grant,
+    })
+}
+
+/// The posture fold, in the order init folds it. A per-run refusal outranks
+/// every grant; an explicit per-run env grant satisfies the standing arm on its
+/// own; otherwise the LIVE config decides, so a manifest snapshot never outlives
+/// an operator flipping the switch off mid-flight.
+/// The preview's verdict shape: authorized, or every blocker the gates could
+/// evaluate. The one receipt `fno do pr status` reads as `ready`.
+#[derive(Debug)]
+pub enum PreviewVerdict {
+    Go {
+        waiver: Option<String>,
+        warnings: Vec<Warning>,
+    },
+    Blocked {
+        blockers: Vec<Blocker>,
+        warnings: Vec<Warning>,
+    },
+}
+
+impl PreviewVerdict {
+    pub fn warnings(&self) -> &[Warning] {
+        match self {
+            Self::Go { warnings, .. } | Self::Blocked { warnings, .. } => warnings,
+        }
+    }
+
+    pub fn to_json(&self, head: &str) -> Value {
+        let mut out = serde_json::Map::new();
+        out.insert("head".into(), json!(head));
+        match self {
+            Self::Go { waiver, .. } => {
+                out.insert("outcome".into(), json!("authorized"));
+                out.insert("blockers".into(), json!([]));
+                if let Some(waiver) = waiver {
+                    out.insert("coverage_waiver".into(), json!(waiver));
+                }
+            }
+            Self::Blocked { blockers, .. } => {
+                out.insert("outcome".into(), json!("held"));
+                out.insert(
+                    "blockers".into(),
+                    json!(blockers
+                        .iter()
+                        .map(|b| json!({
+                            "code": b.code, "detail": b.detail,
+                            "class": match b.class {
+                                BlockerClass::Held => "held", BlockerClass::Refused => "refused",
+                                BlockerClass::Unknown => "unknown",
+                            },
+                        }))
+                        .collect::<Vec<_>>()),
+                );
+            }
+        }
+        if !self.warnings().is_empty() {
+            out.insert("warnings".into(), json!(self.warnings()));
+        }
+        Value::Object(out)
+    }
+}
+
+/// The read-only preview walk: same gates, same order as the effect path's
+/// first-refusal chain, all collected. Preview never writes: take_slot and
+/// release_slot have no preview call site, so a stale PR owing a retest
+/// reads `ci_base_stale` with the slot untouched (AC1); a proven merge, or
+/// a self-held slot whose one retest is already spent, reads none,
+/// mirroring the merge the effect path takes on the same settle.
+pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -> PreviewVerdict {
+    let cwd = request.cwd.as_path();
+    let mut blockers: Vec<Blocker> = Vec::new();
+    let mut entries: Option<Vec<Value>> = None;
+    let mut checks: Option<ChecksRead> = None;
+
+    // (1) terminal. AC3: the blockers are exactly [pr_terminal].
+    if is_terminal_state(&facts.state) {
+        return PreviewVerdict::Blocked {
+            warnings: Vec::new(),
+            blockers: vec![Blocker::held(
+                "pr_terminal",
+                format!(
+                    "PR {} is already {}; nothing to merge",
+                    facts.number,
+                    facts.state.to_lowercase()
+                ),
+            )],
+        };
+    }
+
+    // (2) authority: per-run refusal and live merge consent. The code
+    // comes from authority_refusal itself, so a preview can never label a
+    // blocker differently from the merge command on the same head.
+    if let Some((code, reason)) = authority_refusal(probes, cwd, request, facts) {
+        blockers.push(match code {
+            "auto_merge_disabled" => Blocker::refused("auto_merge_disabled", reason),
+            _ => Blocker::refused("per_run_no_merge", reason),
+        });
+    }
+
+    // (3) node binding: unbound is refused, unreadable is unknown.
+    match probes.node_binding(cwd, facts) {
+        ProbeOutcome::Clear => {}
+        ProbeOutcome::Refused(reason) => {
+            blockers.push(Blocker::refused("node_unbound", reason));
+        }
+        ProbeOutcome::Inconclusive(reason) => {
+            blockers.push(Blocker::unknown("node_binding_unknown", reason));
+        }
+    }
+
+    // (3b) main red: the same refusal the effect path raises, as a blocker.
+    if facts.base_ref == "main" {
+        let token = probes.main_ci_token(cwd);
+        if let Some((workflow, sha)) = token.as_ref().ok().and_then(main_ci_red_run) {
+            if let Some(lane) = probes.main_repair_hold(cwd, facts) {
+                blockers.push(Blocker::refused(
+                    "main_red",
+                    main_red_reason(&workflow, &sha, &lane),
+                ));
+            }
+        }
+    }
+
+    // (3c) the outside-PR gate, the same refusal the effect path raises, so
+    // `fno do pr status` never says ready where merge refuses.
+    match probes.outside_pr(cwd, facts) {
+        ProbeOutcome::Clear => {}
+        ProbeOutcome::Refused(reason) => {
+            blockers.push(Blocker::refused("outside_pr", reason));
+        }
+        ProbeOutcome::Inconclusive(reason) => {
+            blockers.push(Blocker::unknown("outside_pr_unreadable", reason));
+        }
+    }
+
+    // (4) holds, in decide's order. A preview ask may carry the dispatch-hold
+    // answer its caller already probed; the supplied value rides only the
+    // preview (advisory) walk, never decide's own merge chain.
+    let dispatch_hold_outcome = match &request.supplied_dispatch_hold {
+        Some(None) => ProbeOutcome::Clear,
+        Some(Some(reason)) => ProbeOutcome::Refused(reason.clone()),
+        None => probes.dispatch_hold(cwd, facts),
+    };
+    if let Some(reason) = dispatch_hold_outcome.fail_closed() {
+        blockers.push(Blocker::held("dispatch_hold", reason));
+    }
+    if let Some(reason) = probes.pr_hold(cwd, facts).fail_closed() {
+        blockers.push(Blocker::held("pr_hold", reason));
+    }
+    if let Some(reason) = probes.merge_freeze(cwd, facts).fail_closed() {
+        blockers.push(Blocker::held("merge_freeze", reason));
+    }
+    if let Some(reason) = probes.rules(cwd, facts).fail_closed() {
+        blockers.push(Blocker::held("rule", reason));
+    }
+
+    // (5) the pin.
+    if let Some(head) = resolved_covered_head(probes, cwd, request, facts) {
+        if head != facts.head_sha {
+            blockers.push(Blocker::unknown(
+                "head_moved",
+                format!(
+                    "the PR head moved from {head} to {} between validation and the effect",
+                    facts.head_sha
+                ),
+            ));
+        }
+    } else {
+        blockers.push(Blocker::unknown(
+            "head_not_covered",
+            format!(
+                "no covered head is readable for PR {}; refusing an unpinned merge",
+                facts.number
+            ),
+        ));
+    }
+
+    // (6) lineage + merge result, in decide's order.
+    if let Some(reason) = probes.base_lineage(cwd, &facts).fail_open() {
+        blockers.push(Blocker::refused(
+            "stacked_base",
+            format!("stale base: {reason}"),
+        ));
+    }
+    let merge_result_read = probes.merge_result(cwd, &facts);
+    // Mirrors decide's own proof below, before fail_open consumes the read.
+    let merge_proven = merge_result_read == ProbeOutcome::Clear;
+    if let Some(reason) = merge_result_read.fail_open() {
+        blockers.push(Blocker::held(
+            "red_merge_result",
+            format!("red merge result: {reason}"),
+        ));
+    }
+
+    // (7) the status payload: supplied facts win, so a preview ask never
+    // spawns `fno do pr status` for a fact its caller computed. The gate row
+    // rides the ask as `evals_gate` (fact or null): the composer read the
+    // rollup, so present means a row and null means none.
+    let checks = checks.get_or_insert_with(|| match &request.supplied_verdict {
+        Some(word) => ChecksRead {
+            verdict: word.clone(),
+            github_block: None,
+            optional_unresolved: request.supplied_optional_unresolved,
+            rerun_recovered: request.supplied_rerun_recovered,
+            rerun_failures: None,
+            evals_gate_row: request.supplied_evals_gate.clone().unwrap_or(None),
+        },
+        None => probes.checks_read(cwd, facts.number),
+    });
+    let (mut warnings, visual_hold) = process_warnings(probes, request, facts, checks);
+    if let Some(blocker) = visual_hold {
+        blockers.push(blocker);
+    }
+
+    // (7b) the ported gates, always in preview (the effect path runs them
+    // only for Merge). Fidelity reads the ledger, not the graph rows, so it
+    // runs even when the store is unreadable: the gate list must not shrink
+    // with an ingredient the gate does not use.
+    if entries.is_none() {
+        entries = walk_entries(cwd);
+    }
+    let repo_root_path = repo_root(cwd);
+    let (coverage_blocker, waiver) = crate::merge_gates::coverage_gate(probes, cwd, facts.number);
+    if let Some(blocker) = coverage_blocker {
+        warnings.push(Warning::from(blocker));
+    }
+    if let Some(blocker) = probes.architect_evidence(cwd, facts, false, &warnings) {
+        if crate::merge_architect::holds(&blocker) {
+            blockers.push(blocker);
+        } else {
+            warnings.push(Warning::from(blocker));
+        }
+    }
+    if let Some(entry_slice) = entries.as_deref() {
+        if let Some(blocker) =
+            crate::merge_gates::stub_manifest_gate(&repo_root_path, entry_slice, facts.number)
+        {
+            blockers.push(blocker);
+        }
+    }
+    // (8) GitHub's own hold: supplied words, else the parsed github_block.
+    let github_words: Vec<String> = request.supplied_github_blockers.clone().unwrap_or_else(|| {
+        checks
+            .github_block
+            .clone()
+            .map(|_m| vec!["github_blocked".to_string()])
+            .unwrap_or_default()
+    });
+    for word in &github_words {
+        let (code, detail): (&str, String) = match word.as_str() {
+            "github_blocked" => (
+                "github_blocked",
+                match &checks.github_block {
+                    Some(m) => format!(
+                        "GitHub holds this merge: required checks missing at the head ({m})"
+                    ),
+                    None => "GitHub holds this merge".to_string(),
+                },
+            ),
+            other => (other, other.to_string()),
+        };
+        blockers.push(Blocker::held(code, detail));
+    }
+
+    // (9) the CI verdict gate, same precondition as the effect path.
+    if request.require_checks && checks.verdict == "red" {
+        let word = ci_blocker_word(&checks.verdict, request.supplied_counts.as_ref());
+        let detail = format!(
+            "checks are {}; require_checks_pass forbids merging without green",
+            checks.verdict
+        );
+        if checks.verdict == "red" && request.authority.as_deref() == Some("durable_grant") {
+            // The durable-grant lane holds on red (a working session pushes
+            // fixes); the interactive lane refuses. Class follows the lane.
+            blockers.push(Blocker::held(
+                word.as_str(),
+                "checks are red; the healer or the worker owns the next push",
+            ));
+        } else {
+            blockers.push(Blocker::refused(word.as_str(), detail));
+        }
+    }
+
+    // (10) the slot gate, read-only: same precondition (fresh-CI posture,
+    // green) and same eviction readability as the effect path, but take_slot
+    // and release_slot have no preview call site.
+    if request.require_checks && checks.verdict == "green" && probes.require_fresh_ci(cwd) {
+        let n = facts.number;
+        // One slot_holder read, reused below: two reads could observe two
+        // different slot states under concurrent churn.
+        let holder = probes.slot_holder(cwd, &facts.base_ref);
+        // Parity with the effect walk: neither a proven merge nor a
+        // self-held slot with its retest spent owes the fold.
+        let self_retested = match &holder {
+            Ok(Some(m)) if *m == n => probes.slot_retested(cwd, &facts.base_ref, *m),
+            _ => false,
+        };
+        match probes.ci_base(cwd, facts, merge_proven) {
+            ProbeOutcome::Refused(reason) if !self_retested => blockers.push(Blocker::held(
+                "ci_base_stale",
+                format!("{reason}; {}", stale_remedy(n, &facts.base_ref)),
+            )),
+            ProbeOutcome::Refused(_) => {}
+            ProbeOutcome::Inconclusive(reason) => {
+                warnings.push(Warning::new("ci_base_unreadable", reason))
+            }
+            ProbeOutcome::Clear => {}
+        }
+        match holder {
+            Err(_) => {}
+            Ok(Some(m)) if m != n => {
+                let evictable = match probes.pr_facts(cwd, Some(m)) {
+                    Ok(hf) => {
+                        probes.dispatch_hold(cwd, &hf).fail_open().is_some()
+                            || is_terminal_state(&hf.state)
+                            || probes.checks_read(cwd, m).verdict == "red"
+                    }
+                    Err(_) => false,
+                };
+                if !evictable {
+                    blockers.push(Blocker::held(
+                        "merge_slot_held",
+                        format!(
+                            "merge_slot_held: PR {m} holds the merge slot; PR {n} waits so \
+                             PR {m}'s rebased CI stays current; the slot frees when PR {m} \
+                             merges, closes, goes red, takes a dispatch hold, or its {ttl}m lease ends",
+                            ttl = MERGE_SLOT_TTL_MINUTES
+                        ),
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    if blockers.is_empty() {
+        PreviewVerdict::Go { waiver, warnings }
+    } else {
+        PreviewVerdict::Blocked { blockers, warnings }
+    }
+}
+
+fn process_warnings<P: Probes>(
+    probes: &P,
+    request: &Request,
+    facts: &PrFacts,
+    checks: &ChecksRead,
+) -> (Vec<Warning>, Option<Blocker>) {
+    let cwd = request.cwd.as_path();
+    let mut warnings = Vec::new();
+    if let Some(reason) = probes.posture_floor_block(cwd) {
+        warnings.push(Warning::new("posture_floor", reason));
+    }
+    let review = if request.effect == Effect::Preview {
+        match &request.supplied_review_hold {
+            Some(None) => ProbeOutcome::Clear,
+            Some(Some(reason)) => ProbeOutcome::Refused(reason.clone()),
+            None => probes.review_hold(cwd, facts.number),
+        }
+    } else {
+        probes.review_hold(cwd, facts.number)
+    };
+    if let Some(reason) = review.fail_closed() {
+        warnings.push(Warning::new("review_in_flight", reason));
+    }
+    let optional = request
+        .supplied_optional_unresolved
+        .or(checks.optional_unresolved);
+    let (visual, carry_warning) =
+        crate::merge_gates::visual_approval_verdict(probes, cwd, facts.number, &facts.head_sha);
+    if let Some(warning) = carry_warning {
+        warnings.push(warning);
+    }
+    let (visual_warning, visual_hold) = match visual {
+        Some(blocker) if blocker.code == "visual_declined" => (None, Some(blocker)),
+        other => (other, None),
+    };
+    for evidence in [
+        visual_warning,
+        crate::docs_gate::docs_gate_blocker(probes, cwd, facts),
+        crate::merge_gates::review_posted_gate(probes, cwd, facts),
+        crate::merge_gates::plan_fidelity_blocker(probes, cwd, facts.number),
+        crate::merge_gates::overlap_blocker(probes, cwd, facts.number),
+        flake_blocker(request, checks),
+        optional_reviews_blocker(optional),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        warnings.push(Warning::from(evidence));
+    }
+    if request.require_checks && checks.verdict != "green" && checks.verdict != "red" {
+        warnings.push(Warning::new(
+            &ci_blocker_word(&checks.verdict, request.supplied_counts.as_ref()),
+            format!(
+                "checks are {}; no completed code-test failure is available",
+                checks.verdict
+            ),
+        ));
+    }
+    if optional == Some(None) {
+        warnings.push(Warning::new(
+            "optional_reviews_unknown",
+            "optional review findings unreadable",
+        ));
+    }
+    if let Some(description) = checks.evals_gate_red() {
+        warnings.push(Warning::new(
+            "evals_gate_red",
+            format!("evals gate red at this head: {description}; CI is judged separately"),
+        ));
+    }
+    if checks.evals_gate_pending() {
+        let description = checks
+            .evals_gate_row
+            .as_ref()
+            .map(|r| r.description.as_str())
+            .unwrap_or("");
+        warnings.push(Warning::new("evals_gate_pending", format!(
+            "evals gate pending at this head: {description}; retry evidence with fno-agents evals gate-retry {}",
+            short(&facts.head_sha)
+        )));
+    }
+    if checks.evals_gate_row.is_none() && probes.evals_gate_expected(cwd, facts) {
+        warnings.push(Warning::new("evals_gate_missing", format!(
+            "no evals/gate status at this gated head; retry evidence with fno-agents evals gate-retry {}",
+            short(&facts.head_sha)
+        )));
+    }
+    (warnings, visual_hold)
+}
+
+/// The status-side name for a non-green verdict: the KIND of red, never a
+/// generic one. A red whose every failure is a taken-away run is a
+/// cancelled-retrigger; one whose every failure is a StatusContext is a
+/// status red; anything else is the generic word. Unreadable counts
+/// degrade to the generic name - the verdict itself stays authoritative.
+fn ci_blocker_word(verdict: &str, counts: Option<&Value>) -> String {
+    if verdict != "red" {
+        return format!("ci_{verdict}");
+    }
+    if let Some(c) = counts {
+        let uf = c.get("unsettled_fail").and_then(Value::as_i64).unwrap_or(0);
+        let f = c.get("fail").and_then(Value::as_i64).unwrap_or(0);
+        let fs = c.get("fail_statuses").and_then(Value::as_i64).unwrap_or(0);
+        if uf > 0 && uf == f {
+            return "ci_cancelled_retrigger".to_string();
+        }
+        if fs > 0 && fs == f {
+            return "commit_status_red".to_string();
+        }
+    }
+    "ci_red".to_string()
+}
+
+/// A rerun-recovered green carries advisory evidence. `accept_flake` acknowledges it.
+fn flake_blocker(request: &Request, checks: &ChecksRead) -> Option<Blocker> {
+    if request.accept_flake {
+        return None;
+    }
+    if checks.rerun_recovered != Some(true) {
+        return None;
+    }
+    let failed = checks
+        .rerun_failures
+        .as_ref()
+        .map(|names| names.join(", "))
+        .unwrap_or_else(|| "unknown checks".to_string());
+    Some(Blocker::held(
+        "rerun_recovered_green",
+        format!("rerun-recovered green (earlier failed attempt: {failed})"),
+    ))
+}
+
+/// Optional findings and unreadable counts are evidence for both walks.
+/// Required reviewers still gate through coverage.
+fn optional_reviews_blocker(value: Option<Option<i64>>) -> Option<Blocker> {
+    match value {
+        None => Some(Blocker::unknown(
+            "optional_reviews_unknown",
+            "the status read carried no optional review count",
+        )),
+        Some(None) | Some(Some(0)) => None,
+        Some(Some(_)) => Some(Blocker::held(
+            "optional_reviews_unresolved",
+            "optional review findings unresolved",
+        )),
+    }
+}
+
+/// Contract rows for the stub-manifest gate. An unreadable store degrades to
+/// None (the default hard merge path), as the Python did.
+fn walk_entries(cwd: &Path) -> Option<Vec<Value>> {
+    let graph_path = crate::org_board::scope::graph_json_path(cwd);
+    crate::graph_store::read_contract_rows(&graph_path).ok()
+}
+
+/// The repo top-level for manifest lookups: manifests live at the project
+/// root's `.fno/`, never under a subdirectory cwd.
+fn repo_root(cwd: &Path) -> PathBuf {
+    canonical_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf())
+}
+
+/// Is this manifest posture init's `default-off` stamp? Init stamps
+/// `default-off` when its config read found nothing (a yq-less dotted-key
+/// read fails on every tier), so the field records a FAILED LOOKUP, not a
+/// decision. Consumers must treat it as unset and fall through to the live
+/// config, where an explicit refusal (`flag-no-merge`, or config set false)
+/// still wins: `flag-no-merge` and a config refusal never carry this source.
+pub(crate) fn posture_is_default_off(approved: Option<bool>, source: Option<&str>) -> bool {
+    approved == Some(false) && source.map(str::trim) == Some("default-off")
+}
+
+fn main_authority_refusal<P: Probes>(probes: &P, cwd: &Path, facts: &PrFacts) -> Option<Outcome> {
+    if facts.base_ref == "main" {
+        if let Some((workflow, sha)) = probes
+            .main_ci_token(cwd)
+            .as_ref()
+            .ok()
+            .and_then(main_ci_red_run)
+        {
+            if let Some(lane) = probes.main_repair_hold(cwd, facts) {
+                return Some(Outcome::Refused {
+                    reason: main_red_reason(&workflow, &sha, &lane),
+                    warnings: Vec::new(),
+                });
+            }
+        }
+    }
+    None
+}
+
+fn authority_hold<P: Probes>(probes: &P, cwd: &Path, facts: &PrFacts) -> Option<Outcome> {
+    probes
+        .dispatch_hold(cwd, facts)
+        .fail_closed()
+        .or_else(|| probes.pr_hold(cwd, facts).fail_closed())
+        .or_else(|| probes.merge_freeze(cwd, facts).fail_closed())
+        .or_else(|| probes.rules(cwd, facts).fail_closed())
+        .map(|reason| Outcome::Held {
+            reason,
+            warnings: Vec::new(),
+        })
+}
+
+fn decision_warnings<P: Probes>(
+    probes: &P,
+    request: &Request,
+    facts: &PrFacts,
+    checks: &ChecksRead,
+) -> (Vec<Warning>, Option<Blocker>) {
+    let (mut warnings, hold) = process_warnings(probes, request, facts, checks);
+    if let Some(blocker) = crate::merge_gates::coverage_gate(probes, &request.cwd, facts.number).0 {
+        warnings.push(Warning::from(blocker));
+    }
+    (warnings, hold)
+}
+
+/// The authority fold, in the order init folds it. A per-run refusal outranks
+/// every grant - EXCEPT the head-scoped user grant, one of two sanctioned
+/// remedies for a per-run no-merge: an operator row recorded out-of-band by
+/// a person at a terminal through `fno backlog decide --authority operator`
+/// (never by a session - `decide/__init__.py:297` refuses operator authority
+/// from agent sessions), or the user's own chat approval recorded at the
+/// head subject through the law door, whose `chat_attested` row carries the
+/// user's words (`merge_grant::chat_grant_command`). The grant clears only
+/// the per-run layer; the live-config refusal still runs, and
+/// a push to a new head invalidates the grant by subject construction.
+fn authority_refusal<P: Probes>(
+    probes: &P,
+    cwd: &Path,
+    request: &Request,
+    facts: &PrFacts,
+) -> Option<(&'static str, String)> {
+    // The PR's own bound target manifest folds first when the caller carried
+    // no posture: a status read never read it, and the merge command's
+    // spaces-aware read arrives here as `approved` when it did. A manifest
+    // false is a per-run refusal like any caller-supplied one; a present but
+    // unreadable manifest at the PR's branch fails closed. The exact-head
+    // operator grant below stays the one sanctioned remedy.
+    let mut approved = request.approved;
+    let mut folded_source = request.auto_merge_source.clone();
+    if approved.is_none() {
+        match crate::merge_grant::branch_bound_manifest(cwd, &facts.head_ref) {
+            crate::merge_grant::BoundRead::Read(bound) => {
+                approved = bound.approved;
+                folded_source = bound.source;
+            }
+            crate::merge_grant::BoundRead::Unreadable(why) => {
+                return Some((
+                    "manifest_unreadable",
+                    format!(
+                        "the PR's bound target manifest is present but unreadable ({why}); \
+                         refusing without a readable posture"
+                    ),
+                ));
+            }
+            crate::merge_grant::BoundRead::None => {}
+        }
+    }
+    // A `default-off` stamp is init's failed config read, never a refusal:
+    // normalize to unset so the live-config arm below decides, the same
+    // fall-through an absent field already gets.
+    if posture_is_default_off(approved, folded_source.as_deref()) {
+        approved = None;
+        folded_source = None;
+    }
+    let source = folded_source
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("unknown (pre-provenance manifest)")
+        .to_string();
+    if approved == Some(false) {
+        let Some(slug) = crate::merge_grant::repo_slug_from_pr_url(&facts.url) else {
+            return Some((
+                "per_run_no_merge",
+                "per-run no-merge: PR repository identity is unreadable. A head-scoped grant cannot authorize it".into(),
+            ));
+        };
+        let subject =
+            crate::merge_grant::head_grant_subject(&slug, facts.number as i64, &facts.head_sha);
+        let args: Vec<String> = [
+            "backlog",
+            "decisions",
+            subject.as_str(),
+            "--lane",
+            "law",
+            "--state",
+            "live",
+            "--json",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+        let stdout = probes
+            .fno_shell(cwd, &args)
+            .ok()
+            .and_then(|(code, out, _)| (code == Some(0)).then_some(out));
+        match crate::merge_grant::head_grant_status(stdout.as_deref()) {
+            crate::merge_grant::HeadGrant::Granted => {}
+            other => {
+                let (state_word, detail) = match &other {
+                    crate::merge_grant::HeadGrant::Absent => (
+                        "absent",
+                        "no row carrying the user's ruling records a grant at this head"
+                            .to_string(),
+                    ),
+                    crate::merge_grant::HeadGrant::Conflict => (
+                        "conflicting",
+                        "rows carrying the user's ruling at this head disagree or carry no \
+                         decision"
+                            .to_string(),
+                    ),
+                    crate::merge_grant::HeadGrant::Unreadable(d) => ("unreadable", d.clone()),
+                    crate::merge_grant::HeadGrant::Granted => unreachable!("matched above"),
+                };
+                return Some((
+                    "per_run_no_merge",
+                    format!(
+                        "per-run no-merge (manifest auto_merge_approved is not true; \
+                         auto_merge_source: {source}); the user head grant reads \
+                         {state_word} ({detail}); sanctioned overrides: {} (a person at a \
+                         terminal), or the user's own chat approval recorded at this head: {}",
+                        crate::merge_grant::attended_grant_command(
+                            &slug,
+                            facts.number as i64,
+                            &facts.head_sha
+                        ),
+                        crate::merge_grant::chat_grant_command(
+                            &slug,
+                            facts.number as i64,
+                            &facts.head_sha
+                        )
+                    ),
+                ));
+            }
+        }
+    }
+    let env_grant = approved == Some(true) && source == "env-target-auto-merge";
+    if !env_grant && !probes.auto_merge_enabled(cwd) {
+        return Some((
+            "auto_merge_disabled",
+            "auto_merge disabled (live config resolves auto_merge.enabled=false, or autonomy.mode holds merge); sanctioned \
+             override (operator levers): `fno config set auto_merge.enabled true` plus an autonomy.mode that allows merge, or start the \
+             run with TARGET_AUTO_MERGE=1 from the operator's shell"
+                .to_string(),
+        ));
+    }
+    None
+}
+
+/// Decide, then run the effect unless the caller asked to stop at the decision.
+pub fn run<P: Probes>(probes: &P, request: &Request) -> Outcome {
+    run_observed(probes, request, &mut None)
+}
+
+fn run_observed<P: Probes>(
+    probes: &P,
+    request: &Request,
+    observed_head: &mut Option<String>,
+) -> Outcome {
+    match decide_observed(probes, request, observed_head) {
+        Ok(authorized) if request.decide_only || request.effect == Effect::Preview => {
+            Outcome::Authorized {
+                head: authorized.head,
+                warnings: authorized.warnings,
+            }
+        }
+        Ok(authorized) => {
+            let outcome =
+                effect(probes, request, &authorized).with_warnings(authorized.warnings.clone());
+            crate::merge_provenance::record_outcome(request, &authorized.facts, &outcome);
+            // Only a Merge hands the slot back. Every terminal effect() outcome of a Merge
+            // - landed, durably Failed, HeadChanged, or Unknown - releases it
+            // here rather than starving the queue for the rest of the lease.
+            // An arm leaves GitHub to merge later; a slot dropped here lets a
+            // racer restale the queue the armed PR is still waiting in, and a
+            // holder that arms keeps the slot until its merge lands, which the
+            // eviction above then reads as terminal. A PR that never held the
+            // slot releases nothing (holder-matched).
+            if request.effect == Effect::Merge {
+                probes.release_slot(
+                    request.cwd.as_path(),
+                    &authorized.facts.base_ref,
+                    authorized.facts.number,
+                );
+            }
+            outcome
+        }
+        Err(outcome) => outcome,
+    }
+}
+
+fn effect<P: Probes>(probes: &P, request: &Request, authorized: &Authorized) -> Outcome {
+    let cwd = request.cwd.as_path();
+    let number = authorized.facts.number;
+    if authorized.facts.armed {
+        return match request.effect {
+            // Preview never reaches an effect (run() short-circuits it).
+            Effect::Preview => {
+                return Outcome::Unknown {
+                    reason: "preview never runs an effect".to_string(),
+                    warnings: Vec::new(),
+                }
+            }
+            // Re-arming is a no-op on GitHub's side, so the receipt says armed
+            // without spending a request.
+            Effect::Arm => Outcome::Armed {
+                head: authorized.head.clone(),
+                merge_grant: authorized.merge_grant.clone(),
+                warnings: authorized.warnings.clone(),
+                queued: false,
+            },
+            // Merging now would race the queue that already owns this PR.
+            Effect::Merge => Outcome::Held {
+                reason: format!(
+                    "PR {number} is already armed in GitHub's auto-merge queue; \
+                     the queue merges it when checks pass"
+                ),
+                warnings: Vec::new(),
+            },
+        };
+    }
+
+    // Every gate above still decided. The queue only changes who lands it.
+    if let Some(queued) = probes.merge_queue(cwd, &authorized.facts, &authorized.head) {
+        return match queued {
+            Ok(None) => Outcome::Armed {
+                head: authorized.head.clone(),
+                merge_grant: authorized.merge_grant.clone(),
+                warnings: authorized.warnings.clone(),
+                queued: true,
+            },
+            Ok(Some(reason)) => Outcome::Held {
+                reason,
+                warnings: Vec::new(),
+            },
+            Err(reason) => Outcome::Unknown {
+                reason,
+                warnings: Vec::new(),
+            },
+        };
+    }
+
+    let strategy = &authorized.strategy;
+    let mut args = vec!["pr".to_string(), "merge".to_string(), number.to_string()];
+    if request.effect == Effect::Arm {
+        args.push("--auto".to_string());
+    }
+    args.push(format!("--{strategy}"));
+    // Never optional. gh refuses the whole call if the head moved, which is the
+    // last guard between this decision and a racing push.
+    args.push("--match-head-commit".to_string());
+    args.push(authorized.head.clone());
+
+    let (ok, output) = match probes.run_gh(cwd, &args) {
+        Ok(result) => result,
+        Err(error) => {
+            return Outcome::Failed {
+                reason: format!("gh {} failed to run: {error}", request.effect.word()),
+                warnings: Vec::new(),
+            }
+        }
+    };
+    if ok {
+        return match request.effect {
+            Effect::Arm => Outcome::Armed {
+                head: authorized.head.clone(),
+                merge_grant: authorized.merge_grant.clone(),
+                warnings: authorized.warnings.clone(),
+                queued: false,
+            },
+            Effect::Merge => Outcome::Merged {
+                head: authorized.head.clone(),
+                note: None,
+                cleanup_failure: None,
+                merge_grant: authorized.merge_grant.clone(),
+                warnings: authorized.warnings.clone(),
+            },
+            Effect::Preview => Outcome::Unknown {
+                reason: "preview never runs an effect".to_string(),
+                warnings: Vec::new(),
+            },
+        };
+    }
+
+    // gh exits non-zero on an already-merged PR, and on a post-merge step that
+    // failed after the server-side merge landed. Re-read rather than match the
+    // error phrasing: the durable signal is the PR's own state.
+    match probes.pr_facts(cwd, Some(number)) {
+        Ok(after) if after.state == "MERGED" => Outcome::Merged {
+            head: authorized.head.clone(),
+            note: Some("merged server-side".to_string()),
+            cleanup_failure: Some(format!(
+                "gh {} exited non-zero after the server-side merge: {}",
+                request.effect.word(),
+                first_line(&output)
+            )),
+            merge_grant: authorized.merge_grant.clone(),
+            warnings: authorized.warnings.clone(),
+        },
+        Ok(after) if after.head_sha != authorized.head => Outcome::HeadChanged {
+            expected: authorized.head.clone(),
+            actual: after.head_sha,
+            warnings: Vec::new(),
+        },
+        Ok(_) => {
+            // gh refuses before merging when the branch is checked out in
+            // another worktree, which is every worktree-first run. Recover
+            // through the REST endpoint, carrying the same pin: `sha` is that
+            // endpoint's `--match-head-commit`, so the retry cannot quietly
+            // land a head the decision never saw.
+            if request.effect == Effect::Merge && checkout_refused(&output) {
+                let api = vec![
+                    "api".to_string(),
+                    "--method".to_string(),
+                    "PUT".to_string(),
+                    format!("repos/{{owner}}/{{repo}}/pulls/{number}/merge"),
+                    "-f".to_string(),
+                    format!("merge_method={strategy}"),
+                    "-f".to_string(),
+                    format!("sha={}", authorized.head),
+                ];
+                if let Ok((true, _)) = probes.run_gh(cwd, &api) {
+                    // The recovery WORKED, so it carries no cleanup failure.
+                    return Outcome::Merged {
+                        head: authorized.head.clone(),
+                        note: Some("merged server-side (worktree fallback)".to_string()),
+                        cleanup_failure: None,
+                        merge_grant: authorized.merge_grant.clone(),
+                        warnings: authorized.warnings.clone(),
+                    };
+                }
+            }
+            classify_failure(request.effect, strategy, &output)
+        }
+        // The state never became readable, so a landed merge and a failed one
+        // look the same. Unknown keeps that in the receipt.
+        Err(reason) => Outcome::Unknown {
+            reason: format!(
+                "merge state unreadable after a failed {}: {reason}",
+                request.effect.word()
+            ),
+            warnings: Vec::new(),
+        },
+    }
+}
+
+/// gh's two spellings for "that branch is checked out somewhere else". Matching
+/// phrasing is only safe here because the state read above already proved the
+/// merge did NOT land, so a wrong guess costs one refused API call.
+fn checkout_refused(output: &str) -> bool {
+    let lower = output.to_lowercase();
+    lower.contains("is already used by worktree") || lower.contains("already checked out")
+}
+
+/// The fno gh proxy prefixes its own stderr lines with `fno config:`,
+/// `gh proxy:`, or `gh budget:` when it reports on itself (an unmodeled
+/// config key, a fail-open admit, a budget read). An `fno config:` line is
+/// always noise. A `gh proxy:`/`gh budget:` line is noise ONLY when it
+/// announces an admit (contains "admitting"): the proxy prints that banner
+/// to stderr right before `os.execve` replaces it with the real `gh`, so
+/// both share one stderr stream and the banner lands as line one, ahead of
+/// gh's own refusal. The SAME prefix also carries the proxy's own terminal
+/// refusals (`--draft refused`, `re-entered itself`, `real gh executable not
+/// found`) when it never admits - those never contain "admitting" and must
+/// never be skipped, because they are the entire story, not noise ahead of
+/// one.
+pub(crate) fn is_proxy_noise_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("fno config:") {
+        return true;
+    }
+    (trimmed.starts_with("gh proxy:") || trimmed.starts_with("gh budget:"))
+        && trimmed.contains("admitting")
+}
+
+/// The first non-blank line of a command's output, capped for a receipt.
+/// Leading proxy-noise lines (see [`is_proxy_noise_line`]) are skipped so the
+/// reason names the real gh error; output that is only proxy noise still
+/// reports its first line.
+fn first_line(output: &str) -> String {
+    let line = output
+        .lines()
+        .find(|line| !line.trim().is_empty() && !is_proxy_noise_line(line))
+        .or_else(|| output.lines().find(|line| !line.trim().is_empty()))
+        .unwrap_or("no error output");
+    // Truncate by CHARACTER. A byte slice panics when the cut lands inside a
+    // multi-byte character, and gh output carries them (a PR title, a branch
+    // name, a localized git message).
+    line.chars().take(200).collect()
+}
+
+fn classify_failure(effect: Effect, strategy: &str, output: &str) -> Outcome {
+    let lower = output.to_lowercase();
+    if lower.contains("secondary rate limit") {
+        // A burst (a fleet undrafting many PRs at once) trips GitHub's
+        // secondary limiter. The same command succeeds after the backoff, so
+        // it holds like any other retryable state - never a merge-method
+        // fault.
+        return Outcome::Held {
+            reason: format!(
+                "GitHub secondary rate limit; wait out the backoff, then retry the {}: {}",
+                effect.word(),
+                first_line(output)
+            ),
+            warnings: Vec::new(),
+        };
+    }
+    let reason = if lower.contains("fno/review-coverage") {
+        // This command published that status itself moments ago. GitHub has not
+        // observed it yet, so the refusal clears on a retry.
+        "fno/review-coverage is still required after its success status was published; \
+         GitHub may not have observed the update yet - retry the merge"
+            .to_string()
+    } else if lower.contains("not mergeable") {
+        "not mergeable (conflicts or base changed)".to_string()
+    } else if lower.contains("protected") {
+        "branch protected".to_string()
+    } else if lower.contains("required review") {
+        "required review pending".to_string()
+    } else {
+        format!(
+            "gh {} with --{strategy} failed (check the repo allows that merge method): {}",
+            effect.word(),
+            first_line(output)
+        )
+    };
+    Outcome::Failed {
+        reason,
+        warnings: Vec::new(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The real probes.
+// ---------------------------------------------------------------------------
+
+/// The rules read for one merge ask: one `door:merge` event, the PR named
+/// as `<slug>#<n>` (the same subject shape the pr-hold rows use) plus the
+/// node the body binds. A block holds; a warn or unread source prints and
+/// the merge proceeds (AC14).
+fn merge_rules_probe(cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+    let ev = crate::rules::Event {
+        kind: "door:merge".to_string(),
+        node: facts
+            .body
+            .as_deref()
+            .and_then(crate::rules_source::node_in_text),
+        project: crate::law_match::resolve_project(
+            Some(cwd),
+            &crate::law_match::settings_sources(),
+        )
+        .ok(),
+        subjects: crate::merge_grant::repo_slug_from_pr_url(&facts.url)
+            .map(|slug| vec![format!("{slug}#{}", facts.number)])
+            .unwrap_or_default(),
+        ..crate::rules::Event::default()
+    };
+    let ruling = crate::rules_source::rule(cwd, &ev);
+    if let Some(sentence) = crate::rules_source::block_sentence(&ruling) {
+        return ProbeOutcome::Refused(sentence);
+    }
+    for line in crate::rules_source::advisory_lines(&ruling) {
+        eprintln!("{line}");
+    }
+    ProbeOutcome::Clear
+}
+
+/// The production [`Probes`]: one guarded `fno do pr info` fetch, the shipped
+/// hold and lineage commands, and the repo's own config readers.
+pub struct RealProbes;
+
+impl RealProbes {
+    pub(crate) fn fno_env(
+        cwd: &Path,
+        args: &[&str],
+        env: &[(&str, &str)],
+    ) -> Result<(Option<i32>, Vec<u8>, Vec<u8>), String> {
+        let out = crate::loopcheck::bounded_read_env_unadmitted(
+            &crate::scrape::fno_bin(),
+            args,
+            cwd,
+            "merge fno read",
+            std::time::Duration::from_secs(crate::agents_config::merge_gh_read_secs(cwd)),
+            env,
+        )
+        .map_err(|error| crate::loopcheck::bounded_read_diagnostic("merge fno read", &error))?;
+        Ok((out.status.code(), out.stdout, out.stderr_tail))
+    }
+
+    fn fno_strings(cwd: &Path, args: &[String]) -> Result<(Option<i32>, Vec<u8>, Vec<u8>), String> {
+        Self::fno_env(
+            cwd,
+            &args.iter().map(String::as_str).collect::<Vec<_>>(),
+            &[],
+        )
+    }
+}
+
+/// Lifts `RealProbes`' two-tuple `run_gh` onto the shared `GhProbe` shape
+/// `pr_file_paths` takes (the evals gate's `DepsProbe` seam, same lift):
+/// cwd passes through, argv converts, a spawn that could not run at all
+/// reads as a failed call.
+struct RunGhProbe<'a>(&'a RealProbes);
+
+impl crate::pr_status_facts::GhProbe for RunGhProbe<'_> {
+    fn run_gh(&self, cwd: &Path, args: &[String]) -> Result<(bool, String, String), String> {
+        let (ok, stdout) = self.0.run_gh(cwd, args)?;
+        Ok((ok, stdout, String::new()))
+    }
+}
+
+impl Probes for RealProbes {
+    fn architect_evidence(
+        &self,
+        cwd: &Path,
+        facts: &PrFacts,
+        run: bool,
+        warnings: &[Warning],
+    ) -> Option<Blocker> {
+        crate::merge_architect::evidence(self, cwd, facts, run, warnings)
+    }
+    fn pr_facts(&self, cwd: &Path, pr: Option<u64>) -> Result<PrFacts, String> {
+        let _step = step_timer::step("pr_facts");
+        head_probe::read(cwd, pr)
+    }
+
+    fn coverage_verdict(
+        &self,
+        cwd: &Path,
+        pr: u64,
+    ) -> crate::loopcheck::coverage_gate::GateVerdict {
+        let _step = step_timer::step("coverage_verdict");
+        crate::loopcheck::coverage_gate::verdict(self, cwd, pr, true)
+    }
+
+    fn node_binding(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+        let _step = step_timer::step("node_binding");
+        node_binding_probe(cwd, facts)
+    }
+
+    fn main_ci_token(&self, cwd: &Path) -> Result<Value, String> {
+        let _step = step_timer::step("main_ci_token");
+        crate::main_ci::main_ci_reading_cached(cwd)
+    }
+
+    fn main_repair_hold(&self, cwd: &Path, facts: &PrFacts) -> Option<String> {
+        let _step = step_timer::step("main_repair_hold");
+        main_repair_hold_probe(cwd, facts)
+    }
+
+    fn outside_pr(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+        let _step = step_timer::step("outside_pr");
+        crate::pr_admission::outside_pr(cwd, facts)
+    }
+
+    fn pr_hold(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+        let _step = step_timer::step("pr_hold");
+        crate::pr_admission::pr_hold(cwd, facts)
+    }
+
+    fn merge_freeze(&self, _cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+        let _step = step_timer::step("merge_freeze");
+        crate::merge_freeze::probe(facts)
+    }
+
+    fn rules(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+        let _step = step_timer::step("rules");
+        merge_rules_probe(cwd, facts)
+    }
+
+    fn review_posted(&self, cwd: &Path, facts: &PrFacts, reviewed_head: &str) -> ProbeOutcome {
+        let _step = step_timer::step("review_posted");
+        let marker = crate::publish_review::round_marker(&facts.head_ref, reviewed_head);
+        let args = vec![
+            "api".to_string(),
+            "--paginate".to_string(),
+            format!(
+                "/repos/{{owner}}/{{repo}}/pulls/{}/reviews?per_page=100",
+                facts.number
+            ),
+        ];
+        match self.run_gh(cwd, &args) {
+            Ok((true, output)) => {
+                if output.contains(&marker) {
+                    ProbeOutcome::Clear
+                } else {
+                    ProbeOutcome::Refused(format!(
+                        "the attested review round at {} has not landed as a GitHub review on #{}; \
+                         run `fno do pr publish-review --pr-number {}` (finalize/ship already do this \
+                         automatically on every terminal decision, so this normally self-clears)",
+                        &reviewed_head[..reviewed_head.len().min(8)],
+                        facts.number,
+                        facts.number
+                    ))
+                }
+            }
+            Ok((false, output)) => ProbeOutcome::Inconclusive(format!(
+                "could not read #{}'s reviews: {}",
+                facts.number, output
+            )),
+            Err(error) => ProbeOutcome::Inconclusive(format!(
+                "could not read #{}'s reviews: {error}",
+                facts.number
+            )),
+        }
+    }
+
+    fn dispatch_hold(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+        let _step = step_timer::step("dispatch_hold");
+        crate::gate_probes::dispatch_hold(cwd, facts)
+    }
+
+    fn review_hold(&self, cwd: &Path, pr: u64) -> ProbeOutcome {
+        let _step = step_timer::step("review_hold");
+        // `review-hold check` is the one owner of "a review is RUNNING":
+        // clear, held, or unreadable. The probe reads the PR's head ref
+        // through the trait's gh read and answers IN PROCESS (d-e11b2b3e:
+        // the seam crossing to the Python command retires with the Python leg).
+        let read = self.run_gh(
+            cwd,
+            &[
+                "pr".to_string(),
+                "view".to_string(),
+                pr.to_string(),
+                "--json".to_string(),
+                "headRefName,headRefOid,state".to_string(),
+            ],
+        );
+        let pr_json: Value = match read {
+            Ok((true, stdout)) => serde_json::from_str(&stdout).unwrap_or(Value::Null),
+            Ok((false, stdout)) => {
+                return ProbeOutcome::Inconclusive(format!(
+                    "review-activity-unreadable (the PR read failed: {}); \
+refusing to assume no review is running",
+                    stdout.trim().chars().take(200).collect::<String>()
+                ));
+            }
+            Err(error) => {
+                return ProbeOutcome::Inconclusive(format!(
+                    "review-activity-unreadable ({error}); \
+refusing to assume no review is running"
+                ));
+            }
+        };
+        in_process_review_hold(cwd, &pr_json)
+    }
+
+    fn base_lineage(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+        let _step = step_timer::step("base_lineage");
+        let run = |args: &[&str], dir: &Path| {
+            let mut cmd = Command::new(args[0]);
+            cmd.args(&args[1..]).current_dir(dir);
+            crate::gate_probes::run_probe(cmd)
+        };
+        crate::gate_probes::base_lineage(cwd, facts, &run)
+    }
+
+    fn merge_result(&self, cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+        let _step = step_timer::step("merge_result");
+        let run = |args: &[&str], dir: &Path| {
+            let mut cmd = Command::new(args[0]);
+            cmd.args(&args[1..]).current_dir(dir);
+            crate::gate_probes::run_probe(cmd)
+        };
+        crate::gate_probes::merge_result(cwd, facts, &run)
+    }
+
+    fn ci_base(&self, cwd: &Path, facts: &PrFacts, merge_clean: bool) -> ProbeOutcome {
+        let _step = step_timer::step("ci_base");
+        let endpoint = |path: String, jq: &str| {
+            self.run_gh(
+                cwd,
+                &["api".to_string(), path, "--jq".to_string(), jq.to_string()],
+            )
+        };
+        let compare = match endpoint(
+            format!(
+                "repos/{{owner}}/{{repo}}/compare/{}...{}",
+                facts.base_ref, facts.head_sha
+            ),
+            ".behind_by",
+        ) {
+            // The line scan predates the clean-stdout contract and survives
+            // it: gh --jq prints the bare value, and a stray non-numeric
+            // line is skipped either way.
+            Ok((true, output)) => match output.lines().find_map(|l| l.trim().parse::<u64>().ok()) {
+                Some(value) => value,
+                None => {
+                    return ProbeOutcome::Inconclusive(format!(
+                        "ci base compare unreadable: expected behind_by, got {}",
+                        first_line(&output)
+                    ))
+                }
+            },
+            Ok((false, output)) => {
+                return ProbeOutcome::Inconclusive(format!(
+                    "ci base compare unreadable: {}",
+                    first_line(&output)
+                ))
+            }
+            Err(error) => {
+                return ProbeOutcome::Inconclusive(format!("ci base compare unreadable: {error}"))
+            }
+        };
+        if compare == 0 || merge_clean {
+            return ProbeOutcome::Clear;
+        }
+        let overlap = crate::merge_gates::base_move_paths_between(
+            self,
+            cwd,
+            &facts.base_ref,
+            &facts.head_sha,
+        )
+        .zip(crate::merge_gates::pr_file_paths(self, cwd, facts.number))
+        // Every path counts, docs included: the stacked-base-guard CI check
+        // reads the same unfiltered set, so the two never disagree.
+        .map(|(base, pr)| {
+            let base: std::collections::BTreeSet<String> = base.into_iter().collect();
+            let pr: std::collections::BTreeSet<String> = pr.into_iter().collect();
+            base.intersection(&pr).cloned().collect::<Vec<_>>()
+        });
+        ci_base_verdict(compare, merge_clean, overlap.as_deref())
+    }
+
+    fn require_fresh_ci(&self, cwd: &Path) -> bool {
+        let _step = step_timer::step("require_fresh_ci");
+        crate::agents_config::auto_merge_require_fresh_ci(cwd)
+    }
+
+    fn slot_holder(&self, cwd: &Path, base_ref: &str) -> Result<Option<u64>, String> {
+        let _step = step_timer::step("slot_holder");
+        slot_holder_read(cwd, base_ref)
+    }
+
+    fn take_slot(&self, cwd: &Path, base_ref: &str, pr: u64) -> Result<(), String> {
+        let _step = step_timer::step("take_slot");
+        // `merge-slot:` is repo-local, so rootless claim operations share the
+        // current repo space with every worktree.
+        let key = slot_key(base_ref);
+        let holder = slot_holder_key(pr);
+        let (state, record) = claims::status(&key, None);
+        let primary_holder = slot_holder_from_record(&key, state, record)?;
+        if primary_holder.is_some_and(|existing| existing != pr) {
+            return Err(format!(
+                "merge slot already held by pr:{}",
+                primary_holder.unwrap()
+            ));
+        }
+        let legacy_holder = legacy_slot_holder(cwd, &key)?;
+        if legacy_holder.is_some_and(|existing| existing != pr) {
+            return Err(format!(
+                "merge slot already held by pr:{}",
+                legacy_holder.unwrap()
+            ));
+        }
+        if primary_holder.is_none() && legacy_holder.is_some() {
+            return Ok(());
+        }
+        let opts = crate::claims::AcquireOpts {
+            pid_unavailable: true,
+            ttl_ms: Some(MERGE_SLOT_TTL_MS),
+            root: None,
+            reason: Some("ci_base_stale merge slot".to_string()),
+            ..Default::default()
+        };
+        match crate::claims::acquire(&key, &holder, opts) {
+            crate::claims::AcquireOutcome::Acquired(_) if primary_holder.is_some() => Ok(()),
+            crate::claims::AcquireOutcome::Acquired(_) => match legacy_slot_holder(cwd, &key) {
+                Ok(None) => Ok(()),
+                Ok(Some(existing)) => {
+                    let _ = crate::claims::release(&key, &holder, None, None);
+                    if existing == pr {
+                        Ok(())
+                    } else {
+                        Err(format!("merge slot already held by pr:{existing}"))
+                    }
+                }
+                Err(error) => {
+                    let _ = crate::claims::release(&key, &holder, None, None);
+                    Err(error)
+                }
+            },
+            crate::claims::AcquireOutcome::HeldByOther { holder, .. } => {
+                Err(format!("merge slot already held by {holder}"))
+            }
+            crate::claims::AcquireOutcome::Error(error) => Err(error),
+        }
+    }
+
+    fn release_slot(&self, cwd: &Path, base_ref: &str, pr: u64) {
+        let _step = step_timer::step("release_slot");
+        let key = slot_key(base_ref);
+        let holder = slot_holder_key(pr);
+        let _ = crate::claims::release(&key, &holder, None, None);
+        if let Some(root) = canonical_repo_root(cwd) {
+            let _ = crate::claims::release(&key, &holder, Some(&root), None);
+        }
+    }
+
+    fn slot_retested(&self, cwd: &Path, base_ref: &str, pr: u64) -> bool {
+        let _step = step_timer::step("slot_retested");
+        // The migration window can hold the live slot in the legacy
+        // repo-root store while the primary reads empty, so both stores
+        // answer; take_slot accepts a self-held legacy row without creating
+        // a primary one, and the retest cap must bind in that window too.
+        fn retested(record: Option<crate::claims::ClaimRecord>, holder: &str) -> bool {
+            record.is_some_and(|r| {
+                r.holder == holder && r.metadata.get("retested") == Some(&json!(true))
+            })
+        }
+        let key = slot_key(base_ref);
+        let holder = slot_holder_key(pr);
+        let (_, record) = crate::claims::status(&key, None);
+        if retested(record, &holder) {
+            return true;
+        }
+        match canonical_repo_root(cwd) {
+            Some(root) => {
+                let (_, legacy) = crate::claims::status(&key, Some(&root));
+                retested(legacy, &holder)
+            }
+            None => false,
+        }
+    }
+
+    fn mark_slot_retested(&self, cwd: &Path, base_ref: &str, pr: u64) {
+        let _step = step_timer::step("mark_slot_retested");
+        let key = slot_key(base_ref);
+        let holder = slot_holder_key(pr);
+        let mut metadata = serde_json::Map::new();
+        metadata.insert("retested".to_string(), json!(true));
+        // Write every store the slot may live in: a miss returns Ok(false)
+        // and costs one open, so covering the legacy window is unconditional.
+        let _ = crate::claims::mark_metadata(&key, &holder, &metadata, None);
+        if let Some(root) = canonical_repo_root(cwd) {
+            let _ = crate::claims::mark_metadata(&key, &holder, &metadata, Some(&root));
+        }
+    }
+
+    fn checks_read(&self, cwd: &Path, pr: u64) -> ChecksRead {
+        let _step = step_timer::step("checks_read");
+        // One owner: the CI verdict answers in process through the status
+        // door. A preview ask never re-enters here (supplied facts win), so
+        // the decision reads the same payload it would have spawned for.
+        let payload = serde_json::json!({
+            "cwd": cwd.display().to_string(),
+            "pr": pr,
+        });
+        let (_code, stdout, _stderr) = crate::pr_status::cache::run_door("status-read", &payload);
+        let checks = parse_checks_read(stdout.as_bytes());
+        // The green carry: a pending read at a head that only merged main in
+        // since a recorded green consults that green. Every probe miss keeps
+        // the pending verdict.
+        let head = serde_json::from_slice::<Value>(stdout.as_bytes())
+            .ok()
+            .and_then(|v| v.get("head").and_then(Value::as_str).map(str::to_owned));
+        crate::green_carry::carried_checks(cwd, pr, head.as_deref(), checks)
+    }
+
+    fn evals_gate_expected(&self, cwd: &Path, facts: &PrFacts) -> bool {
+        let _step = step_timer::step("evals_gate_expected");
+        // The same file read the daemon tick pays for, answered in process:
+        // slug from the checkout, files paginated straight from GitHub. A
+        // read that cannot run answers false (fail-open, like the lineage
+        // probe): the door never manufactures the missing-status hold from a
+        // probe that could not see.
+        let Some(slug) = crate::pr_status::cache::git_slug(cwd) else {
+            return false;
+        };
+        let files = match crate::pr_status::lists::pr_file_paths(
+            &RunGhProbe(self),
+            cwd,
+            &slug,
+            facts.number,
+        ) {
+            Ok(files) => files,
+            Err(_) => return false,
+        };
+        crate::evals_gate::head_owes_status(cwd, &crate::evals::history_path(), &files)
+    }
+
+    fn fno_shell(
+        &self,
+        cwd: &Path,
+        args: &[String],
+    ) -> Result<(Option<i32>, Vec<u8>, Vec<u8>), String> {
+        let _step = step_timer::step(format!(
+            "fno {}",
+            args.iter().take(3).cloned().collect::<Vec<_>>().join(" ")
+        ));
+        Self::fno_strings(cwd, args)
+    }
+
+    fn live_lanes(&self, cwd: &Path) -> usize {
+        let _step = step_timer::step("live_lanes");
+        // The parallel-lane count the Python hold derived (`claims.lanes.
+        // active_lane_count`): live `lane-slot:` claims at the canonical
+        // repo's own claims root. The global root is other repos' lanes and
+        // must not count. A probe miss answers 0 - the Python miss contract
+        // that disarms the overlap hold rather than blocking on our own read.
+        let Some(repo) = canonical_repo_root(cwd) else {
+            return 0;
+        };
+        let dir = repo.join(crate::claims::CLAIMS_DIRNAME);
+        crate::claims::list_in(std::slice::from_ref(&dir), Some("lane-slot:"), false)
+            .map(|records| records.len())
+            .unwrap_or(0)
+    }
+
+    fn covered_head(&self, cwd: &Path, pr: u64, pr_head: &str) -> Option<String> {
+        let _step = step_timer::step("covered_head");
+        covered_head_from_event(cwd, pr, pr_head)
+    }
+
+    fn auto_merge_enabled(&self, cwd: &Path) -> bool {
+        let _step = step_timer::step("auto_merge_enabled");
+        crate::agents_config::auto_merge_enabled(cwd)
+    }
+
+    fn posture_floor_block(&self, cwd: &Path) -> Option<String> {
+        let _step = step_timer::step("posture_floor_block");
+        crate::agents_config::automerge_posture_floor_block_reason(cwd)
+    }
+
+    fn strategy(&self, cwd: &Path) -> String {
+        let _step = step_timer::step("strategy");
+        crate::agents_config::auto_merge_strategy(cwd)
+    }
+
+    fn run_gh(&self, cwd: &Path, args: &[String]) -> Result<(bool, String), String> {
+        let _step = step_timer::step(format!(
+            "gh {}",
+            args.iter().take(3).cloned().collect::<Vec<_>>().join(" ")
+        ));
+        // The decide path is polled, so it admits: a hold refuses in process
+        // and reads as the failed read it is, never a verdict about the PR.
+        let mut cmd = Command::new("gh");
+        cmd.args(args).current_dir(cwd);
+        let out = crate::gh_budget::output(cmd).map_err(|error| error.to_string())?;
+        // stdout rides alone on success: every success-path consumer parses
+        // it as JSON, and the fno gh proxy's stderr banner appended to a
+        // 200 read is how "page was not JSON" fired on a healthy PR (and how
+        // an override-label read silently answered false). stderr appends
+        // only to a FAILED read, where every consumer reads a message tail.
+        let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+        if !out.status.success() {
+            text.push_str(&String::from_utf8_lossy(&out.stderr));
+        }
+        Ok((out.status.success(), text))
+    }
+    fn merge_queue(
+        &self,
+        cwd: &Path,
+        facts: &PrFacts,
+        head: &str,
+    ) -> Option<Result<Option<String>, String>> {
+        let _step = step_timer::step("merge_queue");
+        if facts.base_ref != crate::merge_queue::QUEUE_BASE || !crate::merge_queue::enabled(cwd) {
+            return None;
+        }
+        let node = pr_bound_entry(cwd, facts.number);
+        let repair = node
+            .as_ref()
+            .is_some_and(|e| node_carries_tag(e, MAIN_REPAIR_TAG));
+        let priority = node
+            .as_ref()
+            .and_then(|e| e.get("priority")?.as_str()?.strip_prefix('p')?.parse().ok())
+            .unwrap_or(2);
+        Some(crate::merge_queue::enqueue(
+            cwd,
+            facts.number,
+            head,
+            &facts.head_ref,
+            repair,
+            priority,
+        ))
+    }
+}
+
+/// Parse one `fno do pr status` stdout into both facts the door needs. An
+/// unreadable read claims neither: `unknown` holds under `require_checks`
+/// exactly as before, and no GitHub hold is asserted from output that never
+/// named one.
+fn parse_checks_read(stdout: &[u8]) -> ChecksRead {
+    let unknown = ChecksRead {
+        verdict: "unknown".to_string(),
+        github_block: None,
+        optional_unresolved: None,
+        rerun_recovered: None,
+        rerun_failures: None,
+        evals_gate_row: None,
+    };
+    let Ok(v) = serde_json::from_slice::<Value>(stdout) else {
+        return unknown;
+    };
+    let optional_unresolved = v.get("optional_reviews_unresolved").map(|raw| {
+        if let Some(n) = raw.as_i64() {
+            Some(n)
+        } else {
+            None
+        }
+    });
+    let rerun_recovered = v.get("rerun_recovered").and_then(Value::as_bool);
+    let rerun_failures = v.get("recovered_failures").and_then(|raw| {
+        let rows = raw.as_array()?;
+        Some(
+            rows.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect(),
+        )
+    });
+    let verdict = v
+        .get("verdict")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| "unknown".to_string());
+    let state = v.get("github_merge_state");
+    let source = || {
+        state
+            .and_then(|s| s.get("source"))
+            .and_then(Value::as_str)
+            .unwrap_or("github_blocked")
+            .to_string()
+    };
+    let github_block = v
+        .get("ready_blockers")
+        .and_then(Value::as_array)
+        .filter(|b| b.iter().any(|b| b.as_str() == Some("github_blocked")))
+        .map(|_| {
+            match state
+                .and_then(|s| s.get("missing_required_checks"))
+                .and_then(Value::as_array)
+            {
+                Some(names) if !names.is_empty() => {
+                    let joined = names
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    if joined.is_empty() {
+                        source()
+                    } else {
+                        joined
+                    }
+                }
+                _ => source(),
+            }
+        });
+    let evals_gate_row = v.get("evals_gate").and_then(|fact| {
+        let state = fact.get("state").and_then(Value::as_str).unwrap_or("");
+        (!state.is_empty()).then(|| EvalsGateRead {
+            state: state.to_string(),
+            description: fact
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+        })
+    });
+    ChecksRead {
+        verdict,
+        github_block,
+        optional_unresolved,
+        rerun_recovered,
+        rerun_failures,
+        evals_gate_row,
+    }
+}
+
+/// The `evals_gate_missing` / `evals_gate_pending` remedies name the head the
+/// way the daemon's own status descriptions do.
+fn short(sha: &str) -> &str {
+    sha.get(..12).unwrap_or(sha)
+}
+
+/// A merged or closed PR has no would-merge left, for the PR under decision
+/// and for a merge-slot holder alike.
+fn is_terminal_state(state: &str) -> bool {
+    state == "MERGED" || state == "CLOSED"
+}
+
+/// The `ci_base_stale` remedy, shared by every `Held` reason that ends in it.
+/// A merge, never a rebase: the branch is already pushed.
+fn stale_remedy(n: u64, base: &str) -> String {
+    format!(
+        "remedy: merge origin/{base} into the branch and push (fno do pr merge {n} does this \
+         once it holds the merge slot), then fno do pr wait {n} --until settled, then retry"
+    )
+}
+
+/// The slot holder's retest: GitHub merges the base into the PR branch (a
+/// merge commit, never a rebase), pinned to the head this decision read, so
+/// CI reruns against the current base. The next attempt reads that run.
+fn retest_on_current_base<P: Probes>(probes: &P, cwd: &Path, facts: &PrFacts) -> String {
+    let n = facts.number;
+    let args = vec![
+        "api".to_string(),
+        "-X".to_string(),
+        "PUT".to_string(),
+        format!("repos/{{owner}}/{{repo}}/pulls/{n}/update-branch"),
+        "-f".to_string(),
+        format!("expected_head_sha={}", facts.head_sha),
+    ];
+    match probes.run_gh(cwd, &args) {
+        Ok((true, _)) => format!(
+            "merged {base} into PR {n}'s branch; CI reruns on the new head; \
+             fno do pr wait {n} --until settled, then retry",
+            base = facts.base_ref
+        ),
+        Ok((false, output)) => format!(
+            "update-branch failed ({}); {}",
+            first_line(&output),
+            stale_remedy(n, &facts.base_ref)
+        ),
+        Err(error) => format!(
+            "update-branch failed ({error}); {}",
+            stale_remedy(n, &facts.base_ref)
+        ),
+    }
+}
+
+/// The merge-slot claim key for a base branch. It is repo-local, so rootless
+/// claim operations resolve the shared space directory for every worktree.
+fn slot_key(base_ref: &str) -> String {
+    format!("merge-slot:{base_ref}")
+}
+
+fn slot_holder_key(pr: u64) -> String {
+    format!("pr:{pr}")
+}
+
+pub(crate) fn parse_slot_holder(holder: &str) -> Option<u64> {
+    holder.strip_prefix("pr:")?.parse::<u64>().ok()
+}
+
+/// The one merge-slot claim read. Strict polarity kept: a corrupted claim or
+/// an unparseable holder is an Err (the merge path refuses on an unreadable
+/// slot rather than merging past it); the fail-open consumer
+/// ([`merge_slot_holder`]) maps Err to None at its own boundary. The primary
+/// read uses the repo-space lockfile; a pre-move lockfile at the canonical root
+/// remains a migration fallback until its lease ends.
+fn slot_holder_read(cwd: &Path, base_ref: &str) -> Result<Option<u64>, String> {
+    let key = slot_key(base_ref);
+    let (state, record) = claims::status(&key, None);
+    match slot_holder_from_record(&key, state, record)? {
+        Some(holder) => Ok(Some(holder)),
+        None => legacy_slot_holder(cwd, &key),
+    }
+}
+
+fn legacy_slot_holder(cwd: &Path, key: &str) -> Result<Option<u64>, String> {
+    let Some(root) = canonical_repo_root(cwd) else {
+        return Ok(None);
+    };
+    let (state, record) = claims::status(key, Some(&root));
+    slot_holder_from_record(key, state, record)
+}
+
+fn slot_holder_from_record(
+    key: &str,
+    state: ClaimState,
+    record: Option<claims::ClaimRecord>,
+) -> Result<Option<u64>, String> {
+    match state {
+        ClaimState::Corrupted => Err(format!("merge slot claim corrupted: {key}")),
+        ClaimState::Live | ClaimState::Suspect => {
+            let record = record
+                .ok_or_else(|| format!("merge slot claim {key} read {state:?} with no record"))?;
+            parse_slot_holder(&record.holder)
+                .map(Some)
+                .ok_or_else(|| format!("merge slot holder unparseable: {}", record.holder))
+        }
+        _ => Ok(None),
+    }
+}
+/// The live merge-slot holder for `base_ref`, fail-open: any claims fault
+/// reads as None so a consumer that only decides whether idling is safe (the
+/// loopcheck classifier) never blocks on a claims io error. Some(pr) only for
+/// a LIVE or SUSPECT slot whose holder parses; a self-held slot stays
+/// Some(self) and the caller filters it.
+pub(crate) fn merge_slot_holder(cwd: &Path, base_ref: &str) -> Option<u64> {
+    slot_holder_read(cwd, base_ref).ok().flatten()
+}
+
+/// The graph tag that declares a repair lane: a node carrying it may merge
+/// through a red main, because it IS the repair. The visual gate reads it
+/// too: the lane's whole point is merging without further ceremony.
+pub(crate) const MAIN_REPAIR_TAG: &str = "main-repair";
+
+/// The refusal: the red run named, then the repair lane.
+fn main_red_reason(workflow: &str, sha: &str, lane: &str) -> String {
+    format!(
+        "main is red: {workflow} failed at {}; merges hold while main's latest \
+         settled run is red. {lane}",
+        sha.chars().take(8).collect::<String>()
+    )
+}
+
+/// Does one graph entry carry the tag?
+pub(crate) fn node_carries_tag(entry: &Value, tag: &str) -> bool {
+    entry
+        .get("tags")
+        .and_then(Value::as_array)
+        .is_some_and(|tags| tags.iter().filter_map(Value::as_str).any(|t| t == tag))
+}
+
+/// The graph entry bound to this PR: the node whose `pr_number` it is, else
+/// the node that lists it in `additional_prs`, as the later half of a split
+/// PR does. `None` on an unreadable graph or no bound node: callers above
+/// treat absent as "not bound", which for every gate here must hold rather
+/// than release.
+pub(crate) fn pr_bound_entry(cwd: &Path, pr: u64) -> Option<Value> {
+    let graph_path = crate::org_board::scope::graph_json_path(cwd);
+    let store = GraphStore::new(&graph_path);
+    let entries = backlog_api::rows(&store).ok()?;
+    let here = crate::pr_list::origin_slug(cwd, None).ok();
+    // A node filed under the repo's former name carries old-name refs; seed
+    // the alias map (one bounded probe per unknown old slug, cached) before
+    // the bind read, or the gate refuses a PR it should bind.
+    let ref_slugs = entries
+        .iter()
+        .flat_map(crate::merge_gates::pr_refs_of)
+        .filter_map(|r| crate::backlog::pr_link::repo_slug_from_url(r.url.as_deref()));
+    let aliases =
+        crate::backlog::pr_link::aliases_with_probe(Some(cwd), here.as_deref(), ref_slugs);
+    let at = pr_bound_index(&entries, pr, here.as_deref(), &aliases)?;
+    entries.into_iter().nth(at)
+}
+
+/// The pure half of [`pr_bound_entry`]. PR numbers collide across
+/// repositories, and `additional_prs` may name any of them, so a ref whose
+/// URL names a repository other than `here` belongs to that repository.
+/// Within a rank a located ref (a URL that names a repo) outranks a bare
+/// number, and several bare rows refuse: after a name-consuming cutover the
+/// new repo reuses old numbers, and a url-less row bound by number alone
+/// would steal the new PR's bind. A lone bare row keeps the legacy number
+/// bind.
+pub(crate) fn pr_bound_index(
+    entries: &[Value],
+    pr: u64,
+    here: Option<&str>,
+    aliases: &BTreeMap<String, String>,
+) -> Option<usize> {
+    let located = |url: Option<&str>| crate::backlog::pr_link::repo_slug_from_url(url).is_some();
+    let ours = |url: Option<&str>| match (here, crate::backlog::pr_link::repo_slug_from_url(url)) {
+        (Some(here), Some(theirs)) => {
+            crate::backlog::pr_link::same_repo_slug(&theirs, here, aliases)
+        }
+        _ => true,
+    };
+    // One rank: the first located ref of ours wins, else the single bare
+    // number, else (nothing | a bare tie). The bool says which: a bare tie
+    // refuses the whole bind, it never falls through to the next rank.
+    let rank = |primary: bool| -> (Option<usize>, bool) {
+        let mut hit: Option<usize> = None;
+        let mut bare: Vec<usize> = Vec::new();
+        for (i, e) in entries.iter().enumerate() {
+            for r in crate::merge_gates::pr_refs_of(e) {
+                if r.number != pr || r.primary != primary {
+                    continue;
+                }
+                if located(r.url.as_deref()) {
+                    if ours(r.url.as_deref()) {
+                        hit.get_or_insert(i);
+                    }
+                } else {
+                    bare.push(i);
+                }
+            }
+        }
+        if hit.is_some() {
+            return (hit, false);
+        }
+        match bare.as_slice() {
+            [] => (None, false),
+            [only] => (Some(*only), false),
+            _ => (None, true),
+        }
+    };
+    let (hit, ambiguous) = rank(true);
+    if hit.is_some() || ambiguous {
+        return hit;
+    }
+    let (hit, ambiguous) = rank(false);
+    if ambiguous {
+        return None;
+    }
+    hit
+}
+
+/// The main-repair exemption probe over the live graph: `None` when this
+/// PR's node carries the [`MAIN_REPAIR_TAG`], else the repair-lane sentence.
+fn main_repair_hold_probe(cwd: &Path, facts: &PrFacts) -> Option<String> {
+    let graph_path = crate::org_board::scope::graph_json_path(cwd);
+    let store = GraphStore::new(&graph_path);
+    match backlog_api::rows(&store) {
+        Err(e) => Some(format!(
+            "the graph is unreadable ({}) so no repair lane can be named; tag \
+             the repair node: fno backlog update <node> tags+={MAIN_REPAIR_TAG}",
+            e.0
+        )),
+        Ok(entries) => main_repair_hold_from_entries(&entries, facts),
+    }
+}
+
+/// The pure half of [`main_repair_hold_probe`], over already-read entries.
+/// The PR's node is found by the same binding keys the node-binding gate
+/// trusts; any one of them carrying the tag exempts the PR.
+fn main_repair_hold_from_entries(entries: &[Value], facts: &PrFacts) -> Option<String> {
+    let keys = pr_binding_keys(
+        facts.number as i64,
+        &facts.head_ref,
+        Some(&facts.url),
+        facts.body.as_deref(),
+        entries,
+    );
+    let entry_of = |nid: &str| entries.iter().find(|e| RowFacts::id_of(e) == Some(nid));
+    let bound: Vec<&Value> = keys
+        .branch
+        .iter()
+        .chain(&keys.backrefs)
+        .chain(&keys.trailer)
+        .filter_map(|nid| entry_of(nid))
+        .collect();
+    if bound.iter().any(|e| node_carries_tag(e, MAIN_REPAIR_TAG)) {
+        return None;
+    }
+    // The lane is named within the PR's own project: another project's
+    // main-repair tag declares that project's main, never this one.
+    let project = bound
+        .iter()
+        .find_map(|e| e.get("project").and_then(Value::as_str));
+    let lanes: Vec<&str> = entries
+        .iter()
+        .filter(|e| node_carries_tag(e, MAIN_REPAIR_TAG))
+        .filter(|e| match project {
+            Some(p) => e.get("project").and_then(Value::as_str) == Some(p),
+            None => true,
+        })
+        // A done node cannot be the repair lane: its repair landed, so a
+        // pointer that still names one is stale; the sentence names a live
+        // node or none.
+        .filter(|e| e.get("status").and_then(Value::as_str) != Some("done"))
+        .filter_map(|e| RowFacts::id_of(e))
+        .collect();
+    Some(if lanes.is_empty() {
+        format!(
+            "no node is declared the repair lane; tag the repair node: \
+             fno backlog update <node> tags+={MAIN_REPAIR_TAG}"
+        )
+    } else {
+        format!("the declared repair lane is {}", lanes.join(", "))
+    })
+}
+
+/// The node-binding gate over the live graph. The scope is the canonical repo
+/// root: a repo whose graph names no node under it (a stock install that
+/// never used the backlog, an external-tracker project) has nothing to bind
+/// to and merges as before.
+fn node_binding_probe(cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+    let root = canonical_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
+    let graph_path = crate::org_board::scope::graph_json_path(cwd);
+    let store = GraphStore::new(&graph_path);
+    match backlog_api::rows(&store) {
+        Err(e) => ProbeOutcome::Inconclusive(format!(
+            "graph unreadable ({}); refusing to assume bound",
+            e.0
+        )),
+        Ok(entries) => node_binding_from_entries(&root, &entries, facts),
+    }
+}
+
+/// The binding decision over already-read graph entries: the pure half of
+/// [`node_binding_probe`], so a unit test needs no filesystem. The three
+/// keys are the board classifier's own (`org_board::prs::pr_binding_keys`).
+fn node_binding_from_entries(root: &Path, entries: &[Value], facts: &PrFacts) -> ProbeOutcome {
+    if detect_project(entries, &root.to_string_lossy()).is_none() {
+        return ProbeOutcome::Clear;
+    }
+    let Some(body) = facts.body.as_deref() else {
+        return ProbeOutcome::Inconclusive(
+            "PR body was not in the fetch (deployed fno predates the body field; \
+             fno doctor update); refusing to assume bound"
+                .to_string(),
+        );
+    };
+    let keys = pr_binding_keys(
+        facts.number as i64,
+        &facts.head_ref,
+        Some(&facts.url),
+        Some(body),
+        entries,
+    );
+    if let Some(detail) = keys.unbound_detail() {
+        if facts.url.is_empty() {
+            // The backref key scopes by url; with none it was unevaluable,
+            // not empty, so the answer is Unknown rather than a refusal.
+            return ProbeOutcome::Inconclusive(
+                "PR carried no comparable url, so the graph back-pointer key \
+                 could not be scoped; refusing to assume unbound"
+                    .to_string(),
+            );
+        }
+        return ProbeOutcome::Refused(format!(
+            "PR {n} is unbound: {detail}. A merge the graph cannot see is refused. \
+             Bind it: pick or file the node (fno backlog idea \"...\"), run \
+             fno do pr closure-trailer <id> [--extra <id> ...], append the \
+             printed ONE line to the PR \
+             body, then retry. A revert or hotfix binds the same way; no flag \
+             bypasses this gate.",
+            n = facts.number
+        ));
+    }
+    if let Some(detail) = retarget_binding_refusal(&keys, body, facts.number as i64, &facts.url) {
+        return ProbeOutcome::Refused(detail);
+    }
+    ProbeOutcome::Clear
+}
+
+/// Parse the status read's own pull projection into [`PrFacts`]: the same
+/// facts the `fno do pr info` spawn answers, from the payload the read
+/// already fetched. A projection older than the `url`/`body` fields is NOT a
+/// fact - the caller falls back to the spawn rather than walking with an
+/// unevaluable backref key or a dead-instrument head.
+pub fn facts_from_pulls(pulls: &Value, fallback_pr: Option<u64>) -> Result<PrFacts, String> {
+    let number = pulls
+        .get("number")
+        .and_then(Value::as_u64)
+        .or(fallback_pr)
+        .ok_or_else(|| "the pull payload carried no PR number".to_string())?;
+    let head_sha = pulls
+        .get("headRefOid")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if head_sha.is_empty() {
+        return Err(format!(
+            "the pull payload carried no head sha for PR {number}"
+        ));
+    }
+    let url = pulls
+        .get("html_url")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let body = pulls.get("body").and_then(Value::as_str);
+    if url.is_empty() || body.is_none() {
+        return Err("the pull payload predates the url/body fields".to_string());
+    }
+    Ok(PrFacts {
+        number,
+        head_sha,
+        head_ref: pulls
+            .get("headRefName")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        base_ref: pulls
+            .get("baseRefName")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        url,
+        body: Some(body.unwrap_or("").to_string()),
+        state: pulls
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or("OPEN")
+            .to_string(),
+        armed: pulls
+            .get("auto_merge")
+            .map(|v| !v.is_null())
+            .unwrap_or(false),
+    })
+}
+
+/// Parse `fno do pr info`. An error field, a missing number, or a missing head
+/// sha is a dead instrument, never a PR with no head.
+pub fn parse_pr_facts(payload: &Value) -> Result<PrFacts, String> {
+    if let Some(error) = payload.get("error").and_then(Value::as_str) {
+        return Err(error.to_string());
+    }
+    let number = payload
+        .get("pr")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "fno do pr info carried no PR number".to_string())?;
+    let head_sha = payload
+        .get("head_sha")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if head_sha.is_empty() {
+        return Err(format!(
+            "fno do pr info carried no head sha for PR {number}"
+        ));
+    }
+    Ok(PrFacts {
+        number,
+        head_sha,
+        head_ref: payload
+            .get("head_ref")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        base_ref: payload
+            .get("base_ref")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        url: payload
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        // The body rides this same payload. `None` means the key was absent:
+        // an out-of-date deployed `fno`, not a bodyless PR.
+        body: payload
+            .get("body")
+            .map(|v| v.as_str().unwrap_or("").to_string()),
+        state: payload
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or("OPEN")
+            .to_string(),
+        // The armed flag rides this same payload. A second `gh pr view` probe
+        // could answer about a head this one never saw.
+        armed: payload
+            .get("auto_merge")
+            .map(|v| !v.is_null())
+            .unwrap_or(false),
+    })
+}
+
+/// A moved command spelling prints one teaching line to stderr. It is not a refusal
+/// reason: kept, it would lead the operator message with noise and permanently
+/// mask the empty-output fallback below.
+pub fn classify_hold_probe(success: bool, stdout: &[u8], stderr: &[u8]) -> ProbeOutcome {
+    if success {
+        return ProbeOutcome::Clear;
+    }
+    let stripped: String = String::from_utf8_lossy(stderr)
+        .lines()
+        .filter(|line| !(line.starts_with("fno ") && line.contains(" is now fno ")))
+        .collect::<Vec<&str>>()
+        .join("\n");
+    let detail = if stripped.trim().is_empty() {
+        stdout
+    } else {
+        stripped.as_bytes()
+    };
+    let message = String::from_utf8_lossy(detail).trim().to_string();
+    ProbeOutcome::Refused(if message.is_empty() {
+        "dispatch hold state unreadable; refusing to assume unheld".to_string()
+    } else {
+        message
+    })
+}
+
+/// Did the CI at this head test a tree close enough to the merge? A head that
+/// holds the base tip clears. A behind head clears when its merge into the
+/// base has no conflicts (`merge_clean`), or when the newer base commits touch
+/// no file the PR changes (`overlap` is `Some(&[])`). A shared file refuses.
+/// An unreadable file set (`None`) is inconclusive: the caller retries later.
+pub fn ci_base_verdict(
+    behind_by: u64,
+    merge_clean: bool,
+    overlap: Option<&[String]>,
+) -> ProbeOutcome {
+    match (behind_by, overlap) {
+        (0, _) | (_, Some([])) => ProbeOutcome::Clear,
+        _ if merge_clean => ProbeOutcome::Clear,
+        (_, Some(shared)) => ProbeOutcome::Refused(format!(
+            "ci_base_stale: PR is {behind_by} behind its base and the newer commits touch files it changes ({})",
+            shared.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
+        )),
+        (_, None) => ProbeOutcome::Inconclusive(format!(
+            "ci_base_unreadable: PR is {behind_by} behind its base and the file overlap is unreadable"
+        )),
+    }
+}
+
+/// The head sha from the latest covered `review_coverage` event that matches
+/// the PR's head, or None. The match reads the head being merged from facts,
+/// never cwd HEAD: a lead merging from the canonical checkout is not checked
+/// out at the PR head, so a cwd match there can never clear.
+pub fn covered_head_from_event(cwd: &Path, pr: u64, pr_head: &str) -> Option<String> {
+    if pr_head.is_empty() {
+        return None;
+    }
+    let path = crate::paths::events_path(cwd);
+    let content = crate::event_store::journal_text(&path, &["review_coverage"]);
+    covered_head_from_text(&content, pr, pr_head)
+}
+
+/// The journal-text half of [`covered_head_from_event`], split so the match
+/// is testable without a pinned space root. The match scopes to one PR: the
+/// space journal aggregates every PR's rows, so an unscoped head match could
+/// pin one PR's merge on another PR's coverage. An empty `pr_head` never
+/// reaches here: the effect chain refuses an unpinned merge.
+fn covered_head_from_text(content: &str, pr: u64, pr_head: &str) -> Option<String> {
+    let mut latest: Option<String> = None;
+    for line in content.lines() {
+        let Ok(val) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        // The query filter above already restricts the text to this event
+        // type, but the family-fallback degrade can surface foreign lines,
+        // so the type guard rides the loop.
+        if val.get("type").and_then(Value::as_str) != Some("review_coverage") {
+            continue;
+        }
+        if val.pointer("/data/pr").and_then(Value::as_i64) != Some(pr as i64) {
+            continue;
+        }
+        if val.pointer("/data/coverage").and_then(Value::as_str) != Some("covered") {
+            continue;
+        }
+        if val
+            .pointer("/data/reviewed_count")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            <= 0
+        {
+            continue;
+        }
+        let ev_head = val
+            .pointer("/data/head_sha")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if ev_head != pr_head {
+            continue;
+        }
+        latest = Some(ev_head.to_string());
+    }
+    latest
+}
+
+// ---------------------------------------------------------------------------
+// The `authorized-merge` command: one JSON payload in, one receipt out.
+// ---------------------------------------------------------------------------
+
+pub fn run_authorized_merge(args: &[String]) -> i32 {
+    // The operand argv door (`authorized-merge merge <pr> [flags]`): the
+    // client passes post-command args, so a door word in the lead position is
+    // the native-flow form, never a payload path.
+    if matches!(
+        args.first().map(String::as_str),
+        Some("merge") | Some("merge-result-check") | Some("hold-check")
+    ) {
+        return crate::merge_command::run_operand(args);
+    }
+    let (code, stdout, stderr) = run_authorized_merge_capture(args);
+    if !stdout.is_empty() {
+        print!("{stdout}");
+    }
+    if !stderr.is_empty() {
+        eprint!("{stderr}");
+    }
+    code
+}
+
+/// The merges hold, read the way the spawn gate reads its breaker: a stop
+/// holding merges (or an unreadable record, fail closed) refuses the merge
+/// primitive with the breaker generation and reason. `None` admits.
+fn merges_breaker_refusal() -> Option<(i32, String)> {
+    match crate::fleet_incident::verdict_for("merges") {
+        crate::fleet_incident::Verdict::Clear(_) => None,
+        crate::fleet_incident::Verdict::Stopped(r) => Some((
+            crate::spawn_gate::EXIT_FLEET_STOP,
+            format!(
+                "refused: fleet incident stop holds merges (generation {}, reason: {}); \
+                 reopen with `fno agents incident clear --reason <text>`\n",
+                r.generation, r.reason
+            ),
+        )),
+        crate::fleet_incident::Verdict::Unavailable(d) => Some((
+            crate::spawn_gate::EXIT_FLEET_STOP_UNAVAILABLE,
+            format!(
+                "refused: fleet incident state is unreadable ({d}); the merge primitive fails closed\n"
+            ),
+        )),
+    }
+}
+
+/// Test-friendly variant: returns (exit_code, stdout, stderr) without printing.
+pub fn run_authorized_merge_capture(args: &[String]) -> (i32, String, String) {
+    let payload: Value = match read_payload(args) {
+        Ok(value) => value,
+        Err(message) => return (2, String::new(), message),
+    };
+    if payload.get("op").and_then(Value::as_str) == Some("pr-head") {
+        return (
+            0,
+            format!("{}\n", head_probe::receipt(&payload)),
+            String::new(),
+        );
+    }
+    // The check-stage door: `{"op": "hold-check", "pr": ..., "cwd": ...}`
+    // answers the plan-hold read in process, the transport the status
+    // cache-key op and the seams probe ride instead of spawning the Python
+    // leaf.
+    if payload.get("op").and_then(Value::as_str) == Some("hold-check") {
+        return match crate::merge_command::run_op("hold-check", &payload) {
+            Ok(answer) => (0, format!("{answer}\n"), String::new()),
+            Err(message) => (3, String::new(), message),
+        };
+    }
+    // The hold ops are merge-authority writes and reads riding this command's
+    // payload, not a new top-level root: `{"op": "hold-set"|"hold-verdict"|...,
+    // ...}` answers with one receipt instead of a merge verdict.
+    if payload
+        .get("op")
+        .and_then(Value::as_str)
+        .is_some_and(|op| op.starts_with("hold-"))
+    {
+        let out = crate::merge_hold::run(
+            payload.get("op").and_then(Value::as_str).unwrap_or(""),
+            &payload,
+        );
+        return (0, out, String::new());
+    }
+    // The freeze ops are the merge freeze's transport, riding the same payload
+    // the hold ops use: `{"op": "freeze-set"|"freeze-clear"|"freeze-check",
+    // ...}` writes and reads the freeze record. The gate reads the freeze as
+    // a probe in `decide_observed`.
+    if payload
+        .get("op")
+        .and_then(Value::as_str)
+        .is_some_and(|op| op.starts_with("freeze-"))
+    {
+        let out = crate::merge_freeze::run(
+            payload.get("op").and_then(Value::as_str).unwrap_or(""),
+            &payload,
+        );
+        return (0, out, String::new());
+    }
+    // The release ops write and read the release record (`release_record.rs`):
+    // `{"op": "release-pin"|"release-join"|"release-show", ...}`. A pin also
+    // moves a live freeze's sha.
+    if payload
+        .get("op")
+        .and_then(Value::as_str)
+        .is_some_and(|op| op.starts_with("release-"))
+    {
+        let out = crate::release_record::run(
+            payload.get("op").and_then(Value::as_str).unwrap_or(""),
+            &payload,
+        );
+        return (0, out, String::new());
+    }
+    // The grant ops are the durable-grant reader riding this command's payload,
+    // the same transport the hold ops use: `{"op": "grant-verdict", ...}`
+    // answers one PR, `{"op": "grant-queue", ...}` answers the merge queue.
+    if payload
+        .get("op")
+        .and_then(Value::as_str)
+        .is_some_and(|op| op.starts_with("grant-"))
+    {
+        let out = crate::merge_grant::run_op(
+            payload.get("op").and_then(Value::as_str).unwrap_or(""),
+            &payload,
+        );
+        return (0, out, String::new());
+    }
+    // The queue-merge finisher's cleanup write (pr port 7): the deleted
+    // `_merge._post_merge_remote_delete` helper's native owner. Warn-only,
+    // gated on `auto_merge.delete_branch_on_merge` exactly as the verify
+    // flow's cleanup leg is.
+    if payload.get("op").and_then(Value::as_str) == Some("merge-remote-delete") {
+        let out = crate::pr_verify::remote_delete_cleanup_op(&payload);
+        return (0, out, String::new());
+    }
+    // The effect ops are the effect-classification door the ported Python
+    // approvals callers route through, the same transport the grant ops use:
+    // `{"op": "effect-classify"|"effect-submit"|"effect-verdict", ...}`.
+    if payload
+        .get("op")
+        .and_then(Value::as_str)
+        .is_some_and(|op| op.starts_with("effect-"))
+    {
+        let out = crate::effect_gate::run_op(
+            payload.get("op").and_then(Value::as_str).unwrap_or(""),
+            &payload,
+        );
+        return (0, out, String::new());
+    }
+    // The status ops are the pr-status fact readers riding this command's
+    // payload, the same transport the hold and grant ops use:
+    // `{"op": "status-merge-blocker"|"status-failure-cause", ...}`.
+    if payload
+        .get("op")
+        .and_then(Value::as_str)
+        .is_some_and(|op| op.starts_with("status-"))
+    {
+        let op = payload.get("op").and_then(Value::as_str).unwrap_or("");
+        // The command-shaped door ops answer with the command's own streams and
+        // exit; the fact ops keep their JSON-receipt contract.
+        if matches!(
+            op,
+            "status-read" | "status-wait" | "status-logs" | "status-ci"
+        ) {
+            return crate::pr_status::cache::run_door(op, &payload);
+        }
+        let out = crate::pr_status_facts::run_op(op, &payload);
+        return (0, out, String::new());
+    }
+    // The merge operand's dispatch lane: the pr-watch queue and the Python
+    // thin forwarder send `{"op": "merge", "argv": [...], "authority": ...}`
+    // and get the flow receipt plus `exit` back. A refused op answers exit 3,
+    // the owner-unreachable shape the flow itself treats as unavailable.
+    if payload.get("op").and_then(Value::as_str) == Some("merge") {
+        return match crate::merge_command::run_op("merge", &payload) {
+            Ok(answer) => (0, format!("{answer}\n"), String::new()),
+            Err(message) => (3, String::new(), message),
+        };
+    }
+    let request = match parse_request(&payload) {
+        Ok(request) => request,
+        Err(message) => return (2, String::new(), format!("authorized-merge: {message}\n")),
+    };
+    // The merges hold: the one merge primitive refuses like the spawn gate
+    // does, naming the breaker generation and reason, before any probe or
+    // queue work. Reads stay reads: preview and decide-only asks answer
+    // normally, and the quota ops above never touch the breaker.
+    if !request.decide_only && matches!(request.effect, Effect::Merge | Effect::Arm) {
+        if let Some((code, message)) = merges_breaker_refusal() {
+            return (code, String::new(), message);
+        }
+    }
+    // A preview ask answers with the structured receipt: `ready` is the
+    // receipt's `blockers` being empty, so the command prints the list itself
+    // instead of the joined-prose Outcome form the effect arms render.
+    if request.effect == Effect::Preview {
+        let receipt = preview_receipt(&request);
+        return (0, format!("{}\n", receipt), String::new());
+    }
+    // The receipt is the verdict, so the exit code answers only whether the command
+    // RAN: 0 with a receipt on stdout, 2 when the payload was unusable. A code
+    // that also encoded refusal would make a held merge indistinguishable from a
+    // binary that could not start, and the caller reads the receipt either way.
+    let mut observed_head = None;
+    let outcome = run_observed(&RealProbes, &request, &mut observed_head);
+    let mut receipt = outcome.to_json();
+    receipt["observed_head"] = json!(observed_head);
+    let notes = outcome
+        .warnings()
+        .iter()
+        .map(Warning::note)
+        .collect::<Vec<_>>()
+        .join("\n");
+    (0, format!("{receipt}\n"), notes)
+}
+
+mod head_probe;
+mod preview_receipt;
+pub mod step_timer;
+
+pub(crate) use preview_receipt::{
+    parse_request, preview_receipt, preview_receipt_payload, read_payload,
+};
+
+/// The in-process review-activity read the merge gate makes: one shared
+/// `pr_status::reviews::review_activity` answer serves the merge probe and
+/// the command door (d-e11b2b3e: twins retire first). The gh read failure and
+/// the unreadable-activity case both read Inconclusive - the exit-4 shape
+/// the Python command carried, which blocks rather than guesses.
+pub(crate) fn in_process_review_hold(cwd: &Path, pr_json: &Value) -> ProbeOutcome {
+    let branch = pr_json
+        .get("headRefName")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let head = pr_json
+        .get("headRefOid")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if branch.is_empty() || head.is_empty() {
+        return ProbeOutcome::Inconclusive(
+            "review-activity-unreadable (the PR read carried no head ref); \
+refusing to assume no review is running"
+                .to_string(),
+        );
+    }
+    let activity = crate::pr_status::reviews::review_activity(cwd, branch, head);
+    if activity
+        .get("blocker")
+        .and_then(Value::as_str)
+        .is_some_and(|b| !b.is_empty())
+    {
+        let blocker = activity
+            .get("blocker")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let detail = activity.get("detail").and_then(Value::as_str).unwrap_or("");
+        ProbeOutcome::Refused(format!("{blocker}: {detail}"))
+    } else {
+        ProbeOutcome::Clear
+    }
+}
+
+#[cfg(test)]
+mod tests;

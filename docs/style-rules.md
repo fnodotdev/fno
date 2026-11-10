@@ -1,0 +1,237 @@
+# House style for agent-authored text
+
+Agent text is re-read by every recipient on every turn. It must read once. A machine checks nine rules at the tool boundary, on every surface. Mail and encounter evidence carry rule 7 as well, the 80-word cap, its number config-driven per surface, and rule 9, the glue refusal.
+
+## The house style
+
+Six rules, from the operator ruling of 2026-08-13, verbatim.
+
+- use short sentences
+- use the active voice
+- give each word one meaning
+- cut the clutter
+- keep the writing warm and human - a person wrote it, not a manual
+- adhere to ASD-STE100
+
+The scope is every message, PR body, comment, doc, and anything you explain. ASD-STE100 is ASD Simplified Technical English, Issue 9.
+
+## Warmth and STE100 pull against each other on purpose
+
+STE100 is a controlled language written for aircraft maintenance manuals. It exists to remove voice. "Warm and human" asks for the opposite. Both rules are the operator ruling and both are intended.
+
+Read them this way. STE100 governs the sentence. Warmth governs the choice of what to say.
+
+Short active sentences with one meaning per word are the mechanics. A person who names a real cost, admits a mistake, and says the thing that matters is the warmth.
+
+So a warm document is not one with longer sentences. It is one that tells the reader something true and useful in short ones.
+
+A worker who reads both rules without this section picks one and drops the other. That is the whole reason this section exists.
+
+## What the checker enforces
+
+The house style above is the standard a person writes to. The list below is the part a machine can decide. The two lists are different things, and one counts six while the other counts eleven. The checker is the floor, never the whole style. A draft that passes it can still bury the point, and no gate catches that.
+
+1. A list-item sentence is 20 words or fewer. Every other sentence is 25 words or fewer.
+2. No semicolon. Write two sentences.
+3. No "should", "would", "may", "might", or "could". Write "can", "will", or "must".
+4. No contractions. Write "do not", not "don't".
+5. If a sentence carries "if" or "when", that word starts the sentence.
+6. A paragraph is one physical line. A newline starts the next block.
+7. Mail prose and encounter evidence are 80 masked words or fewer, or whatever `config.style.word_cap.<surface>` sets. This rule does not run on PR bodies, comments, changed markdown, or progress notes.
+8. No filler or pleasantries: "please", "thanks", "basically", and the phrases "thank you", "of course", "happy to", "feel free". This rule runs on every surface, and its list is closed.
+9. No glued tokens on mail and encounter. A glued token writes a word and digits as one token, or joins two wordlist words with no separator. "staticprogress" and "PIDs76751" are the shapes. This rule runs only where rule 7 runs, because the cap is the pressure that pays for gluing.
+10. A pr-body refuses a standalone node hash whose short number exists. Write the number, or the `number (hash)` pair the closure renderer emits. The checker reads the store once and fails open. An unread store flags nothing, and an unnumbered hash flags nothing.
+11. Mail, pr-body, and markdown prose refuse a bare decision or question hash that holds a number. When the hash must stay copyable, write the pair form `D142 (d-1a2b3c4d)`. Otherwise write the number alone. The store read and the fail-open posture are rule 10's.
+
+Until 2026-09-11 mail ran the word cap only, and rules 1 to 6 never saw a mail body. That was a decision, recorded in this file and in the checker's docstring. The premise aged: agent mail is read by a human in the transcript, and every mail is re-read by a model whose context it spends. Mail now runs the full rule set. Measured on 2026-09-11 against 6,964 authored bodies from the bus corpus, rules 1 to 6 refuse 18.6 percent, and rule 8 adds about 3 percent. The 80-word cap refuses as before. The gate cannot wedge the bus: the `control:` lane, a `style-exception:` line, and `FNO_STYLE_ENFORCE=0` all bypass.
+
+## Rule 7 caps what a reader meets mid-turn
+
+The cap counts words after the same masking pass as rules 1 to 6. Code, paths, flags, and fenced blocks do not count. A pasted 200-line log therefore counts near zero and passes. The cap targets prose, not the full message size.
+
+Rule 7 inherits the existing escapes. Add a `style-exception:` line with a reason, or pass `--style-exception`. The refusal is written to stderr, so it is not charged the mail cap.
+
+The per-pair rolling word window (80 masked words per 10 minutes) was removed on 2026-09-13. Agents routed around the quota by writing long notes on a node and mailing short pointers, so the gate measured compliance, not conversation. A style rule applies at every length, and rule 7 stays the only word gate on an ordinary send.
+
+Operational control has its own lane. A stop, a resume, or a scope change must always arrive. To use the lane, start the body's first line with `control:`. Such a body skips the style check. It rides its own rolling ledger, capped at 60 words per pair per 10 minutes. The cap is fixed policy and deliberately unconfigurable, so a chatter channel gains nothing by moving through it. A control body over 60 words refuses.
+
+### Which surfaces take the cap, and why progress notes do not
+
+The test is whether a reader meets the text MID-TURN, in the flow of doing something else. Mail is read mid-turn. An encounter's evidence is read mid-turn, while a person scans a demand table. A PR body, a node's details, and a plan doc are opened deliberately, so they carry no cap.
+
+`progress_notes` is deliberately UNCAPPED, and the reason is worth stating rather than rediscovering. When a person opens a node, they read its notes deliberately. That is not mid-turn. A note is also an agent's only append-only surface on a node, because `update --details` replaces rather than appends. A refusal there leaves measured evidence nowhere to land that does not overwrite somebody else's writing. The 76,346 words of notes measured on 2026-08-29 are a volume problem on an artifact surface. A refusal that destroys evidence is the wrong instrument for a volume problem. `fno backlog note` therefore prints one advisory line naming the word count and the cheaper alternative, and appends the note.
+
+The surface set lives in `fno.style.CAPPED_SURFACES` and is not configurable. Config moves a number. It can never add a surface the checker says is uncapped.
+
+## Relay concision starts before refusal
+
+Footnote injects a relay compression contract at SessionStart and after context compaction. It covers agent-authored mail, replies, and mux pane sends. Agents think fully, then transmit only outcome, reason, and next action. Findings move to a node or doc and the relay carries its link.
+
+The mechanism adapts [Caveman](https://github.com/JuliusBrussee/caveman)'s MIT-licensed system-prompt pattern. Caveman's own measurements identify prompt programming as the output-shrinking mechanism. It does not compress model reasoning. Footnote keeps the portable core small because every user pays SessionStart context cost.
+
+## User-facing runtime text never narrates a gate
+
+A message fno prints to a human states the fact the reader can act on. It never reports the machinery that reached the fact. No brake report, no other app's process group, no ceiling numbers, and no "admitting anyway". When a gate holds agents and waives the human, the human reads at most one short line, and the measured detail lands in the log a TTY-less process writes. Measured on 2026-10-01: a human's own fno start under the runaway brake printed the arm's whole brake report with a ppid in it, and the user read it as almost snide.
+
+## Why Caveman is not ported whole
+
+The 2026-09-11 operator ask was to bake Caveman into the mail gate. One part of it shipped, and three parts deliberately did not. This section is the record, so the next person does not re-propose the whole.
+
+Shipped: the filler and pleasantry wordlist, as rule 8, cut down to what a real corpus supports. See "Rule 8 uses a closed list" below.
+
+Not shipped: dropping the articles "a", "an", and "the". ASD-STE100 REQUIRES the article. It is a controlled language that mandates it for unambiguous parsing, and adherence is the operator ruling of 2026-08-13. Caveman and the house style contradict each other directly here, and the ruling wins.
+
+Not shipped: abbreviating ("DB", "auth", "config"). The same ruling's line "give each word one meaning" refuses it. An abbreviation gives one concept two spellings.
+
+Not shipped: a mode named `/simple-english`. Simplified Technical English is the house style itself. A second surface with that name teaches every reader there are two standards where there is one.
+
+Also worth naming: `/caveman` and `/simple-english` live in one operator's personal skills directory and ship to nobody who installs this plugin. Forcing a skill by name is a no-op for every stranger, or a hard failure of their mail. Whatever the gate enforces has to be in the checker that ships. That is why the ask landed as checker rules and not as a skill dependency.
+
+## Rule 6 reverses the sentence-per-line convention
+
+This repo used to mandate one full sentence per physical line. The operator ruling reverses that. The author inserts no newline inside a paragraph. The terminal or the renderer wraps it.
+
+Two defects are refused together. One sentence per line puts a newline after every period. A hard wrap at 65 columns puts one every 65 columns. Neither belongs inside a paragraph.
+
+Each of these starts the next block, so each one is a legal newline:
+
+- a blank line
+- a list marker
+- a heading
+- a table row
+- a fence
+- frontmatter
+- a thematic break or a setext underline
+- a blockquote
+- a raw HTML line, such as a `<details>` block
+- a link reference definition
+- a `key: value` field line, such as `RESULT: SUCCESS`
+
+A bare prose line under a list item is a lazy continuation, so rule 6 fires there. Fold it into the item, or start a new one.
+
+The field-line escape exists because mail carries receipts and the worker return grammar. `RESULT: SUCCESS` over `TASK: 2.1` is two fields, never one wrapped sentence, and rule 6 refused that grammar outright. The key is one word with no space, so a colon partway through a sentence exempts nothing.
+
+A table row written WITH leading pipes is removed entirely, so it costs zero words and no rule reads it. A row written without them is waived from rule 6 alone, and rules 1 to 5 still read it.
+
+A pipeless table run ends at the first blank line, or at the first line carrying no pipe. Prose that carries a pipe and sits directly under such a table is read as another row. Rule 6 then skips that line and the line below it. No rule can tell those two apart, because a pipeless row is shaped exactly like a sentence carrying a pipe. A blank line after the table ends the run and rule 6 reads normally again.
+
+That difference is deliberate. A leading pipe is the author saying "this is a table", and a row without one is shaped exactly like a sentence carrying a pipe. Waiving every rule on that shape let a long sentence carrying a semicolon sit under a table and pass the whole gate. The narrow waiver is the safe one, and adding leading pipes is how to ask for the full exemption.
+
+## Rule 6 accepts one blind spot on purpose
+
+Rule 6 reads a pair of lines, and the changed-markdown gate reads added lines only. A break is charged to the CONTINUING line, never to the line above it.
+
+So a new line inserted directly above untouched prose splits that paragraph and goes unreported. It surfaces later, once someone touches the line below.
+
+Charging both halves is the more complete rule and it is the unlandable one. This tree holds 6519 rule-6 breaks across 185 legacy files. A one-line typo fix in any of them then demands a reflow of prose the author never opened. That is the flag-day rewrite the ratchet exists to avoid.
+
+This is the same trade as the rule 1 cap and the rule 4 closed list. A missed break is cheaper than refusing a line the author never wrote.
+
+## Rule 1 splits on block type
+
+The word cap depends on the enclosing block, not on sentence mood. A sentence inside a bullet or a numbered item gets the 20-word cap. Every other sentence gets the 25-word cap.
+
+A mood detector needs a verb lexicon, and a wrong guess is worse than no rule. Block type is a clean read from the line, so it needs no lexicon. <!-- verb-wording: allow (the grammar sense) -->
+
+One false negative is accepted and kept. An imperative sentence sitting in a paragraph gets the 25-word cap. It is still capped.
+
+Do not fix this with a part-of-speech tagger. The tagger trades a cheap cap for a fragile dependency.
+
+## Rule 4 uses a closed list
+
+The checker matches a fixed set of about 40 contractions. It never matches a possessive. A pattern flags "the agent's body", which is correct English. A missed contraction is a cheaper error than a refused correct sentence.
+
+## Rule 8 uses a closed list, and the list is short on purpose
+
+Rule 8 bans three words ("please", "thanks", "basically") and four phrases ("thank you", "of course", "happy to", "feel free"). Every one was measured against every occurrence in the 6,964-message mail corpus before it entered. A word stays out unless the corpus shows it is filler THERE. A false positive in a gate that refuses mail is expensive, so the rejected candidates carry their own record:
+
+- "just" (250 uses): temporal or restrictive every time. "I just resumed a worker", "measured just now".
+- "actually" (94): contrastive, a claim checked against reality. "confirm CI actually ran green".
+- "sure" (11): every use was "make sure". A ban refuses a correct imperative.
+- "certainly" (6): every use was "almost certainly", a hedge with real content.
+- "really" (5): contrastive. "here the code really is fixed".
+- "clearly" (3): an adverb of manner.
+- "I think" (8): separates inference from measurement, which this repo requires. Banning it pushes agents to state guesses as facts.
+- "simply" (14): restrictive, the role of "merely".
+
+A word that reads as filler in other houses can carry load here. To add one to the list, meet its corpus occurrences first and show they carry no task content.
+
+Name the cost honestly: "please" and "thanks" are the only social register agents have with each other, and this rule removes them. That is what the requested compression costs, and it was accepted knowingly.
+
+## Rule 9 refuses glued tokens
+
+Fleet mail measured on 2026-10-03 showed leads gluing words to fit the 80-word cap: "Staticprogress underhold", "readyplan omitted requiredgate", "same9dflogicalID", "Oldbuild PIDs76751". The cap counts whitespace tokens, so glue hides content from the counter while the reader pays for it. Rule 9 closes that dodge at any mail length. It runs only on the capped surfaces, mail and encounter, because the cap is the pressure that pays for gluing.
+
+The trigger set has three reads. The first covers pure words. It fires on eight or more letters, absent from the wordlist, with no inflection hit, and a greedy split into two or more wordlist words. "underhold" is "under" plus "hold". The second covers digits. A word and a run of four or more digits with no separator refuses: "PIDs76751". The third covers short digit runs. At least two letters on both sides refuse: "same9dflogicalID".
+
+The refusal names the split and points at the honest repairs: write the words apart, or put the detail in a linked node note. Quoting a token is the mention escape: a quoted or backticked span is masked to one placeholder before any rule runs.
+
+Two vendored wordlists carry the rule, both closed. The split tier at `crates/fno-agents/src/backlog/style_words.txt` validates split parts: google-10000-english (MIT), filtered to ASCII words of three or more letters, plus a tech and fleet supplement. Entries that serve speech only as prefix or suffix ("pre", "con", "ing", "able") are removed, so a split through one cannot happen. The protection tier at `crates/fno-agents/src/backlog/style_protect.txt` covers the whole token. It is the dwyl english-words list (public domain), kept to entries of ten or more letters or attested words. The attestation source is the top-200k slice of a subtitle frequency list. An established compound such as "beforehand" or "bottleneck" sits in the protection tier and never fires. Obscure junk that shields fabricated glue stays outside it, "underhold" among them. A stem pass protects inflections, so "backfilled" is covered by "backfill" and "footnotes" by "footnote". Hex-shaped tokens are bare ids and shas, and never fire.
+
+2026-11-02: "sandbox" joined the split-tier supplement so the sandbox vocabulary rename stems through its ed/ing inflections. The rule split "sandboxed" into sand and boxed before it.
+
+The false-positive posture was measured before the rule landed, in the rule-8 manner. A prototype ran over 2,658 live bus bodies. The tuned rule fires ten times, and none of the ten is a real word. Nine are bare CamelCase identifiers like "SettingsModel". One is a glued ISO timestamp. The probe also fired on real words in earlier rounds: "ownership", "footnote", "conflicting", "withheld", "override", "outranks", "backfilled", and, in review, "beforehand", "alongside", "bottleneck", "bookkeeping", "aftermath". The protection tier exists because of that last class. A miss list cannot tell an established compound from glued words. The whole token must clear a wide lexicon before its parts count against it. Dictionary coverage, the stem pass, and the removed morphology entries spare every one. An identifier written bare reads as prose. Quote it to name it.
+
+## Rule 10 prefers the short node number
+
+The store mints every node a short sequential number: `x-aaaa` reads as `x-5555`. The number leads on the board card, the backlog list and the lead check-in. An earlier PR painted those. This rule carries the preference into prose. A pr-body that writes a standalone hash whose number exists refuses, and the violation names the number form. The pair form `x-5555 (x-aaaa)` passes, and so does an unnumbered hash. The checker reads the store once per run and fails open. A store problem never blocks a body. `--fix` never repairs rule 10: a blind renumber reaches inside paths and machine text.
+
+Measured 2026-11-06: the closure renderer, `fno do pr closure-trailer`, emits the pair form itself, so machine-written lines pass by construction. The rule reaches agent prose: a hand-written `Fixes` line, a `Retarget` line, and any node mention in the summary. The number resolver reads the exact-id tier first, so a legacy all-digit hash stays itself. A number token resolves to the hash it names. The store never renumbers, so a stale read still binds the right node.
+
+## Rule 11 prefers the D number on the person surfaces
+
+Decisions and questions are one record with one number. A question is a decision not yet made, and answering it keeps its number. New rows mint in the one D sequence. An answer decision reads as the number its question holds. Old Q numbers keep resolving beside the D numbers.
+
+When the store holds a number for a bare `d-1a2b3c4d` or `q-1a2b3c4d` token, mail, a pr-body, and changed markdown refuse it. When the hash must stay copyable, write the pair form `D142 (d-1a2b3c4d)`. Otherwise write the number alone. The store read, the mask, and the fail-open posture stay rule 10's.
+
+## Rule 5 has a sharp edge
+
+A sentence like "do Y if X" fails the rule. That is the point of the rule. The condition must lead the command.
+
+Hyphenated forms like "if-branch" are skipped, because the next character is not whitespace.
+
+## Code does not count
+
+A masking pass runs before any rule. A long identifier costs one word, not one word per character.
+
+Removed entirely, so they cost zero words:
+
+- fenced code blocks
+- indented code blocks
+- YAML frontmatter
+- HTML comments, except a style-exception marker
+- markdown table rows
+- log lines
+
+Replaced by one placeholder token, so they cost one word:
+
+- inline code spans
+- paths and URLs
+- flags
+- markdown link targets, with the link text kept
+- double-quoted spans
+- dotted filenames
+- underscore identifiers
+
+## The escape
+
+Add a `style-exception:` line with a reason to bypass one body. An empty reason does not count. On a mail body, a PR body, or a `--files` run, the escape scopes to the whole unit, so reaching for it is a decision. The receipt prints the reason, so the bypass is never silent.
+
+A `--diff-base` run reads every added line, marker or not. A marker at the top of a file cannot scope a line that someone writes later.
+
+Quoting a word is not a bypass. A banned word inside double quotes or backticks is a mention, not a use. The masking pass turns the quoted span into one placeholder token before any rule runs. So `"should"` names the word without tripping rule 3. Reach for this before the `style-exception` line: it scopes to one word, the exception scopes to a whole body.
+
+Set `FNO_STYLE_ENFORCE` to 0 to disable the check in an emergency.
+
+## Where the check runs
+
+- `fno agents mail send` rejects a body that breaks the rules.
+- Run `fno doctor lint style --surface pr-body --stdin` to check a PR body by hand.
+- Run `fno doctor lint style --surface markdown --diff-base <base>` to check every changed Markdown file by hand. Add `--files <paths>` to narrow it.
+- Every run prints how many lines it read. A run that read zero lines because every input carried a marker exits 2.
+- A PR comment has no chokepoint. Run `fno doctor lint style --surface comment --stdin` yourself.
+- Add `--fix` to rewrite the mechanical set. A semicolon splits into two sentences, and a wrapped paragraph rejoins into one physical line. Any residue needs an author, and residue exits 1.
+
+The comment surface is honest about refusing nothing. A PR comment goes out through `gh pr comment`, which this repo never wraps. A surface that reads as a guard and blocks nothing is worse than no surface at all.
+
+The checker lives in `crates/fno-agents/src/backlog/style_check.rs`, behind `fno doctor lint style`.

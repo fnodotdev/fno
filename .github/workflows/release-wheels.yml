@@ -1,0 +1,174 @@
+name: release-wheels
+
+# Build platform wheels that bundle the `fno` front door plus the `fno-agents`
+# Rust binaries. Build-only: this workflow publishes nothing. It runs on manual
+# dispatch (an inspection build) or as a reusable workflow called from
+# release.yml, which owns every publish leg behind the `release` environment
+# approval. The per-platform smokes below still gate the release: a wheel that
+# cannot install and run on a clean machine never reaches a caller's publish.
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: "Release version to stamp (PEP 440); empty builds the checked-out source version"
+        type: string
+        default: ""
+      ref:
+        description: "Commit to build; empty builds the caller's ref"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build-wheels:
+    name: wheel ${{ matrix.target.name }}
+    runs-on: ${{ matrix.target.runs-on }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - { name: macos-arm64, runs-on: macos-15, rust-target: aarch64-apple-darwin, wheel-platform: macosx_11_0_arm64 }
+          # macos-x64 is cross-compiled on the Apple Silicon runner (the native
+          # Intel macos-13 image is retired). The arm64 leg infers its tag from
+          # the host; this leg must set wheel-platform explicitly, else the build
+          # hook would mis-tag the cross-built wheel as arm64. macosx_10_12 is the
+          # Rust x86_64-apple-darwin default deployment floor (broad Intel-Mac
+          # coverage). Its run-the-binary smokes are skipped below: x86_64 can't
+          # run natively on this arm64 runner, and the arm64 leg validates the
+          # identical packaging. The x86_64 wheel is smoke-tested on real Intel
+          # hardware post-publish.
+          - { name: macos-x64, runs-on: macos-15, rust-target: x86_64-apple-darwin, wheel-platform: macosx_10_12_x86_64 }
+          - { name: linux-x64, runs-on: ubuntu-24.04, rust-target: x86_64-unknown-linux-musl, wheel-platform: manylinux_2_17_x86_64 }
+          - { name: linux-arm64, runs-on: ubuntu-24.04-arm, rust-target: aarch64-unknown-linux-musl, wheel-platform: manylinux_2_17_aarch64 }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        # No `ref:` argument: a workflow_call checkout taking an input-ref
+        # argument is the untrusted-checkout source of the cache-poisoning
+        # findings, so the pin step below applies inputs.ref through plain git
+        # instead, and checkout keeps the caller's sha when ref is empty.
+
+      - name: Pin build ref
+        if: inputs.ref != ''
+        # Plain-git pin: fetches exactly that commit from origin and detaches
+        # on it, so the build runs the pinned source with no action-level ref.
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$REF"
+          git checkout --detach FETCH_HEAD
+
+      - name: Stamp release version
+        if: inputs.version != ''
+        # Workspace-only stamp (never committed): the wheel version carries the
+        # release version, not main's. The script is taken from THIS workflow's
+        # commit, never the released checkout: the nightly ships the newest
+        # green rust-ci sha, which can be weeks old and carry a stamp script
+        # that predates the PEP 440 -> semver Cargo conversion, writing a PEP
+        # 440 version into Cargo.toml where cargo refuses to parse it.
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin "${{ github.sha }}"
+          git show "${{ github.sha }}:scripts/release/sync-version.sh" > scripts/release/sync-version.sh
+          bash scripts/release/sync-version.sh "$VERSION"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target.rust-target }}
+
+      - name: Install musl tools (linux)
+        if: startsWith(matrix.target.name, 'linux')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build fno-agents binary
+        working-directory: crates/fno-agents
+        run: cargo build --release --target ${{ matrix.target.rust-target }} --bins
+
+      - name: Build fno front-door binary
+        working-directory: crates/fno
+        run: cargo build --release --target ${{ matrix.target.rust-target }} --bin fno
+
+      - name: Stage binaries for the bridge wheel
+        shell: bash
+        run: |
+          mkdir -p packaging/pypi/staged
+          # The bridge wheel ships the four binaries and nothing else. The cp set is all-or-nothing:
+          # a missing binary fails this step and names itself (AC2-ERR).
+          cp "crates/fno/target/${{ matrix.target.rust-target }}/release/fno" \
+             "packaging/pypi/staged/fno"
+          for b in fno-agents fno-agents-daemon fno-agents-worker; do
+            cp "crates/fno-agents/target/${{ matrix.target.rust-target }}/release/${b}" \
+               "packaging/pypi/staged/${b}"
+          done
+
+      - name: Build wheel
+        working-directory: packaging/pypi
+        shell: bash
+        run: uv build --wheel
+
+      - name: Retag the wheel to its platform tag
+        # The TOML-only build is tag-less (py3-none-any) until this step: the
+        # `wheel` CLI renames the file and rewrites its WHEEL + RECORD tags in
+        # place, so PyPI accepts it and uv picks it for this platform.
+        working-directory: packaging/pypi
+        shell: bash
+        run: |
+          uvx wheel tags --platform-tag '${{ matrix.target.wheel-platform }}' --remove dist/*.whl
+          ls -1 dist
+
+      - name: Note - the bridge smoke is skipped on the cross-compiled x86_64 leg
+        if: matrix.target.name == 'macos-x64'
+        run: |
+          echo "macos-x64 is cross-compiled on an Apple Silicon runner; its x86_64"
+          echo "binaries cannot run natively here. The macos-arm64 leg validates the"
+          echo "identical packaging. The wheel is still built, tagged, and uploaded below."
+
+      - name: Bridge-wheel smoke (uv installs the four binaries, no Python CLI)
+        if: matrix.target.name != 'macos-x64'
+        working-directory: packaging/pypi
+        shell: bash
+        run: |
+          # The bridge wheel carries only the four Rust binaries (law
+          # d-df1f42c1). Install it into a scratch HOME the way an old wheel
+          # user's `uv tool upgrade fno` would, then prove the front door and
+          # fno-agents answer and no Python CLI rides along.
+          set -euo pipefail
+          wheel="$(ls dist/*.whl | head -1)"
+          scratch="$(mktemp -d)"
+          export HOME="$scratch" UV_TOOL_DIR="$scratch/tools" UV_TOOL_BIN_DIR="$scratch/bin"
+          uv tool install "$wheel"
+          for b in fno fno-agents fno-agents-daemon fno-agents-worker; do
+            [ -x "$UV_TOOL_BIN_DIR/$b" ] || { echo "missing $b in the tool bin"; exit 1; }
+          done
+          if ls "$UV_TOOL_DIR/fno/bin" | grep -q '^fno-py$'; then
+            echo "the bridge wheel still installs a Python CLI"; exit 1
+          fi
+          "$UV_TOOL_BIN_DIR/fno-agents" --version
+          # FNO_STATE_DIR keeps the front door's first-run move inside the scratch HOME.
+          FNO_STATE_DIR="$scratch/.fno" "$UV_TOOL_BIN_DIR/fno" --version
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.target.name }}
+          path: packaging/pypi/dist/*.whl

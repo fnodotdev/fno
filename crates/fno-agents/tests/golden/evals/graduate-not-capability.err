@@ -1,0 +1,1 @@
+usage: fno-agents evals <command> [options] (run | trend | report | macro | export | qualify | graduate | grade | candidates | drafts | gate-retry | events)

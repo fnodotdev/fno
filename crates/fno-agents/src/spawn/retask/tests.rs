@@ -1,0 +1,408 @@
+//! The transaction tests, ported from the Python suite that owned these
+//! functions before the port (`cli/tests/agents/test_retask.py` and
+//! `cli/tests/agents/test_thread_reference.py`). Python test names are kept
+//! snake case so a reviewer can pair the suites.
+
+use super::*;
+use serde_json::json;
+use std::collections::VecDeque;
+
+/// The seam fake the Python tests built from lambdas.
+struct Fake {
+    frames: VecDeque<String>,
+    sends: Vec<(String, bool)>,
+    tiers: Vec<(String, String)>,
+    restamp: Value,
+    renamed: Option<String>,
+    rename_calls: usize,
+    ready: Option<Value>,
+    ready_calls: usize,
+    preflight: Option<Value>,
+}
+
+impl Default for Fake {
+    fn default() -> Self {
+        Self {
+            frames: VecDeque::new(),
+            sends: Vec::new(),
+            tiers: Vec::new(),
+            restamp: json!("new-session"),
+            renamed: Some("target-x-bbbb".to_string()),
+            rename_calls: 0,
+            ready: Some(json!({"matched": true, "rule_id": "idle_prompt", "state": "idle"})),
+            ready_calls: 0,
+            preflight: None,
+        }
+    }
+}
+
+impl RetaskSeams for Fake {
+    fn read_frame(&mut self) -> Result<String, TransportFailure> {
+        Ok(self.frames.pop_front().expect("frame queued"))
+    }
+    fn settle(&mut self) -> Result<(), TransportFailure> {
+        Ok(())
+    }
+    fn send(&mut self, text: &str, submit: bool) -> Result<bool, TransportFailure> {
+        self.sends.push((text.to_string(), submit));
+        Ok(true)
+    }
+    fn restamp(&mut self) -> Result<Value, TransportFailure> {
+        Ok(self.restamp.clone())
+    }
+    fn rename(&mut self, _new_name: &str) -> Option<String> {
+        self.rename_calls += 1;
+        self.renamed.clone()
+    }
+    fn project_tier(&mut self, model: &str, effort: &str) -> Result<(), String> {
+        self.tiers.push((model.to_string(), effort.to_string()));
+        Ok(())
+    }
+    fn ready_frame(&mut self, _frame: &str) -> Option<Value> {
+        self.ready_calls += 1;
+        self.ready.clone()
+    }
+    fn source_preflight(&mut self) -> Option<Value> {
+        self.preflight.clone()
+    }
+}
+
+fn row() -> RetaskRow {
+    RetaskRow {
+        name: "bp-xbdb9-retask".to_string(),
+        harness: "codex".to_string(),
+        provider: None,
+        model: Some("gpt-5.6-sol".to_string()),
+        effort: Some("high".to_string()),
+        substrate: Some("pane".to_string()),
+        status_live: true,
+        harness_session_id: Some("old-session".to_string()),
+        launch_account: None,
+        mux: Some(("main".to_string(), 12)),
+        thread_id: None,
+    }
+}
+
+fn codex_target() -> RetaskTarget {
+    RetaskTarget {
+        harness: "codex".to_string(),
+        provider: None,
+        model: Some("gpt-5.6-sol".to_string()),
+        effort: Some("high".to_string()),
+        substrate: None,
+        permission_mode: None,
+        route: None,
+        account: None,
+        command: "target".to_string(),
+    }
+}
+
+fn status_frame(model: &str, effort: &str) -> String {
+    format!("Model: {model} (reasoning {effort}, summaries auto)")
+}
+
+const CODEX_PROMPT: &str = "› Ask Codex to do anything\n";
+const TARGET_COMMAND: &str = "$fno:target --no-merge x-bbbb";
+
+fn run(row: &RetaskRow, target: &RetaskTarget, seams: &mut Fake) -> Value {
+    let live_mode = None;
+    execute_retask(row, target, "x-bbbb", TARGET_COMMAND, seams, live_mode)
+        .expect("no transport death in fake")
+}
+
+#[test]
+fn refuse_rows() {
+    let no_mux = RetaskRow { mux: None, ..row() };
+    let receipt = detect_retask(&no_mux, &codex_target(), None);
+    assert_eq!(
+        receipt,
+        DetectOutcome {
+            outcome: "refused",
+            reason: Some("worker_has_no_mux_ref".into())
+        }
+    );
+
+    let stopped = RetaskRow {
+        status_live: false,
+        ..row()
+    };
+    assert_eq!(
+        detect_retask(&stopped, &codex_target(), None),
+        DetectOutcome {
+            outcome: "refused",
+            reason: Some("worker_not_live".into())
+        }
+    );
+
+    let no_session = RetaskRow {
+        harness_session_id: None,
+        ..row()
+    };
+    assert_eq!(
+        detect_retask(&no_session, &codex_target(), None),
+        DetectOutcome {
+            outcome: "refused",
+            reason: Some("worker_has_no_session_id".into())
+        }
+    );
+
+    let target = RetaskTarget {
+        substrate: Some("thread".to_string()),
+        ..codex_target()
+    };
+    let thread_row = RetaskRow {
+        substrate: Some("thread".to_string()),
+        mux: None,
+        thread_id: Some("thread-session".to_string()),
+        ..row()
+    };
+    assert_eq!(
+        detect_retask(&thread_row, &target, None).outcome,
+        "retask_ready"
+    );
+
+    let target = RetaskTarget {
+        substrate: Some("thread".to_string()),
+        ..codex_target()
+    };
+    let thread_row = RetaskRow {
+        substrate: Some("thread".to_string()),
+        mux: None,
+        thread_id: None,
+        ..row()
+    };
+    assert_eq!(
+        detect_retask(&thread_row, &target, None),
+        DetectOutcome {
+            outcome: "refused",
+            reason: Some("worker_has_no_thread_ref".into())
+        }
+    );
+
+    let target = RetaskTarget {
+        substrate: Some("thread".to_string()),
+        ..codex_target()
+    };
+    let thread_row = RetaskRow {
+        substrate: Some("thread".to_string()),
+        mux: Some(("main".to_string(), 0)),
+        ..row()
+    };
+    assert_eq!(
+        detect_retask(&thread_row, &target, None),
+        DetectOutcome {
+            outcome: "refused",
+            reason: Some("worker_has_no_thread_ref".into())
+        }
+    );
+}
+
+#[test]
+fn exec_rows() {
+    let mut seams = Fake {
+        frames: VecDeque::from(vec![
+            CODEX_PROMPT.to_string(),
+            status_frame("gpt-5.6-sol", "high"),
+        ]),
+        ..Fake::default()
+    };
+    let receipt = run(&row(), &codex_target(), &mut seams);
+
+    assert_eq!(
+        receipt,
+        json!({
+            "status": "retasked",
+            "cleared": true,
+            "session_restamped": true,
+            "switch": "skipped_same_tier",
+            "switch_verified": true,
+            "target_submit_confirmed": true,
+            "registry_name": "target-x-bbbb",
+            "source_session_id": "old-session",
+            "current_session_id": "new-session",
+            "transition": "succession",
+            "registry_rows": 1,
+            "lineage_recorded": true,
+        })
+    );
+    let texts: Vec<&str> = seams.sends.iter().map(|(text, _)| text.as_str()).collect();
+    assert_eq!(texts, ["/clear", "/status", TARGET_COMMAND]);
+    assert_eq!(
+        seams.tiers,
+        [("gpt-5.6-sol".to_string(), "high".to_string())]
+    );
+
+    let mut seams = Fake {
+        preflight: Some(json!({
+            "status": "refused",
+            "reason": "source_pr_not_green",
+            "pr": 1168,
+            "head": "source-head",
+            "verdict": "red",
+            "blockers": {"failing": 4},
+        })),
+        ..Fake::default()
+    };
+    let receipt = run(&row(), &codex_target(), &mut seams);
+
+    assert_eq!(receipt["status"], json!("refused"));
+    assert_eq!(receipt["reason"], json!("source_pr_not_green"));
+    assert_eq!(receipt["pr"], json!(1168));
+    assert!(seams.sends.is_empty());
+
+    let mut seams = Fake {
+        frames: VecDeque::from(vec![
+            CODEX_PROMPT.to_string(),
+            status_frame("gpt-5.6-sol", "high"),
+        ]),
+        restamp: json!({
+            "classification": "succession",
+            "predecessor_session_id": "old-session",
+            "current_session_id": "new-session",
+            "registry_rows": 1,
+            "lineage_recorded": true,
+        }),
+        ..Fake::default()
+    };
+    let receipt = run(&row(), &codex_target(), &mut seams);
+
+    assert_eq!(receipt["transition"], json!("succession"));
+    assert_eq!(receipt["source_session_id"], json!("old-session"));
+    assert_eq!(receipt["current_session_id"], json!("new-session"));
+    assert_eq!(receipt["registry_rows"], json!(1));
+    assert_eq!(receipt["lineage_recorded"], json!(true));
+    assert_eq!(receipt["target_submit_confirmed"], json!(true));
+
+    let restamp = json!({
+        "classification": "branch",
+        "reason": "session_transition_not_succession",
+        "predecessor_session_id": "old-session",
+        "current_session_id": "new-session",
+    });
+    let mut seams = Fake {
+        frames: VecDeque::from([CODEX_PROMPT.to_string()]),
+        restamp,
+        ..Fake::default()
+    };
+    let receipt = run(&row(), &codex_target(), &mut seams);
+
+    assert_eq!(receipt["status"], json!("refused"));
+    assert_eq!(receipt["cleared"], json!(true));
+    assert_eq!(receipt["target_submit_confirmed"], json!(false));
+    assert_eq!(seams.sends, [("/clear".to_string(), true)]);
+    assert_eq!(
+        seams.rename_calls, 0,
+        "rename must wait for succession proof"
+    );
+
+    let restamp = json!({
+        "classification": "succession",
+        "predecessor_session_id": "other-session",
+        "current_session_id": "new-session",
+        "registry_rows": 1,
+        "lineage_recorded": true,
+    });
+    let mut seams = Fake {
+        frames: VecDeque::from([CODEX_PROMPT.to_string()]),
+        restamp,
+        ..Fake::default()
+    };
+    let receipt = run(&row(), &codex_target(), &mut seams);
+
+    assert_eq!(receipt["status"], json!("refused"));
+    assert_eq!(receipt["cleared"], json!(true));
+    assert_eq!(seams.sends, [("/clear".to_string(), true)]);
+
+    let restamp = json!({
+        "classification": "succession",
+        "predecessor_session_id": "old-session",
+        "current_session_id": "new-session",
+        "registry_rows": 2,
+        "lineage_recorded": true,
+    });
+    let mut seams = Fake {
+        frames: VecDeque::from([CODEX_PROMPT.to_string()]),
+        restamp,
+        ..Fake::default()
+    };
+    let receipt = run(&row(), &codex_target(), &mut seams);
+
+    assert_eq!(receipt["status"], json!("refused"));
+    assert_eq!(receipt["reason"], json!("successor_row_count_invalid"));
+    assert_eq!(seams.sends, [("/clear".to_string(), true)]);
+
+    let mut seams = Fake {
+        frames: VecDeque::from(["painted but busy".to_string()]),
+        ready: Some(json!({"matched": true, "rule_id": "working", "state": "working"})),
+        ..Fake::default()
+    };
+    let receipt = run(&row(), &codex_target(), &mut seams);
+
+    assert_eq!(receipt["reason"], json!("pane_not_idle"));
+    assert_eq!(receipt["cleared"], json!(false));
+    assert_eq!(receipt["target_submit_confirmed"], json!(false));
+
+    let mut seams = Fake {
+        frames: VecDeque::from(["painted but no known manifest rule".to_string()]),
+        ready: Some(json!({"matched": false})),
+        ..Fake::default()
+    };
+    let receipt = run(&row(), &codex_target(), &mut seams);
+
+    assert_eq!(receipt["reason"], json!("pane_state_unobserved"));
+    assert_eq!(receipt["cleared"], json!(false));
+    assert!(seams.sends.is_empty());
+
+    let mut seams = Fake {
+        frames: VecDeque::from(["readable pane frame".to_string()]),
+        ready: None,
+        ..Fake::default()
+    };
+    let receipt = run(&row(), &codex_target(), &mut seams);
+
+    assert_eq!(receipt["reason"], json!("pane_state_unobserved"));
+    assert_eq!(receipt["cleared"], json!(false));
+
+    let mut seams = Fake {
+        frames: VecDeque::from([String::new()]),
+        ..Fake::default()
+    };
+    let receipt = run(&row(), &codex_target(), &mut seams);
+
+    assert_eq!(receipt["reason"], json!("pane_frame_unreadable"));
+    assert_eq!(receipt["cleared"], json!(false));
+    assert_eq!(seams.ready_calls, 0, "empty frame must not be evaluated");
+}
+
+#[test]
+fn truncated_status_frame_falls_back_to_the_status_bar() {
+    // A narrow pane cuts the /status line mid-token; the status bar carries
+    // the same pair and survives. The verify passes on the bar alone.
+    let mut strategy = crate::harness_capabilities::HarnessContract::packaged()
+        .expect("packaged contract")
+        .capabilities("codex")
+        .expect("codex row")
+        .model_switch_strategy
+        .clone();
+    assert!(
+        strategy.status_bar_pattern.is_some(),
+        "codex row declares the bar pattern"
+    );
+    // The narrow-pane frame: the /status line truncates mid-token and the
+    // status bar carries the full pair, both in one pane read.
+    let truncated = "Model: gpt-5.6\nEsc to interrupt    gpt-5.6-luna xhigh";
+    assert_eq!(status_tier(&strategy, truncated), None);
+    assert_eq!(
+        status_tier_or_bar(&strategy, truncated),
+        Some(("gpt-5.6-luna".to_string(), "xhigh".to_string()))
+    );
+    // A full frame needs no fallback and reads the same pair either way.
+    let full = status_frame("gpt-5.6-luna", "xhigh");
+    assert_eq!(
+        status_tier_or_bar(&strategy, &full),
+        status_tier(&strategy, &full)
+    );
+    // A harness without a bar pattern never falls back.
+    strategy.status_bar_pattern = None;
+    assert_eq!(status_tier_or_bar(&strategy, truncated), None);
+}

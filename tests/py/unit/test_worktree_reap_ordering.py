@@ -1,0 +1,73 @@
+"""Reaping must follow the retro, on BOTH paths.
+
+The sequence is: PR merges, retro, reap the session, archive the worktree, drop
+the row. Getting it wrong destroys evidence, because a worker's attestation is
+session-bound and its raw event store is worktree-bound. PR 834 and PR 835 both
+sat green with `reviewed_count` 0 while the only copy of the attestation lived
+inside the worktree. Reaping those sessions destroys the only process able to
+satisfy its own PR's review gate.
+
+Inside the ritual the order is pinned in Rust now
+(crates/fno-agents/src/gate/post_merge/ritual.rs, `retro_precedes_every_removal_leg`):
+the ritual command is native and its leg order moves with it.
+
+The gap this file still owns is the OTHER path. `fno worktree cleanup --merged`
+knows nothing about a retro and neither does the daemon tick. A guard on one of
+N reachable paths is decorative, so the sweep's refusals are asserted here.
+"""
+import re
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+LIFECYCLE = REPO_ROOT / "scripts" / "lib" / "worktree-lifecycle.sh"
+
+
+# -- the sweep path refuses the same cases -----------------------------------
+
+
+def _lifecycle_source() -> str:
+    return LIFECYCLE.read_text()
+
+
+def test_sweep_never_keys_on_zero_commits_ahead() -> None:
+    """ZERO-AHEAD IS NOT A REAP KEY, and this is the assertion that keeps it out.
+
+    A session that finished its work and has not pushed reads as zero commits
+    ahead of origin/main. So does a session whose branch merged. The first still
+    holds the only copy of its PR's attestation.
+
+    `rev-list --count` is legitimate for REPORTING, so the refusal is narrow:
+    no comparison of a commit count against zero may decide a removal. The
+    detached-HEAD decision routes through wt_unpushed_count, so the scan covers
+    the helper where the count is computed; the sound key there is "no commit
+    absent from EVERY remote" (a finished-but-unpushed session reads > 0), and
+    this scan is what forces a future narrowing back to one default branch to
+    show up as a diff here.
+    """
+    unpushed_lib = REPO_ROOT / "scripts" / "lib" / "worktree-unpushed.sh"
+    src = _lifecycle_source() + "\n" + unpushed_lib.read_text()
+
+    # Find any `-eq 0` / `== 0` test in the same line as a rev-list count.
+    for line in src.splitlines():
+        if "rev-list" not in line or "--count" not in line:
+            continue
+        assert not re.search(r"(-eq|==)\s*0\b", line), (
+            f"zero-ahead used as a decision: {line.strip()!r}. "
+            "A finished-but-unpushed session is also zero-ahead."
+        )
+
+
+# -- The sweep is report-only when a timer fires it --------------------------
+
+
+def test_daemon_sweep_is_report_only() -> None:
+    """A merged PR is external proof the work landed. A timer tick is not, so
+    the daemon's sweep reports and the merge-triggered path removes."""
+    module = (
+        REPO_ROOT / "crates" / "fno-agents" / "src" / "runtime" / "daemon" / "worktree_sweep.rs"
+    ).read_text()
+    start = module.index("pub fn worktree_sweep(")
+    body = module[start : start + 2500]
+
+    assert "--apply" not in body
+    assert '"report-only"' in body

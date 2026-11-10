@@ -1,0 +1,2236 @@
+//! `fno-agents hook stop` - the Stop hook's native handler.
+//!
+//! Owns the translation the 451-line shell shim carried: payload read,
+//! ownership (one native evaluation: target manifest, pending delivery, lead
+//! manifest), the bounded-block counters, the foreign-session guard, the
+//! cargo build-dir export, the in-process decide call, harness-shaped block
+//! output, and terminal cleanup (claim release, finalize, delivery retry).
+//! The stop/allow decision itself stays in `loopcheck.rs`; this module is
+//! transport plus the shell's translation, with the ownership code salvaged
+//! from the abandoned WIP `stop_gate.rs` (its registry scan replaced by the one
+//! matcher, `lead_state::find_by_session`).
+
+use serde_json::Value;
+use std::io::Read as _;
+use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
+
+use crate::distress;
+use crate::manifest_lookup::{git_worktree_paths, parse_manifest_identity, paths_eq};
+use crate::paths::{events_path, worktree_repo_root, worktree_space_dir};
+
+mod goal_arbitration;
+use goal_arbitration::{
+    arbitrate_codex_continuation, arbitrate_continuation, emit_stop_decision, goal_payload,
+    GoalArbitration,
+};
+
+/// Consecutive checker-unavailable fires tolerated for an active session
+/// before a loud give-up allow (the shim's `MAX_UNAVAIL_RETRIES`).
+const MAX_UNAVAIL_RETRIES: u64 = 3;
+
+pub fn run(args: &[String]) -> i32 {
+    let _ = args;
+    let mut payload = String::new();
+    if std::io::stdin().read_to_string(&mut payload).is_err() {
+        // An unreadable payload is not a verdict for an owner, but the shell
+        // treated it as an empty read and continued; with no identity, the
+        // ownership evaluation answers no-owner and the stop allows.
+        eprintln!("target stop-hook: unreadable payload; allowing");
+        return 0;
+    }
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
+    let parsed: Option<Value> = serde_json::from_str(payload.trim()).ok();
+    let str_field = |key: &str| -> String {
+        parsed
+            .as_ref()
+            .and_then(|v| v.get(key).and_then(Value::as_str).map(str::to_string))
+            .unwrap_or_default()
+    };
+    let session_id = str_field("session_id");
+    let turn_id = str_field("turn_id");
+    let goal_payload = parsed.as_ref().and_then(goal_payload).cloned();
+    let transport_path = str_field("transcript_path");
+    let payload_cwd = str_field("cwd");
+    let last_assistant_message = parsed.as_ref().and_then(|v| {
+        v.get("last_assistant_message")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    });
+
+    // grok sends camelCase keys with snake_case copies. Its transcript path
+    // names updates.jsonl, not the chat_history.jsonl store the reader needs,
+    // so normalize before the ownership read. A payload without grok's
+    // `hookEventName: "stop"` is not a grok fire and none of this moves:
+    // claude, codex and gemini read snake_case and resolve the transcript
+    // straight from the payload.
+    let mut session_id = session_id;
+    let mut transcript_path = transport_path;
+    let mut payload_cwd = payload_cwd;
+    let mut last_assistant_message = last_assistant_message;
+    let mut payload = payload;
+    if let Some(grok) = parsed.as_ref().and_then(normalize_grok_envelope) {
+        match grok {
+            GrokFire::Skip => return 0,
+            GrokFire::Turn {
+                session_id: sid,
+                cwd: grok_cwd,
+                last_assistant_message: lam,
+                transcript_path: store,
+                store_note,
+            } => {
+                if !store_note.is_empty() {
+                    eprintln!("target stop-hook: grok session store read for {sid}: {store_note}");
+                }
+                session_id = sid;
+                transcript_path = store.display().to_string();
+                payload_cwd = grok_cwd;
+                last_assistant_message = lam.clone();
+                // loop-check's intent channel reads snake_case off the stdin
+                // JSON, so rewrite the payload with grok's final text under the
+                // snake_case key. No loopcheck.rs edit: that file is over the
+                // shrink-only budget, and the rewrite makes one unnecessary.
+                if let Ok(mut v) = serde_json::from_str::<Value>(payload.trim()) {
+                    if let Some(text) = lam {
+                        v["last_assistant_message"] = Value::String(text);
+                    }
+                    payload = v.to_string();
+                }
+            }
+        }
+    }
+
+    let cwd = if payload_cwd.is_empty() {
+        cwd
+    } else {
+        std::fs::canonicalize(&payload_cwd).unwrap_or(PathBuf::from(&payload_cwd))
+    };
+
+    // Every Stop fire is a turn end, whatever the ownership verdict: a live
+    // conversation clock is shortened to its grace (C3). Silent, and it
+    // never creates a file.
+    if !session_id.is_empty() {
+        crate::mail_hold::conversation_turn_end(&session_id);
+    }
+
+    let fire = collect_fire(
+        &session_id,
+        &transcript_path,
+        last_assistant_message,
+        turn_id,
+        goal_payload,
+    );
+
+    // The distress scan fires on EVERY Stop with a transcript, before the
+    // ownership evaluation: lead-owned stops, event-rule returns and trees
+    // holding another session's manifest all get their help read and routed
+    // (F1). The node id comes from the resident manifest when this
+    // session owns it, else None - the help still routes by lineage. The
+    // turn-keyed dedup makes the later loopcheck read on a target-owned
+    // stop write nothing. An in-session route blocks HERE, before the
+    // ownership evaluation, with the route text: separate from the fno
+    // backstop counters, so it never burns the loop's own streak (F5).
+    let distress_hit = if !fire.transcript_path.as_os_str().is_empty() {
+        let node_id = resident_node_id(&cwd, &fire);
+        let project_events = events_path(&cwd);
+        let global_events = crate::loopcheck::default_global_events_path();
+        distress::scan_and_emit(
+            &project_events,
+            &global_events,
+            &cwd,
+            &fire.resolve_harness_id,
+            node_id.as_deref(),
+            fire.harness.as_deref(),
+            &fire.transcript_path,
+            fire.last_assistant_message.as_deref(),
+            Some(fire.resolve_harness_id.as_str()).filter(|s| !s.is_empty()),
+        )
+    } else {
+        None
+    };
+    if let Some((class, rung)) = distress_hit {
+        if let crate::help_router::Route::InSession(text) = crate::help_router::route(class, rung) {
+            return emit_block_for_harness(&session_id, &text);
+        }
+    }
+
+    // Event rules run before the ownership evaluation: a session with no
+    // target or lead manifest still owes its chat asks to the board
+    // (docs/architecture/event-rules.md). A notify leaves through the
+    // operator chokepoint; the first block or nudge serves the same
+    // harness-shaped block the stop gate prints, and the stop returns.
+    let rule_fires = crate::event_rules::eval_stop(&cwd, &payload);
+    for notify in rule_fires.iter().filter_map(|f| f.notify.as_ref()) {
+        crate::operator_notice::notify_operator(&notify.0, &notify.1, notify.2.as_deref());
+    }
+    if let Some(reason) = rule_fires
+        .iter()
+        .find(|f| f.action == "block" || f.action == "nudge")
+        .map(|f| f.reason.clone())
+    {
+        return emit_block_for_harness(&session_id, &reason);
+    }
+
+    // A turn that ends naming an open user question is waiting on the user,
+    // whoever filed the question. Any block below flips the row back to
+    // working with a later seq, so only a terminal allow leaves the flag up.
+    if let Some(msg) = fire.last_assistant_message.as_deref() {
+        let qids = crate::event_rules::stop_open_questions(&cwd, msg);
+        super::session_state::report_waiting_on_user(&session_id, &qids);
+    }
+
+    // ── Correction gate (law d-2d9ee096) ─────────────────────────────────────
+    // A turn the user typed that the classifier reads as a correction or a
+    // request must land as a node, a law, or a code, doc or gate change
+    // before this session's turn ends. Worker sessions are skipped: their
+    // queued turns are the dispatch prompt, not the operator talking - the
+    // same audience the operator-capture nudge draws. The refusal names the
+    // turn and the three disposition commands, so the block carries its own
+    // exit. An unreadable queue reads as no correction (fail-open, the same
+    // stance the stand-down gate takes), because a broken reader must not
+    // hold every stop in the fleet hostage.
+    if let Some(message) = correction_gate(&cwd, &fire) {
+        return emit_block_for_harness(&session_id, &message);
+    }
+
+    // ── Ownership (the salvaged stop-gate evaluation) ─────────────────────────
+    match evaluate(&cwd, &fire) {
+        Verdict::NoOwner => {
+            emit_stop_decision(&cwd, &fire, None, "visitor", "none", "allow", "visitor", "");
+            return 0;
+        }
+        Verdict::Broken(kind) => return broken_block(&cwd, &fire, &kind),
+        Verdict::Owner {
+            state,
+            driver,
+            owner_cwd,
+        } => run_owned(&cwd, &fire, &payload, state, driver, owner_cwd),
+    }
+}
+
+/// A grok Stop fire, normalized onto the snake_case vocabulary the handler
+/// already reads. `Skip` is a fire that is not the session's turn gate: a
+/// subagent's stop, or the session-end observe-only fire with no `promptId`.
+enum GrokFire {
+    Skip,
+    Turn {
+        session_id: String,
+        cwd: String,
+        last_assistant_message: Option<String>,
+        transcript_path: PathBuf,
+        store_note: String,
+    },
+}
+
+/// Recognize a grok Stop payload and map it onto the snake_case fields. Fires
+/// only on grok's camelCase `hookEventName: "stop"`; claude and codex send no
+/// such key, so `None` leaves them on today's path. grok's own
+/// `transcript_path` copy names updates.jsonl, so the store path comes from
+/// the chat_history.jsonl lookup below instead. A subagent stop and the
+/// session-end fire (no `promptId`) answer `Skip`: neither is this session's
+/// turn gate, so `hook stop` exits 0 with no output and no event.
+fn normalize_grok_envelope(parsed: &Value) -> Option<GrokFire> {
+    if parsed.get("hookEventName").and_then(Value::as_str) != Some("stop") {
+        return None;
+    }
+    if parsed.get("subagentType").is_some() {
+        return Some(GrokFire::Skip);
+    }
+    if parsed.get("promptId").is_none() {
+        return Some(GrokFire::Skip);
+    }
+    let session_id = parsed
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            std::env::var("GROK_SESSION_ID")
+                .ok()
+                .filter(|v| !v.is_empty())
+        })
+        .unwrap_or_default();
+    let cwd = parsed
+        .get("cwd")
+        .and_then(Value::as_str)
+        .or_else(|| parsed.get("workspaceRoot").and_then(Value::as_str))
+        .unwrap_or_default()
+        .to_string();
+    let lam = parsed
+        .get("lastAssistantMessage")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let root = crate::grok_store::grok_sessions_root();
+    let (transcript_path, store_note) = match crate::grok_store::lookup_session(&root, &session_id)
+    {
+        crate::pi::SessionLookup::One { file } => (file, String::new()),
+        crate::pi::SessionLookup::None => (PathBuf::new(), "none".to_string()),
+        crate::pi::SessionLookup::Duplicate { .. } => (PathBuf::new(), "duplicate".to_string()),
+        crate::pi::SessionLookup::Unknown { .. } => (PathBuf::new(), "unreadable".to_string()),
+    };
+    Some(GrokFire::Turn {
+        session_id,
+        cwd,
+        last_assistant_message: lam,
+        transcript_path,
+        store_note,
+    })
+}
+
+/// The owned path: the foreign-session guard, the build-dir export, the
+/// in-process decide call, and the decision translation.
+fn run_owned(
+    hook_cwd: &Path,
+    fire: &Fire,
+    payload: &str,
+    state: PathBuf,
+    driver: &'static str,
+    owner_cwd: PathBuf,
+) -> i32 {
+    // ── Pending delivery: the DoneDelivery retry decision without decide ──────
+    let pending = delivery_pending_for(hook_cwd, fire, Some(&state));
+    let state_is_pending = pending.as_ref().is_some_and(|p| *p == state);
+
+    // One read of the manifest feeds the guard below, the diagnostics, and
+    // translate's claim release.
+    let manifest = if state_is_pending {
+        String::new()
+    } else {
+        std::fs::read_to_string(&state).unwrap_or_default()
+    };
+
+    // ── The foreign-session guard (PR #388 fix class) ─────────────────────────
+    // The manifest's stamped harness id (claude_session_id, then
+    // claude_transcript_id, then harness_session_id) must name THIS
+    // transcript. Codex rollout suffixes count. The guard's allow now
+    // journals a correlated stop_decision first: lead admission reads one
+    // after the newest snapshot for EVERY session, and a fresh successor resolves
+    // HERE - to its predecessor's manifest - until init, the very thing the
+    // silent allow starved, writes its own.
+    if !state_is_pending
+        && manifest_names_foreign_session(&manifest, &fire.transcript_path.display().to_string())
+    {
+        emit_stop_decision(
+            hook_cwd,
+            fire,
+            Some(&state),
+            driver,
+            "none",
+            "allow",
+            "foreign-manifest",
+            &manifest,
+        );
+        return 0;
+    }
+
+    // ── Steps mode: a run driven step-by-step never gates on the loop-check ──
+    // A manifest stamped turn_mode: steps marks a run its own skill advances
+    // one instructed step at a time, not a target loop. The stop allows here,
+    // before translate: the claim stays held and nothing finalizes, so the
+    // run keeps its state for the next step.
+    if !state_is_pending && first_raw_field(&manifest, &["turn_mode"]).as_deref() == Some("steps") {
+        emit_stop_decision(
+            hook_cwd,
+            fire,
+            Some(&state),
+            driver,
+            "none",
+            "allow",
+            "steps-mode",
+            &manifest,
+        );
+        return 0;
+    }
+
+    // ── An active owner with no transcript file: unavailable bounded block ────
+    let transcript_ok =
+        !fire.transcript_path.as_os_str().is_empty() && fire.transcript_path.is_file();
+    if !transcript_ok {
+        return unavailable_block(
+            hook_cwd,
+            fire,
+            driver,
+            "no transcript for an active session",
+        );
+    }
+
+    let codex_owner = fire.harness.as_deref() == Some("codex")
+        || first_raw_field(&manifest, &["harness"]).as_deref() == Some("codex");
+    let arbitration = if codex_owner {
+        arbitrate_codex_continuation(driver, fire, &manifest)
+    } else {
+        arbitrate_continuation(driver, fire, &manifest)
+    };
+    match arbitration {
+        GoalArbitration::Delegated => {
+            emit_stop_decision(
+                hook_cwd,
+                fire,
+                Some(&state),
+                driver,
+                "goal",
+                "allow",
+                "delegated-to-goal",
+                &manifest,
+            );
+            return 0;
+        }
+        GoalArbitration::Refusal(reason) => {
+            emit_stop_decision(
+                hook_cwd,
+                fire,
+                Some(&state),
+                driver,
+                "refusal",
+                "refuse",
+                "refusal",
+                &manifest,
+            );
+            return emit_block_for_harness(&fire.session_id, &reason);
+        }
+        GoalArbitration::None => {}
+    }
+
+    // ── done_probes inherit the session cargo build-dir env ───────────
+    export_session_build_dir(driver, &owner_cwd);
+
+    // ── The pending-delivery retry decision, without calling decide ───────────
+    if state_is_pending {
+        let out = serde_json::json!({
+            "decision": "allow",
+            "termination_reason": "DoneDelivery",
+            "message": "retrying generic delivery finalization"
+        })
+        .to_string();
+        return translate(hook_cwd, &out, driver, &state, &owner_cwd, fire, "");
+    }
+
+    // ── Post-terminal: a finished run's later stops are plain conversation ────
+    // A completed finalize whose termination releases the claim (DonePRGreen,
+    // DoneAdvisory, DoneDelivery, NoWork) is the durable record that this
+    // session's loop ENDED; the manifest only proves what it used to run. A
+    // no-intent stop after it is the user talking (the quickstart's "inspect
+    // the pull request" fired the continue-block at exactly this shape and the
+    // agent re-emitted its MISSION COMPLETE line), so it allows before the
+    // loop-check re-judges. Resumable terminals (DoneAwaiting*, DoneBatched)
+    // keep gating: their loop may still be resumed.
+    if !state_is_pending {
+        let manifest_session =
+            first_raw_field(&manifest, &["fno_id", "session_id"]).unwrap_or_default();
+        let released = if manifest_session.is_empty() {
+            None
+        } else {
+            crate::finalize::prior_releasing_finalize(&events_path(&owner_cwd), &manifest_session)
+        };
+        if released.is_some() {
+            emit_stop_decision(
+                hook_cwd,
+                fire,
+                Some(&state),
+                driver,
+                "none",
+                "allow",
+                "post-terminal",
+                &manifest,
+            );
+            return 0;
+        }
+    }
+
+    // ── Decide, in process ─────────────────────────────────────────────────
+    // No settle sweep (it exits 2 on every fire; settlement belongs to the
+    // review lifecycle), no jq, no second binary: the payload rides memory.
+    let args = vec![
+        "loop-check".to_string(),
+        "--driver".to_string(),
+        driver.to_string(),
+        "--state".to_string(),
+        state.display().to_string(),
+        "--transcript".to_string(),
+        fire.transcript_path.display().to_string(),
+        "--cwd".to_string(),
+        owner_cwd.display().to_string(),
+        "--hook-input-stdin".to_string(),
+    ];
+    let parsed = match crate::loopcheck::parse_args(&args) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("target stop-hook: loop-check args rejected: {e}");
+            return unavailable_block(hook_cwd, fire, driver, "argument error");
+        }
+    };
+    let (command_rc, decision_json) = crate::loopcheck::decide_with_payload(&parsed, Some(payload));
+
+    // A non-zero exit means a BROKEN checker only when the output carries no
+    // verdict. The lead driver sends a full decision payload on both block
+    // shapes, so key on the field, never the code.
+    let has_decision = serde_json::from_str::<Value>(decision_json.trim())
+        .is_ok_and(|v| v.get("decision").is_some());
+    if !has_decision {
+        if command_rc != 0 {
+            eprintln!(
+                "target stop-hook: WARNING: fno-agents loop-check exited {command_rc} with no decision for an active session"
+            );
+        } else {
+            eprintln!(
+                "target stop-hook: WARNING: fno-agents loop-check returned unexpected output (not JSON) for an active session"
+            );
+        }
+        if !decision_json.is_empty() {
+            eprintln!("target stop-hook: loop-check output: {decision_json}");
+        }
+        tail_stderr_log(hook_cwd);
+        return unavailable_block(hook_cwd, fire, driver, "checker produced no verdict");
+    }
+
+    translate(
+        hook_cwd,
+        &decision_json,
+        driver,
+        &state,
+        &owner_cwd,
+        fire,
+        &manifest,
+    )
+}
+
+/// The decision translation: counters, tick row, harness-shaped block, and
+/// terminal cleanup. `manifest` is the state file's content when an upstream
+/// step already read it (empty on the pending-retry entry, which re-reads).
+fn translate(
+    hook_cwd: &Path,
+    decision_json: &str,
+    driver: &'static str,
+    state: &Path,
+    owner_cwd: &Path,
+    fire: &Fire,
+    manifest: &str,
+) -> i32 {
+    let v: Value = serde_json::from_str(decision_json.trim()).unwrap_or(Value::Null);
+    let decision = v.get("decision").and_then(Value::as_str).unwrap_or("allow");
+    let message = v
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let termination_reason = v
+        .get("termination_reason")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+
+    // ── Clean decision reached: self-heal the unavailable counter ─────────────
+    let space = super::events_space(hook_cwd);
+    let counter = space.join(format!(".loop-check-unavail-{}", fire.hook_harness_id));
+    let _ = std::fs::remove_file(&counter);
+
+    // One control-plane arm row for this fire.
+    super::emit_tick(
+        hook_cwd,
+        decision,
+        &termination_reason,
+        driver,
+        &fire.hook_harness_id,
+    );
+
+    let event_decision = match decision {
+        "block" | "allow" => decision,
+        _ => "refuse",
+    };
+    let event_class = if decision == "block" {
+        "actionable-block"
+    } else if !termination_reason.is_empty() {
+        "terminal"
+    } else {
+        "live-allow"
+    };
+    emit_stop_decision(
+        hook_cwd,
+        fire,
+        Some(state),
+        driver,
+        "loop_check",
+        event_decision,
+        event_class,
+        manifest,
+    );
+
+    // ── Block ─────────────────────────────────────────────────────────────────
+    if decision == "block" {
+        return emit_block_for_harness(&fire.session_id, &message);
+    }
+
+    // ── Terminal ──────────────────────────────────────────────────────────────
+    if !termination_reason.is_empty() {
+        if driver == "lead" {
+            eprintln!(
+                "target stop-hook: lead terminal ({termination_reason}); the lead loop has no plan to stamp"
+            );
+            return 0;
+        }
+        let reason = parse_reason(&termination_reason);
+        if reason.releases_claim() {
+            // Release BEFORE finalize: both stamp a `do` row for the same
+            // session, and sessions[] is append-only, so the release row must
+            // land first to carry its ended_at window.
+            let content = if manifest.is_empty() {
+                std::fs::read_to_string(state).unwrap_or_default()
+            } else {
+                manifest.to_string()
+            };
+            let key = first_raw_field(&content, &["target_claim_key"]).unwrap_or_default();
+            let holder = first_raw_field(&content, &["target_claim_holder"]).unwrap_or_default();
+            if key.starts_with("node:") && !holder.is_empty() {
+                let _ = crate::claims::release(&key, &holder, None, None);
+            }
+        }
+        let mut finalize_state = state.to_path_buf();
+        if termination_reason == "DoneDelivery" {
+            // The pending retry state must EXIST before finalize runs: when the
+            // terminal was decided from the manifest (not an existing pending
+            // file), the state is copied to the derived pending path - the
+            // shell's routine candidate copy, now made only where the delivery
+            // transaction needs it.
+            let copied = delivery_pending_for(hook_cwd, fire, Some(state))
+                .or_else(|| pending_state_path(hook_cwd, fire, state))
+                .filter(|p| std::fs::copy(state, p).is_ok());
+            let Some(pending_path) = copied else {
+                return emit_block_for_harness(
+                    &fire.session_id,
+                    "generic delivery state could not be preserved; will retry",
+                );
+            };
+            finalize_state = pending_path;
+        }
+        let transcript = fire.transcript_path.display().to_string();
+        let fargs = vec![
+            "--state".to_string(),
+            finalize_state.display().to_string(),
+            "--transcript".to_string(),
+            transcript,
+            "--cwd".to_string(),
+            owner_cwd.display().to_string(),
+            "--reason".to_string(),
+            termination_reason.clone(),
+        ];
+        if termination_reason == "DoneDelivery" {
+            if crate::finalize::run_finalize(&fargs) != 0 {
+                return emit_block_for_harness(
+                    &fire.session_id,
+                    "generic delivery finalization failed; will retry",
+                );
+            }
+            let pending = delivery_pending_for(hook_cwd, fire, Some(state));
+            if let Some(p) = pending {
+                if std::fs::remove_file(&p).is_err() {
+                    return emit_block_for_harness(
+                        &fire.session_id,
+                        "generic delivery retry state cleanup failed; will retry",
+                    );
+                }
+            }
+        } else {
+            // The shell hook this handler replaced finalized every terminal;
+            // the DoneDelivery-only branch silenced the DonePRGreen plan
+            // stamp, the postmortem, the corrections log and the auto-merge
+            // arm fleet-wide. finalize is idempotent on a re-fire
+            // (session_finalized early return), so no new guard is needed.
+            // A failure here is a note, never a block: the terminal is real,
+            // only its bookkeeping failed. Nothing here reads its result, so
+            // it runs detached: inline it was the Stop hook's slow tail
+            // (p90 33 s against a 0.9 s median).
+            if !spawn_finalize_detached(&fargs) {
+                let rc = crate::finalize::run_finalize(&fargs);
+                if rc != 0 {
+                    eprintln!("target stop-hook: finalize note (non-blocking): exit {rc}");
+                }
+            }
+        }
+    }
+
+    // ── Allow ─────────────────────────────────────────────────────────────────
+    if !message.is_empty() {
+        eprintln!("target stop-hook: {message}");
+    }
+    0
+}
+
+/// Run `fno-agents finalize <fargs>` as the leader of a new session with stdio
+/// on /dev/null, so the harness neither waits on it nor kills it with the hook.
+/// False when it could not spawn (the caller then finalizes inline). Tests run
+/// inline: the test binary has no `finalize` command.
+fn spawn_finalize_detached(fargs: &[String]) -> bool {
+    if cfg!(test) {
+        return false;
+    }
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let mut cmd = Command::new(exe);
+    cmd.arg("finalize").args(fargs);
+    // The detached finalize is machine work outside any interactive actor:
+    // the launcher stamp keeps its merge-arm records out of the user column.
+    cmd.env(crate::decision_trace::ACTOR_KIND_STAMP_ENV, "sweep");
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // SAFETY: setsid() is async-signal-safe and takes no arguments; it runs
+    // in the child after fork, before exec.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        })
+    };
+    cmd.spawn().is_ok()
+}
+
+fn parse_reason(s: &str) -> crate::loopcheck::TerminationReason {
+    use crate::loopcheck::TerminationReason as T;
+    // Debug-formatted names: `serde_json` serializes the enum through its
+    // Display? No: loopcheck emits `format!("{reason:?}")`, so the JSON
+    // carries the Debug name. Parse those.
+    match s {
+        "DonePRGreen" => T::DonePRGreen,
+        "DoneAdvisory" => T::DoneAdvisory,
+        "DoneDelivery" => T::DoneDelivery,
+        "NoWork" => T::NoWork,
+        "DonePlanned" => T::DonePlanned,
+        "DoneBatched" => T::DoneBatched,
+        "DoneUnreviewed" => T::DoneUnreviewed,
+        "DoneAwaitingMerge" => T::DoneAwaitingMerge,
+        "DoneAwaitingReview" => T::DoneAwaitingReview,
+        "Budget" => T::Budget,
+        "NoProgress" => T::NoProgress,
+        "Interrupted" => T::Interrupted,
+        "Aborted" => T::Aborted,
+        _ => T::NoWork,
+    }
+}
+
+/// The broken-resolver bounded block: today's counter files and messages, at
+/// most 3 consecutive fires, then allow loudly.
+fn broken_block(cwd: &Path, fire: &Fire, kind: &str) -> i32 {
+    let space = super::events_space(cwd);
+    let _ = std::fs::create_dir_all(&space);
+    // The lead counter keys on the transcript id (SESSION_ID is not derived
+    // until a state file is chosen).
+    let id = if kind == "lead" {
+        &fire.hook_harness_id
+    } else {
+        &fire.resolve_harness_id
+    };
+    let name = format!(
+        ".{}-unavail-{}",
+        if kind == "lead" {
+            "lead-resolve"
+        } else {
+            "loop-check"
+        },
+        if id.is_empty() { "anon" } else { id.as_str() }
+    );
+    let counter = space.join(name);
+    let count = std::fs::read_to_string(&counter)
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(0)
+        + 1;
+    let _ = std::fs::write(&counter, count.to_string());
+    if count <= MAX_UNAVAIL_RETRIES {
+        let msg = if kind == "lead" {
+            format!(
+                "lead manifest resolver unavailable ({count}/{MAX_UNAVAIL_RETRIES}) for an active leads dir, keeping session running"
+            )
+        } else {
+            format!("checker unavailable ({count}/{MAX_UNAVAIL_RETRIES}), keeping session running")
+        };
+        emit_stop_decision(
+            cwd,
+            fire,
+            None,
+            "unknown",
+            "refusal",
+            "block",
+            "unavailable",
+            "",
+        );
+        return emit_block_for_harness(&fire.session_id, &msg);
+    }
+    if kind == "lead" {
+        eprintln!(
+            "target stop-hook: lead manifest resolver unavailable {count} times (counter {}); allowing stop. The counter only increments, so the lead gate stays OFF for the rest of this session. Delete {} to re-arm it.",
+            counter.display(),
+            counter.display()
+        );
+    } else {
+        eprintln!(
+            "target stop-hook: manifest resolver unavailable {count} times; allowing visitor stop"
+        );
+    }
+    emit_stop_decision(
+        cwd,
+        fire,
+        None,
+        "unknown",
+        "refusal",
+        "allow",
+        "unavailable",
+        "",
+    );
+    0
+}
+
+/// The checker-unavailable bounded block for an active session.
+fn unavailable_block(cwd: &Path, fire: &Fire, driver: &str, why: &str) -> i32 {
+    let space = super::events_space(cwd);
+    let _ = std::fs::create_dir_all(&space);
+    let counter = space.join(format!(".loop-check-unavail-{}", fire.hook_harness_id));
+    let count = std::fs::read_to_string(&counter)
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(0)
+        + 1;
+    let _ = std::fs::write(&counter, count.to_string());
+    super::emit_tick(cwd, "blocked", "unavailable", driver, &fire.hook_harness_id);
+    if count <= MAX_UNAVAIL_RETRIES {
+        emit_stop_decision(
+            cwd,
+            fire,
+            None,
+            driver,
+            "refusal",
+            "block",
+            "unavailable",
+            "",
+        );
+        let msg =
+            format!("checker unavailable ({count}/{MAX_UNAVAIL_RETRIES}), keeping session running");
+        return emit_block_for_harness(&fire.session_id, &msg);
+    }
+    eprintln!(
+        "target stop-hook: {why}; checker unavailable {count} times; allowing stop (ship gate off for this stop)"
+    );
+    emit_stop_decision(
+        cwd,
+        fire,
+        None,
+        driver,
+        "refusal",
+        "allow",
+        "unavailable",
+        "",
+    );
+    0
+}
+
+fn tail_stderr_log(cwd: &Path) {
+    let space = super::events_space(cwd);
+    let log = space.join("loop-check.stderr.log");
+    if let Ok(content) = std::fs::read_to_string(&log) {
+        let lines: Vec<&str> = content.lines().collect();
+        let start = lines.len().saturating_sub(5);
+        for line in &lines[start..] {
+            eprintln!("{line}");
+        }
+    }
+}
+
+/// The block shape the CALLING harness honors: claude reads stdout JSON at
+/// exit 0; codex/gemini read only the exit code, so exit 2 stays their block
+/// signal. A foreign marker makes the claude claim ambiguous, so the legacy
+/// exit-2 path runs instead. Every block continues the session, so the row
+/// first flips back to working: the Stop fire's done must not survive the
+/// block it was refused by.
+fn emit_block_for_harness(session_id: &str, reason: &str) -> i32 {
+    super::session_state::report_working(session_id);
+    let claude = std::env::var("CLAUDECODE").as_deref() == Ok("1")
+        || std::env::var_os("CLAUDE_PLUGIN_ROOT").is_some_and(|v| !v.is_empty());
+    let foreign = [
+        "CODEX_THREAD_ID",
+        "CODEX_SESSION_ID",
+        "GEMINI_SESSION_ID",
+        "OPENCODE_SESSION_ID",
+    ]
+    .iter()
+    .any(|k| std::env::var_os(k).is_some_and(|v| !v.is_empty()));
+    if claude && !foreign {
+        let out = serde_json::json!({ "decision": "block", "reason": reason });
+        println!("{out}");
+        return 0;
+    }
+    eprintln!("target stop-hook: {reason}");
+    2
+}
+
+/// The bash hook exported this for its loop-check child; the native handler IS
+/// that process, so it sets the env in place and every done_probe it spawns
+/// inherits it. A session preset wins; the shared resolver answers the value.
+fn export_session_build_dir(driver: &str, owner_cwd: &Path) {
+    if driver == "target" {
+        crate::cargo_build_dirs::fill_build_dir_env(owner_cwd);
+    }
+}
+
+// ── Salvaged ownership (stop_gate.rs, WIP c562f97276) ────────────────────────
+
+/// What the ownership evaluation decided.
+enum Verdict {
+    NoOwner,
+    Owner {
+        state: PathBuf,
+        driver: &'static str,
+        owner_cwd: PathBuf,
+    },
+    Broken(&'static str),
+}
+
+/// The payload-derived identity of the stopping session, collected exactly
+/// the way the shim collected it (most authoritative first).
+struct Fire {
+    session_id: String,
+    transcript_path: PathBuf,
+    hook_harness_id: String,
+    resolve_ids: Vec<String>,
+    resolve_harness_id: String,
+    harness: Option<String>,
+    last_assistant_message: Option<String>,
+    turn_id: String,
+    goal_payload: Option<Value>,
+}
+
+fn collect_fire(
+    session_id: &str,
+    transcript_path: &str,
+    last_assistant_message: Option<String>,
+    turn_id: String,
+    goal_payload: Option<Value>,
+) -> Fire {
+    let hook_harness_id = transcript_basename(transcript_path).unwrap_or_default();
+    let hook_harness_id = if hook_harness_id.is_empty() {
+        session_id.to_string()
+    } else {
+        hook_harness_id
+    };
+    // Codex names its rollout transcript rollout-<utc>-<thread-uuid>; the
+    // resolver wants the bare uuid suffix, when there is one.
+    let codex_uuid = uuid_suffix(&hook_harness_id).unwrap_or_default();
+    let codex_env_id = std::env::var("CODEX_THREAD_ID").ok().filter(|tid| {
+        !tid.is_empty()
+            && (hook_harness_id == *tid || hook_harness_id.ends_with(&format!("-{tid}")))
+    });
+    let mut resolve_ids: Vec<String> = Vec::new();
+    for candidate in [
+        Some(session_id.to_string()),
+        codex_env_id,
+        (!codex_uuid.is_empty()).then_some(codex_uuid),
+        (!hook_harness_id.is_empty()).then_some(hook_harness_id.clone()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !candidate.is_empty() && !resolve_ids.contains(&candidate) {
+            resolve_ids.push(candidate);
+        }
+    }
+    let resolve_harness_id = resolve_ids.first().cloned().unwrap_or_default();
+    Fire {
+        session_id: session_id.to_string(),
+        transcript_path: PathBuf::from(transcript_path),
+        hook_harness_id,
+        resolve_ids,
+        resolve_harness_id,
+        harness: detect_harness(transcript_path, !turn_id.is_empty()),
+        last_assistant_message,
+        turn_id,
+        goal_payload,
+    }
+}
+
+/// The foreign-session guard predicate: the manifest's stamped harness id
+/// (claude_session_id, then claude_transcript_id, then harness_session_id)
+/// must name THIS transcript. Codex rollout suffixes count. An empty basename
+/// (grok with an unreadable store) is not foreign: the transcript_ok
+/// unavailable block owns that answer.
+fn manifest_names_foreign_session(manifest: &str, transcript_display: &str) -> bool {
+    let manifest_ctid = first_raw_field(manifest, &["claude_session_id", "claude_transcript_id"])
+        .filter(|v| v != "null" && !v.is_empty())
+        .or_else(|| {
+            first_raw_field(manifest, &["harness_session_id"])
+                .filter(|v| v != "null" && !v.is_empty())
+        })
+        .unwrap_or_default();
+    if manifest_ctid.is_empty() {
+        return false;
+    }
+    let basename = transcript_basename(transcript_display).unwrap_or_default();
+    !basename.is_empty()
+        && basename != manifest_ctid
+        && !basename.ends_with(&format!("-{manifest_ctid}"))
+}
+
+fn transcript_basename(path: &str) -> Option<String> {
+    if path.is_empty() {
+        return None;
+    }
+    let p = Path::new(path);
+    let name = p.file_name()?.to_string_lossy().into_owned();
+    if name == "chat_history.jsonl" {
+        // grok's store file name is constant, so the session id lives in the
+        // parent directory name; that is the id the manifest guard compares.
+        return p
+            .parent()?
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned());
+    }
+    Some(name.strip_suffix(".jsonl").unwrap_or(&name).to_string())
+}
+
+/// The 8-4-4-4-12 hex uuid at the END of `s`, after a `-` separator: the
+/// shim's `sed -E 's/^.*-([0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12})$/\1/'`.
+fn uuid_suffix(s: &str) -> Option<String> {
+    let (head, tail) = s.split_at(s.len().checked_sub(36)?);
+    let dash_ok = [8, 13, 18, 23].iter().all(|&i| tail.as_bytes()[i] == b'-');
+    if head.is_empty()
+        || !head.ends_with('-')
+        || !dash_ok
+        || !tail.chars().all(|c| c == '-' || c.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    Some(tail.to_string())
+}
+
+/// The shim's harness markers: the transcript location is proof, env markers
+/// are claims, and two disagreeing markers claim nothing.
+fn detect_harness(transcript_path: &str, has_codex_turn: bool) -> Option<String> {
+    if let Ok(h) = std::env::var("FNO_HARNESS") {
+        if !h.is_empty() {
+            return Some(h);
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let prefix = PathBuf::from(home).join(".claude").join("projects");
+        if !transcript_path.is_empty() && Path::new(transcript_path).starts_with(&prefix) {
+            return Some("claude".to_string());
+        }
+    }
+    let present: Vec<&str> = [
+        ("CODEX_THREAD_ID", "codex"),
+        ("CLAUDE_CODE_SESSION_ID", "claude"),
+        ("GEMINI_SESSION_ID", "gemini"),
+    ]
+    .iter()
+    .filter(|(e, _)| std::env::var_os(e).is_some_and(|v| !v.is_empty()))
+    .map(|(_, n)| *n)
+    .collect();
+    match present[..] {
+        [one] => Some(one.to_string()),
+        [] if has_codex_turn => Some("codex".to_string()),
+        _ => None,
+    }
+}
+
+fn evaluate(cwd: &Path, fire: &Fire) -> Verdict {
+    let wt_state = worktree_space_dir(cwd).join("target-state.md");
+    let live_state = if wt_state.exists() {
+        wt_state
+    } else {
+        worktree_repo_root(cwd).join(".fno").join("target-state.md")
+    };
+
+    let step = if live_state.exists() {
+        // Presence is not ownership: a resident manifest naming a FOREIGN
+        // session sends the resolver out (the shell's non-resident branch).
+        if resident_matches(&live_state, &fire.hook_harness_id) {
+            return Verdict::Owner {
+                state: live_state,
+                driver: "target",
+                owner_cwd: cwd.to_path_buf(),
+            };
+        }
+        // A resident manifest that fails the resolver is checker-broken,
+        // whatever else is on disk.
+        resolve_across_worktrees(cwd, &fire.resolve_ids).map_err(|_| true)
+    } else {
+        // A stranger stop with no other worktree present cannot be a
+        // worktree-ownership question, so an unreadable listing falls
+        // through to the lead and visitor arms instead of blocking.
+        resolve_across_worktrees(cwd, &fire.resolve_ids)
+            .map_err(|_| git_worktree_paths(cwd).map_or(false, |w| w.len() > 1))
+    };
+
+    let resolved = match step {
+        Err(true) => return Verdict::Broken("target"),
+        Err(false) => None,
+        Ok(ref r) => r.clone(),
+    };
+    // A CLEAN miss (every worktree answered "no manifest names this stop")
+    // is what gates the visitor diagnostic + distress scan; a broken
+    // fall-through is not a miss and must scan nothing.
+    let clean_miss = matches!(step, Ok(None));
+
+    if let Some(identity) = resolved {
+        return Verdict::Owner {
+            state: identity.manifest_path,
+            driver: "target",
+            owner_cwd: PathBuf::from(identity.owner_cwd.clone()),
+        };
+    }
+
+    // Pending delivery, then lead: the shim's order. Either converts a
+    // stranger into an owner before the visitor allow fires.
+    if let Some(pending) = delivery_pending_for(cwd, fire, None) {
+        return Verdict::Owner {
+            state: pending,
+            driver: "target",
+            owner_cwd: cwd.to_path_buf(),
+        };
+    }
+    match resolve_lead(cwd, fire) {
+        LeadResolve::None => {}
+        LeadResolve::Found(state) => {
+            return Verdict::Owner {
+                state,
+                driver: "lead",
+                owner_cwd: cwd.to_path_buf(),
+            };
+        }
+    }
+
+    // Visitor allow. The diagnostic names every id tried (a contract the
+    // docs reference).
+    if clean_miss && !fire.resolve_harness_id.is_empty() {
+        eprintln!(
+            "loop-check: no manifest names session {}; visitor allowed (tried: {})",
+            fire.resolve_harness_id,
+            fire.resolve_ids.join(" ")
+        );
+    }
+    Verdict::NoOwner
+}
+
+/// The correction gate (law d-2d9ee096): a turn the user typed that the
+/// classifier reads as a correction or a request must land as a node, a
+/// law, or a code, doc or gate change before this session's turn ends. The
+/// refusal names the turn and the three disposition commands, so the block
+/// carries its own exit. Worker sessions are skipped (their queued turn is
+/// the dispatch prompt, not the operator talking), and an unreadable queue
+/// fails open.
+fn correction_gate(cwd: &Path, fire: &Fire) -> Option<String> {
+    let session = if fire.resolve_harness_id.is_empty() {
+        fire.session_id.as_str()
+    } else {
+        fire.resolve_harness_id.as_str()
+    };
+    if session.is_empty() || fire.transcript_path.as_os_str().is_empty() {
+        return None;
+    }
+    // The nudge's audience: a worker session reads as no queue.
+    let home = crate::paths::AgentsHome::from_env();
+    if crate::owner_ladder::role_now(session, &home, cwd) == crate::owner_ladder::Role::Worker {
+        return None;
+    }
+    let capture_dir = crate::operator_turns::capture_dir(cwd)?;
+    let outcome = crate::operator_turns::read_queue(
+        session,
+        &fire.transcript_path,
+        &capture_dir,
+        chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
+    )
+    .ok()?;
+    let turn = crate::operator_turns::corrections_in(&outcome)
+        .into_iter()
+        .next()?;
+    Some(format!(
+        "operator turn {} reads as a {} and is undispositioned: \"{}\". A correction or request \
+         the user types is a product change for every fno user (law user-corrections-are-\
+         product-fixes): record it with `fno backlog idea --source-kind operator_request`, \
+         `fno backlog capture add`, or `fno inbox law set`, then run `fno inbox operator ack {} \
+         --outcome law:<id>|capture:<fu-id>|node:<id>|nothing` before this turn ends.",
+        turn.turn_id, turn.kind, turn.excerpt, turn.turn_id
+    ))
+}
+
+/// The node id from the resident manifest, when THIS stop's session is the
+/// one it names; else None (a stranger or lead stop routes by lineage, so
+/// it carries no node).
+fn resident_node_id(cwd: &Path, fire: &Fire) -> Option<String> {
+    let wt_state = worktree_space_dir(cwd).join("target-state.md");
+    let live_state = if wt_state.exists() {
+        wt_state
+    } else {
+        worktree_repo_root(cwd).join(".fno").join("target-state.md")
+    };
+    if !resident_matches(&live_state, &fire.hook_harness_id) {
+        return None;
+    }
+    let content = std::fs::read_to_string(&live_state).ok()?;
+    crate::loopcheck::scan_manifest_field(&content, "graph_node_id").or_else(|| {
+        crate::loopcheck::scan_manifest_field(&content, "target_claim_key")
+            .and_then(|k| k.strip_prefix("node:").map(|s| s.to_string()))
+    })
+}
+
+/// The shim's resident check: does the manifest at `state` name THIS stop's
+/// harness id (exact or codex rollout suffix), or - when the manifest names
+/// no harness at all - this stop's id as its bare session identity?
+fn resident_matches(state: &Path, hook_harness_id: &str) -> bool {
+    if hook_harness_id.is_empty() {
+        return false;
+    }
+    let Ok(content) = std::fs::read_to_string(state) else {
+        return false;
+    };
+    let resident_session = first_raw_field(&content, &["fno_id", "session_id"]).unwrap_or_default();
+    let resident_harness = first_raw_field(
+        &content,
+        &[
+            "harness_session_id",
+            "claude_session_id",
+            "claude_transcript_id",
+        ],
+    )
+    .unwrap_or_default();
+    if !resident_harness.is_empty()
+        && (resident_harness == hook_harness_id
+            || hook_harness_id.ends_with(&format!("-{resident_harness}")))
+    {
+        return true;
+    }
+    resident_harness.is_empty() && resident_session == hook_harness_id
+}
+
+/// One worktree listing, every id tried id-major (the shim calls the
+/// per-id resolver repeatedly; the first id with any worktree hit wins).
+fn resolve_across_worktrees(
+    cwd: &Path,
+    ids: &[String],
+) -> Result<Option<crate::manifest_lookup::ManifestIdentity>, String> {
+    // An unlistable root (a non-git cwd, an absent repo) is "no sibling
+    // worktrees", not a broken checker: the search proceeds on the cwd alone
+    // and a miss reads CLEAN (the visitor diagnostic fires).
+    let mut candidates = git_worktree_paths(cwd).unwrap_or_default();
+    if !candidates.iter().any(|path| paths_eq(path, cwd)) {
+        candidates.push(cwd.to_path_buf());
+    }
+    for id in ids {
+        if id.trim().is_empty() {
+            continue;
+        }
+        for worktree in &candidates {
+            let manifest_path = worktree.join(".fno/target-state.md");
+            let Ok(content) = std::fs::read_to_string(&manifest_path) else {
+                continue;
+            };
+            let mut identity = parse_manifest_identity(content.as_str());
+            if identity.matches(id) {
+                if identity.owner_cwd.is_empty() {
+                    identity.owner_cwd = worktree.to_string_lossy().into_owned();
+                }
+                identity.manifest_path =
+                    std::fs::canonicalize(&manifest_path).unwrap_or(manifest_path);
+                return Ok(Some(identity));
+            }
+        }
+    }
+    Ok(None)
+}
+
+enum LeadResolve {
+    None,
+    Found(PathBuf),
+}
+
+/// The lead manifest resolution: the registry row - not file presence -
+/// proves authority, and the manifest is read through the row's own cwd, so
+/// a shell or Stop payload outside the repo still resolves the org it
+/// declared. Any unreadable step answers None (the same fail-open the Python
+/// resolver's catch-all ships). The row lookup is the ONE matcher,
+/// `lead_state::find_by_session`.
+fn resolve_lead(cwd: &Path, fire: &Fire) -> LeadResolve {
+    if fire.hook_harness_id.is_empty() {
+        return LeadResolve::None;
+    }
+    let sid = if fire.resolve_harness_id.is_empty() {
+        &fire.hook_harness_id
+    } else {
+        &fire.resolve_harness_id
+    };
+    let rows =
+        match crate::state::load_registry(&crate::paths::AgentsHome::from_env().registry_json()) {
+            Ok(r) => r.entries,
+            Err(_) => return LeadResolve::None,
+        };
+    match lead_manifest_in(&rows, sid, fire.harness.as_deref(), cwd) {
+        Some(path) => LeadResolve::Found(path),
+        None => LeadResolve::None,
+    }
+}
+
+/// The manifest through the team row: the row's cwd names the space, and a
+/// row whose cwd names a since-removed directory (a deleted linked worktree
+/// keys its own dead slug) falls back to the payload cwd's space before
+/// answering None. `lead_state::manifest_path` carries the unsafe-scope
+/// refusal.
+fn lead_manifest_in(
+    rows: &[crate::state::RegistryEntry],
+    sid: &str,
+    harness: Option<&str>,
+    cwd: &Path,
+) -> Option<PathBuf> {
+    let row = crate::lead_state::find_by_session(rows, sid, harness)?;
+    use crate::AgentStatus;
+    if matches!(
+        row.status,
+        AgentStatus::Exited
+            | AgentStatus::Orphaned
+            | AgentStatus::Failed
+            | AgentStatus::PermanentDead
+    ) {
+        return None;
+    }
+    let scope = row
+        .role_scope
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    let mut roots = Vec::with_capacity(2);
+    if !row.cwd.is_empty() {
+        roots.push(PathBuf::from(&row.cwd));
+    }
+    roots.push(cwd.to_path_buf());
+    roots
+        .iter()
+        .map(|root| {
+            crate::lead_state::manifest_path(&super::events_space(root), scope)
+                .ok()
+                .filter(|path| path.is_file())
+        })
+        .find(Option::is_some)
+        .flatten()
+}
+
+/// The pending-delivery retry file this session would resume, if any. With a
+/// resolved state file the name is derived from that manifest's ids; without
+/// one, the newest harness-tagged pending file wins, then any pending file
+/// whose stamped harness id names this stop.
+fn delivery_pending_for(cwd: &Path, fire: &Fire, state: Option<&Path>) -> Option<PathBuf> {
+    let prefix = git_delivery_prefix(&worktree_repo_root(cwd));
+    match state {
+        Some(state) => {
+            let retry_id = retry_id_for(&std::fs::read_to_string(state).ok()?, fire);
+            let pending = PathBuf::from(format!("{}.{}.md", prefix.display(), retry_id));
+            pending.exists().then_some(pending)
+        }
+        None => {
+            let entries = std::fs::read_dir(prefix.parent()?).ok()?;
+            let mut named: Vec<PathBuf> = Vec::new();
+            let mut all: Vec<PathBuf> = Vec::new();
+            let file_name = |p: &Path| -> String {
+                p.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            };
+            for entry in entries.flatten() {
+                let p = entry.path();
+                let name = file_name(&p);
+                if !name.ends_with(".md") || !p.is_file() {
+                    continue;
+                }
+                let Some(rest) = name.strip_prefix(&format!(
+                    "{}",
+                    prefix
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                )) else {
+                    continue;
+                };
+                all.push(p.clone());
+                let suffix = rest.strip_prefix(&format!("{}.", fire.hook_harness_id));
+                if let Some(suffix) = suffix {
+                    // The glob's literal dot sat between the id and the `*`,
+                    // so strip_prefix already consumed it: only the `.md`
+                    // tail is left to check.
+                    if suffix.ends_with(".md") {
+                        named.push(p);
+                    }
+                }
+            }
+            if !fire.hook_harness_id.is_empty() {
+                // Strictly-newer wins (the shim's `-nt` keeps the first of
+                // two equal-mtime files in glob order).
+                let mut newest: Option<(PathBuf, u64)> = None;
+                for p in named {
+                    let m = mtime_secs(&p).unwrap_or(0);
+                    if newest.as_ref().is_none_or(|(_, best)| m > *best) {
+                        newest = Some((p, m));
+                    }
+                }
+                if let Some((p, _)) = newest {
+                    return Some(p);
+                }
+            }
+            // Alphabetical order, first harness-tagged match: the shim's glob
+            // order for its second pass.
+            all.sort();
+            for p in all {
+                let Ok(content) = std::fs::read_to_string(&p) else {
+                    continue;
+                };
+                let stamped =
+                    first_raw_field(&content, &["harness_session_id", "claude_session_id"]);
+                if !fire.hook_harness_id.is_empty()
+                    && stamped.as_deref() == Some(fire.hook_harness_id.as_str())
+                {
+                    return Some(p);
+                }
+            }
+            None
+        }
+    }
+}
+
+/// The derived pending path for a resolved state file, WITHOUT requiring the
+/// file to exist - the DoneDelivery terminal creates it by copying the state.
+fn pending_state_path(cwd: &Path, fire: &Fire, state: &Path) -> Option<PathBuf> {
+    let prefix = git_delivery_prefix(&worktree_repo_root(cwd));
+    let content = std::fs::read_to_string(state).ok()?;
+    let retry_id = retry_id_for(&content, fire);
+    Some(PathBuf::from(format!(
+        "{}.{}.md",
+        prefix.display(),
+        retry_id
+    )))
+}
+
+/// The `<owner>.<session>` retry identity both pending-path shapes derive
+/// from the manifest: this stop's harness id, else the manifest's stamped one.
+fn retry_id_for(content: &str, fire: &Fire) -> String {
+    let live_session = first_raw_field(content, &["fno_id", "session_id"]);
+    let live_harness = first_raw_field(content, &["harness_session_id", "claude_session_id"]);
+    let owner = if !fire.hook_harness_id.is_empty() {
+        fire.hook_harness_id.clone()
+    } else {
+        live_harness.unwrap_or_else(|| "harness".to_string())
+    };
+    format!(
+        "{}.{}",
+        owner,
+        live_session.unwrap_or_else(|| "session".into())
+    )
+}
+
+fn mtime_secs(p: &Path) -> Option<u64> {
+    std::fs::metadata(p)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+}
+
+/// First non-empty, non-`null` value among `keys`, first matching line wins,
+/// quotes and whitespace stripped. Mirrors the shim's `grep | sed | tr` chain.
+fn first_raw_field(content: &str, keys: &[&str]) -> Option<String> {
+    for line in content.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        if !keys.contains(&key.trim()) {
+            continue;
+        }
+        let value = value.trim().trim_matches('"').trim();
+        if !value.is_empty() && value != "null" {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+/// The one subprocess the ownership path may spend: a single `git rev-parse
+/// --git-path` naming the delivery-pending prefix.
+fn git_delivery_prefix(repo_root: &Path) -> PathBuf {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(["rev-parse", "--git-path", "fno-delivery-finalize-pending-"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty());
+    let raw = out.unwrap_or_else(|| {
+        repo_root
+            .join(".fno")
+            .join(".delivery-finalize-pending-")
+            .to_string_lossy()
+            .into_owned()
+    });
+    let path = PathBuf::from(&raw);
+    if path.is_absolute() {
+        path
+    } else {
+        repo_root.join(path)
+    }
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::goal_arbitration::StopDecisionEvent;
+    use super::*;
+
+    struct EventsPathRestore(Option<std::ffi::OsString>);
+
+    impl EventsPathRestore {
+        fn clear() -> Self {
+            let saved = std::env::var_os("FNO_EVENTS_PATH");
+            std::env::remove_var("FNO_EVENTS_PATH");
+            Self(saved)
+        }
+    }
+
+    impl Drop for EventsPathRestore {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(value) => std::env::set_var("FNO_EVENTS_PATH", value),
+                None => std::env::remove_var("FNO_EVENTS_PATH"),
+            }
+        }
+    }
+
+    /// Every block continues the session, so the funnel flips the row back to
+    /// working before the block returns: the Stop fire's done must not
+    /// survive the block it was refused by.
+    #[test]
+    fn a_block_reports_working_for_the_session_before_returning() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let rt = tempfile::TempDir::new().unwrap();
+        let home = rt.path().join("agents-home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::env::set_var("XDG_RUNTIME_DIR", rt.path());
+        // No daemon socket under this root: the send answers DaemonNotRunning
+        // and marks, which is the observable.
+        let saved_agents_home = std::env::var_os("FNO_AGENTS_HOME");
+        std::env::set_var("FNO_AGENTS_HOME", &home);
+        let saved_harness_name = std::env::var_os("FNO_HARNESS_NAME");
+        std::env::remove_var("FNO_HARNESS_NAME");
+        emit_block_for_harness("sess-leg", "keep working");
+        let record = rt
+            .path()
+            .join(format!("fno-turn-pins-{}", unsafe { libc::geteuid() }))
+            .join("state-sess-leg");
+        let body = std::fs::read_to_string(record).unwrap();
+        assert!(body.starts_with("working "), "{body}");
+        match saved_agents_home {
+            Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
+            None => std::env::remove_var("FNO_AGENTS_HOME"),
+        }
+        match saved_harness_name {
+            Some(v) => std::env::set_var("FNO_HARNESS_NAME", v),
+            None => std::env::remove_var("FNO_HARNESS_NAME"),
+        }
+        std::env::remove_var("XDG_RUNTIME_DIR");
+    }
+
+    /// The foreign-session guard's allow journals a correlated
+    /// stop_decision, so a fresh successor's stops stay observable before init
+    /// writes the successor's own manifest.
+    #[test]
+    fn a_foreign_manifest_stop_still_journals_a_correlated_stop_decision() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::TempDir::new().unwrap();
+        std::env::set_var("FNO_SPACES_DIR", dir.path().join("spaces"));
+        std::env::set_var("GLOBAL_EVENTS_PATH", dir.path().join("global-events.jsonl"));
+        let state = dir.path().join("target-state.md");
+        std::fs::write(&state, "---\nharness_session_id: sess-old\n").unwrap();
+        let fire = collect_fire(
+            "sess-new",
+            "/tmp/fno-x4847/sess-new.jsonl",
+            None,
+            "turn-9".to_string(),
+            None,
+        );
+        let rc = run_owned(
+            &dir.path(),
+            &fire,
+            "{}",
+            state,
+            "lead",
+            dir.path().to_path_buf(),
+        );
+        assert_eq!(rc, 0, "the foreign manifest allows the stop unjudged");
+
+        // Read the journal the way lead admission reads it: live text plus
+        // the store, one query for the stop_decision type.
+        let project = crate::paths::events_path(dir.path());
+        let query = crate::event_store::EventQuery::of_types(&["stop_decision"]);
+        let journal =
+            crate::event_store::journal_text_checked(&project, &query).expect("journal readable");
+        let row = journal
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .find(|event| {
+                event.get("type").and_then(Value::as_str) == Some("stop_decision")
+                    && event.pointer("/data/session_id").and_then(Value::as_str) == Some("sess-new")
+            })
+            .unwrap_or_else(|| panic!("no stop_decision for sess-new in {}", project.display()));
+        assert_eq!(
+            row.pointer("/data/correlation_id").and_then(Value::as_str),
+            Some("stop:sess-new:turn-9")
+        );
+        assert_eq!(
+            row.pointer("/data/class").and_then(Value::as_str),
+            Some("foreign-manifest")
+        );
+        assert_eq!(
+            row.pointer("/data/decision").and_then(Value::as_str),
+            Some("allow")
+        );
+        std::env::remove_var("FNO_SPACES_DIR");
+        std::env::remove_var("GLOBAL_EVENTS_PATH");
+
+        // A steps-mode manifest also allows unjudged: the journal names the
+        // steps-mode class, and the return lands before translate, so no
+        // claim releases and no finalize runs - the run keeps its claim.
+        let dir = tempfile::TempDir::new().unwrap();
+        std::env::set_var("FNO_SPACES_DIR", dir.path().join("spaces"));
+        std::env::set_var("GLOBAL_EVENTS_PATH", dir.path().join("global-events.jsonl"));
+        let state = dir.path().join("target-state.md");
+        std::fs::write(
+            &state,
+            "---\nharness_session_id: sess-new\nturn_mode: steps\n",
+        )
+        .unwrap();
+        let fire = collect_fire(
+            "sess-new",
+            "/tmp/fno-x4847/sess-new.jsonl",
+            None,
+            "turn-3".to_string(),
+            None,
+        );
+        let rc = run_owned(
+            &dir.path(),
+            &fire,
+            "{}",
+            state,
+            "lead",
+            dir.path().to_path_buf(),
+        );
+        assert_eq!(rc, 0, "a steps-mode run allows its stops unjudged");
+        let project = crate::paths::events_path(dir.path());
+        let query = crate::event_store::EventQuery::of_types(&["stop_decision"]);
+        let journal =
+            crate::event_store::journal_text_checked(&project, &query).expect("journal readable");
+        let row = journal
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .find(|event| {
+                event.get("type").and_then(Value::as_str) == Some("stop_decision")
+                    && event.pointer("/data/session_id").and_then(Value::as_str) == Some("sess-new")
+            })
+            .unwrap_or_else(|| panic!("no stop_decision for sess-new in {}", project.display()));
+        assert_eq!(
+            row.pointer("/data/class").and_then(Value::as_str),
+            Some("steps-mode")
+        );
+        assert_eq!(
+            row.pointer("/data/decision").and_then(Value::as_str),
+            Some("allow")
+        );
+        std::env::remove_var("FNO_SPACES_DIR");
+        std::env::remove_var("GLOBAL_EVENTS_PATH");
+    }
+
+    /// A finished run's later stops are plain conversation: a completed
+    /// finalize whose termination releases the claim converts a no-intent
+    /// stop into a post-terminal allow BEFORE loop-check re-judges (the
+    /// quickstart's "inspect the pull request" fired the continue-block at
+    /// exactly this shape and the agent re-emitted its MISSION COMPLETE
+    /// line). No loop_check row may land: the gate never re-judged. A
+    /// resumable terminal (DoneAwaitingMerge) keeps gating: no post-terminal
+    /// row, and decide re-judges (a loop_check row lands).
+    #[test]
+    fn a_released_finalized_session_allows_later_no_intent_stops() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::TempDir::new().unwrap();
+        std::env::set_var("FNO_SPACES_DIR", dir.path().join("spaces"));
+        std::env::set_var("GLOBAL_EVENTS_PATH", dir.path().join("global-events.jsonl"));
+        std::env::set_var("XDG_RUNTIME_DIR", dir.path());
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let state = repo.join("target-state.md");
+        std::fs::write(
+            &state,
+            "---\nfno_id: fin-sess-a\nsession_id: fin-sess-a\nharness_session_id: fin-stop-a\n---\n",
+        )
+        .unwrap();
+        let transcript = repo.join("fin-stop-a.jsonl");
+        std::fs::write(
+            &transcript,
+            "{\"message\":{\"role\":\"assistant\",\"content\":\"here is the pull request\"}}\n",
+        )
+        .unwrap();
+        let project_events = crate::paths::events_path(&repo);
+        let global_events = dir.path().join("global-events.jsonl");
+        crate::loopcheck::emit_to_both(
+            &project_events,
+            &global_events,
+            "session_finalized",
+            serde_json::json!({
+                "session_id": "fin-sess-a",
+                "termination_reason": "DonePRGreen",
+                "ship": true
+            }),
+        );
+        let fire = collect_fire(
+            "fin-stop-a",
+            &transcript.display().to_string(),
+            None,
+            "turn-11".to_string(),
+            None,
+        );
+        let rc = run_owned(
+            &repo,
+            &fire,
+            "{}",
+            state.clone(),
+            "target",
+            repo.to_path_buf(),
+        );
+        assert_eq!(rc, 0, "a post-terminal stop allows");
+        let query = crate::event_store::EventQuery::of_types(&["stop_decision"]);
+        let journal = crate::event_store::journal_text_checked(&project_events, &query)
+            .expect("journal readable");
+        let post = journal
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .find(|event| {
+                event.get("type").and_then(Value::as_str) == Some("stop_decision")
+                    && event.pointer("/data/session_id").and_then(Value::as_str)
+                        == Some("fin-stop-a")
+                    && event.pointer("/data/class").and_then(Value::as_str) == Some("post-terminal")
+            })
+            .expect("post-terminal stop_decision must be journaled");
+        assert_eq!(
+            post.pointer("/data/decision").and_then(Value::as_str),
+            Some("allow")
+        );
+        let lc = crate::event_store::EventQuery::of_types(&["loop_check"]);
+        let lc_text =
+            crate::event_store::journal_text_checked(&project_events, &lc).unwrap_or_default();
+        assert!(
+            lc_text.trim().is_empty(),
+            "the gate must not re-judge a post-terminal fire: {lc_text}"
+        );
+
+        // The resumable-terminal counter-case keeps gating: no post-terminal
+        // row, and decide re-judges the stop (a loop_check row lands).
+        let dir = tempfile::TempDir::new().unwrap();
+        std::env::set_var("FNO_SPACES_DIR", dir.path().join("spaces"));
+        std::env::set_var("GLOBAL_EVENTS_PATH", dir.path().join("global-events.jsonl"));
+        std::env::set_var("XDG_RUNTIME_DIR", dir.path());
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let state = repo.join("target-state.md");
+        std::fs::write(
+            &state,
+            "---\nfno_id: fin-sess-b\nsession_id: fin-sess-b\nharness_session_id: fin-stop-b\n---\n",
+        )
+        .unwrap();
+        let transcript = repo.join("fin-stop-b.jsonl");
+        std::fs::write(
+            &transcript,
+            "{\"message\":{\"role\":\"assistant\",\"content\":\"here is the pull request\"}}\n",
+        )
+        .unwrap();
+        let project_events = crate::paths::events_path(&repo);
+        let global_events = dir.path().join("global-events.jsonl");
+        crate::loopcheck::emit_to_both(
+            &project_events,
+            &global_events,
+            "session_finalized",
+            serde_json::json!({
+                "session_id": "fin-sess-b",
+                "termination_reason": "DoneAwaitingMerge",
+                "ship": false
+            }),
+        );
+        let fire = collect_fire(
+            "fin-stop-b",
+            &transcript.display().to_string(),
+            None,
+            "turn-12".to_string(),
+            None,
+        );
+        let _rc = run_owned(
+            &repo,
+            &fire,
+            "{}",
+            state.clone(),
+            "target",
+            repo.to_path_buf(),
+        );
+        let query = crate::event_store::EventQuery::of_types(&["stop_decision"]);
+        let journal = crate::event_store::journal_text_checked(&project_events, &query)
+            .expect("journal readable");
+        assert!(
+            !journal.lines().any(|line| {
+                serde_json::from_str::<Value>(line)
+                    .ok()
+                    .is_some_and(|event| {
+                        event.pointer("/data/class").and_then(Value::as_str)
+                            == Some("post-terminal")
+                    })
+            }),
+            "a resumable terminal must keep gating: {journal}"
+        );
+        let lc = crate::event_store::EventQuery::of_types(&["loop_check"]);
+        let lc_text =
+            crate::event_store::journal_text_checked(&project_events, &lc).unwrap_or_default();
+        assert!(
+            !lc_text.trim().is_empty(),
+            "the gate must re-judge a resumable-terminal fire"
+        );
+
+        std::env::remove_var("FNO_SPACES_DIR");
+        std::env::remove_var("GLOBAL_EVENTS_PATH");
+        std::env::remove_var("XDG_RUNTIME_DIR");
+    }
+
+    /// The shell contract, native now: an unset env is resolved from
+    /// The shell contract, native now: an unset env is resolved from
+    /// config and set in place; a session preset survives untouched; a
+    /// foreign-repo owner cwd earns no export at all. The env pin holds the
+    /// same lock the other env-pinning suites hold.
+    #[test]
+    fn export_session_build_dir_sets_unset_and_honors_preset() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::var_os("CARGO_BUILD_BUILD_DIR");
+        let dir = std::env::temp_dir().join(format!("stop-gate-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(dir.join(".cargo")).unwrap();
+        std::fs::write(
+            dir.join(".cargo/config.toml"),
+            b"[build]\nrustc-wrapper = \"scripts/lib/cargo-rustc-wrapper.sh\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("scripts/lib")).unwrap();
+        std::fs::write(
+            dir.join("scripts/lib/cargo-rustc-wrapper.sh"),
+            b"#!/bin/sh\n",
+        )
+        .unwrap();
+
+        std::env::remove_var("CARGO_BUILD_BUILD_DIR");
+        export_session_build_dir("target", &dir);
+        let set = std::env::var_os("CARGO_BUILD_BUILD_DIR");
+        assert!(
+            set.as_deref()
+                .map(|v| v.to_string_lossy().ends_with("/{workspace-path-hash}"))
+                == Some(true),
+            "unset + driver target must resolve and export: {set:?}"
+        );
+
+        std::env::set_var("CARGO_BUILD_BUILD_DIR", "/tmp/session-own-base/hash");
+        export_session_build_dir("target", &dir);
+        assert_eq!(
+            std::env::var_os("CARGO_BUILD_BUILD_DIR").as_deref(),
+            Some(std::ffi::OsStr::new("/tmp/session-own-base/hash")),
+            "a session preset must survive untouched"
+        );
+
+        std::env::remove_var("CARGO_BUILD_BUILD_DIR");
+        export_session_build_dir("other", &dir);
+        assert_eq!(
+            std::env::var_os("CARGO_BUILD_BUILD_DIR"),
+            None,
+            "non-target drivers get no build-dir export"
+        );
+
+        // A foreign owner cwd earns no export: the fill gate sees no wrapper
+        // naming config, so a target run inside another repo's dir leaves
+        // the env exactly as it found it.
+        let foreign =
+            std::env::temp_dir().join(format!("stop-gate-export-fn-{}", std::process::id()));
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::env::remove_var("CARGO_BUILD_BUILD_DIR");
+        export_session_build_dir("target", &foreign);
+        assert_eq!(
+            std::env::var_os("CARGO_BUILD_BUILD_DIR"),
+            None,
+            "a foreign owner cwd must earn no build-dir export"
+        );
+
+        match saved {
+            Some(v) => std::env::set_var("CARGO_BUILD_BUILD_DIR", v),
+            None => std::env::remove_var("CARGO_BUILD_BUILD_DIR"),
+        }
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&foreign).ok();
+    }
+
+    fn fire_with_goal(goal: Value) -> Fire {
+        collect_fire(
+            "session-full",
+            "/tmp/rollout-session-full.jsonl",
+            None,
+            "turn-42".to_string(),
+            Some(goal),
+        )
+    }
+
+    #[test]
+    fn active_verified_goal_is_the_single_continuation_owner() {
+        let fire = fire_with_goal(serde_json::json!({
+            "objective": "finish the target",
+            "status": "active",
+            "continuation_owner": "target:node-42"
+        }));
+        let manifest = "fno_id: node-42\n";
+        assert_eq!(
+            arbitrate_continuation("target", &fire, manifest),
+            GoalArbitration::Delegated
+        );
+        // With no goal truth at all the loop check keeps ownership.
+        let bare = collect_fire(
+            "session-full",
+            "/tmp/rollout-session-full.jsonl",
+            None,
+            "turn-42".to_string(),
+            None,
+        );
+        assert_eq!(
+            arbitrate_continuation("target", &bare, "fno_id: node-42\n"),
+            GoalArbitration::None
+        );
+    }
+
+    #[test]
+    fn goal_owner_conflicts_and_spellings_arbitrate_honestly() {
+        // A goal with no continuation_owner is a named refusal, not a guess.
+        let fire = fire_with_goal(serde_json::json!({
+            "objective": "finish the target",
+            "status": "active"
+        }));
+        let refusal = arbitrate_continuation("target", &fire, "fno_id: node-42\n");
+        assert!(
+            matches!(refusal, GoalArbitration::Refusal(reason) if reason.contains("missing continuation owner"))
+        );
+        let fire = fire_with_goal(serde_json::json!({
+            "objective": "finish the target",
+            "status": "active",
+            "continuation_owner": "target:other"
+        }));
+        let refusal = arbitrate_continuation("target", &fire, "fno_id: node-42\n");
+        assert!(
+            matches!(refusal, GoalArbitration::Refusal(reason) if reason.contains("conflicting goal truth"))
+        );
+        // A live codex goal keeps the objective and owner strings it was
+        // created with: the lead spelling delegates, the pre-rename one
+        // still delegates, a foreign scope and a non-deriving owner refuse.
+        let manifest = "driver: lead\nscope: fno\nnode_id: x-aaaa\n";
+        let truth = |objective: &str, owner: &str| {
+            Some(super::goal_arbitration::GoalTruth {
+                objective: objective.to_string(),
+                status: "active".to_string(),
+                continuation_owner: owner.to_string(),
+            })
+        };
+        let arbitrate =
+            |goal| super::goal_arbitration::arbitrate_goal_truth("lead", manifest, goal);
+        assert!(matches!(
+            arbitrate(truth("$fno:lead fno", "lead:fno")),
+            GoalArbitration::Delegated
+        ));
+        assert!(matches!(
+            arbitrate(truth("$fno:lead fno", "lead:fno")),
+            GoalArbitration::Delegated
+        ));
+        assert!(matches!(
+            arbitrate(truth("$fno:lead other", "lead:fno")),
+            GoalArbitration::Refusal(_)
+        ));
+        assert!(matches!(
+            arbitrate(truth("$fno:lead fno", "target:x-aaaa")),
+            GoalArbitration::Refusal(_)
+        ));
+    }
+
+    #[test]
+    fn stop_decision_event_serializes_the_full_correlation_contract() {
+        let fire = fire_with_goal(serde_json::json!({
+            "objective": "finish the target",
+            "status": "active",
+            "continuation_owner": "target:node-42"
+        }));
+        let event = StopDecisionEvent {
+            session_id: fire.session_id.clone(),
+            raw_identity_candidates: fire.resolve_ids.clone(),
+            turn_id: fire.turn_id.clone(),
+            manifest: "/work/.fno/target-state.md".to_string(),
+            scope: "scope-42".to_string(),
+            node_id: "node-42".to_string(),
+            driver: "target".to_string(),
+            continuation_owner: "goal".to_string(),
+            decision: "allow".to_string(),
+            class: "delegated-to-goal".to_string(),
+            correlation_id: "stop:session-full:turn-42".to_string(),
+            harness_output_contract: "empty".to_string(),
+        };
+        let value = serde_json::to_value(event).unwrap();
+        for field in [
+            "session_id",
+            "raw_identity_candidates",
+            "turn_id",
+            "manifest",
+            "scope",
+            "node_id",
+            "driver",
+            "continuation_owner",
+            "decision",
+            "class",
+            "correlation_id",
+            "harness_output_contract",
+        ] {
+            assert!(value.get(field).is_some(), "missing event field {field}");
+        }
+        assert_eq!(value["turn_id"], "turn-42");
+        assert_eq!(value["class"], "delegated-to-goal");
+    }
+
+    /// A non-delivery terminal still reaches finalize: the shell hook this
+    /// handler replaced finalized every terminal, and the DoneDelivery-only
+    /// branch silenced the DonePRGreen plan stamp, the postmortem and the
+    /// auto-merge arm fleet-wide. The journal must hold the finalize event,
+    /// and a finalize failure on this path stays non-blocking (exit 0).
+    #[test]
+    fn a_non_delivery_terminal_reaches_finalize_and_allows() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _events = EventsPathRestore::clear();
+        let home = std::env::temp_dir().join(format!("stop-fin-home-{}", std::process::id()));
+        std::fs::create_dir_all(home.join(".fno")).unwrap();
+        let saved_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", &home);
+        // The test already holds the env lock; declare() would take it a
+        // second time and self-deadlock the non-reentrant mutex (CI parity
+        // hang, 5 runs). declare_held exists for exactly this caller.
+        let _root = crate::paths::DeclaredRoot::declare_held("stop-finalize-terminal");
+        let repo = _root.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let manifest = repo.join("target-state.md");
+        std::fs::write(
+            &manifest,
+            "---\nsession_id: fin-stop-sess\nharness_session_id: fin-stop-sess\ncreated_at: 2026-09-30T00:00:00Z\n---\n",
+        )
+        .unwrap();
+        let transcript = repo.join("transcript.jsonl");
+        std::fs::write(
+            &transcript,
+            "{\"message\":{\"role\":\"assistant\",\"content\":\"done\"}}\n",
+        )
+        .unwrap();
+
+        let fire = collect_fire(
+            "fin-stop-sess",
+            &transcript.display().to_string(),
+            None,
+            String::new(),
+            None,
+        );
+        let decision = r#"{"decision":"allow","termination_reason":"DonePRGreen","message":""}"#;
+        let manifest_body = std::fs::read_to_string(&manifest).unwrap();
+        let rc = translate(
+            &repo,
+            decision,
+            "target",
+            &manifest,
+            &repo,
+            &fire,
+            &manifest_body,
+        );
+        assert_eq!(
+            rc, 0,
+            "a finalize failure on a non-delivery terminal is non-blocking"
+        );
+
+        let events_file = crate::paths::events_path(&repo);
+        let text = crate::event_store::journal_text(&events_file, &[]);
+        let saw = text.lines().any(|l| {
+            serde_json::from_str::<serde_json::Value>(l)
+                .ok()
+                .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(str::to_string))
+                .is_some_and(|t| t == "session_finalized" || t == "session_finalize_failed")
+        });
+        assert!(saw, "journal must hold a finalize event; journal: {text}");
+        match saved_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+
+    /// The correction gate (law d-2d9ee096): a session holding one
+    /// undispositioned user correction refuses to stop and names the turn and
+    /// the three disposition commands; after `fno inbox operator ack` writes
+    /// the ledger row, the same stop passes.
+    #[test]
+    fn an_undispositioned_correction_blocks_the_stop_until_acked() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::TempDir::new().unwrap();
+        let capture = dir.path().join("operator-capture");
+        std::fs::create_dir_all(&capture).unwrap();
+        std::env::set_var("FNO_OPERATOR_CAPTURE_DIR", &capture);
+        std::env::set_var("FNO_AGENTS_HOME", dir.path().join("home"));
+        let home = crate::paths::AgentsHome::from_env();
+
+        // One queued user turn that reads as a correction.
+        let transcript = dir.path().join("sess-gate.jsonl");
+        let row = serde_json::json!({
+            "type": "user",
+            "uuid": "u-corr-1",
+            "timestamp": "2026-09-06T21:00:00.000Z",
+            "message": {"role": "user", "content": "no, use the other branch"}
+        });
+        std::fs::write(&transcript, format!("{row}\n")).unwrap();
+
+        let fire = collect_fire(
+            "sess-gate",
+            &transcript.display().to_string(),
+            None,
+            "turn-1".to_string(),
+            None,
+        );
+        let blocked = correction_gate(dir.path(), &fire).expect("the gate must refuse");
+        assert!(blocked.contains("u-corr-1"), "message: {blocked}");
+        assert!(blocked.contains("correct"), "message: {blocked}");
+        assert!(
+            blocked.contains("fno backlog idea --source-kind operator_request"),
+            "message: {blocked}"
+        );
+        assert!(
+            blocked.contains("fno backlog capture add"),
+            "message: {blocked}"
+        );
+        assert!(blocked.contains("fno inbox law set"), "message: {blocked}");
+        assert!(
+            blocked.contains("fno inbox operator ack u-corr-1"),
+            "message: {blocked}"
+        );
+
+        // The ack the refusal names clears the gate: the same stop passes.
+        crate::operator_turns::ack_turn(
+            &home,
+            &capture,
+            "sess-gate",
+            "u-corr-1",
+            "nothing",
+            "chatter, no product change",
+        )
+        .expect("the ack write lands");
+        assert!(
+            correction_gate(dir.path(), &fire).is_none(),
+            "the acked turn must not block the next stop"
+        );
+
+        std::env::remove_var("FNO_OPERATOR_CAPTURE_DIR");
+        std::env::remove_var("FNO_AGENTS_HOME");
+    }
+
+    /// A request-shaped turn blocks with the same refusal; questions,
+    /// approvals and machine envelopes never trip the gate.
+    #[test]
+    fn the_gate_reads_requests_and_leaves_questions_and_approvals_alone() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::TempDir::new().unwrap();
+        let capture = dir.path().join("operator-capture");
+        std::fs::create_dir_all(&capture).unwrap();
+        std::env::set_var("FNO_OPERATOR_CAPTURE_DIR", &capture);
+        std::env::set_var("FNO_AGENTS_HOME", dir.path().join("home"));
+        let home = crate::paths::AgentsHome::from_env();
+
+        // A request: the motivating shape the corpus rule missed.
+        let transcript = dir.path().join("sess-req.jsonl");
+        let rows = [serde_json::json!({
+            "type": "user",
+            "uuid": "u-req-1",
+            "timestamp": "2026-09-06T21:00:00.000Z",
+            "message": {"role": "user",
+                "content": "stop reporting perceived GitHub rate limits; GraphQL and the App exist"}
+        })];
+        let body = rows
+            .iter()
+            .map(|r| r.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        std::fs::write(&transcript, body).unwrap();
+        let fire = collect_fire(
+            "sess-req",
+            &transcript.display().to_string(),
+            None,
+            "turn-1".to_string(),
+            None,
+        );
+        let blocked = correction_gate(dir.path(), &fire).expect("a request must refuse");
+        assert!(blocked.contains("u-req-1"), "message: {blocked}");
+        assert!(blocked.contains("request"), "message: {blocked}");
+        crate::operator_turns::ack_turn(&home, &capture, "sess-req", "u-req-1", "nothing", "")
+            .unwrap();
+        assert!(correction_gate(dir.path(), &fire).is_none());
+
+        // A question and an approval queue as user turns but read as neither
+        // a correction nor a request, so the gate stays shut for them.
+        let transcript = dir.path().join("sess-chatter.jsonl");
+        let rows = [
+            serde_json::json!({
+                "type": "user", "uuid": "u-q-1",
+                "timestamp": "2026-09-06T21:00:00.000Z",
+                "message": {"role": "user", "content": "status on your nodes?"}
+            }),
+            serde_json::json!({
+                "type": "user", "uuid": "u-ok-1",
+                "timestamp": "2026-09-06T21:05:00.000Z",
+                "message": {"role": "user", "content": "looks good, ship it"}
+            }),
+        ];
+        let body = rows
+            .iter()
+            .map(|r| r.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        std::fs::write(&transcript, body).unwrap();
+        let fire = collect_fire(
+            "sess-chatter",
+            &transcript.display().to_string(),
+            None,
+            "turn-1".to_string(),
+            None,
+        );
+        assert!(
+            correction_gate(dir.path(), &fire).is_none(),
+            "chatter must not refuse the stop"
+        );
+
+        std::env::remove_var("FNO_OPERATOR_CAPTURE_DIR");
+        std::env::remove_var("FNO_AGENTS_HOME");
+    }
+}

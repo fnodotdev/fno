@@ -1,0 +1,3821 @@
+//! The question-to-law matcher: one pure function set behind the front's
+//! `fno inbox law` group. The `stage` and `law` modes
+//! read the decision index through [`crate::decision_index`]; the `ask` and
+//! `validate` modes read no file - Python keeps the decision lifecycle read
+//! (`list_decisions`) and the open-question fold (`read_open_questions`) and
+//! works only on rows handed to it.
+
+use crate::decision_index;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::collections::BTreeSet;
+use std::io::Read;
+
+/// Lowercase, split on anything outside `[a-z0-9]`, then drop digit-only
+/// tokens, 4-8 character hex tokens that contain a digit (node ids like
+/// `14c8`, `cf6a`), and the stop set. A hex word with no digit (`added`,
+/// `face`) survives. Moved to the fno crate with the rule matcher; this
+/// re-export keeps the law-side scorers on the one implementation.
+pub use crate::rules::tokens;
+
+#[derive(Deserialize)]
+#[serde(tag = "mode", rename_all = "lowercase")]
+enum MatchRequest {
+    Ask(AskRequest),
+    Law(LawRequest),
+    Stage(StageRequest),
+    Validate(ValidateRequest),
+    #[serde(rename = "record-scope")]
+    RecordScope(RecordScopeRequest),
+    /// The law write door: `argv` is the `fno inbox law set` command line and
+    /// `stdin` is the text `--decision-file -` reads. The answer is NOT a JSON
+    /// envelope - the door owns stdout (the decision id) and the process exit
+    /// code (0 recorded, 1 recorded-but-index-failed, 3 refused).
+    #[serde(rename = "record")]
+    Record(RecordDoorRequest),
+    /// The subject-addressed retraction door: `argv` is the
+    /// `fno inbox law retract` command line. Same ownership as `record`:
+    /// the door owns stdout (the retracted id) and the exit code
+    /// (0 retracted, 3 refused).
+    #[serde(rename = "retract")]
+    Retract(RecordDoorRequest),
+    /// The subject-addressed history read: `argv` is the
+    /// `fno inbox law history` command line. Prints one JSON answer and
+    /// exits 0, like `stage` and `match`.
+    #[serde(rename = "history")]
+    History(RecordDoorRequest),
+    /// The restore door: `argv` is the `fno inbox law restore` command line.
+    /// Same ownership as `retract`: stdout carries the new id, the exit code
+    /// is 0 restored, 1 recorded-but-index-failed, 3 refused.
+    #[serde(rename = "restore")]
+    Restore(RecordDoorRequest),
+    /// The premise re-check: `argv` is the `fno inbox law recheck` command line.
+    #[serde(rename = "recheck")]
+    Recheck(RecordDoorRequest),
+    /// The renew door: `argv` is the `fno inbox law renew` command line.
+    /// Same ownership as `restore`: stdout carries the new id.
+    #[serde(rename = "renew")]
+    Renew(RecordDoorRequest),
+    #[serde(rename = "scope-split")]
+    ScopeSplit(ScopeSplitRequest),
+    /// The decisions listing read: `argv` is the `fno backlog decisions`
+    /// command line. The door owns stdout and the exit code (0 answered,
+    /// 1 unreadable index, 2 usage), like `record` and `retract`.
+    #[serde(rename = "decisions")]
+    Decisions(RecordDoorRequest),
+    /// The decide record command, ported from `_record` + `record_decision`
+    /// (cli/src/fno/decide/cli.py + decide/__init__.py, deleted): `argv` is
+    /// the `fno inbox decide` / `fno backlog decide` command line. Same
+    /// ownership as `record`: the door owns stdout (the decision id) and the
+    /// exit code (0 recorded, 1 failed write, 2 bad flag value, 3 refused).
+    #[serde(rename = "decide")]
+    Decide(RecordDoorRequest),
+    /// The provenance resolver the Python callers share with the decide
+    /// door: one resolver, one law. Returns the resolved columns, or the
+    /// refusal kind plus its text.
+    #[serde(rename = "resolve-provenance")]
+    ResolveProvenance(ResolveProvenanceRequest),
+    /// A rule file validated against the live laws (`crate::rules`).
+    #[serde(rename = "rules-check")]
+    RulesCheck(RulesRequest),
+    /// BM25 against the stage keywords over labeled cases.
+    #[serde(rename = "rules-measure")]
+    RulesMeasure(RulesRequest),
+    /// The law-trigger import door: one `law_trigger` event per rule that
+    /// carries `law`, appended to the decision index. Demands the operator
+    /// floor. The door owns stdout and the exit code (0 imported, 2
+    /// unreadable input, 3 refused, 1 store failure).
+    #[serde(rename = "rules-import")]
+    RulesImport(RulesRequest),
+    /// The fire report: per-rule counts over the `rule` decision spans,
+    /// with `never_fired`, `unwired` and `unevaluated` over the live set.
+    /// Prints one JSON answer and exits 0, like the other read modes.
+    #[serde(rename = "rules-report")]
+    RulesReport(RulesRequest),
+    /// Reads every rule against one event and says why each applies or not.
+    #[serde(rename = "rules-explain")]
+    RulesExplain(ExplainRequest),
+}
+
+/// The rules modes read one file: `file` for rules-check, `cases` for
+/// rules-measure.
+#[derive(Deserialize)]
+struct RulesRequest {
+    #[serde(default)]
+    file: String,
+    #[serde(default)]
+    cases: String,
+    /// The report window, `7d`-shaped; rules-report only.
+    #[serde(default)]
+    since: Option<String>,
+}
+
+/// The rules-explain request: the event to read the rules against.
+#[derive(Deserialize)]
+struct ExplainRequest {
+    #[serde(default)]
+    event: crate::rules::Event,
+}
+
+/// The resolver request: the caller's authority claim and its carried
+/// origin, both optional exactly as the decide door takes them.
+#[derive(Deserialize)]
+pub(crate) struct ResolveProvenanceRequest {
+    #[serde(default)]
+    authority: Option<String>,
+    #[serde(default)]
+    origin: Option<String>,
+}
+
+/// The record door's request: the law-set argv plus the caller's stdin.
+#[derive(Deserialize)]
+struct RecordDoorRequest {
+    #[serde(default)]
+    argv: Vec<String>,
+    #[serde(default)]
+    stdin: String,
+}
+
+/// The law door's scope stamp: the recording project by default,
+/// `global` only by explicit flag, because law is never inherited by silence.
+/// `paths` names the repo-relative globs an edit read keys the law by.
+#[derive(Deserialize)]
+struct RecordScopeRequest {
+    #[serde(default)]
+    r#global: bool,
+    #[serde(default)]
+    paths: Vec<String>,
+}
+
+/// The `list_decisions` scope filter: rows in, the kept rows plus the
+/// withheld count and a renderable note out. One matcher for both languages;
+/// the Python side is a transport, fail-open on any crate trouble.
+#[derive(Deserialize)]
+struct ScopeSplitRequest {
+    rows: Vec<Value>,
+}
+/// The raw hook payload, verbatim from the harness event.
+#[derive(Deserialize)]
+struct StageRequest {
+    hook: serde_json::Value,
+}
+
+/// The statement `fno inbox law set` wants recorded. `rationale` and
+/// `supersedes` are Options because both may be absent; Python sends null.
+#[derive(Deserialize)]
+struct ValidateRequest {
+    subject: String,
+    decision: String,
+    #[serde(default)]
+    rationale: Option<String>,
+    #[serde(default)]
+    supersedes: Option<String>,
+}
+
+// pub(crate): question_intake builds one of these from the transport request
+// and reuses the matcher, so the ask refusal logic lives in exactly one place.
+#[derive(Deserialize)]
+pub(crate) struct AskRequest {
+    pub(crate) question: String,
+    #[serde(default)]
+    pub(crate) subject: Option<String>,
+    pub(crate) laws: Vec<LawRow>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct LawRow {
+    pub decision_id: String,
+    // Option, not String+default: Python rows carry null for a missing
+    // decision body or ts, and serde's `default` covers absent keys only.
+    #[serde(default)]
+    pub subject: Option<String>,
+    #[serde(default)]
+    pub decision: Option<String>,
+    #[serde(default)]
+    pub ts: Option<String>,
+    /// The authority lane the row was classified into by Python's
+    /// `_decision_lane` (`list_decisions` stamps it). That function is the
+    /// one implementation of the lane rule; this side consumes its verdict
+    /// and never re-derives it. Absent (older callers, goldens) reads as
+    /// "not law", the historical behavior of every consumer below.
+    #[serde(default)]
+    pub lane: Option<String>,
+    #[serde(default)]
+    pub authority_source: Option<String>,
+}
+
+impl LawRow {
+    /// The retract gate's authority rule, as the ask gate reads it: a
+    /// session retracts a chat_attested law itself (`chat_may_retire`), so
+    /// only a superuser law's retraction has no agent-side remedy and may
+    /// reach the user.
+    pub(crate) fn retraction_needs_operator(&self) -> bool {
+        self.lane.as_deref() == Some("law")
+            && self.authority_source.as_deref() != Some("chat_attested")
+    }
+}
+
+/// The one lane rule for retiring a row from a session: a chat_attested
+/// caller retires its own kind, never the superuser's. Supersede and retract
+/// both read it.
+pub(crate) fn chat_may_retire(row: &Value) -> bool {
+    row.get("authority_source").and_then(Value::as_str) != Some("operator")
+}
+
+#[derive(Deserialize)]
+struct LawRequest {
+    law: LawRow,
+    questions: Vec<OpenQuestion>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct OpenQuestion {
+    id: String,
+    #[serde(default)]
+    ts: String,
+    #[serde(default)]
+    question: String,
+    #[serde(default)]
+    subject: Option<String>,
+    #[serde(default)]
+    node: Option<String>,
+    #[serde(default)]
+    asker: Option<String>,
+    #[serde(default)]
+    session_id: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct ExactHit {
+    pub(crate) subject: String,
+    pub(crate) ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct NearbyHit {
+    pub(crate) decision_id: String,
+    pub(crate) subject: String,
+    pub(crate) decision: String,
+    pub(crate) shared: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct AskAnswer {
+    pub(crate) ok: bool,
+    pub(crate) exact: Vec<ExactHit>,
+    pub(crate) nearby: Vec<NearbyHit>,
+    pub(crate) uncited: Vec<String>,
+    /// Advisory only: the ask proceeds and the laws ride it as context
+    /// (the 2026-11-07 guard-purge ruling). One shared token between
+    /// subjects never refused an ask again; the loose-word refusal ate
+    /// real asks on 2026-11-07.
+    pub(crate) nearby_notice: Option<String>,
+}
+
+#[derive(Serialize)]
+struct Candidate {
+    question_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    asker: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    node: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subject: Option<String>,
+    shared: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct LawAnswer {
+    ok: bool,
+    candidates: Vec<Candidate>,
+    total: usize,
+    lines: Vec<String>,
+}
+
+/// One-line, char-safe truncation: collapse whitespace, then cut at a char
+/// boundary so a multi-byte character is never split.
+pub(crate) fn one_line(text: &str, cap: usize) -> String {
+    let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    match flat.char_indices().nth(cap) {
+        Some((i, _)) => flat[..i].to_owned(),
+        None => flat,
+    }
+}
+
+/// The exact tier of `_live_law_hits`, ported unchanged. Words are the
+/// `[a-z0-9]+` runs of the lowercased question; a law hits when its subject
+/// casefold equals the named subject, or (only when NO subject was named)
+/// every `-` part of a law subject with two or more parts is in the words.
+/// A law keyed on a node id never hits: the node is where a question is
+/// filed, not what it rules on, and one answered ask must not close the node
+/// to every later question.
+fn exact_tier(req: &AskRequest) -> Vec<ExactHit> {
+    let question_lower = req.question.to_lowercase();
+    let words: BTreeSet<&str> = question_lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let named: Vec<String> = req.subject.iter().map(|s| s.to_lowercase()).collect();
+    let mut hits: Vec<ExactHit> = Vec::new();
+    for law in &req.laws {
+        let key = law.subject.as_deref().unwrap_or("").trim();
+        if key.is_empty() || matches_node_id_shape(&key.to_lowercase()) {
+            continue;
+        }
+        let parts: Vec<String> = key.to_lowercase().split('-').map(str::to_owned).collect();
+        let by_text = req.subject.is_none()
+            && parts.len() >= 2
+            && parts.iter().all(|p| words.contains(p.as_str()));
+        if named.contains(&key.to_lowercase()) || by_text {
+            if let Some(hit) = hits.iter_mut().find(|h| h.subject == key) {
+                hit.ids.push(law.decision_id.clone());
+            } else {
+                hits.push(ExactHit {
+                    subject: key.to_owned(),
+                    ids: vec![law.decision_id.clone()],
+                });
+            }
+        }
+    }
+    hits
+}
+
+/// The nearby tier: only when a subject was named and the exact tier found
+/// nothing. A law is nearby when its subject's tokens share at least one
+/// token with the named subject's tokens. At most 5 are listed, most shared
+/// tokens first, then newest law.
+fn nearby_tier(req: &AskRequest, exact: &[ExactHit]) -> Vec<NearbyHit> {
+    let Some(subject) = req.subject.as_deref() else {
+        return Vec::new();
+    };
+    if !exact.is_empty() {
+        return Vec::new();
+    }
+    let subject_tokens = tokens(subject);
+    let mut nearby: Vec<NearbyHit> = Vec::new();
+    for law in &req.laws {
+        let shared: Vec<String> = tokens(law.subject.as_deref().unwrap_or(""))
+            .intersection(&subject_tokens)
+            .cloned()
+            .collect();
+        if shared.is_empty() {
+            continue;
+        }
+        nearby.push(NearbyHit {
+            decision_id: law.decision_id.clone(),
+            subject: law.subject.clone().unwrap_or_default(),
+            decision: law.decision.clone().unwrap_or_default(),
+            shared,
+        });
+    }
+    // Most shared tokens first, then newest law ts (ISO strings sort
+    // chronologically as bytes).
+    nearby.sort_by(|a, b| {
+        b.shared
+            .len()
+            .cmp(&a.shared.len())
+            .then_with(|| b_ts(&req.laws, &b.decision_id).cmp(&b_ts(&req.laws, &a.decision_id)))
+    });
+    nearby.truncate(5);
+    nearby
+}
+
+fn b_ts<'a>(laws: &'a [LawRow], id: &str) -> &'a str {
+    laws.iter()
+        .find(|l| l.decision_id == id)
+        .and_then(|l| l.ts.as_deref())
+        .unwrap_or("")
+}
+
+pub(crate) fn ask_answer(req: &AskRequest) -> AskAnswer {
+    let exact = exact_tier(req);
+    let nearby = nearby_tier(req, &exact);
+    let uncited: Vec<String> = nearby
+        .iter()
+        .filter(|h| !req.question.contains(&h.decision_id))
+        .map(|h| h.decision_id.clone())
+        .collect();
+    let nearby_notice = if uncited.is_empty() {
+        None
+    } else {
+        let mut line = String::from(
+            "outstanding: notice: live law on a nearby subject may already answer this. ",
+        );
+        for h in &nearby {
+            line.push_str(&format!(
+                "{} ({}): {}. ",
+                h.decision_id,
+                h.subject,
+                one_line(&h.decision, 160)
+            ));
+        }
+        line.push_str("Read any of them with fno inbox decisions <id>; the ask proceeds.");
+        Some(line)
+    };
+    AskAnswer {
+        ok: true,
+        exact,
+        nearby,
+        uncited,
+        nearby_notice,
+    }
+}
+
+/// A candidate question: its subject's tokens share a token with the law
+/// subject's tokens, or the exact tier's text rule holds (every `-` part of
+/// a law subject with two or more parts is in the question words). Order is
+/// shared-token count, then newest question.
+/// The pure core: existing tests pin `lines` exactly, so the near-law read
+/// The pure body: near-law lines arrive as a parameter, and the tests pin it
+/// directly so they stay hermetic against the machine index.
+fn law_answer_with(req: &LawRequest, near: Vec<String>) -> LawAnswer {
+    let law_tokens = tokens(req.law.subject.as_deref().unwrap_or(""));
+    let mut cands: Vec<(usize, &OpenQuestion, Vec<String>)> = Vec::new();
+    for q in &req.questions {
+        let q_subject = q.subject.as_deref().unwrap_or("");
+        let shared: Vec<String> = tokens(q_subject)
+            .intersection(&law_tokens)
+            .cloned()
+            .collect();
+        let mut is_candidate = !shared.is_empty();
+        if !is_candidate {
+            let question_lower = q.question.to_lowercase();
+            let words: BTreeSet<&str> = question_lower
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .filter(|t| !t.is_empty())
+                .collect();
+            let law_subject_lower = req.law.subject.as_deref().unwrap_or("").to_lowercase();
+            let parts: Vec<&str> = law_subject_lower.split('-').collect();
+            is_candidate = parts.len() >= 2 && parts.iter().all(|p| words.contains(p));
+        }
+        if is_candidate {
+            cands.push((shared.len(), q, shared));
+        }
+    }
+    cands.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.ts.cmp(&a.1.ts)));
+    let total = cands.len();
+    // Near-law warnings ride at the FRONT of lines: the recording session
+    // reads them before the open-question sweep, because the point is to
+    // stop a duplicate BEFORE it is repeated, not to route it after.
+    let mut lines: Vec<String> = near;
+    for (_, q, _) in cands.iter().take(10) {
+        let law_id = &req.law.decision_id;
+        let mut ident: Vec<String> = Vec::new();
+        if let Some(a) = &q.asker {
+            ident.push(format!("asker {}", a));
+        }
+        if let Some(n) = &q.node {
+            ident.push(format!("node {}", n));
+        }
+        let ident = if ident.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", ident.join(", "))
+        };
+        let q100 = one_line(&q.question, 100);
+        let line = match q.session_id.as_deref().or(q.asker.as_deref()) {
+            Some(to) => format!(
+                "law: {law_id} may answer open {qid}{ident}: \"{q100}\" If it does, tell the asker: fno agents mail send {to} \"Law {law_id} may answer your question {qid}. Read it: fno inbox decisions {law_id}. If it answers you, act on it and withdraw {qid}.\"",
+                law_id = law_id,
+                qid = q.id,
+                ident = ident,
+                q100 = q100,
+                to = to,
+            ),
+            None => format!(
+                "law: {law_id} may answer open {qid}{ident}: \"{q100}\" nobody to tell. {chat}",
+                law_id = law_id,
+                qid = q.id,
+                ident = ident,
+                q100 = q100,
+                chat = crate::question_clear::chat_answer_line(&q.id),
+            ),
+        };
+        lines.push(line);
+    }
+    if total > 10 {
+        lines.push(format!(
+            "law: {} more open question(s) may match {}, not shown.",
+            total - 10,
+            req.law.decision_id
+        ));
+    }
+    LawAnswer {
+        ok: true,
+        candidates: cands
+            .into_iter()
+            .map(|(_, q, shared)| Candidate {
+                question_id: q.id.clone(),
+                asker: q.asker.clone(),
+                session_id: q.session_id.clone(),
+                node: q.node.clone(),
+                subject: q.subject.clone(),
+                shared,
+            })
+            .collect(),
+        total,
+        lines,
+    }
+}
+
+/// The four review command names `hooks/review-hold.sh:84` classifies as a
+/// review. Named explicitly rather than pattern-matched, for the same reason
+/// the hold does it that way: a substring rule on "review" would fire on
+/// `code-review-attest` and every future skill that merely mentions one.
+const REVIEW_COMMANDS: &[&str] = &["code-review", "review", "review-changes", "sigma-review"];
+
+/// The non-review command names each stage classifies, next to REVIEW_COMMANDS.
+/// `/fno:execute` classifies as target: it runs a bound plan, the same
+/// governed ground. Named explicitly for the same reason REVIEW_COMMANDS is.
+const STAGE_COMMANDS: &[(&str, &str)] = &[
+    ("blueprint", "blueprint"),
+    ("target", "target"),
+    ("execute", "target"),
+];
+
+/// Read the named file and the live laws, then answer with `f`. An
+/// unreadable file or store is an `ok: false` answer, never silence, and so
+/// is a store with damaged rows: a law in a damaged row reads as missing.
+fn rules_answer(path: &str, f: impl Fn(&str, &[Value]) -> Value) -> Value {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => return json!({"ok": false, "error": format!("{path}: {e}")}),
+    };
+    match decision_index::default_store_live().map(decision_index::laws_of) {
+        Ok(index) => {
+            let mut answer = f(&text, &index.rows);
+            answer["damaged"] = json!(index.damaged);
+            if index.damaged > 0 {
+                answer["ok"] = json!(false);
+            }
+            answer
+        }
+        Err(e) => json!({"ok": false, "error": format!("the decision index: {e}")}),
+    }
+}
+
+/// Normalize a skill invocation to the bare command: strip one leading `/` or
+/// `$`, cut at the first whitespace, keep the text after the last `:`. The
+/// order is the one `review-hold.sh:71-76` documents, so a colon inside a
+/// PR URL argument never eats the command.
+fn normalize_command(raw: &str) -> String {
+    let stripped = raw
+        .strip_prefix('/')
+        .or_else(|| raw.strip_prefix('$'))
+        .unwrap_or(raw);
+    let head = stripped.split_whitespace().next().unwrap_or("");
+    match head.rsplit_once(':') {
+        Some((_, tail)) => tail.to_string(),
+        None => head.to_string(),
+    }
+}
+
+/// The stage classifier's input: the raw command-carrying token and the full
+/// text a node id may ride in (skill name plus args, or the whole prompt).
+fn stage_input(hook: &Value) -> Option<(String, String)> {
+    let tool = hook.get("tool_name").and_then(Value::as_str).unwrap_or("");
+    if tool == "Skill" {
+        let input = hook.get("tool_input");
+        let read = |k: &str| input.and_then(|i| i.get(k)).and_then(Value::as_str);
+        let name = read("skill")
+            .or_else(|| read("name"))
+            .or_else(|| read("command"))?;
+        let args = read("args").unwrap_or("");
+        Some((name.to_owned(), format!("{name} {args}")))
+    } else {
+        let prompt = hook.get("prompt").and_then(Value::as_str)?;
+        let head = prompt.split_whitespace().next()?.to_owned();
+        Some((head, prompt.to_owned()))
+    }
+}
+
+/// The first node-id-shaped token in the stage input's full text, lowercased.
+/// A payload with no node id carries no node subjects to match.
+fn payload_node_id(hook: &Value) -> Option<String> {
+    let (_, text) = stage_input(hook)?;
+    text.split_whitespace()
+        .map(|t| t.trim_matches(|c: char| !c.is_ascii_alphanumeric()))
+        .find(|t| matches_node_id_shape(&t.to_lowercase()))
+        .map(|t| t.to_lowercase())
+}
+
+/// The stage classifier: a Skill tool call reads the skill name under the
+/// keys the harness versions use; any other event reads the prompt's first
+/// whitespace-separated token.
+fn classify_stage(hook: &Value) -> Option<&'static str> {
+    let (raw, _) = stage_input(hook)?;
+    let command = normalize_command(&raw);
+    REVIEW_COMMANDS
+        .contains(&command.as_str())
+        .then_some("review")
+        .or_else(|| {
+            STAGE_COMMANDS
+                .iter()
+                .find(|(v, _)| *v == command)
+                .map(|(_, s)| *s)
+        })
+}
+
+/// The law's first sentence, split at `". "`, `"! "` or `"? "`.
+pub(crate) fn first_sentence(text: &str) -> &str {
+    let mut end = text.len();
+    for sep in [". ", "! ", "? "] {
+        if let Some(pos) = text.find(sep) {
+            end = end.min(pos);
+        }
+    }
+    &text[..end]
+}
+
+/// One law line: `- <id> (<subject>, <scope>): <first sentence, 160 chars>`.
+/// The scope rides the line so a reader tells a global ruling from a local
+/// one without a second command.
+fn stage_law_line(row: &Value) -> Option<String> {
+    let id = row.get("decision_id").and_then(Value::as_str)?;
+    let subject = row.get("subject").and_then(Value::as_str).unwrap_or("");
+    let decision = row.get("decision").and_then(Value::as_str).unwrap_or("");
+    Some(format!(
+        "- {id} ({subject}, {}): {}",
+        decision_index::row_scope(row),
+        one_line(first_sentence(decision), 160)
+    ))
+}
+
+/// The project a stage payload's node belongs to: the graph row's `project`
+/// field, because scope matches as a stamped field. An unreadable graph
+/// answers the reason so the stage answer can name the missing scope.
+fn node_project(node_id: &str) -> (Option<String>, Option<String>) {
+    if crate::graph_get::external_backend_selected() {
+        return (None, Some("graph: external backend selected".to_owned()));
+    }
+    let path = crate::graph_get::default_graph_path();
+    let entries = match crate::backlog::api::rows(&crate::backlog::api::Store::new(&path)) {
+        Ok(entries) => entries,
+        Err(error) => return (None, Some(format!("graph: {}", error.0))),
+    };
+    let project = crate::graph_get::find_entry(&entries, node_id)
+        .and_then(|entry| entry.get("project").and_then(Value::as_str))
+        .map(|v| v.trim().to_lowercase())
+        .filter(|v| !v.is_empty());
+    (project, None)
+}
+
+/// The context block for a stage with laws: cap 2000 bytes, first law line
+/// always renders, and every law past the cap keeps a short id line the
+/// validator parses, so overflow law is acknowledged, not hidden.
+fn render_stage_block(
+    stage: &str,
+    matching: &[String],
+    damaged: usize,
+    unread: &[String],
+) -> String {
+    let mut text = format!(
+        "## Law governing {stage}\n\nThese live operator rulings govern the {stage} you are starting. Act inside them. Do not re-derive them.\n"
+    );
+    let mut rendered = 0usize;
+    for line in matching {
+        // The first law line always renders, cap or no cap.
+        if rendered > 0 && text.len() + line.len() + 1 > 2000 {
+            break;
+        }
+        text.push_str(line);
+        text.push('\n');
+        rendered += 1;
+    }
+    // Newest first, like the full lines. The old single `- and N more` line
+    // carried no ids, so the stage-law ack check in validate-plan.sh could
+    // never see the laws the cap had cut.
+    for line in &matching[rendered..] {
+        if let Some(short) = short_law_line(line) {
+            text.push_str(&short);
+            text.push('\n');
+        }
+    }
+    text.push_str(&render_read_receipt(damaged, unread));
+    text
+}
+
+fn render_read_receipt(damaged: usize, unread: &[String]) -> String {
+    let mut text = String::new();
+    if damaged > 0 {
+        text.push_str(&format!(
+            "{} index row(s) could not be parsed, so this list may be incomplete.\n",
+            damaged
+        ));
+    }
+    for reason in unread {
+        text.push_str(&format!("Unread: {reason}\n"));
+    }
+    text
+}
+
+/// `- <id> (<subject>): fno backlog decisions <id>`, cut from a full stage
+/// line at its first `): `. Laws the 2000-byte cap could not summarize still
+/// get a line matching the validator's `- <id> (<subject>):` shape.
+fn short_law_line(full: &str) -> Option<String> {
+    let rest = full.strip_prefix("- ")?;
+    let cut = rest.find("): ")?;
+    let head = &rest[..cut];
+    let id = head.split(" (").next()?;
+    Some(format!("- {head}): fno backlog decisions {id}"))
+}
+
+/// The stage answer, backed by `crate::rules::decide` on a skill event. A
+/// law fire renders as its law line; the block keeps the
+/// `- <id> (<subject>):` lines validate-plan.sh parses. A readable set with
+/// no fire renders nothing (`hook_output: null`); a failed read is a report,
+/// never silence.
+fn stage_answer(req: StageRequest) -> Value {
+    let Some(stage_name) = classify_stage(&req.hook) else {
+        return json!({"ok": true, "stage": null, "hook_output": null, "unread": []});
+    };
+    let (raw, text) = stage_input(&req.hook).unwrap_or_default();
+    let hook_event = req
+        .hook
+        .get("hook_event_name")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let cwd = req
+        .hook
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let node = payload_node_id(&req.hook);
+    let mut unread = Vec::new();
+    // The scope is the NODE's project field, the same stamp the write door
+    // uses; a node row without one falls back to the cwd resolver once.
+    let project = match node.as_deref().map(node_project) {
+        Some((Some(slug), _)) => Some(slug),
+        Some((None, Some(reason))) => {
+            unread.push(format!("the node's project ({reason})"));
+            None
+        }
+        _ => match resolve_project(Some(cwd.as_path()), &settings_sources()) {
+            Ok(slug) => Some(slug),
+            Err(reason) if node.is_some() => {
+                unread.push(format!("the node's project ({reason}; scope filter open)"));
+                None
+            }
+            Err(_) => None,
+        },
+    };
+    let skill = raw
+        .trim_start_matches(['/', '$'])
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_string();
+    let ev = crate::rules::Event {
+        kind: "skill".into(),
+        skill: Some(skill),
+        text: Some(text),
+        node,
+        project,
+        session: req
+            .hook
+            .get("session_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        ..Default::default()
+    };
+    let set = match crate::rules_source::rule_set(&cwd) {
+        Ok(set) => set,
+        Err(reason) => {
+            unread.push(format!("the decision index ({reason})"));
+            let text = format!(
+                "The decision index could not be read ({reason}), so the rulings that govern this {stage_name} are unknown. Run fno backlog decisions --lane law --state live before you act on {stage_name} policy.\n{}",
+                render_read_receipt(0, &unread)
+            );
+            return json!({
+                "ok": true,
+                "stage": stage_name,
+                "hook_output": {"hookSpecificOutput": {"hookEventName": hook_event, "additionalContext": text}},
+                "unread": unread,
+            });
+        }
+    };
+    unread.extend(set.unread.iter().cloned());
+    let today = chrono::Local::now().date_naive();
+    let decision = crate::rules::decide(&set.rules, &ev, today);
+    let fired: Vec<&str> = decision
+        .fires
+        .iter()
+        .filter_map(|f| f.law.as_deref())
+        .collect();
+    crate::law_firings::record(
+        &crate::law_firings::default_path(),
+        &fired,
+        stage_name,
+        chrono::Utc::now(),
+    );
+    let mut matching: Vec<String> = decision
+        .fires
+        .iter()
+        .filter_map(|fire| match fire.law.as_deref() {
+            Some(id) => set
+                .laws
+                .rows
+                .iter()
+                .find(|row| row.get("decision_id").and_then(Value::as_str) == Some(id))
+                .and_then(stage_law_line),
+            None => Some(format!(
+                "- {} (rule): {}",
+                fire.rule,
+                one_line(&fire.text, 160)
+            )),
+        })
+        .collect();
+    // Graduated laws ride the block: their retraction is not stage-local.
+    matching.extend(graduated_retraction_lines(&set.laws, ev.project.as_deref()));
+    let damaged = set.laws.damaged;
+    let hook_output = (!matching.is_empty() || !unread.is_empty() || damaged > 0).then(|| {
+        let additional_context = if matching.is_empty() {
+            render_read_receipt(damaged, &unread)
+        } else {
+            render_stage_block(stage_name, &matching, damaged, &unread)
+        };
+        json!({"hookSpecificOutput": {"hookEventName": hook_event, "additionalContext": additional_context}})
+    });
+    json!({"ok": true, "stage": stage_name, "hook_output": hook_output, "unread": unread})
+}
+
+/// Comma-joined flag values read as separate globs: split on commas, trim,
+/// drop empties.
+fn normalize_paths(raw: &[String]) -> Vec<String> {
+    raw.iter()
+        .flat_map(|p| p.split(','))
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// A law names repo paths: a glob is refused when it is absolute or holds a
+/// `..` component.
+fn glob_is_repo_relative(glob: &str) -> bool {
+    !glob.starts_with('/') && glob.split('/').all(|component| component != "..")
+}
+
+/// The statement validator, a word-for-word port of
+/// `validate_durable_law` (`cli/src/fno/law.py`) plus the one rule that
+/// module cannot own: a bare node id or `pr-<n>` subject is refused, because
+/// a ruling found only by the id of the work that prompted it is unfindable.
+fn validate_answer(req: &ValidateRequest) -> Value {
+    let refusal = if req.subject.trim().is_empty() || req.decision.trim().is_empty() {
+        Some("subject and decision are required".to_string())
+    } else if req.subject.trim().chars().count() < 2 || req.decision.trim().chars().count() < 2 {
+        // A one-character subject or decision is a placeholder, not a
+        // statement: a 2026-08-29 smoke run of this command with x/y/z landed a
+        // live law nobody could act on or clear. The gate refuses the shape
+        // wherever it is invoked from, live session or suite.
+        Some(
+            "subject and decision must be more than one character: a single \
+             letter is a placeholder, not law"
+                .to_string(),
+        )
+    } else if req
+        .rationale
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("")
+        .is_empty()
+    {
+        Some("rationale is required for durable law".to_string())
+    } else {
+        let lowered = req.decision.to_lowercase();
+        if COORDINATION_MARKERS.iter().any(|m| lowered.contains(m)) {
+            Some("the statement is coordination, not durable law".to_string())
+        } else if let Some(sup) = req.supersedes.as_deref() {
+            if !is_decision_id(sup) {
+                Some(if crate::numbers::resolve('d', sup).is_none() {
+                    crate::numbers::unresolved(sup)
+                } else {
+                    "supersedes must be a decision id".to_string()
+                })
+            } else if matches_node_id_shape(req.subject.trim().to_lowercase().as_str())
+                || is_pr_subject(req.subject.trim().to_lowercase().as_str())
+            {
+                Some(format!(
+                    "a node or PR id is not a law subject. Law is found by topic: name the topic, for example review-rounds, and cite {} in the decision text",
+                    req.subject.trim()
+                ))
+            } else {
+                None
+            }
+        } else if matches_node_id_shape(req.subject.trim().to_lowercase().as_str())
+            || is_pr_subject(req.subject.trim().to_lowercase().as_str())
+        {
+            Some(format!(
+                "a node or PR id is not a law subject. Law is found by topic: name the topic, for example review-rounds, and cite {} in the decision text",
+                req.subject.trim()
+            ))
+        } else {
+            None
+        }
+    };
+    json!({"ok": true, "refusal": refusal})
+}
+
+/// The coordination markers of `law.py:18-25`, moved with the validator.
+const COORDINATION_MARKERS: &[&str] = &[
+    "this pr",
+    "this node",
+    "this target",
+    "temporary",
+    "until merge",
+    "for this change",
+];
+
+/// `^d-[0-9a-f]{8}$`, the shape `law.py` enforced on `--supersedes`.
+pub(crate) fn is_decision_id(s: &str) -> bool {
+    let Some(rest) = s.strip_prefix("d-") else {
+        return false;
+    };
+    rest.len() == 8 && rest.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// `^[a-z][a-z0-9]{0,7}-[0-9a-f]{4,8}$`, the node-id shape
+/// `parse-claims-arg.sh` uses. Measured 2026-09-14: the shape matches 3 of
+/// 59 live law subjects, and all 3 are real node ids.
+pub(crate) fn matches_node_id_shape(s: &str) -> bool {
+    let Some((prefix, suffix)) = s.split_once('-') else {
+        return false;
+    };
+    let p = prefix.as_bytes();
+    if p.is_empty() || p.len() > 8 || !p[0].is_ascii_lowercase() {
+        return false;
+    }
+    if !p[1..]
+        .iter()
+        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+    {
+        return false;
+    }
+    let sfx = suffix.as_bytes();
+    (4..=8).contains(&sfx.len()) && sfx.iter().all(|b| b.is_ascii_hexdigit())
+}
+
+/// `^pr-[0-9]+$`.
+fn is_pr_subject(s: &str) -> bool {
+    match s.strip_prefix("pr-") {
+        Some(rest) => !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()),
+        None => false,
+    }
+}
+
+/// Mirror of `fno.agents.discover.resolve_project_for_cwd`, the settings
+/// resolver whose answer is the graph node's `project` vocabulary. NOT
+/// `worktree_paths.resolve_project_id`, whose git-remote basename answers
+/// `footnote` where every node says `fno`: stamp and node must agree or the
+/// stage matcher and the filter answer different questions about one row.
+/// Adds one rung the Python resolver lacks: fno-managed worktrees at
+/// `~/.fno/spaces/worktrees/<repo>/<name>` (or the pre-fold
+/// `~/.fno/worktrees/<repo>/<name>`), attributed through the `<repo>` segment
+/// like the conductor layout, so a law recorded from a worktree session
+/// stamps the parent repo's project instead of refusing.
+pub(crate) fn resolve_project(
+    cwd: Option<&std::path::Path>,
+    sources: &[std::path::PathBuf],
+) -> Result<String, String> {
+    let cwd = match cwd {
+        Some(p) => p.to_path_buf(),
+        None => std::env::current_dir().map_err(|e| format!("cwd unreadable ({e})"))?,
+    };
+    let p = cwd.to_string_lossy().to_string();
+    let sep = std::path::MAIN_SEPARATOR;
+    // <root>/.claude/worktrees/<name> attributes to <root>, then a direct
+    // settings match on the root itself.
+    let claude_marker = format!("{sep}.claude{sep}worktrees{sep}");
+    if let Some((root, _)) = p.split_once(&claude_marker) {
+        if !root.is_empty() {
+            if let Some(slug) = project_in_sources(std::path::Path::new(root), sources) {
+                return Ok(slug);
+            }
+        }
+    }
+    // ~/.fno/{spaces/,}worktrees/<repo>/... and conductor workspaces/<repo>/... map the
+    // repo segment through the settings basename.
+    for marker in [
+        "/.fno/spaces/worktrees/",
+        "/.fno/worktrees/",
+        "/workspaces/",
+    ] {
+        if let Some((_, rest)) = p.split_once(marker) {
+            if let Some(repo) = rest.split(sep).next().filter(|s| !s.is_empty()) {
+                if let Some(slug) = project_by_repo_basename(repo, sources) {
+                    return Ok(slug);
+                }
+            }
+        }
+    }
+    project_in_sources(&cwd, sources).ok_or_else(|| {
+        format!(
+            "no work.workspaces project names {}; add it to the work map",
+            cwd.display()
+        )
+    })
+}
+
+/// The direct settings match: the first candidate file whose work map names
+/// this exact path. Missing and malformed files contribute nothing, mirroring
+/// `detect_project_from_settings`.
+fn project_in_sources(target: &std::path::Path, sources: &[std::path::PathBuf]) -> Option<String> {
+    let want = target.to_string_lossy().trim_end_matches('/').to_string();
+    for (name, path) in iter_settings_projects(sources) {
+        if path == want {
+            return Some(name);
+        }
+    }
+    None
+}
+
+fn project_by_repo_basename(repo: &str, sources: &[std::path::PathBuf]) -> Option<String> {
+    iter_settings_projects(sources)
+        .into_iter()
+        .find(|(_, path)| {
+            std::path::Path::new(path)
+                .file_name()
+                .map_or(false, |base| base == repo)
+        })
+        .map(|(name, _)| name)
+}
+
+/// The work map: `(name, normalized path)` pairs from the candidate settings
+/// files, multi-workspace first then legacy flat, mirroring
+/// `fno.agents.discover._iter_settings_projects`.
+fn iter_settings_projects(sources: &[std::path::PathBuf]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for source in sources {
+        let Some(text) = std::fs::read_to_string(source).ok() else {
+            continue;
+        };
+        let is_toml = source.extension().map_or(false, |e| e == "toml");
+        // Both formats funnel into one serde_json::Value so the walk below
+        // reads one type. A whole-document serde conversion would drop the
+        // file over one TOML datetime anywhere in it, so toml converts
+        // value-by-value with datetimes stringified.
+        let parsed = if is_toml {
+            toml::from_str::<toml::Value>(&text).ok().map(toml_to_json)
+        } else {
+            serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&text)
+                .ok()
+                .and_then(|v| serde_json::to_value(v).ok())
+        };
+        let work = parsed.as_ref().and_then(|v| v.get("work").cloned());
+        let Some(work) = work else { continue };
+        if let Some(workspaces) = work.get("workspaces").and_then(Value::as_object) {
+            for ws in workspaces.values() {
+                let Some(projects) = ws.get("projects").and_then(Value::as_array) else {
+                    continue;
+                };
+                for proj in projects {
+                    if let (Some(name), Some(path)) = (
+                        proj.get("name").and_then(Value::as_str),
+                        proj.get("path").and_then(Value::as_str),
+                    ) {
+                        out.push((name.to_string(), expand_tilde(path)));
+                    }
+                }
+            }
+        }
+        if let Some(flat) = work.get("projects").and_then(Value::as_object) {
+            for (name, cfg) in flat {
+                if let Some(path) = cfg.get("path").and_then(Value::as_str) {
+                    out.push((name.to_string(), expand_tilde(path)));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// toml::Value -> serde_json::Value, value by value. A TOML datetime (legal
+/// anywhere in a config) has no JSON form, so it stringifies instead of
+/// failing the whole document.
+fn toml_to_json(value: toml::Value) -> Value {
+    match value {
+        toml::Value::String(s) => json!(s),
+        toml::Value::Integer(i) => json!(i),
+        toml::Value::Float(f) => json!(f),
+        toml::Value::Boolean(b) => json!(b),
+        toml::Value::Datetime(d) => json!(d.to_string()),
+        toml::Value::Array(items) => Value::Array(items.into_iter().map(toml_to_json).collect()),
+        toml::Value::Table(table) => Value::Object(
+            table
+                .into_iter()
+                .map(|(k, v)| (k, toml_to_json(v)))
+                .collect(),
+        ),
+    }
+}
+
+/// `~/x` -> `$HOME/x`; everything else verbatim. Matches the Python
+/// expanduser + normpath shape closely enough for path equality.
+fn expand_tilde(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return std::path::Path::new(&home)
+                .join(rest)
+                .to_string_lossy()
+                .to_string();
+        }
+    }
+    path.to_string()
+}
+
+/// Settings sources, nearest first: project-local `.fno/config.toml` then
+/// `.fno/settings.yaml`, then the global pair (honoring
+/// `FNO_GLOBAL_SETTINGS_PATH`, like `config_read_candidates`). The
+/// `work.workspaces` map lives in the global file, so the global candidates
+/// are what make resolution work at all.
+pub(crate) fn settings_sources() -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        out.push(cwd.join(".fno/config.toml"));
+        out.push(cwd.join(".fno/settings.yaml"));
+    }
+    let global_dir = match std::env::var_os("FNO_GLOBAL_SETTINGS_PATH") {
+        // The redirect names the global settings FILE; its siblings win too.
+        Some(p) => std::path::PathBuf::from(p)
+            .parent()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from(".")),
+        None => {
+            let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+            home.unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".fno")
+        }
+    };
+    out.push(global_dir.join("config.toml"));
+    out.push(global_dir.join("settings.yaml"));
+    out
+}
+
+/// The law door's scope answer: `global` by explicit flag, else the recording
+/// project. The door fails closed: an unresolvable project is a refusal that
+/// names what failed, because a row stamped with a guessed project is worse
+/// than a row not written.
+fn record_scope_answer(req: RecordScopeRequest) -> Value {
+    let widen = req.r#global.then_some(Widen::Global);
+    record_scope_answer_in(None, &settings_sources(), widen.as_ref(), &req.paths)
+}
+
+fn record_scope_answer_in(
+    cwd: Option<&std::path::Path>,
+    sources: &[std::path::PathBuf],
+    widen: Option<&Widen>,
+    raw_paths: &[String],
+) -> Value {
+    // The globs ride the door's validation: split, trim, drop empties, then
+    // refuse any glob that is absolute or holds `..` - a law names repo
+    // paths, and an absolute or escaping glob would match outside the repo.
+    let paths = normalize_paths(raw_paths);
+    for glob in &paths {
+        if !glob_is_repo_relative(glob) {
+            return json!({
+                "ok": false,
+                "refusal": format!(
+                    "not a repo-relative glob: {glob} (a law names repo paths: no leading /, no ..)"
+                )
+            });
+        }
+    }
+    let scope = match widen {
+        Some(Widen::Global) => "global".to_string(),
+        Some(Widen::Machine(named)) => {
+            let id = named.clone().unwrap_or_else(crate::claims::machine_id);
+            if id.is_empty() {
+                return json!({
+                    "ok": false,
+                    "refusal": "this machine has no readable machine id; name one with --machine=<id>"
+                });
+            }
+            format!("machine:{id}")
+        }
+        Some(Widen::User(named)) => {
+            format!(
+                "user:{}",
+                named.clone().unwrap_or_else(crate::identity::person)
+            )
+        }
+        None => match resolve_project(cwd, sources) {
+            Ok(slug) => format!("project:{slug}"),
+            Err(reason) => {
+                return json!({
+                    "ok": false,
+                    "refusal": format!(
+                        "no project stamps this law ({reason}); pass --global, --machine or --user to widen"
+                    )
+                })
+            }
+        },
+    };
+    if paths.is_empty() {
+        return json!({"ok": true, "scope": scope});
+    }
+    json!({"ok": true, "scope": scope, "paths": paths})
+}
+
+/// The user gate: a law that reaches past this machine's own user needs a
+/// user certificate that names this machine's key. That is `global`, or a
+/// `machine:` or `user:` scope naming someone else. The door then signs the
+/// row, and a certified peer binds it only when that user key proves it.
+pub(crate) fn wide_scope_refusal(scope: &str) -> Option<String> {
+    let names_another = match scope.split_once(':') {
+        Some(("machine", id)) => id != crate::claims::machine_id(),
+        Some(("user" | "person", name)) => name != crate::identity::person(),
+        _ => scope == "global",
+    };
+    if !names_another || crate::identity::proven_user().is_some() {
+        return None;
+    }
+    Some(format!(
+        "a {scope} law binds more than this machine's own user, and no user \
+         certificate proves who records it. Where the user key lives, run \
+         `fno-agents mail-remote key certify <user-key-file> <user> <this machine's key>` \
+         (`fno-agents mail-remote key show` prints the key), then install the line \
+         here with `fno-agents mail-remote key cert <line>`. A project law, a bare \
+         --machine and a bare --user need no certificate"
+    ))
+}
+
+/// The `list_decisions` scope filter: law-lane rows outside the session's
+/// project hide, `global` stays, an absent scope reads `project:fno` (every
+/// pre-scope row was recorded in fno). An unresolvable project fails open
+/// with a renderable note, never silence.
+fn scope_split_answer(req: ScopeSplitRequest) -> Value {
+    scope_split_answer_in(None, &settings_sources(), req)
+}
+
+/// The listing's scope read: the same law-only hiding the Python command got
+/// from its `scope-split` front-door call, one owner, no second impl.
+pub(crate) fn scope_split_rows(rows: Vec<Value>) -> Value {
+    scope_split_answer_in(None, &settings_sources(), ScopeSplitRequest { rows })
+}
+
+fn scope_split_answer_in(
+    cwd: Option<&std::path::Path>,
+    sources: &[std::path::PathBuf],
+    req: ScopeSplitRequest,
+) -> Value {
+    let project = match resolve_project(cwd, sources) {
+        Ok(slug) => Some(slug),
+        // Fail open on the project with a named reason: losing a law is
+        // worse than seeing one that does not apply (d-0fa92eb9's posture).
+        // The reason rides stderr, not the note, so a caller's labels stay
+        // byte-stable.
+        Err(reason) => {
+            eprintln!("fno inbox law: project unresolvable ({reason}); no project law hidden");
+            None
+        }
+    };
+    let mut kept = Vec::new();
+    let mut hidden = 0usize;
+    for row in req.rows {
+        let is_law = row.get("lane").and_then(Value::as_str) == Some("law");
+        if is_law
+            && !(decision_index::row_visible(&row, project.as_deref())
+                && crate::law_when::row_active(&row, true))
+        {
+            hidden += 1;
+        } else {
+            kept.push(row);
+        }
+    }
+    let note = if hidden > 0 {
+        format!(" (hid {hidden} out-of-scope)")
+    } else {
+        String::new()
+    };
+    json!({"ok": true, "kept": kept, "hidden": hidden, "note": note})
+}
+
+// ---------------------------------------------------------------------------
+// The record door: the `record` mode carrying the `fno inbox law set` argv
+//
+// The Python `fno inbox law set` command is a shim that forwards its argv
+// here, so these are the door's real flags: --global and --paths live on the
+// Rust side and the typer option ratchet stays at zero for the shim. The
+// gate order and every refusal text mirror `record_command` + the law-door
+// path of `record_decision` (cli/src/fno/law.py, cli/src/fno/decide/__init__.py)
+// one for one: the authority gate is law, and a drifted refusal is a second
+// law.
+// ---------------------------------------------------------------------------
+
+pub(crate) const WAIVER_SUBJECT_PREFIX: &str = "review-coverage-waiver";
+
+/// The caller identity a no-identity, no-terminal run stamps (decide door
+/// state 3). It must never sit on an operator law row; the clear door's
+/// make_decision corrects it over to `operator`.
+pub(crate) const UNATTRIBUTED_CALLER: &str = "unattributed-caller";
+
+/// The law-set argv, parsed natively.
+pub(crate) struct RecordDoor {
+    subject: String,
+    decision: Option<String>,
+    decision_file: Option<String>,
+    rationale: Option<String>,
+    options: Vec<String>,
+    supersedes: Option<String>,
+    graduation: Option<String>,
+    graduation_ref: Option<String>,
+    reads: Vec<String>,
+    widen: Option<Widen>,
+    raw_paths: Vec<String>,
+    quote: Option<String>,
+    /// Filters beside the scope: the law applies only where every one matches.
+    /// `(key, value)` pairs; the second list is the `not` form.
+    filters: Vec<(String, String)>,
+    not_filters: Vec<(String, String)>,
+    strength: Option<String>,
+    from: Option<String>,
+    whiles: Vec<String>,
+    between: Option<String>,
+    /// The end condition (`--until`); filters say where the rule holds.
+    guard: Option<Value>,
+    /// Main's date-only `--until` form: the day the rule file expires.
+    until: Option<String>,
+}
+
+/// A law's scope past the recording project, from one door flag. `None` in
+/// an identity arm names this machine or this user.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Widen {
+    Global,
+    Machine(Option<String>),
+    User(Option<String>),
+}
+
+const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --user[=<name>]] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD|date:<when>|for:<30m|2h|1d>|event:<node>|set:<node>,<node>] [--strength inform|warn|require-ack|block] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
+/// The `--until` grammar: `date`/`for` fix an instant now, `event` waits for one node,
+/// `set` freezes node ids and drains as they close. `count` refuses (no counter yet).
+pub(crate) fn parse_guard(spec: &str, now: chrono::DateTime<chrono::Utc>) -> Result<Value, String> {
+    let spec = spec.trim();
+    let bad = |why: &str| format!("--until {spec:?}: {why}\n{RECORD_USAGE}");
+    let Some((kind, rest)) = spec.split_once(':') else {
+        return Err(bad("expected date:, for:, event: or set:"));
+    };
+    let rest = rest.trim();
+    match kind {
+        "date" => {
+            let at = if let Ok(t) = chrono::DateTime::parse_from_rfc3339(rest) {
+                t.with_timezone(&chrono::Utc)
+            } else if let Ok(d) = chrono::NaiveDate::parse_from_str(rest, "%Y-%m-%d") {
+                d.and_hms_opt(0, 0, 0)
+                    .map(|n| n.and_utc())
+                    .ok_or_else(|| bad("bad date"))?
+            } else {
+                return Err(bad("date takes RFC 3339 or YYYY-MM-DD (midnight UTC)"));
+            };
+            Ok(json!({"kind": "date", "at": at.to_rfc3339()}))
+        }
+        "for" => {
+            let (num, unit) = rest.split_at(rest.len().saturating_sub(1));
+            let n: i64 = num
+                .parse()
+                .map_err(|_| bad("duration is <N>m, <N>h or <N>d"))?;
+            let span = match unit {
+                "m" => chrono::Duration::minutes(n),
+                "h" => chrono::Duration::hours(n),
+                "d" => chrono::Duration::days(n),
+                _ => return Err(bad("duration is <N>m, <N>h or <N>d")),
+            };
+            if n <= 0 {
+                return Err(bad("duration must be positive"));
+            }
+            Ok(json!({"kind": "date", "at": (now + span).to_rfc3339()}))
+        }
+        "event" if matches_node_id_shape(&rest.to_lowercase()) => {
+            Ok(json!({"kind": "event", "node_id": rest}))
+        }
+        "set" => {
+            let ids: Vec<&str> = rest
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .collect();
+            if ids.is_empty() || !ids.iter().all(|i| matches_node_id_shape(&i.to_lowercase())) {
+                return Err(bad("set takes comma-separated node ids"));
+            }
+            Ok(json!({"kind": "set", "node_ids": ids}))
+        }
+        "count" => Err(bad("count guards are not supported yet")),
+        _ => Err(bad("expected date:, for:, event: or set:")),
+    }
+}
+
+const RETRACT_USAGE: &str = "usage: fno inbox law retract <subject-or-decision-id> --reason <why> [--authority operator|chat_attested] [--quote <the user's words>]";
+const HISTORY_USAGE: &str = "usage: fno inbox law history <subject-or-decision-id>";
+
+fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
+    let mut door = RecordDoor {
+        subject: String::new(),
+        decision: None,
+        decision_file: None,
+        rationale: None,
+        options: Vec::new(),
+        supersedes: None,
+        graduation: None,
+        graduation_ref: None,
+        reads: Vec::new(),
+        widen: None,
+        raw_paths: Vec::new(),
+        quote: None,
+        filters: Vec::new(),
+        not_filters: Vec::new(),
+        strength: None,
+        from: None,
+        whiles: Vec::new(),
+        between: None,
+        guard: None,
+        until: None,
+    };
+    let mut widened_by: Vec<String> = Vec::new();
+    let mut positional = 0usize;
+    let mut i = 0usize;
+    while i < args.len() {
+        let (flag, inline) = match args[i].split_once('=') {
+            Some((f, v)) => (f.to_string(), Some(v.to_string())),
+            None => (args[i].clone(), None),
+        };
+        let take = |i: &mut usize| -> Result<String, String> {
+            if let Some(v) = &inline {
+                return Ok(v.clone());
+            }
+            *i += 1;
+            args.get(*i)
+                .cloned()
+                .ok_or_else(|| format!("{flag} needs a value\n{RECORD_USAGE}"))
+        };
+        match flag.as_str() {
+            "--decision-file" => door.decision_file = Some(take(&mut i)?),
+            "--rationale" => door.rationale = Some(take(&mut i)?),
+            "--option" => door.options.push(take(&mut i)?),
+            "--supersedes" => {
+                let typed = take(&mut i)?;
+                door.supersedes = Some(crate::numbers::resolve('d', &typed).unwrap_or(typed));
+            }
+            "--graduation" => door.graduation = Some(take(&mut i)?),
+            "--graduation-ref" => door.graduation_ref = Some(take(&mut i)?),
+            "--read" => door.reads.push(take(&mut i)?),
+            "--paths" => door.raw_paths.push(take(&mut i)?),
+            "--quote" => door.quote = Some(take(&mut i)?),
+            "--filter" | "--not" => {
+                let spec = take(&mut i)?;
+                let pair = crate::law_filters::parse_pair(&spec)
+                    .map_err(|e| format!("{flag} {spec}: {e}\n{RECORD_USAGE}"))?;
+                if flag == "--not" {
+                    door.not_filters.push(pair);
+                } else {
+                    door.filters.push(pair);
+                }
+            }
+            "--strength" => {
+                let v = take(&mut i)?.to_ascii_lowercase();
+                if !crate::rules::STRENGTHS.contains(&v.as_str()) {
+                    return Err(format!(
+                        "--strength takes one of {}, not {v:?}\n{RECORD_USAGE}",
+                        crate::rules::STRENGTHS.join(", ")
+                    ));
+                }
+                door.strength = Some(v);
+            }
+            "--from" => door.from = Some(take(&mut i)?),
+            "--while" => door.whiles.push(take(&mut i)?),
+            "--between" => door.between = Some(take(&mut i)?),
+            "--until" => {
+                let spec = take(&mut i)?;
+                // A bare YYYY-MM-DD is the rule-file expiry day and a date guard.
+                if let Ok(day) = crate::law_renew::parse_until(&spec) {
+                    door.guard = Some(parse_guard(&format!("date:{day}"), chrono::Utc::now())?);
+                    door.until = Some(day);
+                } else {
+                    door.guard = Some(parse_guard(&spec, chrono::Utc::now())?);
+                }
+            }
+            "--global" => {
+                // An inline value parses like a bool flag should: --global=false
+                // must never widen because the value was ignored.
+                let on = match inline.as_deref() {
+                    None => true,
+                    Some(v) => matches!(v.to_ascii_lowercase().as_str(), "true" | "1" | "yes"),
+                };
+                if on {
+                    door.widen = Some(Widen::Global);
+                    widened_by.push(flag.clone());
+                }
+            }
+            // A bare identity flag never takes the next argv word: it names
+            // this machine or user, and only `=<value>` names another.
+            "--machine" | "--user" => {
+                let named = inline.clone().filter(|v| !v.trim().is_empty());
+                door.widen = Some(if flag == "--machine" {
+                    Widen::Machine(named)
+                } else {
+                    Widen::User(named)
+                });
+                widened_by.push(flag.clone());
+            }
+            f if f.starts_with('-') && f != "-" => {
+                return Err(format!("no such option: {f}\n{RECORD_USAGE}"));
+            }
+            _ => {
+                positional += 1;
+                if positional == 1 {
+                    door.subject = args[i].clone();
+                } else if positional == 2 {
+                    door.decision = Some(args[i].clone());
+                } else {
+                    return Err(format!("too many positional arguments\n{RECORD_USAGE}"));
+                }
+            }
+        }
+        i += 1;
+    }
+    if positional == 0 {
+        return Err(format!("subject is required\n{RECORD_USAGE}"));
+    }
+    if widened_by.len() > 1 {
+        return Err(format!(
+            "one law takes one scope flag, and this one got {}\n{RECORD_USAGE}",
+            widened_by.join(" and ")
+        ));
+    }
+    Ok(door)
+}
+
+pub(crate) fn mint_decision_id() -> String {
+    // 'd-<hex>', matching decide/__init__.py::mint_decision_id (8 hex chars).
+    format!("d-{}", random_hex8())
+}
+
+/// 'r-<hex>', the Python `decision_retracted` builder's shape.
+fn mint_retraction_id() -> String {
+    format!("r-{}", random_hex8())
+}
+
+/// 8 hex chars from getrandom, with a pid+clock fallback. A collision costs
+/// one duplicate id.
+pub(crate) fn random_hex8() -> String {
+    let mut buf = [0u8; 4];
+    if getrandom::fill(&mut buf).is_err() {
+        // Fallback entropy: pid + clock. A collision costs one duplicate id.
+        let seed = (std::process::id() as u64) << 32
+            | std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos() as u64)
+                .unwrap_or(0);
+        buf.copy_from_slice(&seed.to_le_bytes()[..4]);
+    }
+    buf.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+pub(crate) fn attended_terminal() -> bool {
+    // A positive marker, not an absence (the Python doc states the limit
+    // plainly: a tty is obtainable; this raises the cost of forging the
+    // superuser lane and never stands alone).
+    unsafe { libc::isatty(0) == 1 }
+}
+
+/// The trusted columns: (decided_by, attested_by, relayed_by). Port of
+/// `_resolve_decider` for the law door (no `decided_by` claim, no origin):
+/// a resolved session stamps its handle; an attended terminal records
+/// "operator" and marks attested_by; the unattributed state never reaches
+/// here because `require_marked_caller` refused it.
+/// The resolved caller: the authority lane plus the provenance columns,
+/// derived from ONE identity resolution. Port of require_marked_caller +
+/// `_resolve_decider` composed, so the two can never disagree.
+pub(crate) struct Caller {
+    pub(crate) authority: String,
+    pub(crate) decided_by: String,
+    pub(crate) attested_by: Option<String>,
+    pub(crate) relayed_by: Option<String>,
+}
+
+/// Resolve the caller from process truth: the ancestry prover first, the
+/// attended terminal second, the fail-closed refusal last.
+pub(crate) fn resolve_caller() -> Result<Caller, String> {
+    if let Some(handle) = crate::identity::ambient_agent_handle() {
+        return Ok(Caller {
+            authority: "chat_attested".to_string(),
+            decided_by: handle,
+            attested_by: None,
+            relayed_by: None,
+        });
+    }
+    if attended_terminal() {
+        return Ok(Caller {
+            authority: "operator".to_string(),
+            decided_by: "operator".to_string(),
+            attested_by: Some("operator".to_string()),
+            relayed_by: None,
+        });
+    }
+    Err("no session identity and no terminal, so nothing here marks a decider".to_string())
+}
+
+#[cfg(test)]
+impl Caller {
+    pub(crate) fn as_authority(authority: &str) -> Caller {
+        Caller {
+            authority: authority.to_string(),
+            decided_by: if authority == "operator" {
+                "operator".to_string()
+            } else {
+                "testf4c6".to_string()
+            },
+            attested_by: (authority == "operator").then(|| "operator".to_string()),
+            relayed_by: None,
+        }
+    }
+}
+
+/// Port of `graduation.validate_graduation` + `graduation_or_guidance`:
+/// an omitted declaration (both flags absent) defaults to honest guidance;
+/// an empty `kind` with a reference is not a kind and refuses.
+fn graduation_or_guidance(kind: Option<&str>, reference: Option<&str>) -> Result<Value, String> {
+    match (kind, reference) {
+        (None, None) => Ok(json!({"kind": "guidance"})),
+        _ => validate_graduation(kind.unwrap_or("").trim(), reference.unwrap_or("").trim()),
+    }
+}
+
+fn validate_graduation(kind: &str, reference: &str) -> Result<Value, String> {
+    match kind {
+        "" => Err(
+            "graduation must be enforced, guidance, or should-be-enforced-but-i-did-not"
+                .to_string(),
+        ),
+        "guidance" => {
+            if !reference.is_empty() {
+                return Err("guidance takes no graduation reference".to_string());
+            }
+            Ok(json!({"kind": "guidance"}))
+        }
+        "enforced" => {
+            static ARTIFACT_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+            let re = ARTIFACT_RE.get_or_init(|| {
+                regex::Regex::new(r"^(file|test|doc|gate|default):\S(?:.*\S)?$").expect("parses")
+            });
+            if !re.is_match(reference) {
+                return Err(
+                    "enforced graduation requires file:, test:, doc:, gate:, or default:"
+                        .to_string(),
+                );
+            }
+            Ok(json!({"kind": "enforced", "artifact": reference}))
+        }
+        "should-be-enforced-but-i-did-not" => {
+            static FOLLOW_UP_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+            let re = FOLLOW_UP_RE.get_or_init(|| {
+                regex::Regex::new(r"(?i)^node:[a-z][a-z0-9]*-[0-9a-f]+$").expect("parses")
+            });
+            if !re.is_match(reference) {
+                return Err("should-be-enforced-but-i-did-not requires node:<id>".to_string());
+            }
+            Ok(json!({
+                "kind": "should-be-enforced-but-i-did-not",
+                "follow_up": reference.to_ascii_lowercase()
+            }))
+        }
+        other => Err(format!(
+            "graduation must be enforced, guidance, or should-be-enforced-but-i-did-not (got {other})"
+        )),
+    }
+}
+
+/// The newest recoverable row for a decision id, casefold-equal. Port of
+/// `_decision_row_by_id` over the same store read.
+fn find_decision_row(index: &decision_index::Index, decision_id: &str) -> Option<Value> {
+    index
+        .rows
+        .iter()
+        .filter(|row| {
+            let etype = row.get("_event_type").and_then(Value::as_str);
+            matches!(etype, None | Some("operator_decision"))
+                && row
+                    .get("decision_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .eq_ignore_ascii_case(decision_id)
+        })
+        .max_by_key(|row| {
+            (
+                row.get("ts")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                row.get("decision_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            )
+        })
+        .cloned()
+}
+
+/// The repo root the evidence gate resolves citations against: the
+/// FNO_REPO_ROOT test hook, then the git toplevel, then the cwd.
+pub(crate) fn evidence_repo_root() -> std::path::PathBuf {
+    if let Some(root) = std::env::var_os("FNO_REPO_ROOT") {
+        return std::path::PathBuf::from(root);
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    if let Ok(output) = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(&cwd)
+        .output()
+    {
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !text.is_empty() {
+                return std::path::PathBuf::from(text);
+            }
+        }
+    }
+    cwd
+}
+
+/// The project journal beside the carveout ledger under the CANONICAL (main)
+/// worktree: `canonical_repo_root` + `events_path`. The canonical root
+/// honors the FNO_REPO_ROOT test hook first, then the first `git worktree
+/// list` row.
+pub(crate) fn project_events_journal() -> std::path::PathBuf {
+    if let Some(root) = std::env::var_os("FNO_REPO_ROOT") {
+        return std::path::PathBuf::from(root)
+            .join(".fno")
+            .join("events.jsonl");
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    project_events_journal_in(&cwd)
+}
+
+/// The same canonical-root walk, run from a caller-named directory instead
+/// of the process cwd. The env-free form exists because a process-wide
+/// `FNO_REPO_ROOT` pin would race the daemon's concurrent emitters.
+pub(crate) fn project_events_journal_in(cwd: &std::path::Path) -> std::path::PathBuf {
+    let main_root = std::process::Command::new("git")
+        .args(["worktree", "list", "--porcelain"])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .find_map(|l| l.strip_prefix("worktree ").map(str::to_string))
+        })
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| cwd.to_path_buf());
+    main_root.join(".fno").join("events.jsonl")
+}
+
+/// Open questions the new law may answer: `read_open_questions`' fold over
+/// the machine questions store, minus the closed rows. Best-effort: a missing
+/// or malformed store reads as no questions, never an error.
+fn read_open_questions() -> Vec<OpenQuestion> {
+    let path = decision_index::default_state_path("questions.jsonl");
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut asked: Vec<OpenQuestion> = Vec::new();
+    let mut closed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for line in text.lines() {
+        let Ok(row) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let data = row.get("data");
+        let id = data
+            .and_then(|d| d.get("question_id"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if id.is_empty() {
+            continue;
+        }
+        match row.get("type").and_then(Value::as_str) {
+            Some("operator_question") => {
+                let d = data.and_then(|d| d.as_object());
+                asked.push(OpenQuestion {
+                    id: id.to_string(),
+                    ts: d
+                        .and_then(|d| d.get("ts"))
+                        .or(row.get("ts"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    question: d
+                        .and_then(|d| d.get("question"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    subject: None,
+                    node: None,
+                    asker: None,
+                    session_id: None,
+                })
+            }
+            Some("operator_question_closed") => {
+                closed.insert(id.to_string());
+            }
+            _ => {}
+        }
+    }
+    asked.retain(|q| !closed.contains(&q.id));
+    asked
+}
+
+pub(crate) fn now_iso() -> String {
+    chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
+pub(crate) fn door_refuse(message: &str) -> i32 {
+    eprintln!("fno law: refused: {message}. Nothing was recorded.");
+    3
+}
+
+/// The door body, gate by gate in `record_command`'s order. Prints the
+/// decision id on stdout alone; every refusal and hint rides stderr.
+fn run_record_door(args: &[String], stdin_text: &str) -> i32 {
+    let (door, decision) = match record_door_preflight(args, stdin_text) {
+        Ok(pair) => pair,
+        Err(code) => return code,
+    };
+    // The authority gate: law is never inherited by silence. The resolver
+    // reads process truth (the ancestry prover), never env claims, so the
+    // gate is not forgeable by environment.
+    let caller = match resolve_caller() {
+        Ok(c) => c,
+        Err(message) => return door_refuse(&message),
+    };
+    if let Err(message) = autonomy_ask_gate(&caller, door.quote.as_deref(), &policy_cwd()) {
+        return door_refuse(&message);
+    }
+    record_door_write(door, decision, &caller)
+}
+
+fn policy_cwd() -> std::path::PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+}
+
+/// Process ancestry cannot tell a user's `/fno:law` from an agent's own Bash
+/// call, so where `autonomy.mode` asks, the user's words are the recorded ask.
+/// They never change the row's authority: it stays `chat_attested`.
+pub(crate) fn autonomy_ask_gate(
+    caller: &Caller,
+    quote: Option<&str>,
+    cwd: &std::path::Path,
+) -> Result<(), String> {
+    if caller.authority != "chat_attested"
+        || quote.is_some_and(|q| !q.trim().is_empty())
+        || !crate::autonomy_policy::law_needs_quote(cwd)
+    {
+        return Ok(());
+    }
+    Err(
+        "autonomy.mode asks the user before a session writes law: ask the user, \
+then pass --quote \"<the user's words>\""
+            .to_string(),
+    )
+}
+
+/// The argv parse, the decision text, and the statement validator: the gates
+/// that run before anyone asks who is calling. Split from the write so tests
+/// can drive the gated write with an injected authority (the real gate reads
+/// process ancestry and has no hermetic shape).
+fn record_door_preflight(args: &[String], stdin_text: &str) -> Result<(RecordDoor, String), i32> {
+    let door = match parse_record_door(args) {
+        Ok(d) => d,
+        Err(usage) => {
+            eprintln!("fno inbox law set: {usage}");
+            return Err(2);
+        }
+    };
+    // The decision text: positional, a file, or stdin ('-').
+    let decision: String = match door.decision_file.as_deref() {
+        // '-' reads the CALLER's stdin, which the transport (the `fno inbox
+        // law set` shim) carried in the request's stdin field.
+        Some("-") => stdin_text.to_string(),
+        Some(path) => match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) => return Err(door_refuse(&format!("could not read {path} ({e})"))),
+        },
+        None => door.decision.clone().unwrap_or_default(),
+    };
+    // The statement validator, in-process (mode validate's own gate). The
+    // coordination-marker verdict is a caution, not a refusal (the
+    // 2026-11-07 guard-purge ruling): the marker check refused a user
+    // ruling on that day, and losing a ruling is the harm. Rewording advice
+    // rides the record.
+    let validate = validate_answer(&ValidateRequest {
+        subject: door.subject.clone(),
+        decision: decision.clone(),
+        rationale: door.rationale.clone(),
+        supersedes: door.supersedes.clone(),
+    });
+    if let Some(msg) = validate.get("refusal").and_then(Value::as_str) {
+        if msg.contains("coordination, not durable law") {
+            eprintln!(
+                "[fno law] caution: {msg}; recording anyway. If the statement really is \
+                 session-scoped coordination, retract it after the merge instead of \
+                 wording around the markers."
+            );
+        } else {
+            return Err(door_refuse(msg));
+        }
+    }
+    Ok((door, decision))
+}
+
+/// The gated write: every gate from graduation through the stores, then the
+/// sweep. `authority` is the RESOLVED caller lane (chat_attested | operator).
+pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Caller) -> i32 {
+    let authority = caller.authority.as_str();
+    let graduation =
+        match graduation_or_guidance(door.graduation.as_deref(), door.graduation_ref.as_deref()) {
+            Ok(g) => g,
+            Err(message) => return door_refuse(&message),
+        };
+    let Caller {
+        authority: _,
+        decided_by,
+        attested_by,
+        relayed_by,
+    } = caller;
+    // A fleet subject with no widening flag defaults to global, so a project
+    // that does not resolve still records it. The globs are still validated.
+    let fleet_default = door.widen.is_none() && decision_index::is_fleet_subject(&door.subject);
+    let widen = if fleet_default {
+        Some(&Widen::Global)
+    } else {
+        door.widen.as_ref()
+    };
+    // The scope stamp with the widening and the globs validated at the door.
+    let scope_answer = record_scope_answer_in(None, &settings_sources(), widen, &door.raw_paths);
+    if scope_answer.get("ok") != Some(&json!(true)) {
+        let message = scope_answer
+            .get("refusal")
+            .and_then(Value::as_str)
+            .unwrap_or("no project to stamp under");
+        return door_refuse(message);
+    }
+    let scope = scope_answer
+        .get("scope")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if !fleet_default {
+        if let Some(refusal) = wide_scope_refusal(&scope) {
+            return door_refuse(&refusal);
+        }
+    }
+    let paths: Vec<Value> = scope_answer
+        .get("paths")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let when = match crate::law_when::build_when(
+        door.from.as_deref(),
+        &door.whiles,
+        door.between.as_deref(),
+    ) {
+        Ok(w) => w,
+        Err(message) => return door_refuse(&message),
+    };
+    // The evidence gate: a measured claim carries the read that produced it.
+    // Exempt when the RESOLVED authority is operator.
+    let mut read_rows: Option<Vec<Value>> = None;
+    if authority != "operator" {
+        let text = format!("{decision}\n{}", door.rationale.as_deref().unwrap_or(""));
+        let root = evidence_repo_root();
+        let mut runner =
+            |cmd: &str, root: &std::path::Path| crate::evidence::shell_run(cmd, root, 20);
+        match crate::evidence::check_ruling_evidence(&text, &door.reads, &root, &mut runner) {
+            Ok(rows) => read_rows = rows,
+            Err(gate) => return door_refuse(&gate.message),
+        }
+    }
+    // A --read the gate did not store still runs and is kept for `law recheck`.
+    if read_rows.is_none() && !door.reads.is_empty() {
+        let root = evidence_repo_root();
+        let mut runner =
+            |cmd: &str, root: &std::path::Path| crate::evidence::shell_run(cmd, root, 20);
+        match crate::evidence::run_reads(&door.reads, &root, &mut runner) {
+            Ok(rows) => read_rows = Some(rows),
+            Err(gate) => return door_refuse(&gate.message),
+        }
+    }
+    // A waiver subject is operator-evidence-only.
+    if (door.subject == WAIVER_SUBJECT_PREFIX
+        || door
+            .subject
+            .starts_with(&format!("{WAIVER_SUBJECT_PREFIX}:")))
+        && authority != "operator"
+    {
+        return door_refuse(&format!(
+            "'{}' is a review-coverage waiver subject: waiver evidence needs \
+             superuser authority, and a chat-attested row proves only that a \
+             session was addressed, not that a user reviewed anything. \
+             Waivers are recorded by the attended command \
+             `fno do pr coverage-waive <pr> --reason \"...\"` at an operator \
+             terminal; a session a harness identifies records nothing there.",
+            door.subject
+        ));
+    }
+    // Auto-supersede: on a subject with exactly one live law, an edit IS a
+    // supersession - the operator should never have to name the id that the
+    // index already knows. Two or more live laws refuse: the caller
+    // must say which one dies. An explicit --supersedes always wins, and an
+    // unreadable index never blocks a write that is legal without it.
+    let mut supersedes = door.supersedes.clone();
+    let auto_superseded;
+    if supersedes.is_none() && !door.subject.trim().is_empty() {
+        match decision_index::default_store_live() {
+            Ok(index) => {
+                // Scope-equality, not machine-wide: a law recorded in one
+                // project never silently retires another project's law of
+                // the same subject; the record scope and the row scope must
+                // name the same law-world.
+                let same: Vec<String> = index
+                    .rows
+                    .iter()
+                    .filter(|r| decision_index::is_law(r))
+                    .filter(|r| decision_index::row_scope(r) == scope)
+                    .filter(|r| {
+                        r.get("subject")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .trim()
+                            .eq_ignore_ascii_case(door.subject.trim())
+                    })
+                    .filter_map(|r| {
+                        r.get("decision_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .collect();
+                match same.len() {
+                    0 => auto_superseded = None,
+                    1 => {
+                        auto_superseded = Some(same[0].clone());
+                        supersedes = Some(same[0].clone());
+                    }
+                    n => {
+                        let ids = same.join(", ");
+                        return door_refuse(&format!(
+                            "{n} live laws under the subject {:?} ({}). Say which one dies \
+                             with --supersedes <id>, or retract the extras: \
+                             fno inbox law retract <subject-or-id> --reason \"...\"",
+                            door.subject.trim(),
+                            ids
+                        ));
+                    }
+                }
+            }
+            Err(_) => auto_superseded = None,
+        }
+    } else {
+        auto_superseded = None;
+    }
+    // Supersession: the target must be recoverable, and a chat recording may
+    // retire its own kind, never the operator's.
+    if let Some(sup) = &supersedes {
+        let index = match decision_index::default_store_live() {
+            Ok(i) => i,
+            Err(reason) => {
+                return door_refuse(&format!(
+                    "the decision index could not be read ({reason}); \
+                     supersession needs it first"
+                ));
+            }
+        };
+        let Some(row) = find_decision_row(&index, sup) else {
+            return door_refuse(&format!(
+                "supersession target {sup} is not recoverable from the \
+                 decision index. Run `fno backlog decide-reindex` before retrying."
+            ));
+        };
+        if decision_index::is_law(&row) && authority != "operator" && authority != "chat_attested" {
+            return door_refuse(&format!(
+                "agent {decided_by} cannot record under superuser authority"
+            ));
+        }
+        if authority == "chat_attested" && !chat_may_retire(&row) {
+            return door_refuse(&format!(
+                "agent {decided_by} cannot record under superuser authority"
+            ));
+        }
+    }
+    let decision_id = mint_decision_id();
+    let ts = now_iso();
+    // The envelope mirrors the Python `operator_decision` builder: a key
+    // appears only when its value is set; text fields cap at 2000 chars.
+    let mut data = json!({
+        "decision_id": decision_id,
+        "decision": text_cap(&decision, 2000),
+        "authority_source": authority,
+        "graduation": graduation,
+    });
+    if !door.subject.trim().is_empty() {
+        data["subject"] = json!(door.subject.trim());
+    }
+    if !door.options.is_empty() {
+        data["options"] = json!(door.options);
+    }
+    data["decided_by"] = json!(decided_by);
+    if let Some(a) = &attested_by {
+        data["attested_by"] = json!(a);
+    }
+    if let Some(r) = &relayed_by {
+        data["relayed_by"] = json!(r);
+    }
+    if let Some(rationale) = &door.rationale {
+        if !rationale.trim().is_empty() {
+            data["rationale"] = json!(text_cap(rationale, 2000));
+        }
+    }
+    if let Some(quote) = door.quote.as_deref().filter(|q| !q.trim().is_empty()) {
+        data["quote"] = json!(text_cap(quote, 2000));
+    }
+    if let Some(sup) = &supersedes {
+        data["supersedes"] = json!(sup);
+    }
+    if let Some(rows) = &read_rows {
+        data["reads"] = json!(rows);
+        let readings: Vec<Value> = rows
+            .iter()
+            .map(|r| json!({"cmd": r["cmd"], "exit": r["exit"], "out_head": r["out_head"]}))
+            .collect();
+        data["expiry_ref"] = json!({"kind": "reading", "reads": readings});
+    }
+    if let Some(guard) = &door.guard {
+        data["guard"] = guard.clone();
+    }
+    let mut filters = serde_json::Map::new();
+    for (prefix, pairs) in [("", &door.filters), ("not_", &door.not_filters)] {
+        for (key, value) in pairs {
+            let name = format!("{prefix}{key}");
+            let joined = match filters.get(&name).and_then(Value::as_str) {
+                Some(prev) => format!("{prev},{value}"),
+                None => value.clone(),
+            };
+            filters.insert(name, json!(joined));
+        }
+    }
+    if !filters.is_empty() {
+        data["filters"] = Value::Object(filters);
+    }
+    if !scope.is_empty() {
+        data["scope"] = json!(scope);
+    }
+    if !paths.is_empty() {
+        data["paths"] = json!(paths);
+    }
+    if let Some(strength) = &door.strength {
+        data["strength"] = json!(strength);
+    }
+    if let Some(when) = &when {
+        data["when"] = when.clone();
+    }
+    if let Some(until) = &door.until {
+        data["until"] = json!(until);
+    }
+    if let Some(map) = data.as_object_mut() {
+        crate::identity::stamp_person(map);
+        crate::identity::sign_law_row(map, "operator_decision", &ts);
+    }
+    let envelope = json!({"ts": ts, "type": "operator_decision", "source": "target", "data": data});
+    if let Err(code) = append_decision(&envelope, &decision_id) {
+        return code;
+    }
+    if matches_node_id_shape(&door.subject.to_lowercase()) {
+        // The node-view projection (`_project`) is Python-side and not ported;
+        // the durable stores hold the row and every decisions read reaches it.
+        eprintln!(
+            "decide: recorded {decision_id}, but the node projection is not \
+             ported to the record door yet; the decision is durable and \
+             recoverable with `fno backlog decisions`."
+        );
+    }
+    println!("{decision_id}");
+    if let Some(when) = &when {
+        crate::law_when::row_active(&json!({"decision_id": decision_id, "when": when}), true);
+    }
+    if let Some(old) = &auto_superseded {
+        eprintln!("superseded {old}");
+    }
+    // The best-effort rule-time join, on stderr: near laws first, then the
+    // open questions the new law may answer.
+    let law_row = LawRow {
+        decision_id: decision_id.clone(),
+        subject: Some(door.subject.clone()),
+        decision: Some(decision),
+        ts: Some(ts),
+        lane: None,
+        authority_source: None,
+    };
+    let near = near_law_lines(&law_row);
+    let answer = law_answer_with(
+        &LawRequest {
+            law: law_row,
+            questions: read_open_questions(),
+        },
+        near,
+    );
+    for line in &answer.lines {
+        eprintln!("{line}");
+    }
+    0
+}
+
+/// The three-store write of one `operator_decision` envelope: the project
+/// journal first (a failure records nothing, exit 3), then the recall index
+/// (a failure names the reindex, exit 1), then the graph table (a refusal
+/// degrades to the durable capture). `Err` carries the exit code.
+pub(crate) fn append_decision(envelope: &Value, decision_id: &str) -> Result<(), i32> {
+    let journal = project_events_journal();
+    if let Err(e) = crate::event_store::append_envelope(&journal, &envelope.to_string(), None) {
+        return Err(door_refuse(&format!(
+            "the project journal write failed ({e})"
+        )));
+    }
+    // The event id names the recovery, because re-running would mint a
+    // second id for one ruling.
+    let index_path = decision_index::default_state_path("decisions.jsonl");
+    if let Err(e) = crate::event_store::append_envelope(&index_path, &envelope.to_string(), None) {
+        eprintln!(
+            "fno law: recorded {decision_id} to the project journal, but the \
+             recall index write failed ({e}). Run `fno backlog decide-reindex`; \
+             do not re-run the law command."
+        );
+        return Err(1);
+    }
+    let graph_path = crate::graph_get::default_graph_path();
+    if let Err(e) = crate::backlog::api::decision_record(
+        &crate::backlog::api::Store::new(&graph_path),
+        envelope.clone(),
+    ) {
+        eprintln!(
+            "decide: recorded {decision_id}, but the graph store refused the \
+             ruling ({}). The decision is durable in the journal and the index. {}.",
+            e.0,
+            crate::decide_door::GRAPH_RETRY
+        );
+    }
+    Ok(())
+}
+
+/// Raw text cap: the first `cap` chars, Python `text[:cap]` semantics (no
+/// newline collapse; the law row keeps its line breaks).
+pub(crate) fn text_cap(text: &str, cap: usize) -> String {
+    text.chars().take(cap).collect()
+}
+
+// The retract door: the `retract` mode carrying the `fno inbox law retract`
+// argv, and the `fno backlog decide-retract` argv through the same door.
+// Addresses a decision by its subject, the handle operators and nodes
+// actually hold; a decision id works too. The write is the port of
+// `retract_decision` (cli/src/fno/decide/__init__.py, deleted): the
+// retraction envelope lands in the project journal, the recall index, and
+// the graph store, and the original decision stays in the append-only
+// history. One door, two labels, so the surfaces cannot disagree about what
+// is live or what a retraction writes.
+
+#[derive(Default)]
+struct RetractDoor {
+    token: String,
+    reason: String,
+    stated_authority: Option<String>,
+    quote: String,
+}
+
+fn parse_retract_door(
+    args: &[String],
+    usage: &str,
+    require_reason: bool,
+    allow_authority: bool,
+) -> Result<RetractDoor, String> {
+    let mut door = RetractDoor::default();
+    let mut i = 0;
+    while i < args.len() {
+        match (args[i].as_str(), allow_authority) {
+            // One arm takes both spellings, so the value error and the
+            // stored field cannot diverge between --reason and -R.
+            ("--reason", _) | ("-R", true) => {
+                i += 1;
+                door.reason = args
+                    .get(i)
+                    .ok_or_else(|| format!("--reason needs a value\n{usage}"))?
+                    .clone();
+            }
+            ("--authority", true) => {
+                i += 1;
+                let value = args
+                    .get(i)
+                    .ok_or_else(|| format!("--authority needs a value\n{usage}"))?
+                    .clone();
+                door.stated_authority = Some(value);
+            }
+            ("--quote", true) => {
+                i += 1;
+                door.quote = args
+                    .get(i)
+                    .ok_or_else(|| format!("--quote needs a value\n{usage}"))?
+                    .clone();
+            }
+            (f, _) if f.starts_with('-') && f != "-" => {
+                return Err(format!("no such option: {f}\n{usage}"));
+            }
+            (_, _) => {
+                if !door.token.is_empty() {
+                    return Err(format!("exactly one subject or decision id\n{usage}"));
+                }
+                door.token = args[i].clone();
+            }
+        }
+        i += 1;
+    }
+    if door.token.is_empty() {
+        return Err(format!("a subject or decision id is required\n{usage}"));
+    }
+    if require_reason && door.reason.trim().is_empty() {
+        return Err(format!("--reason is required\n{usage}"));
+    }
+    Ok(door)
+}
+
+pub(crate) fn row_id(row: &Value) -> &str {
+    row.get("decision_id").and_then(Value::as_str).unwrap_or("")
+}
+
+/// A retraction event rendered as a flattened row: same subject as its
+/// target, no `decision_id` of its own. Subject-addressed reads and writes
+/// skip it, or a fully retracted subject still answers to its own
+/// retraction.
+pub(crate) fn is_retraction_row(row: &Value) -> bool {
+    row.get("_event_type").and_then(Value::as_str) == Some("decision_retracted")
+}
+
+pub(crate) fn row_subject(row: &Value) -> &str {
+    row.get("subject").and_then(Value::as_str).unwrap_or("")
+}
+
+/// Every flattened decision row, any lifecycle, from the machine's default
+/// store. The history read renders the retired rows; the retract door reads
+/// the same source so the two never disagree about what is live.
+pub(crate) fn all_decision_rows() -> Result<(Vec<Value>, usize), String> {
+    decision_index::read_store_rows(
+        &crate::graph_get::default_graph_path(),
+        &decision_index::default_state_path("decisions.jsonl"),
+    )
+}
+
+/// The rows the retract, restore and history doors may address: global, the
+/// current project, and every machine or user law. Those doors manage law
+/// rather than apply it, so the owner reaches a law bound to another machine,
+/// or to a mistyped id that binds nowhere, from any machine. An unresolvable
+/// project fails open, as every reader does.
+pub(crate) fn scope_filtered_rows(rows: Vec<Value>) -> Vec<Value> {
+    let project = resolve_project(None, &settings_sources()).ok();
+    rows.into_iter()
+        .filter(|r| {
+            decision_index::binds_here(decision_index::row_scope(r)).is_some()
+                || decision_index::row_visible(r, project.as_deref())
+        })
+        .collect()
+}
+
+fn run_retract_door(argv: &[String]) -> i32 {
+    run_retract_labeled("fno inbox law retract", RETRACT_USAGE, argv, true)
+}
+
+/// The `fno backlog decide-retract` entry: every lane, the operator gate
+/// applied to law rows only (the rule `retract_decision` enforced). The
+/// door owns the write path; the Python twin this entry replaces is deleted
+/// in the same change (d-e11b2b3e).
+pub fn run_backlog_retract(argv: &[String]) -> i32 {
+    run_retract_labeled(
+        "fno backlog decide-retract",
+        "usage: fno backlog decide-retract <subject-or-decision-id> --reason <why> [-R] [--authority operator|team|agent|beastmode]",
+        argv,
+        false,
+    )
+}
+
+/// `law_only` keeps the law command's contract: laws-only subject matching,
+/// the operator and chat_attested lanes only, and the pointer refusal for a
+/// non-law target. Both entries share the lane gate and the quote gate.
+fn run_retract_labeled(label: &str, usage: &str, argv: &[String], law_only: bool) -> i32 {
+    let door = match parse_retract_door(argv, usage, law_only, true) {
+        Ok(d) => d,
+        Err(u) => {
+            eprintln!("{label}: {u}");
+            return 2;
+        }
+    };
+    let lanes: &[&str] = if law_only {
+        &["operator", "chat_attested"]
+    } else {
+        &["operator", "team", "agent", "beastmode"]
+    };
+    if let Some(a) = &door.stated_authority {
+        if !lanes.contains(&a.as_str()) {
+            eprintln!(
+                "{label}: --authority '{a}' is not one of {}",
+                lanes.join(", ")
+            );
+            return 2;
+        }
+    }
+    // The gate runs after the target resolves, so a missing id gets its own
+    // answer and a chat_attested law can be retired by its own kind.
+    let caller = match resolve_caller() {
+        Ok(c) => c,
+        Err(message) => return door_refuse(&message),
+    };
+    let (rows, damaged) = match all_decision_rows() {
+        Ok(pair) => pair,
+        Err(reason) => {
+            return door_refuse(&format!(
+                "the decision index could not be read ({reason}); nothing retracted"
+            ))
+        }
+    };
+    if damaged > 0 {
+        eprintln!(
+            "{label}: {damaged} index row(s) could not be parsed; \
+             the answer may be incomplete."
+        );
+    }
+    // Scope read: the caller's own project plus global, the same view the
+    // stage and edit answers render. Unresolvable fails open (nothing
+    // hidden), matching `retain_in_scope`.
+    let rows = scope_filtered_rows(rows);
+    let retired = decision_index::retirement_map(&rows);
+    let token = door.token.trim();
+    let target = match retract_target(
+        token,
+        &rows,
+        &retired,
+        law_only,
+        &caller.authority,
+        door.stated_authority.as_deref(),
+        |t, r, law_only| near_miss_subject_lines(t, r, law_only),
+    ) {
+        Ok(t) => t,
+        Err(message) => return door_refuse(&message),
+    };
+    if let Err(message) = chat_quote_gate(&target, &caller.authority, &door.quote) {
+        return door_refuse(&message);
+    }
+    write_retraction(&target, &door.reason, &door.quote, &caller, label)
+}
+
+/// The target a retraction addresses plus its lane gate, pure over the rows
+/// so both entries share one resolution and the gating stays testable
+/// without env surgery. `Err` carries the refusal message for `door_refuse`.
+/// A subject matches across every lane for the backlog entry; `law_only`
+/// keeps the law command's laws-only search and its pointer refusal for a
+/// non-law target.
+fn retract_target(
+    token: &str,
+    rows: &[Value],
+    retired: &std::collections::BTreeMap<String, ((String, String), &'static str)>,
+    law_only: bool,
+    caller_authority: &str,
+    stated_authority: Option<&str>,
+    near_misses: impl Fn(&str, &[Value], bool) -> Vec<String>,
+) -> Result<Value, String> {
+    let token =
+        &crate::numbers::resolve('d', token).ok_or_else(|| crate::numbers::unresolved(token))?;
+    if is_decision_id(token) {
+        let want = token.to_lowercase();
+        let row = rows
+            .iter()
+            .find(|r| row_id(r).to_lowercase() == want)
+            .ok_or_else(|| {
+                format!("decision {token} is not recoverable from the decision index")
+            })?;
+        match retired.get(&want) {
+            Some((_, "retracted")) => {
+                return Err(format!(
+                    "{token} is already retracted; nothing live to retract"
+                ))
+            }
+            Some((_, "superseded")) => {
+                return Err(format!(
+                    "{token} is superseded and already out of the live set; \
+                     retract its successor instead"
+                ))
+            }
+            _ => {}
+        }
+        gate(caller_authority, stated_authority, law_only, row)?;
+        return Ok(row.clone());
+    }
+    let subject_cf = token.to_lowercase();
+    let hits: Vec<&Value> = rows
+        .iter()
+        .filter(|r| !is_retraction_row(r))
+        .filter(|r| !retired.contains_key(&row_id(r).to_lowercase()))
+        .filter(|r| !law_only || decision_index::is_law(r))
+        .filter(|retract| {
+            row_subject(retract)
+                .trim()
+                .eq_ignore_ascii_case(&subject_cf)
+        })
+        .collect();
+    let noun = if law_only { "law" } else { "decision" };
+    let row = match hits.len() {
+        0 => {
+            let near = near_misses(token, rows, law_only);
+            return Err(format!(
+                "no live {noun} under the subject {token:?}.{}{}",
+                if near.is_empty() { "" } else { " Near: " },
+                near.join("; ")
+            ));
+        }
+        1 => hits[0].clone(),
+        n => {
+            let ids: Vec<&str> = hits.iter().map(|r| row_id(r)).collect();
+            let plural = if law_only { "laws" } else { "decisions" };
+            return Err(format!(
+                "{n} live {plural} under the subject {token:?} ({}). Retract by id, \
+                 or supersede all but one with an explicit --supersedes.",
+                ids.join(", ")
+            ));
+        }
+    };
+    gate(caller_authority, stated_authority, law_only, &row)?;
+    Ok(row)
+}
+
+/// The lane gate: every lane retracts through the backlog entry, a session
+/// retires a chat_attested law with the user's words, a superuser law still
+/// demands the superuser, and a stated --authority that disagrees with the
+/// caller's resolved lane is refused rather than stamped.
+fn gate(
+    caller_authority: &str,
+    stated_authority: Option<&str>,
+    law_only: bool,
+    target: &Value,
+) -> Result<(), String> {
+    if decision_index::is_law(target) && caller_authority != "operator" {
+        if caller_authority != "chat_attested" || !chat_may_retire(target) {
+            return Err(format!(
+                "retracting {} needs superuser authority (got {caller_authority}; it was \
+                 recorded as {}); only the user retracts it, so ask them with \
+                 `fno inbox outstanding ask`",
+                row_id(target),
+                target
+                    .get("authority_source")
+                    .and_then(Value::as_str)
+                    .unwrap_or("operator"),
+            ));
+        }
+    }
+    if let Some(a) = stated_authority {
+        if a != caller_authority {
+            return Err(format!(
+                "--authority {a} does not match this caller's resolved authority \
+                 ({}); state nothing and let the session speak",
+                caller_authority
+            ));
+        }
+    }
+    if law_only && !decision_index::is_law(target) {
+        return Err(format!(
+            "{} is not a law-lane decision; retract it with `fno backlog decide-retract {}`",
+            row_id(target),
+            row_id(target)
+        ));
+    }
+    Ok(())
+}
+
+/// A session retracting a law records the user's words: the quote is the
+/// only evidence the user asked for it.
+fn chat_quote_gate(target: &Value, caller_authority: &str, quote: &str) -> Result<(), String> {
+    if decision_index::is_law(target)
+        && caller_authority == "chat_attested"
+        && quote.trim().is_empty()
+    {
+        return Err(
+            "a chat-attested retraction of a law needs --quote \"<the user's words>\"".to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// Near-miss subjects for a refused retract/history read: live subjects
+/// sharing at least one token with the asked subject, at most 5. `law_only`
+/// keeps the read to law rows, matching the set the door searched.
+fn near_miss_subject_lines(token: &str, rows: &[Value], law_only: bool) -> Vec<String> {
+    let want = tokens(token);
+    let mut near: Vec<String> = Vec::new();
+    for row in rows
+        .iter()
+        .filter(|r| !is_retraction_row(r))
+        .filter(|r| !law_only || decision_index::is_law(r))
+    {
+        let subject = row_subject(row);
+        if subject.trim().eq_ignore_ascii_case(token.trim()) || want.is_empty() {
+            continue;
+        }
+        if !tokens(subject)
+            .intersection(&want)
+            .cloned()
+            .collect::<Vec<_>>()
+            .is_empty()
+        {
+            let id = row_id(row);
+            near.push(format!("{subject} ({id})"));
+        }
+    }
+    near.truncate(5);
+    near
+}
+
+/// The facts one retraction write carries. Both doors build it: the
+/// operator retract doors resolve a `Caller`, the board answer door
+/// (question_clear) stamps the operator shape itself.
+pub(crate) struct RetractWrite {
+    pub target_decision_id: String,
+    pub subject: String,
+    pub reason: String,
+    pub retracted_by: String,
+    pub authority_source: String,
+    pub attested_by: Option<String>,
+    pub relayed_by: Option<String>,
+    /// The user's words a chat retraction of a law rests on.
+    pub quote: Option<String>,
+}
+
+/// How far one write got. The journal is the durable floor: once it lands,
+/// the retraction exists even when a later store refuses, and each later
+/// stage names its own remedy.
+pub(crate) enum RetractOutcome {
+    /// Nothing landed.
+    JournalFailed(String),
+    /// The journal has it; the recall index needs `fno backlog decide-reindex`.
+    IndexFailed(String),
+    /// Journal and index have it; the graph store refused.
+    GraphRefused(String),
+    Done,
+}
+
+/// The one retraction writer, shared by the operator retract doors and the
+/// board answer door, so the two can never disagree about where a
+/// retraction lands: the `decision_retracted` envelope goes to the project
+/// journal, the recall index and the graph store, in that order.
+pub(crate) fn write_retraction_event(w: &RetractWrite) -> RetractOutcome {
+    let retraction_id = mint_retraction_id();
+    let ts = now_iso();
+    let subject_field = if w.subject.is_empty() {
+        "(unscoped)".to_string()
+    } else {
+        w.subject.clone()
+    };
+    let mut data = json!({
+        "retraction_id": retraction_id,
+        "target_decision_id": w.target_decision_id,
+        "subject": subject_field,
+        "reason": text_cap(w.reason.trim(), 2000),
+        "retracted_by": w.retracted_by,
+        "authority_source": w.authority_source,
+    });
+    if let Some(a) = &w.attested_by {
+        data["attested_by"] = json!(a);
+    }
+    if let Some(r) = &w.relayed_by {
+        data["relayed_by"] = json!(r);
+    }
+    if let Some(q) = w.quote.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
+        data["quote"] = json!(text_cap(q, 2000));
+    }
+    // Signed, because an unsigned retraction would retire a signed wide law
+    // on every machine.
+    if let Some(map) = data.as_object_mut() {
+        crate::identity::sign_law_row(map, "decision_retracted", &ts);
+    }
+    let envelope =
+        json!({"ts": ts, "type": "decision_retracted", "source": "target", "data": data});
+    let journal = project_events_journal();
+    if let Err(e) = crate::event_store::append_envelope(&journal, &envelope.to_string(), None) {
+        return RetractOutcome::JournalFailed(e.to_string());
+    }
+    let index_path = decision_index::default_state_path("decisions.jsonl");
+    if let Err(e) = crate::event_store::append_envelope(&index_path, &envelope.to_string(), None) {
+        return RetractOutcome::IndexFailed(e.to_string());
+    }
+    let graph_path = crate::graph_get::default_graph_path();
+    if let Err(e) = crate::backlog::api::decision_retract(
+        &crate::backlog::api::Store::new(&graph_path),
+        envelope,
+    ) {
+        return RetractOutcome::GraphRefused(format!("{e:?}"));
+    }
+    RetractOutcome::Done
+}
+
+/// The port of `retract_decision`'s write: durability first (project
+/// journal), then the recall index, then the graph store. Prints the
+/// retracted id alone on stdout, the narrative on stderr.
+fn write_retraction(
+    target: &Value,
+    reason: &str,
+    quote: &str,
+    caller: &Caller,
+    label: &str,
+) -> i32 {
+    let decision_id = row_id(target).to_string();
+    let subject = row_subject(target).trim().to_string();
+    let outcome = write_retraction_event(&RetractWrite {
+        target_decision_id: decision_id.clone(),
+        subject,
+        reason: reason.to_string(),
+        retracted_by: caller.decided_by.clone(),
+        authority_source: caller.authority.clone(),
+        attested_by: caller.attested_by.clone(),
+        relayed_by: caller.relayed_by.clone(),
+        quote: Some(quote.to_string()),
+    });
+    match outcome {
+        RetractOutcome::JournalFailed(e) => {
+            door_refuse(&format!("the project journal write failed ({e})"))
+        }
+        RetractOutcome::IndexFailed(e) => {
+            eprintln!(
+                "{label}: retracted {decision_id} to the project journal, \
+                 but the recall index write failed ({e}). Run `fno backlog decide-reindex`; \
+                 do not re-run the retract command."
+            );
+            1
+        }
+        RetractOutcome::GraphRefused(e) => {
+            eprintln!(
+                "{label}: retracted {decision_id}, but the graph store refused \
+                 the retraction ({e}). The retraction is durable in the journal and the index. {}.",
+                crate::decide_door::GRAPH_RETRY
+            );
+            println!("{decision_id}");
+            eprintln!(
+                "{label}: retracted {decision_id}. The original decision remains \
+                 in the append-only history."
+            );
+            if decision_index::is_law(target) {
+                eprintln!("undo: fno inbox law restore {decision_id}");
+            }
+            0
+        }
+        RetractOutcome::Done => {
+            println!("{decision_id}");
+            eprintln!(
+                "{label}: retracted {decision_id}. The original decision remains \
+                 in the append-only history."
+            );
+            if decision_index::is_law(target) {
+                eprintln!("undo: fno inbox law restore {decision_id}");
+            }
+            0
+        }
+    }
+}
+
+/// The `history` read: one JSON answer over the whole chain behind a subject
+/// or decision id - the live row plus every retired row, each with its
+/// lifecycle. The subject-addressed read `fno inbox decisions` does not
+/// offer; it stays here so the Python command is untouched.
+fn run_history_read(argv: &[String]) -> i32 {
+    let door = match parse_retract_door(argv, HISTORY_USAGE, false, false) {
+        Ok(d) => d,
+        Err(usage) => {
+            eprintln!("fno inbox law history: {usage}");
+            return 2;
+        }
+    };
+    let (rows, _damaged) = match all_decision_rows() {
+        Ok(pair) => pair,
+        Err(reason) => {
+            eprintln!("fno inbox law history: the decision index could not be read ({reason})");
+            return 1;
+        }
+    };
+    let rows = scope_filtered_rows(rows);
+    let token = crate::numbers::resolve('d', door.token.trim())
+        .unwrap_or_else(|| door.token.trim().to_string());
+    let answer = history_answer(&token, &rows);
+    if answer
+        .get("chain")
+        .and_then(Value::as_array)
+        .map_or(true, Vec::is_empty)
+    {
+        let near = near_miss_subject_lines(door.token.trim(), &rows, true);
+        eprintln!(
+            "fno inbox law history: no decision under {:?}.{}{}",
+            door.token.trim(),
+            if near.is_empty() { "" } else { " Near: " },
+            near.join("; ")
+        );
+        return 3;
+    }
+    println!("{answer}");
+    0
+}
+
+/// The pure history answer: the chain behind a subject or decision id,
+/// newest first, each row carrying its lifecycle (`live` | `superseded` |
+/// `retracted`), with the live row promoted. An unknown id yields an empty
+/// chain; a subject with no rows yields an empty chain.
+fn history_answer(token: &str, rows: &[Value]) -> Value {
+    let retired = decision_index::retirement_map(rows);
+    let subject_cf = token.to_lowercase();
+    let chain: Vec<&Value> = if is_decision_id(token) {
+        let want = token.to_lowercase();
+        // The chain behind an id: the anchor plus every row linked through
+        // `supersedes`, transitively in both directions, so d-a <- d-b <- d-c
+        // renders whole from any member.
+        match rows.iter().find(|r| row_id(r).to_lowercase() == want) {
+            None => Vec::new(),
+            Some(anchor) => {
+                let mut chosen: Vec<&Value> = vec![anchor];
+                loop {
+                    let before = chosen.len();
+                    let chosen_ids: Vec<String> =
+                        chosen.iter().map(|c| row_id(c).to_lowercase()).collect();
+                    for row in rows.iter() {
+                        if chosen.iter().any(|c| std::ptr::eq(*c, row)) {
+                            continue;
+                        }
+                        let row_id_cf = row_id(row).to_lowercase();
+                        let row_sup = row
+                            .get("supersedes")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_lowercase();
+                        let linked = chosen_ids.contains(&row_sup)
+                            || row
+                                .get("supersedes")
+                                .and_then(Value::as_str)
+                                .map(|s| chosen_ids.contains(&s.to_lowercase()))
+                                .unwrap_or(false)
+                            || chosen.iter().any(|c| {
+                                c.get("supersedes")
+                                    .and_then(Value::as_str)
+                                    .map(|s| s.to_lowercase() == row_id_cf)
+                                    .unwrap_or(false)
+                            });
+                        if linked {
+                            chosen.push(row);
+                        }
+                    }
+                    if chosen.len() == before {
+                        break;
+                    }
+                }
+                chosen
+            }
+        }
+    } else {
+        rows.iter()
+            .filter(|r| !is_retraction_row(r))
+            .filter(|r| decision_index::is_law(r))
+            .filter(|r| row_subject(r).trim().eq_ignore_ascii_case(&subject_cf))
+            .collect()
+    };
+    let mut ordered: Vec<(String, &Value)> = chain
+        .iter()
+        .map(|r| {
+            (
+                r.get("ts")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                *r,
+            )
+        })
+        .collect();
+    ordered.sort_by(|a, b| b.0.cmp(&a.0));
+    let rows_json: Vec<Value> = ordered
+        .into_iter()
+        .map(|(_, r)| {
+            let id_cf = row_id(r).to_lowercase();
+            let lifecycle = match retired.get(&id_cf) {
+                Some((_, "retracted")) => json!("retracted"),
+                Some((_, "superseded")) => json!("superseded"),
+                _ => json!("live"),
+            };
+            json!({
+                "decision_id": row_id(r),
+                "subject": r.get("subject").cloned().unwrap_or(Value::Null),
+                "decision": r.get("decision").cloned().unwrap_or(Value::Null),
+                "ts": r.get("ts").cloned().unwrap_or(Value::Null),
+                "scope": r.get("scope").cloned().unwrap_or(Value::Null),
+                "graduation": r.get("graduation").cloned().unwrap_or(Value::Null),
+                "lifecycle": lifecycle,
+            })
+        })
+        .collect();
+    let live = rows_json
+        .iter()
+        .find(|r| r.get("lifecycle") == Some(&json!("live")))
+        .cloned();
+    let answer = json!({
+        "token": token,
+        "matched_by": if is_decision_id(token) { "decision_id" } else { "subject" },
+        "live": live,
+        "chain": rows_json,
+    });
+    answer
+}
+
+/// Role words every lead or review law carries; sharing one says nothing
+/// about the ruling, so they never count toward a near-law match.
+const NEAR_LAW_ROLE_WORDS: [&str; 6] = ["lead", "review", "agent", "user", "fno", "pr"];
+
+/// Near-law lines for a law being recorded: live laws on the same subject
+/// (casefold equality) or a subject sharing two or more `tokens()` after the
+/// role words drop, at most 5, newest first. A note at record time, never a
+/// refusal.
+fn near_law_lines_from(index: &decision_index::Index, law: &LawRow) -> Vec<String> {
+    let new_id = law.decision_id.as_str();
+    let new_subject = law.subject.as_deref().unwrap_or("").trim();
+    let topical = |subject: &str| {
+        let mut t = tokens(subject);
+        t.retain(|w| !NEAR_LAW_ROLE_WORDS.contains(&w.as_str()));
+        t
+    };
+    let new_tokens = topical(new_subject);
+    let mut lines: Vec<String> = Vec::new();
+    for row in &index.rows {
+        let id = row.get("decision_id").and_then(Value::as_str).unwrap_or("");
+        if id.is_empty() || id.eq_ignore_ascii_case(new_id) {
+            continue;
+        }
+        let subject = row.get("subject").and_then(Value::as_str).unwrap_or("");
+        let exact = subject.trim().eq_ignore_ascii_case(new_subject);
+        let shared = topical(subject).intersection(&new_tokens).count();
+        if !exact && shared < 2 {
+            continue;
+        }
+        let decision = row.get("decision").and_then(Value::as_str).unwrap_or("");
+        lines.push(format!(
+            "note: {new_id} sits near live law {id} ({subject}): {}. If it repeats that ruling, retract it: fno inbox law retract {new_id} --reason \"repeats {id}\". If it replaces it cross-subject, record with --supersedes {id}. Same-subject repeats supersede automatically now.",
+            one_line(decision, 60)
+        ));
+    }
+    lines.truncate(5);
+    lines
+}
+
+/// The store-reading variant: an unreadable store is a one-line report, so a
+/// recording against a damaged store still completes.
+fn near_law_lines(law: &LawRow) -> Vec<String> {
+    match decision_index::default_store_live() {
+        Ok(index) => near_law_lines_from(&index, law),
+        Err(reason) => vec![format!("law: near-law check skipped ({reason})")],
+    }
+}
+
+/// A live law whose graduation follow-up node has closed asks for its own
+/// retraction, by subject, in the stage block every session already reads.
+/// The graph read pays only when such a law exists.
+fn graduated_retraction_lines(
+    index: &decision_index::Index,
+    scope_project: Option<&str>,
+) -> Vec<String> {
+    graduated_retraction_lines_in(index, node_is_closed, scope_project)
+}
+
+fn graduated_retraction_lines_in(
+    index: &decision_index::Index,
+    is_closed: impl Fn(&str) -> bool,
+    scope_project: Option<&str>,
+) -> Vec<String> {
+    // The stage view: global plus the staged node's project. `None` fails
+    // open, matching `retain_in_scope`.
+    let mut lines = Vec::new();
+    for row in &index.rows {
+        if !decision_index::row_visible(row, scope_project)
+            || !crate::law_when::row_active(row, true)
+        {
+            continue;
+        }
+        let Some(grad) = row.get("graduation") else {
+            continue;
+        };
+        if grad.get("kind").and_then(Value::as_str) != Some("should-be-enforced-but-i-did-not") {
+            continue;
+        }
+        let Some(follow_up) = grad.get("follow_up").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(node_id) = follow_up.strip_prefix("node:") else {
+            continue;
+        };
+        if !is_closed(node_id) {
+            continue;
+        }
+        let id = row_id(row);
+        let subject = sh_quote(row_subject(row).trim());
+        lines.push(format!(
+            "law: {id} graduated ({subject}): its node {node_id} closed. \
+             Retract it: fno inbox law retract {subject} --reason \"graduation node {node_id} closed\""
+        ));
+    }
+    lines
+}
+
+/// Single-quote a string for safe reuse in a shell command line: every
+/// metacharacter loses its power inside single quotes, and embedded single
+/// quotes close, escape, and reopen the quoting.
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// A follow-up node counts as closed at `done` or `superseded`; an
+/// unreadable graph reads as open, never as closed.
+fn node_is_closed(node_id: &str) -> bool {
+    let store = crate::backlog::api::Store::new(&crate::graph_get::default_graph_path());
+    matches!(
+        crate::backlog::api::node(&store, node_id),
+        Ok(Some(node)) if matches!(node.status, crate::backlog::model::Status::Done | crate::backlog::model::Status::Superseded)
+    )
+}
+
+/// The `fno inbox law match` transport: one JSON request on stdin, one JSON
+/// answer on stdout, exit 0 whenever an answer was computed; exit 2 on
+/// malformed args or an unreadable request.
+pub fn run_law_match(args: &[String]) -> i32 {
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        println!(
+            "usage: fno inbox law match (one JSON request on stdin: mode=ask|law|stage|validate|record-scope|scope-split|rules-check|rules-measure|rules-import|rules-report|rules-explain|record|retract|history; record takes argv: the fno inbox law set command line, and stdin: the text --decision-file - reads; retract and history take argv: the matching fno inbox law command line)"
+        );
+        return 0;
+    }
+    if !args.is_empty() {
+        eprintln!("fno inbox law match: unexpected arguments; the request rides stdin");
+        return 2;
+    }
+    let mut input = String::new();
+    if std::io::stdin().read_to_string(&mut input).is_err() {
+        eprintln!("fno inbox law match: could not read stdin");
+        return 2;
+    }
+    run_law_match_str(&input)
+}
+
+/// The request parser and dispatcher over an in-memory request. The `fno
+/// inbox law` commands on the fno front call this with their own text; the
+/// record arm owns stdout (the decision id) and returns the door's exit
+/// code, every other arm prints one JSON answer and exits 0.
+pub fn run_law_match_str(input: &str) -> i32 {
+    let req: MatchRequest = match serde_json::from_str(input) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("fno inbox law match: bad request: {e}");
+            return 2;
+        }
+    };
+    let answer = match req {
+        MatchRequest::Record(r) => {
+            // The door owns stdout and the exit code; no envelope here.
+            return run_record_door(&r.argv, &r.stdin);
+        }
+        MatchRequest::Decide(r) => {
+            return crate::decide_door::run_decide_door(&r.argv);
+        }
+        MatchRequest::ResolveProvenance(r) => {
+            let origin = crate::decide_door::enforce_origin_floor(
+                r.origin.as_deref(),
+                crate::decide_door::DecideIdentity::Ambient,
+            );
+            match crate::decide_door::resolve_decider_lanes(
+                crate::decide_door::DecideIdentity::Ambient,
+                None,
+                r.authority.as_deref(),
+                origin.as_deref(),
+            ) {
+                Ok(p) => serde_json::to_string(&serde_json::json!({
+                    "decided_by": p.decided_by,
+                    "authority_source": p.authority_source,
+                    "attested_by": p.attested_by,
+                    "relayed_by": p.relayed_by,
+                    "origin": origin,
+                }))
+                .expect("serializes"),
+                Err(crate::decide_door::DecideRefusal::UnknownOrigin(o)) => {
+                    serde_json::to_string(&serde_json::json!({
+                        "refusal_kind": "unknown-origin",
+                        "refusal": format!(
+                            "mail origin '{o}' is unknown; use one of {}",
+                            crate::decide_door::MAIL_ORIGINS.join(", ")
+                        ),
+                    }))
+                    .expect("serializes")
+                }
+                Err(crate::decide_door::DecideRefusal::RefusedAuthority { agent, origin }) => {
+                    serde_json::to_string(&match origin {
+                        Some(o) => serde_json::json!({
+                            "refusal_kind": "origin-authority",
+                            "refusal": format!("agent {agent} cannot record under superuser authority from {o} origin"),
+                            "origin": o,
+                        }),
+                        None => serde_json::json!({
+                            "refusal_kind": "authority",
+                            "refusal": format!("agent {agent} cannot record under superuser authority"),
+                        }),
+                    })
+                    .expect("serializes")
+                }
+                Err(crate::decide_door::DecideRefusal::UnattributedAuthority) => serde_json::to_string(
+                    &serde_json::json!({"refusal_kind": "unattributed"}),
+                )
+                .expect("serializes"),
+            }
+        }
+        MatchRequest::Retract(r) => {
+            return run_retract_door(&r.argv);
+        }
+        MatchRequest::History(r) => {
+            return run_history_read(&r.argv);
+        }
+        MatchRequest::Recheck(r) => {
+            return crate::law_recheck::run_recheck(&r.argv);
+        }
+        MatchRequest::Restore(r) => {
+            return crate::law_restore::run_restore(&r.argv);
+        }
+        MatchRequest::Renew(r) => {
+            return crate::law_renew::run_renew(&r.argv);
+        }
+        MatchRequest::Ask(r) => serde_json::to_string(&ask_answer(&r)).expect("serializes"),
+        MatchRequest::Law(r) => {
+            let near = near_law_lines(&r.law);
+            serde_json::to_string(&law_answer_with(&r, near)).expect("serializes")
+        }
+        MatchRequest::Stage(r) => serde_json::to_string(&stage_answer(r)).expect("serializes"),
+        MatchRequest::Validate(r) => {
+            serde_json::to_string(&validate_answer(&r)).expect("serializes")
+        }
+        MatchRequest::RecordScope(r) => {
+            serde_json::to_string(&record_scope_answer(r)).expect("serializes")
+        }
+        MatchRequest::ScopeSplit(r) => {
+            serde_json::to_string(&scope_split_answer(r)).expect("serializes")
+        }
+        MatchRequest::Decisions(r) => {
+            return crate::backlog::decisions_cli::run(&r.argv);
+        }
+        MatchRequest::RulesCheck(r) => {
+            serde_json::to_string(&rules_answer(&r.file, crate::rules_check::check_answer))
+                .expect("serializes")
+        }
+        MatchRequest::RulesMeasure(r) => {
+            serde_json::to_string(&rules_answer(&r.cases, |text, laws| {
+                crate::rules_check::measure_answer(text, laws)
+            }))
+            .expect("serializes")
+        }
+        MatchRequest::RulesImport(r) => {
+            return crate::rules_source::run_rules_import(&r.file);
+        }
+        MatchRequest::RulesExplain(r) => {
+            serde_json::to_string(&crate::rules_source::rules_explain(r.event)).expect("serializes")
+        }
+        MatchRequest::RulesReport(r) => {
+            serde_json::to_string(&crate::rules_source::rules_report(r.since.as_deref()))
+                .expect("serializes")
+        }
+    };
+    println!("{answer}");
+    0
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+
+    fn law(id: &str, subject: &str, decision: &str, ts: &str) -> LawRow {
+        LawRow {
+            decision_id: id.to_owned(),
+            subject: Some(subject.to_owned()),
+            decision: Some(decision.to_owned()),
+            ts: Some(ts.to_owned()),
+            lane: None,
+            authority_source: None,
+        }
+    }
+
+    /// The six real rows the plan pins as fixtures.
+    fn fixture_laws() -> Vec<LawRow> {
+        vec![
+            law(
+                "d-4b39ad4c",
+                "file-budget",
+                "A size-budget refusal is never answered by raising the allowance and never by splitting the PR.",
+                "2026-09-04T16:59:33Z",
+            ),
+            law(
+                "d-52ae01cb",
+                "file-budget-port-residual",
+                "A port that leaves residual code over the allowance is not finished.",
+                "2026-09-07T10:00:00Z",
+            ),
+            law(
+                "d-7678146e",
+                "x-aaaa-file-budget-exception",
+                "PR 84b2's allowance exception stands.",
+                "2026-09-11T12:00:00Z",
+            ),
+            law(
+                "d-5fff6924",
+                "x-bbbb-file-budget-exception",
+                "PR e64b's allowance exception stands.",
+                "2026-09-11T09:00:00Z",
+            ),
+            law(
+                "d-e177f3c5",
+                "pr-1720-file-budget-allowance",
+                "PR 1720's allowance is raised once.",
+                "2026-09-11T15:00:00Z",
+            ),
+            law(
+                "d-b6cc1a2a",
+                "new-code-language",
+                "New code goes in crates. Existing Python is shrink-only.",
+                "2026-09-12T23:18:00Z",
+            ),
+        ]
+    }
+
+    #[test]
+    fn token_rows() {
+        let got = tokens("x-1111 pr-1847 cf6a file-budget added");
+        let want: BTreeSet<String> = ["added", "budget", "file"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(got, want);
+
+        let req = ask_req(Q470, Some("pr-1847-budget-exception"), Some("x-cccc"));
+        let ans = ask_answer(&req);
+        assert!(ans.exact.is_empty());
+        let ids: Vec<&str> = ans.nearby.iter().map(|h| h.decision_id.as_str()).collect();
+        assert_eq!(ids.len(), 5);
+        assert_eq!(ids[0], "d-7678146e");
+        assert_eq!(ids[1], "d-5fff6924");
+        assert!(!ids.contains(&"d-b6cc1a2a"));
+        assert_eq!(ans.uncited, ids);
+        let notice = ans.nearby_notice.expect("notice names every listed law");
+        for id in &ids {
+            assert!(notice.contains(id));
+        }
+        assert!(notice.contains("notice:"), "{notice}");
+        assert!(!notice.contains("refused"), "{notice}");
+
+        let mut question = String::from(Q470);
+        for id in [
+            "d-4b39ad4c",
+            "d-52ae01cb",
+            "d-7678146e",
+            "d-5fff6924",
+            "d-e177f3c5",
+        ] {
+            question.push_str(&format!(" {id}"));
+        }
+        let req = ask_req(&question, Some("pr-1847-budget-exception"), Some("x-cccc"));
+        let ans = ask_answer(&req);
+        assert!(ans.uncited.is_empty());
+        assert!(ans.nearby_notice.is_none());
+
+        let mut req = ask_req(
+            "PR 1717 is stuck at the review cap: coverage reads uncovered and the \
+             attestation is stale. Approve, or set the override label?",
+            None,
+            None,
+        );
+        req.laws = vec![law(
+            "d-0fa92eb9",
+            "review-coverage",
+            "Two reviews maximum. Two reviews is two reviews.",
+            "2026-08-28T00:00:00Z",
+        )];
+        let ans = ask_answer(&req);
+        assert_eq!(ans.exact.len(), 1);
+        assert_eq!(ans.exact[0].subject, "review-coverage");
+        assert_eq!(ans.exact[0].ids, vec!["d-0fa92eb9"]);
+        assert!(
+            ans.nearby.is_empty(),
+            "nearby runs only when a subject was named"
+        );
+    }
+
+    fn ask_req(question: &str, subject: Option<&str>, _node: Option<&str>) -> AskRequest {
+        AskRequest {
+            question: question.to_owned(),
+            subject: subject.map(str::to_owned),
+            laws: fixture_laws(),
+        }
+    }
+
+    const Q470: &str =
+        "PR 1847 shrank +207 to +142. Requesting the operator-applied budget-exception label.";
+
+    fn validate_req(
+        subject: &str,
+        decision: &str,
+        rationale: Option<&str>,
+        supersedes: Option<&str>,
+    ) -> ValidateRequest {
+        ValidateRequest {
+            subject: subject.to_owned(),
+            decision: decision.to_owned(),
+            rationale: rationale.map(str::to_owned),
+            supersedes: supersedes.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn port_rows() {
+        let cases: Vec<(ValidateRequest, &str)> = vec![
+            (
+                validate_req("", "Decision.", Some("r"), None),
+                "subject and decision are required",
+            ),
+            (
+                validate_req("subject", "", Some("r"), None),
+                "subject and decision are required",
+            ),
+            (
+                validate_req("subject", "Decision.", None, None),
+                "rationale is required for durable law",
+            ),
+            (
+                validate_req("subject", "Decision.", Some("  "), None),
+                "rationale is required for durable law",
+            ),
+            (
+                validate_req("subject", "This PR merges now.", Some("r"), None),
+                "the statement is coordination, not durable law",
+            ),
+            (
+                validate_req("subject", "Until merge it stands.", Some("r"), None),
+                "the statement is coordination, not durable law",
+            ),
+            (
+                validate_req("subject", "Decision.", Some("r"), Some("x-bbbb")),
+                "supersedes must be a decision id",
+            ),
+        ];
+        for (req, want) in cases {
+            let answer = validate_answer(&req);
+            let refusal = answer["refusal"].as_str().expect("refusal");
+            assert!(
+                refusal.starts_with(want.split(',').next().unwrap_or(want)),
+                "wanted {want}, got {refusal}"
+            );
+        }
+        // The happy shape records: no refusal at all.
+        let ok = validate_answer(&validate_req(
+            "review-rounds-cap",
+            "Two rounds.",
+            Some("r"),
+            Some("d-0ad0ad0a"),
+        ));
+        assert_eq!(ok["refusal"], Value::Null);
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("decisions.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{{\"type\":\"operator_decision\",\"ts\":\"2026-09-01T00:00:00Z\",\
+                 \"data\":{{\"decision_id\":\"d-777e7d1f\",\"subject\":\"merge-guard-purpose\",\
+                 \"decision\":\"Two rounds complete the review cap.\",\"text\":\"x\",\
+                 \"authority_source\":\"operator\"}}}}\n\
+                 {{\"type\":\"operator_decision\",\"ts\":\"2026-09-02T00:00:00Z\",\
+                 \"data\":{{\"decision_id\":\"d-777e7d2f\",\"subject\":\"lead-authority:deploy-and-close\",\
+                 \"decision\":\"Leads deploy and close.\",\"text\":\"x\",\
+                 \"authority_source\":\"operator\"}}}}\n"
+            ),
+        )
+        .expect("writes");
+        let index = decision_index::live_laws(&path).expect("reads");
+        let new_law = LawRow {
+            decision_id: "d-00000001".to_owned(),
+            subject: Some("merge-guard-scope".to_owned()),
+            decision: Some("A fourth round is spent".to_owned()),
+            ts: None,
+            lane: None,
+            authority_source: None,
+        };
+        let lines = near_law_lines_from(&index, &new_law);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        let line = &lines[0];
+        assert!(line.contains("d-777e7d1f"), "{line}");
+        assert!(line.contains("merge-guard-purpose"), "{line}");
+        assert!(line.starts_with("note: "), "{line}");
+        assert!(line.contains("law retract"), "{line}");
+        assert!(line.contains("--supersedes"), "{line}");
+        // The new law is named only as the subject of the line, never as a
+        // near hit of itself.
+        assert!(!line.contains("near live law d-00000001"), "{line}");
+        assert!(line.contains("sits near live law d-777e7d1f"), "{line}");
+        // One shared role word ("lead") is no neighbor.
+        let lead_asks = LawRow {
+            subject: Some("lead-asks".to_owned()),
+            ..new_law
+        };
+        assert!(near_law_lines_from(&index, &lead_asks).is_empty());
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod scope_tests {
+    use super::*;
+
+    fn sources(tmp: &std::path::Path) -> Vec<std::path::PathBuf> {
+        vec![tmp.join("global.toml")]
+    }
+
+    fn write_map(tmp: &std::path::Path, slug: &str, proj: &std::path::Path) {
+        std::fs::write(
+            tmp.join("global.toml"),
+            format!(
+                "[[work.workspaces.main.projects]]\nname = \"{slug}\"\npath = \"{}\"\n",
+                proj.display()
+            ),
+        )
+        .expect("writes");
+    }
+
+    #[test]
+    fn the_door_refuses_closed_when_no_project_resolves() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        write_map(tmp.path(), "demo", &tmp.path().join("proj"));
+        let answer = record_scope_answer_in(
+            Some(&tmp.path().join("nowhere")),
+            &sources(tmp.path()),
+            None,
+            &[],
+        );
+        assert_eq!(answer["ok"], false);
+        assert!(answer["refusal"]
+            .as_str()
+            .expect("refusal")
+            .contains("no project stamps this law"));
+    }
+
+    #[test]
+    fn the_record_door_splits_echoes_and_refuses_paths() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        write_map(tmp.path(), "demo", &tmp.path().join("proj"));
+        let cwd = tmp.path().join("proj");
+        let answer = record_scope_answer_in(
+            Some(&cwd),
+            &sources(tmp.path()),
+            None,
+            &["crates/**, hooks/*.sh".to_string(), "  ".to_string()],
+        );
+        assert_eq!(answer["ok"], true);
+        assert_eq!(answer["scope"], "project:demo");
+        assert_eq!(
+            answer["paths"],
+            serde_json::json!(["crates/**", "hooks/*.sh"])
+        );
+        for bad in ["/etc/**", "../x/**"] {
+            let answer =
+                record_scope_answer_in(Some(&cwd), &sources(tmp.path()), None, &[bad.to_string()]);
+            assert_eq!(answer["ok"], false, "{bad}");
+            assert!(
+                answer["refusal"].as_str().expect("refusal").contains(bad),
+                "{answer}"
+            );
+        }
+    }
+
+    // ── the record door ───────────────────────────────────────────────────
+
+    fn door(subject: &str, decision: &str) -> RecordDoor {
+        RecordDoor {
+            subject: subject.to_string(),
+            decision: Some(decision.to_string()),
+            decision_file: None,
+            rationale: Some("the operator owns durable policy.".to_string()),
+            options: Vec::new(),
+            supersedes: None,
+            graduation: None,
+            graduation_ref: None,
+            reads: Vec::new(),
+            widen: None,
+            raw_paths: Vec::new(),
+            quote: None,
+            filters: Vec::new(),
+            not_filters: Vec::new(),
+            strength: None,
+            from: None,
+            whiles: Vec::new(),
+            between: None,
+            guard: None,
+            until: None,
+        }
+    }
+
+    #[test]
+    fn the_record_door_records_a_coordination_wording_and_refuses_placeholders() {
+        // The coordination markers are a caution at the write door (the
+        // 2026-11-07 guard-purge ruling): the refusal ate a user ruling on
+        // that day, and losing a ruling is the harm. The structural gates
+        // keep refusing.
+        let ok = record_door_preflight(
+            &[
+                "guard-purge".to_string(),
+                "This PR merges now.".to_string(),
+                "--rationale".to_string(),
+                "r".to_string(),
+            ],
+            "",
+        );
+        assert!(ok.is_ok());
+        assert_eq!(ok.expect("records").1, "This PR merges now.");
+        let bad = record_door_preflight(
+            &[
+                "x".to_string(),
+                "d".to_string(),
+                "--rationale".to_string(),
+                "r".to_string(),
+            ],
+            "",
+        );
+        assert!(bad.is_err());
+    }
+
+    #[test]
+    fn autonomy_ask_gate_needs_the_users_words_only_from_a_session() {
+        let _guard = DOOR_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".fno")).unwrap();
+        let config = dir.path().join(".fno/config.toml");
+        std::env::set_var("FNO_CONFIG", &config);
+        let chat = Caller::as_authority("chat_attested");
+        let operator = Caller::as_authority("operator");
+        let outcomes = |body: &str| {
+            std::fs::write(&config, body).unwrap();
+            (
+                autonomy_ask_gate(&chat, None, dir.path()).is_ok(),
+                autonomy_ask_gate(&chat, Some("  "), dir.path()).is_ok(),
+                autonomy_ask_gate(&chat, Some("record it"), dir.path()).is_ok(),
+                autonomy_ask_gate(&operator, None, dir.path()).is_ok(),
+            )
+        };
+        let balanced = outcomes("");
+        let yolo = outcomes("[autonomy]\nmode = \"yolo\"\n");
+        let ask_allowed = outcomes("[autonomy]\nmode = \"ask\"\nallow = [\"law\"]\n");
+        std::env::remove_var("FNO_CONFIG");
+        assert_eq!(balanced, (false, false, true, true));
+        assert_eq!(yolo, (true, true, true, true));
+        assert_eq!(ask_allowed, (true, true, true, true));
+    }
+
+    /// Hermetic state for a door write: tmp FNO_HOME (index, questions,
+    /// graph) + tmp FNO_REPO_ROOT (journal, evidence root) + a work map.
+    /// The env is process-global, so the lock serializes every env-touching
+    /// door test; the guard drops after the env restore.
+    static DOOR_ENV_LOCK: std::sync::LazyLock<&'static std::sync::Mutex<()>> =
+        std::sync::LazyLock::new(crate::claims::test_env_lock);
+
+    // Field 2 is the env lock guard, held for its Drop and never read.
+    #[allow(dead_code)]
+    pub(crate) struct DoorEnv(
+        pub(crate) tempfile::TempDir,
+        tempfile::TempDir,
+        std::sync::MutexGuard<'static, ()>,
+    );
+
+    impl DoorEnv {
+        pub(crate) fn new() -> Self {
+            let guard = DOOR_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let home = tempfile::tempdir().expect("tempdir");
+            let root = tempfile::tempdir().expect("tempdir");
+            std::fs::create_dir_all(root.path().join(".fno")).expect("mkdir");
+            std::env::set_var("FNO_HOME", home.path());
+            std::env::set_var("FNO_REPO_ROOT", root.path());
+            let map = root.path().join("settings.yaml");
+            // The map names THIS process's cwd: the door resolves the scope
+            // from std::env::current_dir against the work map.
+            std::fs::write(
+                &map,
+                format!(
+                    "work:\n  workspaces:\n    main:\n      projects:\n        - name: demo\n          path: {}\n",
+                    std::env::current_dir()
+                        .expect("cwd")
+                        .display()
+                ),
+            )
+            .expect("writes");
+            std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", &map);
+            Self(home, root, guard)
+        }
+
+        // The appends land in the SQLite store beside the journal, so the
+        // reads go through the store merge, never the raw jsonl.
+        fn store_text(&self, journal: &std::path::Path) -> String {
+            crate::event_store::journal_text(journal, &["operator_decision"])
+        }
+
+        fn index_text(&self) -> String {
+            self.store_text(&self.0.path().join("decisions.jsonl"))
+        }
+
+        fn journal_text(&self) -> String {
+            self.store_text(&self.1.path().join(".fno").join("events.jsonl"))
+        }
+    }
+
+    impl Drop for DoorEnv {
+        fn drop(&mut self) {
+            std::env::remove_var("FNO_HOME");
+            std::env::remove_var("FNO_REPO_ROOT");
+            std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH");
+        }
+    }
+
+    #[test]
+    fn one_scope_flag_per_law_and_a_wide_one_needs_a_user_certificate() {
+        let argv = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        let Err(two) = parse_record_door(&argv(&["s", "d", "--global", "--machine"])) else {
+            panic!("two scope flags parse");
+        };
+        assert!(two.contains("--global and --machine"), "{two}");
+        let bare = parse_record_door(&argv(&["s", "--user", "d"])).expect("parses");
+        assert_eq!(bare.widen, Some(Widen::User(None)));
+        assert_eq!(
+            bare.decision.as_deref(),
+            Some("d"),
+            "a bare flag takes no value"
+        );
+
+        let env = DoorEnv::new();
+        crate::paths::pin_test_claims_root(env.0.path());
+        let operator = Caller::as_authority("operator");
+        let record = |text: &str, widen: Option<Widen>| {
+            let mut d = door(text, text);
+            d.widen = widen;
+            record_door_write(d, text.to_string(), &operator)
+        };
+        // No certificate: global refuses and no store holds the row.
+        assert_eq!(record("wide-one", Some(Widen::Global)), 3);
+        assert!(!env.index_text().contains("wide-one"));
+        assert!(!env.journal_text().contains("wide-one"));
+        let other = Some(Widen::User(Some("nobody-zz9".into())));
+        assert_eq!(record("other-one", other), 3, "another user is wide too");
+        // A project law and this machine's own scope need no name.
+        assert_eq!(record("project-one", None), 0);
+        let mine = crate::claims::machine_id();
+        let own = record("machine-one", Some(Widen::Machine(None)));
+        assert_eq!(
+            own,
+            if mine.is_empty() { 3 } else { 0 },
+            "machine id {mine:?}"
+        );
+        if !mine.is_empty() {
+            let want = format!("\"scope\":\"machine:{mine}\"");
+            assert!(env.index_text().contains(&want), "{}", env.index_text());
+        }
+        // A stated owner is a name, never proof: global still refuses.
+        std::fs::write(
+            env.1.path().join("config.toml"),
+            "[fleet]\nowner = \"jason\"\n",
+        )
+        .expect("writes");
+        let refusal = wide_scope_refusal("global").expect("an owner alone refuses");
+        assert!(
+            refusal.contains("mail-remote key certify")
+                && refusal.contains("mail-remote key cert "),
+            "{refusal}"
+        );
+        assert_eq!(record("wide-owner", Some(Widen::Global)), 3);
+        assert!(!env.index_text().contains("wide-owner"));
+        assert!(!env.journal_text().contains("wide-owner"));
+        // A certificate for this machine's key opens the wide scopes, and
+        // the row it records reads back signed under that user key.
+        let agents = env.0.path().join("agents");
+        std::fs::create_dir_all(&agents).expect("mkdir");
+        let _agents = crate::claims::EnvVarGuard::set(
+            crate::paths::HOME_ENV,
+            agents.to_str().expect("utf-8"),
+        );
+        let user_key =
+            crate::machine_key::MachineKey::load_or_create(&env.0.path().join("user.pk8"))
+                .expect("user key");
+        let own = crate::machine_key::own().expect("own key").public_key();
+        std::fs::write(
+            crate::machine_key::cert_path(&agents),
+            crate::machine_key::mint_cert(&user_key, "jason", &own, 1),
+        )
+        .expect("writes");
+        assert_eq!(record("wide-two", Some(Widen::Global)), 0);
+        assert!(env.index_text().contains("\"scope\":\"global\""));
+        let (rows, _) = all_decision_rows().expect("the store reads");
+        let signed = rows
+            .iter()
+            .find(|r| r["subject"] == "wide-two")
+            .expect("the signed row reads back");
+        assert_eq!(
+            crate::identity::verify_law_row(signed),
+            Some(user_key.public_key())
+        );
+        // A law bound to a user nobody resolves stays addressable here.
+        let typo = Some(Widen::User(Some("nobody-zz9".into())));
+        assert_eq!(record("typo-one", typo), 0);
+        let (rows, _) = all_decision_rows().expect("the store reads");
+        let addressable = scope_filtered_rows(rows);
+        assert!(addressable.iter().any(|r| r["subject"] == "typo-one"));
+    }
+
+    #[test]
+    fn chat_cannot_supersede_an_operator_row_but_can_its_own() {
+        let env = DoorEnv::new();
+        crate::paths::pin_test_claims_root(env.0.path());
+        let index = env.0.path().join("decisions.jsonl");
+        std::fs::write(
+            &index,
+            concat!(
+                "{\"ts\":\"2026-08-29T19:00:00Z\",\"type\":\"operator_decision\",\"source\":\"test\",",
+                "\"data\":{\"decision_id\":\"d-0ad0ad0a\",\"subject\":\"merge-authority\",",
+                "\"decision\":\"Merges belong to the operator\",\"authority_source\":\"operator\"}}\n"
+            ),
+        )
+        .expect("writes");
+        let mut d = door("merge-authority", "Merges belong to whoever asks");
+        d.supersedes = Some("d-0ad0ad0a".to_string());
+        let code = record_door_write(
+            d,
+            "Merges belong to whoever asks".to_string(),
+            &Caller::as_authority("chat_attested"),
+        );
+        assert_eq!(code, 3, "operator rows are out of a chat session's reach");
+        assert_eq!(
+            std::fs::read_to_string(&index)
+                .expect("reads")
+                .lines()
+                .count(),
+            1,
+            "nothing new recorded"
+        );
+
+        // The make-it-fail control: the same supersession at a chat row lands.
+        let body = concat!(
+            "{\"ts\":\"2026-08-29T19:00:00Z\",\"type\":\"operator_decision\",\"source\":\"test\",",
+            "\"data\":{\"decision_id\":\"d-c4a7c4a7\",\"subject\":\"merge-authority\",",
+            "\"decision\":\"Merges belong to the operator\",\"authority_source\":\"chat_attested\"}}\n"
+        );
+        std::fs::write(&index, body).expect("writes");
+        let mut d = door("merge-authority", "Merges belong to whoever asks");
+        d.supersedes = Some("d-c4a7c4a7".to_string());
+        let code = record_door_write(
+            d,
+            "Merges belong to whoever asks".to_string(),
+            &Caller::as_authority("chat_attested"),
+        );
+        assert_eq!(code, 0);
+        assert!(env.index_text().contains("d-c4a7c4a7"));
+    }
+
+    #[test]
+    fn a_code_fact_without_a_read_refuses_and_with_one_records_the_row() {
+        let env = DoorEnv::new();
+        crate::paths::pin_test_claims_root(env.0.path());
+        std::fs::write(
+            env.1.path().join("advance.py"),
+            (1..=200).map(|i| format!("line {i}\n")).collect::<String>(),
+        )
+        .expect("writes");
+        let code = record_door_write(
+            door(
+                "territory-resolver",
+                "advance.py:167 is the territory resolver",
+            ),
+            "advance.py:167 is the territory resolver".to_string(),
+            &Caller::as_authority("chat_attested"),
+        );
+        assert_eq!(code, 3, "unmeasured claim refused");
+        assert!(env.index_text().is_empty());
+
+        let mut d = door("territory-resolver", "advance.py is 200 lines");
+        d.reads = vec!["head -5 advance.py".to_string()];
+        let code = record_door_write(
+            d,
+            "advance.py is 200 lines".to_string(),
+            &Caller::as_authority("chat_attested"),
+        );
+        assert_eq!(code, 0);
+        let index = env.index_text();
+        assert!(index.contains("\"reads\":[{"), "{index}");
+        assert!(index.contains("head -5 advance.py"), "{index}");
+    }
+}

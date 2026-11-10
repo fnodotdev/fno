@@ -1,0 +1,2176 @@
+//! The one backlog read model: gather once, answer board and node queries
+//! purely, and let two renderers draw the same structs.
+use crate::backlog_view::{
+    board_scope_from_spawn_env, external_backend_selected, has_open_dependency, kanban_column,
+    read_snapshot, run_claim_sweep, BoardScope,
+};
+use crate::node_row::{Edge, KanbanColumn, NodeRow, SessionRecord, Status};
+use crate::proto::AgentRow;
+use crate::store_client;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+/// The ledger the flow aggregate reads, through the layout row. Under test
+/// the proto root is not compiled, so point at a path that reads as absent:
+/// no ledger, no rows.
+#[cfg(not(test))]
+fn ledger_path() -> PathBuf {
+    crate::state_layout::place(&crate::proto::mux_sidecar_root(), "ledger.json")
+}
+
+#[cfg(test)]
+fn ledger_path() -> PathBuf {
+    std::env::temp_dir()
+        .join(format!("fno-model-ledger-{}", std::process::id()))
+        .join("ledger.json")
+}
+
+pub const REGATHER_AFTER: Duration = Duration::from_secs(30);
+
+/// How lanes group cards.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LanesBy {
+    /// One lane per project; the unscoped lane last.
+    #[default]
+    Project,
+    /// One lane per epic (open, parented cards sit in their epic's lane).
+    Epic,
+    /// One lane.
+    #[serde(rename = "none")]
+    None,
+}
+
+/// How the list view asks for its rows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum View {
+    /// The kanban grid: cells keep their per-column caps.
+    #[default]
+    Kanban,
+    /// The list: lanes carry every card, uncapped, so no row is hidden.
+    List,
+    /// The focus node's family graph.
+    Graph,
+}
+
+/// The board query, parsed from the route's pairs.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Query {
+    pub lanes: LanesBy,
+    #[serde(skip_serializing_if = "View::is_kanban", default)]
+    pub view: View,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub focus: Option<String>,
+    pub project: Vec<String>,
+    epic: Vec<String>,
+    status: Vec<String>,
+    priority: Vec<String>,
+    size: Vec<String>,
+    lead: Vec<String>,
+    kind: Vec<String>,
+    tag: Vec<String>,
+    pub(crate) q: Option<String>,
+    /// The resolved page sort from the query's `sort:` term.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub sort: Option<String>,
+    pub all: bool,
+}
+
+/// Why a board query's pairs did not parse. `Display` is the line the page
+/// and the list command print.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QueryError {
+    UnknownLanes(String),
+    UnknownView(String),
+    /// The `q` term's search grammar refused, with its own message.
+    Search(String),
+}
+
+impl std::fmt::Display for QueryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownLanes(v) => write!(f, "unknown lanes '{v}'; use project, epic or none"),
+            Self::UnknownView(v) => write!(f, "unknown view '{v}'; use kanban, list or graph"),
+            Self::Search(m) => f.write_str(m),
+        }
+    }
+}
+
+impl std::error::Error for QueryError {}
+
+impl From<QueryError> for String {
+    fn from(e: QueryError) -> String {
+        e.to_string()
+    }
+}
+
+impl View {
+    fn is_kanban(v: &View) -> bool {
+        *v == View::Kanban
+    }
+}
+
+/// One value per repeated key, first-seen order, duplicates dropped.
+fn push_unique(set: &mut Vec<String>, val: Option<&str>) {
+    if let Some(v) = val {
+        if !set.iter().any(|s| s == v) {
+            set.push(v.to_string());
+        }
+    }
+}
+
+impl Query {
+    /// Parse the route's query pairs. Unknown keys (the page's `t` and
+    /// `node`) are ignored, an empty value reads as unset, repeated filter
+    /// keys accumulate any-of sets, and `all` is true for `1`, `true` or an
+    /// empty value.
+    pub fn from_pairs(p: &[(String, String)]) -> Result<Query, QueryError> {
+        let mut q = Query::default();
+        for (k, v) in p {
+            let val = (!v.is_empty()).then(|| v.as_str());
+            match k.as_str() {
+                "lanes" => match val.unwrap_or_default() {
+                    "" | "project" => q.lanes = LanesBy::Project,
+                    "epic" => q.lanes = LanesBy::Epic,
+                    "none" => q.lanes = LanesBy::None,
+                    other => return Err(QueryError::UnknownLanes(other.to_string())),
+                },
+                "view" => match val.unwrap_or_default() {
+                    "" | "kanban" => q.view = View::Kanban,
+                    "list" => q.view = View::List,
+                    "graph" => q.view = View::Graph,
+                    other => return Err(QueryError::UnknownView(other.to_string())),
+                },
+                "focus" => q.focus = val.map(str::to_string),
+                "project" => push_unique(&mut q.project, val),
+                "epic" => push_unique(&mut q.epic, val),
+                "status" => push_unique(&mut q.status, val),
+                "priority" => push_unique(&mut q.priority, val),
+                "size" => push_unique(&mut q.size, val),
+                "lead" => push_unique(&mut q.lead, val),
+                "type" => push_unique(&mut q.kind, val),
+                "tag" => push_unique(&mut q.tag, val),
+                "q" => {
+                    let text = val.unwrap_or_default();
+                    let parsed = crate::search_query::parse(
+                        text,
+                        crate::search_query::Surface::Node,
+                        crate::search_query::now_secs(),
+                    )
+                    .map_err(QueryError::Search)?;
+                    q.sort = parsed.sort;
+                    q.q = val.map(str::to_string);
+                }
+                "all" => q.all = matches!(v.as_str(), "1" | "true" | ""),
+                _ => {}
+            }
+        }
+        Ok(q)
+    }
+}
+
+/// The teamed row that rules a node's territory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Lead {
+    pub name: String,
+    pub level: u32,
+}
+
+/// One board card.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Card {
+    pub id: String,
+    /// The store-minted short number (`x-5555`), served as `_number`. `None`
+    /// while the primary has not numbered the node yet.
+    pub number: Option<String>,
+    pub slug: Option<String>,
+    /// Falls back to the slug when the row carries no title.
+    pub title: String,
+    /// The authority's column.
+    pub column: KanbanColumn,
+    /// The card's index in the model's total order.
+    pub order: usize,
+    pub rank: Option<f64>,
+    pub priority: Option<String>,
+    pub size: Option<String>,
+    pub status: Option<Status>,
+    pub project: Option<String>,
+    pub parent: Option<String>,
+    /// The row's `type` field.
+    pub kind: Option<String>,
+    /// The row's `tags` array, empty when absent.
+    pub tags: Vec<String>,
+    pub blocked: bool,
+    pub claimed: bool,
+    // The wire keeps the pre-rename roster key; the served page reads it.
+    #[serde(rename = "lead")]
+    pub lead: Option<Lead>,
+    /// True when any of the node's sessions joins a roster row.
+    pub live: bool,
+    /// The row's `created_at`, for the list view's date column.
+    pub created_at: Option<String>,
+    /// The row's `completed_at`, for the client-side epic-lane rule (a card
+    /// sits in its parent's lane only while the parent row is open).
+    pub completed_at: Option<String>,
+    /// The newest stamp on the row or its sessions, for the list view's
+    /// updated column and the `date=updated_at` filter.
+    pub updated_at: Option<String>,
+    /// Rows whose `parent` names this card.
+    pub child_count: usize,
+    /// The parent row's title, for the search's bare-word field.
+    pub parent_title: Option<String>,
+    /// Every session id the row names: `sessions[].session_id`,
+    /// `source_session_id` and `spawned_by_session`, deduplicated, blanks
+    /// dropped. Search matches a full id or its 8-character head.
+    pub session_ids: Vec<String>,
+    /// Distinct encounter voters (demand's `encounter_voters` rule).
+    pub encounters: usize,
+    /// The operator subset (`voter_kind == "operator"`).
+    pub encounters_operator: usize,
+    /// The outside-vote subset (`voter_kind == "external"`): shown on the
+    /// public pill, never counted in demand ranking.
+    pub encounters_external: usize,
+}
+
+/// The row's newest stamp: max of `touched_at`, `created_at`, `completed_at`
+/// and every `sessions[].started_at` / `ended_at`. Compared on the first 19
+/// characters (`YYYY-MM-DDTHH:MM:SS`, so `Z` and `+00:00` forms compare
+/// equal); the original string is returned.
+fn newest_stamp(e: &NodeRow) -> Option<String> {
+    let row_stamps = [&e.touched_at, &e.created_at, &e.completed_at];
+    let session_stamps = e
+        .sessions()
+        .iter()
+        .flat_map(|s| [&s.started_at, &s.ended_at]);
+    let stamps = row_stamps
+        .into_iter()
+        .chain(session_stamps)
+        .filter_map(|s| s.as_deref().filter(|s| !s.is_empty()));
+    let mut best: Option<&str> = None;
+    for s in stamps {
+        let newer = best.is_none_or(|b| &s[..s.len().min(19)] > &b[..b.len().min(19)]);
+        if newer {
+            best = Some(s);
+        }
+    }
+    best.map(str::to_string)
+}
+
+/// One encounter record's voter identity: `voter_key`, falling back to
+/// `session_id` for rows written before the key existed. Mirrors
+/// `fno.graph.demand.voter_key` so the board and the demand read can never
+/// disagree about what one voter is.
+fn voter_key(e: &crate::node_row::Encounter) -> Option<&str> {
+    e.voter_key
+        .as_deref()
+        .or(e.session_id.as_deref())
+        .filter(|s| !s.is_empty())
+}
+
+/// Distinct encounter voters, the operator subset and the outside-vote
+/// subset, per row.
+fn encounter_counts(e: &NodeRow) -> (usize, usize, usize) {
+    let mut voters: HashSet<&str> = HashSet::new();
+    let mut operators: HashSet<&str> = HashSet::new();
+    let mut externals: HashSet<&str> = HashSet::new();
+    for v in e.encounters() {
+        let Some(key) = voter_key(v) else {
+            continue;
+        };
+        voters.insert(key);
+        match v.voter_kind.as_deref() {
+            Some("operator") => operators.insert(key),
+            Some("external") => externals.insert(key),
+            _ => false,
+        };
+    }
+    (voters.len(), operators.len(), externals.len())
+}
+
+/// A link to another node the read holds; an id-only link names a node the
+/// read does not hold.
+#[derive(Debug, Clone, Serialize)]
+pub struct Link {
+    pub id: String,
+    pub title: Option<String>,
+    pub column: Option<KanbanColumn>,
+    pub status: Option<Status>,
+}
+
+/// One column cell within a lane.
+#[derive(Debug, Clone, Serialize)]
+pub struct Cell {
+    pub column: KanbanColumn,
+    pub total: usize,
+    pub cards: Vec<Card>,
+}
+
+/// One lane: a key (project or epic id), a title, one cell per column.
+#[derive(Debug, Clone, Serialize)]
+pub struct Lane {
+    pub key: String,
+    pub title: String,
+    pub cells: Vec<Cell>,
+}
+
+/// Per-column open totals.
+#[derive(Debug, Clone, Serialize)]
+pub struct ColumnTotal {
+    pub column: KanbanColumn,
+    pub total: usize,
+}
+
+/// One status's card count for the list view's count tiles.
+#[derive(Debug, Clone, Serialize)]
+pub struct StatusTotal {
+    pub status: String,
+    pub total: usize,
+}
+
+/// The board's aggregates.
+#[derive(Debug, Clone, Serialize)]
+pub struct Stats {
+    /// Open totals per column, counted over the filtered card set.
+    pub open: Vec<ColumnTotal>,
+    /// Per-status totals over the pre-filter set: a tile's count is what
+    /// selecting it would show.
+    pub statuses: Vec<StatusTotal>,
+    /// Totals per column over the filtered set, Done included, for the
+    /// board-wide header counts.
+    pub totals: Vec<ColumnTotal>,
+    /// The classifier's `flow` verbatim, or `{"available": false, ...}`.
+    pub flow: Value,
+}
+
+/// Off-board disclosure: per-bucket counts over every in-scope card the
+/// default board view leaves out, shown or not.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Hidden {
+    pub deferred: usize,
+    pub superseded: usize,
+    pub roadmap: usize,
+    pub total: usize,
+}
+
+/// Values present after the scope and before the model's own filters, for
+/// filter menus. `kinds` is the set of row `type` values; `tags` the set of
+/// row `tags`, empty while no row carries one.
+#[derive(Debug, Clone, Serialize)]
+pub struct Facets {
+    pub projects: Vec<String>,
+    pub epics: Vec<EpicRef>,
+    #[serde(rename = "leads")]
+    pub leads: Vec<String>,
+    pub priorities: Vec<String>,
+    pub sizes: Vec<String>,
+    pub statuses: Vec<String>,
+    pub kinds: Vec<String>,
+    pub tags: Vec<String>,
+}
+
+/// An epic named in the facets.
+#[derive(Debug, Clone, Serialize)]
+pub struct EpicRef {
+    pub id: String,
+    pub title: Option<String>,
+}
+
+/// A feature the current backend cannot answer, for renderer controls.
+#[derive(Debug, Clone, Serialize)]
+pub struct Unavailable {
+    pub feature: &'static str,
+    pub reason: String,
+}
+
+/// Unavailable feature names, one spelling renderers compare against.
+pub mod unavailable_features {
+    pub const CARD_MOVES: &str = "card moves";
+    pub const FIELD_EDITS: &str = "field edits";
+    pub const SIZE_FILTER: &str = "size filter";
+    pub const DETAILS: &str = "details";
+    pub const EPIC_LANES: &str = "epic lanes";
+    pub const BLOCKERS: &str = "blockers";
+    pub const SESSIONS: &str = "sessions";
+    pub const DONE_COLUMN: &str = "Done column";
+}
+
+/// The whole board answer.
+#[derive(Debug, Clone, Serialize)]
+pub struct Board {
+    pub schema: u8,
+    pub version: Option<i64>,
+    pub backend: String,
+    pub scope: String,
+    pub query: Query,
+    pub lanes: Vec<Lane>,
+    pub stats: Stats,
+    /// Off-board cards (deferred, superseded, roadmap-typed) that pass the
+    /// scope and the query, absent from every lane and tile; the page's
+    /// reveal control renders these.
+    pub offboard: Vec<Card>,
+    /// What the default view leaves out, named per bucket.
+    pub hidden: Hidden,
+    pub facets: Facets,
+    pub unavailable: Vec<Unavailable>,
+    /// The family graph, present only for `view=graph` with at least one card.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph: Option<crate::backlog_graph::Graph>,
+    pub errors: Vec<String>,
+    /// The page's key table, served once when the request asks `keys=1`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search_keys: Option<serde_json::Value>,
+}
+
+/// One graph session row joined to the roster.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct SessionView {
+    pub phase: Option<String>,
+    pub harness: Option<String>,
+    pub session_id: Option<String>,
+    pub model: Option<String>,
+    pub started_at: Option<String>,
+    pub ended_at: Option<String>,
+    /// The joined roster row's name, when the join held.
+    pub agent: Option<String>,
+    /// `attach`, `resume` or `none`.
+    pub action: String,
+    /// The dim reason when the action is `none`.
+    pub reason: Option<String>,
+    /// The shell line that reaches this session: attach a live row, resume a
+    /// registry row that is not live, adopt a session the registry lacks.
+    pub command: Option<String>,
+}
+
+/// The session a node was filed from, with the one way to reach it.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct OriginSession {
+    pub session_id: String,
+    pub harness: Option<String>,
+    pub cwd: Option<String>,
+    /// The session that spawned the origin session, when the row names one.
+    pub parent_session: Option<String>,
+    /// The joined roster row's name, when the join held.
+    pub agent: Option<String>,
+    /// The live pane serving this session on the local roster. The web page
+    /// links its own pane view with it; `None` means no live view here.
+    pub pane: Option<u64>,
+    /// `attach`, `resume` or `none`, as for a [`SessionView`].
+    pub action: String,
+    pub reason: Option<String>,
+    pub command: Option<String>,
+}
+
+/// A PR bound to a node.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Pr {
+    pub number: u64,
+    pub url: Option<String>,
+    pub merge_status: Option<String>,
+}
+
+/// A progress note.
+#[derive(Debug, Clone, Serialize)]
+pub struct Note {
+    pub ts: Option<String>,
+    pub text: String,
+    pub kind: Option<String>,
+    /// The comment-thread vocabulary, flattened onto comment and reply
+    /// rows: who wrote it, the minted thread id a reply names, the reply
+    /// link, and the ask state (open, accepted, done, declined) with its
+    /// landing link or reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_ref: Option<String>,
+    /// Who wrote it, for an agent row: the worker name, the model
+    /// it ran, and the node it was working. The session id is the row's
+    /// `source_session_id`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub working_node: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_session_id: Option<String>,
+}
+
+/// One node's whole answer.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct NodeView {
+    pub card: Card,
+    pub details: Option<Value>,
+    pub current_state: Value,
+    pub plan_path: Option<String>,
+    pub cwd: Option<String>,
+    pub difficulty: Option<String>,
+    /// The row's `type` field.
+    pub kind: Option<String>,
+    pub created_at: Option<String>,
+    pub completed_at: Option<String>,
+    /// The row's `source_kind` (who asked for it) and its evidence line.
+    pub origin: Option<String>,
+    pub origin_evidence: Option<String>,
+    /// The session the node came from (`source_session_id`).
+    pub origin_session: Option<OriginSession>,
+    pub children: Vec<Link>,
+    pub contained: Vec<Link>,
+    pub blocked_by: Vec<Link>,
+    pub blocks: Vec<Link>,
+    pub related: Vec<Link>,
+    /// The node's parent, one link (the row's `parent` id).
+    pub parent: Vec<Link>,
+    pub sessions: Vec<SessionView>,
+    pub prs: Vec<Pr>,
+    pub notes: Vec<Note>,
+    pub decisions: Vec<Value>,
+    pub unavailable: Vec<Unavailable>,
+}
+
+/// Everything one gather read, shared by both renderers.
+#[derive(Debug, Clone, Default)]
+pub struct Inputs {
+    pub backend: String,
+    pub rows: Vec<NodeRow>,
+    pub rows_error: Option<String>,
+    pub version: Option<i64>,
+    /// Every id the keeper named, in selection order.
+    pub order: Vec<String>,
+    pub underway: HashSet<String>,
+    pub effective_priority: HashMap<String, String>,
+    /// The claim sweep's node id -> holder map.
+    pub live_claims: HashMap<String, String>,
+    /// When the read happened: the `now` the grammar's relative dates and
+    /// the stale rule answer against.
+    pub read_at: i64,
+    /// The registry's session identities, read after the gather by
+    /// [`read_search_sources`].
+    pub sessions: crate::search_query::SessionDirectory,
+    /// The node ids with an open operator question, read on demand.
+    pub open_questions: Option<HashSet<String>>,
+    pub agents: Vec<AgentRow>,
+    pub flow: Value,
+    pub scope: BoardScope,
+    pub scope_reason: String,
+    pub errors: Vec<String>,
+    /// The derived total order, built once per read. The rows are frozen at
+    /// gather time, so one map serves every consumer; before the cache,
+    /// `order_of` rebuilt a map over every row on each `node()` call, and
+    /// the detail pane calls `node()` per paint (the frame-cost sample
+    /// named this rebuild as the open board's hot function).
+    pub(crate) order_map: std::sync::OnceLock<HashMap<String, usize>>,
+}
+
+#[cfg(test)]
+pub(crate) fn fixture(rows: Vec<Value>) -> Inputs {
+    let rows = crate::node_row::rows_from_values(rows);
+    Inputs {
+        backend: "graph".into(),
+        order: rows.iter().filter_map(|r| r.id.clone()).collect(),
+        flow: json!({"available": false, "reason": "fixture"}),
+        rows,
+        read_at: FIXTURE_NOW,
+        ..Default::default()
+    }
+}
+
+/// The fixture's `read_at`: 2026-10-01T12:00:00Z, the case file's `now`.
+#[cfg(test)]
+pub(crate) const FIXTURE_NOW: i64 = 1790856000;
+
+/// The card's index in the model's total order: the keeper's `ids` first,
+/// then ids the keeper did not name, by `created_at`. Computed once per
+/// read; every caller shares the one map.
+pub(crate) fn order_of(inp: &Inputs) -> &HashMap<String, usize> {
+    inp.order_map.get_or_init(|| build_order_map(inp))
+}
+
+fn build_order_map(inp: &Inputs) -> HashMap<String, usize> {
+    let mut map: HashMap<String, usize> = HashMap::new();
+    for (i, id) in inp.order.iter().enumerate() {
+        map.insert(id.clone(), i);
+    }
+    // Ids the keeper did not name: append after the named ones, oldest first.
+    let mut unlisted: Vec<(&str, &NodeRow)> = inp
+        .rows
+        .iter()
+        .filter_map(|r| Some((r.id()?, r)))
+        .filter(|(id, _)| !map.contains_key(*id))
+        .collect();
+    unlisted.sort_by_key(|(_, r)| r.created_at.as_deref().unwrap_or(""));
+    let base = inp.order.len();
+    for (i, (id, _)) in unlisted.into_iter().enumerate() {
+        map.insert(id.to_string(), base + i);
+    }
+    map
+}
+
+/// The teamed row ruling this node's territory, from the roster.
+pub(crate) fn lead_for(
+    inp: &Inputs,
+    node_id: &str,
+    parent: Option<&str>,
+    project: Option<&str>,
+) -> Option<Lead> {
+    lead_of(&inp.agents, node_id, parent, project).map(|(name, level)| Lead { name, level })
+}
+
+/// The one per-row card function [`board`] and [`node`] both use.
+pub(crate) fn card_of(
+    inp: &Inputs,
+    e: &NodeRow,
+    order: &HashMap<String, usize>,
+    blocked: bool,
+) -> Option<Card> {
+    let id = e.id.clone()?;
+    let slug = e.slug.clone();
+    let title = e
+        .title
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .or(slug.as_deref())
+        .unwrap_or_default()
+        .to_string();
+    let status = e.status().cloned();
+    let status_claimed = match &status {
+        Some(Status::InProgress) => true,
+        Some(Status::Other(word)) => word == "in-progress",
+        _ => false,
+    };
+    let claimed = status_claimed || inp.live_claims.contains_key(&id);
+    let underway = inp.underway.contains(&id);
+    // A deferred/superseded/roadmap row is off every board lane but still a
+    // row the store holds: keep the card under the sentinel column so list
+    // queries reach it and the board payload can name what it leaves out.
+    let column = kanban_column(
+        e,
+        claimed,
+        underway,
+        inp.effective_priority.get(&id).map(String::as_str),
+    )
+    .unwrap_or(KanbanColumn::OffBoard);
+    let (encounters, encounters_operator, encounters_external) = encounter_counts(e);
+    Some(Card {
+        number: e.number_label.clone(),
+        order: order.get(&id).copied().unwrap_or(usize::MAX),
+        rank: e.rank(),
+        priority: e.priority.clone(),
+        size: e.size.clone(),
+        status,
+        project: e.project().map(str::to_string),
+        parent: e.parent.clone(),
+        kind: e.kind.clone(),
+        tags: e.tags().to_vec(),
+        blocked,
+        claimed,
+        lead: lead_for(inp, &id, e.parent.as_deref(), e.project.as_deref()),
+        live: session_is_live(inp, &id),
+        id,
+        slug,
+        title,
+        column,
+        created_at: e.created_at.clone(),
+        completed_at: e.completed_at.clone(),
+        updated_at: newest_stamp(e),
+        child_count: 0,
+        parent_title: None,
+        session_ids: row_session_ids(e),
+        encounters,
+        encounters_operator,
+        encounters_external,
+    })
+}
+
+/// Every session id the row names: `sessions[].session_id`,
+/// `source_session_id` and `spawned_by_session`, deduplicated, blanks
+/// dropped, first-seen order.
+fn row_session_ids(e: &NodeRow) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let named = e
+        .sessions()
+        .iter()
+        .map(|s| &s.session_id)
+        .chain([&e.source_session_id, &e.spawned_by_session]);
+    for s in named.filter_map(|s| s.as_deref().filter(|s| !s.is_empty())) {
+        if !out.iter().any(|have| have == s) {
+            out.push(s.to_string());
+        }
+    }
+    out
+}
+
+/// Whether any of the node's sessions joins a roster row by
+/// `harness_session_id`.
+fn session_is_live(inp: &Inputs, node_id: &str) -> bool {
+    node_sessions(inp, node_id).iter().any(|s| {
+        s.session_id.as_deref().is_some_and(|sid| {
+            inp.agents
+                .iter()
+                .any(|a| a.harness_session_id.as_deref() == Some(sid))
+        })
+    })
+}
+
+/// The node's `sessions[]` rows.
+fn node_sessions<'a>(inp: &'a Inputs, node_id: &str) -> Vec<&'a SessionRecord> {
+    inp.rows
+        .iter()
+        .filter(|r| r.id() == Some(node_id))
+        .flat_map(NodeRow::sessions)
+        .collect()
+}
+
+/// Whether the filtered card set keeps the row: any-of project, status,
+/// priority, size, lead-name, type and tag filters, `epic` keeps the
+/// epic's own card plus cards whose parent names any selected epic, and
+/// `q` is the shared search grammar over the row's field map.
+#[allow(clippy::too_many_arguments)]
+fn keeps_query(
+    inp: &Inputs,
+    by_ref: &HashMap<&str, &NodeRow>,
+    card: &Card,
+    row: Option<&NodeRow>,
+    q: &Query,
+    parsed: Option<&crate::search_query::Parsed>,
+) -> bool {
+    let in_set = |values: &[String], have: Option<&str>| {
+        values.is_empty() || values.iter().any(|v| Some(v.as_str()) == have)
+    };
+    if !in_set(&q.project, card.project.as_deref()) {
+        return false;
+    }
+    if !in_set(&q.status, card.status.as_ref().map(Status::as_str)) {
+        return false;
+    }
+    if !in_set(&q.priority, card.priority.as_deref()) {
+        return false;
+    }
+    if !in_set(&q.size, card.size.as_deref()) {
+        return false;
+    }
+    if !in_set(&q.kind, card.kind.as_deref()) {
+        return false;
+    }
+    if !q.tag.is_empty() && !q.tag.iter().any(|t| card.tags.iter().any(|have| have == t)) {
+        return false;
+    }
+    if !q.lead.is_empty()
+        && !card
+            .lead
+            .as_ref()
+            .is_some_and(|lead| q.lead.iter().any(|k| lead.name == *k))
+    {
+        return false;
+    }
+    if !q.epic.is_empty()
+        && !q
+            .epic
+            .iter()
+            .any(|epic| card.id == *epic || card.parent.as_deref() == Some(epic.as_str()))
+    {
+        return false;
+    }
+    if !parsed.is_none_or(|p| p.keeps(&search_fields(inp, by_ref, card, row))) {
+        return false;
+    }
+    true
+}
+
+/// The pure board answer for a query over gathered inputs.
+pub fn board(inp: &Inputs, q: &Query) -> Board {
+    if let Some(err) = &inp.rows_error {
+        return Board {
+            schema: 1,
+            version: inp.version,
+            backend: inp.backend.clone(),
+            scope: inp.scope.describe(),
+            query: q.clone(),
+            lanes: vec![],
+            offboard: vec![],
+            hidden: Hidden::default(),
+            stats: Stats {
+                open: vec![],
+                statuses: vec![],
+                totals: vec![],
+                flow: inp.flow.clone(),
+            },
+            facets: Facets {
+                projects: vec![],
+                epics: vec![],
+                leads: vec![],
+                priorities: vec![],
+                sizes: vec![],
+                statuses: vec![],
+                kinds: vec![],
+                tags: vec![],
+            },
+            unavailable: unavailable(inp),
+            graph: None,
+            errors: {
+                let mut e = inp.errors.clone();
+                e.push(err.clone());
+                e
+            },
+            search_keys: None,
+        };
+    }
+    let order = order_of(inp);
+    let by_ref = board_refs(inp);
+    // Cards first (the column may drop a row), then scope, then facets,
+    // then the query's filters, then totals, then the caps.
+    let child_counts = child_counts(inp);
+    let mut cards: Vec<Card> = Vec::new();
+    for e in &inp.rows {
+        let blocked = has_open_dependency(e, &by_ref);
+        if let Some(mut card) = card_of(inp, e, order, blocked) {
+            fill_family(&mut card, &child_counts, &by_ref);
+            cards.push(card);
+        }
+    }
+    // The spawn-env scope is skipped when the query itself scopes.
+    let scope_applies = !q.all && q.project.is_empty();
+    let scoped: Vec<Card> = if scope_applies {
+        cards
+            .into_iter()
+            .filter(|c| {
+                inp.scope
+                    .keeps(c.project.as_deref().filter(|p| !p.is_empty()))
+            })
+            .collect()
+    } else {
+        cards
+    };
+    // Off-board cards (deferred, superseded, roadmap-typed) stay out of
+    // tiles, facets, lanes and column stats so the default board renders
+    // exactly as before. They ride the `offboard` payload for the page's
+    // reveal, and `hidden` names what the default view leaves out.
+    let (on_board, off_board_cards): (Vec<Card>, Vec<Card>) = scoped
+        .into_iter()
+        .partition(|c| c.column != KanbanColumn::OffBoard);
+    // Facets and per-status totals: values present after scope, before
+    // filters. A tile's count is what selecting it would show.
+    let facets = facets_of(&on_board, inp);
+    let mut status_totals: BTreeMap<String, usize> = BTreeMap::new();
+    for s in on_board.iter().filter_map(|c| c.status.as_ref()) {
+        *status_totals.entry(s.as_str().to_string()).or_insert(0) += 1;
+    }
+    let parsed =
+        q.q.as_deref()
+            .map(|text| {
+                crate::search_query::parse(text, crate::search_query::Surface::Node, inp.read_at)
+            })
+            .transpose()
+            .ok()
+            .flatten();
+    let graph_done_context: Vec<Card> = if q.view == View::Graph && !q.status.is_empty() {
+        let mut context_query = q.clone();
+        context_query.status.clear();
+        on_board
+            .iter()
+            .filter(|card| {
+                card.column == KanbanColumn::Done
+                    && keeps_query(
+                        inp,
+                        &by_ref,
+                        card,
+                        by_ref.get(card.id.as_str()).copied(),
+                        &context_query,
+                        parsed.as_ref(),
+                    )
+            })
+            .cloned()
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let filtered: Vec<Card> = on_board
+        .into_iter()
+        .filter(|c| {
+            keeps_query(
+                inp,
+                &by_ref,
+                c,
+                by_ref.get(c.id.as_str()).copied(),
+                q,
+                parsed.as_ref(),
+            )
+        })
+        .collect();
+    let graph = (q.view == View::Graph)
+        .then(|| {
+            crate::backlog_graph::graph_with_done_context(
+                inp,
+                &filtered,
+                &graph_done_context,
+                q.focus.as_deref(),
+            )
+        })
+        .flatten();
+    let mut hidden = Hidden::default();
+    for c in &off_board_cards {
+        match off_board_bucket(c) {
+            Some("deferred") => hidden.deferred += 1,
+            Some("superseded") => hidden.superseded += 1,
+            Some("roadmap") => hidden.roadmap += 1,
+            _ => {}
+        }
+    }
+    hidden.total = hidden.deferred + hidden.superseded + hidden.roadmap;
+    let mut offboard: Vec<Card> = off_board_cards
+        .into_iter()
+        .filter(|c| {
+            keeps_query(
+                inp,
+                &by_ref,
+                c,
+                by_ref.get(c.id.as_str()).copied(),
+                q,
+                parsed.as_ref(),
+            )
+        })
+        .collect();
+    offboard.truncate(OFFBOARD_CAP);
+    // Per-column totals over the filtered set; `open` excludes Done, the
+    // header counts keep it.
+    let mut open_totals: HashMap<KanbanColumn, usize> = HashMap::new();
+    for c in &filtered {
+        *open_totals.entry(c.column).or_insert(0) += 1;
+    }
+    let total_of = |column: KanbanColumn| ColumnTotal {
+        column,
+        total: open_totals.get(&column).copied().unwrap_or(0),
+    };
+    let stats = Stats {
+        open: KanbanColumn::ALL
+            .into_iter()
+            .filter(|col| *col != KanbanColumn::Done)
+            .map(total_of)
+            .collect(),
+        statuses: status_totals
+            .into_iter()
+            .map(|(status, total)| StatusTotal { status, total })
+            .collect(),
+        totals: KanbanColumn::ALL.into_iter().map(total_of).collect(),
+        flow: inp.flow.clone(),
+    };
+    let lanes = build_lanes(filtered, order, inp, &q.lanes, q.view == View::List);
+    Board {
+        schema: 1,
+        version: inp.version,
+        backend: inp.backend.clone(),
+        scope: inp.scope.describe(),
+        query: q.clone(),
+        lanes,
+        stats,
+        offboard,
+        hidden,
+        facets,
+        unavailable: unavailable(inp),
+        graph,
+        errors: inp.errors.clone(),
+        search_keys: None,
+    }
+}
+
+/// Which off-board bucket a card falls into, for the hidden counts. A
+/// roadmap-typed row is off-board on type regardless of its status; the
+/// status buckets take everything else `kanban_column` declines.
+pub(crate) fn off_board_bucket(c: &Card) -> Option<&'static str> {
+    if c.kind.as_deref() == Some("roadmap") {
+        return Some("roadmap");
+    }
+    match c.status {
+        Some(Status::Deferred) => Some("deferred"),
+        Some(Status::Superseded) => Some("superseded"),
+        _ => None,
+    }
+}
+
+/// Filter-menu values present after the scope and before the filters,
+/// sorted.
+fn facets_of(cards: &[Card], inp: &Inputs) -> Facets {
+    let mut projects: BTreeMap<String, ()> = BTreeMap::new();
+    let mut epics: BTreeMap<String, Option<String>> = BTreeMap::new();
+    let mut leads: BTreeMap<String, ()> = BTreeMap::new();
+    let mut priorities: BTreeMap<String, ()> = BTreeMap::new();
+    let mut sizes: BTreeMap<String, ()> = BTreeMap::new();
+    let mut statuses: BTreeMap<String, ()> = BTreeMap::new();
+    let mut kinds: BTreeMap<String, ()> = BTreeMap::new();
+    let mut tags: BTreeMap<String, ()> = BTreeMap::new();
+    for c in cards {
+        if let Some(p) = &c.project {
+            projects.insert(p.clone(), ());
+        }
+        if let Some(k) = &c.lead {
+            leads.insert(k.name.clone(), ());
+        }
+        if let Some(p) = &c.priority {
+            priorities.insert(p.clone(), ());
+        }
+        if let Some(s) = &c.size {
+            sizes.insert(s.clone(), ());
+        }
+        if let Some(s) = &c.status {
+            statuses.insert(s.as_str().to_string(), ());
+        }
+        if let Some(k) = &c.kind {
+            kinds.insert(k.clone(), ());
+        }
+        for t in &c.tags {
+            tags.insert(t.clone(), ());
+        }
+    }
+    // Epic facets come from the rows, not the cards: an epic card may sit
+    // in In Progress but its title facets from its own row.
+    let parents: HashSet<&str> = inp
+        .rows
+        .iter()
+        .filter_map(|o| o.parent.as_deref())
+        .collect();
+    for r in &inp.rows {
+        if let Some(id) = r.id().filter(|id| parents.contains(id)) {
+            epics.entry(id.to_string()).or_insert(r.title.clone());
+        }
+    }
+    Facets {
+        projects: projects.into_keys().collect(),
+        epics: epics
+            .into_iter()
+            .map(|(id, title)| EpicRef { id, title })
+            .collect(),
+        leads: leads.into_keys().collect(),
+        priorities: priorities.into_keys().collect(),
+        sizes: sizes.into_keys().collect(),
+        statuses: statuses.into_iter().map(|(s, _)| s).collect(),
+        kinds: kinds.into_keys().collect(),
+        tags: tags.into_keys().collect(),
+    }
+}
+
+/// The per-cell card cap.
+const CELL_CAP: usize = 50;
+/// The Done cap per cell.
+const DONE_CAP: usize = 20;
+/// The off-board payload cap: the counts stay complete, the page names the
+/// first slice and a narrower query reaches the rest, so a 10 s poll never
+/// carries two thousand cards for wire size.
+const OFFBOARD_CAP: usize = 200;
+
+/// Group the filtered cards into lanes and six-column cells, with caps.
+fn build_lanes(
+    filtered: Vec<Card>,
+    order: &HashMap<String, usize>,
+    inp: &Inputs,
+    lanes_by: &LanesBy,
+    uncapped: bool,
+) -> Vec<Lane> {
+    let by_id = board_refs(inp);
+    // The id each card's parent names; "is an epic" = some row parents to it.
+    let parents: HashSet<&str> = inp
+        .rows
+        .iter()
+        .filter_map(|o| o.parent.as_deref())
+        .collect();
+    // Lane key and title per card id.
+    let mut keys: HashMap<String, (String, String)> = HashMap::new();
+    for c in &filtered {
+        let (key, title) = match lanes_by {
+            LanesBy::None => ("all".to_string(), "all".to_string()),
+            LanesBy::Project => {
+                let key = c.project.clone().unwrap_or_default();
+                let title = if key.is_empty() {
+                    "unscoped".to_string()
+                } else {
+                    key.clone()
+                };
+                (key, title)
+            }
+            LanesBy::Epic => {
+                // A card sits in its parent's lane when the parent row
+                // exists and is open; an epic sits in its own lane; loose
+                // cards sit in a last lane keyed "" titled "no epic".
+                if parents.contains(c.id.as_str()) {
+                    (c.id.clone(), c.title.clone())
+                } else if let Some(parent) = &c.parent {
+                    match by_id.get(parent.as_str()) {
+                        Some(prow) if !prow.is_completed() => {
+                            let title = prow.title.as_deref().unwrap_or(parent).to_string();
+                            (parent.clone(), title)
+                        }
+                        _ => (String::new(), "no epic".to_string()),
+                    }
+                } else {
+                    (String::new(), "no epic".to_string())
+                }
+            }
+        };
+        keys.insert(c.id.clone(), (key, title));
+    }
+    // Group into lanes (first-seen order), then apply the mode's lane order.
+    let mut lane_titles: Vec<(String, String)> = Vec::new();
+    let mut groups: HashMap<String, Vec<Card>> = HashMap::new();
+    for c in filtered {
+        let (key, title) = keys.remove(&c.id).unwrap_or_default();
+        if !groups.contains_key(&key) {
+            lane_titles.push((key.clone(), title));
+        }
+        groups.entry(key).or_default().push(c);
+    }
+    let lane_order: Vec<(String, String)> = match lanes_by {
+        LanesBy::Project => {
+            let mut named: Vec<_> = lane_titles
+                .iter()
+                .filter(|(k, _)| !k.is_empty())
+                .cloned()
+                .collect();
+            named.sort();
+            named.extend(lane_titles.iter().filter(|(k, _)| k.is_empty()).cloned());
+            named
+        }
+        LanesBy::Epic => {
+            // Epic lanes follow the epic's own order; the loose lane last.
+            let epic_order = |k: &str| -> usize {
+                if k.is_empty() {
+                    usize::MAX
+                } else {
+                    order.get(k).copied().unwrap_or(usize::MAX - 1)
+                }
+            };
+            let mut by_epic_order = lane_titles;
+            by_epic_order.sort_by_key(|(k, _)| epic_order(k));
+            by_epic_order
+        }
+        LanesBy::None => lane_titles,
+    };
+    // Cells: six per lane, Done newest-first, others in order, capped.
+    let completed_at = |id: &str| -> &str {
+        by_id
+            .get(id)
+            .and_then(|r| r.completed_at.as_deref())
+            .unwrap_or("")
+    };
+    lane_order
+        .into_iter()
+        .map(|(key, title)| {
+            let cards = groups.remove(&key).unwrap_or_default();
+            let mut cells: Vec<Cell> = Vec::with_capacity(KanbanColumn::ALL.len());
+            for col in KanbanColumn::ALL {
+                let mut in_col: Vec<Card> =
+                    cards.iter().filter(|c| c.column == col).cloned().collect();
+                let total = in_col.len();
+                if col == KanbanColumn::Done {
+                    in_col.sort_by(|a, b| completed_at(&b.id).cmp(completed_at(&a.id)));
+                } else {
+                    in_col.sort_by_key(|c| c.order);
+                }
+                // The list view needs every row; the kanban keeps its
+                // per-cell caps for wire size.
+                if !uncapped {
+                    let cap = if col == KanbanColumn::Done {
+                        DONE_CAP
+                    } else {
+                        CELL_CAP
+                    };
+                    in_col.truncate(cap);
+                }
+                cells.push(Cell {
+                    column: col,
+                    total,
+                    cards: in_col,
+                });
+            }
+            Lane { key, title, cells }
+        })
+        .collect()
+}
+
+/// The features the current backend cannot answer. Empty for `graph`.
+/// `card moves` and `field edits` are unconditional off the graph; each
+/// data feature follows a field no row carries with a non-empty value.
+fn unavailable(inp: &Inputs) -> Vec<Unavailable> {
+    use unavailable_features as f;
+    if inp.backend == "graph" {
+        return vec![];
+    }
+    let b = &inp.backend;
+    let mut out = vec![
+        Unavailable {
+            feature: f::CARD_MOVES,
+            reason: format!("{b} takes no rank writes"),
+        },
+        Unavailable {
+            feature: f::FIELD_EDITS,
+            reason: format!("edit it in {b}"),
+        },
+    ];
+    fn filled(s: &Option<String>) -> bool {
+        s.as_deref().is_some_and(|s| !s.is_empty())
+    }
+    let checks: [(&'static str, &str, fn(&NodeRow) -> bool); 6] = [
+        (f::SIZE_FILTER, "size", |r| filled(&r.size)),
+        (f::DETAILS, "details", |r| filled(&r.details)),
+        (f::EPIC_LANES, "parent", |r| filled(&r.parent)),
+        (f::BLOCKERS, "blocked_by", |r| {
+            r.blocked_by().next().is_some()
+        }),
+        (f::SESSIONS, "sessions", |r| !r.sessions().is_empty()),
+        (f::DONE_COLUMN, "completed_at", NodeRow::is_completed),
+    ];
+    for (feature, field, carries) in checks {
+        if !inp.rows.iter().any(carries) {
+            out.push(Unavailable {
+                feature,
+                reason: format!("{b} supplies no {field}"),
+            });
+        }
+    }
+    out
+}
+
+/// Resolve a node id or slug to its row.
+pub(crate) fn resolve_row<'a>(inp: &'a Inputs, id: &str) -> Option<&'a NodeRow> {
+    inp.rows
+        .iter()
+        .find(|r| r.id() == Some(id))
+        .or_else(|| inp.rows.iter().find(|r| r.slug.as_deref() == Some(id)))
+}
+
+/// The link to one row: its title, column and status as the read holds it.
+fn link_to(inp: &Inputs, id: &str, row: Option<&NodeRow>) -> Link {
+    let card = row.and_then(|r| card_of(inp, r, order_of(inp), false));
+    Link {
+        id: id.to_string(),
+        title: row.and_then(|r| r.title.clone()),
+        column: card.as_ref().map(|c| c.column),
+        status: row.and_then(|r| r.status().cloned()),
+    }
+}
+
+/// One link per id an edge field names, to the nodes the read holds.
+fn links(inp: &Inputs, e: &NodeRow, edge: Edge) -> Vec<Link> {
+    e.edge_ids(edge)
+        .into_iter()
+        .map(|id| link_to(inp, id, resolve_row(inp, id)))
+        .collect()
+}
+
+/// Reverse links: rows whose `edge` field names this node.
+fn reverse_links(inp: &Inputs, id: &str, edge: Edge) -> Vec<Link> {
+    inp.rows
+        .iter()
+        .filter(|r| r.edge_ids(edge).contains(&id))
+        .filter_map(|r| Some(link_to(inp, r.id()?, Some(r))))
+        .collect()
+}
+
+/// The node's answer, or `None` when the read holds no such node.
+pub fn node(inp: &Inputs, id: &str) -> Option<NodeView> {
+    let e = resolve_row(inp, id)?;
+    let node_id = e.id.clone()?;
+    let order = order_of(inp);
+    let blocked = has_open_dependency(e, &board_refs(inp));
+    let card = card_of(inp, e, order, blocked)?;
+    // Sessions joined to the roster: the model carries the answer.
+    let node_cwd = e.cwd.as_deref();
+    let sessions = node_sessions(inp, &node_id)
+        .iter()
+        .map(|s| {
+            let sid = s.session_id.as_deref();
+            let joined = sid.and_then(|sid| {
+                inp.agents
+                    .iter()
+                    .find(|a| a.harness_session_id.as_deref() == Some(sid))
+            });
+            let (action, reason, command) = session_reach(joined, sid, node_cwd);
+            // The live seat's model answers first: it is what runs now.
+            let model = joined
+                .and_then(|a| a.model.as_deref())
+                .or_else(|| s.model())
+                .map(str::to_string);
+            SessionView {
+                phase: s.phase.clone(),
+                harness: s.harness.clone(),
+                session_id: sid.map(str::to_string),
+                model,
+                started_at: s.started_at.clone(),
+                ended_at: s.ended_at.clone(),
+                agent: joined.map(|a| a.name.clone()),
+                action,
+                reason,
+                command,
+            }
+        })
+        .collect();
+    // PRs: the node's own binding plus any additional PRs.
+    let primary = e.pr_number.map(|number| Pr {
+        number,
+        url: e.pr_url.clone(),
+        merge_status: e.merge_status.clone(),
+    });
+    let additional = e.additional_prs().iter().filter_map(|p| {
+        Some(Pr {
+            number: p.number?,
+            url: p.url.clone(),
+            merge_status: p.merge_status.clone(),
+        })
+    });
+    let mut prs: Vec<Pr> = primary.into_iter().chain(additional).collect();
+    // Newest first, once each: `additional_prs` repeats the primary PR.
+    // The stable sort keeps the primary's row (and its merge status) first.
+    prs.sort_by(|a, b| b.number.cmp(&a.number));
+    prs.dedup_by_key(|p| p.number);
+    // Notes: progress_notes newest first, EXCEPT thread rows (kind
+    // comment, reply, or one of the note kinds), which read oldest
+    // first - a thread reads top to bottom. Non-thread rows keep their
+    // block after the thread.
+    let is_thread = |n: &Note| {
+        matches!(
+            n.kind.as_deref(),
+            Some("comment")
+                | Some("reply")
+                | Some("progress")
+                | Some("finding")
+                | Some("ruling")
+                | Some("collision")
+        )
+    };
+    let mut threads: Vec<Note> = Vec::new();
+    let mut plain: Vec<Note> = Vec::new();
+    for n in e.progress_notes().iter().map(|n| Note {
+        ts: n.ts.clone(),
+        text: n.text.clone().unwrap_or_default(),
+        kind: n.kind.clone(),
+        author: n.author.clone(),
+        comment_id: n.comment_id.clone(),
+        reply_to: n.reply_to.clone(),
+        state: n.state.clone(),
+        state_ref: n.state_ref.clone(),
+        agent_name: n.agent_name.clone(),
+        model: n.model.clone(),
+        working_node: n.working_node.clone(),
+        source_session_id: n.source_session_id.clone(),
+    }) {
+        if is_thread(&n) {
+            threads.push(n);
+        } else {
+            plain.push(n);
+        }
+    }
+    threads.sort_by(|a, b| {
+        a.ts.as_deref()
+            .unwrap_or("")
+            .cmp(b.ts.as_deref().unwrap_or(""))
+    });
+    plain.sort_by(|a, b| {
+        b.ts.as_deref()
+            .unwrap_or("")
+            .cmp(a.ts.as_deref().unwrap_or(""))
+    });
+    let mut notes = threads;
+    notes.extend(plain);
+    let decisions = e
+        .decisions
+        .as_ref()
+        .or(e.decision_ids.as_ref())
+        .cloned()
+        .unwrap_or_default();
+    Some(NodeView {
+        unavailable: unavailable(inp),
+        children: reverse_links(inp, &node_id, Edge::Parent),
+        contained: reverse_links(inp, &node_id, Edge::ContainedIn),
+        blocked_by: links(inp, e, Edge::BlockedBy),
+        blocks: reverse_links(inp, &node_id, Edge::BlockedBy),
+        related: links(inp, e, Edge::Related),
+        parent: links(inp, e, Edge::Parent),
+        sessions,
+        prs,
+        notes,
+        decisions,
+        card,
+        details: e.details.clone().map(Value::String),
+        current_state: e.current_state.clone().unwrap_or(Value::Null),
+        plan_path: e.plan_path.clone(),
+        cwd: e.cwd.clone(),
+        difficulty: e.difficulty.clone(),
+        kind: e.kind.clone(),
+        created_at: e.created_at.clone(),
+        completed_at: e.completed_at.clone(),
+        origin: e.source_kind.clone(),
+        origin_evidence: e.origin_evidence.clone(),
+        origin_session: origin_session_of(inp, e),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Gathering
+// ---------------------------------------------------------------------------
+
+/// Read everything once. Blocking reads run in `spawn_blocking`; the claim
+/// sweep runs first so one snapshot binds the order, the underway epics and
+/// the card flags.
+pub async fn gather(graph: &Path, agents: Vec<AgentRow>) -> Inputs {
+    // One claim snapshot binds the order, the underway epics and the card
+    // flags. A failed sweep is an errors line, never an empty board: the
+    // keeper then reads the claim store itself and refuses when it cannot.
+    let (live_claims, sweep_failed) = match run_claim_sweep().await {
+        Some(map) => (map, false),
+        None => (HashMap::new(), true),
+    };
+    let mut errors: Vec<String> = Vec::new();
+    if sweep_failed {
+        errors.push("claim sweep failed; claims shown from graph status only".to_string());
+    }
+    let graph = graph.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        gather_blocking(&graph, agents, live_claims, errors, sweep_failed)
+    })
+    .await
+    .unwrap_or_else(|e| Inputs {
+        errors: vec![format!("the model gather task failed: {e}")],
+        ..Default::default()
+    })
+}
+
+fn external_backend_name() -> String {
+    std::env::var("FNO_TRACKER_BACKEND")
+        .ok()
+        .filter(|v| !v.trim().is_empty() && v.trim() != "graph")
+        .unwrap_or_else(|| "graph".to_string())
+}
+
+/// The snapshot document's rows and its error surface, split out so tests
+/// drive the same parse `gather_blocking` runs. `stale_since` becomes the
+/// leading error line; every `errors` line rides after it.
+fn parse_snapshot_doc(v: &Value) -> (Vec<NodeRow>, Vec<String>) {
+    /// The tracker snapshot document. The fields stay JSON so one off-type
+    /// field never costs the others; each reads its own shape below.
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    struct Snapshot {
+        stale_since: Value,
+        errors: Value,
+        entries: Value,
+    }
+    let doc = Snapshot::deserialize(v).unwrap_or_default();
+    let mut errors = Vec::new();
+    if let Some(ts) = doc.stale_since.as_str() {
+        errors.push(format!("tracker snapshot stale since {ts}"));
+    }
+    if let Value::Array(lines) = &doc.errors {
+        errors.extend(lines.iter().filter_map(Value::as_str).map(str::to_string));
+    }
+    let rows = match doc.entries {
+        Value::Array(rows) => crate::node_row::rows_from_values(rows),
+        _ => Vec::new(),
+    };
+    (rows, errors)
+}
+
+fn gather_blocking(
+    graph: &Path,
+    agents: Vec<AgentRow>,
+    live_claims: HashMap<String, String>,
+    mut errors: Vec<String>,
+    sweep_failed: bool,
+) -> Inputs {
+    let backend_name = external_backend_name();
+    let external = external_backend_selected();
+    // (2) The source: the external snapshot, or the store's rows.
+    let (rows, rows_error, snapshot_errors): (Vec<NodeRow>, Option<String>, Vec<String>) =
+        if external {
+            match read_snapshot().and_then(|s| serde_json::from_str::<Value>(&s).ok()) {
+                Some(v) => {
+                    let (rows, snapshot_errors) = parse_snapshot_doc(&v);
+                    (rows, None, snapshot_errors)
+                }
+                None => (
+                    Vec::new(),
+                    Some("the tracker snapshot read failed".to_string()),
+                    Vec::new(),
+                ),
+            }
+        } else {
+            // Shared rows also feed detail drawers and flow; keep closed rows, prose,
+            // decisions, progress notes, costs, PRs, and complete session records.
+            match store_client::rows(graph, None, None) {
+                Ok(r) => (r, None, Vec::new()),
+                Err(e) => (Vec::new(), Some(e.to_string()), Vec::new()),
+            }
+        };
+    // Snapshot errors (staleness stamp first) lead Inputs.errors, so a board
+    // consumer sees why the read is degraded.
+    errors.splice(..0, snapshot_errors);
+    if rows_error.is_some() {
+        return Inputs {
+            backend: backend_name,
+            rows_error,
+            agents,
+            errors,
+            ..Default::default()
+        };
+    }
+    // (3) The store version, graph backend only.
+    let version = if external {
+        None
+    } else {
+        store_client::version(graph).ok()
+    };
+    // (4) The keeper's board facts. When the sweep failed, send no claimed:
+    // the keeper reads the claim store itself and refuses when it cannot.
+    let claimed: Vec<String> = if sweep_failed {
+        Vec::new()
+    } else {
+        live_claims.keys().cloned().collect()
+    };
+    let shipped_entries = external.then_some(rows.as_slice());
+    let (order, underway, effective_priority) =
+        match store_client::board_facts(graph, shipped_entries, &claimed) {
+            Ok(facts) => (facts.ids, facts.underway, facts.effective_priority),
+            Err(e) => {
+                errors.push(format!("board order unavailable: {e}"));
+                (Vec::new(), HashSet::new(), HashMap::new())
+            }
+        };
+    // (5) The ledger at <state root>/ledger.json.
+    let path = ledger_path();
+    /// The ledger document; only its rows ride to the classifier.
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    struct Ledger {
+        entries: Value,
+    }
+    let ledger: Vec<Value> = match std::fs::read_to_string(&path) {
+        Err(_) => Vec::new(),
+        Ok(text) => match serde_json::from_str::<Value>(&text) {
+            Ok(v) => match Ledger::deserialize(&v).unwrap_or_default().entries {
+                Value::Array(entries) => entries,
+                _ => Vec::new(),
+            },
+            Err(e) => {
+                errors.push(format!("ledger unreadable: {e}"));
+                Vec::new()
+            }
+        },
+    };
+    // (6) Flow over the rows and the ledger.
+    let flow = if external {
+        json!({"available": false, "reason": "no ledger flow on an external backend"})
+    } else {
+        match store_client::flow(graph, &rows, &ledger) {
+            Ok(f) => f,
+            Err(e) => json!({"available": false, "reason": e.to_string()}),
+        }
+    };
+    // (7) The spawn-env scope. Each failure is a named line, never an empty
+    // board.
+    let (scope, scope_reason) = board_scope_from_spawn_env();
+    Inputs {
+        backend: backend_name,
+        rows,
+        rows_error: None,
+        version,
+        order,
+        underway,
+        effective_priority,
+        live_claims,
+        read_at: crate::search_query::now_secs(),
+        sessions: Default::default(),
+        open_questions: None,
+        agents,
+        flow,
+        scope,
+        scope_reason,
+        errors,
+        order_map: Default::default(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The moved node-detail helpers (from client/node_detail.rs, deleted upstream)
+// ---------------------------------------------------------------------------
+
+/// What a session row can DO, derived from the joined registry row - never
+/// a fixed command. The refusal half carries the reason the row renders dim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SessionAction {
+    /// A live pane here: focus it. A paneless attachable row: attach.
+    Attach,
+    /// A paneless row its harness can resume.
+    Resume,
+    /// No launch; the reason renders in the action cell and a press
+    /// answers with it as the notice.
+    Dim(String),
+}
+
+/// Derive the row's action from the joined `AgentRow`. Absent row: no
+/// registry row. Present: pane or attach id wins (the reach commands), then
+/// the resume form - but never on a row the registry reports Working or
+/// Done, which the resume door refuses anyway; saying so here is the whole
+/// point of the state-aware cell.
+pub(crate) fn session_action(a: Option<&AgentRow>) -> SessionAction {
+    let Some(a) = a else {
+        return SessionAction::Dim("no registry row".into());
+    };
+    if a.pane_id.is_some() || a.attach_id.is_some() {
+        return SessionAction::Attach;
+    }
+    match a.badge {
+        Some(crate::proto::AgentBadge::Done) => return SessionAction::Dim("done".into()),
+        Some(crate::proto::AgentBadge::Working) => return SessionAction::Dim("working".into()),
+        _ => {}
+    }
+    if a.resumable {
+        return SessionAction::Resume;
+    }
+    SessionAction::Dim("not resumable".into())
+}
+
+/// The action cell for one session: `(action, dim reason, shell line)`.
+/// Attach a live row, resume a registry row that is not live, adopt a
+/// session the registry lacks.
+fn session_reach(
+    joined: Option<&AgentRow>,
+    sid: Option<&str>,
+    cwd: Option<&str>,
+) -> (String, Option<String>, Option<String>) {
+    let act = session_action(joined);
+    let (action, reason) = match &act {
+        SessionAction::Attach => ("attach", None),
+        SessionAction::Resume => ("resume", None),
+        SessionAction::Dim(why) => ("none", Some(why.clone())),
+    };
+    let command = match &act {
+        SessionAction::Attach => joined.map(|a| format!("fno agents session attach {}", a.name)),
+        SessionAction::Resume => sid.map(|sid| session_command("resume", sid, cwd)),
+        SessionAction::Dim(_) if joined.is_none() => {
+            sid.map(|sid| session_command("adopt", sid, None))
+        }
+        SessionAction::Dim(_) => None,
+    };
+    (action.to_string(), reason, command)
+}
+
+/// The session a row was filed from, or `None` when the row names none.
+pub(crate) fn origin_session_of(inp: &Inputs, e: &NodeRow) -> Option<OriginSession> {
+    let field = |v: &Option<String>| v.clone().filter(|s| !s.is_empty());
+    let sid = field(&e.source_session_id)?;
+    let joined = inp
+        .agents
+        .iter()
+        .find(|a| a.harness_session_id.as_deref() == Some(sid.as_str()));
+    let cwd = field(&e.source_cwd).or_else(|| field(&e.cwd));
+    let (action, reason, command) = session_reach(joined, Some(&sid), cwd.as_deref());
+    Some(OriginSession {
+        harness: field(&e.source_harness),
+        parent_session: field(&e.source_parent_session),
+        agent: joined.map(|a| a.name.clone()),
+        pane: joined.filter(|a| !a.exited).and_then(|a| a.pane_id),
+        cwd,
+        action,
+        reason,
+        command,
+        session_id: sid,
+    })
+}
+
+/// The origin session of the row `id` names.
+pub(crate) fn origin_session_for(inp: &Inputs, id: &str) -> Option<OriginSession> {
+    origin_session_of(inp, resolve_row(inp, id)?)
+}
+
+/// What opening one session does, the ONE answer every surface shares (the
+/// provenance popup today; the backlog board, the questions overlay and
+/// the sideline are the surfaces wired to the same step next). Derived from
+/// [`session_action`], the node view's own action cell, so no surface grows
+/// a second opinion about what a session link can do.
+pub(crate) enum OpenSession {
+    /// Send these wire commands: focus a live pane, portal a live paneless
+    /// row, or the row-menu resume door.
+    Cmds(Vec<crate::proto::Command>),
+    /// No wire door: this shell line reaches the session (an adopt for a
+    /// session the registry lacks). Copyable; Enter repeats it.
+    Shell(String),
+    /// Nothing can open; the reason renders where the link would.
+    Dim(String),
+}
+
+/// The shell line that reaches a session by id: `fno agents <command> <sid>`,
+/// pinned to `cwd` when the caller knows one. The ONE
+/// spelling both [`SessionView`] and [`open_session`] print.
+fn session_command(command: &str, sid: &str, cwd: Option<&str>) -> String {
+    let group = if command == "adopt" {
+        "registry"
+    } else {
+        "session"
+    };
+    let mut cmd = format!("fno agents {group} {command} {sid}");
+    if let Some(cwd) = cwd.filter(|c| !c.is_empty()) {
+        cmd.push_str(&format!(" --cwd {}", sh_quote(cwd)));
+    }
+    cmd
+}
+
+/// Resolve the open-session gesture for `sid` against the roster. The
+/// shell lines carry no cwd pin: a resume relaunches in the row's recorded
+/// directory and an adopt heals the row in place.
+pub(crate) fn open_session(agents: &[AgentRow], sid: &str) -> OpenSession {
+    let joined = agents
+        .iter()
+        .find(|a| a.harness_session_id.as_deref() == Some(sid));
+    match session_action(joined) {
+        SessionAction::Attach => match joined.and_then(|a| a.pane_id) {
+            Some(pid) => OpenSession::Cmds(vec![crate::proto::Command::FocusPane(pid)]),
+            // A live row with no seat reaches a portal, the agent_hit door:
+            // the attach id when the harness gave one, the session id
+            // otherwise (Follow/Locate rows carry no attach id).
+            None => OpenSession::Cmds(vec![crate::proto::Command::AttachAgent {
+                // The portal resolver answers an attach id or the registry
+                // NAME, never a session id: the same fallback agent_hit
+                // makes for Follow/Locate rows.
+                id: joined
+                    .and_then(|a| a.attach_id.clone())
+                    .or_else(|| joined.map(|a| a.name.clone()))
+                    .unwrap_or_else(|| sid.to_string()),
+                placement: crate::proto::PanePlacement {
+                    portal: Some(0),
+                    ..crate::proto::PanePlacement::default()
+                },
+            }]),
+        },
+        // The row-menu resume path: the shared per-harness door whose claude
+        // plan runs adopt, then resume, then respawn; every other harness
+        // plain resumes.
+        SessionAction::Resume => OpenSession::Cmds(vec![crate::proto::Command::RespawnAgent {
+            name: joined.map(|a| a.name.clone()).unwrap_or_else(|| sid.into()),
+        }]),
+        // A session the registry lacks: adopt is the reach that heals the
+        // row from the harness stores - the SessionView command's own rule.
+        // No cwd pin: adopt heals the row in place (the resume relaunches).
+        SessionAction::Dim(_) if joined.is_none() => {
+            OpenSession::Shell(session_command("adopt", sid, None))
+        }
+        SessionAction::Dim(why) => OpenSession::Dim(why),
+    }
+}
+
+/// POSIX single-quote a path for the resume line, so a cwd with spaces or
+/// quotes survives the shell. Mirrors the one-liner in mux_cli.rs, which
+/// stays unwidened (over the 5,000-line budget).
+fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+/// The node's lead: the teamed row with the narrowest territory naming the
+/// node, its parent epic, or its project - a scope naming the node beats one
+/// naming the parent, which beats the project; roster order breaks ties.
+/// (team scopes split on `,`, the level-0 separator). Direct membership
+/// only - a grandchild epic resolves through no scope here, and the pane
+/// says `none` rather than guessing.
+pub(crate) fn lead_of(
+    agents: &[AgentRow],
+    node_id: &str,
+    parent: Option<&str>,
+    project: Option<&str>,
+) -> Option<(String, u32)> {
+    let mut best: Option<(usize, &AgentRow)> = None;
+    for a in agents {
+        let (Some(scope), Some(_)) = (&a.role_scope, a.role_level) else {
+            continue;
+        };
+        let mut rank: Option<usize> = None;
+        for member in scope.split(',') {
+            let m = member.trim();
+            let r = if m == node_id {
+                0
+            } else if parent == Some(m) {
+                1
+            } else if project == Some(m) {
+                2
+            } else {
+                continue;
+            };
+            rank = Some(rank.map_or(r, |have| have.min(r)));
+            if rank == Some(0) {
+                break;
+            }
+        }
+        if let Some(r) = rank {
+            if best.as_ref().map_or(true, |(b, _)| r < *b) {
+                best = Some((r, a));
+            }
+        }
+    }
+    best.map(|(_, a)| (a.name.clone(), a.role_level.unwrap_or(0)))
+}
+
+// ---------------------------------------------------------------------------
+// The search grammar's node leg: one field map per card, and the registry
+// + question reads the grammar's session-derived keys answer through.
+// ---------------------------------------------------------------------------
+
+/// The node row's search field map, one per card, from the row and the
+/// joined sessions. All values lowercase; the matcher reads only this map.
+pub(crate) fn search_fields(
+    inp: &Inputs,
+    by_ref: &HashMap<&str, &NodeRow>,
+    card: &Card,
+    row: Option<&NodeRow>,
+) -> crate::search_query::Fields {
+    let mut f = crate::search_query::Fields::new();
+    push_val(&mut f, "id", Some(card.id.clone()));
+    push_val(&mut f, "id", card.slug.clone());
+    // Session-derived keys match any session on the node (spec rule 3): the
+    // row's ids, the live claim holder, and each id's registry identities.
+    for sid in &card.session_ids {
+        push_val(&mut f, "session", Some(sid.clone()));
+        if let Some(entry) = inp.sessions.get(sid) {
+            for id in &entry.ids {
+                push_val(&mut f, "session", Some(id.clone()));
+            }
+            push_val(&mut f, "agent", Some(entry.name.clone()));
+            push_val(&mut f, "spawner", entry.spawned_by_session.clone());
+            push_val(&mut f, "harness", entry.harness.clone());
+            push_val(&mut f, "model", entry.model.clone());
+            push_val(&mut f, "account", entry.account.clone());
+        }
+    }
+    let str_of = |pick: fn(&NodeRow) -> &Option<String>| row.and_then(|r| pick(r).clone());
+    let holder = inp
+        .live_claims
+        .get(card.id.as_str())
+        .map(|h| {
+            h.split_once("-session:")
+                .map_or(h.as_str(), |(_, rest)| rest)
+        })
+        .map(str::to_string);
+    push_val(&mut f, "session", holder.clone());
+    push_val(&mut f, "session", str_of(|r| &r.session_id));
+    push_val(&mut f, "session", str_of(|r| &r.source_session_id));
+    push_val(&mut f, "session", str_of(|r| &r.locked_by_harness_session));
+    push_val(&mut f, "session", str_of(|r| &r.source_parent_session));
+    push_val(&mut f, "spawner", str_of(|r| &r.spawned_by_session));
+    push_val(&mut f, "spawner", str_of(|r| &r.source_parent_session));
+    push_val(&mut f, "harness", str_of(|r| &r.source_harness));
+    push_val(&mut f, "harness", str_of(|r| &r.spawned_by_harness));
+    push_val(&mut f, "harness", str_of(|r| &r.locked_by_harness));
+    push_val(&mut f, "model", str_of(|r| &r.source_model));
+    push_val(&mut f, "effort", str_of(|r| &r.source_effort));
+    if let Some(row) = row {
+        for s in row.sessions() {
+            push_val(&mut f, "session", s.session_id.clone());
+            push_val(&mut f, "harness", s.harness.clone());
+            push_val(&mut f, "phase", s.phase.clone());
+            push_val(
+                &mut f,
+                "model",
+                s.observed_record_model().map(str::to_string),
+            );
+        }
+    }
+    // The PR set: the node's own binding plus any additional PRs.
+    if let Some(row) = row {
+        let additional = row.additional_prs().iter().filter_map(|p| p.number);
+        for n in row.pr_number.into_iter().chain(additional) {
+            push_val(&mut f, "pr", Some(n.to_string()));
+        }
+        push_val(
+            &mut f,
+            "status",
+            row.status().map(|s| s.as_str().to_string()),
+        );
+    }
+    let fields: [(&str, fn(&NodeRow) -> &Option<String>); 7] = [
+        ("priority", |r| &r.priority),
+        ("size", |r| &r.size),
+        ("difficulty", |r| &r.difficulty),
+        ("type", |r| &r.kind),
+        ("domain", |r| &r.domain),
+        ("project", |r| &r.project),
+        ("origin", |r| &r.source_kind),
+    ];
+    for (key, pick) in fields {
+        push_val(&mut f, key, str_of(pick));
+    }
+    push_val(&mut f, "epic", card.parent.clone());
+    for t in row.map(NodeRow::tags).unwrap_or_default() {
+        push_val(&mut f, "tag", Some(t.clone()));
+    }
+    // `in`: the node and every ancestor up the parent chain; a visited set
+    // stops cycles.
+    let mut chain = vec![card.id.clone()];
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut cur = card.parent.clone();
+    while let Some(p) = cur {
+        if !seen.insert(p.clone()) {
+            break;
+        }
+        chain.push(p.clone());
+        cur = by_ref.get(p.as_str()).and_then(|r| r.parent.clone());
+    }
+    for id in chain {
+        push_val(&mut f, "in", Some(id));
+    }
+    if let Some(lead) = &card.lead {
+        push_val(&mut f, "lead", Some(lead.name.clone()));
+    }
+    push_val(
+        &mut f,
+        "column",
+        Some(card.column.as_str().replace(' ', "_")),
+    );
+    let details = row.and_then(|r| r.details.clone()).unwrap_or_default();
+    let area = crate::search_query::areas_for_node(&card.title, &details, card.project.as_deref());
+    for a in area {
+        push_val(&mut f, "area", Some(a.to_string()));
+    }
+    push_val(&mut f, "created", str_of(|r| &r.created_at));
+    push_val(&mut f, "updated", card.updated_at.clone());
+    push_val(&mut f, "done", str_of(|r| &r.completed_at));
+    for flag in node_flags(inp, card, row) {
+        push_val(&mut f, "is", Some(flag));
+    }
+    for flag in node_has(inp, card, row) {
+        push_val(&mut f, "has", Some(flag));
+    }
+    push_val(&mut f, "votes", Some(card.encounters.to_string()));
+    push_val(&mut f, "children", Some(card.child_count.to_string()));
+    if let Some(cost) = row.and_then(|r| r.cost_usd()) {
+        push_val(&mut f, "cost", Some(cost.to_string()));
+    }
+    push_val(&mut f, "title", Some(card.title.clone()));
+    push_val(&mut f, "details", Some(details.clone()));
+    for n in row.map(NodeRow::progress_notes).unwrap_or_default() {
+        push_val(&mut f, "details", n.text.clone());
+    }
+    push_val(&mut f, "text", Some(card.id.clone()));
+    push_val(&mut f, "text", card.slug.clone());
+    push_val(&mut f, "text", Some(card.title.clone()));
+    push_val(&mut f, "text", card.parent_title.clone());
+    f
+}
+
+/// One lowercase value into a field slot, deduplicated, blanks dropped.
+fn push_val(f: &mut crate::search_query::Fields, key: &str, val: Option<String>) {
+    if let Some(v) = val.filter(|v| !v.is_empty()) {
+        // Stamps stay as stored: the page's stamp parser reads the
+        // RFC3339 `T`/`Z` case-sensitively, and a lowercased stamp would
+        // lose the time of day on the static page.
+        let v = if matches!(key, "created" | "updated" | "done" | "ts") {
+            v
+        } else {
+            v.to_lowercase()
+        };
+        let slot = f.entry(key.to_string()).or_default();
+        if !slot.contains(&v) {
+            slot.push(v);
+        }
+    }
+}
+
+/// The `is:` flags one node answers.
+fn node_flags(inp: &Inputs, card: &Card, row: Option<&NodeRow>) -> Vec<String> {
+    let mut out = Vec::new();
+    if card.column != KanbanColumn::Done {
+        out.push("open".to_string());
+    } else {
+        out.push("done".to_string());
+    }
+    if card.blocked {
+        out.push("blocked".to_string());
+    }
+    if card.claimed {
+        out.push("claimed".to_string());
+    }
+    if card.live || any_session_live(inp, &card.session_ids) {
+        out.push("live".to_string());
+    }
+    let operator = row
+        .and_then(|r| r.source_kind.as_deref().or(r.request_origin.as_deref()))
+        .is_some_and(|k| k == "operator_request");
+    if operator {
+        out.push("operator".to_string());
+    }
+    if row.is_some_and(|r| r.contained_in.is_some()) {
+        out.push("contained".to_string());
+    }
+    let stale = card.status == Some(Status::Ready)
+        && row
+            .and_then(|r| r.created_at.as_deref())
+            .and_then(crate::search_query::stamp_epoch)
+            .is_some_and(|ts| inp.read_at - ts > 30 * 86400);
+    if stale {
+        out.push("stale".to_string());
+    }
+    out
+}
+
+/// The `has:` flags one node answers.
+fn node_has(inp: &Inputs, card: &Card, row: Option<&NodeRow>) -> Vec<String> {
+    let mut out = Vec::new();
+    let carries = |test: fn(&NodeRow) -> bool| row.is_some_and(test);
+    if carries(|r| r.pr_number.is_some() || !r.additional_prs().is_empty()) {
+        out.push("pr".to_string());
+    }
+    if carries(|r| r.plan_path.as_deref().is_some_and(|p| !p.is_empty())) {
+        out.push("plan".to_string());
+    }
+    if card.child_count > 0 {
+        out.push("children".to_string());
+    }
+    if carries(|r| r.blocked_by.as_ref().is_some_and(|ids| !ids.is_empty())) {
+        out.push("blocker".to_string());
+    }
+    if card.live || any_session_live(inp, &card.session_ids) {
+        out.push("worker".to_string());
+    }
+    if inp
+        .open_questions
+        .as_ref()
+        .is_some_and(|set| set.contains(card.id.as_str()))
+    {
+        out.push("question".to_string());
+    }
+    if carries(|r| !r.progress_notes().is_empty()) {
+        out.push("notes".to_string());
+    }
+    out
+}
+
+/// A non-exited registry row answers to any of these ids (the snapshot's
+/// live rule, where the roster carries no harness session ids).
+fn any_session_live(inp: &Inputs, ids: &[String]) -> bool {
+    ids.iter()
+        .any(|sid| inp.sessions.get(sid).is_some_and(|entry| !entry.exited))
+}
+
+/// The registry and question-journal reads the grammar's session-derived
+/// keys and `has:question` answer through, after a gather. A failed read
+/// leaves the slot empty and names itself on `errors`, never an empty board.
+pub fn read_search_sources(inp: &mut Inputs, want_questions: bool) {
+    if inp.sessions.is_empty() {
+        let read = crate::registry_read::registry_text(&crate::agents_view::registry_path())
+            .map_err(|e| e.to_string())
+            .and_then(|raw| {
+                crate::agents_view::derive_rows(&raw, inp.read_at.max(0) as u64)
+                    .ok_or_else(|| "the registry rows did not parse".to_string())
+            });
+        match read {
+            Ok(rows) => inp.sessions = crate::search_query::SessionDirectory::from_registry(&rows),
+            Err(e) => {
+                if !inp.errors.iter().any(|e| e.contains("names unavailable")) {
+                    inp.errors.push(format!("names unavailable: {e}"));
+                }
+            }
+        }
+    }
+    if want_questions && inp.open_questions.is_none() {
+        inp.open_questions = Some(read_open_questions(inp));
+    }
+}
+
+/// The node ids with an `operator_question` whose `question_id` has no
+/// later `operator_question_closed` (file order decides "later").
+fn read_open_questions(inp: &Inputs) -> HashSet<String> {
+    let text = match std::fs::read_to_string(crate::attention_api::journal_path()) {
+        Ok(text) => text,
+        Err(_) => return HashSet::new(),
+    };
+    let _ = inp;
+    /// One journal line. The fields stay JSON so an off-type field never
+    /// costs the line; each reads its own shape below.
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    struct Event {
+        #[serde(rename = "type")]
+        kind: Value,
+        data: Question,
+    }
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    struct Question {
+        question_id: Value,
+        n: Value,
+        node: Value,
+        blocks: Value,
+    }
+    impl Question {
+        fn qid(&self) -> Option<&str> {
+            self.question_id.as_str().or(self.n.as_str())
+        }
+    }
+    let mut by_qid: HashMap<String, Vec<String>> = HashMap::new();
+    for v in crate::attention_api::journal_rows(&text) {
+        let Ok(event) = Event::deserialize(&v) else {
+            continue;
+        };
+        let data = &event.data;
+        match event.kind.as_str() {
+            Some("operator_question") => {
+                let Some(qid) = data.qid().filter(|s| !s.is_empty()) else {
+                    continue;
+                };
+                let blocks = data.blocks.as_array().into_iter().flatten();
+                let nodes = std::iter::once(&data.node)
+                    .chain(blocks)
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect();
+                by_qid.insert(qid.to_string(), nodes);
+            }
+            Some("operator_question_closed") => {
+                if let Some(qid) = data.qid() {
+                    by_qid.remove(qid);
+                }
+            }
+            _ => {}
+        }
+    }
+    by_qid
+        .into_values()
+        .flatten()
+        .filter(|n| !n.is_empty())
+        .collect()
+}
+
+/// The row refs one search-field build reads: id to row, the same map
+/// `board()` builds.
+pub fn board_refs(inp: &Inputs) -> HashMap<&str, &NodeRow> {
+    inp.rows.iter().filter_map(|r| Some((r.id()?, r))).collect()
+}
+
+/// How many rows name each id as their parent.
+pub(crate) fn child_counts(inp: &Inputs) -> HashMap<&str, usize> {
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for parent in inp.rows.iter().filter_map(NodeRow::parent) {
+        *counts.entry(parent).or_insert(0) += 1;
+    }
+    counts
+}
+
+/// The card's family facts the per-row [`card_of`] cannot see: its child
+/// count and its parent's title.
+pub(crate) fn fill_family(
+    card: &mut Card,
+    child_counts: &HashMap<&str, usize>,
+    by_ref: &HashMap<&str, &NodeRow>,
+) {
+    card.child_count = child_counts.get(card.id.as_str()).copied().unwrap_or(0);
+    card.parent_title = card
+        .parent
+        .as_deref()
+        .and_then(|p| by_ref.get(p))
+        .and_then(|r| r.title.clone());
+}
+
+#[cfg(test)]
+#[path = "backlog_model_tests.rs"]
+mod tests;

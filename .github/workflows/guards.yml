@@ -1,0 +1,824 @@
+name: guards
+
+# Consolidates near-duplicate structural-guard workflows into two trigger-shape groups,
+# by trigger shape rather than merged into one - a PR-only group and a push+PR
+# group - so no step
+# needs a runtime `if: event_name` guard and no PR-context env var (PR_BODY,
+# BASE_REF, ...) is ever read on a push event it was never designed for. Each
+# group's serial sum stays under 3 minutes, so both run sequentially rather
+# than backgrounded: several of these scripts have real
+# side effects (apt fallback installs, git history reads) and backgrounding
+# heterogeneous scripts into one shared runner buys nothing but a collision
+# risk none of them were written to tolerate.
+#
+# This trades away the GitHub-level parallelism the old 17-workflow layout
+# had for free - PR feedback now waits on a job's full serial sum instead of
+# just its slowest single check. That trade is the point, not a missed
+# option: 17 independently-scheduled runs is what "27 of 35 rows finish
+# under 30s" and a superseded run reading as current came from in the first
+# place. Two rows nobody misreads, three minutes slower, beats seventeen
+# rows some of which get misread.
+#
+# Every step after Checkout carries `if: ${{ !cancelled() }}` AND its own
+# `timeout-minutes` (matching its original per-workflow timeout). Together
+# they restore the isolation a separate-job-per-check layout gave for free:
+# `if` means a real FAILURE in step 3 does not skip step 9, and the
+# per-step timeout means a HANG in step 3 cannot silently consume the
+# whole job's shared budget and starve every step after it - a failing
+# step still fails the job either way, this only bounds how much of the
+# shared clock any one step can spend before the rest get their turn.
+#
+# Every guard step's name and command is verbatim from the workflow it
+# replaces (scripts/ci/check-workflow-manifest.sh's manifest names the
+# source). The one exception is Checkout/Python/uv: every folded source
+# needed some version of this same setup, so all jobs share it through
+# `.github/actions/guards-setup` (Checkout itself stays a separate step in
+# each job - a local composite action can only be resolved after the repo
+# is already checked out) rather than the jobs hand-copying it and
+# drifting on a version, the way this file's own Checkout once did. A step
+# NOT here (stacked-base-guard.yml) was deliberately excluded from
+# consolidation despite being in the plan's candidate pool: it POSTs commit
+# statuses to OTHER open PRs (not just this one), gates on fork-vs-same-repo
+# for a security reason, and needs its own `astral-sh/setup-uv` + write
+# permissions - it is a fleet-maintenance sweep wearing a check's clothes, not
+# a structural guard, and stays its own workflow.
+
+on:
+  workflow_dispatch:
+  # merge-queue-gate.yml runs these jobs on a merge queue batch. The event
+  # it passes in is workflow_dispatch, so the PR-only jobs skip.
+  workflow_call:
+  # `edited` is load-bearing for guards-pr: oos-tracked.yml triggered on
+  # [opened, synchronize, reopened, edited] on purpose, because its fix path
+  # IS a PR-body edit that cites a tracked node, with no
+  # new commit. A bare `pull_request:` defaults to
+  # [opened, synchronize, reopened] and drops that path silently - the gate
+  # would still be red (or stale) after the exact edit meant to clear it. The
+  # `guards` job also re-runs on a body-only edit as a result; that is an
+  # accepted extra ~112s, not a target to filter back out here, since a
+  # job-level skip on `edited` risks reporting a required check as `skipped`
+  # instead of leaving the prior `success` untouched.
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main]
+
+concurrency:
+  # A main push keys by sha so every merge keeps its own settled run; a called
+  # or dispatched run keeps the ref key.
+  group: guards-${{ github.event_name == 'push' && github.sha || github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  plugin-tree:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install marketplace CLIs for artifact validation
+        run: npm install --global @openai/codex @anthropic-ai/claude-code
+      - name: Prove minimal tree, count refusal and fast-forward publication
+        run: bash scripts/ci/check-plugin-tree.sh
+
+  # The OpenCode plugin suites: the repo-local orchestration plugin and the
+  # shipped stop bridge. Both files speak two OpenCode contracts (the 1.x
+  # function entrypoint and the 2.x `{ id, setup }` entrypoint), so a
+  # regression that breaks either arm must fail CI rather than surface on a
+  # user's upgraded OpenCode.
+  extension-suites:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Bun
+        if: ${{ !cancelled() }}
+        uses: oven-sh/setup-bun@v2
+        with:
+          # Pinned to the bun that authored .opencode/bun.lock, so a future
+          # bun release cannot redden --frozen-lockfile with no code change.
+          bun-version: 1.3.10
+
+      - name: Orchestration plugin suite (.opencode)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        working-directory: .opencode
+        run: |
+          bun install --frozen-lockfile
+          bun test
+
+      - name: Stop bridge suite (tests/js/opencode)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bun test tests/js/opencode/footnote.plugin.test.js
+
+  main-python-static:
+    name: Python static correctness (495 sources)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          # The flag ratchet diffs against the merge base (or the previous
+          # tip on push); depth 1 holds neither.
+          fetch-depth: 0
+
+      - name: Python + uv
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/guards-setup
+
+      - name: Ruff + MyPy (repo-wide)
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/check-python-static.sh
+
+      # The command x harness doc is a projection of the capability table and
+      # skills/*/SKILL.md frontmatter, and since the renderer moved into the
+      # fno-agents binary it takes one build from this checkout: the renderer
+      # must be the same parser that validates the table, or the freshness
+      # verdict can lie.
+      - name: Rust toolchain (matrix renderer build)
+        if: ${{ !cancelled() }}
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build fno-agents (matrix renderer)
+        if: ${{ !cancelled() }}
+        working-directory: crates/fno-agents
+        run: |
+          cargo build --bin fno-agents
+          # Runner-only: replayed locally this overwrites the deployed binary
+          # in place and macOS SIGKILLs every launch. Pin a local build with
+          # FNO_AGENTS_FRONT instead.
+          if [ "$CI" = true ]; then cp target/debug/fno-agents "$HOME/.cargo/bin/"; fi
+
+      # The authoring gate is prose in three skill files; this step is the
+      # machine refusal. The base is the merge base, so removals bank no
+      # credit: each change measures against its own base, the same rule as
+      # scripts/ci/check_flag_registry.py, and the census can only fall.
+      - name: Test declarations are shrink-only
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        env:
+          TEST_BASE: ${{ github.event_name == 'push' && github.event.before || format('origin/{0}', github.base_ref || 'main') }}
+        # 1: a brand-new native module's first contract test is an honest
+        # floor the 0 cap cannot express; the suite still shrinks in net
+        # across any PR that only extends existing owners. 3: the identity
+        # schema (d-f9c59b68, d-2327af8e) adds two native modules and one
+        # store aggregate, each carrying its first contract test. 6: the
+        # OTLP exporter is a new native module whose four tests are its
+        # first contracts, plus two regressions in existing owners (the
+        # preview-flag refusal and the old-spelling vacate). 22: the pane
+        # spawn spine is a brand-new native module whose tests are its
+        # first contracts, each pinning one golden-parity or reconcile
+        # behavior the dual-implementation protocol requires to stay
+        # byte-true until the Python leg deletes.
+        run: fno-agents test-delta --base "$TEST_BASE" --max-net 22
+
+      - name: Command matrix fresh
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          fno-agents harness-matrix --write --root "$GITHUB_WORKSPACE"
+          git diff --exit-code -- docs/harnesses/command-matrix.md
+
+      # hooks/write-gate.sh refuses edits only to generated copies
+      # that generated-artifacts.tsv or skill-bundles.yaml names. The census
+      # fails on a dead row and on a marked generated file no list covers.
+      - name: Generated-copy manifest complete (selftest, then check)
+        if: ${{ !cancelled() }}
+        run: |
+          bash scripts/tests/check-generated-manifest-selftest.sh
+          bash scripts/ci/check-generated-manifest.sh
+
+      # scripts/regen-generated-copies.py is the no-build regen path the
+      # write-gate refusal names. Its selftest watches the two contracts the
+      # plain-copy walk must keep: the spliced notify_dispatch twin is
+      # refused by name, and a copy newer than its source is never moved
+      # backwards.
+      - name: Regen copy script guards (selftest)
+        if: ${{ !cancelled() }}
+        run: bash scripts/tests/test_regen_generated_copies.sh
+
+      # x-3d21 R4/R5: a state path built by hand consults nothing, so no env
+      # pin, guard or refusal can reach it. The ratchet fails in BOTH
+      # directions - a new hand-built path, and a baselined line whose site was
+      # fixed and not removed.
+      # The repository lint checks answer from the native front door now
+      # (the Python lint legs deleted); the binary built below serves them
+      # in-process.
+      - name: Build fno (repo-lint door)
+        if: ${{ !cancelled() }}
+        working-directory: crates/fno
+        run: cargo build --bin fno
+
+      - name: State-roots ratchet (declared root)
+        if: ${{ !cancelled() }}
+        env:
+          FNO_BIN: ${{ github.workspace }}/crates/fno/target/debug/fno
+        run: '"$FNO_BIN" doctor lint state-roots'
+
+      # The Rust/Python seam ratchet, positive-controlled by
+      # tests/ci/test_seam_crossings.sh: the selftest must fail on injected
+      # drift before the check is trusted on the real tree. Both halves run
+      # the native front door.
+      - name: Seam-crossings ratchet (selftest, then check)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        env:
+          FNO_BIN: ${{ github.workspace }}/crates/fno/target/debug/fno
+        run: |
+          set -euo pipefail
+          bash tests/ci/test_seam_crossings.sh
+          "$FNO_BIN" doctor lint seam-crossings
+
+      # A hook script the base revision's config referenced cannot be deleted
+      # in the same commit that unregisters it: running sessions cache hook
+      # config for their lifetime and a PreToolUse hook that cannot launch
+      # fails the whole Bash call, so one stubless deletion bricks every
+      # pre-merge session's shell. One release of no-op stub, then delete.
+      # Moved here from the guards job: the check is native now and reads
+      # the front door built above.
+      - name: Hook script tombstone gate (no stubless deletion)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        env:
+          FNO_BIN: ${{ github.workspace }}/crates/fno/target/debug/fno
+        run: '"$FNO_BIN" doctor lint hook-tombstones'
+
+
+      # The JSON-stdout house contract: a -J command prints exactly one JSON
+      # document on stdout ([] on empty, {ok:false} on a refused read), so an
+      # agent parses output without a wrapper. Selftest first, so the checker
+      # is positive-controlled before it is trusted on the real table.
+      - name: JSON-stdout contract (selftest, then check)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          bash scripts/ci/check-json-stdout.sh --selftest
+          bash scripts/ci/check-json-stdout.sh
+
+      # Flag + env-var registries (x-72fc): the flag check measures the
+      # change against its own base (merge base on a PR, the previous tip on
+      # push), so two PRs from one base cannot race on a stored count; every
+      # env var read carries a doc row. Selftest first, so the checks are
+      # positive-controlled before trusted.
+      - name: Flag and env registry ratchets (selftest, then check)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        env:
+          PR_BASE_REF: ${{ github.base_ref || 'main' }}
+          FLAG_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || '' }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/check_flag_registry.py --selftest
+          python3 scripts/ci/check_flag_registry.py
+          python3 scripts/ci/check_env_registry.py --selftest
+          python3 scripts/ci/check_env_registry.py
+
+  # PR-only: every member here originally triggered on `pull_request` alone
+  # (no `push`), several because they read PR-only context (PR_BODY,
+  # BASE_REF, PR_TITLE, PR_BASE_SHA/PR_HEAD_SHA) that does not exist on a push
+  # event. Sourced from: control-plane-doc-colocation.yml, oos-tracked.yml.
+  guards-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Python + uv
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/guards-setup
+
+      # From control-plane-doc-colocation.yml (doc-colocation job).
+      # Advisory: warns (never blocks) when control-plane code changes
+      # without a matching docs/architecture/ update.
+      - name: Check control-plane doc colocation
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        continue-on-error: true
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: bash scripts/ci/control-plane-doc-colocation.sh
+
+      # From control-plane-doc-colocation.yml (self-test job).
+      - name: Run doc-colocation test harness
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash tests/ci/test_control_plane_doc_colocation.sh
+
+      # From oos-tracked.yml (check-oos-tracked job). PR-controlled text (the
+      # body) reaches the script via env ONLY - never interpolated inline
+      # into `run:`, which would be a shell-injection hole.
+      - name: Out-of-scope items reference a tracked node / carveout
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: bash scripts/ci/check-oos-tracked.sh
+
+      # From oos-tracked.yml (self-test job).
+      - name: Run oos-tracked test harness
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash tests/ci/test_oos_tracked.sh
+
+      - name: PR-create out-of-scope tracking contract
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash tests/skills/test_pr_oos_tracking_contract.sh
+
+  # From pr-node-closure.yml (check-pr-node-closure + self-test jobs, folded
+  # into one job sharing a single fno-agents build). PR-only: the gate reads
+  # PR_BODY, which does not exist on a push event. The job id stays
+  # check-pr-node-closure so the check-run name crates/fno-agents/src/runtime/heal.rs
+  # matches (closure-trailer signature) is unchanged.
+  check-pr-node-closure:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust toolchain (closure scanner build)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/fno-agents
+
+      - name: Build fno-agents (closure scanner)
+        working-directory: crates/fno-agents
+        run: cargo build --bin fno-agents
+
+      # State-root tidiness: the inventory doc's root rows are shrink-only.
+      # The runtime half is hooks/write-gate.sh, which refuses
+      # a NEW top-level write in either root; this gate is the review half,
+      # failing a PR whose diff adds a root pattern to the doc.
+      - name: State-root inventory rows are shrink-only
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/ci/check-state-root-rows.sh --self-test
+          bash scripts/ci/check-state-root-rows.sh
+
+      - name: PR node closure
+        id: closure
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_HEAD_REF: ${{ github.head_ref }}
+        # shell: bash sets pipefail, so the script's exit code fails the step
+        # while tee still captures the remedy text for the annotation step.
+        shell: bash
+        run: bash scripts/ci/check-pr-node-closure.sh 2>&1 | tee closure.log
+
+      - name: Annotate with the remedy
+        if: failure() && steps.closure.outcome == 'failure'
+        run: |
+          cat closure.log >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::PR node closure: the PR body needs the exact closure line (Fixes <id> [<id> ...]). Generate ONE line with: fno do pr closure-trailer <node-id> [--extra <id> ...], then EDIT the PR body: replace every closure line with that one line (the gate reads only the last). Do not rerun this failed run."
+
+      - name: Run self-test
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci/check-pr-node-closure-selftest.sh
+
+  # push (main) + pull_request: no member here reads PR-only context.
+  # Sourced from: autonomy-registry.yml, codex-bootstrap-check.yml,
+  # mail-inject-callers.yml, plan-rung-authority.yml,
+  # preamble-budget.yml,
+  # review-invocation-single-source.yml, skill-local-evals.yml,
+  # tracker-partition.yml, uv-install-bytecode.yml.
+  guards:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Python + uv
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/guards-setup
+
+      # The coverage guard for this consolidation itself - a deleted
+      # workflow file with no matching manifest edit is a red check, not a
+      # review catch.
+      - name: Workflow manifest (no silent workflow-file deletion)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-workflow-manifest.sh
+
+      - name: Run workflow-manifest test harness
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash tests/ci/test_check_workflow_manifest.sh
+
+      # The shipped harness evidence as a subset of the one Rust roster
+      # (provider.rs KNOWN_HARNESSES, parsed from source): setup docs, the
+      # dispatch arms, and the Python adapter registry. stdlib only - no
+      # package install, no Rust build, no network.
+      - name: Harness roster parity (evidence vs the one Rust roster)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: python3 scripts/ci/check-harness-roster-parity.py
+
+      - name: Run harness-roster parity selftest (positive controls)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: python3 scripts/ci/check-harness-roster-parity.py --selftest
+
+      - name: Cargo rustc-wrapper announces its path
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash tests/lib/test_cargo_rustc_wrapper.sh
+
+      # A zero is never a verdict: the helper refuses a probe zero whose
+      # control missed (broken instrument) or a caller that sent no control.
+      - name: assert-absent lib test (positive control on the zero-verdict helper)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash tests/lib/test_assert_absent.sh
+
+      # From disposable-rm.yml.
+      - name: Bare rm in disposable-delete files + self-test
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/ci/check-disposable-rm.sh
+          bash tests/ci/test-check-disposable-rm.sh
+
+      # The state canary's own positive control. `verify` is not run here: it
+      # needs a planted HOME with a suite run between plant and verify, and the
+      # smoke runner owns that bracket. `self-test` is self-contained and cheap,
+      # and it is what makes the canary's green mean anything: it plants into a
+      # fresh HOME, writes one byte into the planted graph.json, and fails
+      # unless the inner verify goes red naming that file.
+      - name: State canary self-test (positive control)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-state-canary.sh self-test
+
+      # From autonomy-registry.yml.
+      - name: autonomy registry ratchet
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-autonomy-registry.sh
+
+      # From codex-bootstrap-check.yml, whose own job carried the widest
+      # timeout of any folded source (15 minutes) - these three steps are
+      # the ones that have actually stalled to their ceiling before.
+      - name: Setup prerequisites
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        # jq ships on ubuntu-latest; apt runs only as an image-drift
+        # fallback (an unconditional `apt-get update` once stalled 15
+        # minutes on an unreachable mirror).
+        run: |
+          command -v jq >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y jq; }
+          jq --version
+
+      - name: Run Codex setup (no package setup)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/setup.sh --provider codex --skip-package-setup
+
+      - name: Run doctor checks
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/doctor.sh
+
+      # From mail-inject-callers.yml.
+      - name: mail-inject caller ratchet
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-mail-inject-callers.sh
+
+      - name: dispatch-observability test journals stay hermetic
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-tests-hermetic-events.sh
+
+      - name: hook source identity
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/ci/check-hook-identity.sh --self-test
+          bash scripts/ci/check-hook-identity.sh
+
+      # Codex reads a Stop hook group's output as one decision: any non-empty
+      # exit-0 stdout that is not one JSON object fails the group and ends the
+      # turn the target loop meant to continue, leaving the worker idle at its
+      # prompt. Replay every Stop command in codex-hooks.json against payload
+      # fixtures and assert the output contract; the self-test first proves
+      # the harness fails on a plain-text-at-exit-0 hook.
+      - name: Codex Stop-hook output contract
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/ci/check-codex-stop-contract.sh --self-test
+          bash scripts/ci/check-codex-stop-contract.sh
+
+      # A skipped test reads green while a failing one blocks the merge, so the
+      # cheapest way past a red test is to skip it. This ratchet refuses any
+      # pytest skip site the checked-in baseline does not name, until the PR
+      # that adds it records a line with a reason, or fixes the test.
+      - name: pytest skip-site ratchet
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-pytest-skips.sh
+
+      - name: pytest skip-site ratchet selftest
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash tests/ci/test_check_pytest_skips.sh
+
+      # From plan-rung-authority.yml.
+      - name: One readiness authority (Python table, shell command, Rust delegation)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-plan-rung-authority.sh
+
+      # From preamble-budget.yml.
+      - name: SessionStart preamble byte budget
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-preamble-budget.sh
+
+      # The user path (hooks, skills, buddy, user-path scripts) starts no new
+      # Python; each file is held to its shrink-only row in
+      # scripts/ci/user-python-debt.tsv.
+      - name: No new Python on the user path
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-no-user-python.sh
+
+      # Every tracked .py file has one verdict row in
+      # scripts/ci/python-ledger.tsv, and every row names a live file; keep
+      # rows must sit inside check-file-budget.sh's PY_ALLOWED homes.
+      - name: Python ledger is complete
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-python-ledger.sh
+
+      # A tracked source file over 5,000 lines is shrink-only relative to the
+      # merge base; the refusal names the module-per-question remedy.
+      - name: Oversized files are shrink-only
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        env:
+          PR_BASE_REF: ${{ github.base_ref || 'main' }}
+          FILE_BUDGET_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || '' }}
+        run: bash scripts/ci/check-file-budget.sh
+
+      - name: File budget gate selftest
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash tests/ci/test_check_file_budget.sh
+
+      # String-key JSON reads and Result<_, String> are shrink-only per
+      # crate relative to the merge base (docs/rust-style.md R1 and R6).
+      - name: String-key reads are shrink-only
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        env:
+          PR_BASE_REF: ${{ github.base_ref || 'main' }}
+          VALUE_READS_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || '' }}
+        run: bash scripts/ci/check-value-reads.sh
+
+      - name: Value-reads gate selftest
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash tests/ci/test_check_value_reads.sh
+
+      # Law d-fe66560a: top-level commands are not allowed at all, hidden ones
+      # included. The fno-agents binary's action list may only shrink; the
+      # command ratchet reads all of fno-agents as ONE baseline leaf, so nothing
+      # else notices the list growing. Same base contract as the file budget
+      # step above.
+      - name: fno-agents action list is shrink-only
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        env:
+          PR_BASE_REF: ${{ github.base_ref || 'main' }}
+          ACTIONS_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || '' }}
+        run: bash scripts/ci/check-client-actions-shrink.sh
+
+      - name: Action list shrink gate selftest
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash tests/ci/test_check_client_actions_shrink.sh
+
+      # The write-side half of the same rule: a diff that ADDS a hand-built
+      # root-level write (a bare state_dir() leaf, a fence-less
+      # root_state_file, a Rust place() with no layout row) fails, so a new
+      # writer cannot skip the paths-module doors the doc's rule names.
+      - name: State-root writes are rowed or subfoldered
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        env:
+          PR_BASE_REF: ${{ github.base_ref || 'main' }}
+        run: |
+          bash scripts/ci/check-state-root-writes.sh --self-test
+          bash scripts/ci/check-state-root-writes.sh
+
+      # From review-invocation-single-source.yml.
+      - name: Review invocation single-source check
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-review-invocation-single-source.sh
+
+      # A ruling that retires a command must reach the caller-facing strings
+      # that still name it, not only the decision record.
+      - name: Retired-command strings check
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-retired-command-strings.sh
+
+      - name: Role vocabulary check
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-role-vocabulary.sh
+
+      # Keep the human address in skills aligned with the shared vocabulary.
+      - name: Skill operator-address check
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-operator-address.sh
+
+      # A command form named by a live law must reach the skill that teaches it.
+      - name: Law command-form check
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-law-command-forms.sh
+
+      # Shipped skill text must not cite maintainer-local decision ids: the
+      # law content lives in a private decision store, so a public clone
+      # carries the pointer without the content. Inline the rule instead.
+      - name: Skill decision-id citation check + self-test
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/ci/check-skill-decision-ids.sh --self-test
+          bash scripts/ci/check-skill-decision-ids.sh
+
+      # Every page the AGENTS.md deep-dive index links must open with a scope
+      # section (## Is this page for you? + a Not for: line), so a reader
+      # with a symptom can tell whether the mechanism on the page governs it
+      # without reading the source.
+      - name: Doc entry-page scope + self-test
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          bash tests/ci/test_check_doc_entry_scope.sh
+          bash scripts/ci/check-doc-entry-scope.sh
+
+      # Graduated from the AGENTS.md reachable-paths pitfall entry.
+      - name: Reachable-paths lint + self-test
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/ci/check-reachable-paths.sh --self-test
+          bash scripts/ci/check-reachable-paths.sh
+
+      - name: Every registered hook declares its class
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/ci/check-hook-classes.sh --self-test
+          bash scripts/ci/check-hook-classes.sh
+
+      - name: Every registered hook picks a pack or mux profile
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/ci/check-pack-profiles.sh --self-test
+          bash scripts/ci/check-pack-profiles.sh
+
+      # A changed SKILL.md carries an eval case in skills/<name>/evals/, which
+      # `fno doctor evals run` and `claude plugin eval` both read.
+      - name: Changed skills carry an eval
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        env:
+          PR_BASE_REF: ${{ github.base_ref || 'main' }}
+          SKILL_EVALS_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || '' }}
+        run: bash scripts/ci/check-skill-has-evals.sh
+
+      # The growth-studio pack declares its scenarios in plugin.yaml, and pack
+      # verification only checks that each command is runnable - it never
+      # executes one. So the pack's own behavior assertions ran nowhere, and a
+      # command rename in SKILL.md left the activation gate asserting a string
+      # that no longer existed while every check stayed green.
+      #
+      # The commands are read from the manifest rather than hardcoded here: a
+      # scenario added or renamed there would otherwise run nowhere, which is
+      # the same hole one directory over. An empty list is an error, not a
+      # pass, so a manifest that stops declaring scenarios cannot read as one.
+      - name: growth-studio pack scenarios
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 - <<'PY'
+          import pathlib, shlex, subprocess, sys, yaml
+
+          pack = pathlib.Path("plugins/growth-studio")
+          scenarios = yaml.safe_load((pack / "plugin.yaml").read_text()).get("scenarios") or []
+          if not scenarios:
+              sys.exit(f"no scenarios declared in {pack}/plugin.yaml")
+          for scenario in scenarios:
+              print(f"::group::{scenario['id']}", flush=True)
+              rc = subprocess.run(shlex.split(scenario["command"]), cwd=pack).returncode
+              print("::endgroup::", flush=True)
+              if rc:
+                  sys.exit(f"scenario {scenario['id']} failed with exit {rc}")
+          print(f"{len(scenarios)} scenario(s) passed")
+          PY
+
+      # From tracker-partition.yml.
+      - name: Tracker partition gate + self-test
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/ci/check-tracker-partition.sh --self-test
+          bash scripts/ci/check-tracker-partition.sh
+
+      # Every install command README.md advertises must be proven by an
+      # expect: pass row of the install-channel matrix. The proof runs here
+      # and not as a README.md path trigger on install-channels.yml: that
+      # trigger made a README-only PR pay the full 22-row clean-runner
+      # matrix for a scan that takes seconds. The matrix still runs daily,
+      # on dispatch, and on install-surface change, and keeps its
+      # readme-commands row for those runs.
+      - name: README install commands are proven by matrix pass rows
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-readme-install-commands.sh
+
+      # From internal-refs.yml. The check-no-internal-refs guard blocks four
+      # leak classes: internal/ vault-path literals in shipped prose,
+      # node IDs / session URLs in that prose and in the code tree, plus
+      # competitor product names ANYWHERE in the tree, code included. That
+      # last class is repo-wide, so the guard runs unconditionally here too.
+      - name: No internal refs or competitor names in the tree
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: bash scripts/ci/check-no-internal-refs.sh
+
+      # The fno concept is "command", in identifiers, paths and prose alike:
+      # the gate scans the whole tree. The self-test watches it fail first.
+      - name: No "verb" wording anywhere in the tree
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/ci/check-no-verb-wording.sh --self-test
+          bash scripts/ci/check-no-verb-wording.sh
+
+      # A web page never swallows an error: an empty catch needs a quiet-ok
+      # comment. The self-test watches it fail first.
+      - name: No empty catch in the web pages
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/ci/check-web-empty-catch.sh --self-test
+          bash scripts/ci/check-web-empty-catch.sh
+
+      # From internal-refs.yml. A gate a rule cites must be watched failing:
+      # the selftest plants one leak per class/scope and asserts each is
+      # rejected, and each sanctioned form is accepted.
+      - name: Gate selftest (positive and negative controls)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        run: bash scripts/tests/check-no-internal-refs-selftest.sh
+
+      # From workflow-contract.yml (workflow-contract job). Pins that every
+      # main head carries the full lane set (unfiltered guards + rust-ci
+      # pushes, full lanes on the non-PR selector) - the input the PR merge
+      # gate's CI-freshness read depends on - plus the release.yml publish
+      # routing.
+      - name: Workflow contract (main head + release routing)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          python3 -m pip install --quiet pyyaml
+          bash tests/ci/test_main_exact_head_correctness.sh

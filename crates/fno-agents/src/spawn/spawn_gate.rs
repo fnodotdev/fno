@@ -1,0 +1,4276 @@
+//! Spawn gate : global concurrency cap + free-RAM floor + queue loop.
+//!
+//! Called at the top of the client `spawn` arm for the `bg`/`headless`
+//! substrates only (`pane` re-execs through the native command dispatcher; the
+//! same Rust gate is the sole gate on every supported spawn path).
+//!
+//! The gate is READ-ONLY: the `max_live` slot cap counts the fno registry
+//! (worker provenance) and the RAM floor reads system `vm_stat`/meminfo. The
+//! claude daemon roster is consulted only as a LIVENESS ORACLE for fno bg rows
+//! that carry no local pid, and by the post-spawn QoS demotion helper — never
+//! as a population to count (: the roster's non-work sessions must not
+//! consume worker slots; only rows that are ALSO in the fno registry count).
+//! The gate's only writes are its own claims (`spawn-gate` check→dispatch mutex,
+//! `worker:<name>` headless slot claims). Every guard fails OPEN on read errors
+//! (LD5): the gate is protective infrastructure and must never become the thing
+//! that bricks spawning.
+
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::agents_config;
+use crate::claims;
+use crate::claude_roster::ClaudeRoster;
+use crate::footprint_cache::{footprint_cause_cached, FOOTPRINT_CACHE_FRESH};
+use crate::spawn_gate_lanes;
+use crate::spawn_gate_lanes::{
+    check_account_login, check_account_quota_lock, check_lane_quota_lock, check_registry_schema,
+};
+use crate::spawn_gate_queue::slot_refusal_line;
+use crate::spawn_gate_reservations::{release_redeemed_reservation, reserved_receipt};
+use crate::spawn_gate_slots::{annotate_burst, burst_slot_reading, slot_tick_line};
+use crate::state::RegistryEntry;
+use crate::AgentStatus;
+use std::collections::{BTreeMap, HashSet};
+
+/// Exit codes, allocated by the shared table in
+/// `cli/src/fno/agents/spawn_gate.py` and kept unique across both trees by
+/// `cli/tests/unit/test_exit_code_allocation.py` (values >= 64 claim a number
+/// once; the same NAME at the same number in both trees is byte-parity).
+/// Distinct from the convention codes (2, 13, 14, 15, 18, 127).
+pub const EXIT_QUEUE_TIMEOUT: i32 = 75;
+pub const EXIT_NO_WAIT: i32 = 76;
+/// The per-territory team cap refused the spawn, or its attribution
+/// was unreadable. The team cap is the one permanent, non-queueable machine
+/// refusal with its own number, so a caller never retries it as capacity.
+pub const EXIT_TERRITORY_CAP: i32 = 86;
+/// The blueprint thread cap: more than
+/// `agents.profiles.blueprint.max_live` live `bp` threads, or more than one
+/// per territory, refuses the spawn and teaches the subagent path.
+pub const EXIT_BLUEPRINT_CAP: i32 = 88;
+/// A spawn whose seed or label names review is refused before every bypass.
+pub const EXIT_REVIEW_SESSION: i32 = 89;
+pub const EXIT_RAM_REFUSED: i32 = 77;
+pub const EXIT_PROVIDER_CAP: i32 = 78;
+pub const EXIT_LOAD_REFUSED: i32 = 79;
+pub const EXIT_LEAD_SHARE: i32 = 80;
+pub const EXIT_REGISTRY_SCHEMA: i32 = 81;
+/// A durable fleet incident stop is active - refused before every
+/// bypass branch, `--force` and `FNO_SPAWN_GATE=0` included. In-flight
+/// workers are untouched; only new admission is refused. Same number as the
+/// Python gate's EXIT_FLEET_STOP (byte-parity for the fleet pair).
+pub const EXIT_FLEET_STOP: i32 = 82;
+/// The incident state exists but cannot be read: fail closed, and say this is
+/// a CANNOT-TELL refusal, never a stop verdict.
+pub const EXIT_FLEET_STOP_UNAVAILABLE: i32 = 83;
+/// The lane declares nothing about how it stands toward the fno state root
+/// (epic rule R3). NOT "declares no carrier": an unsandboxed lane needs none.
+pub const EXIT_STATE_ROOT_UNGRANTED: i32 = 84;
+/// The spawn-gate transport could not get an answer at all (the gate command is
+/// missing, failed, or timed out): fail closed, never admit on an unreadable
+/// gate. Byte-parity with the Python table's EXIT_GATE_UNAVAILABLE. 86 went
+/// to the per-territory team cap, which landed first; the gate-unavailable
+/// number moved to the next free slot.
+pub const EXIT_GATE_UNAVAILABLE: i32 = 87;
+/// The node-occupancy refusal: fleet top shows a positively-live worker on
+/// the spawn's node, claimed or not (fn-6206, 2026-10-21). A collision is
+/// not busyness, so no bypass excuses the named-worker refusal; the
+/// roster-down variant names the broken read and yields to `--force`.
+pub const EXIT_NODE_OCCUPIED: i32 = 92;
+/// The rule engine's door:spawn read refused the spawn. Retryable by
+/// flipping or expiring the rule (`event_rules.<id>` config, expiry, or a
+/// lifted cap), never by `--force`.
+pub const EXIT_RULE_REFUSED: i32 = 93;
+/// The repo holds more open PRs than `agents.max_open_prs`: a new target
+/// seat waits. Work on a node that already has a PR is exempt, and
+/// `--force` does not lift it.
+pub const EXIT_OPEN_PR_CAP: i32 = 94;
+/// A team's known metered model spend has reached `budget.team.cost_cap_usd`.
+pub const EXIT_TEAM_COST_CAP: i32 = 95;
+
+/// The prefix every PASS-path gate line carries. Only a refusal may start
+/// `spawn-gate: ` - the verdict line and the refusal sentences - so the
+/// readers (`cli/src/fno/backlog/advance.py _gate_refusal_detail`,
+/// `crates/fno/src/dispatch_launch.rs refusal_detail`) can pick the refusal
+/// out of a stderr that is full of passing readings. Contract:
+/// docs/architecture/spawn-gate.md (Reading a refusal).
+pub(crate) const NOTE: &str = "spawn-gate note:";
+
+/// A refusal as data: the exit code the caller's arm returns, the stdout
+/// receipt it prints (byte-shape unchanged from when `run_gate` printed it
+/// itself), and the event fields the Python transport emits through `_refuse`
+/// for spawns that enter Python (locked decision 5 - refusal events stay
+/// Python-emitted; the native arm itself still emits nothing, owns a
+/// Rust emit). The eprintln prose stays at the refusal site either way.
+#[derive(Debug, Clone)]
+pub struct Refusal {
+    pub exit_code: i32,
+    pub receipt: Option<serde_json::Value>,
+    pub event: serde_json::Map<String, serde_json::Value>,
+}
+
+impl Refusal {
+    pub(crate) fn code(exit_code: i32) -> Self {
+        Refusal {
+            exit_code,
+            receipt: None,
+            event: serde_json::Map::new(),
+        }
+    }
+
+    pub(crate) fn with_receipt(exit_code: i32, receipt: serde_json::Value) -> Self {
+        Refusal {
+            exit_code,
+            receipt: Some(receipt),
+            event: serde_json::Map::new(),
+        }
+    }
+
+    /// Attach one event field (builder style, so refusal sites stay one line).
+    pub(crate) fn ev(mut self, key: &str, value: serde_json::Value) -> Self {
+        self.event.insert(key.to_string(), value);
+        self
+    }
+}
+
+/// The one-line verdict every refusal ends with: `spawn-gate: refused on
+/// <axis> (<reason>, exit <code>): <figures>`. The axis prefers the event's
+/// explicit axis, then the receipt's axis/held_on/reason; the figures are
+/// the receipt's scalar fields in key order (serde_json `preserve_order`),
+/// skipping the words already named. Contract:
+/// docs/architecture/spawn-gate.md (Reading a refusal).
+fn refusal_axis(r: &Refusal) -> &str {
+    let ev_str = |k: &str| r.event.get(k).and_then(serde_json::Value::as_str);
+    let rc_str = |k: &str| r.receipt.as_ref()?.get(k)?.as_str();
+    ev_str("axis")
+        .or_else(|| rc_str("axis"))
+        .or_else(|| rc_str("held_on"))
+        .or_else(|| rc_str("reason"))
+        .or_else(|| ev_str("reason"))
+        .unwrap_or("unknown")
+}
+
+fn refusal_reason(r: &Refusal) -> &str {
+    r.receipt
+        .as_ref()
+        .and_then(|v| v.get("reason"))
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| r.event.get("reason").and_then(serde_json::Value::as_str))
+        .unwrap_or("unknown")
+}
+
+pub(crate) fn verdict_line(r: &Refusal) -> String {
+    let ev_str = |k: &str| r.event.get(k).and_then(serde_json::Value::as_str);
+    let rc = r.receipt.as_ref();
+    let rc_str = |k: &str| {
+        rc.and_then(|v| v.get(k))
+            .and_then(serde_json::Value::as_str)
+    };
+    let axis = refusal_axis(r);
+    let reason = refusal_reason(r);
+    let mut figures: Vec<String> = Vec::new();
+    let collect = |map: &serde_json::Map<String, serde_json::Value>, figures: &mut Vec<String>| {
+        for (k, v) in map {
+            if matches!(
+                k.as_str(),
+                "status" | "reason" | "axis" | "held_on" | "remedy"
+            ) || (k.as_str() == "max_live" && map.get("learned_cap") == Some(v))
+            {
+                continue;
+            }
+            match v {
+                serde_json::Value::String(s) => figures.push(format!("{k}={s}")),
+                serde_json::Value::Number(_) | serde_json::Value::Bool(_) => {
+                    figures.push(format!("{k}={v}"));
+                }
+                _ => {}
+            }
+        }
+    };
+    if let Some(obj) = rc.and_then(serde_json::Value::as_object) {
+        collect(obj, &mut figures);
+    }
+    if figures.is_empty() {
+        // A receipt-less refusal (lead share, fleet incident) keeps its
+        // measurements in the event; the verdict names them, or it names
+        // no breach at all.
+        collect(&r.event, &mut figures);
+    }
+    let remedy = rc_str("remedy").or_else(|| ev_str("remedy")).unwrap_or("");
+    let remedy = if remedy.is_empty() {
+        String::new()
+    } else {
+        format!("; remedy: {remedy}")
+    };
+    if figures.is_empty() {
+        format!(
+            "spawn-gate: refused on {axis} ({reason}, exit {}){remedy}",
+            r.exit_code
+        )
+    } else {
+        format!(
+            "spawn-gate: refused on {axis} ({reason}, exit {}): {}{remedy}",
+            r.exit_code,
+            figures.join(", ")
+        )
+    }
+}
+
+/// The first admission boundary of the native gate: a durable
+/// incident stop that holds spawns (or an unreadable incident state)
+/// refuses before the `FNO_SPAWN_GATE=0` operator bypass, before `--force`,
+/// and before any capacity math. Mail stays ungated so the incident can be
+/// announced and explained; `fno agents incident clear` reopens admission.
+fn fleet_incident_gate() -> Result<(), Refusal> {
+    // A caller with no worker identity is the human's own typed command: their
+    // call is the recovery path, so the stop holds agent fan-out only.
+    if !crate::spawn_gate_admission::gate_agent_origin() {
+        return Ok(());
+    }
+    match crate::fleet_incident::verdict_for("spawns") {
+        crate::fleet_incident::Verdict::Clear(_) => Ok(()),
+        crate::fleet_incident::Verdict::Stopped(record) => {
+            eprintln!(
+                "refused: fleet incident stop is active (generation {}, reason: {}); \
+                 in-flight workers continue, no new spawn is admitted. \
+                 Reopen with `fno agents incident clear --reason <text>`",
+                record.generation, record.reason
+            );
+            Err(Refusal::code(EXIT_FLEET_STOP)
+                .ev("reason", serde_json::json!("fleet-stop"))
+                .ev("generation", serde_json::json!(record.generation))
+                .ev("detail", serde_json::json!(record.reason)))
+        }
+        crate::fleet_incident::Verdict::Unavailable(detail) => {
+            eprintln!(
+                "refused: fleet incident state is unreadable ({detail}); \
+                 admission fails closed until the record is readable again"
+            );
+            Err(Refusal::code(EXIT_FLEET_STOP_UNAVAILABLE)
+                .ev("reason", serde_json::json!("fleet-stop-unavailable"))
+                .ev("detail", serde_json::json!(detail)))
+        }
+    }
+}
+
+/// Queue mechanics (Claude's Discretion 2: targets, not contracts).
+const QUEUE_POLL: Duration = Duration::from_secs(2);
+/// Under the first-turn watch's 4 minute notice: a queued spawn answers its
+/// caller with its place and reason before the watch would have to.
+const QUEUE_TIMEOUT: Duration = Duration::from_secs(240);
+/// LD4: the CPU-hold re-sample gap and the admission debounce. Longer
+/// than the slot poll because the `ps` CPU column is a decaying average on
+/// macOS - two reads 2s apart are one sample twice. Mirrors
+/// `spawn_gate.py::CPU_HOLD_POLL_S`.
+const CPU_HOLD_POLL: Duration = Duration::from_secs(15);
+const CPU_ADMIT_SAMPLES: u32 = 2;
+/// spawn-gate mutex TTL: generous vs the seconds-scale check→dispatch window;
+/// PID liveness frees it instantly if the spawner dies.
+const GATE_CLAIM_TTL_MS: i64 = 5 * 60 * 1000;
+/// How long an uncapped spawner tolerates an UNBROKEN run of failed mutex
+/// acquisitions before proceeding unserialized. The claim records the holder
+/// pid, so a holder that dies frees the mutex on the next acquire. This bound
+/// covers a LIVE holder stuck in dispatch: the mutex is a check→dispatch
+/// serializer, not a state owner, and a gate that bricks spawning is what LD5
+/// forbids. Failing open can overshoot the cap by the number of racing
+/// spawners, so a capped spawner keeps queueing instead.
+const MUTEX_WAIT_BUDGET: Duration = Duration::from_secs(60);
+/// worker:<name> headless slot TTL: bounds a LIVE holder's stay; a dead
+/// holder frees the slot at once (the claim carries its holder pid stamped
+/// `holder-process`, so PID liveness is the primary release and the TTL is
+/// only the backstop).
+const WORKER_CLAIM_TTL_MS: i64 = 4 * 60 * 60 * 1000;
+const KNOWN_UNROUTED_PROVIDER: &str = "__uncapped__";
+
+/// Registry statuses that can hold a live process (idle counts: an
+/// idle-but-unreaped process still holds RAM; a reaped pid drops out via the
+/// liveness check). Mirrors `spawn_gate.py::LIVE_STATUSES`.
+pub(crate) fn status_is_liveish(s: &AgentStatus) -> bool {
+    matches!(
+        s,
+        AgentStatus::Spawning
+            | AgentStatus::Ready
+            | AgentStatus::Idle
+            | AgentStatus::Busy
+            | AgentStatus::Live
+            | AgentStatus::Restarting
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Layer 2: available-RAM readers (pure parsers + platform dispatch)
+// ---------------------------------------------------------------------------
+
+/// Page size from a `vm_stat` header
+/// ("Mach Virtual Memory Statistics: (page size of 16384 bytes)").
+pub(crate) fn vm_stat_page_size(text: &str) -> Option<u64> {
+    text.lines()
+        .next()?
+        .split("page size of")
+        .nth(1)?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// Parse `vm_stat` output (macOS) to available bytes: (free + inactive +
+/// speculative + purgeable) pages × page size. `None` on any shape surprise
+/// so the guard fails open.
+pub fn parse_vm_stat(text: &str) -> Option<u64> {
+    let page_size: u64 = vm_stat_page_size(text)?;
+    let mut counted: u64 = 0;
+    let mut found_free = false;
+    for line in text.lines().skip(1) {
+        let (label, value) = match line.split_once(':') {
+            Some(kv) => kv,
+            None => continue,
+        };
+        let label = label.trim();
+        let want = matches!(
+            label,
+            "Pages free" | "Pages inactive" | "Pages speculative" | "Pages purgeable"
+        );
+        if !want {
+            continue;
+        }
+        let pages: u64 = value.trim().trim_end_matches('.').parse().ok()?;
+        counted += pages;
+        if label == "Pages free" {
+            found_free = true;
+        }
+    }
+    // A vm_stat with no "Pages free" line is not vm_stat; refuse to guess.
+    found_free.then_some(counted * page_size)
+}
+
+/// Parse `/proc/meminfo` (Linux) `MemAvailable:` kB to bytes.
+pub fn parse_meminfo(text: &str) -> Option<u64> {
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("MemAvailable:") {
+            let kb: u64 = rest.trim().split_whitespace().next()?.parse().ok()?;
+            return Some(kb * 1024);
+        }
+    }
+    None
+}
+
+/// Available system RAM in GB, or `None` when unreadable (guard skipped, fail
+/// open — a broken vm_stat must never brick spawning).
+pub fn available_ram_gb() -> Option<f64> {
+    available_bytes().map(|b| b as f64 / (1024.0 * 1024.0 * 1024.0))
+}
+
+#[cfg(target_os = "macos")]
+fn available_bytes() -> Option<u64> {
+    let out = std::process::Command::new("vm_stat").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_vm_stat(&String::from_utf8_lossy(&out.stdout))
+}
+
+#[cfg(target_os = "linux")]
+fn available_bytes() -> Option<u64> {
+    parse_meminfo(&std::fs::read_to_string("/proc/meminfo").ok()?)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn available_bytes() -> Option<u64> {
+    None
+}
+
+/// Parse macOS `sysctl vm.swapusage`
+/// (`total = 18432.00M  used = 17080.75M  free = 1351.25M  (encrypted)`) to
+/// percent used. `None` when the line does not parse or total is 0.
+pub fn parse_swapusage(text: &str) -> Option<f64> {
+    let (total, used) = parse_swapusage_mb(text)?;
+    Some(used / total * 100.0)
+}
+
+pub(crate) fn parse_swapusage_mb(text: &str) -> Option<(f64, f64)> {
+    let mut total_m = None;
+    let mut used_m = None;
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    for i in 0..tokens.len().saturating_sub(1) {
+        // "total = 18432.00M": label, "=", numeric-with-unit.
+        let num = |tok: Option<&&str>| -> Option<f64> {
+            tok.and_then(|v| {
+                v.chars()
+                    .take_while(|c| c.is_ascii_digit() || *c == '.')
+                    .collect::<String>()
+                    .parse()
+                    .ok()
+            })
+        };
+        match tokens[i] {
+            "total" => total_m = num(tokens.get(i + 2)),
+            "used" => used_m = num(tokens.get(i + 2)),
+            _ => {}
+        }
+    }
+    let (total, used) = (total_m?, used_m?);
+    (total > 0.0).then_some((total, used))
+}
+
+/// Swap percent used beside [`available_ram_gb`]: available counts reclaimable
+/// pages and has no swap term, so a machine paging at 93% swap can read six
+/// times its RAM floor. `None` = unreadable or no swap configured (the guard
+/// skips, fail open like the RAM floor).
+#[cfg(target_os = "macos")]
+pub fn swap_used_pct() -> Option<f64> {
+    sysctl_swapusage_pct()
+}
+
+#[cfg(target_os = "linux")]
+pub fn swap_used_pct() -> Option<f64> {
+    meminfo_swap_pct()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+pub fn swap_used_pct() -> Option<f64> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn sysctl_swapusage_pct() -> Option<f64> {
+    let out = std::process::Command::new("sysctl")
+        .args(["-n", "vm.swapusage"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_swapusage(&String::from_utf8_lossy(&out.stdout))
+}
+
+#[cfg(target_os = "linux")]
+fn meminfo_swap_pct() -> Option<f64> {
+    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let field = |name: &str| -> Option<u64> {
+        text.lines()
+            .find_map(|l| l.strip_prefix(name))
+            .and_then(|rest| {
+                rest.trim_start_matches(':')
+                    .trim()
+                    .split_whitespace()
+                    .next()?
+                    .parse()
+                    .ok()
+            })
+    };
+    let total = field("SwapTotal")?;
+    let free = field("SwapFree")?;
+    if total == 0 {
+        return None;
+    }
+    Some((total - free) as f64 / total as f64 * 100.0)
+}
+
+/// Parse `vm_stat` output (macOS) for the cumulative `Swapins:` counter:
+/// `(pages, page_size)`. `None` without the line or the header.
+/// Dead off macOS except in tests, which parse the fixture on every platform.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn parse_vm_stat_swapins(text: &str) -> Option<(u64, u64)> {
+    let page_size = vm_stat_page_size(text)?;
+    let line = text.lines().find(|l| l.starts_with("Swapins:"))?;
+    let pages: u64 = line
+        .split_once(':')?
+        .1
+        .trim()
+        .trim_end_matches('.')
+        .parse()
+        .ok()?;
+    Some((pages, page_size))
+}
+
+/// Parse Linux `/proc/vmstat` for the cumulative `pswpin` page count. `None`
+/// without the line.
+/// Dead off Linux except in tests, which parse the fixture on every platform.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn parse_proc_vmstat_pswpin(text: &str) -> Option<u64> {
+    let line = text.lines().find(|l| l.starts_with("pswpin "))?;
+    line.split_whitespace().nth(1)?.parse().ok()
+}
+
+/// Sample window for the swap-in rate.
+const SWAPIN_WINDOW: Duration = Duration::from_secs(1);
+/// One mebibyte, the unit every swap-in rate renders in.
+pub(crate) const MIB: f64 = 1024.0 * 1024.0;
+/// Swap-in rate at or above this refuses beside an over-cap allocation. A
+/// calibration choice, not a derived number: idle windows on machines at 94.7%
+/// and 64.8% swap allocation read 0 swap-ins, and 1 MiB/s sits above stray
+/// single-page touches.
+pub(crate) const SWAPIN_REFUSE_BYTES_PER_S: f64 = MIB;
+
+/// Cumulative swap-in pages plus the page size: macOS runs `vm_stat`
+/// (`Swapins:`), Linux reads `/proc/vmstat` (`pswpin`, page size from
+/// sysconf). `None` = unreadable or unsupported platform.
+#[cfg(target_os = "macos")]
+fn swapin_pages() -> Option<(u64, u64)> {
+    let out = std::process::Command::new("vm_stat").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_vm_stat_swapins(&String::from_utf8_lossy(&out.stdout))
+}
+
+#[cfg(target_os = "linux")]
+fn swapin_pages() -> Option<(u64, u64)> {
+    let pages = parse_proc_vmstat_pswpin(&std::fs::read_to_string("/proc/vmstat").ok()?)?;
+    // SAFETY: sysconf with a constant identifier has no preconditions.
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    Some((pages, page_size.max(1) as u64))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn swapin_pages() -> Option<(u64, u64)> {
+    None
+}
+
+/// Swap-in rate in bytes/second over `window`: counter delta times the page
+/// size. `None` when either read fails or the counter went down (a counter
+/// reset must never read as a negative rate).
+pub fn swapin_bytes_per_sec(window: Duration) -> Option<f64> {
+    let (a, page_size) = swapin_pages()?;
+    std::thread::sleep(window);
+    let (b, _) = swapin_pages()?;
+    let pages = b.checked_sub(a)?;
+    Some(pages as f64 * page_size as f64 / window.as_secs_f64())
+}
+
+// ---------------------------------------------------------------------------
+// Layer 1: the worker-slot count
+// ---------------------------------------------------------------------------
+
+/// The node this spawn WORKS, from the calling process's `FNO_NODE` - the same
+/// provenance source the client-side ask lanes stamp onto the registry row, so
+/// the gate attributes a spawn exactly the way the row will be stamped.
+pub fn gate_node() -> Option<String> {
+    std::env::var("FNO_NODE")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+// The cap's one liveness filter lives in `cap_liveness` (the file budget
+// moved it out of this over-budget file); re-exported so every existing
+// reader keeps its `spawn_gate::live_rows` path.
+pub(crate) use crate::cap_liveness::live_rows;
+
+/// Count fno WORKER SLOTS in use for the `max_live` cap: liveness-filtered fno
+/// registry rows + live `worker:<name>` headless slot claims. A lead row (it
+/// carries a role) takes no worker slot.
+///
+/// This is deliberately NOT the full claude daemon roster. The roster
+/// carries every live claude session, dozens of memory-plugin observers and
+/// resident-idle sessions among them, none of which is fno work; counting them
+/// let the slot cap read "20/15" with zero real build workers running and wedge
+/// `/target bg`. Registry membership IS the "fno spawned this for work"
+/// provenance (spawn writes the row), so the registry alone is the slot
+/// denominator. The roster's RAM cost is still honored elsewhere:
+/// [`check_ram_floor`] reads real available RAM from `vm_stat`/meminfo, which
+/// already reflects every process the roster holds.
+///
+/// The roster IS still read here, but only as a LIVENESS ORACLE, not as a
+/// population to count. The full filter, its freshness arm and its tests
+/// live on `crate::cap_liveness::live_rows` (moved under the file budget);
+/// read them there.
+///
+/// Read-only; a registry read failure degrades to a 0 contribution with one
+/// warning line pushed to `warnings` (LD5, fail open).
+pub fn slot_count(registry_path: &Path, warnings: &mut Vec<String>) -> usize {
+    let (rows, claims) = slot_reading(registry_path, warnings);
+    rows.len() + claims.len()
+}
+
+/// The slot count's two inputs, together: the live worker rows and the live
+/// `worker:<name>` headless reservations, each reservation named. `slot_count`
+/// is the sum; the refusal paths need the rows themselves to name them.
+pub(crate) fn slot_reading(
+    registry_path: &Path,
+    warnings: &mut Vec<String>,
+) -> (Vec<RegistryEntry>, Vec<SlotReservation>) {
+    let (rows, _leads) = crate::spawn_gate_slots::split_leads(live_rows(registry_path, warnings));
+    (rows, live_worker_slot_claims(warnings))
+}
+
+/// The territory (key, member node ids, leadless) a node belongs to, or
+/// `None` when the answer cannot be READ (unreadable graph, node absent,
+/// unreadable registry, uncompilable live team). Membership is exclusive:
+/// the deepest live team whose scope holds the node owns it, the lowest
+/// canonical scope on a tie (`territory::node_owners`); an unowned node
+/// counts for its project's loose territory, so one worker never consumes
+/// two territories' caps. `leadless` is false for a team scope, true for
+/// the loose fallback.
+pub(crate) fn territory_of_node(
+    config_cwd: &Path,
+    registry_path: &Path,
+    node: &str,
+    warnings: &mut Vec<String>,
+) -> Option<(String, std::collections::HashSet<String>, bool)> {
+    use crate::org_board::project_map;
+
+    // Through the backend switch (`graph_store::read_rows_strict`): a cap
+    // answered from a frozen sqlite mirror polices a territory the store
+    // does not recognize. Unreadable is None, the cannot-READ contract.
+    let entries: Vec<Value> = match crate::territory::graph_entries(config_cwd) {
+        Ok(rows) => rows,
+        Err(_) => return None,
+    };
+    let row = entries
+        .iter()
+        .find(|e| e.get("id").and_then(Value::as_str) == Some(node));
+    if row.is_none() {
+        return None;
+    }
+    let teams = match crate::territory::live_teams(registry_path) {
+        Ok(c) => c,
+        Err(e) => {
+            warnings.push(format!("{e}; refusing"));
+            return None;
+        }
+    };
+    let (owners, failures) = crate::territory::node_owners(
+        &teams,
+        &entries,
+        &Ok(project_map(config_cwd).unwrap_or_default()),
+    );
+    if !failures.is_empty() {
+        warnings.extend(
+            failures
+                .iter()
+                .map(|(s, e)| format!("territory: team {s} uncompilable: {e}")),
+        );
+        return None;
+    }
+    if let Some(owner) = owners.get(node) {
+        let members: HashSet<String> = owners
+            .iter()
+            .filter(|(_, s)| *s == owner)
+            .map(|(id, _)| id.clone())
+            .collect();
+        return Some((owner.clone(), members, false));
+    }
+    let project = row
+        .and_then(|r| r.get("project").and_then(Value::as_str))
+        .unwrap_or("");
+    if project.is_empty() {
+        return None;
+    }
+    let loose: HashSet<String> = entries
+        .iter()
+        .filter_map(|e| {
+            let id = e.get("id").and_then(Value::as_str)?;
+            (e.get("project").and_then(Value::as_str).unwrap_or("") == project
+                && !owners.contains_key(id))
+            .then(|| id.to_string())
+        })
+        .collect();
+    Some((format!("loose:{project}"), loose, true))
+}
+
+/// The node-occupancy arm: the fleet-top read
+/// ([`crate::backlog::worked::reachable_workers_by_node_excluding`]) applied
+/// at spawn admission. A node's claim lockfile only sees workers that
+/// claimed; fn-6206 (2026-10-21) went through that hole - fork-6206 worked
+/// the node with no claim, `claim status` read free, and a second spawn
+/// double-seated the node and its PR. Like the quota locks, the arm sits
+/// ahead of the force branch and the human exemption: a collision is not
+/// busyness, and the refusal names the live worker either way. The arm runs
+/// for node-bearing spawns only, never a plain one. An unreadable roster
+/// refuses closed - never read "no worker" off a blind instrument - and the
+/// refusal names the broken read and the `--force` bypass, the escape the
+/// 2026-10-20 CPU-instrument outage wanted. A named worker is not bypassable:
+/// waiting cannot seat two workers on one node.
+fn check_node_occupancy(
+    node: &str,
+    caller_session: Option<&str>,
+    force: bool,
+) -> Result<(), Refusal> {
+    match crate::backlog::worked::reachable_workers_by_node_excluding(caller_session) {
+        Ok(map) => match map.get(node) {
+            // The read only inserts non-empty name lists, so a hit is a
+            // live worker.
+            Some(names) => Err(node_occupied_refusal(node, names)),
+            None => Ok(()),
+        },
+        Err(reason) => {
+            if force {
+                eprintln!(
+                    "spawn-gate note: the fleet roster is unreadable ({reason}); \
+                     --force passed the node-occupancy read"
+                );
+                return Ok(());
+            }
+            Err(Refusal::with_receipt(
+                EXIT_NODE_OCCUPIED,
+                serde_json::json!({
+                    "status": "refused",
+                    "reason": "node_occupancy_unknown",
+                    "node": node,
+                    "detail": reason,
+                    "remedy": format!(
+                        "the fleet roster is unreadable, so node occupancy cannot be read ({reason}); repair the roster read, or pass --force to bypass this refusal"
+                    ),
+                }),
+            )
+            .ev("reason", serde_json::json!("node_occupancy_unknown"))
+            .ev("axis", serde_json::json!("occupancy")))
+        }
+    }
+}
+
+fn node_occupied_refusal(node: &str, names: &[String]) -> Refusal {
+    let peek = names.first().map(String::as_str).unwrap_or("");
+    Refusal::with_receipt(
+        EXIT_NODE_OCCUPIED,
+        serde_json::json!({
+            "status": "refused",
+            "reason": "node_occupied",
+            "node": node,
+            "workers": names.join(", "),
+            "remedy": format!(
+                "a live worker holds this node; peek it with `fno agents peek {peek}` and retask or reap it before spawning here"
+            ),
+        }),
+    )
+    .ev("reason", serde_json::json!("node_occupied"))
+    .ev("axis", serde_json::json!("occupancy"))
+}
+
+/// The per-territory team cap. `Err` carries the refusal receipt the
+/// caller prints; `None` territory reads as UNKNOWN and refuses closed - the
+/// cap never counts an unknown as headroom. A spawn that works no node skips
+/// the check entirely: the team cap does not apply to it.
+pub(crate) fn check_territory_cap(
+    config_cwd: &Path,
+    registry_path: &Path,
+    node: &str,
+    cap: u32,
+) -> Result<(), String> {
+    let mut warnings = Vec::new();
+    let state = territory_of_node(config_cwd, registry_path, node, &mut warnings);
+    for w in &warnings {
+        eprintln!("{w}");
+    }
+    let Some((scope, members, _leadless)) = state else {
+        return Err(serde_json::json!({
+            "status": "refused",
+            "reason": "territory_unknown",
+            "node": node,
+            "max_live_per_territory": cap,
+        })
+        .to_string());
+    };
+    let held = match crate::territory::live_node_claims() {
+        Ok(claims) => claims,
+        Err(crate::territory::TerritoryUnknown(reason)) => {
+            eprintln!("{reason}");
+            return Err(serde_json::json!({
+                "status": "refused",
+                "reason": "territory_unknown",
+                "node": node,
+                "max_live_per_territory": cap,
+                "detail": reason,
+            })
+            .to_string());
+        }
+    };
+    let count = crate::territory::live_held_in(&members, &held);
+    if count as u32 >= cap {
+        return Err(serde_json::json!({
+            "status": "refused",
+            "reason": "territory_cap",
+            "territory": scope,
+            "count": count,
+            "current_count": count,
+            "max_live_per_territory": cap,
+        })
+        .to_string());
+    }
+    Ok(())
+}
+
+/// The territory refusal as data: the helper's receipt string parses into the
+/// answer envelope, and the event carries the receipt's own reason word, so
+/// the transport's emit vocabulary matches what the receipt says.
+fn territory_refusal(receipt: &str) -> Refusal {
+    let parsed = serde_json::from_str::<serde_json::Value>(receipt)
+        .unwrap_or(serde_json::json!({"status": "refused", "reason": "territory_cap"}));
+    let reason = parsed
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("territory_cap")
+        .to_string();
+    Refusal::with_receipt(EXIT_TERRITORY_CAP, parsed)
+        .ev("reason", serde_json::json!(reason))
+        .ev("axis", serde_json::json!("territory"))
+}
+
+/// The blueprint thread cap: the machine axis counts live rows whose
+/// names parse to command `bp`; the territory axis counts the ones working the
+/// spawn's territory. Refuses, never queues, beside the machine cap - and
+/// `--force` does not excuse it, the same posture as the territory cap. The
+/// receipt names the live rows so a blocked lead sees what holds the slot.
+pub(crate) fn check_blueprint_cap(
+    config_cwd: &Path,
+    registry_path: &Path,
+    name: &str,
+    node: Option<&str>,
+    live: &[RegistryEntry],
+) -> Result<(), String> {
+    if !crate::naming::is_blueprint_name(name) {
+        return Ok(());
+    }
+    let blueprint_rows: Vec<&RegistryEntry> = live
+        .iter()
+        .filter(|r| crate::naming::is_blueprint_name(&r.name))
+        .collect();
+    let remedy = {
+        let named_node = node
+            .map(str::to_string)
+            .or_else(|| crate::naming::parse_dispatch_agent_name(Some(name)).and_then(|p| p.node))
+            .unwrap_or_else(|| "<node>".to_string());
+        format!(
+            "plan it in a native subagent: /fno:blueprint subagent {named_node} (law d-94853e86)"
+        )
+    };
+    let max = agents_config::blueprint_max_live(config_cwd);
+    if blueprint_rows.len() as u32 >= max {
+        return Err(serde_json::json!({
+            "status": "refused",
+            "reason": "blueprint_cap",
+            "count": blueprint_rows.len(),
+            "max_live": max,
+            "live_blueprints": blueprint_rows.iter().map(|r| r.name.clone()).collect::<Vec<_>>(),
+            "remedy": remedy,
+        })
+        .to_string());
+    }
+    let Some(node) = node else {
+        return Ok(());
+    };
+    let territory_cap = agents_config::blueprint_territory_max_live(config_cwd);
+    let mut warnings = Vec::new();
+    let state = territory_of_node(config_cwd, registry_path, node, &mut warnings);
+    for w in &warnings {
+        eprintln!("{w}");
+    }
+    let Some((scope, members, _leadless)) = state else {
+        return Err(serde_json::json!({
+            "status": "refused",
+            "reason": "territory_unknown",
+            "node": node,
+            "max_live_per_territory": territory_cap,
+        })
+        .to_string());
+    };
+    let territory_rows: Vec<&RegistryEntry> = blueprint_rows
+        .iter()
+        .copied()
+        .filter(|r| {
+            r.node
+                .as_deref()
+                .map(|n| members.contains(n))
+                .unwrap_or(false)
+        })
+        .collect();
+    if territory_rows.len() as u32 >= territory_cap {
+        return Err(serde_json::json!({
+            "status": "refused",
+            "reason": "blueprint_territory_cap",
+            "territory": scope,
+            "count": territory_rows.len(),
+            "max_live_per_territory": territory_cap,
+            "live_blueprints": territory_rows.iter().map(|r| r.name.clone()).collect::<Vec<_>>(),
+            "remedy": remedy,
+        })
+        .to_string());
+    }
+    Ok(())
+}
+
+/// The blueprint refusal as data, mirroring [`territory_refusal`]: the
+/// receipt's own reason word rides the event, the axis is `blueprint`.
+fn blueprint_refusal(receipt: &str) -> Refusal {
+    let parsed = serde_json::from_str::<serde_json::Value>(receipt)
+        .unwrap_or(serde_json::json!({"status": "refused", "reason": "blueprint_cap"}));
+    let reason = parsed
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("blueprint_cap")
+        .to_string();
+    Refusal::with_receipt(EXIT_BLUEPRINT_CAP, parsed)
+        .ev("reason", serde_json::json!(reason))
+        .ev("axis", serde_json::json!("blueprint"))
+}
+
+/// The verdict receipt for one node, from explicit paths - the counting leg
+/// `run_territory_verdict` serves and the tests pin. `leadless` rides every
+/// readable verdict; `territory_unknown` stays without one, because an
+/// unreadable attribution has no territory and a `leadless` value there
+/// would be a guess wearing a boolean.
+fn territory_verdict_receipt(
+    config_cwd: &Path,
+    registry_path: &Path,
+    node: &str,
+    cap: u32,
+) -> Value {
+    let mut warnings = Vec::new();
+    let state = territory_of_node(config_cwd, registry_path, node, &mut warnings);
+    for w in &warnings {
+        eprintln!("{w}");
+    }
+    match state {
+        None => serde_json::json!({
+            "verdict": "territory_unknown",
+            "reason": "territory_unknown",
+            "node": node,
+            "max_live_per_territory": cap,
+        }),
+        Some((scope, members, leadless)) => {
+            let live = live_rows(registry_path, &mut warnings);
+            let count = live
+                .iter()
+                .filter(|r| {
+                    r.node
+                        .as_deref()
+                        .map(|n| members.contains(n))
+                        .unwrap_or(false)
+                })
+                .count();
+            if count as u32 >= cap {
+                serde_json::json!({
+                    "verdict": "territory_cap",
+                    "reason": "territory_cap",
+                    "territory": scope,
+                    "leadless": leadless,
+                    "count": count,
+                    "current_count": count,
+                    "max_live_per_territory": cap,
+                })
+            } else {
+                serde_json::json!({
+                    "verdict": "ok",
+                    "territory": scope,
+                    "leadless": leadless,
+                    "current_count": count,
+                    "max_live_per_territory": cap,
+                })
+            }
+        }
+    }
+}
+
+/// The `--node <id>` argument of a territory door command, or `None`.
+fn parse_node_arg(args: &[String]) -> Option<String> {
+    let mut node: Option<String> = None;
+    let mut iter = args.iter();
+    while let Some(a) = iter.next() {
+        if a == "--node" {
+            node = iter.next().cloned();
+        }
+    }
+    node
+}
+
+/// `fno-agents territory-verdict --node <id>`: the per-territory cap verdict
+/// for one node as JSON on stdout. The single counting leg: the Python gate
+/// passes the node through this door and recomputes nothing. Exit is 0 for
+/// every READABLE verdict (including a refusal - the verdict is the answer);
+/// only a malformed invocation exits non-zero.
+pub fn run_territory_verdict(args: &[String]) -> i32 {
+    let Some(node) = parse_node_arg(args) else {
+        eprintln!("territory-verdict: --node is required");
+        return 2;
+    };
+    let config_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let registry_path = crate::paths::AgentsHome::from_env().registry_json();
+    let cap = agents_config::territory_max_live(&config_cwd);
+    let verdict = territory_verdict_receipt(&config_cwd, &registry_path, &node, cap);
+    println!(
+        "{}",
+        serde_json::to_string(&verdict).unwrap_or_else(|_| "{}".to_string())
+    );
+    0
+}
+
+/// One counted `worker:<name>` reservation the slot census named, so a
+/// reader can see what holds each slot and free a dead one. The provider
+/// walker (`spawn_gate_lanes`) reuses this record instead of a third walk.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct SlotReservation {
+    /// The claim key's name half (`worker:<name>` minus the prefix).
+    pub name: String,
+    /// The claim's holder string (a credential, never parsed for identity).
+    pub holder: String,
+    /// The recorded holder pid, when the writer proved one.
+    pub pid: Option<i32>,
+    /// Seconds since `acquired_at`.
+    pub age_s: Option<u64>,
+    /// `live` or `suspect` - the only states the census counts.
+    pub state: &'static str,
+    /// The `model_provider` metadata tag the provider count reads.
+    pub provider: Option<String>,
+    /// The claim is a named reservation that this same name may redeem.
+    #[serde(skip)]
+    pub redeemable: bool,
+}
+
+/// Live `worker:<name>` slot claims under the GLOBAL claims root, named.
+/// Headless one-shots write no registry row, so their gate acquires one of
+/// these for the call duration; concurrent gates see them here. `Suspect`
+/// counts like `Live` (TTL-protected, never up for grabs); a dead
+/// holder-process claim reads `Stale` before this counts it.
+pub(crate) fn live_worker_slot_claims(warnings: &mut Vec<String>) -> Vec<SlotReservation> {
+    let root = match gate_claims_root() {
+        Some(r) => r,
+        None => return Vec::new(),
+    };
+    let dir = root.join(".fno/claims");
+    let keys = match crate::claim_store::records_in(&dir, Some("worker:"), true) {
+        Ok(records) => records.into_iter().map(|r| r.key),
+        Err(_) => return Vec::new(), // no claims table yet: nothing held.
+    };
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let mut found = Vec::new();
+    for key in keys {
+        match claims::status(&key, Some(&root)) {
+            (state @ (claims::ClaimState::Live | claims::ClaimState::Suspect), Some(rec)) => {
+                found.push(SlotReservation {
+                    name: key.strip_prefix("worker:").unwrap_or(&key).to_string(),
+                    holder: rec.holder,
+                    pid: rec.pid,
+                    age_s: u64::try_from((now_ms - rec.acquired_at).max(0) / 1000).ok(),
+                    state: match state {
+                        claims::ClaimState::Live => "live",
+                        _ => "suspect",
+                    },
+                    provider: rec
+                        .metadata
+                        .get("model_provider")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    redeemable: rec
+                        .metadata
+                        .get("reserved_by")
+                        .and_then(Value::as_str)
+                        .is_some_and(|by| !by.is_empty()),
+                });
+            }
+            (claims::ClaimState::Corrupted, _) => {
+                warnings.push(format!("{NOTE} corrupted slot claim {key} ignored"));
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
+/// The gate's claims live under the GLOBAL root: the RAM budget is
+/// machine-wide, so `spawn-gate` / `worker:<name>` must be visible across
+/// projects and worktrees (unlike default project-local claims).
+fn gate_claims_root() -> Option<PathBuf> {
+    claims::global_claims_root()
+}
+
+// ---------------------------------------------------------------------------
+// The gate
+// ---------------------------------------------------------------------------
+
+/// Flags the spawn arm parses for the gate.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GateFlags {
+    /// Bypass cap AND RAM floor (still QoS-demotes); prints a forced line.
+    pub force: bool,
+    /// Fail immediately at cap instead of queueing.
+    pub no_wait: bool,
+}
+
+/// Held gate state. The caller keeps this alive across its dispatch call and
+/// calls [`GateGuard::release`] (or drops it) when the dispatch result exists,
+/// so the next waiter's count includes the newcomer.
+#[derive(Debug, Default)]
+pub struct GateGuard {
+    /// `spawn-gate` mutex (bg path: held across dispatch until the
+    /// registry/roster row exists).
+    gate_key: Option<(String, String)>, // (key, holder)
+    /// `worker:<name>` slot claim (headless path: held for the call duration).
+    worker_key: Option<(String, String)>,
+    root: Option<PathBuf>,
+}
+
+impl GateGuard {
+    /// Release everything still held. Idempotent.
+    pub fn release(&mut self) {
+        let root = self.root.clone();
+        if let Some((key, holder)) = self.gate_key.take() {
+            let _ = claims::release(&key, &holder, root.as_deref(), None);
+        }
+        if let Some((key, holder)) = self.worker_key.take() {
+            let _ = claims::release(&key, &holder, root.as_deref(), None);
+        }
+    }
+
+    /// Release only the check→dispatch mutex, keeping the worker slot claim
+    /// (headless: the slot must stay visible for the one-shot's duration).
+    fn release_gate_mutex(&mut self) {
+        if let Some((key, holder)) = self.gate_key.take() {
+            let _ = claims::release(&key, &holder, self.root.as_deref(), None);
+        }
+    }
+}
+
+impl Drop for GateGuard {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+impl GateGuard {
+    /// The still-held keys, taken out before the guard drops, so a
+    /// cross-process transport (the spawn-gate command) can hand them back to
+    /// the caller whose pid owns them. The guard is empty afterwards; it must
+    /// NOT be released by the holder of the returned keys.
+    pub fn take_keys(&mut self) -> (Option<(String, String)>, Option<(String, String)>) {
+        (self.gate_key.take(), self.worker_key.take())
+    }
+}
+
+/// Pure parity core (AC2-FR): would a bypass in this env emit
+/// `spawn-cap`? True iff `FNO_SPAWN_GATE=0` AND no non-empty test-context
+/// marker. The JSON fixture (`gate_escape_spawn_cap_parity.json`) pins every
+/// row; an empty value counts as unset.
+pub fn spawn_cap_would_emit(get: impl Fn(&str) -> Option<String>) -> bool {
+    let is_set = |k: &str| get(k).is_some_and(|v| !v.is_empty());
+    get("FNO_SPAWN_GATE").as_deref() == Some("0")
+        && !["PYTEST_CURRENT_TEST", "CI", "FNO_E2E"]
+            .iter()
+            .any(|k| is_set(k))
+}
+
+/// Auto-emit `gate_escape{reason:spawn-cap}` on an operator bypass of THIS gate
+/// (`FNO_SPAWN_GATE=0`) outside a test context (Locked Decision 2). Best-effort:
+/// shells the shared `fno doctor event gate-escape` command (which owns the dedup key +
+/// canonical-log resolution, one emit path) and ignores every failure so a
+/// spawn is never blocked by telemetry (AC1-FR). The command, not this shell,
+/// computes the `(reason, session, day)` dedup bucket, so a Rust-emitted and a
+/// Python-emitted spawn-cap in the same session/day still collapse to one.
+fn maybe_emit_spawn_cap_escape() {
+    if !spawn_cap_would_emit(|k| std::env::var(k).ok()) {
+        return;
+    }
+    let _ = std::process::Command::new(crate::scrape::fno_bin())
+        .args([
+            "doctor",
+            "event",
+            "gate-escape",
+            "spawn-cap",
+            "--detail",
+            "FNO_SPAWN_GATE=0 operator bypass",
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
+/// Whether this substrate charges the machine's RAM floor. `cloud` does not:
+/// the create is a short pty call on this machine and the session runs on
+/// Anthropic-managed infrastructure, so there is nothing local to protect
+/// (the cloud-substrate ruling, recorded on the node). Every other substrate
+/// runs on this machine.
+fn charges_local_memory(substrate: &str) -> bool {
+    substrate != "cloud"
+}
+
+/// Refuse a spawn onto a lane whose stance toward the fno state root is
+/// UNDECLARED.
+///
+/// The trigger is undeclared, NOT "declares no carrier", and that difference
+/// is the correctness of this guard. Epic rule R3 refuses a process denied its
+/// declared root. A lane running under no sandbox is never denied anything, so
+/// it needs no carrier, and refusing it turns a working spawn into a refused
+/// one. Measured 2026-08-28: an opencode PANE worker with no grant acquired a
+/// claim and delivered mail, both read from the operator root. A
+/// carrier-shaped trigger would have broken that lane.
+///
+/// `writable_dirs.py` had already ruled this way on purpose, printing a named
+/// stderr line rather than raising, so that a computed default the caller
+/// never asked for cannot refuse a spawn. This guard agrees with that rather
+/// than quietly reversing it.
+///
+/// THIS GUARD FAILS CLOSED on an unreadable contract, alone in this module.
+/// Every other guard here fails OPEN on a read error because the gate is
+/// protective infrastructure and must never brick spawning (LD5). That holds
+/// for a RAM floor, where a missed refusal costs a slow machine, and it
+/// INVERTS here. A spawn allowed past a missing grant produces a worker that
+/// goes live, runs, edits code, and cannot claim a node, deliver mail, or
+/// spawn a peer, and cannot report that either, because reporting is what it
+/// lost. Five such workers died mute in one night. Silence is the harm.
+///
+/// Fails open on exactly one case: `roots` is empty. There is then no root to
+/// grant and nothing to refuse.
+/// The state-root grant gate. Sits BEFORE `run_gate` in the spawn path
+/// (bin/client.rs), so it carries the same wrapper duty: its refusal ends
+/// with one [`verdict_line`], or the reader sees the remedy prose with no
+/// verdict.
+pub fn state_root_grant_gate(
+    harness: &str,
+    substrate: &str,
+    roots: &[String],
+) -> Result<(), Refusal> {
+    let sock = crate::paths::AgentsHome::from_env_opt()
+        .as_ref()
+        .map(crate::client::client_sock);
+    state_root_grant_gate_decide(harness, substrate, roots, sock.as_deref()).inspect_err(|r| {
+        eprintln!("{}", verdict_line(r));
+    })
+}
+
+fn state_root_grant_gate_decide(
+    harness: &str,
+    substrate: &str,
+    roots: &[String],
+    sock: Option<&Path>,
+) -> Result<(), Refusal> {
+    if roots.is_empty() {
+        return Ok(());
+    }
+    let contract = match crate::harness_capabilities::HarnessContract::packaged() {
+        Ok(contract) => contract,
+        Err(error) => {
+            eprintln!(
+                "spawn-gate: refused: the harness capability contract is unreadable ({error})"
+            );
+            eprintln!(
+                "  a state root resolves for this spawn and no lane can be verified to carry it."
+            );
+            return Err(Refusal::code(EXIT_STATE_ROOT_UNGRANTED));
+        }
+    };
+    let stance = contract.state_root_stance(harness, substrate);
+    if let Err(reason) = crate::daemon::sandbox_host::socket_carrier_ok(stance, sock) {
+        // A `socket` carrier is verified, not taken on faith. A declaration
+        // whose socket answers nobody hides the exact mute-worker harm R3
+        // exists for: a worker that edits code and cannot claim, mail, spawn,
+        // or report that it cannot.
+        eprintln!(
+            "spawn-gate: refused: the {harness}/{substrate} lane declares carrier \
+             `socket`, but the supervisor socket does not answer ({reason})"
+        );
+        eprintln!(
+            "  start the daemon, or mount/forward it and point \
+             FNO_SUPERVISOR_SOCKET at the mounted path."
+        );
+        return Err(Refusal::code(EXIT_STATE_ROOT_UNGRANTED));
+    }
+    if stance.is_some() {
+        return Ok(());
+    }
+    // R3: name the root. A refusal that says "denied" without saying WHICH
+    // directory sends the reader back to the code to find out.
+    eprintln!(
+        "spawn-gate: refused: the {harness}/{substrate} lane does not declare how it stands \
+         toward the state root"
+    );
+    for root in roots {
+        eprintln!("  {root}");
+    }
+    eprintln!(
+        "an undeclared lane can produce a worker that edits code and cannot claim, \
+         mail, or spawn, and cannot report that either."
+    );
+    eprintln!(
+        "add {substrate} to [harness.{harness}.state_root_grant]: a carrier name \
+         (`socket` when the lane rides the daemon socket), \
+         \"unsandboxed\" when measured to need none, or \"unmeasured\"."
+    );
+    Err(Refusal::code(EXIT_STATE_ROOT_UNGRANTED))
+}
+
+/// Everything the gate needs to decide one spawn. The Python transport
+/// (`spawn_gate.py run_gate`) sends these as the `spawn-gate` command's payload;
+/// the native arms construct it directly. `holder_pid` is the pid whose death
+/// frees the gate's claims - the PYTHON caller's pid across the command, so the
+/// native claim verdict judges the real holder, never the command process.
+#[derive(Debug, Clone, Default)]
+pub struct GateInput {
+    pub name: String,
+    pub substrate: String,
+    pub flags: GateFlags,
+    pub route_provider: Option<String>,
+    pub node: Option<String>,
+    pub account: Option<String>,
+    pub caller_session: Option<String>,
+    pub succession_scope: Option<String>,
+    pub holder_pid: Option<u32>,
+    /// The spawn's seed message. Its first command names the session phase.
+    pub seed: Option<String>,
+    /// An explicit `--session-phase` label.
+    pub session_phase: Option<String>,
+}
+
+pub type NodeOccupancy = Result<BTreeMap<String, Vec<String>>, String>;
+
+const REVIEW_SESSION_REMEDY: &str = "run the review in the session that did the work: \
+     /fno:review <level> ($fno:review <level> on codex), or fno do target request-self-review";
+
+/// The rule engine's read of one spawn: one `door:spawn` event from the
+/// gate input. A block refuses on the `rule` axis; a warn or unread source
+/// prints and the spawn proceeds. Sits after the `FNO_SPAWN_GATE=0` bypass,
+/// so test suites that disable the gate never read a rule store.
+fn rules_gate(config_cwd: &Path, input: &GateInput) -> Result<(), Refusal> {
+    let ev = crate::rules::Event {
+        kind: "door:spawn".to_string(),
+        harness: Some(
+            if std::env::var_os("CODEX_THREAD_ID").is_some() {
+                "codex"
+            } else {
+                "claude"
+            }
+            .to_string(),
+        ),
+        model: input.route_provider.clone(),
+        node: input.node.clone(),
+        phase: input.session_phase.clone().or_else(|| {
+            input
+                .seed
+                .as_deref()
+                .and_then(crate::spawn_phase::seed_phase)
+                .map(str::to_owned)
+        }),
+        project: crate::law_match::resolve_project(
+            Some(config_cwd),
+            &crate::law_match::settings_sources(),
+        )
+        .ok(),
+        ..crate::rules::Event::default()
+    };
+    let ruling = crate::rules_source::rule(config_cwd, &ev);
+    if let Some(sentence) = crate::rules_source::block_sentence(&ruling) {
+        return Err(Refusal::with_receipt(
+            EXIT_RULE_REFUSED,
+            serde_json::json!({
+                "status": "refused",
+                "reason": "rule",
+                "remedy": "flip or expire the rule (event_rules.<id> in fno config, expiry, or a lifted cap); --force does not clear a rule",
+            }),
+        )
+        .ev("axis", serde_json::json!("rule"))
+        .ev("reason", serde_json::json!(sentence)));
+    }
+    for line in crate::rules_source::advisory_lines(&ruling) {
+        eprintln!("{line}");
+    }
+    Ok(())
+}
+
+/// Refuse before `--force` and `FNO_SPAWN_GATE=0`: a review runs in the
+/// session that did the work, never in a new one.
+fn review_session_gate(input: &GateInput) -> Option<Refusal> {
+    let seeded = input
+        .seed
+        .as_deref()
+        .and_then(crate::spawn_phase::seed_phase);
+    if input.session_phase.as_deref() != Some("review") && seeded != Some("review") {
+        return None;
+    }
+    Some(
+        Refusal::with_receipt(
+            EXIT_REVIEW_SESSION,
+            serde_json::json!({
+                "status": "refused",
+                "reason": "review_session",
+                "remedy": REVIEW_SESSION_REMEDY,
+            }),
+        )
+        .ev("axis", serde_json::json!("review")),
+    )
+}
+
+/// Run the full gate for a spawn. Returns a guard to keep alive across
+/// dispatch on pass, or `Err(Refusal)` on refusal/timeout. All human-facing
+/// output goes to stderr (LD10: the stdout receipt is byte-reserved for the
+/// pass path); the receipt itself travels as data in the [`Refusal`] for the
+/// caller's arm to print.
+///
+/// Every refusal ends with one [`verdict_line`] on stderr, so a reader of
+/// the stderr sees the refusing axis and breach as the last line, whatever
+/// notes preceded it.
+pub fn run_gate(
+    config_cwd: &Path,
+    registry_path: &Path,
+    input: GateInput,
+) -> Result<GateGuard, Refusal> {
+    let node = input.node.clone();
+    decide_gate(config_cwd, registry_path, input)
+        .map_err(|r| {
+            let home = crate::paths::AgentsHome::from_env();
+            crate::friction::record_gate_refusal(
+                &home.events_jsonl(),
+                "spawn",
+                node.as_deref(),
+                &format!("{} {}", refusal_axis(&r), refusal_reason(&r)),
+                &verdict_line(&r),
+            );
+            // Every gate refusal leaves a feed-visible row: a refused
+            // launch previously wrote nothing, so the feed showed nothing
+            // for a launch the operator watched refuse. The node rides the
+            // row when the payload named one: the stop gate's held-refusal
+            // fold reads the freshest cap refusal FOR A NODE back, and only
+            // a row that names the node can prove the hold. The source is
+            // the schema's one allowed source for this type (`daemon`, the
+            // dispatch door's own refusal rows); "spawn-gate" was refused by
+            // the judge at write time, so the feed showed nothing after all.
+            let _ = crate::events::EventEmitter::new(home.events_jsonl(), "daemon").emit(
+                "agent_spawn_refused",
+                &serde_json::json!({
+                    "argv": std::env::args().skip(1).collect::<Vec<String>>(),
+                    "exit_code": r.exit_code,
+                    "node": node,
+                    "reason": verdict_line(&r),
+                }),
+            );
+            crate::machine_sample::stamp_refusal(r, &home.events_jsonl(), chrono::Utc::now())
+        })
+        .inspect_err(|r| eprintln!("{}", verdict_line(r)))
+}
+
+/// The gate's decision body, split from [`run_gate`] so the wrapper can
+/// append the verdict line at ONE site for all three production callers.
+fn decide_gate(
+    config_cwd: &Path,
+    registry_path: &Path,
+    input: GateInput,
+) -> Result<GateGuard, Refusal> {
+    // the incident stop gates BEFORE the operator bypass below - a
+    // circuit breaker that a flag can bypass is not a circuit breaker.
+    fleet_incident_gate()?;
+    // the machine admission door is the same shape one door later: an
+    // arm-measured world fact that holds agent spawns before any capacity
+    // math.
+    crate::spawn_gate_admission::process_admission_gate()?;
+    if let Some(refusal) = review_session_gate(&input) {
+        return Err(refusal);
+    }
+
+    // FNO_SPAWN_GATE=0 disables the gate entirely (the FNO_THINK_SPAWN=0
+    // precedent): test suites exercising spawn plumbing must not queue behind
+    // the REAL machine's live workers, and it sets the rules door aside too.
+    if std::env::var_os("FNO_SPAWN_GATE").is_some_and(|v| v == "0") {
+        maybe_emit_spawn_cap_escape();
+        return Ok(GateGuard::default());
+    }
+    // The rule engine's read of this spawn: a block refuses on the `rule`
+    // axis (exit 93), a warn prints and the spawn proceeds.
+    rules_gate(config_cwd, &input)?;
+    crate::spawn_gate_open_prs::open_pr_gate(config_cwd, &input)?;
+    let floor_gb = agents_config::min_free_gb(config_cwd);
+    let swap_cap = agents_config::max_swap_pct(config_cwd);
+    let disk_floor_gb = agents_config::min_free_disk_gb(config_cwd);
+    // AC7: the retired trigger (max_load_per_cpu) is not read here;
+    // the CPU axis consumes the payload's admission, which the Python decider
+    // computed from its own config read.
+    let name = input.name.as_str();
+    let substrate = input.substrate.as_str();
+    let flags = input.flags;
+    let route_provider = input.route_provider.as_deref();
+    let admitted_node = input.node.clone().or_else(gate_node);
+    let holder_pid = input.holder_pid.unwrap_or_else(std::process::id);
+    let holder = format!("spawn-gate:{}:{}", holder_pid, name);
+    let root = gate_claims_root();
+
+    let mut guard = GateGuard {
+        gate_key: None,
+        worker_key: None,
+        root: root.clone(),
+    };
+
+    // Ahead of the force branch, deliberately. `--force` means "I know the
+    // machine is busy", and a schema mismatch is not resource pressure: it is
+    // a worker that can neither claim its node nor stamp its mail. The
+    // dequeue path re-checks, the way the RAM floor does, because the queue
+    // window is long enough for the shared schema to move underneath a
+    // waiting spawn.
+    let mut schema_warnings = Vec::new();
+    check_registry_schema(registry_path, &mut schema_warnings)?;
+    for w in &schema_warnings {
+        eprintln!("{w}");
+    }
+
+    // Ahead of the force branch too: a vendor quota window is not machine
+    // busy-ness, and forcing past it buys another corpse.
+    if let Some(account) = input.account.as_deref() {
+        let mut quota_warnings = Vec::new();
+        check_account_quota_lock(config_cwd, account, &mut quota_warnings)?;
+        check_account_login(route_provider, account, &mut quota_warnings)?;
+        for w in &quota_warnings {
+            eprintln!("{w}");
+        }
+    }
+
+    // The route axis of the same wall: a route-keyed spawn carries no
+    // account, so the check above never sees it. The daemon's lane snapshot
+    // is the provider-keyed lock (auto-continue launched d8996f9b 32 minutes
+    // before the reset through this hole), and it sits ahead of the force
+    // branch like the account check: a vendor quota window is not machine
+    // busy-ness.
+    if let Some(provider) = route_provider {
+        let mut lane_warnings = Vec::new();
+        check_lane_quota_lock(
+            registry_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(".")),
+            provider,
+            &mut lane_warnings,
+        )?;
+        for w in &lane_warnings {
+            eprintln!("{w}");
+        }
+    }
+
+    // The node-occupancy arm, beside the quota walls above: fleet top's
+    // live-worker read against the spawn's own node. The claim lockfile only
+    // sees workers that claimed, so a claimless live worker (fn-6206) read
+    // free and the second spawn double-seated the node. A queued spawn
+    // re-reads this at dequeue, where the schema and the RAM floor do. A
+    // blind roster refuses closed unless --force speaks; a plain spawn (no
+    // node) never reads the roster at all.
+    if let Some(node) = admitted_node.as_deref() {
+        check_node_occupancy(node, input.caller_session.as_deref(), flags.force)?;
+    }
+
+    // A caller with no worker identity is the human's own typed command: no
+    // capacity gate below may refuse or hold it. The slot acquire stays
+    // best-effort so the spawned worker still joins the roster accounting.
+    if !crate::spawn_gate_admission::gate_agent_origin() {
+        if substrate == "headless" || substrate == "cloud" {
+            acquire_worker_slot(&mut guard, name, &holder, holder_pid, route_provider, false).ok();
+        }
+        return Ok(guard);
+    }
+
+    // The lane cap binds the provider axis only; an unrouted spawn is
+    // uncapped (KNOWN_UNROUTED_PROVIDER slots carry no provider tag).
+    let provider_cap =
+        route_provider.and_then(|p| spawn_gate_lanes::provider_lanes_cap(config_cwd, p));
+
+    if flags.force && provider_cap.is_none() {
+        // A team spend cap is hard even when the caller uses --force. The
+        // ordinary admission path checks it at dispatch after any queue wait.
+        if let Err(refusal) = crate::spawn_gate_spend::check_team_cost_cap(config_cwd, &input) {
+            return Err(refusal);
+        }
+        // Force speaks for the machine being busy, never for one territory
+        // overrunning its team, so the per-territory cap stays enforced
+        // here - the one axis --force does not excuse.
+        if let Some(node) = admitted_node.as_deref() {
+            if let Err(receipt) = check_territory_cap(
+                config_cwd,
+                registry_path,
+                &node,
+                agents_config::territory_max_live(config_cwd),
+            ) {
+                eprintln!("{receipt}");
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+                return Err(territory_refusal(&receipt));
+            }
+        }
+        // The blueprint axis refuses under --force too: force speaks
+        // for the machine being busy, never for one lead holding every
+        // planning lane.
+        {
+            let mut warnings = Vec::new();
+            let live = live_rows(registry_path, &mut warnings);
+            if let Err(receipt) = check_blueprint_cap(
+                config_cwd,
+                registry_path,
+                name,
+                admitted_node.as_deref(),
+                &live,
+            ) {
+                eprintln!("{receipt}");
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+                return Err(blueprint_refusal(&receipt));
+            }
+        }
+        // The memory axis is hard: --force passes the soft limits only.
+        // Cloud is exempt: the create is a short pty call on this machine and
+        // the session runs remotely, so there is nothing local to protect
+        // (the cloud-substrate ruling, recorded on the node).
+        if charges_local_memory(substrate) {
+            check_host_floors(floor_gb, swap_cap, disk_floor_gb)
+                .inspect_err(|_| guard.release())?;
+        }
+        eprintln!(
+            "{}",
+            crate::spawn_gate_forced::report_probing(registry_path, config_cwd)
+        );
+        if substrate == "headless" || substrate == "cloud" {
+            // fail_closed=false: this arm cannot fault, only warn.
+            acquire_worker_slot(&mut guard, name, &holder, holder_pid, route_provider, false).ok();
+        }
+        return Ok(guard);
+    }
+
+    let started = Instant::now();
+    // The ticket that names this spawn's place while it waits.
+    let mut queue = crate::spawn_gate_queue::Queue::new(root.clone(), &holder, holder_pid);
+    let mut announced = false;
+    let mut last_slots: usize = 0;
+    // What the slot axis last read about a burst past the user's ceiling.
+    // Uninitialized: every queue pass resets it before any read.
+    let mut last_burst: Option<crate::spawn_gate_slots::Burst>;
+    let mut last_succession_error: Option<&'static str>;
+    // LD4: a fleet-over sample holds, and admission after a hold is
+    // debounced to CPU_ADMIT_SAMPLES consecutive under-ceiling samples.
+    let mut held_on_cpu = false;
+    let mut under_streak: u32 = 0;
+    // Start of the current UNBROKEN run of failed acquisitions (None = holding
+    // or not yet contended). Reset on every success so a long legitimate queue
+    // never accumulates into a spurious fail-open.
+    let mut mutex_blocked_since: Option<Instant> = None;
+
+    loop {
+        // Each pass reads afresh: a refusal names only what IT read, never a
+        // slot count from an earlier pass. The cap is read per pass too, so a
+        // floor raised while a spawn is queued releases it.
+        let mut learned = crate::capacity::effective_for(config_cwd);
+        let mut cap = learned.cap;
+        last_succession_error = None;
+        last_burst = None;
+        let mut axes_read = serde_json::Map::new();
+        let mut pause = QUEUE_POLL;
+        // The footprint probe runs OUTSIDE the gate mutex (it costs seconds
+        // and the mutex serializes every spawner), re-taken each pass so a
+        // spawn that held does not decide on a reading from minutes ago.
+        // An Err is a real answer (the probe's own failure words) and
+        // travels into the refusal (LD3).
+        let (prefetched, probe_err) = match footprint_cause_raw() {
+            Ok(raw) => (Some(raw), None),
+            Err(why) => (None, Some(why)),
+        };
+        // Serialize check→dispatch under the spawn-gate mutex so N concurrent
+        // spawners at cap-1 can't all pass. Not held across the wait sleep.
+        // When a provider cap applies, the decision must be SERIALIZED to mean
+        // anything: a claims-layer fault refuses (fail closed), exactly as the
+        // Python gate's fail_closed arm refused.
+        let fail_closed = provider_cap.is_some();
+        let mut acquired_mutex = match claims::acquire(
+            "gate:spawn",
+            &holder,
+            claims::AcquireOpts {
+                ttl_ms: Some(GATE_CLAIM_TTL_MS),
+                root: root.clone(),
+                // Always the holder pid: a dead holder then frees the mutex
+                // on the next acquire, whatever the TTL says.
+                pid: Some(holder_pid),
+                ..Default::default()
+            },
+        ) {
+            claims::AcquireOutcome::Acquired(_) => true,
+            // Contention is a holder acquire could not prove dead: a dead
+            // holder's pid already freed the claim. Queue; --no-wait refuses fast.
+            claims::AcquireOutcome::HeldByOther { .. } => false,
+            claims::AcquireOutcome::Error(e) => {
+                if fail_closed {
+                    return Err(gate_fault_refusal(
+                        route_provider,
+                        "gate_mutex_unavailable",
+                        &e,
+                    ));
+                }
+                // Fail open: the mutex is a serializer, not a state owner.
+                eprintln!("{NOTE} mutex unavailable ({e}); proceeding unserialized");
+                true
+            }
+        };
+
+        if acquired_mutex {
+            mutex_blocked_since = None;
+        } else {
+            let now = Instant::now();
+            let since = *mutex_blocked_since.get_or_insert(now);
+            // --no-wait means "do not queue", and a busy mutex is queueing.
+            // Refusing here (rather than falling through to the sleep) is what
+            // keeps the promise: without it the caller waits the full
+            // QUEUE_TIMEOUT and then gets EXIT_QUEUE_TIMEOUT, so it cannot even
+            // tell "cap is full" from "the gate is wedged".
+            if flags.no_wait {
+                eprintln!(
+                    "spawn-gate: a holder the gate cannot prove dead holds the gate mutex; refusing \
+                     (--no-wait). Read the holder with `fno agents claim status gate:spawn`."
+                );
+                let mut receipt = serde_json::json!({
+                    "status": "refused",
+                    "reason": "no_wait_mutex_held",
+                    "max_live": cap,
+                });
+                queue.annotate(&mut receipt, "gate_mutex");
+                return Err(Refusal::with_receipt(EXIT_NO_WAIT, receipt));
+            }
+            if now.duration_since(since) >= MUTEX_WAIT_BUDGET && !fail_closed {
+                eprintln!(
+                    "{NOTE} the gate mutex stayed held for {}s; proceeding unserialized",
+                    MUTEX_WAIT_BUDGET.as_secs()
+                );
+                acquired_mutex = true;
+            } else if let Some(line) = queue.tick("the gate mutex") {
+                eprintln!("{line}");
+            }
+        }
+
+        if acquired_mutex {
+            guard.gate_key = Some(("gate:spawn".to_string(), holder.clone()));
+            // The provider cap is counted UNDER the mutex (check→dispatch
+            // serialization is what makes the count mean anything), and
+            // refuses before the CPU axis, exactly as the Python gate ordered
+            // it. An unreadable count refuses - never a zero.
+            let mut forced_provider: Option<String> = None;
+            if let Some(cap_value) = provider_cap {
+                let mut lane_warnings = Vec::new();
+                match spawn_gate_lanes::provider_live_count(
+                    registry_path,
+                    route_provider.unwrap_or_default(),
+                    Some(name),
+                    &mut lane_warnings,
+                ) {
+                    Ok(reading) => {
+                        let live = reading.count;
+                        if flags.force && live >= cap_value {
+                            forced_provider = Some(format!(
+                                "the {} lane cap, {live} live of {cap_value}",
+                                route_provider.unwrap_or_default()
+                            ));
+                        }
+                        if live >= cap_value && !flags.force {
+                            guard.release_gate_mutex();
+                            let parked_names: Vec<String> =
+                                reading.parked.iter().map(|(n, _)| n.clone()).collect();
+                            return Err(Refusal::with_receipt(
+                                EXIT_PROVIDER_CAP,
+                                serde_json::json!({
+                                    "status": "refused",
+                                    "reason": "provider_cap",
+                                    "provider": route_provider,
+                                    "cap": cap_value,
+                                    "count": live,
+                                    "current_count": live,
+                                    "parked": parked_names,
+                                    "reserved": reserved_receipt(&reading.reserved),
+                                    "launches": reading.launches,
+                                    "remedy": "read fno agents admit status",
+                                }),
+                            ));
+                        }
+                    }
+                    Err(fault) => {
+                        guard.release_gate_mutex();
+                        return Err(gate_fault_refusal(
+                            route_provider,
+                            "gate_mutex_unavailable",
+                            &fault,
+                        ));
+                    }
+                }
+            }
+            if flags.force {
+                // The memory axis is hard: --force passes the soft limits only.
+                // Cloud is exempt (zero local footprint; the cloud-substrate ruling).
+                if charges_local_memory(substrate) {
+                    check_host_floors(floor_gb, swap_cap, disk_floor_gb)
+                        .inspect_err(|_| guard.release())?;
+                }
+                eprintln!(
+                    "{}",
+                    crate::spawn_gate_forced::report(
+                        registry_path,
+                        config_cwd,
+                        prefetched.as_deref(),
+                        probe_err.as_deref(),
+                        forced_provider,
+                    )
+                );
+                {
+                    // A forced spawn of the reserved name redeems too: force
+                    // speaks for the machine being busy, never for keeping a
+                    // reservation the spawn itself was promised.
+                    release_redeemed_reservation(name, guard.root.as_deref());
+                    // The seat claim: headless/cloud hold their only seat here;
+                    // a capped bg spawn takes one because the gate mutex alone
+                    // cannot carry the admit across dispatch (the
+                    // admit-and-reserve rule at the bg return below).
+                    if substrate == "headless" || substrate == "cloud" || provider_cap.is_some() {
+                        // A worker-slot claim fault is not the gate mutex; name the site.
+                        if let Err(fault) = acquire_worker_slot(
+                            &mut guard,
+                            name,
+                            &holder,
+                            holder_pid,
+                            route_provider,
+                            true,
+                        ) {
+                            guard.release();
+                            return Err(gate_fault_refusal(
+                                route_provider,
+                                "lane_reservation_unavailable",
+                                &fault,
+                            ));
+                        }
+                    }
+                }
+                return Ok(guard);
+            }
+            // Change 3: the CPU axis decides BEFORE the census, so a
+            // hold never pays the registry scan and the slot cap stays the
+            // backstop behind it (LD1).
+            let admission = check_cpu_axis(prefetched.as_deref(), probe_err.as_deref());
+            axes_read.insert("cpu".into(), serde_json::json!(admission.verdict));
+            match admission.verdict.as_str() {
+                "hold" => {
+                    // LD4: over is a HOLD - the fleet's own work drains - not
+                    // a refusal. Re-sample on the slower CPU poll; --no-wait
+                    // fails on the first over sample.
+                    held_on_cpu = true;
+                    under_streak = 0;
+                    guard.release_gate_mutex();
+                    if flags.no_wait {
+                        eprintln!("{}", admission.reason);
+                        let figures = receipt_fields(&admission);
+                        learned.eprint_hint();
+                        let mut receipt = serde_json::json!({
+                            "status": "refused",
+                            "reason": "fleet_cpu_share",
+                            "samples": 1,
+                            "held_on": "fleet_cpu_share",
+                            "axes_read": axes_read.clone(),
+                        });
+                        for (k, v) in figures.as_object().into_iter().flatten() {
+                            receipt[k] = v.clone();
+                        }
+                        queue.annotate(&mut receipt, "fleet_cpu_share");
+                        return Err(Refusal::with_receipt(EXIT_LOAD_REFUSED, receipt)
+                            .ev("reason", serde_json::json!("fleet_cpu_share"))
+                            .ev("samples", serde_json::json!(1))
+                            .ev("held_on", serde_json::json!("fleet_cpu_share"))
+                            .ev("axis", serde_json::json!("cpu"))
+                            .ev("axes_read", serde_json::json!(axes_read))
+                            .ev("figures", figures));
+                    }
+                    if let Some(line) = queue.tick("the fleet CPU hold") {
+                        match announced {
+                            true => eprintln!(
+                                "{}",
+                                held_progress_line(&admission, started.elapsed().as_secs())
+                            ),
+                            false => eprintln!("{}", admission.reason),
+                        }
+                        eprintln!("{line}");
+                        announced = true;
+                    }
+                    pause = CPU_HOLD_POLL;
+                }
+                _ => {
+                    // A held spawn needs CPU_ADMIT_SAMPLES consecutive
+                    // under-ceiling samples before it believes the drain
+                    // (LD4); a spawn that was never held admits on the first.
+                    // A warn sample (an undecidable band or a blind probe) is
+                    // not an under-ceiling sample, so it breaks the streak
+                    // instead of extending it.
+                    let mut hold_pause = false;
+                    if admission.verdict != "admit" {
+                        under_streak = 0;
+                        eprintln!("{NOTE} {}; admitting", admission.reason);
+                    } else if held_on_cpu {
+                        under_streak += 1;
+                        if under_streak < CPU_ADMIT_SAMPLES {
+                            guard.release_gate_mutex();
+                            pause = CPU_HOLD_POLL;
+                            hold_pause = true;
+                        } else {
+                            eprintln!(
+                                "{NOTE} fleet share {:.1}% under the ceiling for \
+                                 {under_streak} consecutive samples; admitting",
+                                admission.share_low * 100.0
+                            );
+                            // The hold is served. Clear it so a later timeout
+                            // names the queue actually eating the budget and
+                            // queued passes do not reprint the admit line.
+                            held_on_cpu = false;
+                            under_streak = 0;
+                        }
+                    }
+                    if !hold_pause {
+                        let mut warnings = Vec::new();
+                        let (live, reservations) = slot_reading(registry_path, &mut warnings);
+                        let slots = live.len() + reservations.len();
+                        let redeeming_own_reservation = reservations
+                            .iter()
+                            .any(|reservation| reservation.name == name && reservation.redeemable);
+                        last_slots = slots;
+                        // The caller is a lead, and a lead row is no worker row.
+                        let succession = input.succession_scope.as_deref().map(|scope| {
+                            spawn_gate_lanes::succession_replaces(
+                                &live_rows(registry_path, &mut warnings),
+                                input.caller_session.as_deref(),
+                                scope,
+                            )
+                        });
+                        last_succession_error = succession
+                            .as_ref()
+                            .and_then(|result| result.as_ref().err().copied());
+                        let replaced = usize::from(matches!(succession.as_ref(), Some(Ok(_))));
+                        for w in &warnings {
+                            eprintln!("{w}");
+                        }
+                        let counted = slots.saturating_sub(usize::from(redeeming_own_reservation));
+                        // The CPU axis admitted this pass; with RAM room too the
+                        // learned cap yields and the user's max_live binds.
+                        let yielded = crate::spawn_gate_slots::cap_yields(
+                            &learned, counted, floor_gb, swap_cap,
+                        )
+                        .then_some(cap);
+                        if yielded.is_some() {
+                            learned = crate::spawn_gate_slots::at_ceiling(&learned);
+                            cap = learned.cap;
+                        }
+                        // The user's max_live yields too: one spawn a minute while CPU and RAM read room.
+                        let burst = crate::spawn_gate_slots::burst(
+                            counted,
+                            &learned,
+                            floor_gb,
+                            swap_cap,
+                            &live,
+                            &reservations,
+                            name,
+                            registry_path.parent(),
+                        );
+                        if matches!(burst, Some(crate::spawn_gate_slots::Burst::Yields)) {
+                            learned = crate::spawn_gate_slots::past_ceiling(&learned, counted);
+                            cap = learned.cap;
+                        }
+                        last_burst = burst;
+                        // A successor holds a worker slot until its role lands, so a
+                        // succession may sit one row over the cap, never two.
+                        if counted.saturating_sub(replaced) < cap {
+                            let slot_reading = match (&succession, yielded, learned.burst) {
+                                (_, _, true) => {
+                                    burst_slot_reading(slots, cap, learned.ceiling)
+                                }
+                                (Some(Ok(name)), _, _) => {
+                                    format!("{slots}/{cap} ok (succession replaces {name})")
+                                }
+                                (_, Some(was), _) => format!(
+                                    "{slots}/{cap} ok (learned cap {was} yields: CPU and RAM have room)"
+                                ),
+                                _ => format!("{slots}/{cap} ok"),
+                            };
+                            axes_read.insert("slots".into(), serde_json::json!(slot_reading));
+                            // Re-checked on dequeue for the same reason the RAM floor is: a
+                            // spawn can sit queued past QUEUE_POLL for minutes, and another
+                            // process can raise the shared schema inside that window.
+                            let mut dequeue_warnings = Vec::new();
+                            check_registry_schema(registry_path, &mut dequeue_warnings)
+                                .inspect_err(|_| guard.release())?;
+                            // Slot free. RAM recheck happens NOW (at dequeue too — a spawn
+                            // that queued 5 minutes must not dispatch into a tight machine).
+                            // Cloud skips it: zero local footprint (the cloud-substrate ruling).
+                            if charges_local_memory(substrate) {
+                                check_host_floors(floor_gb, swap_cap, disk_floor_gb)
+                                    .inspect_err(|_| guard.release())?;
+                            }
+                            // Stamped only once the floor actually answered, so a
+                            // receipt never claims an axis it did not read.
+                            axes_read.insert("ram".into(), serde_json::json!("ok"));
+                            for w in &dequeue_warnings {
+                                eprintln!("{w}");
+                            }
+                            if replaced == 1 {
+                                axes_read.insert(
+                                    "lead_share".into(),
+                                    serde_json::json!("skipped (teamed succession)"),
+                                );
+                            } else {
+                                spawn_gate_lanes::check_lead_share(
+                                    registry_path,
+                                    &learned,
+                                    input.caller_session.as_deref(),
+                                    Some(&crate::paths::AgentsHome::from_env().terminal_runs_dir()),
+                                    &axes_read,
+                                )
+                                .inspect_err(|_| guard.release())?;
+                                axes_read.insert("lead_share".into(), serde_json::json!("ok"));
+                            }
+                            // The occupancy read again, where the schema and the
+                            // RAM floor re-read: a spawn that queued past
+                            // QUEUE_POLL must not dispatch onto a node that
+                            // gained a live worker while it waited.
+                            if let Some(node) = admitted_node.as_deref() {
+                                check_node_occupancy(
+                                    node,
+                                    input.caller_session.as_deref(),
+                                    flags.force,
+                                )
+                                .inspect_err(|_| guard.release())?;
+                            }
+                            // The per-territory team cap: beside the machine cap,
+                            // never instead of it. Refuses (never queues) - waiting cannot
+                            // help while the node's own territory is full, and other
+                            // territories keep their headroom.
+                            if let Some(node) = admitted_node.as_deref() {
+                                if let Err(receipt) = check_territory_cap(
+                                    config_cwd,
+                                    registry_path,
+                                    &node,
+                                    agents_config::territory_max_live(config_cwd),
+                                ) {
+                                    guard.release();
+                                    eprintln!("{receipt}");
+                                    return Err(territory_refusal(&receipt));
+                                }
+                            }
+                            if let Err(refusal) =
+                                crate::spawn_gate_spend::check_team_cost_cap(config_cwd, &input)
+                            {
+                                guard.release();
+                                return Err(refusal);
+                            }
+                            // The blueprint axis beside it: a full
+                            // planning lane refuses, never queues.
+                            if let Err(receipt) = check_blueprint_cap(
+                                config_cwd,
+                                registry_path,
+                                name,
+                                admitted_node.as_deref(),
+                                &live,
+                            ) {
+                                guard.release();
+                                eprintln!("{receipt}");
+                                return Err(blueprint_refusal(&receipt));
+                            }
+                            // Redemption sits after every refusing axis and
+                            // at the point of admission, just before the spawn
+                            // takes its own slot claim: earlier would burn the
+                            // reservation on an unrelated CPU or RAM refusal.
+                            release_redeemed_reservation(name, guard.root.as_deref());
+                            if substrate == "headless" || substrate == "cloud" {
+                                if let Err(fault) = acquire_worker_slot(
+                                    &mut guard,
+                                    name,
+                                    &holder,
+                                    holder_pid,
+                                    route_provider,
+                                    provider_cap.is_some(),
+                                ) {
+                                    guard.release();
+                                    return Err(gate_fault_refusal(
+                                        route_provider,
+                                        "lane_reservation_unavailable",
+                                        &fault,
+                                    ));
+                                }
+                                // Slot claim is visible to concurrent gates: the mutex has
+                                // done its job for this spawn.
+                                guard.release_gate_mutex();
+                            } else if provider_cap.is_some() {
+                                // Admit-and-reserve: the seat claim, taken
+                                // under the mutex, is what a concurrent count
+                                // reads. The gate mutex alone cannot carry the
+                                // admit across dispatch: its claim TTL lapses
+                                // under a dispatch that outlives it (an
+                                // explicit spawn timeout, a slow `claude
+                                // --bg`), a stealer then reads the lane before
+                                // this spawn's row exists, and the count admits
+                                // one seat past the cap. The claim names the
+                                // worker, so once the row lands the count
+                                // dedups it by name; release drops it with the
+                                // mutex.
+                                if let Err(fault) = acquire_worker_slot(
+                                    &mut guard,
+                                    name,
+                                    &holder,
+                                    holder_pid,
+                                    route_provider,
+                                    true,
+                                ) {
+                                    guard.release();
+                                    return Err(gate_fault_refusal(
+                                        route_provider,
+                                        "lane_reservation_unavailable",
+                                        &fault,
+                                    ));
+                                }
+                            }
+                            // bg path: keep the mutex and the seat claim until
+                            // the caller's dispatch returns (registry/roster
+                            // row exists) — released via GateGuard.
+                            return Ok(guard);
+                        }
+                        // At cap: drop the mutex before waiting.
+                        guard.release_gate_mutex();
+                        axes_read.insert(
+                            "slots".into(),
+                            serde_json::json!(format!("{slots}/{cap} queued")),
+                        );
+
+                        if flags.no_wait {
+                            let row_refs: Vec<&RegistryEntry> = live.iter().collect();
+                            let drained = warnings.len();
+                            let waiting = spawn_gate_lanes::read_awaiting_operator(
+                                registry_path,
+                                &row_refs,
+                                &mut warnings,
+                            );
+                            for w in &warnings[drained..] {
+                                eprintln!("{w}");
+                            }
+                            let line = slot_refusal_line(
+                                slots,
+                                &learned,
+                                live.len(),
+                                &reservations,
+                                waiting.len(),
+                                "refusing (--no-wait).",
+                            );
+                            eprintln!("spawn-gate: {line}");
+                            learned.eprint_slot_hint();
+                            let mut receipt = serde_json::json!({
+                                "status": "refused",
+                                "reason": "no_wait",
+                                "axis": "max_live",
+                                "axes_read": axes_read.clone(),
+                                "held_on": "max_live",
+                                "max_live": cap,
+                                "count": slots,
+                                "current_count": slots,
+                                "slot_rows": live
+                                    .iter()
+                                    .map(|r| r.name.clone())
+                                    .chain(reservations.iter().map(|r| r.name.clone()))
+                                    .collect::<Vec<_>>(),
+                                "waiting_on_operator": waiting.iter().map(|(name, qid)| serde_json::json!({
+                                    "name": name,
+                                    "question_id": qid,
+                                })).collect::<Vec<_>>(),
+                            });
+                            learned.annotate(&mut receipt);
+                            queue.annotate(&mut receipt, "max_live");
+                            annotate_burst(last_burst.as_ref(), &mut receipt);
+                            if let Some(reason) = last_succession_error {
+                                receipt["succession"] = serde_json::json!(reason);
+                            }
+                            return Err(Refusal::with_receipt(EXIT_NO_WAIT, receipt));
+                        }
+                        let place = queue.tick(&slot_tick_line(slots, cap, last_burst.as_ref()));
+                        if !announced && place.is_some() {
+                            let row_refs: Vec<&RegistryEntry> = live.iter().collect();
+                            let drained = warnings.len();
+                            let waiting = spawn_gate_lanes::read_awaiting_operator(
+                                registry_path,
+                                &row_refs,
+                                &mut warnings,
+                            );
+                            for w in &warnings[drained..] {
+                                eprintln!("{w}");
+                            }
+                            let line = slot_refusal_line(
+                                slots,
+                                &learned,
+                                live.len(),
+                                &reservations,
+                                waiting.len(),
+                                "waiting for a free slot (--no-wait to fail fast, --force to bypass)",
+                            );
+                            eprintln!("spawn queued: {line}");
+                            learned.eprint_slot_hint();
+                            announced = true;
+                        }
+                        if let Some(place) = place {
+                            eprintln!("{place}");
+                        }
+                    }
+                }
+            }
+        }
+
+        if started.elapsed() >= QUEUE_TIMEOUT {
+            let held_on = if mutex_blocked_since.is_some() {
+                "gate_mutex"
+            } else if held_on_cpu {
+                "fleet_cpu_share"
+            } else {
+                "max_live"
+            };
+            let reason = if mutex_blocked_since.is_some() {
+                "gate_mutex_busy"
+            } else {
+                "queue_timeout"
+            };
+            if mutex_blocked_since.is_some() {
+                eprintln!(
+                    "spawn-gate: {reason} after {}s; a holder the gate cannot prove dead holds the gate mutex. \
+                     Read it with `fno agents claim status gate:spawn`. Release a stuck holder \
+                     with `fno agents claim release gate:spawn --force --reason \"<why>\"`.",
+                    QUEUE_TIMEOUT.as_secs()
+                );
+            } else {
+                eprintln!(
+                    "spawn-gate: {reason} after {}s held on {held_on}; \
+                     inspect live workers with `fno agents top`, or retry with --no-wait/--force",
+                    QUEUE_TIMEOUT.as_secs()
+                );
+                if held_on_cpu {
+                    learned.eprint_hint();
+                } else {
+                    learned.eprint_slot_hint();
+                }
+            }
+            let mut receipt = serde_json::json!({
+                "status": "refused",
+                "reason": reason,
+                "held_on": held_on,
+                "axis": held_on,
+                "axes_read": axes_read.clone(),
+                "max_live": cap,
+                "count": last_slots,
+                "current_count": last_slots,
+            });
+            learned.annotate(&mut receipt);
+            queue.annotate(&mut receipt, held_on);
+            crate::spawn_gate_slots::annotate_burst(last_burst.as_ref(), &mut receipt);
+            if let Some(reason) = last_succession_error {
+                receipt["succession"] = serde_json::json!(reason);
+            }
+            return Err(Refusal::with_receipt(EXIT_QUEUE_TIMEOUT, receipt));
+        }
+        std::thread::sleep(pause);
+        // A queued pass must not reuse the admit pass's roster reading.
+        crate::backlog::worked::forget_roster_reading();
+    }
+}
+
+/// One shared memory reading: what the gate refuses on and what the probe
+/// reports. `avail` is read only when the floor is enabled, `swap` only when
+/// the cap is enabled, and the swap-in rate only when swap sits at or above
+/// the cap (the sample costs a 1 s window; a normal spawn pays no wait).
+pub(crate) struct MemoryReading {
+    pub(crate) avail: Option<f64>,
+    pub(crate) swap: Option<f64>,
+    pub(crate) swapin_bps: Option<f64>,
+}
+
+/// Read [`MemoryReading`] once so the gate and the probe answer from the same
+/// instrument calls.
+pub(crate) fn read_memory(floor_gb: f64, max_swap_pct: f64) -> MemoryReading {
+    let avail = (floor_gb > 0.0).then(available_ram_gb).flatten();
+    let swap = (max_swap_pct > 0.0).then(swap_used_pct).flatten();
+    let swapin_bps = if swap.is_some_and(|s| s >= max_swap_pct) {
+        swapin_bytes_per_sec(SWAPIN_WINDOW)
+    } else {
+        None
+    };
+    MemoryReading {
+        avail,
+        swap,
+        swapin_bps,
+    }
+}
+
+/// The decision core of the memory check, pure so both terms are testable
+/// without the machine happening to sit in a given state. Available is named
+/// first: under BOTH terms failing, the receipt names the floor an operator
+/// tunes first. The swap term fires only while the machine is ALSO swapping
+/// in: macOS keeps swap allocated after pressure ends (an idle app can hold
+/// tens of GB until it exits), so allocation alone refused every spawn on a
+/// machine with no paging at all.
+pub(crate) fn ram_floor_term(
+    avail: Option<f64>,
+    floor_gb: f64,
+    swap: Option<f64>,
+    swapin_bps: Option<f64>,
+    max_swap_pct: f64,
+) -> Option<(&'static str, String)> {
+    if floor_gb > 0.0 && avail.is_some_and(|a| a < floor_gb) {
+        return Some((
+            "ram_floor",
+            format!(
+                "available RAM {:.1}GB is below the min_free_gb floor {floor_gb:.1}GB",
+                avail.unwrap()
+            ),
+        ));
+    }
+    if max_swap_pct > 0.0
+        && swap.is_some_and(|s| s >= max_swap_pct)
+        && swapin_bps.is_some_and(|r| r >= SWAPIN_REFUSE_BYTES_PER_S)
+    {
+        return Some((
+            "swap_pressure",
+            format!(
+                "swap {:.1}% used is at or above the max_swap_pct cap {max_swap_pct:.0}% and \
+                 swap-in is {:.1} MiB/s",
+                swap.unwrap(),
+                swapin_bps.unwrap() / MIB,
+            ),
+        ));
+    }
+    None
+}
+
+/// Memory check (Layer 2), two terms: refuse below the `floor_gb` available-
+/// RAM floor, or at/above the `max_swap_pct` swap ceiling WHILE the machine
+/// swaps in at [`SWAPIN_REFUSE_BYTES_PER_S`] or more. Never queues: low RAM
+/// means something ELSE is eating the machine. `<= 0` disables a term; an
+/// unreadable term skips (fail open, as before). Both readings ride every
+/// verdict: a floor that only speaks on refusal cannot be audited, and a
+/// passing gate must not look like a healthy machine.
+/// The pass-path RAM readings line, pure so the note prefix is testable:
+/// it starts [`NOTE`], never the `spawn-gate: ` verdict marker, because
+/// these readings ride ADMITTED spawns too.
+pub(crate) fn ram_readings_line(m: &MemoryReading, floor_gb: f64, max_swap_pct: f64) -> String {
+    // A disabled term renders `off`, never `unreadable`: it was not read
+    // because it is disabled, and a broken sensor must not read as a
+    // tuned knob.
+    let off_or = |disabled: bool, value: &Option<f64>, unit: &str| -> String {
+        if disabled {
+            "off".into()
+        } else {
+            value
+                .map(|v| format!("{v:.1}{unit}"))
+                .unwrap_or_else(|| "unreadable".into())
+        }
+    };
+    let swapin_word: String = if max_swap_pct <= 0.0 {
+        "off".into()
+    } else if m.swap.is_none_or(|s| s < max_swap_pct) {
+        "not sampled (under cap)".into()
+    } else {
+        m.swapin_bps
+            .map(|r| format!("{:.1} MiB/s", r / MIB))
+            .unwrap_or_else(|| "unreadable".into())
+    };
+    format!(
+        "{NOTE} ram readings: available {} (floor {floor_gb:.1}GB), swap {} (cap {max_swap_pct:.0}%), swap-in {swapin_word}",
+        off_or(floor_gb <= 0.0, &m.avail, "GB"),
+        off_or(max_swap_pct <= 0.0, &m.swap, "%"),
+    )
+}
+
+fn check_ram_floor(floor_gb: f64, max_swap_pct: f64) -> Result<(), Refusal> {
+    let m = read_memory(floor_gb, max_swap_pct);
+    if floor_gb > 0.0 || max_swap_pct > 0.0 {
+        eprintln!("{}", ram_readings_line(&m, floor_gb, max_swap_pct));
+    }
+    match ram_floor_term(m.avail, floor_gb, m.swap, m.swapin_bps, max_swap_pct) {
+        Some((reason, term)) => {
+            eprintln!(
+                "spawn-gate: {term}; refusing to spawn. The memory axis is hard: --force and the cap \
+                 floor do not lift it. To change the limit: set agents.min_free_gb or \
+                 agents.max_swap_pct in ~/.fno/config.toml."
+            );
+            Err(Refusal::with_receipt(
+                EXIT_RAM_REFUSED,
+                serde_json::json!({
+                    "status": "refused",
+                    "reason": reason,
+                    "available_gb": m.avail,
+                    "min_free_gb": floor_gb,
+                    "swap_used_pct": m.swap,
+                    "max_swap_pct": max_swap_pct,
+                    "swapin_mib_per_s": m.swapin_bps.map(|r| r / MIB),
+                }),
+            ))
+        }
+        None => Ok(()),
+    }
+}
+
+/// Disk check: refuse a new build worker while the data volume holds less
+/// than `agents.min_free_disk_gb`. The refusal names the janitor; the daemon
+/// runs it off the spawn path, because a sweep deletes tens of GB and a
+/// foreground command never waits on that. Hard like the memory axis: `--force`
+/// does not lift it. Shares the memory axis's exit code; the receipt reason
+/// `disk_floor` tells them apart.
+pub(crate) fn check_disk_floor(
+    home: &crate::paths::AgentsHome,
+    floor_gb: f64,
+) -> Result<(), Refusal> {
+    let free = crate::disk_floor::free_disk_gb(home.root());
+    let Some(term) = crate::disk_floor::disk_floor_term(free, floor_gb) else {
+        return Ok(());
+    };
+    let janitor = crate::disk_floor::JANITOR_NOTE;
+    eprintln!(
+        "spawn-gate: {term}; refusing to spawn. The disk axis is hard: --force does not lift it. \
+         {janitor}. To change the limit: set agents.min_free_disk_gb in ~/.fno/config.toml."
+    );
+    Err(Refusal::with_receipt(
+        EXIT_RAM_REFUSED,
+        serde_json::json!({
+            "status": "refused",
+            "reason": "disk_floor",
+            "free_disk_gb": free,
+            "min_free_disk_gb": floor_gb,
+            "janitor": janitor,
+        }),
+    ))
+}
+
+/// Both resource floors a local build worker is held to: RAM, then disk.
+fn check_host_floors(floor_gb: f64, swap_cap: f64, disk_floor_gb: f64) -> Result<(), Refusal> {
+    check_ram_floor(floor_gb, swap_cap)?;
+    check_disk_floor(&crate::paths::AgentsHome::from_env(), disk_floor_gb)
+}
+
+/// Change 3: the payload's `admission` object, computed by the ONE
+/// Python decider (`cpu_admission`) and consumed verbatim by this gate. The
+/// Rust gate computes no verdict of its own.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct AdmissionPayload {
+    pub(crate) verdict: String,
+    pub(crate) axis: String,
+    pub(crate) reason: String,
+    #[serde(default)]
+    pub(crate) share_low: f64,
+    #[serde(default)]
+    pub(crate) share_high: f64,
+    #[serde(default)]
+    pub(crate) bound: String,
+    #[serde(default)]
+    pub(crate) fleet_cores: f64,
+    #[serde(default)]
+    pub(crate) machine_cores: f64,
+    #[serde(default)]
+    pub(crate) capacity_cores: f64,
+    #[serde(default)]
+    pub(crate) ceiling: f64,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub(crate) gap: Option<String>,
+    /// The Python decider's short form of the fleet's largest program; absent
+    /// on an older wheel and whenever no attributed row exists.
+    #[serde(default)]
+    pub(crate) top_holder: Option<String>,
+}
+
+/// The receipt's figure block. An axis of `cpu_instrument` measured nothing,
+/// so every figure is JSON null - never a 0.0 a reader would take for a
+/// reading. `axis`, `detail` and `bound` are words, not figures, and stay.
+fn receipt_fields(admission: &AdmissionPayload) -> serde_json::Value {
+    let unreadable = admission.axis == "cpu_instrument";
+    let fig = |v: f64| {
+        if unreadable {
+            serde_json::Value::Null
+        } else {
+            serde_json::json!(v)
+        }
+    };
+    serde_json::json!({
+        "axis": admission.axis,
+        "detail": admission.reason,
+        "share_low": fig(admission.share_low),
+        "share_high": fig(admission.share_high),
+        "bound": admission.bound,
+        "fleet_cores": fig(admission.fleet_cores),
+        "machine_cores": fig(admission.machine_cores),
+        "capacity_cores": fig(admission.capacity_cores),
+        "ceiling": fig(admission.ceiling),
+    })
+}
+
+/// The periodic held line. The holder clause is the payload's own words, so
+/// this reprint and the Python reason cannot drift.
+fn held_progress_line(admission: &AdmissionPayload, waited_secs: u64) -> String {
+    let holder = admission
+        .top_holder
+        .as_deref()
+        .map(|h| format!("; top holder {h}"))
+        .unwrap_or_default();
+    format!(
+        "still held: fleet {:.1}% over {:.1}%, waited {}s{}",
+        admission.share_low * 100.0,
+        admission.ceiling * 100.0,
+        waited_secs,
+        holder
+    )
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct FootprintCausePayload {
+    /// The Claude Code background daemon's idle pre-warm pool, for the
+    /// `fno agents status` machine line.
+    #[serde(default)]
+    spare_pool_process_count: u64,
+    #[serde(default)]
+    spare_pool_cpu_cores: f64,
+    /// The `_emit_failure` shape: when footprint cannot measure at all it
+    /// still answers, carrying this key and exit 4. Its words travel into
+    /// the instrument warning (keeps that contract).
+    #[serde(default)]
+    error: Option<String>,
+    /// The decider's answer. Absent on a degraded payload, the gate admits
+    /// on the instrument warning: a blind probe is not overload (guard
+    /// diet, law d-9d4e95e5).
+    #[serde(default)]
+    admission: Option<AdmissionPayload>,
+    /// Top fleet consumers by summed ps %cpu; the machine_watch escalation
+    /// names the first three by their own argv strings (AC7).
+    #[serde(default)]
+    pub(crate) top: Vec<TopConsumer>,
+}
+
+/// One `top` row of the footprint payload.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TopConsumer {
+    #[serde(default)]
+    pub(crate) command: String,
+}
+
+/// The one spelling of the instrument warning: the condition, the probe's
+/// own words for what it measured, and a command the reader can run.
+fn instrument_warning_sentence(why: &str) -> String {
+    format!(
+        "spawn-gate: the CPU instrument is unreadable ({why}); \
+         read the instrument yourself with `fno doctor footprint --json --cause-only`; \
+         a blind probe is not overload"
+    )
+}
+
+/// Read the CPU axis from the prefetched footprint payload (LD3).
+///
+/// The Rust decider `cpu_admission` (footprint_cause.rs) is the ONE decider;
+/// this gate maps its `admission.verdict` to the branches the loop takes and
+/// prints `admission.reason` verbatim. No payload, an unparseable payload, a
+/// payload without `admission`, or an unknown verdict word yields the
+/// synthetic instrument payload (axis `cpu_instrument`, verdict
+/// `undecidable`): the sensor's own failure is not evidence of overload
+/// (guard diet, law d-9d4e95e5), so the loop admits on it with the warning
+/// printed. The probe's own failure words (`probe_err`) travel into it.
+pub(crate) fn check_cpu_axis(
+    prefetched: Option<&str>,
+    probe_err: Option<&str>,
+) -> AdmissionPayload {
+    fn instrument_warning(why: &str) -> AdmissionPayload {
+        AdmissionPayload {
+            verdict: "undecidable".to_string(),
+            axis: "cpu_instrument".to_string(),
+            reason: instrument_warning_sentence(why),
+            share_low: 0.0,
+            share_high: 0.0,
+            bound: "exact".to_string(),
+            fleet_cores: 0.0,
+            machine_cores: 0.0,
+            capacity_cores: 0.0,
+            ceiling: 0.0,
+            gap: None,
+            top_holder: None,
+        }
+    }
+    let raw = match prefetched {
+        Some(raw) => raw,
+        None => {
+            return instrument_warning(
+                probe_err.unwrap_or("the footprint probe produced no payload"),
+            );
+        }
+    };
+    let payload: FootprintCausePayload = match serde_json::from_str(raw) {
+        Ok(payload) => payload,
+        Err(_) => {
+            return instrument_warning("the footprint probe wrote an unparseable payload");
+        }
+    };
+    // An answered failure (`{"error": ..., "exit_code": 4}`) is a different
+    // fact from a probe that never answered: its words travel (main's
+    // contract, kept under the admission regime).
+    if let Some(err) = payload.error {
+        return instrument_warning(&err);
+    }
+    let admission = match payload.admission {
+        Some(admission) => admission,
+        None => return instrument_warning("the payload carries no admission"),
+    };
+    let verdict = admission.verdict.clone();
+    match verdict.as_str() {
+        "admit" | "hold" | "undecidable" => admission,
+        other => instrument_warning(&format!(
+            "the payload carries the unknown verdict {other:?}"
+        )),
+    }
+}
+
+/// The status footer's reading and the store keeper's path note, from ONE
+/// footprint answer, a live probe or a fresh persisted one: `(machine line,
+/// keeper note)`. Both best-effort
+/// - a machine whose footprint cannot be read yields `(None, None)`, never a
+/// stale or fabricated line.
+pub fn machine_reading_notes() -> (Option<String>, Option<String>) {
+    // ONE parse serves both notes; the raw string is never read twice.
+    let payload: Option<FootprintCausePayload> = footprint_cause_cached(FOOTPRINT_CACHE_FRESH)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok());
+    let home = crate::paths::AgentsHome::from_env();
+    let footer = crate::machine_sample::newest(&home.events_jsonl())
+        .map(|row| {
+            let mut line = crate::machine_sample::footer_line(&row, chrono::Utc::now());
+            if let Some(payload) = payload.as_ref().filter(|p| p.spare_pool_process_count > 0) {
+                line.push_str(&format!(
+                    " claude_spare_pool={}proc/{:.2}cores",
+                    payload.spare_pool_process_count, payload.spare_pool_cpu_cores
+                ));
+            }
+            line
+        })
+        .or_else(|| Some(crate::machine_sample::no_row_footer()));
+    let keeper = payload.as_ref().and_then(|payload| {
+        let commands: Vec<String> = payload.top.iter().map(|c| c.command.clone()).collect();
+        crate::drift::keeper_path_note(&commands, std::env::current_exe().ok().as_deref())
+    });
+    (footer, keeper)
+}
+
+/// The decider's admission inside one raw footprint payload, `None` when
+/// the payload does not parse or carries none.
+pub(crate) fn admission_of(raw: &str) -> Option<AdmissionPayload> {
+    serde_json::from_str::<FootprintCausePayload>(raw)
+        .ok()?
+        .admission
+}
+
+/// The footprint admission from a live probe: the one fleet-share answer
+/// the machine arm's split and the capacity loop read in one tick. `None`
+/// when the probe or the parse fails, which classifies as fleet load.
+pub(crate) fn fleet_admission() -> Option<AdmissionPayload> {
+    admission_of(&footprint_cause_raw().ok()?)
+}
+
+/// The fleet's CPU share the spawn gate decides on, as one number: the
+/// upper bound, so an attribution gap reads as load, never as headroom.
+/// `None` on an unreadable instrument (axis `cpu_instrument`).
+pub(crate) fn fleet_share(admission: &AdmissionPayload) -> Option<f64> {
+    (admission.axis == "fleet_cpu_share").then_some(admission.share_high)
+}
+
+pub(crate) fn footprint_cause_raw() -> Result<String, String> {
+    // Test seam: a pinned payload keeps gate tests measuring their own axis,
+    // never the live machine's load or whatever probe PATH resolves here.
+    #[cfg(test)]
+    if let Ok(raw) = std::env::var("FNO_TEST_FOOTPRINT_PAYLOAD") {
+        if !raw.is_empty() {
+            return Ok(raw);
+        }
+    }
+    // Test seam for the re-read loop: one payload PER read. Each call
+    // consumes the first line; the last line sticks, so a positive control
+    // can count the reads that actually happened. `ERR <words>` answers the
+    // no-payload path.
+    #[cfg(test)]
+    if let Ok(seq) = std::env::var("FNO_TEST_FOOTPRINT_PAYLOAD_SEQ") {
+        if !seq.is_empty() {
+            let raw = std::fs::read_to_string(&seq).expect("payload-seq file readable");
+            let (first, rest) = raw.split_once('\n').unwrap_or((raw.as_str(), ""));
+            if !rest.is_empty() {
+                std::fs::write(&seq, rest).expect("payload-seq file writable");
+            }
+            if let Some(why) = first.strip_prefix("ERR ") {
+                return Err(why.to_string());
+            }
+            return Ok(first.to_string());
+        }
+    }
+    // The reading computes in process (the deleted fno-footprint-cause
+    // probe): one engine serves the gate and the doctor footprint command,
+    // so the two answers cannot drift and the crossing is gone.
+    let reading = crate::footprint_cause::cause_reading(false, Duration::from_secs(5))?;
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let payload = crate::footprint_cause::cause_payload(&reading, true, None, None, &cwd);
+    let raw = crate::footprint_cause::sorted_json(&payload);
+    crate::footprint_cache::persist_footprint_cache(&raw);
+    Ok(raw)
+}
+
+/// Take the headless worker slot claim. The claim carries `model_provider`
+/// (the route provider, else the un-routed marker) because the provider count
+/// reads that tag. The claim carries the holder pid stamped `holder-process`
+/// (the same stamp the flight gate writes), so a dead holder frees its slot
+/// at once instead of reading Suspect for the whole TTL. `fail_closed` (a
+/// provider cap applies) turns a fault into the caller's refusal; without a
+/// cap the claim is count VISIBILITY, not a correctness gate, and a fault
+/// proceeds uncounted.
+fn acquire_worker_slot(
+    guard: &mut GateGuard,
+    name: &str,
+    holder: &str,
+    holder_pid: u32,
+    route_provider: Option<&str>,
+    fail_closed: bool,
+) -> Result<(), String> {
+    let key = format!("worker:{name}");
+    let mut metadata = serde_json::Map::new();
+    metadata.insert(
+        "model_provider".to_string(),
+        serde_json::Value::String(
+            route_provider
+                .filter(|p| !p.is_empty())
+                .unwrap_or(KNOWN_UNROUTED_PROVIDER)
+                .to_string(),
+        ),
+    );
+    match claims::acquire(
+        &key,
+        holder,
+        claims::AcquireOpts {
+            pid: Some(holder_pid),
+            pid_provenance: Some(claims::HOLDER_PROCESS.to_string()),
+            ttl_ms: Some(WORKER_CLAIM_TTL_MS),
+            metadata: Some(metadata),
+            root: guard.root.clone(),
+            ..Default::default()
+        },
+    ) {
+        claims::AcquireOutcome::Acquired(_) => {
+            guard.worker_key = Some((key, holder.to_string()));
+            Ok(())
+        }
+        // Fail open: a slot claim is count VISIBILITY, not a correctness gate.
+        claims::AcquireOutcome::HeldByOther { holder: h, .. } => {
+            let fault = format!("worker reservation {key} held by {h}");
+            if fail_closed {
+                Err(fault)
+            } else {
+                eprintln!("{NOTE} worker slot claim {key} unavailable; proceeding uncounted");
+                Ok(())
+            }
+        }
+        claims::AcquireOutcome::Error(e) => {
+            let fault = format!("worker reservation {key} unavailable: {e}");
+            if fail_closed {
+                Err(fault)
+            } else {
+                eprintln!("{NOTE} worker slot claim {key} unavailable; proceeding uncounted");
+                Ok(())
+            }
+        }
+    }
+}
+
+/// The claims-layer fault refusal: the gate could not serialize the decision
+/// or take a lane reservation, so no count was measured and no cap may be
+/// named. The reason is the faulted site, never a cap.
+fn gate_fault_refusal(provider: Option<&str>, reason: &str, error: &str) -> Refusal {
+    Refusal::with_receipt(
+        EXIT_PROVIDER_CAP,
+        serde_json::json!({
+            "status": "refused",
+            "reason": reason,
+            "provider": provider,
+            "error": error,
+        }),
+    )
+}
+
+/// The lead-share refusal (W4 / LD1): the share divides
+/// `max_live` by TEAMS; `held` counts the caller's own worker rows; a caller
+/// with no resolved session is not share-checked; waiting cannot help, so
+/// this refuses like the provider cap. Every number comes from
+/// [`spawn_gate_lanes::share_reading`]: the count the gate refuses on and the
+/// count any readout prints are one value.
+/// The held-rows clause of the lead-share refusal: the row names the caller
+/// can act on, capped at five with an ellipsis like the unattributed suffix.
+pub(crate) fn held_rows_suffix(held_rows: Option<&Vec<String>>) -> String {
+    match held_rows.filter(|r| !r.is_empty()) {
+        Some(rows) => {
+            let shown: Vec<String> = rows.iter().take(5).cloned().collect();
+            format!(
+                "; the rows charged to you are {}{}",
+                shown.join(", "),
+                if rows.len() > 5 { "..." } else { "" }
+            )
+        }
+        None => String::new(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Layer 3: background QoS
+// ---------------------------------------------------------------------------
+
+/// Exec-wrap a child command at background priority when
+/// `config.agents.worker_qos` is `utility`: `taskpolicy -c utility -- <cmd>`
+/// on macOS, `nice -n 10 <cmd>` on Linux. Identity on `off` / other OSes.
+pub fn qos_wrap(config_cwd: &Path, argv: Vec<String>) -> Vec<String> {
+    if !agents_config::worker_qos_enabled(config_cwd) || argv.is_empty() {
+        return argv;
+    }
+    // Don't wrap a command that won't resolve: callers report a missing
+    // provider CLI as NotFound/127, and a taskpolicy prefix would swallow
+    // that into the wrapper's own error.
+    if !resolves_on_path(&argv[0]) {
+        return argv;
+    }
+    // Absolute paths + existence check: a missing wrapper must degrade to an
+    // unwrapped exec (fail open), never surface as a "CLI not found" spawn
+    // failure for the actual worker command.
+    let mut wrapped: Vec<String> = if cfg!(target_os = "macos") {
+        if !Path::new("/usr/sbin/taskpolicy").exists() {
+            return argv;
+        }
+        vec![
+            "/usr/sbin/taskpolicy".into(),
+            "-c".into(),
+            "utility".into(),
+            "--".into(),
+        ]
+    } else if cfg!(target_os = "linux") {
+        if !Path::new("/usr/bin/nice").exists() {
+            return argv;
+        }
+        vec!["/usr/bin/nice".into(), "-n".into(), "10".into()]
+    } else {
+        return argv;
+    };
+    wrapped.extend(argv);
+    wrapped
+}
+
+/// Does `cmd` resolve to an executable (explicit path, or a PATH lookup)?
+fn resolves_on_path(cmd: &str) -> bool {
+    resolves_on_path_in(cmd, None)
+}
+
+/// [`resolves_on_path`] against a caller-supplied PATH: `Some` is the env the
+/// CHILD will carry (an `extra_env` PATH override wins over this process's).
+fn resolves_on_path_in(cmd: &str, path_var: Option<&std::ffi::OsStr>) -> bool {
+    if cmd.contains('/') {
+        return Path::new(cmd).exists();
+    }
+    let paths = path_var
+        .map(|p| p.to_os_string())
+        .or_else(|| std::env::var_os("PATH"));
+    paths
+        .map(|paths| std::env::split_paths(&paths).any(|d| d.join(cmd).is_file()))
+        .unwrap_or(false)
+}
+
+/// The reason a spawn would fail as not-found, checked before exec.
+/// posix_spawn folds a missing binary and a missing `current_dir` into one
+/// NotFound, and a report that blames the binary sent an evals seat hunting
+/// for a CLI that was on PATH the whole time while its work directory had
+/// been removed. `env_path` is the child's PATH when the caller overrides it
+/// in the spawn env, else None for this process's. Some reason names the
+/// candidate that is already gone; None means both looked right at check
+/// time and only a mid-spawn race remains.
+pub(crate) fn spawn_not_found_reason(
+    binary: &str,
+    cwd: &Path,
+    env_path: Option<&std::ffi::OsStr>,
+) -> Option<String> {
+    if !cwd.is_dir() {
+        return Some(format!("spawn cwd is missing: {}", cwd.display()));
+    }
+    if !resolves_on_path_in(binary, env_path) {
+        return Some(format!(
+            "`{binary}` not found on PATH (no executable by that name)"
+        ));
+    }
+    None
+}
+
+/// The message for a NotFound that survived [`spawn_not_found_reason`]: one
+/// of the two checked candidates vanished in the window before exec.
+pub(crate) fn spawn_not_found_after_preflight(
+    binary: &str,
+    cwd: &Path,
+    e: &std::io::Error,
+) -> String {
+    format!(
+        "spawn returned not-found after preflight; binary `{}` or cwd `{}` \
+         vanished mid-spawn: {}",
+        binary,
+        cwd.display(),
+        e
+    )
+}
+
+/// Best-effort post-hoc demotion of a claude-daemon-owned bg worker pid
+/// (`taskpolicy -b -p` on macOS, `renice 10 -p` on Linux; same uid, so
+/// permitted). Non-fatal: failure prints one warning, the spawn stands.
+pub fn qos_demote_pid(config_cwd: &Path, pid: u32) {
+    if !agents_config::worker_qos_enabled(config_cwd) {
+        return;
+    }
+    let status = if cfg!(target_os = "macos") {
+        std::process::Command::new("/usr/sbin/taskpolicy")
+            .args(["-b", "-p", &pid.to_string()])
+            .status()
+    } else if cfg!(target_os = "linux") {
+        std::process::Command::new("/usr/bin/renice")
+            .args(["10", "-p", &pid.to_string()])
+            .status()
+    } else {
+        return;
+    };
+    match status {
+        Ok(s) if s.success() => {}
+        _ => eprintln!("{NOTE} QoS demotion of pid {pid} failed (non-fatal)"),
+    }
+}
+
+/// After a `--substrate bg` dispatch, poll the roster briefly for the new
+/// worker's pid and demote it post-hoc (its exec is claude's, not ours).
+/// Bounded ~10s; one warning if the pid never appears (AC3-UI).
+pub fn qos_demote_bg_worker(config_cwd: &Path, job_id: &str) {
+    if !agents_config::worker_qos_enabled(config_cwd) || job_id.is_empty() {
+        return;
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Ok(roster) = ClaudeRoster::load_default() {
+            if let Some(pid) = roster.find(job_id).and_then(|w| w.pid) {
+                qos_demote_pid(config_cwd, pid);
+                return;
+            }
+        }
+        if Instant::now() >= deadline {
+            eprintln!(
+                "{NOTE} bg worker {job_id} pid not in roster within 10s; \
+                 QoS demotion skipped (non-fatal)"
+            );
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_spawn_preflight_names_a_missing_cwd_over_the_binary() {
+        let base = std::env::temp_dir().join(format!(
+            "fno-preflight-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let missing = base.join("gone");
+        let reason = spawn_not_found_reason("claude", &missing, None)
+            .expect("a missing cwd is a named reason");
+        assert!(
+            reason.contains(&missing.display().to_string()),
+            "reason names the cwd: {reason}"
+        );
+        assert!(reason.contains("cwd is missing"), "{reason}");
+    }
+
+    #[test]
+    fn a_spawn_preflight_names_a_binary_off_path() {
+        let dir = std::env::temp_dir();
+        let reason = spawn_not_found_reason("fno-no-such-cli-preflight-probe", &dir, None)
+            .expect("an unresolvable binary is a named reason");
+        assert!(reason.contains("not found on PATH"), "{reason}");
+        assert!(
+            reason.contains("fno-no-such-cli-preflight-probe"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn a_spawn_preflight_passes_a_real_pair() {
+        let dir = std::env::temp_dir();
+        assert_eq!(spawn_not_found_reason("sh", &dir, None), None);
+    }
+
+    #[test]
+    fn a_spawn_preflight_resolves_against_the_child_path_override() {
+        let dir = std::env::temp_dir().join(format!(
+            "fno-preflight-bin-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = crate::write_exec_stub(&dir, "fno-fake-cli-probe", "#!/bin/sh\nexit 0\n");
+        // The parent PATH lacks the fake; the child PATH override finds it.
+        assert_eq!(
+            spawn_not_found_reason(
+                "fno-fake-cli-probe",
+                &dir,
+                Some(fake.parent().unwrap().as_os_str())
+            ),
+            None
+        );
+        let reason = spawn_not_found_reason("fno-fake-cli-probe", &dir, None)
+            .expect("the parent PATH misses the fake");
+        assert!(reason.contains("not found on PATH"), "{reason}");
+    }
+
+    #[test]
+    fn phase_rows() {
+        for seed in [
+            "$fno:review high --comment",
+            "/fno:review x",
+            "/code-review this diff",
+            "/review x-1",
+        ] {
+            let refusal = review_session_gate(&GateInput {
+                seed: Some(seed.to_string()),
+                ..Default::default()
+            })
+            .expect(seed);
+            assert_eq!(refusal.exit_code, EXIT_REVIEW_SESSION);
+            let receipt = refusal.receipt.as_ref().unwrap();
+            assert_eq!(receipt["reason"], "review_session");
+            let remedy = receipt["remedy"].as_str().unwrap();
+            assert!(remedy.contains("/fno:review"));
+            assert!(remedy.contains("$fno:review"));
+            assert!(verdict_line(&refusal)
+                .starts_with("spawn-gate: refused on review (review_session, exit 89)"));
+        }
+
+        for (seed, phase) in [
+            ("/fno:triage deep", Some("review")),
+            ("/code-review this diff", Some("do")),
+        ] {
+            let refusal = review_session_gate(&GateInput {
+                seed: Some(seed.to_string()),
+                session_phase: phase.map(str::to_string),
+                ..Default::default()
+            })
+            .expect(seed);
+            assert_eq!(refusal.exit_code, EXIT_REVIEW_SESSION);
+        }
+
+        for seed in [
+            "/fno:think why",
+            "/fno:target x-1",
+            "review the diff",
+            "/Users/x/review",
+            "",
+        ] {
+            assert!(review_session_gate(&GateInput {
+                seed: Some(seed.to_string()),
+                ..Default::default()
+            })
+            .is_none());
+        }
+        assert!(review_session_gate(&GateInput::default()).is_none());
+
+        let src = include_str!("spawn_gate.rs");
+        let loop_at = src
+            .find("\n    loop {\n")
+            .expect("run_gate's queue loop must be present");
+        let bind_at = src
+            .find("let mut axes_read = serde_json::Map::new();")
+            .expect("axes_read binding must be present");
+        assert!(
+            bind_at > loop_at,
+            "axes_read must reset per pass: it sits before the queue loop"
+        );
+        assert!(
+            !src[loop_at..bind_at].lines().any(|l| l.starts_with('}')),
+            "axes_read binding drifted outside the queue loop"
+        );
+    }
+
+    /// The no_wait specimen renders the verdict line the plan pins: axis and
+    /// breach named, figures from the receipt in key order.
+    #[test]
+    fn verdict_rows() {
+        let refusal = Refusal::with_receipt(
+            EXIT_NO_WAIT,
+            serde_json::json!({
+                "status": "refused",
+                "reason": "no_wait",
+                "axis": "max_live",
+                "axes_read": {"cpu": "admit", "slots": "15/15 queued"},
+                "held_on": "max_live",
+                "max_live": 15,
+                "count": 15,
+                "current_count": 15,
+                "slot_rows": ["w1", "w2"],
+                "waiting_on_operator": [],
+            }),
+        );
+        assert_eq!(
+            verdict_line(&refusal),
+            "spawn-gate: refused on max_live (no_wait, exit 76): max_live=15, count=15, current_count=15"
+        );
+
+        let refusal = Refusal::with_receipt(
+            EXIT_TERRITORY_CAP,
+            serde_json::json!({
+                "status": "refused",
+                "reason": "territory_cap",
+                "territory": "team-x",
+                "count": 3,
+                "current_count": 3,
+                "max_live_per_territory": 3,
+                "live_blueprints": ["bp-a", "bp-b"],
+            }),
+        )
+        .ev("axis", serde_json::json!("territory"));
+        assert_eq!(
+            verdict_line(&refusal),
+            "spawn-gate: refused on territory (territory_cap, exit 86): territory=team-x, count=3, current_count=3, max_live_per_territory=3"
+        );
+
+        let refusal = Refusal::code(82);
+        assert_eq!(
+            verdict_line(&refusal),
+            "spawn-gate: refused on unknown (unknown, exit 82)"
+        );
+
+        let refusal = Refusal::code(EXIT_LEAD_SHARE)
+            .ev("reason", serde_json::json!("lead_share"))
+            .ev("lead", serde_json::json!("abc12345"))
+            .ev("held", serde_json::json!(5))
+            .ev("share", serde_json::json!(3))
+            .ev("max_live", serde_json::json!(15))
+            .ev("leads", serde_json::json!(2));
+        assert_eq!(
+            verdict_line(&refusal),
+            "spawn-gate: refused on lead_share (lead_share, exit 80): lead=abc12345, held=5, share=3, max_live=15, leads=2"
+        );
+
+        let m = MemoryReading {
+            avail: Some(35.9),
+            swap: Some(85.5),
+            swapin_bps: None,
+        };
+        let line = ram_readings_line(&m, 2.0, 90.0);
+        assert!(
+            line.starts_with("spawn-gate note: ram readings:"),
+            "got: {line}"
+        );
+        assert!(!line.starts_with("spawn-gate:"), "got: {line}");
+
+        const NEEDLE: &str = concat!("spawn-gate", ": ");
+        const BARRED: [&str; 9] = [
+            "proceeding",
+            "readings",
+            "not refusing",
+            "admitting",
+            "non-fatal",
+            "forced past",
+            "ignored",
+            "uncounted",
+            "degraded",
+        ];
+        for file in [
+            include_str!("spawn_gate.rs"),
+            include_str!("spawn_gate_lanes.rs"),
+        ] {
+            for line in file.lines() {
+                if line.contains(NEEDLE) {
+                    for word in BARRED {
+                        assert!(
+                            !line.contains(word),
+                            "pass-path word {word:?} beside the verdict marker in: {line}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// A territory refusal: the event's axis wins over the receipt's, and
+    /// the live_blueprints array never enters the figures.
+
+    /// No receipt and no event: the line still names the exit.
+
+    /// A receipt-less refusal keeps its measurements in the event; the
+    /// verdict falls back to the event's scalars so the breach is named.
+
+    /// The readings of an admitted spawn carry the note prefix, never the
+    /// verdict marker.
+
+    /// The marker is the refusal wire format (advance.py and
+    /// dispatch_launch.rs both key on it). A pass-path word beside the
+    /// marker breaks the readers, so the source itself is scanned.
+
+    /// A refusal receipt carries only the readings of the pass that refused.
+    /// No fixture can flip the CPU payload between queue
+    /// passes (the test seam is one static env var), so the plan's fallback
+    /// pins it structurally: the binding must sit inside run_gate's queue
+    /// loop, not before it.
+
+    /// The receipt names swap when the ceiling fires beside live swap-ins.
+    #[test]
+    fn ram_floor_rows() {
+        let term = ram_floor_term(
+            Some(24.0),
+            4.0,
+            Some(92.6),
+            Some(SWAPIN_REFUSE_BYTES_PER_S),
+            90.0,
+        );
+        assert_eq!(term.as_ref().map(|(r, _)| *r), Some("swap_pressure"));
+        let msg = term.unwrap().1;
+        assert!(msg.contains("swap"), "the failing term must be named");
+        assert!(msg.contains("MiB/s"), "the message names the swap-in rate");
+
+        let term = ram_floor_term(
+            Some(1.0),
+            4.0,
+            Some(95.0),
+            Some(SWAPIN_REFUSE_BYTES_PER_S),
+            90.0,
+        );
+        assert_eq!(term.as_ref().map(|(r, _)| *r), Some("ram_floor"));
+        assert!(term.unwrap().1.contains("available"));
+
+        assert_eq!(
+            ram_floor_term(
+                Some(24.0),
+                4.0,
+                Some(30.0),
+                Some(SWAPIN_REFUSE_BYTES_PER_S),
+                90.0
+            ),
+            None
+        );
+
+        assert_eq!(ram_floor_term(Some(24.0), 4.0, None, None, 90.0), None);
+        assert_eq!(
+            ram_floor_term(Some(1.0), 4.0, None, None, 90.0).map(|(r, _)| r),
+            Some("ram_floor")
+        );
+
+        assert_eq!(
+            ram_floor_term(Some(24.0), 4.0, Some(100.0), Some(f64::MAX), 0.0),
+            None
+        );
+
+        assert_eq!(
+            ram_floor_term(Some(24.0), 4.0, Some(94.7), Some(0.0), 90.0),
+            None
+        );
+
+        let term = ram_floor_term(
+            Some(24.11),
+            4.0,
+            Some(92.6),
+            Some(8.0 * 1024.0 * 1024.0),
+            90.0,
+        );
+        assert_eq!(term.as_ref().map(|(r, _)| *r), Some("swap_pressure"));
+        let msg = term.unwrap().1;
+        assert!(msg.contains("92.6"), "names the swap percent");
+        assert!(msg.contains("MiB/s"), "names the swap-in rate");
+
+        assert_eq!(
+            ram_floor_term(Some(24.0), 4.0, Some(94.7), None, 90.0),
+            None
+        );
+
+        let under = SWAPIN_REFUSE_BYTES_PER_S - 1.0;
+        assert_eq!(
+            ram_floor_term(Some(24.0), 4.0, Some(94.7), Some(under), 90.0),
+            None
+        );
+        assert_eq!(
+            ram_floor_term(
+                Some(24.0),
+                4.0,
+                Some(94.7),
+                Some(SWAPIN_REFUSE_BYTES_PER_S),
+                90.0
+            )
+            .map(|(r, _)| r),
+            Some("swap_pressure")
+        );
+    }
+
+    /// Under BOTH terms failing, available is named (the floor an operator
+    /// tunes first).
+
+    /// Plenty of RAM, low swap: no term.
+
+    /// An unreadable swap read skips its term (fail open), while a failing
+    /// available term still refuses.
+
+    /// The swap ceiling disabled (`<= 0`) never fires, whatever the machine
+    /// reads.
+
+    /// Allocation alone never refuses: 94.7% against a cap of 90 with no
+    /// swap-ins admits, because macOS holds swap allocated after pressure
+    /// ends.
+
+    /// The thrash shape stays refused: over-cap swap WITH live swap-ins, and
+    /// the message names both the percent and the rate.
+
+    /// An unreadable swap-in rate fails open even with swap over the cap.
+
+    /// One byte per second under the floor admits; at the floor refuses.
+
+    /// the macOS swapusage line parses to percent used; a malformed
+    /// line and a zero total both read as unreadable.
+    #[test]
+    fn parse_rows() {
+        let line = "total = 18432.00M  used = 17080.75M  free = 1351.25M  (encrypted)";
+        let pct = parse_swapusage(line).unwrap();
+        assert!((pct - 17080.75 / 18432.0 * 100.0).abs() < 0.01);
+        assert_eq!(parse_swapusage("banana"), None);
+        assert_eq!(parse_swapusage("total = 0.00M  used = 0.00M"), None);
+
+        // (100000 + 200000 + 50000 + 25000) * 16384
+        assert_eq!(parse_vm_stat(VM_STAT), Some(375_000 * 16_384));
+
+        assert_eq!(parse_vm_stat(""), None);
+        assert_eq!(parse_vm_stat("something else entirely\n"), None);
+        // Header without any "Pages free" line: refuse to guess.
+        assert_eq!(
+            parse_vm_stat("Mach Virtual Memory Statistics: (page size of 16384 bytes)\n"),
+            None
+        );
+        // Garbage page count: None, not a partial sum.
+        let bad = "Mach Virtual Memory Statistics: (page size of 16384 bytes)\n\
+Pages free: banana.\n";
+        assert_eq!(parse_vm_stat(bad), None);
+
+        let text = "MemTotal:       16384000 kB\nMemFree:         1000000 kB\n\
+MemAvailable:    8000000 kB\n";
+        assert_eq!(parse_meminfo(text), Some(8_000_000 * 1024));
+        assert_eq!(parse_meminfo("MemTotal: 1 kB\n"), None);
+        assert_eq!(parse_meminfo("MemAvailable: banana kB\n"), None);
+
+        let (pages, size) = parse_vm_stat_swapins(VM_STAT).unwrap();
+        assert_eq!(pages, 19_235_608);
+        assert_eq!(size, 16_384);
+        // Header but no Swapins line: not a swap-in reading, refuse to guess.
+        assert_eq!(
+            parse_vm_stat_swapins("Mach Virtual Memory Statistics: (page size of 16384 bytes)\n"),
+            None
+        );
+        assert_eq!(parse_vm_stat_swapins("Swapins: banana.\n"), None);
+
+        assert_eq!(
+            parse_proc_vmstat_pswpin("pgfault 123\npswpin 456\npswpout 789\n"),
+            Some(456)
+        );
+        assert_eq!(parse_proc_vmstat_pswpin("pgfault 123\n"), None);
+    }
+
+    const ROOTS: [&str; 1] = ["/Users/x/.fno"];
+
+    fn roots() -> Vec<String> {
+        ROOTS.iter().map(|r| r.to_string()).collect()
+    }
+
+    /// AC3-HP (Rust side): an active stop refuses at the FIRST boundary -
+    /// this call runs before `run_gate`'s `FNO_SPAWN_GATE=0` return, so the
+    /// bypass env cannot wave a spawn through. AC2-HP: the machine brake
+    /// door one step later refuses the same way and admits an expired one.
+    #[test]
+    fn fleet_incident_gate_refuses_a_stopped_record() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let td = tempfile::TempDir::new().unwrap();
+        let saved = std::env::var_os("FNO_AGENTS_HOME");
+        std::env::set_var("FNO_AGENTS_HOME", td.path());
+        let path = crate::fleet_incident::fleet_stop_path(&crate::paths::AgentsHome::at(td.path()));
+        std::fs::create_dir_all(td.path()).unwrap();
+        let record = crate::fleet_incident::IncidentRecord {
+            version: crate::fleet_incident::STATE_VERSION,
+            state: "stopped".into(),
+            generation: 3,
+            changed_at: "2026-09-11T00:00:00Z".into(),
+            changed_by: "op".into(),
+            reason: "wedged lock".into(),
+            holds: Vec::new(),
+            source: Some("file".into()),
+            target: None,
+            expires_at: None,
+            origin: None,
+            mail: None,
+            mail_session_id: None,
+        };
+        std::fs::write(&path, serde_json::to_string(&record).unwrap()).unwrap();
+
+        // The stop holds an agent-origin caller only; the human's own typed
+        // command is the recovery path and passes.
+        std::env::set_var("FNO_AGENT_SELF", "incident-test-worker");
+        assert_eq!(
+            fleet_incident_gate().err().map(|r| r.exit_code),
+            Some(EXIT_FLEET_STOP)
+        );
+        std::env::remove_var("FNO_AGENT_SELF");
+        assert!(fleet_incident_gate().is_ok(), "no identity, no hold");
+        match saved {
+            Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
+            None => std::env::remove_var("FNO_AGENTS_HOME"),
+        }
+        // The machine admission door one boundary later: armed refuses a
+        // worker identity with the same exit code and a machine-runaway
+        // reason; expired admits; no identity admits under the same armed
+        // brake (the human's own typed command is never held here).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("brake.json");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        std::env::set_var("FNO_MACHINE_BRAKE", &path);
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "until_epoch": now + 600,
+                "reason": "machine runaway: load hot for 700s",
+                "group": {"name": "claude", "count": 9, "ppid": 1},
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::env::set_var("FNO_AGENT_SELF", "gate-admission-test");
+        let refusal = crate::spawn_gate_admission::process_admission_gate()
+            .err()
+            .expect("armed brake refuses");
+        assert_eq!(refusal.exit_code, EXIT_FLEET_STOP);
+        // One line, and the hold's numbers (seconds left) ride the verdict
+        // detail; the prose line is gone.
+        let verdict = verdict_line(&refusal);
+        assert!(!verdict.contains('\n'), "{verdict}");
+        assert!(verdict.contains("machine-runaway"), "{verdict}");
+        // The fixture arms the brake for 600s; two clock reads can straddle a
+        // second boundary, so assert the shape, not the exact count.
+        assert!(verdict.contains("s left"), "{verdict}");
+        // No worker identity, no hold: the default door admits.
+        std::env::remove_var("FNO_AGENT_SELF");
+        assert!(
+            crate::spawn_gate_admission::process_admission_gate().is_ok(),
+            "a caller with no identity passes the armed brake"
+        );
+        std::env::set_var("FNO_AGENT_SELF", "gate-admission-test");
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "until_epoch": now - 10,
+                "reason": "machine runaway: expired",
+                "group": serde_json::Value::Null,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert!(
+            crate::spawn_gate_admission::process_admission_gate().is_ok(),
+            "an expired brake admits the spawn"
+        );
+        std::env::remove_var("FNO_AGENT_SELF");
+        match std::env::var_os("FNO_MACHINE_BRAKE") {
+            Some(v) if v == path.as_os_str() => std::env::remove_var("FNO_MACHINE_BRAKE"),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn lane_rows() {
+        // An unknown harness declares nothing at all, which is the only thing
+        // this gate refuses.
+        assert_eq!(
+            state_root_grant_gate("nosuchharness", "thread", &roots())
+                .err()
+                .map(|r| r.exit_code),
+            Some(EXIT_STATE_ROOT_UNGRANTED)
+        );
+        assert_eq!(
+            state_root_grant_gate("claude", "nosuchsubstrate", &roots())
+                .err()
+                .map(|r| r.exit_code),
+            Some(EXIT_STATE_ROOT_UNGRANTED)
+        );
+
+        for (harness, substrate) in [
+            ("opencode", "pane"),     // measured unsandboxed
+            ("opencode", "headless"), // unmeasured, so not refused on a guess
+            ("gemini", "headless"),
+            ("gemini", "pane"),
+            ("gemini", "thread"),
+        ] {
+            assert!(
+                state_root_grant_gate(harness, substrate, &roots()).is_ok(),
+                "{harness}/{substrate} declares a stance, so it must pass"
+            );
+        }
+
+        for (harness, substrate) in [
+            ("claude", "thread"),
+            ("claude", "headless"),
+            ("codex", "thread"),
+            ("codex", "headless"),
+            ("agy", "thread"),
+            ("opencode", "thread"),
+        ] {
+            assert!(
+                state_root_grant_gate(harness, substrate, &roots()).is_ok(),
+                "{harness}/{substrate}"
+            );
+        }
+
+        let contract = crate::harness_capabilities::HarnessContract::packaged().unwrap();
+        for (name, caps) in &contract.harness {
+            for substrate in ["pane", "thread", "headless"] {
+                assert!(
+                    caps.state_root_stance(substrate).is_some(),
+                    "{name}/{substrate} declares no stance toward the state root"
+                );
+            }
+        }
+
+        assert!(state_root_grant_gate("gemini", "headless", &[]).is_ok());
+    }
+
+    /// The regression this gate nearly shipped. Its first trigger was "declares
+    /// no carrier", which refused every opencode pane and gemini spawn. Then an
+    /// opencode PANE worker was measured acquiring a claim and delivering mail
+    /// with no grant at all: it is unsandboxed, so it is never denied the root
+    /// and R3 does not reach it. A lane that works must not be refused.
+
+    /// Every harness and substrate the fleet dispatches must declare a stance.
+    /// Without this the gate's refusal is unreachable in practice and a lane
+    /// added later inherits silence instead of a loud refusal.
+
+    /// The one narrow fail-open case: no root resolved means there is nothing
+    /// to grant and nothing to refuse.
+
+    #[test]
+    fn fixture_rows() {
+        let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/spawn_gate/gate_escape_spawn_cap_parity.json");
+        let raw = std::fs::read_to_string(&fixture_path)
+            .unwrap_or_else(|e| panic!("read fixture {}: {e}", fixture_path.display()));
+        let fixture: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        for sc in fixture["scenarios"].as_array().unwrap() {
+            let name = sc["name"].as_str().unwrap();
+            let env = sc["env"].clone();
+            let get = |k: &str| env.get(k).and_then(|v| v.as_str()).map(|s| s.to_string());
+            let expect = sc["expect"].as_bool().unwrap();
+            assert_eq!(spawn_cap_would_emit(get), expect, "row {name}");
+        }
+
+        let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/spawn_gate/spawn_gate_admission.json");
+        let raw = std::fs::read_to_string(&fixture_path)
+            .expect("the shared fixture must exist beside the Python suite");
+        let doc: serde_json::Value = serde_json::from_str(&raw).expect("fixture is JSON");
+        let cases = doc["cases"].as_array().expect("fixture carries cases");
+        assert_eq!(cases.len(), 4, "one case per AC branch");
+        for case in cases {
+            let expected = case["payload"]["admission"]["verdict"].as_str().unwrap();
+            let expected_reason = case
+                .pointer("/payload/admission/reason")
+                .and_then(Value::as_str)
+                .expect("fixture carries the admission reason");
+            let payload = serde_json::to_string(&case["payload"]).unwrap();
+            let admission = check_cpu_axis(Some(&payload), None);
+            assert_eq!(admission.verdict, expected, "case {} drifted", case["name"]);
+            assert_eq!(
+                admission.reason, expected_reason,
+                "case {} must print the payload's sentence verbatim",
+                case["name"]
+            );
+        }
+    }
+
+    const VM_STAT: &str = "Mach Virtual Memory Statistics: (page size of 16384 bytes)\n\
+Pages free:                              100000.\n\
+Pages active:                            500000.\n\
+Pages inactive:                          200000.\n\
+Pages speculative:                        50000.\n\
+Pages throttled:                              0.\n\
+Pages wired down:                        300000.\n\
+Pages purgeable:                          25000.\n\
+Swapins: 19235608.\n\
+Swapouts: 3444531.\n";
+
+    /// The receipt's figure block: an unreadable instrument leaves every
+    /// figure JSON null - never a 0.0 a reader would take for a reading -
+    /// while the words (axis, detail, bound) survive intact.
+
+    /// The periodic held reprint prints the payload's holder clause
+    /// verbatim; an absent holder leaves the line exactly as before.
+    #[test]
+    fn held_rows() {
+        let raw = r#"{"verdict":"hold","axis":"fleet_cpu_share","reason":"r","share_low":0.625,"share_high":0.625,"bound":"exact","fleet_cores":7.5,"machine_cores":7.5,"capacity_cores":12.0,"ceiling":0.5,"gap":null}"#;
+        let mut admission: AdmissionPayload = serde_json::from_str(raw).unwrap();
+        assert_eq!(
+            held_progress_line(&admission, 40),
+            "still held: fleet 62.5% over 50.0%, waited 40s"
+        );
+        admission.top_holder = Some("yes 16 procs 5.13 cores".to_string());
+        assert_eq!(
+            held_progress_line(&admission, 60),
+            "still held: fleet 62.5% over 50.0%, waited 60s; top holder yes 16 procs 5.13 cores"
+        );
+
+        let rows =
+            |names: &[&str]| -> Vec<String> { names.iter().map(|n| n.to_string()).collect() };
+        assert_eq!(
+            held_rows_suffix(Some(&rows(&["w1", "w2"]))),
+            "; the rows charged to you are w1, w2"
+        );
+        assert_eq!(
+            held_rows_suffix(Some(&rows(&["w1", "w2", "w3", "w4", "w5", "w6", "w7"]))),
+            "; the rows charged to you are w1, w2, w3, w4, w5..."
+        );
+        assert_eq!(held_rows_suffix(Some(&rows(&[]))), "");
+        assert_eq!(held_rows_suffix(None), "");
+    }
+
+    /// Mirrors `test_no_wait_refuses_fast_when_the_mutex_is_contended` on the
+    /// Python side: a busy gate mutex IS queueing, so `--no-wait` must refuse on
+    /// it instead of falling through to the queue loop. The regression it pins
+    /// made every `--no-wait` caller wait the full `QUEUE_TIMEOUT` behind a
+    /// spawner that died mid-gate, then exit `EXIT_QUEUE_TIMEOUT`, so the
+    /// caller could not tell "cap is full" from "the gate is wedged".
+    #[test]
+    fn no_wait_refuses_fast_when_the_mutex_is_contended() {
+        let _g = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _id = crate::spawn_gate_admission::AgentSelfFixture::set();
+        let dir = std::env::temp_dir().join(format!("fno-gate-nowait-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.join("claims-root");
+        std::fs::create_dir_all(&root).unwrap();
+        std::env::set_var("FNO_CLAIMS_ROOT", &root);
+        let prior_spawn_gate = std::env::var_os("FNO_SPAWN_GATE");
+        std::env::remove_var("FNO_SPAWN_GATE");
+        // A high cap so the ONLY thing that can refuse here is the mutex.
+        let fnodir = dir.join(".fno");
+        std::fs::create_dir_all(&fnodir).unwrap();
+        std::fs::write(
+            fnodir.join("config.toml"),
+            "[agents]\nmax_live = 999\nmin_free_gb = 0\nmax_swap_pct = 0\n",
+        )
+        .unwrap();
+
+        // Hold the mutex as somebody else. The claim defaults its pid to this
+        // live test process, so it reads as a live holder.
+        let held = claims::acquire(
+            "gate:spawn",
+            "spawn-gate:999999:ghost",
+            claims::AcquireOpts {
+                ttl_ms: Some(GATE_CLAIM_TTL_MS),
+                root: Some(root.clone()),
+                ..Default::default()
+            },
+        );
+        assert!(
+            matches!(held, claims::AcquireOutcome::Acquired(_)),
+            "test setup: ghost must hold the mutex, got {held:?}"
+        );
+        // Positive control on the test's own premise: acquire must report the
+        // mutex held by another. Assert that instead of assuming it: a free
+        // mutex would let run_gate sail through, and this test would pass
+        // while exercising none of the branch it exists to pin.
+        let contended = claims::acquire(
+            "gate:spawn",
+            "spawn-gate:probe",
+            claims::AcquireOpts {
+                ttl_ms: Some(GATE_CLAIM_TTL_MS),
+                root: Some(root.clone()),
+                ..Default::default()
+            },
+        );
+        assert!(
+            matches!(contended, claims::AcquireOutcome::HeldByOther { .. }),
+            "test premise broken: a dead-holder claim must still read as held, got {contended:?}"
+        );
+        let started = Instant::now();
+        let got = run_gate(
+            &dir,
+            &dir.join("registry.json"),
+            GateInput {
+                name: "w2".into(),
+                substrate: "bg".into(),
+                flags: GateFlags {
+                    force: false,
+                    no_wait: true,
+                },
+                ..Default::default()
+            },
+        );
+        let elapsed = started.elapsed();
+        let _ = claims::release("gate:spawn", "spawn-gate:999999:ghost", Some(&root), None);
+        std::env::remove_var("FNO_CLAIMS_ROOT");
+        match prior_spawn_gate {
+            Some(value) => std::env::set_var("FNO_SPAWN_GATE", value),
+            None => std::env::remove_var("FNO_SPAWN_GATE"),
+        }
+
+        assert_eq!(
+            got.err().map(|r| r.exit_code),
+            Some(EXIT_NO_WAIT),
+            "must refuse with the no-wait code"
+        );
+        assert!(
+            elapsed < QUEUE_TIMEOUT,
+            "must refuse fast, not queue: took {elapsed:?}"
+        );
+    }
+
+    /// Admit-and-reserve: a bg admit at cap-minus-one takes its seat claim
+    /// under the mutex, so a dispatch that outlives the mutex TTL cannot
+    /// lose the seat. A stealer that takes the lapsed mutex counts the
+    /// claim and refuses; release drops the seat and the lane frees again.
+    #[test]
+    fn a_bg_admit_holds_a_seat_claim_that_survives_a_lapsed_gate_mutex() {
+        let _g = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _id = crate::spawn_gate_admission::AgentSelfFixture::set();
+        let dir = std::env::temp_dir().join(format!("fno-gate-seat-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.join("claims-root");
+        std::fs::create_dir_all(&root).unwrap();
+        std::env::set_var("FNO_CLAIMS_ROOT", &root);
+        let prior_spawn_gate = std::env::var_os("FNO_SPAWN_GATE");
+        std::env::remove_var("FNO_SPAWN_GATE");
+        let prior_payload = std::env::var_os("FNO_TEST_FOOTPRINT_PAYLOAD");
+        std::env::set_var(
+            "FNO_TEST_FOOTPRINT_PAYLOAD",
+            r#"{"admission":{"verdict":"admit","axis":"fleet_cpu_share","reason":"fixture","bound":"exact","ceiling":0.5}}"#,
+        );
+        let fnodir = dir.join(".fno");
+        std::fs::create_dir_all(&fnodir).unwrap();
+        std::fs::write(
+            fnodir.join("config.toml"),
+            "[agents]\nmax_live = 999\nmin_free_gb = 0\nmax_swap_pct = 0\n\n\
+             [agents.provider_limits.zai]\nlanes = 2\n",
+        )
+        .unwrap();
+        let me = std::process::id();
+        let start = crate::daemon::process_start_time(me).unwrap_or(0);
+        let reg = dir.join("registry.json");
+        std::fs::write(
+            &reg,
+            format!(
+                r#"{{"schema_version":{},"entries":[{{"name":"zai-live","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{me},"pid_start_time":{start}}}]}}"#,
+                crate::state::REGISTRY_SCHEMA_VERSION
+            ),
+        )
+        .unwrap();
+
+        // Spawn A admits at 1 of 2 and keeps its guard: the gate mutex plus,
+        // since this fix, the seat claim naming the worker.
+        let mut guard_a = run_gate(
+            &dir,
+            &reg,
+            GateInput {
+                name: "seat-a".into(),
+                substrate: "bg".into(),
+                flags: GateFlags {
+                    force: false,
+                    no_wait: true,
+                },
+                route_provider: Some("zai".into()),
+                ..Default::default()
+            },
+        )
+        .expect("1 of 2 admits");
+        let (seat_state, seat_record) = claims::status("worker:seat-a", Some(&root));
+        assert!(
+            matches!(seat_state, claims::ClaimState::Live),
+            "the admit must mint the seat claim, got {seat_state:?}"
+        );
+        assert_eq!(
+            seat_record
+                .as_ref()
+                .and_then(|rec| rec.metadata.get("model_provider"))
+                .and_then(Value::as_str),
+            Some("zai"),
+            "the seat claim names the provider lane"
+        );
+
+        // The dispatch outlives the mutex TTL: age the gate:spawn claim past
+        // its expiry while the live holder keeps the pid. This is the exact
+        // state a stealer finds at admit-plus-TTL.
+        let claims_dir = root.join(".fno").join("claims");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        crate::claim_store::seed_yaml_at_path(
+            &claims_dir.join(format!("{}.lock", claims::encode_key("gate:spawn"))),
+            &format!(
+                "schema_version: {}\nkey: gate:spawn\nholder: spawn-gate:{}:seat-a\nacquired_at: {}\nexpires_at: {}\npid: {}\nhost: {}\n",
+                claims::SCHEMA_VERSION,
+                me,
+                now - 10 * 60_000,
+                now - 5 * 60_000,
+                me,
+                claims::hostname()
+            ),
+        );
+
+        // Spawn B steals the lapsed mutex and counts the seat: 2 of 2 refuses.
+        let refused = run_gate(
+            &dir,
+            &reg,
+            GateInput {
+                name: "seat-b".into(),
+                substrate: "bg".into(),
+                flags: GateFlags {
+                    force: false,
+                    no_wait: true,
+                },
+                route_provider: Some("zai".into()),
+                ..Default::default()
+            },
+        )
+        .expect_err("the stealer must refuse on the counted seat");
+        assert_eq!(refused.exit_code, EXIT_PROVIDER_CAP);
+        let receipt = refused.receipt.expect("cap refusal carries a receipt");
+        assert_eq!(
+            receipt["count"], 2,
+            "the seat claim held the lane: {receipt}"
+        );
+
+        // Release drops the seat with the mutex; the lane frees for the next
+        // spawn, so the seat never outlives its dispatch.
+        guard_a.release();
+        let (seat_state, _) = claims::status("worker:seat-a", Some(&root));
+        assert!(
+            matches!(seat_state, claims::ClaimState::Free),
+            "release must drop the seat claim, got {seat_state:?}"
+        );
+        let mut guard_c = run_gate(
+            &dir,
+            &reg,
+            GateInput {
+                name: "seat-c".into(),
+                substrate: "bg".into(),
+                flags: GateFlags {
+                    force: false,
+                    no_wait: true,
+                },
+                route_provider: Some("zai".into()),
+                ..Default::default()
+            },
+        )
+        .expect("the freed lane admits again");
+        guard_c.release();
+        std::env::remove_var("FNO_CLAIMS_ROOT");
+        match prior_payload {
+            Some(value) => std::env::set_var("FNO_TEST_FOOTPRINT_PAYLOAD", value),
+            None => std::env::remove_var("FNO_TEST_FOOTPRINT_PAYLOAD"),
+        }
+        match prior_spawn_gate {
+            Some(value) => std::env::set_var("FNO_SPAWN_GATE", value),
+            None => std::env::remove_var("FNO_SPAWN_GATE"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The forced arm obeys the same admit-and-reserve rule: a forced bg
+    /// spawn past a full lane still mints the seat the next count reads.
+    #[test]
+    fn a_forced_bg_admit_past_a_full_lane_mints_the_seat() {
+        let _g = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _id = crate::spawn_gate_admission::AgentSelfFixture::set();
+        let dir = std::env::temp_dir().join(format!("fno-gate-seatf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.join("claims-root");
+        std::fs::create_dir_all(&root).unwrap();
+        std::env::set_var("FNO_CLAIMS_ROOT", &root);
+        let prior_spawn_gate = std::env::var_os("FNO_SPAWN_GATE");
+        std::env::remove_var("FNO_SPAWN_GATE");
+        let prior_payload = std::env::var_os("FNO_TEST_FOOTPRINT_PAYLOAD");
+        std::env::set_var(
+            "FNO_TEST_FOOTPRINT_PAYLOAD",
+            r#"{"admission":{"verdict":"admit","axis":"fleet_cpu_share","reason":"fixture","bound":"exact","ceiling":0.5}}"#,
+        );
+        let fnodir = dir.join(".fno");
+        std::fs::create_dir_all(&fnodir).unwrap();
+        std::fs::write(
+            fnodir.join("config.toml"),
+            "[agents]\nmax_live = 999\nmin_free_gb = 0\nmax_swap_pct = 0\n\n\
+             [agents.provider_limits.zai]\nlanes = 2\n",
+        )
+        .unwrap();
+        let me = std::process::id();
+        let start = crate::daemon::process_start_time(me).unwrap_or(0);
+        let row = |index: usize| {
+            format!(
+                r#"{{"name":"zai-{index}","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{me},"pid_start_time":{start}}}"#
+            )
+        };
+        let reg = dir.join("registry.json");
+        std::fs::write(
+            &reg,
+            format!(
+                r#"{{"schema_version":{},"entries":[{},{}]}}"#,
+                crate::state::REGISTRY_SCHEMA_VERSION,
+                row(0),
+                row(1)
+            ),
+        )
+        .unwrap();
+        let mut guard = run_gate(
+            &dir,
+            &reg,
+            GateInput {
+                name: "seat-f".into(),
+                substrate: "bg".into(),
+                flags: GateFlags {
+                    force: true,
+                    no_wait: true,
+                },
+                route_provider: Some("zai".into()),
+                ..Default::default()
+            },
+        )
+        .expect("force admits past the full lane");
+        let (seat_state, seat_record) = claims::status("worker:seat-f", Some(&root));
+        assert!(
+            matches!(seat_state, claims::ClaimState::Live),
+            "the forced admit must mint the seat claim, got {seat_state:?}"
+        );
+        assert_eq!(
+            seat_record
+                .as_ref()
+                .and_then(|rec| rec.metadata.get("model_provider"))
+                .and_then(Value::as_str),
+            Some("zai"),
+            "the forced seat claim names the provider lane"
+        );
+        guard.release();
+        std::env::remove_var("FNO_CLAIMS_ROOT");
+        match prior_payload {
+            Some(value) => std::env::set_var("FNO_TEST_FOOTPRINT_PAYLOAD", value),
+            None => std::env::remove_var("FNO_TEST_FOOTPRINT_PAYLOAD"),
+        }
+        match prior_spawn_gate {
+            Some(value) => std::env::set_var("FNO_SPAWN_GATE", value),
+            None => std::env::remove_var("FNO_SPAWN_GATE"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// workers hold its full share refuses exit 80 even with a fleet slot
+    /// free, when that slot is owed to a lead still under its share.
+    #[test]
+    fn lead_share_refuses_when_the_caller_holds_its_full_share() {
+        let _g = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _id = crate::spawn_gate_admission::AgentSelfFixture::set();
+        let dir = std::env::temp_dir().join(format!("fno-gate-share-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.join("claims-root");
+        std::fs::create_dir_all(&root).unwrap();
+        std::env::set_var("FNO_CLAIMS_ROOT", &root);
+        let prior_spawn_gate = std::env::var_os("FNO_SPAWN_GATE");
+        std::env::remove_var("FNO_SPAWN_GATE");
+        // A prior test's FNO_CONFIG can name a deleted TempDir; config
+        // candidates then resolve to that dead path alone and max_live
+        // defaults, so this test's own config.toml never gets read.
+        let prior_config = std::env::var_os("FNO_CONFIG");
+        std::env::remove_var("FNO_CONFIG");
+        // Pin the CPU axis to an admit: the lead share under test sits AFTER
+        // the CPU axis in gate order, so a busy machine (or a CI runner with
+        // no probe installed) would refuse with 79 before reaching it.
+        let prior_payload = std::env::var_os("FNO_TEST_FOOTPRINT_PAYLOAD");
+        std::env::set_var(
+            "FNO_TEST_FOOTPRINT_PAYLOAD",
+            r#"{"admission":{"verdict":"admit","axis":"fleet_cpu_share","reason":"fixture","bound":"exact","ceiling":0.5}}"#,
+        );
+        let fnodir = dir.join(".fno");
+        std::fs::create_dir_all(&fnodir).unwrap();
+        std::fs::write(
+            fnodir.join("config.toml"),
+            "[agents]\nmax_live = 4\nmin_free_gb = 0\nmax_swap_pct = 0\n",
+        )
+        .unwrap();
+
+        let pid = std::process::id();
+        let start = claims::process_create_time_ms(pid as i32).unwrap_or(0);
+        let live = |name: &str, spawned_by: &str| {
+            format!(
+                r#"{{"name":"{name}","harness":"claude","provider":"zai","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","pid":{pid},"pid_start_time":{start},"spawned_by_session":"{spawned_by}"}}"#
+            )
+        };
+        let teamed = |name: &str, session: &str| {
+            format!(
+                r#"{{"name":"{name}","harness":"claude","cwd":"/tmp","status":"live","created_at":"2026-01-01T00:00:00Z","role_level":1,"harness_session_id":"{session}"}}"#
+            )
+        };
+        // 2 leads -> share 2; the caller holds its full share with 2 rows and
+        // an unteamed session's row takes a third seat. The one free slot is
+        // owed to lead-b, so there is none to borrow and the lead share refuses.
+        let reg = dir.join("registry.json");
+        std::fs::write(
+            &reg,
+            format!(
+                r#"{{"schema_version":{},"entries":[{},{},{},{},{}]}}"#,
+                crate::state::REGISTRY_SCHEMA_VERSION,
+                teamed("lead-a", "session-aaaaaaaa"),
+                teamed("lead-b", "session-bbbbbbbb"),
+                live("w1", "session-aaaaaaaa"),
+                live("w2", "session-aaaaaaaa"),
+                live("w-other", "session-cccccccc"),
+            ),
+        )
+        .unwrap();
+
+        let got = run_gate(
+            &dir,
+            &reg,
+            GateInput {
+                name: "w3".into(),
+                substrate: "bg".into(),
+                flags: GateFlags {
+                    force: false,
+                    no_wait: true,
+                },
+                caller_session: Some("session-aaaaaaaa".into()),
+                ..Default::default()
+            },
+        );
+        std::env::remove_var("FNO_CLAIMS_ROOT");
+        match prior_spawn_gate {
+            Some(value) => std::env::set_var("FNO_SPAWN_GATE", value),
+            None => std::env::remove_var("FNO_SPAWN_GATE"),
+        }
+        match prior_config {
+            Some(value) => std::env::set_var("FNO_CONFIG", value),
+            None => std::env::remove_var("FNO_CONFIG"),
+        }
+        match prior_payload {
+            Some(value) => std::env::set_var("FNO_TEST_FOOTPRINT_PAYLOAD", value),
+            None => std::env::remove_var("FNO_TEST_FOOTPRINT_PAYLOAD"),
+        }
+        let refusal = got.err().expect("the full share must refuse");
+        assert_eq!(refusal.exit_code, EXIT_LEAD_SHARE, "{refusal:?}");
+        assert_eq!(
+            refusal.event.get("reason"),
+            Some(&serde_json::json!("lead_share"))
+        );
+        assert_eq!(refusal.event.get("held"), Some(&serde_json::json!(2)));
+        assert_eq!(refusal.event.get("share"), Some(&serde_json::json!(2)));
+        assert_eq!(refusal.event.get("leads"), Some(&serde_json::json!(2)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// AC1-FR: the Rust gate and the Python mirror must return the same
+    /// slot count for the same synthetic registry+roster. Both suites read this
+    /// ONE fixture; a divergence in either gate's counting rule (e.g. re-adding
+    /// the roster to the slot count) fails its own assertion. A populated roster
+    /// is materialized deliberately: `slot_count` must ignore it, so a future
+    /// re-introduction of roster counting inflates the count and trips here.
+    #[test]
+    fn slot_count_agrees_with_python_gate_fixture() {
+        let _g = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/spawn_gate/spawn_gate_slot_agreement.json");
+        let raw = std::fs::read_to_string(&fixture_path)
+            .unwrap_or_else(|e| panic!("read fixture {}: {e}", fixture_path.display()));
+        let fixture: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let self_pid = std::process::id();
+        // 2^22+17: realistically never a live pid (mirrors the Python fixture).
+        let dead_pid: u32 = 4_194_321;
+        let resolve = |v: &serde_json::Value| -> Option<u32> {
+            match v.as_str() {
+                Some("self") => Some(self_pid),
+                Some("dead") => Some(dead_pid),
+                _ => None, // absent pid = disk-only row
+            }
+        };
+        let base = std::env::temp_dir().join(format!("fno-gate-agree-{self_pid}"));
+        for (i, sc) in fixture["scenarios"].as_array().unwrap().iter().enumerate() {
+            let dir = base.join(format!("s{i}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            // Isolate the claims root: no real worker:<name> slot claim leaks in.
+            std::env::set_var("FNO_CLAIMS_ROOT", dir.join("claims-root"));
+            // Populate a roster the slot count must ignore.
+            let daemon = dir.join("daemon");
+            std::fs::create_dir_all(&daemon).unwrap();
+            std::env::set_var("FNO_CLAUDE_DAEMON_DIR", &daemon);
+            let mut rworkers = Vec::new();
+            for (j, r) in sc["roster"].as_array().unwrap().iter().enumerate() {
+                let short = r["short"]
+                    .as_str()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| format!("{:08x}", 0xaaaa_0000u32 + j as u32));
+                let pidf = resolve(&r["pid"])
+                    .map(|p| format!(r#","pid":{p}"#))
+                    .unwrap_or_default();
+                rworkers.push(format!(
+                    r#""{short}":{{"sessionId":"{short}-1-2-3-4"{pidf}}}"#
+                ));
+            }
+            std::fs::write(
+                daemon.join("roster.json"),
+                format!(
+                    r#"{{"proto":1,"supervisorPid":1,"workers":{{{}}}}}"#,
+                    rworkers.join(",")
+                ),
+            )
+            .unwrap();
+            // Materialize the registry.
+            let mut entries = Vec::new();
+            for row in sc["registry"].as_array().unwrap() {
+                let name = row["name"].as_str().unwrap();
+                let status = row["status"].as_str().unwrap();
+                let pidf = resolve(&row["pid"])
+                    .map(|p| format!(r#","pid":{p}"#))
+                    .unwrap_or_default();
+                let csidf = row["short_id"]
+                    .as_str()
+                    .map(|s| format!(r#","short_id":"{s}""#))
+                    .unwrap_or_default();
+                entries.push(format!(
+                    r#"{{"name":"{name}","provider":"claude","cwd":"/tmp","status":"{status}","created_at":"2026-01-01T00:00:00Z"{pidf}{csidf}}}"#
+                ));
+            }
+            let reg = dir.join("registry.json");
+            std::fs::write(
+                &reg,
+                format!(
+                    r#"{{"schema_version":1,"entries":[{}]}}"#,
+                    entries.join(",")
+                ),
+            )
+            .unwrap();
+
+            let mut warnings = Vec::new();
+            let got = slot_count(&reg, &mut warnings);
+            let want = sc["expect_slot_count"].as_u64().unwrap() as usize;
+            assert_eq!(
+                got,
+                want,
+                "scenario {:?}: got {got}, want {want}",
+                sc["name"].as_str().unwrap_or("?")
+            );
+        }
+        std::env::remove_var("FNO_CLAIMS_ROOT");
+        std::env::remove_var("FNO_CLAUDE_DAEMON_DIR");
+    }
+    /// Snapshot-and-restore scope for the env vars a fixture pins: the
+    /// original value (or its absence) is put back on drop, panic included,
+    /// so a fixture cannot permanently discard an ambient pin.
+    pub(super) struct EnvPin(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+    impl EnvPin {
+        pub(super) fn take(vars: &[&'static str]) -> Self {
+            Self(
+                vars.iter()
+                    .map(|var| (*var, std::env::var_os(var)))
+                    .collect(),
+            )
+        }
+    }
+
+    impl Drop for EnvPin {
+        fn drop(&mut self) {
+            for (var, saved) in &self.0 {
+                match saved {
+                    Some(v) => std::env::set_var(var, v),
+                    None => std::env::remove_var(var),
+                }
+            }
+        }
+    }
+
+    /// AC6-ERR (force): the force branch refuses the same blueprint
+    /// spawn - force never excuses the blueprint axis.
+    #[test]
+    fn the_force_branch_refuses_a_capped_blueprint_spawn() {
+        let _g = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _id = crate::spawn_gate_admission::AgentSelfFixture::set();
+        let dir = tempfile::tempdir().unwrap();
+        let fnodir = dir.path().join(".fno");
+        std::fs::create_dir_all(&fnodir).unwrap();
+        std::fs::write(fnodir.join("config.toml"), "schema_version = 1\n").unwrap();
+        crate::graph_store::seed_rows(
+            &dir.path().join("graph.json"),
+            &[serde_json::json!({"id": "x-1", "project": "proj", "status": "idea"})],
+        )
+        .unwrap();
+        std::env::set_var("FNO_HOME", dir.path());
+        std::env::set_var("FNO_NODE", "x-1");
+        let prior_claims = std::env::var_os("FNO_CLAIMS_ROOT");
+        std::env::set_var("FNO_CLAIMS_ROOT", dir.path().join("claims-root"));
+        let prior_spawn_gate = std::env::var_os("FNO_SPAWN_GATE");
+        std::env::remove_var("FNO_SPAWN_GATE");
+        let reg = dir.path().join("registry.json");
+        let mut e = RegistryEntry::default();
+        e.name = "bp-x-1-a".into();
+        e.node = Some("x-1".into());
+        e.pid = Some(std::process::id());
+        e.status = AgentStatus::Busy;
+        e.pid_start_time = crate::daemon::process_start_time(std::process::id());
+        crate::state::update_registry(&reg, |r| r.entries.push(e)).unwrap();
+        let got = run_gate(
+            dir.path(),
+            &reg,
+            GateInput {
+                name: "bp-x-2-slug".into(),
+                substrate: "bg".into(),
+                flags: GateFlags {
+                    force: true,
+                    no_wait: false,
+                },
+                ..Default::default()
+            },
+        );
+        std::env::remove_var("FNO_HOME");
+        std::env::remove_var("FNO_NODE");
+        std::env::remove_var("FNO_CLAIMS_ROOT");
+        if let Some(v) = prior_claims {
+            std::env::set_var("FNO_CLAIMS_ROOT", v);
+        }
+        if let Some(v) = prior_spawn_gate {
+            std::env::set_var("FNO_SPAWN_GATE", v);
+        }
+        let refusal = got.err().expect("the spawn must refuse");
+        assert_eq!(
+            refusal.exit_code, EXIT_BLUEPRINT_CAP,
+            "{:?}",
+            refusal.receipt
+        );
+        let receipt = refusal.receipt.clone().unwrap_or(serde_json::Value::Null);
+        assert_eq!(
+            receipt["reason"],
+            serde_json::json!("blueprint_territory_cap"),
+            "{receipt}"
+        );
+    }
+}
+
+#[cfg(test)]
+#[path = "spawn_gate_slot_tests.rs"]
+mod spawn_gate_slot_tests;
+
+#[cfg(test)]
+#[path = "spawn_gate_blind_tests.rs"]
+mod spawn_gate_blind_tests;
+
+#[cfg(test)]
+#[path = "spawn_gate_territory_tests.rs"]
+mod spawn_gate_territory_tests;
+
+#[cfg(test)]
+#[path = "spawn_gate_occupancy_tests.rs"]
+mod spawn_gate_occupancy_tests;

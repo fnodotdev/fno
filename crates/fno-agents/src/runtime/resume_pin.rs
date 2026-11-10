@@ -1,0 +1,453 @@
+//! Which model a claude resume comes back on.
+//!
+//! claude launches a resume on the account default unless the argv names a
+//! model, so every fno door that resumes without the job's saved launch asks
+//! this module first: pin the argv, or refuse by name.
+
+use serde_json::{json, Value};
+use std::io::BufRead;
+use std::path::{Path, PathBuf};
+
+/// The placeholder a transcript's synthetic turns carry instead of a model.
+pub const SYNTHETIC_MODEL: &str = "<synthetic>";
+
+/// The model axes a registry row states, plus the provider the row records.
+#[derive(Debug, Clone, Default)]
+pub struct RowPins {
+    pub requested_model: Option<String>,
+    pub model: Option<String>,
+    pub requested_effort: Option<String>,
+    pub effort: Option<String>,
+    pub provider: Option<String>,
+}
+
+fn opt_str(v: &Value, key: &str) -> Option<String> {
+    v.get(key)
+        .and_then(|x| x.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+impl RowPins {
+    /// From the spawn-axes payload's `row` object; absent or empty keys read
+    /// None, the same absence-is-unknown discipline as the row itself.
+    pub fn from_json(row: &Value) -> Self {
+        RowPins {
+            requested_model: opt_str(row, "requested_model"),
+            model: opt_str(row, "model"),
+            requested_effort: opt_str(row, "requested_effort"),
+            effort: opt_str(row, "effort"),
+            provider: opt_str(row, "provider"),
+        }
+    }
+
+    pub fn from_entry(entry: &crate::state::RegistryEntry) -> Self {
+        RowPins {
+            requested_model: entry.requested_model.clone(),
+            model: entry.model.clone(),
+            requested_effort: entry.requested_effort.clone(),
+            effort: entry.effort.clone(),
+            provider: entry.provider.clone(),
+        }
+    }
+}
+
+/// The FIRST model identity a transcript names, as (model, marketing_name).
+/// A model-identity attachment answers `identity.modelId`; else the first
+/// non-synthetic assistant `message.model`. Stop at the first hit; never read
+/// the whole file. The LAST model is the wrong fallback here: after a bad wake
+/// it reads the poisoned default, while the first identity is the birth pin.
+fn birth_identity(transcript: &Path) -> (Option<String>, Option<String>) {
+    let Ok(file) = std::fs::File::open(transcript) else {
+        return (None, None);
+    };
+    for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
+        let Ok(v) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if v.get("type").and_then(|t| t.as_str()) == Some("attachment") {
+            if let Some(identity) = v
+                .get("attachment")
+                .filter(|a| a.get("type").and_then(|t| t.as_str()) == Some("model"))
+                .and_then(|a| a.get("identity"))
+            {
+                let model = opt_str(identity, "modelId");
+                let marketing = opt_str(identity, "marketingName");
+                return (model, marketing);
+            }
+        }
+        if v.get("type").and_then(|t| t.as_str()) == Some("assistant") {
+            if let Some(m) = v
+                .get("message")
+                .and_then(|m| m.get("model"))
+                .and_then(|m| m.as_str())
+                .filter(|m| !m.is_empty() && *m != SYNTHETIC_MODEL)
+            {
+                return (Some(m.to_string()), None);
+            }
+        }
+    }
+    (None, None)
+}
+
+/// The transcript's birth model, or None when neither read answers.
+pub fn birth_model(transcript: &Path) -> Option<String> {
+    birth_identity(transcript).0
+}
+
+/// The resolver's answer. `argv_model` is the `--model` a resume must carry
+/// (None when the route owns the argv); `route_model` is the model to RECORD
+/// on a routed resume; `marketing_name` rides only a transcript-sourced
+/// candidate, read by the rowless unknown-provider rule.
+#[derive(Debug, Clone)]
+pub struct Pin {
+    pub argv_model: Option<String>,
+    pub route_model: Option<String>,
+    pub effort: Option<String>,
+    pub source: &'static str,
+    pub marketing_name: Option<String>,
+}
+
+/// Why a resume cannot pin its model, and the route that would serve it.
+#[derive(Debug, Clone)]
+pub struct Unpinned {
+    pub text: String,
+    /// (provider, model) when a recorded route or the row names the provider.
+    pub lost_route: Option<(String, String)>,
+    /// The candidate the refusal is about, `None` only on the
+    /// "records no model" arm: the model was never established.
+    pub model: Option<String>,
+}
+
+/// Which provider serves `candidate`, answered from the recorded route
+/// settings. `None` is a MISS - no file names the model, or the matches
+/// disagree - and the caller treats a miss as UNKNOWN, never unrouted.
+pub type RouteProviderOf<'a> = &'a dyn Fn(Option<&str>) -> Option<String>;
+
+/// Which model a resume comes back on, or the named refusal. `routed` says
+/// what THIS resume restores, not how the session launched: a routed resume
+/// never refuses and never pins the argv, because the route file carries
+/// endpoint, auth and model as one unit.
+pub fn resolve(
+    row: Option<RowPins>,
+    transcript: Option<&Path>,
+    routed: bool,
+    session_id: &str,
+    route_provider_of: RouteProviderOf<'_>,
+) -> Result<Pin, Unpinned> {
+    let effort = row
+        .as_ref()
+        .and_then(|r| r.requested_effort.clone().or_else(|| r.effort.clone()));
+    let from_row = row
+        .as_ref()
+        .and_then(|r| r.requested_model.clone().or_else(|| r.model.clone()));
+    let (candidate, source, marketing) = match from_row {
+        Some(m) => (Some(m), "registry", None),
+        None => {
+            // A bare row that records no model reads the transcript's birth
+            // identity: the first model the session ran on is the route it
+            // was born to serve.
+            let (model, marketing) = transcript.map(birth_identity).unwrap_or((None, None));
+            (model, "transcript", marketing)
+        }
+    };
+    // A routed resume never refuses: the route owns the argv, so a candidate
+    // that resolves is only recorded, and no candidate records nothing.
+    if routed {
+        return Ok(Pin {
+            argv_model: None,
+            route_model: candidate,
+            effort,
+            source,
+            marketing_name: marketing,
+        });
+    }
+
+    let Some(candidate) = candidate else {
+        let row_read = if row.is_some() {
+            "the registry row records no model"
+        } else {
+            "no registry row"
+        };
+        let transcript_read = match transcript {
+            Some(p) => format!("no model identity in {}", p.display()),
+            None => "no transcript found".to_string(),
+        };
+        return Err(Unpinned {
+            text: format!(
+                "session {session_id} records no model: {row_read}; {transcript_read}; \
+                 pass --model to resume it"
+            ),
+            lost_route: None,
+            model: None,
+        });
+    };
+
+    match route_provider_of(Some(&candidate)) {
+        Some(p) if p != "anthropic" => Err(Unpinned {
+            text: format!(
+                "session {session_id} last ran {candidate}, which only route {p} serves, \
+                 and this resume restores no route. The lane template owns the vendor \
+                 choice now: seed a new session on a lane that names {p}, or pin an \
+                 account with `fno agents spawn --account <id>`."
+            ),
+            lost_route: Some((p, candidate.clone())),
+            model: Some(candidate),
+        }),
+        Some(_) => Ok(Pin {
+            argv_model: Some(candidate),
+            route_model: None,
+            effort,
+            source,
+            marketing_name: marketing,
+        }),
+        None => {
+            let row_provider = row
+                .as_ref()
+                .and_then(|r| r.provider.as_deref())
+                .filter(|p| !p.is_empty() && *p != "anthropic");
+            // Transcript-sourced (rowless, or a bare row that records no
+            // model): glm stamps marketingName null on its model identity;
+            // Anthropic stamps "Opus 5"/"Sonnet 5". A null name means the
+            // provider cannot be established, and a default-endpoint resume
+            // would bill the wrong vendor.
+            let rowless_unknown = source == "transcript" && marketing.is_none();
+            if row_provider.is_some() || rowless_unknown {
+                return Err(Unpinned {
+                    lost_route: row_provider.map(|p| (p.to_string(), candidate.clone())),
+                    model: Some(candidate.clone()),
+                    text: format!(
+                        "session {session_id} last ran {candidate}, but no recorded route names \
+                         its provider and this resume restores no route. The lane template \
+                         owns the vendor choice now: seed a new session on a lane that \
+                         names it, or pin an account with `fno agents spawn --account <id>`."
+                    ),
+                });
+            }
+            Ok(Pin {
+                argv_model: Some(candidate),
+                route_model: None,
+                effort,
+                source,
+                marketing_name: marketing,
+            })
+        }
+    }
+}
+
+/// Push `--model`/`--effort` unless the argv already names them: an explicit
+/// token an earlier arm added always wins.
+pub fn append_axes(argv: &mut Vec<String>, model: Option<&str>, effort: Option<&str>) {
+    if !argv.iter().any(|t| t == "--model") {
+        if let Some(m) = model {
+            argv.push("--model".into());
+            argv.push(m.to_string());
+        }
+    }
+    if !argv.iter().any(|t| t == "--effort") {
+        if let Some(e) = effort {
+            argv.push("--effort".into());
+            argv.push(e.to_string());
+        }
+    }
+}
+
+/// The spawn-axes answer for a `resume_pin` field: `{"session_id", "routed",
+/// "row"}` in, the decision JSON out - `{"model", "route_model", "effort",
+/// "source"}` or `{"refusal"}`.
+pub fn decide(payload: &Value) -> Value {
+    let session_id = payload
+        .get("session_id")
+        .and_then(|s| s.as_str())
+        .unwrap_or("");
+    let routed = payload
+        .get("routed")
+        .and_then(|r| r.as_bool())
+        .unwrap_or(false);
+    let row = payload
+        .get("row")
+        .filter(|r| r.is_object())
+        .map(RowPins::from_json);
+    let transcript: Option<PathBuf> = if session_id.is_empty() {
+        None
+    } else {
+        crate::claude_drive::find_transcript(session_id)
+    };
+    let lookup: RouteProviderOf<'_> = &|m| crate::claude_adopt::provider_from_route_settings(m);
+    match resolve(row, transcript.as_deref(), routed, session_id, lookup) {
+        Ok(pin) => json!({
+            "model": pin.argv_model,
+            "route_model": pin.route_model,
+            "effort": pin.effort,
+            "source": pin.source,
+        }),
+        Err(u) => json!({
+            "refusal": u.text,
+            "lost_route": u.lost_route.map(|(p, m)| json!({"provider": p, "model": m})),
+        }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn temp_transcript(tag: &str, lines: &[String]) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "resume-pin-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+        path
+    }
+
+    fn attachment_line(model_id: &str, marketing: Option<&str>) -> String {
+        let marketing = marketing
+            .map(|m| format!("\"{m}\""))
+            .unwrap_or_else(|| "null".to_string());
+        format!(
+            r#"{{"parentUuid":"75ee36ae","isSidechain":false,"attachment":{{"type":"model","identity":{{"modelId":"{model_id}","marketingName":{marketing},"knowledgeCutoff":null}},"text":"You are powered by the model {model_id}."}},"type":"attachment"}}"#
+        )
+    }
+
+    fn assistant_line(model: &str) -> String {
+        format!(
+            r#"{{"type":"assistant","message":{{"role":"assistant","model":"{model}"}},"timestamp":"2026-09-18T00:00:00Z"}}"#
+        )
+    }
+
+    fn row(requested_model: Option<&str>, provider: Option<&str>) -> Option<RowPins> {
+        Some(RowPins {
+            requested_model: requested_model.map(str::to_string),
+            model: None,
+            requested_effort: None,
+            effort: None,
+            provider: provider.map(str::to_string),
+        })
+    }
+
+    fn no_lookup(_: Option<&str>) -> Option<String> {
+        None
+    }
+
+    fn refusal_text(answer: Result<Pin, Unpinned>) -> String {
+        let Err(unpinned) = answer else {
+            panic!("expected a refusal")
+        };
+        unpinned.text
+    }
+
+    #[test]
+    fn ac1_hp_registry_model_answers_unrouted() {
+        // AC1-HP: a row's requested model, no route file naming it, unrouted:
+        // the candidate rides the argv with source registry.
+        let answer = resolve(
+            row(Some("claude-opus-5"), None),
+            None,
+            false,
+            "11111111-2222-3333-4444-555555555555",
+            &no_lookup,
+        );
+        let pin = answer.unwrap();
+        assert_eq!(pin.argv_model.as_deref(), Some("claude-opus-5"));
+        assert_eq!(pin.route_model, None);
+        assert_eq!(pin.source, "registry");
+    }
+
+    #[test]
+    fn bare_row_anthropic_birth_pins_the_birth_model() {
+        // AC1-EDGE: a bare row born on an Anthropic model (marketing name
+        // present) pins the birth model as today; and a row that records a
+        // model still answers from the row, transcript unread.
+        let transcript = temp_transcript(
+            "bare-row-anthropic",
+            &[attachment_line("claude-opus-5", Some("Opus 5"))],
+        );
+        let answer = resolve(
+            row(None, None),
+            Some(&transcript),
+            false,
+            "77770003-2222-3333-4444-555555555555",
+            &no_lookup,
+        );
+        assert_eq!(answer.unwrap().argv_model.as_deref(), Some("claude-opus-5"));
+        let answer = resolve(
+            row(Some("claude-fable-5-1"), None),
+            Some(&transcript),
+            false,
+            "77770004-2222-3333-4444-555555555555",
+            &no_lookup,
+        );
+        assert_eq!(
+            answer.unwrap().argv_model.as_deref(),
+            Some("claude-fable-5-1")
+        );
+        std::fs::remove_file(&transcript).ok();
+    }
+
+    #[test]
+    fn ac1_edge_no_row_no_transcript_refuses_naming_both_reads() {
+        let answer = resolve(
+            None,
+            None,
+            false,
+            "ffff0002-2222-3333-4444-555555555555",
+            &no_lookup,
+        );
+        let text = refusal_text(answer);
+        assert!(text.contains("no registry row"), "{text}");
+        assert!(text.contains("records no model"), "{text}");
+        assert!(text.contains("pass --model"), "{text}");
+    }
+
+    #[test]
+    fn birth_scan_stops_at_the_first_hit() {
+        // Assistant lines BEFORE the attachment do not win, and a synthetic
+        // turn is skipped, not read as the running model.
+        let transcript = temp_transcript(
+            "birth-first-hit",
+            &[
+                assistant_line(SYNTHETIC_MODEL),
+                attachment_line("glm-5.3-flash[1m]", None),
+                assistant_line("claude-fable-5-1"),
+            ],
+        );
+        assert_eq!(
+            birth_model(&transcript).as_deref(),
+            Some("glm-5.3-flash[1m]")
+        );
+        std::fs::remove_file(&transcript).ok();
+    }
+
+    #[test]
+    fn append_axes_adds_missing_flags_only() {
+        // AC1-EDGE: an explicit --model an earlier arm added always wins, and
+        // a plan with neither flag gains both.
+        let mut argv = vec!["claude".into(), "--resume".into(), "u".into()];
+        append_axes(&mut argv, Some("claude-opus-5"), Some("high"));
+        assert_eq!(
+            argv,
+            vec![
+                "claude".to_string(),
+                "--resume".to_string(),
+                "u".to_string(),
+                "--model".to_string(),
+                "claude-opus-5".to_string(),
+                "--effort".to_string(),
+                "high".to_string()
+            ]
+        );
+        let mut pinned = vec!["claude".into(), "--model".into(), "m".into()];
+        append_axes(&mut pinned, Some("claude-opus-5"), Some("high"));
+        assert_eq!(pinned.iter().filter(|t| *t == "--model").count(), 1);
+        assert_eq!(pinned.iter().filter(|t| *t == "--effort").count(), 1);
+        let mut no_pin = vec!["claude".into()];
+        append_axes(&mut no_pin, None, None);
+        assert_eq!(no_pin, vec!["claude".to_string()]);
+    }
+}

@@ -1,0 +1,1155 @@
+//! The status coalescing cache and the status door: one row per
+//! (repo, PR, head), flock-protected, refreshed at most once per TTL, served
+//! degraded inside a fleet backoff. Ported from `fno.pr._cache`.
+//!
+//! Code default, deliberately not operator config: TTL 60s, and a settled
+//! row serves a head-pinned caller for the settled TTL instead. Env
+//! overrides exist for tests and one-off tuning: FNO_PR_STATUS_TTL,
+//! FNO_PR_STATUS_SETTLED_TTL, FNO_PR_STATUS_CACHE_DIR.
+
+use super::compose::{serve_notes, verdict_line};
+use super::RestReason;
+use crate::pr_status_facts::GhProbe;
+use serde_json::{json, Value};
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// One status read must not become a hundred gh calls; the counting probe
+/// feeds the spend note.
+pub(crate) struct CountingProbe<P: GhProbe> {
+    pub(crate) inner: P,
+    pub(crate) calls: AtomicUsize,
+}
+
+impl<P: GhProbe> GhProbe for CountingProbe<P> {
+    fn run_gh(&self, cwd: &Path, args: &[String]) -> Result<(bool, String, String), String> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.inner.run_gh(cwd, args)
+    }
+}
+
+pub(crate) fn ttl() -> u64 {
+    let raw = std::env::var("FNO_PR_STATUS_TTL").unwrap_or_default();
+    raw.parse::<u64>().map(|v| v.max(1)).unwrap_or(60)
+}
+
+/// How long a settled GREEN row serves the head-pinned poll path. A row
+/// minted for head H carries a concluded verdict whose fix can only arrive
+/// as a new head (a push mints a new key and misses at once), so a PR's
+/// review/merge plateau costs one refresh per settled TTL instead of one
+/// per TTL. The spend journal names this plateau the fleet's top spender
+/// (2026-11-03: `do pr` at 60 percent of live requests, most rows
+/// re-reading settled heads every 60 s). A settled RED row is exactly the
+/// state an operator pokes with a check re-run on the same head, so it
+/// keeps the short TTL.
+const SETTLED_TTL_S: u64 = 600;
+
+fn settled_ttl() -> u64 {
+    let raw = std::env::var("FNO_PR_STATUS_SETTLED_TTL").unwrap_or_default();
+    raw.parse::<u64>()
+        .map(|v| v.max(1))
+        .unwrap_or(SETTLED_TTL_S)
+}
+
+/// The age one row answers under. `pinned` marks a caller bound to the
+/// row's head (the wait's `require_head`, or a read that just minted the
+/// key from its own head read): it may take the settled long TTL. An
+/// unpinned read - the human status command, which wants the PR's current
+/// truth whatever the head - keeps the short TTL.
+fn row_ttl(row: &Value, pinned: bool) -> f64 {
+    let out = row.get("output");
+    let settled = out.and_then(|o| o.get("settled")).and_then(Value::as_bool) == Some(true);
+    let green = out.and_then(|o| o.get("green")).and_then(Value::as_bool) == Some(true);
+    if pinned && settled && green {
+        settled_ttl() as f64
+    } else {
+        ttl() as f64
+    }
+}
+
+/// The one dir resolver: the shared config helper already folds the env
+/// override and the state root; the door hands it the payload's cwd.
+fn cache_dir(cwd: &Path) -> Option<PathBuf> {
+    crate::agents_config::pr_status_cache_dir(cwd)
+}
+
+/// A row's `{ts, exit, output}` or None: a corrupt row is a miss, never an
+/// error (the network read is the truth).
+fn read_row(dir: &Path, key: &str) -> Option<Value> {
+    let row = std::fs::read_to_string(dir.join(format!("{key}.json"))).ok()?;
+    let parsed: Value = serde_json::from_str(&row).ok()?;
+    if parsed.is_object() {
+        Some(parsed)
+    } else {
+        None
+    }
+}
+
+/// A numeric row field through the finite-or-zero guard.
+fn num(row: &Value, key: &str) -> f64 {
+    row.get(key)
+        .and_then(Value::as_f64)
+        .filter(|v| v.is_finite())
+        .unwrap_or(0.0)
+}
+
+/// Every row file for (slug_key, pr), newest mtime first.
+fn rows_newest_first(dir: &Path, slug_key: &str, pr: &str) -> Vec<PathBuf> {
+    let mut candidates: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        let prefix = format!("{slug_key}-{pr}-");
+        for entry in rd.flatten() {
+            let path = entry.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.starts_with(&prefix) && name.ends_with(".json") {
+                if let Ok(meta) = entry.metadata() {
+                    if let Ok(mtime) = meta.modified() {
+                        candidates.push((mtime, path));
+                    }
+                }
+            }
+        }
+    }
+    candidates.sort_by(|a, b| b.0.cmp(&a.0));
+    candidates.into_iter().map(|(_, p)| p).collect()
+}
+
+fn write_row(dir: &Path, key: &str, row: &Value) {
+    let p = dir.join(format!("{key}.json"));
+    let tmp = p.with_extension("tmp");
+    if std::fs::File::create(&tmp)
+        .ok()
+        .and_then(|mut f| f.write_all(row.to_string().as_bytes()).ok())
+        .is_some()
+    {
+        let _ = std::fs::rename(&tmp, &p);
+    }
+}
+
+/// Print one cached row, degraded to unknown when `stale`, and answer the
+/// command's exit code; None when the row is not servable (empty output or a
+/// foreign schema: a miss, checked before any write).
+fn serve(row: &Value, stale: bool) -> Option<(i32, String, String)> {
+    let mut out = row.get("output").cloned().unwrap_or(Value::Null);
+    if !out.is_object() || out.as_object().unwrap().is_empty() {
+        return None;
+    }
+    let exit_raw = row.get("exit");
+    let code = match exit_raw {
+        Some(Value::Number(n)) => n.as_i64().unwrap_or(-2) as i32,
+        _ => return None,
+    };
+    if code < 0 {
+        return None;
+    }
+    let head_unverified = row.get("head_unverified").and_then(Value::as_bool) == Some(true);
+    let (code, degraded) = if stale || head_unverified {
+        (
+            3,
+            json!({
+                "stale_verdict": out.get("verdict").cloned().unwrap_or(Value::Null),
+                "verdict": "unknown",
+                "green": false,
+                "settled": false,
+                "ready": false,
+                "ready_blockers": ["status_stale"],
+                "stale_reason": "cached row past its window; degraded to unknown, not a verdict",
+            }),
+        )
+    } else {
+        (code, Value::Null)
+    };
+    if degraded.is_object() {
+        for (k, v) in degraded.as_object().unwrap() {
+            out[k] = v.clone();
+        }
+        if let Some(obj) = out.as_object_mut() {
+            obj.remove("failures");
+            if let Some(decision) = obj.get_mut("merge_decision").and_then(Value::as_object_mut) {
+                decision.remove("warnings");
+            }
+        }
+    }
+    out["cached"] = json!(true);
+    let ts = num(row, "ts");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    out["cached_age_seconds"] = if ts > 0.0 {
+        json!(((now - ts) as i64).max(0))
+    } else {
+        Value::Null
+    };
+    out["cached_at"] = if ts > 0.0 {
+        json!(chrono::DateTime::from_timestamp(ts as i64, 0)
+            .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()))
+    } else {
+        Value::Null
+    };
+    let stdout = format!("{}\n", serde_json::to_string(&out).unwrap_or_default());
+    let mut stderr = vec![verdict_line(&out)];
+    stderr.extend(serve_notes(&out));
+    Some((code, stdout, stderr.join("\n")))
+}
+
+// ---------------------------------------------------------------------------
+// The status door
+// ---------------------------------------------------------------------------
+
+/// The status door: one op dispatch for the command's stdin payload. Only
+/// `status-read` today; the wait, logs, and ci ops land with their ports.
+pub(crate) fn run_door(op: &str, payload: &Value) -> (i32, String, String) {
+    match op {
+        "status-read" => status_read(payload),
+        "status-wait" => super::wait::run_wait(payload),
+        "status-logs" => super::logs::run_logs_door(payload),
+        "status-ci" => super::status_ci(payload),
+        "status-rerun" => status_rerun(payload),
+        _ => (2, String::new(), format!("unknown status door op {op}\n")),
+    }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+}
+
+fn status_read(payload: &Value) -> (i32, String, String) {
+    let cwd_str = payload.get("cwd").and_then(Value::as_str).unwrap_or("");
+    let pr = payload.get("pr").and_then(Value::as_u64).unwrap_or(0);
+    let refresh = payload
+        .get("refresh")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    // The command's readers act on `ready` and the local gates, so it composes
+    // here and never serves a peer's row.
+    let (mut code, mut out, mut stderr_lines, calls) =
+        cached_status_via(cwd_str, pr, refresh, None, false);
+    // The pinned read: `--expect-head SHA` (or `HEAD`, the checkout's own
+    // sha, read free from git) refuses any answer about another head
+    // (exit 6) instead of settling the question against whatever commit the
+    // PR happens to point at. A failed read answered nothing, so the error
+    // exit and its reason line stand; the pin has nothing to refuse.
+    let pin = match super::wait::resolve_expect_head(payload) {
+        super::wait::ExpectHead::None => None,
+        super::wait::ExpectHead::Sha(sha) => Some(sha),
+        super::wait::ExpectHead::LocalUnresolved => {
+            // The machine contract is one JSON line on stdout at every exit;
+            // the error shape is the payload a refused read prints.
+            let payload = super::compose::error_payload(
+                &pr.to_string(),
+                &super::RestReason::new(
+                    "--expect-head HEAD cannot resolve in this checkout; \
+                     run it from the worktree that holds the commit",
+                    "",
+                ),
+            );
+            let stdout = format!(
+                "{}\n",
+                serde_json::to_string(&payload.1).unwrap_or_default()
+            );
+            return (4, stdout, format!("{}\n", payload.2.join("\n")));
+        }
+    };
+    let mut mismatch = None;
+    if let Some(expected) = pin {
+        if out.get("verdict").and_then(Value::as_str) != Some("error") {
+            if let Some(obj) = out.as_object_mut() {
+                mismatch = super::compose::apply_expect_head(obj, &expected);
+            }
+        }
+    }
+    if let Some(note) = &mismatch {
+        code = 6;
+        // The verdict line was composed before the pin: re-emit it from the
+        // mutated payload so the stderr grep reads the pinned answer.
+        if let Some(first) = stderr_lines.first_mut() {
+            *first = super::compose::verdict_line(&out);
+        }
+        stderr_lines.push(note.clone());
+    }
+    let snap = crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now_ms());
+    let mut stderr = stderr_lines.join("\n");
+    if !stderr.is_empty() {
+        stderr.push('\n');
+    }
+    stderr.push_str(&format!(
+        "note: {calls} gh call(s) this invocation, fleet budget {} of {} points in the last 60s{}\n",
+        snap.points_60s,
+        snap.cap,
+        format!(
+            "{}{}",
+            crate::gh_etag::note_suffix(),
+            crate::gh_poller::note_suffix()
+        )
+    ));
+    let stdout = format!("{}\n", serde_json::to_string(&out).unwrap_or_default());
+    (code, stdout, stderr)
+}
+
+/// `cached_status`: the coalescing chokepoint. Head-keyed rows, one live
+/// read per TTL under the per-key flock, and the fail-closed stale serve
+/// when the head read itself refuses on a class no route can answer (a
+/// rate-limit refusal goes live through the route chain instead).
+/// `head_read` is the caller's own light head read (the wait's per tick):
+/// a complete block is both the fresh-serve guard and the key material, so
+/// the tick spends the read once; a refused read (empty sha) guards with a
+/// sha no row can carry; None is the self-reading status command.
+pub(crate) fn cached_status(
+    cwd_str: &str,
+    pr: u64,
+    refresh: bool,
+    head_read: Option<&Value>,
+) -> (i32, Value, Vec<String>, usize) {
+    cached_status_via(cwd_str, pr, refresh, head_read, true)
+}
+
+/// `cached_status` with the shared-row follow switched by `follow`. Only the
+/// callers that read the verdict and the settled flag follow a peer poller.
+fn cached_status_via(
+    cwd_str: &str,
+    pr: u64,
+    refresh: bool,
+    head_read: Option<&Value>,
+    follow: bool,
+) -> (i32, Value, Vec<String>, usize) {
+    let cwd = Path::new(cwd_str);
+    // The slug resolves once here; the reader never runs git. No repo
+    // context: serve uncached rather than key every caller onto one row.
+    let slug = git_slug(cwd);
+    let (Some(slug), true) = (slug, pr > 0) else {
+        let probe = fresh_probe();
+        let (code, out, lines) = super::status_payload(&probe, cwd, pr, None, "", None, None);
+        return (code, out, lines, probe.calls.load(Ordering::SeqCst));
+    };
+    let slug_key = slug.replace('/', "--");
+    let Some(dir) = cache_dir(cwd) else {
+        let probe = fresh_probe();
+        let (code, out, lines) = super::status_payload(&probe, cwd, pr, None, &slug, None, None);
+        return (code, out, lines, probe.calls.load(Ordering::SeqCst));
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    let now = now_secs();
+    // The pre-network serve: any row for (slug, pr) younger than the TTL
+    // answers with ZERO gh calls, the key-minting head read included. The
+    // per-tick head check it replaces was the read that kept a cache "hit"
+    // at ~6 calls; a head that moves mid-window is noticed one TTL late,
+    // which is the freshness contract the TTL already sells. `refresh` is
+    // the escape hatch. A caller that names a head is answered only by a
+    // row minted for that head, so a push never hands the wait the old
+    // head's settled record; a refused caller read names an empty sha,
+    // which no row carries.
+    let require_head =
+        head_read.map(|block| block.get("head_sha").and_then(Value::as_str).unwrap_or(""));
+    if !refresh {
+        if let Some(answer) = fresh_serve(cwd, &dir, &slug_key, &pr.to_string(), now, require_head)
+        {
+            return into_answer(answer, 0);
+        }
+        if let Some(answer) = follow
+            .then(|| follower_serve(&dir, &slug, &slug_key, pr, require_head))
+            .flatten()
+        {
+            return into_answer(answer, 0);
+        }
+    }
+    // The fleet-hold pre-check serve is GONE: a rate-limited read now answers
+    // through the route chain (app-token auth swap, then the GraphQL rollup
+    // query) inside the same call, so serving the newest cached row degraded
+    // here manufactured exactly the "status_stale: secondary rate limit
+    // backoff - the check set is unreadable" answer tonight's specimen
+    // printed. A refusal that still fails every route is an error naming the
+    // routes, never a stale row.
+    // The light head read that mints the key. A refusal fails CLOSED: the
+    // newest row degraded ONLY on a refusal no route can answer (an outage
+    // class, not a rate limit); the loud live read otherwise. A complete
+    // caller block is the same read fetched seconds earlier; the reuse
+    // keeps the tick at one head call instead of two.
+    let probe = fresh_probe();
+    let head = match head_read {
+        Some(block) if require_head.is_some_and(|sha| !sha.is_empty()) => Ok(block.clone()),
+        _ => read_head(&probe, cwd, &slug, pr),
+    };
+    let (head_sha, pr_state, pulls) = match &head {
+        Ok(info) => (
+            info.get("head_sha")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            info.get("state")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            info.get("pulls").cloned().unwrap_or(Value::Null),
+        ),
+        Err(reason) => {
+            // A rate-limit refusal goes LIVE through the route chain instead
+            // of serving a stale row: the app-token auth swap and the
+            // GraphQL rollup query answer inside this same call. An outage
+            // class (network down, transport refused) keeps the ride-out.
+            if !reason.rate_limit_class.is_empty() {
+                return live_through(cwd, pr, None, &slug, &dir, "", None, None);
+            }
+            if let Some(row) = newest_row(&dir, &slug_key, &pr.to_string()) {
+                if let Some(answer) = serve(&row, true) {
+                    return into_answer(answer, probe.calls.load(Ordering::SeqCst));
+                }
+            }
+            return live_through(cwd, pr, None, &slug, &dir, "", None, None);
+        }
+    };
+    let canonical_repo = canonical_repo(Some(&pulls), &slug);
+    // ONE hold probe per read: its verdict feeds both the cache-key material
+    // and the payload; the verdict resolves in process from the pulls
+    // payload this read already holds.
+    let hold_state = if pr_state == "OPEN" {
+        Some(super::seams::hold_verdict(cwd, pr, Some(&pulls)))
+    } else {
+        None
+    };
+    let key = mint_key(
+        cwd,
+        pr,
+        &head_sha,
+        &pr_state,
+        &slug_key,
+        &hold_state
+            .as_ref()
+            .map(hold_word)
+            .unwrap_or_else(|| "unasked".to_string()),
+        &canonical_repo,
+    );
+    if !refresh {
+        if let Some(row) = read_row(&dir, &key) {
+            if now - num(&row, "ts") < row_ttl(&row, true) {
+                if let Some(answer) = serve(&row, false) {
+                    return into_answer(answer, probe.calls.load(Ordering::SeqCst));
+                }
+            }
+        }
+    }
+    // Miss: the ONE live read under the per-key lock; queued pollers re-read
+    // the fresh row after.
+    let _lock = match miss_lock(&dir, &key, &slug_key, pr, None) {
+        Ok(lock) => lock,
+        Err(answer) => return into_answer(answer, probe.calls.load(Ordering::SeqCst)),
+    };
+    let prior = read_row(&dir, &key)
+        .and_then(|row| row.get("output").cloned())
+        .filter(|v| v.is_object());
+    if !refresh {
+        if let Some(row) = read_row(&dir, &key) {
+            if now_secs() - num(&row, "ts") < row_ttl(&row, true) {
+                if let Some(answer) = serve(&row, false) {
+                    return into_answer(answer, probe.calls.load(Ordering::SeqCst));
+                }
+            }
+        }
+    }
+    live_through(
+        cwd,
+        pr,
+        prior.as_ref(),
+        &slug,
+        &dir,
+        &key,
+        Some(&pulls),
+        hold_state,
+    )
+}
+
+/// The per-key miss lock, or the answer to give when it stays held past its
+/// retry bound. `tries` is None for the real bound.
+fn miss_lock(
+    dir: &Path,
+    key: &str,
+    slug_key: &str,
+    pr: u64,
+    tries: Option<u32>,
+) -> Result<crate::gh_budget::FileLock, (i32, String, String)> {
+    let path = dir.join(format!("{key}.lock"));
+    let locked = match tries {
+        Some(n) => crate::gh_budget::FileLock::try_acquire_with(&path, n, 0),
+        None => crate::gh_budget::FileLock::try_acquire(&path),
+    };
+    locked.map_err(|why| contended_serve(dir, key, slug_key, pr, &why))
+}
+
+/// The miss lock stayed held past its retry bound. The answer is a wait, never
+/// a panic: the newest row degraded to unknown, or a bare unknown when no row
+/// exists. Both read `settled: false`, so a watcher polls again next tick.
+fn contended_serve(
+    dir: &Path,
+    key: &str,
+    slug_key: &str,
+    pr: u64,
+    why: &str,
+) -> (i32, String, String) {
+    let reason = format!("the status cache lock is busy ({why}); this is no verdict, read again");
+    let served = read_row(dir, key)
+        .or_else(|| newest_row(dir, slug_key, &pr.to_string()))
+        .and_then(|row| serve(&row, true));
+    let (mut out, stderr) = match served {
+        Some((_, stdout, stderr)) => (
+            serde_json::from_str::<Value>(stdout.trim()).unwrap_or_else(|_| json!({})),
+            stderr,
+        ),
+        None => (
+            json!({"pr": pr.to_string(), "verdict": "unknown", "green": false, "settled": false, "ready": false}),
+            String::new(),
+        ),
+    };
+    out["ready_blockers"] = json!(["status_lock_busy"]);
+    out["stale_reason"] = json!(reason);
+    let stdout = format!("{}\n", serde_json::to_string(&out).unwrap_or_default());
+    let stderr = format!("{stderr}\nnote: {reason}").trim_start().to_string();
+    (3, stdout, stderr)
+}
+
+/// A peer host holds the poller lease and shared a row young enough to
+/// serve: answer with zero gh calls, and keep the row locally under its key
+/// so this host's other processes read it from disk.
+fn follower_serve(
+    dir: &Path,
+    slug: &str,
+    slug_key: &str,
+    pr: u64,
+    require_head: Option<&str>,
+) -> Option<(i32, String, String)> {
+    let (key, mut row) = crate::gh_poller::follow(dir, slug, pr)?;
+    without_publisher_gates(&mut row);
+    if key.contains(['/', '\\']) || !serve_head_ok(&row, require_head) {
+        return None;
+    }
+    let answer = serve(&row, false)?;
+    write_row(dir, &key, &row);
+    prune_rows(dir, slug_key, &pr.to_string(), &key);
+    Some(answer)
+}
+
+/// The fields a peer composed from its own journal, graph and merge config.
+/// They say nothing about this host, so a shared row drops them and reads as
+/// not ready: the verdict and the check counts are the GitHub facts.
+fn without_publisher_gates(row: &mut Value) {
+    let Some(out) = row.get_mut("output").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for key in [
+        "review_coverage",
+        "review_posture",
+        "merge_authority",
+        "merge_execution",
+        "review_activity",
+        "dispatch_hold",
+        "merge_decision",
+        "coverage_waiver",
+        "rounds_used",
+        "max_rounds",
+        "rounds_exhausted",
+        "rounds_note",
+    ] {
+        out.remove(key);
+    }
+    out.insert("ready".into(), json!(false));
+    out.insert("ready_blockers".into(), json!(["status_shared"]));
+}
+
+fn fresh_probe() -> CountingProbe<crate::pr_status_facts::RealGhProbe> {
+    CountingProbe {
+        inner: crate::pr_status_facts::RealGhProbe,
+        calls: AtomicUsize::new(0),
+    }
+}
+
+/// The `status-rerun` door op: the rerun-recovery fact for a PR head,
+/// fail-open (`{"recovered": false, "failed": []}` on any read error). The
+/// merge gate asks with the covered head it already holds; no sha asks the
+/// light head read.
+fn status_rerun(payload: &Value) -> (i32, String, String) {
+    let cwd_str = payload.get("cwd").and_then(Value::as_str).unwrap_or("");
+    let pr = payload.get("pr").and_then(Value::as_u64).unwrap_or(0);
+    let cwd = Path::new(cwd_str);
+    let no_recovery = || json!({"recovered": false, "failed": []}).to_string();
+    let Some(slug) = git_slug(cwd) else {
+        return (0, format!("{}\n", no_recovery()), String::new());
+    };
+    let probe = fresh_probe();
+    let sha = payload
+        .get("sha")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            read_head(&probe, cwd, &slug, pr).ok().and_then(|info| {
+                info.get("head_sha")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+        });
+    let Some(sha) = sha else {
+        return (0, format!("{}\n", no_recovery()), String::new());
+    };
+    let fact = super::seams::rerun_recovery(&probe, cwd, &slug, &sha, None);
+    (0, format!("{fact}\n"), String::new())
+}
+
+pub(crate) fn git_slug(cwd: &Path) -> Option<String> {
+    let url = std::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .unwrap_or_default();
+    crate::merge_gates::repo_slug_from_origin(&url)
+}
+
+pub(crate) fn newest_row(dir: &Path, slug_key: &str, pr: &str) -> Option<Value> {
+    let path = rows_newest_first(dir, slug_key, pr).into_iter().next()?;
+    let row = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&row).ok()
+}
+
+/// A row's head, from the payload it was written from.
+fn row_head(row: &Value) -> Option<&str> {
+    row.pointer("/output/head").and_then(Value::as_str)
+}
+
+/// The head guard on the pre-key serves: a caller that names a head (the
+/// wait, from its own light read) is never answered by a row minted for a
+/// different one. None (the status command) keeps the zero-network serve.
+fn serve_head_ok(row: &Value, require_head: Option<&str>) -> bool {
+    match require_head {
+        None => true,
+        Some(head) => row_head(row) == Some(head),
+    }
+}
+
+fn canonical_repo(pulls: Option<&Value>, fallback: &str) -> String {
+    pulls
+        .and_then(|p| p.get("html_url"))
+        .and_then(Value::as_str)
+        .and_then(crate::merge_grant::repo_slug_from_pr_url)
+        .unwrap_or_else(|| fallback.to_owned())
+}
+
+fn architecture_fresh(cwd: &Path, pr: &str, row: &Value) -> bool {
+    if row.pointer("/output/merge_decision").is_none()
+        && row.pointer("/output/ready").and_then(Value::as_bool) != Some(true)
+    {
+        return true;
+    }
+    let (Some(repo), Some(saved), Some(head)) = (
+        row.pointer("/architect/repo").and_then(Value::as_str),
+        row.pointer("/architect/material").and_then(Value::as_str),
+        row_head(row),
+    ) else {
+        return false;
+    };
+    let Ok(pr) = pr.parse() else {
+        return false;
+    };
+    saved == crate::merge_architect::cache_material(cwd, repo, pr, head)
+}
+
+/// The pre-network serve, head-guarded: the newest (slug, pr) row answers
+/// only inside the TTL and only when no head is required or the row was
+/// minted for that head.
+fn fresh_serve(
+    cwd: &Path,
+    dir: &Path,
+    slug_key: &str,
+    pr: &str,
+    now: f64,
+    require_head: Option<&str>,
+) -> Option<(i32, String, String)> {
+    let row = newest_row(dir, slug_key, pr)?;
+    let pinned = require_head.is_some();
+    if now - num(&row, "ts") >= row_ttl(&row, pinned) {
+        return None;
+    }
+    if !serve_head_ok(&row, require_head) {
+        return None;
+    }
+    if !architecture_fresh(cwd, pr, &row) {
+        return None;
+    }
+    serve(&row, false)
+}
+
+/// The light head read behind the wait's cache guard: `read_head`'s block
+/// (head sha, state, pulls) with the gh calls it spent, or None when the
+/// read refuses (the caller then guards with an empty sha and rides the
+/// degraded serve until the read recovers).
+pub(crate) fn head_read(cwd: &Path, pr: u64) -> (Option<Value>, usize) {
+    let Some(slug) = git_slug(cwd) else {
+        return (None, 0);
+    };
+    let probe = fresh_probe();
+    let block = read_head(&probe, cwd, &slug, pr).ok();
+    (block, probe.calls.load(Ordering::SeqCst))
+}
+
+/// The wait's zero-network tick: the newest (slug, pr) row answers only
+/// inside the TTL and only when minted for `require_head`, so the head
+/// guard that protects the status command serves the wait too - fed a sha the
+/// caller read from local git at no cost instead of from GitHub. None sends
+/// the caller down the network path.
+pub(crate) fn fresh_tick(
+    cwd: &Path,
+    pr: u64,
+    require_head: Option<&str>,
+) -> Option<(i32, Value, Vec<String>)> {
+    let slug = git_slug(cwd)?;
+    let dir = cache_dir(cwd)?;
+    let slug_key = slug.replace('/', "--");
+    let answer = fresh_serve(
+        cwd,
+        &dir,
+        &slug_key,
+        &pr.to_string(),
+        now_secs(),
+        require_head,
+    )?;
+    let (code, payload, lines, _) = into_answer(answer, 0);
+    Some((code, payload, lines))
+}
+
+/// The light read that mints the key: the PR's head sha and state, one call.
+/// The full pulls payload rides along so the live read never re-fetches the
+/// same PR seconds later (one `pulls/{n}` read per status, not two).
+fn read_head<P: GhProbe>(probe: &P, cwd: &Path, slug: &str, pr: u64) -> Result<Value, RestReason> {
+    let args = vec!["api".to_string(), format!("repos/{slug}/pulls/{pr}")];
+    let (ok, stdout, stderr) = probe.run_gh(cwd, &args).map_err(|e| RestReason {
+        text: e,
+        rate_limit_class: String::new(),
+    })?;
+    if !ok {
+        return Err(super::rest_reason(probe, cwd, &stderr));
+    }
+    let pulls: Value = serde_json::from_str(&stdout).map_err(|e| RestReason {
+        text: format!("unparseable PR read: {e}"),
+        rate_limit_class: String::new(),
+    })?;
+    let head_sha = pulls
+        .pointer("/head/sha")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if head_sha.is_empty() {
+        return Err(RestReason {
+            text: "the PR read carried no head sha".into(),
+            rate_limit_class: String::new(),
+        });
+    }
+    Ok(json!({"head_sha": head_sha, "state": pr_state_word(&pulls), "pulls": pulls}))
+}
+
+/// The PR state word the cache rows and the head probe both carry: open
+/// reads OPEN; closed with a merge marker reads MERGED; closed otherwise
+/// CLOSED. One mapping, two callers - never a second one.
+pub(crate) fn pr_state_word(pulls: &Value) -> String {
+    match pulls.get("state").and_then(Value::as_str).unwrap_or("") {
+        "open" => "OPEN".to_string(),
+        "closed" => {
+            if pulls.get("merged").and_then(Value::as_bool) == Some(true)
+                || pulls.get("merged_at").and_then(Value::as_str).is_some()
+            {
+                "MERGED".to_string()
+            } else {
+                "CLOSED".to_string()
+            }
+        }
+        _ => "UNKNOWN".to_string(),
+    }
+}
+
+/// The cache-key material for a hold verdict: changes whenever the hold
+/// changes, so a row written before a hold flip never serves after it.
+fn hold_word(verdict: &super::seams::HoldVerdict) -> String {
+    match verdict {
+        super::seams::HoldVerdict::Clear => "clear".to_string(),
+        super::seams::HoldVerdict::Held(reason) => format!("held:{reason}"),
+        super::seams::HoldVerdict::Unreadable => "unreadable".to_string(),
+    }
+}
+
+fn mint_key(
+    cwd: &Path,
+    pr: u64,
+    head_sha: &str,
+    pr_state: &str,
+    slug_key: &str,
+    hold_word: &str,
+    canonical_repo: &str,
+) -> String {
+    let payload = json!({
+        "cwd": cwd.display().to_string(),
+        "pr": pr,
+        "head_sha": head_sha,
+        "pr_state": pr_state,
+        "slug": slug_key,
+        "repo_slug": canonical_repo,
+        // The hold probe this read already ran; the key material keeps the
+        // hold in the key so a row written before a flip never serves after.
+        "hold_probe_word": hold_word,
+    });
+    let out = crate::pr_status_facts::status_cache_key(&payload);
+    if let Some(key) = out
+        .get("key")
+        .and_then(Value::as_str)
+        .filter(|k| !k.is_empty())
+    {
+        return key.to_string();
+    }
+    format!(
+        "{slug_key}-{pr}-{}",
+        head_sha.chars().take(12).collect::<String>()
+    )
+}
+
+/// The live read the row is written from, plus the write and the prune of
+/// superseded heads' rows. A refused read (exit 4) writes nothing. `pulls` is
+/// the payload the key-minting head read already fetched; the live read
+/// reuses it instead of paying a second `pulls/{n}` call seconds later.
+/// `hold_state` is the probe result the key material already used.
+fn live_through(
+    cwd: &Path,
+    pr: u64,
+    prior: Option<&Value>,
+    slug: &str,
+    dir: &Path,
+    key: &str,
+    pulls: Option<&Value>,
+    hold_state: Option<super::seams::HoldVerdict>,
+) -> (i32, Value, Vec<String>, usize) {
+    let repo = canonical_repo(pulls, slug);
+    let head = pulls
+        .and_then(|p| p.pointer("/head/sha"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let before = crate::merge_architect::cache_material(cwd, &repo, pr, head);
+    let probe = fresh_probe();
+    let (code, out, lines) = super::status_payload(&probe, cwd, pr, prior, slug, pulls, hold_state);
+    let calls = probe.calls.load(Ordering::SeqCst);
+    if code == 4 && out.get("rate_limit_class").and_then(Value::as_str) == Some("secondary") {
+        // The guard above already named the class.
+        let _ = crate::gh_budget::record_refusal(
+            &crate::gh_budget::ledger_path(),
+            now_ms(),
+            "secondary",
+        );
+    }
+    if code != 4 && !key.is_empty() && out.is_object() {
+        let material = crate::merge_architect::cache_material(
+            cwd,
+            &repo,
+            pr,
+            out.get("head").and_then(Value::as_str).unwrap_or(""),
+        );
+        if before != material
+            || (!head.is_empty() && Some(head) != out.get("head").and_then(Value::as_str))
+        {
+            return (code, out, lines, calls);
+        }
+        let row = json!({"ts": now_secs(), "exit": code, "output": out, "architect": {"repo": repo, "material": material}});
+        write_row(dir, key, &row);
+        let slug_key = slug.replace('/', "--");
+        prune_rows(dir, &slug_key, &pr.to_string(), key);
+        crate::gh_poller::publish(dir, slug, pr, key, &row);
+    }
+    (code, out, lines, calls)
+}
+
+fn prune_rows(dir: &Path, slug_key: &str, pr: &str, keep_key: &str) {
+    for path in rows_newest_first(dir, slug_key, pr) {
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        if stem != keep_key {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
+fn now_secs() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
+fn into_answer(answer: (i32, String, String), calls: usize) -> (i32, Value, Vec<String>, usize) {
+    let (code, stdout, stderr) = answer;
+    let payload = serde_json::from_str::<Value>(stdout.trim()).unwrap_or(Value::Null);
+    let lines: Vec<String> = stderr.lines().map(str::to_string).collect();
+    let _ = calls;
+    (code, payload, lines, 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_cache_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "fno-pr-status-cache-{tag}-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+
+    fn seed_row(dir: &Path, name: &str, head: &str) {
+        let row = json!({
+            "ts": now_secs(),
+            "exit": 0,
+            "architect": {"repo":"canonical/repo", "material": crate::merge_architect::cache_material(dir, "canonical/repo", 42, head)},
+            "output": {"head": head, "verdict": "green", "settled": true, "green": true,
+                "evals_gate": {"state":"FAILURE", "description":"old gate evidence"},
+                "merge_decision": {"outcome":"authorized", "warnings":[{"code":"docs_line_missing", "detail":"doc evidence"}]}},
+        });
+        write_row(dir, name, &row);
+    }
+
+    #[test]
+    fn a_row_for_head_a_never_serves_a_wait_on_head_b() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = temp_cache_dir("mismatch");
+        seed_row(&dir, "Owner--Repo-42-aaaaaaaa1111", "aaaaaaaa1111");
+        assert!(
+            fresh_serve(
+                &dir,
+                &dir,
+                "Owner--Repo",
+                "42",
+                now_secs(),
+                Some("bbbbbb2222")
+            )
+            .is_none(),
+            "a row minted for head A must not answer a wait on head B"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A peer's shared row serves with no gh call while it is under two TTLs
+    /// old on the store clock; past that the follower reads GitHub itself.
+    #[test]
+    fn a_follower_serves_the_peers_row_until_it_is_two_ttls_old() {
+        let primary = crate::store_remote::test_primary::start();
+        let (peer_dir, dir) = (temp_cache_dir("peer"), temp_cache_dir("follower"));
+        crate::gh_poller::route_to(Some((
+            primary.remote.clone(),
+            "mac-b".into(),
+            "alice".into(),
+        )));
+        let row = json!({"exit": 0, "output": {"head": "h1", "verdict": "green", "settled": true,
+            "merge_execution": {"state":"publisher"},
+            "merge_decision": {"warnings":[{"code":"docs_line_missing", "detail":"peer evidence"}]}}});
+        crate::gh_poller::publish(&peer_dir, "Owner/Repo", 7, "Owner--Repo-7-h1", &row);
+        crate::gh_poller::route_to(Some((
+            primary.remote.clone(),
+            "mac-a".into(),
+            "alice".into(),
+        )));
+
+        let (code, stdout, _) = follower_serve(&dir, "Owner/Repo", "Owner--Repo", 7, None)
+            .expect("a live peer lease and a young row serve");
+        assert_eq!(code, 0);
+        assert!(stdout.contains("\"settled\":true"), "{stdout}");
+        assert!(stdout.contains("status_shared"), "{stdout}");
+        assert!(!stdout.contains("merge_execution"), "{stdout}");
+        assert!(!stdout.contains("merge_decision"), "{stdout}");
+        assert!(!stdout.contains("peer evidence"), "{stdout}");
+        assert!(dir.join("Owner--Repo-7-h1.json").exists());
+
+        let sql = format!(
+            "UPDATE gh_status_by_login SET ts = {} - 121000",
+            crate::claim_store::CLOCK
+        );
+        primary.db.lock().unwrap().execute(&sql, []).unwrap();
+        assert!(
+            follower_serve(&dir, "Owner/Repo", "Owner--Repo", 7, None).is_none(),
+            "a row past two TTLs falls through to the live read"
+        );
+        crate::gh_poller::route_to(None);
+        for d in [peer_dir, dir] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    /// A miss lock held elsewhere answers a wait, never a panic: with no row
+    /// a bare unknown, with a row that row degraded. Both are unsettled.
+    #[test]
+    fn a_held_miss_lock_answers_unsettled_instead_of_panicking() {
+        let dir = temp_cache_dir("contended");
+        let key = "Owner--Repo-42-aaaaaaaa1111";
+        let _held = crate::gh_budget::FileLock::try_acquire(&dir.join(format!("{key}.lock")))
+            .expect("the test holds the lock");
+
+        let (code, stdout, _) = miss_lock(&dir, key, "Owner--Repo", 42, Some(1))
+            .expect_err("a held lock answers instead of locking");
+        assert_eq!(code, 3);
+        assert!(stdout.contains("\"settled\":false"), "{stdout}");
+        assert!(stdout.contains("status_lock_busy"), "{stdout}");
+
+        seed_row(&dir, key, "aaaaaaaa1111");
+        let (code, stdout, stderr) = miss_lock(&dir, key, "Owner--Repo", 42, Some(1))
+            .expect_err("a held lock answers instead of locking");
+        assert_eq!(code, 3);
+        assert!(stdout.contains("\"settled\":false"), "{stdout}");
+        assert!(stdout.contains("\"stale_verdict\":\"green\""), "{stdout}");
+        assert!(!stdout.contains("doc evidence"), "{stdout}");
+        assert!(!stderr.contains("docs_line_missing"), "{stderr}");
+        assert!(!stderr.contains("evals gate red"), "{stderr}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The zero-network tick's serve: a young row minted FOR the required
+    /// head answers; the mismatch case is pinned by the head-guard test
+    /// above. No probe is involved, so 0 gh calls is inherent.
+    #[test]
+    fn a_young_row_minted_for_the_head_serves_fresh_tick() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let ambient = std::env::temp_dir()
+            .parent()
+            .unwrap()
+            .join("fno-ci-ambient");
+        let _ambient = [
+            crate::claims::EnvVarGuard::set("FNO_SPACES_DIR", ambient.to_str().unwrap()),
+            crate::claims::EnvVarGuard::set("FNO_AGENTS_HOME", ambient.to_str().unwrap()),
+        ];
+        let _root = crate::paths::DeclaredRoot::declare_held("pr-cache-architect");
+        let dir = temp_cache_dir("freshtick");
+        let config = dir.join("config.toml");
+        std::fs::write(&config, "").unwrap();
+        let _pins = [
+            crate::claims::EnvVarGuard::set("FNO_CONFIG", config.to_str().unwrap()),
+            crate::claims::EnvVarGuard::set("FNO_TEST_HERMETIC", "1"),
+            crate::claims::EnvVarGuard::set("FNO_HOME", dir.join("home").to_str().unwrap()),
+            crate::claims::EnvVarGuard::set("FNO_STATE_DIR", dir.join("home").to_str().unwrap()),
+            crate::claims::EnvVarGuard::set(
+                "FNO_GRAPH_JSON",
+                dir.join("home/db/graph.db").to_str().unwrap(),
+            ),
+            crate::claims::EnvVarGuard::set("FNO_SPACES_DIR", dir.join("spaces").to_str().unwrap()),
+        ];
+        seed_row(&dir, "Owner--Repo-42-aaaaaaaa1111", "aaaaaaaa1111");
+        let (code, stdout, stderr) = fresh_serve(
+            &dir,
+            &dir,
+            "Owner--Repo",
+            "42",
+            now_secs(),
+            Some("aaaaaaaa1111"),
+        )
+        .expect("a young matching row serves");
+        assert_eq!(code, 0);
+        assert!(stdout.contains("\"head\":\"aaaaaaaa1111\""), "{stdout}");
+        assert!(stdout.contains("\"cached\":true"), "{stdout}");
+        assert!(
+            stderr.contains("warn: docs_line_missing: doc evidence"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("evals gate red"), "{stderr}");
+        let facts = crate::authorized_merge::PrFacts {
+            number: 42,
+            head_sha: "aaaaaaaa1111".into(),
+            url: "https://github.com/canonical/repo/pull/42".into(),
+            ..Default::default()
+        };
+        let produced = crate::merge_architect::evidence(
+            &crate::authorized_merge::RealProbes,
+            &dir,
+            &facts,
+            true,
+            &[],
+        )
+        .expect("unavailable inputs publish an advisory record");
+        assert_eq!(produced.code, "architect_unavailable");
+        assert!(
+            fresh_serve(
+                &dir,
+                &dir,
+                "Owner--Repo",
+                "42",
+                now_secs(),
+                Some("aaaaaaaa1111")
+            )
+            .is_none(),
+            "an architect attempt invalidates a young row even through an old repository name"
+        );
+        let mut row: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("Owner--Repo-42-aaaaaaaa1111.json")).unwrap(),
+        )
+        .unwrap();
+        row.as_object_mut()
+            .unwrap()
+            .insert("head_unverified".into(), json!(true));
+        let (_, stdout, stderr) = serve(&row, false).unwrap();
+        assert!(stdout.contains("status_stale"), "{stdout}");
+        assert!(!stdout.contains("doc evidence"), "{stdout}");
+        assert!(!stderr.contains("docs_line_missing"), "{stderr}");
+        assert!(!stderr.contains("evals gate red"), "{stderr}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A settled row answers its head-pinned waiter far past the short TTL:
+    /// the plateau serve is the wait's bargain. The same row refuses an
+    /// unpinned read at the short TTL, so the interactive command keeps its
+    /// freshness contract.
+    #[test]
+    fn a_settled_row_outlives_the_short_ttl_only_for_a_pinned_caller() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = temp_cache_dir("settledttl");
+        let row = json!({
+            "ts": now_secs() - 120.0,
+            "exit": 0,
+            "output": {"head": "aaaaaaaa1111", "verdict": "green", "settled": true, "green": true},
+        });
+        write_row(&dir, "Owner--Repo-42-aaaaaaaa1111", &row);
+        let (_, stdout, _) = fresh_serve(
+            &dir,
+            &dir,
+            "Owner--Repo",
+            "42",
+            now_secs(),
+            Some("aaaaaaaa1111"),
+        )
+        .expect("a 120s-old settled row answers its pinned waiter");
+        assert!(stdout.contains("\"verdict\":\"green\""), "{stdout}");
+        assert!(
+            fresh_serve(&dir, &dir, "Owner--Repo", "42", now_secs(), None).is_none(),
+            "an unpinned read keeps the short TTL"
+        );
+        // A settled RED row is the re-runnable state: it keeps the short TTL.
+        let red = json!({
+            "ts": now_secs() - 120.0,
+            "exit": 0,
+            "output": {"head": "aaaaaaaa1111", "verdict": "red", "settled": true, "green": false},
+        });
+        write_row(&dir, "Owner--Repo-42-aaaaaaaa1111", &red);
+        assert!(
+            fresh_serve(
+                &dir,
+                &dir,
+                "Owner--Repo",
+                "42",
+                now_secs(),
+                Some("aaaaaaaa1111")
+            )
+            .is_none(),
+            "a 120s-old settled-red row keeps the short TTL"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

@@ -1,0 +1,403 @@
+//! A routing row may name a model family instead of a version. codex's own
+//! model list, which codex refreshes, supplies the newest version at spawn.
+
+use serde_json::{json, Value};
+
+#[derive(Debug, Clone)]
+pub struct Catalog {
+    pub source: String,
+    pub fetched_at: String,
+    pub slugs: Vec<String>,
+}
+
+/// payload["codex_catalog"] = {"fetched_at", "slugs"} wins (the test seam,
+/// honored the way an explicit payload capacity is); otherwise
+/// load_catalog_at(codex_home()/models_cache.json).
+pub fn load_catalog(payload: &Value) -> Result<Catalog, String> {
+    match payload.get("codex_catalog") {
+        Some(fixture) => catalog_from_fixture(fixture),
+        None => {
+            let home = crate::codex_store::codex_home()
+                .ok_or_else(|| "no codex home: CODEX_HOME and HOME are both unset".to_string())?;
+            load_catalog_at(&home.join("models_cache.json"))
+        }
+    }
+}
+
+fn catalog_from_fixture(value: &Value) -> Result<Catalog, String> {
+    let obj = value.as_object().ok_or_else(|| {
+        "<payload codex_catalog>: expected an object with fetched_at and slugs".to_string()
+    })?;
+    let slugs = obj
+        .get("slugs")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "<payload codex_catalog>: slugs must be a list".to_string())?
+        .iter()
+        .map(|s| {
+            s.as_str()
+                .map(str::to_string)
+                .ok_or_else(|| "<payload codex_catalog>: slugs must be strings".to_string())
+        })
+        .collect::<Result<Vec<String>, String>>()?;
+    let fetched_at = obj
+        .get("fetched_at")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    Ok(Catalog {
+        source: "payload codex_catalog".to_string(),
+        fetched_at,
+        slugs,
+    })
+}
+
+/// Parse one models_cache.json: keep every models[].slug whose visibility is
+/// not "hide". Err names the path and the cause (missing, unreadable, no
+/// models list).
+pub fn load_catalog_at(path: &std::path::Path) -> Result<Catalog, String> {
+    let display = path.display().to_string();
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{display}: {e}"))?;
+    let value: Value = serde_json::from_str(&text).map_err(|e| format!("{display}: {e}"))?;
+    let models = value
+        .get("models")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("{display}: no models list"))?;
+    let slugs = models
+        .iter()
+        .filter_map(|m| {
+            let slug = m.get("slug")?.as_str()?;
+            match m.get("visibility").and_then(Value::as_str) {
+                Some("hide") => None,
+                _ => Some(slug.to_string()),
+            }
+        })
+        .collect();
+    let fetched_at = value
+        .get("fetched_at")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    Ok(Catalog {
+        source: display,
+        fetched_at,
+        slugs,
+    })
+}
+
+/// "gpt-6-luna" -> ([6], "luna"); "gpt-5.6-luna" -> ([5, 6], "luna"); None otherwise.
+fn version_and_family(slug: &str) -> Option<(Vec<u32>, &str)> {
+    let rest = slug.strip_prefix("gpt-")?;
+    let (version, family) = rest.rsplit_once('-')?;
+    if version.is_empty() || family.is_empty() {
+        return None;
+    }
+    let mut list = Vec::new();
+    for part in version.split('.') {
+        if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        list.push(part.parse::<u32>().ok()?);
+    }
+    Some((list, family))
+}
+
+/// Numeric list comparison: missing ranks below present, so `6` beats `5.6`
+/// and `6.1` beats `6`.
+fn newer(a: &[u32], b: &[u32]) -> bool {
+    for i in 0..a.len().max(b.len()) {
+        let x = a.get(i).copied().unwrap_or(0);
+        let y = b.get(i).copied().unwrap_or(0);
+        if x != y {
+            return x > y;
+        }
+    }
+    false
+}
+
+/// The listed slug gpt-<version>-<family> with the highest version.
+pub fn newest_in_family<'a>(family: &str, catalog: &'a Catalog) -> Option<&'a str> {
+    let mut best: Option<(&str, Vec<u32>)> = None;
+    for slug in &catalog.slugs {
+        if let Some((version, fam)) = version_and_family(slug) {
+            if fam == family && best.as_ref().is_none_or(|(_, v)| newer(&version, v)) {
+                best = Some((slug.as_str(), version));
+            }
+        }
+    }
+    best.map(|(slug, _)| slug)
+}
+
+/// A family word (a non-empty model value that is neither a listed slug nor
+/// a versioned form) to its newest listed slug.
+fn family_target(word: &str, catalog: &Catalog) -> Option<String> {
+    let word = word.trim();
+    if word.is_empty() || catalog.slugs.iter().any(|s| s == word) {
+        return None;
+    }
+    newest_in_family(word, catalog).map(str::to_string)
+}
+
+fn resolve_row(row: &mut Value, name: &str, catalog: &Catalog, lines: &mut Vec<Value>) {
+    if row.get("harness").and_then(Value::as_str).map(str::trim) != Some("codex") {
+        return;
+    }
+    let model = row
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let Some(slug) = family_target(&model, catalog) else {
+        return;
+    };
+    let obj = row.as_object_mut().expect("routing rows are objects");
+    obj.insert("model".into(), json!(slug));
+    obj.insert("family".into(), json!(model));
+    lines.push(json!(format!(
+        "slot family {name} {model} -> {slug} (codex models_cache.json fetched {})",
+        catalog.fetched_at
+    )));
+}
+
+/// A clone of the payload with every codex row's family word replaced, plus
+/// the chain lines that say so. Rows: declared_rows values, inventory.rows
+/// entries, and lanes_raw tables whose provider is codex. A value that is a
+/// listed slug is a pin and stays. A value with no family match stays
+/// verbatim. A resolved row also gets "family": "<word>". Reads the catalog
+/// only when a codex row exists, and stores it under "codex_catalog" in the
+/// clone so a later leg does not read the file again.
+pub fn resolve_payload(payload: &Value) -> (Value, Vec<Value>) {
+    let mut lines: Vec<Value> = Vec::new();
+    let mut has_codex_row = false;
+    if let Some(rows) = payload.get("declared_rows").and_then(Value::as_object) {
+        has_codex_row |= rows
+            .values()
+            .any(|r| r.get("harness").and_then(Value::as_str) == Some("codex"));
+    }
+    if let Some(rows) = payload
+        .get("inventory")
+        .and_then(|i| i.get("rows"))
+        .and_then(Value::as_array)
+    {
+        has_codex_row |= rows
+            .iter()
+            .any(|r| r.get("harness").and_then(Value::as_str) == Some("codex"));
+    }
+    if let Some(lanes) = payload.get("lanes_raw").and_then(Value::as_array) {
+        has_codex_row |= lanes
+            .iter()
+            .any(|l| l.get("provider").and_then(Value::as_str) == Some("codex"));
+    }
+    if !has_codex_row {
+        return (payload.clone(), lines);
+    }
+    let catalog = match load_catalog(payload) {
+        Ok(c) => c,
+        Err(err) => {
+            lines.push(json!(format!(
+                "slot family catalog unreadable ({err}); codex model values pass through verbatim"
+            )));
+            return (payload.clone(), lines);
+        }
+    };
+    let mut out = payload.clone();
+    if let Some(rows) = out.get_mut("declared_rows").and_then(Value::as_object_mut) {
+        for (name, row) in rows.iter_mut() {
+            resolve_row(row, name, &catalog, &mut lines);
+        }
+    }
+    if let Some(rows) = out
+        .get_mut("inventory")
+        .and_then(|i| i.get_mut("rows"))
+        .and_then(Value::as_array_mut)
+    {
+        for row in rows.iter_mut() {
+            let name = row
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            resolve_row(row, &name, &catalog, &mut lines);
+        }
+    }
+    // Inline lane tables carry a closed vocabulary (slot_lanes.toml), so the
+    // model value is replaced but no family key is added: fold would fault on
+    // an unknown field.
+    if let Some(lanes) = out.get_mut("lanes_raw").and_then(Value::as_array_mut) {
+        let rung_base = payload
+            .get("rung_base")
+            .and_then(Value::as_str)
+            .unwrap_or("agents.profiles");
+        for (index, lane) in lanes.iter_mut().enumerate() {
+            if lane.get("provider").and_then(Value::as_str) != Some("codex") {
+                continue;
+            }
+            let model = lane
+                .get("model")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let Some(slug) = family_target(&model, &catalog) else {
+                continue;
+            };
+            if let Some(obj) = lane.as_object_mut() {
+                obj.insert("model".into(), json!(slug));
+            }
+            lines.push(json!(format!(
+                "slot family {rung_base}.lanes[{index}] {model} -> {slug} (codex models_cache.json fetched {})",
+                catalog.fetched_at
+            )));
+        }
+    }
+    if let Some(obj) = out.as_object_mut() {
+        obj.insert(
+            "codex_catalog".into(),
+            json!({
+                "source": catalog.source,
+                "fetched_at": catalog.fetched_at,
+                "slugs": catalog.slugs,
+            }),
+        );
+    }
+    (out, lines)
+}
+
+/// One line per codex row pinned to gpt-<v>-<fam> when a higher version of
+/// <fam> is listed. Rows that carry "family" are skipped.
+pub fn drift_lines(rows: &[Value], catalog: &Catalog) -> Vec<String> {
+    let mut out = Vec::new();
+    for row in rows {
+        if row.get("family").is_some() {
+            continue;
+        }
+        if row.get("harness").and_then(Value::as_str).map(str::trim) != Some("codex") {
+            continue;
+        }
+        let model = row
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let Some((pinned, family)) = version_and_family(model) else {
+            continue;
+        };
+        if !catalog.slugs.iter().any(|s| s == model) {
+            continue;
+        }
+        let Some(newest) = newest_in_family(family, catalog) else {
+            continue;
+        };
+        let Some((latest, _)) = version_and_family(newest) else {
+            continue;
+        };
+        if newer(&latest, &pinned) {
+            let name = row.get("name").and_then(Value::as_str).unwrap_or("");
+            out.push(format!(
+                "drift {name} pins {model}; newest {family} in codex models_cache.json is {newest}"
+            ));
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ---- integration: resolve_slot_payload (AC1-AC3) ----
+
+    fn slot_payload(overrides: Value) -> Value {
+        let mut base = json!({
+            "rung_base": "agents.profiles.target",
+            "lanes_raw": ["codex-luna"],
+            "declared_rows": {
+                "codex-luna": {"name": "codex-luna", "harness": "codex", "model": "luna"},
+            },
+            "profile": {"on_exhausted": "refuse", "on_low": "prefer_healthy",
+                        "on_unknown": "allow", "by_difficulty": {}},
+            "node": null,
+            "capacity": {"codex": {"state": "ok", "window": "w",
+                                   "accounts": {}, "evidence": {}, "resets": {}}},
+            "vendor_counts": {}, "vendor_caps": {}, "vendor_count_errors": {},
+            "thread_seatable": {}, "substrate": null, "permission_mode": null,
+            "constrain_harness": null,
+            "explicit_lane": false, "gate_bypassed": false,
+            "codex_catalog": {
+                "fetched_at": "2026-09-23T00:00:00Z",
+                "slugs": ["gpt-5.6-luna", "gpt-6-luna"],
+            },
+        });
+        if let (Some(base_obj), Some(ovr)) = (base.as_object_mut(), overrides.as_object()) {
+            for (k, v) in ovr {
+                base_obj.insert(k.clone(), v.clone());
+            }
+        }
+        base
+    }
+
+    fn chain_of(out: &Value) -> Vec<String> {
+        out["chain"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn slot_resolves_family_words_in_declared_rows_ac1() {
+        let out = crate::route_slot::resolve_slot_payload(&slot_payload(json!({})));
+        assert_eq!(out["status"], "pick", "{}", out);
+        assert_eq!(out["candidate"]["model"], "gpt-6-luna");
+        assert_eq!(out["candidate"]["lane_fields"]["model"], "gpt-6-luna");
+        let chain = chain_of(&out);
+        assert!(
+            chain
+                .iter()
+                .any(|l| l.starts_with("slot family codex-luna luna -> gpt-6-luna")),
+            "{chain:?}"
+        );
+        // The terminal chain entry is preserved, not displaced.
+        assert_eq!(
+            chain.last().unwrap(),
+            "slot agents.profiles.target.lanes[0] codex-luna capacity=ok window=w"
+        );
+    }
+
+    #[test]
+    fn slot_pin_claude_and_explicit_survive_ac2() {
+        let payload = slot_payload(json!({
+            "lanes_raw": ["pin-x", "word-x", "claude-x"],
+            "declared_rows": {
+                "pin-x": {"name": "pin-x", "harness": "codex", "model": "gpt-5.6-luna"},
+                "word-x": {"name": "word-x", "harness": "codex", "model": "ghostfam"},
+                "claude-x": {"name": "claude-x", "harness": "claude", "model": "opus"},
+            },
+            "capacity": {"codex": {"state": "ok", "window": "w",
+                                   "accounts": {}, "evidence": {}, "resets": {}},
+                         "claude": {"state": "ok", "window": "w",
+                                    "accounts": {}, "evidence": {}, "resets": {}}},
+        }));
+        let resolved = resolve_payload(&payload).0;
+        assert_eq!(resolved["declared_rows"]["pin-x"]["model"], "gpt-5.6-luna");
+        assert_eq!(resolved["declared_rows"]["word-x"]["model"], "ghostfam");
+        assert_eq!(resolved["declared_rows"]["claude-x"]["model"], "opus");
+    }
+
+    #[test]
+    fn slot_malformed_catalog_passes_through_with_one_line_ac3() {
+        let payload = slot_payload(json!({
+            "codex_catalog": "junk",
+        }));
+        let out = crate::route_slot::resolve_slot_payload(&payload);
+        assert_eq!(out["status"], "pick", "{}", out);
+        assert_eq!(out["candidate"]["model"], "luna");
+        let unreadable = chain_of(&out)
+            .iter()
+            .filter(|l| l.contains("slot family catalog unreadable"))
+            .count();
+        assert_eq!(unreadable, 1);
+    }
+}

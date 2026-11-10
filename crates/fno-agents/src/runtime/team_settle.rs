@@ -1,0 +1,1280 @@
+//! `team-settle`: whether a teamed spawn is granted, transfers, or refuses,
+//! reached as payload kind `team-settle` on the existing `spawn-overlay`
+//! command (law d-fe66560a bars new top-level commands, hidden ones included).
+//!
+//! A port of Python's `settle_spawn_team` (`cli/src/fno/agents/team.py`)
+//! with one new branch: a human caller with `succession` may transfer a
+//! team away from any live holder, the same authority `grant_error` already
+//! gives a human to grant any scope (a human may grant what nobody above it
+//! could check). An agent caller may only succeed itself: every live holder
+//! of the scope must already be that agent.
+//!
+//! The take-over door: a caller whose own team contains the target scope may
+//! move that sub-team from its live holder to a spawned colleague with one
+//! `take_over` request (`{"reason": ...}`), no proof of the holder's state.
+//! The floor is `loop_lead::scope_strictly_contains`; the written reason is
+//! required and travels to the journal and the old lead's mail.
+//!
+//! Rows arrive as plain JSON here, not a typed registry row. A row's
+//! terminal read answers through `row_verdict::finished_json`, the
+//! role-vacancy door: the reversible word (Orphaned) re-answers on
+//! process evidence, and every other status keeps the legacy
+//! `announce::TERMINAL_STATUSES` word list.
+//!
+//! Occupancy is the exact-scope holders plus ladder-aware rivals: through
+//! `loop_lead::team_rivals`, a live team over overlapping territory
+//! declines the spawn before the succession branch, and an agent's own
+//! wider team is its delegation, not a rival.
+//!
+//! Team-settle answers twice: before launch against a snapshot, then again
+//! under the registry lock with the plan attached. Holder identity is the
+//! name and harness session id together because registry names are reclaimable.
+//! Rows that both lack a session id still compare by name alone.
+
+use crate::loop_lead::{same_territory, scope_strictly_contains, scopes_overlap, team_rivals_pub};
+use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
+
+struct Holder {
+    index: usize,
+    name: String,
+    session: Option<String>,
+}
+
+struct Occupancy {
+    clear_terminal: Vec<(usize, String)>,
+    holders: Vec<Holder>,
+    rivals: Vec<(String, String)>,
+}
+
+enum Caller {
+    Human,
+    Agent(String),
+}
+
+/// The take-over containment floor's verdict for an agent caller.
+enum TakeOverVerdict {
+    /// The caller's territory strictly contains the target's.
+    Contains,
+    /// The caller's territory equals the target's: its own team.
+    OwnTeam,
+    /// A live seat exists but its territory does not contain the target.
+    Outside,
+    /// No live lead row answers the caller's name.
+    NoSeat,
+}
+
+/// The caller's own live lead row's `role_scope`, by name: the row a
+/// take-over floor reads. A finished row, a bare worker, or an empty scope
+/// answers None.
+fn caller_role_scope<'a>(rows: &'a [Value], me: &str) -> Option<&'a str> {
+    rows.iter()
+        .find(|row| {
+            !crate::row_verdict::finished_json(row)
+                && row.get("name").and_then(Value::as_str) == Some(me)
+                && row
+                    .get("role_scope")
+                    .and_then(Value::as_str)
+                    .is_some_and(|s| !s.trim().is_empty())
+        })
+        .and_then(|row| row.get("role_scope"))
+        .and_then(Value::as_str)
+}
+
+fn parse_caller(value: Option<&Value>) -> Option<Caller> {
+    match value?.get("kind").and_then(Value::as_str)? {
+        "human" => Some(Caller::Human),
+        "agent" => Some(Caller::Agent(
+            value?.get("name").and_then(Value::as_str)?.to_string(),
+        )),
+        _ => None,
+    }
+}
+
+/// Decide occupancy for one teamed spawn over `scope`, then apply the
+/// team-name effect (a succeeded succession carries the name with a
+/// generation bump; a fresh grant forgets it). See the module doc for the
+/// caller/succession rules and the request/answer shapes.
+pub fn resolve(payload: &Value) -> Result<Value, String> {
+    if payload.get("plan").is_none() {
+        // The plan/preview path reads no store and no home env (existing
+        // unit tests run it with no declared agents home).
+        let projects = crate::org_board::project_map(&std::env::current_dir().unwrap_or_default());
+        let mut answer = resolve_with_projects(payload, &projects)?;
+        if let Some(store) = crate::paths::AgentsHome::from_env_opt().map(|h| h.team_names_json()) {
+            crate::name_draw::settle_draw(payload, &mut answer, &store);
+        }
+        return Ok(answer);
+    }
+    let store = crate::paths::AgentsHome::from_env_opt().map(|h| h.team_names_json());
+    let projects = crate::org_board::project_map(&std::env::current_dir().unwrap_or_default());
+    let mut answer = resolve_with_projects(payload, &projects)?;
+    // No declared home (a test) reads as no store, so the plan answer is
+    // unchanged; production always declares one.
+    if let Some(store) = store.as_ref() {
+        crate::name_draw::settle_draw(payload, &mut answer, store);
+    }
+    if let Some(store) = store.as_ref() {
+        apply_name_effect(payload, &answer, store);
+    }
+    Ok(answer)
+}
+
+/// [`resolve`] with an explicit store path, so tests pass a tempdir store
+/// instead of setting the agents home env.
+pub fn resolve_at(payload: &Value, store: &std::path::Path) -> Result<Value, String> {
+    let projects = crate::org_board::project_map(&std::env::current_dir().unwrap_or_default());
+    let mut answer = resolve_with_projects(payload, &projects)?;
+    crate::name_draw::settle_draw(payload, &mut answer, store);
+    apply_name_effect(payload, &answer, store);
+    Ok(answer)
+}
+
+/// The registry commit is the authority: a store error prints one stderr
+/// line and never changes the answer.
+fn apply_name_effect(payload: &Value, answer: &Value, store: &std::path::Path) {
+    if payload.get("plan").is_none() {
+        return;
+    }
+    let Some(scope) = payload.get("scope").and_then(|s| s.as_str()) else {
+        return;
+    };
+    let outcome = answer.get("outcome").and_then(|o| o.as_str());
+    let effect = match outcome {
+        Some("succeeded") => {
+            let pending = succession_pending(payload);
+            let result = crate::team_names::carry_succession(store, scope, pending.clone());
+            if let Ok(Some(p)) = result.as_ref() {
+                crate::succession_txn::announce(scope, p);
+                crate::succession_txn::transferred(scope, p);
+            }
+            if let (Some(p), Some(take_over)) = (
+                result.as_ref().ok().and_then(|o| o.as_ref()),
+                payload
+                    .get("plan")
+                    .and_then(|plan| plan.get("take_over"))
+                    .filter(|t| t.is_object()),
+            ) {
+                crate::succession_txn::taken_over(scope, p, take_over);
+            }
+            result.map(|_| ())
+        }
+        Some("granted") => {
+            let forgotten = crate::team_names::forget(store, scope);
+            let successor = payload
+                .get("successor")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty());
+            // The successor's session rides `successor_identity` (dispatch plumbs the
+            // row's own id); the carry is registry-free, so the apply path
+            // never waits on the registry lock.
+            let session = payload
+                .get("successor_identity")
+                .and_then(|i| i.get("session_id"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            match (forgotten, successor) {
+                (Ok(()), Some(name)) => {
+                    // A fresh grant carries the promoted row's own name, so
+                    // the team never lands anonymous.
+                    crate::team_names::carry_holder_name(store, session, 2, scope, name).map(|_| ())
+                }
+                (result, _) => result,
+            }
+        }
+        _ => Ok(()),
+    };
+    if let Err(e) = effect {
+        eprintln!("team-settle: team names: {e}");
+    }
+}
+
+/// The pending-succession inputs for a succeeded settle: the successor from the
+/// payload's `successor` key (the spawned row's name, plumbed by dispatch), the
+/// predecessor from the plan's first vacated holder_id. A payload without
+/// the successor key (an old caller) carries no pending record and keeps
+/// today's shape.
+fn succession_pending(payload: &Value) -> Option<crate::team_names::PendingSuccession> {
+    let successor = payload
+        .get("successor")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())?;
+    let plan = payload.get("plan")?;
+    let (name, session) = parse_holder_ids(plan.get("holder_ids"))
+        .ok()?
+        .into_iter()
+        .next()?;
+    Some(crate::team_names::PendingSuccession {
+        successor_name: successor.to_string(),
+        successor_session: payload
+            .get("successor_identity")
+            .and_then(|i| i.get("session_id"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| successor_session(successor)),
+        predecessor_name: name,
+        predecessor_session: session,
+        ts: crate::daemon::now_rfc3339_like(),
+    })
+}
+
+/// The successor row's session id at settle time, so the succession revert's
+/// join keys on identity. A row not yet in the registry (a settle racing
+/// the spawn row's write, or a test with no declared home) carries no
+/// session; the revert then falls back to the name join as before.
+fn successor_session(successor: &str) -> Option<String> {
+    let home = crate::paths::AgentsHome::from_env_opt()?;
+    let registry = crate::state::try_load_registry(&home.registry_json()).ok()??;
+    match crate::lead_state::live_name_join(&registry.entries, successor) {
+        crate::lead_state::NameJoin::One(row) => row.harness_session_id.clone(),
+        _ => None,
+    }
+}
+
+fn resolve_with_projects(
+    payload: &Value,
+    projects: &Result<HashMap<String, String>, String>,
+) -> Result<Value, String> {
+    if payload.get("plan").is_some() {
+        return apply_with_projects(payload, projects);
+    }
+    plan_with_projects(payload, projects)
+}
+
+fn occupancy(
+    rows: &[Value],
+    scope: &str,
+    caller: &Caller,
+    exclude_name: Option<&str>,
+    projects: &Result<HashMap<String, String>, String>,
+) -> Occupancy {
+    let empty_map: HashMap<String, String> = HashMap::new();
+    let map = projects.as_ref().unwrap_or(&empty_map);
+    let mut clear_terminal = Vec::new();
+    let mut holders = Vec::new();
+    let mut rivals = Vec::new();
+    for (index, row) in rows.iter().enumerate() {
+        let name = row.get("name").and_then(Value::as_str).unwrap_or("");
+        let row_scope = row.get("role_scope").and_then(Value::as_str);
+        if row_scope == Some(scope) && crate::row_verdict::finished_json(row) {
+            clear_terminal.push((index, name.to_string()));
+            continue;
+        }
+        if crate::row_verdict::finished_json(row) || Some(name) == exclude_name {
+            continue;
+        }
+        if row_scope == Some(scope) {
+            holders.push(Holder {
+                index,
+                name: name.to_string(),
+                session: row
+                    .get("harness_session_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            });
+        }
+        let Some(held) = row_scope else {
+            continue;
+        };
+        if held.trim().is_empty() || held == scope {
+            continue;
+        }
+        // An agent delegating one member of its own team does not rival
+        // itself; grant_error verified strict containment before team-settle
+        // runs, and role_grant::promote skips the grantor the same way.
+        if let Caller::Agent(me) = caller {
+            if name == me && !same_territory(held, scope, map) {
+                continue;
+            }
+        }
+        let rival = if projects.is_ok() {
+            team_rivals_pub(held, None, scope, None, map)
+        } else {
+            scopes_overlap(held, scope, &empty_map)
+        };
+        if rival {
+            rivals.push((name.to_string(), held.to_string()));
+        }
+    }
+    holders.sort_by(|a, b| (&a.name, &a.session).cmp(&(&b.name, &b.session)));
+    clear_terminal.sort_by_key(|(index, _)| *index);
+    rivals.sort();
+    Occupancy {
+        clear_terminal,
+        holders,
+        rivals,
+    }
+}
+
+fn holder_names(holders: &[Holder]) -> Vec<String> {
+    holders.iter().map(|holder| holder.name.clone()).collect()
+}
+
+fn holder_ids(holders: &[Holder]) -> Vec<Value> {
+    holders
+        .iter()
+        .map(|holder| {
+            json!({
+                "name": holder.name,
+                "harness_session_id": holder.session,
+            })
+        })
+        .collect()
+}
+
+/// The refusal for a proposed lead name already used anywhere the draw
+/// looks (history, store, registry, bus, handoffs, peer claims), naming who
+/// used it and when; `None` when it is fresh. `draw_scope` accepts the
+/// machine's pending draw over that scope, which the draw itself just made
+/// used. Fail closed: an unreadable source refuses the ask, never reads the
+/// name as fresh. No declared agents home (a unit test) reads no store.
+fn retired_name_refusal(
+    proposed: &str,
+    door: &str,
+    draw_scope: Option<&str>,
+) -> Result<Option<String>, String> {
+    let Some(home) = crate::paths::AgentsHome::from_env_opt() else {
+        return Ok(None);
+    };
+    let store_path = home.team_names_json();
+    if let Some(scope) = draw_scope {
+        let pending = crate::team_names::unconsumed_draw(&store_path, scope)
+            .map_err(|e| format!("{door} cannot read the name history: {e}"))?;
+        if pending.is_some_and(|p| p.eq_ignore_ascii_case(proposed)) {
+            return Ok(None);
+        }
+    }
+    let used = crate::team_names::used_names(&store_path, &home.registry_json())
+        .map_err(|e| format!("{door} cannot read the used names: {e}"))?;
+    if !used.contains(&proposed.to_ascii_lowercase()) {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "{door} requires a fresh person name: {proposed} is retired ({}), and names are never reused on any machine",
+        crate::team_names::used_by(&store_path, proposed)
+    )))
+}
+
+fn plan_answer(
+    outcome: &str,
+    occupancy: Occupancy,
+    vacate: Vec<String>,
+    refusal: Value,
+    caller: Value,
+) -> Value {
+    let holders = holder_names(&occupancy.holders);
+    let holder_ids = holder_ids(&occupancy.holders);
+    let clear_terminal = occupancy
+        .clear_terminal
+        .iter()
+        .map(|(_, name)| name.clone())
+        .collect::<Vec<_>>();
+    json!({
+        "outcome": outcome,
+        "clear_terminal": clear_terminal,
+        "holders": holders,
+        "holder_ids": holder_ids,
+        "caller": caller,
+        "vacate": vacate,
+        "rivals": occupancy.rivals.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>(),
+        "refusal": refusal,
+    })
+}
+
+fn plan_with_projects(
+    payload: &Value,
+    projects: &Result<HashMap<String, String>, String>,
+) -> Result<Value, String> {
+    let scope = payload
+        .get("scope")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "team-settle: payload needs a non-empty scope".to_string())?;
+    let rows = payload
+        .get("rows")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "team-settle: payload needs a rows array".to_string())?;
+    let caller = parse_caller(payload.get("caller"))
+        .ok_or_else(|| "team-settle: payload needs a caller of kind human or agent".to_string())?;
+    let succession = payload
+        .get("succession")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let exclude_name = payload.get("exclude_name").and_then(Value::as_str);
+    let occupancy = occupancy(rows, scope, &caller, exclude_name, projects);
+    let caller_value = payload.get("caller").cloned().unwrap_or(Value::Null);
+    let holders = holder_names(&occupancy.holders);
+    let proposed_name = payload
+        .get("proposed_name")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+
+    let take_over = payload.get("take_over").filter(|t| t.is_object());
+    if (succession || take_over.is_some())
+        && !proposed_name.is_empty()
+        && (!crate::team_names::valid_person_name(proposed_name)
+            || rows.iter().any(|row| {
+                !crate::row_verdict::finished_json(row)
+                    && row.get("role_scope").and_then(Value::as_str).is_some()
+                    && row
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .is_some_and(|name| name.eq_ignore_ascii_case(proposed_name))
+            }))
+    {
+        let (door, chooser, tail) = if succession {
+            (
+                "--hand-off",
+                "the outgoing lead chooses",
+                "; or drop --name and take the machine's draw",
+            )
+        } else {
+            (
+                "--take-over",
+                "the colleague takes",
+                "; or pass --name redraw to take the machine's draw",
+            )
+        };
+        return Ok(plan_answer(
+            "declined",
+            occupancy,
+            Vec::new(),
+            json!(format!(
+                "{door} requires --name <Name>: {chooser} a fresh person name, distinct from every live lead{tail}"
+            )),
+            caller_value,
+        ));
+    }
+
+    if let Some((first, _)) = occupancy.rivals.first() {
+        let listed = occupancy
+            .rivals
+            .iter()
+            .map(|(n, h)| format!("{n} (holding {h:?})"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let refusal = format!(
+            "scope {scope:?} overlaps territory held by live row(s) {listed}. Two live \
+             teams would rule the same members, so this spawn refuses before launch. \
+             --hand-off hands down only an identical team, never part of a wider or \
+             overlapping one. Re-scope the holder (fno agents org promote {first} --scope \
+             <other territory>), run fno agents reconcile if it looks dead, or fno \
+             agents stop {first}, then retry."
+        );
+        return Ok(plan_answer(
+            "declined",
+            occupancy,
+            Vec::new(),
+            json!(refusal),
+            caller_value,
+        ));
+    }
+
+    // A fresh grant (`--promote --name X`) names a new lead: X must be fresh
+    // on every machine. A revive keeps its own row's name.
+    if !succession
+        && take_over.is_none()
+        && crate::team_names::valid_person_name(proposed_name)
+        && !exclude_name.is_some_and(|n| n.eq_ignore_ascii_case(proposed_name))
+    {
+        if let Some(refusal) = retired_name_refusal(proposed_name, "--promote --name", Some(scope))?
+        {
+            // `retired` asks the settle draw to name a fresh one.
+            let mut answer = plan_answer(
+                "declined",
+                occupancy,
+                Vec::new(),
+                json!(refusal),
+                caller_value,
+            );
+            answer["retired"] = json!(proposed_name);
+            return Ok(answer);
+        }
+    }
+
+    if holders.is_empty() {
+        return Ok(plan_answer(
+            "granted",
+            occupancy,
+            Vec::new(),
+            Value::Null,
+            caller_value,
+        ));
+    }
+
+    if let Some(take_over) = take_over {
+        let reason = take_over
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if reason.is_empty() {
+            return Ok(plan_answer(
+                "declined",
+                occupancy,
+                Vec::new(),
+                json!("--take-over needs a reason: say why the team moves, for example --take-over \"lead paused since 10:00\"."),
+                caller_value,
+            ));
+        }
+        // The containment floor for an agent caller: its own live lead row's
+        // territory must strictly contain the target's. Reads no graph - the
+        // Python guard's strict containment already refused the graph-precise
+        // misses before team-settle ran - so it can only double-check scope
+        // shape, never refine that answer.
+        let empty_map: HashMap<String, String> = HashMap::new();
+        let map = projects.as_ref().unwrap_or(&empty_map);
+        let floor = |mine: Option<&str>| -> TakeOverVerdict {
+            let Some(mine) = mine else {
+                return TakeOverVerdict::NoSeat;
+            };
+            if same_territory(mine, scope, map) {
+                return TakeOverVerdict::OwnTeam;
+            }
+            if scope_strictly_contains(mine, scope, map) {
+                TakeOverVerdict::Contains
+            } else {
+                TakeOverVerdict::Outside
+            }
+        };
+        let (verdict, by) = match &caller {
+            Caller::Human => (TakeOverVerdict::Contains, "the user".to_string()),
+            Caller::Agent(me) => {
+                let mine = caller_role_scope(rows, me);
+                (floor(mine), me.clone())
+            }
+        };
+        match verdict {
+            TakeOverVerdict::OwnTeam => {
+                return Ok(plan_answer(
+                    "declined",
+                    occupancy,
+                    Vec::new(),
+                    json!(format!(
+                        "scope {scope:?} is your own team. Use --hand-off to pass it on; --take-over moves a team your team contains."
+                    )),
+                    caller_value,
+                ));
+            }
+            TakeOverVerdict::Outside => {
+                let mine = caller_role_scope(rows, &by);
+                let mine = mine.unwrap_or_default();
+                return Ok(plan_answer(
+                    "declined",
+                    occupancy,
+                    Vec::new(),
+                    json!(format!(
+                        "--take-over refused: your team over {mine:?} does not contain {scope:?}. Only a lead whose team contains a sub-team can move it. Ask that lead."
+                    )),
+                    caller_value,
+                ));
+            }
+            TakeOverVerdict::NoSeat => {
+                return Ok(plan_answer(
+                    "declined",
+                    occupancy,
+                    Vec::new(),
+                    json!(format!(
+                        "--take-over refused: no live team answers {by:?}, so no seat contains {scope:?}. Only a lead whose team contains a sub-team can move it. Ask that lead."
+                    )),
+                    caller_value,
+                ));
+            }
+            TakeOverVerdict::Contains => {}
+        }
+        let redraw = payload
+            .get("redraw")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if proposed_name.is_empty() && !redraw {
+            // The colleague is a person, never a drawn slug: a take-over
+            // without --name must not launch and let the entry mint pick.
+            // `--name redraw` asks the settle draw for the name.
+            return Ok(plan_answer(
+                "declined",
+                occupancy,
+                Vec::new(),
+                json!("--take-over requires --name <Name> or --name redraw: the colleague takes a fresh person name, distinct from every live lead"),
+                caller_value,
+            ));
+        }
+        // A retired name must refuse at the plan, not at the carry: the
+        // registry move would still commit, and a carry error skips both the
+        // journal row and the mail, leaving the team moved unjournaled. A
+        // take-over has no draw, so the pending-draw accept never applies.
+        if let Some(refusal) = retired_name_refusal(proposed_name, "--take-over", None)? {
+            return Ok(plan_answer(
+                "declined",
+                occupancy,
+                Vec::new(),
+                json!(refusal),
+                caller_value,
+            ));
+        }
+        let vacate = holder_names(&occupancy.holders);
+        let predecessors: Vec<Value> = occupancy
+            .holders
+            .iter()
+            .map(|h| {
+                let row = &rows[h.index];
+                json!({
+                    "name": h.name,
+                    "status": row.get("status").cloned().unwrap_or(Value::Null),
+                    "harness": row.get("harness").cloned().unwrap_or(Value::Null),
+                    "harness_session_id": row.get("harness_session_id").cloned().unwrap_or(Value::Null),
+                })
+            })
+            .collect();
+        let mut answer = plan_answer("succeeded", occupancy, vacate, Value::Null, caller_value);
+        answer["take_over"] = json!({
+            "by": by,
+            "reason": reason,
+            "predecessors": predecessors,
+        });
+        return Ok(answer);
+    }
+
+    if succession {
+        match &caller {
+            Caller::Agent(name) if holders.iter().all(|h| h == name) => {
+                return Ok(plan_answer(
+                    "succeeded",
+                    occupancy,
+                    vec![name.clone()],
+                    Value::Null,
+                    caller_value,
+                ));
+            }
+            Caller::Human => {
+                return Ok(plan_answer(
+                    "succeeded",
+                    occupancy,
+                    holders,
+                    Value::Null,
+                    caller_value,
+                ));
+            }
+            Caller::Agent(_) => {}
+        }
+    }
+
+    let refusal = match &caller {
+        Caller::Human => format!(
+            "scope {scope:?} is held by live row(s) {holders:?}. This spawn would launch \
+             a successor with no team, so it refuses. Re-run with --hand-off to transfer the \
+             team to the new session, or choose a scope nobody holds."
+        ),
+        Caller::Agent(me) => {
+            // A superior caller learns the take-over door; every other agent
+            // caller keeps the incumbent text byte for byte.
+            let empty_map: HashMap<String, String> = HashMap::new();
+            let contained = caller_role_scope(rows, me).is_some_and(|mine| {
+                scope_strictly_contains(mine, scope, projects.as_ref().unwrap_or(&empty_map))
+            });
+            if contained {
+                format!(
+                    "scope {scope:?} is held by live row(s) {holders:?}. Your team contains it, \
+                     so you can move it to a new colleague: spawn --promote {scope} --take-over \"<why>\" --name <Name>."
+                )
+            } else {
+                format!(
+                    "scope {scope:?} is held by live row(s) {holders:?}, not by this session, so \
+                     this session cannot hand it down. Only the holder (spawn --promote \
+                     --hand-off from its own session) or a lead whose team contains it \
+                     can transfer it."
+                )
+            }
+        }
+    };
+
+    Ok(plan_answer(
+        "declined",
+        occupancy,
+        Vec::new(),
+        json!(refusal),
+        caller_value,
+    ))
+}
+
+fn parse_holder_ids(value: Option<&Value>) -> Result<Vec<(String, Option<String>)>, String> {
+    let ids = value
+        .and_then(Value::as_array)
+        .ok_or_else(|| "team-settle: plan needs holder_ids array".to_string())?;
+    let mut parsed = Vec::with_capacity(ids.len());
+    for id in ids {
+        let name = id
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "team-settle: holder_ids entries need a name".to_string())?;
+        let session = match id.get("harness_session_id") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(session)) => Some(session.clone()),
+            _ => return Err("team-settle: holder_ids session must be a string or null".to_string()),
+        };
+        parsed.push((name.to_string(), session));
+    }
+    parsed.sort();
+    Ok(parsed)
+}
+
+fn apply_with_projects(
+    payload: &Value,
+    projects: &Result<HashMap<String, String>, String>,
+) -> Result<Value, String> {
+    let scope = payload
+        .get("scope")
+        .and_then(Value::as_str)
+        .filter(|scope| !scope.is_empty())
+        .ok_or_else(|| "team-settle: payload needs a non-empty scope".to_string())?;
+    let rows = payload
+        .get("rows")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "team-settle: payload needs a rows array".to_string())?;
+    let plan = payload
+        .get("plan")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "team-settle: plan must be an object".to_string())?;
+    let caller_value = plan.get("caller");
+    let caller = parse_caller(caller_value)
+        .ok_or_else(|| "team-settle: plan needs caller of kind human or agent".to_string())?;
+    let expected = parse_holder_ids(plan.get("holder_ids"))?;
+    let outcome = plan
+        .get("outcome")
+        .and_then(Value::as_str)
+        .filter(|outcome| matches!(*outcome, "granted" | "succeeded" | "declined"))
+        .ok_or_else(|| "team-settle: plan needs valid outcome".to_string())?;
+    let successor = payload
+        .get("successor")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if outcome == "succeeded"
+        && (!crate::team_names::valid_person_name(successor)
+            || expected
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(successor)))
+    {
+        let door = if plan.get("take_over").is_some() {
+            "--take-over"
+        } else {
+            "--hand-off"
+        };
+        return Ok(
+            json!({"outcome":"declined", "clear_terminal_rows":[], "vacate_rows":[],
+            "reown_rows":[], "reown_owner":null, "refusal":format!("{door} requires a fresh person name")}),
+        );
+    }
+    let exclude_name = payload.get("exclude_name").and_then(Value::as_str);
+    let occupancy = occupancy(rows, scope, &caller, exclude_name, projects);
+    let clear_terminal_rows = occupancy
+        .clear_terminal
+        .iter()
+        .map(|(index, _)| *index)
+        .collect::<Vec<_>>();
+    let current = occupancy
+        .holders
+        .iter()
+        .map(|holder| (holder.name.clone(), holder.session.clone()))
+        .collect::<Vec<_>>();
+    let planned_vacate = plan
+        .get("vacate")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "team-settle: plan needs vacate array".to_string())?
+        .iter()
+        .map(|name| {
+            name.as_str()
+                .ok_or_else(|| "team-settle: vacate entries need names".to_string())
+        })
+        .collect::<Result<HashSet<_>, _>>()?;
+    if outcome == "succeeded"
+        && occupancy
+            .holders
+            .iter()
+            .any(|holder| !planned_vacate.contains(holder.name.as_str()))
+    {
+        return Err("team-settle: plan vacate omits a holder".to_string());
+    }
+    let (outcome, vacate_rows) = if !occupancy.rivals.is_empty() {
+        ("declined", Vec::new())
+    } else if current == expected {
+        let vacate_rows = if outcome == "succeeded" {
+            occupancy
+                .holders
+                .iter()
+                .filter(|holder| planned_vacate.contains(holder.name.as_str()))
+                .map(|holder| holder.index)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        (outcome, vacate_rows)
+    } else if !occupancy.holders.is_empty() {
+        ("declined", Vec::new())
+    } else {
+        ("granted", Vec::new())
+    };
+    // Succession re-homes the org: every live child whose CURRENT owner (the
+    // provenance owner) names a vacated holder's session follows the team to
+    // the successor. The birth edge itself stays history - ownership is what the
+    // sideline reads.
+    let vacated_sessions: HashSet<String> = if outcome == "succeeded" {
+        occupancy
+            .holders
+            .iter()
+            .filter(|holder| planned_vacate.contains(holder.name.as_str()))
+            .filter_map(|holder| holder.session.as_deref().map(str::to_ascii_lowercase))
+            .collect()
+    } else {
+        HashSet::new()
+    };
+    let reown_rows: Vec<usize> = if vacated_sessions.is_empty() {
+        Vec::new()
+    } else {
+        rows.iter()
+            .enumerate()
+            .filter(|(_, row)| {
+                if crate::row_verdict::finished_json(row) {
+                    return false;
+                }
+                if Some(row.get("name").and_then(Value::as_str).unwrap_or("")) == exclude_name {
+                    return false;
+                }
+                // Reown only rows that already carry provenance. Falling back
+                // to the birth edge selected provenance-less rows (adopt,
+                // pre-v33), and the applier then forked an origin-less block
+                // onto them that the typed reader rejects row-wide.
+                let owner = row
+                    .get("spawn_provenance")
+                    .and_then(|p| p.get("owner"))
+                    .and_then(|o| o.get("session_id"))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_ascii_lowercase);
+                owner.is_some_and(|o| vacated_sessions.contains(&o))
+            })
+            .map(|(index, _)| index)
+            .collect()
+    };
+    // The owner block the applier stamps onto each reowned child, composed
+    // here from the successor's own identity so the one session-id rule (the
+    // payload's `successor_identity`, read like every other field) writes the
+    // block and Python only assigns it. Blank session id answers null: an
+    // unaddressable successor re-creates the orphan the reown exists to prevent.
+    let identity = payload.get("successor_identity");
+    let successor_session = identity
+        .and_then(|i| i.get("session_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let reown_owner = successor_session.map(|session_id| {
+        json!({
+            "kind": "session",
+            "harness": identity.and_then(|i| i.get("harness")).and_then(Value::as_str),
+            "session_id": session_id,
+            "cwd": identity.and_then(|i| i.get("cwd")).and_then(Value::as_str),
+        })
+    });
+    Ok(json!({
+        "outcome": outcome,
+        "clear_terminal_rows": clear_terminal_rows,
+        "vacate_rows": vacate_rows,
+        "reown_rows": reown_rows,
+        "reown_owner": reown_owner,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    fn row(name: &str, scope: &str, status: &str) -> Value {
+        json!({"name": name, "role_scope": scope, "status": status})
+    }
+
+    fn settle(payload: Value, projects: Result<HashMap<String, String>, String>) -> Value {
+        resolve_with_projects(&payload, &projects).unwrap()
+    }
+
+    #[test]
+    fn plan_rows() {
+        // resolve() writes the name store of whatever agents home the env
+        // names; holding the env lock keeps a sibling's home out of reach.
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let caller = json!({"kind": "human"});
+        let mut holder = row("lead-a", "epic-a", "busy");
+        holder["harness_session_id"] = json!("sess-a");
+        let out = resolve(&json!({
+            "kind": "role-settle", "scope": "epic-a", "successor": "Taylor", "succession": true, "proposed_name": "Taylor",
+            "caller": caller, "rows": [holder],
+        }))
+        .unwrap();
+        assert_eq!(out["holders"], json!(["lead-a"]));
+        assert_eq!(
+            out["holder_ids"],
+            json!([{
+                "name": "lead-a", "harness_session_id": "sess-a",
+            }])
+        );
+        assert_eq!(out["caller"], json!({"kind": "human"}));
+
+        // Succession re-homes the org. A live child whose CURRENT
+        // owner (the provenance owner) names a vacated holder's session
+        // follows the team; a child already owned by another session stays
+        // put; a provenance-less child (birth edge only) is never selected,
+        // and a terminal row never moves.
+        let out = resolve(&json!({
+            "kind": "role-settle", "scope": "epic-a", "successor": "Taylor",
+            "successor_identity": {"harness": "codex", "session_id": "sess-successor", "cwd": "/w"},
+            "plan": {
+                "caller": {"kind": "human"},
+                "holder_ids": [{"name": "lead-a", "harness_session_id": "sess-a"}],
+                "outcome": "succeeded", "vacate": ["lead-a"],
+            },
+            "rows": [
+                {"name": "lead-a", "role_scope": "epic-a", "status": "busy",
+                 "harness_session_id": "sess-a"},
+                {"name": "w5", "status": "busy",
+                 "spawned_by_session": "sess-a",
+                 "spawn_provenance": {"owner": {"kind": "session",
+                                                "session_id": "sess-a"}}},
+                {"name": "elsewhere", "status": "busy",
+                 "spawned_by_session": "sess-a",
+                 "spawn_provenance": {"owner": {"kind": "session",
+                                                "session_id": "sess-other"}}},
+                {"name": "legacy", "status": "busy",
+                 "spawned_by_session": "sess-a"},
+                {"name": "corpse", "status": "exited",
+                 "spawned_by_session": "sess-a"}
+            ],
+        }))
+        .unwrap();
+        assert_eq!(out["outcome"], "succeeded");
+        assert_eq!(out["vacate_rows"], json!([0]));
+        assert_eq!(out["reown_rows"], json!([1]));
+        assert_eq!(out["reown_owner"]["session_id"], "sess-successor");
+        assert_eq!(out["reown_owner"]["kind"], "session");
+
+        let out = resolve(&json!({
+            "kind": "role-settle", "scope": "epic-a", "successor": "Taylor",
+            "plan": {
+                "caller": {"kind": "human"},
+                "holder_ids": [{"name": "lead-a", "harness_session_id": "sess-a"}],
+                "outcome": "succeeded", "vacate": ["lead-a"],
+            },
+            "rows": [{"name": "lead-a", "role_scope": "epic-a", "status": "busy",
+                      "harness_session_id": "sess-b"}],
+        }))
+        .unwrap();
+        assert_eq!(out["outcome"], "declined");
+        assert_eq!(out["vacate_rows"], json!([]));
+
+        let out = resolve(&json!({
+            "kind": "role-settle", "scope": "epic-a", "successor": "Taylor",
+            "plan": {
+                "caller": {"kind": "human"},
+                "holder_ids": [{"name": "lead-a", "harness_session_id": "sess-a"}],
+                "outcome": "succeeded", "vacate": ["lead-a"],
+            },
+            "rows": [
+                {"name": "other", "role_scope": null, "status": "busy"},
+                {"name": "dead-lead", "role_scope": "epic-a", "status": "exited"},
+            ],
+        }))
+        .unwrap();
+        assert_eq!(out["clear_terminal_rows"], json!([1]));
+        assert_eq!(out["outcome"], "granted");
+        assert_eq!(out["vacate_rows"], json!([]));
+
+        let out = resolve_with_projects(
+            &json!({
+                "kind": "role-settle", "scope": "epic-a", "successor": "Taylor",
+                "plan": {
+                    "caller": {"kind": "human"}, "holder_ids": [],
+                    "outcome": "granted", "vacate": [],
+                },
+                "rows": [{"name": "lead-b", "role_scope": "epic-a,epic-b",
+                          "status": "busy", "harness_session_id": "sess-b"}],
+            }),
+            &Ok(HashMap::new()),
+        )
+        .unwrap();
+        assert_eq!(out["outcome"], "declined");
+        assert_eq!(out["vacate_rows"], json!([]));
+
+        let rows = json!([{
+            "name": "lead-a", "role_scope": "epic-a", "status": "busy",
+            "harness_session_id": "sess-a",
+        }]);
+        for (plan, key) in [
+            (json!({"holder_ids": [], "outcome": "granted"}), "caller"),
+            (
+                json!({"caller": {"kind": "unknown"}, "holder_ids": [], "outcome": "granted"}),
+                "caller",
+            ),
+            (
+                json!({"caller": {"kind": "human"}, "outcome": "granted"}),
+                "holder_ids",
+            ),
+            (
+                json!({"caller": {"kind": "human"}, "holder_ids": "bad", "outcome": "granted"}),
+                "holder_ids",
+            ),
+            (
+                json!({"caller": {"kind": "human"}, "holder_ids": []}),
+                "outcome",
+            ),
+            (
+                json!({"caller": {"kind": "human"}, "holder_ids": [], "outcome": "unknown"}),
+                "outcome",
+            ),
+            (
+                json!({
+                    "caller": {"kind": "human"},
+                    "holder_ids": [{"name": "lead-a", "harness_session_id": "sess-a"}],
+                    "outcome": "succeeded",
+                }),
+                "vacate",
+            ),
+            (
+                json!({"caller": {"kind": "human"}, "holder_ids": [],
+                       "outcome": "granted", "vacate": "bad"}),
+                "vacate",
+            ),
+            (
+                json!({
+                    "caller": {"kind": "human"},
+                    "holder_ids": [{"name": "lead-a", "harness_session_id": "sess-a"}],
+                    "outcome": "succeeded", "vacate": [],
+                }),
+                "vacate",
+            ),
+        ] {
+            let error = resolve(&json!({
+                "kind": "role-settle", "scope": "epic-a", "successor": "Taylor", "rows": rows,
+                "plan": plan,
+            }))
+            .unwrap_err();
+            assert!(error.contains(key), "{error}");
+        }
+    }
+
+    // -- take-over: a superior caller moves a contained sub-team --
+
+    /// The AC1 world: an L1 row over the `fno` project, a live L2 `alder`
+    /// over two fno epics, and the project map marking `fno` a project so
+    /// the rung half of the containment floor can pass.
+    fn take_over_rows() -> Value {
+        json!([
+            {"name": "vellum", "status": "live", "role_scope": "fno",
+             "role_level": 1, "cwd": "/repo", "harness": "claude",
+             "harness_session_id": "sess-vellum",
+             "created_at": "2026-10-16T00:00:00Z"},
+            {"name": "alder", "status": "busy", "role_scope": "x-aaaa,x-bbbb",
+             "role_level": 2, "cwd": "/repo", "harness": "codex",
+             "harness_session_id": "sess-alder",
+             "created_at": "2026-10-06T10:00:00Z"},
+        ])
+    }
+
+    fn take_over_projects() -> Result<HashMap<String, String>, String> {
+        Ok(HashMap::from([("fno".to_string(), "fno".to_string())]))
+    }
+
+    /// AC1-HP + AC4-HP (door side): a superior L1 with `take_over.reason`
+    /// and a person-name colleague succeeds the plan, vacating the old lead
+    /// and carrying `take_over.by`, the reason and one predecessor row; with
+    /// no `take_over` key the same L1 now gets the door-naming refusal.
+    #[test]
+    fn a_superior_lead_takes_over_a_contained_sub_team_and_the_refusal_names_the_door() {
+        // The plan reads the name history through the agents home: pin a
+        // fresh home so the test never reads the machine's real store.
+        let home = tempfile::TempDir::new().unwrap();
+        let _env = crate::AgentsHomeEnvGuard::set(&home.path().join("home"));
+        let payload = json!({
+            "kind": "role-settle", "scope": "x-aaaa,x-bbbb",
+            "take_over": {"reason": "Alder paused since 10:00 on the intake bug"},
+            "proposed_name": "Maya",
+            "caller": {"kind": "agent", "name": "vellum"},
+            "rows": take_over_rows(),
+        });
+        let out = settle(payload, take_over_projects());
+        assert_eq!(out["outcome"], "succeeded");
+        assert_eq!(out["vacate"], json!(["alder"]));
+        assert_eq!(out["take_over"]["by"], json!("vellum"));
+        assert_eq!(
+            out["take_over"]["reason"],
+            json!("Alder paused since 10:00 on the intake bug")
+        );
+        assert_eq!(
+            out["take_over"]["predecessors"].as_array().unwrap().len(),
+            1
+        );
+        let pred = &out["take_over"]["predecessors"][0];
+        assert_eq!(pred["name"], json!("alder"));
+        assert_eq!(pred["status"], json!("busy"));
+        assert_eq!(pred["harness"], json!("codex"));
+        assert_eq!(pred["harness_session_id"], json!("sess-alder"));
+
+        // AC4-HP: no take_over key, same superior caller: the refusal names
+        // the take-over door.
+        let out = settle(
+            json!({
+                "kind": "role-settle", "scope": "x-aaaa,x-bbbb",
+                "caller": {"kind": "agent", "name": "vellum"},
+                "rows": take_over_rows(),
+            }),
+            take_over_projects(),
+        );
+        assert_eq!(out["outcome"], "declined");
+        let refusal = out["refusal"].as_str().unwrap();
+        assert!(refusal.contains("--take-over \"<why>\""), "{refusal}");
+
+        // A human caller gets the same succeeded answer, journaled as `the
+        // user` (the take-over request carries no agent name).
+        let out = settle(
+            json!({
+                "kind": "role-settle", "scope": "x-aaaa,x-bbbb",
+                "take_over": {"reason": "r"},
+                "proposed_name": "Maya",
+                "caller": {"kind": "human"},
+                "rows": take_over_rows(),
+            }),
+            take_over_projects(),
+        );
+        assert_eq!(out["outcome"], "succeeded");
+        assert_eq!(out["take_over"]["by"], json!("the user"));
+
+        // A contained superior with no --name declines before launch instead
+        // of launching a minted name; `--name redraw` passes to the draw.
+        let ask = |redraw: bool| {
+            settle(
+                json!({
+                    "kind": "role-settle", "scope": "x-aaaa,x-bbbb",
+                    "take_over": {"reason": "r"}, "redraw": redraw,
+                    "caller": {"kind": "agent", "name": "vellum"},
+                    "rows": take_over_rows(),
+                }),
+                take_over_projects(),
+            )
+        };
+        let out = ask(false);
+        assert_eq!(out["outcome"], "declined");
+        let refusal = out["refusal"].as_str().unwrap();
+        assert!(refusal.contains("requires --name"), "{refusal}");
+        assert!(refusal.contains("--name redraw"), "{refusal}");
+        assert_eq!(ask(true)["outcome"], "succeeded");
+
+        // AC2-ERR + AC3-ERR + AC4-HP (incumbent side): an unrelated L2's
+        // take-over declines with the not-contained text (and the no-key
+        // refusal keeps the incumbent text), a blank reason declines, and
+        // the own-team ask declines.
+        let rows = json!([
+            {"name": "ivy", "status": "busy", "role_scope": "x-bbbb",
+             "role_level": 2, "cwd": "/repo", "harness": "claude",
+             "harness_session_id": "sess-ivy",
+             "created_at": "2026-10-16T00:00:00Z"},
+            {"name": "alder", "status": "busy", "role_scope": "x-aaaa",
+             "role_level": 2, "cwd": "/repo", "harness": "codex",
+             "harness_session_id": "sess-alder",
+             "created_at": "2026-10-06T10:00:00Z"},
+        ]);
+        // AC2-ERR: an unrelated L2 is refused with the not-contained text,
+        // which never suggests the take-over door.
+        let out = settle(
+            json!({
+                "kind": "role-settle", "scope": "x-aaaa",
+                "take_over": {"reason": "r"},
+                "caller": {"kind": "agent", "name": "ivy"},
+                "rows": rows,
+            }),
+            Ok(HashMap::new()),
+        );
+        assert_eq!(out["outcome"], "declined");
+        let refusal = out["refusal"].as_str().unwrap();
+        assert!(refusal.contains("does not contain"), "{refusal}");
+        assert!(!refusal.contains("you can move it"), "{refusal}");
+
+        // AC4 incumbent side: the same unrelated caller with no take_over
+        // key keeps the incumbent text byte for byte.
+        let out = settle(
+            json!({
+                "kind": "role-settle", "scope": "x-aaaa",
+                "caller": {"kind": "agent", "name": "ivy"},
+                "rows": rows,
+            }),
+            Ok(HashMap::new()),
+        );
+        assert_eq!(out["outcome"], "declined");
+        let refusal = out["refusal"].as_str().unwrap();
+        assert!(refusal.contains("not by this session"), "{refusal}");
+
+        // AC3-ERR: a blank or whitespace reason declines.
+        for reason in ["", "   "] {
+            let out = settle(
+                json!({
+                    "kind": "role-settle", "scope": "x-aaaa,x-bbbb",
+                    "take_over": {"reason": reason},
+                    "caller": {"kind": "agent", "name": "vellum"},
+                    "rows": take_over_rows(),
+                }),
+                take_over_projects(),
+            );
+            assert_eq!(out["outcome"], "declined");
+            let refusal = out["refusal"].as_str().unwrap();
+            assert!(refusal.contains("needs a reason"), "{refusal}");
+        }
+
+        // Own team: the caller's territory EQUALS the target's; the
+        // take-over declines naming --hand-off instead.
+        let out = settle(
+            json!({
+                "kind": "role-settle", "scope": "x-aaaa,x-bbbb",
+                "take_over": {"reason": "r"},
+                "caller": {"kind": "agent", "name": "alder"},
+                "rows": take_over_rows(),
+                "exclude_name": null,
+            }),
+            take_over_projects(),
+        );
+        assert_eq!(out["outcome"], "declined");
+        let refusal = out["refusal"].as_str().unwrap();
+        assert!(refusal.contains("is your own team"), "{refusal}");
+    }
+
+    /// AC5-HP: the apply pass re-homes the team like succession: alder's row
+    /// vacates, only the worker whose provenance owner names alder's session
+    /// re-owns to the successor.
+    #[test]
+    fn a_take_over_apply_vacates_the_old_lead_and_reowns_his_workers() {
+        let store = tempfile::TempDir::new().unwrap();
+        let _home = crate::AgentsHomeEnvGuard::set(store.path());
+        let payload = json!({
+            "kind": "role-settle", "scope": "x-aaaa,x-bbbb",
+            "successor": "Maya", "successor_identity": {"harness": "claude", "session_id": "sess-maya", "cwd": "/w"},
+            "take_over": {"reason": "r"},
+            "plan": {
+                "caller": {"kind": "agent", "name": "vellum"},
+                "holder_ids": [{"name": "alder", "harness_session_id": "sess-alder"}],
+                "outcome": "succeeded", "vacate": ["alder"],
+                "take_over": {"by": "vellum", "reason": "r", "predecessors": [{"name": "alder", "status": "busy", "harness": "codex", "harness_session_id": "sess-alder"}]},
+            },
+            "rows": [
+                {"name": "alder", "role_scope": "x-aaaa,x-bbbb", "status": "busy",
+                 "harness_session_id": "sess-alder"},
+                {"name": "w1", "status": "busy",
+                 "spawned_by_session": "sess-alder",
+                 "spawn_provenance": {"owner": {"kind": "session", "session_id": "sess-alder"}}},
+                {"name": "w2", "status": "busy",
+                 "spawned_by_session": "sess-alder"},
+            ],
+        });
+        let answer = resolve_at(&payload, &store.path().join("team_names.json")).unwrap();
+        assert_eq!(answer["outcome"], "succeeded");
+        assert_eq!(answer["vacate_rows"], json!([0]));
+        assert_eq!(answer["reown_rows"], json!([1]));
+    }
+}

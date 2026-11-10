@@ -1,0 +1,44 @@
+# model_tiers.toml - the benchmark-model reachability and static tier tables.
+# ONE owner: route_gather.rs include_str!s it, and accounts/benchmarks.rs and
+# review_level.rs read it through route_gather::load_model_tiers. A row absent
+# from reachability is invisible to routing.
+#
+# Reachability: benchmark model name -> [harness, --model value]. The declared
+# inventory (config.routing.models) is the only reachability SOURCE; this
+# table is the built-in FALLBACK a tier request still resolves on an install
+# that declares nothing.
+#
+# Two operator-named candidates were OMITTED because no configured provider
+# serves an id matching them: `gemini-3.7-flash` (the
+# google surface here tops out at antigravity-gemini-3.x and gemini-2.5) and
+# opencode's "0x Alpha Free" tier (a marketing name; opencode's real free ids
+# are hy3-free, mimo-v2.5-free, muse-spark-1.2-contributor-free,
+# nemotron-3-ultra-free, nemotron-3.5-lightning-free - none carries the 0x
+# or alpha name). The omission is the rule working: an unverifiable id is
+# never guessed into a routing table.
+[reachability]
+claude-fable = ["claude", "fable"]
+claude-opus = ["claude", "opus"]
+claude-sonnet = ["claude", "sonnet"]
+# The evals gate's fallback lane names the roster model id; these two rows
+# are what let a virgin install resolve that name (no config row required):
+# the reachability pair carries harness and model, and the tier entry is what
+# puts the name on the builtin inventory at all (an inventory row is built
+# only for a name a tier table lists).
+"claude-sonnet-5-5" = ["claude", "claude-sonnet-5-5"]
+claude-haiku = ["claude", "haiku"]
+"glm-5.3[1m]" = ["claude", "glm-5.3[1m]"]
+"glm-4.7" = ["claude", "glm-4.7"]
+codex-sol = ["codex", "sol"]
+codex-terra = ["codex", "terra"]
+codex-luna = ["codex", "luna"]
+
+# Static fallback tier bands (curated) used ONLY when no snapshot exists, so
+# tier resolution still works offline / on a virgin install: routing degrades,
+# never blocks. `max` is the deliberate exception: a max request takes the
+# STRONGEST reachable model, not the cheapest that clears.
+[static_tiers]
+max = ["claude-fable", "codex-sol"]
+high = ["claude-opus", "codex-sol"]
+medium = ["claude-sonnet", "claude-sonnet-5-5", "glm-5.3[1m]", "codex-terra"]
+low = ["glm-4.7", "claude-haiku", "codex-luna"]

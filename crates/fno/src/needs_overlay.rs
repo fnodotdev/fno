@@ -1,0 +1,826 @@
+//! The needs-me-queue events-fold leg : a bounded, fail-open shell-out
+//! to `fno-agents needs --json`, mirroring [`crate::digest_overlay`]'s idiom.
+//!
+//! The client owns the live badge leg (blocked/done-unseen rows from the
+//! layout) and renders it instantly; this module supplies the event-derived
+//! leg (`review_wedged` / `budget_stop`) the client cannot see from badges. The
+//! call is off the UI loop: it runs on a spawned task and reports back over a
+//! channel, so a slow `fno-agents` never blocks the overlay from opening.
+
+use serde::Deserialize;
+use std::time::Duration;
+
+/// Same 800ms cap as the digest overlay: a fold slower than this degrades the
+/// queue to its live badge leg with a visible notice, never blocks the UI.
+const SHELLOUT_TIMEOUT: Duration = Duration::from_millis(800);
+
+/// The questions leg's bound. The bell renders the index fold at once and
+/// applies this read whenever it lands, so the projection is a background
+/// refresh, never a deadline the UI waits under (the 800ms cap turned a
+/// loaded machine into "questions unavailable" with ten questions open).
+const QUESTIONS_TIMEOUT: Duration = Duration::from_secs(30);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(45);
+const ANSWER_TIMEOUT_MESSAGE: &str =
+    "timed out after 45s; the answer may have landed - rerun it, a rerun resumes";
+
+/// One event-derived need, as emitted by `fno-agents needs --json`. The `live`
+/// bit is the claim-liveness stamp (1.4): the client renders an item
+/// that joins no roster row only when it is `live`, so a dead session's stale
+/// stop never nags.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FoldItem {
+    pub kind: String,
+    pub session_id: String,
+    #[serde(default)]
+    pub node: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub ts: String,
+    #[serde(default)]
+    pub evidence: String,
+    #[serde(default)]
+    pub live: bool,
+}
+
+/// One operator-owned priority, as emitted by `fno inbox outstanding mine
+/// --json`. `n` is the stable file index used by later mutation tasks; this
+/// task only folds and renders it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MineItem {
+    pub n: usize,
+    pub text: String,
+    pub done: bool,
+    pub node: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct MineResponse {
+    mine: Vec<MineItem>,
+}
+
+/// One option of a [`QuestionItem`], mirroring the projection's ItemOption.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct QuestionOption {
+    pub n: u32,
+    pub text: String,
+    #[serde(default)]
+    pub next: Option<String>,
+    #[serde(default)]
+    pub pros: Vec<String>,
+    #[serde(default)]
+    pub cons: Vec<String>,
+}
+
+/// One context field of a [`QuestionItem`], mirroring the projection's
+/// Recommendation.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct QuestionRecommendation {
+    pub option: u32,
+    #[serde(default)]
+    pub why: String,
+    #[serde(default)]
+    pub downside: Option<String>,
+}
+
+/// One asker of a [`QuestionItem`], mirroring the projection's Asker.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct QuestionAsker {
+    pub handle: String,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub harness: Option<String>,
+    #[serde(default)]
+    pub live: Option<bool>,
+    #[serde(default)]
+    pub reach: Option<String>,
+}
+
+/// Who asked, mirroring the projection's `origin`: the session the question
+/// came from, with its registry name, harness and host when known. The
+/// HQ page re-serializes it, so it also derives Serialize.
+#[derive(Debug, Clone, Default, Deserialize, serde::Serialize)]
+pub struct QuestionOrigin {
+    /// The asker's lane name. Reads null as absent: one cross-machine copy
+    /// stamped `"handle": null` (the ask carried no asker) and a bare String
+    /// here refused the whole response, blanking every question page.
+    #[serde(default)]
+    pub handle: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub harness: Option<String>,
+    #[serde(default)]
+    pub host: Option<String>,
+}
+
+/// The ladder rung a [`QuestionItem`] sits at, mirroring the projection's
+/// `rung`. `holder_*` are absent at the user rung.
+#[derive(Debug, Clone, Default, Deserialize, serde::Serialize)]
+pub struct QuestionRung {
+    #[serde(default)]
+    pub level: Option<String>,
+    #[serde(default)]
+    pub holder_name: Option<String>,
+    #[serde(default)]
+    pub holder_session: Option<String>,
+}
+
+/// One rung a [`QuestionItem`] climbed from, mirroring one `via` hop: the
+/// holder that let it pass, and the evidence they named.
+#[derive(Debug, Clone, Default, Deserialize, serde::Serialize)]
+pub struct QuestionHop {
+    #[serde(default)]
+    pub level: Option<String>,
+    #[serde(default)]
+    pub holder_name: Option<String>,
+    #[serde(default)]
+    pub evidence: Option<String>,
+}
+
+/// One open or answered operator question, mirroring the projection item
+/// `fno-agents needs --items --json` prints. This is what the overlay and the
+/// notifications panel render and answer. All fields but `id` are
+/// optional or defaulted, so a projection field added later never breaks an
+/// older client. The settled bit folds node-closed questions into Answered.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct QuestionItem {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub asker: Option<QuestionAsker>,
+    #[serde(default)]
+    pub node: Option<String>,
+    #[serde(default)]
+    pub blocks: Vec<String>,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub priority: String,
+    #[serde(default)]
+    pub ready: bool,
+    #[serde(default)]
+    pub missing: Vec<String>,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub settled: bool,
+    #[serde(default)]
+    pub options: Vec<QuestionOption>,
+    /// The screenshots the ask attached, as absolute paths.
+    #[serde(default)]
+    pub images: Vec<String>,
+    #[serde(default)]
+    pub blocked_because: Option<String>,
+    #[serde(default)]
+    pub options_rationale: Option<String>,
+    #[serde(default)]
+    pub recommendation: Option<QuestionRecommendation>,
+    #[serde(default)]
+    pub unknowns: Option<String>,
+    #[serde(default)]
+    pub reversible: Option<String>,
+    #[serde(default)]
+    pub cost_if_wrong: Option<String>,
+    #[serde(default)]
+    pub meanwhile: Option<String>,
+    #[serde(default)]
+    pub class: Option<String>,
+    /// The asking machine on a copy from another machine; `None` when it
+    /// was asked here.
+    #[serde(default)]
+    pub host: Option<String>,
+    /// The short number (`Q87`) the store minted for this question.
+    #[serde(default)]
+    pub number: Option<String>,
+    /// The session that asked, with its registry name and harness.
+    #[serde(default)]
+    pub origin: Option<QuestionOrigin>,
+    /// The rung the row sits at on the question ladder.
+    #[serde(default)]
+    pub rung: Option<QuestionRung>,
+    /// Every rung the row climbed from, asking lead last.
+    #[serde(default)]
+    pub via: Vec<QuestionHop>,
+    /// What the asker already attempted, required before a climb.
+    #[serde(default)]
+    pub tried: Option<String>,
+    /// Why this row reached this rung: the climb evidence.
+    #[serde(default)]
+    pub evidence: Option<String>,
+    /// The node's title and graph status, joined by the projection at read.
+    #[serde(default)]
+    pub node_title: Option<String>,
+    #[serde(default)]
+    pub node_stage: Option<String>,
+    /// What the row does when its deadline passes with no answer.
+    #[serde(default)]
+    pub on_silence: Option<String>,
+    #[serde(default)]
+    pub deadline: Option<String>,
+}
+
+/// One recently answered item beside the open list, from the payload's
+/// top-level `answered` array.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AnsweredItem {
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub asker: Option<String>,
+    #[serde(default)]
+    pub answer: String,
+    #[serde(default)]
+    pub rung: Option<String>,
+    #[serde(default)]
+    pub outcome: Option<String>,
+    #[serde(default)]
+    pub at: String,
+}
+
+/// The questions fold shape: open-or-answered items plus the recently
+/// answered rows, one shape for the overlay and the sideline block.
+#[derive(Debug, Clone, Default)]
+pub struct QuestionsFold {
+    pub items: Vec<QuestionItem>,
+    pub answered: Vec<AnsweredItem>,
+    pub as_of: Option<u64>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct QuestionsResponse {
+    pub(crate) items: Vec<QuestionItem>,
+    #[serde(default)]
+    answered: Vec<AnsweredItem>,
+    #[serde(default)]
+    as_of: Option<u64>,
+}
+
+/// Which items of the projection payload this fold keeps: real questions and
+/// pins in an open or answered state (mine rows are the user lane, not a
+/// question for the user).
+fn keep_question(item: &QuestionItem) -> bool {
+    matches!(item.kind.as_str(), "question" | "pin")
+        && matches!(item.state.as_str(), "open" | "answered")
+}
+
+/// Both independent overlay reads. Each leg carries its own failure so one
+/// unavailable command never hides the other lanes.
+pub struct FoldOutcome {
+    pub needs: Option<Vec<FoldItem>>,
+    pub mine: Option<Vec<MineItem>>,
+    pub questions: Result<QuestionsFold, String>,
+}
+
+/// Fold the needs-me events leg over the `since_epoch` window. `None` on any
+/// failure (timeout, nonzero exit, unparseable JSON) - the caller shows the
+/// degraded notice; `Some(vec)` (possibly empty) is a clean fold.
+pub async fn fold_now(since_epoch: &str) -> Option<Vec<FoldItem>> {
+    let mut command =
+        crate::process_admission::tokio_command(crate::digest_overlay::fno_agents_bin());
+    command
+        .args(["needs", "--since-epoch", since_epoch, "--json"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        // Dropped on timeout; kill_on_drop reaps the child so a slow fold can't
+        // orphan a process on each overlay open.
+        .kill_on_drop(true);
+    let fut = crate::process_admission::tokio_output(&mut command);
+    let output = tokio::time::timeout(SHELLOUT_TIMEOUT, fut)
+        .await
+        .ok()?
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse(&output.stdout)
+}
+
+/// Fold the operator-owned lane through the installed/current `fno` binary.
+/// It has the same timeout and kill-on-drop discipline as the needs fold.
+pub async fn mine_now() -> Option<Vec<MineItem>> {
+    let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
+    command
+        .args(["inbox", "outstanding", "mine", "--json"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let fut = crate::process_admission::tokio_output(&mut command);
+    let output = tokio::time::timeout(SHELLOUT_TIMEOUT, fut)
+        .await
+        .ok()?
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_mine(&output.stdout)
+}
+
+/// Fold open questions through the Rust projection command - bounded by
+/// [`QUESTIONS_TIMEOUT`], with the store's cursor fast path (a store-sized
+/// read measured 4.99 s before it). A failure carries a reason: the bell
+/// names it over the last good fold instead of blanking the board.
+pub async fn questions_now() -> Result<QuestionsFold, String> {
+    let mut command =
+        crate::process_admission::tokio_command(crate::digest_overlay::fno_agents_bin());
+    command
+        .args(["needs", "--items", "--json"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let fut = crate::process_admission::tokio_output(&mut command);
+    let output = match tokio::time::timeout(QUESTIONS_TIMEOUT, fut).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => return Err(e.to_string()),
+        Err(_) => {
+            return Err(format!(
+                "timed out after {}ms",
+                QUESTIONS_TIMEOUT.as_millis()
+            ))
+        }
+    };
+    if !output.status.success() {
+        return Err(questions_reason(&output.stdout).unwrap_or_else(|| {
+            match output.status.code() {
+                Some(code) => format!("needs --items exited {code}"),
+                None => "needs --items was killed by a signal".to_string(),
+            }
+        }));
+    }
+    parse_questions(&output.stdout).ok_or_else(|| "unreadable output".to_string())
+}
+
+/// The first unreadable source the payload names. A failed projection still
+/// prints its payload with exit 1, so the reason rides in `sources`.
+fn questions_reason(stdout: &[u8]) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_slice(stdout).ok()?;
+    let sources = v.get("sources")?.as_array()?;
+    let bad = sources
+        .iter()
+        .find(|s| s.get("readable") == Some(&serde_json::Value::Bool(false)))?;
+    let store = bad
+        .get("store")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("source");
+    let error = bad
+        .get("error")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if error.is_empty() {
+        Some(store.to_string())
+    } else {
+        Some(format!("{store}: {error}"))
+    }
+}
+
+/// Run all three bounded reads concurrently under the client's one
+/// single-flight.
+pub async fn fold_both(since_epoch: &str) -> FoldOutcome {
+    let (needs, mine, questions) = tokio::join!(fold_now(since_epoch), mine_now(), questions_now());
+    FoldOutcome {
+        needs,
+        mine,
+        questions,
+    }
+}
+
+/// One MINE mutation the panel can send, addressed by `MineItem::n` (the
+/// stable file index `mine_now` already carries for this purpose). The command
+/// is the one writer; the client never edits the file or `mine_fold` itself -
+/// it re-folds on success so the render always reflects what the file holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MineMutation {
+    Toggle(usize),
+    Drop(usize),
+    Add(String),
+}
+
+/// Run one MINE mutation through the installed/current `fno` binary, bounded
+/// by the same timeout as every other overlay shell-out. `Ok(())` on a clean
+/// exit; `Err(message)` on a timeout, spawn failure, or a nonzero exit (the
+/// CLI writes `mine: failed: ...` to stderr, which is captured here) - the
+/// operator sees WHY a write failed, never a silent no-op.
+pub async fn mine_mutate(mutation: MineMutation) -> Result<(), String> {
+    let mut args: Vec<String> = vec![
+        "inbox".into(),
+        "outstanding".into(),
+        "mine".into(),
+        "do".into(),
+    ];
+    match mutation {
+        MineMutation::Toggle(n) => {
+            args.push("done".into());
+            args.push(n.to_string());
+        }
+        MineMutation::Drop(n) => {
+            args.push("drop".into());
+            args.push(n.to_string());
+        }
+        MineMutation::Add(text) => {
+            args.push("add".into());
+            args.push(text);
+        }
+    }
+    let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
+    command
+        .args(&args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let fut = crate::process_admission::tokio_output(&mut command);
+    let output = tokio::time::timeout(WRITE_TIMEOUT, fut)
+        .await
+        .map_err(|_| "timed out after 45s; the change may have landed - rerun it".to_string())?
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            format!("exit {}", output.status)
+        } else {
+            stderr
+        })
+    }
+}
+
+/// Parse the command's JSON array. Fails quiet (returns `None`) on unparseable
+/// output so a torn stdout degrades the overlay rather than crashing it.
+fn parse(stdout: &[u8]) -> Option<Vec<FoldItem>> {
+    serde_json::from_slice(stdout).ok()
+}
+
+fn parse_mine(stdout: &[u8]) -> Option<Vec<MineItem>> {
+    serde_json::from_slice::<MineResponse>(stdout)
+        .ok()
+        .map(|response| response.mine)
+}
+
+fn parse_questions(stdout: &[u8]) -> Option<QuestionsFold> {
+    if let Ok(response) = serde_json::from_slice::<QuestionsResponse>(stdout) {
+        return Some(fold_from(response.items, response.answered, response.as_of));
+    }
+    // The envelope parsed as a whole is the fast path. On its failure, salvage
+    // item by item: one malformed row (a null where a type is expected) once
+    // blanked every question page, so a bad row now becomes its own degraded
+    // line and the readable rows survive. Only a stdout that is not JSON at
+    // all (a torn write) still fails quiet.
+    let raw = serde_json::from_slice::<serde_json::Value>(stdout).ok()?;
+    let items = raw.get("items")?.as_array()?;
+    let parsed: Vec<QuestionItem> = items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            serde_json::from_value::<QuestionItem>(item.clone())
+                .unwrap_or_else(|e| degraded_question(item, i, &e))
+        })
+        .collect();
+    let answered = raw
+        .get("answered")
+        .and_then(serde_json::Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|r| serde_json::from_value::<AnsweredItem>(r.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let as_of = raw.get("as_of").and_then(serde_json::Value::as_u64);
+    Some(fold_from(parsed, answered, as_of))
+}
+
+fn fold_from(
+    items: Vec<QuestionItem>,
+    answered: Vec<AnsweredItem>,
+    as_of: Option<u64>,
+) -> QuestionsFold {
+    QuestionsFold {
+        items: items.into_iter().filter(keep_question).collect(),
+        answered,
+        as_of,
+    }
+}
+
+/// One unreadable projection row, rendered as its own degraded question so a
+/// malformed item never blanks the rest of the board. The id and created_at
+/// ride when the raw row carries them; the serde error names the field that
+/// refused.
+fn degraded_question(
+    raw: &serde_json::Value,
+    index: usize,
+    err: &serde_json::Error,
+) -> QuestionItem {
+    let id = raw
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty());
+    QuestionItem {
+        id: id
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("q-unreadable-{index}")),
+        kind: "question".into(),
+        title: "projection row unreadable".into(),
+        body: Some(format!(
+            "this question's stored row could not be read: {err}"
+        )),
+        created_at: raw
+            .get("created_at")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        state: "open".into(),
+        priority: "p2".into(),
+        ..QuestionItem::default()
+    }
+}
+
+/// The pick the overlay sends through the door: an option number (1-based),
+/// free-text words, a pin's done, or a hand-off to the team over the node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnswerPick {
+    Option(u32),
+    Words(String),
+    Done,
+    Delegate,
+}
+
+/// Answer one open question through the door - `fno-agents needs
+/// --answer <id> ... --sink mux`, the one writer of a mux answer. Bounded,
+/// single writer: the client never records the decision itself. `Ok(receipt)`
+/// returns the door's JSON receipt; `Err(message)` on a timeout, spawn
+/// failure, or a nonzero exit (stderr captured) - the operator sees WHY a
+/// write failed, never a silent no-op.
+pub async fn answer(item_id: &str, pick: AnswerPick) -> Result<String, String> {
+    answer_as(item_id, pick, "mux", None)
+        .await
+        .map(|_| "recorded, delivering".to_string())
+        .map_err(|f| f.message)
+}
+
+/// Why the door did not record: its own line, and whether the door refused
+/// (exit 2: the question is closed, the option is out of range, the sink
+/// is not legal) or the call itself failed (a timeout, a spawn error, the
+/// write lock).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DoorFailure {
+    pub(crate) message: String,
+    pub(crate) refused: bool,
+    pub(crate) timed_out: bool,
+}
+
+/// The one spawn path for an answer. `sink` is `mux` or `command_page`, and
+/// `email` rides only with `command_page`. `Ok` is the door's JSON receipt.
+pub(crate) async fn answer_as(
+    item_id: &str,
+    pick: AnswerPick,
+    sink: &str,
+    email: Option<&str>,
+) -> Result<String, DoorFailure> {
+    let mut args: Vec<String> = vec!["needs".into(), "--answer".into(), item_id.to_string()];
+    match pick {
+        AnswerPick::Option(n) => {
+            args.push("--option".into());
+            args.push(n.to_string());
+        }
+        AnswerPick::Words(text) => {
+            args.push("--words".into());
+            args.push(text);
+        }
+        AnswerPick::Done => {
+            args.push("--done".into());
+        }
+        AnswerPick::Delegate => {
+            args.push("--delegate".into());
+        }
+    }
+    args.push("--sink".into());
+    args.push(sink.into());
+    if let Some(login) = email {
+        args.push("--email".into());
+        args.push(login.into());
+    }
+    run_door_coded(args)
+        .await
+        .map_err(|(_, message, code)| DoorFailure {
+            timed_out: message == ANSWER_TIMEOUT_MESSAGE,
+            refused: code == Some(2),
+            message,
+        })
+}
+
+/// Withdraw open questions with no answer through the door - `fno-agents
+/// needs --archive <id>... --sink mux`. The same bounded shape as
+/// [`answer`]; `Ok` reads the door's receipt as "archived N". A partial
+/// archive (some ids refused) is still `Ok`, the refusal appended, so the
+/// view refolds over the questions that did close.
+pub async fn archive(ids: Vec<String>) -> Result<String, String> {
+    let mut args: Vec<String> = vec!["needs".into()];
+    for id in ids {
+        args.push("--archive".into());
+        args.push(id);
+    }
+    args.push("--sink".into());
+    args.push("mux".into());
+    let archived = |stdout: &str| {
+        serde_json::from_str::<serde_json::Value>(stdout)
+            .ok()
+            .and_then(|v| v.get("archived").and_then(serde_json::Value::as_u64))
+            .unwrap_or(0)
+    };
+    match run_door(args).await {
+        Ok(stdout) => Ok(format!("archived {}", archived(&stdout))),
+        Err((stdout, msg)) => match archived(&stdout) {
+            0 => Err(msg),
+            n => Ok(format!("archived {n}; {msg}")),
+        },
+    }
+}
+
+/// Close every still-open question whose node or blocked node has finished.
+/// The daemon-side fold owns the graph read and writes `node-closed` rows;
+/// this client only reports its receipt.
+pub async fn clear_settled() -> Result<String, String> {
+    let result = |stdout: &str| {
+        serde_json::from_str::<serde_json::Value>(stdout)
+            .ok()
+            .and_then(|v| v.get("cleared")?.as_array().map(|rows| rows.len()))
+            .unwrap_or(0)
+    };
+    match run_door(vec!["needs".into(), "--clear-settled".into()]).await {
+        Ok(stdout) => Ok(format!("cleared {} settled questions", result(&stdout))),
+        Err((stdout, error)) => match result(&stdout) {
+            0 => Err(error),
+            n => Ok(format!("cleared {n} settled questions; {error}")),
+        },
+    }
+}
+
+/// One bounded door call: stdout on success; on a timeout, a spawn
+/// failure, or a nonzero exit, whatever stdout the door printed and the
+/// reason (stderr, else the exit).
+async fn run_door(args: Vec<String>) -> Result<String, (String, String)> {
+    run_door_coded(args)
+        .await
+        .map_err(|(stdout, message, _)| (stdout, message))
+}
+
+/// [`run_door`] plus the exit code, so a caller can tell a refusal (2) from a
+/// failed write.
+async fn run_door_coded(args: Vec<String>) -> Result<String, (String, String, Option<i32>)> {
+    let mut command =
+        crate::process_admission::tokio_command(crate::digest_overlay::fno_agents_bin());
+    command
+        .args(&args)
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let fut = crate::process_admission::tokio_output(&mut command);
+    let output = tokio::time::timeout(WRITE_TIMEOUT, fut)
+        .await
+        .map_err(|_| (String::new(), ANSWER_TIMEOUT_MESSAGE.to_string(), None))?
+        .map_err(|e| (String::new(), e.to_string(), None))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if output.status.success() {
+        Ok(stdout)
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err((
+            stdout,
+            if stderr.is_empty() {
+                format!("exit {}", output.status)
+            } else {
+                stderr
+            },
+            output.status.code(),
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_a_fold_array() {
+        let json = br#"[{"kind":"review_wedged","session_id":"s","node":"x-1","name":"x-1","title":"t","ts":"2026-07-03T02:00:00Z","evidence":"green PR wedged","live":true}]"#;
+        let items = parse(json).expect("valid array parses");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].kind, "review_wedged");
+        assert_eq!(items[0].node.as_deref(), Some("x-1"));
+        assert!(items[0].live);
+    }
+    #[test]
+    fn torn_json_fails_quiet() {
+        assert!(parse(b"[{not json").is_none());
+    }
+
+    #[test]
+    fn parses_required_mine_json() {
+        let json = br#"{"mine":[{"n":1,"text":"ship tonight","done":false,"node":null},{"n":2,"text":"cut commands","done":true,"node":"x-aaaa"}]}"#;
+        let items = parse_mine(json).expect("valid mine response parses");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].n, 1);
+        assert_eq!(items[0].text, "ship tonight");
+        assert!(!items[0].done);
+        assert_eq!(items[1].node.as_deref(), Some("x-aaaa"));
+    }
+    #[test]
+    fn parses_required_questions_json() {
+        // AC4-HP: the projection payload with items and the answered array.
+        let json = br#"{"as_of":1000,"items":[
+            {"id":"q-1","kind":"question","title":"which auth?","state":"open","ready":false,"missing":["unknowns"],"priority":"normal","created_at":"2026-09-26T05:00:00Z","options":[{"n":1,"text":"oauth"},{"n":2,"text":"apikey"}],"asker":{"handle":"w1","live":true},
+             "origin":{"handle":"w1","session_id":"aaaa1111-bbbb","name":"t-one","harness":"claude","host":"u"},
+             "rung":{"level":"user"},
+             "via":[{"level":"lead","holder_name":"tomas","evidence":"read PR 12"}],
+             "tried":"two leads declined","evidence":"no owner named","class":"irreversible",
+             "node_title":"seat table drawer","node_stage":"in_review",
+             "on_silence":"proceed","deadline":"2026-10-30T09:00:00Z"},
+            {"id":"m-1","kind":"mine","title":"ship tonight","state":"open","ready":true,"missing":[],"priority":"normal","created_at":"","options":[]},
+            {"id":"q-2","kind":"pin","title":"publish the crate","state":"open","ready":false,"missing":["node"],"priority":"high","created_at":"","options":[]}
+        ],"answered":[{"id":"q-0","title":"old one","asker":"w9","answer":"narrow","rung":"mail","outcome":"landed","at":"2026-09-26T04:00:00Z"}]}"#;
+        let fold = parse_questions(json).expect("valid projection payload parses");
+        assert_eq!(fold.items.len(), 2, "mine rows are not questions");
+        assert_eq!(fold.items[0].id, "q-1");
+        assert_eq!(fold.items[0].options[0].text, "oauth");
+        assert_eq!(fold.items[0].asker.as_ref().unwrap().live, Some(true));
+        assert_eq!(fold.items[0].missing, vec!["unknowns"]);
+        let origin = fold.items[0].origin.as_ref().unwrap();
+        assert_eq!(origin.name.as_deref(), Some("t-one"));
+        assert_eq!(origin.session_id.as_deref(), Some("aaaa1111-bbbb"));
+        assert_eq!(origin.host.as_deref(), Some("u"));
+        assert_eq!(
+            fold.items[0].rung.as_ref().unwrap().level.as_deref(),
+            Some("user")
+        );
+        assert_eq!(fold.items[0].via[0].holder_name.as_deref(), Some("tomas"));
+        assert_eq!(fold.items[0].tried.as_deref(), Some("two leads declined"));
+        assert_eq!(
+            fold.items[0].node_title.as_deref(),
+            Some("seat table drawer")
+        );
+        assert_eq!(fold.items[0].node_stage.as_deref(), Some("in_review"));
+        assert_eq!(fold.items[0].on_silence.as_deref(), Some("proceed"));
+        assert_eq!(fold.answered.len(), 1);
+        assert_eq!(fold.answered[0].rung.as_deref(), Some("mail"));
+    }
+    #[test]
+    fn null_handle_item_parses_and_sibling_rows_survive() {
+        // One cross-machine copy carried origin {"handle": null}; a bare
+        // String handle refused the whole response and blanked every page.
+        // Null reads absent, so the row itself parses and its siblings
+        // render in full.
+        let json = br#"{"as_of":5,"items":[
+            {"id":"q-null","kind":"question","title":"from the mirror","state":"open",
+             "priority":"p1","created_at":"2026-11-03T22:00:00Z",
+             "origin":{"handle":null,"host":"mac2.local"}},
+            {"id":"q-good","kind":"question","title":"which route?","state":"open",
+             "priority":"p1","created_at":"2026-11-03T22:05:00Z",
+             "options":[{"n":1,"text":"oauth"}]}
+        ]}"#;
+        let fold = parse_questions(json).expect("null-handle row must not blank the fold");
+        assert_eq!(fold.items.len(), 2, "both rows survive");
+        let origin = fold.items[0].origin.as_ref().unwrap();
+        assert_eq!(origin.handle.as_deref(), None, "null reads absent");
+        assert_eq!(origin.host.as_deref(), Some("mac2.local"));
+        assert_eq!(fold.items[1].id, "q-good");
+        assert_eq!(fold.items[1].options[0].text, "oauth");
+    }
+
+    #[test]
+    fn malformed_row_degrades_alone_and_readable_rows_survive() {
+        // A row no field-fix can read (a string where a bool is expected)
+        // becomes its own degraded question; the readable sibling is intact.
+        let json = br#"{"items":[
+            {"id":"q-bad","kind":"question","title":"broken","state":"open",
+             "priority":"p1","created_at":"2026-11-03T22:00:00Z","ready":"yes"},
+            {"id":"q-ok","kind":"question","title":"which route?","state":"open",
+             "priority":"p1","created_at":"2026-11-03T22:05:00Z"}
+        ],"answered":[{"id":"q-old","title":"old","asker":"w9","answer":"narrow","at":"2026-11-03T21:00:00Z"},{"id":"x","title":7}]}"#;
+        let fold = parse_questions(json).expect("salvage parse succeeds");
+        assert_eq!(fold.items.len(), 2);
+        assert_eq!(fold.items[0].id, "q-bad");
+        assert_eq!(
+            fold.items[0].title, "projection row unreadable",
+            "the bad row renders its own degraded line"
+        );
+        assert!(fold.items[0]
+            .body
+            .as_deref()
+            .is_some_and(|b| b.contains("could not be read")));
+        assert_eq!(
+            fold.items[1].title, "which route?",
+            "the good row is intact"
+        );
+        assert_eq!(fold.answered.len(), 1, "unreadable answered rows drop");
+    }
+}

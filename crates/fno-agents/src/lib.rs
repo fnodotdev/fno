@@ -1,0 +1,1966 @@
+//! `fno-agents` substrate crate (Phase 6).
+#![recursion_limit = "512"]
+//!
+//! This crate is the Rust substrate for PTY-managed agents (codex / gemini /
+//! future OpenCode). It is split per the design's Locked Decisions:
+//!
+//! - shared types (this module): [`ShortId`], [`AgentStatus`], [`ParsedEvent`]
+//!   (LD9, sealed enum), [`MonotonicTimestamp`] (count-during-sleep clock).
+//! - [`pty`]: PTY spawn + bounded-ring output drainer (LD31).
+//! - [`write_queue`]: bounded-backpressure stdin queue + [`write_queue::WriteMsg`].
+//! - [`supervisor`]: [`supervisor::RestartPolicy`] state machine + hard ceiling (LD36).
+//! - [`readiness`]: [`readiness::ReadinessDetector`] trait + `UnknownReadinessSignal`
+//!   (Open Question #9: no generic byte-count fallback; per-CLI signal mandatory).
+//!
+//! ## Scope of Wave 1 (this PR)
+//!
+//! Wave 0's smoke prototype (`cli/scripts/smoke/pty-survival/`) refuted the
+//! "direct daemon-owned PTY survives daemon restart" assertion: a child on a
+//! PTY whose master the supervisor owns is SIGHUP'd and dies the instant the
+//! master closes. The locked outcome (Outcome B) was a per-agent worker process
+//! that owned the master and outlived the daemon. That daemon-owned PTY hosting
+//! was retired at G4: the mux is now the agent-PTY substrate, and this crate
+//! keeps the registry, inside-leg reports, and the claude stream-json adopt lane.
+//!
+//! Deliberately deferred (documented seams, not gaps):
+//! - `alacritty_terminal` grid wiring + per-CLI [`readiness::ReadinessDetector`]
+//!   impls -> Wave 2, alongside the smoke captures that define the grid patterns
+//!   (the trait operates over [`readiness::ScreenView`] so Wave 2 only adds impls).
+//! - `tokio` runtime integration -> Wave 3 (the daemon is its only consumer; the
+//!   substrate stays runtime-agnostic and is driven from `spawn_blocking`).
+//!
+//! ## Scope of Wave 2 (this PR)
+//!
+//! Wave 2 fills the seams Wave 1 left:
+//! - [`provider`]: [`provider::Provider`] + [`provider::ProviderWithPty`] traits
+//!   (LD8) and the three impls ([`provider::ClaudeProvider`] shellout,
+//!   [`provider::CodexProvider`] / [`provider::GeminiProvider`] PTY-managed).
+//! - [`fno_mail::frame`]: [`fno_mail::frame::Envelope`] structural anti-injection wrapper (LD15).
+//! - [`screen`]: the terminal-grid construction behind [`readiness::ScreenView`]
+//!   (the per-CLI [`readiness::ReadinessDetector`] impls now live in
+//!   [`readiness`]).
+
+// daemon.rs's `agent.list` row is one json! literal with a key set pinned by
+// schemas/agents-list-row.json; the crate-level recursion_limit above covers
+// the macro expansion since `spawned_by_session` joined the contract.
+
+pub mod backlog;
+#[cfg(test)]
+#[path = "birth_guard_tests.rs"]
+mod birth_guard_tests;
+mod bounded_cmd;
+pub mod cli_args;
+pub mod client;
+pub mod client_commands;
+pub mod client_render;
+pub mod client_transport;
+pub mod duration;
+pub mod family_doors;
+pub mod git_paths;
+#[cfg(test)]
+mod git_test_helpers;
+pub mod glob;
+pub mod help_router;
+pub mod json_output;
+#[cfg(test)]
+#[path = "mint_guard_tests.rs"]
+mod mint_guard_tests;
+pub mod numbers;
+pub mod paths;
+pub mod paths_cli;
+pub mod protocol;
+pub mod single_flight;
+pub mod spawn;
+pub mod text_or_file;
+pub mod version;
+
+pub mod eval;
+pub mod gate;
+pub mod runtime;
+
+// The flat `crate::<module>` paths stay valid: each module moved into a
+// group directory is re-exported here under its old name.
+
+pub(crate) use backlog::owner_ladder;
+pub use backlog::{
+    active_backlog, additional_prs, announce, backlog_ready, backlog_share, check_supersession,
+    day, decide_door, decision_index, decision_trace, digest, epic_issue, feed, fleet_law,
+    graph_get, graph_keeper, graph_store, join_marker, law_filters, law_firings, law_match,
+    law_pr_shape, law_recheck, law_renew, law_restore, law_when, lead_answers, lint_registry,
+    list_render, list_row, live_store_fence, needs, node_bind, node_branch, node_liveness,
+    node_origin, node_reading, node_route, node_seed, outstanding, outstanding_cmds, plan_carry,
+    plan_doc, plan_schema, planning_lane, plans_dirs, plans_path, question_bus, question_clear,
+    question_intake, question_judge, question_ladder, question_probe, question_sweep,
+    repeated_asks, row_truth, row_verdict, rules, rules_check, rules_source, rundown, select_read,
+    store_conn, store_exec, store_export, store_heal, store_remote, think_daily, think_dispatch,
+    think_inspect, wave, wave_ready, worked_nodes, you_threads,
+};
+pub(crate) use eval::lead_eval_grade;
+use eval::refusal_surface_owner;
+pub use eval::{
+    bash_census, blueprint_judge, census, census_reads, context_audit, correction_detect,
+    correction_fold, correction_meter, correction_outcome, correction_readings, correction_seat,
+    delivery_eval, eval_attempt, eval_events, eval_part4, eval_reap, evals, evals_arm,
+    evals_candidates, evals_capability, evals_climb, evals_compare, evals_drafts, evals_gate,
+    evals_labels, evals_macro, evals_power, evals_predict, evals_profile, evals_qualification,
+    evals_traces, evals_trend, feedback, friction, golden_drafter, honesty_sweep, intel,
+    intel_corpus, intel_html, intel_insights, intel_lens, intel_plans, intel_rollup,
+    intel_rules_lens, intel_scorecard, lead_checkin_evals, lead_eval, memory_groups, muse,
+    otel_ingest, otel_read, otlp_export, prove_it_verdicts, reader_cost, refusal_fold,
+    refusal_rate, refusal_trend, research, retro, scoreboard, scoreboard_escalation,
+    scoreboard_provider, session_cost, session_report, skill_diff, skill_drift, stability_report,
+    test_census, tick_ledger, wake_meter,
+};
+pub use gate::{
+    acceptance_evidence, approvals, attest, authorized_merge, autonomy_policy, autonomy_status,
+    bank_pr, canonical_check, chokepoint, chokepoint_events, ci_cadence, ci_front, ci_tier,
+    ci_tier_cmd, delivery_completion, disposition_gate, distress, docs_gate, effect_gate,
+    effect_map, escalation, evidence, finalize, finalize_run_summary, fleet_incident, flight_gate,
+    gate_probes, gh_budget, gh_cache, gh_etag, gh_incident, gh_login, gh_poller, gh_spend,
+    github_app, green_carry, hold_label, incident_claim, install_verify, kill_criteria, look_hold,
+    loop_readiness, loopcheck, main_ci, main_ci_proof, main_ci_transition, main_revert,
+    merge_close, merge_command, merge_freeze, merge_gates, merge_grant, merge_hold, merge_posture,
+    merge_provenance, merge_queue, merge_reap, outside_holds, phase_close, post_merge,
+    pr_admission, pr_base_check, pr_body_check, pr_create, pr_door, pr_draft_ready, pr_front,
+    pr_info, pr_list, pr_merge_result, pr_nudge, pr_park, pr_push, pr_rebase, pr_status,
+    pr_status_facts, pr_steward, pr_verify, pr_watch, pr_worktree, publish_review, quarantine,
+    receipt_policy, release_notes, release_record, release_watch, review_capability, review_doors,
+    review_findings, review_freshness, review_hold, review_invocation, review_level, review_policy,
+    review_summary, stub_manifest, subagent_hold, surface_check, symptom_recheck, target_blast,
+    target_denominator, target_gates, target_init, target_orient, target_start, test_changed,
+    test_command, test_delta, test_env, test_hold, test_run, test_smoke, test_smoke_discovery,
+    test_smoke_registry, verify_advise, verify_evidence,
+};
+pub(crate) use gate::{build_marks, pr_idle, stacked_base_stamp};
+use gate::{cancel_sentinel, completion_output, merge_architect, test_run_journal, test_run_pins};
+pub use runtime::{
+    acp_stdio, agent_ref, agents_seam, agents_top, agy_hooks, agy_transcript, arm_repair,
+    arm_watch, attach, attention, attention_arm, attention_chat, attention_file, attention_http,
+    attention_reply, attention_route, board_render_arm, burn_watch, cargo_build_dirs, chats,
+    claim_cli, claim_commands, claim_lanes_cli, claim_queue, claim_store, claims, claims_root,
+    claude_adopt, claude_attach, claude_drive, claude_records, claude_resume, claude_roster,
+    claude_sessions, claude_stream_entry, claude_supervisor, claude_transcript_paths, claude_vault,
+    codex_converge, codex_fake_daemon, codex_inject, codex_store, codex_thread, codex_watch,
+    compaction, consult, context_run, context_window, convert, cutover, daemon, daemon_predecessor,
+    discovered_sessions, disk_floor, drift, event_rules, event_store, events, events_limits,
+    first_check, fleet_beacon, fleet_load, fleet_state, fleet_task, fleet_workspace,
+    footnote_harness, footnote_transcript, footprint_cause, frames, gc, gc_claude_stop,
+    gc_inventory, gc_native, gc_open_pr_guard, gc_sweep, gc_verify, grok_store, harness_beat,
+    harness_daemon, harness_reader, heal, heal_pid, heal_sweep, hook, identity, inbox_peers,
+    interrupt_classify, keep_mark, lead_checkin, lead_checkin_blueprint, lead_checkin_lineup,
+    lead_checkin_machine, lead_checkin_orders, lead_escalation, lead_goal, lead_history,
+    lead_hygiene, lead_lifecycle, lead_mail, lead_ops, lead_pushback, lead_reads, lead_rebind,
+    lead_settle, lead_state, lead_term, lead_termination, lead_verdict_inputs, lead_wake,
+    lead_wake_triggers, lease_heartbeat, ledger_axes, link_dial, liveness_cmd, liveness_sweep,
+    lock_queue, logs, logs_args, logs_client, loop_lead, loop_runtime, loop_target, loops_pause,
+    machine_load, machine_mail, machine_sample, machine_watch, mail_arm, mail_backfill, mail_bus,
+    mail_carrier, mail_cli, mail_control_drain, mail_envelope, mail_header, mail_hold, mail_inject,
+    mail_notify_self, mail_paths, mail_receipt, mail_remote, mail_teach, mail_threads, manifest,
+    manifest_lookup, mcp, native_adopt, notice_route, notify_dispatch, nudge, observer,
+    opencode_serve, opencode_transcript, operator_notice, operator_turns, operator_witness,
+    org_board, org_fold, org_remote, org_rivals, orphan_reap, orphans, osc, page_relief,
+    pane_claim, pane_identity, pane_keeper, pane_loop, pane_rebind, pane_relaunch, pane_stop, peek,
+    pending_session_row, pi_transcript, process_owner, process_probe, project, provenance,
+    quiet_retire, readiness, reap_release, reap_render, receipt, reclaim, recovery_sweep, reentry,
+    register, registry_commands, registry_commit, registry_guard, registry_json, registry_read,
+    registry_store, removals, rename, reserve, restart_run, resume_args, resume_gate, resume_pin,
+    resume_receipt, resume_wake, rev_front, revival_check, revive_proof, rm_receipt, rm_tombstone,
+    roles, roster_reap, run_import, run_outcome, run_state, scrape, scratch, screen,
+    session_activity, session_backfill, session_join, session_names_fold, session_start_bytes,
+    session_truth, silence_sweep, slot_cutover, source_pin, stale_spaces, stalls, state,
+    state_layout, state_layout_sqlite, state_path, state_root_drift, status_fanout, status_render,
+    status_sinks, stream_worker, stuck_work, subscribe, succession_txn, supervisor, sync_canonical,
+    system_sender, task_context, team_alarm, team_identity, team_names, team_read, team_reap,
+    team_rescope, team_settle, team_spend, team_split, team_widen, terminal_stop, territory,
+    tool_activity, tracker, transcript_activity, transcript_resolve, transcript_turns, truth_cli,
+    truth_probe, update_journal, visual_screen, wait, wake_name, wake_read, watch, watch_expiry,
+    watchdog, whoami, worker_wake, worktree, worktree_reapable, write_queue,
+};
+pub(crate) use runtime::{
+    adopt_carry, adopt_identity, agents_event, attended, cargo_builds, cargo_orphans,
+    claude_restart_watch, fnod, footprint_cache, keeper_revival, lead_checkin_beat_budget,
+    ledger_register, ledger_workers, prompt_wait, reap_evidence, resume_reroute, resume_route,
+    retired_lead, served_liveness, session_receipt, thread_dialog,
+};
+use runtime::{agent_lock, boot_revival, codex_thread_entry, repo_identity, state_layout_merge};
+pub use spawn::{
+    accounts, agents_config, agy_ask, agy_launch, ask_project, capability_leaves, capacity,
+    claude_ask, claude_cloud, claude_config_tmp, claude_login, claude_workspace_trust, codex_ask,
+    codex_daemon_readiness, codex_daemon_upgrade, codex_hook_trust, codex_posture, codex_route,
+    codex_skills, component_update, config_route, cursor_agent, dispatch_credit, dispatch_harness,
+    effort_surface, executor_route, fallback_chain, fleet_lanes, gemini_ask, grok_ask,
+    harness_capabilities, harness_commands, harness_matrix, harness_roster, keeper_spawn,
+    lane_heal, lanes, launch_exec, launch_flags, launch_record, launch_workdir, launchd_labels,
+    loop_dispatch, loops_config, machine_key, model_env_scrub, model_family, model_price,
+    name_draw, name_ledger, naming, native_bg_mint, occupancy_classify, occupancy_login,
+    opencode_ask, opencode_config, opencode_install, pack_profile, pane_spawn, pi, pi_ask,
+    plugin_install, plugins, project_sandbox, provider, provider_cap, provider_cap_commands,
+    provider_key, provider_route, retask, role_cwd, role_grant, role_migration, route_capacity,
+    route_gather, route_inventory, route_node_pin, route_recovery, route_settings, route_slot,
+    sandbox_launch, sandbox_probe, session_role, spawn_admission, spawn_axes, spawn_backends,
+    spawn_bare, spawn_compose, spawn_context, spawn_contract, spawn_cwd, spawn_edge, spawn_gate,
+    spawn_gate_admission, spawn_gate_command, spawn_gate_forced, spawn_gate_lanes,
+    spawn_gate_reservations, spawn_guard, spawn_lineage, spawn_overlay, spawn_payload, spawn_phase,
+    spawn_place, spawn_promote, spawn_remote, spawn_role, spawn_route, spawn_seam,
+    spawn_transaction, stale_lane, subprocess_ask, team_spawn, terminal_route, terminal_run,
+    terminal_vocab, thread_host, usage, usage_refresh, zcode, zcode_ask,
+};
+use spawn::{bounded_spawn, lifecycle_child, spawn_gate_spend};
+pub(crate) use spawn::{
+    cap_liveness, resolve_tier, session_origin, spawn_gate_open_prs, spawn_gate_probe,
+    spawn_gate_queue, spawn_gate_slots, spawn_watch,
+};
+
+use serde::{Deserialize, Serialize};
+use std::time::Duration;
+
+/// A short, opaque agent identifier (e.g. `wkA`). Stored in the registry and
+/// used to name per-agent state directories. Validation is intentionally light
+/// at this layer; dispatch-layer validation (US1 invariant) owns argv rules.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum ShortIdError {
+    #[error("short id must be non-empty")]
+    Empty,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ShortId(pub(crate) String);
+
+impl ShortId {
+    /// Construct a short id. The field is crate-private and this is the only
+    /// constructor, so a zero-length registry key (which would collapse
+    /// per-agent state directory paths) cannot be built at any call site.
+    /// Charset rules beyond non-empty remain the dispatch layer's
+    /// responsibility (US1 argv validation).
+    pub fn new(s: impl Into<String>) -> Result<Self, ShortIdError> {
+        let s = s.into();
+        if s.is_empty() {
+            return Err(ShortIdError::Empty);
+        }
+        Ok(ShortId(s))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ShortId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Agent lifecycle status. `state.status` is canonical; `registry.status` is a
+/// denormalized projection of it (LD10). Serialized snake_case for the JSON
+/// state files and the cross-language schemas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentStatus {
+    /// PTY spawned, not yet confirmed ready for input.
+    #[default]
+    Spawning,
+    /// Confirmed ready for input (readiness_detector reported ready).
+    Ready,
+    /// Alive and waiting (equivalent to `Ready` for drive-eligibility, LD28).
+    Idle,
+    /// Mid-reply / actively processing.
+    Busy,
+    /// Live shorthand used by the registry projection.
+    Live,
+    /// Restart policy is backing off before re-spawn.
+    Restarting,
+    /// Reachability probe failed; needs reconcile or rm.
+    Orphaned,
+    /// Per-agent task panicked (provider parse panic, etc.); restart policy applies.
+    Failed,
+    /// Child exited; registry entry retained until rm.
+    Exited,
+    /// Restart hard ceiling hit (LD36); will not restart again.
+    PermanentDead,
+}
+
+impl AgentStatus {
+    /// Drive is accepted only for these statuses (LD28). `Idle`/`Live` are
+    /// equivalent to `Ready` for drive purposes.
+    pub fn is_drive_eligible(&self) -> bool {
+        matches!(
+            self,
+            AgentStatus::Ready | AgentStatus::Idle | AgentStatus::Busy | AgentStatus::Live
+        )
+    }
+}
+
+/// Sealed event vocabulary every provider parses INTO (LD9). Variant additions
+/// are a one-line crate-wide change; no per-provider enums. `#[serde(tag="kind")]`
+/// matches the wire shape in the design's Architecture section.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ParsedEvent {
+    SessionCreated {
+        session_id: String,
+    },
+    OutputChunk {
+        text: String,
+    },
+    ReplyComplete {
+        text: String,
+        duration_ms: u64,
+    },
+    ToolUse {
+        name: String,
+        args: Option<serde_json::Value>,
+    },
+    ProviderError {
+        message: String,
+    },
+    /// A line the provider's parser did not recognize. Tee'd to timeline.jsonl
+    /// as `unknown_stream_event` rather than dropped, so a provider version bump
+    /// degrades gracefully (Silent-Failure-Hunter finding).
+    Unknown {
+        raw: String,
+    },
+}
+
+/// A monotonic timestamp that **counts during system sleep**, used for
+/// drive-window heartbeat math (LD17 + Domain Pitfall: macOS/Linux suspend
+/// divergence).
+///
+/// Rust's `std::time::Instant` is inconsistent across platforms for the
+/// sleep case: on macOS it uses `mach_continuous_time` (counts sleep), on
+/// Linux it uses `CLOCK_MONOTONIC` (does NOT count sleep). A laptop-sleep
+/// during a drive window must EXPIRE the window, so we standardize on the
+/// count-during-sleep semantic on both:
+///
+/// - Linux: `clock_gettime(CLOCK_BOOTTIME)`.
+/// - macOS: `mach_continuous_time()` converted to ns via `mach_timebase_info`.
+///
+/// Stored as nanoseconds since an unspecified epoch; only differences are
+/// meaningful. Wall-clock `ts` for human audit lives in events.jsonl, tracked
+/// independently (LD17).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct MonotonicTimestamp(u64);
+
+impl MonotonicTimestamp {
+    /// Read the current count-during-sleep monotonic clock.
+    pub fn now() -> Self {
+        MonotonicTimestamp(raw_monotonic_nanos())
+    }
+
+    /// Nanoseconds elapsed since `earlier`. Saturates at 0 if `earlier` is in
+    /// the future (clock readings are monotonic, so this only guards against a
+    /// caller passing a later timestamp as `earlier`).
+    pub fn duration_since(&self, earlier: MonotonicTimestamp) -> Duration {
+        Duration::from_nanos(self.0.saturating_sub(earlier.0))
+    }
+
+    /// Convenience: elapsed since this timestamp until now.
+    pub fn elapsed(&self) -> Duration {
+        MonotonicTimestamp::now().duration_since(*self)
+    }
+
+    /// Raw nanoseconds, for persisting the heartbeat baseline to state.json.
+    pub fn as_nanos(&self) -> u64 {
+        self.0
+    }
+
+    /// Reconstruct from raw nanoseconds previously read via [`as_nanos`]. Used
+    /// by the daemon (Wave 3) to restore a persisted heartbeat baseline. Only
+    /// meaningful when paired with a `now()` from the same daemon incarnation's
+    /// clock (the value is epoch-relative to the running clock).
+    ///
+    /// [`as_nanos`]: MonotonicTimestamp::as_nanos
+    pub fn from_nanos(nanos: u64) -> Self {
+        MonotonicTimestamp(nanos)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn raw_monotonic_nanos() -> u64 {
+    // CLOCK_BOOTTIME includes time spent suspended (unlike CLOCK_MONOTONIC).
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `ts` is a valid, owned timespec; CLOCK_BOOTTIME is a valid clock
+    // id on Linux >= 2.6.39.
+    let rc = unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut ts) };
+    if rc != 0 {
+        // clock_gettime on a standard clock id effectively never fails on a
+        // supported kernel, so treat it as a should-be-impossible fault and
+        // make it LOUD rather than silent. Returning 0 is NOT a universal
+        // fail-safe: if a *baseline* read failed, elapsed over-reports (window
+        // expires early - safe); if a *current* read fails, elapsed under-
+        // reports toward 0 (window could hang open - unsafe). We accept that
+        // residual risk only because the failure cannot occur in practice, and
+        // log so it never passes unnoticed.
+        tracing::error!("clock_gettime(CLOCK_BOOTTIME) failed; monotonic reading degraded to 0");
+        return 0;
+    }
+    (ts.tv_sec as u64)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(ts.tv_nsec.max(0) as u64)
+}
+
+/// Mach ticks to nanoseconds via the once-read timebase ratio, shared by
+/// the monotonic clock and the reader-cost probe's CPU-time reads (which
+/// are ticks on the same clock). `libc` deprecated its mach timebase
+/// helpers, so the libSystem symbol is declared directly.
+#[cfg(target_os = "macos")]
+pub(crate) fn mach_ticks_to_ns(ticks: u64) -> u64 {
+    #[repr(C)]
+    struct MachTimebaseInfo {
+        numer: u32,
+        denom: u32,
+    }
+    extern "C" {
+        fn mach_timebase_info(info: *mut MachTimebaseInfo) -> libc::c_int;
+    }
+    use std::sync::OnceLock;
+    static TIMEBASE: OnceLock<(u64, u64)> = OnceLock::new();
+    let (numer, denom) = *TIMEBASE.get_or_init(|| {
+        let mut info = MachTimebaseInfo { numer: 0, denom: 0 };
+        // SAFETY: `info` is a valid, owned, repr(C) struct matching the C ABI;
+        // mach_timebase_info fills it and returns a kern_return_t.
+        let rc = unsafe { mach_timebase_info(&mut info) };
+        if rc != 0 || info.denom == 0 {
+            (1, 1)
+        } else {
+            (info.numer as u64, info.denom as u64)
+        }
+    });
+    ((ticks as u128 * numer as u128) / denom as u128) as u64
+}
+
+#[cfg(target_os = "macos")]
+fn raw_monotonic_nanos() -> u64 {
+    // mach_continuous_time() counts during sleep. `libc` dropped the symbol
+    // entirely (it lives in the `mach2` crate now), so the libSystem symbol
+    // is declared directly to avoid a macOS-only crate dependency.
+    extern "C" {
+        fn mach_continuous_time() -> u64;
+    }
+    // SAFETY: no arguments; returns a monotonic tick count that counts sleep.
+    let ticks = unsafe { mach_continuous_time() };
+    mach_ticks_to_ns(ticks)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn raw_monotonic_nanos() -> u64 {
+    // Other POSIX targets are not shipped by Phase 6 (Windows is Phase 7+).
+    // Fall back to CLOCK_MONOTONIC so the crate still compiles for dev on
+    // such hosts; the suspend semantic is undefined there and not relied on.
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: valid owned timespec; CLOCK_MONOTONIC is POSIX-standard.
+    let rc = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    if rc != 0 {
+        tracing::error!("clock_gettime(CLOCK_MONOTONIC) failed; monotonic reading degraded to 0");
+        return 0;
+    }
+    (ts.tv_sec as u64)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(ts.tv_nsec.max(0) as u64)
+}
+
+/// Serializes every test that mutates the PROCESS `PATH` (or resolves a
+/// subprocess through it): two tests racing `set_var` under the default
+/// parallel test threads make the loser inherit the winner's stub dir - or a
+/// deleted tempdir, which exits 127. Take `PATH_TEST_MUTEX` around both the
+/// mutation and the PATH-dependent work. cfg(test) in the lib only.
+#[cfg(test)]
+pub static PATH_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Hold [`PATH_TEST_MUTEX`] for the rest of the scope, poisoning ignored: a
+/// panicking test leaves the env restored by its own guard, so refusing the
+/// lock afterwards would fail every later test instead of the broken one.
+#[cfg(test)]
+pub fn path_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    PATH_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Point `FNO_AGENTS_HOME` at `path` for the rest of the scope. Serialized by
+/// [`crate::claims::test_env_lock`], so every test that resolves the agents
+/// home shares one lane, and the previous value is restored on drop, panic
+/// included.
+#[cfg(test)]
+pub(crate) struct AgentsHomeEnvGuard {
+    previous: Option<std::ffi::OsString>,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl AgentsHomeEnvGuard {
+    pub(crate) fn set(path: &std::path::Path) -> Self {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let previous = std::env::var_os("FNO_AGENTS_HOME");
+        std::env::set_var("FNO_AGENTS_HOME", path);
+        Self { previous, _lock }
+    }
+}
+
+#[cfg(test)]
+impl Drop for AgentsHomeEnvGuard {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
+            None => std::env::remove_var("FNO_AGENTS_HOME"),
+        }
+    }
+}
+
+/// The process `PATH` with `dir` in front. PREPEND, never replace: PATH is
+/// process-global, so a test that replaces it takes the system tools away from
+/// every concurrent test in the binary, and a stub only needs to win.
+#[cfg(test)]
+pub fn path_with(dir: &std::path::Path) -> std::ffi::OsString {
+    let mut value = std::ffi::OsString::from(dir);
+    if let Some(previous) = std::env::var_os("PATH") {
+        value.push(":");
+        value.push(previous);
+    }
+    value
+}
+
+/// Write `body` to `dir/name` as a 0755 executable and return the path.
+///
+/// A child /bin/sh writes the bytes, never this process. A write fd held
+/// here is copied into the child of any sibling test thread that forks in
+/// that window, and an exec of the stub then fails with ETXTBSY until that
+/// child execs. A temp name plus rename does not help: the copied fd follows
+/// the inode. The writer has exited before this returns.
+#[cfg(test)]
+pub(crate) fn write_exec_stub(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+    use std::io::Write;
+    let path = dir.join(name);
+    let mut child = std::process::Command::new("/bin/sh")
+        .args([
+            "-c",
+            r#"cat > "$1.tmp.$$" && chmod 755 "$1.tmp.$$" && mv -f "$1.tmp.$$" "$1""#,
+            "sh",
+        ])
+        .arg(&path)
+        .env("PATH", "/usr/bin:/bin")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn /bin/sh to write an exec stub");
+    // A writer that fails early (a missing dir) closes its stdin first, so
+    // this write can see a broken pipe. The exit status below names the
+    // real failure, so the write error is not the one to report.
+    let _ = child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(body.as_bytes());
+    let status = child.wait().expect("wait for the stub writer");
+    assert!(
+        status.success(),
+        "could not write exec stub {}: {status}",
+        path.display()
+    );
+    path
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // AC2-ERR: a non-positive boot second count is a failed reading.
+    #[test]
+    fn boot_ms_from_refuses_a_non_positive_second() {
+        assert_eq!(boot_ms_from(0, 0), None);
+        assert_eq!(boot_ms_from(-5, 0), None);
+        assert_eq!(boot_ms_from(1, 0), Some(1000));
+        assert_eq!(boot_ms_from(1789997638, 500_000), Some(1789997638500));
+    }
+
+    #[test]
+    fn short_id_rejects_empty() {
+        assert_eq!(ShortId::new(""), Err(ShortIdError::Empty));
+        let ok = ShortId::new("wkA").unwrap();
+        assert_eq!(ok.as_str(), "wkA");
+    }
+
+    #[test]
+    fn drive_eligibility_matches_ld28() {
+        assert!(AgentStatus::Ready.is_drive_eligible());
+        assert!(AgentStatus::Idle.is_drive_eligible());
+        assert!(AgentStatus::Busy.is_drive_eligible());
+        assert!(!AgentStatus::Restarting.is_drive_eligible());
+        assert!(!AgentStatus::Exited.is_drive_eligible());
+        assert!(!AgentStatus::PermanentDead.is_drive_eligible());
+    }
+
+    // ── cv-114f75cc: production emit-kind completeness guard ──────────────
+    // KNOWN_EVENT_KINDS is hand-maintained and feeds both the Branch B `kind`
+    // schema enum and the cross-language parity gate, so a new `.emit("foo")`
+    // whose kind was never added to the constant would silently drift those
+    // surfaces. This test scans every production call site and fails on drift.
+
+    // `KNOWN_EVENT_KINDS` and `schema.yaml` cannot be generated from each
+    // other: the YAML entry carries description/sources/data/consumers the
+    // const does not have, and the two sets are a deliberate partition. So
+    // this one stays a check; what changes is WHERE it fires. Step 6 of
+    // scripts/check-event-schema-parity.sh needs a built binary and WARNs
+    // when it is absent, so a missing entry surfaced only after a push, which
+    // cost a CI cycle. A unit test costs nothing and fires on the dev machine.
+    #[test]
+    fn known_event_kinds_documented_in_schema_yaml() {
+        use std::collections::BTreeSet;
+
+        let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/runtime/event_store/schema.yaml");
+        if !schema_path.is_file() {
+            // The crates.io tarball case cannot trigger: the schema ships in
+            // the manifest tree now. A parse failure below is NOT swallowed.
+            return;
+        }
+        let text = std::fs::read_to_string(&schema_path).expect("read schema.yaml");
+        let parsed: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(&text).expect("schema.yaml must parse");
+        let documented: BTreeSet<&str> = parsed["event_types"]
+            .as_sequence()
+            .expect("schema.yaml must carry an event_types sequence")
+            .iter()
+            .filter_map(|entry| entry["name"].as_str())
+            .collect();
+
+        let missing: Vec<&str> = KNOWN_EVENT_KINDS
+            .iter()
+            .copied()
+            .filter(|kind| !documented.contains(kind))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "KNOWN_EVENT_KINDS entries missing from src/runtime/event_store/schema.yaml: {}\n\
+             Add an event_types entry for each, or drop the kind from the registry.",
+            missing.join(", ")
+        );
+    }
+
+    #[test]
+    fn every_production_emit_kind_is_registered() {
+        use std::collections::BTreeSet;
+
+        let known: BTreeSet<&str> = KNOWN_EVENT_KINDS.iter().copied().collect();
+        let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+
+        let mut files = Vec::new();
+        collect_rs_files(&src_root, &mut files);
+        assert!(!files.is_empty(), "found no .rs files under {src_root:?}");
+
+        let mut unregistered: Vec<String> = Vec::new();
+        let mut production_kinds: BTreeSet<String> = BTreeSet::new();
+        let mut scanned_calls = 0usize;
+        for file in &files {
+            let text = std::fs::read_to_string(file).expect("read source file");
+            // Production code only: truncate at the first `#[cfg(test)]` that
+            // gates a test MODULE. Tests live at the bottom by Rust convention,
+            // so test fixtures like `.emit("tick")` are excluded. An item-level
+            // `#[cfg(test)]` higher up (a test seam const or fn) is not a
+            // boundary: truncating there would hide every production emit
+            // after it, which is exactly what backlog_share.rs's
+            // `route_to_primary` seam did to this scan.
+            let prod = match test_module_boundary(&text) {
+                Some(i) => &text[..i],
+                None => &text[..],
+            };
+            let file_name = file.file_name().unwrap().to_string_lossy();
+            for (kind, line) in scan_emit_kinds(prod) {
+                scanned_calls += 1;
+                production_kinds.insert(kind.clone());
+                if !known.contains(kind.as_str()) {
+                    unregistered.push(format!(
+                        "{file_name}:{line}: .emit(\"{kind}\") not in KNOWN_EVENT_KINDS"
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            scanned_calls > 0,
+            "scanner found zero emit call sites - the scan pattern likely broke"
+        );
+
+        // cv-2801ed8a: enforce the truncation assumption rather than just
+        // documenting it. The scan above trusts that every production emit
+        // precedes its file's first `#[cfg(test)]`. Verify it: scan BELOW each
+        // boundary too, and require every kind found there to be either also
+        // emitted in production (so the registration guard above already saw
+        // it) or a known test-only fixture. A production-looking kind that
+        // lives only below a boundary would otherwise escape the guard
+        // silently. `production_kinds` must be complete across ALL files before
+        // this check (a kind can be production in one file and test-only in
+        // another), so this is a second pass.
+        //
+        // `tick`/`heartbeat` are test fixture emits; `foo`/`x` are `.emit(...)`
+        // examples inside doc comments in the test module that the byte-level
+        // scanner picks up. (Escaped `.emit(\"...\")` in the scanner self-check
+        // string is NOT matched: the char after `(` is a backslash, not `"`.)
+        // `mux_pane_counters`/`operator_decision` are real kinds whose production
+        // emitters live outside this crate (the mux server shells out to the
+        // Python CLI; operator_decision is Python-only); the routing unit tests
+        // in events.rs emit them below the test boundary.
+        const TEST_ONLY_EMIT_KINDS: &[&str] = &[
+            "tick",
+            "heartbeat",
+            "foo",
+            "x",
+            "mux_pane_counters",
+            "operator_decision",
+            // The hook emits this in Python; Rust only stages fixtures of it.
+            "loop_check_watch_idle",
+        ];
+        let test_only: BTreeSet<&str> = TEST_ONLY_EMIT_KINDS.iter().copied().collect();
+
+        let mut below_only: Vec<String> = Vec::new();
+        for file in &files {
+            let text = std::fs::read_to_string(file).expect("read source file");
+            let boundary = match test_module_boundary(&text) {
+                Some(i) => i,
+                None => continue,
+            };
+            // scan_emit_kinds reports lines relative to its input slice; add the
+            // newline count before the boundary so the message points at the
+            // real file line.
+            let base_line = text[..boundary].bytes().filter(|&c| c == b'\n').count();
+            let file_name = file.file_name().unwrap().to_string_lossy();
+            for (kind, line) in scan_emit_kinds(&text[boundary..]) {
+                if production_kinds.contains(&kind) || test_only.contains(kind.as_str()) {
+                    continue;
+                }
+                below_only.push(format!(
+                    "{file_name}:{}: .emit(\"{kind}\") appears only below #[cfg(test)] \
+                     (not emitted in production, not a known test-only fixture)",
+                    base_line + line
+                ));
+            }
+        }
+
+        assert!(
+            below_only.is_empty(),
+            "emit kinds found only below a #[cfg(test)] boundary - the truncation \
+             assumption (all production emits precede the test module) may be \
+             violated. If a kind below is a real production emit, register it in \
+             KNOWN_EVENT_KINDS and move it above the test module; if it is \
+             test-only, add it to TEST_ONLY_EMIT_KINDS:\n  {}",
+            below_only.join("\n  ")
+        );
+
+        // Self-check: the scanner extracts a single-line `.emit(` kind, a
+        // multi-line `.emit_fields(` kind, AND a whitespace-before-paren
+        // `.emit (` kind (valid Rust), so a genuine unregistered kind cannot
+        // slip past this guard silently. Also asserts the reported line number.
+        let synthetic = "x.emit(\"agent_spawned\", &p);\n  y.emit_fields(\n    \"definitely_not_a_real_kind\", m);\n z.emit (\"another_fake_kind\");";
+        let scanned = scan_emit_kinds(synthetic);
+        assert!(
+            scanned.iter().any(|(k, l)| k == "agent_spawned" && *l == 1),
+            "scanner missed a single-line emit kind (or wrong line)"
+        );
+        assert!(
+            scanned
+                .iter()
+                .any(|(k, _)| k == "definitely_not_a_real_kind"),
+            "scanner missed a multi-line emit_fields kind"
+        );
+        assert!(
+            scanned.iter().any(|(k, _)| k == "another_fake_kind"),
+            "scanner missed a `.emit (` call with whitespace before the paren"
+        );
+        assert!(
+            !known.contains("definitely_not_a_real_kind") && !known.contains("another_fake_kind"),
+            "the synthetic drift kinds must not be real registered kinds"
+        );
+        assert!(
+            unregistered.is_empty(),
+            "production emit kinds missing from KNOWN_EVENT_KINDS:\n  {}",
+            unregistered.join("\n  ")
+        );
+    }
+
+    fn collect_rs_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_rs_files(&path, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                out.push(path);
+            }
+        }
+    }
+
+    /// The byte offset of the first `#[cfg(test)]` that gates a test MODULE.
+    /// An item-level `#[cfg(test)]` (a seam const or fn above the module) is
+    /// not a boundary: truncating there hides every production emit after it.
+    /// `None` when the file has no test module at all.
+    fn test_module_boundary(text: &str) -> Option<usize> {
+        const MARKER: &str = "#[cfg(test)]";
+        let mut from = 0usize;
+        while let Some(rel) = text[from..].find(MARKER) {
+            let pos = from + rel;
+            let rest = text[pos + MARKER.len()..].trim_start();
+            // `mod tests` and its visibility-spelled forms gate the same way;
+            // four files in this crate spell `pub mod` / `pub(crate) mod`.
+            let rest = rest
+                .strip_prefix("pub(crate) ")
+                .or_else(|| rest.strip_prefix("pub "))
+                .unwrap_or(rest)
+                .trim_start();
+            if rest.starts_with("mod ") {
+                return Some(pos);
+            }
+            from = pos + 1;
+        }
+        None
+    }
+
+    /// Extract `(kind, line)` for every `.emit` / `.emit_fields` call with a
+    /// string-literal kind. Whitespace tolerant on both sides: `.emit ("x")`
+    /// and a newline between `(` and the opening quote both parse (valid Rust).
+    /// A call whose first argument is not a string literal is skipped - the
+    /// kind is dynamic and not statically checkable. The line number (1-based)
+    /// is reported so a drift failure points straight at the offending call.
+    fn scan_emit_kinds(src: &str) -> Vec<(String, usize)> {
+        // Comment lines are blanked (offsets preserved) first: a doc comment
+        // may SHOW an emit shape (`.emit("...")` in prose) and the scan reads
+        // bytes, not syntax.
+        let bytes = src.as_bytes();
+        let mut blanked = bytes.to_vec();
+        let mut i = 0usize;
+        while i < bytes.len() {
+            let line_end = bytes[i..]
+                .iter()
+                .position(|&c| c == b'\n')
+                .map(|p| i + p)
+                .unwrap_or(bytes.len());
+            let first = bytes[i..line_end]
+                .iter()
+                .find(|&&c| c != b' ' && c != b'\t');
+            if first == Some(&b'/') {
+                for b in &mut blanked[i..line_end] {
+                    *b = b' ';
+                }
+            }
+            i = line_end + 1;
+        }
+        let src = std::str::from_utf8(&blanked).unwrap_or(src);
+        let bytes = src.as_bytes();
+        let mut kinds = Vec::new();
+        for needle in [".emit", ".emit_fields"] {
+            let nb = needle.as_bytes();
+            let mut from = 0usize;
+            while let Some(rel) = find_sub(&bytes[from..], nb) {
+                let pos = from + rel;
+                let mut j = pos + nb.len();
+                // `.emit` must not match inside `.emit_fields` (next char `_`).
+                if needle == ".emit" && j < bytes.len() && bytes[j] == b'_' {
+                    from = j;
+                    continue;
+                }
+                while j < bytes.len() && (bytes[j] as char).is_whitespace() {
+                    j += 1;
+                }
+                if j < bytes.len() && bytes[j] == b'(' {
+                    j += 1;
+                    while j < bytes.len() && (bytes[j] as char).is_whitespace() {
+                        j += 1;
+                    }
+                    if j < bytes.len() && bytes[j] == b'"' {
+                        let start = j + 1;
+                        let mut k = start;
+                        while k < bytes.len() && bytes[k] != b'"' {
+                            k += 1;
+                        }
+                        if k < bytes.len() {
+                            let kind = String::from_utf8_lossy(&bytes[start..k]).into_owned();
+                            let line = src[..pos].bytes().filter(|&c| c == b'\n').count() + 1;
+                            kinds.push((kind, line));
+                        }
+                    }
+                }
+                from = pos + nb.len();
+            }
+        }
+        kinds
+    }
+
+    // The exec-stub guard: a lib test that writes an executable stub
+    // in-process holds a write fd, and a sibling test thread's fork copies it
+    // into a child; an exec of the stub then fails with ETXTBSY until that
+    // child reaches its own exec. The one writer is `write_exec_stub`, whose
+    // child /bin/sh exits before returning. ponytail: the regex matches only
+    // the literal-mode idiom; a mode built in a variable not named `mode`
+    // evades it.
+    #[test]
+    fn every_exec_stub_goes_through_write_exec_stub() {
+        let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        collect_rs_files(&src_root, &mut files);
+        assert!(!files.is_empty(), "found no .rs files under {src_root:?}");
+
+        // Byte-level scan, like the emit-kind guard: no regex crate here.
+        // Matches the plan regex `(from_mode|set_mode|\.mode)\((0o7[0-7]{2}|mode)\)`
+        // per line: after the needle, trimmed whitespace, either a 0o7xx octal
+        // literal closed by `)`, or the variable form `mode)`.
+        const NEEDLES: [&str; 3] = ["from_mode(", "set_mode(", ".mode("];
+        let mut offenders: Vec<String> = Vec::new();
+        for file in &files {
+            let text = std::fs::read_to_string(file).expect("read source file");
+            let lines: Vec<&str> = text.lines().collect();
+            for (idx, line) in lines.iter().enumerate() {
+                let mut hit = false;
+                for needle in NEEDLES {
+                    let mut from = 0;
+                    while let Some(pos) = line[from..].find(needle) {
+                        let rest = line[from + pos + needle.len()..].trim_start();
+                        let octal = rest.as_bytes();
+                        let matched = (octal.len() >= 6
+                            && octal[..3] == *b"0o7"
+                            && (b'0'..=b'7').contains(&octal[3])
+                            && (b'0'..=b'7').contains(&octal[4])
+                            && octal[5] == b')')
+                            || rest.starts_with("mode)");
+                        if matched {
+                            hit = true;
+                            break;
+                        }
+                        from += pos + needle.len();
+                    }
+                    if hit {
+                        break;
+                    }
+                }
+                if hit {
+                    let name = file.strip_prefix(&src_root).unwrap_or(file);
+                    offenders.push(format!("{}:{}", name.display(), idx + 1));
+                }
+            }
+        }
+
+        // The allowed files: production binary repair (install_verify), seven
+        // production dir modes (paths, fleet_incident, chats, the
+        // session-state pin dir, the mcp sidecar's socket-parent tightening,
+        // the daemon's sandbox socket dir, the saved-sessions dir),
+        // two dir-mode
+        // restores in tests (claims, operator_turns); the bin test target
+        // cannot see a cfg(test) lib fn (client_tests); and the plan writer's
+        // production mode-preserve on its atomic plan-file replace
+        // (plan_doc/codec).
+        const ALLOWED: &[(&str, usize)] = &[
+            ("gate/install_verify.rs", 1),
+            ("paths.rs", 1),
+            ("runtime/org_board/claims.rs", 1),
+            ("runtime/hook/session_state.rs", 1),
+            ("runtime/operator_turns.rs", 1),
+            ("backlog/plan_doc/codec.rs", 1),
+            ("gate/fleet_incident.rs", 1),
+            ("runtime/chats.rs", 1),
+            ("runtime/mcp/sidecar.rs", 1),
+            ("runtime/daemon/sandbox_host.rs", 1),
+            ("runtime/hook/save_session.rs", 1),
+        ];
+        let allowed_counts: std::collections::HashMap<&str, usize> =
+            ALLOWED.iter().copied().collect();
+        let mut by_file: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for o in &offenders {
+            let file = o.rsplit_once(':').map(|(f, _)| f.to_string()).unwrap();
+            *by_file.entry(file).or_insert(0) += 1;
+        }
+        for (file, count) in &by_file {
+            let allowed = allowed_counts.get(file.as_str()).copied().unwrap_or(0);
+            assert!(
+                *count <= allowed,
+                "this test writes an executable stub from inside the test \
+                 process, where a sibling test's fork can hold the write fd \
+                 open and the exec fails with Text file busy. Write it with \
+                 crate::write_exec_stub. Offenders: {offenders:?}"
+            );
+        }
+        for (file, allowed) in ALLOWED {
+            let actual = by_file.get(*file).copied().unwrap_or(0);
+            assert!(
+                actual <= *allowed,
+                "{file} now matches {actual} times (allowance {allowed}); \
+                 the extra site must go through crate::write_exec_stub. {offenders:?}"
+            );
+        }
+    }
+
+    fn find_sub(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        if needle.is_empty() || haystack.len() < needle.len() {
+            return None;
+        }
+        haystack.windows(needle.len()).position(|w| w == needle)
+    }
+
+    // AC1-HP / AC1-EDGE: the stub writer never holds the write fd in this
+    // process, so execs of its output survive sibling threads forking in a
+    // loop (darwin has no /bin/true, so the forking threads use
+    // /usr/bin/true). Each stub prints its own name and the exec asserts it.
+    #[test]
+    fn write_exec_stub_survives_sibling_forks() {
+        use std::io::Read;
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut forkers = Vec::new();
+        for _ in 0..4 {
+            let stop = Arc::clone(&stop);
+            forkers.push(std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let _ = std::process::Command::new("/usr/bin/true").status();
+                }
+            }));
+        }
+        let mut writers = Vec::new();
+        for t in 0..4u32 {
+            let dir = dir.path().to_path_buf();
+            writers.push(std::thread::spawn(move || {
+                for i in 0..25u32 {
+                    let body = format!("#!/bin/sh\nprintf '%s' '{t}-{i}'\n");
+                    let stub = crate::write_exec_stub(&dir, &format!("s{t}-{i}"), &body);
+                    let out = std::process::Command::new(&stub)
+                        .output()
+                        .expect("exec stub");
+                    assert!(
+                        out.status.success(),
+                        "exec of {} failed: {out:?}",
+                        stub.display()
+                    );
+                    let mut text = String::new();
+                    std::io::Cursor::new(&out.stdout)
+                        .read_to_string(&mut text)
+                        .expect("stdout is utf-8");
+                    assert_eq!(text, format!("{t}-{i}"));
+                }
+            }));
+        }
+        for w in writers {
+            w.join().expect("writer thread");
+        }
+        stop.store(true, Ordering::Relaxed);
+        for f in forkers {
+            f.join().expect("forker thread");
+        }
+        let mode = std::fs::metadata(dir.path().join("s0-0"))
+            .expect("stub exists")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o755, "stub mode must be 0755");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// W7: Cross-language schema introspection
+// ---------------------------------------------------------------------------
+
+/// All real operator-facing event kinds emitted by the Rust supervisor.
+/// Excludes test-only kinds (tick, heartbeat).
+///
+/// This const is the authoritative list for `--emit-schema` output and must
+/// stay in sync with every `.emit(kind, ...)` / `.emit_fields(kind, ...)`
+/// call site in the crate. The parity check script compares this list against
+/// the Python side for global uniqueness.
+///
+/// **How to regenerate when adding a new event kind:**
+/// ```text
+/// grep -rn '\.emit\b\|\.emit_fields\b' crates/fno-agents/src/ \
+///   | grep -v '//' \
+///   | grep -oP '"[a-z_]+"' \
+///   | sort | uniq
+/// ```
+/// Then cross-check the output against this list. Test-only kinds (tick,
+/// heartbeat) and value fields (reason, backend, ...) will appear in the grep
+/// output; only include kinds that appear as the first string argument to an
+/// emit call in non-test production code.
+pub const KNOWN_EVENT_KINDS: &[&str] = &[
+    // A standalone research round ships its brief and records the
+    // DoneAdvisory terminal (research/deliverable.rs).
+    "termination",
+    // The daemon trust-answer sweep: one row per attempt to answer a parked
+    // codex folder-trust modal itself (daemon/sweeps.rs).
+    "trust_prompt_answered",
+    // The legacy shell-writer rendezvous sweep (daemon/shell_writers_sweep.rs):
+    // the per-pass summary row and its pause-skip row.
+    "shell_writers_sweep",
+    // The native-bg roster adopt (native_bg_mint.rs): a failed registry
+    // birth write, a node or parent filled on a later beat, a short-id row
+    // renamed, and the per-beat budget deferral.
+    "native_bg_mint_failed",
+    "native_bg_node_backfilled",
+    "native_bg_parent_backfilled",
+    "native_bg_renamed",
+    "native_bg_mint_deferred",
+    // The sandbox-denial ingester: codex transcript refusals -> one row per
+    // (session, class, path) with a hit count, plus the pass summary row.
+    // The claude half rides another node; harness is the seam.
+    "sandbox_denial",
+    "sandbox_ingest",
+    // Reconcile's post-close emits (the Python twins declared both in
+    // events/schema.yaml; session_satisfied carries the pr_merge data source).
+    "session_satisfied",
+    "human_touch",
+    // A refused shared-backlog flush: the operator notice beside the
+    // retained batch (backlog_share::repair).
+    "backlog_refused_flush",
+    // The dead-letter cap's loud announcement: the batch ids the trim
+    // dropped (backlog_share::announce_refused_trim). No reader replays a
+    // refused batch, so the drop is forensic history only.
+    "backlog_refused_trimmed",
+    // The freed-page return arm (page_relief.rs): resident size before and
+    // after malloc_zone_pressure_relief, and the zone count it covered.
+    "page_relief_done",
+    // Triage apply telemetry (the native triage engine): one row per
+    // committed apply, carrying the applied counts, the priority moves and
+    // the dropped-entry count.
+    "triage_applied",
+    // The pr-watch sweep flipped an open fno-bound draft PR back to ready
+    // (config.pr.open_ready's sweep leg, decided by pr_draft_ready.rs).
+    "pr_watch_draft_flip",
+    // The post-merge route's per-attempt attribution receipt (route.rs);
+    // observability only, never a dedup input.
+    "post_merge_dispatch_receipt",
+    // One row per post-merge ritual archive attempt (ritual.rs archive leg);
+    // Python emitted the kind unregistered, the port registers it.
+    "post_merge_archive",
+    // The question intake's journal write (the ask port): the durable half
+    // of `fno inbox outstanding ask`.
+    "operator_question",
+    // The probe daemon's per-pass row (question_probe.rs): probed count,
+    // closed and unread counts, and the pass outcome.
+    "question_probe",
+    // One hop in a traced decision (decision_trace.rs): ask, route,
+    // correction, or guard block, written through emit_span into the
+    // project journal; the Python side documents the shape for the
+    // validator, the way operator_question does.
+    "decision_span",
+    // Agent lifecycle (daemon-emitted)
+    "agent_spawned",
+    // Spawn coordinator: the durable accepted record written BEFORE
+    // any backend launch; not a birth, correlated to it by spawn_id.
+    "agent_spawn_accepted",
+    // A launch the spawn gate or the dispatch door refused before any
+    // worker existed; the feed projects it so a refused launch shows.
+    "agent_spawn_refused",
+    // The first-turn watch saw a launch's first assistant line; carries the
+    // latency from the call per harness, substrate and machine.
+    "spawn_first_turn",
+    // A reaped session came back (client-emitted): one event per revive
+    // naming the command, the actor session, the prior name and the session id.
+    "agent_revived",
+    // The keeper's render trigger failed a pass (waves 8-9 store cutover);
+    // carries the version and a stderr tail, and the backoff retries it.
+    "graph_render_failed",
+    // One archive sweep ran, dry run or apply; carries the moved and
+    // held-back counts.
+    "graph_archive_swept",
+    // Pane-to-thread conversion: one per phase of the agent.convert
+    // transaction (classified, claims-held, pane-stopped, hand-off,
+    // resumed, flipped, rolled-back), carrying the name and strategy.
+    "agent_convert_phase",
+    // Spawn gate: registry writer-floor incompatibility, latched by the
+    // writer/floor/reader tuple so repeated refusals emit once.
+    "version_skew",
+    "agent_stopped",
+    // Stop/rm claims release: the receipt event for the claims a
+    // stopped or removed worker held; one emit per stop/rm that ran one.
+    "agent_stop_claims_released",
+    // A stop the daemon REFUSED to claim: the interrupt never confirmed a
+    // terminal turn, so the row stays live and the work is still running.
+    "agent_stop_refused",
+    "agent_exited",
+    // The sweep's observed lifecycle word for an owned row: one row per
+    // applied status transition (exit or restart) with its evidence cause
+    // (ruling d-e096c669), so an exit or a restart is never silent again.
+    "row_lifecycle_observed",
+    "agent_removed",
+    // Served facts (daemon-emitted): the sweep is the only writer of the
+    // registry's measured surfaces, so each of these announces a change that
+    // a reader would otherwise learn from a snapshot field. `agent_renamed`
+    // is the harness's title moving against the row's last-seen baseline
+    // (the label is never rewritten); `agent_model_changed` /
+    // `agent_effort_changed` are PostModelSwitch axis changes verified by
+    // the report write; `session_aliases_merged` is the session-names
+    // overlay folding legible aliases onto rows.
+    "agent_renamed",
+    "agent_model_changed",
+    "agent_effort_changed",
+    "agent_posture_changed",
+    "session_aliases_merged",
+    "merge_cleanup_requested",
+    "merge_cleanup_skipped",
+    "merge_cleanup_completed",
+    "merge_cleanup_refused",
+    // Merge reaper (daemon-emitted): a pending request was HELD (the
+    // node reads open, the list is empty, or the graph would not read) and is
+    // retried next pass; a request aged past its expiry window and is
+    // tombstoned; a row's harness was stopped ahead of its registry removal.
+    "merge_cleanup_held",
+    "merge_cleanup_expired",
+    "merge_reaper_stopped",
+    "agent_inconsistent",
+    "agent_ask_done",
+    "codex_turn_error",
+    "quiet_worker_nudge",
+    "quiet_worker_recovery",
+    // Quiet-recovery's revival-rule skip: a deliberately stopped worker on a
+    // delivered node, recorded instead of revived (codex_watch/quiet.rs).
+    "quiet_worker_skip",
+    // Who stamped a row bus-only (mail_hold.rs record_stamp).
+    "mail_hold_stamped",
+    "quiet_worker_error",
+    // Blueprint-stall lane (codex_watch/stall.rs): stall evidence observed,
+    // the one nudge delivered, or the lead's reseat-on-claude mail landed;
+    // plus the per-row error row the run loop emits on a failed entry.
+    "blueprint_stall",
+    "blueprint_stall_error",
+    "agent_create_no_session",
+    "agent_orphan_reaped",
+    "agent_orphan_state_archived",
+    // Orphaned-test-binary reap sweep (daemon-emitted): one event per pid
+    // the footprint command killed on the daemon's behalf.
+    "orphan_test_binary_reaped",
+    "orphan_owner_server_reaped",
+    // One local test run through `fno doctor test`: a started and a finished
+    // row joined by run_id, plus a refused row when the door refuses before
+    // spawning (test_run_journal.rs).
+    "test_run",
+    // Late bind (daemon-emitted, task 2): a pane-hosted codex row whose
+    // spawn-time bind window expired got its `harness_session_id` resolved on
+    // a later reconcile tick, from the pane-tree rollout probe. Makes "the row
+    // bound 40 seconds after spawn" visible instead of inferred.
+    "agent_late_bind",
+    // Late-bind write failure (daemon-emitted, follow-up): the registry
+    // write that would have bound `harness_session_id` failed, most often a
+    // collision with a session id already claimed by another row. Distinct
+    // from a probe miss (no event, just skipped) and from `agent_late_bind`
+    // (the write succeeded).
+    "agent_late_bind_failed",
+    // Dead-row GC (daemon/reap-command-emitted): a terminal, past-grace,
+    // clean agent-view row was removed from the registry by the GC sweep or
+    // `fno agents reap`. Distinct from `agent_orphan_reaped` (which flips a
+    // live-but-unowned PID to exited); this REMOVES the row entirely.
+    "agent_row_reaped",
+    // One row per daemon retire tick that held rows: every held id
+    // with its reason, detail and age, so the fleet reads one event stream.
+    "retire_holds",
+    // The retirement sweep held a row fno's verdict keeps live while the
+    // vendor roster reads it finished: the recorded disagreement, never
+    // an override.
+    "row_liveness_drift",
+    // One bounded count summary for every configured state-retention pass.
+    "state_reap",
+    "graph_write_gate",
+    // Choke-point removal accounting: ANY write path that drops a
+    // registry row emits one of these, receipt staged first. Distinct from
+    // `agent_row_reaped` (the GC door's own event); this fires for every
+    // door, including ones nobody has enumerated yet.
+    "registry_row_removed",
+    // One lossy save, grouped: the writer, pid, command, and every
+    // lost id in one event, beside the per-row receipts above, so a save
+    // that drops rows can never vanish without a door being named.
+    "registry_rows_lost",
+    // Orphan process sweep (daemon-emitted): the row GC beside it reaps
+    // registry ROWS, this reaps the reparable children that init inherited and
+    // nobody was waiting on. Emitted on EVERY run including the ones that reap
+    // nothing, because a reaper that speaks only when it kills cannot be told
+    // apart from a reaper that never ran.
+    "orphan_reap_sweep",
+    // Worktree sweep (daemon-emitted): one line per repo per 6h saying what
+    // `fno agents workspace worktree cleanup --merged` WOULD archive, or what
+    // its --apply pass archived once a merge proof stands (a minted cleanup
+    // request, or the pass's own dry-run judgment for an outside merge).
+    // Emitted even when the counts are zero,
+    // so a quiet repo cannot be mistaken for a sweep that never ran.
+    "worktree_sweep",
+    // Stale-question reconcile (daemon-emitted): `fno agents stale-escalate`
+    // ran on its 6h floor and reconciled the lane's fleet tasks (the former
+    // [watchdog-stale:*] operator question) to the measured fleet through
+    // the Rust fleet-task door. Report-only: a lead reads open tasks on the
+    // board's fleet_task queue.
+    // Emitted even on outcome none/duplicate, so a quiet run cannot be
+    // mistaken for a sweep that never ran.
+    "stale_sweep",
+    // Question sweep (daemon-emitted): `fno agents question-sweep` ran on
+    // its interval floor and closed the node-closed questions it found,
+    // appending one empty-answer row per question (a non-empty answer would
+    // arm the unrecorded-decision gate against the asking session). Emitted
+    // even on outcome none, so a quiet run cannot be mistaken for a sweep
+    // that never ran.
+    "question_sweep",
+    // Park sweep (daemon-emitted): `fno-agents pr-park sweep` ran on its 10-minute
+    // floor and un-parked open rows whose head moved or whose park passed
+    // 24h, marking finished rows handled. Emitted even on a quiet or skipped
+    // run, so a quiet run cannot be mistaken for a sweep that never ran.
+    "park_sweep",
+    // Evals-gate settle (daemon-emitted): the one-minute arm graded a
+    // finished gate run outside the pr-watch tick, or a run is in flight
+    // under it. A fully idle minute stays silent by design.
+    "evals_settle",
+    // A parked PR resumed polling (pr-park-emitted): retries reset, by hand
+    // (the lead row's command) or by the sweep.
+    "pr_watch_unparked",
+    // Dead-row GC also reconstructs the loop's canonical failure event when a
+    // convention-named dispatch disappeared without a termination receipt.
+    "node_failed",
+    // The merge reaper emits the same kind the cleanup command does when
+    // it takes a merged node's tree, so one removal, one event, wherever the
+    // caller lives.
+    "worktree_removed",
+    // Terminal-stop sweep (daemon-emitted): a fire-and-forget
+    // `claude --bg` worker that finalize marked terminal was `claude stop`ped so
+    // its slot frees instead of parking at an idle prompt forever.
+    "bg_worker_terminal_stopped",
+    // Nudge ladder (daemon-emitted): a session the retirement sweep keeps on
+    // an open PR is mailed or resumed to drive the PR to merge; a stuck one
+    // escalates to the operator; a recorded merge order pauses the ladder.
+    "pr_nudge_sent",
+    "pr_nudge_escalated",
+    "pr_nudge_paused",
+    // Open-PR reap guard (daemon-emitted): the retirement sweep refused to
+    // reap a driver row whose node PR is open with no recorded termination.
+    // Filed once per row, beside the reap-keep task it announces.
+    "worker_reap_refused",
+    // Burn arm (daemon-emitted): a worker whose spend or node age grows on
+    // a flat sample is woken; three unanswered wakes escalate as one fleet
+    // task through the pr-nudge store.
+    "burn_watch_wake",
+    "burn_watch_escalated",
+    "loop_check_watch_expiry_wake",
+    "agent_spawn_failed",
+    // A codex thread was auto-resumed with no reconstructible state-root grant
+    //. The roots reach a spawn as an RPC param from the Python seam,
+    // and daemon-side recovery has no such param, so that worker may be unable
+    // to claim or mail. Emitted so the loss is readable instead of silent.
+    "codex_thread_resumed_without_state_grant",
+    "agent_stop_error",
+    "agent_spawn_cwd_fallback",
+    // Claude stream-json adoption front door (daemon-emitted):
+    // advisory note that the single-writer claim substrate could not be consulted
+    // before spawning, so the adopt proceeded fail-open (the registry one-host
+    // re-check is the authoritative guard).
+    "agent_stream_claim_unavailable",
+    // Channel (daemon-emitted)
+    "channel_registered",
+    // Daemon lifecycle (daemon-emitted)
+    "daemon_started",
+    "daemon_exited",
+    // A replacement daemon found its predecessor gone with no daemon_exited:
+    // names the old pid and how long the log had been quiet.
+    "daemon_died_unexpectedly",
+    "daemon_idle_pending_exit",
+    // Drift retirement (daemon-emitted): the daemon measured its own
+    // build drifted and, at a quiet tick with no live worker, retired through
+    // the graceful tail so the next lazy start runs the installed binary.
+    "daemon_drift_pending_exit",
+    "daemon_shutting_down",
+    // The socket path stopped resolving to the inode this daemon bound, so
+    // something else now owns it and this process is unreachable.
+    // It retires rather than keep running as an invisible CPU burner.
+    "daemon_socket_lost",
+    "daemon_state",
+    "daemon_recovery_error",
+    "daemon_recovery_interrupted_temp",
+    // Binary-version drift (daemon-emitted, plan): advisory note that
+    // the daemon could not fingerprint its own executable at startup, so every
+    // client drift check fails safe to Unknown.
+    "daemon_exe_fingerprint_unavailable",
+    // Drive (daemon-emitted)
+    "drive_attached",
+    "drive_detached",
+    "drive_crashed",
+    "drive_force_close_timeout",
+    "drive_keystroke_stepped",
+    "drive_refused_busy_elsewhere",
+    "drive_takeover_after_stale",
+    "drive_watch_input_rejected",
+    // Reconcile (daemon-emitted)
+    "reconcile_deferred",
+    "reconcile_done",
+    "reconcile_error",
+    // Lead (lead-emitted): the tenured-lead skill journals these from
+    // the leading session; audit resolves the names through this table.
+    "lead_armed",
+    "lead_checkin",
+    "lead_dispatch_exception",
+    // The lead-wake arm's receipt: one row per daemon wake episode, the
+    // dedupe memory the arm folds before it wakes again (lead_wake.rs).
+    "lead_wake",
+    // The trigger leg's receipts (lead_wake_triggers.rs): the refill-respawn
+    // side of the arm, ported from the pr-watch tick's Python wake phase.
+    "lead_woken",
+    "lead_wake_refused",
+    "lead_spawned_successor",
+    "worker_wake",
+    // The first read that finds a worker past its silence deadline
+    // (silence_sweep.rs).
+    "worker_silent",
+    // A landed push and the ci_cadence arm's read of it (ci_cadence.rs).
+    "pr_push_landed",
+    "ci_cadence_check",
+    // The main_revert arm's read of a red main (main_revert.rs).
+    "main_revert_check",
+    // A ci_tier arm pass, a push it held, and the wake when a slot freed
+    // (ci_tier.rs).
+    "ci_tier_pass",
+    "ci_tier_held",
+    "ci_tier_wake",
+    // The look_hold arm's cancel of a paint head's CI and its rerun when the
+    // user's look clears (look_hold.rs).
+    "look_hold_cancel",
+    "look_hold_release",
+    // The reruns a lifted test hold posts on open PRs left with only
+    // cancelled runs (test_hold.rs).
+    "test_hold_rerun",
+    // A wait or cadence red-cancel of a head's runs in flight
+    // (pr_status/wait.rs), with the failing checks that caused it.
+    "ci_wait_cancel",
+    "ci_cancel_intent",
+    // A PR queued in place of a merge, and the merge queue arm's acts
+    // (merge_queue.rs).
+    "merge_queue_entry",
+    "merge_queue_step",
+    // The beat's cron act receipt: the wake resumed a parked codex lead's
+    // resting goal, so the beat is a work beat (lead_wake.rs). The same kind
+    // the wake-mode loop emits for its dispatch-side resume.
+    "lead_goal_resumed",
+    // A team's term declared or extended (`fno agents org term <spec>
+    // [--reason]`), before or after a Stop-hook gate observed it reached.
+    // The receipt a lead's tenure bound leaves; `fno doctor event audit`
+    // resolves it through this table exactly like the lead kinds above.
+    "lead_term",
+    // A team whose holder session is proven dead left its territory: the
+    // dead-team sweep journals the vacate with cause holder_dead, the
+    // death evidence, and the inheritor (team_reap.rs; the daemon retire
+    // arm and `fno agents reap`). Python's attended `lead done` emits the
+    // same kind through the shared emitter.
+    "agent_team_vacated",
+    // The retire arm held its vacates and row reaps: this boot's revival
+    // pass has not finished, and the hold names its reason (gc.rs gate).
+    "retire_held_for_boot_revival",
+    // A vacated lead manifest restored and its row re-stamped after the
+    // holder revived (boot_revival.rs reseat).
+    "agent_team_reseated",
+    // The schema's canonical spelling of the same vacate (the alias pair in
+    // event_store::EVENT_TYPE_ALIASES): the native `org done` and the team
+    // spawn's succession write it.
+    "agent_role_vacated",
+    // A succession reverted: the reap sweep restored the predecessor's
+    // session after a successor died unbound past the window (team_reap.rs;
+    // the daemon retire arm and `fno agents reap`).
+    "team_succession_reverted",
+    // The succession transaction (succession_txn.rs): announce (plus its
+    // failed row), transfer, verify, release (plus the unproven row), and
+    // the retro receipt (plus its unmeasured row). All share one
+    // succession_id.
+    "team_succession_announced",
+    "team_succession_announce_failed",
+    "team_succession_transferred",
+    "team_succession_verified",
+    "team_succession_released",
+    "team_succession_release_unproven",
+    "team_succession_retro_filed",
+    "team_succession_retro_unmeasured",
+    // The take-over door (succession_txn.rs): the settle moved a contained
+    // sub-team to the promoted colleague, and the announcement that failed
+    // to write (the transfer stands either way).
+    "team_succession_taken_over",
+    "team_succession_take_over_mail_failed",
+    // Startup reconcile sweep (daemon-emitted, plan Architecture B)
+    "startup_reconcile_done",
+    "startup_reconcile_failed",
+    // Truth warm pass (daemon-emitted): every row's cursor rebuilt after a
+    // restart, so no session answers `warming` past this point.
+    "truth_warm_done",
+    // Registry-side keeper sweep (daemon-emitted): the daemon-start
+    // walk of the lane-B keeper thread sockets. Every dead or wedged verdict
+    // carries its reason; the rebound/dead/wedged row events name the row.
+    "keeper_sweep_done",
+    "keeper_sweep_failed",
+    "keeper_sweep_budget_exhausted",
+    "keeper_socket_unlinked",
+    "keeper_socket_silent_no_row",
+    "keeper_socket_orphan",
+    "keeper_row_dead",
+    "keeper_row_wedged",
+    "keeper_row_rebound",
+    "keeper_row_superseded",
+    "keeper_row_terminal_socket_live",
+    // Store-keeper socket hygiene (daemon-start sweep): dead store sockets in
+    // the state root and the hashed temp root are unlinked, as are orphaned
+    // seat locks; live listeners are left as found.
+    "store_socket_unlinked",
+    "store_seat_lock_unlinked",
+    // Deliver (daemon-emitted, Task 2.2 US4)
+    "agent_deliver_injected",
+    "agent_deliver_demoted",
+    "agent_deliver_status_write_failed",
+    // Unwrapped-injection audit (mail-inject binary + mux pane): an
+    // agent_raw_inject records a payload delivered without the <fno_mail>
+    // envelope, so the provenance marker survives in the ledger, not transcript.
+    "agent_raw_inject",
+    // Prompt-boundary mail delivery (mail_notify_self.rs): one receipt per
+    // drained id, so a sender can join events to a terminal drained state.
+    "agent_mail_drained",
+    // Review invocation attempt/outcome join (daemon-emitted): the
+    // canonical repo-local event records how a Codex review was fired and
+    // whether its transport confirmed delivery.
+    "review_invocation",
+    // Active-backlog mission drain supervisor (daemon-emitted): the drain tick
+    // panicked and the supervisor is restarting it with backoff. The drain
+    // decision events (active_backlog_dispatched / _parked / _skip) are
+    // loop-stream events via Journal::append, NOT daemon emits, so they are
+    // exempt from this registry by design.
+    "active_backlog_task_crashed",
+    // A mission drain loop retired (its epic deactivated / all children done,
+    // K2). An EventEmitter emit, so a first-class registered kind.
+    "active_backlog_mission_retired",
+    // Harness-aware dispatch guard (walker-emitted): the shared node
+    // chokepoint deferred a node to a foreign harness that owns / is working it
+    // (a foreign-tagged claim, a codex/gemini branch, or a foreign worktree)
+    // instead of default-spawning a claude worker. Unlike the journal-based
+    // active_backlog decision events above, this is an EventEmitter emit, so it
+    // is a first-class registered kind.
+    "dispatch_deferred",
+    // Control-plane arms readout: the supervisor-level
+    // active_backlog tick row is an EventEmitter emit (the mission-level rows
+    // ride Journal::append and are exempt like the drain decision events).
+    "control_plane_tick",
+    // Evals demand (daemon-scheduled): the regression-tier run's outcome,
+    // and the could-not-fire row whose journal entries rate-bound notices.
+    "evals_scheduled_run",
+    "evals_stale",
+    // Scratch-shape sweep (agents-emitted from the `scratch sweep`
+    // stage of the daily eval-sweep ignition): one row per new (job, shape)
+    // recurrence the jobs-dir walker found, and one row per node the sweep
+    // filed, folded, or seeded for a shape. The journal is the sweep's own
+    // dedupe index: a pair already observed in the window never re-emits.
+    "scratch_shape_observed",
+    "scratch_shape_filed",
+    // Node-closed question sweep (daemon-emitted): the periodic walk that
+    // auto-closes open operator questions whose node has closed; one emit
+    // per pass names how many it closed and, when any, which.
+    "question_sweep",
+    // Meta (daemon/worker-emitted)
+    "event_payload_too_large",
+    // Inside-leg state push (daemon-emitted, inside-out E3.2): a per-turn hook
+    // stored its latest {working|blocked|done} on the matching claude row, or the
+    // daemon dropped a report (stale seq / unknown session) without storing it.
+    "inside_leg_report",
+    "inside_leg_report_dropped",
+    // Session-start report (daemon-emitted): a harness hook's raw SessionStart
+    // payload was stamped onto the matching registry row, or was dropped
+    // (unknown session / third distinct id) without storing.
+    "session_report_stored",
+    "session_report_dropped",
+    // A foreground SessionStart report bound its row to a proven pane claim
+    // (pane_claim.rs), moving it off a stale or absent mux ref.
+    "session_pane_rebound",
+    // The org init --rebind-from repair (lead_rebind.rs): a role row and its
+    // scope manifest moved onto a new harness session id, old id recorded as
+    // the row's predecessor.
+    "session_id_restamped",
+    // The same failure the Python identification arm emits: the manifest
+    // rebind at a promoted row's first self-identification did not land.
+    "role_manifest_arm_failed",
+    // The session-report lineage port (session_report.rs): the daemon's
+    // classification of a differing reported session id (succession or
+    // branch fork), and the cwd heal it attempts, or fails, on the
+    // reporting worker's own row.
+    "session_transition_classified",
+    "session_cwd_healed",
+    "session_cwd_heal_failed",
+    // Ordered exit teardown (daemon-emitted, inside-out E3.3): a claude row with
+    // an inside-leg report is going Exited; the completion is published before
+    // the registry clears the report (AC-X2-4).
+    "inside_leg_completed",
+    // Buffer-on-early-push (daemon-emitted, inside-out E3.3): a report arrived
+    // before its session's row existed and was held in the pending buffer, then
+    // flushed onto the row at creation.
+    "inside_leg_report_buffered",
+    "inside_leg_buffer_flushed",
+    // Driver-sourced thread-row status: the codex thread actor's
+    // turn phases land on the row's inside_leg through the shared seq gate;
+    // one event per state change.
+    "codex_thread_inside_leg",
+    // Screen-manifest fallback rung (daemon-emitted, scrape sweep): a scraped
+    // verdict was stored/refreshed/cleared on a hook-less mux row, or a
+    // provider's manifest failed to load.
+    "screen_state_change",
+    // CI heal drive loop (pr-heal command): one row per --all --apply
+    // invocation carrying the per-tick counts, so the arm is visible in the
+    // journal even on a quiet cycle. Emitted even when every PR is skipped,
+    // for the same reason worktree_sweep is: a quiet repo must not read as a
+    // loop that never ran. The Python tick emits nothing for this family.
+    "pr_heal_tick",
+    // The heal loop's acted-on rows: one flake guard staged per flapping
+    // (sha, run id, check), one remedy row per PR the loop acted on, and
+    // one hold row per rerun deferred to a live Actions incident.
+    "pr_heal_flake",
+    "pr_heal_pr",
+    "pr_heal_hold",
+    // The pr-watch tick: its attempt bracket, the sweep receipt, one row per
+    // PR verdict, and the durable-grant merge queue (pr_watch/dispatch.rs).
+    "pr_watch_tick_attempt",
+    "pr_watch_tick_end",
+    "pr_watch_tick",
+    "pr_watch_sweep_chunk",
+    "pr_watch_skipped",
+    "pr_watch_parked",
+    "pr_watch_dispatched",
+    "pr_watch_dispatch_failed",
+    "pr_watch_cleanup_failed",
+    "merge_grant_execution",
+    // Daemon startup scope declaration: sandbox home vs the operator's
+    // shared home. Fleet gating and board routing key off it.
+    "daemon_fleet_scope",
+    // The invocations door's attestation leg: the head-pinned verdict the
+    // loop gate reads, settled rows included. The Python hook and
+    // emit-attestation.sh write the same kind at the same boundary, so it is
+    // dual_owner_kinds in check-event-schema-parity.sh (review_invocation
+    // above is the door's other leg).
+    "review_attestation",
+    // The mail style gate's refusal record: one event per refusal so the
+    // retry rate is a query over events.jsonl. The raw-send lane emits it
+    // from Rust; the Python front still runs the same gate on the non-raw
+    // sends, so the parity script carries it as dual-owned.
+    "style_refusal",
+    // NOTE: the a2a status-breakpoint kinds (task_started/task_done/blocked/
+    // run_summary) are NOT registered here. They are Python-defined in
+    // src/runtime/event_store/schema.yaml; the parity gate partitions names (a kind
+    // in both the Python schema and this Rust registry is a COLLISION). finalize
+    // emits run_summary via a custom envelope writer (not the registered
+    // `.emit()` path), so the production-emit-kind guard does not require it.
+    // The routed-stem writer cutover: attention answers and their delivery
+    // ladders, the day-boundary question index, and the journal retire
+    // receipt all emit through the store now (attention_arm, attention_reply,
+    // day, state_layout_sqlite).
+    "attention_answer",
+    "attention_delivery",
+    "day_boundary",
+    "legacy_journal_retired",
+    // The managed slot switch (accounts/use_switch.rs): `use`, `switch` and
+    // the daemon's slot cutover.
+    "account_switched",
+    // The once-per-window close warning (accounts/window.rs).
+    "provider_window_closing",
+    // The pre-promise review-bot quota warning (accounts/required_bot.rs).
+    "quota_required_bot_exhausted",
+    // The observer's per-dimension verdict and its run close
+    // (observer/mod.rs: sweep and replay).
+    "skill_eval_finding",
+    "skill_eval_run_complete",
+    // The register command's join row (register.rs): one event per minted
+    // or refreshed roster row.
+    "session_registered",
+    // One bounded stronger-model question from a worker session
+    // (consult.rs); figures are "unknown" when the envelope omits them.
+    "consult_call",
+    // The first-check sweep's notice beside the parent mail
+    // (first_check.rs); the notice index orders the repeats.
+    "first_check_notice",
+];
+
+/// Build the unified events.jsonl envelope JSON Schema and the
+/// `status-v1` AgentState schema as static JSON objects.
+///
+/// This mirrors `schemas/events-v3.json` (single envelope) and
+/// `schemas/status-v1.json`. The hand-rolled approach is
+/// chosen to avoid pulling in `schemars`; it MUST be accompanied by the
+/// struct-drift unit test in `src/bin/client.rs` that asserts every
+/// `AgentState` field key is present in the emitted status schema properties.
+///
+/// Returns a JSON object suitable for printing via `--emit-schema`:
+/// ```json
+/// {
+///   "envelope": { <unified events-v3 schema> },
+///   "status": { <status-v1 schema> },
+///   "event_kinds": ["agent_spawned", ...]
+/// }
+/// ```
+pub fn emit_schema_json() -> serde_json::Value {
+    use serde_json::json;
+    json!({
+        "envelope": {
+            "$comment": "Unified events.jsonl envelope. Emitted by crates/fno-agents/src/runtime/events.rs; structurally equal to schemas/events-v3.json after doc-key stripping (the parity gate diffs them).",
+            "type": "object",
+            "required": ["ts", "type", "source", "data"],
+            "properties": {
+                "ts": {
+                    "type": "string",
+                    "description": "UTC RFC3339 timestamp with millisecond precision and Z suffix"
+                },
+                "type": {
+                    "type": "string",
+                    "description": "Event type name; the daemon kinds live in KNOWN_EVENT_KINDS (see event_kinds below)"
+                },
+                "source": {
+                    "type": "string",
+                    "anyOf": [
+                        { "enum": ["active-backlog", "agents", "approvals", "backlog", "bash", "cli", "config", "consult", "daemon", "fno-first-check", "fno-loop", "hook", "legacy", "loop", "megatron", "megawalk", "migration", "observer", "pr-heal", "pr-park", "python", "rust", "skill_diff", "subagent", "target", "test"] },
+                        { "pattern": "^(worker|stream-worker|footnote):.+$" }
+                    ],
+                    "description": "Producer identity: a fixed-string source or a per-agent worker (worker:<id> / stream-worker:<id>)"
+                },
+                "data": {
+                    "type": "object",
+                    "description": "Per-type payload object"
+                }
+            },
+            "additionalProperties": true
+        },
+        "status": {
+            "$comment": "AgentState schema v1. Derived from crates/fno-agents/src/runtime/state.rs AgentState struct.",
+            "type": "object",
+            "required": ["schema_version", "short_id", "status"],
+            "properties": {
+                "schema_version": {
+                    "type": "integer",
+                    "const": 1
+                },
+                "short_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "spawning", "ready", "idle", "busy", "live",
+                        "restarting", "orphaned", "failed", "exited", "permanent_dead"
+                    ]
+                },
+                "ready": {
+                    "type": "boolean",
+                    "default": false
+                },
+                "last_message_at": {
+                    "type": ["string", "null"]
+                },
+                "last_reply": {
+                    "type": ["string", "null"]
+                },
+                "restart_count": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0
+                },
+                "last_restart_at": {
+                    "type": ["string", "null"]
+                },
+                "pty": {
+                    "oneOf": [
+                        { "type": "null" },
+                        {
+                            "type": "object",
+                            "required": ["active", "drive_active"],
+                            "properties": {
+                                "active": { "type": "boolean" },
+                                "drive_active": { "type": "boolean", "default": false },
+                                "drive_session_id": { "type": ["string", "null"] },
+                                "drive_mode": { "type": ["string", "null"] },
+                                "last_heartbeat_at_monotonic_ns": { "type": ["integer", "null"] }
+                            },
+                            "additionalProperties": false,
+                            "if": {
+                                "properties": { "drive_active": { "const": true } },
+                                "required": ["drive_active"]
+                            },
+                            "then": {
+                                "required": ["drive_session_id", "drive_mode"],
+                                "properties": {
+                                    "drive_session_id": { "type": "string" },
+                                    "drive_mode": { "type": "string" }
+                                }
+                            }
+                        }
+                    ]
+                }
+            },
+            "additionalProperties": false
+        },
+        "event_kinds": KNOWN_EVENT_KINDS,
+        // Generated from src/runtime/event_store/schema.yaml's limits block by
+        // build.rs. Emitting it makes the value the compiled binary
+        // actually carries observable, so a regenerated file the code never
+        // reads cannot pass for a fix. The parity gate diffs only `envelope`,
+        // `status` and `event_kinds`, so this sibling key perturbs nothing.
+        "limits": {
+            "max_data_bytes": events_limits::max_data_bytes(),
+            "data_size_encoding": events_limits::data_size_encoding()
+        }
+    })
+}
+
+/// A file's tail, at most `cap` bytes, starting on a line boundary: a seek
+/// into the middle of a line drops that partial line, so every admitted row
+/// is whole. Empty on any read failure, never a guess. The one tail walk:
+/// `tail_text` lossy-repairs it for observational readers, and a guard that
+/// must fail closed takes [`tail_text_strict`] instead.
+pub(crate) fn tail_bytes(path: &std::path::Path, cap: u64) -> Vec<u8> {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let len = match file.metadata() {
+        Ok(m) => m.len(),
+        Err(_) => return Vec::new(),
+    };
+    let start = len.saturating_sub(cap);
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return Vec::new();
+    }
+    let mut buf = Vec::new();
+    if file.take(len - start).read_to_end(&mut buf).is_err() {
+        return Vec::new();
+    }
+    if start > 0 {
+        match buf.iter().position(|&b| b == b'\n') {
+            // No whole line inside the window: nothing to admit.
+            Some(p) => buf.split_off(p + 1),
+            None => Vec::new(),
+        }
+    } else {
+        buf
+    }
+}
+
+/// [`tail_bytes`] as lossy text: observational readers never fail on bytes.
+pub(crate) fn tail_text(path: &std::path::Path, cap: u64) -> String {
+    String::from_utf8_lossy(&tail_bytes(path, cap)).into_owned()
+}
+
+/// [`tail_bytes`] as text, None when the tail is not valid UTF-8: a guard
+/// that answers with an allow reads corrupt evidence as unreadable, never
+/// as a repaired guess.
+pub(crate) fn tail_text_strict(path: &std::path::Path, cap: u64) -> Option<String> {
+    String::from_utf8(tail_bytes(path, cap)).ok()
+}
+
+/// Test seam: pin the boot for fixtures that fabricate pre-boot history.
+/// A stamp older than the real boot clamps to the boot under the awake-idle
+/// rule, so a backdated fixture reads fresh on a young machine and can no
+/// longer express quiet-past-grace. The pin restores that expression.
+/// Never set in production; a production boot reads the kernel.
+fn test_boot_override() -> Option<i64> {
+    std::env::var("FNO_TEST_BOOT_EPOCH_MS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|ms| *ms > 0)
+}
+
+/// Host boot as epoch ms. Linux reuses `claims::linux_boot_time_s` (the
+/// cached `/proc/stat` btime); macOS reads sysctl `kern.boottime`. None on
+/// any failure, never "now": a caller that cannot know the boot must drop
+/// the boot clause, not invent one.
+#[cfg(target_os = "linux")]
+pub fn host_boot_epoch_ms() -> Option<i64> {
+    if let Some(ms) = test_boot_override() {
+        return Some(ms);
+    }
+    crate::claims::linux_boot_time_s().and_then(|s| boot_ms_from(s, 0))
+}
+
+/// The macOS leg: sysctl `kern.boottime` into a zeroed timeval, the same
+/// call shape `census.rs` uses for its CTL_KERN probes. Cached like the
+/// Linux btime: constant for the life of the host, read once per process.
+#[cfg(target_os = "macos")]
+pub fn host_boot_epoch_ms() -> Option<i64> {
+    if let Some(ms) = test_boot_override() {
+        return Some(ms);
+    }
+    static BOOT: std::sync::OnceLock<Option<i64>> = std::sync::OnceLock::new();
+    *BOOT.get_or_init(|| {
+        let mut mib = [libc::CTL_KERN, libc::KERN_BOOTTIME];
+        let mut tv: libc::timeval = unsafe { std::mem::zeroed() };
+        let mut size = std::mem::size_of::<libc::timeval>();
+        // SAFETY: sysctl fills a caller-owned zeroed buffer; mib and size live
+        // in this frame and are read only during the call.
+        let done = unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                2,
+                &mut tv as *mut _ as *mut libc::c_void,
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if done != 0 {
+            return None;
+        }
+        boot_ms_from(tv.tv_sec as i64, tv.tv_usec as i64)
+    })
+}
+
+/// Platforms with neither reader read absent, like every other bound.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn host_boot_epoch_ms() -> Option<i64> {
+    if let Some(ms) = test_boot_override() {
+        return Some(ms);
+    }
+    None
+}
+
+/// Boot epoch ms from a boot-time second count. A non-positive count is a
+/// failed reading, not "the host booted at the epoch".
+fn boot_ms_from(sec: i64, usec: i64) -> Option<i64> {
+    if sec <= 0 {
+        return None;
+    }
+    Some(sec * 1000 + usec / 1000)
+}
+
+/// Idle seconds that only count time the host was awake: the idle clock
+/// starts at the LATER of the last activity and this boot. An anchor that
+/// predates the boot cannot have idled through the powered-off stretch
+/// between the two - a reboot would otherwise let every transcript age past
+/// every window at once, and the first sweep would vacate and reap the fleet
+/// the boot revival exists to bring back. A boot the host cannot read
+/// applies no clamp: an unmeasurable boot never invents one.
+pub fn awake_idle_secs(anchor_epoch_s: i64, now_epoch_s: i64) -> i64 {
+    awake_idle_from(anchor_epoch_s, now_epoch_s, host_boot_epoch_ms())
+}
+
+/// [`awake_idle_secs`] with the boot reading injected, so tests pin it.
+pub(crate) fn awake_idle_from(anchor_epoch_s: i64, now_epoch_s: i64, boot_ms: Option<i64>) -> i64 {
+    let clamped = match boot_ms {
+        Some(ms) => anchor_epoch_s.max(ms / 1000),
+        None => anchor_epoch_s,
+    };
+    (now_epoch_s - clamped).max(0)
+}
+
+#[cfg(test)]
+mod awake_idle_tests {
+    use super::*;
+
+    #[test]
+    fn idle_counts_from_the_boot_when_the_anchor_predates_it() {
+        // Last activity 100s, boot at 1000s, now 3000s: the powered-off
+        // stretch between them is not idle, so the clock starts at boot.
+        assert_eq!(awake_idle_from(100, 3000, Some(1_000_000)), 2000);
+        // An anchor inside this boot is untouched.
+        assert_eq!(awake_idle_from(1500, 3000, Some(1_000_000)), 1500);
+        // A boot the host cannot read never invents a clamp.
+        assert_eq!(awake_idle_from(100, 3000, None), 2900);
+        // A future anchor clamps to zero, like every other idle read.
+        assert_eq!(awake_idle_from(3000, 2000, Some(1_000_000)), 0);
+    }
+}
+
+#[cfg(test)]
+#[path = "../codegen/event_retention.rs"]
+mod event_retention_tests;

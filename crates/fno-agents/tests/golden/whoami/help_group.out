@@ -1,0 +1,12 @@
+Usage: fno whoami [OPTIONS] COMMAND [ARGS]...
+
+  Operating-stack summary: project + fleet + session + harness.
+
+Options:
+  -J, --json         emit JSON to stdout
+  --state-file PATH  override session state-file detection
+  --no-fleet         suppress fleet layer in output
+  --help             Show this message and exit.
+
+Commands:
+  status  Show gate satisfaction, bounded events tail, inconsistencies.

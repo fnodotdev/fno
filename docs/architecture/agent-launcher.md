@@ -1,0 +1,92 @@
+# Agent launcher (the composer: a draft card in each workspace)
+
+One composer launches a new harness session through the canonical spawn door and hands off to the native session. This is a launcher, not a chat client. After a verified birth the pane is focused, and the native harness UI owns everything after that. For a bg thread the roster row is the handoff. The composer has ONE draft, ONE focus cycle, ONE key rule and ONE keybar.
+
+## Primary flow
+
+1. Four gestures open a workspace's draft card. The `+` on its header opens it. So do prefix+i in the focused workspace, the sideline menu and `t` on a board card. With the sideline hidden, prefix+i reveals it at its normal width first. The catalog read arms at attach (a prefetch), not at first open.
+2. The tokens carry the pick itself, never a field label. The harness token reads `claude`. The model token reads `default` or the pinned row. The Where token reads `Local` or the selected machine from the fleet tree. When a placement is pinned, it reads `<machine> · <placement>`. A new card starts on the workspace's own folder and on Local.
+3. Enter in the input puts ONE typed request (`ClientMsg::AgentLaunch`, v83) on the wire. Duplicate submissions are suppressed at the source and at the server desk.
+4. The server validates pre-birth: absolute project path (checked for existence locally only for a local launch), supported substrate, message length. It answers duplicates with the SAME attempt and runs exactly one `fno agents spawn` off the core loop. The message rides `--prompt-file -` stdin, never argv.
+5. The client receives `ServerMsg::AgentLaunch` progress: `Starting`, then one terminal state (`Launched` / `Refused` / `Unknown`).
+6. A verified pane birth focuses the new pane through the existing `FocusPane` command path. The seed is never sent again on attach.
+
+The composer owns every key while it is open. Mouse reports reach the sideline as usual, and a tap on a card line acts on the card. A bare H/J/K/L inside a resize repeat window is text for the draft, never a resize. An unknown CSI (a focus report `ESC [ I`) is dropped whole, so nothing wedges the fold and no byte lands as text.
+
+## The key rule
+
+Tab and Shift-Tab move along the chip cycle. Enter on a token unfolds that token's list inside the card, and the roster below moves down. Enter in a list picks and folds it. Enter in the input launches. Ctrl-J inserts a newline (a `\n` byte, told apart from Enter's `\r` in the fold). When the terminal spells it (`CSI 13;2u`), Shift+Enter launches with force. Ctrl-U or Cmd+Backspace deletes everything left of the cursor on the current row. The fold maps both spellings (`0x15` and `ESC DEL`) to one key, and every fno text input honors it. Up/Down move between message lines. Left/Right move the cursor. In the model picker Left/Right cycle the effort. `?` on an empty input opens the composer help sheet, which lists the whole grammar. Esc closes it. Ctrl-O toggles a refusal's raw text under its one-sentence head. Esc folds a list, then folds the card. When the draft holds text, the card leaves a one-line ghost row, `+ new session · <folder>`. A tap on the ghost row reopens the card with its text. The keybar `↵ open/launch · tab next · ^j newline · esc close` is always painted, above the lifecycle line, and a refusal or `starting...` never replaces it.
+## The will-run line and the rest state
+
+At rest the card shows the prompt and one summary line. The line is the literal command Enter runs. It comes from `launch_spawn_argv`, the writer the server uses, so the shown command and the run command share one source. If the launch refuses the draft, the line shows that refusal instead. A worktree launch adds a dim `in a new worktree` note, because the server picks the path after Enter.
+
+Tab from the prompt unfolds the chip rows and moves to the next chip. Tab or Shift-Tab back to the prompt folds them again. The last Tab stop is the will-run line. A tap on the line also edits it. Enter parses the edited text back into the chips and pills. `--harness`, `--model` or `--route`, `--effort`, `--permission-mode`, `--cwd` and the placement flags pick their chips. Every other flag becomes a pill. A value that no list offers refuses under the line and leaves the chips as they were. Esc reverts the text. Enter on an unedited line changes nothing.
+
+## The card
+
+Each workspace has its own draft. The card sits at the top of its workspace's group, above the pinned cards. Opening another workspace's card folds the open one to its ghost row, so no draft is lost. A removed workspace drops its draft.
+
+The card has five parts, top to bottom. First, the prompt: one to six wrapped rows. On an empty input a dim placeholder names the grammar: `prompt · +flag · :value · ! shell`. It vanishes at the first keystroke. A refusal or `starting...` sits under the prompt. Second, the pills, each with a tap target `×`. Third, the will-run line, `$ fno agents spawn ...`. Fourth, two groups of tokens. Each token is a dim label then its value. The first group is harness, model, effort and perms. A blank row follows. The second group is folder, branch and worktree (`yes` or `no`). Where joins the second group once a host is chosen, and shows while Tab holds it. The chip groups, the facts line and the key line paint only while the card is unfolded. At rest the card is the prompt, the will-run line, a dim `esc close` and the `[start]` row. A token never truncates. At a narrow width the first group drops its dim labels, so perms stays beside harness. A line that runs out of room wraps to the next one. While a project token is focused, one more line reads `working directory` and the full folder, or the launch facts under Branch and Worktree. Fifth, the key line, `↵ launch · tab next · ^j newline · esc close`. Sixth, one row: `[more]` at the left and `[start]` right-aligned in the accent color. `[start]` becomes `[cancel]` while an attempt is pending. A frame with a bold `new session` title closes the card. The focused token and the picker's band wear the selected agent row's fill, the one selection mark. On codex the mode list picks the sandbox first (read only, workspace write, full access), then the approval, with `codex decides` on top. The sideline footer pads one cell off the edge and names each control (`i new · N space · + host · P menu`), each tap range one cell wider than its text.
+
+Tokens paint values, never axis names: `Local`, `footnote`, `main`, `auto`, `claude`, `default`, `high`. When the harness's capability row declares no effort axis, the effort token does not paint. A launch that succeeds closes the card. The new row takes its place in the workspace group. The request carries the workspace's folder, and the server's cwd rung maps that folder back to the workspace. A refusal keeps the card open with the reason under the prompt. A workspace with no folder refuses at launch and names the missing folder.
+
+A bare `!` then Enter opens a plain login shell as a new tab of the card's workspace, in its folder. `!cmd` runs the command first, then leaves the same shell. The Open as pick can turn the tab into a split or the active tab.
+
+## Saved sets
+
+A set is a whole loadout: harness, model, effort, perms, host, placement and the worktree box. Up to nine live in `composer-sets.json` in the mux dir. When the card opens, it reads that JSON list. A save writes a temp file, then renames it. A missing file means no sets. A file that does not parse also means no sets, and the card shows one line naming the file.
+
+Three doors apply set n through the draft's own fields. With focus off the prompt, the digit `1` to `9` applies it. On a phone, `[more]` unfolds the list as rows, `1 daily  claude · opus · high`, and a tap applies one. In the prompt, `:daily` applies it by name through the `:value` grammar, so a unique word, a spaced sigil and a paste all work. A set names a harness the catalog no longer lists: the card applies the other axes and names the missing harness.
+
+The `save as set` row, last in the same list, asks for a name in the prompt line. Enter saves the current draft. A name that matches a saved one, case aside, replaces it, which is how a set is edited. A name is one word. The tenth name is refused until one is replaced. The files stay per mux dir, so a set does not travel between machines.
+
+## Typed flags are pills
+
+Typing `+` or `:` at a word start opens one completion list under the prompt. The sigil never lands in the prompt. The list holds the flags and every chip value (harness, model, effort, perms, folder, branch, worktree, where), one group per axis. `+` lists flags first and `:` lists values first. The match is fuzzy, so `+op` finds `opus` and `:wor` finds `worktree`. Groups with the best match lead, and rows used recently for that axis lead their group. Tab or Enter picks the highlighted row through the action its chip uses. Recent picks live in `composer-recent.json` in the mux dir, kept per harness for flags.
+
+A phone's autocorrect turns `+search` into `+ search`. The list swallows one space after the sigil. On a later space, a filter that names exactly one row picks it. A filter that names none gives the typed text back to the prompt byte for byte. Pasted text runs the same grammar. The word after a word-start `+` or `:` must name one row to become a token. A trailing colon (`note:`) and a sum (`count + 1`) stay text. Every web text input the repo ships turns autocorrect, autocapitalize and spellcheck off.
+
+Any flag beyond the chips is typed, never a form. Typing `+` or an em dash (`—`) at a word start opens the flags picker. The ASCII `--` prefix also works. Its rows come from the installed harness's own `--help`, read at runtime and cached per binary version (`--version` output is the version). Each row carries the flag's one-line description. When the read fails or the binary is absent, the static capability-table capture stays as the offline fallback. A `fno spawn options` section sits above the harness rows, labelled apart: `--force`, `--name`, `--account` (substrate and effort live on their chips). Picking a flag adds a pill. The prompt excludes the entry prefix and filter. A flag that takes a value takes the next word you type as that value (Space or Enter finalizes it). Space after an unlisted `--word` commits it verbatim as a pill and it passes through to the harness untouched. `--model`, `--effort`, `--permission-mode` and `--harness` pin their chip instead of storing a pill. Pills paint as one row between the input and the bottom row, each with a clickable `x`. Backspace at an empty message start removes the last pill. At submit every pill joins `extra_flags` in order, one argv element per flag and one per value. The wire door's own validation runs on them, so a chip-owned flag such as `--cwd` refuses exactly as before.
+
+## Shell lines, force, and how refusals read
+
+A `!` on an empty input turns the composer into a one-line shell prompt. The line is the user's own typed command. Its pane run rides the same human admission exemption the user's own attach carries (`PanePlacement.human`, v101). The runaway brake warns instead of refusing, and the fleet census still gates. A `!` line never needs force. Shell mode requires Local. A remote selection refuses before execution.
+
+A refusal shows as one sentence naming the limit and the way out, for example `process limit: machine runaway brake on`. The raw gate text is never painted mid-word. Ctrl-O swaps the raw text in, and the journal row (`composer_shell_refused`, `composer_launch_forced`) always carries it.
+
+Force is a deliberate user gesture. Shift+enter arms it, and so does the `--force` row in the picker's fno section. The armed state shows as a `--force` pill. The request carries `force` once (v100). When a launch actually rides it, the pill clears. A refusal keeps it for the retry. The server journals `composer_launch_forced` with the user as the actor. It runs the door with `--force`. The cap, the provider cap and the CPU ceiling stand down. The RAM floor and the blueprint axis stay enforced. The armed state clears on submit.
+
+## What the composer owns, and what it does not
+
+- The harness catalog is the compiled-in `harness_capabilities.toml` the spawn door itself enforces, plus a PATH check per name. No UI-only list.
+- Model rows come from one bounded read (30s budget, prefetched at attach). The capability table floors each harness's list. Its first entry leads as the flagship row under `harness default`, hint `flagship`. Codex tops up from its own models cache. Configured account pins merge over both. Ready rows carry the filled mark. The list closes with `more…`. It rebuilds the picker over the catalog tail, grouped by provider. Every more row is enabled. A Ready row picks. A NoKey row shows the hollow mark and names the missing env var. Enter opens its connect steps: the `fno config set` line plus the `export`. An Unreachable row carries the dash. Enter explains the protocol gap. Esc steps back: steps -> more -> the main list. A launch checks the pinned row's key: env var first, then `api_key_file`. Nothing resolving means a pre-wire refusal naming the env var. While the read runs, the picker shows `reading models...`. After a failure it shows the reason as a disabled row. The `<harness> decides` rows launch either way. A failure re-probes on the next open.
+- Advanced pins are explicit values only. An empty pin reads as "harness default". The composer never displays an invented resolved value.
+- Routing, provider capacity, permission gates and seed acceptance stay with canonical spawn. The composer renders refusals verbatim.
+- The current mux session is the only draft memory. Esc hides the composer and retains the draft. If the client exits, the draft is lost.
+
+The server forwards explicit harness, model or route, effort and permission picks to spawn as separate argv values. No separate `--` fence is required for typed flags. Spawn reads a file or stdin prompt once before admission and worker-name minting, so a message delivered through the composer can name its worker.
+
+Run on lists the remote machines already known to the fleet tree. A remote launch uses the existing `--name @host` spawn relay. Choose the worktree box explicitly: local project facts do not decide a remote policy. Worktree resolution runs on that host. Remote choices require a mux server with protocol v122 or later. The client refuses a remote request to an older server.
+
+Its receipt carries `name@host`. The local mux opens a remote portal. A remote timeout or lost SSH connection remains `Unknown`.
+
+## Draft and outcome lifetime
+
+- One launch request id equals one spawn attempt, enforced twice. The composer disables the button while an attempt it armed is in flight. The server's launch desk replays the in-flight or finished attempt for a duplicate submission instead of spawning again.
+- The client remembers the attempt across close/reopen. A reopened composer cannot silently spawn a replacement; it shows the pending or resolved attempt.
+- An `Unknown` outcome leaves birth unresolved. Esc is the explicit cancel. It resolves back to editing, the draft survives, and retry arms a fresh request id. A timed-out launch no longer stops at "may have been born". A follow-up registry read names the worker born during the window, or reports a clean read with no birth. An unreadable registry says the read failed and stays unresolved. An admission refusal at the child spawn surfaces as a refusal with its reason, never as a fake timeout.
+- The editor cursor paints with the theme's cursor surface (`Role::BodyCursor`), the role the popups' input fields already use. It is no longer a default-styled bar.
+- An empty message is an intentionally seedless launch. The spawn door decides whether the harness/substrate combination accepts one, and its refusal is the visible explanation. No fabricated seed.
+
+## Boundaries not crossed
+
+- The composer launches a thread by default, or a pane through the Where chip's placement rows. Headless workers keep the CLI. Both reuse the same state and render components (`client/agent_launcher.rs`), not a second composer.
+- Agent launches carry flags as separate argv values. Role grants and permission policy stay with canonical spawn. Force exists only as the explicit user gesture above. The request field, not a free argv token, carries it. The override is journaled with the user as the actor. The axes `--force` can never excuse (provider cap, blueprint) stay enforced. Without the gesture, a refusal is still the product.
+
+## Tests
+
+- `src/client/tests/agent_launcher_tests.rs`: editor units, the chip cycle, draft retention, submit refusals, update correlation, chip labels and chip-row paint. Also kill-left, the refusal sentence and its Ctrl+O raw view, and the `?` help sheet. `composer_card_*` pins the card: header `+`, drafts, ghost row, launch, refusal, missing folder, bare shell.
+- `src/client/tests/backlog_board_tests.rs`: the `t` key. It prefills from a card, refuses a worked card, works in the drill-down, and keeps a held draft.
+- `src/server/tests/agent_launcher_tests.rs`: pre-birth validation and desk dedup/replay at the Core.
+- `tests/agent_launcher_journey.rs`: real subprocess boundary with a recording fake door. Pins exact argv, verbatim stdin, refusal and unknown journeys, and no duplicate attempt.
+- `tests/agent_launcher_client_e2e.rs`: a real-client test per reported defect, plus the card paint and each list.

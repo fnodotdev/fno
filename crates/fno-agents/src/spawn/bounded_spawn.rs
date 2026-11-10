@@ -1,0 +1,253 @@
+//! The bounded transport's spawn half: one child spawn, retried while the
+//! failure is transient.
+//!
+//! `run_bounded` owns the wait, the kill, and the pipe drains; this module
+//! owns only getting a child to exist. The retry lives here because a spawn
+//! failure is the one transport outcome that says nothing about the read
+//! itself: on a loaded machine (a CI runner mid-suite, a fleet host near its
+//! process limit) `fork` answers EAGAIN for a binary that is perfectly
+//! spawnable a millisecond later. The gh probe already retried exactly this
+//! class at its own layer; one red CI run surfaced the same failure one layer
+//! down, where no retry existed, and a healthy `pr-heal` run exited "unreadable
+//! world" instead of refusing on the branch it was asked about. Absence stays
+//! immediate: ENOENT is a fact about the disk, not about the moment.
+
+use std::ffi::OsStr;
+use std::path::Path;
+use std::process::Stdio;
+
+/// The auth posture of one spawn: the default installation decision, a
+/// token-less child, or the forced placement the rate-limit route retry
+/// uses (the refused bucket is the exported token's, so overriding it for
+/// that one attempt is the point).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum AppAuth {
+    Default,
+    Without,
+    Forced,
+}
+
+/// Attempts per spawn, and the pause between them: the same shape as the gh
+/// probe's loop, which exists for the same reason (ETXTBSY clears in
+/// milliseconds).
+const SPAWN_ATTEMPTS: u32 = 3;
+const RETRY_PAUSE: std::time::Duration = std::time::Duration::from_millis(5);
+
+/// ENOENT is the one spawn error worth classifying as stable: it says the
+/// binary is not there and will still not be there in 5ms, and it is the one
+/// the shell fallback in `run_probe` has to see on attempt one. Everything
+/// else retries. Most of that set really is moment-shaped (EAGAIN under fork
+/// pressure, ETXTBSY while the binary is still being written, EMFILE at the
+/// fd ceiling), but not all of it: EACCES on a mode-644 file is as stable as
+/// ENOENT and still burns all three attempts. That is the deliberate trade.
+/// Enumerating every stable errno is how one gets sorted into the wrong
+/// bucket; the bound is what makes guessing wrong cheap - two extra forks and
+/// 10ms on a binary that was never going to run.
+fn failure_is_transient(kind: std::io::ErrorKind) -> bool {
+    kind != std::io::ErrorKind::NotFound
+}
+
+/// Spawn `bin args` in `cwd` for the bounded transport: null stdin, piped
+/// stdout/stderr, own process group, transient spawn failures retried. The
+/// error is the LAST attempt's kind, so a stable failure surfaces as itself.
+pub(crate) fn spawn_bounded(
+    bin: &OsStr,
+    args: &[&str],
+    cwd: &Path,
+) -> Result<std::process::Child, std::io::ErrorKind> {
+    spawn_bounded_flagged(bin, args, cwd, true, &[]).map(|(child, _)| child)
+}
+
+/// `spawn_bounded` plus whether the child carries an installation token: a
+/// caller that reads the child's result can retry a 404-shaped failure once
+/// without the token, which covers a stale installation scope.
+pub(crate) fn spawn_bounded_flagged(
+    bin: &OsStr,
+    args: &[&str],
+    cwd: &Path,
+    allow_app_token: bool,
+    env: &[(&str, &str)],
+) -> Result<(std::process::Child, bool), std::io::ErrorKind> {
+    spawn_bounded_auth(
+        bin,
+        args,
+        cwd,
+        if allow_app_token {
+            AppAuth::Default
+        } else {
+            AppAuth::Without
+        },
+        env,
+    )
+}
+
+/// `spawn_bounded_flagged` over the three auth postures. `Forced` places
+/// the installation token even over an exported operator token: it is only
+/// ever reached from the rate-limit route retry, where the exported
+/// token's bucket is the capacity GitHub just refused.
+pub(crate) fn spawn_bounded_auth(
+    bin: &OsStr,
+    args: &[&str],
+    cwd: &Path,
+    auth: AppAuth,
+    env: &[(&str, &str)],
+) -> Result<(std::process::Child, bool), std::io::ErrorKind> {
+    let mut cmd = crate::pr_status::quota::helper_command(bin);
+    cmd.args(args);
+    cmd.current_dir(cwd);
+    cmd.envs(env.iter().copied());
+    let injected = match auth {
+        AppAuth::Default => crate::github_app::inject(&mut cmd, bin),
+        AppAuth::Without => false,
+        AppAuth::Forced => crate::github_app::inject_forced(&mut cmd, bin),
+    };
+    spawn_bounded_command(cmd).map(|child| (child, injected))
+}
+
+/// Spawn a fully built `Command` under the same contract: null stdin, piped
+/// stdout/stderr, own process group, transient spawn failures retried. A
+/// caller that needs env or a non-quota binary builds the Command itself and
+/// lands here, so the retry and group rules keep one home.
+pub(crate) fn spawn_bounded_command(
+    mut cmd: std::process::Command,
+) -> Result<std::process::Child, std::io::ErrorKind> {
+    use std::os::unix::process::CommandExt;
+
+    let mut attempt = 0;
+    loop {
+        let spawned = cmd
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0)
+            .spawn();
+        match spawned {
+            Ok(child) => return Ok(child),
+            Err(e) if !failure_is_transient(e.kind()) => return Err(e.kind()),
+            Err(e) => {
+                attempt += 1;
+                if attempt >= SPAWN_ATTEMPTS {
+                    return Err(e.kind());
+                }
+                std::thread::sleep(RETRY_PAUSE);
+            }
+        }
+    }
+}
+
+/// SIGKILL a process group, ignoring "already gone".
+pub(crate) fn killpg(pgid: i32) {
+    if pgid <= 0 {
+        return;
+    }
+    // SAFETY: pgid is our own spawned group leader's pid; ESRCH is expected
+    // once every member has exited and is deliberately ignored.
+    unsafe {
+        libc::killpg(pgid, libc::SIGKILL);
+    }
+}
+
+/// SIGKILL the child's whole process group, then reap it. A probe pipeline's
+/// grandchildren hold the stderr pipe open; killing only the direct child would
+/// leave the drain thread blocked on a pipe that never reaches EOF.
+pub(crate) fn kill_process_group(child: &mut std::process::Child) {
+    killpg(child.id() as i32);
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_loaded_machines_eagain_is_transient() {
+        // EAGAIN maps to WouldBlock, the moment-shaped case. PermissionDenied
+        // is the deliberate over-capture: EACCES is stable, and retrying it
+        // anyway is what keeps this classifier a one-line rule.
+        assert!(failure_is_transient(std::io::ErrorKind::WouldBlock));
+        assert!(failure_is_transient(std::io::ErrorKind::PermissionDenied));
+    }
+
+    /// This module is only worth having if `loopcheck` actually routes
+    /// through it, so the guard for that lives here rather than there. A
+    /// direct `.spawn()` in the loopcheck module is a transport with no retry
+    /// beneath it, and a transient EAGAIN there reports the world unreadable
+    /// on a machine that was merely busy: the exact failure this module
+    /// exists to delete.
+    ///
+    /// The bug it retires was the class, not the instance. The retry landed
+    /// on `run_bounded` while `run_probe` kept its own bare `.spawn()`, so a
+    /// loaded fleet host still turned a healthy done_probe into BLOCKED and
+    /// held the stop gate. Both runners now route through the one spawner,
+    /// and the last direct spawn left the file entirely: the detached
+    /// notifier's spawn retired with the in-process notify port, and the
+    /// notify dispatch's one `fno mux notify` seam spawn is bounded (its
+    /// failures have no caller to retry to). `run_probe` and its tests now
+    /// live in acceptance_evidence.rs; the guard scans both production
+    /// halves.
+    #[test]
+    fn no_unretried_spawn_outside_the_bounded_spawner() {
+        fn production(source: &'static str) -> &'static str {
+            source
+                .split("\nmod tests {")
+                .next()
+                .expect("test module marker")
+        }
+        let loopcheck = crate::loopcheck::production_source();
+        let acceptance = production(include_str!("../gate/acceptance_evidence.rs"));
+        // run_bounded moved to its own module; the routed call site moved
+        // with it, so the guard scans that production half too.
+        let bounded_read = production(include_str!("../gate/loopcheck/bounded_run.rs"));
+        // Positive control first: a zero-hit scan of the wrong haystack reads
+        // identical to a clean one, so prove the routed sites are in view
+        // before trusting the count below.
+        assert!(
+            bounded_read
+                .matches("crate::bounded_spawn::spawn_bounded_auth(")
+                .count()
+                >= 1,
+            "run_bounded must route through the one spawner"
+        );
+        assert!(
+            acceptance
+                .matches("crate::bounded_spawn::spawn_bounded(")
+                .count()
+                >= 1,
+            "run_probe must route through the one spawner"
+        );
+        assert_eq!(
+            loopcheck.matches(".spawn()").count(),
+            0,
+            "loopcheck spawns only through bounded_spawn; the crate's one \
+             detached direct spawn lives in operator_notice, and a new direct \
+             spawn here routes through spawn_bounded or amends this guard"
+        );
+        assert_eq!(
+            bounded_read.matches(".spawn()").count(),
+            0,
+            "bounded_read spawns only through bounded_spawn; a new direct \
+             spawn here routes through spawn_bounded or amends this guard"
+        );
+        assert_eq!(
+            acceptance.matches(".spawn()").count(),
+            0,
+            "acceptance_evidence spawns only through bounded_spawn; a new \
+             direct spawn here routes through spawn_bounded or amends this guard"
+        );
+    }
+
+    #[test]
+    fn a_stable_spawn_error_terminates_as_itself_after_the_bounded_retries() {
+        // A regular file with no execute bit answers EACCES on every attempt,
+        // so this proves the retry loop TERMINATES and reports the real kind
+        // rather than hanging or synthesizing one.
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().join("not-executable");
+        std::fs::write(&p, "#!/bin/sh\nexit 0\n").unwrap();
+        let err = spawn_bounded(p.as_os_str(), &[], tmp.path())
+            .err()
+            .expect("a non-executable file cannot spawn");
+        assert_eq!(err, std::io::ErrorKind::PermissionDenied);
+    }
+}

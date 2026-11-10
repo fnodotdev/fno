@@ -1,0 +1,451 @@
+"""Guard: node:<id> claim-release authority is locked to two sanctioned sites.
+
+Regression guard for ab-588326a7: a helper/worker subprocess exit released the
+parent target session's ``node:<id>`` claim mid-run, leaving the node
+double-dispatchable. That bug was eliminated by x-73cc / PR #534 - the
+``dispatch:<id>`` vs ``node:<id>`` holder separation - but nothing PINNED the
+invariant, so future drift could reintroduce it (a new helper path that
+constructs the ``target-session:<sid>`` holder and releases the node claim, or
+an exit handler that unlinks it).
+
+The target self-handoff shell must not release a ``node:<id>`` claim directly.
+It delegates archive plus exact-holder release to the native
+target-handoff-prepare op so shell and target handoffs share one recoverable
+custody operation.
+
+A "node-release site" is a ``claim release`` invocation whose released KEY
+resolves to a ``node:`` prefix (a literal, or a local variable / ``format!``
+bound to ``node:``). This is deliberately NOT mere co-occurrence of the string
+``node:`` in the file: ``backlog/advance.py`` carries a ``node:`` liveness probe
+AND a ``dispatch:`` reservation release in the same file and must NOT be flagged.
+Generic prefix-agnostic wrappers that release a ``key`` parameter (the
+``fno agents claim release`` CLI, ``advance._safe_release``, the pr_watch
+``ClaimAdapter``) and releasers of other prefixes
+(``session:`` / ``fleet:`` / ``dispatch:`` / ``pending-plan:`` / ``walker:``) are
+not node-release sites.
+
+The matcher errs toward FALSE POSITIVES (a new site must be justified in the
+allowlist) over false negatives (a silently-missed releaser would give false
+confidence - the worst outcome for this specific bug).
+
+Filter: uv run pytest cli/tests/test_node_claim_release_authority.py -q
+"""
+from __future__ import annotations
+
+import ast
+import re
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# crates/ is in scope because the megawalk walker (the legitimate node-claim
+# owner) and any future Rust releaser live there.
+SCAN_DIRS = ["cli/src/fno", "scripts", "skills", "hooks", "crates"]
+
+# Sanctioned node:<id> release sites. Each releases a node claim as a
+# legitimate owner/successor with holder verification; see ab-588326a7 / x-73cc.
+# A NEW entry here requires an equivalent justification (a holder-verified,
+# single-authority release at a sanctioned lifecycle boundary).
+ALLOWLIST = {
+    # `fno backlog unclaim`/`release`/`requeue`: the sanctioned one-shot un-claim
+    # and queue-return commands. Their lockfile release is holder-verified - it
+    # drops the lock ONLY when the holder is stale (PID dead / TTL expired) or
+    # matches the invoking session, and REFUSES a live foreign holder (warn +
+    # point at force-release). Single authority at an explicit operator
+    # lifecycle boundary (x-a747). The queue-return subject moved to the
+    # native requeue arm, which releases through the same ladder below.
+    # init-target-state.sh: the acquire-then-validate refusal (x-e957). Releases
+    # the claim THIS SAME BLOCK acquired one line earlier, with the holder it
+    # just minted, when the post-acquire containment read says the node was
+    # adopted into a delivery unit mid-bootstrap - then exits without writing
+    # state. It is the inverse of ab-588326a7 rather than a repeat: that bug was
+    # a helper releasing the PARENT session's claim, whereas this releases only
+    # its own, never observes a foreign holder (a live one makes the acquire
+    # fail and this branch unreachable), and holds the claim for the microseconds
+    # between the two calls. Not releasing would strand a bogus 2h claim on a
+    # node no one is building.
+    "hooks/helpers/init-target-state.sh",
+    # The failover respawn: it releases the dead worker's node claim only after
+    # that worker's stop succeeded, so the replacement spawn can acquire it. A
+    # failed stop returns before this line, and a live holder is never in play.
+    "crates/fno-agents/src/runtime/recovery_sweep/redispatch.rs",
+    # graph/store.py release_node_claim_at_closure: the node-CLOSURE release.
+    # Fired at the one choke point every closure path funnels through (the
+    # terminal-rung transition inside commit_rows_via_store, plus the tracker
+    # seam right after close()) and nowhere else, it is deliberately
+    # holder-agnostic: a closed node has no work left to protect, so there is
+    # no legitimate holder to verify - the terminal rung IS the authority.
+    # Before it, closing a node never released its claim, so a live worker
+    # that finished one node and moved to the next kept a permanent lock the
+    # reaper could not settle (measured 2026-08-21: 16h past the node's own
+    # completion). Scratch-graph closures are gated out; only the process's
+    # configured graph releases.
+    # crates/fno-agents/src/backlog/session_cli.rs run_close: the
+    # BLUEPRINT-CLOSE terminal release. A spawn dispatch acquires
+    # node:<id> under spawn-handover:<worker> and a blueprint session never
+    # runs init, so the close is the only terminal that lifecycle has.
+    # Holder-scoped: it releases ONLY the session's own spawn-handover or
+    # blueprint-session holder and leaves a successor target session's
+    # rebound claim intact, so the ab-588326a7 shape (a helper releasing
+    # somebody else's claim) cannot occur here by construction. Not releasing
+    # at all leaves the node un-dispatchable until TTL with advance skipping
+    # it as already-claimed.
+    "crates/fno-agents/src/backlog/session_cli.rs",
+    # crates/fno-agents/src/backlog/update_cli.rs apply_mutators: the
+    # operator's explicit `update --locked-by null` clear ("'null' to
+    # release" per update_help.txt). Holder-scoped: it drops the lock only
+    # when the holder is stale (pid dead / TTL expired) or matches the
+    # invoking session, and REFUSES a live foreign holder naming
+    # `fno agents claim release` - the unclaim/requeue contract (x-dd1f
+    # review round; the pre-fix site released whatever holder the record
+    # named). Explicit operator lifecycle boundary, never a helper's own
+    # initiative.
+    "crates/fno-agents/src/backlog/update_cli.rs",
+    # crates/fno-agents/src/backlog/cutover.rs run_unclaim: the unclaim
+    # command's native release ladder (the wheel leg retired with
+    # lifecycle.py). Holder-verified on the same contract as requeue.py:
+    # a stale lock releases, a live holder releases only when it matches
+    # the invoking session, and a live foreign holder survives with its
+    # name in the receipt. Single authority at the explicit operator
+    # `unclaim` boundary.
+    "crates/fno-agents/src/backlog/cutover.rs",
+    # crates/fno-agents/src/gate/target_start.rs release_early_claim: the start
+    # orchestrator releases the EARLY claim it acquired itself, minutes
+    # earlier, before the slow allocation steps - and only when start itself
+    # fails before init runs (ensure refusal/timeout, bind refusal). The
+    # release is holder-bound (`claims::release` drops only a matching
+    # holder, silently no-ops otherwise), so it can never release the
+    # parent's or a foreign session's claim: the inverse of ab-588326a7,
+    # same shape as the init-helper acquire-then-refuse site above. Not
+    # releasing would strand a 2h claim on a node whose allocation failed.
+    "crates/fno-agents/src/gate/target_start.rs",
+    # crates/fno-agents/src/backlog/requests.rs write_claims: the request
+    # import's release of an outside contributor's claim, when the claim issue
+    # left the open approved list. The holder is `github:<login>`, written by
+    # the same import run that grants the claim, and `claims::release` drops
+    # the lock only for a matching holder. No session is involved, so a
+    # worker's or parent's claim cannot be released here: the inverse of a
+    # helper releasing its parent's claim. Not releasing would hold the node
+    # for the full TTL after the contributor closed the issue.
+    "crates/fno-agents/src/backlog/requests.rs",
+    # crates/fno-agents/src/gate/pr_steward.rs deliver_take: the steward releases
+    # the contributor's claim once their pull request arrived, so the
+    # fleet can rebuild the node. It passes `--holder github:<login>`, the
+    # holder the import wrote, and the release verifies that holder. A claim
+    # held by anyone else survives. The steward never releases a session's
+    # claim.
+    "crates/fno-agents/src/gate/pr_steward.rs",
+}
+
+_EXTS = {".py", ".sh", ".bash", ".rs"}
+
+
+def _rel(path: Path) -> str:
+    return path.relative_to(REPO_ROOT).as_posix()
+
+
+def _skip(rel: str) -> bool:
+    return (
+        "/tests/" in rel
+        or "/test/" in rel
+        or Path(rel).name.startswith("test_")
+        or Path(rel).name.startswith("test-")
+        or "/__pycache__/" in rel
+        or "/internal/" in rel
+        or "/.claude/" in rel
+        or rel.endswith((".pyc", ".jsonl"))
+    )
+
+
+def _iter_source_files():
+    for d in SCAN_DIRS:
+        base = REPO_ROOT / d
+        if not base.exists():
+            continue
+        for path in base.rglob("*"):
+            if not path.is_file() or path.suffix not in _EXTS:
+                continue
+            rel = _rel(path)
+            if _skip(rel):
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+            yield rel, text
+
+
+# --------------------------------------------------------------------------
+# shell: a `claim release <KEY>` where KEY is a node: literal, or a variable
+# assigned a node: value anywhere in the file.
+# --------------------------------------------------------------------------
+
+_SH_RELEASE = re.compile(r"\bclaim\s+release\s+(\S+)")
+_SH_VAR = re.compile(r'^["\']?\$\{?([A-Za-z_]\w*)\}?["\']?$')
+
+
+def _shell_node_release_lines(text: str) -> list[int]:
+    hits: list[int] = []
+    lines = text.splitlines()
+    for n, line in enumerate(lines, start=1):
+        if line.lstrip().startswith("#"):
+            continue
+        m = _SH_RELEASE.search(line)
+        if not m:
+            continue
+        key = m.group(1)
+        if key.strip().strip("\"'").startswith("node:"):
+            hits.append(n)
+            continue
+        vm = _SH_VAR.match(key)
+        if vm:
+            var = vm.group(1)
+            # Resolve the variable: its assigned VALUE must START with `node:`
+            # (a node key). A plain substring test would mis-flag a value like
+            # `dispatch:$id` paired with a `dispatch-node:$$` holder on the same
+            # line - "node:" occurs inside "dispatch-node:" but the released key
+            # is a dispatch reservation, not a node claim.
+            assign = re.compile(
+                r"^\s*(?:local\s+|export\s+)?" + re.escape(var) + r"=(\S+)"
+            )
+            for l2 in lines:
+                am = assign.match(l2)
+                if am and am.group(1).strip("\"'").startswith("node:"):
+                    hits.append(n)
+                    break
+    return hits
+
+
+# --------------------------------------------------------------------------
+# rust: `["claim", "release", <KEY>, ...]` where KEY is a node: literal or a
+# variable bound to a `format!("node:...` / `"node:...` value in the file.
+# --------------------------------------------------------------------------
+
+# An `["claim", "release", <KEY>, ...]` argv. Matched over the WHOLE file text
+# (not line-by-line) so a multi-line `.args([...])` or `vec![...]` argv is not
+# missed (codex P2), and tolerating `.to_string()` / `.into()` adornments on the
+# literals (the `claim_release_argv` helper style).
+_RS_ADORN = r"(?:\.to_string\(\)|\.into\(\)|\.to_owned\(\))?"
+_RS_RELEASE = re.compile(
+    r'"claim"' + _RS_ADORN + r'\s*,\s*"release"' + _RS_ADORN + r"\s*,\s*(&?\s*[^,\]\)]+)"
+)
+_RS_DIRECT_RELEASE = re.compile(r"\brelease\s*\(\s*(&?\s*[^,\]\)]+)")
+_RS_BIND = re.compile(r"\blet\s+(?:mut\s+)?([A-Za-z_]\w*)\s*(?::[^=]+)?=\s*(.+)$")
+
+
+def _rust_cfg_test_lines(lines: list[str]) -> set[int]:
+    """1-indexed line numbers inside an inline ``#[cfg(test)] mod`` block.
+
+    Inlined from the deleted lint_cli.py so the scanner survives its
+    deletion; the native twin is repo_lint::seam_crossings::rust_cfg_test_lines.
+    """
+    inside: set[int] = set()
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if stripped != "#[cfg(test)]":
+            i += 1
+            continue
+        head = lines[i + 1].strip() if i + 1 < len(lines) else ""
+        if not head.startswith(("mod ", "pub mod ", "pub(crate) mod ")):
+            i += 1
+            continue
+        # `#[cfg(test)] pub mod frame_html;` declares an EXTERNAL module and
+        # opens no block. A declaration excludes nothing.
+        if head.endswith(";"):
+            i += 1
+            continue
+        j = i + 1
+        while j < len(lines) and "{" not in lines[j]:
+            j += 1
+        if j >= len(lines):
+            break
+        depth = 0
+        while j < len(lines):
+            depth += lines[j].count("{") - lines[j].count("}")
+            if depth <= 0:
+                break
+            j += 1
+        for k in range(i, min(j, len(lines) - 1) + 1):
+            inside.add(k + 1)
+        i = j + 1
+    return inside
+
+
+def _rust_node_release_lines(text: str) -> list[int]:
+    lines = text.splitlines()
+    test_lines = _rust_cfg_test_lines(lines)
+    lines = ["" if index in test_lines else line for index, line in enumerate(lines, 1)]
+    text = "\n".join(lines)
+    node_vars: set[str] = set()
+    for line in lines:
+        if line.lstrip().startswith("//"):
+            continue
+        bm = _RS_BIND.search(line)
+        if bm and ('format!("node:' in line or '"node:' in bm.group(2)):
+            node_vars.add(bm.group(1))
+    # Scrub `//` line comments (keep newlines) so a commented-out release in the
+    # whole-text scan is not a false positive; line numbers stay accurate.
+    scrubbed = re.sub(r"//[^\n]*", "", text)
+    hits: list[int] = []
+    for m in _RS_RELEASE.finditer(scrubbed):
+        key = m.group(1).strip().lstrip("&").strip()
+        # `"node:` anywhere in the key catches both a bare literal (`"node:foo"`)
+        # and an inlined `&format!("node:{}", ...)` (gemini HIGH); `node_vars`
+        # membership catches a `&claim_key` bound to `format!("node:...)`
+        # elsewhere. The leading-quote anchor avoids the `dispatch-node:` holder
+        # substring trap.
+        if '"node:' in key or key in node_vars:
+            hits.append(scrubbed.count("\n", 0, m.start()) + 1)
+    # The direct form: `release(claim_key, ...)` — the same key check, so the
+    # claims::release front the session commands call is as visible as the
+    # literal-argument spelling above.
+    for m in _RS_DIRECT_RELEASE.finditer(scrubbed):
+        key = m.group(1).strip().lstrip("&").strip()
+        if '"node:' in key or key in node_vars:
+            hits.append(scrubbed.count("\n", 0, m.start()) + 1)
+    return sorted(set(hits))
+
+
+# --------------------------------------------------------------------------
+# python (AST): a `release_claim(...)` / `force_release_claim(...)` whose first
+# arg (positional, or `key=`) resolves to a node: literal / f-string. A bare
+# Name is resolved against assignments in the enclosing function + module scope
+# (so a `key` parameter is correctly classified non-node).
+# --------------------------------------------------------------------------
+
+
+def _is_node_const(node: ast.AST) -> bool:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value.startswith("node:")
+    if isinstance(node, ast.JoinedStr):
+        for v in node.values:
+            if isinstance(v, ast.Constant) and isinstance(v.value, str):
+                return v.value.startswith("node:")
+            # leading element is an interpolation -> cannot be a node: prefix
+            return False
+    return False
+
+
+def _python_node_release_lines(text: str) -> list[int]:
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return []
+
+    parents: dict[ast.AST, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+
+    def enclosing_func(node: ast.AST):
+        cur = parents.get(node)
+        while cur is not None:
+            if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                return cur
+            cur = parents.get(cur)
+        return None
+
+    def name_is_node(name: str, func) -> bool:
+        scopes: list[ast.AST] = [tree]
+        if func is not None:
+            scopes.append(func)
+        for scope in scopes:
+            for node in ast.walk(scope):
+                targets: list[ast.AST] = []
+                if isinstance(node, ast.Assign):
+                    targets = list(node.targets)
+                elif isinstance(node, ast.AnnAssign) and node.target is not None:
+                    targets = [node.target]
+                else:
+                    continue
+                for t in targets:
+                    if isinstance(t, ast.Name) and t.id == name and _is_node_const(node.value):
+                        return True
+        return False
+
+    hits: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        fname = (
+            fn.id if isinstance(fn, ast.Name)
+            else fn.attr if isinstance(fn, ast.Attribute)
+            else None
+        )
+        if fname not in ("release_claim", "force_release_claim"):
+            continue
+        arg = None
+        if node.args:
+            arg = node.args[0]
+        else:
+            for kw in node.keywords:
+                if kw.arg == "key":
+                    arg = kw.value
+                    break
+        if arg is None:
+            continue
+        if _is_node_const(arg):
+            hits.append(node.lineno)
+        elif isinstance(arg, ast.Name) and name_is_node(arg.id, enclosing_func(node)):
+            hits.append(node.lineno)
+    return hits
+
+
+def _node_release_lines(rel: str, text: str) -> list[int]:
+    if rel.endswith((".sh", ".bash")):
+        return _shell_node_release_lines(text)
+    if rel.endswith(".rs"):
+        return _rust_node_release_lines(text)
+    if rel.endswith(".py"):
+        return _python_node_release_lines(text)
+    return []
+
+
+def _discover() -> dict[str, list[int]]:
+    sites: dict[str, list[int]] = {}
+    for rel, text in _iter_source_files():
+        lines = _node_release_lines(rel, text)
+        if lines:
+            sites[rel] = lines
+    return sites
+
+
+# --------------------------------------------------------------------------
+# tests
+# --------------------------------------------------------------------------
+
+
+def test_no_unsanctioned_node_claim_release():
+    """The dangerous direction: a NEW file releasing a node:<id> claim."""
+    sites = _discover()
+    unexpected = {r: ls for r, ls in sites.items() if r not in ALLOWLIST}
+    detail = "\n".join(
+        f"  {r}:{','.join(map(str, ls))}" for r, ls in sorted(unexpected.items())
+    )
+    assert not unexpected, (
+        "Unsanctioned node:<id> claim-release site(s) found. A node claim must "
+        "be released ONLY by handoff.sh (deliberate self-handoff) or the "
+        "megawalk walker (owner) - never by a helper/worker subprocess "
+        "(ab-588326a7). Route the release through a sanctioned site, or add a "
+        "justified entry to ALLOWLIST:\n" + detail
+    )
+
+
+def test_both_sanctioned_sites_detected():
+    """The matcher must keep SEEING the two known sites. A miss here means the
+    matcher silently broke or a sanctioned site moved - either way the guard
+    would pass vacuously and must fail loud instead."""
+    sites = _discover()
+    missing = ALLOWLIST - set(sites)
+    assert not missing, (
+        "Expected node-release site(s) not detected by the matcher: "
+        f"{sorted(missing)}. Either the matcher regressed (it would now miss a "
+        "real new releaser too) or the site moved - update the matcher/allowlist."
+    )
+
+
+if __name__ == "__main__":  # debug: print discovered sites
+    for r, ls in sorted(_discover().items()):
+        print(f"{r}: {ls}")

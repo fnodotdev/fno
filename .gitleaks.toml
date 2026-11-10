@@ -1,0 +1,22 @@
+# Synthetic-fixture allowlist for the public tree. Every credential in the
+# tracked tip is a planted regression fixture: the sequential placeholder PAT
+# (ghp_A1b2...), sequential hex bodies, and golden-account outputs with fixed
+# fake bearer hashes. A finding outside this allowlist is real: rotate the
+# credential, do not extend this file.
+title = "fno synthetic-fixture allowlist"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "planted test fixtures and golden outputs only"
+paths = [
+  '''^crates/fno-agents/tests/golden/''',
+  '''^crates/fno-agents/tests/fixtures/''',
+  '''^tests/py/events/parity_corpus\.jsonl$''',
+]
+regexes = [
+  '''ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8''',
+  '''ghp_abcdefghijklmnopqrstuvwxyz0123456789''',
+  '''0123456789abcdef0123456789abcdef''',
+]

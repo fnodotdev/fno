@@ -1,0 +1,282 @@
+---
+name: mail
+description: Read, send, reply to, and manage Footnote agent mail from any session.
+argument-hint: "<command> [args]  |  send <name> \"<body>\"  |  reply <msg-id> \"<body>\"  |  hold [minutes|off|status]  |  dnd [off|cancel]  |  unread|show [name]"
+metadata:
+  internal: false
+  requires:
+    binaries:
+      - "fno >= 0.1"
+---
+
+# Mail
+
+## Relay compression contract
+
+Every agent-authored mail is a handoff: 80 words or fewer, outcome and next action only. The full contract (what to cut, what stays exact, the `Status:`/`Approval:` forms) is stated ONCE in the auto-loaded `skills/using-fno/SKILL.md`. A second copy here can drift from the one every session loads. Compress against that statement. Keep technical terms, commands, errors, numbers, and negation exact. This binds `fno agents mail send`, `fno agents mail reply`, and `fno mux pane send` alike.
+
+**Message background workers and projects from anywhere - even your phone.**
+
+`/fno:mail` is the runner-less front door over the shipped `fno agents mail`
+messaging surface. `fno agents mail send|reply|unread|...` needs exact shell quoting, and
+a phone has no `!` local-command runner, so a typed command either splits on bad
+smart quotes or never executes at all. This skill fixes that the same way
+`/agent` does: **you (the agent) are the runner.** You read the messy input,
+route it to the right `fno agents mail` command, normalize it, run the **genuine** command
+via your Bash tool, and report the **real** captured receipt.
+
+`/agent` is agent **lifecycle** (spawn / watch / stop). `/mail` is **messaging**.
+Two skills, two concerns. This skill REUSES the shipped `fno agents mail` primitives -
+it does not reimplement the bus, the cursor, or the render. Its value is command
+routing + input normalization + honest reporting for surfaces that cannot run a
+local command.
+
+`SKILL_DIR` below is `skills/mail` inside this plugin.
+
+## The delivered turn: one header line, then the whole body
+
+Delivered mail opens with one backticked line, `` `@sender · fmail-<12 hex> · summary` ``, and the full message follows, wholly visible. The summary is the body's first sentence capped at 12 words. The `@` lives inside inline code on purpose: a bare `@` in harness text can open a mention picker or read as an address, so each harness's contract row (`mail_header_at` in `harness_capabilities.toml`) rules which spelling its composer gets, set by the composer check. Old `<fno_mail>` turns in existing transcripts still resolve everywhere.
+
+## The delivery model (so the commands make sense)
+
+**A send injects into the recipient's live session. The durable queue is what
+happens when that misses, and it is recovery, not delivery.**
+
+`fno agents mail send` tries a live inject first. On success the header-framed turn lands in the recipient's session and an audit-only `delivery: hosted` row records it in `messages.jsonl`. Recipient drains ignore that row because delivery already happened. When no live inject confirms, the envelope instead enters the durable queue and waits on a drain the recipient does not reliably run. Both exit 0, so **read the receipt, not the exit code**:
+
+- `msg-<id> accepted-new-turn` or `accepted-steer` - the recipient's own turn record holds the envelope id. It does not prove the recipient acted on it.
+- `msg-<id> parked` or `injected` - the bytes reached the recipient, but no turn took them yet. Peek before you resend: a resend reaches it twice.
+- `msg-<id> queued (durable)` - live delivery was not confirmed. This is durable fallback, not delivery.
+- the send command re-checks the recipient after a settle window. The receipt then ends `landed (...)`, `queued, not landed yet`, or a `NOT LANDED` block. `queued, not landed yet` means a live recipient drains it at its next turn boundary. That send exits 0, so do not re-send. NOT LANDED names the recovery and verify commands for that substrate and exits non-zero (14).
+
+The recipient's own `unread` / `ack` / `drain-self` commands exist to consume that
+fallback queue, which is why they read like a mailbox. They are the recovery
+path, not the main one.
+
+### A miss is recoverable now - look before you re-send
+
+A durable receipt usually means the session is idle rather than gone, and an idle
+session can be brought back, so waiting on a drain is the last resort. But
+"not confirmed" is not the same as "not delivered": a BUSY recipient can queue
+the injected turn past the confirm budget and still receive it later, so a blind
+re-send is how you double-deliver. Check first, then act:
+
+```bash
+fno agents session peek <short-id>     # did the turn actually land? is it alive?
+fno agents session resume <short-id>   # wakes it (claude) or resumes it (other harnesses), then re-send
+fno agents session attach <short-id>   # drive it yourself (claude)
+```
+
+Address a peer by its full session id: the `from_session=` value on the `<fno_mail>` envelope, or the id `fno agents session list` shows. The head-8 short form is a display handle. Under UUIDv7 it is a ~66-second clock bucket. Two workers started in the same minute share one, so a send or reply addressed to the short form can refuse as ambiguous. `resume` / `attach` accept the id that names the session in the registry, and `send` can reach a live session that never registered. If a handle mails but will not resume, `fno agents session list` / `top` will show whether it has a row.
+
+A harness-prefixed address (`claude-<short-id>`) is refused, not translated. If you hit that error, something built the address the retired way - fix that, and do not hand-edit the string and move on.
+
+No probe is proof a peer is dead. `peek`, discovery, a status token, and a claim pid can all read stale at once. A peer that ran `EnterWorktree` moved its transcript to a worktree-keyed project dir, so a probe pointed at the old path reads empty. The one authoritative pre-dead-declaration check is the session's transcript file itself (its worktree-keyed project dir, by mtime/tail). Any receipt or probe that names a store must say WHICH store it read.
+
+## Command router
+
+The first whitespace token of the argument is the **command**. Route on it, then run
+the matching section. Messaging is free, so **nothing here confirms** (contrast
+`/agent`, where `chat`/`stop` confirm).
+
+| Command | Routes to | Needs normalize | Cost |
+|------|-----------|-----------------|------|
+| `send <name> "<body>"` | `fno agents mail send <name> "<body>"` | yes (refuse empty) | free |
+| `send project <X> "<body>"` | `fno agents mail send --to-project <X> "<body>"` | yes (one live peer) | free |
+| `reply <msg-id> "<body>"` | `fno agents mail reply --to <msg-id> --body "<body>"` | yes (refuse empty) | free |
+| `unread [name]` | `fno agents mail unread [-n <name>]` | no (read) | free |
+| `ack <msg-id> [name]` | `fno agents mail ack <msg-id> [-n <name>]` | no | free |
+| `show [id]` | `fno agents mail show [id]` | no (read) | own session (--all lifts) |
+| `hold [minutes\|off\|status]` | `/fno:dnd` (codex `$fno:dnd`) with the same argument | natural-language duration | free |
+| `dnd [off\|cancel]` | `/fno:dnd` (codex `$fno:dnd`) with the same argument | no | free |
+
+An unrecognized leading token is an error - tell the user the command set above; do
+NOT guess a send. (Unlike `/agent`, a bare non-command is not a default action here,
+because a misrouted `send` could publish a malformed message.)
+
+---
+
+## `send <name> "<body>"` - publish to a peer or a project
+
+The core command (US4). Strip the leading `send`; the rest is `<recipient> <body>`
+(name mode) or `project <X> <body>` / `--to-project <X> <body>` (broadcast mode).
+
+### Flow: NORMALIZE -> RUN -> REPORT (no confirm: free lane)
+
+#### 1. NORMALIZE (deterministic helper)
+
+Run the normalizer with everything after the `send` command as ONE `--input`:
+
+```bash
+bash "${SKILL_DIR}/scripts/normalize.sh" --command send --input "<recipient/project + body>"
+```
+
+It strips smart quotes, splits the recipient (or detects a `project`/`to-project`
+broadcast keyword) from the body, strips one wrapping quote pair off the body,
+and **refuses an empty or whitespace-only recipient or body**. Read its
+`key=value` output; never `eval` it. Fields: `status`, `error`, `command`,
+`recipient`, `to_project`, `body`. `body` is emitted **last** and may span
+multiple lines (a pasted multiline message is preserved intact), so capture
+**everything after the `body=` marker** to end of output as the body - do not
+truncate it at the first newline.
+
+- If `status=error`, **STOP. Report the `error=` line and run nothing** (AC4-ERR).
+- Otherwise capture `recipient` / `to_project` / `body`.
+
+#### 2. RUN (genuine execution)
+
+Run the real `fno agents mail send` - never reimplement the bus. Pass the body as a
+single quoted argument exactly as normalize returned it:
+
+```bash
+# name mode (recipient non-empty):
+fno agents mail send "<recipient>" "<body>"
+
+# broadcast mode (to_project non-empty):
+fno agents mail send --to-project "<to_project>" "<body>"
+```
+
+#### 3. REPORT (echo ONLY what actually happened)
+
+`fno agents mail send` exits 0 for both outcomes, so the receipt line is the only signal:
+
+- `msg-<id> accepted-new-turn` or `accepted-steer` - the recipient's turn record holds it. That does not prove the recipient acted on it. `parked` and `injected` are not taken yet.
+- `msg-<id> queued (durable)` - **report this as NOT delivered**, not as success.
+  The CLI prints the recovery ladder on stderr; relay it. Offer to `resume` the
+  session and re-send rather than telling the user to wait for a drain.
+
+Relay the **real** msg-id and the resolved recipient/project so delivery is
+auditable. Never round a durable receipt up to "sent" - that is the phrasing that
+lets a message sit unread for a day while both sides believe it arrived.
+
+#### Send-and-hold: make your reply reachable
+
+A name-lane send (`send <name>`) already self-stamps the sender: omit `--from-name`
+and the envelope carries your canonical reply handle, so a reply resolves. A
+`--to-project` send instead stamps the *project* as sender by default (correct for
+fire-and-forget notes, wrong when you hold for an answer). If you send
+`--to-project` and will wait for the reply, pass `--from-self` - it stamps your own
+reply handle (exit 2 if there is no ambient harness identity, never a silent
+floor). The `mail:` line of `fno whoami` is the only identity field that is a valid
+`--from-name`; never copy the `run:` line (a ledger id, not a handle).
+
+- **Unknown name** (`fno agents mail send` exits 16): report "unknown agent `<name>` -
+  nothing was written" and do NOT guess a recipient.
+- **Broadcast ambiguity** (multiple live peers for a project, exit nonzero): relay
+  the candidate list `fno agents mail send` printed; suggest `--any` only if the user
+  meant "any one of them".
+- Any other nonzero exit: report **FAILED** with the captured stderr. NEVER report
+  a phantom delivery or a fabricated msg-id.
+
+---
+
+## `reply <msg-id> "<body>"` - correlated response
+
+Strip the leading `reply`; the rest is `<msg-id> <body>`.
+
+### Flow: NORMALIZE -> RUN -> REPORT (no confirm)
+
+1. **NORMALIZE.** `bash "${SKILL_DIR}/scripts/normalize.sh" --command reply --input "<msg-id + body>"`.
+   It refuses an empty msg-id or empty body. On `status=error`, STOP and report the
+   `error=` line. Capture `msg_id` and `body`.
+2. **RUN.** The id is always a flag. The body goes in exactly once, as `--body` (canonical), a bare positional, or `--body-file`:
+
+   ```bash
+   fno agents mail reply --to "<msg_id>" --body "<body>"
+   ```
+
+   The shipped parser accepts exactly one of the three body forms. Two at once is a refusal, not a precedence rule.
+
+3. **REPORT.** Relay the real outcome (`fno agents mail reply` correlates the thread via `in_reply_to`). On a nonzero exit, report FAILED with the captured stderr - never a phantom reply.
+
+---
+
+## `unread [name]` / `show` - read your inbox (thin pass-through)
+
+Reads. No normalize, no confirm. Run the raw command and relay its output faithfully.
+
+```bash
+fno agents mail unread                 # my default inbox (project 'footnote')
+fno agents mail unread -n "<name>"     # a specific agent/project inbox
+fno agents mail show                   # my session's mail; an id reads one
+```
+
+`unread`/`ack` take the inbox name as the `-n/--name` **option** (default
+`footnote`), NOT a positional - pass `-n "<name>"` when the user names a specific
+inbox. If the raw command errors, relay the real error; do not invent output.
+
+---
+
+## `ack <msg-id> [name]` - advance your read cursor
+
+`ack` marks everything up through `<msg-id>` seen. The msg-id is positional and
+required; the inbox name is the `-n` option (default `footnote`).
+
+```bash
+fno agents mail ack "<msg-id>"               # advance my default cursor
+fno agents mail ack "<msg-id>" -n "<name>"   # advance a specific inbox's cursor
+```
+
+Refuse an empty msg-id before running. Relay the real outcome. The advance is
+idempotent (re-acking the same id is a safe no-op), so a retry never double-skips.
+
+---
+
+## Addressing a project, and the retired `--kind` lane
+
+A send has two axes. Keep them apart.
+
+- **Addressee** - WHO. A live session handle (`send <name>`) or a project
+  (`--to-project <X>`). A project send resolves to the one live peer working on
+  that project. No live peer means the send exits 16 and writes nothing, because
+  no drain reads a queued project note. Many live peers exit 17 unless you pass
+  `--any`.
+- **Lane** - HOW it travels. Live-inject first, durable bus as the fallback. You
+  do not choose this; the delivery model does. A durable receipt names WHY it is
+  durable (`[live-miss]`, `[self-send]`).
+- **`[agent-lock-timeout]`** - the odd durable reason. Another command on the same agent held the per-agent lock. `send`, `ask`, `spawn`, `stop` and `rm` all take it. No live attempt ran. The token says nothing about the recipient in either direction. Do not resurrect it on that evidence. Do not read it as healthy either. `peek` first, then withdraw before you re-send.
+
+`--kind` (`heads-up`, `question`, `fyi`) and `--persist` are retired. The flag exits 2
+and names the two real intents: drop `--kind` to send to a session by name, or run
+`fno inbox outstanding ask` to put a question to a human.
+
+### Cross-host targets: `<name>@<host>`
+
+A target carrying `@host` reaches a peer on another machine: `fno agents mail send nemo@mbp3 "status?"`. With `store.remote_url` set, the send writes one row on the shared primary, and the target host's daemon injects it through the receiver's own local send. Registry resolution and holds stay the receiver's. A row waits up to 7 days for its host, then expires. `fno-agents mail-remote status` reads your own rows' outcomes. Cross-host `--raw` refuses unless the receiver lists your `user@host` in `agents.remote.raw_senders`. No shared store means the send relays over ssh. `--from-self` refuses on the ssh path, so pass `--from-name`.
+
+`fno agents session peek <handle>@<host>` always relays over ssh, because transcripts never ride the store. The remote `fno` answers with its exit code, and `--follow` streams. Transcript paths and mux panes stay per-machine: ssh in and read them there. Full mechanics: [docs/architecture/multiplayer.md](../../docs/architecture/multiplayer.md).
+
+---
+
+## Hard rules (non-negotiable)
+
+1. **Never fabricate a receipt.** Report ONLY a msg-id / outcome line that
+   `fno agents mail` actually printed. "No receipt" is FAILED, full stop. This is the
+   cardinal guard (same as `/agent`).
+2. **Refuse empty input.** An empty recipient, empty body, or empty msg-id is a
+   refusal **before any command runs** (AC4-ERR) - the normalizer enforces it for
+   `send`/`reply`; you enforce it for `ack`.
+3. **Never confirm.** Messaging is free; there is nothing billed or destructive
+   to gate. Sending without asking is fine - reporting a durable queue as
+   delivered is not (rule 4).
+4. **A durable receipt is not delivery.** Say so, and offer the recovery ladder
+   (`peek` / `resume` + re-send / `attach`). Waiting on a drain is the last
+   resort, never the advice you lead with.
+5. **Do not reinvent the bus.** Addressed delivery, the cursor, the render, and
+   rotation all live in `fno agents mail`. This skill routes commands, normalizes input, and
+   reports honestly; it never duplicates that machinery.
+6. **Use the genuine CLI shapes.** `send <name> <body>` and `--to-project <X>` are positional/flag. `reply` takes `--to <id>` plus the body exactly once (`--body`, a positional, or `--body-file` - two forms is a refusal). `unread`/`ack` name is `-n`.
+
+## Multi-CLI
+
+This skill is Claude-Code primary but provider-neutral: it only needs the `fno`
+binary (the `fno agents mail` mailbox is provider-agnostic - claude, codex, and gemini
+peers all read and write the same bus). On a CLI without `fno`, the command fails
+loud and nothing is written - it degrades honestly, never fakes a delivery. See
+[docs/SKILL-COMPAT-MATRIX.md](../../docs/SKILL-COMPAT-MATRIX.md).
+
+To dispatch or observe a worker (rather than message one), use `/agent`.
+
+## Known Limitations and Deferred Work
+
+- Agy worker projection remains limited. See [LIMITATIONS.md](LIMITATIONS.md).

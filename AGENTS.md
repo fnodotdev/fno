@@ -1,0 +1,192 @@
+# AGENTS.md
+
+Project context for AI agents. Canonical source. `CLAUDE.md` and `GEMINI.md` are import stubs. Deep mechanics live in `docs/` (see [Deep-dive docs](#deep-dive-docs)).
+
+**fno** is a Claude Code plugin: idea -> shipped PR. Setup: `fno config setup run` or `/fno:setup`.
+
+## Precedence and output style
+
+Per-machine coding skills are advisory here. This file's principles win, so "shortest diff" loses to principle 4 and tool-branded comments are barred by principle 6.
+
+Lead with the next action, number multi-step work, give concrete time estimates, drop preamble, recaps, and closers. Details: [docs/output-style.md](docs/output-style.md).
+
+## Working principles
+
+0. **Worktree-first.** Enter a feature worktree before editing, generating, or committing (`worktree.policy = "never"` projects work in place). Keep the canonical checkout unclogged. Prune after merge.
+1. **Think before coding.** Ask and state assumptions on uncertainty. Surface alternative interpretations and simpler options instead of silently picking.
+2. **Simplicity first.** Minimum code that solves the problem. No speculative features, single-use abstractions, unrequested config. If 200 lines could be 50, rewrite.
+3. **OSS-first: fix in the project, never memory-only**. Anything load-bearing goes in code, docs, `--help` text, a gate, a test, or a filed node. The load-bearing thing is the workaround, the invariant, the gotcha, the "next time do X". It never lands in private agent memory, which ships to nobody. Full rule: [docs/oss-fix-not-memory.md](docs/oss-fix-not-memory.md).
+4. **Fix what you find - overrides "surgical changes."** Fix pre-existing problems in this PR. Unrelated ones count. Prefer FEWER, larger PRs. Carveouts (`fno backlog carveout add`) / follow-up nodes are for large separable efforts only.
+5. **Goal-driven execution.** Turn tasks into verifiable goals with a verify step each ("add validation" -> "write failing tests, make them pass").
+6. **Comments earn their place.** Match the surrounding file's comment density and idiom; add one only for a non-obvious invariant, race, or why-not-the-obvious. Never ticket/PR/node IDs. `scripts/ci/check-no-internal-refs.sh` fails on node IDs, prose and code alike; bare ticket and PR numbers still have no gate.
+7. **Reproduce before you fix.** Reproduce a bug end-to-end on the real user path before editing. The repro proves the fix landed. With a UI in the loop, exercise it and be picky (see #4).
+8. **Quality outweighs cost.** Prefer quality, simplicity and robustness over effort; never overrides #2.
+9. **Delete a leg, never a harness forcing two to agree.** Protocol: [dual-implementation-inventory](docs/architecture/dual-implementation-inventory.md). The Python runtime is gone, so `crates/` is the one leg. Plans check the inventory for any surface a skill, hook or script still duplicates. Cite it by file:line or rg-absent, and explain one-leg fixes.
+
+## Pitfalls corpus (capped)
+
+Traps a fresh agent re-hits because no lint, guard or refusal catches them yet. Inlined, not linked: this file is the one channel proven to reach every harness at session start.
+
+**Cap: bytes, not count.** Every entry is paid at session start. `check-pitfalls.sh` fails on an 11th entry, a missing field or one over 60 days. The byte budget binds first near 5.
+
+**Format:** one `###` block each: imperative trap (1-3 sentences), `specimens:` file:line refs, `graduates-to:` the guard that retires it, `added:` YYYY-MM-DD. Remove an entry in the PR where its guard lands.
+
+AC9 delivery sentinel (echoed verbatim by a fresh worker, asserted by unit test): `kdc-delivery-sentinel-1932`.
+
+No entries today.
+
+## Repository
+
+```
+footnote/
+├── .claude-plugin/   # Plugin manifest
+├── skills/           # Skills
+├── agents/           # Subagents
+├── commands/         # Slash commands
+├── hooks/            # Stop hooks, session-start, context monitor
+├── scripts/          # Validation, metrics, orchestration, diagnostics
+├── cli/              # Data the binaries read by path (setup assets, scope)
+├── crates/           # Rust runtime: fno front door + fno-agents
+├── tests/            # Shell tests, tests/py (dev-only pytest), tests/smoke
+└── internal ->       # Obsidian vault symlink (not git-tracked)
+```
+
+### Conventions
+
+- **Worktrees:** worktree-first for all repo work. `claude --worktree <name>` is intercepted by `hooks/worktree-setup.sh`. After creation run `bash scripts/setup/setup-worktree.sh`. Full contract: [docs/architecture/worktree-mechanics.md](docs/architecture/worktree-mechanics.md) (Placement).
+- **Search:** prefer `rg` / Grep over `grep -r` (descends into nested worktrees). Scope any `grep -r` to a path. Load-bearing sweep: `RIPGREP_CONFIG_PATH= rg -uu`, never a bare `rg -uu` (`-u` ignores files, not globs).
+- **Prose style:** a paragraph is ONE physical line. A newline starts the next block. House style, and the gate: [docs/style-rules.md](docs/style-rules.md).
+- **Flags, not env prefixes:** agents invoke `fno do <command> --flag`, never `ENV_VAR=x fno do <command>`. A knob with only an env var gets its missing flag filed.
+- **File budget:** a file over 5,000 lines is shrink-only. A new `.py` file lands only in an allowed home such as `tests/py`. Product code goes in `crates/`. `scripts/ci/check-file-budget.sh` enforces both at push.
+- **Large files:** a source file over 1,000 lines gets read the exact range, edit, re-read, and a test count proved with `rg -c '#\[test\]'` (or `def test_`) before and after.
+- **Rust rules:** [docs/rust-style.md](docs/rust-style.md), R1 to R17. Parse JSON once into a typed struct and return typed errors. `scripts/ci/check-value-reads.sh` holds `.get("field")` and `Result<_, String>` shrink-only per crate.
+- **Test value:** Run only changed-file tests. Push and let CI gate. New tests pass test-audit and replace tests guarding no distinct contract. The suite is shrink-only at a net cap of 6 (`fno-agents test-delta --max-net 6`). pr create refuses a code PR with no cut and no `Audited owners:` line.
+- **Multi-CLI:** skills are portable. Orchestration needs per-CLI hook config. See `docs/HARNESSES.md`, `docs/architecture/multi-cli-hooks.md`, `docs/SKILL-COMPAT-MATRIX.md`.
+
+## Commands
+
+Five advertised commands (table below): `target`, `think`, `review`, `ship`, `fix`. Full set in `skills/using-fno/SKILL.md`. Always write commands plugin-qualified per harness (bare `/execute` resolves elsewhere). Claude/opencode use `/fno:command`. Codex uses `$fno:command` (`/` is reserved for harness commands). See [docs/harness-command-matrix.md](docs/harness-command-matrix.md).
+
+| Command (claude/opencode `/fno:`, codex `$fno:`) | Purpose |
+|---|---|
+| `target "feature"` | End-to-end: think -> blueprint -> execute -> review -> ship |
+| `target path/to/plan` \| `<node-id>` | Execute an existing plan or backlog node |
+| `target L "feature"` | Large size: full ceremony including adversarial |
+| `target auto-merge "..."` | Auto-merge once external review passes (opt-in). [auto-merge](skills/target/references/auto-merge.md) |
+| `blueprint <doc-path>` | Mutate a design doc in place; `quick "..."` for a flat single-file plan |
+| `execute` | Execute a plan: `flat` (default) or `waves` |
+| `think` \| `review` \| `fix` \| `tdd` \| `triage` \| `setup` | Research / review / fix-loop / TDD / spec-ordering / config wizard |
+| `ship pr create` \| `check` \| `merged` | Open PR inline after `/fno:review` on HEAD / poll+implement external review / post-merge ritual |
+| `growth-launch "<objective>"` | Growth-studio pack: four-role campaign bundle held at a founder approval gate |
+
+Surface evolution: an approved native Plan-Mode plan is picked up by the next bare `target` ([target-plan-mode-integration](docs/architecture/target-plan-mode-integration.md)).
+
+## Backlog (`fno backlog`)
+
+Day-to-day usage (create/edit/columns/lifecycle/roadmap) is in [docs/backlog-usage.md](docs/backlog-usage.md). Essentials:
+
+- **Node IDs:** `<prefix>-<hex>` (e.g. `fno-a3f9`); generation config-driven, resolution format-agnostic. Every node also has an immutable `slug`; slugs, bare hex, `next`, and fuzzy matches all resolve.
+- **Lifecycle:** `intake -> triage -> ready/next -> done`. Side states: `blocked`, `deferred` (`defer`/`undefer`), `superseded`.
+- **Priority:** `p0`..`p3` (default `p2`); orthogonal to `--size S|M|L`.
+- **Editing:** `fno backlog update <id>` in place (`details+=text` appends, `blocked_by+=<id>` adds, ...). Never recreate via `idea` (dupes). Status moves through the same command: `update <id> --status <word>`, a repeatable `--set <field>=<value>`, and `--leave deferred|superseded`. The patch door validates the move. A refusal names the missing fact and the flag or command that supplies it.
+- **Operator asks:** file with `fno backlog idea "..." --source-kind operator_request`. `fno inbox operator status` reads the operator-turn queue, `ack` disposes a turn.
+- **Subtasks:** `fno backlog contain <owner> <id>...` folds existing nodes into a feature with no plan. They stay on the board, never dispatch alone, and close on the owner's merge. Never defer to mean contained.
+- **Board == work order:** non-Done cards share a rank suffix (live-epic children before epics, then priority, then created_at); project lane is a board-only display prefix; `rank <id> --top` orders, never dispatches; `_kanban_column` is the sole column authority. [backlog-board-ordering](docs/architecture/backlog-board-ordering.md).
+- **Hygiene:** `fno backlog groom` (daily pass), `triage health [--check]`, `maintain [--apply]`, `reconcile` (auto-fires on SessionStart), `advance` (merge-triggered auto-continue, opt-in).
+- **Demand signal:** `fno backlog encounter <id> --evidence "..."`, one per node per session, evidence required. `fno backlog demand` ranks by divergence, never re-ranks. [usage](docs/backlog-usage.md#demand-signal-what-the-agents-keep-hitting).
+
+## Execution & looping
+
+**Waves + executors.** Plans declare waves in their `## Execution Strategy`. `fno-agents wave ready` lists the dispatchable tasks. Executor resolves via task block -> plan frontmatter -> surface inference: `do`/`tdd` (archer, default) or `impeccable` (frontend-executor). [executor-resolution](skills/execute/references/executor-resolution.md).
+
+**Looping.**
+- *In-session:* `hooks/target-stop-hook.sh` shims `fno-agents loop-check`, deciding stop/allow from external truth only: `<promise>` intent, done() reads (PR exists, CI green, every `config.review.required_bots` bot reviewed with no unaddressed blocking finding, and either no open finding or the configured rounds spent), any plan-declared `done_probes`, a backstop fingerprint, and budget. Terminal-allow invokes `fno-agents finalize` (idempotent).
+- *Cross-session:* `fno-agents loop run` drives `--driver target`, stopping on a `TerminationReason` (DonePRGreen, DoneAdvisory, DoneDelivery, NoWork, Budget, NoProgress, Interrupted). [unified-loop](docs/architecture/unified-loop.md).
+- Distress: `<help reason="..." evidence="...">...</help>`. Cancel target: `/fno:cancel-target` (attributed). Lead: `fno agents org cancel --scope <scope>`. Subprocess agents return `RESULT: BLOCKED`.
+- Shared iteration protocol: do ONE thing -> verify mechanically -> keep or discard -> repeat ([iteration-loop](skills/target/references/iteration-loop.md)).
+
+### State files & forbidden surfaces
+
+NEVER edit these directly (a `PreToolUse` hook detects it). Use `fno backlog` / `fno do state`:
+- `~/.fno/db/graph.db` - the backlog graph. Mutate via `fno backlog` only.
+- `<space>/worktrees/<name>/target-state.md` - immutable manifest for agent tools. Native post-init writes stay legal: the plan_path first-fill via `fno do state set`, the claim-handover refresh, and the child rebind. The child rebind lands the forked child's claim in the parent's worktree and re-points the node lines. When a `--handover-from` acquire lands for the manifest's node, the refresh drops the stale line and appends the claim lines.
+- Generated copies named in `generated-artifacts.tsv` or `skill-bundles.yaml`, and the installed plugin copy. Edit, Write, and Bash writes are refused. The refusal names the source and regen command.
+
+| File | Default | Purpose | Owner |
+|------|---------|---------|-------|
+| `paths.graph_json()` | `~/.fno/db/graph.db` | SQLite; stable `graph.json` path anchor | backlog |
+| `paths.ledger_json()` | `~/.fno/ledger.json` | Execution history + cost | target |
+| `paths.briefs_dir()` | `~/.fno/briefs/{id}.md` | Sidecar discovery briefs | backlog |
+| `<space>/worktrees/<name>/target-state.md` | repo space | Immutable session manifest | target |
+| `<space>/worktrees/<name>/STATE.md` / `SUMMARY.md` / `00-INDEX.md` | repo space | Wave progress / completion / strategy | /execute, operator, /blueprint |
+| `{plan_path}.artifacts/` | plan-relative | Quick-plan sidecar | target stop hook |
+
+Paths resolve via `crates/fno-agents/src/paths.rs`; override under `config.paths.*`; check with `fno config doctor`. [path-config](docs/path-config.md). A state-root TOP-LEVEL write needs an owner + lifetime in [state-root-inventory](docs/state-root-inventory.md). Session-keyed files go in a subfolder.
+
+### Ship vocabulary
+
+`/ship` is the deliverable umbrella (`/ship pr` is the PR lifecycle, `/ship doc` a research brief). The **ship phase** creates the PR. The **ship gate** stamps plan frontmatter. Loop finish lines: `DonePRGreen` (PR + CI + reviewed), `DoneUnreviewed` (green, unreviewed), `DoneAdvisory` (doc + eval-green), `DoneDelivery` (current evidence). `fno do pr merge` is the merge primitive. [skills/ship/SKILL.md](skills/ship/SKILL.md).
+
+### Plan completion stamp
+
+At the ship gate `/target` stamps plan frontmatter (`status: in_review|done`, `shipped_at`, `urls`, `session_ids`). `in_review` = first PR created; `done` = all expected ships. Node closure clears a **promise gate** (exit 6).
+
+### Multi-repo features
+
+A session works only in its own project. A multi-repo feature is one node per project linked by `blocked_by`, each shipping its own PR: `/blueprint` decomposes, `/execute` spawns foreign unblocked waves via `fno agents spawn --cwd <root>`, `fno backlog advance` dispatches dependents on merge.
+
+### Return contract for execution agents
+
+Preferred (claude): a JSON object in a fenced ```json block (or `<result>{...}</result>`):
+
+```json
+{"result": "SUCCESS", "task": "2.1", "commit": "abc123", "summary": "..."}
+```
+
+`result` ∈ `SUCCESS | DONE_WITH_CONCERNS | FAILED | BLOCKED`. `task` is required. Fallback (codex/gemini): the `RESULT:`/`TASK:`/... line grammar, fail-closed. Grammar: [state-formats](skills/execute/references/state-formats.md).
+
+### Deviation rules
+
+Bug in plan -> fix inline, note in SUMMARY.md. Minor enhancement (<15 min) -> implement, note it. Architecture decision or missing dependency -> emit `<help class=... reason=... evidence=...>` and take the routed step. The 12 classes route at docs/architecture/help-routing.md. The classes: stale-plan, missing-prereq, ci-red, stuck, held, wait, env-denied, gate-deadlock, gate-unsatisfiable, question, budget, unclassified. STOP only for irreversible, money, public surface, or taste. Under a beastmode grant (`authority: full`) that last rule inverts: decide, append to the `## Autonomous Decisions` ledger, continue. Genuine blockers still stop. [skills/target/SKILL.md](skills/target/SKILL.md#authority-the-beastmode-grant).
+
+## CLI subsystems (summary + doc)
+
+- **`fno agents claim`** - the one work-claim primitive with atomic lockfiles. `target init` already claims the node - never `claim acquire` manually. [coordination](docs/architecture/coordination.md).
+- **`fno agents mail` - coordination.** Review inline via `/fno:review` or Codex `$fno:review`. Never use mail or spawn a reviewer. The merge gate enforces review. `review.self_review_required = false` needs a live claim, expires after `review.optout_ttl_minutes`, and disables auto-merge. [review lanes](docs/architecture/review-lanes.md).
+- **`fno inbox decide`** - records a ruling per subject. `fno inbox decisions X` recovers it, newest first. [decision-record](docs/architecture/decision-record.md).
+- **`fno agents fleet feed`** - one ordered projection of questions.jsonl + the graph store. Rows carry the node id + session id the mux `prefix+e` overlay deep-links through. [activity-feed](docs/architecture/activity-feed.md).
+- **`fno whoami` / `fno whoami status`** - read-only self-introspection; run when confused after compaction.
+- **`fno do target start <node>`** - one-command worktree cold-start (ensure off `origin/main` -> `target init`), idempotent. [target-start-command](docs/architecture/target-start-command.md).
+- **Spawn lane** - `fno agents spawn --as thread|pane|headless|cloud`, default `thread`. A pane needs `--as pane`: placement flags, an uncarried `--` fence and a thread-less harness refuse without it. A thread is persistent and shows through a **portal** ([portals](docs/architecture/portals.md)). `cloud` is the remote lane ([cloud-substrate](docs/architecture/cloud-substrate.md)).
+- **`fno mux workspace restore`** - one command resumes a session's workers through their harness's resume form after reboot or server kill. Every member it cannot bring back is named with the reason. [workspace-restore](docs/architecture/workspace-restore.md).
+- **Pane keeper** - every pane's pty master lives in a keeper, not the server. A fresh server re-adopts the same pid; kill-server refuses an unkept pane. `fno mux pane keeper list` reads survivors. The page answers why, not the daemon. [pane-keeper](docs/architecture/pane-keeper.md).
+- **watchdog** - transcript-truth wake/reroute/reap; dry run, `--apply`/`--apply-all`. [fleet-watchdog](docs/architecture/fleet-watchdog.md)
+- **`fno doctor`** - compares deployed `fno` with local source. Reports lag. `--fix` runs `fno doctor update`. [installed-fno-staleness](docs/architecture/installed-fno-staleness.md).
+- **`fno doctor footprint`** - measures sustained fleet CPU and process count; the demoted load average decides nothing. See [machine footprint](docs/architecture/machine-footprint.md).
+- **Accounts + rotation** - `fno config accounts`: records, failover, lockout, routing, combos. Five axes, never confuse them: harness (`-H`), provider (vendor, `-P`), model (`-m`), effort (`--effort`), account (`--account`). `opencode` is legally both harness and provider. Never infer the axis from a value. Defined in [axis-vocabulary](docs/architecture/axis-vocabulary.md).
+- **[Stage table](docs/architecture/role-based-model-routing.md)** (per-stage axis) - `config.agents.profiles.<command>` overlays `agents.defaults`, reaches autonomous dispatch. `dispatch.harness` is deprecated. `route`=vendor/model (`--route`) beside `provider`=harness (`provider` is the config key name, not the axis. It holds a harness value.)
+- **Curated CLI menu** - `fno doctor lint menu-caps` caps the first three levels of `fno` and `fno-agents`. A root holds 13 commands. Levels two and three hold 12. Hidden commands count. Over-cap groups sit in shrink-only `scripts/ci/menu-caps-debt.tsv`. Group actions are arguments not leaves.
+- **Post-merge ritual** - `/fno:ship pr merged` runs reconcile + retro. Follow-ups: `config.post_merge.parking_lot_path`.
+- **Target self-handoff** - `/target` can hand the execute phase to a fresh-context successor, generation-capped. [target-self-handoff](docs/architecture/target-self-handoff.md).
+- **Self-improvement** - the evals loop (traces, labels, go-N fixer), two memory-pass checkpoints, stuck terminals write postmortems. See [memory-system](docs/architecture/memory-system.md) and [self-improvement-loops](docs/architecture/self-improvement-loops.md) (the loop map: triggers, config keys, where output lands).
+
+## Skill / agent development
+
+- **Skill:** `skills/<name>/SKILL.md` (+ optional `references/`, `scripts/`). **Agent:** `agents/<name>.md` with frontmatter.
+- **Skills ship together:** the fno skills load each other by name at runtime. `skills/target/references/toolbag.md` lists them. No skill refs `${REPO_ROOT}/scripts/`. Script reuse is build-time through `skill-bundles.yaml` and `fno doctor bundle`. The `bundle check` action gates freshness.
+- **TDD:** failing test -> red -> minimal code -> green -> verify -> atomic commit.
+- **Testing:** `fno-agents wave ready --help`, then `./scripts/validate-test-first.sh`.
+
+## Deep-dive docs
+
+Docs nothing above points at:
+
+Backlog: [usage](docs/backlog-usage.md), [board ordering](docs/architecture/backlog-board-ordering.md), [triage](docs/backlog-triage.md)
+
+Loop & target: [control-plane loop](docs/architecture/control-plane-loop.md), [target reliability](docs/architecture/target-reliability-core.md)
+
+Planning & ship: [lean blueprint](docs/architecture/lean-blueprint.md), [plan completion stamp](docs/architecture/plan-completion-stamp.md), [post-merge ritual](docs/architecture/auto-post-merge-ritual.md), [attention](docs/architecture/attention-items.md)
+
+Coordination & providers: [coordination](docs/architecture/coordination.md), [mux selector resolution](docs/architecture/mux-selector-resolution.md), [provider rotation](docs/provider-rotation.md), [slot cutover](docs/architecture/managed-claude-slot-cutover.md), [cross-model review](docs/architecture/cross-model-review.md)
+
+Platform & ops: [processes](docs/architecture/background-processes.md), [fleet-FAQ](docs/fleet-faq.md), [reaping-FAQ](docs/reaping-faq.md), [harnesses](docs/HARNESSES.md), [multi-CLI hooks](docs/architecture/multi-cli-hooks.md), [path-config](docs/path-config.md), [workspace restore](docs/architecture/workspace-restore.md), [autonomy mode](docs/architecture/autonomy-mode.md), [disposable deletes](docs/architecture/disposable-deletes.md), [thread lanes](docs/architecture/thread-lanes.md), [resource meter](docs/architecture/resource-meter.md), [vocabulary](docs/architecture/vocabulary-user-and-operator.md), [graph](docs/graph-search.md)

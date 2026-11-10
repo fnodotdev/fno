@@ -1,0 +1,31 @@
+"""Tests for scripts/ci/check-tracker-partition.sh.
+
+The gate enforces zero overlap (except the id key) between the footnote-owned
+sidecar and the tracker read interface. Its --self-test is the positive
+control: it proves field extraction and overlap detection both fire on
+synthetic input, so a green real-check cannot be the "instrument never ran"
+absence. These tests run both modes.
+"""
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[3]
+GATE = REPO / "scripts" / "ci" / "check-tracker-partition.sh"
+
+
+def test_partition_holds_on_real_models():
+    r = subprocess.run(
+        ["bash", str(GATE)], capture_output=True, text=True, cwd=str(REPO)
+    )
+    assert r.returncode == 0, r.stderr
+    # Positive assertion of the join key, not an absence: the gate must report
+    # the overlap is exactly {id}, so a lockstep rename of `id` on both sides
+    # (overlap becomes empty) would fail this, not pass vacuously.
+    assert "exactly the join key ['id']" in r.stdout
+    # Every tracker-owned projection is named in the receipt: the selection
+    # projection joins the inspection set, so the marker proves the gate saw
+    # more than TrackerNode. The Rust selection projection is `Candidate`
+    # (the Python `TrackerCandidate` class died with the package).
+    assert "Candidate" in r.stdout

@@ -1,0 +1,14 @@
+# Flake regression tier: the Rust loop-check unit tests, the leg that replaced
+# the pytest suite when loop-check moved to crates/. Running them under pass^k
+# turns "we re-run and it clears" folklore into a graded flake rate.
+# Grade-only: no worker step, the suite already exists at the fixture.
+# cargo exits 0 when a filter matches nothing, so the grep requires a nonzero
+# count.
+id: regression-loop-check-suite
+tier: regression
+grade:
+  - kind: exit
+    command: "cargo test --manifest-path crates/fno-agents/Cargo.toml --lib loopcheck:: 2>&1 | grep -q 'test result: ok\\. [1-9]'"
+    expect: 0
+timeout_minutes: 20
+tags: [ci-flake]

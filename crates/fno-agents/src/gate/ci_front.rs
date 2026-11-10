@@ -1,0 +1,612 @@
+//! The native `fno do ci` namespace: per-commit CI state with per-check
+//! names. The front door claims `do ci` lexically and execs this binary with
+//! the argv intact, the same handover `do pr` uses; every target form (PR
+//! number, `main`, hex sha) reduces to one sha and one workflow-run read.
+//! The merge verdict stays `do pr status`; this command answers the narrower
+//! question the census keeps filing: what ran at THIS sha, and what is red.
+
+use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+/// One spelling's row: (spelling, usage tail), the pr_front help shape.
+const HELP_ROWS: &[(&str, &str)] = &[(
+    "status <sha|main|pr> [--watch] [--interval 60] [--timeout 15m]",
+    "One CI verdict at one commit: a hex sha, `main` (its head sha), or a PR number (its head sha; all-digits reads as a PR number). Prints a JSON line {target, kind, sha, verdict, merge_check, settled, green, checks} with one checks row per workflow {name, status, conclusion, created_at}, newest 100 runs at that sha. Per workflow the newest run decides while it is in flight (pending); the newest completed run decides once it lands: fail or cancel reads red, success reads green; no rows at that sha reads pending, never green. merge_check is the per-merge answer: only the push-event rows of guards and rust-ci at that sha, green when both succeeded, red on a failure, pending while one runs, unverified when one is cancelled or missing; it means compiled and guarded, never that the suite passed, and it leaves verdict and the exit codes alone. exit 0 green, 1 red, 2 pending (with --watch: still unsettled at --timeout), 3 unresolvable target, 4 read failed. --watch re-reads every --interval seconds until settled or the bound, one stderr line per poll; it never cancels runs (do pr wait owns that).",
+), (
+    "tier [promote <pr>]",
+    "The CI tier's operator surface: `tier` prints one JSON line from the arm's newest ci_tier_pass row for this repo, under a 24h window: {enabled, slug, last_pass: {age_ms, live, ts, slots, gates, active, ranked, cancelled, rerun}, note}. live means a keeper ran on this machine under 20 minutes ago (the fact speaks for this machine; a keeper on another machine never writes this journal). exit 0 answered, 4 a read failure. `tier promote <pr>` resolves the PR to its one bound backlog node the same predicate the merge owner reads, then bumps the node's priority one step toward p0 (p2 to p1, and so on). Refuses - exit 3 - when the tier is off on this machine (ci_tier.enabled), the PR binds no node or binds ambiguously, or the node already ranks p0; exit 4 on a read or write failure.",
+)];
+
+fn print_help() {
+    println!("CI utilities (per-commit workflow-run state)");
+    println!();
+    println!("Usage: fno do ci <spelling> [flags...]");
+    println!();
+    for (spelling, wording) in HELP_ROWS {
+        println!("  {spelling}");
+        println!("      {wording}");
+        println!();
+    }
+}
+
+/// The help row matching a spelling name exactly (first word of the usage
+/// line), the pr door's per-spelling --help precedent.
+pub(crate) fn spelling_help(sub: &str) -> Option<&'static str> {
+    HELP_ROWS
+        .iter()
+        .find(|(name, _)| name.split_whitespace().next() == Some(sub))
+        .map(|(_, wording)| *wording)
+}
+
+/// One dispatchable target word.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Target {
+    Main,
+    Pr(u64),
+    Sha(String),
+}
+
+/// Classify one positional target: all-digits reads as a PR number (the
+/// pr_operand precedent), `main` is reserved, else hex-ish 7..=40 with a
+/// letter is a sha.
+pub(crate) fn classify_target(raw: &str) -> Option<Target> {
+    if raw == "main" {
+        return Some(Target::Main);
+    }
+    if !raw.is_empty() && raw.chars().all(|c| c.is_ascii_digit()) {
+        return raw.parse::<u64>().ok().map(Target::Pr);
+    }
+    let hexish = (7..=40).contains(&raw.len())
+        && raw.chars().all(|c| c.is_ascii_hexdigit())
+        && raw.chars().any(|c| c.is_ascii_alphabetic());
+    hexish.then(|| Target::Sha(raw.to_ascii_lowercase()))
+}
+
+use crate::pr_front::option_value;
+
+/// Seconds for one flag: absent keeps `default`, a present value parses
+/// through the shared duration parser (plain digits are seconds). A present
+/// but unparsable or zero value is a usage error, never a silent default -
+/// the shared parser's own contract, and a mistyped --timeout must not
+/// silently watch for fifteen minutes.
+fn seconds_flag(tail: &[String], name: &str, default: u64) -> Result<u64, String> {
+    let Some(raw) = option_value(tail, name) else {
+        return Ok(default);
+    };
+    let secs = match raw.parse::<u64>() {
+        Ok(n) => Some(n),
+        Err(_) => crate::duration::parse_duration_secs(&raw),
+    };
+    match secs {
+        Some(secs) if secs > 0 => Ok(secs),
+        _ => Err(format!("{name} wants a positive duration, got {raw:?}")),
+    }
+}
+
+/// The one positional target word and its count: `status --interval 30 main`
+/// must read `main`, never the flag's own `30`, and two positionals refuse.
+fn positional_target(tail: &[String]) -> Option<(String, usize)> {
+    let mut index = 0;
+    let mut found: Option<String> = None;
+    let mut count = 0usize;
+    while index < tail.len() {
+        let arg = &tail[index];
+        if arg == "--interval" || arg == "--timeout" {
+            index += 2;
+            continue;
+        }
+        if arg.starts_with("--") {
+            index += 1;
+            continue;
+        }
+        count += 1;
+        if found.is_none() {
+            found = Some(arg.clone());
+        }
+        index += 1;
+    }
+    found.map(|word| (word, count))
+}
+
+/// Resolve the target to its commit sha and the target kind the payload
+/// names. A resolution read that fails is a read failure, not a usage error:
+/// the argv was well formed to get here.
+fn resolve_sha(cwd: &Path, target: &Target) -> Result<(String, &'static str), String> {
+    match target {
+        Target::Sha(sha) => {
+            // The Actions head_sha filter matches the stored full sha, so an
+            // abbreviation must expand first or it filters to an empty page.
+            if sha.len() == 40 {
+                return Ok((sha.clone(), "sha"));
+            }
+            let raw = crate::pr_push::gh_api(
+                "gh",
+                cwd,
+                &format!("repos/{{owner}}/{{repo}}/commits/{sha}"),
+                &[],
+            )?;
+            let parsed: Value = serde_json::from_str(&raw)
+                .map_err(|e| format!("commits/{sha} returned unparseable json: {e}"))?;
+            let full = parsed
+                .get("sha")
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("commits/{sha} returned no sha"))?
+                .to_string();
+            Ok((full, "sha"))
+        }
+        Target::Main => {
+            let raw = crate::pr_push::gh_api("gh", cwd, "repos/{owner}/{repo}/branches/main", &[])?;
+            let parsed: Value = serde_json::from_str(&raw)
+                .map_err(|e| format!("branches/main returned unparseable json: {e}"))?;
+            let sha = parsed
+                .get("commit")
+                .and_then(|c| c.get("sha"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| "branches/main returned no commit sha".to_string())?
+                .to_string();
+            Ok((sha, "branch"))
+        }
+        Target::Pr(number) => {
+            let raw = crate::pr_push::gh_api(
+                "gh",
+                cwd,
+                &format!("repos/{{owner}}/{{repo}}/pulls/{number}"),
+                &[],
+            )?;
+            let parsed: Value = serde_json::from_str(&raw)
+                .map_err(|e| format!("pulls/{number} returned unparseable json: {e}"))?;
+            let sha = parsed
+                .get("head")
+                .and_then(|h| h.get("sha"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("pulls/{number} returned no head sha"))?
+                .to_string();
+            Ok((sha, "pr"))
+        }
+    }
+}
+
+/// Every workflow run at one sha, newest page only: a burst past 100 rows
+/// outruns the per-sha read the way the branch page does in main_ci.
+fn runs_at_sha(cwd: &Path, sha: &str) -> Result<Vec<Value>, String> {
+    let raw = crate::pr_push::gh_api(
+        "gh",
+        cwd,
+        &format!("repos/{{owner}}/{{repo}}/actions/runs?head_sha={sha}&per_page=100"),
+        &[],
+    )?;
+    let parsed: Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("actions/runs returned unparseable json: {e}"))?;
+    Ok(parsed
+        .get("workflow_runs")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default())
+}
+
+/// The verdict at one sha's run page: (verdict, green, checks rows), from
+/// one fold per workflow name. Per workflow the newest run decides while in
+/// flight; the newest completed run decides once it lands, through the
+/// shared bucket vocabulary that never reads an unknown conclusion green.
+/// No rows reads pending, never green: a sha with no CI must never answer a
+/// green watcher.
+pub(crate) fn verdict_from_runs(runs: &[Value]) -> (String, bool, Vec<Value>) {
+    let mut folds: Vec<(&str, &Value, Option<&Value>)> = Vec::new();
+    crate::main_ci::fold_page(&mut folds, runs.iter());
+    let mut red = false;
+    let mut pending = false;
+    let mut checks = Vec::new();
+    // The fold's newest-completed slot stays unused here on purpose: once
+    // the newest run has landed it IS the newest completed one, so the
+    // newest pointer alone decides, in flight or landed.
+    for (name, newest, _newest_completed) in &folds {
+        let newest_status = newest.get("status").and_then(Value::as_str).unwrap_or("");
+        let row = if newest_status != "completed" {
+            pending = true;
+            json!({
+                "name": name,
+                "status": newest_status,
+                "conclusion": Value::Null,
+                "created_at": newest.get("created_at").and_then(Value::as_str).unwrap_or(""),
+            })
+        } else {
+            let conclusion = newest
+                .get("conclusion")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            // rest_bucket folds an unknown conclusion to fail on purpose
+            // (fail-closed), so the wildcard reads red with it, never green.
+            match crate::pr_push::rest_bucket(newest) {
+                "pass" | "skipping" => {}
+                _ => red = true,
+            }
+            json!({
+                "name": name,
+                "status": "completed",
+                "conclusion": conclusion,
+                "created_at": newest.get("created_at").and_then(Value::as_str).unwrap_or(""),
+            })
+        };
+        checks.push(row);
+    }
+    let verdict = if red {
+        "red"
+    } else if pending || folds.is_empty() {
+        "pending"
+    } else {
+        "green"
+    };
+    (verdict.to_string(), verdict == "green", checks)
+}
+
+/// The workflows that run on every main push, one run per sha, with no
+/// path filter. They are the per-merge check; cli-ci stays the coalesced
+/// batch and release gate and is not read here.
+const MERGE_CHECK_WORKFLOWS: &[&str] = &["guards", "rust-ci"];
+
+/// The per-merge check at one sha: `green`, `red`, `pending` or
+/// `unverified`. Reads only push-event rows of [`MERGE_CHECK_WORKFLOWS`], the
+/// newest per workflow. A failure reads red before anything else; a run in
+/// flight reads pending; a cancelled or missing workflow reads unverified,
+/// never green, because nobody finished testing that commit.
+pub(crate) fn merge_check(runs: &[Value]) -> &'static str {
+    let mut folds: Vec<(&str, &Value, Option<&Value>)> = Vec::new();
+    crate::main_ci::fold_page(
+        &mut folds,
+        runs.iter()
+            .filter(|run| run.get("event").and_then(Value::as_str) == Some("push")),
+    );
+    let mut red = false;
+    let mut pending = false;
+    let mut unverified = false;
+    for name in MERGE_CHECK_WORKFLOWS {
+        let Some((_, newest, _)) = folds.iter().find(|(seen, _, _)| seen == name) else {
+            unverified = true;
+            continue;
+        };
+        if newest.get("status").and_then(Value::as_str) != Some("completed") {
+            pending = true;
+        } else if newest.get("conclusion").and_then(Value::as_str) == Some("cancelled") {
+            unverified = true;
+        } else if !matches!(crate::pr_push::rest_bucket(newest), "pass" | "skipping") {
+            red = true;
+        }
+    }
+    if red {
+        "red"
+    } else if pending {
+        "pending"
+    } else if unverified {
+        "unverified"
+    } else {
+        "green"
+    }
+}
+
+/// One dispatch of `do ci status [tail...]`, with `args = argv[2..]`.
+pub fn run(args: &[String]) -> i32 {
+    let Some(sub) = args.first() else {
+        print_help();
+        return 0;
+    };
+    if sub == "--help" || sub == "-h" {
+        print_help();
+        return 0;
+    }
+    if sub == "tier" {
+        let rest: &[String] = args.split_first().map_or(&[], |(_, rest)| rest);
+        return crate::ci_tier_cmd::run(rest);
+    }
+    if sub != "status" {
+        print_help();
+        return 2;
+    }
+    let tail = &args[1..];
+    if tail.iter().any(|arg| arg == "--help" || arg == "-h") {
+        if let Some((spelling, wording)) = HELP_ROWS.first() {
+            println!("Usage: fno do ci {spelling}");
+            println!();
+            println!("    {wording}");
+            return 0;
+        }
+    }
+    let Some((target_word, positional_count)) = positional_target(tail) else {
+        eprintln!("fno do ci status: a target is required: <sha|main|pr>");
+        return 3;
+    };
+    if positional_count > 1 {
+        eprintln!("fno do ci status: one target only, got {positional_count} positionals");
+        return 3;
+    }
+    let Some(target) = classify_target(&target_word) else {
+        eprintln!(
+            "fno do ci status: cannot read {target_word:?} as a target: \
+             all-digits is a PR number, `main` is the branch, else 7..=40 hex \
+             with at least one letter is a sha"
+        );
+        return 3;
+    };
+    let watch = tail.iter().any(|arg| arg == "--watch");
+    let interval = match seconds_flag(tail, "--interval", 60) {
+        Ok(secs) => secs,
+        Err(error) => {
+            eprintln!("fno do ci status: {error}");
+            return 3;
+        }
+    };
+    let timeout = match seconds_flag(tail, "--timeout", 15 * 60) {
+        Ok(secs) => secs,
+        Err(error) => {
+            eprintln!("fno do ci status: {error}");
+            return 3;
+        }
+    };
+
+    let cwd = PathBuf::from(
+        std::env::current_dir()
+            .map(|d| d.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| ".".into()),
+    );
+    let sha = match resolve_sha(&cwd, &target) {
+        Ok((sha, kind)) => (sha, kind),
+        Err(error) => {
+            eprintln!("fno do ci status: {error}");
+            return 4;
+        }
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(timeout);
+    let mut poll = 0u64;
+    loop {
+        poll += 1;
+        let runs = match runs_at_sha(&cwd, &sha.0) {
+            Ok(runs) => runs,
+            Err(error) => {
+                eprintln!("fno do ci status: {error}");
+                return 4;
+            }
+        };
+        let (verdict, green, checks) = verdict_from_runs(&runs);
+        let settled = verdict != "pending";
+        if watch && !settled {
+            eprintln!(
+                "fno do ci status: pending at {} (poll {poll}, {}s left)",
+                sha.0.get(..7).unwrap_or(&sha.0),
+                deadline.saturating_duration_since(Instant::now()).as_secs()
+            );
+        }
+        if settled || !watch || Instant::now() >= deadline {
+            let payload = json!({
+                "target": target_word,
+                "kind": sha.1,
+                "sha": sha.0,
+                "verdict": verdict,
+                "merge_check": merge_check(&runs),
+                "settled": settled,
+                "green": green,
+                "checks": checks,
+            });
+            println!("{}", serde_json::to_string(&payload).unwrap_or_default());
+            return match verdict.as_str() {
+                "green" => 0,
+                "red" => 1,
+                _ => 2,
+            };
+        }
+        std::thread::sleep(Duration::from_secs(
+            interval.min(
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_secs()
+                    .max(1),
+            ),
+        ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_row(name: &str, status: &str, conclusion: &str, created: &str) -> Value {
+        json!({
+            "name": name,
+            "status": status,
+            "conclusion": conclusion,
+            "created_at": created,
+            "workflow_id": 1,
+            "event": "push",
+            "head_sha": "abc",
+        })
+    }
+
+    fn vec_of(words: &[&str]) -> Vec<String> {
+        words.iter().map(|w| w.to_string()).collect()
+    }
+
+    #[test]
+    fn target_words_classify_by_the_documented_rule() {
+        assert_eq!(classify_target("main"), Some(Target::Main));
+        assert_eq!(classify_target("41"), Some(Target::Pr(41)));
+        assert_eq!(classify_target("0"), Some(Target::Pr(0)));
+        assert_eq!(
+            classify_target("deadbeef123"),
+            Some(Target::Sha("deadbeef123".into()))
+        );
+        assert_eq!(
+            classify_target("DEADBEEF123"),
+            Some(Target::Sha("deadbeef123".into()))
+        );
+        // All-digits stays a PR number even at sha-ish length.
+        assert_eq!(classify_target("1234567"), Some(Target::Pr(1234567)));
+        assert_eq!(classify_target("abc"), None);
+        assert_eq!(classify_target(""), None);
+        assert_eq!(classify_target("mainx"), None);
+        assert_eq!(classify_target("dead beef"), None);
+    }
+
+    #[test]
+    fn a_flag_value_never_reads_as_the_target() {
+        // `status --interval 30 main`: the 30 belongs to the flag; the
+        // positional walk must land on `main` and count one positional.
+        assert_eq!(
+            positional_target(&vec_of(&["--interval", "30", "main"])),
+            Some(("main".to_string(), 1))
+        );
+        assert_eq!(
+            positional_target(&vec_of(&["main", "--timeout", "5m"])),
+            Some(("main".to_string(), 1))
+        );
+        assert_eq!(
+            positional_target(&vec_of(&["41", "42"])).map(|(_, n)| n),
+            Some(2)
+        );
+        assert_eq!(positional_target(&vec_of(&["--watch"])), None);
+    }
+
+    #[test]
+    fn a_present_bad_flag_value_refuses_and_an_absent_one_defaults() {
+        assert_eq!(seconds_flag(&vec_of(&["main"]), "--interval", 60), Ok(60));
+        assert_eq!(
+            seconds_flag(&vec_of(&["--interval", "30"]), "--interval", 60),
+            Ok(30)
+        );
+        assert_eq!(
+            seconds_flag(&vec_of(&["--timeout", "5m"]), "--timeout", 900),
+            Ok(300)
+        );
+        assert_eq!(
+            seconds_flag(&vec_of(&["--timeout", "1x"]), "--timeout", 900)
+                .err()
+                .is_some(),
+            true
+        );
+        assert_eq!(
+            seconds_flag(&vec_of(&["--timeout", "0s"]), "--timeout", 900)
+                .err()
+                .is_some(),
+            true
+        );
+    }
+
+    #[test]
+    fn verdict_reads_green_only_when_every_workflow_completed_green() {
+        let runs = vec![
+            run_row("ci", "completed", "success", "2026-10-25T00:00:00Z"),
+            run_row("wheels", "completed", "success", "2026-10-25T00:01:00Z"),
+        ];
+        let (verdict, green, checks) = verdict_from_runs(&runs);
+        assert_eq!(verdict, "green");
+        assert!(green);
+        assert_eq!(checks.len(), 2);
+        assert_eq!(checks[0]["name"], "ci");
+        assert_eq!(checks[0]["conclusion"], "success");
+    }
+
+    #[test]
+    fn verdict_reads_red_on_the_newest_completed_failure_with_names() {
+        let runs = vec![
+            run_row("ci", "completed", "success", "2026-10-25T00:00:00Z"),
+            run_row("wheels", "completed", "failure", "2026-10-25T00:01:00Z"),
+        ];
+        let (verdict, green, checks) = verdict_from_runs(&runs);
+        assert_eq!(verdict, "red");
+        assert!(!green);
+        let wheels = checks.iter().find(|c| c["name"] == "wheels").unwrap();
+        assert_eq!(wheels["conclusion"], "failure");
+    }
+
+    #[test]
+    fn an_in_flight_newest_run_holds_its_workflow_pending() {
+        let runs = vec![
+            run_row("ci", "completed", "success", "2026-10-25T00:00:00Z"),
+            // A newer run of the same workflow superseded the pass and is live.
+            run_row("ci", "in_progress", "", "2026-10-25T00:02:00Z"),
+        ];
+        let (verdict, green, checks) = verdict_from_runs(&runs);
+        assert_eq!(verdict, "pending");
+        assert!(!green);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0]["status"], "in_progress");
+        assert_eq!(checks[0]["conclusion"], Value::Null);
+    }
+
+    #[test]
+    fn a_cancelled_completed_run_reads_red() {
+        let runs = vec![run_row(
+            "ci",
+            "completed",
+            "cancelled",
+            "2026-10-25T00:00:00Z",
+        )];
+        let (verdict, green, _) = verdict_from_runs(&runs);
+        assert_eq!(verdict, "red");
+        assert!(!green);
+    }
+
+    #[test]
+    fn no_rows_reads_pending_never_green() {
+        let (verdict, green, checks) = verdict_from_runs(&[]);
+        assert_eq!(verdict, "pending");
+        assert!(!green);
+        assert!(checks.is_empty());
+    }
+
+    #[test]
+    fn an_unknown_conclusion_reads_red_fail_closed() {
+        let runs = vec![run_row(
+            "ci",
+            "completed",
+            "stale_beyond_vocabulary",
+            "2026-10-25T00:00:00Z",
+        )];
+        let (verdict, green, _) = verdict_from_runs(&runs);
+        assert_eq!(verdict, "red");
+        assert!(!green);
+    }
+
+    #[test]
+    fn merge_check_never_reads_green_on_a_cancelled_missing_or_pr_row() {
+        let cancelled = vec![
+            run_row("guards", "completed", "success", "2026-10-25T00:00:00Z"),
+            run_row("rust-ci", "completed", "cancelled", "2026-10-25T00:00:00Z"),
+        ];
+        assert_eq!(merge_check(&cancelled), "unverified");
+        assert_eq!(merge_check(&[]), "unverified");
+        let mut pr_row = run_row("rust-ci", "completed", "success", "2026-10-25T00:00:00Z");
+        pr_row["event"] = json!("pull_request");
+        let runs = vec![
+            run_row("guards", "completed", "success", "2026-10-25T00:00:00Z"),
+            pr_row,
+        ];
+        assert_eq!(merge_check(&runs), "unverified");
+    }
+
+    #[test]
+    fn merge_check_ranks_red_over_pending() {
+        let runs = vec![
+            run_row("guards", "completed", "failure", "2026-10-25T00:00:00Z"),
+            run_row("rust-ci", "in_progress", "", "2026-10-25T00:00:00Z"),
+        ];
+        assert_eq!(merge_check(&runs), "red");
+        let runs = vec![run_row(
+            "rust-ci",
+            "in_progress",
+            "",
+            "2026-10-25T00:00:00Z",
+        )];
+        assert_eq!(merge_check(&runs), "pending");
+    }
+
+    #[test]
+    fn a_skipped_workflow_reads_neutral_not_pending() {
+        let runs = vec![
+            run_row("ci", "completed", "success", "2026-10-25T00:00:00Z"),
+            run_row("release", "completed", "skipped", "2026-10-25T00:00:00Z"),
+        ];
+        let (verdict, green, _) = verdict_from_runs(&runs);
+        assert_eq!(verdict, "green");
+        assert!(green);
+    }
+}

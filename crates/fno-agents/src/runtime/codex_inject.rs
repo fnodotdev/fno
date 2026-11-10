@@ -1,0 +1,3019 @@
+//! `mail-inject --harness codex`: LIVE delivery into a running codex session
+//! over the codex app-server daemon socket (US8, node). The codex sibling
+//! of [`crate::mail_inject`]'s claude `control.sock` path. Python's send path
+//! (`_mail_inject_codex`) runs this as a subprocess and falls back to the durable
+//! bus ONLY when it reports not-delivered (live-inject-first).
+//!
+//! Transport = JSON-RPC text frames over a WebSocket over a Unix socket (mirrors
+//! [`crate::logs_client`]). Unlike the claude path, the `turn/start` RPC RESPONSE
+//! is itself the delivery confirmation (the daemon accepts and queues the turn
+//! synchronously), so there is no transcript growth-poll.
+//!
+//! # The daemon prerequisite (why this can be a no-op)
+//!
+//! A default `codex` TUI runs its app-server IN-PROCESS with no socket on disk.
+//! The socket appears when a codex app-server daemon is running
+//! (`codex app-server daemon start`, standalone install + ChatGPT login); TUIs
+//! launched afterward auto-attach to it. The socket FILE also outlives its
+//! daemon, so liveness is the connect attempt itself: a refusal (or a missing
+//! file) makes `deliver_via_codex_daemon` return `"no-daemon"` and the caller
+//! writes the durable floor. e2e verification
+//! needs the user's daemon; the pure builders + `classify_turn_start_response`
+//! below are the correct-by-construction unit-tested core.
+//!
+//! Protocol map verified against `~/code/tools/codex/codex-rs/` (app-server-protocol
+//! rpc.rs / v2/turn.rs, app-server-client remote.rs initialize handshake).
+
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use crate::protocol::{Request, ResponsePayload};
+use futures_util::{SinkExt, StreamExt};
+use serde_json::json;
+use tokio::net::UnixStream;
+use tokio_tungstenite::tungstenite::Message;
+
+/// Overall budget for connect + handshake + turn/start round-trip. The daemon
+/// responds promptly; this only bounds a wedged socket so the command cannot hang.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Frame-skip ceiling per read: notifications and unrelated ids are skipped, but
+/// a chatty (or silent) socket must not loop forever before the timeout fires.
+const MAX_FRAMES: usize = 64;
+
+const LOADED_PAGE_SIZE: u32 = 100;
+const MAX_LOADED_PAGES: usize = 64;
+
+#[derive(Debug, serde::Serialize, PartialEq, Eq)]
+pub struct LoadedThread {
+    pub session_id: String,
+    pub cwd: String,
+}
+
+/// The shared codex app-server control socket: `$CODEX_HOME/app-server-control/
+/// app-server-control.sock` (CODEX_HOME defaults to `~/.codex`). Absent unless a
+/// codex app-server daemon is running.
+pub fn codex_app_server_socket_path() -> PathBuf {
+    let home = std::env::var("CODEX_HOME")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| format!("{}/.codex", std::env::var("HOME").unwrap_or_default()));
+    PathBuf::from(home)
+        .join("app-server-control")
+        .join("app-server-control.sock")
+}
+
+/// The Codex daemon's recorded process identity. The state file is provider
+/// owned, so a pid without `processStartTime` is unreadable rather than a
+/// positive liveness signal.
+pub struct CodexDaemonAdapter {
+    provider_state_path: PathBuf,
+    provider_state_fallback_path: Option<PathBuf>,
+    state_path: PathBuf,
+    lock_path: PathBuf,
+    socket_path: PathBuf,
+}
+
+impl CodexDaemonAdapter {
+    pub fn new(provider_state_path: PathBuf, lock_path: PathBuf, socket_path: PathBuf) -> Self {
+        let state_path = provider_state_path
+            .parent()
+            .map(|parent| parent.join("fno-harness-daemon.json"))
+            .unwrap_or_else(|| PathBuf::from("fno-harness-daemon.json"));
+        Self {
+            provider_state_path,
+            provider_state_fallback_path: None,
+            state_path,
+            lock_path,
+            socket_path,
+        }
+    }
+
+    fn with_provider_state_fallback(
+        provider_state_path: PathBuf,
+        fallback_path: PathBuf,
+        lock_path: PathBuf,
+        socket_path: PathBuf,
+    ) -> Self {
+        let mut adapter = Self::new(provider_state_path, lock_path, socket_path);
+        adapter.provider_state_fallback_path = Some(fallback_path);
+        adapter
+    }
+
+    pub fn from_environment() -> Self {
+        let home = std::env::var_os("CODEX_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex")))
+            .unwrap_or_else(|| PathBuf::from(".codex"));
+        let daemon_dir = home.join("app-server-daemon");
+        Self::with_provider_state_fallback(
+            daemon_dir.join("daemon.pid"),
+            daemon_dir.join("app-server.pid"),
+            home.join("app-server-daemon")
+                .join("fno-harness-daemon.lock"),
+            home.join("app-server-control")
+                .join("app-server-control.sock"),
+        )
+    }
+
+    /// The managed daemon's (pid, start token) from the provider-owned
+    /// state file. `None` = the state is absent or unreadable: readiness
+    /// degrades to unknown, never to a guessed pid.
+    pub fn provider_pid_start(&self) -> Option<(u32, u64)> {
+        let state = self.provider_state().ok()?;
+        Some((state.pid?, state.process_start_time?))
+    }
+
+    /// The control socket path this adapter resolves.
+    pub fn control_socket(&self) -> PathBuf {
+        self.socket_path.clone()
+    }
+
+    /// Socket-level reachability plus the initialize handshake: the
+    /// process/socket/initialize predicate, without the state wrapper.
+    pub fn socket_up(&self) -> bool {
+        self.socket_path.exists() && probe_codex_app_server(&self.socket_path)
+    }
+
+    fn provider_state(&self) -> Result<crate::harness_daemon::DaemonState, String> {
+        let raw = match std::fs::read_to_string(&self.provider_state_path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let Some(fallback) = &self.provider_state_fallback_path else {
+                    return Err(format!("read Codex daemon state: {error}"));
+                };
+                std::fs::read_to_string(fallback).map_err(|fallback_error| {
+                    format!("read Codex daemon state: {fallback_error}")
+                })?
+            }
+            Err(error) => return Err(format!("read Codex daemon state: {error}")),
+        };
+        <Self as crate::harness_daemon::HarnessDaemonAdapter>::parse_state(self, &raw)
+    }
+}
+
+impl crate::harness_daemon::HarnessDaemonAdapter for CodexDaemonAdapter {
+    fn harness(&self) -> &str {
+        "codex"
+    }
+
+    fn state_path(&self) -> &Path {
+        &self.state_path
+    }
+
+    fn lock_path(&self) -> &Path {
+        &self.lock_path
+    }
+
+    fn parse_state(&self, raw: &str) -> Result<crate::harness_daemon::DaemonState, String> {
+        let mut value: serde_json::Value =
+            serde_json::from_str(raw).map_err(|error| error.to_string())?;
+        let pid = value
+            .get("pid")
+            .and_then(serde_json::Value::as_u64)
+            .filter(|pid| *pid > 0)
+            .ok_or_else(|| "missing pid".to_string())? as u32;
+        let process_start_time = ["processStartToken", "process_start_time", "startTime"]
+            .into_iter()
+            .find_map(|key| value.get(key).and_then(json_u64))
+            .or_else(|| {
+                value
+                    .get("processStartTime")
+                    .and_then(serde_json::Value::as_u64)
+            })
+            .or_else(|| {
+                value
+                    .get("processStartTime")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|start| !start.is_empty())
+                    .and_then(|_| crate::daemon::process_start_time(pid))
+            })
+            .filter(|start| *start > 0)
+            .ok_or_else(|| "missing process start time".to_string())?;
+        if let Some(object) = value.as_object_mut() {
+            object.insert(
+                "processStartToken".to_string(),
+                serde_json::Value::from(process_start_time),
+            );
+        }
+        crate::harness_daemon::DaemonState::new(
+            value,
+            pid,
+            process_start_time,
+            self.socket_path.to_string_lossy(),
+            format!("{pid}:{process_start_time}"),
+        )
+    }
+
+    fn is_healthy(&self, state: &crate::harness_daemon::DaemonState) -> bool {
+        let process_is_current = state
+            .pid
+            .is_some_and(|pid| crate::daemon::pid_is_ours(pid, state.process_start_time));
+        process_is_current && self.socket_path.exists() && probe_codex_app_server(&self.socket_path)
+    }
+
+    fn may_replace(&self) -> bool {
+        false
+    }
+
+    fn may_refresh_unhealthy(&self) -> bool {
+        true
+    }
+
+    fn unreadable_state_may_boot(&self) -> bool {
+        true
+    }
+
+    fn boot(&self) -> Result<crate::harness_daemon::DaemonState, String> {
+        if let Ok(state) = self.provider_state() {
+            if self.is_healthy(&state) {
+                return Ok(state);
+            }
+        }
+        // The daemon is a detached service: its startup output must never
+        // land on the spawning client's stdout, whose bytes are the reply
+        // stream by contract (`.status()` inherits, and an inherited child
+        // printed its banner straight into a one-shot spawn's reply).
+        let mut cmd = std::process::Command::new("codex");
+        cmd.args(["app-server", "daemon", "start"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // The daemon hosts every codex thread, so the launching terminal's
+        // Rex markers must not fossil into it (same rule as the supervisor
+        // birth, which carries them out through the identity scrub).
+        crate::claims::scrub_terminal_host_env(&mut cmd);
+        let status = cmd
+            .status()
+            .map_err(|error| format!("codex app-server daemon start: {error}"))?;
+        if !status.success() {
+            return Err(format!(
+                "codex app-server daemon start exited {}",
+                status.code().unwrap_or(1)
+            ));
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            if let Ok(state) = self.provider_state() {
+                if self.is_healthy(&state) {
+                    return Ok(state);
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "Codex daemon did not pass initialize handshake within 15s ({})",
+                    self.socket_path.display()
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+}
+
+fn json_u64(value: &serde_json::Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
+}
+
+/// Ensure the Codex app-server daemon before a client-side spawn or attach.
+///
+/// Returns the whole [`crate::harness_daemon::EnsureResult`] rather than the
+/// receipt alone because the daemon's PID anchors the thread lane: a codex
+/// thread worker's app-server IS this process. The registry row records
+/// `pid: None` for a thread worker (one always-alive shared pid on every row
+/// broke liveness); ownership is provable from the control socket and
+/// `thread/loaded/list`.
+pub fn ensure_codex_daemon() -> Result<crate::harness_daemon::EnsureResult, String> {
+    crate::harness_daemon::ensure_harness_daemon(&CodexDaemonAdapter::from_environment())
+        .map_err(|error| error.to_string())
+}
+
+/// Positive Codex app-server health: the control socket must complete the
+/// initialize handshake. Socket existence alone is deliberately insufficient.
+pub fn probe_codex_app_server(socket_path: &Path) -> bool {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        let socket_path = socket_path.to_path_buf();
+        return std::thread::spawn(move || probe_codex_app_server_fresh(&socket_path))
+            .join()
+            .unwrap_or(false);
+    }
+    probe_codex_app_server_fresh(socket_path)
+}
+
+fn probe_codex_app_server_fresh(socket_path: &Path) -> bool {
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(_) => return false,
+    };
+    runtime.block_on(async {
+        codex_initialize_handshake_with_timeout(socket_path, HANDSHAKE_TIMEOUT)
+            .await
+            .is_ok()
+    })
+}
+
+async fn codex_initialize_handshake_with_timeout(
+    socket_path: &Path,
+    timeout: Duration,
+) -> Result<(), &'static str> {
+    match tokio::time::timeout(timeout, codex_initialize_handshake(socket_path)).await {
+        Ok(result) => result,
+        Err(_) => Err("timeout"),
+    }
+}
+
+/// The write half of a connected app-server session.
+pub type AppServerSink =
+    futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<UnixStream>, Message>;
+/// The read half of a connected app-server session.
+pub type AppServerStream =
+    futures_util::stream::SplitStream<tokio_tungstenite::WebSocketStream<UnixStream>>;
+
+/// Connect to the shared app-server control socket and complete the
+/// `initialize` / `initialized` handshake, returning the two halves ready for
+/// protocol traffic.
+///
+/// The ONE client for this socket. Both the health probe
+/// ([`probe_codex_app_server`]) and the persistent thread driver
+/// ([`crate::codex_thread::CodexThread`]) call it, so there is a single place
+/// where the transport is decided. That transport is WebSocket, not
+/// newline-delimited JSON: a bare NDJSON write to the same socket closes the
+/// connection, which is the entire difference between speaking to the shared
+/// daemon and speaking to a privately forked child.
+///
+/// The returned stream is positioned AFTER the initialize response, so the
+/// caller's first read is its own first frame.
+pub async fn connect_app_server(
+    socket_path: &Path,
+) -> Result<(AppServerSink, AppServerStream), &'static str> {
+    // Bounded HERE, not at each call site. `read_until_id` caps FRAMES, never
+    // wall clock, so a daemon that accepts the connection and completes the
+    // upgrade but never answers `initialize` parks the caller forever. That
+    // is a reachable state: `ensure_codex_daemon`'s probe is a separate,
+    // earlier connection, and the daemon can wedge between the two.
+    tokio::time::timeout(HANDSHAKE_TIMEOUT, connect_app_server_unbounded(socket_path))
+        .await
+        .unwrap_or(Err("timeout"))
+}
+
+async fn connect_app_server_unbounded(
+    socket_path: &Path,
+) -> Result<(AppServerSink, AppServerStream), &'static str> {
+    let conn = UnixStream::connect(socket_path)
+        .await
+        .map_err(|error| connect_refused_reason(&error))?;
+    let ws = tokio_tungstenite::client_async("ws://localhost/rpc", conn)
+        .await
+        .map_err(|_| "handshake-failed")?;
+    let (mut sink, mut stream) = ws.0.split();
+    sink.send(Message::Text(initialize_request_json().into()))
+        .await
+        .map_err(|_| "io-error")?;
+    // The id-matched frame is not automatically a successful handshake. A
+    // daemon that refuses `initialize` (protocol or version skew) answers with
+    // an `error` on the same id, and treating the id match as success is worse
+    // than a bad message: `probe_codex_app_server` runs this same helper, so
+    // the refusing daemon would report healthy, never be rebooted, and every
+    // later call would fail naming something else.
+    let response = read_until_id(&mut stream, &serde_json::json!("init")).await?;
+    if serde_json::from_str::<serde_json::Value>(&response)
+        .ok()
+        .and_then(|frame| frame.get("error").cloned())
+        .is_some_and(|error| !error.is_null())
+    {
+        return Err("initialize-refused");
+    }
+    sink.send(Message::Text(initialized_notification_json().into()))
+        .await
+        .map_err(|_| "io-error")?;
+    Ok((sink, stream))
+}
+
+async fn codex_initialize_handshake(socket_path: &Path) -> Result<(), &'static str> {
+    connect_app_server(socket_path).await.map(|_| ())
+}
+
+/// Read the initialize response's serverInfo (the server's own name +
+/// version user-agent) WITHOUT retaining the connection: a second
+/// initialize on the same connection is a protocol error, so this helper
+/// owns its whole lifecycle. `None` = the daemon never answered. This is
+/// the live-version reader the readiness verdict needs - the handshake
+/// used to discard exactly this response.
+pub fn initialize_server_info() -> Option<serde_json::Value> {
+    let socket_path = CodexDaemonAdapter::from_environment().control_socket();
+    // Same guard as `probe_codex_app_server`: block_on from inside a running
+    // runtime panics, and the census reads this from the async daemon loop.
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return std::thread::spawn(move || {
+            initialize_server_info_inner(&socket_path, HANDSHAKE_TIMEOUT)
+        })
+        .join()
+        .ok()
+        .flatten();
+    }
+    initialize_server_info_inner(&socket_path, HANDSHAKE_TIMEOUT)
+}
+
+/// The whole handshake under a wall-clock bound: a connect that lands on a
+/// listening-but-stalled server parks `read_until_id` forever otherwise, and
+/// this reader runs on the readiness path the provider lock protects.
+fn initialize_server_info_inner(
+    socket_path: &Path,
+    timeout: std::time::Duration,
+) -> Option<serde_json::Value> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .ok()?;
+    runtime.block_on(async {
+        tokio::time::timeout(timeout, async {
+            let conn = UnixStream::connect(&socket_path).await.ok()?;
+            let ws = tokio_tungstenite::client_async("ws://localhost/rpc", conn)
+                .await
+                .ok()?
+                .0;
+            let (mut sink, mut stream) = ws.split();
+            use futures_util::SinkExt;
+            sink.send(Message::Text(initialize_request_json().into()))
+                .await
+                .ok()?;
+            let response = read_until_id(&mut stream, &serde_json::json!("init"))
+                .await
+                .ok()?;
+            drop(sink);
+            drop(stream);
+            let frame: serde_json::Value = serde_json::from_str(&response).ok()?;
+            frame.pointer("/result/serverInfo").cloned()
+        })
+        .await
+        .ok()
+        .flatten()
+    })
+}
+
+/// The `initialize` request frame. Local socket needs no auth/pairing — just the
+/// handshake. `id` is the string `"init"` (matched on the response). Note the
+/// absence of a `"jsonrpc":"2.0"` field: the codex app-server carries bare
+/// JSON-RPC text frames.
+pub fn initialize_request_json() -> String {
+    serde_json::json!({
+        "id": "init",
+        "method": "initialize",
+        "params": {
+            "clientInfo": {"name": "fno-mail-inject", "version": "0.1.0"},
+            "capabilities": {"experimentalApi": true}
+        }
+    })
+    .to_string()
+}
+
+/// The `initialized` notification (no `id`) sent after the initialize response.
+pub fn initialized_notification_json() -> String {
+    serde_json::json!({"method": "initialized"}).to_string()
+}
+
+/// The `turn/start` request injecting `text` into `thread_id` as a text input
+/// item, carrying an optional per-turn `sandboxPolicy`. `None` builds the bare
+/// frame. `text` is injected verbatim — the `<fno_mail>` envelope is rendered
+/// caller-side (Python), so this is a dumb transport, mirroring
+/// [`crate::mail_inject`]. The policy, when present, is always the thread's own
+/// resolved posture with only the roots widened - never a hand-built object,
+/// which would replace every sibling field with the server's defaults.
+pub fn turn_start_request_json_with_policy(
+    id: u64,
+    thread_id: &str,
+    text: &str,
+    sandbox_policy: Option<&serde_json::Value>,
+) -> String {
+    let mut params = serde_json::json!({
+        "threadId": thread_id,
+        "input": [{"type": "text", "text": text}],
+    });
+    if let Some(policy) = sandbox_policy {
+        params["sandboxPolicy"] = policy.clone();
+    }
+    serde_json::json!({"id": id, "method": "turn/start", "params": params}).to_string()
+}
+
+/// The minimal `thread/resume` probe: reads the posture the server resolved
+/// for a LOADED thread (`result.sandbox`) without spawning anything. Measured
+/// 2026-09-14 on codex 0.154.0: the reply carries `sandbox` and the thread's
+/// rollout does not grow.
+pub fn thread_resume_probe_json(id: u64, thread_id: &str) -> String {
+    serde_json::json!({
+        "id": id,
+        "method": "thread/resume",
+        "params": {"threadId": thread_id, "excludeTurns": true}
+    })
+    .to_string()
+}
+
+/// `review/start` target: what the codex reviewer diffs against. Mirrors the
+/// app-server protocol's `ReviewTarget` enum (verified live against the daemon,
+/// node): a structured target beats a typed `/review <prose>`, which only
+/// yields `{type:custom, instructions}` with no computed merge base.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReviewTarget {
+    UncommittedChanges,
+    BaseBranch { branch: String },
+    Commit { sha: String, title: Option<String> },
+    Custom { instructions: String },
+}
+
+impl ReviewTarget {
+    fn to_json(&self) -> serde_json::Value {
+        match self {
+            ReviewTarget::UncommittedChanges => json!({"type": "uncommittedChanges"}),
+            ReviewTarget::BaseBranch { branch } => json!({"type": "baseBranch", "branch": branch}),
+            ReviewTarget::Commit { sha, title } => {
+                let mut o = json!({"type": "commit", "sha": sha});
+                if let Some(t) = title {
+                    o["title"] = json!(t);
+                }
+                o
+            }
+            ReviewTarget::Custom { instructions } => {
+                json!({"type": "custom", "instructions": instructions})
+            }
+        }
+    }
+}
+
+/// `review/start` delivery: `inline` runs the review on the worker's own thread
+/// (its current cwd), `detached` forks a new thread that inherits the session's
+/// ORIGINAL cwd - the cwd trap (node). Default inline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewDelivery {
+    Inline,
+    Detached,
+}
+
+impl ReviewDelivery {
+    fn to_json(self) -> &'static str {
+        match self {
+            ReviewDelivery::Inline => "inline",
+            ReviewDelivery::Detached => "detached",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReviewStartError {
+    Reason(&'static str),
+    Server(String),
+}
+
+impl std::fmt::Display for ReviewStartError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Reason(reason) => formatter.write_str(reason),
+            Self::Server(message) => write!(formatter, "server-error: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for ReviewStartError {}
+
+impl From<&'static str> for ReviewStartError {
+    fn from(reason: &'static str) -> Self {
+        Self::Reason(reason)
+    }
+}
+
+/// The `review/start` request. `id` is `1` (matched on the response). The
+/// response is an OUTCOME receipt (a `Turn` with a status plus a
+/// `reviewThreadId` to read findings from), strictly better than the inject
+/// path's transport boolean.
+pub fn review_start_request_json(
+    thread_id: &str,
+    target: &ReviewTarget,
+    delivery: ReviewDelivery,
+) -> String {
+    review_start_request_json_with_id(1, thread_id, target, delivery)
+}
+
+/// Same request with a caller-chosen id: the thread actor matches responses
+/// per request id and must not collide with the id-1 handshake exchanges.
+pub fn review_start_request_json_with_id(
+    id: u64,
+    thread_id: &str,
+    target: &ReviewTarget,
+    delivery: ReviewDelivery,
+) -> String {
+    json!({
+        "id": id,
+        "method": "review/start",
+        "params": {
+            "threadId": thread_id,
+            "target": target.to_json(),
+            "delivery": delivery.to_json()
+        }
+    })
+    .to_string()
+}
+
+/// Parse a `review/start` response into the outcome receipt.
+/// `.result.turn.id` + `.result.reviewThreadId` is accepted. Protocol reason
+/// tokens and server-provided messages remain separate error variants.
+pub fn parse_review_start_response(raw: &str) -> Result<(String, String), ReviewStartError> {
+    let v: serde_json::Value =
+        serde_json::from_str(raw).map_err(|_| ReviewStartError::Reason("invalid-response"))?;
+    if let Some(result) = v.get("result") {
+        let turn_id = result
+            .get("turn")
+            .and_then(|t| t.get("id"))
+            .and_then(|id| id.as_str())
+            .unwrap_or("");
+        let review_thread = result
+            .get("reviewThreadId")
+            .and_then(|id| id.as_str())
+            .unwrap_or("");
+        if !turn_id.is_empty() && !review_thread.is_empty() {
+            return Ok((turn_id.to_string(), review_thread.to_string()));
+        }
+        if !turn_id.is_empty() || !review_thread.is_empty() {
+            return Err(ReviewStartError::Reason("not-confirmed"));
+        }
+    }
+    if let Some(error) = v.get("error") {
+        let message = error
+            .get("message")
+            .and_then(|message| message.as_str())
+            .filter(|message| !message.is_empty())
+            .map(str::to_string)
+            .ok_or(ReviewStartError::Reason("unexpected-response"))?;
+        return Err(ReviewStartError::Server(message));
+    }
+    Err(ReviewStartError::Reason("unexpected-response"))
+}
+
+/// A unix connect refusal is the dead-daemon marker: the socket file survives
+/// the process that created it, so a missing file and a refused connect both
+/// mean no daemon is listening. Any other io error (permission, wedged) stays
+/// an `io-error`.
+fn connect_refused_reason(error: &std::io::Error) -> &'static str {
+    match error.kind() {
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused => "no-daemon",
+        _ => "io-error",
+    }
+}
+
+/// Drive a `review/start` over the app-server daemon socket. `Ok((turn_id,
+/// review_thread_id))` on accept; every `Err(reason)` is a clean not-delivered
+/// signal. No daemon listening on the socket (the connect refuses or the file
+/// is gone) -> `"no-daemon"`; a pre-send wedge -> `"io-error"`; a lost response
+/// after the request was sent -> `"not-confirmed"`.
+pub async fn deliver_via_codex_review_start(
+    thread_id: &str,
+    target: &ReviewTarget,
+    delivery: ReviewDelivery,
+) -> Result<(String, String), ReviewStartError> {
+    let sock = codex_app_server_socket_path();
+    let mut request_in_flight = false;
+    match tokio::time::timeout(
+        HANDSHAKE_TIMEOUT,
+        review_start_round_trip(&sock, thread_id, target, delivery, &mut request_in_flight),
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(_) if request_in_flight => Err(ReviewStartError::Reason("not-confirmed")),
+        Err(_) => Err(ReviewStartError::Reason("io-error")),
+    }
+}
+
+/// Connect + initialize handshake + `review/start` round-trip. Split out so the
+/// timeout wrapper in [`deliver_via_codex_review_start`] bounds a wedged socket.
+async fn review_start_round_trip(
+    sock: &Path,
+    thread_id: &str,
+    target: &ReviewTarget,
+    delivery: ReviewDelivery,
+    request_in_flight: &mut bool,
+) -> Result<(String, String), ReviewStartError> {
+    let (mut sink, mut stream) = connect_app_server(sock)
+        .await
+        .map_err(ReviewStartError::Reason)?;
+    *request_in_flight = true;
+    sink.send(Message::Text(
+        review_start_request_json(thread_id, target, delivery).into(),
+    ))
+    .await
+    // A failed SEND is a pre-send wedge (nothing delivered), not a lost
+    // response; only the timeout layer's request_in_flight remap and the read
+    // below may claim "not-confirmed".
+    .map_err(|_| ReviewStartError::Reason("io-error"))?;
+    let resp = read_until_id(&mut stream, &serde_json::json!(1))
+        .await
+        .map_err(|_| ReviewStartError::Reason("not-confirmed"))?;
+    parse_review_start_response(&resp)
+}
+
+fn emit_review_invocation_fields(
+    emitter: &crate::events::EventEmitter,
+    fields: serde_json::Map<String, serde_json::Value>,
+) {
+    let _ = emitter.emit_fields("review_invocation", fields);
+}
+
+fn review_start_audit_fields_with_origin_and_self(
+    thread_id: &str,
+    target_raw: &str,
+    delivery: ReviewDelivery,
+    audit_payload: Option<&str>,
+    audit_sender: Option<&str>,
+    audit_target_cwd: Option<&str>,
+    failure_reason: Option<&str>,
+    audit_origin: Option<&str>,
+    self_send: bool,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut fields = serde_json::Map::new();
+    fields.insert("target_session".into(), thread_id.into());
+    fields.insert(
+        "payload".into(),
+        audit_payload
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                format!(
+                    "review/start {} delivery={}",
+                    target_raw,
+                    delivery.to_json()
+                )
+            })
+            .into(),
+    );
+    fields.insert("harness".into(), "codex".into());
+    fields.insert("lane".into(), "codex-review-start".into());
+    fields.insert("confirmed".into(), failure_reason.is_none().into());
+    let payload = fields
+        .get("payload")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let command = crate::mail_inject::raw_inject_command(payload);
+    fields.insert("verb".into(), command.map(str::to_string).into());
+    fields.insert("self_send".into(), self_send.into());
+    if let Some(sender) = audit_sender {
+        fields.insert("sender".into(), sender.into());
+    }
+    if let Some(cwd) = audit_target_cwd {
+        fields.insert("target_cwd".into(), cwd.into());
+    }
+    if let Some(origin) = audit_origin {
+        fields.insert("origin".into(), origin.into());
+    }
+    if let Some(reason) = failure_reason {
+        fields.insert("reason".into(), reason.into());
+    }
+    fit_review_start_audit_fields(&mut fields);
+    fields
+}
+
+fn fit_review_start_audit_fields(fields: &mut serde_json::Map<String, serde_json::Value>) {
+    if review_start_audit_payload_len(fields) <= crate::events_limits::max_data_bytes() {
+        return;
+    }
+    for key in [
+        "reason",
+        "target_cwd",
+        "sender",
+        "origin",
+        "payload",
+        "target_session",
+    ] {
+        shrink_review_start_audit_field(fields, key);
+        if review_start_audit_payload_len(fields) <= crate::events_limits::max_data_bytes() {
+            return;
+        }
+    }
+}
+
+fn shrink_review_start_audit_field(
+    fields: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) {
+    let Some(value) = fields
+        .get(key)
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+    else {
+        return;
+    };
+    fields.insert(format!("{key}_truncated"), true.into());
+    let boundaries: Vec<usize> = value
+        .char_indices()
+        .map(|(index, _)| index)
+        .chain(std::iter::once(value.len()))
+        .collect();
+    let mut low = 0;
+    let mut high = boundaries.len() - 1;
+    while low < high {
+        let middle = (low + high + 1) / 2;
+        fields.insert(key.to_string(), value[..boundaries[middle]].into());
+        if review_start_audit_payload_len(fields) <= crate::events_limits::max_data_bytes() {
+            low = middle;
+        } else {
+            high = middle - 1;
+        }
+    }
+    fields.insert(key.to_string(), value[..boundaries[low]].into());
+}
+
+fn review_start_audit_payload_len(fields: &serde_json::Map<String, serde_json::Value>) -> usize {
+    serde_json::to_string(fields)
+        .map(|payload| payload.len())
+        .unwrap_or(usize::MAX)
+}
+
+fn review_invocation_event_fields(
+    invocation_id: &str,
+    thread_id: &str,
+    audit_payload: Option<&str>,
+    audit_sender: Option<&str>,
+    audit_origin: Option<&str>,
+    confirmed: bool,
+    receipt: &str,
+) -> serde_json::Map<String, serde_json::Value> {
+    // The one parser answers here too: level, flags and args_raw come from
+    // crate::review_invocation::owner::parse_review_invocation, so the codex leg
+    // records the same table as the mail and hook legs. Recorded behavior
+    // change: a bare `fix` (or `fix` led by one U+2014 character) now reads
+    // as --fix on codex, and an unknown -- token is recorded verbatim
+    // instead of matched loosely.
+    let command = audit_payload.unwrap_or("/review");
+    let parsed = crate::review_invocation::owner::parse_review_invocation(command);
+    let command_name = parsed
+        .as_ref()
+        .map(|p| p.command.clone())
+        .unwrap_or_else(|| "/review".to_string());
+    let args_raw = parsed
+        .as_ref()
+        .map(|p| p.args_raw.clone())
+        .unwrap_or_else(|| command.trim().to_string());
+    let level = parsed
+        .as_ref()
+        .map(|p| p.level.clone())
+        .unwrap_or_else(|| "unset".to_string());
+    let level_source = parsed
+        .as_ref()
+        .map(|p| p.level_source.clone())
+        .unwrap_or_else(|| "fallback".to_string());
+    let flags = parsed.map(|p| p.flags).unwrap_or_default();
+    let initiator = match audit_origin {
+        Some("operator") => "operator",
+        Some("peer") => "lead",
+        Some("scheduler" | "recovery") => "daemon",
+        _ => "unknown",
+    };
+    let mut fields = serde_json::Map::new();
+    fields.insert("invocation_id".into(), invocation_id.into());
+    fields.insert("stage".into(), "sent".into());
+    fields.insert("verb".into(), command_name.into());
+    fields.insert("args_raw".into(), args_raw.into());
+    fields.insert("level".into(), level.into());
+    fields.insert("level_source".into(), level_source.into());
+    fields.insert("flags".into(), json!(flags));
+    fields.insert("transport".into(), "codex_rpc".into());
+    fields.insert("initiator".into(), initiator.into());
+    fields.insert("target_session_id".into(), thread_id.into());
+    fields.insert("submit_required".into(), false.into());
+    fields.insert("submit_key".into(), "none".into());
+    fields.insert("submit_confirmed".into(), confirmed.into());
+    fields.insert(
+        "receipt".into(),
+        receipt.chars().take(240).collect::<String>().into(),
+    );
+    if let Some(sender) = audit_sender.filter(|sender| !sender.is_empty()) {
+        fields.insert("initiator_session_id".into(), sender.into());
+    }
+    fields
+}
+
+fn emit_review_invocation_event(
+    thread_id: &str,
+    audit_payload: Option<&str>,
+    audit_sender: Option<&str>,
+    audit_target_cwd: Option<&str>,
+    audit_origin: Option<&str>,
+    invocation_id: &str,
+    confirmed: bool,
+    receipt: &str,
+) {
+    let cwd = audit_target_cwd
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
+    let events_path = std::env::var("FNO_EVENTS_PATH")
+        .ok()
+        .filter(|path| !path.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| crate::paths::events_path(&cwd));
+    let fields = review_invocation_event_fields(
+        invocation_id,
+        thread_id,
+        audit_payload,
+        audit_sender,
+        audit_origin,
+        confirmed,
+        receipt,
+    );
+    emit_review_invocation_fields(
+        &crate::events::EventEmitter::new(events_path, "daemon"),
+        fields,
+    );
+}
+
+/// The `fno-agents review-start` command entry: parse CLI, drive the round-trip,
+/// print the outcome receipt (or a clean not-delivered reason). The socket
+/// round-trip needs the user's daemon and stays a manual verification, as
+/// `turn/start` already documents for its own path; the pure builders above are
+/// the correct-by-construction unit-tested core.
+async fn deliver_via_hosted_codex_thread(
+    thread_id: &str,
+    target_raw: &str,
+    delivery: ReviewDelivery,
+) -> Option<Result<(String, String), ReviewStartError>> {
+    let home = crate::paths::AgentsHome::from_env();
+    let registry = match crate::state::load_registry(&home.registry_json()) {
+        Ok(registry) => registry,
+        Err(_) => return None,
+    };
+    let row = registry.find_name_or_full_session_id(thread_id)?;
+    if row.harness_name() != "codex"
+        || row.host_mode_or_default() != crate::state::HOST_MODE_INTERACTIVE
+    {
+        return None;
+    }
+    let request = Request::new(
+        1,
+        "agent.review-start",
+        json!({
+            "thread_id": thread_id,
+            "target": target_raw,
+            "delivery": match delivery {
+                ReviewDelivery::Inline => "inline",
+                ReviewDelivery::Detached => "detached",
+            },
+        }),
+    );
+    let response = crate::client::call(&home, &crate::client::resolve_daemon_bin(), &request).await;
+    Some(match response {
+        Ok(response) => match response.payload {
+            ResponsePayload::Ok(result) => {
+                let turn_id = result
+                    .get("turn_id")
+                    .and_then(|value| value.as_str())
+                    .filter(|value| !value.is_empty());
+                let review_thread_id = result
+                    .get("review_thread_id")
+                    .and_then(|value| value.as_str())
+                    .filter(|value| !value.is_empty());
+                match (turn_id, review_thread_id) {
+                    (Some(turn_id), Some(review_thread_id)) => {
+                        Ok((turn_id.to_string(), review_thread_id.to_string()))
+                    }
+                    _ => Err(ReviewStartError::Reason("not-confirmed")),
+                }
+            }
+            ResponsePayload::Err(error) => Err(ReviewStartError::Server(error.message)),
+        },
+        Err(error) => Err(ReviewStartError::Server(error.to_string())),
+    })
+}
+
+pub async fn run_review_start(rest: &[String]) -> i32 {
+    let mut thread_id: Option<String> = None;
+    let mut target_raw: Option<String> = None;
+    let mut delivery = ReviewDelivery::Inline;
+    let mut audit_payload: Option<String> = None;
+    let mut audit_sender: Option<String> = None;
+    let mut audit_target_cwd: Option<String> = None;
+    let mut audit_origin: Option<String> = None;
+    let mut audit_self_send = false;
+    let mut it = rest.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--session" => {
+                thread_id = it.next().map(String::clone).or_else(|| {
+                    eprintln!("review-start: --session needs a value");
+                    None
+                });
+            }
+            "--target" => {
+                target_raw = it.next().cloned();
+            }
+            "--delivery" => {
+                delivery = match it.next().map(String::as_str) {
+                    Some("inline") => ReviewDelivery::Inline,
+                    Some("detached") => ReviewDelivery::Detached,
+                    _ => {
+                        eprintln!("review-start: --delivery must be inline or detached (detached forks a thread that inherits the session's ORIGINAL cwd, not the current one - verify the review thread's cwd before trusting its findings)");
+                        return 2;
+                    }
+                };
+            }
+            // These values enrich the append-only event after delivery. They
+            // are never parsed as a ReviewTarget; the routing door stays
+            // limited to the structured --target grammar.
+            "--audit-payload" => {
+                audit_payload = it.next().cloned();
+            }
+            "--audit-sender" => {
+                audit_sender = it.next().cloned();
+            }
+            "--audit-target-cwd" => {
+                audit_target_cwd = it.next().cloned();
+            }
+            "--audit-origin" => {
+                audit_origin = it.next().cloned();
+            }
+            "--audit-self-send" => audit_self_send = true,
+            // stdout is only the delivery JSON; the flag is accepted for parity.
+            "--json" | "-J" => {}
+            other => {
+                eprintln!("review-start: unknown flag: {other}");
+                return 2;
+            }
+        }
+    }
+    let thread_id = match thread_id {
+        Some(t) => t,
+        None => {
+            eprintln!("review-start: --session is required (the codex threadId)");
+            return 2;
+        }
+    };
+    let target_raw = match target_raw {
+        Some(t) => t,
+        None => {
+            eprintln!(
+                "review-start: --target is required, one of: \
+                 uncommittedChanges | baseBranch:<branch> | commit:<sha> | custom:<instructions>"
+            );
+            return 2;
+        }
+    };
+    let target = match parse_review_target(&target_raw) {
+        Some(t) => t,
+        None => {
+            eprintln!(
+                "review-start: could not parse --target {target_raw:?} \
+                 (expected uncommittedChanges | baseBranch:<branch> | commit:<sha> | custom:<text>)"
+            );
+            return 2;
+        }
+    };
+    let invocation_id = crate::review_invocation::owner::adopt_pending_invocation(&thread_id, None)
+        .unwrap_or_else(crate::review_invocation::owner::mint_invocation_id);
+    crate::review_invocation::owner::write_pending_invocation(&thread_id, &invocation_id, None);
+    let outcome = match deliver_via_hosted_codex_thread(&thread_id, &target_raw, delivery).await {
+        Some(outcome) => outcome,
+        None => deliver_via_codex_review_start(&thread_id, &target, delivery).await,
+    };
+    let failure_reason = outcome.as_ref().err().map(ToString::to_string);
+    let receipt = match failure_reason.as_deref() {
+        Some(reason) => format!("codex review/start failed: {reason}"),
+        None => "review/start delivered".to_string(),
+    };
+    emit_review_invocation_event(
+        &thread_id,
+        audit_payload.as_deref(),
+        audit_sender.as_deref(),
+        audit_target_cwd.as_deref(),
+        audit_origin.as_deref(),
+        &invocation_id,
+        outcome.is_ok(),
+        &receipt,
+    );
+
+    // Audit floor: `review/start` is the second unwrapped-fire path this crate
+    // ships. It carries no `<fno_mail>` envelope and leaves no agent-authored
+    // marker in the recipient thread, so it needs the same ledger record the
+    // mail-inject lane writes -- a guard on one of two reachable paths is
+    // decorative. Best-effort; a write failure never changes the exit code.
+    let fields = review_start_audit_fields_with_origin_and_self(
+        &thread_id,
+        &target_raw,
+        delivery,
+        audit_payload.as_deref(),
+        audit_sender.as_deref(),
+        audit_target_cwd.as_deref(),
+        failure_reason.as_deref(),
+        audit_origin.as_deref(),
+        audit_self_send,
+    );
+    let _ = crate::events::EventEmitter::new(
+        crate::paths::AgentsHome::from_env().events_jsonl(),
+        "daemon",
+    )
+    .emit_fields("agent_raw_inject", fields);
+
+    match outcome {
+        Ok((turn_id, review_thread)) => {
+            println!(
+                "{}",
+                json!({"delivered": true, "turn_id": turn_id, "review_thread_id": review_thread})
+            );
+            0
+        }
+        Err(reason) => {
+            println!(
+                "{}",
+                json!({"delivered": false, "reason": reason.to_string()})
+            );
+            1
+        }
+    }
+}
+
+/// Parse a `--target` shorthand into a [`ReviewTarget`]. `baseBranch:main`,
+/// `commit:abc123`, `custom:focus on concurrency`, or the bare
+/// `uncommittedChanges`.
+pub fn parse_review_target(raw: &str) -> Option<ReviewTarget> {
+    if raw == "uncommittedChanges" {
+        return Some(ReviewTarget::UncommittedChanges);
+    }
+    if let Some(rest) = raw.strip_prefix("baseBranch:") {
+        return Some(ReviewTarget::BaseBranch {
+            branch: rest.to_string(),
+        });
+    }
+    if let Some(rest) = raw.strip_prefix("commit:") {
+        let (sha, title) = match rest.split_once('|') {
+            Some((sha, title)) => (sha.to_string(), Some(title.to_string())),
+            None => (rest.to_string(), None),
+        };
+        return Some(ReviewTarget::Commit { sha, title });
+    }
+    if let Some(rest) = raw.strip_prefix("custom:") {
+        return Some(ReviewTarget::Custom {
+            instructions: rest.to_string(),
+        });
+    }
+    None
+}
+
+pub fn loaded_list_request_json(id: u64, cursor: Option<&str>) -> String {
+    serde_json::json!({
+        "id": id,
+        "method": "thread/loaded/list",
+        "params": {
+            "cursor": cursor,
+            "limit": LOADED_PAGE_SIZE,
+        }
+    })
+    .to_string()
+}
+
+pub fn thread_read_request_json(id: u64, thread_id: &str) -> String {
+    serde_json::json!({
+        "id": id,
+        "method": "thread/read",
+        "params": {
+            "threadId": thread_id,
+            "includeTurns": false,
+        }
+    })
+    .to_string()
+}
+
+pub fn parse_loaded_list_response(
+    raw: &str,
+) -> Result<(Vec<String>, Option<String>), &'static str> {
+    let v: serde_json::Value = serde_json::from_str(raw).map_err(|_| "rpc-error")?;
+    if v.get("error").is_some() {
+        return Err("rpc-error");
+    }
+    let result = v
+        .get("result")
+        .and_then(|r| r.as_object())
+        .ok_or("rpc-error")?;
+    let data = result
+        .get("data")
+        .and_then(|d| d.as_array())
+        .ok_or("rpc-error")?;
+    let mut ids = Vec::with_capacity(data.len());
+    for item in data {
+        let id = item.as_str().filter(|s| !s.is_empty()).ok_or("rpc-error")?;
+        ids.push(id.to_string());
+    }
+    let next_cursor = match result.get("nextCursor") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(value) => Some(value.as_str().ok_or("rpc-error")?.to_string()),
+    };
+    let next_cursor = next_cursor.filter(|cursor| !cursor.is_empty());
+    Ok((ids, next_cursor))
+}
+
+/// The runtime `status.type` a `thread/read` answer carries: `notLoaded`,
+/// `idle`, `systemError`, or `active`. `None` = the answer named no status,
+/// which the upgrade transaction treats as unreadable.
+pub fn parse_thread_read_status(raw: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()?
+        .pointer("/result/thread/status/type")
+        .and_then(|status| status.as_str())
+        .map(str::to_string)
+}
+
+pub fn parse_thread_read_cwd(raw: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
+    v.pointer("/result/thread/cwd")
+        .and_then(|cwd| cwd.as_str())
+        .map(str::to_string)
+}
+
+/// Classify a `turn/start` response frame into delivered / not-delivered.
+///
+/// - `.result.turn.id` is a string -> `Ok(())` (turn accepted; DELIVERED).
+/// - `.error` whose message says "not found" -> `Reason("thread-not-loaded")`
+///   (the session is embedded / not attached to the daemon -> durable fallback).
+/// - any other `.error` -> `Server(message)`: the daemon said WHY, and the
+///   reason must survive to the receipt. A bare "thread" substring is NOT the
+///   not-loaded marker: an unrelated error mentioning threads takes this path.
+/// - an error object with no message, or a result frame with no turn id ->
+///   `Reason("unexpected-response")`; unparseable frames -> `Reason("invalid-response")`.
+///
+/// The `Reason` value IS the `mail-inject` JSON `reason` token.
+pub fn classify_turn_start_response(raw: &str) -> Result<(), ReviewStartError> {
+    let v: serde_json::Value = match serde_json::from_str(raw) {
+        Ok(v) => v,
+        Err(_) => return Err(ReviewStartError::Reason("invalid-response")),
+    };
+    if v.get("result")
+        .and_then(|r| r.get("turn"))
+        .and_then(|t| t.get("id"))
+        .and_then(|id| id.as_str())
+        .is_some()
+    {
+        return Ok(());
+    }
+    if let Some(err) = v.get("error") {
+        let msg = err
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if msg.contains("not found") {
+            return Err(ReviewStartError::Reason("thread-not-loaded"));
+        }
+        return match err
+            .get("message")
+            .and_then(|m| m.as_str())
+            .filter(|m| !m.is_empty())
+        {
+            Some(m) => Err(ReviewStartError::Server(m.to_string())),
+            None => Err(ReviewStartError::Reason("unexpected-response")),
+        };
+    }
+    Err(ReviewStartError::Reason("unexpected-response"))
+}
+
+/// Deliver `text` into codex `thread_id` over the app-server daemon socket.
+/// `Ok(())` == turn accepted (delivered); every `Err` is a clean not-delivered
+/// signal whose `Reason` value is the `mail-inject` JSON `reason` token. No
+/// daemon listening -> `Err("no-daemon")`; a wedged socket -> `Err("io-error")`
+/// after [`HANDSHAKE_TIMEOUT`].
+const CODEX_NATIVE_COMMAND_REFUSAL: &str =
+    "native-command: use fno mux command <selector> --text <command> --proof <compact|goal-active|screen>";
+
+fn codex_native_command_refusal(text: &str) -> Result<Option<&'static str>, String> {
+    let Some(command) = text.trim().split_whitespace().next() else {
+        return Ok(None);
+    };
+    if !command.starts_with('/') && !command.starts_with('$') {
+        return Ok(None);
+    }
+    let contract = crate::harness_capabilities::HarnessContract::packaged()
+        .map_err(|error| format!("capability contract unreadable: {error}"))?;
+    let capabilities = contract
+        .capabilities("codex")
+        .map_err(|error| format!("Codex capability row unreadable: {error}"))?;
+    let native = capabilities
+        .native_verbs
+        .iter()
+        .any(|candidate| candidate == command);
+    let review = capabilities
+        .review_verbs
+        .iter()
+        .any(|candidate| candidate == command);
+    Ok((native && !review).then_some(CODEX_NATIVE_COMMAND_REFUSAL))
+}
+
+pub async fn deliver_via_codex_daemon(thread_id: &str, text: &str) -> Result<(), ReviewStartError> {
+    deliver(thread_id, text, None).await
+}
+
+/// How long the mail lane reads the rollout for the envelope after
+/// `turn/start` answers. Measured on codex 0.164.0: the user message lands
+/// in the rollout within a second, busy or idle.
+const ROLLOUT_CONFIRM_BUDGET: Duration = Duration::from_secs(10);
+
+/// The mail lane: `turn/start`, then the rollout read that turns the turn
+/// id into a state. A turn id alone is `parked` (the harness may hold it
+/// behind the running turn); the rollout's user message carrying the
+/// envelope is the acceptance. On a busy thread `turn/start` folds the
+/// message into the running turn, so the item's turn id equal to the turn
+/// running at inject reads `accepted-steer`.
+pub async fn deliver_state_via_codex_daemon(
+    thread_id: &str,
+    text: &str,
+) -> fno_mail::state::DeliveryState {
+    use fno_mail::state::{DeliveryState, Parked};
+    let rollout = crate::codex_store::codex_rollout_path(None, thread_id);
+    let baseline = rollout
+        .as_ref()
+        .and_then(|p| std::fs::metadata(p).ok())
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let running = rollout
+        .as_deref()
+        .and_then(crate::mail_inject::codex_running_turn);
+    if let Err(e) = deliver(thread_id, text, None).await {
+        return DeliveryState::failed(e.to_string());
+    }
+    let marker = crate::mail_inject::typed_marker(text);
+    let deadline = tokio::time::Instant::now() + ROLLOUT_CONFIRM_BUDGET;
+    loop {
+        // A thread with no rollout at inject writes its first one now.
+        let (path, since) = match &rollout {
+            Some(p) => (Some(p.clone()), baseline),
+            None => (crate::codex_store::codex_rollout_path(None, thread_id), 0),
+        };
+        if let Some(path) = path {
+            if let Ok(Some(state)) =
+                crate::mail_inject::landing_after(&path, &marker, since, running.as_deref())
+            {
+                if state.is_accepted() {
+                    return state;
+                }
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return DeliveryState::Parked {
+                where_: Parked::HarnessQueue,
+            };
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// Sync form of [`deliver_via_codex_daemon`] for the daemon's blocking arms
+/// (the codex-watch waker). Same try-current guard as [`thread_loaded`].
+pub fn deliver_via_codex_daemon_sync(thread_id: &str, text: &str) -> Result<(), ReviewStartError> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        let (id, body) = (thread_id.to_string(), text.to_string());
+        return std::thread::spawn(move || deliver_sync_inner(&id, &body))
+            .join()
+            .unwrap_or_else(|_| Err(ReviewStartError::Reason("io-error")));
+    }
+    deliver_sync_inner(thread_id, text)
+}
+
+fn deliver_sync_inner(thread_id: &str, text: &str) -> Result<(), ReviewStartError> {
+    match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime.block_on(deliver_via_codex_daemon(thread_id, text)),
+        Err(_) => Err(ReviewStartError::Reason("io-error")),
+    }
+}
+
+/// A bounded pane's seed turn: the spawner holds the cwd the TUI launched
+/// with, so the widening runs without a `thread/read` round trip and lands on
+/// the TUI's first turn, which no fno turn/start would otherwise reach.
+pub async fn deliver_seed_via_codex_daemon(
+    thread_id: &str,
+    text: &str,
+    cwd: &Path,
+) -> Result<(), ReviewStartError> {
+    deliver(thread_id, text, Some(cwd)).await
+}
+
+async fn deliver(
+    thread_id: &str,
+    text: &str,
+    cwd_hint: Option<&Path>,
+) -> Result<(), ReviewStartError> {
+    match codex_native_command_refusal(text).map_err(|error| {
+        ReviewStartError::Server(format!("native-command policy unreadable: {error}"))
+    })? {
+        Some(reason) => return Err(ReviewStartError::Reason(reason)),
+        None => {}
+    }
+    let sock = codex_app_server_socket_path();
+    match tokio::time::timeout(HANDSHAKE_TIMEOUT, inject(&sock, thread_id, text, cwd_hint)).await {
+        Ok(r) => r,
+        Err(_) => Err(ReviewStartError::Reason("io-error")),
+    }
+}
+
+pub async fn discover_loaded_threads() -> Result<Vec<LoadedThread>, &'static str> {
+    let sock = codex_app_server_socket_path();
+    match tokio::time::timeout(HANDSHAKE_TIMEOUT, discover(&sock)).await {
+        Ok(result) => result,
+        Err(_) => Err("io-error"),
+    }
+}
+
+/// The inject-routability predicate (the mail live-inject adoption check):
+/// `thread_id` loads on the app-server this environment names. `Ok(false)` is
+/// a DEFINITIVE answer from an up daemon (unload the watch); every `Err` is
+/// "the daemon could not answer", never a verdict. Sync wrapper so the
+/// loop-check stop path and the daemon's blocking arms can call it; a caller
+/// already inside a tokio runtime gets a helper thread, mirroring
+/// [`initialize_server_info`]'s block_on guard.
+pub fn thread_loaded(thread_id: &str) -> Result<bool, &'static str> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        let id = thread_id.to_string();
+        return std::thread::spawn(move || thread_loaded_inner(&id))
+            .join()
+            .map_err(|_| "io-error")?;
+    }
+    thread_loaded_inner(thread_id)
+}
+
+fn thread_loaded_inner(thread_id: &str) -> Result<bool, &'static str> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| "io-error")?;
+    runtime.block_on(async {
+        discover_loaded_threads()
+            .await
+            .map(|threads| threads.iter().any(|t| t.session_id == thread_id))
+    })
+}
+
+/// Sync form of [`discover_loaded_threads`] for the daemon's blocking arms:
+/// the full loaded-roster set in one socket read. Same try-current guard as
+/// [`thread_loaded`].
+pub fn loaded_thread_ids() -> Result<std::collections::HashSet<String>, &'static str> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return std::thread::spawn(loaded_thread_ids_inner)
+            .join()
+            .map_err(|_| "io-error")?;
+    }
+    loaded_thread_ids_inner()
+}
+
+fn loaded_thread_ids_inner() -> Result<std::collections::HashSet<String>, &'static str> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| "io-error")?;
+    runtime.block_on(async {
+        discover_loaded_threads()
+            .await
+            .map(|threads| threads.into_iter().map(|t| t.session_id).collect())
+    })
+}
+
+/// The `codex_loaded` payload block: what the retired hidden
+/// `codex-loaded-threads` command printed, as a value. `Ok` -> `{"available":
+/// true, "threads": [...]}`; every `Err` -> `{"available": false, "reason":
+/// <reason>}`, so "the daemon could not answer" stays distinct from "zero
+/// threads". Rides `list --json --harness codex` instead of a command root.
+pub fn loaded_threads_block(result: Result<Vec<LoadedThread>, &'static str>) -> serde_json::Value {
+    match result {
+        Ok(threads) => serde_json::json!({ "available": true, "threads": threads }),
+        Err(reason) => serde_json::json!({ "available": false, "reason": reason }),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Project assignment. Codex never derives a thread's project from its
+// cwd: a thread carries an explicit projectId and a project carries an ARRAY
+// of root paths, and Desktop writes the assignment only for worktrees it
+// created itself under CODEX_HOME/worktrees. Every other spawn falls back to
+// a cwd-keyed bucket the UI labels with the folder basename - which for fno
+// worktrees is the node id (measured 2026-09-01: 3054 threads, 0 assigned).
+// Two lanes assign. The interactive thread lane puts projectId straight on
+// `thread/start`; the headless lane has no argv flag and calls
+// `thread/metadata/update` after its rollout binds, through the hidden
+// `codex-assign-project` command below.
+// ---------------------------------------------------------------------------
+
+const PROJECT_PAGE_SIZE: u32 = 100;
+const MAX_PROJECT_PAGES: usize = 64;
+
+/// The inline pre-spawn resolve must cost less than a spawn is worth: the
+/// standalone `codex-assign-project` command may take the full
+/// [`HANDSHAKE_TIMEOUT`], but `ensure_project_for_cwd` runs BEFORE thread/start
+/// on every interactive spawn, so a wedged app-server costs a spawn this much,
+/// not ten seconds. One list round-trip on a unix socket is milliseconds; this
+/// bound exists for the pathological case.
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// `project/list` page request. Response shape (app-server-protocol
+/// `ProjectListResponse`): `{data: [Project], nextCursor}`.
+pub fn project_list_request_json(id: u64, limit: u32, cursor: Option<&str>) -> String {
+    serde_json::json!({
+        "id": id,
+        "method": "project/list",
+        "params": {"limit": limit, "cursor": cursor}
+    })
+    .to_string()
+}
+
+/// `project/create`. The idempotency key is REQUIRED (`ProjectCreateParams`)
+/// and codex persists it, so one repo must always send one key: a repeated
+/// create answers with the first project instead of a twin.
+pub fn project_create_request_json(
+    id: u64,
+    name: &str,
+    root: &Path,
+    idempotency_key: &str,
+) -> String {
+    serde_json::json!({
+        "id": id,
+        "method": "project/create",
+        "params": {
+            "name": name,
+            "roots": [{"path": root}],
+            "idempotencyKey": idempotency_key,
+        }
+    })
+    .to_string()
+}
+
+/// `project/update` carrying a whole replacement roots array (the protocol has
+/// no append command, so the caller extends the list it listed).
+/// `project/update` carrying a whole replacement roots array (the protocol has
+/// no append command, so the caller extends the list it listed).
+pub fn project_update_roots_request_json(id: u64, project_id: &str, roots: &[PathBuf]) -> String {
+    serde_json::json!({
+        "id": id,
+        "method": "project/update",
+        "params": {
+            "projectId": project_id,
+            "roots": roots.iter().map(|root| json!({"path": root})).collect::<Vec<_>>(),
+        }
+    })
+    .to_string()
+}
+
+/// `project/read`, the fresh-roots read that must precede a roots update:
+/// `project/update` replaces the array rather than appending, so extending
+/// from a page the list returned moments ago would drop anything written
+/// between that page and the update.
+pub fn project_read_request_json(id: u64, project_id: &str) -> String {
+    serde_json::json!({
+        "id": id,
+        "method": "project/read",
+        "params": {"projectId": project_id}
+    })
+    .to_string()
+}
+
+/// `thread/metadata/update`: the headless lane's assignment carrier. An empty
+/// projectId is the protocol's explicit CLEAR; this builder always assigns.
+pub fn thread_metadata_update_request_json(id: u64, thread_id: &str, project_id: &str) -> String {
+    serde_json::json!({
+        "id": id,
+        "method": "thread/metadata/update",
+        "params": {"threadId": thread_id, "projectId": project_id}
+    })
+    .to_string()
+}
+
+/// One `project/list` row, narrowed to what the resolver matches on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectSummary {
+    pub id: String,
+    pub name: String,
+    pub roots: Vec<PathBuf>,
+}
+
+/// Parse one `project/list` page into `(rows, next_cursor)`.
+pub fn parse_project_page(
+    raw: &str,
+) -> Result<(Vec<ProjectSummary>, Option<String>), &'static str> {
+    let v: serde_json::Value = serde_json::from_str(raw).map_err(|_| "rpc-error")?;
+    if v.get("error").is_some() {
+        return Err("rpc-error");
+    }
+    let data = v
+        .pointer("/result/data")
+        .and_then(|d| d.as_array())
+        .ok_or("rpc-error")?;
+    let mut projects = Vec::with_capacity(data.len());
+    for item in data {
+        let id = item
+            .get("id")
+            .and_then(|id| id.as_str())
+            .filter(|id| !id.is_empty())
+            .ok_or("rpc-error")?;
+        let name = item.get("name").and_then(|n| n.as_str()).unwrap_or("");
+        let roots = item
+            .get("roots")
+            .and_then(|roots| roots.as_array())
+            .map(|roots| {
+                roots
+                    .iter()
+                    .filter_map(|root| root.get("path").and_then(|p| p.as_str()))
+                    .map(PathBuf::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+        projects.push(ProjectSummary {
+            id: id.to_string(),
+            name: name.to_string(),
+            roots,
+        });
+    }
+    let next_cursor = match v.pointer("/result/nextCursor") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(value) => Some(value.as_str().ok_or("rpc-error")?.to_string()),
+    };
+    let next_cursor = next_cursor.filter(|cursor| !cursor.is_empty());
+    Ok((projects, next_cursor))
+}
+
+/// The `project.id` from a `project/create` or `project/update` response.
+pub fn parse_created_project_id(raw: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()?
+        .pointer("/result/project/id")
+        .and_then(|id| id.as_str())
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+}
+
+/// The roots array from a `project/read` response.
+pub fn parse_project_roots(raw: &str) -> Option<Vec<PathBuf>> {
+    let v = serde_json::from_str::<serde_json::Value>(raw).ok()?;
+    Some(
+        v.pointer("/result/project/roots")?
+            .as_array()?
+            .iter()
+            .filter_map(|root| root.get("path").and_then(|p| p.as_str()))
+            .map(PathBuf::from)
+            .collect(),
+    )
+}
+
+/// One repo, one key, forever: the key derives from the canonical root, so
+/// every spawn for a repo sends the same create and codex answers with the
+/// first project every time.
+fn project_idempotency_key(repo_root: &Path) -> String {
+    format!("fno:{}", repo_root.display())
+}
+
+/// Resolve (or create) the codex project whose roots contain `repo_root`.
+/// Three steps, first hit wins: a root match returns as-is; a project already
+/// named after the repo directory gains the root; otherwise one is created.
+///
+/// Fail open at every step - an absent socket, a refused handshake, a rejected
+/// write all return None and the caller spawns unchanged, the rule
+/// `codex_git_writable_args` states. Even though this lane now WRITES, a
+/// project we cannot resolve must never break a spawn.
+pub async fn ensure_project_for_root(repo_root: &Path) -> Option<String> {
+    let repo_root = std::fs::canonicalize(repo_root).ok()?;
+    let (mut sink, mut stream) = connect_app_server(&codex_app_server_socket_path())
+        .await
+        .ok()?;
+
+    let mut projects: Vec<ProjectSummary> = Vec::new();
+    let mut seen_cursors = HashSet::new();
+    let mut cursor: Option<String> = None;
+    let mut request_id = 2_u64;
+    let mut complete = false;
+    for _ in 0..MAX_PROJECT_PAGES {
+        sink.send(Message::Text(
+            project_list_request_json(request_id, PROJECT_PAGE_SIZE, cursor.as_deref()).into(),
+        ))
+        .await
+        .ok()?;
+        let raw = read_until_id(&mut stream, &serde_json::json!(request_id))
+            .await
+            .ok()?;
+        let (page, next_cursor) = parse_project_page(&raw).ok()?;
+        projects.extend(page);
+        request_id += 1;
+        match next_cursor {
+            None => {
+                complete = true;
+                break;
+            }
+            Some(next) if seen_cursors.insert(next.clone()) => cursor = Some(next),
+            Some(_) => return None,
+        }
+    }
+    if !complete {
+        // The listing never finished: creating now could mint a twin of a
+        // project a later page would have matched. Fail open instead.
+        return None;
+    }
+
+    if let Some(existing) = projects.iter().find(|project| {
+        project
+            .roots
+            .iter()
+            .any(|root| std::fs::canonicalize(root).is_ok_and(|resolved| resolved == repo_root))
+    }) {
+        return Some(existing.id.clone());
+    }
+    let dir_name = repo_root.file_name()?.to_string_lossy().into_owned();
+    if let Some(named) = projects.iter().find(|project| project.name == dir_name) {
+        // Re-read the roots fresh: the list can be pages old, and the update
+        // below REPLACES the array - extending from a stale read would drop a
+        // root written since. A failed re-read falls back to the listed roots.
+        let mut roots = {
+            sink.send(Message::Text(
+                project_read_request_json(request_id, &named.id).into(),
+            ))
+            .await
+            .ok()?;
+            let raw = read_until_id(&mut stream, &serde_json::json!(request_id))
+                .await
+                .ok()?;
+            request_id += 1;
+            parse_project_roots(&raw).unwrap_or_else(|| named.roots.clone())
+        };
+        if roots
+            .iter()
+            .any(|root| std::fs::canonicalize(root).is_ok_and(|resolved| resolved == repo_root))
+        {
+            // A concurrent writer already attached this repo: done, no write.
+            return Some(named.id.clone());
+        }
+        roots.push(repo_root.clone());
+        sink.send(Message::Text(
+            project_update_roots_request_json(request_id, &named.id, &roots).into(),
+        ))
+        .await
+        .ok()?;
+        let raw = read_until_id(&mut stream, &serde_json::json!(request_id))
+            .await
+            .ok()?;
+        return parse_created_project_id(&raw);
+    }
+    sink.send(Message::Text(
+        project_create_request_json(
+            request_id,
+            &dir_name,
+            &repo_root,
+            &project_idempotency_key(&repo_root),
+        )
+        .into(),
+    ))
+    .await
+    .ok()?;
+    let raw = read_until_id(&mut stream, &serde_json::json!(request_id))
+        .await
+        .ok()?;
+    parse_created_project_id(&raw)
+}
+
+/// [`ensure_project_for_root`] for a worker cwd: a linked worktree resolves to
+/// its repo through the git COMMON dir, whose parent is the canonical root.
+/// None outside a repo. Bounded by [`RESOLVE_TIMEOUT`] as a whole, because this
+/// sits inline before thread/start on every interactive spawn.
+pub async fn ensure_project_for_cwd(cwd: &Path) -> Option<String> {
+    let common = crate::provider::git_common_dir(cwd)?;
+    let repo_root = Path::new(&common).parent()?;
+    tokio::time::timeout(RESOLVE_TIMEOUT, ensure_project_for_root(repo_root))
+        .await
+        .ok()?
+}
+
+/// Assign a bound thread to `project_id` over `thread/metadata/update`. The
+/// headless lane calls this AFTER its session binds - a thread with no rollout
+/// yet answers "no rollout found", which is why the call cannot precede the
+/// bind. An unknown project and every transport failure fold into None; the
+/// spawn is already complete and nothing upstream reacts to this.
+pub async fn assign_thread_to_project(thread_id: &str, project_id: &str) -> Option<()> {
+    let (mut sink, mut stream) = connect_app_server(&codex_app_server_socket_path())
+        .await
+        .ok()?;
+    sink.send(Message::Text(
+        thread_metadata_update_request_json(2, thread_id, project_id).into(),
+    ))
+    .await
+    .ok()?;
+    let raw = read_until_id(&mut stream, &serde_json::json!(2))
+        .await
+        .ok()?;
+    let accepted = serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()?
+        .get("error")
+        .is_none();
+    accepted.then_some(())
+}
+
+/// The hidden `fno-agents codex-assign-project` command: resolve or
+/// create the repo's project for `--cwd`, and when `--thread-id` is given,
+/// assign that bound thread to it. This is how the HEADLESS lane reaches the
+/// resolver - the Python codex create path captures the thread id from
+/// `thread.started` and shells this binary fire-and-forget. Same `matches!`
+/// treatment as `review-start` so it stays out of CLIENT_COMMAND_USAGE /
+/// RUST_CLIENT_COMMANDS and the routable-command parity guard. Prints one JSON line;
+/// exits 0 on a resolved project, 1 when resolution failed.
+pub async fn run_codex_assign_project(rest: &[String]) -> i32 {
+    let mut cwd: Option<PathBuf> = None;
+    let mut thread_id: Option<String> = None;
+    let mut it = rest.iter();
+    while let Some(flag) = it.next() {
+        match flag.as_str() {
+            "--cwd" => cwd = it.next().map(PathBuf::from),
+            "--thread-id" => thread_id = it.next().cloned(),
+            other => {
+                eprintln!("codex-assign-project: unknown flag: {other}");
+                return 2;
+            }
+        }
+    }
+    let Some(cwd) = cwd else {
+        eprintln!("codex-assign-project: --cwd is required");
+        return 2;
+    };
+    let outcome = async {
+        let project_id = ensure_project_for_cwd(&cwd).await?;
+        let assigned = match thread_id.as_deref() {
+            Some(thread_id) => assign_thread_to_project(thread_id, &project_id)
+                .await
+                .is_some(),
+            None => false,
+        };
+        Some((project_id, assigned))
+    };
+    match outcome.await {
+        Some((project_id, assigned)) => {
+            println!(
+                "{}",
+                json!({"available": true, "projectId": project_id, "assigned": assigned})
+            );
+            0
+        }
+        None => {
+            println!(
+                "{}",
+                json!({"available": false, "reason": "project-unresolved"})
+            );
+            1
+        }
+    }
+}
+
+/// Wire ids for the three request frames, in send order. `read_until_id`
+/// matches ids, so each read waits for its own frame; a skipped stage leaves a
+/// gap, which bare JSON-RPC allows.
+const THREAD_READ_ID: u64 = 1;
+const THREAD_RESUME_ID: u64 = 2;
+const TURN_START_ID: u64 = 3;
+
+/// One send + wait-for-its-own-id round-trip.
+async fn round_trip(
+    sink: &mut AppServerSink,
+    stream: &mut AppServerStream,
+    id: u64,
+    frame: String,
+) -> Result<String, &'static str> {
+    sink.send(Message::Text(frame.into()))
+        .await
+        .map_err(|_| "io-error")?;
+    read_until_id(stream, &serde_json::json!(id)).await
+}
+
+/// What the registry row of a thread records: the full-access posture and the
+/// roots its spawn was granted. An empty grant on a registered row is the
+/// sealed record (`spawn_seam::export_worker_dirs` publishes nothing under
+/// `FNO_EVALS_SEALED=1`), so the row, not the sender's env, decides `sealed`.
+struct ThreadRecord {
+    full_access: bool,
+    granted_roots: Vec<String>,
+}
+
+/// The row for `thread_id`. A `None` home (tests, stray callers), an
+/// unreadable registry, and a row miss all read `None`, so every miss keeps
+/// today's probe frame. The read is offloaded: `load_registry` takes the
+/// registry flock, and a blocking wait does not belong on the async delivery
+/// path.
+async fn recorded_thread(thread_id: &str) -> Option<ThreadRecord> {
+    let thread_id = thread_id.to_string();
+    tokio::task::spawn_blocking(move || {
+        let home = crate::paths::AgentsHome::from_env_opt()?;
+        let registry = crate::state::load_registry(&home.registry_json()).ok()?;
+        let entry = registry.find_name_or_full_session_id(&thread_id)?;
+        Some(ThreadRecord {
+            full_access: crate::codex_posture::entry_posture_is_full_access(entry),
+            granted_roots: entry.granted_writable_roots.clone(),
+        })
+    })
+    .await
+    .unwrap_or(None)
+}
+
+/// A rollout `turn_context.sandbox_policy` (kebab tags, snake keys) in the v2
+/// wire shape `turn/start` takes (camel tags, camel keys). The rename is
+/// one-to-one; an unrecognized tag reads `None`, never a guessed posture.
+fn rollout_policy_to_wire(policy: &serde_json::Value) -> Option<serde_json::Value> {
+    let flag = |key: &str| policy.get(key).cloned().unwrap_or(json!(false));
+    match policy.get("type")?.as_str()? {
+        "danger-full-access" => Some(json!({"type": "dangerFullAccess"})),
+        "read-only" => Some(json!({"type": "readOnly", "networkAccess": flag("network_access")})),
+        "external-sandbox" => Some(json!({
+            "type": "externalSandbox",
+            "networkAccess": policy.get("network_access").cloned().unwrap_or(json!("restricted")),
+        })),
+        "workspace-write" => Some(json!({
+            "type": "workspaceWrite",
+            "writableRoots": policy.get("writable_roots").cloned().unwrap_or(json!([])),
+            "networkAccess": flag("network_access"),
+            "excludeTmpdirEnvVar": flag("exclude_tmpdir_env_var"),
+            "excludeSlashTmp": flag("exclude_slash_tmp"),
+        })),
+        _ => None,
+    }
+}
+
+/// The policy the thread's newest turn ran under, read from its rollout. A
+/// codex turn/start policy is per-turn on the deployed server, so a turn that
+/// carries none runs under the thread-START posture; echoing the last policy
+/// is what keeps a steered thread where it was. `None` when no rollout
+/// resolves, the newest `turn_context` lies past the scan bound, or its
+/// policy is unreadable: an unreadable newest record stops the scan and the
+/// caller falls back to the probe, never echoes an older turn's policy.
+async fn last_rollout_policy(thread_id: &str) -> Option<serde_json::Value> {
+    let thread_id = thread_id.to_string();
+    tokio::task::spawn_blocking(move || {
+        let path = crate::codex_store::codex_rollout_path(None, &thread_id)?;
+        let len = std::fs::metadata(&path).ok()?.len();
+        crate::session_truth::cursor::scan_back(
+            &path,
+            len,
+            b"turn_context",
+            crate::session_truth::CODEX_MODEL_SCAN_LIMIT,
+            &|line| {
+                let rec: serde_json::Value = serde_json::from_str(line).ok()?;
+                if rec.get("type")?.as_str()? != "turn_context" {
+                    return None;
+                }
+                // The newest turn_context stops the scan whatever its policy
+                // reads: a missing or unrecognized policy is Some(None), and
+                // an older turn's policy never echoes through it.
+                Some(
+                    rec.get("payload")
+                        .and_then(|payload| payload.get("sandbox_policy"))
+                        .and_then(rollout_policy_to_wire),
+                )
+            },
+        )
+    })
+    .await
+    .unwrap_or(None)
+    .flatten()
+}
+
+fn policy_type(policy: &serde_json::Value) -> Option<&str> {
+    policy.get("type").and_then(serde_json::Value::as_str)
+}
+
+/// The connect + initialize handshake + the posture read + `turn/start`.
+/// Split out so [`deliver_via_codex_daemon`] can wrap it in a total timeout.
+///
+/// The writable-roots grant rides the TURN, never a client `-c` flag:
+/// `thread/read` names the thread's cwd, `thread/resume` reads the posture the
+/// server resolved, and only a `workspaceWrite` posture widens the roots -
+/// this lane never narrows a thread. A failed read is NOT a delivery failure:
+/// the turn still goes out, policy-less. Measured 2026-09-14 on codex 0.154.0:
+/// resume on a loaded thread answers Ok carrying `sandbox`, and the rollout
+/// does not grow. A registry row recording full access, or a rollout whose
+/// last turn ran full access, re-asserts it instead: the turn carries
+/// `{"type":"dangerFullAccess"}` and the probe is skipped, so an out-of-band
+/// narrowing is healed by the next delivered turn. The grant is the row's
+/// recorded roots plus the roots resolved from the thread's cwd, never the
+/// sender's `FNO_WORKER_ADD_DIRS`.
+async fn inject(
+    sock: &Path,
+    thread_id: &str,
+    text: &str,
+    cwd_hint: Option<&Path>,
+) -> Result<(), ReviewStartError> {
+    let record = recorded_thread(thread_id).await;
+    // A full-access row decides the posture alone: the rollout read buys
+    // nothing and is skipped outright.
+    let last = if record.as_ref().is_some_and(|r| r.full_access) {
+        None
+    } else {
+        last_rollout_policy(thread_id).await
+    };
+    let (mut sink, mut stream) = connect_app_server(sock)
+        .await
+        .map_err(ReviewStartError::Reason)?;
+
+    let mut policy = None;
+    if record.as_ref().is_some_and(|r| r.full_access)
+        || last.as_ref().and_then(policy_type) == Some("dangerFullAccess")
+    {
+        policy = Some(json!({"type": "dangerFullAccess"}));
+    } else if let Some(echo) = last
+        .as_ref()
+        .filter(|p| policy_type(p) != Some("workspaceWrite"))
+    {
+        policy = Some(echo.clone());
+    } else {
+        // A seed turn brings the spawner's own cwd: a fresh no-turn thread is
+        // where thread/read is least certain, and the spawner knows the cwd
+        // it launched the TUI with.
+        let cwd = match cwd_hint {
+            Some(hint) => hint.to_string_lossy().into_owned(),
+            None => match round_trip(
+                &mut sink,
+                &mut stream,
+                THREAD_READ_ID,
+                thread_read_request_json(THREAD_READ_ID, thread_id),
+            )
+            .await
+            {
+                Ok(raw) => parse_thread_read_cwd(&raw).unwrap_or_default(),
+                Err(_) => String::new(),
+            },
+        };
+        if !cwd.is_empty() {
+            let sealed = match &record {
+                Some(r) => r.granted_roots.is_empty(),
+                None => {
+                    std::env::var_os(crate::spawn_seam::EVALS_SEALED_ENV).is_some_and(|v| v == "1")
+                }
+            };
+            let mut roots: Vec<String> = record
+                .as_ref()
+                .map(|r| r.granted_roots.clone())
+                .unwrap_or_default();
+            for root in crate::provider::codex_writable_roots_for(Path::new(&cwd), sealed) {
+                if !roots.contains(&root) {
+                    roots.push(root);
+                }
+            }
+            if !roots.is_empty() {
+                // The rollout answers the posture; the probe is the fallback
+                // when no rollout resolves. It reports the thread-START
+                // posture, never the last turn's.
+                let sandbox = match last {
+                    Some(sandbox) => Some(sandbox),
+                    None => round_trip(
+                        &mut sink,
+                        &mut stream,
+                        THREAD_RESUME_ID,
+                        thread_resume_probe_json(THREAD_RESUME_ID, thread_id),
+                    )
+                    .await
+                    .ok()
+                    .and_then(|raw| crate::codex_thread::parse_resolved_sandbox(&raw)),
+                };
+                // This lane never narrows: only a workspaceWrite posture is
+                // widened. A dangerFullAccess or readOnly probe answer goes
+                // policy-less, which leaves the thread on whatever the server
+                // already had.
+                if let Some(sandbox) = sandbox.filter(|s| policy_type(s) == Some("workspaceWrite"))
+                {
+                    policy = Some(crate::codex_thread::sandbox_policy_with_roots(
+                        &sandbox, &roots,
+                    ));
+                }
+            }
+        }
+    }
+
+    match start_turn(&mut sink, &mut stream, thread_id, text, policy.as_ref()).await {
+        Err(ReviewStartError::Reason("thread-not-loaded")) => {
+            // Only an explicit rejection permits replay; an unacked turn may
+            // already be running. Resume metadata avoids the history frame cap.
+            let raw = round_trip(
+                &mut sink,
+                &mut stream,
+                THREAD_RESUME_ID,
+                thread_resume_probe_json(THREAD_RESUME_ID, thread_id),
+            )
+            .await
+            .map_err(ReviewStartError::Reason)?;
+            let (confirmed, _) = crate::codex_thread::parse_thread_start_response(&raw).map_err(
+                |error| match error {
+                    crate::codex_thread::ThreadStartError::Server(message) => {
+                        ReviewStartError::Server(message)
+                    }
+                    _ => ReviewStartError::Reason("unexpected-response"),
+                },
+            )?;
+            if confirmed != thread_id {
+                return Err(ReviewStartError::Reason("thread-resume-mismatch"));
+            }
+            start_turn(&mut sink, &mut stream, thread_id, text, policy.as_ref()).await
+        }
+        result => result,
+    }
+}
+
+async fn start_turn(
+    sink: &mut AppServerSink,
+    stream: &mut AppServerStream,
+    thread_id: &str,
+    text: &str,
+    policy: Option<&serde_json::Value>,
+) -> Result<(), ReviewStartError> {
+    sink.send(Message::Text(
+        turn_start_request_json_with_policy(TURN_START_ID, thread_id, text, policy).into(),
+    ))
+    .await
+    .map_err(|_| ReviewStartError::Reason("io-error"))?;
+    // Once sent, a missing acknowledgment never authorizes another turn.
+    let raw = read_until_id(stream, &json!(TURN_START_ID))
+        .await
+        .map_err(|_| ReviewStartError::Reason("turn-start-unacked"))?;
+    classify_turn_start_response(&raw)
+}
+
+async fn discover(sock: &Path) -> Result<Vec<LoadedThread>, &'static str> {
+    let (mut sink, mut stream) = connect_app_server(sock).await?;
+
+    let mut ids = Vec::new();
+    let mut seen_ids = HashSet::new();
+    let mut seen_cursors = HashSet::new();
+    let mut cursor: Option<String> = None;
+    let mut request_id = 2_u64;
+    let mut complete = false;
+    for _ in 0..MAX_LOADED_PAGES {
+        sink.send(Message::Text(
+            loaded_list_request_json(request_id, cursor.as_deref()).into(),
+        ))
+        .await
+        .map_err(|_| "io-error")?;
+        let raw = read_until_id(&mut stream, &serde_json::json!(request_id)).await?;
+        let (page, next_cursor) = parse_loaded_list_response(&raw)?;
+        for id in page {
+            if seen_ids.insert(id.clone()) {
+                ids.push(id);
+            }
+        }
+        request_id += 1;
+        match next_cursor {
+            None => {
+                complete = true;
+                break;
+            }
+            Some(next) if seen_cursors.insert(next.clone()) => cursor = Some(next),
+            Some(_) => return Err("rpc-error"),
+        }
+    }
+    if !complete {
+        return Err("rpc-error");
+    }
+
+    let mut threads = Vec::with_capacity(ids.len());
+    for session_id in ids {
+        sink.send(Message::Text(
+            thread_read_request_json(request_id, &session_id).into(),
+        ))
+        .await
+        .map_err(|_| "io-error")?;
+        let cwd = match read_until_id(&mut stream, &serde_json::json!(request_id)).await {
+            Ok(raw) => parse_thread_read_cwd(&raw).unwrap_or_default(),
+            Err(_) => String::new(),
+        };
+        request_id += 1;
+        threads.push(LoadedThread { session_id, cwd });
+    }
+    Ok(threads)
+}
+
+/// Read Text frames until one whose `id` equals `want`, returning its raw text.
+/// Skips notifications (no `id`) and frames for other ids; ignores non-Text
+/// frames. Bounded by [`MAX_FRAMES`]; a read error / closed stream is `"io-error"`.
+pub(crate) async fn read_until_id<S>(
+    stream: &mut S,
+    want: &serde_json::Value,
+) -> Result<String, &'static str>
+where
+    S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
+    for _ in 0..MAX_FRAMES {
+        match stream.next().await {
+            Some(Ok(Message::Text(t))) => {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) {
+                    if v.get("id") == Some(want) {
+                        return Ok(t.to_string());
+                    }
+                }
+            }
+            Some(Ok(_)) => {} // non-Text frame (ping/binary/close-less); skip
+            Some(Err(tokio_tungstenite::tungstenite::Error::Capacity(_))) => {
+                return Err("app-server-response-over-cap");
+            }
+            Some(Err(_)) | None => return Err("io-error"),
+        }
+    }
+    Err("io-error")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::harness_daemon::HarnessDaemonAdapter;
+    use tokio::net::UnixListener;
+    use tokio_tungstenite::{accept_async, WebSocketStream};
+
+    async fn accept_initialized(listener: UnixListener) -> WebSocketStream<UnixStream> {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut ws = accept_async(stream).await.unwrap();
+        let init = ws.next().await.unwrap().unwrap().into_text().unwrap();
+        let init: serde_json::Value = serde_json::from_str(&init).unwrap();
+        assert_eq!(init["method"], "initialize");
+        ws.send(Message::Text(r#"{"id":"init","result":{}}"#.into()))
+            .await
+            .unwrap();
+        let initialized = ws.next().await.unwrap().unwrap().into_text().unwrap();
+        let initialized: serde_json::Value = serde_json::from_str(&initialized).unwrap();
+        assert_eq!(initialized["method"], "initialized");
+        ws
+    }
+
+    async fn next_request(ws: &mut WebSocketStream<UnixStream>) -> serde_json::Value {
+        let raw = ws.next().await.unwrap().unwrap().into_text().unwrap();
+        serde_json::from_str(&raw).unwrap()
+    }
+
+    #[tokio::test]
+    async fn mail_inject_refuses_declared_codex_native_commands_before_connecting() {
+        let result = deliver_via_codex_daemon("thread-1", "/compact").await;
+        assert_eq!(
+            result,
+            Err(ReviewStartError::Reason(CODEX_NATIVE_COMMAND_REFUSAL))
+        );
+        assert_eq!(
+            codex_native_command_refusal("/goal status"),
+            Ok(Some(CODEX_NATIVE_COMMAND_REFUSAL))
+        );
+    }
+
+    #[test]
+    fn review_start_target_variants_and_delivery() {
+        // uncommittedChanges + inline
+        let v: serde_json::Value = serde_json::from_str(&review_start_request_json(
+            "T1",
+            &ReviewTarget::UncommittedChanges,
+            ReviewDelivery::Inline,
+        ))
+        .unwrap();
+        assert_eq!(v["method"], "review/start");
+        assert_eq!(v["params"]["threadId"], "T1");
+        assert_eq!(v["params"]["target"]["type"], "uncommittedChanges");
+        assert_eq!(v["params"]["delivery"], "inline");
+
+        // baseBranch + detached
+        let v: serde_json::Value = serde_json::from_str(&review_start_request_json(
+            "T1",
+            &ReviewTarget::BaseBranch {
+                branch: "main".into(),
+            },
+            ReviewDelivery::Detached,
+        ))
+        .unwrap();
+        assert_eq!(v["params"]["target"]["type"], "baseBranch");
+        assert_eq!(v["params"]["target"]["branch"], "main");
+        assert_eq!(v["params"]["delivery"], "detached");
+
+        // commit (with title)
+        let v: serde_json::Value = serde_json::from_str(&review_start_request_json(
+            "T1",
+            &ReviewTarget::Commit {
+                sha: "abc".into(),
+                title: Some("t".into()),
+            },
+            ReviewDelivery::Inline,
+        ))
+        .unwrap();
+        assert_eq!(v["params"]["target"]["type"], "commit");
+        assert_eq!(v["params"]["target"]["sha"], "abc");
+        assert_eq!(v["params"]["target"]["title"], "t");
+
+        // custom
+        let v: serde_json::Value = serde_json::from_str(&review_start_request_json(
+            "T1",
+            &ReviewTarget::Custom {
+                instructions: "focus on x".into(),
+            },
+            ReviewDelivery::Inline,
+        ))
+        .unwrap();
+        assert_eq!(v["params"]["target"]["type"], "custom");
+        assert_eq!(v["params"]["target"]["instructions"], "focus on x");
+    }
+
+    #[test]
+    fn review_invocation_audit_carries_server_message_and_canonical_fields() {
+        let fields = review_invocation_event_fields(
+            "ri-positive",
+            "thread-1",
+            Some("/review medium --comment"),
+            Some("sender-1"),
+            Some("peer"),
+            false,
+            "codex review/start failed: server-error: review target must be a base branch",
+        );
+
+        assert_eq!(fields["stage"], "sent");
+        assert_eq!(fields["transport"], "codex_rpc");
+        assert_eq!(fields["level"], "medium");
+        assert_eq!(fields["level_source"], "explicit");
+        assert_eq!(fields["flags"], serde_json::json!(["--comment"]));
+        assert_eq!(fields["initiator"], "lead");
+        assert_eq!(fields["submit_key"], "none");
+        assert_eq!(
+            fields["receipt"],
+            "codex review/start failed: server-error: review target must be a base branch"
+        );
+        assert!(fields["invocation_id"].as_str().unwrap().starts_with("ri-"));
+
+        let temp = tempfile::tempdir().unwrap();
+        emit_review_invocation_fields(
+            &crate::events::EventEmitter::new(temp.path().join("events.jsonl"), "daemon"),
+            fields,
+        );
+        let raw = crate::events::committed_journal_text(&temp.path().join("events.jsonl"));
+        let event: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
+        assert_eq!(event["type"], "review_invocation");
+        assert_eq!(
+            event["data"]["receipt"],
+            "codex review/start failed: server-error: review target must be a base branch"
+        );
+    }
+
+    #[tokio::test]
+    async fn review_start_close_after_send_is_not_confirmed() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket = temp.path().join("codex.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = tokio::spawn(async move {
+            let mut ws = accept_initialized(listener).await;
+            let request = next_request(&mut ws).await;
+            assert_eq!(request["method"], "review/start");
+        });
+        let mut request_in_flight = false;
+        let result = review_start_round_trip(
+            &socket,
+            "thread-1",
+            &ReviewTarget::UncommittedChanges,
+            ReviewDelivery::Inline,
+            &mut request_in_flight,
+        )
+        .await;
+        server.await.unwrap();
+        assert!(request_in_flight);
+        assert_eq!(
+            result.unwrap_err(),
+            ReviewStartError::Reason("not-confirmed")
+        );
+    }
+
+    #[tokio::test]
+    async fn discovery_paginates_deduplicates_and_keeps_failed_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket = temp.path().join("codex.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = tokio::spawn(async move {
+            let mut ws = accept_initialized(listener).await;
+
+            let first = next_request(&mut ws).await;
+            assert_eq!(first["params"]["cursor"], serde_json::Value::Null);
+            ws.send(Message::Text(
+                r#"{"id":2,"result":{"data":["thread-a"],"nextCursor":"thread-a"}}"#.into(),
+            ))
+            .await
+            .unwrap();
+
+            let second = next_request(&mut ws).await;
+            assert_eq!(second["params"]["cursor"], "thread-a");
+            ws.send(Message::Text(
+                r#"{"id":3,"result":{"data":["thread-a","thread-b"],"nextCursor":null}}"#.into(),
+            ))
+            .await
+            .unwrap();
+
+            let read_a = next_request(&mut ws).await;
+            assert_eq!(read_a["params"]["threadId"], "thread-a");
+            ws.send(Message::Text(
+                r#"{"id":4,"result":{"thread":{"cwd":"/repo/a"}}}"#.into(),
+            ))
+            .await
+            .unwrap();
+
+            let read_b = next_request(&mut ws).await;
+            assert_eq!(read_b["params"]["threadId"], "thread-b");
+            ws.send(Message::Text(
+                r#"{"id":5,"error":{"message":"metadata unavailable"}}"#.into(),
+            ))
+            .await
+            .unwrap();
+        });
+
+        let threads = discover(&socket).await.unwrap();
+        assert_eq!(
+            threads,
+            vec![
+                LoadedThread {
+                    session_id: "thread-a".into(),
+                    cwd: "/repo/a".into(),
+                },
+                LoadedThread {
+                    session_id: "thread-b".into(),
+                    cwd: String::new(),
+                },
+            ]
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn discovery_rejects_repeated_cursor_without_partial_results() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket = temp.path().join("codex.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = tokio::spawn(async move {
+            let mut ws = accept_initialized(listener).await;
+            let _first = next_request(&mut ws).await;
+            ws.send(Message::Text(
+                r#"{"id":2,"result":{"data":["thread-a"],"nextCursor":"thread-a"}}"#.into(),
+            ))
+            .await
+            .unwrap();
+            let _second = next_request(&mut ws).await;
+            ws.send(Message::Text(
+                r#"{"id":3,"result":{"data":["thread-b"],"nextCursor":"thread-a"}}"#.into(),
+            ))
+            .await
+            .unwrap();
+        });
+
+        assert_eq!(discover(&socket).await, Err("rpc-error"));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn dead_socket_connect_reads_no_daemon_not_io_error() {
+        // The measured specimen: a socket inode whose daemon is gone. The file
+        // exists, nothing listens; the refusal must read no-daemon (the Python
+        // demote and the start-the-daemon remedy key on that token), never
+        // io-error. A missing file answers the same token.
+        let temp = tempfile::tempdir().unwrap();
+        let socket = temp.path().join("codex.sock");
+        UnixListener::bind(&socket).unwrap(); // dropped: inode survives, no listener
+        assert!(socket.exists());
+        let mut in_flight = false;
+        assert_eq!(
+            review_start_round_trip(
+                &socket,
+                "t",
+                &ReviewTarget::UncommittedChanges,
+                ReviewDelivery::Inline,
+                &mut in_flight,
+            )
+            .await,
+            Err(ReviewStartError::Reason("no-daemon"))
+        );
+        assert_eq!(
+            inject(&socket, "t", "hi", None).await,
+            Err(ReviewStartError::Reason("no-daemon"))
+        );
+        assert_eq!(discover(&socket).await, Err("no-daemon"));
+        let absent = temp.path().join("absent.sock");
+        let mut in_flight = false;
+        assert_eq!(
+            review_start_round_trip(
+                &absent,
+                "t",
+                &ReviewTarget::UncommittedChanges,
+                ReviewDelivery::Inline,
+                &mut in_flight,
+            )
+            .await,
+            Err(ReviewStartError::Reason("no-daemon"))
+        );
+    }
+
+    #[test]
+    fn classify_thread_not_loaded_on_thread_error() {
+        let raw = r#"{"id":1,"error":{"code":-32000,"message":"thread not found"}}"#;
+        assert_eq!(
+            classify_turn_start_response(raw),
+            Err(ReviewStartError::Reason("thread-not-loaded"))
+        );
+    }
+
+    #[test]
+    fn classify_preserves_server_message_and_splits_unreadable_frames() {
+        // A structured error names its cause; the reason must carry it out
+        // instead of collapsing into one undiagnosable token.
+        let other = r#"{"id":1,"error":{"code":-32601,"message":"method not implemented"}}"#;
+        assert_eq!(
+            classify_turn_start_response(other),
+            Err(ReviewStartError::Server("method not implemented".into()))
+        );
+        // Unparseable frame.
+        assert_eq!(
+            classify_turn_start_response("not json"),
+            Err(ReviewStartError::Reason("invalid-response"))
+        );
+        // A result without a string turn id is not a confirmed delivery.
+        let no_turn = r#"{"id":1,"result":{}}"#;
+        assert_eq!(
+            classify_turn_start_response(no_turn),
+            Err(ReviewStartError::Reason("unexpected-response"))
+        );
+        // An error object with no message has nothing to preserve.
+        let bare = r#"{"id":1,"error":{"code":-32000}}"#;
+        assert_eq!(
+            classify_turn_start_response(bare),
+            Err(ReviewStartError::Reason("unexpected-response"))
+        );
+    }
+
+    #[test]
+    fn codex_daemon_state_requires_pid_and_process_start_time() {
+        let adapter = CodexDaemonAdapter::new(
+            PathBuf::from("/tmp/codex.pid"),
+            PathBuf::from("/tmp/codex.lock"),
+            PathBuf::from("/tmp/codex.sock"),
+        );
+        assert!(adapter
+            .parse_state(r#"{"pid":123}"#)
+            .expect_err("bare pid must be unreadable")
+            .contains("process start"));
+    }
+
+    #[test]
+    fn codex_uses_an_fno_sidecar_and_never_replaces_the_provider_process() {
+        use crate::harness_daemon::HarnessDaemonAdapter;
+        let provider_state = PathBuf::from("/tmp/app-server.pid");
+        let adapter = CodexDaemonAdapter::new(
+            provider_state.clone(),
+            PathBuf::from("/tmp/codex.lock"),
+            PathBuf::from("/tmp/codex.sock"),
+        );
+        assert_ne!(adapter.state_path(), provider_state.as_path());
+        assert!(!adapter.may_replace());
+    }
+
+    #[tokio::test]
+    async fn codex_health_handshake_times_out_when_the_server_stops_replying() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket = temp.path().join("codex.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            let _initialize = ws.next().await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        });
+
+        let result =
+            codex_initialize_handshake_with_timeout(&socket, Duration::from_millis(20)).await;
+
+        assert_eq!(result, Err("timeout"));
+        server.abort();
+    }
+
+    /// The serverInfo reader is bounded: a connect that lands on a
+    /// listening-but-stalled server must read None inside its budget, not
+    /// park the readiness path (and any provider lock above it) forever.
+    /// Plain test, no tokio attribute: the reader builds its own runtime.
+    #[test]
+    fn the_server_info_reader_is_bounded_on_a_silent_socket() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket = temp.path().join("silent.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+        let started = std::time::Instant::now();
+        let info = initialize_server_info_inner(&socket, Duration::from_millis(50));
+        let elapsed = started.elapsed();
+        assert!(
+            info.is_none(),
+            "a silent socket reads none inside its bound, got {info:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "a silent socket must not hold the reader {elapsed:?}"
+        );
+    }
+
+    // --- project assignment -------------------------------------
+
+    /// Root match: the resolver answers with the existing id and creates
+    /// nothing. Positive controls: the list actually ran, and the create never
+    /// fired.
+    #[tokio::test]
+    async fn resolver_returns_the_matching_project_and_creates_nothing() {
+        let _guard = crate::path_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick().with_projects(vec![json!({
+                "id": "proj-a", "name": "somewhere-else",
+                "roots": [{"path": root.display().to_string()}]
+            })]),
+        );
+        let id = ensure_project_for_root(temp.path()).await;
+        assert_eq!(id.as_deref(), Some("proj-a"));
+        assert!(
+            daemon.first_params("project/list").is_some(),
+            "the listing must have run"
+        );
+        assert!(
+            daemon.first_params("project/create").is_none(),
+            "a root match must not create"
+        );
+    }
+
+    /// A project already named after the repo directory gains the root instead
+    /// of a second project with the same label.
+    #[tokio::test]
+    async fn resolver_extends_a_same_named_project_instead_of_creating_a_twin() {
+        let _guard = crate::path_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let dir_name = temp
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick().with_projects(vec![json!({
+                "id": "proj-b", "name": dir_name, "roots": [{"path": "/elsewhere"}]
+            })]),
+        );
+        let id = ensure_project_for_root(temp.path()).await;
+        assert_eq!(id.as_deref(), Some("proj-b"));
+        let update = daemon.first_params("project/update");
+        assert!(
+            update.is_some(),
+            "a same-named project must be extended, not duplicated"
+        );
+        assert_eq!(update.unwrap()["projectId"], "proj-b");
+    }
+
+    /// Neither root nor name matches: create, carrying the derived idempotency
+    /// key, and return the created id.
+    #[tokio::test]
+    async fn resolver_creates_when_nothing_matches() {
+        let _guard = crate::path_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick(),
+        );
+        let id = ensure_project_for_root(temp.path()).await;
+        assert_eq!(id.as_deref(), Some("proj-created-fno"));
+        let create = daemon.first_params("project/create").expect("create ran");
+        assert_eq!(
+            create["idempotencyKey"],
+            format!(
+                "fno:{}",
+                std::fs::canonicalize(temp.path()).unwrap().display()
+            )
+        );
+        assert_eq!(
+            create["roots"][0]["path"],
+            std::fs::canonicalize(temp.path())
+                .unwrap()
+                .display()
+                .to_string()
+        );
+    }
+
+    /// The full turn path on a thread fno never registered: a workspaceWrite
+    /// probe yields a `turn/start` whose `sandboxPolicy.writableRoots` widens
+    /// the posture's own roots. The sender's `FNO_WORKER_ADD_DIRS` is dead on
+    /// this lane - a lead has none and a worker's belong to its own project -
+    /// so its dirs never ride, whatever the sender env carries.
+    #[tokio::test]
+    async fn deliver_carries_the_writable_roots_grant_on_the_turn() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::path_test_guard();
+        let _add_dirs =
+            crate::claims::EnvVarGuard::set("FNO_WORKER_ADD_DIRS", "/tmp/fno-t13-a:/tmp/fno-t13-b");
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick().with_thread_sandbox(json!({
+                "type": "workspaceWrite", "writableRoots": ["/tmp/fno-t13-own"]
+            })),
+        );
+        let result = deliver_via_codex_daemon("thread-t", "hello GRANT").await;
+        assert!(result.is_ok(), "delivery must succeed: {result:?}");
+        let turn = daemon
+            .first_params("turn/start")
+            .expect("turn/start must have run");
+        let roots: Vec<String> = turn
+            .get("sandboxPolicy")
+            .and_then(|policy| policy.get("writableRoots"))
+            .and_then(|v| v.as_array())
+            .expect("writableRoots rode the turn")
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            roots.contains(&"/tmp/fno-t13-own".to_string()),
+            "the posture's own roots ride: {roots:?}"
+        );
+        assert!(
+            !roots.contains(&"/tmp/fno-t13-a".to_string())
+                && !roots.contains(&"/tmp/fno-t13-b".to_string()),
+            "the sender env grants nothing: {roots:?}"
+        );
+    }
+
+    /// An ack loss after the turn/start went out reads as
+    /// `turn-start-unacked`, the token the seed lane treats as in-flight so a
+    /// typed fallback cannot double-seed a thread that is already running.
+    #[tokio::test]
+    async fn seed_delivery_names_an_unacked_turn_start() {
+        let _guard = crate::path_test_guard();
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick().with_unacked_turn_start(),
+        );
+        let result =
+            deliver_seed_via_codex_daemon("thread-t", "hello", Path::new("/tmp/fno-t14-cwd")).await;
+        assert_eq!(
+            result,
+            Err(ReviewStartError::Reason("turn-start-unacked")),
+            "an ack loss must be named, not read as io-error"
+        );
+        assert_eq!(
+            daemon
+                .received()
+                .iter()
+                .filter(|f| f["method"] == "turn/start")
+                .count(),
+            1
+        );
+    }
+
+    /// A registry row recording full access re-asserts it: the turn carries
+    /// `{"type":"dangerFullAccess"}` and no `thread/resume` probe runs, even
+    /// when the live posture reads workspaceWrite.
+    #[tokio::test]
+    async fn deliver_reasserts_a_recorded_full_access_posture_without_the_probe() {
+        let _guard = crate::path_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        crate::state::update_registry(
+            &crate::paths::AgentsHome::at(temp.path()).registry_json(),
+            |registry| {
+                let mut entry = crate::state::RegistryEntry::default();
+                entry.name = "t-yolo".to_string();
+                entry.cwd = "/repo".to_string();
+                entry.harness = Some("codex".to_string());
+                entry.harness_session_id = Some("thread-t".to_string());
+                entry.sandbox_posture = Some("danger-full-access".to_string());
+                registry.entries.push(entry);
+            },
+        )
+        .unwrap();
+        let saved_home = std::env::var_os("FNO_AGENTS_HOME");
+        std::env::set_var("FNO_AGENTS_HOME", temp.path());
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick().with_thread_sandbox(json!({
+                "type": "workspaceWrite", "writableRoots": ["/tmp/fno-t13-own"]
+            })),
+        );
+        let result = deliver_via_codex_daemon("thread-t", "hello REASSERT").await;
+        assert!(result.is_ok(), "delivery must succeed: {result:?}");
+        match saved_home {
+            Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
+            None => std::env::remove_var("FNO_AGENTS_HOME"),
+        }
+        let turn = daemon.first_params("turn/start").expect("turn ran");
+        assert_eq!(
+            turn.get("sandboxPolicy"),
+            Some(&json!({"type": "dangerFullAccess"}))
+        );
+        assert!(
+            daemon.received().iter().all(|frame| {
+                frame.get("method").and_then(serde_json::Value::as_str) != Some("thread/resume")
+            }),
+            "no resume probe may run when the row records full access"
+        );
+    }
+
+    /// A bounded row's recorded grant rides the mail turn with a bare sender
+    /// env: the roots come off the row, not off the process steering it.
+    #[tokio::test]
+    async fn mail_turn_keeps_recorded_state_root() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::path_test_guard();
+        let home = tempfile::tempdir().unwrap();
+        let state_root = tempfile::tempdir().unwrap();
+        let grant = state_root.path().to_string_lossy().into_owned();
+        crate::state::update_registry(
+            &crate::paths::AgentsHome::at(home.path()).registry_json(),
+            {
+                let grant = grant.clone();
+                move |registry| {
+                    let mut entry = crate::state::RegistryEntry::default();
+                    entry.name = "t-mail-root".to_string();
+                    entry.cwd = "/repo".to_string();
+                    entry.harness = Some("codex".to_string());
+                    entry.harness_session_id = Some("thread-mail-root".to_string());
+                    entry.sandbox_posture = Some("workspace-write".to_string());
+                    entry.granted_writable_roots = vec![grant];
+                    registry.entries.push(entry);
+                }
+            },
+        )
+        .unwrap();
+        let _agents_home =
+            crate::claims::EnvVarGuard::set("FNO_AGENTS_HOME", home.path().to_str().unwrap());
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick().with_thread_sandbox(json!({
+                "type": "workspaceWrite", "writableRoots": ["/tmp/fno-t13-own"]
+            })),
+        );
+        let result = deliver_via_codex_daemon("thread-mail-root", "hello ROOT").await;
+        assert!(result.is_ok(), "delivery must succeed: {result:?}");
+        let turn = daemon.first_params("turn/start").expect("turn ran");
+        let roots: Vec<String> = turn
+            .get("sandboxPolicy")
+            .and_then(|policy| policy.get("writableRoots"))
+            .and_then(|v| v.as_array())
+            .expect("writableRoots rode the turn")
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            roots.contains(&grant),
+            "the row's recorded grant rides: {roots:?}"
+        );
+    }
+
+    /// The superseded twin case: the row says nothing about full access, but
+    /// the thread's newest turn ran it. The rollout read answers the posture
+    /// and re-asserts it, probe answer aside; the probe is skipped outright.
+    #[tokio::test]
+    async fn mail_turn_keeps_last_full_access() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::path_test_guard();
+        // The fake daemon repoints CODEX_HOME at its own home for the socket,
+        // so the rollout must live under THAT home for the lane's read to
+        // find it; resolve it the way deliver() resolves the socket.
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick().with_thread_sandbox(json!({
+                "type": "workspaceWrite", "writableRoots": ["/tmp/fno-t13-own"]
+            })),
+        );
+        let daemon_home = codex_app_server_socket_path()
+            .parent()
+            .and_then(|socket_dir| socket_dir.parent())
+            .expect("daemon home resolves from the control socket")
+            .to_path_buf();
+        let sessions = daemon_home.join("sessions/2026/11/06");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let rollout = sessions.join("rollout-2026-11-06T03-19-27-thread-full.jsonl");
+        std::fs::write(
+            &rollout,
+            concat!(
+                r#"{"timestamp":"2026-11-06T11:19:30Z","type":"turn_context","payload":{"sandbox_policy":{"type":"workspace-write","writable_roots":["/repo/.git"]}}}"#,
+                "\n",
+                r#"{"timestamp":"2026-11-06T13:20:44Z","type":"turn_context","payload":{"sandbox_policy":{"type":"danger-full-access"}}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let result = deliver_via_codex_daemon("thread-full", "hello FULL").await;
+        assert!(result.is_ok(), "delivery must succeed: {result:?}");
+        let turn = daemon.first_params("turn/start").expect("turn ran");
+        assert_eq!(
+            turn.get("sandboxPolicy"),
+            Some(&json!({"type": "dangerFullAccess"})),
+            "the last policy wins over the workspaceWrite probe"
+        );
+        assert!(
+            daemon.received().iter().all(|frame| {
+                frame.get("method").and_then(serde_json::Value::as_str) != Some("thread/resume")
+            }),
+            "the rollout answered the posture, so the probe is skipped"
+        );
+    }
+
+    /// A sender process whose `FNO_WORKER_ADD_DIRS` names another project's
+    /// dirs passes none of them to the thread: the row's recorded grant is
+    /// the whole story on a registered thread.
+    #[tokio::test]
+    async fn mail_turn_ignores_sender_grant() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::path_test_guard();
+        let home = tempfile::tempdir().unwrap();
+        let state_root = tempfile::tempdir().unwrap();
+        let grant = state_root.path().to_string_lossy().into_owned();
+        crate::state::update_registry(
+            &crate::paths::AgentsHome::at(home.path()).registry_json(),
+            {
+                let grant = grant.clone();
+                move |registry| {
+                    let mut entry = crate::state::RegistryEntry::default();
+                    entry.name = "t-mail-foreign".to_string();
+                    entry.cwd = "/repo".to_string();
+                    entry.harness = Some("codex".to_string());
+                    entry.harness_session_id = Some("thread-mail-foreign".to_string());
+                    entry.sandbox_posture = Some("workspace-write".to_string());
+                    entry.granted_writable_roots = vec![grant];
+                    registry.entries.push(entry);
+                }
+            },
+        )
+        .unwrap();
+        let _agents_home =
+            crate::claims::EnvVarGuard::set("FNO_AGENTS_HOME", home.path().to_str().unwrap());
+        let _add_dirs = crate::claims::EnvVarGuard::set(
+            "FNO_WORKER_ADD_DIRS",
+            "/tmp/fno-foreign-a:/tmp/fno-foreign-b",
+        );
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick().with_thread_sandbox(json!({
+                "type": "workspaceWrite", "writableRoots": ["/tmp/fno-t13-own"]
+            })),
+        );
+        let result = deliver_via_codex_daemon("thread-mail-foreign", "hello FOREIGN").await;
+        assert!(result.is_ok(), "delivery must succeed: {result:?}");
+        let turn = daemon.first_params("turn/start").expect("turn ran");
+        let roots: Vec<String> = turn
+            .get("sandboxPolicy")
+            .and_then(|policy| policy.get("writableRoots"))
+            .and_then(|v| v.as_array())
+            .expect("writableRoots rode the turn")
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            roots.contains(&grant),
+            "the row's recorded grant rides: {roots:?}"
+        );
+        assert!(
+            !roots.contains(&"/tmp/fno-foreign-a".to_string())
+                && !roots.contains(&"/tmp/fno-foreign-b".to_string()),
+            "the sender env grants nothing on a registered thread: {roots:?}"
+        );
+    }
+
+    /// A newest `turn_context` whose policy is unreadable stops the rollout
+    /// read: the lane falls back to the probe instead of echoing an older
+    /// turn's policy, so the older policy's own roots never ride.
+    #[tokio::test]
+    async fn mail_turn_falls_back_to_probe_when_newest_policy_unreadable() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::path_test_guard();
+        // The fake daemon repoints CODEX_HOME at its own home for the socket,
+        // so the rollout must live under THAT home for the lane's read to
+        // find it; resolve it the way deliver() resolves the socket.
+        let daemon = crate::codex_fake_daemon::FakeDaemon::start(
+            crate::codex_fake_daemon::Behavior::quick().with_thread_sandbox(json!({
+                "type": "workspaceWrite", "writableRoots": ["/tmp/fno-t13-own"]
+            })),
+        );
+        let daemon_home = codex_app_server_socket_path()
+            .parent()
+            .and_then(|socket_dir| socket_dir.parent())
+            .expect("daemon home resolves from the control socket")
+            .to_path_buf();
+        let sessions = daemon_home.join("sessions/2026/11/06");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let rollout = sessions.join("rollout-2026-11-06T03-19-27-thread-unreadable.jsonl");
+        std::fs::write(
+            &rollout,
+            concat!(
+                r#"{"timestamp":"2026-11-06T11:19:30Z","type":"turn_context","payload":{"sandbox_policy":{"type":"workspace-write","writable_roots":["/repo/.git"]}}}"#,
+                "\n",
+                r#"{"timestamp":"2026-11-06T13:20:44Z","type":"turn_context","payload":{}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let result = deliver_via_codex_daemon("thread-unreadable", "hello FALLBACK").await;
+        assert!(result.is_ok(), "delivery must succeed: {result:?}");
+        let turn = daemon.first_params("turn/start").expect("turn ran");
+        let roots: Vec<String> = turn
+            .get("sandboxPolicy")
+            .and_then(|policy| policy.get("writableRoots"))
+            .and_then(|v| v.as_array())
+            .expect("writableRoots rode the turn")
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            roots.contains(&"/tmp/fno-t13-own".to_string()),
+            "the probe answered and its own roots ride: {roots:?}"
+        );
+        assert!(
+            !roots.contains(&"/repo/.git".to_string()),
+            "the older policy's roots must not ride past an unreadable newest: {roots:?}"
+        );
+    }
+}

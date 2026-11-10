@@ -1,0 +1,28 @@
+[package]
+name = "fno-mail"
+# Keep in lockstep with crates/fno, crates/fno-agents and cli (Python).
+version = "0.4.5"
+edition = "2021"
+# MSRV: the bus log's advisory flock uses std's File::try_lock (log.rs),
+# stabilized in Rust 1.89. Pinning the floor lets `cargo` warn on an older
+# toolchain instead of failing with a confusing "no method named try_lock".
+rust-version = "1.89"
+description = "The fno mail protocol: envelope, bus log, address forms, delivery states, the lane trait and session ids."
+license = "Apache-2.0"
+repository = "https://github.com/fnodotdev/fno"
+homepage = "https://github.com/fnodotdev/fno"
+documentation = "https://docs.rs/fno-mail"
+readme = "README.md"
+publish = true
+include = ["src/**", "SPEC.md", "Cargo.toml", "README.md", "LICENSE*"]
+
+# A library only: the mail protocol has no command surface. The fleet binary
+# stays in fno-agents.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+# preserve_order is load-bearing: envelope bytes follow the field order the
+# conformance test pins.
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[dev-dependencies]
+tempfile = "3"

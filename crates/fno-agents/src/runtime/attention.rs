@@ -1,0 +1,1213 @@
+//! The attention-item model: a read-time projection over the three stores
+//! that already exist (question journals, escalation notes, the user lane).
+//! No new store; the mux overlay, the sinks and the future answer endpoint
+//! all read this one projection. Every user-facing name here is `question`,
+//! `pin` or `mine`; "attention item" stays inside code and the plan.
+
+use serde::Serialize;
+use serde_json::Value;
+use std::collections::HashMap;
+use std::path::Path;
+
+/// One `operator_question_closed` fold row: the last close per question id.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Closed {
+    pub answer: String,
+    pub ts: String,
+    pub closed_by: String,
+    pub reason: String,
+}
+
+/// The last `operator_question_closed` row per question id, folded from the
+/// raw journal text the projection read. Pure, so the arm and a test share
+/// it.
+pub fn closes(journals_raw: &str) -> HashMap<String, Closed> {
+    let mut out: HashMap<String, Closed> = HashMap::new();
+    for line in journals_raw.lines() {
+        if line.trim().is_empty() || !line.contains("operator_question_closed") {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue; // torn/malformed tail line: skip, never abort
+        };
+        if v.get("type").and_then(Value::as_str) != Some("operator_question_closed") {
+            continue;
+        }
+        let data = v.get("data").cloned().unwrap_or(Value::Null);
+        let field = |name: &str| -> String {
+            data.get(name)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        };
+        let Some(qid) = data.get("question_id").and_then(Value::as_str) else {
+            continue;
+        };
+        out.insert(
+            qid.to_string(),
+            Closed {
+                answer: field("answer"),
+                ts: v
+                    .get("ts")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                closed_by: field("closed_by"),
+                reason: field("reason"),
+            },
+        );
+    }
+    out
+}
+
+/// Question ids the user answered themselves: an unsuperseded
+/// `attention_answer` row whose record is not a delegate. A sink close for
+/// one of these sends nothing - the user watched it close on their own tap.
+/// Pure, so the arm and a test share it.
+pub fn user_answered(journals_raw: &str) -> std::collections::HashSet<String> {
+    let mut out: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for line in journals_raw.lines() {
+        if line.trim().is_empty() || !line.contains("attention_answer") {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue; // torn/malformed tail line: skip, never abort
+        };
+        if v.get("type").and_then(Value::as_str) != Some("attention_answer") {
+            continue;
+        }
+        let data = v.get("data").cloned().unwrap_or(Value::Null);
+        if data.get("superseded").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        if data.get("delegated").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        if let Some(qid) = data.get("item_id").and_then(Value::as_str) {
+            out.insert(qid.to_string());
+        }
+    }
+    out
+}
+
+/// Every question id an `operator_question` row names across the question
+/// stores. A page whose id is absent here and has no close row is a question
+/// the stores no longer hold: no beat can ever name its close. A store that
+/// holds no ask row at all may be a lost store, so the set is empty then and
+/// no page closes as lost until every store reads asks again.
+pub fn asked_ids(stores: &[String]) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    for store in stores {
+        if !collect_asks(store, &mut out) {
+            return std::collections::HashSet::new();
+        }
+    }
+    out
+}
+
+/// Adds the store's ask ids to `out`; false when it holds no ask row.
+fn collect_asks(journal: &str, out: &mut std::collections::HashSet<String>) -> bool {
+    let mut any = false;
+    for line in journal.lines() {
+        if !line.contains("operator_question") {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(Value::as_str) != Some("operator_question") {
+            continue;
+        }
+        if let Some(qid) = str_field(&v, "question_id") {
+            out.insert(qid.to_string());
+            any = true;
+        }
+    }
+    any
+}
+
+/// Who asked, and how to reach them. `live` is `None` when unmeasured, never
+/// `false` by inference. `reach` is the exact command that opens the asking
+/// session (from the agents registry), `None` when no live row joins.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Asker {
+    pub handle: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rank: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub live: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reach: Option<String>,
+    /// The person behind the asking machine: a display name, never proof.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub person: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ItemOption {
+    pub n: u32,
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub pros: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub cons: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Recommendation {
+    pub option: u32,
+    pub why: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub downside: Option<String>,
+}
+
+/// One item. Field names are the OpenAPI contract (`docs/architecture/
+/// attention-items.md`); they are the wire shape the sinks and the endpoint
+/// share, so they do not follow this repo's rust naming beyond serde defaults.
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+pub struct AttentionItem {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovery_batch: Option<String>,
+    pub id: String,
+    /// `question` (someone waits) | `pin` (an action left for the user) | `mine`.
+    pub kind: String,
+    /// One line, no ids needed to read it.
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    /// Routing key, from the asker's cwd.
+    pub project: String,
+    /// `high` when the item blocks nodes or carries a class, else `normal`.
+    pub priority: String,
+    pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on_silence: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub class: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub blocks: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asker: Option<Asker>,
+    /// The asking session's node, or the literal `none`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocked_because: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options_rationale: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recommendation: Option<Recommendation>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub options: Vec<ItemOption>,
+    /// What the asker has not thought through yet; `none found` is not
+    /// accepted, the asker names what it did not check.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unknowns: Option<String>,
+    /// `yes | costly | no`; says whether a lead may answer instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reversible: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_if_wrong: Option<String>,
+    /// What the asker does while it waits: stops, or proceeds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meanwhile: Option<String>,
+    /// False when any required field for the kind is absent; a sink never
+    /// delivers a not-ready item.
+    pub ready: bool,
+    /// Names of the absent required fields.
+    pub missing: Vec<String>,
+    /// `open | answered | withdrawn`.
+    pub state: String,
+    /// True when the fact the question waits on has resolved while the row
+    /// is still open: its node, or any blocks id, reads `done` or
+    /// `superseded`. Computed by the `needs --items` read against the graph;
+    /// an unreadable graph marks nothing, so a sink never invents it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub settled: bool,
+    /// The machine that asked, on a copy pulled from another machine of the
+    /// store; `None` for a question asked here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// The short number (`Q87`), joined at read time from `fno_numbers`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub number: Option<String>,
+    /// The probe arm's last reading for a question, joined at read time
+    /// from the daemon's cache; the hook line renders its last check.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub probe: Option<serde_json::Value>,
+    /// Absolute paths of the screenshots the ask copied into the vault.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub images: Vec<String>,
+    /// Who asked: handle, session id, registry name, harness and host.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Value>,
+    /// The ladder rung the row sits at, and every rung it climbed from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rung: Option<Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub via: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tried: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
+    /// The node's title and graph status, joined at read time by `needs`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_stage: Option<String>,
+}
+
+/// Every defect, so the asker fixes the row instead of a sink dropping it
+/// silently (mirrors `escalation::problems`).
+pub fn problems(item: &AttentionItem) -> Vec<String> {
+    let mut out = Vec::new();
+    if matches!(item.kind.as_str(), "question" | "pin") {
+        match &item.asker {
+            None => out.push("missing asker".to_string()),
+            Some(a) if a.handle.trim().is_empty() => out.push("missing asker".to_string()),
+            Some(_) => {}
+        }
+        match &item.node {
+            None => out.push("missing node".to_string()),
+            Some(n) if n.trim().is_empty() => out.push("missing node".to_string()),
+            Some(_) => {}
+        }
+        if item
+            .blocked_because
+            .as_ref()
+            .is_none_or(|b| b.trim().is_empty())
+        {
+            out.push("missing blocked_because".to_string());
+        }
+        if item.unknowns.as_ref().is_none_or(|u| u.trim().is_empty()) {
+            out.push("missing unknowns".to_string());
+        }
+    }
+    if item.kind == "question" {
+        if item.options.len() < 2 {
+            out.push("fewer than two options".to_string());
+        }
+        for (i, option) in item.options.iter().enumerate() {
+            if option.text.trim().is_empty() {
+                out.push(format!("option {} has no text", i + 1));
+            }
+            if option.next.as_ref().is_none_or(|n| n.trim().is_empty()) {
+                out.push(format!("option {} has no next", i + 1));
+            }
+        }
+        if item
+            .options_rationale
+            .as_ref()
+            .is_none_or(|r| r.trim().is_empty())
+        {
+            out.push("missing options_rationale".to_string());
+        }
+        match &item.recommendation {
+            None => out.push("missing recommendation".to_string()),
+            Some(r) => {
+                if r.option == 0 || r.option as usize > item.options.len() {
+                    out.push("recommendation outside the options".to_string());
+                }
+                if r.why.trim().is_empty() {
+                    out.push("recommendation has no why".to_string());
+                }
+            }
+        }
+        match item.reversible.as_deref() {
+            None | Some("") => out.push("missing reversible".to_string()),
+            Some("costly")
+                if item
+                    .cost_if_wrong
+                    .as_ref()
+                    .is_none_or(|c| c.trim().is_empty()) =>
+            {
+                out.push("missing cost_if_wrong".to_string());
+            }
+            Some(v) if !matches!(v, "yes" | "costly" | "no") => {
+                out.push(format!("unknown reversible: {v}"));
+            }
+            Some(_) => {}
+        }
+        if item.meanwhile.as_ref().is_none_or(|m| m.trim().is_empty()) {
+            out.push("missing meanwhile".to_string());
+        }
+        // A ladder row on the user's board carries what every rung checked
+        // and what silence means; a row from before the ladder does not.
+        if item.rung.is_some() {
+            for (name, value) in [
+                ("class", &item.class),
+                ("tried", &item.tried),
+                ("on_silence", &item.on_silence),
+                ("deadline", &item.deadline),
+            ] {
+                if value.as_ref().is_none_or(|v| v.trim().is_empty()) {
+                    out.push(format!("missing {name}"));
+                }
+            }
+        }
+    }
+    out
+}
+
+impl AttentionItem {
+    /// `ready` and `missing` derived from [`problems`], so the gate and the
+    /// message the asker receives can never disagree.
+    pub fn seal_readiness(&mut self) {
+        self.missing = problems(self);
+        self.ready = self.missing.is_empty();
+    }
+}
+
+/// Envelope-agnostic scalar read: nested under `data` (unified rows) or
+/// top-level (retired flat rows). Same shape `needs.rs` keeps locally.
+fn str_field<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
+    v.get("data")
+        .and_then(|d| d.get(key))
+        .or_else(|| v.get(key))
+        .and_then(|f| f.as_str())
+}
+
+fn arr_field<'a>(v: &'a Value, key: &str) -> Option<&'a Vec<Value>> {
+    v.get("data")
+        .and_then(|d| d.get(key))
+        .or_else(|| v.get(key))
+        .and_then(|f| f.as_array())
+}
+
+fn basename(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// The asker's project: the canonical checkout's name while the cwd still
+/// exists, so a worker in `<base>/<repo>/<node>` routes to `<repo>`, not to
+/// its node id. A cwd that is gone keeps the basename.
+fn project_of(cwd: &str) -> String {
+    let path = std::path::Path::new(cwd);
+    if path.is_dir() {
+        if let Some(name) = crate::paths::canonical_repo_root(path)
+            .as_deref()
+            .and_then(std::path::Path::file_name)
+            .and_then(|n| n.to_str())
+        {
+            return name.to_string();
+        }
+    }
+    basename(cwd).to_string()
+}
+
+/// The row's visible title: the question's first line with a leading
+/// machine-internal dedupe bracket dropped (`[watchdog-stale:key] prose` ->
+/// `prose`); a marker-only first line yields the next prose line. The stored
+/// body keeps the full text - the bracket is the `already_asked` dedupe key
+/// (the stale-escalate fold reads it), so it never leaves
+/// the body, only the title.
+pub(crate) fn display_title(question: &str) -> String {
+    let mut lines = question.lines().map(str::trim).filter(|l| !l.is_empty());
+    let Some(first) = lines.next() else {
+        return String::new();
+    };
+    let prose = strip_marker_bracket(first);
+    if !prose.is_empty() {
+        return prose.to_string();
+    }
+    lines.next().unwrap_or("").to_string()
+}
+
+/// `[<multiword-kebab-token>:<key>]` followed by a space or end-of-line: the
+/// durable askers' dedupe bracket (`watchdog-stale`, `reap-hold`, ... - every
+/// shipped token is hyphenated). A bracket a question opens with on purpose -
+/// a single-word or uppercase token, a key with no colon inside - stays
+/// untouched.
+fn strip_marker_bracket(line: &str) -> &str {
+    let Some(rest) = line.strip_prefix('[') else {
+        return line;
+    };
+    let Some(close) = rest.find(']') else {
+        return line;
+    };
+    let Some((token, key)) = rest[..close].split_once(':') else {
+        return line;
+    };
+    let kebab = token.contains('-')
+        && token
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if !kebab || key.is_empty() {
+        return line;
+    }
+    let after = &rest[close + 1..];
+    match after.chars().next() {
+        // End of line: the marker-only line display_title falls through from.
+        None => after,
+        // The emitters write `] ` before the prose; a bracket followed by
+        // any other character is content the title keeps.
+        Some(ch) if ch.is_whitespace() => after.trim_start(),
+        Some(_) => line,
+    }
+}
+
+/// Build one item from an `operator_question` row (`data` fields read
+/// envelope-agnostically). `data.context`, when present, carries the
+/// structured context fields the Rust intake writes (wave 3); bare
+/// `options` strings arrive without `next`/`pros`/`cons` and read not-ready.
+fn item_from_question_row(row: &Value, ts: &str) -> Option<AttentionItem> {
+    let qid = str_field(row, "question_id")?;
+    let question = str_field(row, "question").unwrap_or("");
+    let title = display_title(question);
+    let ask = str_field(row, "ask").unwrap_or("");
+    let options: Vec<ItemOption> = arr_field(row, "options")
+        .map(|arr| {
+            arr.iter()
+                .enumerate()
+                .map(|(i, o)| match o {
+                    Value::String(text) => ItemOption {
+                        n: i as u32 + 1,
+                        text: text.clone(),
+                        next: None,
+                        pros: vec![],
+                        cons: vec![],
+                    },
+                    Value::Object(_) => ItemOption {
+                        n: o.get("n").and_then(Value::as_u64).unwrap_or(i as u64 + 1) as u32,
+                        text: o
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        next: o.get("next").and_then(Value::as_str).map(str::to_string),
+                        pros: o
+                            .get("pros")
+                            .and_then(Value::as_array)
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(Value::as_str)
+                                    .map(str::to_string)
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                        cons: o
+                            .get("cons")
+                            .and_then(Value::as_array)
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(Value::as_str)
+                                    .map(str::to_string)
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                    },
+                    _ => ItemOption {
+                        n: i as u32 + 1,
+                        text: String::new(),
+                        next: None,
+                        pros: vec![],
+                        cons: vec![],
+                    },
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let kind = if options.is_empty() && !ask.is_empty() {
+        "pin"
+    } else {
+        "question"
+    };
+    let ctx = row
+        .get("data")
+        .and_then(|d| d.get("context"))
+        .or_else(|| row.get("context"));
+    let ctx_str = |key: &str| -> Option<String> {
+        ctx.and_then(|c| c.get(key))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+    let blocks: Vec<String> = arr_field(row, "blocks")
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let asker = str_field(row, "asker").map(|handle| Asker {
+        handle: handle.to_string(),
+        session_id: str_field(row, "session_id").map(str::to_string),
+        harness: ctx_str("harness"),
+        rank: ctx_str("rank"),
+        live: None,
+        reach: ctx
+            .and_then(|c| c.get("reach"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        person: str_field(row, "person").map(str::to_string),
+    });
+    let recommendation = ctx.and_then(|c| c.get("recommendation")).and_then(|r| {
+        Some(Recommendation {
+            option: r.get("option").and_then(Value::as_u64)? as u32,
+            why: r
+                .get("why")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            downside: r
+                .get("downside")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        })
+    });
+    // A question asked on another machine names that machine's vault; a
+    // path missing here re-roots onto this machine's synced copy.
+    let images: Vec<String> = arr_field(row, "images")
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(|p| {
+                    if Path::new(p).exists() {
+                        return p.to_string();
+                    }
+                    let cwd = std::env::current_dir().unwrap_or_default();
+                    crate::escalation::rebase_vault_path(p, &cwd)
+                        .filter(|local| local.exists())
+                        .map_or_else(|| p.to_string(), |l| l.to_string_lossy().into_owned())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut item = AttentionItem {
+        images,
+        number: None,
+        host: crate::question_bus::peer_origin(row).map(|_| {
+            str_field(row, "host")
+                .unwrap_or("another machine")
+                .to_string()
+        }),
+        recovery_batch: row
+            .get("_recovery_batch")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        id: qid.to_string(),
+        kind: kind.to_string(),
+        title,
+        body: Some(question.to_string()).filter(|b| !b.is_empty()),
+        project: str_field(row, "cwd").map(project_of).unwrap_or_default(),
+        priority: String::new(),
+        created_at: ts.to_string(),
+        deadline: ctx_str("deadline"),
+        on_silence: ctx_str("on_silence"),
+        class: ctx_str("class").or_else(|| str_field(row, "class").map(str::to_string)),
+        origin: row.get("data").and_then(|d| d.get("origin")).cloned(),
+        rung: row.get("data").and_then(|d| d.get("rung")).cloned(),
+        via: arr_field(row, "via").cloned().unwrap_or_default(),
+        tried: ctx_str("tried"),
+        evidence: ctx_str("evidence"),
+        node_title: None,
+        node_stage: None,
+        blocks,
+        subject: str_field(row, "subject").map(str::to_string),
+        asker,
+        node: str_field(row, "node").map(str::to_string),
+        blocked_because: ctx_str("blocked_because"),
+        options_rationale: ctx_str("options_rationale"),
+        recommendation,
+        options,
+        unknowns: ctx_str("unknowns"),
+        reversible: ctx_str("reversible"),
+        cost_if_wrong: ctx_str("cost_if_wrong"),
+        meanwhile: ctx_str("meanwhile"),
+        ready: false,
+        missing: vec![],
+        state: "open".to_string(),
+        settled: false,
+        probe: None,
+    };
+    item.priority = if item.blocks.is_empty() && item.class.is_none() {
+        "normal"
+    } else {
+        "high"
+    }
+    .to_string();
+    // A question with no text names its asker and node instead of showing a
+    // bare id down every consumer: the row always carries who asked.
+    if item.title.is_empty() {
+        if let Some(handle) = item.asker.as_ref().map(|a| a.handle.as_str()) {
+            item.title = match item.node.as_deref() {
+                Some(node) if !node.is_empty() => format!("from {handle} on {node}"),
+                _ => format!("from {handle}"),
+            };
+        }
+    }
+    item.seal_readiness();
+    Some(item)
+}
+
+/// One escalation note becomes a `question` item with `class` and `deadline`.
+fn item_from_note(slug: &str, text: &str) -> Option<AttentionItem> {
+    let esc = crate::escalation::parse(text);
+    if esc.status != "open" {
+        return None;
+    }
+    let options: Vec<ItemOption> = esc
+        .options
+        .iter()
+        .enumerate()
+        .map(|(i, o)| ItemOption {
+            n: i as u32 + 1,
+            text: o.text.clone(),
+            next: (!o.next.is_empty()).then(|| o.next.clone()),
+            pros: vec![],
+            cons: vec![],
+        })
+        .collect();
+    // Notes written before the Blocked because section existed keep their
+    // why-now reading; the newer section wins when present.
+    let blocked = if esc.blocked_because.is_empty() {
+        esc.why_now.clone()
+    } else {
+        esc.blocked_because.clone()
+    };
+    let mut item = AttentionItem {
+        host: None,
+        number: None,
+        recovery_batch: None,
+        id: format!("note-{slug}"),
+        kind: "question".to_string(),
+        title: esc.title.clone(),
+        body: (!esc.deciding.is_empty()).then(|| esc.deciding.clone()),
+        project: String::new(),
+        priority: "high".to_string(),
+        created_at: esc.raised_at.clone(),
+        deadline: (!esc.deadline.is_empty()).then(|| esc.deadline.clone()),
+        on_silence: (!esc.on_silence.is_empty()).then(|| esc.on_silence.clone()),
+        class: (!esc.class.is_empty()).then(|| esc.class.clone()),
+        blocks: esc.node.clone().into_iter().collect(),
+        subject: None,
+        asker: (!esc.raised_by.is_empty()).then(|| Asker {
+            handle: esc.raised_by.clone(),
+            session_id: None,
+            harness: None,
+            rank: None,
+            live: None,
+            reach: None,
+            person: None,
+        }),
+        node: esc.node.clone(),
+        blocked_because: (!blocked.is_empty()).then_some(blocked),
+        options_rationale: (!esc.options_rationale.is_empty())
+            .then(|| esc.options_rationale.clone()),
+        recommendation: esc.recommend.map(|n| Recommendation {
+            option: n as u32,
+            why: esc.recommendation.clone(),
+            downside: (!esc.downside.is_empty()).then(|| esc.downside.clone()),
+        }),
+        options,
+        unknowns: (!esc.unknowns.is_empty()).then(|| esc.unknowns.clone()),
+        reversible: (!esc.reversible.is_empty()).then(|| esc.reversible.clone()),
+        cost_if_wrong: (!esc.cost_if_wrong.is_empty()).then(|| esc.cost_if_wrong.clone()),
+        meanwhile: (!esc.meanwhile.is_empty()).then(|| esc.meanwhile.clone()),
+        ready: false,
+        missing: vec![],
+        state: "open".to_string(),
+        settled: false,
+        images: vec![],
+        ..Default::default()
+    };
+    item.seal_readiness();
+    Some(item)
+}
+
+fn fnv1a(text: &str) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in text.as_bytes() {
+        hash ^= u64::from(*b);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+/// Lane lines the user wrote: `- [ ] text` with no `-> node` or
+/// `-> parked:` suffix (those are linked or parked, not open).
+fn mine_items(lane_text: &str) -> Vec<AttentionItem> {
+    let mut out = Vec::new();
+    for line in lane_text.lines() {
+        let trimmed = line.trim_start();
+        let Some(rest) = trimmed.strip_prefix("- [ ] ") else {
+            continue;
+        };
+        let rest = rest.trim();
+        if rest.is_empty() || rest.contains("-> ") {
+            continue;
+        }
+        out.push(AttentionItem {
+            host: None,
+            number: None,
+            recovery_batch: None,
+            id: format!("mine-{:016x}", fnv1a(rest)),
+            kind: "mine".to_string(),
+            title: rest.to_string(),
+            body: None,
+            project: "user".to_string(),
+            priority: "normal".to_string(),
+            created_at: String::new(),
+            deadline: None,
+            on_silence: None,
+            class: None,
+            blocks: vec![],
+            subject: None,
+            asker: None,
+            node: None,
+            blocked_because: None,
+            options_rationale: None,
+            recommendation: None,
+            options: vec![],
+            unknowns: None,
+            reversible: None,
+            cost_if_wrong: None,
+            meanwhile: None,
+            ready: true,
+            missing: vec![],
+            state: "open".to_string(),
+            settled: false,
+            images: vec![],
+            ..Default::default()
+        });
+    }
+    out
+}
+
+/// The projection: every open item across the three stores, board order
+/// (high priority first, then newest, then id for determinism). `journals_raw`
+/// is the newline-joined question journals, `notes` the (slug, text) pairs of
+/// the escalation notes, `lane_text` the user lane file. All arguments are
+/// pre-read text, so tests need no disk.
+pub fn project(
+    journals_raw: &str,
+    notes: &[(String, String)],
+    lane_text: &str,
+    _now: u64,
+) -> Vec<AttentionItem> {
+    let mut items: Vec<AttentionItem> = Vec::new();
+    // Latest ask of a qid wins; a close row drops the item; an unsuperseded
+    // `attention_answer` row flips the state to `answered` (first answer wins).
+    let mut asked: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
+    let mut closed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut answered_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for line in journals_raw.lines() {
+        if line.trim().is_empty()
+            || !(line.contains("operator_question") || line.contains("attention_answer"))
+        {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue; // torn/malformed tail line: skip, never abort
+        };
+        let kind = v.get("type").and_then(Value::as_str).unwrap_or("");
+        match kind {
+            "operator_question" => {
+                if let Some(qid) = str_field(&v, "question_id") {
+                    if crate::question_ladder::envelope_on_board(&v) {
+                        asked.insert(qid.to_string(), v);
+                    } else {
+                        asked.remove(qid);
+                    }
+                }
+            }
+            "operator_question_closed" => {
+                if let Some(qid) = str_field(&v, "question_id") {
+                    closed.insert(qid.to_string());
+                }
+            }
+            "attention_answer" => {
+                let superseded = v
+                    .get("data")
+                    .and_then(|d| d.get("superseded"))
+                    .and_then(Value::as_bool)
+                    == Some(true);
+                if !superseded {
+                    if let Some(qid) = str_field(&v, "item_id") {
+                        answered_ids.insert(qid.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    for (qid, row) in &asked {
+        if closed.contains(qid) {
+            continue;
+        }
+        let ts = row.get("ts").and_then(Value::as_str).unwrap_or("");
+        if let Some(mut item) = item_from_question_row(row, ts) {
+            if answered_ids.contains(qid) {
+                item.state = "answered".to_string();
+            }
+            items.push(item);
+        }
+    }
+    for (slug, text) in notes {
+        if let Some(mut item) = item_from_note(slug, text) {
+            if answered_ids.contains(&format!("note-{slug}")) {
+                item.state = "answered".to_string();
+            }
+            items.push(item);
+        }
+    }
+    items.extend(mine_items(lane_text));
+    items.sort_by(|a, b| {
+        a.priority
+            .cmp(&b.priority)
+            .then_with(|| b.created_at.cmp(&a.created_at))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    items
+}
+
+/// Join each question item's asker to the agents registry: a row whose
+/// liveness reads alive yields `fno agents attach <name>`. A miss or an
+/// unmeasured row leaves `reach` None (unmeasured, never false).
+pub fn attach_reach(items: &mut [AttentionItem], registry: &crate::state::Registry) {
+    for item in items {
+        let Some(asker) = item.asker.as_mut() else {
+            continue;
+        };
+        if asker.reach.is_some() {
+            continue;
+        }
+        let Some(row) = registry.find(&asker.handle) else {
+            continue;
+        };
+        if row.liveness.as_deref() == Some("alive") {
+            asker.live = Some(true);
+            asker.reach = Some(format!("fno agents attach {}", row.name));
+        }
+    }
+}
+
+/// One recently-answered item, as the panel shows it: an answer or delivery
+/// row under [`ANSWERED_TTL_S`] old. `rung`/`outcome` stay empty until the
+/// arm's first delivery row lands.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Answered {
+    pub id: String,
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asker: Option<String>,
+    pub answer: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rung: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    pub at: String,
+}
+
+/// The answered fold: closed or answered items whose answer or delivery row
+/// is under [`ANSWERED_TTL_S`] old, newest first. Reads the same raw journal
+/// text `project` reads, so tests need no disk.
+pub fn answered(journals_raw: &str, now: u64) -> Vec<Answered> {
+    let ttl = ANSWERED_TTL_S;
+    // Last ask per id (title/asker/options), first unsuperseded answer per
+    // id, last delivery per id.
+    let mut asks: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
+    let mut answers: std::collections::HashMap<String, (String, Value)> =
+        std::collections::HashMap::new();
+    let mut deliveries: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
+    for line in journals_raw.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if !(line.contains("operator_question")
+            || line.contains("attention_answer")
+            || line.contains("attention_delivery"))
+        {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        match v.get("type").and_then(Value::as_str).unwrap_or("") {
+            "operator_question" => {
+                if let Some(qid) = str_field(&v, "question_id") {
+                    if crate::question_ladder::envelope_on_board(&v) {
+                        asks.insert(qid.to_string(), v.clone());
+                    } else {
+                        asks.remove(qid);
+                    }
+                }
+            }
+            "attention_answer" => {
+                let superseded = v
+                    .get("data")
+                    .and_then(|d| d.get("superseded"))
+                    .and_then(Value::as_bool)
+                    == Some(true);
+                let Some(id) = str_field(&v, "item_id") else {
+                    continue;
+                };
+                if !superseded && !answers.contains_key(id) {
+                    let at = v
+                        .get("ts")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    answers.insert(id.to_string(), (at, v.clone()));
+                }
+            }
+            "attention_delivery" => {
+                if let Some(id) = str_field(&v, "item_id") {
+                    deliveries.insert(id.to_string(), v.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    let parse = |ts: &str| -> Option<u64> {
+        chrono::DateTime::parse_from_rfc3339(ts)
+            .ok()
+            .map(|t| t.timestamp().max(0) as u64)
+    };
+    let mut out: Vec<Answered> = Vec::new();
+    for (id, (at, row)) in answers {
+        let answer_at = parse(&at);
+        let delivery = deliveries.get(&id);
+        let delivery_at = delivery
+            .and_then(|d| d.get("ts"))
+            .and_then(Value::as_str)
+            .and_then(parse);
+        let fresh = answer_at.is_some_and(|t| now.saturating_sub(t) < ttl)
+            || delivery_at.is_some_and(|t| now.saturating_sub(t) < ttl);
+        if !fresh {
+            continue;
+        }
+        // The ask row supplies title, asker and the option texts the answer
+        // maps onto; a store-only answer (no ask row) still shows its words.
+        let (title, asker, answer_text) = match asks.get(&id) {
+            Some(ask) => {
+                let item = item_from_question_row(ask, "");
+                let text = match (
+                    row.get("data").and_then(|d| d.get("option")),
+                    row.get("data").and_then(|d| d.get("words")),
+                    row.get("data").and_then(|d| d.get("done")),
+                ) {
+                    (Some(Value::Number(n)), _, _) => {
+                        let n = n.as_u64().unwrap_or(0) as usize;
+                        item.as_ref()
+                            .and_then(|i| i.options.get(n.saturating_sub(1)))
+                            .map(|o| o.text.clone())
+                            .unwrap_or_else(|| format!("option {n}"))
+                    }
+                    (_, Some(Value::String(w)), _) if !w.is_empty() => w.clone(),
+                    (_, _, Some(Value::Bool(true))) => "done".to_string(),
+                    _ => String::new(),
+                };
+                (
+                    item.as_ref().map(|i| i.title.clone()).unwrap_or_default(),
+                    item.as_ref()
+                        .and_then(|i| i.asker.as_ref())
+                        .map(|a| a.handle.clone()),
+                    text,
+                )
+            }
+            None => (String::new(), None, String::new()),
+        };
+        out.push(Answered {
+            id,
+            title,
+            asker,
+            answer: answer_text,
+            rung: delivery
+                .and_then(|d| d.get("data"))
+                .and_then(|d| d.get("rung"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            outcome: delivery
+                .and_then(|d| d.get("data"))
+                .and_then(|d| d.get("outcome"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            at: at.clone(),
+        });
+    }
+    out.sort_by(|a, b| b.at.cmp(&a.at));
+    out
+}
+
+/// How long a closed or answered item stays on the panel's answered rows
+/// after its answer (or its delivery row) landed.
+pub const ANSWERED_TTL_S: u64 = 15 * 60;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn row(qid: &str, question: &str, extra: Value) -> String {
+        let mut v = json!({
+            "ts": "2026-09-18T12:00:00Z",
+            "type": "operator_question",
+            "source": "test",
+            "data": {
+                "question_id": qid,
+                "question": question,
+                "session_id": "s1",
+                "cwd": "/repo/fno"
+            }
+        });
+        if let (Some(base), Some(extra_obj)) = (
+            v.get_mut("data").and_then(Value::as_object_mut),
+            extra.as_object(),
+        ) {
+            for (k, val) in extra_obj {
+                base.insert(k.clone(), val.clone());
+            }
+        }
+        v.to_string()
+    }
+
+    #[test]
+    fn a_worktree_asker_routes_to_its_repo_and_asked_ids_names_each_ask() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main = tmp.path().join("footnote");
+        let gitdir = main.join(".git/worktrees/x-aaaa");
+        std::fs::create_dir_all(&gitdir).unwrap();
+        std::fs::write(gitdir.join("commondir"), "../..\n").unwrap();
+        let wt = tmp.path().join("worktrees/footnote/x-aaaa");
+        std::fs::create_dir_all(&wt).unwrap();
+        std::fs::write(wt.join(".git"), format!("gitdir: {}\n", gitdir.display())).unwrap();
+        let gone = tmp.path().join("worktrees/footnote/x-gone");
+        let journals = format!(
+            "{}\n{}\n",
+            row(
+                "q-wt",
+                "ship?",
+                json!({"ask": "a", "cwd": wt.to_str().unwrap()})
+            ),
+            row(
+                "q-gone",
+                "ship?",
+                json!({"ask": "a", "cwd": gone.to_str().unwrap()})
+            ),
+        );
+        let items = project(&journals, &[], "", 0);
+        let of = |id: &str| items.iter().find(|i| i.id == id).unwrap().project.clone();
+        assert_eq!(of("q-wt"), "footnote", "a linked worktree names its repo");
+        assert_eq!(of("q-gone"), "x-gone", "a removed cwd keeps its basename");
+        let closed =
+            r#"{"type":"operator_question_closed","data":{"question_id":"q-only-closed"}}"#;
+        let asked = asked_ids(&[format!("{journals}{closed}\n")]);
+        assert_eq!(asked, ["q-wt".to_string(), "q-gone".to_string()].into());
+        // One store with no ask row while another holds asks: a partial
+        // store loss proves nothing lost, so no id is named.
+        assert!(asked_ids(&[journals.clone(), format!("{closed}\n")]).is_empty());
+    }
+
+    #[test]
+    fn ac1_hp_open_question_projects_with_missing_fields_named() {
+        let journals = format!(
+            "{}\n{}\n",
+            row("q-closed", "already answered", json!({"ask": "do x"})),
+            row(
+                "q-open",
+                "Rule on the law",
+                json!({"ask": "pick one", "options": ["yes", "no"], "blocks": ["x-aaaa"]})
+            ),
+        );
+        let closed = json!({
+            "ts": "2026-09-18T13:00:00Z",
+            "type": "operator_question_closed",
+            "source": "test",
+            "data": {"question_id": "q-closed"}
+        })
+        .to_string();
+        let raw = format!("{journals}{closed}\n");
+        let items = project(&raw, &[], "", 0);
+        assert_eq!(items.len(), 1);
+        let item = &items[0];
+        assert_eq!(item.id, "q-open");
+        assert_eq!(item.kind, "question");
+        assert_eq!(item.priority, "high");
+        assert_eq!(item.state, "open");
+        assert!(!item.ready);
+        let missing = item.missing.join(",");
+        assert!(missing.contains("asker"), "missing: {missing}");
+        assert!(missing.contains("blocked_because"), "missing: {missing}");
+        assert!(missing.contains("unknowns"), "missing: {missing}");
+        assert!(missing.contains("options_rationale"), "missing: {missing}");
+        assert!(missing.contains("recommendation"), "missing: {missing}");
+        assert!(missing.contains("reversible"), "missing: {missing}");
+        assert!(missing.contains("meanwhile"), "missing: {missing}");
+        assert!(!missing.contains("tried"), "a pre-ladder row: {missing}");
+
+        // A climbed ladder row carries its provenance and needs the card
+        // fields the ladder adds.
+        let climbed = row(
+            "q-ladder",
+            "Rule on the law",
+            json!({"options": ["yes", "no"], "rung": {"level": "user"},
+                "origin": {"name": "t-worker", "harness": "claude"},
+                "via": [{"holder_name": "tomas", "evidence": "read PR 12"}]}),
+        );
+        let items = project(&format!("{climbed}\n"), &[], "", 0);
+        let item = &items[0];
+        assert_eq!(item.origin.as_ref().unwrap()["name"], json!("t-worker"));
+        assert_eq!(item.via[0]["holder_name"], json!("tomas"));
+        let missing = item.missing.join(",");
+        for field in ["tried", "on_silence", "deadline", "class"] {
+            assert!(missing.contains(field), "missing: {missing}");
+        }
+    }
+
+    #[test]
+    fn an_answer_row_flips_the_item_state_to_answered() {
+        let journals = format!(
+            "{}\n{}\n",
+            row(
+                "q-ans",
+                "Which lane?",
+                json!({"ask": "pick one", "options": ["a", "b"]})
+            ),
+            r#"{"ts":"2026-09-26T05:00:00Z","type":"attention_answer","source":"daemon","data":{"item_id":"q-ans","sink":"mux","option":2,"answered_at":"2026-09-26T05:00:00Z","authority":"sink","attested_by":"mux","superseded":false}}"#
+        );
+        let items = project(&journals, &[], "", 0);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].state, "answered");
+        // A superseded row changes nothing.
+        let journals2 = format!(
+            "{}\n{}\n",
+            row(
+                "q-ans2",
+                "Which lane?",
+                json!({"ask": "pick one", "options": ["a", "b"]})
+            ),
+            r#"{"ts":"2026-09-26T05:00:00Z","type":"attention_answer","source":"daemon","data":{"item_id":"q-ans2","sink":"mux","option":1,"superseded":true}}"#
+        );
+        let items2 = project(&journals2, &[], "", 0);
+        assert_eq!(items2[0].state, "open", "a superseded row never answers");
+    }
+
+    // The user_answered fold: a plain or attested answer counts as the
+    // user's own; a superseded row and a delegate's answer never do. The
+    // sink close for a set member posts nothing.
+    #[test]
+    fn the_user_answered_fold_reads_own_answers_only() {
+        let own = r#"{"ts":"2026-09-26T05:00:00Z","type":"attention_answer","source":"daemon","data":{"item_id":"q-own","sink":"mux","option":1,"superseded":false}}"#;
+        let sup = r#"{"ts":"2026-09-26T05:00:00Z","type":"attention_answer","source":"daemon","data":{"item_id":"q-sup","sink":"mux","option":1,"superseded":true}}"#;
+        let del = r#"{"ts":"2026-09-26T05:00:00Z","type":"attention_answer","source":"daemon","data":{"item_id":"q-del","sink":"mux","option":1,"superseded":false,"delegated":true}}"#;
+        let missing = r#"{"ts":"2026-09-26T05:00:00Z","type":"attention_answer","source":"daemon","data":{"sink":"mux","option":1}}"#;
+        let got = user_answered(&format!("{own}\n{sup}\n{del}\n{missing}"));
+        assert!(got.contains("q-own"));
+        assert!(!got.contains("q-sup"), "a superseded row never answers");
+        assert!(
+            !got.contains("q-del"),
+            "a delegate answer is not the user's"
+        );
+    }
+}

@@ -1,0 +1,413 @@
+//! Contracts for `fno config setup run`, replacing the deleted Python
+//! wizard tests (cli/tests/unit/test_setup_wizard.py): the argv claim, the
+//! no-prompt decision, the step table's askability, the report shape, the
+//! markers, and the recommendation shaping. One table-driven fn per
+//! contract family, so the suite stays under the test-delta cap.
+
+use super::*;
+
+fn oss(pieces: &[&str]) -> Vec<OsString> {
+    pieces.iter().map(OsString::from).collect()
+}
+
+#[test]
+fn the_argv_surface_parses_and_refuses() {
+    // The lexical claim: run is ours; the siblings stay with their owners.
+    assert!(classify(&oss(&["config", "setup", "run", "--yes"])).is_some());
+    assert!(classify(&oss(&["config", "setup", "run"])).is_some());
+    for sibling in [
+        vec!["config", "setup", "auto-wire"],
+        vec!["config", "setup", "plan"],
+        vec!["config", "setup", "wizard"],
+        vec!["config", "setup"],
+    ] {
+        assert!(classify(&oss(&sibling)).is_none());
+    }
+    // Defaults: the whole run, both layers, no flags, no preview.
+    let o = parse_opts(&oss(&[])).unwrap();
+    assert!(
+        !o.yes
+            && !o.once
+            && !o.list
+            && !o.json
+            && !o.dry_run
+            && !o.scan
+            && o.scan_dirs.is_empty()
+            && o.only.is_empty()
+            && !o.export
+            && o.out.is_none()
+            && o.join.is_none()
+            && !o.check
+            && !o.help
+    );
+    // Help reads in both spellings, so a stranger's `--help` exits 0.
+    assert!(parse_opts(&oss(&["--help"])).unwrap().help);
+    assert!(parse_opts(&oss(&["-h"])).unwrap().help);
+    // The prerequisite git floor: Apple's suffix parses, an old minor fails.
+    assert!(git_version_at_least(
+        "git version 2.39.5 (Apple Git-154)\n",
+        (2, 31)
+    ));
+    assert!(!git_version_at_least("git version 2.30.1", (2, 31)));
+    assert!(!git_version_at_least("garbage", (2, 31)));
+    assert_eq!(o.scope, Scope::Both);
+    // Every flag reads.
+    let o = parse_opts(&oss(&[
+        "--yes",
+        "--once",
+        "--scope",
+        "global",
+        "--only",
+        "gh-auth,backlog-prefix",
+        "--list",
+        "--json",
+        "--dry-run",
+        "--check",
+        "--scan-repos",
+        "--scan-dirs",
+        "code,src",
+        "--export",
+        "--out",
+        "profile.toml",
+        "--join",
+        "-",
+    ]))
+    .unwrap();
+    assert!(o.yes && o.once && o.list && o.json && o.dry_run && o.scan && o.check);
+    assert!(o.export);
+    assert_eq!(o.out.as_deref(), Some("profile.toml"));
+    assert_eq!(o.join.as_deref(), Some("-"));
+    assert_eq!(o.scan_dirs, vec!["code".to_string(), "src".to_string()]);
+    assert_eq!(o.scope, Scope::Global);
+    assert_eq!(o.only, vec!["gh-auth", "backlog-prefix"]);
+    // Refusals: unknown flag, unknown scope, missing values.
+    assert!(parse_opts(&oss(&["--bogus"])).is_err());
+    assert!(parse_opts(&oss(&["--scope", "side"])).is_err());
+    assert!(parse_opts(&oss(&["--scope"])).is_err());
+    assert!(parse_opts(&oss(&["--only"])).is_err());
+    assert!(parse_opts(&oss(&["--join"])).is_err());
+    assert!(parse_opts(&oss(&["--out"])).is_err());
+}
+#[test]
+fn claude_auto_mode_setup_requires_explicit_approval() {
+    let step = STEPS
+        .iter()
+        .find(|step| step.id == "claude-auto-mode")
+        .expect("Claude Auto Mode setup step");
+    assert_eq!(step.layer, Layer::Global);
+    assert_eq!(step.kind, Kind::Approve);
+    assert!(step.question.to_lowercase().contains("auto mode"));
+
+    let dir = tempfile::tempdir().unwrap();
+    let settings = dir.path().join("settings.json");
+    let mut skips = Vec::new();
+    let proposed = compute_proposals(&[step], Path::new("."), &settings, &mut skips);
+    assert_eq!(proposed.len(), 1);
+    assert_eq!(proposed[0].id, "claude-auto-mode");
+    assert!(proposed[0].key.is_empty());
+    assert!(proposed[0].reason.contains("--only claude-auto-mode"));
+    assert!(
+        !settings.exists(),
+        "a dry-run proposal must not write settings"
+    );
+
+    assert!(crate::cli_hooks::install_claude_auto_mode_allow(&settings).changed);
+    let proposed = compute_proposals(&[step], Path::new("."), &settings, &mut skips);
+    assert!(proposed.is_empty(), "installed rules need no new proposal");
+}
+
+#[test]
+fn step_selection_offers_both_layers_and_filters() {
+    // The table is askable: unique ids, real question text, both layers
+    // always offered (the plan forbids a choose-one).
+    let mut ids: Vec<&str> = STEPS.iter().map(|s| s.id).collect();
+    let n = ids.len();
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), n, "duplicate step id");
+    for s in STEPS {
+        assert!(!s.question.is_empty());
+        assert!(!s.effect.is_empty());
+    }
+    assert!(STEPS.iter().any(|s| s.layer == Layer::Global));
+    assert!(STEPS.iter().any(|s| s.layer == Layer::Project));
+    // The service and report rows: the approve gate owns the first five's
+    // proposals, the last two only ever report.
+    for id in [
+        "pr-watcher",
+        "auto-heal",
+        "groom-agent",
+        "projects",
+        "review-merge",
+    ] {
+        assert!(STEPS
+            .iter()
+            .any(|s| s.id == id && s.kind == Kind::Approve && s.layer == Layer::Global));
+    }
+    for id in ["machine-tools", "permission-rules"] {
+        assert!(STEPS
+            .iter()
+            .any(|s| s.id == id && s.kind == Kind::Report && s.layer == Layer::Global));
+    }
+    // --only selects known ids and refuses unknown ones.
+    let mut opts = Opts::default();
+    opts.only = vec!["gh-auth".into(), "backlog-prefix".into()];
+    assert_eq!(select_steps(&opts, Path::new(".")).unwrap().len(), 2);
+    let mut bad = Opts::default();
+    bad.only = vec!["no-such-step".into()];
+    assert!(select_steps(&bad, Path::new("."))
+        .unwrap_err()
+        .contains("no-such-step"));
+    // The join lane: out of the default pool, so a plain run never sees
+    // it; an explicit `--only join` without --join refuses, naming the
+    // flag; with the file, the lane selects alone, as an approve-kind
+    // global.
+    let mut join_opts = Opts::default();
+    join_opts.only = vec!["join".into()];
+    assert!(select_steps(&join_opts, Path::new("."))
+        .unwrap_err()
+        .contains("--join"));
+    join_opts.join = Some("-".into());
+    let selected = select_steps(&join_opts, Path::new(".")).unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].id, "join");
+    assert_eq!(selected[0].kind, Kind::Approve);
+    assert_eq!(selected[0].layer, Layer::Global);
+    // A global scope never carries project or contributor rows.
+    let mut global = Opts::default();
+    global.scope = Scope::Global;
+    assert!(select_steps(&global, Path::new("."))
+        .unwrap()
+        .iter()
+        .all(|s| s.layer == Layer::Global));
+    // Every kind renders its stable name, approve included.
+    assert_eq!(kind_name(Kind::Act), "act");
+    assert_eq!(kind_name(Kind::Approve), "approve");
+    assert_eq!(kind_name(Kind::Report), "report");
+    assert_eq!(kind_name(Kind::Human), "human");
+}
+
+#[test]
+fn the_report_shape_and_wire_fold_hold() {
+    // The JSON report carries exactly the fourteen fields an agent parses.
+    let mut rep = Report::default();
+    rep.done
+        .push("harness-wiring: Claude Code: installed".into());
+    rep.skipped
+        .push("accounts: review with `fno config accounts`".into());
+    rep.needs_human.push("gh-auth: run `gh auth login`".into());
+    rep.paths.push("/Users/x/.fno/config.toml".into());
+    rep.restart_needed = true;
+    let v = rep.to_json();
+    let keys: Vec<&str> = v.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+    assert_eq!(keys.len(), 14);
+    for k in [
+        "schema",
+        "run_id",
+        "host",
+        "status",
+        "done",
+        "skipped",
+        "needs_human",
+        "paths",
+        "restart_needed",
+        "undo",
+        "proposed",
+        "verified",
+        "rows",
+        "next_action",
+    ] {
+        assert!(keys.contains(&k), "missing {k}");
+    }
+    assert_eq!(v["schema"], json!(1));
+    assert_eq!(v["host"], "agent");
+    assert_eq!(v["status"], "finished");
+    assert_eq!(v["restart_needed"], true);
+    // Wire lines fold by their status words: an install is done plus a
+    // restart ask, already-installed is done without one, and a manual
+    // finish or failure blocks on a human.
+    let mut rep = Report::default();
+    fold_wire_line("wired the fno plugin into your agent CLIs:", &mut rep);
+    fold_wire_line("  Claude Code: installed", &mut rep);
+    fold_wire_line("  Codex CLI: already installed", &mut rep);
+    fold_wire_line(
+        "  pi: needs a manual finish - locate the extension",
+        &mut rep,
+    );
+    fold_wire_line("  agy: FAILED (no hooks file)", &mut rep);
+    fold_wire_line(
+        "  no agent CLIs detected on PATH - nothing to wire.",
+        &mut rep,
+    );
+    assert_eq!(rep.done.len(), 2);
+    assert_eq!(rep.needs_human.len(), 2);
+    assert_eq!(rep.skipped.len(), 1);
+    assert!(rep.restart_needed, "a fresh install must ask for a restart");
+    // Every blocking wire line carries a stable code, its fix, and the
+    // needs_human list, in line order.
+    let codes: Vec<&str> = rep.rows.iter().map(|r| r.code).collect();
+    assert_eq!(codes, vec!["wiring_manual", "wiring_failed"]);
+    assert!(rep.rows.iter().all(|r| !r.fix.is_empty()));
+    assert!(rep.rows.iter().all(|r| r.list == "needs_human"));
+    let mut rep = Report::default();
+    fold_wire_line("  Codex CLI: already installed", &mut rep);
+    assert!(
+        !rep.restart_needed,
+        "an already-installed line changed nothing"
+    );
+    // The dry-run envelope: seven keys, the first red row's fix as the
+    // next action, the fallback when nothing blocks, and `services`
+    // lifted out of detection (absent here, so null).
+    assert!(!run_id().is_empty());
+    assert!(CODES.iter().any(|(c, _)| *c == "gh_not_signed_in"));
+    let rows = vec![row("needs_human", "gh_not_signed_in", "sign in".into())];
+    assert_eq!(next_action(&rows, "fallback"), "gh auth login");
+    assert_eq!(next_action(&[], "fallback"), "fallback");
+    let proposed = vec![Proposal {
+        id: "concurrency-band",
+        key: "agents.max_live".into(),
+        value: "4".into(),
+        scope: "global",
+        reason: "the measured band".into(),
+        source: "sample",
+    }];
+    let body = dry_run_json(json!({}), &proposed, &rows, &["sign in".into()], "fallback");
+    let keys: Vec<&str> = body
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(|k| k.as_str())
+        .collect();
+    assert_eq!(keys.len(), 8);
+    for k in [
+        "detected",
+        "proposed",
+        "services",
+        "needs_human",
+        "key_gap",
+        "rows",
+        "verified",
+        "next_action",
+    ] {
+        assert!(keys.contains(&k), "missing {k}");
+    }
+    assert_eq!(body["key_gap"], json!(1));
+    assert_eq!(body["next_action"], "gh auth login");
+    assert!(body["services"].is_null());
+    let body = dry_run_json(json!({}), &[], &[], &[], "fallback");
+    assert_eq!(body["next_action"], "fallback");
+    assert_eq!(body["key_gap"], json!(0));
+    // The three join codes are reportable, and `undo` rides the report:
+    // null until a join sets it, then the restore hint round-trips.
+    for code in ["join_backup_failed", "join_restored", "join_pending"] {
+        assert!(CODES.iter().any(|(c, _)| *c == code), "missing {code}");
+        assert_eq!(row("needs_human", code, "fix".into()).code, code);
+    }
+    assert!(Report::default().to_json()["undo"].is_null());
+    let mut rep = Report::default();
+    rep.undo = Some("undo: cp /b/config.toml.x /g/config.toml".into());
+    assert_eq!(
+        rep.to_json()["undo"],
+        "undo: cp /b/config.toml.x /g/config.toml"
+    );
+}
+
+#[test]
+fn markers_name_owned_dirs_and_stamp_iso() {
+    // The global marker rides the already-inventoried sidecar/ subfolder:
+    // the state root itself grows no new row (the freeze gate).
+    assert_eq!(global_marker().file_name().unwrap(), "setup-done");
+    assert_eq!(
+        global_marker().parent().unwrap().file_name().unwrap(),
+        "sidecar"
+    );
+    // The project marker sits beside the repo's config, not in the state root.
+    assert_eq!(
+        project_marker(Path::new("/tmp/some-repo")),
+        Path::new("/tmp/some-repo/.fno/setup.done")
+    );
+    // The marker line carries the version and an ISO UTC stamp.
+    let line = marker_line();
+    assert!(line.starts_with("fno "));
+    assert!(line.contains(env!("CARGO_PKG_VERSION")));
+    assert!(line.ends_with('Z'));
+    let stamp = utc_now();
+    assert_eq!(stamp.len(), 20);
+    let b = stamp.as_bytes();
+    assert_eq!(b[4], b'-');
+    assert_eq!(b[7], b'-');
+    assert_eq!(b[10], b'T');
+    assert_eq!(b[13], b':');
+    assert_eq!(b[16], b':');
+    assert_eq!(b[19], b'Z');
+}
+/// The check-side helpers hold without a platform: the step outcome reads
+/// from the slices this pass appended to, a proposal token parses bare or
+/// quoted, the drift word spells strings bare, and the workspace-list
+/// reader passes a missing key and a real array through while refusing
+/// every hand-set non-array.
+#[test]
+fn the_check_side_helpers_parse_and_refuse() {
+    // An explicit skip beats done: the step's own words carry the reason.
+    let declined = ["join: declined".to_string()];
+    let (kind, reason) = step_outcome("join", &["join: restored".to_string()], &declined);
+    assert_eq!(kind, "skipped");
+    assert_eq!(reason, Some("declined"));
+    // Done without a skip is a done step; nothing at all is blocked.
+    let (kind, reason) = step_outcome("gh-auth", &["gh-auth: signed in".into()], &[]);
+    assert_eq!(kind, "done");
+    assert_eq!(reason, None);
+    let (kind, reason) = step_outcome("gh-auth", &[], &[]);
+    assert_eq!(kind, "blocked");
+    assert_eq!(reason, None);
+    // A skip line that never carried the prefix stays whole.
+    let no_prefix = ["no prefix".to_string()];
+    let (kind, reason) = step_outcome("x", &[], &no_prefix);
+    assert_eq!(kind, "skipped");
+    assert_eq!(reason, Some("no prefix"));
+    // Numbers read bare; bare words read after the Rust quote fallback; a
+    // token neither form reads (a control char breaks bare text and the
+    // \u{7} debug spelling TOML never accepts alike) answers None.
+    assert_eq!(proposal_token("3"), Some(toml::Value::Integer(3)));
+    assert_eq!(
+        proposal_token("standard"),
+        Some(toml::Value::String("standard".into()))
+    );
+    assert_eq!(proposal_token("a\u{7}b"), None);
+    // The workspace-list reader passes a missing key and a real array
+    // through and refuses every other hand-set shape, so setup never
+    // overwrites a hand-set value with its own array.
+    assert!(projects_rows(None).unwrap().is_empty());
+    let array = toml::Value::Array(vec![toml::Value::String("stale".into())]);
+    assert_eq!(projects_rows(Some(&array)).unwrap().len(), 1);
+    for bad in [
+        toml::Value::String("my-dir".into()),
+        toml::Value::Integer(3),
+        toml::Value::Table(toml::map::Map::new()),
+    ] {
+        assert!(projects_rows(Some(&bad)).is_err());
+    }
+    // The drift word spells strings bare and keeps TOML's other forms.
+    assert_eq!(value_word(&toml::Value::String("fn".into())), "fn");
+    assert_eq!(value_word(&toml::Value::Boolean(true)), "true");
+    // A red verify names its reason: the cap, the problem line, or the re-run.
+    assert_eq!(
+        verify_reason("fno doctor --blockers", "/x/fno: timed out after 10s"),
+        "timed out after 10s"
+    );
+    assert_eq!(
+        verify_reason(
+            "fno config doctor",
+            "`fno config doctor` exited 1: [doctor] schema_version: 1\n[doctor] 1 state-root write issue(s):\n  - claims not writable\nlater"
+        ),
+        "[doctor] 1 state-root write issue(s): - claims not writable"
+    );
+    assert_eq!(
+        verify_reason("fno config doctor", "`fno config doctor` exited 1: quiet"),
+        "run `fno config doctor` to read why"
+    );
+    assert_eq!(
+        verify_reason("fno-agents daemon serving", "daemon is not serving"),
+        "daemon is not serving"
+    );
+}

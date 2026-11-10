@@ -1,0 +1,98 @@
+{
+  "apply_permission_builtin": true,
+  "argv": [
+    "spawn",
+    "--name",
+    "w42",
+    "-H",
+    "codex",
+    "--substrate",
+    "thread",
+    "-kx-aaaa",
+    "/fno:lead x-aaaa"
+  ],
+  "config_toml": "[agents.defaults]\npermission_mode = \"bypassPermissions\"\n",
+  "env_node": null,
+  "expect": {
+    "argv": [
+      "spawn",
+      "--name",
+      "w42",
+      "-H",
+      "codex",
+      "--substrate",
+      "thread",
+      "-kx-aaaa",
+      "/fno:lead x-aaaa"
+    ],
+    "exit": 0,
+    "journal": {
+      "data": {
+        "name": "w42",
+        "verb": "role",
+        "seed": "/fno:lead x-aaaa",
+        "fingerprint": "",
+        "resolved": {
+          "route": {
+            "value": "",
+            "rung": null
+          },
+          "account": {
+            "value": "",
+            "rung": null
+          },
+          "pane_group": {
+            "value": "",
+            "rung": null
+          }
+        },
+        "applied": [],
+        "suppressed": []
+      },
+      "type": "spawn_defaults_applied",
+      "source": "agents"
+    },
+    "stderr": [],
+    "stdout": null
+  },
+  "facts": {
+    "role_protected": null,
+    "role_resolves": false
+  },
+  "node": null,
+  "node_row": null,
+  "node_command": null,
+  "scan": {
+    "account_flag_present": false,
+    "explicit_harness": "codex",
+    "explicit_route": false,
+    "explicit_substrate": "thread",
+    "explicit_vendor": null,
+    "flag_node": null,
+    "has_effort": false,
+    "has_harness": true,
+    "has_model": false,
+    "has_permission": false,
+    "model_value": null,
+    "name": "w42",
+    "permission_value": null,
+    "positional_present": true,
+    "role": null,
+    "route_value": null,
+    "seed": "/fno:lead x-aaaa",
+    "seed_form": "positional",
+    "seed_index": 8,
+    "spawn_tokens": [
+      "--name",
+      "w42",
+      "-H",
+      "codex",
+      "--substrate",
+      "thread",
+      "-kx-aaaa",
+      "/fno:lead x-aaaa"
+    ],
+    "tab_flag_present": false
+  },
+  "verbose": true
+}

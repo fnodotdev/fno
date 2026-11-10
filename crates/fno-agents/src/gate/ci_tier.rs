@@ -1,0 +1,970 @@
+//! The ci_tier arm: open PRs run CI in tiers of 6, opt-in per repo with
+//! `ci_tier.enabled`. The rules and their reasons live in
+//! docs/architecture/pr-heal.md, "The CI tier".
+
+use crate::backlog::row_facts::RowFacts;
+use std::collections::{BTreeMap, HashSet};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use serde_json::{json, Value};
+
+use crate::paths::AgentsHome;
+
+const INTERVAL: Duration = Duration::from_secs(180);
+const SIZE: usize = 6;
+const SPARE_PASS_SHARE: f64 = 0.8;
+const HEARTBEAT_MS: i64 = 10 * 60_000;
+/// How fresh a pass row must be to prove a keeper ran on this machine: the
+/// hold/rerun remedy and `do ci tier`'s live flag read it.
+pub(crate) const FRESH_MS: i64 = 20 * 60_000;
+const DAY_MS: i64 = 24 * 3_600_000;
+pub(crate) const PASS_EVENT: &str = "ci_tier_pass";
+const HELD_EVENT: &str = "ci_tier_held";
+const WAKE_EVENT: &str = "ci_tier_wake";
+
+#[derive(Default)]
+pub struct Arm {
+    last_tick: Mutex<Option<Instant>>,
+    in_flight: Arc<AtomicBool>,
+}
+
+/// Sorts a PR into line: main-repair, not draft, priority, then age.
+pub(crate) type Rank = (bool, bool, u8, u64);
+
+/// One head's runs, latest per workflow. `recancelled` names the cancelled
+/// runs whose rerun was taken away again inside FRESH_MS: proof a keeper is
+/// live somewhere in the fleet, readable from the runs list alone.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct Head {
+    pub in_flight: Vec<u64>,
+    pub cancelled: Vec<u64>,
+    pub recancelled: Vec<u64>,
+    pub failed: bool,
+    pub passed: usize,
+    pub total: usize,
+}
+
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct Plan {
+    pub active: Vec<u64>,
+    pub cancel: Vec<(u64, Vec<u64>)>,
+    pub rerun: Vec<(u64, Vec<u64>)>,
+}
+
+pub(crate) fn word<'a>(v: &'a Value, pointer: &str) -> &'a str {
+    v.pointer(pointer).and_then(Value::as_str).unwrap_or("")
+}
+
+fn id(run: &Value) -> u64 {
+    run.get("id").and_then(Value::as_u64).unwrap_or(0)
+}
+
+fn is_gate(run: &Value) -> bool {
+    word(run, "/name") == "merge-queue-gate" || word(run, "/path").ends_with("merge-queue-gate.yml")
+}
+
+/// A run GitHub fired itself, on no workflow file: default-setup code
+/// scanning names its path `dynamic/...` and its event `dynamic`. GitHub
+/// refuses run and job retry for one, so a cancelled dynamic run comes back
+/// only by a new push, which restarts every check on the head. The tier
+/// never cancels what it cannot rerun, so a dynamic run is left out of the
+/// fold: no cancel, no rerun, no slot.
+fn is_dynamic(run: &Value) -> bool {
+    word(run, "/event") == "dynamic"
+}
+
+/// Fold one head's `workflow_runs` to its latest run per workflow. A
+/// merge-queue-gate run is left out: the tier never cancels or reruns one.
+/// So is a dynamic run.
+pub(crate) fn head_of(runs: &[Value]) -> Head {
+    let now_ms = crate::ci_cadence::millis_now();
+    let mut latest: BTreeMap<&str, &Value> = BTreeMap::new();
+    for run in runs.iter().filter(|r| !is_gate(r) && !is_dynamic(r)) {
+        let slot = latest.entry(word(run, "/name")).or_insert(run);
+        if id(run) > id(slot) {
+            *slot = run;
+        }
+    }
+    let mut head = Head {
+        total: latest.len(),
+        ..Head::default()
+    };
+    for run in latest.into_values() {
+        match (word(run, "/status"), word(run, "/conclusion")) {
+            ("completed", "success" | "skipped" | "neutral") => head.passed += 1,
+            ("completed", "cancelled") => {
+                head.cancelled.push(id(run));
+                if recancelled_after_rerun(run, now_ms) {
+                    head.recancelled.push(id(run));
+                }
+            }
+            ("completed", _) => head.failed = true,
+            _ => head.in_flight.push(id(run)),
+        }
+    }
+    head
+}
+
+/// A rerun taken away again inside FRESH_MS: `run_attempt` over one names a
+/// rerun, a fresh `updated_at` names the re-cancel. The proof rides the
+/// runs list, so it holds fleet-wide where the journal never does.
+fn recancelled_after_rerun(run: &Value, now_ms: i64) -> bool {
+    if run
+        .pointer("/run_attempt")
+        .and_then(Value::as_u64)
+        .unwrap_or(1)
+        <= 1
+    {
+        return false;
+    }
+    word(run, "/updated_at")
+        .parse::<chrono::DateTime<chrono::FixedOffset>>()
+        .map(|ts| now_ms - ts.timestamp_millis() < FRESH_MS)
+        .unwrap_or(false)
+}
+
+/// The tier for one pass over ranked PRs and their heads. `approved` names
+/// the PRs whose visual approval is pinned to the head under test: their CI
+/// cannot restart by a push, so the tier never cancels one and reruns its
+/// cancelled runs at once, outside the slot count.
+pub(crate) fn plan(ranked: &[(Rank, Head)], slots: usize, approved: &HashSet<u64>) -> Plan {
+    let mut plan = Plan::default();
+    for ((.., pr), head) in ranked {
+        let idle = head.in_flight.is_empty();
+        if idle && (head.cancelled.is_empty() || head.failed) {
+            continue;
+        }
+        if approved.contains(pr) {
+            if idle {
+                plan.rerun.push((*pr, head.cancelled.clone()));
+            }
+            continue;
+        }
+        if plan.active.len() < slots {
+            plan.active.push(*pr);
+            if idle {
+                plan.rerun.push((*pr, head.cancelled.clone()));
+            }
+        } else if !idle && (head.passed as f64) < SPARE_PASS_SHARE * head.total as f64 {
+            // A head at 80 percent passed finishes instead.
+            plan.cancel.push((*pr, head.in_flight.clone()));
+        }
+    }
+    plan
+}
+
+fn pages(root: &Path, path: &str) -> Result<Vec<Value>, String> {
+    crate::pr_push::gh_api_pages_conditional("gh", root, path)
+}
+
+pub(crate) fn runs_of(root: &Path, query: &str) -> Result<Vec<Value>, String> {
+    let path = format!("repos/{{owner}}/{{repo}}/actions/runs?{query}&per_page=100");
+    Ok(pages(root, &path)?
+        .iter()
+        .filter_map(|page| page.get("workflow_runs").and_then(Value::as_array))
+        .flatten()
+        .cloned()
+        .collect())
+}
+
+/// The bound node's main-repair tag and priority; untagged p2 when none.
+/// The binding keys matter: the daemon's own revert PR names its repair
+/// node only by branch and `Fixes` trailer, never by `pr_number`.
+fn node_rank(pull: &Value, entries: &[Value]) -> (bool, u8) {
+    let number = pull.get("number").and_then(Value::as_i64).unwrap_or(0);
+    let body = pull.get("body").and_then(Value::as_str);
+    let url = pull.get("html_url").and_then(Value::as_str);
+    let keys =
+        crate::org_board::prs::pr_binding_keys(number, word(pull, "/head/ref"), url, body, entries);
+    let mut ids = keys
+        .branch
+        .iter()
+        .chain(&keys.backrefs)
+        .chain(&keys.trailer);
+    let bound = |nid: &String| {
+        let id = Some(nid.as_str());
+        entries.iter().find(|e| RowFacts::id_of(e) == id)
+    };
+    let Some(node) = ids.find_map(bound) else {
+        return (false, 2);
+    };
+    let priority = word(node, "/priority").strip_prefix('p');
+    let tag = crate::authorized_merge::MAIN_REPAIR_TAG;
+    (
+        crate::authorized_merge::node_carries_tag(node, tag),
+        priority.and_then(|p| p.parse().ok()).unwrap_or(2),
+    )
+}
+
+type Repo = (Vec<(Rank, Head)>, Vec<Value>, usize, Vec<(u64, String)>);
+
+/// The open PRs, ranked, each with its head's runs; the same order as
+/// `{pr, branch}` rows; and the gate runs in flight.
+fn read_repo(root: &Path) -> Result<Repo, String> {
+    let store = crate::backlog::api::Store::new(&crate::org_board::scope::graph_json_path(root));
+    let entries = crate::backlog::api::rows(&store).map_err(|e| e.0)?;
+    let mut prs = Vec::new();
+    for page in pages(root, "repos/{owner}/{repo}/pulls?state=open&per_page=100")? {
+        for pull in page.as_array().into_iter().flatten() {
+            let number = pull.get("number").and_then(Value::as_u64).unwrap_or(0);
+            let (repair, priority) = node_rank(pull, &entries);
+            let draft = pull.get("draft").and_then(Value::as_bool) == Some(true);
+            let sha = word(pull, "/head/sha").to_string();
+            let branch = word(pull, "/head/ref").to_string();
+            prs.push(((!repair, draft, priority, number), sha, branch));
+        }
+    }
+    prs.sort();
+    let (mut ranked, mut order, mut shas) = (Vec::new(), Vec::new(), Vec::new());
+    for (pr, sha, branch) in prs {
+        order.push(json!({"pr": pr.3, "branch": branch}));
+        ranked.push((pr, head_of(&runs_of(root, &format!("head_sha={sha}"))?)));
+        shas.push((pr.3, sha));
+    }
+    let mut gates = HashSet::new();
+    for status in ["queued", "in_progress"] {
+        let runs = runs_of(root, &format!("status={status}"))?;
+        gates.extend(runs.iter().filter(|r| is_gate(r)).map(id));
+    }
+    Ok((ranked, order, gates.len(), shas))
+}
+
+/// POST `action` on each run; the journal records what gh refused. A cancel
+/// journals its caller first: `actor` names the arm.
+pub(crate) fn act(root: &Path, list: &[(u64, Vec<u64>)], action: &str, actor: &str) -> Vec<Value> {
+    let post = |run: &u64| {
+        let sent = if action == "cancel" {
+            crate::pr_push::cancel_run("gh", root, *run, actor)
+        } else {
+            let path = format!("repos/{{owner}}/{{repo}}/actions/runs/{run}/{action}");
+            crate::pr_push::gh_api("gh", root, &path, &["-X", "POST"]).map(|_| ())
+        };
+        match sent {
+            Ok(_) => json!({"run": run, "ok": true}),
+            Err(e) => json!({"run": run, "ok": false, "error": e}),
+        }
+    };
+    list.iter()
+        .map(|(pr, runs)| json!({"pr": pr, "runs": runs.iter().map(post).collect::<Vec<_>>()}))
+        .collect()
+}
+
+/// This repo's rows of one kind since `since_ms`, oldest first.
+fn rows_of(path: &Path, kind: &str, slug: &str, since_ms: i64) -> Result<Vec<Value>, String> {
+    let query = crate::event_store::EventQuery {
+        since_ms: Some(since_ms),
+        ..crate::event_store::EventQuery::of_types(&[kind])
+    };
+    let text = crate::event_store::journal_text_checked(path, &query)?;
+    let rows = text
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok());
+    Ok(rows
+        .filter(|r| r.pointer("/data/slug").and_then(Value::as_str) == Some(slug))
+        .collect())
+}
+
+/// The runs this tier cancelled, from its own rows.
+fn ours(passes: &[Value]) -> HashSet<u64> {
+    let cancels = passes.iter().flat_map(|r| r.pointer("/data/cancelled"));
+    let runs = cancels.flat_map(|c| c.as_array().cloned().unwrap_or_default());
+    let posts = runs.flat_map(|pr| pr["runs"].as_array().cloned().unwrap_or_default());
+    let landed = posts.filter(|p| p["ok"] == json!(true));
+    landed.filter_map(|p| p["run"].as_u64()).collect()
+}
+
+/// The runs another row names as cancelled at this slug: a look hold owns
+/// its rerun, and a wait cancel answered a red the head already carries.
+pub(crate) fn named_cancels(
+    path: &Path,
+    slug: &str,
+    since_ms: i64,
+) -> Result<HashSet<u64>, String> {
+    let mut named = HashSet::new();
+    for kind in ["look_hold_cancel", "ci_wait_cancel"] {
+        for row in rows_of(path, kind, slug, since_ms)? {
+            for post in row
+                .pointer("/data/runs")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+            {
+                if post.get("ok").and_then(Value::as_bool) == Some(true) {
+                    if let Some(run) = post.get("run").and_then(Value::as_u64) {
+                        named.insert(run);
+                    }
+                }
+            }
+        }
+    }
+    Ok(named)
+}
+
+/// Whether a cancelled run stays on the rerun ledger: only a run the tier
+/// cancelled itself, and never one another row names. A hand cancel stays
+/// cancelled. A wait cancel answered a red the head already carries, so a
+/// rerun would burn a slot on a known red. A look hold reruns its own when
+/// the look clears.
+fn rerunnable(run: u64, ours: &HashSet<u64>, named: &HashSet<u64>) -> bool {
+    ours.contains(&run) && !named.contains(&run)
+}
+
+/// The PR a push of `branch` must wait for, and the refusal sentence. A
+/// push waits only when the pass row is under 20 minutes old, its tier is
+/// full, and the branch's PR ranks below every PR in the tier.
+pub(crate) fn hold_reason(pass_row: &Value, branch: &str, now_ms: i64) -> Option<(u64, String)> {
+    let ts = crate::ci_cadence::ts_ms(pass_row)?;
+    if now_ms - ts >= FRESH_MS {
+        return None;
+    }
+    let data = pass_row.get("data")?;
+    let slots = data.get("slots").and_then(Value::as_u64)? as usize;
+    let active: Vec<u64> = data["active"]
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_u64)
+        .collect();
+    let ranked: Vec<(u64, &str)> = data["ranked"]
+        .as_array()?
+        .iter()
+        .map(|r| (r["pr"].as_u64().unwrap_or(0), word(r, "/branch")))
+        .collect();
+    let at = ranked.iter().position(|(_, b)| *b == branch)?;
+    let pr = ranked[at].0;
+    let last_member = ranked.iter().rposition(|(n, _)| active.contains(n));
+    if active.len() < slots || active.contains(&pr) || last_member.is_some_and(|m| at < m) {
+        return None;
+    }
+    let tier: Vec<String> = active.iter().map(|n| format!("#{n}")).collect();
+    Some((
+        pr,
+        format!(
+            "refusing: the CI tier is full ({}) and PR #{pr} ranks below every PR in it. \
+             Nothing pushed. The daemon wakes this session when a slot frees; then run \
+             fno do pr push again. To move PR #{pr} up the rank now, run \
+             fno do ci tier promote {pr}.",
+            tier.join(", ")
+        ),
+    ))
+}
+
+pub(crate) fn tier_on(root: &Path) -> bool {
+    crate::agents_config::config_value_deep(root, &["ci_tier", "enabled"]).and_then(|v| v.as_bool())
+        == Some(true)
+}
+
+/// The newest `ci_tier_pass` row of `slug` under `window_ms`, oldest pass
+/// first, so `None` means the keeper has not passed here in the window.
+pub(crate) fn newest_pass_row(
+    path: &Path,
+    slug: &str,
+    window_ms: i64,
+) -> Result<Option<Value>, String> {
+    let now = crate::ci_cadence::millis_now();
+    let mut rows = rows_of(path, PASS_EVENT, slug, now - window_ms)?;
+    Ok(rows.pop())
+}
+
+/// The refusal for a push of `branch` from `cwd`, or None to push. A tier
+/// that is off never holds. A held push writes one `ci_tier_held` row,
+/// which the arm wakes from.
+pub(crate) fn push_hold(cwd: &Path, branch: &str) -> Option<String> {
+    if !tier_on(cwd) {
+        return None;
+    }
+    let home = AgentsHome::from_env_opt()?;
+    let slug = crate::pr_status::cache::git_slug(cwd)?;
+    let path = crate::daemon::global_events_path(&home);
+    let now = crate::ci_cadence::millis_now();
+    let passes = rows_of(&path, PASS_EVENT, &slug, now - FRESH_MS).ok()?;
+    let (pr, sentence) = hold_reason(passes.last()?, branch, now)?;
+    let (session_id, _) = crate::claims::resolve_identity();
+    let row = json!({"slug": slug, "branch": branch, "pr": pr,
+        "cwd": cwd.to_string_lossy(), "session_id": session_id});
+    let emitter = crate::events::EventEmitter::new(path, "rust");
+    if let Err(e) = emitter.emit(HELD_EVENT, &row) {
+        eprintln!("pr-push: the {HELD_EVENT} row did not land ({e}); no wake for this hold");
+    }
+    Some(sentence)
+}
+
+/// The status payload's tier fact for a cancelled-only head. `fresh` is a
+/// `ci_tier_pass` row of this slug under FRESH_MS old: the row is the only
+/// machine-local proof a keeper ran here recently, and a keeper on another
+/// machine never writes this journal. `recancelled` is the fleet-visible
+/// proof: runs whose rerun was taken away again inside FRESH_MS prove a
+/// keeper live somewhere in the fleet. A live keeper reruns the cancelled
+/// runs when the PR's tier slot frees, so the remedy is hold. Without
+/// either proof, the orphaned runs would sit red forever, so the remedy is
+/// the rerun itself; runs a look hold cancelled are not orphaned, because
+/// the look arm reruns its own once the look clears.
+pub(crate) fn stranded_fact_pure(
+    enabled: bool,
+    fresh: bool,
+    cancelled: &[u64],
+    look_named: &[u64],
+    recancelled: &[u64],
+) -> Value {
+    let owned: HashSet<u64> = look_named.iter().copied().collect();
+    let orphaned: Vec<u64> = cancelled
+        .iter()
+        .copied()
+        .filter(|run| !owned.contains(run))
+        .collect();
+    let runs = json!(orphaned);
+    if fresh {
+        return json!({
+            "live": true,
+            "remedy": "hold",
+            "enabled": enabled,
+            "cancelled_runs": runs,
+            "note": "the CI-tier keeper ran on this machine in the last 20 minutes; it reruns the cancelled runs when the PR's tier slot frees",
+        });
+    }
+    if orphaned.is_empty() && !owned.is_empty() {
+        return json!({
+            "live": false,
+            "remedy": "hold",
+            "enabled": enabled,
+            "cancelled_runs": json!([]),
+            "note": "a look hold cancelled the runs at this head, and the look arm reruns its own once the look clears; hold for the look",
+        });
+    }
+    // The re-cancel proof only counts on an orphaned run: a look-named
+    // recancel is the look arm's own economy, not a keeper's.
+    if recancelled.iter().any(|run| orphaned.contains(run)) {
+        return json!({
+            "live": true,
+            "remedy": "hold",
+            "enabled": enabled,
+            "cancelled_runs": runs,
+            "note": "the cancelled runs at this head were rerun and cancelled again in the last 20 minutes, so a keeper elsewhere in the fleet is live and re-cancels reruns. Hold: it reruns them when the PR's tier slot frees",
+        });
+    }
+    let why = if enabled {
+        "ci_tier.enabled is true but no ci_tier_pass row landed in the last 20 minutes"
+    } else {
+        "ci_tier.enabled is false and no ci_tier_pass row landed in the last 20 minutes"
+    };
+    json!({
+        "live": false,
+        "remedy": "rerun",
+        "enabled": enabled,
+        "cancelled_runs": runs,
+        "note": format!("no CI-tier keeper ran on this machine in the last 20 minutes ({why}), so a tier hold never resolves here. Rerun each cancelled run: gh run rerun <run-id>. A rerun cancelled again within 20 minutes proves a keeper elsewhere is live: hold"),
+    })
+}
+
+/// The run ids a look-hold cancel row names at this slug and sha, inside the
+/// 30-day window the look arm reruns within. A wait cancel cannot appear
+/// here: it answers a red the head carries, and a red head never reaches the
+/// cancelled-only caller.
+fn look_named_cancels(
+    path: &Path,
+    slug: &str,
+    sha: &str,
+    since_ms: i64,
+) -> Result<HashSet<u64>, String> {
+    let mut named = HashSet::new();
+    for row in rows_of(path, crate::look_hold::CANCEL_EVENT, slug, since_ms)? {
+        if word(&row, "/data/sha") != sha {
+            continue;
+        }
+        for post in row
+            .pointer("/data/runs")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+        {
+            if post.get("ok").and_then(Value::as_bool) == Some(true) {
+                if let Some(run) = post.get("run").and_then(Value::as_u64) {
+                    named.insert(run);
+                }
+            }
+        }
+    }
+    Ok(named)
+}
+
+/// The live read behind `stranded_fact_pure`: the repo's config, this
+/// machine's journal, and the head's cancelled runs. Every read fails open
+/// to what it can prove; the caller gates on the cancelled-only shape.
+pub(crate) fn stranded_fact(root: &Path, slug: &str, sha: &str) -> Value {
+    let enabled = crate::agents_config::config_value_deep(root, &["ci_tier", "enabled"])
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let now = crate::ci_cadence::millis_now();
+    let journal = AgentsHome::from_env_opt().map(|home| crate::daemon::global_events_path(&home));
+    let fresh = journal
+        .as_ref()
+        .map(|path| {
+            rows_of(path, PASS_EVENT, slug, now - FRESH_MS)
+                .map(|rows| !rows.is_empty())
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+    let look_named = journal
+        .as_ref()
+        .and_then(|path| {
+            look_named_cancels(path, slug, sha, now - crate::look_hold::WINDOW_MS).ok()
+        })
+        .unwrap_or_default();
+    let (cancelled, recancelled) = runs_of(root, &format!("head_sha={sha}"))
+        .map(|runs| {
+            let head = head_of(&runs);
+            (head.cancelled, head.recancelled)
+        })
+        .unwrap_or_default();
+    // Journal sets iterate in hash order; the fact's id arrays must not flap
+    // between reads.
+    let mut look_named: Vec<u64> = look_named.into_iter().collect();
+    look_named.sort_unstable();
+    stranded_fact_pure(enabled, fresh, &cancelled, &look_named, &recancelled)
+}
+
+/// Wake each held push once, when its hold clears against `pass_row`. A
+/// wake covers every older hold of the same branch. With `off` set the tier
+/// is switched off: every hold clears and no pass row is read.
+fn wake_held(
+    path: &Path,
+    slug: &str,
+    pass_row: &Value,
+    now_ms: i64,
+    off: bool,
+) -> Result<(), String> {
+    // A hold can outlast a day below a full tier.
+    let since = now_ms - 7 * DAY_MS;
+    let key = |r: &Value| {
+        (
+            word(r, "/data/branch").to_string(),
+            crate::ci_cadence::ts_ms(r),
+        )
+    };
+    let mut woken: BTreeMap<String, i64> = BTreeMap::new();
+    for row in rows_of(path, WAKE_EVENT, slug, since)? {
+        let held_at = row
+            .pointer("/data/held_ms")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let slot = woken
+            .entry(word(&row, "/data/branch").to_string())
+            .or_default();
+        *slot = (*slot).max(held_at);
+    }
+    let mut due: BTreeMap<String, (i64, Value)> = BTreeMap::new();
+    for row in rows_of(path, HELD_EVENT, slug, since)? {
+        let (branch, Some(ts)) = key(&row) else {
+            continue;
+        };
+        if woken.get(&branch).is_some_and(|w| *w >= ts) {
+            continue;
+        }
+        due.insert(branch, (ts, row));
+    }
+    let data = &pass_row["data"];
+    let ranked: Vec<&str> = data["ranked"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|p| word(p, "/branch"))
+        .collect();
+    let active = data["active"].as_array().map_or(0, Vec::len);
+    let slots = data["slots"].as_u64().unwrap_or(0) as usize;
+    // Every woken session pushes before the next pass, so wake in rank
+    // order and only as many as the free slots, at least one.
+    let mut budget = if off {
+        usize::MAX
+    } else {
+        slots.saturating_sub(active).max(1)
+    };
+    let mut order: Vec<_> = due.into_iter().collect();
+    order.sort_by_key(|(b, _)| ranked.iter().position(|r| r == b));
+    let emitter = crate::events::EventEmitter::new(path.to_path_buf(), "daemon");
+    for (branch, (held_ms, held)) in order {
+        if !off && hold_reason(pass_row, &branch, now_ms).is_some() {
+            continue;
+        }
+        let open = off || ranked.contains(&branch.as_str());
+        if open && budget == 0 {
+            continue;
+        }
+        let pr = held.pointer("/data/pr").cloned().unwrap_or(Value::Null);
+        // A closed PR clears its hold too; its session has nothing to push.
+        let mut row = json!({"slug": slug, "branch": branch, "pr": pr, "held_ms": held_ms,
+            "closed": !open});
+        let sid = held.pointer("/data/session_id").and_then(Value::as_str);
+        if let Some(sid) = sid.filter(|_| open) {
+            budget -= 1;
+            let text = if off {
+                format!(
+                    "The CI tier is off, so PR #{pr} ({branch}) no longer waits. Run fno do pr \
+                     push again to push the commits it held."
+                )
+            } else {
+                format!(
+                    "The CI tier has a free slot for PR #{pr} ({branch}). Run fno do pr push \
+                     again to push the commits it held."
+                )
+            };
+            let mut runner = crate::burn_watch::run_command;
+            let (delivered, via) =
+                crate::burn_watch::wake_with_text(sid, false, &text, "ci-tier", &mut runner);
+            if !delivered && via != "durable" {
+                // No wake row, so the next pass retries this hold.
+                eprintln!("ci-tier: {slug}: wake for {branch} failed via {via}");
+                continue;
+            }
+            row["session_id"] = json!(sid);
+            row["via"] = json!(via);
+        }
+        emitter
+            .emit(WAKE_EVENT, &row)
+            .map_err(|e| format!("{WAKE_EVENT} row did not land: {e}"))?;
+    }
+    Ok(())
+}
+
+/// The PRs whose head carries a pinned visual approval. Only a head with
+/// runs to act on reads the gate, and a head with no paint path costs one
+/// cached files read.
+fn approved_heads(
+    root: &Path,
+    slug: &str,
+    ranked: &[(Rank, Head)],
+    shas: &[(u64, String)],
+) -> HashSet<u64> {
+    static PAINT: std::sync::OnceLock<crate::look_hold::PaintCache> = std::sync::OnceLock::new();
+    let paint = PAINT.get_or_init(Default::default);
+    let open = |head: &Head| !head.in_flight.is_empty() || !head.cancelled.is_empty();
+    ranked
+        .iter()
+        .zip(shas)
+        .filter(|((_, head), _)| open(head))
+        .filter(|(_, (pr, sha))| crate::look_hold::approved_at_head(paint, root, slug, *pr, sha))
+        .map(|(_, (pr, _))| *pr)
+        .collect()
+}
+
+fn pass_repo(root: &Path, slug: &str, path: &Path) -> Result<(), String> {
+    let (mut ranked, order, gates, shas) = read_repo(root)?;
+    let now = crate::ci_cadence::millis_now();
+    let passes = rows_of(path, PASS_EVENT, slug, now - DAY_MS)?;
+    let ours = ours(&passes);
+    let named = named_cancels(path, slug, now - DAY_MS)?;
+    for (_, head) in &mut ranked {
+        head.cancelled.retain(|run| rerunnable(*run, &ours, &named));
+    }
+    // Each merge-queue-gate run in flight holds one slot.
+    let slots = SIZE.saturating_sub(gates);
+    let approved = approved_heads(root, slug, &ranked, &shas);
+    let plan = plan(&ranked, slots, &approved);
+    let cancelled = act(root, &plan.cancel, "cancel", "ci_tier");
+    // A full rerun: a cancelled run has no failed job for rerun-failed-jobs.
+    let rerun = act(root, &plan.rerun, "rerun", "ci_tier");
+    let data = json!({"slug": slug, "slots": slots, "gates": gates, "active": plan.active,
+        "ranked": order, "cancelled": cancelled, "rerun": rerun});
+    let pass_row = json!({"ts": chrono::Utc::now().to_rfc3339(), "data": data});
+    // pr push reads the newest row, so a changed tier and a 10-minute
+    // heartbeat both write one.
+    let last = passes.last();
+    let changed = last.is_none_or(|r| {
+        r.pointer("/data/active") != Some(&data["active"])
+            || r.pointer("/data/ranked") != Some(&data["ranked"])
+            || r.pointer("/data/slots") != Some(&data["slots"])
+    });
+    let stale = last
+        .and_then(crate::ci_cadence::ts_ms)
+        .is_none_or(|ts| now - ts >= HEARTBEAT_MS);
+    if changed || stale || !cancelled.is_empty() || !rerun.is_empty() {
+        crate::events::EventEmitter::new(path.to_path_buf(), "daemon")
+            .emit(PASS_EVENT, &data)
+            .map_err(|e| format!("{PASS_EVENT} row did not land: {e}"))?;
+    }
+    wake_held(path, slug, &pass_row, now, false)
+}
+
+pub(crate) fn run_pass(home: &AgentsHome) -> Result<(), String> {
+    let path = crate::daemon::global_events_path(home);
+    let mut slugs = HashSet::new();
+    let mut off: Vec<String> = Vec::new();
+    for root in crate::daemon::worktree_sweep::registry_repo_roots(home) {
+        let root = Path::new(&root);
+        let Some(slug) = crate::pr_status::cache::git_slug(root) else {
+            continue;
+        };
+        if !tier_on(root) {
+            off.push(slug);
+            continue;
+        }
+        // Two clones of one repo are one tier.
+        if !slugs.insert(slug.clone()) {
+            continue;
+        }
+        if let Err(e) = pass_repo(root, &slug, &path) {
+            eprintln!("ci-tier: {slug}: {e}");
+        }
+    }
+    // A push held before the switch went off must not wait on a pass that
+    // will never come. A repo with any clone still on keeps its tier.
+    let now = crate::ci_cadence::millis_now();
+    let mut done = HashSet::new();
+    for slug in off.into_iter().filter(|s| !slugs.contains(s)) {
+        if done.insert(slug.clone()) {
+            if let Err(e) = wake_held(&path, &slug, &Value::Null, now, true) {
+                eprintln!("ci-tier: {slug}: {e}");
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
+    {
+        let mut last = arm.last_tick.lock().unwrap_or_else(|e| e.into_inner());
+        let busy = last.is_some_and(|t| t.elapsed() < INTERVAL);
+        if busy || arm.in_flight.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        *last = Some(Instant::now());
+    }
+    let flag = Arc::clone(&arm.in_flight);
+    tokio::task::spawn_blocking(move || {
+        let _gate = crate::daemon::SweepGate(flag);
+        if let Err(error) = run_pass(&home) {
+            eprintln!("ci-tier: {error}");
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pr(number: u64, priority: u8) -> Rank {
+        (true, false, priority, number)
+    }
+
+    fn head(f: &[u64], c: &[u64], failed: bool, passed: usize, total: usize) -> Head {
+        let (in_flight, cancelled) = (f.to_vec(), c.to_vec());
+        Head {
+            in_flight,
+            cancelled,
+            failed,
+            passed,
+            total,
+            ..Head::default()
+        }
+    }
+
+    fn iso_now_minus(minutes: i64) -> String {
+        (chrono::Utc::now() - chrono::Duration::minutes(minutes)).to_rfc3339()
+    }
+
+    #[test]
+    fn a_tier_switched_off_never_holds_a_push() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join(".fno");
+        std::fs::create_dir_all(&cfg).unwrap();
+        std::fs::write(cfg.join("config.toml"), "[ci_tier]\nenabled = false\n").unwrap();
+        assert!(!tier_on(dir.path()));
+        assert_eq!(push_hold(dir.path(), "feature/x"), None);
+        std::fs::write(cfg.join("config.toml"), "[ci_tier]\nenabled = true\n").unwrap();
+        assert!(tier_on(dir.path()));
+    }
+
+    #[test]
+    fn only_a_tier_own_cancel_reruns_and_a_named_one_never_does() {
+        let own: HashSet<u64> = [10, 11].into();
+        let named: HashSet<u64> = [11, 30].into();
+        // The tier's own unnamed cancel reruns. A wait cancel on a red head
+        // and a look hold's cancel never do, and neither does a hand cancel:
+        // no row names it, so it is not the tier's own.
+        assert!(rerunnable(10, &own, &named));
+        assert!(!rerunnable(11, &own, &named));
+        assert!(!rerunnable(30, &own, &named));
+        assert!(!rerunnable(20, &own, &named));
+    }
+
+    #[test]
+    fn a_head_folds_to_its_latest_run_per_workflow_and_skips_the_queue_gate() {
+        let run = |id: u64, wf: &str, status: &str, conclusion: &str| json!({"id": id, "name": wf, "status": status, "conclusion": conclusion});
+        let runs = vec![
+            run(10, "a", "completed", "cancelled"),
+            run(11, "a", "in_progress", ""),
+            run(12, "b", "completed", "success"),
+            run(13, "c", "completed", "cancelled"),
+            json!({"id": 14, "name": "merge-queue-gate", "status": "queued"}),
+            // A dynamic run fires on no workflow file and GitHub refuses its
+            // retry, so neither its cancel nor its rerun may reach the plan.
+            json!({"id": 15, "name": "PR #4471", "path": "dynamic/github-code-scanning/codeql",
+                "event": "dynamic", "status": "completed", "conclusion": "cancelled"}),
+            json!({"id": 16, "name": "PR #4470", "path": "dynamic/github-code-scanning/codeql",
+                "event": "dynamic", "status": "in_progress"}),
+        ];
+        assert_eq!(head_of(&runs), head(&[11], &[13], false, 1, 3));
+    }
+
+    #[test]
+    fn a_cancelled_run_rerun_then_recancelled_inside_the_window_reads_as_a_fleet_keeper() {
+        // run_attempt over one means someone rerun the run already; a cancel
+        // fresh enough means something alive took the rerun away. Together
+        // they are the rerun remedy's own receipt, readable fleet-side.
+        let recancelled = json!({"id": 20, "name": "cli-ci", "status": "completed",
+            "conclusion": "cancelled", "run_attempt": 2,
+            "updated_at": iso_now_minus(5)});
+        let stale = json!({"id": 21, "name": "rust-ci", "status": "completed",
+            "conclusion": "cancelled", "run_attempt": 2,
+            "updated_at": iso_now_minus(90)});
+        let first_cancel = json!({"id": 22, "name": "smoke", "status": "completed",
+            "conclusion": "cancelled", "run_attempt": 1,
+            "updated_at": iso_now_minus(1)});
+        let head = head_of(&[recancelled, stale, first_cancel]);
+        assert_eq!(head.cancelled, vec![20, 21, 22]);
+        assert_eq!(head.recancelled, vec![20]);
+    }
+
+    #[test]
+    fn a_dynamic_run_never_enters_the_tier_economy() {
+        // GitHub's default-setup scanners fire dynamic runs and refuse their
+        // retry, so cancelling one strands the head behind a check only a
+        // fresh push restores. The fold leaves one out: a PR whose only run
+        // is dynamic takes no slot and nothing is cancelled, and a tier
+        // member's cancelled dynamic run is never rerun.
+        let dynamic = |id: u64, status: &str, conclusion: &str| {
+            json!({"id": id, "name": "PR #9", "path": "dynamic/github-code-scanning/codeql",
+                "event": "dynamic", "status": status, "conclusion": conclusion})
+        };
+        let waiting = (pr(9, 2), head_of(&[dynamic(60, "in_progress", "")]));
+        let member = (pr(1, 0), head_of(&[dynamic(61, "completed", "cancelled")]));
+        let plan = plan(&[member, waiting], 2, &HashSet::new());
+        assert!(plan.active.is_empty());
+        assert!(plan.cancel.is_empty());
+        assert!(plan.rerun.is_empty());
+    }
+
+    #[test]
+    fn the_tier_fills_by_rank_cancels_the_rest_spares_near_green_and_reruns_on_entry() {
+        let ranked = vec![
+            (pr(1, 0), head(&[], &[], false, 4, 4)),
+            (pr(2, 0), head(&[20], &[], false, 0, 3)),
+            (pr(3, 1), head(&[], &[70], false, 1, 2)),
+            (pr(4, 1), head(&[], &[80], true, 0, 2)),
+            (pr(5, 2), head(&[50], &[], false, 4, 5)),
+            (pr(6, 2), head(&[60], &[], false, 1, 5)),
+            (pr(7, 3), head(&[], &[90], false, 0, 1)),
+        ];
+        let plan = plan(&ranked, 2, &HashSet::new());
+        // Green 1 and idle red 4 hold no slot.
+        assert_eq!(plan.active, vec![2, 3]);
+        assert_eq!(plan.rerun, vec![(3, vec![70])]);
+        // 5 has 80 percent passed; 7 waits with nothing to cancel.
+        assert_eq!(plan.cancel, vec![(6, vec![60])]);
+    }
+
+    #[test]
+    fn an_approved_head_keeps_its_run_and_reruns_outside_the_slot_count() {
+        let ranked = vec![
+            (pr(1, 0), head(&[10], &[], false, 0, 3)),
+            (pr(2, 1), head(&[20], &[], false, 0, 3)),
+            (pr(3, 2), head(&[], &[30], false, 0, 3)),
+            (pr(4, 2), head(&[40], &[], false, 0, 3)),
+        ];
+        let approved: HashSet<u64> = [2, 3].into();
+        let plan = plan(&ranked, 1, &approved);
+        // 1 takes the one slot. 2 is approved so it keeps its run, 3 is
+        // approved so its cancelled run reruns, and only 4 is cancelled.
+        assert_eq!(plan.active, vec![1]);
+        assert_eq!(plan.cancel, vec![(4, vec![40])]);
+        assert_eq!(plan.rerun, vec![(3, vec![30])]);
+    }
+
+    #[test]
+    fn a_push_waits_only_below_a_full_fresh_tier() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-27T12:00:00Z")
+            .unwrap()
+            .timestamp_millis();
+        let row = |age_min: i64, slots: u64, active: &[u64]| {
+            let ts = chrono::DateTime::from_timestamp_millis(now - age_min * 60_000).unwrap();
+            let ranked: Vec<Value> = (1..=4)
+                .map(|n| json!({"pr": n, "branch": format!("b{n}")}))
+                .collect();
+            json!({"ts": ts.to_rfc3339(), "data": {"slots": slots, "active": active, "ranked": ranked}})
+        };
+        let full = row(5, 2, &[1, 3]);
+        let (pr, sentence) = hold_reason(&full, "b4", now).unwrap();
+        assert_eq!(pr, 4);
+        // The held session must see the promote escape; the wake text is the
+        // only other message it is guaranteed to read.
+        assert!(sentence.contains("fno do ci tier promote 4"), "{sentence}");
+        // 2 outranks member 3; 3 is a member; b9 has no open PR.
+        for branch in ["b2", "b3", "b9"] {
+            assert_eq!(hold_reason(&full, branch, now), None, "{branch}");
+        }
+        assert_eq!(hold_reason(&row(5, 3, &[1, 3]), "b4", now), None);
+        assert_eq!(hold_reason(&row(20, 2, &[1, 3]), "b4", now), None);
+    }
+
+    #[test]
+    fn a_fresh_pass_row_holds_and_an_absent_keeper_names_the_rerun() {
+        let fact = stranded_fact_pure(true, true, &[70], &[], &[]);
+        assert_eq!(fact["remedy"], "hold");
+        assert_eq!(fact["live"], json!(true));
+        assert_eq!(fact["cancelled_runs"], json!([70]));
+        // The stranded shape carries the config state and the rerun remedy
+        // with the concrete command, whatever the config says. The note
+        // names the conditional: a re-cancelled rerun proves a live keeper.
+        for enabled in [true, false] {
+            let fact = stranded_fact_pure(enabled, false, &[70, 71], &[], &[]);
+            assert_eq!(fact["remedy"], "rerun");
+            assert_eq!(fact["live"], json!(false));
+            assert_eq!(fact["enabled"], json!(enabled));
+            assert_eq!(fact["cancelled_runs"], json!([70, 71]));
+            let note = fact["note"].as_str().unwrap();
+            assert!(note.contains("gh run rerun"), "{note}");
+            assert!(note.contains("this machine"), "{note}");
+            assert!(note.contains("cancelled again"), "{note}");
+        }
+    }
+
+    #[test]
+    fn a_recancelled_rerun_holds_because_a_fleet_keeper_is_live() {
+        // A rerun already went out and something took it away inside the
+        // window: rerunning again repeats the specimen loop, so the remedy
+        // reads hold and the ids stay on the fact for the keeper to rerun.
+        let fact = stranded_fact_pure(false, false, &[70, 71], &[], &[70]);
+        assert_eq!(fact["remedy"], "hold");
+        assert_eq!(fact["live"], json!(true));
+        assert_eq!(fact.pointer("/enabled"), Some(&json!(false)));
+        assert_eq!(fact["cancelled_runs"], json!([70, 71]));
+        let note = fact["note"].as_str().unwrap();
+        assert!(note.contains("rerun"), "{note}");
+        assert!(note.contains("again"), "{note}");
+        assert!(note.contains("fleet"), "{note}");
+        // Only a recancelled orphaned run flips the remedy. A look-named
+        // recancel is the look arm's own economy, not a keeper's, so the
+        // orphaned remainder keeps the rerun remedy.
+        let fact = stranded_fact_pure(false, false, &[70, 71], &[70], &[70]);
+        assert_eq!(fact["remedy"], "rerun");
+        assert_eq!(fact["cancelled_runs"], json!([71]));
+        let note = fact["note"].as_str().unwrap();
+        assert!(note.contains("gh run rerun"), "{note}");
+    }
+
+    #[test]
+    fn look_owned_cancels_never_become_a_rerun_remedy() {
+        // Every cancel belongs to the look arm: the remedy stays hold, and
+        // no run id rides as the worker's to rerun.
+        let fact = stranded_fact_pure(false, false, &[70, 71], &[70, 71], &[]);
+        assert_eq!(fact["remedy"], "hold");
+        assert_eq!(fact["cancelled_runs"], json!([]));
+        let note = fact["note"].as_str().unwrap();
+        assert!(note.contains("look hold"), "{note}");
+        // A mixed head reruns only the orphaned ids.
+        let fact = stranded_fact_pure(false, false, &[70, 71], &[70], &[]);
+        assert_eq!(fact["remedy"], "rerun");
+        assert_eq!(fact["cancelled_runs"], json!([71]));
+    }
+}

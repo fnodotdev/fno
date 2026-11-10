@@ -1,0 +1,737 @@
+//! How does a child process run under a bound? Bounded subprocess runs, bounded gh reads and their errors, and the gh binary probe.
+
+use super::*;
+
+use std::io::Read;
+
+use crate::bounded_spawn::AppAuth;
+
+/// Cap on RETAINED stderr per bounded run. Only retention is capped - the
+/// drain itself always runs to EOF, or a child that overflows the pipe would
+/// deadlock before exiting. The tail (not the head) is kept because the end
+/// of a diagnostic stream carries the line that killed the run.
+pub(super) const BOUNDED_STDERR_TAIL_CAP: usize = 2000;
+
+/// A completed bounded run's full classification payload: exit status, stdout,
+/// and a capped stderr tail. Parsers read `stdout`; the status and tail exist
+/// so a non-zero exit or a failing child can be NAMED at the call site rather
+/// than collapsed into "the read failed".
+pub(crate) struct BoundedOutput {
+    pub(crate) status: std::process::ExitStatus,
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr_tail: Vec<u8>,
+}
+
+/// Outcome of a bounded, killable child run: the whole point is that a hang
+/// inside the child can never
+/// again read as "the read failed" or wedge forever - it reads as exactly
+/// what happened, with the command and the elapsed time attached at the call
+/// site.
+pub(super) enum BoundedRun {
+    Completed(BoundedOutput),
+    /// The elapsed bound plus whatever stderr the child printed before the
+    /// kill - the evidence a timeout row needs to name what it waited on.
+    TimedOut(std::time::Duration, Vec<u8>),
+    /// The io error kind is kept because "binary absent" (NotFound) and
+    /// "could not spawn right now" (ETXTBSY, EACCES, ...) are different
+    /// facts; collapsing them is how a transient spawn failure used to read
+    /// as absence at the gh probe.
+    SpawnFailed(std::io::ErrorKind),
+    /// `try_wait()` itself errored (e.g. a concurrent reap of the group
+    /// leader) - the bound was never reached, so this must stay distinct
+    /// from `TimedOut` or a wait failure would misreport as "timed out
+    /// after 0s", naming a hang that never happened.
+    WaitFailed,
+    /// The fire budget was spent before the read, and its bound sits at the
+    /// spent line, so the read refuses without spawning: enough floored
+    /// reads would spend the drain's reserved slice.
+    Refused,
+}
+
+/// Run `fno_bin args...` under a native wall-clock bound, killing the
+/// child's whole process group on expiry - the same discipline as
+/// `run_probe` (spawn, poll `try_wait`, `kill_process_group`) - and return
+/// the completed payload (exit status, stdout, capped stderr tail). This is
+/// the single transport boundary for synchronous external work on the stop
+/// path: `Command::output()` alone has no timeout, so it blocks until the
+/// child exits however long that takes, which is exactly how a hang three
+/// calls deep in `fno do plan fidelity` turned into loop-check
+/// itself hanging forever and stranding the session behind it. stdout and
+/// stderr are drained on background threads for the same reason `run_probe`
+/// drains stderr that way: reading a pipe only after the child exits
+/// deadlocks against a child that fills the pipe buffer before exiting.
+/// One external stop-gate read: a first attempt that may carry an
+/// installation token, then one attempt with the caller's own auth when the
+/// failure names missing visibility (a stale installation scope). The
+/// decision and its window live in `github_app::should_retry_without_app`.
+pub(super) fn run_bounded(
+    fno_bin: &OsStr,
+    args: &[&str],
+    cwd: &Path,
+    timeout: std::time::Duration,
+) -> BoundedRun {
+    run_bounded_env(fno_bin, args, cwd, timeout, &[])
+}
+
+fn run_bounded_env(
+    fno_bin: &OsStr,
+    args: &[&str],
+    cwd: &Path,
+    timeout: std::time::Duration,
+    env: &[(&str, &str)],
+) -> BoundedRun {
+    let (run, injected) = run_bounded_attempt(fno_bin, args, cwd, timeout, AppAuth::Default, env);
+    if let BoundedRun::Completed(out) = &run {
+        let failed = out.status.code().is_some_and(|code| code != 0);
+        let stderr = String::from_utf8_lossy(&out.stderr_tail);
+        if crate::github_app::should_retry_without_app(injected, failed, &stderr) {
+            return run_bounded_attempt(fno_bin, args, cwd, timeout, AppAuth::Without, env).0;
+        }
+    }
+    run
+}
+
+/// One admission-skipping read at a caller-chosen auth posture. The
+/// pr-status probe transport owns the rate-limit route chain (its caller
+/// swaps the auth bucket on a rate-limit refusal), so the shared stop-gate
+/// transport keeps its single-posture read: the stop-gate surfaces pin the
+/// call arithmetic, and a blanket swap doubles every refused read they
+/// make.
+pub(crate) fn bounded_read_forced(
+    bin: &OsStr,
+    args: &[&str],
+    cwd: &Path,
+    read_name: &str,
+    timeout: std::time::Duration,
+) -> Result<BoundedOutput, GhReadError> {
+    match run_bounded_attempt(
+        bin,
+        args,
+        cwd,
+        timeout,
+        crate::bounded_spawn::AppAuth::Forced,
+        &[],
+    ) {
+        (BoundedRun::Completed(out), _) => Ok(out),
+        (BoundedRun::TimedOut(elapsed, tail), _) => Err(GhReadError::timed_out(
+            read_name,
+            elapsed,
+            String::from_utf8_lossy(&tail).into_owned(),
+        )),
+        (BoundedRun::Refused, _) => Err(GhReadError::budget_refused(read_name)),
+        (BoundedRun::SpawnFailed(kind), _) => Err(GhReadError::unrunnable_spawn(
+            read_name,
+            kind,
+            &format!("spawn failed ({kind:?})"),
+        )),
+        (BoundedRun::WaitFailed, _) => Err(GhReadError::unrunnable(read_name, "wait failed")),
+    }
+}
+
+fn run_bounded_attempt(
+    fno_bin: &OsStr,
+    args: &[&str],
+    cwd: &Path,
+    timeout: std::time::Duration,
+    auth: crate::bounded_spawn::AppAuth,
+    env: &[(&str, &str)],
+) -> (BoundedRun, bool) {
+    if timeout <= super::read_bounds::STOPGATE_PRE_DRAIN_SPENT_BOUND {
+        return (BoundedRun::Refused, false);
+    }
+    let (mut child, injected) =
+        match crate::bounded_spawn::spawn_bounded_auth(fno_bin, args, cwd, auth, env) {
+            Ok(pair) => pair,
+            Err(kind) => return (BoundedRun::SpawnFailed(kind), false),
+        };
+    let pgid = child.id() as i32;
+
+    let mut stdout_pipe = child.stdout.take();
+    let stdout_drain = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(ref mut p) = stdout_pipe {
+            let _ = p.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let mut stderr_pipe = child.stderr.take();
+    // The tail travels over a channel, not a bare join, so the timeout arm
+    // can collect it under a short bound: a kill usually ends the writer,
+    // but a straggler holding the pipe write end must cost the tail, never
+    // a hang on the stop path.
+    let (stderr_tx, stderr_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    let _stderr_drain = std::thread::spawn(move || {
+        // Retain only the LAST `BOUNDED_STDERR_TAIL_CAP` bytes while still
+        // draining to EOF: an unbounded write must not buy an unbounded
+        // allocation, but stopping the read early would block a child that
+        // is still writing, deadlocking the runner before any timeout.
+        let mut tail: Vec<u8> = Vec::new();
+        if let Some(ref mut p) = stderr_pipe {
+            let mut chunk = [0u8; 4096];
+            loop {
+                match p.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        // Always append, THEN trim: a guard on append would
+                        // freeze the buffer at whatever the first chunks
+                        // carried, which for a stream longer than one chunk
+                        // keeps the head, not the tail.
+                        tail.extend_from_slice(&chunk[..n]);
+                        if tail.len() > BOUNDED_STDERR_TAIL_CAP {
+                            let excess = tail.len() - BOUNDED_STDERR_TAIL_CAP;
+                            tail.drain(..excess);
+                        }
+                    }
+                }
+            }
+        }
+        let _ = stderr_tx.send(tail);
+    });
+
+    enum Outcome {
+        Done(std::process::ExitStatus),
+        TimedOut(std::time::Duration),
+        WaitFailed,
+    }
+
+    let start = std::time::Instant::now();
+    let outcome = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Outcome::Done(status),
+            Ok(None) => {
+                let elapsed = start.elapsed();
+                if elapsed >= timeout {
+                    kill_process_group(&mut child);
+                    break Outcome::TimedOut(elapsed);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(_) => {
+                // The bound was never reached - this is NOT a timeout, and
+                // must not be reported as one (that would name a hang that
+                // never happened). Still kill the group: an error mid-wait
+                // leaves the child's liveness unknown, and a stray survivor
+                // must not outlive this call.
+                kill_process_group(&mut child);
+                break Outcome::WaitFailed;
+            }
+        }
+    };
+
+    // Reap any descendant still holding a pipe write end (a wrapper script
+    // that forks) so the drain threads see EOF either way.
+    killpg(pgid);
+
+    let run = match outcome {
+        // Captured at the moment the bound was actually crossed, not after
+        // kill_process_group + killpg have run - else the reported duration
+        // is inflated by cleanup cost instead of reflecting the timeout itself.
+        Outcome::TimedOut(elapsed) => BoundedRun::TimedOut(
+            elapsed,
+            // The kill ended the writer, so the drain threads see EOF; a short
+            // bounded collect keeps whatever gh printed before the bound
+            // (the network-vs-GitHub evidence a timeout row would
+            // otherwise drop). A straggler holding the write end costs the
+            // bound below, never a hang on the stop path.
+            stderr_rx
+                .recv_timeout(std::time::Duration::from_millis(250))
+                .unwrap_or_default(),
+        ),
+        Outcome::WaitFailed => BoundedRun::WaitFailed,
+        Outcome::Done(status) => {
+            let stdout = stdout_drain.join().unwrap_or_default();
+            let stderr_tail = stderr_rx.recv().unwrap_or_default();
+            BoundedRun::Completed(BoundedOutput {
+                status,
+                stdout,
+                stderr_tail,
+            })
+        }
+    };
+    (run, injected)
+}
+
+/// How an external stop-gate read failed. `TimedOut` is its own kind so a
+/// killed child can never render through the ordinary failed-read wording -
+/// the two demand opposite operator responses (wait out a reset vs. debug a
+/// command), and conflating them is how a hang reads as a blip forever.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ReadErrorKind {
+    /// Non-zero exit or unparseable payload. The ordinary vocabulary
+    /// ("gh read '<name>' failed; retrying next fire").
+    Failed,
+    /// The process could not be spawned or waited on.
+    Unrunnable,
+    /// The child outlived its bound and the process group was killed.
+    TimedOut,
+    /// The read refused to start: the fire budget was spent before it, and
+    /// running it at the 1ms spent bound would erode the drain's reserve.
+    BudgetRefused,
+}
+
+/// One external read's typed failure: the logical read name, the kind, the
+/// capped stderr tail, and - for a timeout - the elapsed bound. Threads
+/// through every stop-gate reader so the render sites classify instead of
+/// guessing from a detail string.
+#[derive(Clone)]
+pub(crate) struct GhReadError {
+    pub(super) read: String,
+    pub(super) kind: ReadErrorKind,
+    pub(super) stderr_tail: String,
+    pub(super) elapsed: Option<std::time::Duration>,
+    /// The raw io error kind when a spawn failed, so a caller can tell
+    /// "binary absent" (NotFound) from "could not spawn right now". None for
+    /// every other failure class, including wait failures.
+    pub(super) spawn_kind: Option<std::io::ErrorKind>,
+}
+
+impl GhReadError {
+    pub(super) fn failed(read: &str, stderr_tail: String) -> Self {
+        GhReadError {
+            read: read.to_string(),
+            kind: ReadErrorKind::Failed,
+            stderr_tail,
+            elapsed: None,
+            spawn_kind: None,
+        }
+    }
+
+    pub(super) fn parse_failed(read: &str) -> Self {
+        Self::failed(read, String::new())
+    }
+
+    /// Test seam: a caller outside the loopcheck module tree (pr_info's
+    /// assembly tests) fabricates a refused read without spawning a stub gh.
+    #[cfg(test)]
+    pub(crate) fn for_test(read: &str, stderr_tail: &str) -> Self {
+        Self::failed(read, stderr_tail.to_string())
+    }
+
+    /// The one-line cause a caller appends when a fallback also failed: the
+    /// read name and the stderr tail, or the read name alone when the tail
+    /// is empty (a parse failure renders with no stderr to quote).
+    pub(crate) fn cause_line(&self) -> String {
+        if self.stderr_tail.trim().is_empty() {
+            format!("{} failed with no stderr", self.read)
+        } else {
+            format!("{}: {}", self.read, self.stderr_tail.trim())
+        }
+    }
+
+    pub(super) fn timed_out(read: &str, elapsed: std::time::Duration, stderr_tail: String) -> Self {
+        GhReadError {
+            read: read.to_string(),
+            kind: ReadErrorKind::TimedOut,
+            stderr_tail,
+            elapsed: Some(elapsed),
+            spawn_kind: None,
+        }
+    }
+
+    pub(super) fn unrunnable(read: &str, detail: &str) -> Self {
+        GhReadError {
+            read: read.to_string(),
+            kind: ReadErrorKind::Unrunnable,
+            stderr_tail: detail.to_string(),
+            elapsed: None,
+            spawn_kind: None,
+        }
+    }
+
+    pub(super) fn budget_refused(read: &str) -> Self {
+        GhReadError {
+            read: read.to_string(),
+            kind: ReadErrorKind::BudgetRefused,
+            stderr_tail: String::new(),
+            elapsed: None,
+            spawn_kind: None,
+        }
+    }
+
+    /// The fleet request budget refused before the spawn; `detail` carries
+    /// the ledger's refusal line, which every existing classifier already
+    /// reads as `budget_lock` (it names `gh budget:`).
+    pub(super) fn budget_refused_with_detail(read: &str, detail: String) -> Self {
+        GhReadError {
+            read: read.to_string(),
+            kind: ReadErrorKind::BudgetRefused,
+            stderr_tail: detail,
+            elapsed: None,
+            spawn_kind: None,
+        }
+    }
+
+    pub(super) fn unrunnable_spawn(
+        read: &str,
+        spawn_kind: std::io::ErrorKind,
+        detail: &str,
+    ) -> Self {
+        GhReadError {
+            read: read.to_string(),
+            kind: ReadErrorKind::Unrunnable,
+            stderr_tail: detail.to_string(),
+            elapsed: None,
+            spawn_kind: Some(spawn_kind),
+        }
+    }
+
+    /// The kill bound when this error is a timeout, so a render site can
+    /// classify without parsing the rendered prose.
+    pub(crate) fn timeout_bound(&self) -> Option<std::time::Duration> {
+        match self.kind {
+            ReadErrorKind::TimedOut => self.elapsed,
+            _ => None,
+        }
+    }
+
+    /// True when the fleet request budget refused before the spawn. A
+    /// caller answering a user-facing read retries without admission, so
+    /// our own hold never manufactures the answer.
+    pub(crate) fn is_budget_refusal(&self) -> bool {
+        self.kind == ReadErrorKind::BudgetRefused
+    }
+
+    pub(crate) fn render(&self) -> String {
+        match self.kind {
+            ReadErrorKind::TimedOut => format!(
+                "external read '{}' timed out after {:.1}s and was killed; retrying next fire",
+                self.read,
+                self.elapsed.map(|d| d.as_secs_f64()).unwrap_or(0.0)
+            ),
+            ReadErrorKind::Failed => format!(
+                "gh read '{}' failed; retrying next fire. {}",
+                self.read, self.stderr_tail
+            ),
+            ReadErrorKind::Unrunnable => format!(
+                "external read '{}' could not run; retrying next fire. {}",
+                self.read, self.stderr_tail
+            ),
+            ReadErrorKind::BudgetRefused if self.stderr_tail.is_empty() => format!(
+                "external read '{}' was not run: the fire budget was spent before the read",
+                self.read
+            ),
+            // A non-empty tail names the fleet ledger's own refusal line, so
+            // the render prints that instead of the fire-budget prose.
+            ReadErrorKind::BudgetRefused => format!(
+                "external read '{}' was not run: {}",
+                self.read, self.stderr_tail
+            ),
+        }
+    }
+
+    /// The positive outcome marker for `loop_check_gh_error` rows: every row
+    /// carries one, so a timeout is distinguishable in the events log without
+    /// parsing prose.
+    pub(crate) fn outcome(&self) -> &'static str {
+        match self.kind {
+            ReadErrorKind::TimedOut => "timeout",
+            ReadErrorKind::Failed => "failed",
+            ReadErrorKind::Unrunnable => "unrunnable",
+            ReadErrorKind::BudgetRefused => "budget_refused",
+        }
+    }
+
+    /// What the failed call waited on, from the evidence the row carries:
+    /// the local fleet budget gate (its refusal text names itself), GitHub's
+    /// own refusal wording, or the network's resolve/connect/TLS markers on
+    /// a killed child. A row with no evidence stays `unknown` - the stall
+    /// report counts it under unattributed rather than guessing a cause
+    /// past what the row proves.
+    pub(crate) fn waited_on(&self) -> &'static str {
+        if self.stderr_tail.contains("gh budget:") {
+            return "budget_lock";
+        }
+        match self.kind {
+            ReadErrorKind::Failed if stderr_names_github_refusal(&self.stderr_tail) => "github",
+            ReadErrorKind::TimedOut if stderr_names_network(&self.stderr_tail) => "network",
+            _ => "unknown",
+        }
+    }
+}
+
+/// GitHub's own refusal wording: a 403/429 status line or the secondary
+/// limit's rate-limit sentence.
+fn stderr_names_github_refusal(stderr: &str) -> bool {
+    stderr.contains("HTTP 403")
+        || stderr.contains("HTTP 429")
+        || stderr.contains("secondary rate limit")
+        || stderr.contains("rate limit")
+}
+
+/// The network's failure vocabulary: name resolution, connect, and transport
+/// trouble a hung `gh` prints before it stops printing.
+fn stderr_names_network(stderr: &str) -> bool {
+    [
+        "Could not resolve",
+        "Unable to resolve",
+        "connection refused",
+        "Connection refused",
+        "connection reset",
+        "Connection reset",
+        "getaddrinfo",
+        "i/o timeout",
+        "request timeout",
+        "TLS",
+        "SSL",
+    ]
+    .iter()
+    .any(|marker| stderr.contains(marker))
+}
+
+pub(crate) fn bounded_read_diagnostic(context: &str, error: &GhReadError) -> String {
+    let elapsed = error
+        .elapsed
+        .map(|duration| format!("{:.1}", duration.as_secs_f64()))
+        .unwrap_or_else(|| "-".to_string());
+    format!(
+        "loop-check: {context}: external read '{}' outcome={} elapsed_s={} stderr_tail={:?}",
+        error.read,
+        error.outcome(),
+        elapsed,
+        error.stderr_tail
+    )
+}
+
+pub(crate) fn log_bounded_read_error(context: &str, error: &GhReadError) {
+    eprintln!("{}", bounded_read_diagnostic(context, error));
+}
+
+/// One external read through the single bounded transport. Every synchronous
+/// `gh`/`fno` read reachable from the stop decision routes through here, so
+/// none can hang the fire and none can misreport a kill as an ordinary
+/// failure. The completed payload carries the exit status, stdout, and the
+/// pre-capped stderr tail; policy (fail-closed, fail-open, degrade) stays at
+/// the typed call site.
+pub(crate) fn bounded_read(
+    bin: &OsStr,
+    args: &[&str],
+    cwd: &Path,
+    read_name: &str,
+    timeout: std::time::Duration,
+) -> Result<BoundedOutput, GhReadError> {
+    bounded_read_env(bin, args, cwd, read_name, timeout, &[])
+}
+
+pub(crate) fn bounded_read_env(
+    bin: &OsStr,
+    args: &[&str],
+    cwd: &Path,
+    read_name: &str,
+    timeout: std::time::Duration,
+    env: &[(&str, &str)],
+) -> Result<BoundedOutput, GhReadError> {
+    // The fleet request budget admits before the spawn: a refusal leaves no
+    // child and carries the ledger's refusal line. gh and the loop-check
+    // adapters that wrap it are GitHub traffic; fno and git reads are not,
+    // and the 0-point shapes (version probes, `api rate_limit`) admit
+    // untouched.
+    if let Some(line) = crate::gh_budget::admit_spawn_app(bin, args, cwd) {
+        return Err(GhReadError::budget_refused_with_detail(read_name, line));
+    }
+    let out = bounded_read_env_unadmitted(bin, args, cwd, read_name, timeout, env)?;
+    // With the transport stood down for a consulting child, the child is
+    // where a budget refusal surfaces. The transport's own refusal exits 75;
+    // a child that refused on a caller's behalf can surface at its own exit
+    // code instead (the conditional-door path exits 1 with the same ledger
+    // line). Only footnote machinery prints `gh budget:`, so the marker on
+    // a nonzero exit is the contract, and the outcome word and waited_on()
+    // read unchanged. The drain keeps stderr as bytes; the marker check and
+    // the error row both read it as UTF-8 with lossy replacement.
+    let tail = String::from_utf8_lossy(&out.stderr_tail).into_owned();
+    // The `gh budget:` prefix also carries admit notices ("ledger
+    // unavailable, admitting", "refusal not recorded"), which are not
+    // refusals. Every refusal line says "held locally", or "refusing while"
+    // in the reader-killed form; those two phrases are the marker.
+    let refused_line = tail.contains("held locally") || tail.contains("refusing while");
+    if matches!(out.status.code(), Some(code) if code != 0) && refused_line {
+        return Err(GhReadError::budget_refused_with_detail(read_name, tail));
+    }
+    Ok(out)
+}
+
+/// `bounded_read` without the budget admission, for a caller that already
+/// judged the request against the budget itself (the origin-aware door).
+pub(crate) fn bounded_read_unadmitted(
+    bin: &OsStr,
+    args: &[&str],
+    cwd: &Path,
+    read_name: &str,
+    timeout: std::time::Duration,
+) -> Result<BoundedOutput, GhReadError> {
+    bounded_read_env_unadmitted(bin, args, cwd, read_name, timeout, &[])
+}
+
+pub(crate) fn bounded_read_env_unadmitted(
+    bin: &OsStr,
+    args: &[&str],
+    cwd: &Path,
+    read_name: &str,
+    timeout: std::time::Duration,
+    env: &[(&str, &str)],
+) -> Result<BoundedOutput, GhReadError> {
+    match run_bounded_env(bin, args, cwd, timeout, env) {
+        BoundedRun::Completed(out) => Ok(out),
+        BoundedRun::TimedOut(elapsed, tail) => Err(GhReadError::timed_out(
+            read_name,
+            elapsed,
+            String::from_utf8_lossy(&tail).into_owned(),
+        )),
+        BoundedRun::Refused => Err(GhReadError::budget_refused(read_name)),
+        BoundedRun::SpawnFailed(kind) => Err(GhReadError::unrunnable_spawn(
+            read_name,
+            kind,
+            &format!("spawn failed ({kind:?})"),
+        )),
+        BoundedRun::WaitFailed => Err(GhReadError::unrunnable(read_name, "wait failed")),
+    }
+}
+
+/// The stop gate's answer to "is gh installed?" Three states, because a
+/// transient spawn failure and an absent binary are different claims (the
+/// failure-encoded-as-value class): Absent means the OS answered NotFound;
+/// SpawnTrouble means gh exists but could not be spawned right now (ETXTBSY
+/// while the binary is still being written, EACCES, ...); Present means the
+/// probe spawned at all - completion at any exit code OR a timeout both
+/// prove the binary exists, since the child had to run to hit either.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum GhProbeOutcome {
+    Present,
+    Absent,
+    SpawnTrouble { kind: std::io::ErrorKind },
+}
+
+impl GhProbeOutcome {
+    /// The positive outcome marker for the `gh_probe` event row: each state
+    /// has its own string, so the probe's conclusion is readable from the
+    /// events log without parsing prose.
+    pub(super) fn outcome_str(&self) -> &'static str {
+        match self {
+            GhProbeOutcome::Present => "found",
+            GhProbeOutcome::Absent => "absent",
+            GhProbeOutcome::SpawnTrouble { .. } => "spawn_trouble",
+        }
+    }
+
+    pub(super) fn detail_str(&self) -> String {
+        match self {
+            GhProbeOutcome::SpawnTrouble { kind } => format!("{kind:?}"),
+            _ => String::new(),
+        }
+    }
+}
+
+/// Probe gh by spawning `gh --version` through the bounded transport. Only
+/// NotFound reads as Absent, and absence is stable so it is not retried.
+/// Every other spawn error is retried a bounded number of times (ETXTBSY
+/// clears in milliseconds) and then reported as SpawnTrouble - never as
+/// absence, because "could not spawn right now" is not a fact about the
+/// world. Callers treat SpawnTrouble as present: the downstream reads are
+/// individually bounded and each carries its own conservative failure
+/// handling, which is exactly where a still-broken spawn belongs.
+pub(super) fn probe_gh_bin(gh_bin: &OsStr, cwd: &Path) -> GhProbeOutcome {
+    let mut last_kind = std::io::ErrorKind::Other;
+    for _ in 0..3 {
+        match bounded_read(
+            gh_bin,
+            &["--version"],
+            cwd,
+            "gh_version_probe",
+            std::time::Duration::from_secs(5),
+        ) {
+            // Completion proves existence at any exit code; a timeout proves
+            // it too (the child ran and outlived its bound), and a Failed
+            // read can only follow a completed spawn.
+            Ok(_)
+            | Err(GhReadError {
+                kind: ReadErrorKind::Failed | ReadErrorKind::TimedOut | ReadErrorKind::BudgetRefused,
+                ..
+            }) => return GhProbeOutcome::Present,
+            Err(GhReadError {
+                kind: ReadErrorKind::Unrunnable,
+                spawn_kind: Some(std::io::ErrorKind::NotFound),
+                ..
+            }) => {
+                // ENOENT is ambiguous: the binary is absent, or it EXISTS
+                // and its shebang interpreter is. An existing file is spawn
+                // trouble, never absence - a gh present on disk must not
+                // degrade the session to advisory mode.
+                if path_lookup(gh_bin).is_some() {
+                    return GhProbeOutcome::SpawnTrouble {
+                        kind: std::io::ErrorKind::NotFound,
+                    };
+                }
+                return GhProbeOutcome::Absent;
+            }
+            Err(GhReadError {
+                kind: ReadErrorKind::Unrunnable,
+                spawn_kind,
+                ..
+            }) => {
+                last_kind = spawn_kind.unwrap_or(std::io::ErrorKind::Other);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+    }
+    GhProbeOutcome::SpawnTrouble { kind: last_kind }
+}
+
+/// Resolve `bin` the way `Command::new` would: a path with a separator is
+/// checked directly, a bare name is searched on PATH (first regular-file
+/// hit). Used only on the NotFound arm of the gh probe, to tell "no such
+/// file" from "the file exists but execve said ENOENT" (missing interpreter).
+pub(super) fn path_lookup(bin: &OsStr) -> Option<std::path::PathBuf> {
+    let name = bin.to_str()?;
+    if name.contains('/') {
+        return std::fs::symlink_metadata(name)
+            .ok()
+            .map(|_| std::path::PathBuf::from(name));
+    }
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(name))
+        .find(|p| p.is_file())
+}
+
+/// One bounded local-`git` read. Every stop-gate git call routes here for
+/// the same reason the gh reads route through `bounded_read`: an external
+/// diff driver, a locked index, or a stalled mount can hang `git` exactly
+/// the way a wedged network child hangs `gh`, and an unbounded `.output()`
+/// turns that into a fire that never decides. A timeout or unrunnable git is
+/// named on stderr (the shim's forensic log) and reads as "no answer";
+/// every caller already treats no-answer as its conservative outcome
+/// (unshipped, dirty, unknown branch), so the degrade direction is the same
+/// one each caller documented for a failing git.
+pub(crate) fn git_bounded(git_bin: &str, args: &[&str], cwd: &Path) -> Option<BoundedOutput> {
+    let read_name = format!("git {}", args.first().unwrap_or(&"?"));
+    match run_bounded(OsStr::new(git_bin), args, cwd, stopgate_read_timeout()) {
+        BoundedRun::Completed(out) => Some(out),
+        BoundedRun::TimedOut(elapsed, tail) => {
+            let error = GhReadError::timed_out(
+                &read_name,
+                elapsed,
+                String::from_utf8_lossy(&tail).into_owned(),
+            );
+            log_bounded_read_error("git", &error);
+            None
+        }
+        BoundedRun::SpawnFailed(kind) => {
+            let error = GhReadError::unrunnable_spawn(
+                &read_name,
+                kind,
+                &format!("spawn failed ({kind:?})"),
+            );
+            log_bounded_read_error("git", &error);
+            None
+        }
+        BoundedRun::WaitFailed => {
+            let error = GhReadError::unrunnable(&read_name, "wait failed");
+            log_bounded_read_error("git", &error);
+            None
+        }
+        BoundedRun::Refused => {
+            let error = GhReadError::budget_refused(&read_name);
+            log_bounded_read_error("git", &error);
+            None
+        }
+    }
+}

@@ -1,0 +1,200 @@
+#!/usr/bin/env bash
+# check-no-hardcoded-paths.sh - CI gate that blocks new hardcoded ~/.fno
+# path literals from landing in the fno codebase.
+#
+# After Phase 03 of the path-config migration (plan 2026-05-14-path-config-impl),
+# all path resolution must go through:
+#   Rust: crates/fno-agents/src/paths.rs (state_dir, graph_json, ...)
+#   Bash: source "$(fno config paths shell-stub)"  then use $STATE_DIR and its emitted paths.
+#
+# Run: bash scripts/ci/check-no-hardcoded-paths.sh
+# Exits 0 when no violations found; exits 1 with a report when violations detected.
+#
+# Allowlist rationale
+# -------------------
+# Python (entire-file exclusions):
+#   - fno/paths.py - canonical accessor defs
+#   - fno/config/__init__.py    - bootstrap fallback (load before paths available)
+#   - fno/update.py             - has try/except fallback for source-path cache
+#   - graph/_constants.py             - uses _state_dir() helper with try/except
+#   - doctor.py - the orphan-file report deliberately checks the DEFAULT
+#       (unconfigured) ~/.fno, not a configured override: it is an advisory
+#       hygiene check for stray files at the standard location, and routing
+#       through paths.state_dir() would pull in the settings loader's git
+#       subprocess call on every `fno doctor` invocation.
+#   - test_*.py                       - sandboxed tests
+#   - scripts/metrics/*.py            - standalone analysis scripts (not in CLI)
+#
+# Bash (entire-file or pattern exclusions):
+#   - scripts/lib/paths.sh            - the generated stub
+#   - scripts/tests/                  - harnesses redirect HOME=$TMP before use
+#   - scripts/ci/                     - this script itself
+#   - Lines using ${VAR:-$HOME/.fno/...} - already-migrated fallbacks
+#   - Comment lines (# ...) and docstring lines (Python triple-quote strings)
+
+set -euo pipefail
+
+REPO_ROOT=""
+if git_root=$(git rev-parse --show-toplevel 2>/dev/null); then
+    REPO_ROOT="$git_root"
+fi
+if [[ -z "$REPO_ROOT" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    candidate="$SCRIPT_DIR"
+    while [[ "$candidate" != "/" && "$candidate" != "." ]]; do
+        if [[ -e "$candidate/.git" ]]; then
+            REPO_ROOT="$candidate"
+            break
+        fi
+        candidate="$(dirname "$candidate")"
+    done
+fi
+if [[ -z "$REPO_ROOT" ]]; then
+    echo "ERROR: could not resolve repo root" >&2
+    exit 2
+fi
+
+VIOLATIONS=0
+REPORT=""
+
+add_violation() {
+    local heading="$1"
+    local hits="$2"
+    if [[ -n "$hits" ]]; then
+        local count
+        count=$(echo "$hits" | wc -l | tr -d ' ')
+        VIOLATIONS=$((VIOLATIONS + count))
+        REPORT+=$'\n'"$heading"$'\n'"$hits"$'\n'
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Python: Path.home() / ".fno" in CLI source files
+#
+# Files excluded (known legitimate fallbacks or bootstrap paths):
+#   paths.py, config/__init__.py,
+#   config_io.py (bootstrap: _global_settings_path defines where ~/.fno is,
+#     so it predates and cannot route through fno.paths),
+#   update.py (try/except),
+#   agents/registry.py (guard identifies the shared HOME registry despite config overrides)
+#   graph/_constants.py (uses _state_dir() helper), test_*.py
+# ---------------------------------------------------------------------------
+
+PY_HITS=$(
+    grep -rn 'Path\.home() / "\.fno"' \
+        "$REPO_ROOT/cli/src/fno/" \
+        --include='*.py' \
+        --exclude='paths.py' \
+        --exclude='test_*.py' \
+        2>/dev/null \
+    | grep -v 'config/__init__\.py' \
+    | grep -v 'config_io\.py' \
+    | grep -v 'graph/_constants\.py' \
+    | grep -v 'update\.py' \
+    | grep -v 'agents/dispatch_target\.py' \
+    | grep -v 'agents/registry\.py' \
+    | grep -v 'doctor\.py' \
+    || true
+)
+add_violation "Python bare Path.home() / \".fno\" violations in cli/src/fno/:" "$PY_HITS"
+
+# ---------------------------------------------------------------------------
+# Bash: bare $HOME/.fno/ WITHOUT ${VAR:-...} fallback wrapper
+# Scopes: hooks/, skills/ (not scripts/tests/, not paths.sh, not this script)
+# Excludes: comment lines, lines with ${VAR:-$HOME/.fno} pattern
+#
+# The comment filter must match AFTER grep -rn's `path:lineno:` prefix, so it
+# anchors on that prefix (`^[^:]*:[0-9]*:[[:space:]]*#`), NOT a bare `^\s*#`
+# (which never matches, since every line starts with the file path). A bare
+# anchor silently disabled comment exclusion and let a $HOME/.fno example in a
+# comment fail the gate.
+#
+# The pattern must match BOTH spellings and must NOT require a trailing slash.
+# The old `\$HOME/\.fno/` missed twice over: `${HOME}/.fno` escaped it on the
+# brace form, and the trailing slash excused a bare directory assignment. That
+# is exactly how `hooks/context-nudge.sh` came to write four latch files per
+# session per band into the state-dir top level while this gate scanned the
+# file on every CI run and stayed green. A guard on one of N spellings of the
+# same literal reads as protection and covers nothing. The exclusion filter has
+# to use the same widened pattern, or the sanctioned `${VAR:-$HOME/.fno}`
+# fallback form starts failing.
+# ---------------------------------------------------------------------------
+
+BARE_STATE_DIR_RE='\$\{?HOME\}?/\.fno'
+
+HOOKS_SH_HITS=$(
+    grep -rnE "$BARE_STATE_DIR_RE" \
+        "$REPO_ROOT/hooks/" \
+        --include='*.sh' \
+        2>/dev/null \
+    | grep -vE ":-.*$BARE_STATE_DIR_RE" \
+    | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' \
+    || true
+)
+add_violation "hooks/ bare \$HOME/.fno violations:" "$HOOKS_SH_HITS"
+
+SKILLS_SH_HITS=$(
+    grep -rnE "$BARE_STATE_DIR_RE" \
+        "$REPO_ROOT/skills/" \
+        --include='*.sh' \
+        2>/dev/null \
+    | grep -vE ":-.*$BARE_STATE_DIR_RE" \
+    | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' \
+    || true
+)
+add_violation "skills/ bare \$HOME/.fno violations:" "$SKILLS_SH_HITS"
+
+# ---------------------------------------------------------------------------
+# handoffs/ path joins: the canon handoff doc location is configured via
+# paths.handoffs_dir() and surfaced by `fno config paths handoff`. A skill or hook
+# that composes a `handoffs/` path by hand re-hardcodes the convention the command
+# exists to retire. The command (`fno config paths handoff`) and the
+# worktree-local succession brief (`.fno/artifacts/handoff/`, singular) do not
+# match this plural-slash form, so there are no legitimate hits to exclude.
+# ---------------------------------------------------------------------------
+HANDOFFS_HITS=$(
+    grep -rn 'handoffs/' \
+        "$REPO_ROOT/skills/" \
+        "$REPO_ROOT/hooks/" \
+        --include='*.sh' \
+        --include='*.py' \
+        2>/dev/null \
+    | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' \
+    || true
+)
+add_violation "skills/ + hooks/ hardcoded handoffs/ joins (use 'fno config paths handoff'):" "$HANDOFFS_HITS"
+
+# scripts/ directory: exclude scripts/tests/ (sandboxed) and scripts/ci/ (this script)
+# also exclude scripts/lib/paths.sh
+SCRIPTS_SH_HITS=$(
+    grep -rnE "$BARE_STATE_DIR_RE" \
+        "$REPO_ROOT/scripts/" \
+        --include='*.sh' \
+        2>/dev/null \
+    | grep -v 'scripts/tests/' \
+    | grep -v 'scripts/ci/' \
+    | grep -v 'scripts/lib/paths\.sh' \
+    | grep -vE ":-.*$BARE_STATE_DIR_RE" \
+    | grep -v '^[^:]*:[0-9]*:[[:space:]]*#' \
+    || true
+)
+add_violation "scripts/ bare \$HOME/.fno violations (excluding tests/ and ci/):" "$SCRIPTS_SH_HITS"
+
+# ---------------------------------------------------------------------------
+# Report
+# ---------------------------------------------------------------------------
+
+if [[ $VIOLATIONS -eq 0 ]]; then
+    echo "check-no-hardcoded-paths: no violations found"
+    exit 0
+fi
+
+{
+    echo "check-no-hardcoded-paths: $VIOLATIONS violation(s) found"
+    echo "$REPORT"
+    echo
+    echo "To fix: route paths through crates/fno-agents/src/paths.rs (Rust)"
+    echo "        or source \"\$(fno config paths shell-stub)\" + \${STATE_DIR} (Bash)."
+    echo "See: scripts/lib/paths.sh, crates/fno-agents/src/paths.rs"
+} >&2
+exit 1

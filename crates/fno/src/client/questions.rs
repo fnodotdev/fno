@@ -1,0 +1,2128 @@
+//! The full questions detail view, split out of `client.rs` because that file
+//! is over the line budget and shrink-only. It reuses the backlog board's
+//! framed list and detail panes and markdown renderer (`backlog_panes` /
+//! `backlog_md`), and answers through [`crate::needs_overlay::answer`].
+//! A child module of `client`, so `View`'s private fields stay local.
+
+use super::*;
+use std::sync::atomic::Ordering;
+
+fn age_short(created_at: &str, now: u64) -> String {
+    let Ok(t) = chrono::DateTime::parse_from_rfc3339(created_at) else {
+        return String::new();
+    };
+    let age = now.saturating_sub(t.timestamp().max(0) as u64);
+    if age >= 3600 {
+        format!("{}h", age / 3600)
+    } else {
+        format!("{}m", age / 60)
+    }
+}
+
+pub(super) struct Detail {
+    /// The opened question; the bell panel tabs are the board, so the old
+    /// list pane is gone and a view holds exactly the row it opened on.
+    pub(super) item: crate::needs_overlay::QuestionItem,
+    /// Why the projection read is unavailable, while it is. The page names it
+    /// so a bare index row reads as a failed read, not an empty question.
+    pub(super) degraded: Option<String>,
+    pub(super) sel: Option<u32>,
+    pub(super) notes: Option<String>,
+    pub(super) free: Option<String>,
+    pub(super) notice: Option<String>,
+    /// The page line the pane windows to.
+    pub(super) scroll: usize,
+    /// `a` picked "agents decide": Enter hands the question to the team.
+    pub(super) delegate: bool,
+    /// The decision that answered this question, when the index holds one.
+    pub(super) decision: Option<String>,
+    /// The first `X` armed archive-all; the second sends it.
+    pub(super) archive_armed: bool,
+    /// The screenshots the ask attached.
+    pub(super) shots: Vec<Shot>,
+    /// Their pixels, one slot per shot. A thread fills it, so a decode never
+    /// stalls the UI loop; until it lands the strip shows names only.
+    pixels: std::sync::Arc<std::sync::OnceLock<Vec<Option<image::DynamicImage>>>>,
+    /// The screen the arrows picked; Enter expands it.
+    pub(super) screen: Option<usize>,
+    /// The picked screen fills the view.
+    pub(super) expanded: bool,
+    /// A screen that does not decode, for the loop to send through the open
+    /// router (`mux.open_with`).
+    pub(super) open_req: Option<std::path::PathBuf>,
+    /// The strip (`None`) or one expanded screen, encoded for its last rect.
+    cache: std::cell::RefCell<Option<ShotCache>>,
+    /// Where the last draw put the thumbnails, and the shot in each slot, so
+    /// a click on one opens it.
+    strip_at: std::cell::Cell<Option<image_layer::Rect>>,
+    strip_slots: std::cell::RefCell<Vec<usize>>,
+}
+
+type ShotCache = (
+    image_layer::Rect,
+    Option<usize>,
+    Option<(image_layer::Rect, image_layer::Rendered)>,
+);
+
+pub(super) struct Shot {
+    pub(super) path: std::path::PathBuf,
+}
+
+impl Shot {
+    fn name(&self) -> String {
+        self.path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+}
+
+impl Detail {
+    /// Open on the question with `id`; None when the fold does not hold it.
+    pub(super) fn open(fold: &crate::needs_overlay::QuestionsFold, id: &str) -> Option<Detail> {
+        let item = fold.items.iter().find(|q| q.id == id).cloned()?;
+        let shots: Vec<Shot> = item
+            .images
+            .iter()
+            .map(|p| Shot {
+                path: std::path::PathBuf::from(p),
+            })
+            .collect();
+        let pixels = std::sync::Arc::new(std::sync::OnceLock::new());
+        // Half-block terminals decode too: the thumbnails and the expanded
+        // view paint as cells there, so every terminal shows the pixels.
+        if !shots.is_empty() {
+            let paths: Vec<_> = shots.iter().map(|s| s.path.clone()).collect();
+            let slot = pixels.clone();
+            std::thread::spawn(move || {
+                let _ = slot.set(
+                    paths
+                        .iter()
+                        .map(|p| super::file_viewer::decode_image(p))
+                        .collect(),
+                );
+            });
+        }
+        Some(Detail {
+            item,
+            degraded: None,
+            sel: None,
+            notes: None,
+            free: None,
+            notice: None,
+            scroll: 0,
+            delegate: false,
+            decision: None,
+            archive_armed: false,
+            shots,
+            pixels,
+            screen: None,
+            expanded: false,
+            open_req: None,
+            cache: std::cell::RefCell::new(None),
+            strip_at: std::cell::Cell::new(None),
+            strip_slots: std::cell::RefCell::new(Vec::new()),
+        })
+    }
+
+    /// Block until the decode thread lands, at most `bound`. A snapshot
+    /// composes once, so it waits for the pixels the live loop redraws for.
+    pub(super) fn wait_decoded(&self, bound: std::time::Duration) {
+        let end = std::time::Instant::now() + bound;
+        while !self.shots.is_empty()
+            && self.pixels.get().is_none()
+            && std::time::Instant::now() < end
+        {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    /// Shot `i`'s pixels, once the decode thread has landed them.
+    fn img(&self, i: usize) -> Option<&image::DynamicImage> {
+        self.pixels.get()?.get(i)?.as_ref()
+    }
+
+    /// Step the picked screen by `dir`, wrapping. The first step from none
+    /// lands on the first screen (right) or the last (left).
+    fn step_screen(&mut self, dir: isize) {
+        let n = self.shots.len() as isize;
+        if n == 0 {
+            return;
+        }
+        let next = match self.screen {
+            Some(i) => (i as isize + dir).rem_euclid(n),
+            None if dir > 0 => 0,
+            None => n - 1,
+        };
+        self.screen = Some(next as usize);
+    }
+
+    pub(super) fn item(&self) -> &crate::needs_overlay::QuestionItem {
+        &self.item
+    }
+}
+
+/// One `## heading` block, printed only when the field holds text: a
+/// section the source never recorded prints nothing.
+fn section(s: &mut String, heading: &str, body: Option<&str>) {
+    if let Some(text) = body.map(str::trim).filter(|v| !v.is_empty()) {
+        s.push_str(&format!("## {heading}\n\n{text}\n\n"));
+    }
+}
+
+/// The question page as markdown, the shape the backlog board's renderer
+/// turns into the detail pane's lines: title and meta, the context sections,
+/// the numbered options (the recommended one marked), and the answer line.
+fn question_page(
+    item: &crate::needs_overlay::QuestionItem,
+    d: &Detail,
+    now: u64,
+    w: usize,
+) -> String {
+    let mut s = String::new();
+    let title = if item.title.is_empty() {
+        "(no title)"
+    } else {
+        &item.title
+    };
+    s.push_str(&format!("# {title}\n\n"));
+    if let Some(reason) = d.degraded.as_deref() {
+        s.push_str(&format!(
+            "projection unavailable: {reason}; this page shows what the index holds\n\n"
+        ));
+    }
+    if let Some(decision) = d.decision.as_deref() {
+        s.push_str(&format!("decision: {decision} (d opens it)\n\n"));
+    }
+    let asker = item.asker.as_ref();
+    let origin = item.origin.as_ref();
+    // The card's header line: who asked (registry name, mail tag), the lead
+    // the row climbed through, the class, and the node with its graph stage.
+    let who = match origin {
+        // Origin present but carrying no usable identity (a null or empty
+        // handle and no registry name) reads as an unknown asker, never as a
+        // blank header. Absent means absent: a null handle once blanked
+        // every question page.
+        Some(o) => {
+            let handle = o.handle.as_deref().filter(|h| !h.is_empty());
+            let name = o.name.as_deref().filter(|n| !n.is_empty());
+            match (name, handle) {
+                (Some(n), Some(h)) if n == h => format!("asked by {n}"),
+                (Some(n), Some(h)) => format!("asked by {n} ({h})"),
+                (Some(n), None) => format!("asked by {n}"),
+                (None, Some(h)) => format!("asked by {h}"),
+                (None, None) => asker.map(|a| a.handle.as_str()).unwrap_or("?").to_string(),
+            }
+        }
+        None => asker.map(|a| a.handle.as_str()).unwrap_or("?").to_string(),
+    };
+    let mut head = match item.via.last().and_then(|h| h.holder_name.as_deref()) {
+        Some(lead) => format!("{who} via {lead}"),
+        None => who,
+    };
+    if let Some(host) = origin.and_then(|o| o.host.as_deref()) {
+        head.push_str(&format!(" on {host}"));
+    }
+    if let Some(class) = item.class.as_deref() {
+        head.push_str(&format!(" \u{b7} class {class}"));
+    }
+    let stage = item
+        .node_stage
+        .as_deref()
+        .map(|s| format!(" ({s})"))
+        .unwrap_or_default();
+    let title_word = item
+        .node_title
+        .as_deref()
+        .map(|t| format!(" {t}"))
+        .unwrap_or_default();
+    // The harness rides the origin when the asker row never carried one,
+    // and prints nothing over a bare question mark: a token with no fact
+    // behind it reads as noise.
+    let harness_word = origin
+        .and_then(|o| o.harness.as_deref())
+        .or_else(|| asker.and_then(|a| a.harness.as_deref()))
+        .map(|h| format!(" \u{b7} {h}"))
+        .unwrap_or_default();
+    // The missing list prints once, and the projection's per-field
+    // `missing ` prefix drops: `missing: asker, node`, never the word twice.
+    let missing = if item.ready {
+        String::new()
+    } else {
+        let names: Vec<&str> = item
+            .missing
+            .iter()
+            .map(|m| m.strip_prefix("missing ").unwrap_or(m))
+            .collect();
+        format!(" \u{b7} missing: {}", names.join(", "))
+    };
+    s.push_str(&format!(
+        "{head} \u{b7} node {}{title_word}{stage}{harness_word} \u{b7} {} {}{}\n\n",
+        item.node.as_deref().unwrap_or("none"),
+        age_short(&item.created_at, now),
+        if item.settled {
+            "answered"
+        } else {
+            &item.state
+        },
+        missing
+    ));
+    if let Some(body) = item.body.as_deref() {
+        if !body.is_empty() && body != item.title {
+            s.push_str(&format!("{body}\n\n"));
+        }
+    }
+    // The notes input lives in the page: directly under
+    // the question body, above `## why asked`, pre-wrapped so every line
+    // keeps the blockquote bar, with the cursor block riding the text.
+    if let Some(text) = d.free.as_deref() {
+        s.push_str("## notes\n\n");
+        let mut wrapped = Vec::new();
+        node_detail::wrap_line(
+            &format!("\u{276f} {text}\u{258f}"),
+            w.saturating_sub(2).max(8),
+            &mut wrapped,
+        );
+        for line in &wrapped {
+            s.push_str(&format!("> {line}\n"));
+        }
+        s.push('\n');
+    }
+    section(&mut s, "why asked", item.blocked_because.as_deref());
+    section(
+        &mut s,
+        "why these options",
+        item.options_rationale.as_deref(),
+    );
+    if !item.options.is_empty() {
+        s.push_str("## options\n\n");
+    }
+    for o in &item.options {
+        let mut line = format!("{}. {}", o.n, o.text);
+        if d.sel == Some(o.n) {
+            line.push_str("  [selected]");
+        }
+        if item
+            .recommendation
+            .as_ref()
+            .is_some_and(|r| r.option == o.n)
+        {
+            line.push_str("  [recommended]");
+        }
+        s.push_str(&format!("{line}\n"));
+        for p in &o.pros {
+            s.push_str(&format!("   + {p}\n"));
+        }
+        for c in &o.cons {
+            s.push_str(&format!("   - {c}\n"));
+        }
+    }
+    if !item.options.is_empty() {
+        let none_sel = d.sel == Some(0);
+        s.push_str(&format!(
+            "0. none of these{}\n",
+            if none_sel { "  [selected]" } else { "" }
+        ));
+        s.push('\n');
+    }
+    if let Some(r) = &item.recommendation {
+        s.push_str(&format!(
+            "## recommended\n\noption {} \u{b7} {}{}\n\n",
+            r.option,
+            r.why,
+            r.downside
+                .as_deref()
+                .map(|x| format!(" \u{b7} downside: {x}"))
+                .unwrap_or_default()
+        ));
+    }
+    section(&mut s, "reversible", item.reversible.as_deref());
+    if item.reversible.as_deref() == Some("costly") {
+        section(&mut s, "cost if wrong", item.cost_if_wrong.as_deref());
+    }
+    section(&mut s, "meanwhile", item.meanwhile.as_deref());
+    section(&mut s, "not thought through", item.unknowns.as_deref());
+    section(&mut s, "tried", item.tried.as_deref());
+    section(&mut s, "evidence", item.evidence.as_deref());
+    // The default on silence with its deadline: what the row does when no
+    // answer lands before the deadline passes.
+    let silence = match (
+        item.on_silence.as_deref().map(str::trim),
+        item.deadline.as_deref().map(str::trim),
+    ) {
+        (Some(what), Some(at)) => format!("{what} at {at}"),
+        (Some(what), None) => what.to_string(),
+        (None, Some(at)) => format!("at {at}"),
+        (None, None) => String::new(),
+    };
+    section(&mut s, "on silence", Some(&silence));
+    if d.delegate {
+        s.push_str(
+            "## answer\n\nagents decide: the team over the node decides a reversible call\n\n",
+        );
+    }
+    if let Some(notes) = &d.notes {
+        s.push_str(&format!("## answer\n\nnotes: {notes}\n\n"));
+    }
+    s
+}
+
+/// The question page's rendered lines at the detail pane's width.
+fn page_lines(d: &Detail, w: usize, now: u64) -> Vec<crate::text_style::TLine> {
+    super::node_detail::backlog_md::md_lines(&question_page(d.item(), d, now, w), w)
+}
+
+/// The page's wrapped width: the framed pane's text width at any terminal.
+/// The frame spends two cells on side pad inside the body, and the body row
+/// clips whatever runs past that, so a line wrapped any wider loses its last
+/// two cells.
+fn page_width(cols: usize) -> usize {
+    cols.saturating_sub(chrome::Chrome::FRAME_COLS + 2).max(10)
+}
+
+/// Draw the question page over the content viewport: one framed pane, the
+/// key hint below, and the notes input floating over it all. The bell panel
+/// tabs are the board (the 2026-10-05 ruling), so the old list pane is
+/// gone. Returns false when no view is open, so the draw chain's `else if`
+/// arm is one call.
+pub(super) fn draw_detail(
+    view: &View,
+    cells: &mut [Cell],
+    (rows, cols): (usize, usize),
+    _origin: (usize, usize),
+    _dims: (usize, usize),
+) -> bool {
+    let Some(d) = &view.question_detail else {
+        return false;
+    };
+    let now = crate::digest_overlay::now_secs();
+    let hint_h = if rows >= 8 { 2 } else { 0 };
+    if d.expanded {
+        draw_expanded(d, cells, rows, cols, &view.theme);
+        return true;
+    }
+    let strip_h = strip_rows(d, rows);
+    let panes_h = rows.saturating_sub(hint_h + strip_h);
+    // The frame sizes to the page, so blank the view first: a short
+    // question never shows the panes under it.
+    backlog_style::paint_panel(cells, rows, cols, 0, cols, panes_h, &[], None, &view.theme);
+    if strip_h > 0 {
+        draw_strip(d, cells, (panes_h, strip_h), cols, &view.theme);
+    }
+    let page = page_lines(d, page_width(cols), now);
+    // While the notes box is open the window follows the cursor line, so a
+    // box taller than the pane keeps every typed line in view.
+    let page_follow = if d.free.is_some() {
+        let cursor = page.iter().rposition(|l| l.text.contains('\u{258f}'));
+        Some(cursor.unwrap_or(page.len().saturating_sub(1)))
+    } else {
+        Some(d.scroll.min(page.len().saturating_sub(1)))
+    };
+    let chrome = chrome::Chrome::new(
+        match d.item().number.as_deref() {
+            Some(number) => format!("question \u{b7} {number}"),
+            None => format!("question \u{b7} {}", d.item().id),
+        },
+        crate::popup::Anchor::Center,
+    )
+    .flat();
+    let body: Vec<chrome::BodyLine> = page
+        .iter()
+        .map(|l| backlog_style::to_body_line(&l.clone().pad_to(cols.saturating_sub(2))))
+        .collect();
+    super::backlog_board::backlog_panes::framed_region(
+        cells,
+        rows,
+        cols,
+        (0, 0, panes_h, cols),
+        &chrome,
+        &body,
+        page_follow,
+        None,
+        &view.theme,
+    );
+    // The two-row hint, mirroring the backlog board's. A refusal or a
+    // "pick an option" nudge reads in the hint's place until the next key.
+    let hint = if let Some(n) = &d.notice {
+        n.as_str()
+    } else if d.screen.is_some() {
+        "\u{2190}/\u{2192} screen \u{b7} Enter view \u{b7} j/k back to options \u{b7} Esc close"
+    } else if let Some(_) = &d.free {
+        if d.item().options.is_empty() && d.item().kind != "pin" {
+            "type the answer \u{b7} Enter sends \u{b7} Esc cancels"
+        } else {
+            "notes \u{b7} Enter saves \u{b7} Esc cancels"
+        }
+    } else if d.item().options.is_empty() {
+        "Enter answer \u{b7} j/k scroll \u{b7} n notes \u{b7} w watch \u{b7} Esc close"
+    } else {
+        "1-9 option \u{b7} 0 none \u{b7} a agents decide \u{b7} j/k select \u{b7} Enter sends \u{b7} n notes \u{b7} w watch \u{b7} ^d/^u scroll \u{b7} x archive \u{b7} X archive all \u{b7} Esc close"
+    };
+    if hint_h > 0 {
+        let wrapped = super::backlog_board::backlog_panes::hint_rows(hint, cols);
+        let hint_lines: Vec<crate::text_style::TLine> = wrapped
+            .into_iter()
+            .take(2)
+            .map(crate::text_style::TLine::meta)
+            .collect();
+        backlog_style::paint_panel(
+            cells,
+            rows,
+            cols,
+            rows - hint_h,
+            cols,
+            hint_h,
+            &hint_lines,
+            None,
+            &view.theme,
+        );
+    }
+    // The notes box draws in the page (see question_page); nothing floats.
+    true
+}
+
+/// Rows the screens strip takes under the page: none without shots, one label
+/// row when the view is short or no shot decodes, else a band of thumbnails
+/// above the label row.
+fn strip_rows(d: &Detail, rows: usize) -> usize {
+    let none_decode = d
+        .pixels
+        .get()
+        .is_some_and(|px| px.iter().all(Option::is_none));
+    if d.shots.is_empty() {
+        0
+    } else if rows < 16 || none_decode {
+        1
+    } else {
+        (rows / 4).clamp(5, 10)
+    }
+}
+
+/// The screens label: each shot numbered, the picked one marked.
+fn strip_label(d: &Detail) -> String {
+    let names: Vec<String> = d
+        .shots
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let mark = if d.screen == Some(i) { "\u{25b8}" } else { " " };
+            format!("{mark}{} {}", i + 1, s.name())
+        })
+        .collect();
+    format!(
+        "screens \u{2190}/\u{2192} \u{b7} click opens  {}",
+        names.join("  ")
+    )
+}
+
+/// The strip: thumbnails composed into one sheet (a frame carries one image
+/// placement), the label row under it.
+fn draw_strip(
+    d: &Detail,
+    cells: &mut [Cell],
+    (top, h): (usize, usize),
+    cols: usize,
+    theme: &Theme,
+) {
+    let rows = top + h;
+    let mut lines = vec![crate::text_style::TLine::meta(String::new()); h - 1];
+    lines.push(crate::text_style::TLine::meta(strip_label(d)));
+    backlog_style::paint_panel(cells, rows, cols, top, cols, h, &lines, None, theme);
+    let slots: Vec<usize> = (0..d.shots.len()).filter(|&i| d.img(i).is_some()).collect();
+    let shown: Vec<&image::DynamicImage> = slots.iter().filter_map(|&i| d.img(i)).collect();
+    let rect = image_layer::Rect {
+        row: top as u16,
+        col: 1,
+        w: cols.saturating_sub(2) as u16,
+        h: (h - 1) as u16,
+    };
+    d.strip_at.set(None);
+    if shown.is_empty() || rect.h == 0 {
+        return;
+    }
+    d.strip_at.set(Some(rect));
+    *d.strip_slots.borrow_mut() = slots;
+    paint_cached(d, rect, None, cells, cols, || {
+        let (fw, fh) = image_layer::font_px();
+        let px = (
+            u32::from(rect.w) * u32::from(fw),
+            u32::from(rect.h) * u32::from(fh),
+        );
+        sheet(&shown, px)
+    });
+}
+
+/// Thumbnails side by side on one transparent canvas of `px` pixels, each
+/// fit and centered in an equal slot. Fit scales up too, so one shot on a
+/// canvas the size of the view fills it.
+fn sheet(imgs: &[&image::DynamicImage], px: (u32, u32)) -> image::DynamicImage {
+    let mut canvas = image::RgbaImage::new(px.0.max(1), px.1.max(1));
+    let slot = px.0 / imgs.len().max(1) as u32;
+    let pad = 8;
+    for (i, img) in imgs.iter().enumerate() {
+        let (w, h) = (
+            slot.saturating_sub(pad).max(1),
+            px.1.saturating_sub(pad).max(1),
+        );
+        // The fast integer thumbnail shrinks; only a shot smaller than its
+        // slot pays for a filtered resize up.
+        let thumb = if img.width() > w || img.height() > h {
+            img.thumbnail(w, h)
+        } else {
+            img.resize(w, h, image::imageops::FilterType::Triangle)
+        };
+        let x = i as u32 * slot + (slot.saturating_sub(thumb.width())) / 2;
+        let y = px.1.saturating_sub(thumb.height()) / 2;
+        image::imageops::overlay(&mut canvas, &thumb.to_rgba8(), i64::from(x), i64::from(y));
+    }
+    image::DynamicImage::ImageRgba8(canvas)
+}
+
+/// The picked screen over the whole view: a title row, the image under it.
+fn draw_expanded(d: &Detail, cells: &mut [Cell], rows: usize, cols: usize, theme: &Theme) {
+    let Some(i) = d.screen else {
+        return;
+    };
+    let title = format!(
+        "screen {}/{} \u{b7} {} \u{b7} \u{2190}/\u{2192} step \u{b7} Esc back",
+        i + 1,
+        d.shots.len(),
+        d.shots[i].name()
+    );
+    let mut lines = vec![crate::text_style::TLine::meta(title)];
+    lines.resize(rows, crate::text_style::TLine::meta(String::new()));
+    backlog_style::paint_panel(cells, rows, cols, 0, cols, rows, &lines, None, theme);
+    let Some(img) = d.img(i) else {
+        return;
+    };
+    let rect = image_layer::Rect {
+        row: 1,
+        col: 0,
+        w: cols as u16,
+        h: rows.saturating_sub(1) as u16,
+    };
+    // The encoder only shrinks to fit, so a small shot is first scaled up and
+    // centered on a canvas the size of the view.
+    paint_cached(d, rect, Some(i), cells, cols, || {
+        let (fw, fh) = image_layer::font_px();
+        let px = (
+            u32::from(rect.w) * u32::from(fw),
+            u32::from(rect.h) * u32::from(fh),
+        );
+        sheet(&[img], px)
+    });
+}
+
+/// Encode once per rect and screen, then paint the cached encoding. A stable
+/// encoding is what lets the compositor skip re-sending the image each frame.
+fn paint_cached(
+    d: &Detail,
+    rect: image_layer::Rect,
+    key: Option<usize>,
+    cells: &mut [Cell],
+    cols: usize,
+    img: impl FnOnce() -> image::DynamicImage,
+) {
+    let mut cache = d.cache.borrow_mut();
+    if cache
+        .as_ref()
+        .is_none_or(|(at, k, _)| *at != rect || *k != key)
+    {
+        let (img, at) = opaque_crop(&img(), rect);
+        *cache = Some((rect, key, image_layer::render(&img, at).map(|r| (at, r))));
+    }
+    if let Some((_, _, Some((at, rendered)))) = cache.as_ref() {
+        image_layer::paint(rendered, *at, cells, cols);
+    }
+}
+
+/// Crop a canvas of `rect` cells to the cells its opaque pixels cover.
+/// Half-blocks paint a transparent pixel black, so the empty canvas would
+/// draw a black band; cropped, the panel ground shows round the image.
+fn opaque_crop(
+    img: &image::DynamicImage,
+    rect: image_layer::Rect,
+) -> (image::DynamicImage, image_layer::Rect) {
+    let rgba = img.to_rgba8();
+    let (fw, fh) = (
+        rgba.width() / u32::from(rect.w.max(1)),
+        rgba.height() / u32::from(rect.h.max(1)),
+    );
+    let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+    for (x, y, p) in rgba.enumerate_pixels() {
+        if p[3] > 0 {
+            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
+        }
+    }
+    if x0 >= x1 || fw == 0 || fh == 0 {
+        return (img.clone(), rect);
+    }
+    let (c0, r0) = (x0 / fw, y0 / fh);
+    let (c1, r1) = (x1.div_ceil(fw), y1.div_ceil(fh));
+    let at = image_layer::Rect {
+        row: rect.row + r0 as u16,
+        col: rect.col + c0 as u16,
+        w: (c1 - c0) as u16,
+        h: (r1 - r0) as u16,
+    };
+    let crop = img.crop_imm(c0 * fw, r0 * fh, (c1 - c0) * fw, (r1 - r0) * fh);
+    (crop, at)
+}
+
+pub(super) type FoldMsg = Result<crate::needs_overlay::QuestionsFold, String>;
+
+/// The projection leg's channel: the newest fold wins.
+pub(super) fn fold_channel() -> (
+    tokio::sync::mpsc::UnboundedSender<FoldMsg>,
+    tokio::sync::mpsc::UnboundedReceiver<FoldMsg>,
+) {
+    tokio::sync::mpsc::unbounded_channel()
+}
+
+/// The index leg's channel: lands first, seeds the bell's list.
+pub(super) fn index_channel() -> (
+    tokio::sync::mpsc::UnboundedSender<crate::needs_overlay::QuestionsFold>,
+    tokio::sync::mpsc::UnboundedReceiver<crate::needs_overlay::QuestionsFold>,
+) {
+    tokio::sync::mpsc::unbounded_channel()
+}
+
+/// Refresh the shared questions projection while the sidebar is visible.
+/// The read runs off the UI loop; the index fold rides `index_tx` back the
+/// moment it lands, the projection rides `tx` when the subprocess answers.
+pub(super) fn maybe_kick(
+    view: &mut View,
+    tx: &tokio::sync::mpsc::UnboundedSender<Result<crate::needs_overlay::QuestionsFold, String>>,
+    index_tx: &tokio::sync::mpsc::UnboundedSender<crate::needs_overlay::QuestionsFold>,
+) {
+    if view.panel_w() == 0 {
+        return;
+    }
+    // The index flies on its own flight and clock: a projection wedged at
+    // its 30s bound must not starve the ms-fast list refresh.
+    let now_ms = crate::digest_overlay::now_secs() * 1000;
+    if now_ms.saturating_sub(INDEX_KICKED_AT_MS.load(Ordering::Relaxed)) >= 10_000
+        && !INDEX_INFLIGHT.swap(true, Ordering::SeqCst)
+    {
+        INDEX_KICKED_AT_MS.store(now_ms, Ordering::Relaxed);
+        let index_tx = index_tx.clone();
+        tokio::spawn(async move {
+            if let Some(fold) = questions_index_now().await {
+                let _ = index_tx.send(fold);
+            }
+            INDEX_INFLIGHT.store(false, Ordering::SeqCst);
+        });
+    }
+    // The projection keeps the View single-flight: one subprocess at a time.
+    if view.questions_inflight {
+        return;
+    }
+    let due = view
+        .questions_kick_at
+        .is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(10));
+    if !due {
+        return;
+    }
+    view.questions_inflight = true;
+    view.questions_kick_at = Some(Instant::now());
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let fold = crate::needs_overlay::questions_now().await;
+        let _ = tx.send(fold);
+    });
+}
+
+/// The index leg's own single-flight and cadence clock, module-local so the
+/// View carries no second kick state.
+static INDEX_INFLIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static INDEX_KICKED_AT_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The question pages index, resolved through `state path questions` and
+/// parsed in-process: the fast leg that lets the bell paint the board
+/// without waiting on the projection subprocess. Best-effort - any failure
+/// reads as None and the projection stays the only source.
+pub(super) async fn questions_index_now() -> Option<crate::needs_overlay::QuestionsFold> {
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        crate::process_admission::tokio_command(crate::digest_overlay::fno_agents_bin())
+            .args(["state", "path", "questions"])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let dir = std::path::PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+    let text = std::fs::read_to_string(dir.join("questions.md")).ok()?;
+    parse_questions_index(&text)
+}
+
+/// Parse the attention arm's generated index (`## Open (n)` then `## Done`,
+/// one `- [[stem|title]] \u{b7} kind \u{b7} trail` row per question) into the fold
+/// shape every questions reader already consumes. Ids come from the stem's
+/// `q-<8 hex>`; a stem that names no such id drops (the healthy projection
+/// still covers it).
+fn parse_questions_index(text: &str) -> Option<crate::needs_overlay::QuestionsFold> {
+    let mut items: Vec<crate::needs_overlay::QuestionItem> = Vec::new();
+    let mut done = false;
+    let mut any = false;
+    for line in text.lines() {
+        if line.starts_with("## ") {
+            done = line.contains("Done");
+            continue;
+        }
+        let Some(row) = line.strip_prefix("- [[") else {
+            continue;
+        };
+        let Some((wiki, _trail)) = row.split_once("]]") else {
+            continue;
+        };
+        let Some((stem, title)) = wiki.split_once('|') else {
+            continue;
+        };
+        let Some(id) = stem_id(stem) else {
+            continue;
+        };
+        let (state, settled) = if done {
+            ("answered", true)
+        } else {
+            ("open", false)
+        };
+        let kind = row
+            .split('\u{b7}')
+            .nth(1)
+            .map(str::trim)
+            .unwrap_or("question");
+        let kind = if kind == "pin" { "pin" } else { "question" };
+        let created_at = stem_date(stem);
+        // One row per id: the Open section comes first, so a stale Done copy
+        // never adds a second row for an open question.
+        if items.iter().any(|q| q.id == id) {
+            continue;
+        }
+        let (number, title) = split_number(title.trim());
+        items.push(crate::needs_overlay::QuestionItem {
+            id: id.into(),
+            number,
+            kind: kind.into(),
+            title: title.into(),
+            state: state.into(),
+            ready: true,
+            missing: vec![],
+            created_at: created_at.into(),
+            options: vec![],
+            settled,
+            ..Default::default()
+        });
+        any = true;
+    }
+    if !any {
+        return None;
+    }
+    Some(crate::needs_overlay::QuestionsFold {
+        items,
+        ..Default::default()
+    })
+}
+
+/// One question filed on two machines holds two ids: the row asked here stays
+/// and the other machine's copy with the same title and node leaves the board.
+fn one_row_per_question(
+    items: Vec<crate::needs_overlay::QuestionItem>,
+) -> Vec<crate::needs_overlay::QuestionItem> {
+    let key = |q: &crate::needs_overlay::QuestionItem| (q.title.trim().to_string(), q.node.clone());
+    let here: std::collections::HashSet<_> = items
+        .iter()
+        .filter(|q| q.host.is_none() && !q.title.trim().is_empty())
+        .map(key)
+        .collect();
+    items
+        .into_iter()
+        // A fixed id with a host is a different question on that machine.
+        .filter(|q| q.host.is_none() || bare_id(&q.id) == q.id || !here.contains(&key(q)))
+        .collect()
+}
+
+/// A copy's question hash. A fixed id with a host stays whole: two machines
+/// use `provider-cap:<lane>` for two different questions.
+fn bare_id(id: &str) -> &str {
+    match id.split_once('@') {
+        Some((bare, _)) if stem_id(bare).is_some() => bare,
+        _ => id,
+    }
+}
+
+/// Split the index's `Q87: title` into the number and the title.
+fn split_number(text: &str) -> (Option<String>, &str) {
+    if let Some((head, rest)) = text.split_once(": ") {
+        let number = head.split('@').next().unwrap_or(head);
+        let digits = number.strip_prefix('Q').unwrap_or("");
+        if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+            return (Some(head.to_string()), rest);
+        }
+    }
+    (None, text)
+}
+
+/// The stem's question id: the `q` segment followed by an 8-hex segment.
+fn stem_id(stem: &str) -> Option<String> {
+    let segments: Vec<&str> = stem.split('-').collect();
+    let i = segments.iter().position(|s| *s == "q")?;
+    let hex = segments.get(i + 1)?;
+    if hex.len() == 8 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(format!("q-{hex}"))
+    } else {
+        None
+    }
+}
+
+/// Day precision from the stem's `YYYYMMDD` prefix; empty when absent.
+fn stem_date(stem: &str) -> String {
+    let Some(head) = stem.get(..8) else {
+        return String::new();
+    };
+    if head.chars().all(|c| c.is_ascii_digit()) {
+        let (y, rest) = head.split_at(4);
+        let (m, d) = rest.split_at(2);
+        format!("{y}-{m}-{d}T00:00:00Z")
+    } else {
+        String::new()
+    }
+}
+
+/// Kick a queued answer or archive off the UI loop; the result rides `tx`
+/// back. `question_acting` was set at enqueue time, so one send at a time.
+pub(super) fn kick_action(
+    view: &mut View,
+    tx: &tokio::sync::mpsc::UnboundedSender<Result<String, String>>,
+    link_tx: &super::open_link::LinkTx,
+) {
+    if let Some(path) = view
+        .question_detail
+        .as_mut()
+        .and_then(|d| d.open_req.take())
+    {
+        let link_tx = link_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            use crate::open_router::Target;
+            // This terminal shows no images and the question view covers the
+            // in-mux viewer, so `inmux` goes to the platform opener.
+            let target = match crate::open_router::resolve(&path, None) {
+                Target::Viewer { path, .. } => Target::System(path),
+                outside => outside,
+            };
+            let outcome =
+                crate::open_router::launch(&target).map(super::open_link::LinkDone::Opened);
+            let _ = link_tx.send((path.display().to_string(), outcome));
+        });
+    }
+    let tx = tx.clone();
+    if let Some((qid, pick)) = view.question_action.take() {
+        tokio::spawn(async move {
+            let _ = tx.send(crate::needs_overlay::answer(&qid, pick).await);
+        });
+    } else if let Some(ids) = view.question_archive.take() {
+        tokio::spawn(async move {
+            let _ = tx.send(crate::needs_overlay::archive(ids).await);
+        });
+    } else if std::mem::take(&mut view.question_clear_settled) {
+        tokio::spawn(async move {
+            let _ = tx.send(crate::needs_overlay::clear_settled().await);
+        });
+    }
+}
+
+/// The full questions view's keys. The notes input owns the keyboard while
+/// open (Enter saves or sends, Esc cancels); otherwise the list pane's j/k
+/// moves the cursor, Tab flips panes, digits (and 0 for none of these)
+/// highlight an option, Enter drills in or submits through
+/// [`crate::needs_overlay::answer`], and Esc closes. Consumes every byte -
+/// an open modal never leaks a key to a pane (the answer-overlay invariant).
+pub(super) async fn detail_keys(
+    view: &mut View,
+    bytes: &[u8],
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<StdinFlow, String> {
+    let open_ids: Vec<String> = view
+        .questions_merged()
+        .map(|fold| {
+            fold.items
+                .iter()
+                .filter(|q| q.state == "open")
+                .map(|q| q.id.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    let Some(d) = view.question_detail.as_mut() else {
+        return Ok(StdinFlow::Continue);
+    };
+    let mut esc = std::mem::take(&mut view.question_esc);
+    // While the notes box is open an arrow is cursor motion, never a letter.
+    let keys = if d.free.is_some() {
+        fold_text_entry_keys(&mut esc, bytes)
+    } else {
+        fold_selector_keys(&mut esc, bytes)
+    };
+    view.question_esc = esc;
+    for &k in &keys {
+        if let Some(buf) = d.free.as_mut() {
+            match k {
+                b'\r' | b'\n' => {
+                    let text = std::mem::take::<String>(buf).trim().to_string();
+                    let item = d.item().clone();
+                    d.free = None;
+                    if text.is_empty() {
+                        d.notes = None;
+                    } else if item.options.is_empty() && item.kind != "pin" {
+                        // A no-option question's answer IS the line.
+                        if !view.question_acting {
+                            view.question_action =
+                                Some((item.id, crate::needs_overlay::AnswerPick::Words(text)));
+                            view.question_acting = true;
+                        }
+                    } else {
+                        d.notes = Some(text);
+                    }
+                }
+                0x1b => d.free = None,
+                0x7f | 0x08 => {
+                    buf.pop();
+                }
+                0x15 => {
+                    buf.clear();
+                }
+                0x20..=0x7e => buf.push(k as char),
+                _ => {}
+            }
+            continue;
+        }
+        // The expanded screen owns the keyboard: arrows step, anything that
+        // closes goes back to the page. No key here answers the question.
+        if d.expanded {
+            match k {
+                b'h' => d.step_screen(-1),
+                b'l' => d.step_screen(1),
+                0x1b | b'q' | b'\r' | b'\n' => d.expanded = false,
+                _ => {}
+            }
+            continue;
+        }
+        if let Some(i) = d.screen.filter(|_| matches!(k, b'\r' | b'\n')) {
+            if d.img(i).is_some() {
+                d.expanded = true;
+            } else {
+                d.open_req = Some(d.shots[i].path.clone());
+            }
+            continue;
+        }
+        if matches!(k, b'h' | b'l') {
+            d.step_screen(if k == b'l' { 1 } else { -1 });
+            continue;
+        }
+        if matches!(k, b'j' | b'k' | b'0'..=b'9' | b'a' | b'n') {
+            d.screen = None;
+        }
+        let armed = std::mem::take(&mut d.archive_armed);
+        match k {
+            b'x' | b'X' => {
+                let ids: Vec<String> = if k == b'x' {
+                    Some(d.item())
+                        .filter(|q| q.state == "open")
+                        .map(|q| q.id.clone())
+                        .into_iter()
+                        .collect()
+                } else {
+                    open_ids.clone()
+                };
+                if ids.is_empty() {
+                    d.notice = Some("no open question to archive".into());
+                } else if k == b'X' && !armed {
+                    d.archive_armed = true;
+                    d.notice = Some(format!(
+                        "press X again to archive {} open questions",
+                        ids.len()
+                    ));
+                } else if !view.question_acting {
+                    view.question_archive = Some(ids);
+                    view.question_acting = true;
+                }
+            }
+            b'd' if d.decision.is_some() => {
+                view.question_detail = None;
+                super::bell::open_decisions(view);
+                return Ok(StdinFlow::Continue);
+            }
+            b'a' => {
+                let (open, pin) = (d.item().state == "open", d.item().kind == "pin");
+                if !open {
+                    d.notice = Some("this question is answered - read only".into());
+                } else if pin {
+                    d.notice = Some("a pin has no delegate".into());
+                } else {
+                    d.delegate = true;
+                    d.sel = None;
+                }
+            }
+            b'j' => {
+                if d.item().options.is_empty() {
+                    // No options to select: j scrolls the page.
+                    let lines = page_lines(
+                        d,
+                        page_width(view.term.1 as usize),
+                        crate::digest_overlay::now_secs(),
+                    )
+                    .len();
+                    d.scroll = (d.scroll + 1).min(lines.saturating_sub(1));
+                } else {
+                    select_neighbor(d, 1);
+                }
+            }
+            b'k' => {
+                if d.item().options.is_empty() {
+                    d.scroll = d.scroll.saturating_sub(1);
+                } else {
+                    select_neighbor(d, -1);
+                }
+            }
+            // Ctrl+d / Ctrl+u: half a page down/up. The scroll gesture for
+            // option questions, where j/k are the selection.
+            0x04 | 0x15 => {
+                let lines = page_lines(
+                    d,
+                    page_width(view.term.1 as usize),
+                    crate::digest_overlay::now_secs(),
+                )
+                .len();
+                let step = 12;
+                d.scroll = if k == 0x04 {
+                    (d.scroll + step).min(lines.saturating_sub(1))
+                } else {
+                    d.scroll.saturating_sub(step)
+                };
+            }
+            b'0'..=b'9' => {
+                let n = (k - b'0') as u32;
+                let opts = &d.item().options;
+                let valid = n == 0 && !opts.is_empty() || opts.iter().any(|o| o.n == n);
+                if valid {
+                    d.sel = Some(n);
+                    d.delegate = false;
+                }
+            }
+            b'n' => {
+                let saved = d.notes.take().unwrap_or_default();
+                d.free = Some(saved);
+            }
+            // `w` watches the asker: focus its live pane through the same
+            // agent_hit path the feed modal uses (feed_detail.rs), else the
+            // notice names the miss. A send failure aborts the key batch.
+            b'w' => {
+                let row = d
+                    .item()
+                    .origin
+                    .as_ref()
+                    .and_then(|o| o.session_id.clone())
+                    .and_then(|sid| {
+                        view.layout
+                            .agents
+                            .iter()
+                            .find(|a| a.harness_session_id.as_deref() == Some(sid.as_str()))
+                            .cloned()
+                    });
+                match row {
+                    Some(a) => match agent_hit(&a, view.layout.active_squad) {
+                        ChromeHit::Cmds(cmds) => {
+                            for cmd in cmds {
+                                write_msg(sock_w, &ClientMsg::Command(cmd))
+                                    .await
+                                    .map_err(|e| format!("command send failed: {e}"))?;
+                            }
+                        }
+                        ChromeHit::Notice(msg) => d.notice = Some(msg),
+                        _ => d.notice = Some("session not on this bridge".into()),
+                    },
+                    None => d.notice = Some("session not on this bridge".into()),
+                }
+            }
+            b'\r' | b'\n' => match submit(d) {
+                Submit::Queued((id, pick)) => {
+                    if !view.question_acting {
+                        view.question_action = Some((id, pick));
+                        view.question_acting = true;
+                    }
+                }
+                Submit::Notice(msg) => d.notice = Some(msg.to_string()),
+                Submit::OpenFree => d.free = Some(String::new()),
+            },
+            0x1b => {
+                view.question_detail = None;
+                view.question_esc.clear();
+                return Ok(StdinFlow::Continue);
+            }
+            _ => {}
+        }
+    }
+    Ok(StdinFlow::Continue)
+}
+
+/// The questions view owns every pointer event while open. A left press on a
+/// thumbnail opens that shot over the whole view; Esc closes it again.
+pub(super) fn mouse(view: &mut View, rep: crate::mouse::MouseReport) {
+    let Some(d) = view.question_detail.as_mut() else {
+        return;
+    };
+    // The notes input owns the keyboard, so a click never hides it.
+    if d.expanded || d.free.is_some() || !matches!(rep.kind, MouseKind::Press(MouseButton::Left)) {
+        return;
+    }
+    let Some(r) = d.strip_at.get() else {
+        return;
+    };
+    let inside = (r.row..r.row + r.h).contains(&rep.row) && (r.col..r.col + r.w).contains(&rep.col);
+    let slots = d.strip_slots.borrow().clone();
+    if !inside || slots.is_empty() {
+        return;
+    }
+    let k = usize::from(rep.col - r.col) * slots.len() / usize::from(r.w);
+    d.screen = slots.get(k).copied();
+    d.expanded = d.screen.is_some();
+}
+
+/// Move the highlighted option one step through the option list with none
+/// of these last (spec f: the arrow gesture): `dir` 1 steps down, -1 up,
+/// wrapping, and an unset pick starts at the first option (down) or at
+/// none of these (up).
+fn select_neighbor(d: &mut Detail, dir: isize) {
+    let mut ns: Vec<u32> = d.item().options.iter().map(|o| o.n).collect();
+    ns.sort_unstable();
+    ns.dedup();
+    ns.push(0);
+    let pos = ns
+        .iter()
+        .position(|&n| Some(n) == d.sel)
+        .unwrap_or(if dir > 0 { usize::MAX } else { 0 });
+    let next = (pos as isize + dir).rem_euclid(ns.len() as isize) as usize;
+    d.sel = Some(ns[next]);
+}
+
+/// What submitting the cursor question decided: an answer to queue, a
+/// refusal to show on the view, or the answer line to open (a no-option
+/// question). The caller owns every `View` write, so `submit` never borrows
+/// the view; a send already in flight is the caller's guard.
+enum Submit {
+    Queued((String, crate::needs_overlay::AnswerPick)),
+    Notice(&'static str),
+    OpenFree,
+}
+
+/// Compose the cursor question's answer: a pin sends done, a no-option
+/// question opens the answer line, an option (or none of these) sends
+/// through the pick with any notes composed in.
+fn submit(d: &mut Detail) -> Submit {
+    let item = d.item().clone();
+    if item.state != "open" || item.settled {
+        return Submit::Notice("this question is answered - read only");
+    }
+    if item.kind == "pin" {
+        return Submit::Queued((item.id, crate::needs_overlay::AnswerPick::Done));
+    }
+    if d.delegate {
+        return Submit::Queued((item.id, crate::needs_overlay::AnswerPick::Delegate));
+    }
+    if item.options.is_empty() {
+        return Submit::OpenFree;
+    }
+    let notes = d.notes.clone().unwrap_or_default();
+    let Some(n) = d.sel else {
+        // Typed notes with no option ticked are still an answer: send them
+        // as words rather than dropping them behind a one-key notice.
+        if notes.is_empty() {
+            return Submit::Notice("pick an option: 1-9, or 0 for none of these");
+        }
+        return Submit::Queued((item.id, crate::needs_overlay::AnswerPick::Words(notes)));
+    };
+    let pick = if n == 0 {
+        crate::needs_overlay::AnswerPick::Words(if notes.is_empty() {
+            "none of these".to_string()
+        } else {
+            format!("none of these - {notes}")
+        })
+    } else if notes.is_empty() {
+        crate::needs_overlay::AnswerPick::Option(n)
+    } else {
+        let text = item
+            .options
+            .iter()
+            .find(|o| o.n == n)
+            .map(|o| o.text.clone())
+            .unwrap_or_default();
+        crate::needs_overlay::AnswerPick::Words(format!("{n}. {text} - notes: {notes}"))
+    };
+    Submit::Queued((item.id, pick))
+}
+
+impl View {
+    /// Open the full questions view on one question by id (the page holds
+    /// focus).
+    pub(super) fn open_detail_on(&mut self, id: &str) {
+        let empty = crate::needs_overlay::QuestionsFold::default();
+        let merged = self.questions_merged();
+        let fold = merged.as_ref().unwrap_or(&empty);
+        self.question_detail = Detail::open(fold, id);
+        let decision = super::bell::decision_for(self, id);
+        if let Some(d) = &mut self.question_detail {
+            d.degraded = self.questions_degraded_reason.clone();
+            d.decision = decision;
+        }
+    }
+
+    /// Re-read the open page's question from the merged fold, so a page that
+    /// opened on an index stub fills in when the projection lands. The
+    /// reader's own state (pick, notes, scroll) stays; a changed shot list
+    /// reopens the page so the strip decodes the new files.
+    pub(super) fn refresh_detail(&mut self) {
+        let Some(id) = self.question_detail.as_ref().map(|d| d.item.id.clone()) else {
+            return;
+        };
+        let merged = self.questions_merged();
+        let Some(fresh) = merged
+            .as_ref()
+            .and_then(|f| f.items.iter().find(|q| q.id == id))
+        else {
+            return;
+        };
+        let reason = self.questions_degraded_reason.clone();
+        let Some(d) = &mut self.question_detail else {
+            return;
+        };
+        d.degraded = reason;
+        if d.item.images == fresh.images {
+            d.item = fresh.clone();
+            return;
+        }
+        let Some(mut next) = merged.as_ref().and_then(|f| Detail::open(f, &id)) else {
+            return;
+        };
+        next.degraded = d.degraded.clone();
+        next.sel = d.sel;
+        next.notes = d.notes.take();
+        next.free = d.free.take();
+        next.notice = d.notice.take();
+        next.scroll = d.scroll;
+        next.delegate = d.delegate;
+        next.archive_armed = d.archive_armed;
+        *d = next;
+    }
+
+    pub(super) fn list_selector(&self) -> Option<usize> {
+        self.selector
+    }
+
+    /// Stamp `AgentBadge::Blocked` on every live row whose session holds an
+    /// open user-rung question. The stamp rides the badge path a parked
+    /// prompt rides (`AgentBadge::Blocked` drives the glyph, the pinned
+    /// Needs input section and the strip count), so the flag never forks a
+    /// second state source. Matched by the asker's session id first, its
+    /// registry name second; an exited row keeps its exit fact. Re-derived
+    /// on every fold landing and layout push, so an answer clears it.
+    pub(super) fn restamp_asking_badges(&mut self) {
+        use std::collections::HashSet;
+        let Some(fold) = self.questions_fold.as_ref() else {
+            return;
+        };
+        let mut ids: HashSet<String> = HashSet::new();
+        let mut names: HashSet<String> = HashSet::new();
+        for item in &fold.items {
+            if item.state != "open" || !matches!(item.kind.as_str(), "question" | "pin") {
+                continue;
+            }
+            // A question sitting at a lead rung is not the user's to answer
+            // yet; its row keeps working until the lease lapses onto the
+            // board (the same visibility rule `on_board` applies).
+            if !matches!(
+                item.rung.as_ref().and_then(|r| r.level.as_deref()),
+                None | Some("user")
+            ) {
+                continue;
+            }
+            let Some(origin) = item.origin.as_ref() else {
+                continue;
+            };
+            if let Some(sid) = origin.session_id.as_deref() {
+                ids.insert(sid.to_string());
+            }
+            // The name joins only a question asked on this machine (the
+            // item's host reads None here, and Some on a copy): a cross-
+            // machine copy's name is another machine's registry name, and
+            // two machines name rows alike.
+            if item.host.is_none() {
+                if let Some(name) = origin.name.as_deref() {
+                    names.insert(name.to_string());
+                }
+            }
+        }
+        for a in &mut self.layout.agents {
+            if a.exited {
+                continue;
+            }
+            let asks = a
+                .harness_session_id
+                .as_deref()
+                .is_some_and(|s| ids.contains(s))
+                || names.contains(a.name.as_str());
+            let key = a
+                .harness_session_id
+                .clone()
+                .unwrap_or_else(|| a.name.clone());
+            if asks {
+                // An already-stamped row keeps its first capture: the badge
+                // under a live stamp is always the stamp itself.
+                if a.reason.as_deref() != Some("filed_question") {
+                    self.question_stamps
+                        .insert(key, (a.badge.take(), a.reason.take()));
+                    a.badge = Some(AgentBadge::Blocked);
+                    a.reason = Some("filed_question".into());
+                }
+            } else if let Some((badge, reason)) = self.question_stamps.remove(&key) {
+                // The question closed: the row reads its own badge again.
+                a.badge = badge;
+                a.reason = reason;
+            }
+        }
+    }
+
+    /// Apply the latest questions projection. An Err remains visible in the
+    /// bell panel instead of becoming an empty list.
+    pub(super) fn apply_questions_fold(
+        &mut self,
+        fold: Result<crate::needs_overlay::QuestionsFold, String>,
+    ) {
+        self.questions_inflight = false;
+        match fold {
+            Ok(f) => {
+                self.questions_degraded = false;
+                self.questions_degraded_reason = None;
+                self.questions_fold = Some(f);
+                self.restamp_asking_badges();
+            }
+            Err(reason) => {
+                // The last good fold stays: an unread board never renders 0,
+                // and a timed-out read never blanks the cached one.
+                self.questions_degraded = true;
+                self.questions_degraded_reason = Some(reason);
+            }
+        }
+        self.refresh_detail();
+        bell::clamp_selection(self);
+    }
+
+    /// The bell's visible question fold: the index seeds the list, the full
+    /// projection enriches it when healthy. A degraded projection yields to
+    /// the index on every id both hold, so a timed-out read never outvotes
+    /// the fresh list; ids only one side holds append.
+    pub(super) fn questions_merged(&self) -> Option<crate::needs_overlay::QuestionsFold> {
+        let index = self.questions_index.as_ref();
+        let fold = self.questions_fold.as_ref();
+        let items = match (index, fold) {
+            (None, None) => return None,
+            (Some(index), None) => index.items.clone(),
+            (None, Some(fold)) => fold.items.clone(),
+            (Some(index), Some(fold)) => {
+                let healthy = !self.questions_degraded;
+                let primary = if healthy { fold } else { index };
+                let secondary = if healthy { index } else { fold };
+                // A copy from another machine reads `q-1234abcd@host` in the
+                // projection and `q-1234abcd` in the index: one question, one
+                // row.
+                let mut items: Vec<_> = primary.items.clone();
+                if !healthy {
+                    // The index holds an id, title and state only. Where the
+                    // last good projection holds the same question, its fields
+                    // fill the stub, and the index keeps the open or answered
+                    // call.
+                    for q in &mut items {
+                        if let Some(full) =
+                            fold.items.iter().find(|f| bare_id(&f.id) == bare_id(&q.id))
+                        {
+                            let (title, state, settled) =
+                                (q.title.clone(), q.state.clone(), q.settled);
+                            *q = full.clone();
+                            q.title = title;
+                            q.state = state;
+                            q.settled = settled;
+                        }
+                    }
+                }
+                let mut held: std::collections::HashSet<String> = primary
+                    .items
+                    .iter()
+                    .map(|q| bare_id(&q.id).to_string())
+                    .collect();
+                for q in &secondary.items {
+                    if held.insert(bare_id(&q.id).to_string()) {
+                        items.push(q.clone());
+                    }
+                }
+                items
+            }
+        };
+        Some(crate::needs_overlay::QuestionsFold {
+            items: one_row_per_question(items),
+            ..Default::default()
+        })
+    }
+    /// Apply the index fold: the fast seed the bell renders before the
+    /// projection answers.
+    pub(super) fn apply_questions_index(&mut self, fold: crate::needs_overlay::QuestionsFold) {
+        self.questions_index = Some(fold);
+        self.refresh_detail();
+        bell::clamp_selection(self);
+    }
+
+    /// Apply a finished question answer: success re-folds so the row leaves
+    /// the queue on the next fold and closes the view; a failure shows the
+    /// door's own line and keeps the view open on it.
+    pub(super) fn apply_question_action_result(&mut self, result: Result<String, String>) {
+        self.question_acting = false;
+        match result {
+            Ok(receipt) => {
+                self.needs_want = true;
+                self.questions_kick_at = None;
+                self.set_notice(format!("needs: {receipt}"));
+                self.question_detail = None;
+            }
+            Err(msg) => self.set_notice(msg),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::{question_item, view_with_agents};
+    use super::*;
+    use crate::needs_overlay::{QuestionItem, QuestionOption, QuestionsFold};
+
+    fn item(id: &str, ready: bool) -> QuestionItem {
+        QuestionItem {
+            id: id.into(),
+            kind: "question".into(),
+            title: format!("title for {id}"),
+            state: "open".into(),
+            ready,
+            missing: if ready {
+                vec![]
+            } else {
+                vec!["unknowns".into()]
+            },
+            created_at: "2026-09-26T04:00:00Z".into(),
+            options: vec![
+                QuestionOption {
+                    n: 1,
+                    text: "narrow".into(),
+                    ..Default::default()
+                },
+                QuestionOption {
+                    n: 2,
+                    text: "wide".into(),
+                    ..Default::default()
+                },
+            ],
+            blocked_because: Some("two lanes".into()),
+            ..Default::default()
+        }
+    }
+
+    fn fold_with(items: Vec<QuestionItem>) -> QuestionsFold {
+        QuestionsFold {
+            items,
+            ..Default::default()
+        }
+    }
+
+    /// The row `fno-agents needs --items --json` printed for q-b4d63b60.
+    const STORED_ROW: &str = r#"{"as_of":1,"items":[{"id":"q-b4d63b60","kind":"question","title":"Does PR 4328 look right to merge","body":"Does PR 4328 look right to merge","project":"footnote","priority":"high","created_at":"2026-11-03T02:29:56.393Z","deadline":"2026-11-04T18:00:00Z","on_silence":"wait","class":"taste","subject":"visual approval","asker":{"handle":"ce094978","person":"u"},"node":"x-aaaa","blocked_because":"PR 4328 holds on visual approval only.","options_rationale":"The look is the one open gate.","recommendation":{"option":1,"why":"It meets the law.","downside":"A later change costs a new PR."},"options":[{"n":1,"text":"Approve PR 4328.","next":"the worker merges."},{"n":2,"text":"Change something first.","next":"the worker fixes it."}],"unknowns":"The shots use a demo fleet.","reversible":"costly","cost_if_wrong":"A look you dislike ships.","meanwhile":"x-bbbb keeps moving.","tried":"I read the shots.","evidence":"Visual Log entry.","ready":true,"missing":[],"state":"open","settled":false}],"answered":[]}"#;
+
+    fn stored_fold() -> QuestionsFold {
+        let response: crate::needs_overlay::QuestionsResponse =
+            serde_json::from_str(STORED_ROW).unwrap();
+        fold_with(response.items)
+    }
+
+    #[test]
+    fn a_stored_row_renders_every_section() {
+        let fold = stored_fold();
+        let q = fold.items[0].clone();
+        let d = Detail::open(&fold, "q-b4d63b60").unwrap();
+        let page = question_page(&q, &d, 0, 80);
+        assert!(!page.contains("NOT RECORDED"), "{page}");
+        for want in [
+            "class taste",
+            "node x-aaaa",
+            "## why asked\n\nPR 4328 holds",
+            "## why these options\n\nThe look",
+            "1. Approve PR 4328.  [recommended]",
+            "2. Change something first.",
+            "## recommended\n\noption 1 \u{b7} It meets the law.",
+            "## reversible\n\ncostly",
+            "## cost if wrong\n\nA look you dislike ships.",
+            "## meanwhile\n\nx-bbbb keeps moving.",
+            "## not thought through\n\nThe shots use a demo fleet.",
+            "## tried\n\nI read the shots.",
+            "## evidence\n\nVisual Log entry.",
+            "## on silence\n\nwait at 2026-11-04T18:00:00Z",
+        ] {
+            assert!(page.contains(want), "{want} missing from:\n{page}");
+        }
+    }
+
+    #[test]
+    fn a_degraded_projection_keeps_the_fields_the_index_lacks() {
+        let mut v = view_with_agents(vec![]);
+        v.questions_fold = Some(stored_fold());
+        v.questions_degraded = true;
+        let mut stub = item("q-b4d63b60", true);
+        stub.title = "Does PR 4328 look right to merge".into();
+        stub.options = vec![];
+        stub.blocked_because = None;
+        v.questions_index = Some(fold_with(vec![stub]));
+        let merged = v.questions_merged().unwrap();
+        let q = &merged.items[0];
+        assert_eq!(q.node.as_deref(), Some("x-aaaa"));
+        assert_eq!(q.options.len(), 2);
+        assert!(q.blocked_because.is_some());
+    }
+    #[test]
+    fn page_rows() {
+        let mut q = item("q-1", false);
+        q.recommendation = Some(crate::needs_overlay::QuestionRecommendation {
+            option: 1,
+            why: "narrowest".into(),
+            downside: Some("hides a feature".into()),
+        });
+        q.unknowns = Some("net-zero moves".into());
+        q.reversible = Some("costly".into());
+        q.cost_if_wrong = Some("the allowance drops".into());
+        q.meanwhile = Some("stops".into());
+        let d = Detail::open(&fold_with(vec![q.clone()]), "q-1").unwrap();
+        let page = question_page(&q, &d, 0, 60);
+        for want in [
+            "title for q-1",
+            "why asked",
+            "two lanes",
+            "1. narrow",
+            "2. wide",
+            "[recommended]",
+            "recommended",
+            "option 1 \u{b7} narrowest",
+            "downside: hides a feature",
+            "reversible",
+            "cost if wrong",
+            "the allowance drops",
+            "meanwhile",
+            "stops",
+            "not thought through",
+            "net-zero moves",
+            "missing: unknowns",
+            "0. none of these",
+        ] {
+            assert!(page.contains(want), "{want} missing from:\n{page}");
+        }
+
+        let mut q = item("q-2", true);
+        q.blocked_because = None;
+        q.unknowns = None;
+        let d = Detail::open(&fold_with(vec![q.clone()]), "q-2").unwrap();
+        let page = question_page(&q, &d, 0, 60);
+        assert!(!page.contains("NOT RECORDED"), "{page}");
+        assert!(!page.contains("## not thought through"), "{page}");
+
+        let q = item("q-1", true);
+        let mut d = Detail::open(&fold_with(vec![q.clone()]), "q-1").unwrap();
+        d.sel = Some(2);
+        let page = question_page(&q, &d, 0, 60);
+        assert!(page.contains("2. wide  [selected]"));
+        d.sel = Some(0);
+        let page = question_page(&q, &d, 0, 60);
+        assert!(page.contains("0. none of these  [selected]"));
+    }
+
+    #[test]
+    fn header_names_origin_lead_class_and_stage_rows() {
+        // AC33-HP: the card's header names the origin worker, the via lead,
+        // the class and the node stage; the tried and evidence sections and
+        // the on-silence line show their fields.
+        let mut q = item("q-o", true);
+        q.origin = Some(crate::needs_overlay::QuestionOrigin {
+            handle: Some("w1".into()),
+            session_id: Some("aaaa1111-bbbb".into()),
+            name: Some("t-one".into()),
+            harness: Some("claude".into()),
+            host: Some("u".into()),
+        });
+        q.via = vec![crate::needs_overlay::QuestionHop {
+            level: Some("lead".into()),
+            holder_name: Some("tomas".into()),
+            evidence: Some("read PR 12".into()),
+        }];
+        q.class = Some("irreversible".into());
+        q.node = Some("x-1".into());
+        q.node_title = Some("seat table drawer".into());
+        q.node_stage = Some("in_review".into());
+        q.tried = Some("two leads declined".into());
+        q.evidence = Some("no owner named".into());
+        q.on_silence = Some("proceed".into());
+        q.deadline = Some("2026-10-30T09:00:00Z".into());
+        let d = Detail::open(&fold_with(vec![q.clone()]), "q-o").unwrap();
+        let page = question_page(&q, &d, 0, 60);
+        for want in [
+            "asked by t-one (w1)",
+            "via tomas",
+            "on u",
+            "class irreversible",
+            "node x-1 seat table drawer (in_review)",
+            "## tried\n\ntwo leads declined",
+            "## evidence\n\nno owner named",
+            "## on silence\n\nproceed at 2026-10-30T09:00:00Z",
+        ] {
+            assert!(page.contains(want), "{want} missing from:\n{page}");
+        }
+
+        // A row with none of the new fields still renders, and the empty
+        // sections print nothing.
+        let bare = item("q-bare", true);
+        let d = Detail::open(&fold_with(vec![bare.clone()]), "q-bare").unwrap();
+        let page = question_page(&bare, &d, 0, 60);
+        assert!(!page.contains("NOT RECORDED"), "{page}");
+        assert!(!page.contains("## tried"), "{page}");
+        assert!(!page.contains("via "), "no lead named: {page}");
+
+        // A name equal to the handle prints once: the parenthetical would
+        // read the same word twice.
+        let mut same = item("q-same", true);
+        same.origin = Some(crate::needs_overlay::QuestionOrigin {
+            handle: Some("w1".into()),
+            session_id: Some("aaaa1111-bbbb".into()),
+            name: Some("w1".into()),
+            harness: Some("claude".into()),
+            host: Some("u".into()),
+        });
+        let d = Detail::open(&fold_with(vec![same.clone()]), "q-same").unwrap();
+        let page = question_page(&same, &d, 0, 60);
+        assert!(page.contains("asked by w1"), "no duplicated handle: {page}");
+        assert!(!page.contains("(w1"), "parens dropped: {page}");
+    }
+    #[tokio::test]
+    async fn answer_keys_rows() {
+        let mut v = view_with_agents(vec![]);
+        v.mine_fold = Some(Vec::new());
+        v.needs_fold = Some(Vec::new());
+        v.questions_fold = Some(crate::needs_overlay::QuestionsFold {
+            items: vec![question_item("q-2", &[], None)],
+            ..Default::default()
+        });
+        v.answers = Some(0);
+        let mut buf: Vec<u8> = Vec::new();
+        answer_keys(&mut v, b"\r", &mut buf).await.unwrap();
+        let detail = v.question_detail.expect("the full view opened");
+        assert_eq!(detail.item().id, "q-2");
+        assert_eq!(v.answers, Some(0), "the overlay stays open");
+        assert!(buf.is_empty());
+
+        let mut v = view_with_agents(vec![]);
+        v.mine_fold = Some(Vec::new());
+        v.needs_fold = Some(Vec::new());
+        v.questions_fold = Some(crate::needs_overlay::QuestionsFold {
+            items: vec![question_item("q-1", &["oauth", "apikey"], Some(true))],
+            ..Default::default()
+        });
+        v.answers = Some(0);
+        let mut buf: Vec<u8> = Vec::new();
+        answer_keys(&mut v, b"2", &mut buf).await.unwrap();
+        let detail = v.question_detail.expect("the full view opened");
+        assert_eq!(detail.item().id, "q-1");
+        assert!(
+            v.question_action.is_none(),
+            "nothing is sent from the digit"
+        );
+        assert!(
+            buf.is_empty(),
+            "a question digit never sends a pane keystroke"
+        );
+
+        let mut v = view_with_agents(vec![]);
+        v.mine_fold = Some(Vec::new());
+        v.needs_fold = Some(Vec::new());
+        v.questions_fold = Some(crate::needs_overlay::QuestionsFold {
+            items: vec![question_item("q-3", &["oauth"], Some(true))],
+            ..Default::default()
+        });
+        v.answers = Some(0);
+        let mut buf: Vec<u8> = Vec::new();
+        answer_keys(&mut v, b"9", &mut buf).await.unwrap();
+        assert_eq!(v.question_action, None);
+        assert!(!v.question_acting);
+        assert!(buf.is_empty());
+    }
+
+    #[tokio::test]
+    async fn submit_rows() {
+        let mut v = view_with_agents(vec![]);
+        v.questions_fold = Some(fold_with(vec![item("q-1", true)]));
+        // A row click opens with the page focused; a digit highlights.
+        v.open_detail_on("q-1");
+        detail_keys(&mut v, b"2", &mut Vec::new()).await.unwrap();
+        detail_keys(&mut v, b"\r", &mut Vec::new()).await.unwrap();
+        assert_eq!(
+            v.question_action,
+            Some(("q-1".into(), crate::needs_overlay::AnswerPick::Option(2)))
+        );
+        // None of these composes the words answer.
+        v.question_action = None;
+        v.question_acting = false;
+        v.question_detail.as_mut().unwrap().sel = Some(0);
+        detail_keys(&mut v, b"\r", &mut Vec::new()).await.unwrap();
+        assert_eq!(
+            v.question_action,
+            Some((
+                "q-1".into(),
+                crate::needs_overlay::AnswerPick::Words("none of these".into())
+            ))
+        );
+
+        let mut v = view_with_agents(vec![]);
+        v.questions_fold = Some(fold_with(vec![item("q-1", true)]));
+        v.open_detail_on("q-1");
+        detail_keys(&mut v, b"1", &mut Vec::new()).await.unwrap();
+        detail_keys(&mut v, b"n", &mut Vec::new()).await.unwrap();
+        assert!(v.question_detail.as_ref().unwrap().free.is_some());
+        detail_keys(&mut v, b"check legal", &mut Vec::new())
+            .await
+            .unwrap();
+        detail_keys(&mut v, b"\r", &mut Vec::new()).await.unwrap();
+        let d = v.question_detail.as_ref().unwrap();
+        assert!(d.free.is_none(), "the input closed");
+        assert_eq!(d.notes.as_deref(), Some("check legal"));
+        // Submitting composes option + notes into one words answer; the
+        // page still holds focus, so Enter sends.
+        detail_keys(&mut v, b"\r", &mut Vec::new()).await.unwrap();
+        assert_eq!(
+            v.question_action,
+            Some((
+                "q-1".into(),
+                crate::needs_overlay::AnswerPick::Words("1. narrow - notes: check legal".into())
+            ))
+        );
+
+        // Notes typed with no option ticked record as the words typed.
+        let mut v = view_with_agents(vec![]);
+        v.questions_fold = Some(fold_with(vec![item("q-1", true)]));
+        v.open_detail_on("q-1");
+        detail_keys(&mut v, b"n", &mut Vec::new()).await.unwrap();
+        detail_keys(&mut v, b"needs more hierarchy", &mut Vec::new())
+            .await
+            .unwrap();
+        // Arrows inside the notes box move nothing and type nothing.
+        detail_keys(&mut v, b"\x1b[C\x1b[D\x1b[B", &mut Vec::new())
+            .await
+            .unwrap();
+        detail_keys(&mut v, b"\r\r", &mut Vec::new()).await.unwrap();
+        assert_eq!(
+            v.question_action,
+            Some((
+                "q-1".into(),
+                crate::needs_overlay::AnswerPick::Words("needs more hierarchy".into())
+            ))
+        );
+
+        let mut q = item("q-p", true);
+        q.options = vec![];
+        let mut v = view_with_agents(vec![]);
+        v.questions_fold = Some(fold_with(vec![q]));
+        v.open_detail_on("q-p");
+        detail_keys(&mut v, b"\r", &mut Vec::new()).await.unwrap();
+        assert!(v.question_detail.as_ref().unwrap().free.is_some());
+        detail_keys(&mut v, b"do it yourself", &mut Vec::new())
+            .await
+            .unwrap();
+        detail_keys(&mut v, b"\r", &mut Vec::new()).await.unwrap();
+        assert_eq!(
+            v.question_action,
+            Some((
+                "q-p".into(),
+                crate::needs_overlay::AnswerPick::Words("do it yourself".into())
+            ))
+        );
+
+        let mut q = item("q-pin", true);
+        q.kind = "pin".into();
+        q.options = vec![];
+        let mut v = view_with_agents(vec![]);
+        v.questions_fold = Some(fold_with(vec![q]));
+        v.open_detail_on("q-pin");
+        detail_keys(&mut v, b"\r", &mut Vec::new()).await.unwrap();
+        assert_eq!(
+            v.question_action,
+            Some(("q-pin".into(), crate::needs_overlay::AnswerPick::Done))
+        );
+        // `a` on a pin refuses; there is nothing to decide.
+        v.question_action = None;
+        v.question_acting = false;
+        detail_keys(&mut v, b"a", &mut Vec::new()).await.unwrap();
+        let d = v.question_detail.as_ref().unwrap();
+        assert_eq!(d.notice.as_deref(), Some("a pin has no delegate"));
+
+        // `a` then Enter hands the question to the team.
+        let mut v = view_with_agents(vec![]);
+        v.questions_fold = Some(fold_with(vec![item("q-1", true)]));
+        v.open_detail_on("q-1");
+        detail_keys(&mut v, b"a\r", &mut Vec::new()).await.unwrap();
+        assert_eq!(
+            v.question_action,
+            Some(("q-1".into(), crate::needs_overlay::AnswerPick::Delegate))
+        );
+
+        // X arms archive-all on the first press and sends every open id on
+        // the second; any other key between disarms.
+        let mut v = view_with_agents(vec![]);
+        let mut done = item("q-d", true);
+        done.state = "answered".into();
+        v.questions_fold = Some(fold_with(vec![
+            item("q-a", true),
+            item("q-b", true),
+            item("q-c", false),
+            done,
+        ]));
+        v.open_detail_on("q-a");
+        detail_keys(&mut v, b"X", &mut Vec::new()).await.unwrap();
+        assert!(v.question_archive.is_none(), "one X archives nothing");
+        assert_eq!(
+            v.question_detail.as_ref().unwrap().notice.as_deref(),
+            Some("press X again to archive 3 open questions")
+        );
+        detail_keys(&mut v, b"kX", &mut Vec::new()).await.unwrap();
+        assert!(v.question_archive.is_none(), "a key between disarms");
+        detail_keys(&mut v, b"X", &mut Vec::new()).await.unwrap();
+        assert_eq!(
+            v.question_archive,
+            Some(vec!["q-a".into(), "q-b".into(), "q-c".into()])
+        );
+        // x archives the opened question alone.
+        v.question_archive = None;
+        v.question_acting = false;
+        detail_keys(&mut v, b"x", &mut Vec::new()).await.unwrap();
+        assert_eq!(v.question_archive, Some(vec!["q-a".into()]));
+    }
+    #[tokio::test]
+    async fn screens_strip_expand_and_fallback_rows() {
+        let red = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            40,
+            20,
+            image::Rgba([200, 30, 30, 255]),
+        ));
+        let sheet = sheet(&[&red, &red], (200, 50));
+        let painted = |x: u32| sheet.to_rgba8().get_pixel(x, 25)[3] > 0;
+        assert!(painted(50) && painted(150), "one thumbnail per slot");
+        assert!(!painted(1), "the slot pad stays clear");
+
+        let mut q = item("q-s", true);
+        q.images = vec!["/v/q-s-1-a.png".into(), "/v/q-s-2-b.png".into()];
+        let mut v = view_with_agents(vec![]);
+        v.questions_fold = Some(fold_with(vec![q]));
+        v.open_detail_on("q-s");
+        let d = v.question_detail.as_mut().unwrap();
+        // The paths do not exist: every decode fails, so Enter falls back to
+        // the open router and the strip is the label row alone.
+        d.pixels = std::sync::Arc::new(std::sync::OnceLock::from(vec![None, None]));
+        detail_keys(&mut v, b"\x1b[D", &mut Vec::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            v.question_detail.as_ref().unwrap().screen,
+            Some(1),
+            "left wraps to the last"
+        );
+        detail_keys(&mut v, b"\r", &mut Vec::new()).await.unwrap();
+        let d = v.question_detail.as_mut().unwrap();
+        assert_eq!(
+            d.open_req.as_deref(),
+            Some(std::path::Path::new("/v/q-s-2-b.png"))
+        );
+        assert!(
+            !d.expanded && v.question_action.is_none(),
+            "Enter on a screen never answers"
+        );
+        let (rows, cols) = (30usize, 120usize);
+        let mut cells = vec![Cell::default(); rows * cols];
+        draw_detail(&v, &mut cells, (rows, cols), (0, 0), (rows, cols));
+        let label: String = cells[(rows - 3) * cols..(rows - 2) * cols]
+            .iter()
+            .map(|c| c.c)
+            .collect();
+        assert!(label.contains("\u{25b8}2 q-s-2-b.png"), "{label}");
+
+        // Decoded, the half-block test picker paints the thumbnails: a click
+        // on the second opens it. Enter expands, arrows step, Esc goes back.
+        let d = v.question_detail.as_mut().unwrap();
+        d.pixels = std::sync::Arc::new(std::sync::OnceLock::from(vec![
+            Some(red.clone()),
+            Some(red.clone()),
+        ]));
+        let mut cells = vec![Cell::default(); rows * cols];
+        draw_detail(&v, &mut cells, (rows, cols), (0, 0), (rows, cols));
+        let strip = v.question_detail.as_ref().unwrap().strip_at.get().unwrap();
+        let red = crate::proto::Color::Rgb(200, 30, 30);
+        let band = &cells[usize::from(strip.row) * cols..(usize::from(strip.row + strip.h)) * cols];
+        assert!(
+            band.iter().any(|c| c.fg == red || c.bg == red),
+            "half-block thumbnails paint"
+        );
+        mouse(
+            &mut v,
+            crate::mouse::MouseReport {
+                row: strip.row + 1,
+                col: strip.col + strip.w - 2,
+                kind: MouseKind::Press(MouseButton::Left),
+                shift: false,
+                alt: false,
+            },
+        );
+        let d = v.question_detail.as_mut().unwrap();
+        assert!(d.expanded && d.screen == Some(1), "a click opens the shot");
+        d.expanded = false;
+        detail_keys(&mut v, b"\r", &mut Vec::new()).await.unwrap();
+        assert!(v.question_detail.as_ref().unwrap().expanded);
+        detail_keys(&mut v, b"\x1b[C", &mut Vec::new())
+            .await
+            .unwrap();
+        assert_eq!(v.question_detail.as_ref().unwrap().screen, Some(0));
+        let mut cells = vec![Cell::default(); rows * cols];
+        draw_detail(&v, &mut cells, (rows, cols), (0, 0), (rows, cols));
+        let title: String = cells[..cols].iter().map(|c| c.c).collect();
+        assert!(title.contains("screen 1/2"), "{title}");
+        // A solid image draws no `▀` (both halves match), so read its color.
+        assert!(
+            cells[cols..].iter().any(|c| c.fg == red || c.bg == red),
+            "the image paints"
+        );
+        detail_keys(&mut v, b"q", &mut Vec::new()).await.unwrap();
+        let d = v.question_detail.as_ref().unwrap();
+        assert!(!d.expanded && d.screen == Some(0));
+    }
+    #[test]
+    fn apply_result_rows() {
+        let mut v = view_with_agents(vec![]);
+        v.needs_want = false;
+        v.apply_question_action_result(Ok("recorded, delivering".into()));
+        assert!(!v.question_acting);
+        assert!(v.needs_want, "success re-folds so the row leaves on refold");
+
+        let mut v = view_with_agents(vec![]);
+        v.needs_want = false;
+        v.apply_question_action_result(Err("failed to close q-1: locked".into()));
+        assert!(!v.question_acting);
+        assert!(!v.needs_want, "a failure never triggers a re-fold");
+        let notice = v.notice.as_ref().expect("failure surfaces a notice");
+        assert!(notice.0.contains("failed to close q-1: locked"));
+
+        let mut v = view_with_agents(vec![]);
+        v.apply_questions_fold(Ok(fold_with(vec![item("q-a", true)])));
+        v.apply_questions_fold(Err("events.jsonl: permission denied".into()));
+        assert!(v.questions_degraded);
+        assert_eq!(
+            v.questions_degraded_reason.as_deref(),
+            Some("events.jsonl: permission denied")
+        );
+        assert_eq!(
+            v.questions_merged().unwrap().items.len(),
+            1,
+            "a failed read keeps the last good fold, never a 0 board"
+        );
+        v.apply_questions_fold(Ok(fold_with(vec![item("q-a", true)])));
+        assert!(!v.questions_degraded);
+        assert_eq!(v.questions_degraded_reason, None);
+    }
+
+    #[test]
+    fn questions_index_and_merge_rows() {
+        let text = "---\nfno_generated: questions-index\n---\n\n## Open (2)\n\n- [[20261005-q-aaaaaaaa-pin-kind-q-aaaa|pin title]] \u{b7} pin \u{b7} quill\n- [[20261005-q-bbbbbbbb-the-other-one-x-aaaa|other title]] \u{b7} question \u{b7} blocks x-aaaa \u{b7}\n\n## Done\n\n- [[q-cccccccc|closed title]] \u{b7} closed 2026-10-05 \u{b7} node-closed\n- [[ask-deadbeef|an ask]] \u{b7} answered 2026-10-04 \u{b7} PR\n";
+        let fold = parse_questions_index(text).unwrap();
+        assert_eq!(fold.items.len(), 3, "ask- pages stay out of the fold");
+        let pin = &fold.items[0];
+        assert_eq!(pin.id, "q-aaaaaaaa");
+        assert_eq!(pin.kind, "pin");
+        assert_eq!(pin.state, "open");
+        assert!(!pin.settled);
+        assert_eq!(pin.created_at, "2026-10-05T00:00:00Z");
+        let done = &fold.items[2];
+        assert!(done.settled);
+        assert_eq!(done.state, "answered");
+
+        // A healthy projection wins shared ids and keeps its richer item;
+        // ids only one side holds survive either way.
+        let mut v = view_with_agents(vec![]);
+        v.apply_questions_index(fold);
+        let mut rich = item("q-aaaaaaaa", true);
+        rich.title = "rich".into();
+        v.apply_questions_fold(Ok(fold_with(vec![rich, item("q-ffff0000", true)])));
+        let merged = v.questions_merged().unwrap();
+        let by_id = |id: &str| {
+            merged
+                .items
+                .iter()
+                .find(|q| q.id == id)
+                .unwrap_or_else(|| panic!("{id} missing"))
+                .clone()
+        };
+        assert_eq!(by_id("q-aaaaaaaa").title, "rich", "projection enriches");
+        assert_eq!(
+            by_id("q-bbbbbbbb").title,
+            "other title",
+            "index-only ids survive"
+        );
+        assert!(!by_id("q-ffff0000").settled, "projection-only ids survive");
+
+        // The same question from two machines holds one row: a copy id against
+        // the index's bare id, a Done copy beside an open row, and one question
+        // filed under two ids.
+        let index = parse_questions_index(
+            "## Open (1)\n\n- [[20261101-q-dddddddd-t-x-a|Q87: shared title]] \u{b7} question \u{b7} l\n\n## Done\n\n- [[q-dddddddd-26|Q87: shared title]] \u{b7} closed 2026-10-22 \u{b7} \n",
+        )
+        .unwrap();
+        assert_eq!(index.items.len(), 1, "a Done copy adds no row");
+        assert_eq!(index.items[0].number.as_deref(), Some("Q87"));
+        assert_eq!(index.items[0].title, "shared title");
+        let mut copy = item("q-dddddddd@mac2", true);
+        copy.host = Some("mac2".into());
+        let mut filed_here = item("note-hold-cap", true);
+        filed_here.title = "same ask".into();
+        filed_here.node = Some("x-1".into());
+        let mut filed_there = item("q-eeeeeeee@mac2", true);
+        filed_there.title = "same ask".into();
+        filed_there.node = Some("x-1".into());
+        filed_there.host = Some("mac2".into());
+        let mut two = view_with_agents(vec![]);
+        two.apply_questions_index(index);
+        two.apply_questions_fold(Ok(fold_with(vec![copy, filed_here, filed_there])));
+        let ids: Vec<String> = two
+            .questions_merged()
+            .unwrap()
+            .items
+            .iter()
+            .map(|q| q.id.clone())
+            .collect();
+        assert_eq!(ids, ["q-dddddddd@mac2", "note-hold-cap"]);
+
+        // A degraded projection yields to the index on shared ids: the
+        // timed-out read never outvotes the fresh list.
+        v.questions_degraded = true;
+        v.questions_degraded_reason = Some("timed out after 30000ms".into());
+        let merged = v.questions_merged().unwrap();
+        let pin = merged.items.iter().find(|q| q.id == "q-aaaaaaaa").unwrap();
+        assert_eq!(pin.title, "pin title", "the index wins when degraded");
+    }
+}

@@ -1,0 +1,115 @@
+{
+  "apply_permission_builtin": true,
+  "argv": [
+    "spawn",
+    "--name",
+    "w11",
+    "/fno:target x-9"
+  ],
+  "config_toml": "[[routing.models]]\nname = \"acct-x\"\nharness = \"codex\"\nmodel = \"gpt-acct-x\"\nband = \"high\"\naccount = \"readyrule\"\nroute = \"zai/glm-x\"\neffort = \"high\"\n",
+  "env_node": null,
+  "expect": {
+    "argv": [
+      "spawn",
+      "--harness",
+      "codex",
+      "--route",
+      "zai/glm-x",
+      "--name",
+      "w11",
+      "/fno:target x-9"
+    ],
+    "exit": 0,
+    "journal": {
+      "data": {
+        "name": "w11",
+        "verb": "target",
+        "seed": "/fno:target x-9",
+        "fingerprint": "7d4d7108bed9",
+        "resolved": {
+          "route": {
+            "value": "",
+            "rung": null
+          },
+          "account": {
+            "value": "",
+            "rung": null
+          },
+          "pane_group": {
+            "value": "",
+            "rung": null
+          }
+        },
+        "applied": [
+          [
+            "grid",
+            "grid effort(high)",
+            "routing"
+          ],
+          [
+            "harness",
+            "codex",
+            "routing"
+          ],
+          [
+            "route",
+            "zai/glm-x",
+            "difficulty-grid"
+          ],
+          [
+            "grid",
+            "codex/gpt-acct-x",
+            "difficulty-grid"
+          ]
+        ],
+        "suppressed": []
+      },
+      "type": "spawn_defaults_applied",
+      "source": "agents"
+    },
+    "stderr": [
+      "fno agents spawn: account skipped (claude-only, grid harness 'codex'); 'readyrule' ignored",
+      "fno agents spawn: applied grid=grid effort(high) (routing), harness=codex (routing), route=zai/glm-x (difficulty-grid), grid=codex/gpt-acct-x (difficulty-grid)"
+    ],
+    "stdout": null
+  },
+  "facts": {
+    "role_protected": null,
+    "role_resolves": false
+  },
+  "node": null,
+  "node_row": {
+    "difficulty": "high",
+    "id": "x-9",
+    "priority": "p2"
+  },
+  "node_command": null,
+  "scan": {
+    "account_flag_present": false,
+    "explicit_harness": null,
+    "explicit_route": false,
+    "explicit_substrate": null,
+    "explicit_vendor": null,
+    "flag_node": null,
+    "has_effort": false,
+    "has_harness": false,
+    "has_model": false,
+    "has_permission": false,
+    "model_value": null,
+    "name": "w11",
+    "permission_value": null,
+    "positional_present": true,
+    "role": null,
+    "route_value": null,
+    "seed": "/fno:target x-9",
+    "seed_form": "positional",
+    "seed_index": 3,
+    "spawn_tokens": [
+      "--name",
+      "w11",
+      "/fno:target x-9"
+    ],
+    "tab_flag_present": false
+  },
+  "verbose": true
+}

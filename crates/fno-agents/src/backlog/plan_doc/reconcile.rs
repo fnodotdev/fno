@@ -1,0 +1,903 @@
+//! The reconcile-status sweep. Three tiers over every `*.md` in a plans dir:
+//! Tier 1 rewrites drift
+//! synonyms, Tier 2 classifies blank/unknown tokens by the linked node's
+//! closed-ness, Tier 3 recomputes a canonical-but-stale status from the node's
+//! derived status (forward-only). Dry-run unless `apply`. Only a closed node
+//! writes a terminal in Tier 2: a doc with no node evidence holds its word.
+//! The keeper builds the status map and hands it in as data, so an empty map
+//! IS absent evidence. Each applied terminal write leaves one receipt line, the
+//! only way back: plan docs are untracked, so no history can restore the word.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::time::Duration;
+
+use regex::Regex;
+
+use super::codec::{self, Fields, Value};
+use super::lock::PlanDocLock;
+use super::status::project_plan_status;
+
+/// Tier 1: pure synonym rewrite (no node signal needed). The sweep touches
+/// plan `status:` only and never writes the graph.
+const TIER1: &[(&str, &str)] = &[
+    ("designed", "design"),
+    ("draft", "design"),
+    ("planned", "design"),
+    ("pending", "design"),
+    ("ready-for-blueprint", "design"),
+    ("design-locked", "ready"),
+    ("reviewing", "in_review"),
+    ("shipping", "in_review"),
+    ("superseded-by-implementation", "superseded"),
+    // Think-brief terminal words. A brief is complete when written, so these
+    // mean `done` whatever the linked node still says - the sweep must never
+    // read a finished brief's own word as drift.
+    ("findings", "done"),
+    ("research", "done"),
+    ("complete", "done"),
+];
+
+fn front_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?s)\A(---\n)(?P<fm>.*?)(\n---)(?P<rest>.*)\z").expect("front regex")
+    })
+}
+
+fn status_line_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?m)^(?P<indent>[ \t]*)status[ \t]*:.*$").expect("status regex"))
+}
+
+fn done_at_line_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?m)^[ \t]*done_at[ \t]*:.*$").expect("done_at regex"))
+}
+
+/// A raw frontmatter value as a scalar token, or None when the value is not a
+/// scalar (a list/mapping status is Tier-2 drift either way).
+fn scalar_of(raw: Option<&Value>) -> Option<&str> {
+    match raw {
+        Some(Value::Scalar(s)) => Some(s),
+        _ => None,
+    }
+}
+
+/// Bare lowercase token from a raw frontmatter status value.
+fn norm(raw: Option<&Value>) -> String {
+    scalar_of(raw)
+        .unwrap_or("")
+        .trim()
+        .trim_matches(|c| c == '\'' || c == '"')
+        .to_lowercase()
+}
+
+fn is_known(s: &str) -> bool {
+    super::status::known_statuses().iter().any(|k| *k == s)
+}
+
+/// The node id a plan links to: `node`, then `claims`, then `graph_node_id`
+/// (first non-empty wins). A one-item list unwraps; any other shape reads as
+/// unlinked, since no single node owns the plan's status.
+pub fn plan_link_id(fields: &Fields) -> Option<String> {
+    for key in ["node", "claims", "graph_node_id"] {
+        let Some(v) = fields.get(key) else {
+            continue;
+        };
+        let empty = match v {
+            Value::Scalar(s) => s.is_empty(),
+            Value::List(l) | Value::BlockList(l) => l.is_empty(),
+            Value::Raw(_) => false,
+        };
+        if empty {
+            continue;
+        }
+        return match v {
+            Value::Scalar(s) => Some(s.clone()),
+            Value::List(l) | Value::BlockList(l) if l.len() == 1 => Some(l[0].clone()),
+            _ => None,
+        };
+    }
+    None
+}
+
+/// Repair target for a file whose frontmatter cannot parse: resolve the node
+/// link (`node` / `claims` / `graph_node_id`) by regex, then project the node's
+/// status with the same forward-only projection the tiers use. A live node
+/// whose status writes no plan status holds; no link or node row is None.
+/// Needing no frontmatter parse, it runs where `parse_frontmatter` just failed.
+fn repair_target(text: &str, status_map: &HashMap<String, String>) -> Option<String> {
+    let fm = front_re().captures(text)?["fm"].to_string();
+    let mut link: Option<String> = None;
+    for line in fm.lines() {
+        for key in ["node", "claims", "graph_node_id"] {
+            let prefix = format!("{key}:");
+            if line.starts_with(&prefix) {
+                let v = line[prefix.len()..].trim().trim_matches('"');
+                if !v.is_empty() {
+                    link = Some(v.to_string());
+                    break;
+                }
+            }
+        }
+        if link.is_some() {
+            break;
+        }
+    }
+    let link = link?;
+    let node_status = status_map.get(&link).map(String::as_str);
+    super::status::project_plan_status(None, node_status?)
+}
+
+/// Canonical status a drifted `raw` should become, or None to leave it alone.
+/// `node_status` is the linked node's status when the map knows it; None means
+/// absent evidence (no link, or the link resolves to nothing). Tier 1 runs
+/// before the signal and ignores it. Tier 2 writes only a closed node's status.
+/// A live node or absent evidence returns None: a terminal stamp with neither
+/// behind it is how a freshly written brief read dead.
+pub fn target_status(raw: Option<&Value>, node_status: Option<&str>) -> Option<String> {
+    let s = norm(raw);
+    if is_known(&s) {
+        return None; // already canonical - the sweep corrects drift only
+    }
+    if let Some((_, to)) = TIER1.iter().find(|(from, _)| *from == s) {
+        return Some((*to).to_string());
+    }
+    // Tier 2: blank or any unrecognized token.
+    match node_status {
+        Some(st @ ("done" | "superseded")) => Some(st.to_string()),
+        _ => None, // live node or no evidence: the drift holds, never a guess
+    }
+}
+
+/// Return *text* with the frontmatter `status:` scalar set to *new_status*:
+/// the first frontmatter block only, the first `status:` line rewritten
+/// (or the key inserted as the first frontmatter line), double-quoted and
+/// single-line, the body byte-for-byte unchanged. None when there is no
+/// parseable frontmatter block.
+pub fn rewrite_status(text: &str, new_status: &str) -> Option<String> {
+    let caps = front_re().captures(text)?;
+    let fm = &caps["fm"];
+    let line = format!("status: \"{new_status}\"");
+    let new_fm = if status_line_re().is_match(fm) {
+        status_line_re()
+            .replacen(fm, 1, |c: &regex::Captures| {
+                format!("{}{}", &c["indent"], line)
+            })
+            .into_owned()
+    } else if fm.is_empty() {
+        line
+    } else {
+        format!("{line}\n{fm}")
+    };
+    Some(format!(
+        "{}{}{}{}",
+        &caps[1], new_fm, &caps[3], &caps["rest"]
+    ))
+}
+
+/// Append a `done_at: "<ts>"` line to the frontmatter if absent (first-write
+/// only): a sweep that promotes a plan to `done` must stamp the completion
+/// timestamp. Byte-preserving.
+pub fn ensure_done_at(text: &str, ts: &str) -> String {
+    let Some(caps) = front_re().captures(text) else {
+        return text.to_string();
+    };
+    let fm = &caps["fm"];
+    if done_at_line_re().is_match(fm) {
+        return text.to_string();
+    }
+    let line = format!("done_at: \"{ts}\"");
+    let new_fm = if fm.is_empty() {
+        line
+    } else {
+        format!("{fm}\n{line}")
+    };
+    format!("{}{}{}{}", &caps[1], new_fm, &caps[3], &caps["rest"])
+}
+
+/// Canonical-but-stale -> the node's forward projection, or None to leave it.
+/// An empty status map disables Tier 3 (never rewrite on absent evidence). An
+/// unlinked plan is skipped; a link resolving to no node in a readable map is
+/// treated as unlinked and warned.
+fn tier3_target(
+    fields: &Fields,
+    current: &str,
+    status_map: &HashMap<String, String>,
+    warnings: &mut Vec<String>,
+    name: &str,
+) -> Option<String> {
+    if status_map.is_empty() {
+        return None;
+    }
+    let link = plan_link_id(fields)?;
+    match status_map.get(&link) {
+        Some(node_status) => project_plan_status(Some(current), node_status),
+        None => {
+            warnings.push(format!(
+                "tier3 skip (link {link} not in graph or archive): {name}"
+            ));
+            None
+        }
+    }
+}
+
+/// Counters and the change list for one sweep pass.
+#[derive(Default)]
+pub struct SweepResult {
+    /// Rewritten to a non-terminal canonical status.
+    pub normalized: u32,
+    /// Rewritten to `superseded`.
+    pub superseded: u32,
+    /// Already canonical, no frontmatter, unparseable, or locked.
+    pub skipped: u32,
+    /// Drift token left alone: no node status was available tier2-blind, or
+    /// the doc has no closed node and a terminal write would be a guess.
+    pub stood_down: u32,
+    /// An unparseable file whose status line was rebuilt from the linked
+    /// node's status (the corrupt-line repair arm).
+    pub repaired: u32,
+    /// (path, old, new) per rewrite.
+    pub changes: Vec<(String, String, String)>,
+    pub warnings: Vec<String>,
+}
+
+impl SweepResult {
+    /// A stand-down is reported separately: folded into `skipped` it would be
+    /// shaped exactly like a healthy idempotent run, which is how a wedged
+    /// graph reads as "nothing to do" to the unattended --apply callers.
+    pub fn summary(&self) -> String {
+        let mut base = format!(
+            "{} normalized, {} superseded, {} skipped",
+            self.normalized, self.superseded, self.skipped
+        );
+        if self.repaired > 0 {
+            base = format!("{base}, {} repaired", self.repaired);
+        }
+        if self.stood_down > 0 {
+            format!("{base}, {} stood down", self.stood_down)
+        } else {
+            base
+        }
+    }
+}
+
+/// Scan every `*.md` in *plans_dir*, classify + (if apply) rewrite drift.
+/// Each file's read-decide-write runs under its sidecar `PlanDocLock`, so a
+/// concurrent projection is never clobbered mid-rewrite.
+pub fn sweep(plans_dir: &Path, apply: bool, status_map: &HashMap<String, String>) -> SweepResult {
+    let mut res = SweepResult::default();
+    if !plans_dir.is_dir() {
+        res.warnings
+            .push(format!("plans dir not found: {}", plans_dir.display()));
+        return res;
+    }
+
+    // An empty map is absent evidence for every doc, so one warning stands in
+    // for a hold line per drift-token plan. Tier 1 is a pure synonym rewrite
+    // and still runs.
+    let tier2_blind = status_map.is_empty();
+    if tier2_blind {
+        res.warnings
+            .push("tier2 off (no node status available): drift tokens left as-is".to_string());
+    }
+
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(plans_dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "md"))
+        .collect();
+    paths.sort();
+
+    for path in paths {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let guard = match PlanDocLock::acquire(&path, Duration::from_secs(2)) {
+            Ok(g) => g,
+            Err(_) => {
+                res.skipped += 1;
+                res.warnings.push(format!("skip (locked): {name}"));
+                continue;
+            }
+        };
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => {
+                res.skipped += 1;
+                res.warnings
+                    .push(format!("skip (unparseable): {name}: {e}"));
+                continue;
+            }
+        };
+        let parsed = match codec::parse_frontmatter(&text) {
+            Ok(p) => p,
+            Err(e) => {
+                // Repair arm: an unparseable file whose status line a link
+                // + node status can rebuild. The stance matches tier2/3: a
+                // live node holds, a closed node writes its terminal. The
+                // write runs the same parse-back gate as every other writer.
+                match repair_target(&text, status_map) {
+                    Some(new) => {
+                        let Some(rewritten) = rewrite_status(&text, &new) else {
+                            res.skipped += 1;
+                            res.warnings.push(format!("skip (no frontmatter): {name}"));
+                            continue;
+                        };
+                        let rewritten = if new == "done" {
+                            ensure_done_at(&rewritten, &super::now_stamp())
+                        } else {
+                            rewritten
+                        };
+                        if apply {
+                            if let Err(e) = codec::ensure_canonical(&rewritten)
+                                .map_err(std::io::Error::other)
+                                .and_then(|()| codec::atomic_write(&path, &rewritten))
+                            {
+                                res.warnings.push(format!("write failed: {name}: {e}"));
+                                drop(guard);
+                                continue;
+                            }
+                        }
+                        res.changes.push((
+                            path.to_string_lossy().into_owned(),
+                            "(corrupt)".into(),
+                            new.clone(),
+                        ));
+                        res.repaired += 1;
+                        continue;
+                    }
+                    None => {
+                        res.stood_down += 1;
+                        res.warnings.push(format!(
+                            "repair hold (status line unparseable, node status writes no plan status): {name}: {e}"
+                        ));
+                        continue;
+                    }
+                }
+            }
+        };
+
+        let raw = parsed.fields.get("status");
+        let s = norm(raw);
+        let new = if is_known(&s) {
+            // Tier 3: a canonical status may still be stale vs its node.
+            tier3_target(&parsed.fields, &s, status_map, &mut res.warnings, &name)
+        } else if tier2_blind && TIER1.iter().all(|(from, _)| *from != s) {
+            // Only the signal-gated tier stands down; Tier 1 still runs.
+            res.stood_down += 1;
+            continue;
+        } else {
+            let link = plan_link_id(&parsed.fields);
+            let node_status = link
+                .as_deref()
+                .and_then(|l| status_map.get(l))
+                .map(String::as_str);
+            // Unknown word with no closed node: reported apart from `skipped`,
+            // which would read as a healthy idempotent run.
+            let Some(n) = target_status(raw, node_status) else {
+                res.stood_down += 1;
+                let evidence = match (link.as_deref(), node_status) {
+                    (Some(l), Some(st)) => format!("node {l} is {st}"),
+                    (Some(l), None) => format!("link {l} not in graph or archive"),
+                    (None, _) => "no node link".to_string(),
+                };
+                res.warnings.push(format!(
+                    "tier2 hold ({evidence}, status word '{s}' unknown): {name}"
+                ));
+                continue;
+            };
+            Some(n)
+        };
+        let Some(new) = new else {
+            res.skipped += 1;
+            continue;
+        };
+        // Absent full-delivery evidence never manufactures a terminal write:
+        // a plan that declares more ships than it recorded holds its drift.
+        if new == "done" && super::stamp::unshipped_waves(&parsed.fields, &path) {
+            res.skipped += 1;
+            continue;
+        }
+
+        let Some(rewritten) = rewrite_status(&text, &new) else {
+            res.skipped += 1;
+            res.warnings.push(format!("skip (no frontmatter): {name}"));
+            continue;
+        };
+
+        // A promotion to `done` must carry a first-write done_at, else later
+        // sweeps/projections see done == done and never backfill it.
+        let rewritten = if new == "done" {
+            ensure_done_at(&rewritten, &super::now_stamp())
+        } else {
+            rewritten
+        };
+
+        if apply {
+            if let Err(e) = codec::ensure_canonical(&rewritten)
+                .map_err(std::io::Error::other)
+                .and_then(|()| codec::atomic_write(&path, &rewritten))
+            {
+                res.warnings.push(format!("write failed: {name}: {e}"));
+                drop(guard);
+                continue;
+            }
+        }
+        res.changes.push((
+            path.to_string_lossy().into_owned(),
+            // Verbatim, not `s`: a receipt line is how the word gets restored.
+            match raw {
+                Some(Value::Scalar(word)) if !word.trim().is_empty() => word.trim().to_string(),
+                Some(Value::Scalar(_)) | None => "(none)".to_string(),
+                Some(other) => format!("{other:?}"),
+            },
+            new.clone(),
+        ));
+        if new == "superseded" {
+            res.superseded += 1;
+        } else {
+            res.normalized += 1;
+        }
+    }
+
+    res
+}
+
+/// Append one JSON line per terminal entry in *changes* to *receipt*. A sweep
+/// with no terminal write creates no file.
+fn append_terminal_receipts(
+    receipt: &Path,
+    changes: &[(String, String, String)],
+    at: &str,
+) -> std::io::Result<()> {
+    let lines: String = changes
+        .iter()
+        .filter(|(_, _, new)| new == "done" || new == "superseded")
+        .map(|(path, old, new)| {
+            format!(
+                "{}\n",
+                serde_json::json!({"at": at, "path": path, "old": old, "new": new})
+            )
+        })
+        .collect();
+    if lines.is_empty() {
+        return Ok(());
+    }
+    if let Some(parent) = receipt.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(receipt)?;
+    std::io::Write::write_all(&mut file, lines.as_bytes())
+}
+
+/// The caller's receipt path when it names one, else
+/// `<state root>/state/plan-sweep/terminal-writes.jsonl`.
+fn receipt_path(params: &serde_json::Value) -> Option<PathBuf> {
+    if let Some(raw) = params
+        .get("receipt_path")
+        .and_then(serde_json::Value::as_str)
+    {
+        return Some(super::keeper::caller_path(params, raw));
+    }
+    let cwd = params.get("cwd").and_then(serde_json::Value::as_str);
+    let root = crate::backlog::settings::state_dir_at(cwd.map(Path::new))?;
+    Some(root.join("state/plan-sweep/terminal-writes.jsonl"))
+}
+
+/// The keeper's `plan_docs op=reconcile_status` handler: builds the status map
+/// from the keeper's strict entries plus an optional archive read-through,
+/// then runs the sweep. Served by `plan_doc::keeper`'s dispatch.
+pub(crate) fn handle_reconcile_status_op(
+    state: &crate::graph_keeper::StoreState,
+    params: &serde_json::Value,
+) -> Result<serde_json::Value, crate::graph_store::StoreError> {
+    let Some(plans_dir) = params.get("plans_dir").and_then(serde_json::Value::as_str) else {
+        return Err(crate::graph_store::StoreError::Invalid(
+            "plan_docs reconcile_status needs plans_dir".to_string(),
+        ));
+    };
+    let apply = params
+        .get("apply")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    // Strict read: corruption must reach the empty-map stand-down, not be
+    // topped up by the archive into a non-empty map that covers no live node.
+    // On a read error the map stays empty and the archive is not consulted:
+    // absent evidence, not archive-only truth.
+    let read = crate::graph_keeper::cached_entries(state, false, true);
+    let mut rows: Vec<serde_json::Value> = match &read {
+        Ok(e) => e.as_ref().clone(),
+        Err(_) => Vec::new(),
+    };
+    if read.is_ok() {
+        if let Some(archive) = params
+            .get("archive_path")
+            .and_then(serde_json::Value::as_str)
+        {
+            rows = crate::graph_store::entries_with_archive(&rows, Path::new(archive));
+        }
+    }
+    let status_map: HashMap<String, String> = rows
+        .iter()
+        .filter_map(|e| {
+            let id = e.get("id")?.as_str()?.to_string();
+            let status = e.get("status")?.as_str()?.to_string();
+            Some((id, status))
+        })
+        .collect();
+    let mut res = sweep(
+        &super::keeper::caller_path(params, plans_dir),
+        apply,
+        &status_map,
+    );
+    if apply {
+        let written = match receipt_path(params) {
+            Some(receipt) => append_terminal_receipts(&receipt, &res.changes, &super::now_stamp())
+                .map_err(|e| format!("{}: {e}", receipt.display())),
+            None => Err("no state root".to_string()),
+        };
+        // The doc writes already stand; a lost receipt must not read as a
+        // failed sweep.
+        if let Err(e) = written {
+            res.warnings
+                .push(format!("terminal receipt not written: {e}"));
+        }
+    }
+    Ok(serde_json::json!({
+        "normalized": res.normalized,
+        "superseded": res.superseded,
+        "skipped": res.skipped,
+        "stood_down": res.stood_down,
+        "changes": res.changes.iter().map(|(p, o, n)| serde_json::json!([p, o, n])).collect::<Vec<_>>(),
+        "warnings": res.warnings,
+        "summary": res.summary(),
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "fno-plan-reconcile-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// `---\nnode: x-1\n{status_line}\n---` + body.
+    fn plan_doc(status_line: &str) -> String {
+        let fm = if status_line.is_empty() {
+            "---\nnode: x-1\n---".to_string()
+        } else {
+            format!("---\nnode: x-1\n{status_line}\n---")
+        };
+        format!("{fm}\n# Title\n\nbody text\n")
+    }
+
+    fn linked_plan(status: &str, node: &str) -> String {
+        format!("---\nnode: {node}\nstatus: {status}\n---\n# T\n\nbody\n")
+    }
+
+    fn write_doc(dir: &Path, name: &str, text: &str) -> PathBuf {
+        let p = dir.join(name);
+        std::fs::write(&p, text).unwrap();
+        p
+    }
+
+    fn map(rows: &[(&str, &str)]) -> HashMap<String, String> {
+        rows.iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    // ------------------------------------------------------------------
+    // corrupt-line repair arm
+    // ------------------------------------------------------------------
+
+    /// The corrupt specimen shape with a claims link.
+    fn corrupt_doc() -> String {
+        "---\nclaims: x-regress\nstatus: \"in_\"in_review\"\n---\n# T\n\nbody\n".to_string()
+    }
+
+    #[test]
+    fn repair_arm_rebuilds_a_corrupt_status_line_from_the_node() {
+        let dir = tmp_dir("repair");
+        write_doc(&dir, "corrupt.md", &corrupt_doc());
+        let res = sweep(&dir, true, &map(&[("x-regress", "done")]));
+        assert_eq!(res.repaired, 1, "{:?}", res.warnings);
+        let text = read_doc(&dir.join("corrupt.md"));
+        assert!(text.contains("status: \"done\""), "{text}");
+        assert!(text.contains("claims: x-regress"), "{text}");
+    }
+
+    #[test]
+    fn repair_arm_holds_when_the_node_writes_no_plan_status() {
+        let dir = tmp_dir("repair-live");
+        write_doc(&dir, "corrupt.md", &corrupt_doc());
+        // An in_progress node maps to no plan-status write: the repair holds
+        // rather than guessing. An in_review node repairs forward to
+        // in_review, never a terminal guess.
+        let res = sweep(&dir, true, &map(&[("x-regress", "in_progress")]));
+        assert_eq!(res.repaired, 0);
+        assert_eq!(res.stood_down, 1, "{:?}", res.warnings);
+        assert!(read_doc(&dir.join("corrupt.md")).contains("in_\"in_review\""));
+
+        let dir2 = tmp_dir("repair-forward");
+        write_doc(&dir2, "corrupt.md", &corrupt_doc());
+        let res2 = sweep(&dir2, true, &map(&[("x-regress", "in_review")]));
+        assert_eq!(res2.repaired, 1, "{:?}", res2.warnings);
+        assert!(read_doc(&dir2.join("corrupt.md")).contains("status: \"in_review\""));
+    }
+
+    // ------------------------------------------------------------------
+    // classification (target_status)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn tier1_synonyms_rewrite() {
+        for (raw, expected) in [
+            ("PENDING", "design"),
+            ("draft", "design"),
+            ("designed", "design"),
+            ("design-locked", "ready"),
+            ("reviewing", "in_review"),
+            ("shipping", "in_review"),
+            ("superseded-by-implementation", "superseded"),
+            ("findings", "done"),
+            ("research", "done"),
+            ("complete", "done"),
+        ] {
+            assert_eq!(
+                target_status(Some(&Value::Scalar(raw.into())), None),
+                Some(expected.into())
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_status_left_alone() {
+        for s in crate::plan_doc::status::known_statuses().iter().copied() {
+            assert_eq!(
+                target_status(Some(&Value::Scalar(s.into())), Some("done")),
+                None
+            );
+        }
+    }
+
+    /// A finished think brief reads `findings` and its node is still open.
+    /// The word is a Tier 1 synonym, so it rewrites to `done` before the node
+    /// signal is ever consulted.
+    #[test]
+    fn tier1_think_words_rewrite_even_on_a_live_node() {
+        for raw in ["findings", "research", "complete", "FINDINGS"] {
+            assert_eq!(
+                target_status(Some(&Value::Scalar(raw.into())), Some("idea")),
+                Some("done".into())
+            );
+        }
+    }
+
+    #[test]
+    fn tier2_terminals_still_write() {
+        assert_eq!(
+            target_status(Some(&Value::Scalar("wip".into())), Some("done")),
+            Some("done".into())
+        );
+        assert_eq!(
+            target_status(Some(&Value::Scalar("wip".into())), Some("superseded")),
+            Some("superseded".into())
+        );
+    }
+
+    /// Neither an unlinked doc nor a link to no node row is evidence of
+    /// abandonment, in a map that does hold rows. A superseded node still is.
+    #[test]
+    fn tier2_holds_without_node_evidence() {
+        let dir = tmp_dir("no-evidence");
+        let held = [
+            write_doc(&dir, "open.md", "---\nstatus: open\n---\n# T\n"),
+            write_doc(&dir, "nokey.md", "---\nkind: note\n---\n# T\n"),
+            write_doc(&dir, "orphan.md", &linked_plan("open", "x-gone")),
+        ];
+        let before = held.each_ref().map(|p| read_doc(p));
+        let closed = write_doc(&dir, "closed.md", &linked_plan("open", "x-closed"));
+
+        let res = sweep(&dir, true, &map(&[("x-closed", "superseded")]));
+
+        assert_eq!(held.each_ref().map(|p| read_doc(p)), before);
+        assert_eq!(res.stood_down, 3);
+        assert_eq!(res.superseded, 1);
+        assert!(read_doc(&closed).contains("status: \"superseded\""));
+        assert!(res
+            .warnings
+            .iter()
+            .any(|w| w.contains("no node link") && w.contains("open.md")));
+        assert!(res
+            .warnings
+            .iter()
+            .any(|w| w.contains("link x-gone not in graph") && w.contains("orphan.md")));
+    }
+
+    // ------------------------------------------------------------------
+    // in-place rewrite (rewrite_status / ensure_done_at)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn done_promotion_stamps_done_at_once() {
+        let text = plan_doc("status: PENDING");
+        let rewritten = rewrite_status(&text, "done").unwrap();
+        let stamped = ensure_done_at(&rewritten, "2026-10-01T00:00:00Z");
+        assert_eq!(stamped.matches("done_at:").count(), 1);
+        assert!(stamped.contains("done_at: \"2026-10-01T00:00:00Z\""));
+        // Idempotent: a second stamp does not add a second line.
+        let again = ensure_done_at(&stamped, "2026-10-01T01:00:00Z");
+        assert_eq!(again.matches("done_at:").count(), 1);
+    }
+
+    // ------------------------------------------------------------------
+    // sweep (end to end over a tmp plans dir)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn sweep_dry_run_reports_without_writing() {
+        let dir = tmp_dir("dry");
+        write_doc(&dir, "a.md", &plan_doc("status: PENDING"));
+        let res = sweep(&dir, false, &map(&[]));
+        assert_eq!(res.normalized, 1);
+        assert!(read_doc(&dir.join("a.md")).contains("PENDING"));
+    }
+
+    #[test]
+    fn sweep_apply_normalizes_and_summarizes() {
+        let dir = tmp_dir("apply");
+        write_doc(&dir, "a.md", &plan_doc("status: PENDING"));
+        write_doc(&dir, "b.md", &plan_doc(""));
+        write_doc(&dir, "c.md", &plan_doc("status: in_review"));
+        // x-1 absent from the map: b holds, c warns.
+        let res = sweep(&dir, true, &map(&[("x-other", "ready")]));
+        assert_eq!(
+            res.summary(),
+            "1 normalized, 0 superseded, 1 skipped, 1 stood down"
+        );
+        assert!(read_doc(&dir.join("a.md")).contains("status: \"design\""));
+        assert_eq!(read_doc(&dir.join("b.md")), plan_doc(""));
+    }
+
+    #[test]
+    fn sweep_skips_malformed_body_intact() {
+        let dir = tmp_dir("malformed");
+        // An indented continuation line is the codec's parse error. No node
+        // evidence: the repair arm stands down, and the file stays
+        // byte-identical.
+        let bad = "---\nnode: x-1\nstatus: idea\n  wrapped\n---\nbody\n";
+        let p = write_doc(&dir, "bad.md", bad);
+        let res = sweep(&dir, true, &map(&[]));
+        assert_eq!(res.stood_down, 1);
+        assert_eq!(res.skipped, 0);
+        assert_eq!(res.normalized, 0);
+        assert_eq!(read_doc(&p), bad);
+    }
+
+    #[test]
+    fn sweep_idempotent_and_non_regressing() {
+        let dir = tmp_dir("idempotent");
+        let p = write_doc(&dir, "a.md", &plan_doc("status: \"superseded\""));
+        sweep(&dir, true, &map(&[("x-other", "ready")]));
+        assert!(read_doc(&p).contains("status: \"superseded\""));
+        // Human re-activates it.
+        let reactivated = read_doc(&p).replace("status: \"superseded\"", "status: \"design\"");
+        std::fs::write(&p, reactivated).unwrap();
+        let res = sweep(&dir, true, &map(&[("x-other", "ready")]));
+        assert_eq!(res.normalized, 0);
+        assert_eq!(res.superseded, 0);
+        assert_eq!(res.skipped, 1);
+        assert!(read_doc(&p).contains("status: \"design\""));
+    }
+
+    // ------------------------------------------------------------------
+    // Tier 3: canonical-but-stale -> node projection
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn tier3_fixes_stale_canonical() {
+        let dir = tmp_dir("t3fix");
+        let p = write_doc(&dir, "a.md", &linked_plan("design", "x-1"));
+        let res = sweep(&dir, true, &map(&[("x-1", "done")]));
+        assert_eq!(res.normalized, 1);
+        let text = read_doc(&p);
+        assert!(text.contains("status: \"done\""));
+        assert_eq!(text.matches("done_at:").count(), 1);
+
+        // A plan that declares more ships than it recorded holds: the
+        // node-closed signal never promotes it past in_review.
+        let multi = write_doc(
+            &dir,
+            "multi.md",
+            &linked_plan("in_review", "x-1").replace(
+                "---\n# T\n",
+                "---\n# T\n\n## Execution Strategy\n\n```yaml\nexecution_mode: sequential\nwaves:\n  - wave: 1\n    tasks: ['1.1']\n  - wave: 2\n    tasks: ['2.1']\ntasks:\n  - id: '1.1'\n    surface: ['a.rs']\n    verify: 'true'\n  - id: '2.1'\n    surface: ['b.rs']\n    verify: 'true'\n```\n",
+            ),
+        );
+        let res = sweep(&dir, true, &map(&[("x-1", "done")]));
+        assert_eq!(res.normalized, 0);
+        assert_eq!(res.skipped, 2);
+        assert!(read_doc(&multi).contains("status: in_review"));
+    }
+
+    #[test]
+    fn tier3_forward_only() {
+        let dir = tmp_dir("t3fwd");
+        let p = write_doc(&dir, "a.md", &linked_plan("shipped", "x-1"));
+        let res = sweep(&dir, true, &map(&[("x-1", "in_progress")]));
+        assert_eq!(res.skipped, 1);
+        assert!(read_doc(&p).contains("status: shipped"));
+    }
+
+    // ------------------------------------------------------------------
+    // link normalization (plan_link_id)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn plan_link_id_prefers_node_then_claims_then_graph_node_id() {
+        // codex PR#149: plans link the node via `claims:` or `node:`; a
+        // truthy `node` outranks a later key.
+        assert_eq!(
+            plan_link_id(&fields_of("node: x-a\nclaims: x-closed")),
+            Some("x-a".to_string())
+        );
+        assert_eq!(
+            plan_link_id(&fields_of("claims: x-closed\ngraph_node_id: x-old")),
+            Some("x-closed".to_string())
+        );
+    }
+
+    #[test]
+    fn plan_link_id_returns_none_for_unusable_link_shapes() {
+        assert_eq!(plan_link_id(&fields_of("claims: [t-1d91, t-aa95]")), None);
+        assert_eq!(plan_link_id(&fields_of("claims: []")), None);
+        assert_eq!(plan_link_id(&fields_of("claims:")), None);
+    }
+
+    // ------------------------------------------------------------------
+    // absent evidence must not manufacture a terminal status
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn tier2_stands_down_when_no_node_status_is_available() {
+        let dir = tmp_dir("standdown");
+        let p = write_doc(&dir, "a.md", &linked_plan("implemented", "x-1"));
+        let before = read_doc(&p);
+        let res = sweep(&dir, true, &map(&[]));
+        assert_eq!(res.superseded, 0);
+        assert_eq!(res.stood_down, 1);
+        assert_eq!(res.skipped, 0);
+        assert!(res.summary().contains("1 stood down"));
+        assert_eq!(read_doc(&p), before);
+        assert!(res.warnings.iter().any(|w| w.contains("tier2 off")));
+    }
+
+    fn read_doc(p: &Path) -> String {
+        std::fs::read_to_string(p).unwrap()
+    }
+
+    fn fields_of(kv: &str) -> Fields {
+        codec::parse_frontmatter(&format!("---\n{kv}\n---\n"))
+            .unwrap()
+            .fields
+    }
+}

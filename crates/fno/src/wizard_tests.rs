@@ -1,0 +1,512 @@
+//! Contracts for the pure wizard flow: one scripted prompter drives all
+//! four acceptance shapes - the screen order and skips across the three
+//! presets, back navigation with its pre-selected answers, the write
+//! latch, and the harness gate's retry loop and skip-for-now exit.
+
+use super::*;
+
+use std::collections::VecDeque;
+
+enum Que {
+    C(Conf),
+    P(Pick),
+    T(Ticks),
+}
+
+struct Offer {
+    screen: &'static str,
+    kind: &'static str,
+    yes: Option<bool>,
+    index: Option<usize>,
+    options: usize,
+}
+
+struct Script {
+    que: VecDeque<Que>,
+    offers: Vec<Offer>,
+    notes: Vec<String>,
+}
+
+impl Script {
+    fn auto() -> Script {
+        Script {
+            que: VecDeque::new(),
+            offers: Vec::new(),
+            notes: Vec::new(),
+        }
+    }
+
+    fn queued(items: Vec<Que>) -> Script {
+        Script {
+            que: items.into(),
+            offers: Vec::new(),
+            notes: Vec::new(),
+        }
+    }
+
+    fn confirms(&self, screen: &str) -> Vec<bool> {
+        self.offers
+            .iter()
+            .filter(|o| o.kind == "confirm" && o.screen == screen)
+            .map(|o| o.yes.unwrap_or(false))
+            .collect()
+    }
+
+    fn asks(&self) -> usize {
+        self.offers.len()
+    }
+}
+
+impl Prompter for Script {
+    fn confirm(&mut self, screen: &'static str, _prompt: &str, default: bool) -> Conf {
+        self.offers.push(Offer {
+            screen,
+            kind: "confirm",
+            yes: Some(default),
+            index: None,
+            options: 0,
+        });
+        match self.que.pop_front() {
+            Some(Que::C(c)) => c,
+            Some(_) => panic!("queue mismatch at {screen}: expected a confirm"),
+            None => {
+                if default {
+                    Conf::Yes
+                } else {
+                    Conf::No
+                }
+            }
+        }
+    }
+
+    fn select(
+        &mut self,
+        screen: &'static str,
+        _prompt: &str,
+        options: &[&str],
+        default: usize,
+    ) -> Pick {
+        self.offers.push(Offer {
+            screen,
+            kind: "select",
+            yes: None,
+            index: Some(default),
+            options: options.len(),
+        });
+        match self.que.pop_front() {
+            Some(Que::P(p)) => p,
+            Some(_) => panic!("queue mismatch at {screen}: expected a pick"),
+            None => Pick::Ok(default),
+        }
+    }
+
+    fn checklist(
+        &mut self,
+        screen: &'static str,
+        _prompt: &str,
+        _options: &[&str],
+        defaults: &[usize],
+    ) -> Ticks {
+        self.offers.push(Offer {
+            screen,
+            kind: "checklist",
+            yes: None,
+            index: None,
+            options: 0,
+        });
+        match self.que.pop_front() {
+            Some(Que::T(t)) => t,
+            Some(_) => panic!("queue mismatch at {screen}: expected ticks"),
+            None => Ticks::Ok(defaults.to_vec()),
+        }
+    }
+
+    fn secret(&mut self, screen: &'static str, _prompt: &str) -> Hidden {
+        panic!("the pure flow never reads a secret (asked at {screen})")
+    }
+
+    fn note(&mut self, screen: &'static str, text: &str) {
+        self.notes.push(format!("{screen}: {text}"));
+    }
+
+    fn progress(&mut self, screen: &'static str, label: &str) {
+        self.notes.push(format!("{screen}: [step] {label}"));
+    }
+}
+
+struct FixedProbes {
+    que: VecDeque<Probe>,
+}
+
+impl Probes for FixedProbes {
+    fn harness_check(&mut self, _harness: &str) -> Probe {
+        self.que.pop_front().unwrap_or(Probe::Pass { ms: 5 })
+    }
+
+    fn model_check(&mut self, _harness: &str, _model: &str) -> Probe {
+        self.que.pop_front().unwrap_or(Probe::Pass { ms: 5 })
+    }
+}
+
+fn fresh_detect() -> Detect {
+    Detect {
+        markers_present: false,
+        band: Some(4),
+        harnesses: vec![
+            Found {
+                name: "claude",
+                by: "on PATH",
+            },
+            Found {
+                name: "codex",
+                by: "on PATH",
+            },
+        ],
+        env_keys: vec![("claude", "ANTHROPIC_API_KEY"), ("codex", "OPENAI_API_KEY")],
+        models: vec!["model-a".into(), "model-b".into()],
+    }
+}
+
+fn drive(state: &mut State, pr: &mut Script, pb: &mut FixedProbes) -> Next {
+    for _ in 0..200 {
+        let next = step(state, pr, pb);
+        if matches!(next, Next::Done | Next::Cancel | Next::SkipToDone) {
+            return next;
+        }
+    }
+    panic!("the flow did not settle in 200 steps");
+}
+
+fn shown(state: &State) -> Vec<&'static str> {
+    state
+        .screens
+        .iter()
+        .filter(|(_, mark)| *mark == "shown")
+        .map(|(id, _)| *id)
+        .collect()
+}
+
+fn skipped(state: &State) -> Vec<&'static str> {
+    state
+        .screens
+        .iter()
+        .filter(|(_, mark)| *mark == "skipped")
+        .map(|(id, _)| *id)
+        .collect()
+}
+
+#[test]
+fn screen_order_and_skips_follow_the_presets() {
+    // Balanced with every default accepted: fifteen screens run in
+    // order, three skip, and the proposal set is the balanced one.
+    let mut state = State::new(None, fresh_detect(), false);
+    let mut pr = Script::auto();
+    let mut pb = FixedProbes {
+        que: VecDeque::new(),
+    };
+    assert_eq!(drive(&mut state, &mut pr, &mut pb), Next::Done);
+    assert_eq!(
+        shown(&state),
+        vec![
+            "preflight",
+            "preset",
+            "look",
+            "harnesses",
+            "models",
+            "budget",
+            "review-merge",
+            "interview",
+            "services",
+            "claude-auto-mode",
+            "messaging",
+            "projects",
+            "review",
+            "apply",
+            "done",
+        ]
+    );
+    assert_eq!(skipped(&state), vec!["rerun", "keys", "join"]);
+    let rows = pending(&state);
+    assert!(rows
+        .iter()
+        .any(|r| r.id == "pr-watcher" && r.key == "pr_watch.enabled"));
+    assert!(rows.iter().any(|r| r.id == "groom-agent"));
+    // The default merge refusal still persists its answer: enabled=false
+    // rides the proposal so a later run cannot read a stale true.
+    assert!(rows
+        .iter()
+        .any(|r| r.key == "auto_merge.enabled" && r.value == "false"));
+    // The preset pick offers three postures with balanced defaulted; the
+    // model pick appends Leave unchanged last and defaults to it.
+    let preset_offer = pr
+        .offers
+        .iter()
+        .find(|o| o.kind == "select" && o.screen == "preset")
+        .unwrap();
+    assert_eq!(preset_offer.options, 3);
+    assert_eq!(preset_offer.index, Some(1));
+    let model_offer = pr
+        .offers
+        .iter()
+        .find(|o| o.kind == "select" && o.screen == "models")
+        .unwrap();
+    assert_eq!(model_offer.options, 3);
+    assert_eq!(model_offer.index, Some(2));
+
+    // User-reviewed: every stop is asked, the review screen offers No by
+    // default, the flow ends in Cancel, and no service or auto-merge row
+    // exists (the posture row may).
+    let mut state = State::new(Some(Preset::UserReviewed), fresh_detect(), false);
+    let mut pr = Script::auto();
+    let mut pb = FixedProbes {
+        que: VecDeque::new(),
+    };
+    assert_eq!(drive(&mut state, &mut pr, &mut pb), Next::Cancel);
+    let last = pr.offers.last().unwrap();
+    assert_eq!(last.screen, "review");
+    assert_eq!(last.kind, "confirm");
+    assert_eq!(last.yes, Some(false));
+    let rows = pending(&state);
+    assert!(rows
+        .iter()
+        .all(|r| r.id != "pr-watcher" && r.id != "auto-heal" && r.id != "groom-agent"));
+    assert!(rows
+        .iter()
+        .any(|r| r.key == "auto_merge.enabled" && r.value == "false"));
+    assert!(rows.iter().any(|r| r.key == "review.posture"));
+
+    // Aggressive still asks before writing Claude Code settings; its other
+    // default choices use the full aggressive proposal set.
+    let mut state = State::new(Some(Preset::Aggressive), fresh_detect(), false);
+    let mut pr = Script::auto();
+    let mut pb = FixedProbes {
+        que: VecDeque::new(),
+    };
+    assert_eq!(drive(&mut state, &mut pr, &mut pb), Next::Done);
+    assert_eq!(pr.asks(), 1, "only the settings consent is always asked");
+    assert_eq!(pr.confirms("claude-auto-mode"), vec![false]);
+    let rows = pending(&state);
+    assert!(rows.iter().all(|r| r.id != "claude-auto-mode"));
+    assert!(rows.iter().any(|r| r.key == "auto_merge.enabled"));
+    assert!(rows.iter().any(|r| r.key == "auto_merge.grant"));
+    for id in ["pr-watcher", "auto-heal", "groom-agent"] {
+        assert!(rows.iter().any(|r| r.id == id));
+    }
+}
+
+#[test]
+fn interview_answers_map_to_keyed_proposals() {
+    let mut state = State::new(None, fresh_detect(), false);
+    state
+        .answers
+        .insert("interview-lane", Answer::Text("codex".into()));
+    state.answers.insert(
+        "interview-review",
+        Answer::Picked(vec!["code-review".into(), "chatgpt-codex-connector".into()]),
+    );
+    state.answers.insert(
+        "interview-favorites",
+        Answer::Picked(vec!["review".into(), "ship".into()]),
+    );
+    state
+        .answers
+        .insert("interview-loop", Answer::Picked(vec!["tdd".into()]));
+    let rows = pending(&state);
+    let interview: Vec<_> = rows.iter().filter(|r| r.id == "interview").collect();
+    assert_eq!(interview.len(), 5);
+    assert!(interview
+        .iter()
+        .any(|r| r.key == "agents.defaults.provider" && r.value == "codex"));
+    // The reviewer-skill tick and the bot tick split across two keys; the
+    // skill list never names the bot login.
+    assert!(interview
+        .iter()
+        .any(|r| r.key == "review.reviewers" && r.value == "[\"code-review\"]"));
+    assert!(interview
+        .iter()
+        .any(|r| r.key == "review.github_apps" && r.value == "[\"chatgpt-codex-connector\"]"));
+    assert!(interview
+        .iter()
+        .any(|r| r.key == "user.favorite_skills" && r.value == "[\"review\", \"ship\"]"));
+    assert!(interview
+        .iter()
+        .any(|r| r.key == "target.loop_skills" && r.value == "[\"tdd\"]"));
+}
+
+#[test]
+fn empty_interview_answers_propose_nothing() {
+    let mut state = State::new(None, fresh_detect(), false);
+    state
+        .answers
+        .insert("interview-lane", Answer::Text(String::new()));
+    state
+        .answers
+        .insert("interview-review", Answer::Picked(Vec::new()));
+    state
+        .answers
+        .insert("interview-favorites", Answer::Picked(Vec::new()));
+    state
+        .answers
+        .insert("interview-loop", Answer::Picked(Vec::new()));
+    let rows = pending(&state);
+    assert!(rows.iter().all(|r| r.id != "interview"));
+}
+
+#[test]
+fn auto_mode_settings_need_a_yes_answer_under_every_preset() {
+    let index = SCREENS
+        .iter()
+        .position(|screen| screen.id == "claude-auto-mode")
+        .expect("Claude Auto Mode consent screen");
+    assert_eq!(SCREENS[index].stops, [true, true, true]);
+
+    let mut declined = State::new(Some(Preset::Aggressive), fresh_detect(), false);
+    declined.index = index;
+    let mut pr = Script::auto();
+    let mut pb = FixedProbes {
+        que: VecDeque::new(),
+    };
+    assert_eq!(step(&mut declined, &mut pr, &mut pb), Next::Forward);
+    assert_eq!(pr.confirms("claude-auto-mode"), vec![false]);
+    assert!(pending(&declined)
+        .iter()
+        .all(|row| row.id != "claude-auto-mode"));
+
+    let mut accepted = State::new(Some(Preset::Aggressive), fresh_detect(), false);
+    accepted.index = index;
+    let mut pr = Script::queued(vec![Que::C(Conf::Yes)]);
+    let mut pb = FixedProbes {
+        que: VecDeque::new(),
+    };
+    assert_eq!(step(&mut accepted, &mut pr, &mut pb), Next::Forward);
+    assert_eq!(pr.confirms("claude-auto-mode"), vec![false]);
+    assert!(pending(&accepted)
+        .iter()
+        .any(|row| row.id == "claude-auto-mode"));
+}
+
+#[test]
+fn back_navigation_and_the_write_latch() {
+    // A balanced run that goes back twice: once from the interview, once
+    // from the review screen. Back steps one screen up the trail, so the
+    // interview's back re-asks review-merge; re-shown screens offer the
+    // committed answer as the default - the merge ask flips from false to
+    // true.
+    let mut state = State::new(Some(Preset::Balanced), fresh_detect(), false);
+    let mut pr = Script::queued(vec![
+        Que::T(Ticks::Ok(vec![0, 2])), // harnesses: claude + codex
+        Que::P(Pick::Ok(2)),           // models: claude keeps its model
+        Que::P(Pick::Ok(2)),           // models: codex keeps its model
+        Que::C(Conf::Yes),             // budget: apply the band
+        Que::C(Conf::Yes),             // review-merge: keep the posture
+        Que::C(Conf::Yes),             // review-merge: merge (non-default)
+        Que::P(Pick::Ok(0)),           // interview: lane
+        Que::T(Ticks::Back),           // interview: review lane, back
+        Que::C(Conf::Yes),             // review-merge re-shown: posture
+        Que::C(Conf::No),              // review-merge re-shown: merge (offered true now)
+        Que::P(Pick::Ok(0)),           // interview re-shown: lane
+        Que::T(Ticks::Ok(vec![])),     // review lane, none
+        Que::T(Ticks::Ok(vec![])),     // favorites, none
+        Que::T(Ticks::Ok(vec![])),     // loop skills, none
+        Que::T(Ticks::Ok(vec![0, 2])), // services
+        Que::C(Conf::No),              // Auto Mode: decline settings write
+        Que::T(Ticks::Ok(vec![])),     // messaging: none
+        Que::C(Conf::Yes),             // projects: register
+        Que::C(Conf::No),              // projects: no scan
+        Que::C(Conf::Back),            // review: back
+        Que::C(Conf::Yes),             // projects again: register
+        Que::C(Conf::No),              // projects again: no scan
+        Que::C(Conf::Yes),             // review again: write (the latch)
+    ]);
+    let mut pb = FixedProbes {
+        que: VecDeque::new(),
+    };
+    assert_eq!(drive(&mut state, &mut pr, &mut pb), Next::Done);
+    // The merge default reads the committed answer: false first, then
+    // true on the re-shown screen. Posture stays true throughout.
+    assert_eq!(pr.confirms("review-merge"), vec![true, false, true, true]);
+    // Projects re-offers the committed register yes and the committed
+    // scan no.
+    assert_eq!(pr.confirms("projects"), vec![true, false, true, false]);
+    assert!(!state.back_allowed(), "the review yes latched writes");
+
+    // A host restoring a mid-run session: writes already started, so the
+    // first back is refused with a note and the screen asks again.
+    let mut state = State::new(Some(Preset::Balanced), fresh_detect(), false);
+    state.writes_started = true;
+    let mut pr = Script::queued(vec![
+        Que::T(Ticks::Back),           // harnesses: refused
+        Que::T(Ticks::Ok(vec![0, 2])), // harnesses again
+        Que::P(Pick::Ok(2)),           // models: claude
+        Que::P(Pick::Ok(2)),           // models: codex
+        Que::C(Conf::Yes),             // budget
+        Que::C(Conf::Yes),             // posture
+        Que::C(Conf::No),              // merge
+        Que::P(Pick::Ok(0)),           // interview: lane
+        Que::T(Ticks::Ok(vec![])),     // interview: review lane, none
+        Que::T(Ticks::Ok(vec![])),     // interview: favorites, none
+        Que::T(Ticks::Ok(vec![])),     // interview: loop skills, none
+        Que::T(Ticks::Ok(vec![0, 2])), // services
+        Que::C(Conf::No),              // Auto Mode: decline settings write
+        Que::T(Ticks::Ok(vec![])),     // messaging: none
+        Que::C(Conf::Yes),             // register
+        Que::C(Conf::No),              // scan
+    ]);
+    let mut pb = FixedProbes {
+        que: VecDeque::new(),
+    };
+    assert_eq!(drive(&mut state, &mut pr, &mut pb), Next::Done);
+    assert_eq!(
+        pr.offers
+            .iter()
+            .filter(|o| o.kind == "checklist" && o.screen == "harnesses")
+            .count(),
+        2,
+        "the refused back re-asked the checklist"
+    );
+    assert!(pr.notes.iter().any(|n| n.contains("back is off")));
+
+    // A declined posture on back clears the stale answer: Yes at
+    // review-merge seeds self_review, then Back from the interview
+    // re-asks the screen. A No there must clear the seeded answer, so no
+    // review.posture proposal is built and the note names the kept
+    // posture.
+    let mut state = State::new(Some(Preset::Balanced), fresh_detect(), false);
+    let mut pr = Script::queued(vec![
+        Que::T(Ticks::Ok(vec![0, 2])), // harnesses: claude + codex
+        Que::P(Pick::Ok(2)),           // models: claude keeps its model
+        Que::P(Pick::Ok(2)),           // models: codex keeps its model
+        Que::C(Conf::Yes),             // budget: apply the band
+        Que::C(Conf::Yes),             // review-merge: keep the posture
+        Que::C(Conf::Yes),             // review-merge: merge
+        Que::P(Pick::Ok(0)),           // interview: lane
+        Que::T(Ticks::Back),           // interview: review lane, back
+        Que::C(Conf::No),              // review-merge re-shown: decline the posture
+        Que::C(Conf::No),              // review-merge re-shown: no merge
+        Que::P(Pick::Ok(0)),           // interview re-shown: lane
+        Que::T(Ticks::Ok(vec![])),     // review lane, none
+        Que::T(Ticks::Ok(vec![])),     // favorites, none
+        Que::T(Ticks::Ok(vec![])),     // loop skills, none
+        Que::T(Ticks::Ok(vec![0, 2])), // services
+        Que::C(Conf::No),              // Auto Mode: decline settings write
+        Que::T(Ticks::Ok(vec![])),     // messaging: none
+        Que::C(Conf::Yes),             // projects: register
+        Que::C(Conf::No),              // projects: no scan
+        Que::C(Conf::Yes),             // review: write (the latch)
+    ]);
+    let mut pb = FixedProbes {
+        que: VecDeque::new(),
+    };
+    assert_eq!(drive(&mut state, &mut pr, &mut pb), Next::Done);
+    assert!(pr
+        .notes
+        .iter()
+        .any(|n| n.contains("the review posture stays as configured")));
+    assert!(
+        pending(&state).iter().all(|r| r.key != "review.posture"),
+        "the declined posture must not stay proposed"
+    );
+    assert!(pending(&state)
+        .iter()
+        .any(|r| r.key == "auto_merge.enabled" && r.value == "false"));
+}

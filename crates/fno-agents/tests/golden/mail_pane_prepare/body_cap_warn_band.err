@@ -1,0 +1,17 @@
+note: mail body is 3500 bytes (over the 3000-byte brevity guide); prefer a short pointer with the detail in a node/doc.
+style notes (not blocking):
+
+rule 1 (length): sentence 1 is 700 words. The cap is 25. "word word word word word word word word word word word word ..."
+
+rule 7 (wordcap): this message runs 700 words. The cap is 80 words. "word word word word word word word word word word word word ..."
+
+Cut articles, filler, pleasantries, hedges. Fragments work. Keep technical terms exact.
+
+Status: X. Why Y. Done at Z.
+
+Approval: Problem X. Options Y or Z. I recommend Z because A. Your call?
+
+Put findings on the node and link it.
+
+run "fno doctor lint style --stdin --surface mail" to check a rewrite next time.
+pane send refused: pane 3 hosts no registered agent, so there is no peer to attribute this to. Use --raw to type keystrokes at it.

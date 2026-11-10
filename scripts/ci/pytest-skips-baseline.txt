@@ -1,0 +1,10 @@
+tests/py/_native_door.py::run_native::pytest.skip  # on main before this ratchet
+tests/py/conftest.py::native_backlog_door::pytest.skip  # on main before this ratchet
+tests/py/conftest.py::pytest_collection_modifyitems::mark.skip  # the dev_build marker's hook-applied skip: the smoke pytest legs delete the dev build on purpose, so a marked test skips there (tests/test-dev-build-suites.sh runs it with the build present)
+tests/py/goldens/_door.py::door::pytest.skip  # native door: the golden receipts drive the fno-agents binary; without a dev build there is no door to pin
+tests/py/integration/test_first_run_documentation.py::<module>::mark.skipif  # on main before this ratchet
+tests/py/integration/test_marketplace_lint.py::<module>::mark.skipif  # on main before this ratchet
+tests/py/unit/test_evidence_refusal_remedy.py::test_unmeasured_refusal_names_only_remedies_the_commands_support::pytest.skip  # front-binary probe: CI builds crates/fno, a bare checkout has none
+tests/py/unit/test_skill_bundles.py::<module>::mark.skipif  # on main before this ratchet
+tests/py/unit/test_skill_bundles.py::test_generator_handles_mixed_manifest::marker.requires_shelled_yaml  # on main before this ratchet
+tests/py/unit/test_unknown_subcommand_exit.py::test_unknown_command_exits_nonzero_with_diagnostic::pytest.skip  # a checkout with no built fno front door has nothing to run; the tests-py CI job builds it first

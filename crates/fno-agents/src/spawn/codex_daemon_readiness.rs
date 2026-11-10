@@ -1,0 +1,295 @@
+//! Installed-version readiness for the shared Codex daemon.
+//!
+//! `is_healthy` answers "is a daemon alive and answering initialize". This
+//! module answers a DIFFERENT axis: "is that daemon the version the
+//! installed CLI would start". The two never substitute for each other - a
+//! symlink moved to 0.154.0 does not change PID 27454's 0.153.4 executable -
+//! and the census, the persistent create/resume/attach receipts and the
+//! upgrade transaction all read this one owner.
+
+use serde::Serialize;
+
+/// The version verdict. `Current` needs two agreeing positive readings; a
+/// socket or pid answer alone is never `Current`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VersionVerdict {
+    Current,
+    Stale,
+    Ahead,
+    Unknown,
+}
+
+/// One readiness snapshot of the shared Codex daemon.
+#[derive(Debug, Clone, Serialize)]
+pub struct CodexDaemonReadiness {
+    /// The process/socket/initialize predicate, verbatim from the daemon
+    /// adapter. Health and version are separate fields on purpose.
+    pub healthy: bool,
+    pub pid: Option<u32>,
+    pub start_token: Option<u64>,
+    pub endpoint: String,
+    pub codex_home: String,
+    pub installed_version: Option<String>,
+    pub live_version: Option<String>,
+    pub verdict: VersionVerdict,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Read the whole readiness snapshot. Every reader failure degrades to
+/// `Unknown` with the reason carried in `note`; nothing here guesses.
+pub fn codex_daemon_readiness() -> CodexDaemonReadiness {
+    let adapter = crate::codex_inject::CodexDaemonAdapter::from_environment();
+    let codex_home = std::env::var_os("CODEX_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".codex"))
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from(".codex"));
+    let provider_state = adapter.provider_pid_start();
+    let healthy = provider_state
+        .as_ref()
+        .map(|(pid, start)| crate::daemon::pid_is_ours(*pid, Some(*start)) && adapter.socket_up())
+        .unwrap_or(false);
+    let installed_version = installed_cli_version();
+    let live_version = live_app_server_version();
+    let verdict = match (&installed_version, &live_version) {
+        (Some(installed), Some(live)) => verdict_from(installed, live),
+        _ => VersionVerdict::Unknown,
+    };
+    CodexDaemonReadiness {
+        healthy,
+        pid: provider_state.as_ref().map(|(pid, _)| *pid),
+        start_token: provider_state.as_ref().map(|(_, start)| *start),
+        endpoint: endpoint_path().to_string_lossy().into_owned(),
+        codex_home: codex_home.to_string_lossy().into_owned(),
+        installed_version,
+        live_version,
+        verdict,
+        note: None,
+    }
+}
+
+fn endpoint_path() -> std::path::PathBuf {
+    crate::codex_inject::CodexDaemonAdapter::from_environment().control_socket()
+}
+
+/// Locate the codex CLI: `$FNO_CODEX_BIN` first (private roots and tests),
+/// then PATH. Every codex subprocess in the readiness and upgrade paths
+/// resolves through this ONE function, so a test or private-root run never
+/// mixes the fake CLI with the real one.
+pub fn codex_cli_path() -> Option<std::path::PathBuf> {
+    if let Some(path) = std::env::var_os("FNO_CODEX_BIN") {
+        return Some(std::path::PathBuf::from(path));
+    }
+    let path_var = std::env::var("PATH").ok()?;
+    std::env::split_paths(&path_var)
+        .map(|dir| dir.join("codex"))
+        .find(|candidate| candidate.is_file())
+}
+
+/// The installed CLI's own version: `codex --version`, parsed from its last
+/// whitespace-separated token. `None` = the CLI is absent, unreadable, or
+/// silent past 5 s: spawn argv builders call this, and a wedged or fake
+/// `codex` must not hang the spawn.
+pub fn installed_cli_version() -> Option<String> {
+    cli_version_of(codex_cli_path()?)
+}
+
+/// `<bin> --version` under the same parse and 5 s bound.
+pub fn cli_version_of(bin: impl AsRef<std::ffi::OsStr>) -> Option<String> {
+    let mut cmd = std::process::Command::new(bin);
+    cmd.arg("--version").stdin(std::process::Stdio::null());
+    let out = crate::bounded_cmd::output_with_timeout(cmd, 5)?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.split_whitespace().last().map(str::to_string)
+}
+
+/// The LIVE app-server's version, read two independent ways and required to
+/// agree: the initialize response's server user-agent info, and the vendor
+/// `codex app-server daemon version` command as a positive control (it may
+/// itself fail to inspect the managed pid under a sandbox, so it is never
+/// the only reader). Disagreeing or empty readings are `None` - unknown,
+/// never current.
+pub fn live_app_server_version() -> Option<String> {
+    let readings = live_version_readings();
+    let mut unique: Vec<String> = readings.iter().filter_map(|(_, v)| v.clone()).collect();
+    unique.dedup();
+    if unique.len() == 1 {
+        Some(unique[0].clone())
+    } else {
+        None
+    }
+}
+
+/// Both raw readings with their reader names, for a receipt that must name
+/// what it saw when it saw nothing.
+pub fn live_version_readings() -> Vec<(String, Option<String>)> {
+    vec![
+        (
+            "initialize serverInfo".to_string(),
+            crate::codex_inject::initialize_server_info().and_then(|info| {
+                info.get("version")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            }),
+        ),
+        (
+            "daemon version command".to_string(),
+            daemon_version_command(),
+        ),
+    ]
+}
+
+fn daemon_version_command() -> Option<String> {
+    daemon_version_command_from(codex_cli_path()?.as_os_str(), 5)
+}
+
+/// The vendor version read under a wall-clock bound. Same parse and bound as
+/// [`installed_cli_version`]: a wedged `codex app-server daemon version`
+/// must not hold the caller (and any lock it keeps) past the budget.
+fn daemon_version_command_from(bin: &std::ffi::OsStr, secs: u64) -> Option<String> {
+    let mut cmd = std::process::Command::new(bin);
+    cmd.args(["app-server", "daemon", "version"])
+        .stdin(std::process::Stdio::null());
+    let out = crate::bounded_cmd::output_with_timeout(cmd, secs)?;
+    if !out.status.success() {
+        return None;
+    }
+    daemon_version_output_version(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// The version inside `codex app-server daemon version` stdout. Since codex
+/// 0.167.0 that stdout is a compact JSON object, so the old last-whitespace-
+/// token read returned the whole blob; JSON input reads `appServerVersion`,
+/// anything else keeps the bare last-token shape.
+fn daemon_version_output_version(stdout: &str) -> Option<String> {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(stdout.trim()) {
+        return value
+            .get("appServerVersion")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+    }
+    stdout.split_whitespace().last().map(str::to_string)
+}
+
+/// Three-way version compare on dotted numeric prefixes. `None` = not both
+/// parseable: the verdict is unknown, never a guess from a prefix.
+pub fn compare_versions(installed: &str, live: &str) -> Option<std::cmp::Ordering> {
+    let parse = |text: &str| -> Option<Vec<u64>> {
+        let trimmed = text.trim_start_matches('v');
+        let numeric: String = trimmed
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        if numeric.is_empty() {
+            return None;
+        }
+        let mut parts: Vec<u64> = numeric
+            .split('.')
+            .filter(|p| !p.is_empty())
+            .map(|p| p.parse().ok())
+            .collect::<Option<Vec<_>>>()?;
+        parts.resize(3, 0);
+        Some(parts)
+    };
+    let (a, b) = (parse(installed)?, parse(live)?);
+    Some(a.cmp(&b))
+}
+
+/// The verdict from two parsed versions: equal is current, installed newer
+/// than live is stale (the running daemon lags), installed older than live
+/// is ahead (the daemon leads the CLI). Pure and unit-tested.
+pub fn verdict_from(installed: &str, live: &str) -> VersionVerdict {
+    match compare_versions(installed, live) {
+        Some(std::cmp::Ordering::Equal) => VersionVerdict::Current,
+        Some(std::cmp::Ordering::Greater) => VersionVerdict::Stale,
+        Some(std::cmp::Ordering::Less) => VersionVerdict::Ahead,
+        None => VersionVerdict::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compare_versions_orders_the_three_verdicts() {
+        use std::cmp::Ordering::*;
+        assert_eq!(compare_versions("0.153.4", "0.153.4"), Some(Equal));
+        assert_eq!(
+            compare_versions("0.154.0", "0.153.4"),
+            Some(Greater),
+            "installed newer = live stale"
+        );
+        assert_eq!(
+            compare_versions("0.152.0", "0.153.4"),
+            Some(Less),
+            "installed older than live = ahead"
+        );
+        assert_eq!(compare_versions("garbage", "0.153.4"), None);
+    }
+
+    #[test]
+    fn live_version_requires_two_agreeing_readings() {
+        // One reader answers, one fails: unknown, never current from a
+        // single observation.
+        let one = vec![
+            ("a".to_string(), Some("0.1.0".to_string())),
+            ("b".to_string(), None),
+        ];
+        let mut unique: Vec<String> = one.iter().filter_map(|(_, v)| v.clone()).collect();
+        unique.dedup();
+        assert_eq!(unique.len(), 1);
+        let disagree = vec![
+            ("a".to_string(), Some("0.1.0".to_string())),
+            ("b".to_string(), Some("0.2.0".to_string())),
+        ];
+        let mut unique: Vec<String> = disagree.iter().filter_map(|(_, v)| v.clone()).collect();
+        unique.dedup();
+        assert_ne!(unique.len(), 1, "disagreeing readers are unknown");
+    }
+
+    #[test]
+    fn the_daemon_version_probe_is_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let stub = crate::write_exec_stub(
+            dir.path(),
+            "hangs-then-versions",
+            "#!/bin/bash\nsleep 20\necho 0.1.2\n",
+        );
+        let started = std::time::Instant::now();
+        let version = daemon_version_command_from(stub.as_os_str(), 1);
+        let elapsed = started.elapsed();
+        assert!(
+            version.is_none(),
+            "a probe past its bound reads none, got {version:?}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "a 20s hang must not hold the reader {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn the_daemon_version_command_reads_appserverversion_from_vendor_json() {
+        // Verbatim shape of codex 0.167.0 stdout (2026-11-06 probe on this
+        // laptop): compact JSON, no spaces, so the bare last-token read
+        // returned the whole blob.
+        let json = r#"{"status":"running","backend":"pid","managedCodexPath":"/Users/x/.codex/packages/standalone/current/bin/codex","managedCodexVersion":"0.167.0","socketPath":"/Users/x/.codex/app-server-control/app-server-control.sock","cliVersion":"0.167.0","appServerVersion":"0.167.0"}"#;
+        assert_eq!(
+            daemon_version_output_version(json).as_deref(),
+            Some("0.167.0"),
+            "the vendor JSON names appServerVersion"
+        );
+        assert_eq!(
+            daemon_version_output_version("0.154.0\n").as_deref(),
+            Some("0.154.0"),
+            "older bare vendor output keeps the last-token read"
+        );
+    }
+}

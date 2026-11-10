@@ -1,0 +1,1527 @@
+//! Tests for the new spawn routing and ask-no-create behavior (Task 1.3a).
+//!
+//! Covers:
+//! - ask with unknown name -> exit 16 + unknown-agent stderr (all 3 providers)
+//! - dispatch_claude_spawn: collision check, receipt byte shape
+//! - dispatch_codex_once / dispatch_gemini_once: teardown, collision, create failure
+
+use fno_agents::paths::AgentsHome;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::Duration;
+
+// Serialize tests that mutate PATH so they don't race.
+static PATH_MUTEX: Mutex<()> = Mutex::new(());
+
+const CLAUDE_SESSION_ID: &str = "12345678-1234-4234-8234-123456789abc";
+
+fn tmpdir(tag: &str) -> PathBuf {
+    let p = std::env::temp_dir().join(format!(
+        "fno-spawn-routing-{}-{}-{}",
+        tag,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&p).unwrap();
+    p
+}
+
+/// Seed registry.json with a single entry (any provider).
+fn seed_registry(home: &AgentsHome, name: &str, provider: &str) {
+    let session_field = if provider == "claude" {
+        r#","short_id":"deadbeef""#.to_string()
+    } else if provider == "codex" {
+        r#","codex_session_id":"sess-codex-001""#.to_string()
+    } else {
+        r#","gemini_session_id":"sess-gemini-001""#.to_string()
+    };
+    let body = format!(
+        r#"{{"schema_version":3,"agents":[{{"name":"{name}","provider":"{provider}","cwd":"/tmp","status":"live","created_at":"2026-06-06T00:00:00Z","log_path":null{session_field}}}]}}"#
+    );
+    let path = home.registry_json();
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, body).unwrap();
+}
+
+/// Install a fake claude binary that simulates `claude --bg`.
+fn install_fake_claude(bin_dir: &Path) {
+    let script = r#"#!/bin/sh
+name=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "--name" ]; then name="$a"; fi
+  prev="$a"
+done
+if [ -n "$FAKE_CLAUDE_SESSIONS" ]; then
+  mkdir -p "$FAKE_CLAUDE_SESSIONS"
+  printf '%s\n' '{"jobId":"7c5dcf5d","kind":"bg","messagingSocketPath":"/tmp/fake-claude.sock","sessionId":"12345678-1234-4234-8234-123456789abc"}' > "$FAKE_CLAUDE_SESSIONS/999.json"
+  # Real claude records the prompt as job-state intent before it returns.
+  jobs="$(dirname "$FAKE_CLAUDE_SESSIONS")/jobs/7c5dcf5d"
+  mkdir -p "$jobs"
+  printf '{"state":"running","intent":"seeded"}\n' > "$jobs/state.json"
+fi
+if [ -n "$FAKE_CLAUDE_DAEMON_DIR" ]; then
+  mkdir -p "$FAKE_CLAUDE_DAEMON_DIR" "$FAKE_CLAUDE_CONTROL_DIR/spare"
+  printf '{"proto":1,"supervisorPid":%s,"updatedAt":1,"workers":{"12345678":{"sessionId":"12345678-1234-4234-8234-123456789abc","pid":%s,"procStart":1,"ptySock":"%s/spare/12345678.pty.sock","cwd":"/tmp"}}}\n' "$FAKE_CLAUDE_SUPERVISOR_PID" "$FAKE_CLAUDE_SUPERVISOR_PID" "$FAKE_CLAUDE_CONTROL_DIR" > "$FAKE_CLAUDE_DAEMON_DIR/roster.json"
+fi
+printf 'backgrounded · 7c5dcf5d · %s\n' "$name"
+exit 0
+"#;
+    let path = bin_dir.join("claude");
+    fs::write(&path, script).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// Install the smallest positive Claude daemon fixture: a roster, a control
+/// socket, and one attachable worker. The client must complete the attach
+/// handshake before the fake `claude --bg` binary is allowed to run.
+fn install_fake_claude_daemon(daemon_dir: &Path) {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+
+    let shard = daemon_dir.join("fixture");
+    let spare = shard.join("spare");
+    fs::create_dir_all(&spare).unwrap();
+    let control_dir = PathBuf::from(format!(
+        "/tmp/fno-cd-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(control_dir.join("spare")).unwrap();
+    let control = control_dir.join("control.sock");
+    let listener = UnixListener::bind(&control).unwrap();
+    let pty = control_dir.join("spare").join("12345678.pty.sock");
+    let roster = serde_json::json!({
+        "proto": 1,
+        "supervisorPid": std::process::id(),
+        "updatedAt": 1,
+        "workers": {
+            "12345678": {
+                "sessionId": CLAUDE_SESSION_ID,
+                "pid": std::process::id(),
+                "procStart": 1,
+                "ptySock": pty,
+                "cwd": "/tmp"
+            }
+        }
+    });
+    fs::write(daemon_dir.join("roster.json"), roster.to_string()).unwrap();
+    std::thread::spawn(move || {
+        if let Ok((stream, _)) = listener.accept() {
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            let _ = reader.read_line(&mut request);
+            let mut stream = stream;
+            let _ = stream.write_all(b"{\"ok\":true,\"op\":\"attach\"}\n");
+        }
+    });
+}
+
+fn install_fake_claude_control_socket(control_dir: &Path) {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+
+    fs::create_dir_all(control_dir.join("spare")).unwrap();
+    let listener = UnixListener::bind(control_dir.join("control.sock")).unwrap();
+    std::thread::spawn(move || {
+        if let Ok((stream, _)) = listener.accept() {
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            let _ = reader.read_line(&mut request);
+            let mut stream = stream;
+            let _ = stream.write_all(b"{\"ok\":true,\"op\":\"attach\"}\n");
+        }
+    });
+}
+
+/// Install a fake codex binary that emits a one-shot JSONL session.
+fn install_fake_codex(bin_dir: &Path, session_id: &str, reply: &str) {
+    let script = format!(
+        r#"#!/bin/sh
+printf '{{"type":"thread.started","thread_id":"{session_id}"}}\n'
+printf '{{"type":"item.completed","item":{{"type":"agent_message","text":"{reply}"}}}}\n'
+printf '{{"type":"turn.completed"}}\n'
+"#
+    );
+    let path = bin_dir.join("codex");
+    fs::write(&path, &script).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn install_fake_codex_app_server_failure(bin_dir: &Path) {
+    let path = bin_dir.join("codex");
+    fs::write(&path, "#!/bin/sh\nexit 17\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// Install a fake gemini binary that emits a one-shot JSON response.
+///
+/// gemini_ask::parse_response expects `{"session_id":..., "response":..., "stats":{}}`.
+fn install_fake_gemini(bin_dir: &Path, reply: &str) {
+    let script = format!(
+        r#"#!/bin/sh
+printf '{{"session_id":"gemini-sess-001","response":"{reply}","stats":{{}}}}\n'
+"#
+    );
+    let path = bin_dir.join("gemini");
+    fs::write(&path, &script).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn path_with(bin_dir: &Path) -> String {
+    format!("{}:/usr/bin:/bin", bin_dir.display())
+}
+
+fn install_warn_config(dir: &Path) -> Option<std::ffi::OsString> {
+    let config = dir.join("config.toml");
+    fs::write(&config, "[sandbox]\non_unavailable = \"warn\"\n").unwrap();
+    let old = std::env::var_os("FNO_CONFIG");
+    unsafe { std::env::set_var("FNO_CONFIG", &config) };
+    old
+}
+
+fn restore_config(old: Option<std::ffi::OsString>) {
+    match old {
+        Some(path) => unsafe { std::env::set_var("FNO_CONFIG", path) },
+        None => unsafe { std::env::remove_var("FNO_CONFIG") },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AC1-HP: ask with unknown name exits 16 (codex path)
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// AC1-HP: ask with unknown name exits 16 (gemini path)
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// AC2-HP: unknown-name error message is byte-parity with Python
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ask_unknown_name_stderr_byte_parity() {
+    use fno_agents::claude_ask::{dispatch_claude_ask, ClaudeHome};
+
+    let home = AgentsHome::at(tmpdir("ask-parity-home"));
+    let ch = ClaudeHome::at(tmpdir("ask-parity-claude"));
+    let cwd = tmpdir("ask-parity-cwd");
+
+    let out = dispatch_claude_ask(
+        &home,
+        &ch,
+        "myagent",
+        "msg",
+        "fno",
+        &cwd,
+        false,
+        None,
+        &[],
+        None,
+    );
+
+    // Python: f"unknown agent {name!r}; spawn it first: fno agents spawn {name} --harness <harness>"
+    // Rust must match this exactly (py_repr wraps in single quotes).
+    let expected =
+        "unknown agent 'myagent'; spawn it first: fno agents spawn myagent --harness <harness>\n";
+    assert_eq!(
+        out.stderr, expected,
+        "stderr must be byte-for-byte parity with Python"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AC3-HP: dispatch_claude_spawn - happy path, receipt byte shape
+// ---------------------------------------------------------------------------
+
+#[test]
+fn spawn_claude_receipt_byte_shape() {
+    use fno_agents::claude_ask::{dispatch_claude_spawn, ClaudeHome};
+
+    let home = AgentsHome::at(tmpdir("spawn-cl-home"));
+    let ch = ClaudeHome::at(tmpdir("spawn-cl-claude"));
+    let cwd = tmpdir("spawn-cl-cwd");
+    let bin = tmpdir("spawn-cl-bin");
+    install_fake_claude(&bin);
+    let path = path_with(&bin);
+    let sessions = ch.sessions_dir();
+
+    let out = dispatch_claude_spawn(
+        &home,
+        &ch,
+        "myspawn",
+        "hello",
+        "fno",
+        &cwd,
+        false,
+        None,
+        &[
+            ("PATH", path.as_str()),
+            ("FAKE_CLAUDE_SESSIONS", sessions.to_str().unwrap()),
+        ],
+        None,
+        None,
+        None,
+        fno_agents::claude_ask::HarnessFlags::default(),
+        false, // surface_cwd: explicit --cwd, no default move (x-85fe)
+    );
+
+    assert_eq!(
+        out.exit_code, 0,
+        "spawn claude happy path should exit 0, stderr: {}",
+        out.stderr
+    );
+    // Receipt: {"name": "<name>", "short_id": "<8hex>", "harness": "claude", "model_basis": "lane-default", "status": "live"}\n
+    let receipt = out.stdout.trim_end_matches('\n');
+    assert!(
+        receipt.starts_with(r#"{"name": "myspawn", "short_id": "#),
+        "receipt must start with name/short_id fields: {}",
+        out.stdout
+    );
+    assert!(
+        receipt
+            .ends_with(r#""harness": "claude", "model_basis": "lane-default", "status": "live"}"#),
+        "receipt must end with harness/basis/status: {}",
+        out.stdout
+    );
+    // Parse as JSON to verify structure.
+    let v: serde_json::Value = serde_json::from_str(receipt).expect("receipt must be valid JSON");
+    assert_eq!(v["name"], "myspawn");
+    assert_eq!(v["harness"], "claude");
+    assert_eq!(v["status"], "live");
+    let short_id = v["short_id"].as_str().unwrap();
+    assert_eq!(
+        short_id.len(),
+        8,
+        "short_id must be 8 hex chars: {}",
+        short_id
+    );
+    assert!(
+        short_id.chars().all(|c| c.is_ascii_hexdigit()),
+        "short_id must be hex: {}",
+        short_id
+    );
+    let registry: serde_json::Value =
+        serde_json::from_str(&registry_text(&home.registry_json()).unwrap()).unwrap();
+    assert_eq!(
+        registry["agents"][0]["harness_session_id"],
+        CLAUDE_SESSION_ID
+    );
+}
+
+// A config-dir account worker writes its session record under the account
+// root's sessions dir. The spawn resolves the full session id only when the
+// ClaudeHome carries that root; on the one-root read the receipt leaves the
+// identity unresolved.
+#[test]
+fn spawn_claude_resolves_a_record_written_under_an_account_root() {
+    use fno_agents::claude_ask::{dispatch_claude_spawn, ClaudeHome};
+
+    let home = AgentsHome::at(tmpdir("spawn-acct-home"));
+    let claude_root = tmpdir("spawn-acct-claude");
+    let acct = tmpdir("spawn-acct-acct");
+    let ch = ClaudeHome::at(&claude_root).with_extra_roots([acct.clone()]);
+    let cwd = tmpdir("spawn-acct-cwd");
+    let bin = tmpdir("spawn-acct-bin");
+    install_fake_claude(&bin);
+    let path = path_with(&bin);
+    let sessions = acct.join("sessions");
+
+    let out = dispatch_claude_spawn(
+        &home,
+        &ch,
+        "acctspawn",
+        "hello",
+        "fno",
+        &cwd,
+        false,
+        None,
+        &[
+            ("PATH", path.as_str()),
+            ("FAKE_CLAUDE_SESSIONS", sessions.to_str().unwrap()),
+        ],
+        None,
+        None,
+        None,
+        fno_agents::claude_ask::HarnessFlags::default(),
+        false, // surface_cwd: explicit --cwd, no default move (x-85fe)
+    );
+
+    assert_eq!(
+        out.exit_code, 0,
+        "spawn claude happy path should exit 0, stderr: {}",
+        out.stderr
+    );
+    let receipt = out.stdout.trim_end_matches('\n');
+    let v: serde_json::Value = serde_json::from_str(receipt).expect("receipt must be valid JSON");
+    assert_eq!(v["status"], "live");
+    let registry: serde_json::Value =
+        serde_json::from_str(&registry_text(&home.registry_json()).unwrap()).unwrap();
+    assert_eq!(
+        registry["agents"][0]["harness_session_id"], CLAUDE_SESSION_ID,
+        "a record under the account root must resolve: {}",
+        out.stdout
+    );
+}
+
+// x-85fe: surface_cwd=true appends the effective cwd as the LAST key (AC1-HP /
+// AC1-UI). Byte-parity with the Python cmd_spawn receipt; the unmoved receipt
+// (surface_cwd=false) is proven byte-identical by spawn_claude_receipt_byte_shape.
+#[test]
+fn spawn_claude_receipt_surfaces_moved_cwd() {
+    use fno_agents::claude_ask::{dispatch_claude_spawn, ClaudeHome};
+
+    let home = AgentsHome::at(tmpdir("spawn-mv-home"));
+    let ch = ClaudeHome::at(tmpdir("spawn-mv-claude"));
+    let cwd = tmpdir("spawn-mv-cwd");
+    let bin = tmpdir("spawn-mv-bin");
+    install_fake_claude(&bin);
+    let path = path_with(&bin);
+    let sessions = ch.sessions_dir();
+
+    let out = dispatch_claude_spawn(
+        &home,
+        &ch,
+        "movedspawn",
+        "hello",
+        "fno",
+        &cwd,
+        false,
+        None,
+        &[
+            ("PATH", path.as_str()),
+            ("FAKE_CLAUDE_SESSIONS", sessions.to_str().unwrap()),
+        ],
+        None,
+        None,
+        None,
+        fno_agents::claude_ask::HarnessFlags::default(),
+        true, // surface_cwd: the default canonical move
+    );
+
+    assert_eq!(out.exit_code, 0, "stderr: {}", out.stderr);
+    let receipt = out.stdout.trim_end_matches('\n');
+    // cwd is the LAST key.
+    assert!(
+        receipt.ends_with(&format!(r#""cwd": "{}"}}"#, cwd.display())),
+        "receipt must end with the cwd field: {}",
+        out.stdout
+    );
+    let v: serde_json::Value = serde_json::from_str(receipt).expect("receipt must be valid JSON");
+    assert_eq!(v["cwd"], cwd.display().to_string());
+    assert_eq!(v["status"], "live");
+    let registry: serde_json::Value =
+        serde_json::from_str(&registry_text(&home.registry_json()).unwrap()).unwrap();
+    assert_eq!(
+        registry["agents"][0]["harness_session_id"],
+        CLAUDE_SESSION_ID
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AC3-ERR: dispatch_claude_spawn - collision check (name already exists)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn spawn_claude_collision_exits_2() {
+    use fno_agents::claude_ask::{dispatch_claude_spawn, ClaudeHome};
+
+    let home = AgentsHome::at(tmpdir("spawn-cl-coll-home"));
+    let ch = ClaudeHome::at(tmpdir("spawn-cl-coll-claude"));
+    let cwd = tmpdir("spawn-cl-coll-cwd");
+
+    // Seed an existing agent.
+    seed_registry(&home, "existing", "claude");
+
+    let out = dispatch_claude_spawn(
+        &home,
+        &ch,
+        "existing",
+        "hello",
+        "fno",
+        &cwd,
+        false,
+        None,
+        &[],
+        None,
+        None,
+        None,
+        fno_agents::claude_ask::HarnessFlags::default(),
+        false, // surface_cwd: explicit --cwd, no default move (x-85fe)
+    );
+
+    assert_eq!(
+        out.exit_code, 2,
+        "collision must exit 2, got {}: {}",
+        out.exit_code, out.stderr
+    );
+    assert!(
+        out.stderr.contains("already exists"),
+        "stderr must say agent already exists: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("existing"),
+        "stderr must mention the agent name: {}",
+        out.stderr
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AC4-ERR: dispatch_codex_once - collision check (name already exists)
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// AC5-HP: dispatch_gemini_once - happy path (create + reply + teardown)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn spawn_gemini_once_happy_path() {
+    use fno_agents::gemini_ask::dispatch_gemini_once;
+
+    let home = AgentsHome::at(tmpdir("once-gm-home"));
+    let cwd = tmpdir("once-gm-cwd");
+    let bin = tmpdir("once-gm-bin");
+    install_fake_gemini(&bin, "once gemini reply");
+    let old_config = install_warn_config(&cwd);
+
+    let _guard = PATH_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+    let old_path = std::env::var_os("PATH");
+    unsafe { std::env::set_var("PATH", path_with(&bin)) };
+
+    let out = dispatch_gemini_once(
+        &home,
+        "ephemeral-gemini",
+        "do something once",
+        "fno",
+        &cwd,
+        false,
+        Some(Duration::from_secs(10)),
+        None,
+    );
+
+    match old_path {
+        Some(p) => unsafe { std::env::set_var("PATH", p) },
+        None => unsafe { std::env::remove_var("PATH") },
+    }
+    restore_config(old_config);
+
+    assert_eq!(
+        out.exit_code, 0,
+        "once happy path must exit 0, stderr: {}",
+        out.stderr
+    );
+    // stdout = reply verbatim.
+    assert!(!out.stdout.is_empty(), "stdout must contain the reply");
+    // Teardown receipt on stderr.
+    assert!(
+        out.stderr.contains("once:"),
+        "teardown receipt must contain 'once:': {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("gemini"),
+        "teardown receipt must mention provider: {}",
+        out.stderr
+    );
+
+    // Registry row must be removed after teardown.
+    let registry_path = home.registry_json();
+    if registry_path.exists() {
+        let body = registry_text(&registry_path).unwrap();
+        assert!(
+            !body.contains("ephemeral-gemini"),
+            "registry row must be torn down: {}",
+            body
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Client binary integration tests: verify client.rs routing wiring.
+// These exercise the thin shell in bin/client.rs that delegates to the lib.
+// ---------------------------------------------------------------------------
+
+/// Locate the fno-agents client binary from the build output dir.
+fn find_client_bin() -> std::path::PathBuf {
+    if let Some(path) = option_env!("CARGO_BIN_EXE_fno-agents") {
+        return std::path::PathBuf::from(path);
+    }
+    // `cargo test` sets CARGO_MANIFEST_DIR; binary lands under target/debug.
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // Walk up to workspace root (fno/crates/fno-agents -> fno/)
+    let target = manifest
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("target")
+        .join("debug")
+        .join("fno-agents");
+    if target.exists() {
+        return target;
+    }
+    // Fallback: check from manifest dir directly.
+    let direct = manifest.join("target").join("debug").join("fno-agents");
+    if direct.exists() {
+        return direct;
+    }
+    // Last resort: rely on PATH (headless CI).
+    std::path::PathBuf::from("fno-agents")
+}
+
+/// AC6-CLIENT: `ask` on an unknown name must exit 16 at the client level
+/// (client.rs unknown-name pre-check, Task 1.3a).
+#[test]
+fn client_ask_unknown_name_exits_16() {
+    let home_dir = tmpdir("cli-ask-unk-home");
+    let bin = find_client_bin();
+    if !bin.exists() {
+        // Skip if binary not built yet (will be built by the time this runs
+        // in CI via `cargo test`; in a source-only check this is expected).
+        eprintln!(
+            "skipping client_ask_unknown_name_exits_16: binary not found at {:?}",
+            bin
+        );
+        return;
+    }
+
+    let out = std::process::Command::new(&bin)
+        .envs(fno_agents::test_run::self_owner_env())
+        .args(["ask", "ghost-client", "hello"])
+        .env("FNO_SPAWN_GATE", "0")
+        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire
+        .env("FNO_AGENTS_HOME", &home_dir)
+        .output()
+        .expect("failed to run fno-agents");
+
+    assert_eq!(
+        out.status.code(),
+        Some(16),
+        "client ask unknown name must exit 16, got {:?}; stderr: {}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("unknown agent"),
+        "stderr must mention 'unknown agent': {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("spawn"),
+        "stderr must mention 'spawn': {}",
+        stderr
+    );
+}
+
+#[test]
+fn client_ask_full_codex_session_id_resumes_named_row() {
+    let _guard = PATH_MUTEX
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let home_dir = tmpdir("cli-ask-full-codex-home");
+    let bin_dir = tmpdir("cli-ask-full-codex-bin");
+    let cwd = tmpdir("cli-ask-full-codex-cwd");
+    let session_id = "01a03a0e-0fa6-7661-b194-7520ce5ea6e2";
+    let addressed_session_id = session_id.to_ascii_uppercase();
+    let marker = "RECOVERY-RESUME-OK-client";
+    install_fake_codex(&bin_dir, session_id, marker);
+    let log_path = home_dir.join("agents/full-id/output.jsonl");
+    // The CURRENT schema, with the identity fields stated rather than derived.
+    // This row used to say v3 and let the pre-v15 provider-semantics migration
+    // produce `harness`/`harness_session_id`. The ask below writes this file
+    // through `state::update_registry`, and a test binary is built inside the
+    // checkout, so raising v3 to the current version on what FNO_AGENTS_HOME
+    // makes the process-global registry is exactly what x-665d's write guard
+    // refuses. The subject here is full-session-id resolution, not migration.
+    let registry = format!(
+        r#"{{"schema_version":{},"agents":[{{"name":"01a03a0e","provider":"codex","harness":"codex","harness_session_id":"{}","cwd":"{}","codex_session_id":"{}","status":"orphaned","created_at":"2026-08-25T00:00:00Z","log_path":"{}"}}]}}"#,
+        fno_agents::state::REGISTRY_SCHEMA_VERSION,
+        session_id,
+        cwd.display(),
+        session_id,
+        log_path.display()
+    );
+    fs::write(home_dir.join("registry.json"), registry).unwrap();
+    let bin = find_client_bin();
+    if !bin.exists() {
+        eprintln!(
+            "skipping client_ask_full_codex_session_id_resumes_named_row: binary not found at {:?}",
+            bin
+        );
+        return;
+    }
+
+    let out = std::process::Command::new(&bin)
+        .envs(fno_agents::test_run::self_owner_env())
+        .args([
+            "ask",
+            &addressed_session_id,
+            &format!("Reply exactly {marker}"),
+        ])
+        .env("FNO_SPAWN_GATE", "0")
+        .env("FNO_E2E", "1")
+        .env("FNO_AGENTS_HOME", &home_dir)
+        .env("PATH", path_with(&bin_dir))
+        .current_dir(&cwd)
+        .output()
+        .expect("failed to run fno-agents");
+
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "full-id ask failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), marker);
+    let persisted = registry_text(&home_dir.join("registry.json")).unwrap();
+    assert!(persisted.contains("last_message_at"), "{persisted}");
+    assert!(persisted.contains("\"name\": \"01a03a0e\""), "{persisted}");
+}
+
+/// x-2c27 (codex P2): the claude headless lane honors `--timeout` - a hung
+/// `claude -p` is SIGKILLed past the deadline and reported as exit 124, not an
+/// indefinite wedge.
+#[test]
+fn client_spawn_headless_claude_honors_timeout() {
+    let _guard = PATH_MUTEX
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let home_dir = tmpdir("cli-spawn-hl-to-home");
+    let bin_dir = tmpdir("cli-spawn-hl-to-bin");
+    let cwd = tmpdir("cli-spawn-hl-to-cwd");
+    // A fake claude that hangs well past the 1s timeout.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let path = bin_dir.join("claude");
+        fs::write(&path, "#!/bin/sh\nsleep 30\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let bin = find_client_bin();
+    if !bin.exists() {
+        eprintln!("skipping client_spawn_headless_claude_honors_timeout: binary not found");
+        return;
+    }
+
+    let start = std::time::Instant::now();
+    let out = std::process::Command::new(&bin)
+        .envs(fno_agents::test_run::self_owner_env())
+        .args([
+            "spawn",
+            "--name",
+            "wk",
+            "--harness",
+            "claude",
+            "--once",
+            "--timeout",
+            "1",
+            "hello",
+        ])
+        .env("FNO_SPAWN_GATE", "0")
+        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire
+        .env("FNO_AGENTS_HOME", &home_dir)
+        .env("PATH", path_with(&bin_dir))
+        .current_dir(&cwd)
+        .output()
+        .expect("failed to run fno-agents");
+    let elapsed = start.elapsed();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(124),
+        "headless timeout must exit 124; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("timed out"),
+        "stderr must name the timeout: {stderr}"
+    );
+    assert!(
+        elapsed.as_secs() < 10,
+        "must not wait the full 30s sleep; took {elapsed:?}"
+    );
+}
+
+/// `--once --harness opencode` runs the `opencode run` one-shot
+/// in the `--cwd` directory. opencode resolves its project from `$PWD`, not
+/// from the process cwd, so a spawn that sets only the process cwd runs the
+/// worker in the CALLER's directory. A fake `opencode` that prints `$PWD`
+/// proves both that the lane is wired and that the worker lands in `--cwd`.
+#[test]
+fn client_spawn_substrate_headless_opencode_runs_in_cwd() {
+    use std::os::unix::fs::PermissionsExt;
+    let home_dir = tmpdir("cli-spawn-headless-opencode-home");
+    let fake_path = tmpdir("cli-spawn-headless-opencode-fakepath");
+    let target = tmpdir("cli-spawn-headless-opencode-target");
+    let caller = tmpdir("cli-spawn-headless-opencode-caller");
+    let bin = find_client_bin();
+    if !bin.exists() {
+        eprintln!(
+            "skipping client_spawn_substrate_headless_opencode_runs_in_cwd: binary not found"
+        );
+        return;
+    }
+    let fake = fake_path.join("opencode");
+    std::fs::write(&fake, "#!/bin/sh\necho \"PWD=$PWD\"\n").unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let out = std::process::Command::new(&bin)
+        .envs(fno_agents::test_run::self_owner_env())
+        .args([
+            "spawn",
+            "--name",
+            "myagent",
+            "--harness",
+            "opencode",
+            "--once",
+        ])
+        .arg("--cwd")
+        .arg(&target)
+        .arg("hello")
+        .current_dir(&caller)
+        .env("PWD", &caller)
+        .env("FNO_SPAWN_GATE", "0")
+        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire
+        .env("FNO_AGENTS_HOME", &home_dir)
+        .env("PATH", format!("{}:/usr/bin:/bin", fake_path.display()))
+        .output()
+        .expect("failed to run fno-agents");
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stdout.contains(&format!("PWD={}", target.display())),
+        "the opencode worker must see PWD = --cwd, not the caller's dir; stdout: {stdout} stderr: {stderr}"
+    );
+}
+
+/// `spawn --once` for `harness`, with `path_dir` first on PATH
+/// and the endpoint env scrubbed. Returns (exit code, stdout, stderr).
+fn run_headless_spawn(
+    harness: &str,
+    path_dir: &Path,
+    extra: &[&str],
+    env: &[(&str, &str)],
+) -> Option<(Option<i32>, String, String)> {
+    let bin = find_client_bin();
+    if !bin.exists() {
+        eprintln!("skipping headless spawn of {harness}: binary not found");
+        return None;
+    }
+    let out = std::process::Command::new(&bin)
+        .envs(fno_agents::test_run::self_owner_env())
+        .args(["spawn", "--name", "reach", "--harness", harness])
+        .arg("--once")
+        .arg("--cwd")
+        .arg(tmpdir("headless-cwd"))
+        .arg("hello")
+        .args(extra)
+        .env("FNO_SPAWN_GATE", "0")
+        .env("FNO_E2E", "1")
+        .env("FNO_AGENTS_HOME", tmpdir("headless-home"))
+        .env("HOME", tmpdir("headless-user-home"))
+        .env_remove("ANTHROPIC_BASE_URL")
+        .env("PATH", format!("{}:/usr/bin:/bin", path_dir.display()))
+        .envs(env.iter().copied())
+        .output()
+        .expect("failed to run fno-agents");
+    Some((
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    ))
+}
+
+/// `--once --harness pi` runs one `pi --print --mode json` turn
+/// and returns the last assistant message. Before the arm existed the call fell
+/// through to the daemon and died on "use --substrate bg|headless".
+#[test]
+fn client_spawn_substrate_headless_pi_returns_the_assistant_reply() {
+    use std::os::unix::fs::PermissionsExt;
+    let fake_path = tmpdir("headless-pi-fakepath");
+    let argv_log = fake_path.join("argv");
+    let stream = r#"{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"pong"}],"stopReason":"stop"}]}"#;
+    let fake = fake_path.join("pi");
+    std::fs::write(
+        &fake,
+        format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > {argv_log:?}\nprintf '%s\\n' '{stream}'\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let Some((code, stdout, stderr)) = run_headless_spawn("pi", &fake_path, &[], &[]) else {
+        return;
+    };
+    assert_eq!(code, Some(0), "stderr: {stderr}");
+    assert_eq!(stdout.trim(), "pong");
+    let argv = std::fs::read_to_string(&argv_log).expect("the pi arm ran the fake pi");
+    assert!(
+        argv.starts_with("--print\n--mode\njson\n--no-session\n--provider\n"),
+        "argv: {argv}"
+    );
+}
+
+/// A `claude -p` one-shot mints no registry row: its child carries the
+/// no-row marker under its own name, unless `--mux` (the show-row env) opted
+/// in. The opt-in never rides on to the child.
+#[test]
+fn client_spawn_headless_claude_child_is_rowless_unless_shown() {
+    use std::os::unix::fs::PermissionsExt;
+    let fake_path = tmpdir("headless-claude-rowless");
+    let fake = fake_path.join("claude");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\nprintf 'no_row=%s show=%s\\n' \"$FNO_AGENT_NO_ROW\" \"$FNO_SPAWN_SHOW_ROW\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let Some((code, stdout, stderr)) = run_headless_spawn("claude", &fake_path, &[], &[]) else {
+        return;
+    };
+    assert_eq!(code, Some(0), "stderr: {stderr}");
+    assert_eq!(stdout.trim(), "no_row=reach show=");
+    let shown = [(fno_agents::claude_ask::SHOW_ROW_ENV, "1")];
+    let Some((code, stdout, stderr)) = run_headless_spawn("claude", &fake_path, &[], &shown) else {
+        return;
+    };
+    assert_eq!(code, Some(0), "stderr: {stderr}");
+    assert_eq!(stdout.trim(), "no_row= show=");
+}
+
+/// `--once --harness footnote -- -m <model>` reaches footnote's own turn loop.
+/// The fenced model names no provider, and with the endpoint env scrubbed the
+/// loop refuses "no model endpoint"; a gate or daemon fall-through would print a thread-lane or
+/// PTY-hosting refusal instead.
+#[test]
+fn client_spawn_substrate_headless_footnote_reaches_its_turn_loop() {
+    let Some((_, _, stderr)) = run_headless_spawn(
+        "footnote",
+        &tmpdir("headless-footnote-fakepath"),
+        &["--", "-m", "glm-5.3-flash"],
+        &[],
+    ) else {
+        return;
+    };
+    assert!(stderr.contains("no model endpoint"), "stderr: {stderr}");
+    assert!(!stderr.contains("thread lane"), "stderr: {stderr}");
+    assert!(!stderr.contains("PTY hosting"), "stderr: {stderr}");
+}
+
+/// x-567d: `--substrate bg --harness opencode` still hard-errors (bg is
+/// claude-only) but now points at `--substrate headless` (the generic bg arm)
+/// x-d9f9: opencode's bg substrate is the serve-HTTP worker lane, so the
+/// old "bg is claude-only" refusal no longer fires for it. Deterministic on
+/// every machine: an empty PATH means ensure_serve cannot find the opencode
+/// binary, so the arm's OWN failure (exit 13, naming the serve boot) is the
+/// proof the spawn ROUTED to the serve lane - never a real serve boot inside
+/// a routing test, and never the exit-2 substrate refusal.
+#[test]
+fn client_spawn_substrate_bg_opencode_routes_to_serve_lane() {
+    let home_dir = tmpdir("cli-spawn-bg-opencode-home");
+    let bin = find_client_bin();
+    if !bin.exists() {
+        eprintln!(
+            "skipping client_spawn_substrate_bg_opencode_routes_to_serve_lane: binary not found"
+        );
+        return;
+    }
+
+    let out = std::process::Command::new(&bin)
+        .envs(fno_agents::test_run::self_owner_env())
+        .args([
+            "spawn",
+            "--name",
+            "myagent",
+            "--harness",
+            "opencode",
+            "hello",
+        ])
+        .env("FNO_SPAWN_GATE", "0")
+        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire
+        .env("FNO_AGENTS_HOME", &home_dir)
+        .env("PATH", "") // no opencode binary anywhere: serve boot fails, not the substrate guard
+        .output()
+        .expect("failed to run fno-agents");
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(13),
+        "an unflagged opencode spawn must reach the serve lane (exit 13 = serve boot failure on an empty PATH, never the old exit-2 bg refusal); stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("opencode serve"),
+        "the failure must name the serve boot, proving the route: {stderr}"
+    );
+}
+
+/// A substrate word outside the live vocabulary refuses at scan, before any
+/// lane resolves (`--substrate thread` itself is a live alias now, so the
+/// deterministic off-vocabulary word is `bg`). The negative assertion stays
+/// load-bearing: the refusal must never list "claude + codex + opencode",
+/// which told a reader every other harness has no thread lane.
+#[test]
+fn client_spawn_substrate_off_vocabulary_names_lanes() {
+    let home_dir = tmpdir("cli-spawn-bg-agy-home");
+    let bin = find_client_bin();
+    if !bin.exists() {
+        eprintln!("skipping client_spawn_substrate_off_vocabulary_names_lanes: binary not found");
+        return;
+    }
+
+    let out = std::process::Command::new(&bin)
+        .envs(fno_agents::test_run::self_owner_env())
+        .args([
+            "spawn",
+            "--name",
+            "myagent",
+            "--harness",
+            "agy",
+            "--substrate",
+            "bg",
+            "hello",
+        ])
+        .env("FNO_SPAWN_GATE", "0")
+        .env("FNO_E2E", "1")
+        .env("FNO_AGENTS_HOME", &home_dir)
+        .output()
+        .expect("failed to run fno-agents");
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "agy --substrate bg must exit 2; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("must be one of: pane, thread, headless, cloud"),
+        "the refusal must name the lane vocabulary: {stderr}"
+    );
+    assert!(
+        !stderr.contains("claude + codex + opencode"),
+        "the refusal must not carry a provider name list: {stderr}"
+    );
+}
+
+/// `spawn --substrate bg` without --provider no longer exits 2 with a
+/// "provider is required" error - it INFERS the invoking harness, mirroring
+/// Python's resolve_dispatch_harness (and the pane arm). Proven deterministically
+/// here via a single CODEX_SESSION_ID marker: inference resolves codex, which then
+/// reaches the Codex thread lane. Other harness markers are removed so the
+/// ambient session running the test suite can't make the env ambiguous.
+#[test]
+fn client_spawn_bg_no_provider_infers_harness() {
+    let home_dir = tmpdir("cli-spawn-noprov-home");
+    let bin = find_client_bin();
+    if !bin.exists() {
+        eprintln!(
+            "skipping client_spawn_bg_no_provider_infers_harness: binary not found at {:?}",
+            bin
+        );
+        return;
+    }
+
+    let bin_dir = tmpdir("cli-spawn-noprov-bin");
+    install_fake_codex_app_server_failure(&bin_dir);
+    let path = format!(
+        "{}:{}",
+        bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let _path_guard = PATH_MUTEX
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let out = std::process::Command::new(&bin)
+        .envs(fno_agents::test_run::self_owner_env())
+        .args(["spawn", "--name", "myagent", "hello"])
+        .env("FNO_SPAWN_GATE", "0")
+        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire
+        .env("FNO_AGENTS_HOME", &home_dir)
+        .env("FNO_AGENTS_NO_STARTUP_RECONCILE", "1")
+        .env("PATH", path)
+        .env("CODEX_SESSION_ID", "test-sid") // exactly one marker -> codex inferred
+        .env_remove("CODEX_THREAD_ID")
+        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .env_remove("CLAUDE_SESSION_ID")
+        .env_remove("GEMINI_SESSION_ID")
+        .env_remove("OPENCODE_SESSION_ID")
+        .env_remove("FNO_HARNESS_NAME")
+        .output()
+        .expect("failed to run fno-agents");
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // Inference landed on codex -> the thread lane, NOT the old
+    // "provider is required" rejection.
+    assert!(
+        stderr.contains("lazy-starting daemon") && !stderr.contains("provider is required"),
+        "missing --provider on bg must infer codex and reach its thread lane: {stderr}"
+    );
+}
+
+/// Q1 (sigma-review): the HAPPY PATH of the CLIENT-SIDE claude `--bg` spawn lane
+/// through the real client binary. Post-x-2c27 that lane is reached via
+/// `--substrate bg` (the detached `claude --bg` thread); a plain `spawn -p
+/// claude` (pane) routes through the daemon's owned-interactive lane instead
+/// (covered by build_request's `spawn_claude_default_is_pty_lane_with_minted_session`
+/// + the daemon e2e suite, which spawn_routing.rs deliberately does NOT start a
+/// daemon for). The bg receipt byte shape stays pinned end-to-end: callers parse
+/// `.short_id` off it.
+#[test]
+fn client_spawn_bg_claude_happy_path_prints_receipt() {
+    let home_dir = tmpdir("cli-spawn-claude-hp-home");
+    let claude_home = tmpdir("cli-spawn-claude-hp-claude");
+    let daemon_dir = claude_home.join("daemon");
+    fs::create_dir_all(&daemon_dir).unwrap();
+    install_fake_claude_daemon(&daemon_dir);
+    fs::write(
+        daemon_dir.join("fno-harness-daemon.json"),
+        serde_json::json!({
+            "supervisorPid": std::process::id(),
+            "processStartTime": fno_agents::daemon::process_start_time(std::process::id()),
+            "controlSocket": "/tmp/reaped-worker/control.sock",
+            "shortId": "deadbeef",
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let sessions = claude_home.join(".claude").join("sessions");
+    let bin_dir = tmpdir("cli-spawn-claude-hp-bin");
+    let cwd = tmpdir("cli-spawn-claude-hp-cwd");
+    install_fake_claude(&bin_dir);
+    let bin = find_client_bin();
+    if !bin.exists() {
+        eprintln!(
+            "skipping client_spawn_once_claude_happy_path_prints_receipt: binary not found at {:?}",
+            bin
+        );
+        return;
+    }
+
+    let out = std::process::Command::new(&bin)
+        .envs(fno_agents::test_run::self_owner_env())
+        .args([
+            "spawn",
+            "--name",
+            "hp-agent",
+            "--harness",
+            "claude",
+            "hello there",
+        ])
+        .env("FNO_SPAWN_GATE", "0")
+        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire
+        .env("FNO_AGENTS_HOME", &home_dir)
+        .env("HOME", &claude_home)
+        .env("FNO_CLAUDE_DAEMON_DIR", &daemon_dir)
+        .env("FAKE_CLAUDE_SESSIONS", &sessions)
+        .env("PATH", path_with(&bin_dir))
+        .current_dir(&cwd)
+        .output()
+        .expect("failed to run fno-agents");
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "claude spawn happy path must exit 0; stderr: {stderr}"
+    );
+    // Receipt is one compact JSON line with positive daemon ownership proof.
+    let receipt: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(receipt["name"], "hp-agent");
+    assert_eq!(receipt["short_id"], "7c5dcf5d");
+    assert_eq!(receipt["harness"], "claude");
+    assert_eq!(receipt["status"], "live");
+    assert_eq!(receipt["durability"], "daemon-owned");
+    assert!(receipt["incarnation"]
+        .as_str()
+        .is_some_and(|value| value.contains(':')));
+    assert!(receipt["endpoint"]
+        .as_str()
+        .is_some_and(|value| value.ends_with("control.sock")));
+    // And the registry row landed under the temp home.
+    let registry_raw = registry_text(&home_dir.join("registry.json")).unwrap_or_default();
+    let registry: serde_json::Value = serde_json::from_str(&registry_raw).unwrap();
+    let row = &registry["agents"][0];
+    assert_eq!(row["name"], "hp-agent");
+    assert_eq!(row["short_id"], "7c5dcf5d");
+    assert_eq!(row["harness_session_id"], CLAUDE_SESSION_ID);
+}
+
+#[test]
+fn client_spawn_bg_claude_bootstraps_the_first_daemon_worker() {
+    let _path_guard = PATH_MUTEX
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let home_dir = tmpdir("cli-spawn-claude-bootstrap-home");
+    let claude_home = tmpdir("cli-spawn-claude-bootstrap-claude");
+    let daemon_dir = claude_home.join("daemon");
+    fs::create_dir_all(&daemon_dir).unwrap();
+    let control_dir = PathBuf::from(format!(
+        "/tmp/fno-cb-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    install_fake_claude_control_socket(&control_dir);
+    let sessions = claude_home.join(".claude").join("sessions");
+    let bin_dir = tmpdir("cli-spawn-claude-bootstrap-bin");
+    let cwd = tmpdir("cli-spawn-claude-bootstrap-cwd");
+    install_fake_claude(&bin_dir);
+    let bin = find_client_bin();
+    if !bin.exists() {
+        eprintln!(
+            "skipping client_spawn_bg_claude_bootstraps_the_first_daemon_worker: binary not found at {:?}",
+            bin
+        );
+        return;
+    }
+
+    let out = std::process::Command::new(&bin)
+        .envs(fno_agents::test_run::self_owner_env())
+        .args([
+            "spawn",
+            "--name",
+            "bootstrap-agent",
+            "--harness",
+            "claude",
+            "hello there",
+        ])
+        .env("FNO_SPAWN_GATE", "0")
+        .env("FNO_E2E", "1")
+        .env("FNO_AGENTS_HOME", &home_dir)
+        .env("HOME", &claude_home)
+        .env("FNO_CLAUDE_DAEMON_DIR", &daemon_dir)
+        .env("FAKE_CLAUDE_SESSIONS", &sessions)
+        .env("FAKE_CLAUDE_DAEMON_DIR", &daemon_dir)
+        .env("FAKE_CLAUDE_CONTROL_DIR", &control_dir)
+        .env("FAKE_CLAUDE_SUPERVISOR_PID", std::process::id().to_string())
+        .env("PATH", path_with(&bin_dir))
+        .current_dir(&cwd)
+        .output()
+        .expect("failed to run fno-agents");
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "first claude bg spawn must bootstrap its supervisor; stderr: {stderr}"
+    );
+    let receipt: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(receipt["durability"], "daemon-owned");
+    assert!(receipt["endpoint"]
+        .as_str()
+        .is_some_and(|value| value.ends_with("control.sock")));
+}
+
+/// AC5-EDGE (x-f54c): `host` was retired at G4 (interactive daemon PTY hosting
+/// moved to the mux). The binary must intercept it with a one-line mux pointer
+/// and exit non-zero - never reach the daemon, never a silent no-op.
+#[test]
+fn client_host_retired_prints_mux_pointer() {
+    let home_dir = tmpdir("cli-host-retired-home");
+    let bin = find_client_bin();
+    if !bin.exists() {
+        eprintln!(
+            "skipping client_host_retired_prints_mux_pointer: binary not found at {:?}",
+            bin
+        );
+        return;
+    }
+    let home = AgentsHome::at(home_dir.clone());
+    seed_registry(&home, "host-collide", "codex");
+
+    let out = std::process::Command::new(&bin)
+        .envs(fno_agents::test_run::self_owner_env())
+        .args(["host", "host-collide", "--harness", "codex"])
+        .env("FNO_SPAWN_GATE", "0")
+        .env("FNO_E2E", "1") // test context: the spawn-cap auto-emit must NOT fire
+        .env("FNO_AGENTS_HOME", &home_dir)
+        .env("FNO_AGENTS_DAEMON_BIN", "/usr/bin/false")
+        .output()
+        .expect("failed to run fno-agents");
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "retired host must exit 2; stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("retired at G4") && stderr.contains("fno mux"),
+        "host must print the mux pointer: {stderr}"
+    );
+    // It must NOT have taken the daemon path.
+    assert!(
+        !stderr.contains("lazy-starting"),
+        "retired host must not reach the daemon: {stderr}"
+    );
+}
+
+fn registry_text(path: &std::path::Path) -> std::io::Result<String> {
+    fno_agents::registry_store::read(path)
+        .map(|doc| serde_json::to_string_pretty(&doc).unwrap())
+        .map_err(|e| std::io::Error::other(e.to_string()))
+}
+
+// The cloud lane journey without a live session: a fake claude on PATH
+// prints the measured create markers, the lane parses the id, mints
+// the row, and the receipt names the cloud id. The pty-held create,
+// the parse belt and the row mint all run for real here.
+#[test]
+fn spawn_claude_cloud_receipt_shape() {
+    use fno_agents::claude_cloud::{
+        dispatch_claude_cloud, non_claude_cloud_refusal, refuse_cloud_axes,
+    };
+    use fno_agents::spawn_backends::{resolve_backend, ResolvedBackend};
+
+    // Phase one, the pure contracts: the router arm (claude+cloud resolves,
+    // codex+cloud refuses naming the claude-harness limit), the axis refusals
+    // by flag name, and the packaged mail argv with its holes filled.
+    assert_eq!(
+        resolve_backend("claude", "cloud"),
+        ResolvedBackend::ClaudeCloud
+    );
+    let refused = resolve_backend("codex", "cloud");
+    match refused {
+        ResolvedBackend::Refused(msg) => {
+            assert!(msg.contains("claude-harness"), "{msg}");
+            assert!(msg.contains("codex"), "{msg}");
+        }
+        other => panic!("codex+cloud must refuse, got {other:?}"),
+    }
+    let params = serde_json::json!({"model": "x"});
+    assert!(refuse_cloud_axes(&params).is_some());
+    let params = serde_json::json!({"harness_args": ["-c"]});
+    assert!(
+        refuse_cloud_axes(&params).is_some(),
+        "passthrough must refuse by name"
+    );
+    assert!(refuse_cloud_axes(&serde_json::json!({})).is_none());
+    assert!(non_claude_cloud_refusal("codex").contains("claude-harness"));
+    // Phase two, the lane journey: the pty-held create, the parse belt and
+    // the row mint all run for real here.
+    let home = AgentsHome::at(tmpdir("spawn-cloud-home"));
+    let cwd = tmpdir("spawn-cloud-cwd");
+    let bin = tmpdir("spawn-cloud-bin");
+    install_fake_claude_cloud(&bin);
+    let old_path = std::env::var("PATH").ok();
+    unsafe { std::env::set_var("PATH", path_with(&bin)) };
+    let out = dispatch_claude_cloud(&home, "clouddy", "seed the wave", "fno", &cwd, false);
+    match old_path {
+        Some(p) => unsafe { std::env::set_var("PATH", p) },
+        None => unsafe { std::env::remove_var("PATH") },
+    }
+
+    assert_eq!(out.exit_code, 0, "cloud spawn: {}", out.stderr);
+    // stdout is exactly the receipt JSON (the Python seam parses whole-stdout
+    // JSON); the human create output rides stderr.
+    assert!(
+        out.stderr.contains("Created cloud session"),
+        "{}",
+        out.stderr
+    );
+    let receipt: serde_json::Value =
+        serde_json::from_str(out.stdout.trim()).expect("receipt must be valid JSON");
+    assert_eq!(receipt["name"], "clouddy");
+    assert_eq!(receipt["substrate"], "cloud");
+    assert_eq!(receipt["harness"], "claude");
+    let sid = receipt["short_id"].as_str().unwrap().to_string();
+    assert!(sid.starts_with("session_"), "{sid}");
+    let registry: serde_json::Value =
+        serde_json::from_str(&registry_text(&home.registry_json()).unwrap()).unwrap();
+    let row = &registry["agents"][0];
+    assert_eq!(row["substrate"], "cloud");
+    assert_eq!(row["harness"], "claude");
+    assert_eq!(row["harness_session_id"], sid.as_str());
+    assert_eq!(row["status"], "live");
+    assert!(row.get("pid").is_none_or(|v| v.is_null()));
+}
+
+// A fake claude whose only job is the create form: print the measured
+// markers and exit, the shape the real CLI shows under a pty.
+fn install_fake_claude_cloud(bin_dir: &std::path::Path) {
+    let mut script = String::from("#!/bin/sh\n");
+    script.push_str("printf \'Created cloud session: probe title\\n\'\n");
+    script.push_str(
+        "printf \'View: https://claude.ai/code/session_01CLOUDTEST0123456789?from=cli&m=0\\n\'\n",
+    );
+    script.push_str("printf \'Resume with: claude --teleport session_01CLOUDTEST0123456789\\n\'\n");
+    script.push_str("exit 0\n");
+    let path = bin_dir.join("claude");
+    std::fs::create_dir_all(bin_dir).expect("bin mkdir");
+    std::fs::write(&path, script).expect("write fake claude");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// `[sandbox] provider = "devcontainer"`: a headless spawn asks the daemon for
+/// the plan once, brings the sandbox up with the socket-dir mount, probes the
+/// daemon from inside, and runs the lane under `devcontainer exec` with the
+/// lane env in a file, never the argv (AC3). A failing probe refuses 84
+/// naming the recreate (AC6); a thread spawn refuses 2 naming `--as
+/// headless` (AC4); `none` never calls devcontainer (AC5).
+#[test]
+fn client_spawn_devcontainer_sandboxes_the_headless_lane() {
+    use std::io::{Read, Write};
+    use std::os::unix::fs::PermissionsExt;
+    let bin = find_client_bin();
+    if !bin.exists() {
+        eprintln!(
+            "skipping client_spawn_devcontainer_sandboxes_the_headless_lane: binary not found"
+        );
+        return;
+    }
+    let fake_path = tmpdir("sandbox-bin");
+    std::fs::write(
+        fake_path.join("devcontainer"),
+        "#!/bin/sh\nprintf '%s\\036' \"$*\" >> \"$DEVCONTAINER_LOG\"\n\
+         case \"$*\" in *'fno-agents status'*) exit \"${PROBE_EXIT:-0}\" ;; esac\n\
+         echo sandboxed\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        fake_path.join("devcontainer"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let run = |provider: &str, extra: &[&str], probe_exit: &str| {
+        let root = tmpdir("sandbox-home");
+        let home = AgentsHome::at(root.clone());
+        std::fs::create_dir_all(home.sandbox_sock_dir()).unwrap();
+        let listener = std::os::unix::net::UnixListener::bind(home.supervisor_sock()).unwrap();
+        let plan = fno_agents::sandbox_launch::launch_for(
+            fno_agents::sandbox_launch::SandboxProvider::Devcontainer,
+            &home.sandbox_sock_dir(),
+        );
+        let methods = std::sync::Arc::new(Mutex::new(Vec::<String>::new()));
+        let seen = methods.clone();
+        std::thread::spawn(move || {
+            for mut conn in listener.incoming().flatten() {
+                let mut len = [0u8; 4];
+                if conn.read_exact(&mut len).is_err() {
+                    continue;
+                }
+                let mut body = vec![0u8; u32::from_le_bytes(len) as usize];
+                let _ = conn.read_exact(&mut body);
+                let req: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+                let method = req["method"].as_str().unwrap_or_default().to_string();
+                let reply = if method == "agent.sandbox-plan" {
+                    serde_json::json!({ "id": req["id"], "result": plan })
+                } else {
+                    serde_json::json!({
+                        "id": req["id"],
+                        "error": { "code": -32601, "message": "fake" },
+                    })
+                };
+                seen.lock().unwrap().push(method);
+                let out = serde_json::to_vec(&reply).unwrap();
+                let _ = conn.write_all(&(out.len() as u32).to_le_bytes());
+                let _ = conn.write_all(&out);
+            }
+        });
+        let config = tmpdir("sandbox-config").join("config.toml");
+        std::fs::write(&config, format!("[sandbox]\nprovider = \"{provider}\"\n")).unwrap();
+        let log = tmpdir("sandbox-log").join("devcontainer.log");
+        let out = std::process::Command::new(&bin)
+            .envs(fno_agents::test_run::self_owner_env())
+            .args(["spawn", "--name", "sandboxed", "--harness", "claude"])
+            .args(extra)
+            .arg("--cwd")
+            .arg(tmpdir("sandbox-cwd"))
+            .arg("hello")
+            .env("FNO_SPAWN_GATE", "0")
+            .env("FNO_E2E", "1")
+            .env("FNO_AGENTS_HOME", &root)
+            .env("FNO_CLAIMS_ROOT", root.join("claims"))
+            .env("FNO_CONFIG", &config)
+            .env("DEVCONTAINER_LOG", &log)
+            .env("PROBE_EXIT", probe_exit)
+            .env_remove("FNO_SUPERVISOR_SOCKET")
+            .env("PATH", path_with(&fake_path))
+            .output()
+            .expect("failed to run fno-agents");
+        let calls = std::fs::read_to_string(&log).unwrap_or_default();
+        let methods = methods.lock().unwrap().clone();
+        (out, calls, methods, home)
+    };
+
+    let (out, calls, methods, home) = run("devcontainer", &["--once"], "0");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        methods
+            .iter()
+            .filter(|m| *m == "agent.sandbox-plan")
+            .count(),
+        1,
+        "{methods:?} stderr: {stderr}"
+    );
+    // One record per call: the lane prompt itself carries newlines.
+    let lines: Vec<&str> = calls.split('\u{1e}').filter(|c| !c.is_empty()).collect();
+    assert_eq!(lines.len(), 3, "up, probe, lane: {calls} stderr: {stderr}");
+    assert!(
+        lines[0].starts_with("up --workspace-folder "),
+        "{}",
+        lines[0]
+    );
+    assert!(
+        lines[0].ends_with(&format!(
+            "--mount type=bind,source={},target=/fno-state/sock",
+            home.sandbox_sock_dir().display()
+        )),
+        "{}",
+        lines[0]
+    );
+    for line in &lines[1..] {
+        assert!(
+            line.starts_with("exec --workspace-folder ")
+                && line
+                    .contains("--remote-env FNO_SUPERVISOR_SOCKET=/fno-state/sock/supervisor.sock"),
+            "{line}"
+        );
+    }
+    assert!(lines[1].ends_with("fno-agents status"), "{}", lines[1]);
+    assert!(
+        lines[2].contains(" -- /bin/sh -c ") && lines[2].contains(" claude "),
+        "{}",
+        lines[2]
+    );
+    assert!(
+        !calls.contains("FNO_AGENT_FROM"),
+        "lane env rides a file: {calls}"
+    );
+
+    let (out, _, _, _) = run("devcontainer", &["--once"], "13");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(84), "stderr: {stderr}");
+    assert!(stderr.contains("--remove-existing-container"), "{stderr}");
+
+    let (out, calls, methods, _) = run("devcontainer", &["--as", "thread"], "0");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "stderr: {stderr}");
+    assert!(stderr.contains("--as headless"), "{stderr}");
+    assert!(
+        calls.is_empty() && methods.is_empty(),
+        "{calls} {methods:?}"
+    );
+
+    let (_, calls, methods, _) = run("none", &["--once"], "0");
+    assert!(calls.is_empty(), "none never sandboxes: {calls}");
+    assert!(
+        !methods.iter().any(|m| m == "agent.sandbox-plan"),
+        "{methods:?}"
+    );
+}

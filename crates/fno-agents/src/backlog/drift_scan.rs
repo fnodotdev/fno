@@ -1,0 +1,1350 @@
+//! The merge-drift scan: open nodes whose PR merged outside the ship gate,
+//! plus the reverse map that closes ref-less nodes by merged branch name.
+//! Ported from graph/_reconcile.py.
+
+use serde_json::{json, Value};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use super::merge_evidence::PrReadError;
+use super::merge_state::{query_pr_merge_state, read_body, PrMergeState};
+use super::pr_link::repo_slug_from_url;
+use crate::backlog_ready::node_is_open;
+use crate::loop_dispatch::which_binary;
+
+/// The reverse map and open-binding scans fire one gh call per distinct
+/// repo in their scope; a wall-clock budget bounds the fan-out.
+const REVERSE_MAP_BUDGET: Duration = Duration::from_secs(60);
+
+/// One open node carrying a PR whose GitHub state we resolved. `closeable`
+/// records hold a MERGED PR and are safe to close. Records with a non-None
+/// `error` could not be resolved and are surfaced but never closed.
+#[derive(Debug, Clone)]
+pub(crate) struct MergeDriftRecord {
+    pub node_id: String,
+    pub plan_path: Option<String>,
+    pub pr_number: i64,
+    pub pr_url: Option<String>,
+    pub pr_state: String,
+    pub merged_at: Option<String>,
+    pub error: Option<String>,
+    pub session_id: Option<String>,
+    pub cwd: Option<String>,
+    /// mergeCommit.oid for the closed PR: the exactly-once dedup key for
+    /// the post-merge-ritual auto-dispatch. None on a reverse-mapped
+    /// record (branch-name match has no SHA).
+    pub merge_sha: Option<String>,
+    pub changed_files: Vec<String>,
+    pub files_truncated: bool,
+    pub error_kind: Option<String>,
+    pub remedy: Option<String>,
+}
+
+impl MergeDriftRecord {
+    pub(crate) fn closeable(&self) -> bool {
+        self.error.is_none() && self.pr_state == "MERGED"
+    }
+}
+
+/// gh on PATH, else None (reconcile auto-fires on SessionStart; a gh-less
+/// machine must stay quiet).
+pub(crate) fn gh_executable() -> Option<PathBuf> {
+    which_binary("gh")
+}
+
+fn map_pr_state(row: &Value) -> Result<String, String> {
+    if row.get("merged").and_then(Value::as_bool).unwrap_or(false) {
+        return Ok("MERGED".into());
+    }
+    match row
+        .get("state")
+        .and_then(Value::as_str)
+        .map(|s| s.to_ascii_uppercase())
+        .as_deref()
+    {
+        Some("OPEN") => Ok("OPEN".into()),
+        Some("CLOSED") => Ok("CLOSED".into()),
+        Some(other) => Err(format!("malformed PR state {other:?}")),
+        None => Err("REST row carried no state".into()),
+    }
+}
+
+/// One REST pulls listing with the detail rows the scans read:
+/// `{number, state, title, headRefName, isCrossRepository, url, mergedAt,
+/// body}`. A malformed
+/// head/title/url fails the whole page loudly, never an absent answer.
+fn rest_pr_rows(cwd: &Path, state: &str, max_pages: usize) -> Result<Vec<Value>, PrReadError> {
+    let Some(gh) = gh_executable() else {
+        return Ok(Vec::new());
+    };
+    let slug = super::pr_link::resolve_current_repo_slug(cwd.to_str())
+        .ok_or_else(|| PrReadError::new("could not resolve owner/repo from the checkout", ""))?;
+    let mut rows: Vec<Value> = Vec::new();
+    for page in 1..=max_pages {
+        let path = format!("repos/{slug}/pulls?state={state}&per_page=100&page={page}");
+        let (ok, out, err) = crate::pr_push::run_labeled(
+            "backlog-evidence",
+            gh.to_str().unwrap_or("gh"),
+            &["api", "--allow-escape-sequences", &path],
+            cwd,
+            Duration::from_secs(30),
+        )
+        .map_err(|e| PrReadError::new(e, "availability"))?;
+        if !ok {
+            let message = if err.trim().is_empty() { out } else { err };
+            return Err(PrReadError::new(
+                format!("gh api pulls ({state}) failed: {message}"),
+                "",
+            ));
+        }
+        let payload: Value = serde_json::from_str(out.trim()).map_err(|e| {
+            PrReadError::new(
+                format!("gh api pulls list page {page} returned output that is not JSON: {e}"),
+                "malformed",
+            )
+        })?;
+        let Some(rows_page) = payload.as_array() else {
+            return Err(PrReadError::new(
+                format!("gh api pulls list page {page} was not a JSON array"),
+                "malformed",
+            ));
+        };
+        for row in rows_page {
+            let Some(number) = row.get("number").and_then(Value::as_i64) else {
+                continue;
+            };
+            let head_ref = row
+                .get("head")
+                .and_then(|h| h.get("ref"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    PrReadError::new(
+                        format!("gh api pulls list page {page} carried malformed head ref"),
+                        "malformed",
+                    )
+                })?;
+            if !row.get("title").map(Value::is_string).unwrap_or(false)
+                || !row.get("html_url").map(Value::is_string).unwrap_or(false)
+            {
+                return Err(PrReadError::new(
+                    format!("gh api pulls list page {page} carried malformed title/url"),
+                    "malformed",
+                ));
+            }
+            let state_word = map_pr_state(row).map_err(|e| PrReadError::new(e, "malformed"))?;
+            // The binding verdicts skip a positive true, so a fork PR raises
+            // no advisory; a null head repo (deleted fork) reads true.
+            let head_repo = row.pointer("/head/repo/full_name").and_then(Value::as_str);
+            let base_repo = row.pointer("/base/repo/full_name").and_then(Value::as_str);
+            let cross = match (head_repo, base_repo) {
+                (Some(h), Some(b)) => h != b,
+                _ => true,
+            };
+            rows.push(json!({
+                "number": number,
+                "state": state_word,
+                "title": row.get("title"),
+                "headRefName": head_ref,
+                "isCrossRepository": cross,
+                "url": row.get("html_url"),
+                "mergedAt": row.get("merged_at"),
+                "body": row.get("body").and_then(Value::as_str).unwrap_or(""),
+            }));
+        }
+        if rows_page.len() < 100 {
+            return Ok(rows);
+        }
+    }
+    // Every page came back full: the ceiling cut a listing that had more
+    // rows. Loud on purpose, like the Python twin's warning.
+    eprintln!(
+        "reconcile: gh api pulls list hit the max_pages={max_pages} ceiling with a full last page; listing is possibly truncated after {} rows",
+        rows.len()
+    );
+    Ok(rows)
+}
+
+/// Merged PRs (number/url/headRefName/mergedAt) for reverse-mapping, run in
+/// `cwd` so gh resolves the repo from that dir's origin remote. Empty when
+/// gh is absent; a real gh failure is a typed refusal so the caller degrades
+/// with one advisory per repo.
+pub(crate) fn list_merged_pr_branches(cwd: &str, limit: usize) -> Result<Vec<Value>, PrReadError> {
+    if gh_executable().is_none() {
+        return Ok(Vec::new());
+    }
+    let rows: Vec<Value> = rest_pr_rows(Path::new(cwd), "closed", 1)?
+        .into_iter()
+        .filter(|r| r.get("state").and_then(Value::as_str) == Some("MERGED"))
+        .take(limit)
+        .collect();
+    Ok(rows)
+}
+
+/// Open PRs (number/url/headRefName) for the open-binding heal. Same
+/// contract as the merged listing; the listing itself is capped at two
+/// pages and the row count at `limit`.
+pub(crate) fn list_open_pr_branches(cwd: &str, limit: usize) -> Result<Vec<Value>, PrReadError> {
+    if gh_executable().is_none() {
+        return Ok(Vec::new());
+    }
+    let rows = rest_pr_rows(Path::new(cwd), "open", 2)?;
+    if rows.len() > limit {
+        return Err(PrReadError::new(
+            format!("open PR listing hit its {limit}-row limit; refusing a unique binding"),
+            "",
+        ));
+    }
+    Ok(rows)
+}
+
+/// The git common dir of `cwd`, or `cwd` when git can't say. `.git` comes
+/// back relative on a main checkout, so the answer is anchored and
+/// canonicalized for the keys to agree across worktrees.
+pub(crate) fn repo_group_key(cwd: &str, memo: &mut HashMap<String, String>) -> String {
+    if let Some(hit) = memo.get(cwd) {
+        return hit.clone();
+    }
+    let probe = std::process::Command::new("git")
+        .args(["rev-parse", "--git-common-dir"])
+        .current_dir(cwd)
+        .output();
+    let hit = match probe {
+        Ok(out) if out.status.success() && !out.stdout.is_empty() => {
+            let rel = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            std::fs::canonicalize(Path::new(cwd).join(rel))
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| cwd.to_string())
+        }
+        _ => cwd.to_string(),
+    };
+    memo.insert(cwd.to_string(), hit.clone());
+    hit
+}
+
+/// One gh listing per repo per run, shared by the scans. A failed fetch
+/// caches the error so later asks re-raise, not re-hit gh.
+#[derive(Default)]
+pub(crate) struct ListingCache {
+    repo_keys: RefCell<HashMap<String, String>>,
+    store: RefCell<HashMap<(String, String), Vec<Value>>>,
+    errors: RefCell<HashMap<(String, String), String>>,
+}
+
+impl ListingCache {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Cached rows for `kind` ("open" | "merged") of `cwd`'s repo.
+    pub(crate) fn rows_for(&self, kind: &str, cwd: &str) -> Result<Vec<Value>, PrReadError> {
+        self.rows_for_with(kind, cwd, |cwd| match kind {
+            "open" => list_open_pr_branches(cwd, 100),
+            _ => list_merged_pr_branches(cwd, 100),
+        })
+    }
+
+    /// The seam: tests pass a stub fetch, production uses the closures above.
+    pub(crate) fn rows_for_with(
+        &self,
+        kind: &str,
+        cwd: &str,
+        fetch: impl Fn(&str) -> Result<Vec<Value>, PrReadError>,
+    ) -> Result<Vec<Value>, PrReadError> {
+        let mut keys = self.repo_keys.borrow_mut();
+        let key = (kind.to_string(), repo_group_key(cwd, &mut keys));
+        drop(keys);
+        if let Some(err) = self.errors.borrow().get(&key) {
+            return Err(PrReadError::new(err.clone(), ""));
+        }
+        if let Some(rows) = self.store.borrow().get(&key) {
+            return Ok(rows.clone());
+        }
+        match fetch(cwd) {
+            Ok(rows) => {
+                self.store.borrow_mut().insert(key, rows.clone());
+                Ok(rows)
+            }
+            Err(e) => {
+                self.errors.borrow_mut().insert(key, e.message.clone());
+                Err(e)
+            }
+        }
+    }
+}
+
+/// `cwd` is a dir inside some git checkout (its own `.git` or an ancestor's).
+fn in_checkout(cwd: &Path) -> bool {
+    if !cwd.is_dir() {
+        return false;
+    }
+    let mut probe = Some(cwd);
+    while let Some(dir) = probe {
+        if dir.join(".git").exists() {
+            return true;
+        }
+        probe = dir.parent();
+    }
+    false
+}
+
+/// The dir reconcile should run a node's gh query / post-close routing in:
+/// the recorded cwd (a worktree) when it is a live checkout, else the
+/// node's own project checkout when that exists, else the original cwd so
+/// the existing degrade is strictly unchanged.
+pub(crate) fn effective_reconcile_cwd(cwd: &str, project: Option<&str>) -> String {
+    if !cwd.is_empty() && !in_checkout(Path::new(cwd)) {
+        if let Some(project) = project.filter(|p| !p.is_empty()) {
+            if let Some(root) = super::settings::project_root(project) {
+                if Path::new(&root).is_dir() {
+                    return root;
+                }
+            }
+        }
+    }
+    cwd.to_string()
+}
+
+/// True when `node_id` is a full delimiter-bounded segment of `head_ref`.
+/// A bare substring must NOT match: fixed-width hex ids make a short id a
+/// prefix of a longer one, so an unbounded match would close the wrong node.
+pub(crate) fn branch_matches_node(head_ref: &str, node_id: &str) -> bool {
+    if head_ref.is_empty() || node_id.is_empty() {
+        return false;
+    }
+    let escaped = regex::escape(node_id);
+    let re = regex::Regex::new(&format!(r"(^|[/-]){escaped}([/-]|$)")).expect("static pattern");
+    re.is_match(head_ref)
+}
+
+/// Group candidates by repo: (groups, cwd_by_nid, skipped). Shared
+/// eligibility of both listing scans; the first member's cwd runs the gh
+/// call so gh still resolves the repo from that dir's origin remote.
+/// Groups carry entry indices so the callers can re-read rows. `with_refs`
+/// admits ref-carrying nodes; `include_done` admits finished rows, which
+/// only the open-binding heal wants (a follow-up PR records there).
+fn group_refless_by_repo(
+    entries: &[Value],
+    scope: Option<&BTreeSet<String>>,
+    memo: &mut HashMap<String, String>,
+    with_refs: bool,
+    include_done: bool,
+) -> (
+    Vec<(String, Vec<usize>)>,
+    HashMap<String, String>,
+    Vec<String>,
+) {
+    let mut by_repo: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    let mut cwd_by_nid: HashMap<String, String> = HashMap::new();
+    let mut skipped: Vec<String> = Vec::new();
+    for (index, node) in entries.iter().enumerate() {
+        let Some(nid) = node.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        if let Some(scope) = scope {
+            if !scope.contains(nid) {
+                continue;
+            }
+        }
+        if (!node_is_open(node) && !include_done)
+            || (!with_refs && !node_pr_refs_of(node).is_empty())
+        {
+            continue;
+        }
+        let raw = node.get("cwd").and_then(Value::as_str).unwrap_or("");
+        if raw.is_empty() {
+            continue;
+        }
+        let cwd = effective_reconcile_cwd(raw, node.get("project").and_then(Value::as_str));
+        if !Path::new(&cwd).is_dir() || repo_group_key(&cwd, memo) == cwd {
+            skipped.push(nid.to_string());
+            continue;
+        }
+        cwd_by_nid.insert(nid.to_string(), cwd.clone());
+        let key = repo_group_key(&cwd, memo);
+        by_repo.entry(key).or_default().push(index);
+    }
+    (by_repo.into_iter().collect(), cwd_by_nid, skipped)
+}
+
+fn node_pr_refs_of(node: &Value) -> Vec<(i64, Option<String>)> {
+    super::merge_evidence::node_pr_refs(node)
+}
+
+/// First row carrying this number whose repo may answer for the ref.
+fn listing_answer<'a>(rows: &'a [Value], number: i64, ref_repo: Option<&str>) -> Option<&'a Value> {
+    rows.iter().find(|row| {
+        row.get("number").and_then(Value::as_i64) == Some(number)
+            && match (
+                repo_slug_from_url(row.get("url").and_then(Value::as_str)),
+                ref_repo,
+            ) {
+                (None, _) | (_, None) => true,
+                (Some(slug), Some(repo)) => slug.eq_ignore_ascii_case(repo),
+            }
+    })
+}
+
+/// True when the PR body's closure line names `nid`. A merged PR closes
+/// only the nodes it claims: an early wave of a multi-wave node merges with
+/// no line for it, and an approved Retarget line moves the claim to another
+/// node, so neither PR is this node's closing evidence.
+fn closure_names(body: &str, nid: &str) -> bool {
+    crate::org_board::pr_closure::parse(body)
+        .iter()
+        .any(|id| id == nid)
+}
+
+fn row_closure_names(row: &Value, nid: &str) -> bool {
+    closure_names(row.get("body").and_then(Value::as_str).unwrap_or(""), nid)
+}
+
+/// Close open nodes with NO PR refs by matching the id in a merged branch.
+pub(crate) fn reverse_map_unstamped(
+    entries: &[Value],
+    scope: Option<&BTreeSet<String>>,
+    listings: Option<&ListingCache>,
+) -> Vec<MergeDriftRecord> {
+    let mut fallback = HashMap::new();
+    let (groups, cwd_by_nid, skipped_dead_cwd) = {
+        let mut cache_memo;
+        let memo: &mut HashMap<String, String> = match listings {
+            Some(cache) => {
+                cache_memo = cache.repo_keys.borrow_mut();
+                &mut cache_memo
+            }
+            None => &mut fallback,
+        };
+        group_refless_by_repo(entries, scope, memo, false, false)
+    };
+
+    if !skipped_dead_cwd.is_empty() {
+        // Name EVERY skipped id: the id is the only handle an operator has
+        // to heal a genuinely-merged-but-archived node.
+        eprintln!(
+            "reverse-map: skipped {} ref-less node(s) with missing or non-checkout cwd: {} (heal with: fno backlog update <id> project=<p> cwd=<path>)",
+            skipped_dead_cwd.len(),
+            skipped_dead_cwd.join(" ")
+        );
+    }
+
+    let mut records: Vec<MergeDriftRecord> = Vec::new();
+    let deadline = Instant::now() + REVERSE_MAP_BUDGET;
+    for (_key, nodes) in &groups {
+        if Instant::now() >= deadline {
+            let deferred: Vec<String> = groups
+                .iter()
+                .flat_map(|(_, ns)| ns.iter())
+                .filter_map(|i| entries[*i].get("id").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect();
+            eprintln!(
+                "reverse-map: stopped at its {}s budget (gh is slow or degraded); deferred {} node(s) to a later sweep: {}",
+                REVERSE_MAP_BUDGET.as_secs(),
+                deferred.len(),
+                deferred.join(" ")
+            );
+            break;
+        }
+        let Some(first) = nodes.first() else { continue };
+        let nid0 = entries[*first]
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let gh_cwd = cwd_by_nid
+            .get(&nid0)
+            .map(String::as_str)
+            .unwrap_or_default();
+        let merged_rows = match listings {
+            Some(cache) => cache.rows_for("merged", gh_cwd),
+            None => list_merged_pr_branches(gh_cwd, 100),
+        };
+        let merged_rows = match merged_rows {
+            Ok(rows) => rows,
+            Err(e) => {
+                for node_index in nodes {
+                    let node = &entries[*node_index];
+                    records.push(MergeDriftRecord {
+                        node_id: node
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        plan_path: str_field(node.get("plan_path")),
+                        pr_number: 0,
+                        pr_url: None,
+                        pr_state: "UNKNOWN".into(),
+                        merged_at: None,
+                        error: Some(format!("reverse-map gh query failed: {}", e.message)),
+                        session_id: str_field(node.get("session_id")),
+                        cwd: cwd_by_nid
+                            .get(node.get("id").and_then(Value::as_str).unwrap_or_default())
+                            .cloned(),
+                        merge_sha: None,
+                        changed_files: Vec::new(),
+                        files_truncated: false,
+                        error_kind: Some(e.kind.clone()),
+                        remedy: None,
+                    });
+                }
+                continue;
+            }
+        };
+        for node_index in nodes {
+            let node = &entries[*node_index];
+            let nid = node.get("id").and_then(Value::as_str).unwrap_or_default();
+            let hits: Vec<&Value> = merged_rows
+                .iter()
+                .filter(|row| {
+                    branch_matches_node(
+                        row.get("headRefName").and_then(Value::as_str).unwrap_or(""),
+                        nid,
+                    ) && row_closure_names(row, nid)
+                })
+                .collect();
+            if hits.is_empty() {
+                continue;
+            }
+            let mut numbers: Vec<i64> = hits
+                .iter()
+                .filter_map(|r| r.get("number").and_then(Value::as_i64))
+                .collect();
+            numbers.sort_unstable();
+            numbers.dedup();
+            if numbers.len() > 1 {
+                let nums = numbers
+                    .iter()
+                    .map(|n| format!("#{n}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                records.push(MergeDriftRecord {
+                    node_id: nid.to_string(),
+                    plan_path: str_field(node.get("plan_path")),
+                    pr_number: 0,
+                    pr_url: None,
+                    pr_state: "UNKNOWN".into(),
+                    merged_at: None,
+                    error: Some(format!(
+                        "reverse-map ambiguous: {nums} both match branch id {nid}"
+                    )),
+                    session_id: str_field(node.get("session_id")),
+                    cwd: cwd_by_nid.get(nid).cloned(),
+                    merge_sha: None,
+                    changed_files: Vec::new(),
+                    files_truncated: false,
+                    error_kind: None,
+                    remedy: None,
+                });
+                continue;
+            }
+            let row = hits[0];
+            records.push(MergeDriftRecord {
+                node_id: nid.to_string(),
+                plan_path: str_field(node.get("plan_path")),
+                pr_number: row.get("number").and_then(Value::as_i64).unwrap_or(0),
+                pr_url: str_field(row.get("url")),
+                pr_state: "MERGED".into(),
+                merged_at: str_field(row.get("mergedAt")),
+                error: None,
+                session_id: str_field(node.get("session_id")),
+                cwd: cwd_by_nid.get(nid).cloned(),
+                merge_sha: None,
+                changed_files: Vec::new(),
+                files_truncated: false,
+                error_kind: None,
+                remedy: None,
+            });
+        }
+    }
+    records
+}
+
+/// (node_id, revert_pr_number) pairs to stamp `reverted: true`.
+///
+/// A GitHub revert PR titles itself `Revert "..."` and auto-writes
+/// `Reverts owner/repo#N` in the body; a hand-written one usually keeps the
+/// git subject. Misses are a documented limitation with the manual
+/// `fno backlog update reverted=true` fallback.
+pub(crate) fn detect_reverted_nodes(merged_prs: &[Value], entries: &[Value]) -> Vec<(String, i64)> {
+    let title_re = regex::Regex::new(r"^\s*Revert\b").expect("static pattern");
+    let body_re =
+        regex::Regex::new(r"(?i)\breverts\s+(?:([\w.-]+/[\w.-]+))?#(\d+)").expect("static pattern");
+    // pr_number -> [(entry index, that ref's repo slug)]; refs without a
+    // parseable pr_url are indexed with slug None and never match
+    // (conservative).
+    let mut by_pr: HashMap<i64, Vec<(usize, Option<String>)>> = HashMap::new();
+    for (index, entry) in entries.iter().enumerate() {
+        for (num, url) in node_pr_refs_of(entry) {
+            let slug = repo_slug_from_url(url.as_deref());
+            by_pr.entry(num).or_default().push((index, slug));
+        }
+    }
+
+    let mut out: Vec<(String, i64)> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for pr in merged_prs {
+        let Some(number) = pr.get("number").and_then(Value::as_i64) else {
+            continue;
+        };
+        if number <= 0 {
+            continue;
+        }
+        let title = pr.get("title").and_then(Value::as_str).unwrap_or("");
+        if !title_re.is_match(title) {
+            continue;
+        }
+        let Some(revert_slug) = repo_slug_from_url(pr.get("url").and_then(Value::as_str)) else {
+            // No repo context for the revert PR itself: refuse to match a
+            // bare number against the multi-project graph.
+            continue;
+        };
+        let body = pr.get("body").and_then(Value::as_str).unwrap_or("");
+        for caps in body_re.captures_iter(body) {
+            let qualifier = caps.get(1).map(|m| m.as_str());
+            let Ok(target) = caps[2].parse::<i64>() else {
+                continue;
+            };
+            if qualifier.is_some_and(|q| !q.eq_ignore_ascii_case(&revert_slug)) {
+                continue; // explicit cross-repo reference: not this repo's PR
+            }
+            let matches: Vec<usize> = by_pr
+                .get(&target)
+                .map(|rows| {
+                    rows.iter()
+                        .filter(|(index, slug)| {
+                            slug.as_ref()
+                                .is_some_and(|s| s.eq_ignore_ascii_case(&revert_slug))
+                                && !entries[*index]
+                                    .get("reverted")
+                                    .map(|v| !v.is_null() && v.as_bool().unwrap_or(false))
+                                    .unwrap_or(false)
+                        })
+                        .map(|(index, _)| *index)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let ids: BTreeSet<&str> = matches
+                .iter()
+                .filter_map(|i| entries[*i].get("id").and_then(Value::as_str))
+                .collect();
+            if ids.len() != 1 {
+                continue; // zero or ambiguous: stamp nothing
+            }
+            let nid = ids.into_iter().next().expect("exactly one");
+            if seen.insert(nid.to_string()) {
+                out.push((nid.to_string(), number));
+            }
+        }
+    }
+    out
+}
+
+/// Find open nodes whose PR has merged outside the ship gate and whose
+/// closure line names them (see [`closure_names`]). With
+/// `listings`, a ref resolves against the repo's listings first; the
+/// per-node query fires only for a number in neither listing.
+///
+/// The query seam keeps tests hermetic: production passes
+/// [`query_seam`]. Successors of a pending supersession need changed-file
+/// evidence, which only the per-node query fetches: they route around the
+/// listings.
+pub(crate) fn scan_merge_drift(
+    entries: &[Value],
+    scope: Option<&BTreeSet<String>>,
+    listings: Option<&ListingCache>,
+    query: impl Fn(i64, Option<&str>, Option<&str>, bool) -> Result<PrMergeState, PrReadError>,
+) -> Vec<MergeDriftRecord> {
+    let pending_supersede: BTreeSet<&str> = entries
+        .iter()
+        .filter(|e| {
+            e.get("supersession")
+                .map(|r| r.is_object() && r.get("verified_at").is_none())
+                .unwrap_or(false)
+        })
+        .filter_map(|e| e.get("superseded_by").and_then(Value::as_str))
+        .collect();
+
+    let mut records: Vec<MergeDriftRecord> = Vec::new();
+
+    for node in entries {
+        let Some(nid) = node.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        if let Some(scope) = scope {
+            if !scope.contains(nid) {
+                continue;
+            }
+        }
+        if !node_is_open(node) {
+            continue;
+        }
+        let refs = node_pr_refs_of(node);
+        if refs.is_empty() {
+            continue;
+        }
+
+        // Same dead-cwd defect as the reverse path: a subprocess cwd of a
+        // missing dir fails at launch even when --repo was parsed from
+        // pr_url. Resolve through the project-root fallback; if still gone,
+        // degrade to None so a repo-scoped query still succeeds via --repo.
+        let raw_cwd = node.get("cwd").and_then(Value::as_str).unwrap_or("");
+        let cwd = if raw_cwd.is_empty() {
+            None
+        } else {
+            let resolved =
+                effective_reconcile_cwd(raw_cwd, node.get("project").and_then(Value::as_str));
+            if Path::new(&resolved).is_dir() {
+                Some(resolved)
+            } else {
+                None
+            }
+        };
+
+        let mut merged_rows: Vec<Value> = Vec::new();
+        let mut open_rows: Vec<Value> = Vec::new();
+        if let Some(cache) = listings {
+            if cwd.is_some() && !pending_supersede.contains(nid) {
+                if let Ok(rows) = cache.rows_for("merged", cwd.as_deref().unwrap_or("")) {
+                    merged_rows = rows;
+                }
+                if let Ok(rows) = cache.rows_for("open", cwd.as_deref().unwrap_or("")) {
+                    open_rows = rows;
+                }
+            }
+        }
+
+        let mut merged: Option<PrMergeState> = None;
+        let mut first_error: Option<String> = None;
+        let mut first_error_kind: Option<String> = None;
+        let mut first_remedy: Option<String> = None;
+        let mut closed_refs = 0usize;
+
+        for (number, url) in &refs {
+            // Prefer an explicit repo parsed from the PR URL so we never
+            // resolve a PR number against the wrong repository. With
+            // neither URL nor cwd we cannot safely identify the repo:
+            // record a failure rather than risk closing a node off a
+            // same-numbered PR elsewhere.
+            let repo = repo_slug_from_url(url.as_deref());
+            if let Some(hit) = listing_answer(&merged_rows, *number, repo.as_deref()) {
+                if !row_closure_names(hit, nid) {
+                    continue;
+                }
+                // No mergeCommit oid/files on a listing row - like a
+                // reverse-mapped record.
+                merged = Some(PrMergeState {
+                    number: *number,
+                    state: "MERGED".into(),
+                    url: str_field(hit.get("url")),
+                    merged_at: str_field(hit.get("mergedAt")),
+                    merge_sha: None,
+                    changed_files: Vec::new(),
+                    files_truncated: false,
+                    body: None,
+                });
+                break;
+            }
+            if listing_answer(&open_rows, *number, repo.as_deref()).is_some() {
+                continue; // still open on GitHub: no drift, and no query owed
+            }
+            if repo.is_none() && cwd.is_none() {
+                if first_error.is_none() {
+                    first_error = Some(format!(
+                        "PR #{number}: no repo context (pr_url unparseable and cwd unset); refusing to query to avoid a wrong-repo match"
+                    ));
+                    first_error_kind = Some("repository_context".to_string());
+                }
+                continue;
+            }
+            match query(*number, repo.as_deref(), cwd.as_deref(), true) {
+                Err(e) => {
+                    if first_error.is_none() {
+                        first_error = Some(e.message.clone());
+                        first_error_kind = Some(e.kind.clone());
+                        first_remedy = Some(e.remedy_for(*number, repo.as_deref()));
+                    }
+                    continue;
+                }
+                Ok(state) => {
+                    if state.state == "CLOSED" {
+                        closed_refs += 1;
+                    }
+                    let body = state.body.as_deref().unwrap_or_default();
+                    if state.state == "MERGED" && closure_names(body, nid) {
+                        merged = Some(state);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if let Some(state) = merged {
+            records.push(MergeDriftRecord {
+                node_id: nid.to_string(),
+                plan_path: str_field(node.get("plan_path")),
+                pr_number: state.number,
+                pr_url: state.url,
+                pr_state: "MERGED".into(),
+                merged_at: state.merged_at,
+                error: None,
+                session_id: str_field(node.get("session_id")),
+                cwd,
+                merge_sha: state.merge_sha,
+                changed_files: state.changed_files,
+                files_truncated: state.files_truncated,
+                error_kind: None,
+                remedy: None,
+            });
+        } else if let Some(error) = first_error {
+            // Could not resolve any PR for this open node. Surface it so
+            // the caller reports a query failure rather than silently
+            // dropping.
+            let (number, url) = &refs[0];
+            records.push(MergeDriftRecord {
+                node_id: nid.to_string(),
+                plan_path: str_field(node.get("plan_path")),
+                pr_number: *number,
+                pr_url: url.clone(),
+                pr_state: "UNKNOWN".into(),
+                merged_at: None,
+                error: Some(error),
+                session_id: str_field(node.get("session_id")),
+                cwd,
+                merge_sha: None,
+                changed_files: Vec::new(),
+                files_truncated: false,
+                error_kind: first_error_kind,
+                remedy: first_remedy,
+            });
+        } else if closed_refs == refs.len()
+            && node.get("status").and_then(Value::as_str) == Some("in_review")
+            && node.get("pr_number").and_then(Value::as_i64) == Some(refs[0].0)
+        {
+            // Every ref closed unmerged: nothing can land this node's work.
+            let (number, url) = &refs[0];
+            records.push(MergeDriftRecord {
+                node_id: nid.to_string(),
+                plan_path: str_field(node.get("plan_path")),
+                pr_number: *number,
+                pr_url: url.clone(),
+                pr_state: "CLOSED".into(),
+                merged_at: None,
+                error: None,
+                session_id: str_field(node.get("session_id")),
+                cwd,
+                merge_sha: None,
+                changed_files: Vec::new(),
+                files_truncated: false,
+                error_kind: None,
+                remedy: None,
+            });
+        }
+    }
+
+    records.extend(reverse_map_unstamped(entries, scope, listings));
+    records
+}
+
+/// The production query seam: the cache-first merge-state read, with the
+/// closure body read fresh when the cache served the merge facts.
+pub(crate) fn query_seam(
+    pr: i64,
+    repo: Option<&str>,
+    cwd: Option<&str>,
+    include_files: bool,
+) -> Result<PrMergeState, PrReadError> {
+    let mut state = query_pr_merge_state(pr, repo, cwd, include_files)?;
+    if state.state == "MERGED" && state.body.is_none() {
+        state.body = Some(read_body(pr, repo, cwd)?);
+    }
+    Ok(state)
+}
+
+fn str_field(v: Option<&Value>) -> Option<String> {
+    v.and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn open_node(extra: Value) -> Value {
+        let mut base = json!({"id": "x-aaaa"});
+        if let (Some(b), Some(e)) = (base.as_object_mut(), extra.as_object()) {
+            for (k, v) in e {
+                b.insert(k.clone(), v.clone());
+            }
+        }
+        base
+    }
+
+    fn pr_row(number: i64, head: &str, state: &str) -> Value {
+        json!({
+            "number": number,
+            "state": state,
+            "title": format!("work {number}"),
+            "headRefName": head,
+            "url": format!("https://github.com/o/r/pull/{number}"),
+            "mergedAt": "2026-10-01T00:00:00Z",
+            "body": "Fixes x-aaaa",
+        })
+    }
+
+    #[test]
+    fn a_node_surfaces_as_closed_only_when_every_ref_closed_unmerged() {
+        let state_of = |pr: i64| PrMergeState {
+            number: pr,
+            state: if pr == 7 { "CLOSED" } else { "OPEN" }.into(),
+            url: None,
+            merged_at: None,
+            merge_sha: None,
+            changed_files: Vec::new(),
+            files_truncated: false,
+            body: None,
+        };
+        let node = |extra: Value| {
+            let mut row = json!({
+                "status": "in_review", "pr_number": 7,
+                "pr_url": "https://github.com/o/r/pull/7", "cwd": ".",
+            });
+            if let (Some(r), Some(e)) = (row.as_object_mut(), extra.as_object()) {
+                r.extend(e.clone());
+            }
+            vec![open_node(row)]
+        };
+        let scan = |entries: &[Value]| {
+            scan_merge_drift(entries, None, None, |pr, _, _, _| Ok(state_of(pr)))
+        };
+        let records = scan(&node(json!({})));
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert_eq!(records[0].pr_state, "CLOSED");
+        assert!(!records[0].closeable());
+        // A replacement PR still open keeps the node in_review.
+        let open_extra = json!({"additional_prs": [{"number": 8, "url": null}]});
+        assert!(scan(&node(open_extra)).is_empty());
+        // A deferred node is already off the board's in-flight read.
+        assert!(scan(&node(json!({"status": "deferred"}))).is_empty());
+    }
+
+    #[test]
+    fn a_merged_pr_closes_only_a_node_its_closing_line_names() {
+        // The recorded shape: wave 1 of a multi-wave node merges with no
+        // closing line, and the node must stay open for its later waves.
+        let entries = vec![open_node(json!({
+            "pr_number": 7,
+            "pr_url": "https://github.com/o/r/pull/7",
+            "cwd": ".",
+        }))];
+        let scan_listing = |body: &str| {
+            let mut row = pr_row(7, "feature/x-aaaa", "MERGED");
+            row["body"] = json!(body);
+            let cache = ListingCache::new();
+            cache
+                .rows_for_with("merged", ".", |_| Ok(vec![row.clone()]))
+                .expect("seed merged");
+            cache
+                .rows_for_with("open", ".", |_| Ok(Vec::new()))
+                .expect("seed open");
+            scan_merge_drift(&entries, None, Some(&cache), |_, _, _, _| {
+                panic!("query owed nothing: the listing answered")
+            })
+        };
+        assert!(scan_listing("wave 1 of 2").is_empty());
+        // An approved Retarget hand-off names the new node, not this one.
+        assert!(scan_listing("Fixes x-bbbb\n\nRetarget x-aaaa x-bbbb msg-123456").is_empty());
+        let records = scan_listing("Fixes x-bbbb x-aaaa");
+        assert_eq!(records.len(), 1, "{records:?}");
+        assert!(records[0].closeable());
+
+        let scan_query = |body: &str| {
+            scan_merge_drift(&entries, None, None, |pr, _, _, _| {
+                Ok(PrMergeState {
+                    number: pr,
+                    state: "MERGED".into(),
+                    url: None,
+                    merged_at: None,
+                    merge_sha: None,
+                    changed_files: Vec::new(),
+                    files_truncated: false,
+                    body: Some(body.to_string()),
+                })
+            })
+        };
+        assert!(scan_query("").is_empty());
+        assert_eq!(scan_query("Fixes: x-aaaa").len(), 1);
+
+        // A ref-less node matched by branch name holds to the same rule.
+        let refless = vec![open_node(json!({"cwd": "."}))];
+        let mut row = pr_row(11, "feature/x-aaaa", "MERGED");
+        row["body"] = json!("part 1 of 4");
+        let cache = ListingCache::new();
+        cache
+            .rows_for_with("merged", ".", |_| Ok(vec![row.clone()]))
+            .expect("seed merged");
+        assert!(reverse_map_unstamped(&refless, None, Some(&cache)).is_empty());
+    }
+
+    #[test]
+    fn scan_surfacing_refuses_a_repoless_query() {
+        let entries = vec![open_node(json!({"pr_number": 7}))];
+        let records = scan_merge_drift(&entries, None, None, |_, _, _, _| {
+            Err(PrReadError::new("gh down", "availability"))
+        });
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].pr_state, "UNKNOWN");
+        let error = records[0].error.as_deref().unwrap_or_default();
+        assert!(error.contains("no repo context"), "{error}");
+        assert_eq!(records[0].error_kind.as_deref(), Some("repository_context"));
+        assert!(!records[0].closeable());
+    }
+
+    #[test]
+    fn the_missing_verdict_heal_decision_table() {
+        let no_query = |_: i64, _: Option<&str>, _: Option<&str>, _: bool| {
+            panic!("query owed nothing: no primary-closed read was owed")
+        };
+        // A finished node records the branch-named open PR as a follow-up.
+        let done = json!({
+            "id": "x-aaaa",
+            "completed_at": "2026-09-12T00:00:00Z",
+            "pr_number": 1720,
+            "pr_url": "https://github.com/o/r/pull/1720",
+            "merge_status": "merged",
+        });
+        let heal = heal_for_missing_verdict(&done, 1813, None, ".", &no_query, &mut Vec::new())
+            .expect("done node earns a heal");
+        assert!(heal.followup);
+        assert!(!heal.rebind);
+        assert_eq!(heal.pr_number, 1813);
+        // An open node with no refs fills its primary.
+        let refless = open_node(json!({}));
+        let heal = heal_for_missing_verdict(&refless, 5, None, ".", &no_query, &mut Vec::new())
+            .expect("refless open node earns a fill");
+        assert!(!heal.followup && !heal.rebind);
+        // An open node whose primary closed rebinds.
+        let closed_primary = open_node(json!({
+            "pr_number": 7,
+            "pr_url": "https://github.com/o/r/pull/7",
+        }));
+        let closed_query = |pr: i64,
+                            _: Option<&str>,
+                            _: Option<&str>,
+                            _: bool|
+         -> Result<PrMergeState, PrReadError> {
+            Ok(PrMergeState {
+                number: pr,
+                state: "CLOSED".into(),
+                url: None,
+                merged_at: None,
+                merge_sha: None,
+                changed_files: Vec::new(),
+                files_truncated: false,
+                body: None,
+            })
+        };
+        let heal = heal_for_missing_verdict(
+            &closed_primary,
+            9,
+            None,
+            ".",
+            &closed_query,
+            &mut Vec::new(),
+        )
+        .expect("closed primary earns a rebind");
+        assert!(heal.rebind && !heal.followup);
+        // An open node whose primary is still open earns nothing.
+        let open_query = |pr: i64,
+                          _: Option<&str>,
+                          _: Option<&str>,
+                          _: bool|
+         -> Result<PrMergeState, PrReadError> {
+            Ok(PrMergeState {
+                number: pr,
+                state: "OPEN".into(),
+                url: None,
+                merged_at: None,
+                merge_sha: None,
+                changed_files: Vec::new(),
+                files_truncated: false,
+                body: None,
+            })
+        };
+        assert!(heal_for_missing_verdict(
+            &closed_primary,
+            9,
+            None,
+            ".",
+            &open_query,
+            &mut Vec::new()
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn a_done_node_heals_its_branch_named_open_pr_as_a_followup() {
+        let done = open_node(json!({
+            "completed_at": "2026-09-12T00:00:00Z",
+            "pr_number": 1720,
+            "pr_url": "https://github.com/o/r/pull/1720",
+            "cwd": ".",
+        }));
+        let entries = vec![
+            done,
+            open_node(json!({
+                "id": "x-bbbb",
+                "completed_at": "2026-09-12T00:00:00Z",
+                "cwd": "/nonexistent-dead-cwd",
+            })),
+        ];
+        let mut row = pr_row(1813, "shrink/x-aaaa-cli-net", "");
+        row["body"] = json!("");
+        let cache = ListingCache::new();
+        cache
+            .rows_for_with("open", ".", |_| Ok(vec![row.clone()]))
+            .expect("seed open");
+        let (heals, advisories) =
+            collect_open_binding_heals(&entries, None, Some(&cache), |_, _, _, _| {
+                panic!("query owed nothing: no primary-closed read was owed")
+            });
+        // The dead-cwd candidate is skipped, and the skip is loud.
+        assert!(
+            advisories
+                .iter()
+                .any(|a| a.contains("x-bbbb") && a.contains("cwd")),
+            "{advisories:?}"
+        );
+        assert_eq!(heals.len(), 1, "{heals:?}");
+        assert_eq!(heals[0].node_id, "x-aaaa");
+        assert_eq!(heals[0].pr_number, 1813);
+        assert!(heals[0].followup);
+        assert!(!heals[0].rebind);
+    }
+}
+
+/// One open-PR binding heal: a missing verdict on a node the PR resolves to.
+/// The exact repair a human did by hand with `update pr_number=<n>`, plus
+/// the follow-up record for a finished node whose branch names one open PR.
+#[derive(Debug, Clone)]
+pub(crate) struct OpenBindingHeal {
+    pub node_id: String,
+    pub pr_number: i64,
+    pub pr_url: Option<String>,
+    /// true when the node already carries refs and the primary PR closed:
+    /// the heal REBINDS instead of filling.
+    pub rebind: bool,
+    /// true when the node is finished: the heal records the open PR in
+    /// `additional_prs` and touches nothing else on the row.
+    pub followup: bool,
+}
+
+/// Discover open PRs that uniquely name an open, ref-less node. One gh
+/// listing per repo (same-repo worktrees share the call), under the same
+/// wall-clock budget as the merged reverse map. Returns (heals,
+/// advisories): advisories name ambiguity and gh read failures without
+/// mutating anything. Persisting the fills is the CALLER's job.
+pub(crate) fn collect_open_binding_heals(
+    entries: &[Value],
+    scope: Option<&BTreeSet<String>>,
+    listings: Option<&ListingCache>,
+    query: impl Fn(i64, Option<&str>, Option<&str>, bool) -> Result<PrMergeState, PrReadError>,
+) -> (Vec<OpenBindingHeal>, Vec<String>) {
+    // The repo_keys RefMut must drop before the loop: rows_for re-borrows
+    // it, and a borrow held across the loop panicked (exit 101) on every
+    // daemon sweep once the graph held a ref-less open-bound node.
+    let mut advisories: Vec<String> = Vec::new();
+    let (groups, cwd_by_nid, skipped_dead_cwd) = {
+        let mut fallback = HashMap::new();
+        let mut cache_memo;
+        let memo: &mut HashMap<String, String> = match listings {
+            Some(cache) => {
+                cache_memo = cache.repo_keys.borrow_mut();
+                &mut cache_memo
+            }
+            None => &mut fallback,
+        };
+        group_refless_by_repo(entries, scope, memo, true, true)
+    };
+    // A candidate the scan dropped for a dead cwd still names its warning
+    // forever; say why it was skipped, with the remedy, instead of silence.
+    for nid in &skipped_dead_cwd {
+        advisories.push(format!(
+            "open-binding scan skipped {nid}: its recorded cwd is missing or \
+             not a checkout (heal with: fno backlog update {nid} cwd=<path>)"
+        ));
+    }
+
+    let mut heals: Vec<OpenBindingHeal> = Vec::new();
+    let deadline = Instant::now() + REVERSE_MAP_BUDGET;
+    for (_key, nodes) in &groups {
+        if Instant::now() >= deadline {
+            let deferred: Vec<String> = groups
+                .iter()
+                .flat_map(|(_, ns)| ns.iter())
+                .filter_map(|i| entries[*i].get("id").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect();
+            advisories.push(format!(
+                "open-binding scan stopped at its {}s budget (gh is slow or degraded); deferred {} node(s) to a later sweep: {}",
+                REVERSE_MAP_BUDGET.as_secs(),
+                deferred.len(),
+                deferred.join(" ")
+            ));
+            break;
+        }
+        let Some(first) = nodes.first() else { continue };
+        let nid0 = entries[*first]
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let gh_cwd = cwd_by_nid
+            .get(&nid0)
+            .map(String::as_str)
+            .unwrap_or_default();
+        let rows = match listings {
+            Some(cache) => cache.rows_for("open", gh_cwd),
+            None => list_open_pr_branches(gh_cwd, 100),
+        };
+        let rows = match rows {
+            Ok(rows) => rows,
+            Err(e) => {
+                advisories.push(format!(
+                    "open-binding gh query failed ({gh_cwd}): {}",
+                    e.message
+                ));
+                continue;
+            }
+        };
+        for verdict in crate::org_board::prs::pr_binding_verdicts(&rows, entries) {
+            match verdict.verdict {
+                "ambiguous" => {
+                    if let Some(detail) = &verdict.detail {
+                        advisories.push(format!(
+                            "open PR #{} binding ambiguous: {detail}",
+                            verdict.number
+                        ));
+                    }
+                }
+                "missing" => {
+                    let Some(heal_nid) = &verdict.node_id else {
+                        continue;
+                    };
+                    let Some(node) = nodes.iter().find(|i| {
+                        entries[**i].get("id").and_then(Value::as_str) == Some(heal_nid.as_str())
+                    }) else {
+                        continue;
+                    };
+                    if let Some(heal) = heal_for_missing_verdict(
+                        &entries[*node],
+                        verdict.number,
+                        verdict.pr_url(),
+                        gh_cwd,
+                        &query,
+                        &mut advisories,
+                    ) {
+                        heals.push(heal);
+                    }
+                }
+                // A closed PR reopened after the closed-PR leg moved it aside.
+                "bound" => {
+                    let Some(heal_nid) = &verdict.node_id else {
+                        continue;
+                    };
+                    let moved_aside = nodes.iter().any(|i| {
+                        entries[*i].get("id").and_then(Value::as_str) == Some(heal_nid.as_str())
+                            && entries[*i]
+                                .get("pr_number")
+                                .and_then(Value::as_i64)
+                                .is_none()
+                    });
+                    if moved_aside {
+                        heals.push(OpenBindingHeal {
+                            node_id: heal_nid.clone(),
+                            pr_number: verdict.number,
+                            pr_url: verdict.pr_url().map(str::to_string),
+                            rebind: true,
+                            followup: false,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    (heals, advisories)
+}
+
+/// The heal a `missing` verdict earns, decided purely from the node row:
+/// a finished node records the open PR as a follow-up (`additional_prs`,
+/// no other field moves); an open node with no refs fills its primary; an
+/// open node whose primary closed rebinds; an open node whose primary is
+/// still open earns nothing (its second open PR reads ambiguous upstream).
+/// `None` skips. `query` is the primary-closed read, already injected.
+fn heal_for_missing_verdict(
+    node: &Value,
+    number: i64,
+    url: Option<&str>,
+    gh_cwd: &str,
+    query: &impl Fn(i64, Option<&str>, Option<&str>, bool) -> Result<PrMergeState, PrReadError>,
+    advisories: &mut Vec<String>,
+) -> Option<OpenBindingHeal> {
+    let refs = node_pr_refs_of(node);
+    if !node_is_open(node) {
+        return Some(OpenBindingHeal {
+            node_id: node.get("id").and_then(Value::as_str)?.to_string(),
+            pr_number: number,
+            pr_url: url.map(str::to_string),
+            rebind: false,
+            followup: true,
+        });
+    }
+    if !refs.is_empty() {
+        let closed = primary_closed(node, gh_cwd, query, advisories);
+        if !closed {
+            return None;
+        }
+    }
+    Some(OpenBindingHeal {
+        node_id: node.get("id").and_then(Value::as_str)?.to_string(),
+        pr_number: number,
+        pr_url: url.map(str::to_string),
+        rebind: !refs.is_empty(),
+        followup: false,
+    })
+}
+
+/// The rebind gate: the node's primary PR must have CLOSED on GitHub
+/// before an open PR may rebind it. A read failure is an advisory, never
+/// a bind.
+fn primary_closed(
+    node: &Value,
+    cwd: &str,
+    query: &impl Fn(i64, Option<&str>, Option<&str>, bool) -> Result<PrMergeState, PrReadError>,
+    advisories: &mut Vec<String>,
+) -> bool {
+    let Some(number) = node.get("pr_number").and_then(Value::as_i64) else {
+        // The closed-PR leg already moved the primary: a replacement may bind.
+        return node
+            .get("additional_prs")
+            .and_then(Value::as_array)
+            .is_some_and(|rows| {
+                rows.iter()
+                    .all(|r| r.get("merge_status").and_then(Value::as_str) == Some("closed"))
+            });
+    };
+    match query(number, None, Some(cwd), false) {
+        Ok(state) => state.state == "CLOSED",
+        Err(e) => {
+            let nid = node.get("id").and_then(Value::as_str).unwrap_or("?");
+            advisories.push(format!(
+                "open-binding rebind: {nid} PR #{number} unreadable ({})",
+                e.message
+            ));
+            false
+        }
+    }
+}

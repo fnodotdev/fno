@@ -1,0 +1,831 @@
+//! The node's command against the payload's command, decided in one place: a
+//! `--node` spawn runs the command the node derives, unless the payload names
+//! another family command, which wins with a notice. The Python
+//! seam projects the lifecycle table's answer (never a copy of it), the
+//! seed's slot facts and the team/resume flags; this module answers
+//! pass / profile / compose / refuse, and the seam applies the answer
+//! verbatim before any lane is chosen. `decide_in` is pure over its input; the
+//! Rust client's own check (`spawn_payload_command_notice`) reads the node's
+//! graph row and the blueprint floor, then asks `decide` for the answer.
+
+use serde_json::{json, Value};
+use std::path::Path;
+
+use crate::law_match::matches_node_id_shape;
+use crate::provider::parse_command_token;
+
+/// The node's command as one canonical `/word`, reusing the seed parser so no
+/// second spelling rule exists. An unparseable stored command is compared as-is.
+fn canonical(node_command: &str) -> String {
+    match parse_command_token(node_command.trim()) {
+        Some((word, _)) => format!("/{word}"),
+        None => node_command.trim().to_string(),
+    }
+}
+
+/// The seed text at `argv[seed_index]`, with the `--message=` prefix
+/// stripped for the `message_eq` form. `None` when there is no slot.
+fn seed_text(payload: &Value) -> Option<String> {
+    // A nodeless derive caller may send bare argv: the seed is then the first
+    // command-shaped token, and a flag value never parses as a command.
+    if payload.get("seed_index").and_then(Value::as_u64).is_none() {
+        let argv = payload.get("argv")?.as_array()?;
+        return argv.iter().skip(1).find_map(|tok| {
+            let raw = tok.as_str()?;
+            let text = raw.strip_prefix("--message=").unwrap_or(raw);
+            parse_command_token(text.split_whitespace().next()?).map(|_| text.to_string())
+        });
+    }
+    let index = payload.get("seed_index")?.as_u64()? as usize;
+    let argv = payload.get("argv")?.as_array()?;
+    let raw = argv.get(index)?.as_str()?.to_string();
+    if payload.get("seed_form").and_then(Value::as_str) == Some("message_eq") {
+        Some(raw.strip_prefix("--message=").unwrap_or(&raw).to_string())
+    } else {
+        Some(raw)
+    }
+}
+
+/// Liberal pre-check mirroring Python's `has_node_id_prefix`: a prefix-like
+/// head, one dash, and a non-strict suffix, so the short test/legacy ids that
+/// resolve by exact graph lookup stay derivable. Dash-less ids are covered by
+/// the shared well-formed gate. A FORMAT check, not an identity check;
+/// resolution stays a graph lookup on the Python side.
+fn looks_like_node_id(s: &str) -> bool {
+    if crate::backlog::node_ref::is_wellformed_node_id(s) {
+        return true;
+    }
+    let Some((prefix, suffix)) = s.split_once('-') else {
+        return false;
+    };
+    prefix.len() >= 1
+        && prefix.len() <= 8
+        && prefix.starts_with(|c: char| c.is_ascii_lowercase())
+        && prefix
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && !suffix.is_empty()
+        && suffix
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+}
+
+/// Sentence punctuation the spawn template leaves on the argument token
+/// (`/fno:target x-cccc. Plan: ...`): prose, not part of the id.
+fn trim_sentence_punct(s: &str) -> &str {
+    s.trim_end_matches(['.', ',', ';', ':', '!', '?'])
+}
+
+/// Insert `flag value` into the argv before the `--` fence when one is
+/// present, else append: a client-side flag must never land inside the
+/// harness's own tokens.
+fn with_flag_inserted(mut argv: Vec<String>, flag: &str, value: &str) -> Vec<String> {
+    let at = argv
+        .iter()
+        .position(|tok| tok == "--")
+        .filter(|&i| i > 0)
+        .unwrap_or(argv.len());
+    argv.insert(at, flag.to_string());
+    argv.insert(at + 1, value.to_string());
+    argv
+}
+
+/// Remove `flag` and the value that follows it from the argv.
+fn without_flag(mut argv: Vec<String>, flag: &str) -> Vec<String> {
+    if let Some(i) = argv.iter().position(|tok| tok == flag) {
+        argv.drain(i..(i + 2).min(argv.len()));
+    }
+    argv
+}
+
+/// The strict first-line scan: after a leading command token, the first
+/// node-shaped token names the spawn's node even past a modifier (`L`).
+/// Reuses `resolve_node`'s scanner so no second spelling rule exists.
+pub(crate) fn scan_seed_node(text: &str) -> Option<String> {
+    let toks: Vec<&str> = text
+        .lines()
+        .next()
+        .unwrap_or("")
+        .split_whitespace()
+        .collect();
+    if !toks
+        .first()
+        .is_some_and(|t| parse_command_token(t).is_some())
+    {
+        return None;
+    }
+    // The node slot is the argument right after the command, once past a
+    // single modifier token. A quoted token opens free-text prose: the
+    // slot is a title, and no node-shaped word inside it binds.
+    toks.iter()
+        .skip(1)
+        .take(2)
+        .take_while(|tok| !tok.starts_with(['"', '\'']))
+        .find_map(|tok| {
+            let word = tok
+                .trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase();
+            matches_node_id_shape(&word).then_some(word)
+        })
+}
+
+/// The nodeless arm: read the seed's command argument as the node the
+/// spawn is FOR, and answer compose with the flag already inserted, so the
+/// Python side applies the answer generically and both lanes see an
+/// explicit node afterwards. A seed naming no node answers pass with a
+/// `derive_reason`. A strict-scan name binds unconditionally: the row gate
+/// on the Python side re-decides with real row facts. Pure over the payload.
+fn derive_from_seed(payload: &Value, seed: Option<String>, rows: &[Value]) -> Value {
+    let pass = |reason: String| json!({"action": "pass", "derive_reason": reason});
+    // An explicit `--substrate headless` (or its `--once` spelling) names the
+    // one-shot lane the Rust client routes per harness - footnote's only arm
+    // is one of them. Composing `--node` here would pin the spawn to the
+    // Python lane, which seats no headless footnote and refuses it with the
+    // thread-lane text before any launch. The seed keeps naming the node; a
+    // /target worker claims it at its own init.
+    if explicit_headless(&argv_of(payload)) {
+        return pass("explicit headless spawn keeps its lane; the seed keeps the node".into());
+    }
+    let Some(text) = seed.filter(|t| !t.trim().is_empty()) else {
+        return pass("no seed".into());
+    };
+    let toks: Vec<&str> = text.split_whitespace().collect();
+    if toks.iter().any(|tok| *tok == "--reconcile") {
+        return pass("reconcile seed names its own command".into());
+    }
+    let Some((first, _)) = toks.first().and_then(|t| parse_command_token(t)) else {
+        return pass("prose seed names no command".into());
+    };
+    let family: Vec<String> = payload
+        .get("family")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    if !family.iter().any(|f| f == &format!("/{first}")) {
+        return pass(format!("command /{first} is outside the target family"));
+    }
+    let scanned = scan_seed_node(&text);
+    let arg = scanned
+        .as_deref()
+        .or_else(|| toks.get(1).map(|t| trim_sentence_punct(t)));
+    match arg.filter(|a| looks_like_node_id(a)) {
+        Some(id) => {
+            if scanned.as_deref() == Some(id) {
+                // A shape-valid scan name rides with its source so the seam
+                // marks the node payload-named and the row gate refuses a
+                // typo instead of degrading it onto the default lane.
+                let argv = with_flag_inserted(argv_of(payload), "--node", id);
+                return json!({"action": "compose", "argv": argv, "source": "payload"});
+            }
+            let named = rows
+                .iter()
+                .any(|r| r.get("id").and_then(Value::as_str) == Some(id));
+            if !named {
+                // A derived name with no row proceeds exactly as before the
+                // derivation existed; the flag carries the receipt.
+                let reason = format!("{id} names no readable backlog row (derived from the seed)");
+                let argv = with_flag_inserted(
+                    without_flag(argv_of(payload), "--node"),
+                    "--node-reason",
+                    &reason,
+                );
+                return json!({"action": "compose", "argv": argv});
+            }
+            let argv = with_flag_inserted(argv_of(payload), "--node", id);
+            json!({"action": "compose", "argv": argv})
+        }
+        None => pass(format!(
+            "seed names no node argument (read {})",
+            arg.unwrap_or("nothing")
+        )),
+    }
+}
+
+fn argv_of(payload: &Value) -> Vec<String> {
+    payload
+        .get("argv")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .map(|v| v.as_str().unwrap_or("").to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether the argv pins the one-shot headless lane: the long spelling, the
+/// pre-substrate `--once`/-o the client maps to headless, or the trailing
+/// positional the seam normalizes into `--substrate headless`. A fence ends
+/// the scan: past `--`/`--argv` every token is seed or provider payload,
+/// never one of fno's flags (the same boundary the Python seam's substrate
+/// scan draws).
+fn explicit_headless(argv: &[String]) -> bool {
+    let mut i = 0;
+    while i < argv.len() {
+        match argv[i].as_str() {
+            "--argv" | "--" => return false,
+            "--once" | "-o" => return true,
+            "--substrate" => {
+                if argv.get(i + 1).map(String::as_str) == Some("headless") {
+                    return true;
+                }
+                i += 2;
+                continue;
+            }
+            other => {
+                if other.strip_prefix("--substrate=") == Some("headless") {
+                    return true;
+                }
+            }
+        }
+        i += 1;
+    }
+    // The trailing-positional spelling: `... <seed> headless` normalizes to
+    // the flag form before any lane is chosen, so the raw argv names
+    // headless only in this last token. A non-command one-token seed spelled
+    // `headless` derives no node either way, so a stray match there is
+    // harmless.
+    argv.last().map(String::as_str) == Some("headless")
+}
+
+pub fn decide(payload: &Value) -> Value {
+    let nodeless = payload
+        .get("node")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .is_empty();
+    let rows = if nodeless {
+        {
+            let wanted = seed_text(payload)
+                .and_then(|text| {
+                    scan_seed_node(&text).or_else(|| {
+                        text.split_whitespace()
+                            .nth(1)
+                            .map(trim_sentence_punct)
+                            .map(str::to_string)
+                    })
+                })
+                .unwrap_or_default();
+            crate::graph_store::read_rows_where(
+                &crate::graph_get::default_graph_path(),
+                &crate::backlog::RowQuery {
+                    filter: crate::backlog::api::NodeFilter {
+                        id_in: Some(vec![wanted]),
+                        ..Default::default()
+                    },
+                    fields: Some(["id"].into_iter().map(str::to_string).collect()),
+                    with_blockers: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap_or_default()
+        }
+    } else {
+        Vec::new()
+    };
+    decide_in(payload, &rows)
+}
+
+/// [`decide`] over a handed-in row set, so a test can pin a fixture and the
+/// nodeless arm never touches the machine store.
+fn decide_in(payload: &Value, rows: &[Value]) -> Value {
+    let node = payload
+        .get("node")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    // A node the payload named (not the --node flag) gets refusals that
+    // point at the payload, so the remedy names what to fix.
+    let from_payload = payload.get("node_source").and_then(Value::as_str) == Some("payload");
+
+    // 1. Team and resume spawns pass unchanged: their flags already name
+    //    the work profile, and the payload carries them as facts.
+    let argv: Vec<String> = payload["argv"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|t| t.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    if payload.get("role").and_then(Value::as_bool) == Some(true)
+        || crate::spawn_compose::argv_has_team(&argv)
+        || payload.get("resume").and_then(Value::as_bool) == Some(true)
+    {
+        return json!({"action": "pass"});
+    }
+
+    let seed = seed_text(payload);
+
+    // 1b. The nodeless arm: the seed names the node, so derive it; the row
+    //     check rides the store rows, and a name with no row answers the
+    //     receipt so the spawn proceeds exactly as before.
+    if node.is_empty() {
+        return derive_from_seed(payload, seed, rows);
+    }
+
+    // 2. The de-stub pass spells its own command; its seed carries the token.
+    if let Some(text) = &seed {
+        if text.split_whitespace().any(|tok| tok == "--reconcile") {
+            return json!({"action": "pass"});
+        }
+    }
+
+    // 3. A seed the lifecycle family does not own passes unchecked: only a
+    //    leading /target or /blueprint claims the node's command.
+    if let Some(text) = &seed {
+        if let Some((first, _)) = text.split_whitespace().next().and_then(parse_command_token) {
+            let family: Vec<String> = payload
+                .get("family")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !family.iter().any(|f| f == &format!("/{first}")) {
+                return json!({"action": "pass"});
+            }
+        }
+    }
+
+    // 4-6. Unknown means refuse, the spawn-gate posture: a missing row, a
+    //    derivation error, or a node with no command is not evidence of
+    //    /target.
+    if payload.get("row_found").and_then(Value::as_bool) != Some(true) {
+        let message = if from_payload {
+            format!(
+                "the payload names {node}, but no readable backlog row has that id; \
+                 fix the id, or pass the work as prose"
+            )
+        } else {
+            format!(
+                "--node {node} names no readable backlog row; an unknown node is not evidence of a command"
+            )
+        };
+        return json!({"action": "refuse", "message": message});
+    }
+    if let Some(err) = payload
+        .get("derive_error")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+    {
+        return json!({"action": "refuse", "message": format!("--node {node}: {err}")});
+    }
+    let raw_command = payload
+        .get("effective_command")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            payload
+                .get("stored_command")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+        });
+    let node_command = match raw_command.map(canonical) {
+        Some(v) => v,
+        None => {
+            return json!({"action": "refuse", "message": format!(
+                "--node {node} declares no dispatch command; encode one with fno backlog update {node} dispatch_command=<command>")});
+        }
+    };
+
+    // 7. A family command in the payload that differs from the node's
+    //    command wins: the caller named it. The pass carries a notice.
+    if let Some(text) = &seed {
+        if let Some((first, _)) = text.split_whitespace().next().and_then(parse_command_token) {
+            let family: Vec<String> = payload
+                .get("family")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            if family.iter().any(|f| f == &format!("/{first}")) {
+                if format!("/{first}") == node_command {
+                    return json!({"action": "pass"});
+                }
+                let notice = if from_payload {
+                    format!("{node} derives {node_command}; running /{first} as named")
+                } else {
+                    format!(
+                        "--node {node} derives {node_command}; running /{first} as the payload names it"
+                    )
+                };
+                return json!({"action": "pass", "notice": notice});
+            }
+        }
+    }
+
+    let word = node_command.trim_start_matches('/').to_string();
+
+    // 8. No seed: the profile routes by the derived command; the door keeps
+    //    rendering the command (it also carries the brief env).
+    match seed {
+        Some(text) if !text.trim().is_empty() => {
+            // 9. Prose: the node's command goes in front, a blank line, then
+            //    the caller's text, in the slot it arrived in.
+            let composed = format!("/fno:{word} {node}\n\n{text}");
+            let mut argv = argv_of(payload);
+            if let Some(slot) = payload.get("seed_index").and_then(Value::as_u64) {
+                if let Some(tok) = argv.get_mut(slot as usize) {
+                    if payload.get("seed_form").and_then(Value::as_str) == Some("message_eq")
+                        && tok.starts_with("--message=")
+                    {
+                        *tok = format!("--message={composed}");
+                    } else {
+                        *tok = composed;
+                    }
+                }
+            }
+            json!({"action": "compose", "verb": word, "argv": argv})
+        }
+        _ => json!({"action": "profile", "verb": word}),
+    }
+}
+
+/// The notice for a payload whose family command differs from the command its
+/// node derives, for a caller that never crossed the seam, so a direct client
+/// call names the mismatch the seam would have named. A node with no row, a
+/// derivation that abstains, and a seed outside the family all answer `None`.
+pub fn payload_command_notice(
+    seed: &str,
+    flag_node: Option<&str>,
+    skips_check: bool,
+    row: Option<&Value>,
+    floor: &str,
+) -> Option<String> {
+    let flag_node = flag_node.map(str::trim).filter(|n| !n.is_empty());
+    let node = match flag_node {
+        Some(node) => node.to_string(),
+        None => scan_seed_node(seed)?,
+    };
+    let command = match crate::backlog_ready::effective_command_with_floor(row?, floor) {
+        Ok((Some(command), _)) => command,
+        _ => return None,
+    };
+    let node_source = flag_node.map_or(json!("payload"), |_| Value::Null);
+    let payload = json!({
+        "node": node, "row_found": true, "effective_command": command,
+        "stored_command": null, "derive_error": null,
+        "node_source": node_source,
+        "family": ["/target", "/blueprint"], "role": skips_check, "resume": false,
+        "argv": ["spawn", seed], "seed_index": 1, "seed_form": "positional",
+    });
+    let answer = decide_in(&payload, &[]);
+    answer
+        .get("notice")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+/// [`payload_command_notice`] over a spawn request's params: reads the node's
+/// graph row and the operator's blueprint floor from `cwd`'s config.
+pub fn spawn_payload_command_notice(params: &Value, cwd: &Path) -> Option<String> {
+    let seed = params.get("message").and_then(Value::as_str)?;
+    let flag_node = params.get("node").and_then(Value::as_str);
+    let node = match flag_node.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(node) => node.to_string(),
+        None => scan_seed_node(seed)?,
+    };
+    let row = crate::spawn_compose::graph_row_for(&node)?;
+    // The floor is the node's project's, the same config the Python door
+    // loads from the row's cwd; the caller's cwd answers only a row with none.
+    let project = row
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(Path::new)
+        .filter(|p| p.is_dir())
+        .unwrap_or(cwd);
+    let floor = crate::agents_config::config_lookup(project, &["dispatch", "blueprint_floor"])
+        .and_then(|v| v.as_str().map(|s| s.trim().to_string()))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR.to_string());
+    payload_command_notice(
+        seed,
+        flag_node,
+        spawn_skips_command_check(params),
+        Some(&row),
+        &floor,
+    )
+}
+
+/// A resume or role-bearing spawn names its work profile by flag, so the seam
+/// passes it without comparing the payload command. A promoted codex thread
+/// reaches the client carrying `role_level` / `role_scope`.
+fn spawn_skips_command_check(params: &Value) -> bool {
+    ["resume_id", "role_level", "role_scope", "promote"]
+        .iter()
+        .any(|key| params.get(*key).is_some())
+}
+
+/// The spawn cwd guard's answer for a node-named spawn.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SpawnNodeCwd {
+    /// No node named, or the id names no readable row with a cwd: the
+    /// pre-existing default (the caller repo's canonical) applies untouched.
+    Unnamed,
+    /// Dispatch from the node's project dir.
+    Project(std::path::PathBuf),
+    /// The caller cwd sits in a different git repo than the node's project;
+    /// the message names both. Printed and refused, never dispatched.
+    Foreign(String),
+}
+
+/// The launch dir for a spawn whose payload names a node, and whether the
+/// caller must be refused instead. The node comes from [`resolve_node`]
+/// (explicit flag, then the seed's first-line scan), the project cwd from the
+/// node's graph row, and refuse-vs-dispatch from the two repo roots: a caller
+/// inside ANOTHER git repo is refused naming both paths (the 2026-09-27
+/// incident dispatched a node's worker into the caller's private config repo,
+/// whose "canonical" is the caller-repo-relative default), while a caller in
+/// the node's own repo - any worktree - or outside git entirely dispatches
+/// from the node's project cwd. [`spawn_node_cwd`] is the production shape
+/// over the machine graph; this pure core is the testable one.
+fn spawn_node_cwd_in(
+    payload: &Value,
+    caller: &Path,
+    rows: &[Value],
+    repo_of: &dyn Fn(&Path) -> Option<std::path::PathBuf>,
+) -> SpawnNodeCwd {
+    let resolved = resolve_node(payload);
+    let node = resolved
+        .get("node")
+        .and_then(Value::as_str)
+        .filter(|n| !n.is_empty());
+    let Some(node) = node else {
+        return SpawnNodeCwd::Unnamed;
+    };
+    let Some(row) = rows
+        .iter()
+        .find(|r| r.get("id").and_then(Value::as_str) == Some(node))
+    else {
+        return SpawnNodeCwd::Unnamed;
+    };
+    let Some(cwd) = row
+        .get("cwd")
+        .and_then(Value::as_str)
+        .filter(|c| !c.trim().is_empty())
+    else {
+        return SpawnNodeCwd::Unnamed;
+    };
+    let project = std::path::PathBuf::from(cwd);
+    if let (Some(caller_repo), Some(node_repo)) = (repo_of(caller), repo_of(&project)) {
+        if caller_repo != node_repo {
+            return SpawnNodeCwd::Foreign(format!(
+                "the prompt names node {node} in project {}, but this shell \
+                 stands in another repo ({}); cd into the node's project, or \
+                 pass --cwd / --here to dispatch deliberately",
+                project.display(),
+                caller_repo.display(),
+            ));
+        }
+    }
+    SpawnNodeCwd::Project(project)
+}
+
+/// The spawn PARAMS (the JSON-RPC shape: `message`, optional `node`)
+/// projected onto the seed payload `resolve_node` reads: they never carry
+/// `argv`/`seed_index` themselves, so the raw params answer Null and the
+/// guard would never fire.
+fn project_params(params: &Value) -> Value {
+    json!({
+        "argv": ["spawn", params.get("message").and_then(Value::as_str).unwrap_or("")],
+        "seed_index": 1,
+        "seed_form": "positional",
+        "flag_node": params.get("node").cloned().unwrap_or(Value::Null),
+        "env_node": Value::Null,
+    })
+}
+
+/// [`spawn_node_cwd_in`] over the machine graph and the real git resolution.
+pub fn spawn_node_cwd(params: &Value, caller: &Path) -> SpawnNodeCwd {
+    let payload = project_params(params);
+    let resolved = resolve_node(&payload);
+    let wanted = resolved
+        .get("node")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .into_iter()
+        .collect();
+    let rows = crate::graph_store::read_rows_where(
+        &crate::graph_get::default_graph_path(),
+        &crate::backlog::RowQuery {
+            filter: crate::backlog::api::NodeFilter {
+                id_in: Some(wanted),
+                ..Default::default()
+            },
+            fields: Some(["id", "cwd"].into_iter().map(str::to_string).collect()),
+            with_blockers: true,
+            ..Default::default()
+        },
+    )
+    .unwrap_or_default();
+    spawn_node_cwd_in(&payload, caller, &rows, &crate::paths::canonical_repo_root)
+}
+
+/// Which node does this spawn work, answered with the source that named it:
+/// a non-empty `flag_node` wins, then the first node-shaped token on the
+/// seed's first line (modifier tokens such as `L` never match the shape),
+/// then a non-empty `env_node`. Pure over the payload: row resolution stays
+/// a graph lookup on the caller's side, so a null answer routes nothing.
+pub fn resolve_node(payload: &Value) -> Value {
+    let named = |key: &str| -> Option<String> {
+        payload
+            .get(key)
+            .and_then(Value::as_str)
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    if let Some(flag) = named("flag_node") {
+        return json!({"node": flag, "source": "flag"});
+    }
+    if let Some(text) = seed_text(payload) {
+        if let Some(word) = scan_seed_node(&text) {
+            return json!({"node": word, "source": "payload"});
+        }
+    }
+    if let Some(env) = named("env_node") {
+        return json!({"node": env, "source": "env"});
+    }
+    json!({"node": Value::Null, "source": Value::Null})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{json, Map};
+    use std::path::PathBuf;
+
+    fn decide_map(payload: Value) -> Map<String, Value> {
+        decide_in(&payload, &[])
+            .as_object()
+            .cloned()
+            .expect("decision is an object")
+    }
+
+    /// The shared shape: node x-1 derives /blueprint, no error, no team.
+    fn base() -> Value {
+        json!({
+            "node": "x-1", "row_found": true, "effective_command": "/blueprint",
+            "stored_command": "/blueprint", "derive_error": null,
+            "family": ["/target", "/blueprint"], "role": false, "resume": false,
+        })
+    }
+
+    // --- AC1-HP --------------------------------------------------------- //
+
+    #[test]
+    fn disagreeing_family_command_warns_and_proceeds() {
+        let mut p = base().clone();
+        p["argv"] = json!(["spawn", "w", "/fno:target x-1", "--node", "x-1"]);
+        p["seed_index"] = json!(2);
+        p["seed_form"] = json!("positional");
+        let out = Value::Object(decide_map(p));
+        assert_eq!(out.pointer("/action").and_then(Value::as_str), Some("pass"));
+        let msg = out.pointer("/notice").and_then(Value::as_str).unwrap();
+        assert!(msg.contains("/target"), "{msg}");
+        assert!(msg.contains("/blueprint"), "{msg}");
+    }
+
+    // --- AC2-EDGE ------------------------------------------------------- //
+
+    #[test]
+    fn unknown_node_refuses() {
+        let mut p = base().clone();
+        p["row_found"] = json!(false);
+        let out = decide_map(p);
+        assert_eq!(out["action"], "refuse");
+        assert!(out["message"].as_str().unwrap().contains("x-1"));
+    }
+
+    // --- the nodeless derive arm --------------------------------------- //
+
+    // --- the explicit headless lane ------------------------------------- //
+
+    // --- resolve_node: which node, and who named it ---------------------- //
+
+    fn resolved(payload: Value) -> Map<String, Value> {
+        resolve_node(&payload)
+            .as_object()
+            .cloned()
+            .expect("answer is an object")
+    }
+
+    fn resolve_payload(seed: &str, flag: Value, env: Value) -> Value {
+        json!({
+            "argv": ["spawn", "--name", "w", seed],
+            "seed_index": 3,
+            "seed_form": "positional",
+            "flag_node": flag,
+            "env_node": env,
+        })
+    }
+
+    #[test]
+    fn flag_wins_over_payload_and_env() {
+        let out = resolved(resolve_payload(
+            "/fno:target x-2",
+            json!("x-1"),
+            json!("x-3"),
+        ));
+        assert_eq!(out["node"], "x-1");
+        assert_eq!(out["source"], "flag");
+    }
+
+    #[test]
+    fn a_quoted_title_never_binds_a_node_shaped_word() {
+        // Free text after the command is a title, not a node slot: a
+        // node-shaped word inside it stays prose.
+        for seed in [
+            "/fno:target \"stop treating x-3333 as a node\"",
+            "/fno:target fix the x-3333 bug",
+            "/fno:target L \"add x-4444 later\"",
+        ] {
+            let out = resolved(resolve_payload(seed, Value::Null, Value::Null));
+            assert_eq!(out["node"], Value::Null, "{seed}");
+            assert_eq!(out["source"], Value::Null, "{seed}");
+        }
+    }
+
+    // --- node_source: refusals name the payload -------------------------- //
+
+    // --- spawn_node_cwd: the node-named spawn's launch dir ---------------- //
+
+    /// The guard over pinned rows and a repo resolver modelling two canonical
+    /// repos: every path under `/repo` (any worktree) maps to `/repo`, every
+    /// path under `/other` to `/other`, anything else to None.
+    fn cwd_guard(payload: Value, caller: &str) -> SpawnNodeCwd {
+        let rows = vec![
+            json!({"id": "x-1111", "cwd": "/repo/footnote"}),
+            json!({"id": "x-2222", "cwd": ""}),
+            json!({"id": "x-3333", "cwd": "/other/project"}),
+        ];
+        spawn_node_cwd_in(&payload, Path::new(caller), &rows, &|p: &Path| {
+            if p.starts_with("/repo") {
+                Some(PathBuf::from("/repo"))
+            } else {
+                p.starts_with("/other").then(|| PathBuf::from("/other"))
+            }
+        })
+    }
+
+    fn seed_payload(seed: &str, flag_node: Value) -> Value {
+        json!({
+            "argv": ["spawn", seed],
+            "seed_index": 1,
+            "seed_form": "positional",
+            "flag_node": flag_node,
+            "env_node": Value::Null,
+        })
+    }
+
+    #[test]
+    fn foreign_repo_caller_is_refused_naming_both() {
+        let got = cwd_guard(seed_payload("/fno:target x-3333", Value::Null), "/repo/wt");
+        match got {
+            SpawnNodeCwd::Foreign(msg) => {
+                assert!(msg.contains("/other/project"), "{msg}");
+                assert!(msg.contains("another repo (/repo)"), "{msg}");
+            }
+            other => panic!("expected Foreign, got {other:?}"),
+        }
+    }
+
+    // --- the Rust client's own refusal ------------------------------------ //
+
+    #[test]
+    fn a_payload_command_the_node_does_not_derive_warns_and_proceeds() {
+        let row = json!({"id": "x-aaaa", "dispatch_command": "/blueprint", "difficulty": "high"});
+        let msg = payload_command_notice("$fno:target x-aaaa", None, false, Some(&row), "high")
+            .expect("a /target payload on a /blueprint node names the mismatch");
+        assert!(
+            msg.contains("x-aaaa derives /blueprint; running /target as named"),
+            "{msg}"
+        );
+        let flagged = payload_command_notice(
+            "$fno:target x-aaaa",
+            Some("x-aaaa"),
+            false,
+            Some(&row),
+            "high",
+        )
+        .expect("--node names it too");
+        assert!(
+            flagged.contains("--node x-aaaa derives /blueprint"),
+            "{flagged}"
+        );
+    }
+
+    // --- the production params shape ------------------------------------- //
+}

@@ -1,0 +1,304 @@
+//! `fno-agents-worker` entrypoint. Three lanes:
+//!
+//! - `--keeper`: the keeper. Owns a hosted child's pty master in its own
+//!   process (setsid'd, SIGHUP-immune), so the child outlives whatever
+//!   launched it and a fresh mux server re-adopts a pane instead of
+//!   re-spawning it. `--pane` is the alias the mux server's call sites spell
+//!   it by; a pane-less lane-B thread is the same keeper with no pane behind
+//!   it. This is the lane retired at G4 and restored once the crashes it
+//!   predicted kept biting: the deleted worker.rs module doc named the undo
+//!   ("supervisor fd-keeper"). Callers build this argv; humans never type it.
+//! - `--stream`: the claude stream-json adoption lane.
+//! - `--store-keeper`: the graph store keeper (graph_keeper.rs). Owns one
+//!   graph file, serves reads and locked mutations over its own socket, and
+//!   outlives the daemon the same way the pane keeper does. Callers build
+//!   this argv; humans never type it.
+//! - `--store-exec`: the one-shot store lane (graph_keeper.rs). Serves ONE
+//!   store request on stdin/stdout and exits, so a client that must not
+//!   leave a resident process behind (the leak shape recorded 2026-09-17: a
+//!   keeper grows with requests served) still gets the full dispatch.
+//!   Callers build this argv; humans never type it.
+//! - `--law-exec`: the one-shot law-door lane (law_match.rs). Serves ONE
+//!   law request on stdin, prints the door's own answer, and exits with the
+//!   door's code. The front's `fno inbox law` commands spawn it, because the
+//!   mux never links the runtime (product boundary). Callers build this
+//!   argv; humans never type it.
+//! - `--mcp-exec`: the MCP channel family's process door (mcp/mod.rs).
+//!   `send` routes one stdin envelope to a registered channel (the exit
+//!   codes the deleted Python leg answered), `status` prints the sidecar
+//!   status JSON, `serve` runs the per-session stdio channel server CC
+//!   spawns, `sidecar` runs the per-user sidecar daemon the client
+//!   lazy-starts. The front's `fno agents mcp send` route and the client's
+//!   lazy-start build this argv; humans never type it.
+//! - `--paths-exec`: the one-shot paths lane (paths_cli.rs). Serves ONE
+//!   `config paths` command argv (emit-shell and shell-stub so far; siblings
+//!   still answer in Python) and exits with the command's code. The front's
+//!   `fno config paths <native-command>` spawns it. Callers build this argv;
+//!   humans never type it.
+//! - `--footnote-host <spec> <socket> <name>`: holds one fnh session open
+//!   over ACP stdio for a `-H footnote --substrate thread` row and serves it
+//!   on a unix socket (footnote_harness/thread.rs). Callers build this argv;
+//!   humans never type it.
+//! - `--muse-host <spec> <socket> <name>`: the same for one Muse session
+//!   over MSP (`muse serve`) for a `-H muse --substrate thread` row
+//!   (muse/host.rs).
+//!
+//! The worker ignores SIGHUP so a stray hangup (e.g. the controlling
+//! terminal going away) cannot take it - and therefore the PTY child -
+//! down. Outlasting the daemon is the whole point.
+
+use fno_agents::stream_worker::{self, SessionClaim, StreamWorkerConfig};
+use std::path::PathBuf;
+
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // Defensively ignore SIGHUP (both lanes): the worker must outlive the daemon
+    // and any terminal disconnect (the child's survival depends on this process
+    // living). SAFETY: SIG_IGN for SIGHUP is a standard, async-signal-safe call.
+    unsafe {
+        libc::signal(libc::SIGHUP, libc::SIG_IGN);
+    }
+
+    // `version [--json]`: report the baked-in build rev so `fno doctor update` can
+    // verify this bin is the SAME build as its triad siblings. Checked BEFORE
+    // the --stream gate so `version` is not rejected as "not --stream".
+    if matches!(
+        args.first().map(String::as_str),
+        Some("version" | "-V" | "--version")
+    ) {
+        fno_agents::version::print_version(fno_agents::json_output::requested(&args));
+        return;
+    }
+
+    // Four lanes: `--keeper` (the keeper: pty master ownership outlives the
+    // mux server; `--pane` is the alias its call sites spell it by),
+    // `--stream` (claude stream-json adoption, launched by the daemon's
+    // spawn_claude_stream_lane), `--store-keeper` (the resident graph
+    // store), and `--store-exec` (one store request, then exit).
+    // Everything else refuses, truthfully.
+    if args.iter().any(|a| a == "--store-keeper") {
+        if let Err(msg) = store_keeper_lane(&args) {
+            eprintln!("fno-agents-worker: {msg}");
+            std::process::exit(2);
+        }
+        return;
+    }
+    if args.iter().any(|a| a == "--store-exec") {
+        if let Err(msg) = store_exec_lane(&args) {
+            eprintln!("fno-agents-worker: {msg}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if args.iter().any(|a| a == "--law-exec") {
+        law_exec_lane();
+        return;
+    }
+    // The MCP channel family's process door: send | status | serve |
+    // sidecar. The front's `fno agents mcp` route and the client's
+    // lazy-start build this argv; humans type `fno agents mcp send`.
+    // Callers build this argv; humans never type it.
+    if args.iter().any(|a| a == "--mcp-exec") {
+        std::process::exit(fno_agents::mcp::run_mcp_exec(&args));
+    }
+    if let Some(idx) = args.iter().position(|a| a == "--law-exec-arg") {
+        let request = args
+            .get(idx + 1)
+            .map(|s| s.clone())
+            .unwrap_or_else(|| "fno-agents-worker: --law-exec-arg needs a request".to_string());
+        if args.get(idx + 1).is_none() {
+            eprintln!("{request}");
+            std::process::exit(2);
+        }
+        // The request rides argv so stdin stays INHERITED: the retract door
+        // proves the operator by the real terminal fd, which a piped stdin
+        // can never be.
+        std::process::exit(fno_agents::law_match::run_law_match_str(&request));
+    }
+    if args.iter().any(|a| a == "--keeper" || a == "--pane") {
+        if let Err(msg) = pane_keeper_lane(&args) {
+            eprintln!("fno-agents-worker: {msg}");
+            std::process::exit(2);
+        }
+        return;
+    }
+    if let Some(idx) = args.iter().position(|a| a == "--footnote-host") {
+        let [spec, socket, name] =
+            [1, 2, 3].map(|i| args.get(idx + i).cloned().unwrap_or_default());
+        if let Some(cwd) = spec_cwd(&spec) {
+            fno_agents::cargo_build_dirs::fill_pane_env(&cwd);
+        }
+        std::process::exit(fno_agents::footnote_harness::thread::run_host(
+            PathBuf::from(spec).as_path(),
+            PathBuf::from(socket).as_path(),
+            &name,
+        ));
+    }
+    if let Some(idx) = args.iter().position(|a| a == "--muse-host") {
+        let [spec, socket, name] =
+            [1, 2, 3].map(|i| args.get(idx + i).cloned().unwrap_or_default());
+        if let Some(cwd) = spec_cwd(&spec) {
+            fno_agents::cargo_build_dirs::fill_pane_env(&cwd);
+        }
+        std::process::exit(fno_agents::muse::host::run_host(
+            PathBuf::from(spec).as_path(),
+            PathBuf::from(socket).as_path(),
+            &name,
+        ));
+    }
+    if let Some(idx) = args.iter().position(|a| a == "--paths-exec") {
+        let rest: Vec<String> = args[idx + 1..].to_vec();
+        std::process::exit(fno_agents::paths_cli::run(&rest));
+    }
+    if !args.iter().any(|a| a == "--stream") {
+        eprintln!(
+            "fno-agents-worker: pass a lane: --keeper (alias --pane), --stream \
+             (claude stream-json adoption), --store-keeper (graph store), \
+             --store-exec (one store request), --law-exec (one law request on \
+             stdin), or --law-exec-arg <request> (one law request by argv, \
+             stdin inherited), --paths-exec <command> [args...] (one paths \
+             command, e.g. emit-shell), --footnote-host <spec> <socket> <name> \
+             (one footnote thread session), or --muse-host <spec> <socket> <name> \
+             (one muse thread session)"
+        );
+        std::process::exit(2);
+    }
+    run_stream_lane(args);
+}
+
+/// `--store-keeper` entrypoint: parse, then run the store keeper to
+/// completion. A normal lifecycle (Shutdown frame) ends inside with exit(0).
+fn store_keeper_lane(args: &[String]) -> Result<(), String> {
+    let cfg = fno_agents::graph_keeper::parse_store_keeper_args(args)?;
+    fno_agents::graph_keeper::run(cfg)
+}
+
+/// `--store-exec` entrypoint: parse, serve one request, exit. A failed
+/// request still prints its reply envelope, then exits 1 (the reply is the
+/// completion record; the exit code is for the shell, the stdout is for the
+/// client).
+fn store_exec_lane(args: &[String]) -> Result<(), String> {
+    let cfg = fno_agents::store_exec::parse_store_exec_args(args)?;
+    fno_agents::store_exec::run_exec(cfg)
+}
+
+/// `--law-exec` entrypoint: one law-door request on stdin, the door's own
+/// stdout and exit code out. The front's `fno inbox law` commands spawn this
+/// lane; the child reads stdin to EOF and answers, so write-then-read
+/// cannot deadlock.
+fn law_exec_lane() {
+    use std::io::Read;
+
+    let mut input = String::new();
+    if std::io::stdin().read_to_string(&mut input).is_err() {
+        eprintln!("fno-agents-worker: --law-exec could not read stdin");
+        std::process::exit(2);
+    }
+    std::process::exit(fno_agents::law_match::run_law_match_str(&input));
+}
+
+/// `--keeper` / `--pane` entrypoint: parse, settle the build env for the
+/// pane's own repo (before any thread starts, so the env write is sound),
+/// then run the keeper; every hosted harness child inherits the posture.
+fn pane_keeper_lane(args: &[String]) -> Result<(), String> {
+    let cfg = fno_agents::pane_keeper::parse_pane_args(args)?;
+    fno_agents::cargo_build_dirs::fill_pane_env(&cfg.cwd);
+    fno_agents::pane_keeper::run(cfg)
+}
+
+/// The spec file's `cwd`, for the host lanes' pane env posture: both host
+/// specs carry the session's work dir, so the lane keys the posture on the
+/// real repo without an argv change. An unreadable spec keeps today's
+/// behavior (the daemon's env inherits untouched).
+fn spec_cwd(spec: &str) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(spec).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    Some(PathBuf::from(value.get("cwd")?.as_str()?))
+}
+
+/// `fno-agents-worker --stream` entrypoint: the claude stream-json host lane.
+/// Usage (the daemon builds this argv; humans never type it):
+/// ```text
+/// fno-agents-worker --stream --short-id sw1 --home /path/.fno/agents \
+///     --cwd /work [--session-uuid <uuid>] [--holder <claim-holder>] \
+///     -- claude -p --resume <uuid> --input-format stream-json ...
+/// ```
+fn run_stream_lane(args: Vec<String>) {
+    let cfg = match parse_stream_args(args) {
+        Ok(cfg) => cfg,
+        Err(msg) => {
+            eprintln!("fno-agents-worker: {msg}");
+            std::process::exit(2);
+        }
+    };
+    // The daemon always passes --cwd, so the pane env posture keys on the
+    // session's real repo: a foreign-repo adoption gets the scrub instead of
+    // the daemon's fleet fill.
+    fno_agents::cargo_build_dirs::fill_pane_env(&cfg.cwd);
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("fno-agents-worker: cannot build runtime: {e}");
+            std::process::exit(1);
+        }
+    };
+    match rt.block_on(stream_worker::run(cfg)) {
+        Ok(()) => {}
+        Err(e) => {
+            eprintln!("fno-agents-worker: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn parse_stream_args(args: Vec<String>) -> Result<StreamWorkerConfig, String> {
+    let mut short_id = None;
+    let mut home = None;
+    let mut cwd = None;
+    let mut session_uuid = None;
+    let mut holder = None;
+    let mut argv: Vec<String> = Vec::new();
+
+    let mut it = args.into_iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--stream" => {} // mode selector, consumed in main
+            "--short-id" => short_id = it.next(),
+            "--home" => home = it.next().map(PathBuf::from),
+            "--cwd" => cwd = it.next().map(PathBuf::from),
+            "--session-uuid" => session_uuid = it.next(),
+            "--holder" => holder = it.next(),
+            "--" => {
+                argv.extend(it.by_ref());
+                break;
+            }
+            other => return Err(format!("unknown arg: {other}")),
+        }
+    }
+
+    let short_id = short_id.ok_or("missing --short-id")?;
+    let home = home.ok_or("missing --home")?;
+    let cwd = cwd.unwrap_or_else(std::env::temp_dir);
+    if argv.is_empty() {
+        return Err("missing provider argv after `--`".into());
+    }
+
+    // The claim uuid + holder travel as a pair: one without the other is
+    // meaningless (and would silently skip the orphan-time release).
+    let session_claim = match (session_uuid, holder) {
+        (Some(u), Some(h)) => Some(SessionClaim {
+            session_uuid: u,
+            claim_holder: h,
+        }),
+        (None, None) => None,
+        _ => return Err("--session-uuid and --holder must be given together".into()),
+    };
+
+    let mut cfg = StreamWorkerConfig::new(short_id, home, cwd, argv);
+    cfg.session_claim = session_claim;
+    Ok(cfg)
+}

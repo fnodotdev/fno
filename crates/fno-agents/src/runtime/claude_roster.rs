@@ -1,0 +1,1511 @@
+//! Read Claude Code's own daemon roster and resolve its `control.sock` /
+//! `control.key`.
+//!
+//! G1 held-attach substrate (epic, node). footnote ADOPTS an
+//! externally-spawned `claude --bg` worker by reading Claude's daemon roster
+//! (`~/.claude/daemon/roster.json`), then holds that worker's session live via a
+//! programmatic `control.sock` attach (see [`crate::claude_attach`]). This module
+//! is the read side: a typed roster, daemon-socket path resolution, and adopt
+//! selection. It never writes anything Claude owns.
+//!
+//! Wire contracts are pinned to claude-code **2.1.195** (readiness brief
+//! `internal/fno/design/2026-06-27-phase0-held-attach-readiness.md`). The roster
+//! schema below is `[confirmed]` against a live 14-worker roster; `control.sock`
+//! framing/auth are `[corroborated]`. On a version bump, re-tap the wire format
+//! first (`fno doctor` version-probe).
+//!
+//! ponytail: the one runtime-unverified property -- a held non-TTY attach
+//! defeats the ~1h idle auto-suspend window -- is the Phase-0 spike's job, not a
+//! code-shape concern. Nothing in this module asserts it.
+
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use serde::Deserialize;
+use serde_json::Value;
+
+const AGENTS_LIST_TIMEOUT: Duration = Duration::from_secs(15);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaudeAgentRow {
+    pub short_id: String,
+    pub state: Option<String>,
+    /// Full harness session id, name and cwd, when the listing carries them
+    /// the roster-side sweep needs the identity a registry row
+    /// would have had, and the registry-side surfaces ignore them.
+    pub session_id: Option<String>,
+    pub name: Option<String>,
+    pub cwd: Option<String>,
+    /// (mirror) Which claude account root this row was read from:
+    /// `None` = the ambient `~/.claude`, `Some(id)` = an isolated account's
+    /// config dir from the fno accounts config. Set by the union reader,
+    /// never by `parse_all_agents` (the parse stays dir-blind).
+    pub account: Option<String>,
+    pub pid: Option<u32>,
+    /// What the session waits on (`waitingFor`, e.g. "permission prompt").
+    /// A native thread worker has no pane to scrape, so this field is the
+    /// only witness that a prompt is up.
+    pub waiting_for: Option<String>,
+}
+
+impl ClaudeAgentRow {
+    pub fn new(short_id: &str, state: Option<&str>) -> Self {
+        Self {
+            short_id: short_id.to_string(),
+            state: state.map(|value| value.to_ascii_lowercase()),
+            session_id: None,
+            name: None,
+            cwd: None,
+            account: None,
+            pid: None,
+            waiting_for: None,
+        }
+    }
+
+    pub fn with_pid(mut self, pid: Option<u32>) -> Self {
+        self.pid = pid;
+        self
+    }
+
+    /// A hosted process stands behind this row. A session that died keeps
+    /// its last state (`blocked`, `working`) with no pid, so the state
+    /// alone lies. `carries_pids` is false for a listing whose rows carry
+    /// no pid field at all; that listing keeps the state-only reading.
+    pub fn has_live_process(&self, carries_pids: bool) -> bool {
+        let terminal = self.state.as_deref().is_some_and(is_terminal_roster_state);
+        !terminal && (!carries_pids || self.pid.is_some())
+    }
+}
+
+/// The one terminal-state set, shared by every death-evidence reader (rm's
+/// live gate, the reaper's stop confirmation). `blocked` is deliberately
+/// absent: a blocked row may be rotated and resumed, so it holds.
+pub fn is_terminal_roster_state(state: &str) -> bool {
+    matches!(state, "done" | "stopped" | "failed")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClaudeAgentsSnapshot {
+    Known {
+        rows: Vec<ClaudeAgentRow>,
+        warnings: Vec<String>,
+    },
+    Unknown {
+        rows: Vec<ClaudeAgentRow>,
+        warnings: Vec<String>,
+    },
+}
+
+impl ClaudeAgentsSnapshot {
+    pub fn known(rows: Vec<ClaudeAgentRow>) -> Self {
+        Self::Known {
+            rows,
+            warnings: Vec::new(),
+        }
+    }
+
+    pub fn unknown(reason: &str) -> Self {
+        Self::Unknown {
+            rows: Vec::new(),
+            warnings: vec![reason.to_string()],
+        }
+    }
+
+    pub fn find(&self, short_id: &str) -> Option<&ClaudeAgentRow> {
+        match self {
+            Self::Known { rows, .. } | Self::Unknown { rows, .. } => {
+                rows.iter().find(|row| row.short_id == short_id)
+            }
+        }
+    }
+
+    /// A hosted process stands behind the session `id` names. Claude takes a
+    /// resume prefix of the full id, so any live row the prefix starts is a
+    /// hit: an ambiguous prefix refuses rather than guessing which session.
+    pub fn holds_session(&self, id: &str) -> bool {
+        let carries_pids = self.carries_pids();
+        let rows = match self {
+            Self::Known { rows, .. } | Self::Unknown { rows, .. } => rows,
+        };
+        !id.is_empty()
+            && rows.iter().any(|row| {
+                let named = row.short_id == id
+                    || row
+                        .session_id
+                        .as_deref()
+                        .is_some_and(|sid| id.len() >= 8 && sid.starts_with(id));
+                named && row.has_live_process(carries_pids)
+            })
+    }
+
+    /// True when at least one row parsed. Known rows can carry warnings (a
+    /// partial list): presence checks on them are sound, absence checks are
+    /// not - gate those on [`Self::warning_text`] being empty.
+    pub fn is_known(&self) -> bool {
+        matches!(self, Self::Known { .. })
+    }
+
+    /// Whether ANY row in this listing carries a pid. A listing with no pid
+    /// anywhere (an older claude that omits the field) keeps the state-only
+    /// liveness reading; a listing that carries pids makes a missing pid a
+    /// death witness.
+    pub fn carries_pids(&self) -> bool {
+        match self {
+            Self::Known { rows, .. } | Self::Unknown { rows, .. } => {
+                rows.iter().any(|row| row.pid.is_some())
+            }
+        }
+    }
+
+    pub fn warning_text(&self) -> String {
+        let warnings = match self {
+            Self::Known { warnings, .. } | Self::Unknown { warnings, .. } => warnings,
+        };
+        warnings.join("; ")
+    }
+
+    /// The pid of this short id's row IF the measured listing shows it as a
+    /// currently-live process, else `None`. Requires a concrete pid: when the
+    /// listing carries no pid anywhere (`carries_pids() == false`), a row can
+    /// read `has_live_process == true` from state alone, but there is
+    /// nothing useful to stamp onto a registry row, so this stays `None`
+    /// rather than manufacturing a pid.
+    pub fn live_bg_pid(&self, short_id: &str) -> Option<u32> {
+        let row = self.find(short_id)?;
+        let pid = row.pid?;
+        row.has_live_process(self.carries_pids()).then_some(pid)
+    }
+}
+
+struct ClaudeCommandOutput {
+    success: bool,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+pub fn read_all_agents() -> ClaudeAgentsSnapshot {
+    read_all_agents_with(run_all_agents_command)
+}
+
+/// Read `claude agents --json --all` under one account root. `None` preserves
+/// the ambient `CLAUDE_CONFIG_DIR`; a plan's explicit root pins both the
+/// roster and the daemon paths used by live resume.
+pub fn read_all_agents_in(config_dir: Option<&Path>) -> ClaudeAgentsSnapshot {
+    read_all_agents_with(|| run_all_agents_command_in(config_dir))
+}
+
+fn read_all_agents_with(
+    run: impl FnOnce() -> Result<ClaudeCommandOutput, String>,
+) -> ClaudeAgentsSnapshot {
+    let output = match run() {
+        Ok(output) => output,
+        Err(reason) => return ClaudeAgentsSnapshot::unknown(&reason),
+    };
+    if !output.success {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        return ClaudeAgentsSnapshot::unknown(&format!(
+            "claude agents --json --all exited non-zero: {}",
+            detail.trim()
+        ));
+    }
+    parse_all_agents(&output.stdout)
+}
+
+fn parse_all_agents(stdout: &[u8]) -> ClaudeAgentsSnapshot {
+    let parsed: serde_json::Value = match serde_json::from_slice(stdout) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return ClaudeAgentsSnapshot::unknown(&format!(
+                "claude agents --json --all parse failure: {error}"
+            ))
+        }
+    };
+    let rows = match parsed {
+        serde_json::Value::Array(rows) => rows,
+        serde_json::Value::Object(mut object) => match object.remove("agents") {
+            Some(serde_json::Value::Array(rows)) => rows,
+            _ => {
+                return ClaudeAgentsSnapshot::unknown(
+                    "claude agents --json --all response missing agents array",
+                )
+            }
+        },
+        _ => {
+            return ClaudeAgentsSnapshot::unknown(
+                "claude agents --json --all response has an unexpected shape",
+            )
+        }
+    };
+
+    let mut parsed_rows = Vec::new();
+    let mut warnings = Vec::new();
+    let mut agent_rows = 0usize;
+    for (index, row) in rows.into_iter().enumerate() {
+        let Some(object) = row.as_object() else {
+            warnings.push(format!(
+                "claude agents row {index} is not an object; skipped"
+            ));
+            continue;
+        };
+        if object.get("kind").and_then(|value| value.as_str()) == Some("interactive") {
+            continue;
+        }
+        agent_rows += 1;
+        let short_id = ["short_id", "id"]
+            .into_iter()
+            .find_map(|key| object.get(key).and_then(|value| value.as_str()))
+            .filter(|value| !value.is_empty());
+        let Some(short_id) = short_id else {
+            warnings.push(format!(
+                "claude agents row {index} has no usable short id; skipped"
+            ));
+            continue;
+        };
+        let state = ["state", "status"]
+            .into_iter()
+            .find_map(|key| object.get(key).and_then(|value| value.as_str()));
+        let pid = object
+            .get("pid")
+            .and_then(|value| value.as_u64())
+            .and_then(|value| u32::try_from(value).ok());
+        let mut row = ClaudeAgentRow::new(short_id, state).with_pid(pid);
+        row.session_id = ["session_id", "sessionId"]
+            .into_iter()
+            .find_map(|key| object.get(key).and_then(|value| value.as_str()))
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        row.name = ["name"]
+            .into_iter()
+            .find_map(|key| object.get(key).and_then(|value| value.as_str()))
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        row.cwd = ["cwd"]
+            .into_iter()
+            .find_map(|key| object.get(key).and_then(|value| value.as_str()))
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        row.waiting_for = ["waitingFor", "waiting_for"]
+            .into_iter()
+            .find_map(|key| object.get(key).and_then(|value| value.as_str()))
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        parsed_rows.push(row);
+    }
+    if !warnings.is_empty() {
+        if parsed_rows.is_empty() {
+            if agent_rows > 0 {
+                warnings.push(format!(
+                    "0 of {agent_rows} Claude agent rows parsed; agent list is unverified"
+                ));
+            }
+            return ClaudeAgentsSnapshot::Unknown {
+                rows: parsed_rows,
+                warnings,
+            };
+        }
+        // Partial parse stays Known: the rows that did parse are real, and
+        // presence/terminal-state checks on them are sound. Absence is not -
+        // the skipped rows could hide the row - so absence-proofs gate on
+        // warning_text() being empty, not on this verdict alone.
+        return ClaudeAgentsSnapshot::Known {
+            rows: parsed_rows,
+            warnings,
+        };
+    }
+    ClaudeAgentsSnapshot::Known {
+        rows: parsed_rows,
+        warnings,
+    }
+}
+
+/// The RAW `claude agents --json --all` rows, the `claude_agents_rows` twin
+/// for consumers that key rows on the session id instead of the short id
+/// (`backlog worked`'s fleet fold): every non-interactive object passes
+/// through unmangled, and every failure mode degrades to an empty row list
+/// plus the registry-only warning word the roster classifier tolerates.
+pub(crate) struct RawAgents {
+    pub rows: Vec<Value>,
+    pub warnings: Vec<String>,
+}
+
+const REGISTRY_ONLY_MARK: &str = "falling back to registry-only view";
+
+pub(crate) fn read_all_agents_raw() -> RawAgents {
+    let output = match run_all_agents_command() {
+        Ok(output) => output,
+        Err(error) => {
+            return RawAgents {
+                rows: Vec::new(),
+                warnings: vec![format!(
+                    "claude agents --json failed to start ({error}); live_status unavailable, {REGISTRY_ONLY_MARK}"
+                )],
+            }
+        }
+    };
+    if !output.success {
+        let head = String::from_utf8_lossy(&output.stderr);
+        let head = head.trim();
+        let head = if head.is_empty() {
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        } else {
+            head.to_string()
+        };
+        let head: String = head.chars().take(200).collect();
+        return RawAgents {
+            rows: Vec::new(),
+            warnings: vec![format!(
+                "claude agents --json exited non-zero; stderr: '{head}'; {REGISTRY_ONLY_MARK}"
+            )],
+        };
+    }
+    parse_raw_all_agents(&output.stdout)
+}
+
+fn parse_raw_all_agents(stdout: &[u8]) -> RawAgents {
+    let parsed: Value = match serde_json::from_slice(stdout) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return RawAgents {
+                rows: Vec::new(),
+                warnings: vec![format!(
+                    "claude agents --json parse failure: {error}; {REGISTRY_ONLY_MARK}"
+                )],
+            }
+        }
+    };
+    let rows = match parsed {
+        Value::Array(rows) => rows,
+        Value::Object(mut object) => match object.remove("agents") {
+            Some(Value::Array(rows)) => rows,
+            _ => {
+                return RawAgents {
+                    rows: Vec::new(),
+                    warnings: vec![format!(
+                        "claude agents --json response missing 'agents' array; {REGISTRY_ONLY_MARK}"
+                    )],
+                }
+            }
+        },
+        _ => {
+            return RawAgents {
+                rows: Vec::new(),
+                warnings: vec![format!(
+                    "claude agents --json response has unexpected shape; {REGISTRY_ONLY_MARK}"
+                )],
+            }
+        }
+    };
+    let mut out = Vec::new();
+    let mut warnings = Vec::new();
+    for (index, row) in rows.into_iter().enumerate() {
+        let Some(object) = row.as_object() else {
+            warnings.push(format!(
+                "claude agents --json row {index} is not an object; skipped"
+            ));
+            continue;
+        };
+        if object.get("kind").and_then(Value::as_str) == Some("interactive") {
+            continue;
+        }
+        out.push(Value::Object(object.clone()));
+    }
+    RawAgents {
+        rows: out,
+        warnings,
+    }
+}
+
+fn run_all_agents_command() -> Result<ClaudeCommandOutput, String> {
+    run_all_agents_command_in(None)
+}
+
+/// Run `claude agents --json --all` against ONE account root. `None` is the
+/// ambient root (whatever `CLAUDE_CONFIG_DIR` the process already carries);
+/// `Some(dir)` pins the dir, which is how an isolated account's rows become
+/// visible to a reader that would otherwise never see them.
+/// The exact argv the roster snapshot shells out with, built here so the
+/// regression test can assert on it without spawning. A duplicated
+/// `.args(...)` chain here once issued `claude agents --json --all agents
+/// --json --all`, which exits 1 and read every snapshot as Unknown - the
+/// regression test exists because this line is exactly the kind a second
+/// chain slips back into.
+fn all_agents_command(config_dir: Option<&std::path::Path>) -> std::process::Command {
+    let mut command = std::process::Command::new("claude");
+    if let Some(dir) = config_dir {
+        command.env("CLAUDE_CONFIG_DIR", dir);
+    }
+    command.args(["agents", "--json", "--all"]);
+    // The roster read must not inherit the caller's cwd: a daemon or client
+    // session whose launch worktree was reaped holds a deleted cwd, and claude
+    // refuses to run from one. The read itself needs no cwd, so pin the most
+    // stable dir there is.
+    command.current_dir("/");
+    command
+}
+
+fn run_all_agents_command_in(
+    config_dir: Option<&std::path::Path>,
+) -> Result<ClaudeCommandOutput, String> {
+    let mut command = all_agents_command(config_dir);
+    let mut child = command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("claude agents --json --all failed to start: {error}"))?;
+    let stdout = child.stdout.take().map(|mut pipe| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = pipe.read_to_end(&mut bytes);
+            bytes
+        })
+    });
+    let stderr = child.stderr.take().map(|mut pipe| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = pipe.read_to_end(&mut bytes);
+            bytes
+        })
+    });
+    let deadline = std::time::Instant::now() + AGENTS_LIST_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "claude agents --json --all timed out after {}s",
+                    AGENTS_LIST_TIMEOUT.as_secs()
+                ));
+            }
+            Err(error) => return Err(format!("claude agents --json --all wait failed: {error}")),
+        }
+    };
+    let stdout = stdout
+        .and_then(|thread| thread.join().ok())
+        .unwrap_or_default();
+    let stderr = stderr
+        .and_then(|thread| thread.join().ok())
+        .unwrap_or_default();
+    Ok(ClaudeCommandOutput {
+        success: status.success(),
+        stdout,
+        stderr,
+    })
+}
+
+/// The isolated claude account roots, `(account_id, config_dir)`, mirrored
+/// from the accounts config the same way the mux's `agents_view` reads them
+/// (the crates share no types; the FILE is the contract). Managed accounts
+/// carry no `config_dir` and contribute nothing, so an all-managed config
+/// degrades to the single ambient read. Every source is read and the results
+/// merge first-wins per id (project-local `.fno/config.toml`, then the
+/// `$FNO_GLOBAL_SETTINGS_PATH` sibling, then `~/.fno/config.toml`), so one
+/// source's record never hides another source's account. Fail-open to empty:
+/// an unreadable config means no known isolated roots, and the union
+/// degrades to the ambient read.
+pub fn isolated_account_dirs() -> Vec<(String, std::path::PathBuf)> {
+    let mut sources: Vec<std::path::PathBuf> = Vec::new();
+    let pinned = std::env::var_os("FNO_CONFIG").filter(|v| !v.is_empty());
+    if let Some(config) = pinned {
+        // A pinned config is the only source (docs/path-config.md): the
+        // ambient layers must not leak live account roots into a sandbox.
+        sources.push(std::path::PathBuf::from(config));
+    } else {
+        if let Ok(cwd) = std::env::current_dir() {
+            sources.push(cwd.join(".fno").join("config.toml"));
+        }
+        if let Ok(global) = std::env::var("FNO_GLOBAL_SETTINGS_PATH") {
+            if let Some(parent) = std::path::Path::new(&global).parent() {
+                sources.push(parent.join("config.toml"));
+            }
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            sources.push(
+                std::path::PathBuf::from(home)
+                    .join(".fno")
+                    .join("config.toml"),
+            );
+        }
+    }
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for path in sources {
+        let Ok(body) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for (id, dir) in parse_isolated_config_dirs(&body, std::env::var_os("HOME").as_deref()) {
+            if seen.insert(id.clone()) {
+                out.push((id, dir));
+            }
+        }
+    }
+    out
+}
+
+/// The config dir a removal must address for this row, `None` meaning the
+/// ambient root. A union row's measured account outranks the historical
+/// launch account; the latter is used only when the snapshot has no row.
+pub fn removal_config_dir(
+    snapshot: &ClaudeAgentsSnapshot,
+    short_id: &str,
+    launch_account: Option<&str>,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let account = match snapshot.find(short_id) {
+        Some(row) => match &row.account {
+            Some(account) => account.clone(),
+            None => return Ok(None),
+        },
+        None => match launch_account {
+            Some(account) => account.to_string(),
+            None => return Ok(None),
+        },
+    };
+    isolated_account_dirs()
+        .into_iter()
+        .find(|(id, _)| id == &account)
+        .map(|(_, dir)| Some(dir))
+        .ok_or_else(|| format!("claude account root '{account}' is not configured"))
+}
+
+/// Resolve the account root for a legacy short-id-only removal call.
+pub fn removal_config_dir_for_short_id(
+    short_id: &str,
+) -> Result<Option<std::path::PathBuf>, String> {
+    if isolated_account_dirs().is_empty() {
+        return Ok(None);
+    }
+    removal_config_dir(&read_all_agents_union(), short_id, None)
+}
+
+/// Parse `[[providers.records]]` / `[[accounts.records]]` entries carrying an
+/// isolated `config_dir`, as `(account_id, dir)` with `~/` expanded. Malformed
+/// records are skipped, never a panic.
+pub fn parse_isolated_config_dirs(
+    toml_body: &str,
+    home: Option<&std::ffi::OsStr>,
+) -> Vec<(String, std::path::PathBuf)> {
+    let Ok(table) = toml_body.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for record in crate::accounts::records::block_records(&table) {
+        let (Some(id), Some(dir)) = (
+            record.get("id").and_then(|v| v.as_str()),
+            record.get("config_dir").and_then(|v| v.as_str()),
+        ) else {
+            continue;
+        };
+        if id.is_empty() || dir.trim().is_empty() {
+            continue;
+        }
+        let expanded = if let Some(rest) = dir.strip_prefix("~/") {
+            let Some(home) = home else {
+                continue;
+            };
+            std::path::PathBuf::from(home).join(rest)
+        } else {
+            std::path::PathBuf::from(dir)
+        };
+        out.push((id.to_string(), expanded));
+    }
+    out
+}
+
+/// The agent list across EVERY account root: the ambient read first, then
+/// one pinned read per isolated account. Rows carry the account they were
+/// read under, so a removal can be routed to the root that owns them.
+/// The snapshot reads `Known` only when EVERY root's read parsed - a root
+/// that failed leaves the whole union `Unknown`, because absence from a
+/// partial union is a WRONG-ROOT absence and must never read as removal
+/// evidence.
+pub fn read_all_agents_union() -> ClaudeAgentsSnapshot {
+    let mut rows: Vec<ClaudeAgentRow> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+    let mut all_known = true;
+    let ambient = read_all_agents();
+    match &ambient {
+        ClaudeAgentsSnapshot::Known { rows: parsed, .. } => rows.extend(parsed.iter().cloned()),
+        ClaudeAgentsSnapshot::Unknown {
+            rows: parsed,
+            warnings: w,
+        } => {
+            all_known = false;
+            warnings.extend(w.iter().cloned());
+            rows.extend(parsed.iter().cloned());
+        }
+    }
+    for (account, dir) in isolated_account_dirs() {
+        let output = run_all_agents_command_in(Some(&dir));
+        let snapshot = match output {
+            Ok(output) => parse_all_agents(&output.stdout),
+            Err(reason) => ClaudeAgentsSnapshot::unknown(&reason),
+        };
+        match snapshot {
+            ClaudeAgentsSnapshot::Known {
+                rows: parsed,
+                warnings: w,
+            } => {
+                for mut row in parsed {
+                    row.account = Some(account.clone());
+                    rows.push(row);
+                }
+                if !w.is_empty() {
+                    warnings.extend(w);
+                }
+            }
+            ClaudeAgentsSnapshot::Unknown {
+                rows: parsed,
+                warnings: w,
+            } => {
+                all_known = false;
+                warnings.extend(w.iter().cloned());
+                for mut row in parsed {
+                    row.account = Some(account.clone());
+                    rows.push(row);
+                }
+            }
+        }
+    }
+    if all_known {
+        ClaudeAgentsSnapshot::Known { rows, warnings }
+    } else {
+        ClaudeAgentsSnapshot::Unknown { rows, warnings }
+    }
+}
+
+/// The short ids whose harness row reads `blocked` - claude's usage-lockout
+/// state. Positive readings only: a row FOUND carrying that state is
+/// evidence, but a failed root poisons absence, never presence, so the
+/// union's rows are read even when a root failed to parse.
+pub fn read_blocked_short_ids() -> std::collections::HashSet<String> {
+    blocked_short_ids_from_rows(&read_all_agents_union())
+}
+
+pub(crate) fn blocked_short_ids_from_rows(
+    snapshot: &ClaudeAgentsSnapshot,
+) -> std::collections::HashSet<String> {
+    let rows = match snapshot {
+        ClaudeAgentsSnapshot::Known { rows, .. } | ClaudeAgentsSnapshot::Unknown { rows, .. } => {
+            rows
+        }
+    };
+    rows.iter()
+        .filter(|row| row.state.as_deref() == Some("blocked"))
+        .map(|row| row.short_id.clone())
+        .collect()
+}
+
+/// Env override that redirects the whole Claude daemon dir (tests, and operators
+/// who run Claude with a non-default home). When unset, `$HOME/.claude/daemon`.
+pub const DAEMON_DIR_ENV: &str = "FNO_CLAUDE_DAEMON_DIR";
+
+/// The Claude Code config root (`$HOME/.claude`). `CLAUDE_DIR_OVERRIDE`
+/// redirects the whole tree for tests and alt-home setups. Read-only
+/// consumers; footnote stores no state there.
+pub fn config_dir() -> PathBuf {
+    if let Some(v) = std::env::var_os("CLAUDE_DIR_OVERRIDE") {
+        return PathBuf::from(v);
+    }
+    if let Some(v) = std::env::var_os("CLAUDE_CONFIG_DIR") {
+        if !v.is_empty() {
+            return PathBuf::from(v);
+        }
+    }
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    home.join(".claude")
+}
+
+/// Resolve the Claude daemon directory (`<home>/.claude/daemon`). Honors
+/// [`DAEMON_DIR_ENV`] first so tests and alt-home setups redirect the whole tree.
+pub fn daemon_dir() -> PathBuf {
+    daemon_dir_in(None)
+}
+
+/// Resolve the Claude daemon directory for an explicit account root. The
+/// operator override remains highest priority so tests and alt-home setups
+/// can redirect the complete daemon tree.
+pub fn daemon_dir_in(config_dir: Option<&Path>) -> PathBuf {
+    if let Some(v) = std::env::var_os(DAEMON_DIR_ENV) {
+        return PathBuf::from(v);
+    }
+    if let Some(config_dir) = config_dir {
+        return config_dir.join("daemon");
+    }
+    crate::claude_roster::config_dir().join("daemon")
+}
+
+/// `<daemon_dir>/roster.json` -- the worker roster the supervisor maintains.
+pub fn default_roster_path() -> PathBuf {
+    daemon_dir().join("roster.json")
+}
+
+/// Read and trim the daemon control key, if present. Returns `None` when the file
+/// is absent or empty -- a same-uid socket attach may legally omit `auth` ("legacy
+/// client, allowed via peerUid"), so the caller treats this as optional, never an
+/// error. [corroborated]
+pub fn read_control_key() -> Option<String> {
+    read_control_key_in(&daemon_dir())
+}
+
+pub(crate) fn read_control_key_in(daemon_dir: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(daemon_dir.join("control.key")).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// One row of `~/.claude/daemon/roster.json`. Only the fields G1 consumes are
+/// modeled; serde ignores the rest (`rendezvousSock`, `dispatch`, `decModes`,
+/// `rvAuth`, `attempt`, `pendingRespawn`, ...), so a roster that grows new keys
+/// still parses. [confirmed] against a live 14-worker roster.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RosterWorker {
+    /// Full session UUID. The single adopt key; its first 8-hex segment is the
+    /// roster MAP key and our `short_id`.
+    pub session_id: String,
+    /// The externally-owned `claude --bg` worker pid. Used for `pid_start_time`
+    /// reuse-detection on the minted registry row -- NOT the pid the `pty:`
+    /// claim is reanchored to (that is footnote's long-lived HOLDER pid).
+    #[serde(default)]
+    pub pid: Option<u32>,
+    #[serde(default)]
+    pub repl_pid: Option<u32>,
+    /// Worker process start time; mirrors `RegistryEntry::pid_start_time`. Only
+    /// ever compared for equality.
+    ///
+    /// Parsed leniently: `procStart` drifted from an epoch `u64` (claude-code
+    /// <=2.1.194) to a human date string (e.g. `"Mon Jun 29 00:11:16 2026"`) on
+    /// later CLIs. `#[serde(default)]` tolerates a MISSING field but NOT a type
+    /// mismatch, so a strict `Option<u64>` makes serde reject the ENTIRE roster on
+    /// the first string value, silently zeroing every worker (the 0->visible flip
+    /// this restores). [`de_lenient_opt_u64`] accepts null/absent -> None, a number
+    /// -> `Some`, a numeric string -> `Some`, and any other string (a date) ->
+    /// None - degrading only the equality signal rather than killing the parse.
+    #[serde(default, deserialize_with = "de_lenient_opt_u64")]
+    pub proc_start: Option<u64>,
+    /// The internal supervisor<->worker ptySock. We never speak it directly (the
+    /// substrate is the daemon `control.sock`), but we WALK UP from it to resolve
+    /// the sibling `control.sock`.
+    #[serde(default)]
+    pub pty_sock: Option<String>,
+    /// Per-worker data-path token. Recorded for completeness; the `control.sock`
+    /// attach authenticates with the daemon `control.key`, not this.
+    #[serde(default)]
+    pub pty_auth: Option<String>,
+    /// CLI version that minted the row. A mismatch vs the running daemon can mean
+    /// a transient `ERESPAWNING` on attach (version-skew respawn). [corroborated]
+    #[serde(default)]
+    pub cli_version: Option<String>,
+    /// The worker's cwd; carried onto the minted registry row.
+    #[serde(default)]
+    pub cwd: String,
+    /// Linked-worktree path, when the worker runs in one (0/14 live, but modeled).
+    #[serde(default)]
+    pub worktree_path: Option<String>,
+}
+
+/// Lenient `Option<u64>` deserializer for the drifting `procStart` field (see
+/// [`RosterWorker::proc_start`]). Accepts a JSON number, a numeric string, or
+/// null/anything-else (-> None). Never errors, so one worker's date-string
+/// `procStart` cannot fail the whole-roster parse. The field is only compared for
+/// equality, so a None from an unparseable value is a safe degradation.
+fn de_lenient_opt_u64<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::Number(n) => Ok(n.as_u64()),
+        serde_json::Value::String(s) => Ok(s.trim().parse::<u64>().ok()),
+        _ => Ok(None),
+    }
+}
+
+impl RosterWorker {
+    /// The roster map key == `sessionId.split('-')[0]` (first 8-hex segment). The
+    /// `pty:<short_id>` claim holder and the minted registry `short_id` both key
+    /// on this. [confirmed: 14/14]
+    pub fn short_id(&self) -> &str {
+        self.session_id
+            .split('-')
+            .next()
+            .unwrap_or(&self.session_id)
+    }
+
+    /// Resolve this worker's daemon `control.sock` by walking up from its
+    /// `ptySock`: `control.sock` is a sibling of the `pty/ rv/ spare/` dirs under
+    /// `<daemonDir>`, so the first ancestor dir containing a `control.sock` child
+    /// wins. Returns `None` when there is no `ptySock` or no `control.sock` is
+    /// found up the chain. The brief's "walk up from ptySock past `spare/`"
+    /// resolution; the `kMm()`-hashed daemon subdir is never hardcoded.
+    pub fn resolve_control_sock(&self) -> Option<PathBuf> {
+        let pty = self.pty_sock.as_deref()?;
+        control_sock_from_ptysock(Path::new(pty))
+    }
+}
+
+/// Walk ancestors of `pty_sock` for the first dir holding a `control.sock` child.
+fn control_sock_from_ptysock(pty_sock: &Path) -> Option<PathBuf> {
+    let mut cur = pty_sock.parent();
+    while let Some(dir) = cur {
+        let cand = dir.join("control.sock");
+        if cand.exists() {
+            return Some(cand);
+        }
+        cur = dir.parent();
+    }
+    None
+}
+
+/// Typed `~/.claude/daemon/roster.json`. Unknown top-level keys are ignored.
+/// [confirmed]: `{proto:1, supervisorPid, updatedAt, workers:{<short>:WorkerEntry}}`.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeRoster {
+    #[serde(default)]
+    pub proto: u32,
+    #[serde(default)]
+    pub supervisor_pid: Option<u32>,
+    #[serde(default)]
+    pub updated_at: Option<u64>,
+    /// `<short> -> WorkerEntry`. The key is informational (== `sessionId` prefix);
+    /// we dedup on the full `session_id`, never the key.
+    #[serde(default)]
+    pub workers: std::collections::BTreeMap<String, RosterWorker>,
+}
+
+impl ClaudeRoster {
+    /// Parse a roster from JSON bytes. A torn/garbage roster is a hard error here;
+    /// callers degrade (an unreadable roster yields zero adoptable workers, never a
+    /// panic) at the call site, not by swallowing the parse.
+    pub fn parse(bytes: &[u8]) -> serde_json::Result<Self> {
+        serde_json::from_slice(bytes)
+    }
+
+    /// Read + parse the roster at `path`.
+    pub fn load(path: &Path) -> std::io::Result<Self> {
+        let bytes = std::fs::read(path)?;
+        Self::parse(&bytes).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    }
+
+    /// Read + parse the default roster (`~/.claude/daemon/roster.json`). A missing
+    /// roster (no Claude daemon ever ran) returns `Ok` with no workers, so the
+    /// substrate degrades to "nothing to adopt" rather than erroring.
+    pub fn load_default() -> std::io::Result<Self> {
+        let path = default_roster_path();
+        match std::fs::read(&path) {
+            Ok(bytes) => Self::parse(&bytes)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(ClaudeRoster {
+                proto: 0,
+                supervisor_pid: None,
+                updated_at: None,
+                workers: Default::default(),
+            }),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// The default roster merged with every isolated account root's own
+    /// roster, so a worker launched under an isolated `--account` reads
+    /// PRESENT here like the `claude agents --json --all` union listing
+    /// already reads it. Absence in this witness is what authorizes the
+    /// reconcile's exit reap for a bg row, so a root-scoped read that
+    /// misses an account-isolated worker stamps a live lead exited. A
+    /// merged root that fails to READ poisons absence (the union's rule:
+    /// a failed root is evidence, never clean absence): the caller's
+    /// unknown-liveness contract takes over.
+    pub fn load_merged_accounts() -> (std::io::Result<Self>, bool) {
+        let mut any_root_failed = false;
+        let roots: Vec<PathBuf> = isolated_account_dirs()
+            .into_iter()
+            .map(|(_account, dir)| dir)
+            .collect();
+        let (roster, failed) = Self::load_with_account_roots(&roots);
+        any_root_failed |= failed;
+        (roster, any_root_failed)
+    }
+
+    /// The merge on injected roots, so tests stage temp daemon dirs. A root
+    /// whose roster is missing counts as empty (no daemon ran there), never
+    /// failed; a root whose roster exists but fails to read or parse sets
+    /// the failure flag the caller folds into its readability verdict.
+    pub fn load_with_account_roots(roots: &[PathBuf]) -> (std::io::Result<Self>, bool) {
+        let mut failed = false;
+        let mut roster = match Self::load_default() {
+            Ok(r) => r,
+            Err(e) => return (Err(e), failed),
+        };
+        for root in roots {
+            // The per-root shape `daemon_dir_in(Some(root))` builds, without
+            // its env override: an ambient DAEMON_DIR override must not make
+            // every account root resolve to the same directory.
+            let path = root.join("daemon").join("roster.json");
+            match std::fs::read(&path) {
+                Ok(bytes) => match Self::parse(&bytes) {
+                    Ok(other) => roster.workers.extend(other.workers),
+                    Err(_) => failed = true,
+                },
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => failed = true,
+            }
+        }
+        (Ok(roster), failed)
+    }
+
+    /// Adoptable workers, deduped by `session_id` (a torn roster could in
+    /// principle list a session twice under two keys; first occurrence wins),
+    /// ordered by `session_id` for determinism.
+    pub fn workers_deduped(&self) -> Vec<&RosterWorker> {
+        let mut seen = std::collections::HashSet::new();
+        let mut out: Vec<&RosterWorker> = self
+            .workers
+            .values()
+            .filter(|w| seen.insert(w.session_id.as_str()))
+            .collect();
+        out.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+        out
+    }
+
+    /// Find a worker by full `session_id` OR by 8-hex `short_id`. The accepted
+    /// resolution inputs the adopt entrypoint takes.
+    pub fn find(&self, session_or_short: &str) -> Option<&RosterWorker> {
+        self.workers
+            .values()
+            .find(|w| w.session_id == session_or_short || w.short_id() == session_or_short)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // the roster snapshot shells out with EXACTLY
+    // [agents, --json, --all]. A duplicated .args chain once issued
+    // `claude agents ... agents --json --all`, which the CLI refuses with
+    // exit 1, so every snapshot read Unknown, claude_row_provably_absent
+    // was permanently false, and no claude-harness row was ever reapable.
+    // Asserting the BUILT ARGV (not a snapshot) is the point: a snapshot
+    // test passes on any machine where claude is absent.
+    #[test]
+    fn snapshot_rows() {
+        let command = all_agents_command(None);
+        assert_eq!(command.get_program().to_string_lossy(), "claude");
+        let argv: Vec<String> = command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            argv,
+            vec![
+                "agents".to_string(),
+                "--json".to_string(),
+                "--all".to_string()
+            ],
+            "the roster shellout argv must be exactly [agents, --json, --all]: {argv:?}"
+        );
+        assert_eq!(
+            command.get_current_dir(),
+            Some(std::path::Path::new("/")),
+            "the roster shellout must not inherit a possibly-deleted caller cwd"
+        );
+
+        let dead = ClaudeAgentRow::new("deadbeef", Some("blocked"));
+        let live_peer = ClaudeAgentRow::new("c0ffee00", Some("working")).with_pid(Some(5001));
+        let snapshot = ClaudeAgentsSnapshot::known(vec![dead.clone(), live_peer]);
+        assert!(snapshot.carries_pids());
+        assert!(!dead.has_live_process(snapshot.carries_pids()));
+
+        let row = ClaudeAgentRow::new("deadbeef", Some("blocked")).with_pid(Some(5001));
+        let snapshot = ClaudeAgentsSnapshot::known(vec![row.clone()]);
+        assert!(snapshot.carries_pids());
+        assert!(row.has_live_process(snapshot.carries_pids()));
+
+        let row = ClaudeAgentRow::new("deadbeef", Some("done")).with_pid(Some(5001));
+        let snapshot = ClaudeAgentsSnapshot::known(vec![row.clone()]);
+        assert!(snapshot.carries_pids());
+        assert!(!row.has_live_process(snapshot.carries_pids()));
+
+        let row = ClaudeAgentRow::new("deadbeef", Some("blocked"));
+        let snapshot = ClaudeAgentsSnapshot::known(vec![row.clone()]);
+        assert!(!snapshot.carries_pids());
+        assert!(row.has_live_process(snapshot.carries_pids()));
+    }
+
+    // A session that died while blocked keeps its `blocked` row with no
+    // pid and no process. In a listing that carries pids the missing pid
+    // is the death witness; the state alone reads live and lies.
+
+    // An older claude whose listing omits the pid field everywhere keeps
+    // today's state-only reading: absence of the column is not death.
+
+    #[test]
+    fn pinned_agents_reader_uses_the_plan_config_dir() {
+        // Both lanes, env first: the order codex_inject's tests already hold,
+        // so a thread can never hold PATH_TEST_MUTEX while it waits on the
+        // env lane or the reverse.
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::path_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let bin = temp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let log = temp.path().join("config-dir");
+        crate::write_exec_stub(
+            &bin,
+            "claude",
+            "#!/bin/sh\nprintf '%s' \"$CLAUDE_CONFIG_DIR\" > \"$FNO_TEST_CLAUDE_CONFIG_LOG\"\nprintf '%s\\n' '{\"agents\":[{\"kind\":\"background\",\"short_id\":\"abcd1234\",\"status\":\"idle\"}]}'\n",
+        );
+
+        let old_path = std::env::var_os("PATH");
+        let old_config = std::env::var_os("CLAUDE_CONFIG_DIR");
+        let old_log = std::env::var_os("FNO_TEST_CLAUDE_CONFIG_LOG");
+        std::env::set_var("PATH", &bin);
+        std::env::set_var("CLAUDE_CONFIG_DIR", temp.path().join("ambient"));
+        std::env::set_var("FNO_TEST_CLAUDE_CONFIG_LOG", &log);
+        let alt = temp.path().join("alt");
+
+        let snapshot = read_all_agents_in(Some(&alt));
+
+        match old_path {
+            Some(value) => std::env::set_var("PATH", value),
+            None => std::env::remove_var("PATH"),
+        }
+        match old_config {
+            Some(value) => std::env::set_var("CLAUDE_CONFIG_DIR", value),
+            None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
+        }
+        match old_log {
+            Some(value) => std::env::set_var("FNO_TEST_CLAUDE_CONFIG_LOG", value),
+            None => std::env::remove_var("FNO_TEST_CLAUDE_CONFIG_LOG"),
+        }
+
+        assert!(snapshot.is_known(), "the pinned fake roster must parse");
+        assert_eq!(
+            snapshot
+                .find("abcd1234")
+                .and_then(|row| row.state.as_deref()),
+            Some("idle")
+        );
+        assert_eq!(std::fs::read_to_string(log).unwrap(), alt.to_string_lossy());
+    }
+
+    // A 2-worker roster in the confirmed live shape (extra keys present, to prove
+    // they are ignored).
+    const SAMPLE: &str = r#"{
+      "proto": 1,
+      "supervisorPid": 4242,
+      "updatedAt": 1751049130000,
+      "workers": {
+        "a1b2c3d4": {
+          "pid": 5001,
+          "procStart": 99887766,
+          "sessionId": "a1b2c3d4-1111-2222-3333-444455556666",
+          "rendezvousSock": "/tmp/cc-daemon-501/deadbeef/rv/a1b2c3d4.rv.sock",
+          "ptySock": "/tmp/cc-daemon-501/deadbeef/spare/a1b2c3d4.pty.sock",
+          "cliVersion": "2.1.195",
+          "startedAt": 1751049000000,
+          "attempt": 1,
+          "cwd": "/Users/x/code/proj",
+          "dispatch": {"source": "shell"},
+          "rvAuth": "aaaa1111bbbb2222",
+          "ptyAuth": "cccc3333dddd4444"
+        },
+        "ee99ff00": {
+          "pid": 5002,
+          "sessionId": "ee99ff00-7777-8888-9999-aaaabbbbcccc",
+          "ptySock": "/tmp/cc-daemon-501/deadbeef/pty/ee99ff00.pty.sock",
+          "startedAt": 1751049050000,
+          "attempt": 2,
+          "cwd": "/Users/x/code/other",
+          "dispatch": {"source": "fleet"}
+        }
+      }
+    }"#;
+
+    #[test]
+    fn roster_parse_rows() {
+        let r = ClaudeRoster::parse(SAMPLE.as_bytes()).expect("parse");
+        assert_eq!(r.proto, 1);
+        assert_eq!(r.supervisor_pid, Some(4242));
+        assert_eq!(r.workers.len(), 2);
+        let w = &r.workers["a1b2c3d4"];
+        assert_eq!(w.session_id, "a1b2c3d4-1111-2222-3333-444455556666");
+        assert_eq!(w.pid, Some(5001));
+        assert_eq!(w.proc_start, Some(99887766));
+        assert_eq!(w.cli_version.as_deref(), Some("2.1.195"));
+        assert_eq!(w.cwd, "/Users/x/code/proj");
+        assert_eq!(w.pty_auth.as_deref(), Some("cccc3333dddd4444"));
+
+        // Regression: before the lenient deserializer this errored, zeroing the
+        // roster (mail-inject + every roster consumer saw zero claude workers).
+        let r = ClaudeRoster::parse(SAMPLE_STRING_PROCSTART.as_bytes())
+            .expect("string procStart must not fail the whole-roster parse");
+        assert_eq!(r.workers.len(), 2, "both workers survive the drift");
+        let w = &r.workers["6269e385"];
+        assert_eq!(w.session_id, "6269e385-1111-2222-3333-444455556666");
+        assert_eq!(w.pid, Some(6001));
+        // An unparseable date string degrades to None, not a parse failure.
+        assert_eq!(w.proc_start, None);
+        assert_eq!(w.cwd, "/home/u/code/footnote/footnote");
+
+        // number -> Some
+        let num = r#"{"workers":{"a":{"sessionId":"a-1","procStart":12345}}}"#;
+        assert_eq!(
+            ClaudeRoster::parse(num.as_bytes()).unwrap().workers["a"].proc_start,
+            Some(12345)
+        );
+        // numeric string -> Some (a future CLI could quote the epoch)
+        let numstr = r#"{"workers":{"a":{"sessionId":"a-1","procStart":"12345"}}}"#;
+        assert_eq!(
+            ClaudeRoster::parse(numstr.as_bytes()).unwrap().workers["a"].proc_start,
+            Some(12345)
+        );
+        // explicit null -> None
+        let null = r#"{"workers":{"a":{"sessionId":"a-1","procStart":null}}}"#;
+        assert_eq!(
+            ClaudeRoster::parse(null.as_bytes()).unwrap().workers["a"].proc_start,
+            None
+        );
+        // absent -> None (the #[serde(default)] path)
+        let absent = r#"{"workers":{"a":{"sessionId":"a-1"}}}"#;
+        assert_eq!(
+            ClaudeRoster::parse(absent.as_bytes()).unwrap().workers["a"].proc_start,
+            None
+        );
+    }
+
+    // The live claude-code (>=2.1.195) roster shape: `procStart` is a human DATE
+    // STRING, not the epoch `u64` the <=2.1.194 schema emitted. A strict
+    // `Option<u64>` rejected the WHOLE roster here (every worker lost); the lenient
+    // deserializer must parse all workers and degrade `proc_start` to None.
+    const SAMPLE_STRING_PROCSTART: &str = r#"{
+      "proto": 1,
+      "supervisorPid": 77901,
+      "workers": {
+        "6269e385": {
+          "pid": 6001,
+          "procStart": "Mon Jun 29 00:11:16 2026",
+          "sessionId": "6269e385-1111-2222-3333-444455556666",
+          "ptySock": "/tmp/cc-daemon-501/608d3bdb/spare/6269e385.pty.sock",
+          "cliVersion": "2.1.199",
+          "cwd": "/home/u/code/footnote/footnote"
+        },
+        "d712218d": {
+          "pid": 6002,
+          "procStart": "Mon Jun 29 00:11:22 2026",
+          "sessionId": "d712218d-7777-8888-9999-aaaabbbbcccc",
+          "ptySock": "/tmp/cc-daemon-501/608d3bdb/spare/d712218d.pty.sock",
+          "cwd": "/home/u/code/footnote/footnote"
+        }
+      }
+    }"#;
+
+    #[test]
+    fn live_bg_pid_rows() {
+        let working = ClaudeAgentRow::new("aaaa1111", Some("working")).with_pid(Some(777));
+        let done = ClaudeAgentRow::new("bbbb2222", Some("done")).with_pid(Some(888));
+        let no_pid_anywhere = ClaudeAgentRow::new("cccc3333", Some("working"));
+        let snapshot = ClaudeAgentsSnapshot::known(vec![working, done, no_pid_anywhere]);
+        assert_eq!(snapshot.live_bg_pid("aaaa1111"), Some(777));
+        assert_eq!(
+            snapshot.live_bg_pid("bbbb2222"),
+            None,
+            "a done row is not live"
+        );
+        assert_eq!(snapshot.live_bg_pid("cccc3333"), None, "no pid to stamp");
+        assert_eq!(snapshot.live_bg_pid("dddd4444"), None, "no row at all");
+    }
+
+    fn alternate_account_env_lock() -> &'static std::sync::Mutex<()> {
+        crate::claims::test_env_lock()
+    }
+
+    fn with_alt_account_config(test: impl FnOnce(PathBuf)) {
+        let _guard = alternate_account_env_lock()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let root = std::env::temp_dir().join(format!(
+            "fno-removal-config-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("config.toml"),
+            format!(
+                "[[accounts.records]]\nid = \"alt\"\nconfig_dir = \"{}\"\n",
+                root.join("claude-alt").display()
+            ),
+        )
+        .unwrap();
+        let previous = std::env::var_os("FNO_GLOBAL_SETTINGS_PATH");
+        std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", root.join("settings.toml"));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            test(root.join("claude-alt"));
+        }));
+        match previous {
+            Some(value) => std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", value),
+            None => std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH"),
+        }
+        std::fs::remove_dir_all(root).ok();
+        drop(_guard);
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    #[test]
+    fn removal_config_dir_uses_measured_isolated_row_root() {
+        with_alt_account_config(|alt_dir| {
+            let mut row = ClaudeAgentRow::new("aaaa1111", Some("done"));
+            row.account = Some("alt".to_string());
+            let snapshot = ClaudeAgentsSnapshot::known(vec![row]);
+            assert_eq!(
+                removal_config_dir(&snapshot, "aaaa1111", None),
+                Ok(Some(alt_dir))
+            );
+        });
+    }
+
+    #[test]
+    fn removal_config_dir_refuses_an_unmapped_measured_account() {
+        with_alt_account_config(|_| {
+            let mut row = ClaudeAgentRow::new("dddd4444", Some("done"));
+            row.account = Some("missing".to_string());
+            let snapshot = ClaudeAgentsSnapshot::known(vec![row]);
+            let got = format!("{:?}", removal_config_dir(&snapshot, "dddd4444", None));
+            assert!(
+                got.starts_with("Err("),
+                "an unmapped measured account must refuse, got {got}"
+            );
+        });
+    }
+
+    // The presence witness reads every isolated account root: a worker a
+    // default-only roster read misses reads PRESENT after the merge, a
+    // root whose roster is absent counts as empty, and a root whose
+    // roster exists but is unreadable poisons absence for the caller.
+    #[test]
+    fn merged_roster_covers_isolated_account_roots() {
+        let td = tempfile::tempdir().unwrap();
+        let live = td.path().join("live");
+        std::fs::create_dir_all(live.join("daemon")).unwrap();
+        std::fs::write(
+            live.join("daemon").join("roster.json"),
+            r#"{"workers":{"abcd1234":{"sessionId":"abcd1234-0000-0000-0000-000000000001","pid":41}}}"#,
+        )
+        .unwrap();
+        let torn = td.path().join("torn");
+        std::fs::create_dir_all(torn.join("daemon")).unwrap();
+        std::fs::write(torn.join("daemon").join("roster.json"), b"{not json").unwrap();
+        let empty = td.path().join("empty");
+        std::fs::create_dir_all(empty.join("daemon")).unwrap();
+
+        let (roster, failed) =
+            ClaudeRoster::load_with_account_roots(&[live.clone(), torn.clone(), empty.clone()]);
+        assert!(failed, "a torn root poisons absence");
+        // A poisoned read still carries the roots that did parse, so
+        // presence is never lost to a sibling root's failure.
+        assert!(
+            roster
+                .unwrap()
+                .find("abcd1234-0000-0000-0000-000000000001")
+                .is_some(),
+            "the parsed root's worker survives a sibling root's failure"
+        );
+
+        let (roster, failed) =
+            ClaudeRoster::load_with_account_roots(&[live.clone(), empty.clone()]);
+        assert!(!failed, "a missing roster is empty, never failed");
+        assert!(roster
+            .unwrap()
+            .find("abcd1234-0000-0000-0000-000000000001")
+            .is_some());
+    }
+
+    // Every source is read, first wins per id: project-local over global over
+    // home, so one source's record never hides another's.
+    #[test]
+    fn isolated_account_dirs_merge_sources_first_wins_per_id() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let global = std::env::temp_dir().join(format!(
+            "fno-roster-merge-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let home = global.with_file_name(format!(
+            "{}-h",
+            global.file_name().unwrap().to_string_lossy()
+        ));
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        let toml_g = r#"
+[[accounts.records]]
+id = "makers"
+config_dir = "dir-g"
+
+[[accounts.records]]
+id = "beta"
+config_dir = "dir-b"
+"#;
+        let toml_h = r#"
+[[accounts.records]]
+id = "makers"
+config_dir = "dir-h"
+
+[[accounts.records]]
+id = "gamma"
+config_dir = "dir-c"
+"#;
+        std::fs::write(global.join("config.toml"), toml_g).unwrap();
+        // The home source reads HOME/.fno/config.toml, not HOME/config.toml.
+        std::fs::create_dir_all(home.join(".fno")).unwrap();
+        std::fs::write(home.join(".fno").join("config.toml"), toml_h).unwrap();
+        let previous_home = std::env::var_os("HOME");
+        let previous_global = std::env::var_os("FNO_GLOBAL_SETTINGS_PATH");
+        std::env::set_var("HOME", &home);
+        std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", global.join("settings.toml"));
+        let out = isolated_account_dirs();
+        match previous_global {
+            Some(v) => std::env::set_var("FNO_GLOBAL_SETTINGS_PATH", v),
+            None => std::env::remove_var("FNO_GLOBAL_SETTINGS_PATH"),
+        }
+        match previous_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        assert_eq!(out.len(), 3);
+        assert_eq!(
+            out[0],
+            ("makers".to_string(), std::path::PathBuf::from("dir-g"))
+        );
+        assert_eq!(
+            out[1],
+            ("beta".to_string(), std::path::PathBuf::from("dir-b"))
+        );
+        assert_eq!(
+            out[2],
+            ("gamma".to_string(), std::path::PathBuf::from("dir-c"))
+        );
+    }
+
+    // The blocked join reads only POSITIVE evidence: a row found carrying
+    // state `blocked` enters the set. A failed root (Unknown) still carries
+    // parsed rows, and a blocked row in them is still positive evidence;
+    // absence never manufactures a member.
+    #[test]
+    fn blocked_short_ids_read_positive_only() {
+        let snapshot = ClaudeAgentsSnapshot::known(vec![
+            ClaudeAgentRow::new("deadbeef", Some("blocked")),
+            ClaudeAgentRow::new("c0ffee00", Some("working")),
+        ]);
+        let blocked = blocked_short_ids_from_rows(&snapshot);
+        assert_eq!(blocked.len(), 1);
+        assert!(blocked.contains("deadbeef"));
+
+        let snapshot = ClaudeAgentsSnapshot::Unknown {
+            rows: vec![ClaudeAgentRow::new("deadbeef", Some("blocked"))],
+            warnings: vec!["a root failed".into()],
+        };
+        let blocked = blocked_short_ids_from_rows(&snapshot);
+        assert_eq!(
+            blocked.len(),
+            1,
+            "a found row counts whatever the union verdict is"
+        );
+    }
+
+    // fno's ambient claude root must agree with claude itself: a non-empty
+    // CLAUDE_CONFIG_DIR pins both the config root and the daemon dir, the
+    // same root claude_config_tmp and claude_drive already honor.
+    #[test]
+    fn claude_config_dir_pins_the_ambient_root() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let cfg = temp.path().join("cfg");
+        let old_config = std::env::var_os("CLAUDE_CONFIG_DIR");
+        let old_override = std::env::var_os("CLAUDE_DIR_OVERRIDE");
+        std::env::set_var("CLAUDE_CONFIG_DIR", &cfg);
+        std::env::remove_var("CLAUDE_DIR_OVERRIDE");
+        let root = config_dir();
+        let daemon = daemon_dir();
+        match old_config {
+            Some(value) => std::env::set_var("CLAUDE_CONFIG_DIR", value),
+            None => std::env::remove_var("CLAUDE_CONFIG_DIR"),
+        }
+        match old_override {
+            Some(value) => std::env::set_var("CLAUDE_DIR_OVERRIDE", value),
+            None => std::env::remove_var("CLAUDE_DIR_OVERRIDE"),
+        }
+        assert_eq!(root, cfg, "config_dir() follows CLAUDE_CONFIG_DIR");
+        assert_eq!(
+            daemon,
+            cfg.join("daemon"),
+            "daemon_dir() derives from the pinned root"
+        );
+    }
+
+    // A pinned FNO_CONFIG is the only config source (docs/path-config.md), so
+    // the home layer's isolated accounts must drop out while it is set.
+    #[test]
+    fn isolated_account_dirs_treats_fno_config_as_the_only_source() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(home.join(".fno")).unwrap();
+        let record =
+            "[[accounts.records]]\nid = \"alt-home\"\nconfig_dir = \"/tmp/alt-home-claude\"\n";
+        std::fs::write(home.join(".fno").join("config.toml"), record).unwrap();
+        let pinned = temp.path().join("pinned.toml");
+        std::fs::write(&pinned, "[accounts]\nrecords = []\n").unwrap();
+
+        let old_home = std::env::var_os("HOME");
+        let old_fno_config = std::env::var_os("FNO_CONFIG");
+        std::env::set_var("HOME", &home);
+        std::env::remove_var("FNO_CONFIG");
+        let without_pin = isolated_account_dirs();
+        std::env::set_var("FNO_CONFIG", &pinned);
+        let with_pin = isolated_account_dirs();
+        match old_home {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+        match old_fno_config {
+            Some(value) => std::env::set_var("FNO_CONFIG", value),
+            None => std::env::remove_var("FNO_CONFIG"),
+        }
+
+        assert!(
+            without_pin.iter().any(|(id, _)| id == "alt-home"),
+            "control: the home-layer record reads while FNO_CONFIG is unset"
+        );
+        assert!(
+            !with_pin.iter().any(|(id, _)| id == "alt-home"),
+            "a pinned FNO_CONFIG is the only source, so the home layer drops out"
+        );
+    }
+}

@@ -1,0 +1,569 @@
+//! `fno backlog session backfill`: fill a session row's missing
+//! `started_at` or `ended_at` from a recorded fact (user ruling 2026-09-24).
+//! A dry run by default; `--apply` writes. It never overwrites a stamp, and
+//! a row with no transcript on disk keeps its gap. It is its own command, never
+//! part of the schema-4 migration, because the migration invents no time.
+//!
+//! The start is the first invocation of the phase's command in the session's
+//! transcript whose arguments name the node (its id or its plan file): a
+//! typed `/fno:<command>` or `$fno:<command>` that opens a user message, or a
+//! Skill tool call naming `fno:<command>`. A session that holds the phase for
+//! one node only takes the command's first invocation, named or not. A session
+//! that holds it for several nodes stamps only a node its own call names;
+//! the rest keep their gap and count as unmatched. The end is the last
+//! event before a later call of another phase, or of the same phase for
+//! another node, or the transcript's last event once it has been idle for a
+//! day. A ship row ends at its merge commit (`phase_close`). A do row never
+//! ends here: an open do row can be live work, and it ends through its
+//! gated settle.
+
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::io::BufRead;
+use std::path::{Path, PathBuf};
+
+use serde_json::{json, Value};
+
+use crate::backlog::api::{self, SessionFill, Store};
+use crate::backlog::row_facts::RowFacts;
+
+/// A transcript quiet this long is a finished session.
+const IDLE_SECS: u64 = 86_400;
+
+/// The phase an fno command opens.
+fn phase_of(command: &str) -> Option<&'static str> {
+    match command {
+        "think" => Some("think"),
+        "blueprint" => Some("blueprint"),
+        "target" | "execute" | "do" => Some("execute"),
+        "review" => Some("review"),
+        "pr" | "ship" => Some("ship"),
+        _ => None,
+    }
+}
+
+/// One transcript event: its UTC time and, when it invokes an fno command, the
+/// phase that command opens and the call's argument text.
+type Event = (String, Option<(&'static str, String)>);
+
+/// A session's transcript events and whether it is idle; None when no
+/// transcript is on disk.
+type TranscriptRead = Option<(Vec<Event>, bool)>;
+
+/// One transcript read: each timestamped event, with the call it carries.
+struct Transcript {
+    events: Vec<Event>,
+    idle: bool,
+}
+
+pub fn run(args: &[String]) -> i32 {
+    let mut graph: Option<PathBuf> = None;
+    let (mut apply, mut as_json) = (false, false);
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--graph" => graph = it.next().map(PathBuf::from),
+            "--apply" => apply = true,
+            "--json" | "-J" => as_json = true,
+            "--help" | "-h" => {
+                println!("usage: fno backlog session backfill [--graph PATH] [--apply] [--json]");
+                return 0;
+            }
+            other => {
+                eprintln!("session-backfill: unknown argument {other:?}");
+                return 2;
+            }
+        }
+    }
+    let Some(graph) = graph else {
+        eprintln!("session-backfill: --graph is required");
+        return 2;
+    };
+    let store = Store::new(&graph);
+    let entries = match api::rows(&store) {
+        Ok(entries) => entries,
+        Err(err) => {
+            eprintln!("session-backfill: graph unreadable: {}", err.0);
+            return 1;
+        }
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let codex = codex_rollouts();
+    let mut cache: HashMap<(String, String), Option<Transcript>> = HashMap::new();
+    let (fills, mut counts) = plan(&entries, &mut |harness, sid| {
+        cache
+            .entry((harness.to_string(), sid.to_string()))
+            .or_insert_with(|| {
+                let path = match harness {
+                    "claude" => crate::claude_drive::find_transcript(sid),
+                    "codex" => codex.get(&sid.to_ascii_lowercase()).cloned(),
+                    _ => None,
+                }?;
+                read_transcript(&path, now)
+            })
+            .as_ref()
+            .map(|t| (t.events.clone(), t.idle))
+    });
+    let ships = crate::phase_close::ship_backfill_plan(&entries);
+    for _ in &ships {
+        bump(&mut counts, "ship", "end_filled");
+    }
+    let mut refused = Vec::new();
+    let (mut stamps, mut ship_ends) = (0, 0);
+    if apply {
+        match api::session_backfill(&store, &fills) {
+            Ok(n) => stamps = n,
+            Err(err) => refused.push(json!({"write": "stamps", "error": err.0})),
+        }
+        match api::phase_end(&store, "ship", &ships) {
+            Ok(n) => ship_ends = n,
+            Err(err) => refused.push(json!({"write": "ship ends", "error": err.0})),
+        }
+    }
+    let report = json!({
+        "applied": apply,
+        "phases": counts,
+        "written": {"stamps": stamps, "ship_ends": ship_ends},
+        "refused": refused,
+    });
+    if as_json {
+        println!("{report}");
+    } else {
+        println!(
+            "session backfill ({})",
+            if apply {
+                "applied"
+            } else {
+                "dry run; --apply writes"
+            }
+        );
+        for (phase, c) in &counts {
+            let n = |k: &str| c.get(k).copied().unwrap_or(0);
+            println!(
+                "  {phase:<9} start {}/{} filled   end {}/{} filled   no transcript {}   unmatched {}",
+                n("start_filled"),
+                n("start_missing"),
+                n("end_filled"),
+                n("end_missing"),
+                n("no_transcript"),
+                n("unmatched"),
+            );
+        }
+        if apply {
+            println!("  written: {stamps} stamps, {ship_ends} ship ends");
+        }
+        for r in &refused {
+            println!("  refused {r}");
+        }
+    }
+    i32::from(!refused.is_empty())
+}
+
+type Counts = BTreeMap<&'static str, BTreeMap<&'static str, u64>>;
+
+fn bump(counts: &mut Counts, phase: &str, key: &'static str) {
+    let phase = ["think", "blueprint", "execute", "review", "ship"]
+        .into_iter()
+        .find(|p| *p == phase)
+        .unwrap_or("other");
+    *counts.entry(phase).or_default().entry(key).or_default() += 1;
+}
+
+/// A row's non-empty text field.
+fn text<'a>(row: &'a Value, key: &str) -> Option<&'a str> {
+    row.get(key)
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+}
+
+fn session_rows(entry: &Value) -> impl Iterator<Item = &Value> {
+    entry
+        .get("sessions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+}
+
+/// Whether instant `a` is at or before `b`. A stored stamp may read `Z` or
+/// `+00:00`, with or without fractions, so the two compare as instants; a
+/// stamp that does not parse compares as text.
+fn at_or_before(a: &str, b: &str) -> bool {
+    match (
+        chrono::DateTime::parse_from_rfc3339(a),
+        chrono::DateTime::parse_from_rfc3339(b),
+    ) {
+        (Ok(a), Ok(b)) => a <= b,
+        _ => a <= b,
+    }
+}
+
+/// Whether `args` names `name` as a whole token, so x-1 never matches x-12.
+fn mentions(args: &str, name: &str) -> bool {
+    let token = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
+    args.match_indices(name)
+        .any(|(at, _)| !args[..at].ends_with(token) && !args[at + name.len()..].starts_with(token))
+}
+
+/// The fills each gapped row can take from its transcript, and the counts
+/// per phase. `events_of(harness, session_id)` answers the transcript's
+/// events and whether it is idle, or None when none is on disk.
+fn plan(
+    entries: &[Value],
+    events_of: &mut dyn FnMut(&str, &str) -> TranscriptRead,
+) -> (Vec<(String, SessionFill)>, Counts) {
+    let mut fills = Vec::new();
+    let mut counts = Counts::new();
+    // The nodes each session holds a phase for: a session that worked
+    // several nodes in one phase must name the node in the call.
+    let mut holders: HashMap<(&str, &str), HashSet<&str>> = HashMap::new();
+    for entry in entries {
+        let Some(node) = RowFacts::id_of(entry) else {
+            continue;
+        };
+        for row in session_rows(entry) {
+            if let (Some(phase), Some(sid)) = (text(row, "phase"), text(row, "session_id")) {
+                holders.entry((phase, sid)).or_default().insert(node);
+            }
+        }
+    }
+    for entry in entries {
+        let Some(node) = RowFacts::id_of(entry) else {
+            continue;
+        };
+        let plan_file = entry
+            .get("plan_path")
+            .and_then(Value::as_str)
+            .and_then(|path| Path::new(path).file_name()?.to_str());
+        let names =
+            |args: &str| mentions(args, node) || plan_file.is_some_and(|f| mentions(args, f));
+        for row in session_rows(entry) {
+            let field = |key: &str| text(row, key);
+            let (Some(phase), Some(harness), Some(sid)) =
+                (field("phase"), field("harness"), field("session_id"))
+            else {
+                continue;
+            };
+            let shared = holders
+                .get(&(phase, sid))
+                .is_some_and(|nodes| nodes.len() > 1);
+            let (started, ended) = (field("started_at"), field("ended_at"));
+            // A ship row's end is its merge (phase_close); a do row's end is
+            // its gated settle.
+            let wants_end = ended.is_none() && !matches!(phase, "ship" | "execute");
+            if started.is_none() {
+                bump(&mut counts, phase, "start_missing");
+            }
+            if ended.is_none() {
+                bump(&mut counts, phase, "end_missing");
+            }
+            if started.is_some() && !wants_end {
+                continue;
+            }
+            let Some((events, idle)) = events_of(harness, sid) else {
+                bump(&mut counts, phase, "no_transcript");
+                continue;
+            };
+            let calls = |event: &Event, named: bool| {
+                event
+                    .1
+                    .as_ref()
+                    .is_some_and(|(p, args)| *p == phase && (!named || names(args)))
+            };
+            let first = events.iter().position(|e| calls(e, false));
+            let open = match (events.iter().position(|e| calls(e, true)), first) {
+                (Some(open), _) => open,
+                (None, Some(first)) if !shared => first,
+                (None, first) => {
+                    if first.is_some() {
+                        bump(&mut counts, phase, "unmatched");
+                    }
+                    continue;
+                }
+            };
+            let mut fill = SessionFill {
+                phase: phase.to_string(),
+                harness: harness.to_string(),
+                session_id: sid.to_string(),
+                started_at: None,
+                ended_at: None,
+                ended_by: "transcript".to_string(),
+            };
+            let start = events[open].0.as_str();
+            if started.is_none() && ended.is_none_or(|end| at_or_before(start, end)) {
+                fill.started_at = Some(start.to_string());
+                bump(&mut counts, phase, "start_filled");
+            }
+            if wants_end {
+                let next = events[open + 1..]
+                    .iter()
+                    .position(|(_, call)| {
+                        call.as_ref()
+                            .is_some_and(|(p, args)| *p != phase || (shared && !names(args)))
+                    })
+                    .map(|i| open + 1 + i);
+                let end = match next {
+                    Some(next) => Some(events[next - 1].0.as_str()),
+                    None if idle => events.last().map(|(ts, _)| ts.as_str()),
+                    None => None,
+                };
+                let from = started.unwrap_or(start);
+                if let Some(end) = end.filter(|end| at_or_before(from, end)) {
+                    fill.ended_at = Some(end.to_string());
+                    bump(&mut counts, phase, "end_filled");
+                }
+            }
+            if fill.started_at.is_some() || fill.ended_at.is_some() {
+                fills.push((node.to_string(), fill));
+            }
+        }
+    }
+    (fills, counts)
+}
+
+fn read_transcript(path: &Path, now: u64) -> Option<Transcript> {
+    let file = std::fs::File::open(path).ok()?;
+    let modified = file
+        .metadata()
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs());
+    let mut events = Vec::new();
+    for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
+        let Ok(event) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let Some(ts) = event
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(crate::phase_close::utc)
+        else {
+            continue;
+        };
+        let call = invocation(&event).and_then(|(command, args)| Some((phase_of(command)?, args)));
+        events.push((ts, call));
+    }
+    Some(Transcript {
+        events,
+        idle: now.saturating_sub(modified) >= IDLE_SECS,
+    })
+}
+
+/// The fno command an event invokes and the call's argument text: a typed
+/// command, a message that opens with the command, or a Skill tool call. Text
+/// that only mentions a command (injected context, a quoted launch line)
+/// invokes nothing.
+fn invocation(event: &Value) -> Option<(&str, String)> {
+    let message = event.get("message");
+    match event.get("type").and_then(Value::as_str)? {
+        "user" => {
+            let text = message?.get("content")?.as_str()?;
+            if let Some((_, rest)) = text.split_once("<command-name>/fno:") {
+                let args = text
+                    .split_once("<command-args>")
+                    .and_then(|(_, tail)| tail.split_once("</command-args>"))
+                    .map_or("", |(args, _)| args);
+                return Some((command_token(rest), args.to_string()));
+            }
+            leading_command(text).map(split_call)
+        }
+        "assistant" => message?
+            .get("content")?
+            .as_array()?
+            .iter()
+            .filter(|item| item.get("type").and_then(Value::as_str) == Some("tool_use"))
+            .filter(|item| item.get("name").and_then(Value::as_str) == Some("Skill"))
+            .find_map(|item| {
+                let command = item
+                    .pointer("/input/skill")?
+                    .as_str()?
+                    .strip_prefix("fno:")?;
+                let args = item.pointer("/input/args").and_then(Value::as_str);
+                Some((command_token(command), args.unwrap_or_default().to_string()))
+            }),
+        "response_item" => {
+            let payload = event.get("payload")?;
+            if payload.get("role").and_then(Value::as_str) != Some("user") {
+                return None;
+            }
+            let text = payload
+                .get("content")?
+                .as_array()?
+                .iter()
+                .find_map(|c| c.get("text").and_then(Value::as_str))?;
+            leading_command(text).map(split_call)
+        }
+        _ => None,
+    }
+}
+
+fn leading_command(text: &str) -> Option<&str> {
+    let text = text.trim_start();
+    text.strip_prefix("/fno:")
+        .or_else(|| text.strip_prefix("$fno:"))
+}
+
+/// [`bg_fno_invocation`] against an explicit transcript file, so the scan
+/// is testable without a session on disk.
+pub(crate) fn bg_fno_invocation_in(path: &std::path::Path) -> bool {
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
+        // Every invocation form carries `fno:` - `/fno:` on a typed or
+        // leading call, `"skill":"fno:` on a Skill tool call - and a sweep
+        // rescans negative rows each pass, so most lines must skip the
+        // serde parse, not pay it.
+        if !line.contains("fno:") {
+            continue;
+        }
+        let Ok(event) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        // A mesh join (`fno-me`) and the preamble (`using-fno`) run no work.
+        if let Some((command, _)) = invocation(&event) {
+            if command != "using-fno" && command != "fno-me" {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// The argument text of the transcript's first real fno call (never
+/// `using-fno`): the prompt a bg lead was launched with, which names its node.
+pub(crate) fn first_fno_invocation_args(session_id: &str, account: Option<&str>) -> Option<String> {
+    let path = crate::claude_drive::find_transcript_for_account(session_id, account)
+        .or_else(|| crate::claude_drive::find_transcript(session_id))?;
+    let file = std::fs::File::open(path).ok()?;
+    std::io::BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter(|line| line.contains("fno:"))
+        .find_map(|line| {
+            let event = serde_json::from_str::<Value>(&line).ok()?;
+            let (command, args) = invocation(&event)?;
+            (command != "using-fno").then_some(args)
+        })
+}
+
+fn command_token(rest: &str) -> &str {
+    let end = rest
+        .find(|c: char| !(c.is_ascii_lowercase() || c == '-'))
+        .unwrap_or(rest.len());
+    &rest[..end]
+}
+
+/// A leading call split into its command and the text after it.
+fn split_call(rest: &str) -> (&str, String) {
+    let command = command_token(rest);
+    (command, rest[command.len()..].to_string())
+}
+
+/// Codex rollout files by lowercased session id, one store walk.
+pub(crate) fn codex_rollouts() -> HashMap<String, PathBuf> {
+    let Some(root) = crate::codex_store::codex_home().map(|h| h.join("sessions")) else {
+        return HashMap::new();
+    };
+    crate::daemon::index_tree(&root, 0)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(name, _)| name.starts_with("rollout-"))
+        .filter_map(|(_, path)| {
+            let stem = path.file_stem()?.to_str()?;
+            Some((
+                crate::provenance::rollout_session_id(stem).to_ascii_lowercase(),
+                path,
+            ))
+        })
+        .collect()
+}
+
+/// The session's first user turn (its UTC stamp), read off the same
+/// transcript files [`run`] walks: claude's `user` events and codex's
+/// `response_item` user payloads. None when no transcript is on disk or no
+/// user turn in it carries a timestamp - the caller falls back to its own
+/// stamp and says so, and never fails a filing over it.
+pub(crate) fn first_user_turn(harness: &str, sid: &str) -> Option<String> {
+    let path = match harness {
+        "claude" => crate::claude_drive::find_transcript(sid)?,
+        "codex" => codex_rollouts().remove(&sid.to_ascii_lowercase())?,
+        _ => return None,
+    };
+    let file = std::fs::File::open(path).ok()?;
+    for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
+        let Ok(event) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let Some(ts) = event
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(crate::phase_close::utc)
+        else {
+            continue;
+        };
+        let is_user = match event.get("type").and_then(Value::as_str) {
+            // A claude meta event (the harness's own preamble line) is not a
+            // person's turn, so it never starts the session.
+            Some("user") => event.get("isMeta") != Some(&Value::Bool(true)),
+            Some("response_item") => {
+                event
+                    .get("payload")
+                    .and_then(|p| p.get("role").and_then(Value::as_str))
+                    == Some("user")
+            }
+            _ => false,
+        };
+        if is_user {
+            return Some(ts);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_fills_gaps_and_never_overwrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let graph = dir.path().join("graph.json");
+        crate::graph_store::seed_rows(
+            &graph,
+            &[json!({
+                "id": "x-f", "slug": "f", "type": "feature", "title": "f",
+                "status": "idea", "priority": "p2",
+                "sessions": [{"phase": "think", "harness": "claude", "session_id": "s", "ended_at": "2026-09-01T09:00:00Z"}]
+            })],
+        )
+        .unwrap();
+        let store = Store::new(&graph);
+        let fill = SessionFill {
+            phase: "think".into(),
+            harness: "claude".into(),
+            session_id: "s".into(),
+            started_at: Some("2026-09-01T08:00:00Z".into()),
+            ended_at: Some("2026-09-01T10:00:00Z".into()),
+            ended_by: "transcript".into(),
+        };
+        let fills = [("x-f".to_string(), fill)];
+        assert_eq!(api::session_backfill(&store, &fills).unwrap(), 1);
+        let row = api::rows(&store).unwrap().remove(0);
+        assert_eq!(
+            row["sessions"][0]["started_at"],
+            json!("2026-09-01T08:00:00Z")
+        );
+        assert_eq!(
+            row["sessions"][0]["ended_at"],
+            json!("2026-09-01T09:00:00Z")
+        );
+        assert_eq!(
+            api::session_backfill(&store, &fills).unwrap(),
+            0,
+            "idempotent"
+        );
+    }
+}

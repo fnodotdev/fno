@@ -1,0 +1,2192 @@
+//! The sideline column's paint: the agent Table, the per-row overlays, the
+//! docked new-agent composer, the org block and the divider. One Buffer,
+//! one blit. Draw_sideline and its two exclusive helpers live here; the
+//! file-budget gate names this module the answer to "how does the sideline
+//! column paint".
+
+use unicode_width::UnicodeWidthStr;
+
+mod observer_rows;
+
+use super::*;
+use crate::text_style::TLine;
+
+/// A snapshot freezes the need-input mark on one point of its turn (up for
+/// ON, down for OFF), so a still shot can show two frames. The live client never sets it.
+pub(super) static PULSE_PIN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+pub(super) const PULSE_ON: u8 = 1;
+pub(super) const PULSE_OFF: u8 = 2;
+
+/// The sideline Table's five columns: status word, name, message, PR, age.
+/// Width ranking (operator, 2026-09-20): name first, message second, status
+/// third. The status words are shortened (operator, 2026-09-21, longest is
+/// `Input`) so the cell fits in 5, right-aligned so a word's blank parks at
+/// the margin, and every freed column goes to the name's Min(22); the
+/// message keeps the Fill(3) surplus. Read by the Table; callers that need
+/// the solver's answer beside the paint use `worker_column_rects`, the same
+/// constraints the paint feeds: one geometry authority, and it is the solver.
+const SIDELINE_RIGHT_SLOT_W: u16 = 6;
+/// The card edge bar: leads every card line, accent-toned on the chosen
+/// card, theme-dim on a resting one.
+const CARD_EDGE_BAR: char = '\u{258e}';
+pub(super) const PIN_STAR: char = '\u{2605}';
+pub(super) const PIN_OUTLINE: char = '\u{2606}';
+/// The cell a row's pin star sits in: a card's line 2 under the status
+/// mark, else the list gutter. Paint and click both read it.
+fn pin_star_cell<'a>(
+    drow: &DisplayRow<'a>,
+    rects: &[RtRect],
+    card: bool,
+    density: Density,
+) -> Option<(usize, &'a AgentRow)> {
+    match *drow {
+        DisplayRow::CardDetail(a) if card => {
+            Some(((rects[0].x + rects[0].width).saturating_sub(1) as usize, a))
+        }
+        DisplayRow::Agent(a) if !card || density == Density::Slim => Some((0, a)),
+        _ => None,
+    }
+}
+const CARD_COLUMNS: [Constraint; 5] = [
+    Constraint::Length(5),
+    Constraint::Min(22),
+    Constraint::Fill(3),
+    Constraint::Length(SIDELINE_RIGHT_SLOT_W),
+    // 6, not the plan's 4: the density button overlays the last two
+    // columns, and a 4-wide age cell leaves the sort arrow nowhere to hide
+    // under it (the regression `age_sort_arrow_survives_the_density_button`
+    // pins). The two spare columns are the padding the old COL_TIME=6 gave.
+    Constraint::Length(SIDELINE_RIGHT_SLOT_W),
+];
+
+/// The sort column under each head cell. A card's third cell is the bar
+/// and node, which sort nothing; its PR rides the last slot, so `age` takes
+/// the empty fourth. Read by the head paint and the head click alike.
+pub(super) fn head_sorts(card: bool) -> [Option<AgentSortColumn>; 5] {
+    use AgentSortColumn::*;
+    if card {
+        [Some(Status), Some(Agent), None, Some(Age), Some(Pr)]
+    } else {
+        [
+            Some(Status),
+            Some(Agent),
+            Some(LastMessage),
+            Some(Pr),
+            Some(Age),
+        ]
+    }
+}
+
+/// A sort column's whole word, for the card head and the sort notice, where
+/// the table's short head labels would read cryptic.
+pub(super) fn sort_name(column: AgentSortColumn) -> &'static str {
+    match column {
+        AgentSortColumn::Status => "status",
+        AgentSortColumn::Agent => "agent",
+        AgentSortColumn::LastMessage => "last message",
+        AgentSortColumn::Pr => "pr",
+        AgentSortColumn::Age => "age",
+        AgentSortColumn::Created => "created",
+        AgentSortColumn::Modified => "modified",
+        AgentSortColumn::Manual => "manual",
+    }
+}
+
+/// The card head's words: the sort and, when cards group by lead, the
+/// grouping. The longest form that leaves two spare cells off the border
+/// wins, so the narrow rail keeps the sort whole and shortens the rest.
+fn card_head_caption(grouped: bool, column: AgentSortColumn, arrow: &str, room: usize) -> String {
+    let name = sort_name(column);
+    let sort = format!("sort: {name} {arrow}");
+    let tiers = if grouped {
+        vec![
+            format!("group: lead \u{b7} {sort}"),
+            format!("by lead \u{b7} {sort}"),
+            format!("by lead \u{b7} {name} {arrow}"),
+        ]
+    } else {
+        vec![format!("{sort} \u{b7} node \u{b7} PR"), sort]
+    };
+    let room = room.saturating_sub(2);
+    let fit = match tiers.iter().find(|t| t.chars().count() <= room) {
+        Some(fit) => fit.clone(),
+        None => tiers.last().cloned().unwrap_or_default(),
+    };
+    // The caption rides the cell's right edge: a trailing space keeps it off the border.
+    format!("{fit} ")
+}
+
+fn head_label(column: AgentSortColumn) -> &'static str {
+    match column {
+        AgentSortColumn::Status => "st",
+        AgentSortColumn::Agent => "agent",
+        AgentSortColumn::LastMessage => "last msg",
+        AgentSortColumn::Pr => "pr",
+        AgentSortColumn::Age => "age",
+        AgentSortColumn::Created => "created",
+        AgentSortColumn::Modified => "mod",
+        AgentSortColumn::Manual => "manual",
+    }
+}
+
+impl View {
+    fn worker_columns(&self, text_w: u16) -> Vec<Constraint> {
+        // A card paints two live columns: the status glyph and the name.
+        // The list's five need ~42 and starve the default 28-col panel,
+        // which collapsed the glyph cell to zero and left lines 2-3 flush
+        // (the operator's 2026-10-04 screenshot). Two columns never starve.
+        if self.sideline_layout == sideline_color::SidelineLayout::Card {
+            return vec![Constraint::Length(2), Constraint::Min(8)];
+        }
+        let text_w = text_w.saturating_sub(self.pin_gutter());
+        // The name takes a quarter of the surplus over the fixed cells, the
+        // description first (d-36438ea4); the message keeps the Fill(3)
+        // surplus. Both layouts use the same rule. `Min`, not `Length`: the
+        // name keeps the old yield order under deficit (names starve last),
+        // and name_w floors at 22 (less the pin gutter) so the narrow rail
+        // solves as it did before the formula existed.
+        let list_wide = self.sideline_layout == sideline_color::SidelineLayout::List
+            && (self.density == Density::Extended || self.sideline_full)
+            // Fixed cells and six gaps leave at least eight message columns.
+            && text_w >= 5 + 22 + 6 + 6 + 7 + 4 + 6 + 8;
+        if list_wide {
+            vec![
+                CARD_COLUMNS[0],
+                Constraint::Min(row_meter::name_w(text_w, 28, 6)),
+                CARD_COLUMNS[2],
+                CARD_COLUMNS[3],
+                CARD_COLUMNS[4],
+                Constraint::Length(7),
+                Constraint::Length(4),
+            ]
+        } else {
+            vec![
+                CARD_COLUMNS[0],
+                Constraint::Min(row_meter::name_w(text_w, 17, 4).saturating_sub(self.pin_gutter())),
+                CARD_COLUMNS[2],
+                CARD_COLUMNS[3],
+                CARD_COLUMNS[4],
+            ]
+        }
+    }
+
+    pub(super) fn worker_column_rects(&self, text_w: u16) -> std::rc::Rc<[RtRect]> {
+        let gutter = self.pin_gutter();
+        Layout::horizontal(self.worker_columns(text_w).iter().copied())
+            .flex(Flex::Start)
+            .spacing(1)
+            .split(RtRect::new(gutter, 0, text_w.saturating_sub(gutter), 1))
+    }
+
+    /// The agent whose pin star sits under a sideline click, if any.
+    pub(super) fn pin_star_at(&self, row: u16, col: u16) -> Option<AgentRow> {
+        let i = self.sideline_row_at(row, col)?;
+        let rects = self.worker_column_rects(self.sideline_paint_w().checked_sub(1)? as u16);
+        let card = self.sideline_layout == sideline_color::SidelineLayout::Card;
+        let density = if self.sideline_full {
+            Density::Extended
+        } else {
+            self.density
+        };
+        let rows = self.painted_rows();
+        let (c, a) = pin_star_cell(rows.get(i)?, &rects, card, density)?;
+        (c == col as usize).then(|| a.clone())
+    }
+
+    /// A list row's column 0 is the pin gutter, so a pin never moves a name.
+    pub(super) fn pin_gutter(&self) -> u16 {
+        u16::from(self.sideline_layout == sideline_color::SidelineLayout::List)
+    }
+
+    /// Rows of chrome the full-screen sideline paints under (the tab strip),
+    /// so the click mappers invert the same offset the painter used.
+    pub(super) fn sideline_top(&self) -> usize {
+        // The strip row (`Agents  Messages`) owns the first painted row in
+        // every view, so the content region starts one row down. Full-screen
+        // composes below the tab strip, normal mode at the slice's row 0.
+        if self.sideline_full {
+            (TAB_BAR_ROWS as usize) + 1
+        } else {
+            1
+        }
+    }
+
+    /// The width the sideline paints at: the full terminal in full-screen
+    /// mode, the saved panel width otherwise. The click mappers bound
+    /// columns to THIS, not to `panel_w`, or the painted table's right half
+    /// goes dead and clamped clicks misresolve their column.
+    pub(super) fn sideline_paint_w(&self) -> usize {
+        if self.sideline_full {
+            self.term.1 as usize
+        } else {
+            self.panel_w() as usize
+        }
+    }
+
+    /// The row list the sideline PAINTS: the Extended table in full-screen
+    /// mode, the stored density's rows otherwise. The click mappers, row
+    /// actions and the scroll clamp index THIS, or a click resolves a
+    /// different row than the one drawn.
+    pub(super) fn painted_rows(&self) -> Vec<DisplayRow<'_>> {
+        if self.sideline_full {
+            let (rows, depths) = self.table_rows_with_depths();
+            self.with_draft_cards(rows, depths).0
+        } else {
+            self.display_rows()
+        }
+    }
+
+    /// Sideline rows the cursor can occupy: the full terminal height (the
+    /// sideline owns row 0 since US1) minus the bottom chrome row,
+    /// minus the org block's rows at the bottom. The block is the
+    /// subtraction point's only second customer, so `clamp_sideline_scroll`
+    /// and `reveal_focus_row` inherit the shrunk window without a second
+    /// fix.
+    pub(super) fn sideline_visible_rows(&self) -> usize {
+        // The sticky menu footer comes off the region before the scroll math
+        // runs (h): scrolling to the end lands the last row above the footer.
+        // The footer
+        // only reserves a row it can spare - a region down to its last row
+        // keeps that row as list, never as chrome (the org rule).
+        let rows = (self.term.0 as usize)
+            .saturating_sub(1) // the strip row
+            .saturating_sub(self.bottom_row_is_chrome() as usize)
+            .saturating_sub(self.org_block_rows());
+        let pinned = self.painted_rows().len() > rows && rows >= 2;
+        rows.saturating_sub(pinned as usize)
+    }
+
+    /// The display index the sticky menu footer resolves to at terminal
+    /// `row`, or `None` when that row is not the pinned footer (or the list
+    /// does not pin). The one resolver behind hover, the row menus, and the
+    /// click map, so the gestures never disagree on the footer's row: when
+    /// the rows overflow, the footer pins directly above the org block, and
+    /// the row there is the footer's even though its display row has
+    /// scrolled away. The pinned copy paints at the absolute row `list_rows`
+    /// names in both compositions: a `top +` form held only full-screen and
+    /// read one row up when docked, so hover and click landed on the list
+    /// row behind the buttons. The pinned test reads the
+    /// same raw region `sideline_visible_rows` starts from, so a list that
+    /// exactly fits never reads as pinned here.
+    pub(super) fn pinned_footer_row_index(&self, row: u16, top: usize) -> Option<usize> {
+        // The composition's own row height: full-screen composes into the
+        // slice below the tab strip, docked into the full terminal. The
+        // block count must come from the same height the paint used, or at
+        // the boundary height where the two availability checks disagree
+        // the resolver fires on a row the footer never paints.
+        let rows = if self.sideline_full {
+            (self.term.0 as usize).saturating_sub(TAB_BAR_ROWS as usize)
+        } else {
+            self.term.0 as usize
+        };
+        let (block_rows, _) = self.org_block_layout(rows);
+        let chrome_rows = self.bottom_row_is_chrome() as usize;
+        let list_rows = rows.saturating_sub(block_rows);
+        let raw_rows = list_rows.saturating_sub(chrome_rows).saturating_sub(1); // the strip row
+        let pinned = self.painted_rows().len() > raw_rows && raw_rows >= 2;
+        // The pinned copy paints at buffer row `list_rows - 1`, which is
+        // the absolute row `term.0 - block_rows - 1` in both compositions.
+        let footer_row = (self.term.0 as usize)
+            .saturating_sub(block_rows)
+            .saturating_sub(1);
+        if !pinned || row < top as u16 || row as usize != footer_row {
+            return None;
+        }
+        self.painted_rows()
+            .iter()
+            .position(|r| matches!(r, DisplayRow::NewSquad))
+    }
+
+    /// The `display_rows()` index a hover cell falls on in the sideline, or
+    /// `None` when the cell is not a sideline text cell - a pane, the divider
+    /// column, the tab bar, or the bottom chrome row. Mirrors [`chrome_hit`]'s
+    /// sideline geometry exactly so the highlight lands where a click would
+    ///.
+    pub(super) fn sideline_row_at(&self, row: u16, col: u16) -> Option<usize> {
+        // The board column paints its own surface and owns no agents display
+        // rows: every resolver that answers "which sideline row is this"
+        // (hover, right-click menu, drag pickup, press-hold) must answer
+        // none there, or a press on the board acts on a phantom row.
+        if self.sideline_view != crate::view_store::SidelineView::Agents {
+            return None;
+        }
+        // The sideline owns row 0 in normal mode (the strip moved right of
+        // the divider), so display row `i` maps directly from `row`. A cell
+        // on the divider or in the strip's content columns returns None.
+        // Sideline: the painted width minus its divider (the full terminal
+        // in full-screen mode). Off/narrow => no panel.
+        let paint_w = self.sideline_paint_w();
+        if paint_w == 0 || col as usize >= paint_w - 1 {
+            return None;
+        }
+        // Full-screen sideline paints below the strip; invert the same
+        // offset the painter used.
+        let top = self.sideline_top();
+        if (row as usize) < top {
+            return None;
+        }
+        if row as usize == (self.term.0 as usize).saturating_sub(1) && self.bottom_row_is_chrome() {
+            return None;
+        }
+        // The sticky menu footer (h): when the rows overflow, the
+        // menu/add-workspace row pins directly above the org block, so
+        // a click or hover there is the footer's row even though its display
+        // row has scrolled away. Checked ahead of the offset path: the
+        // covered display row must never win.
+        if let Some(ns) = self.pinned_footer_row_index(row, top) {
+            return Some(ns);
+        }
+        let i = row as usize - top + self.sideline_offset();
+        if i < self.painted_rows().len() {
+            return Some(i);
+        }
+        None
+    }
+
+    /// The strip row's words at this panel's width. Below the width where
+    /// the full words would crowd the bell and density buttons off the row,
+    /// the tabs read `A  M` so both buttons keep their seat.
+    pub(super) fn top_row_words(&self) -> [(&'static str, crate::view_store::SidelineView); 2] {
+        // The full words end at column 19; the buttons need the bell label,
+        // the density glyph, and a gap past that, so the full form pays off
+        // only from here.
+        const FULL_WORDS_MIN_W: usize = 30;
+        let tw = self.sideline_paint_w().saturating_sub(1);
+        if tw >= FULL_WORDS_MIN_W {
+            [
+                ("Agents", crate::view_store::SidelineView::Agents),
+                ("Messages", crate::view_store::SidelineView::Messages),
+            ]
+        } else {
+            [
+                ("A", crate::view_store::SidelineView::Agents),
+                ("M", crate::view_store::SidelineView::Messages),
+            ]
+        }
+    }
+
+    /// The strip row's words with their column spans, shared by the paint
+    /// and the click map so the two cannot drift (R15). The toggle
+    /// right-aligns in the strip (the operator's 2026-10-04 ask, after the
+    /// bell moved to the tab bar): it ends before the density button's seat
+    /// when one is reserved.
+    pub(super) fn top_row_spans(&self) -> Vec<(usize, usize, crate::view_store::SidelineView)> {
+        let words = self.top_row_words();
+        let gap = 3usize;
+        let total: usize = words.iter().map(|(w, _)| w.chars().count()).sum::<usize>()
+            + gap * words.len().saturating_sub(1);
+        let limit = self.sideline_paint_w().saturating_sub(1);
+        let reserved = self
+            .density_button_range(self.panel_w() as usize)
+            .map_or(limit, |r| r.start.min(limit));
+        // The floor yields to the density seat at degenerate widths: a word
+        // pushed past `reserved` would paint under the button and lose its
+        // click to the button's own range.
+        let mut c = reserved.saturating_sub(total + 1).max(1);
+        let mut out = Vec::new();
+        for (word, view) in words {
+            let w = word.chars().count();
+            out.push((c, w, view));
+            c += w + gap;
+        }
+        out
+    }
+
+    /// Agent rows waiting on the user: local blocked rows and remote
+    /// blocked rows. Open questions stay in the notifications panel, where
+    /// they answer (operator, 2026-11-04): a question line here never
+    /// opened anything. Local rows fold the same state function as every
+    /// section rollup, so they equal the sum of the section counts.
+    pub(super) fn need_input_count(&self) -> usize {
+        let local = self
+            .layout
+            .agents
+            .iter()
+            .filter(|a| agent_lattice_state(a) == LatticeState::Blocked)
+            .count();
+        local + self.machine_tree.blocked_remote()
+    }
+
+    /// Columns the strip's count label covers, for the tap map. Zero when
+    /// the label does not paint (nothing needs input, or another view).
+    pub(super) fn need_input_label_cols(&self) -> usize {
+        let need = self.need_input_count();
+        if need == 0 || self.sideline_view != crate::view_store::SidelineView::Agents {
+            return 0;
+        }
+        let limit = self
+            .sideline_paint_w()
+            .saturating_sub(1)
+            .min(self.term.1 as usize);
+        let stop = self
+            .top_row_spans()
+            .first()
+            .map_or(limit, |s| s.0.saturating_sub(1))
+            .min(limit);
+        format!(" {need} need input").chars().count().min(stop)
+    }
+
+    /// The pinned Needs input section: a header, then the blocked rows
+    /// (this machine, then remote machines). Open questions never appear
+    /// here; the notifications panel lists and answers them. The rows also
+    /// stay in their groups below, so a click never lands on a row that
+    /// moved.
+    pub(super) fn pin_needs<'a>(
+        &'a self,
+        rows: Vec<DisplayRow<'a>>,
+        depths: Vec<usize>,
+    ) -> (Vec<DisplayRow<'a>>, Vec<usize>) {
+        if !self.needs_open || self.need_input_count() == 0 {
+            return (rows, depths);
+        }
+        let blocked = |a: &&AgentRow| agent_lattice_state(a) == LatticeState::Blocked;
+        let agents: Vec<&AgentRow> = self
+            .layout
+            .agents
+            .iter()
+            .filter(blocked)
+            .chain(self.machine_tree.rows().filter(blocked))
+            .collect();
+        let mut out = vec![DisplayRow::Header {
+            label: "Needs input".into(),
+            rollup: vec![(LatticeState::Blocked, agents.len())],
+            key: SectionKey::Group("@needs-input".into()),
+            view: SectionView::Expanded,
+        }];
+        let mut out_depths = vec![0];
+        for a in agents {
+            out.push(DisplayRow::Agent(a));
+            out_depths.push(0);
+        }
+        out.push(DisplayRow::Blank);
+        out_depths.push(0);
+        out.extend(rows);
+        out_depths.extend(depths);
+        (out, out_depths)
+    }
+
+    /// The glyph beside the count: it turns through four points on the spin
+    /// clock while anything needs input, so the count catches the eye without
+    /// moving a row or ever blanking its cell.
+    pub(super) fn need_input_pulse(&self) -> char {
+        const TURN: [char; 4] = ['\u{25B2}', '\u{25B6}', '\u{25BC}', '\u{25C0}'];
+        match PULSE_PIN.load(std::sync::atomic::Ordering::Relaxed) {
+            PULSE_ON => return TURN[0],
+            PULSE_OFF => return TURN[2],
+            _ => {}
+        }
+        let frame = crate::lattice::spin_epoch().map_or(0, |t0| {
+            t0.elapsed().as_millis() as u64 / crate::lattice::SPIN_FRAME_MS
+        });
+        TURN[frame as usize % TURN.len()]
+    }
+
+    /// Paint the strip row at the slice's row 0: `Agents  Messages`
+    /// right-aligned. The active word wears the brand accent with an
+    /// underline and the resting word sits muted, so the pair reads as tabs
+    /// (the operator's 2026-10-04 ruling) instead of bold-versus-plain.
+    pub(super) fn paint_top_row(&self, cells: &mut [Cell], cols: usize, text_w: usize) {
+        let limit = text_w.min(cols.saturating_sub(1));
+        let rest_fg = crate::theme::dim_fg(&self.theme);
+        let need = self.need_input_count();
+        if need > 0 && self.sideline_view == crate::view_store::SidelineView::Agents {
+            let stop = self
+                .top_row_spans()
+                .first()
+                .map_or(limit, |s| s.0.saturating_sub(1));
+            let mark = self.need_input_pulse();
+            for (col, ch) in format!("{mark}{need} need input").chars().enumerate() {
+                if col >= stop.min(limit) {
+                    break;
+                }
+                cells[col] = Cell {
+                    c: ch,
+                    fg: self.theme.needs_you,
+                    bg: Color::Default,
+                    flags: cell_flags::BOLD,
+                };
+            }
+        }
+        for ((start, _, view), (word, _)) in
+            self.top_row_spans().into_iter().zip(self.top_row_words())
+        {
+            let active = self.sideline_view == view;
+            for (i, ch) in word.chars().enumerate() {
+                let col = start + i;
+                if col >= limit {
+                    break;
+                }
+                cells[col] = Cell {
+                    c: ch,
+                    fg: if active { self.theme.brand } else { rest_fg },
+                    bg: Color::Default,
+                    flags: if active {
+                        cell_flags::BOLD | cell_flags::UNDERLINE
+                    } else {
+                        0
+                    },
+                };
+            }
+        }
+    }
+
+    /// Whether agent row `a` hosts pane `pid`: the one predicate behind the
+    /// chosen-row tests, the pane-menu resolution, the drag re-anchor, the
+    /// focus reveal and the selector seed. A remote row hosts the pane its
+    /// portal twin carries (the seat pane a reach named with the glyph
+    /// address), so the remote row reads chosen, seeded, revealable and
+    /// menu-resolvable while the twin itself stays out of the sideline and
+    /// the navigator: one session, one row.
+    pub(super) fn row_hosts_pane(&self, a: &AgentRow, pid: u64) -> bool {
+        if a.pane_id == Some(pid) {
+            return true;
+        }
+        match &a.remote {
+            Some(remote) => {
+                machine_tree::portal_twin(self, remote).is_some_and(|t| t.pane_id == Some(pid))
+            }
+            None => false,
+        }
+    }
+
+    pub(super) fn draw_sideline(
+        &self,
+        cells: &mut [Cell],
+        rows: usize,
+        cols: usize,
+        panel_w: usize,
+    ) {
+        let text_w = panel_w - 1; // last column is the divider
+                                  // The backlog view: the board's own render inside THIS column, no
+                                  // second border, the cursor row wearing the sideline band. The
+                                  // divider paints as in the agents view, then the agent path stops.
+        if self.sideline_view != crate::view_store::SidelineView::Agents {
+            // The strip row owns row 0 (R15) unless a board claims it: the
+            // Org board paints rows 1 and below, the docked backlog board
+            // frames its filter bar at row 0 and wins.
+            self.paint_top_row(cells, cols, text_w);
+            if self.sideline_view == crate::view_store::SidelineView::Org {
+                if !self.board_full {
+                    org_board::paint(
+                        self,
+                        &mut cells[cols..],
+                        rows - 1,
+                        cols,
+                        text_w,
+                        rows.saturating_sub(self.bottom_row_is_chrome() as usize) - 1,
+                    );
+                }
+            } else if matches!(
+                self.sideline_view,
+                crate::view_store::SidelineView::Messages
+                    | crate::view_store::SidelineView::Decisions
+            ) {
+                // A full-surface view: the compose overlay paints it across
+                // the whole terminal, so the column keeps only the strip.
+            } else if let Some(b) = &self.backlog_board {
+                if !self.board_full {
+                    let chrome_rows = self.bottom_row_is_chrome() as usize;
+                    backlog_board::backlog_panes::paint(
+                        b,
+                        cells,
+                        rows,
+                        cols,
+                        (0, 1, rows - chrome_rows - 1, text_w),
+                        self.input_owner() == super::region_focus::RegionOwner::Board,
+                        self.edge_sizes.get(super::edge_drag::Edge::BacklogSeam),
+                        &self.theme,
+                    );
+                }
+            } else {
+                let msg = TLine::meta("backlog off (pref)");
+                let lines = [msg];
+                backlog_style::paint_panel(
+                    cells,
+                    rows,
+                    cols,
+                    0,
+                    text_w,
+                    1,
+                    &lines,
+                    None,
+                    &self.theme,
+                );
+            }
+            let border_active = self.hover_sideline_border || self.sideline_drag.is_some();
+            let (border_fg, border_flags) = if border_active {
+                (self.theme.brand, cell_flags::BOLD)
+            } else {
+                (Color::Default, cell_flags::DIM)
+            };
+            for r in 0..rows {
+                cells[r * cols + (panel_w - 1)] = Cell {
+                    c: '\u{2502}',
+                    fg: border_fg,
+                    bg: Color::Default,
+                    flags: border_flags,
+                };
+            }
+            return;
+        }
+        // Read the clock ONCE per paint, not per row: every row's age is
+        // relative to the same instant, so a mid-paint tick cannot make one
+        // row read older than the row above it.
+        let now = crate::digest_overlay::now_secs();
+        // Full-screen sideline forces the Extended table (the full column
+        // list) for this paint; the stored density returns untouched on exit.
+        let full = self.sideline_full;
+        let card = self.sideline_layout == sideline_color::SidelineLayout::Card;
+        let density = if full {
+            Density::Extended
+        } else {
+            self.density
+        };
+        let (display, row_depths) = if full {
+            self.table_rows_with_depths()
+        } else {
+            self.display_rows_with_depths()
+        };
+        // The new-agent composer is a centered sheet overlay now, in every
+        // surface: the sideline paints untouched (the sheet is drawn by the
+        // client's overlay chain), and the passive org block yields to an
+        // active editor.
+        let chrome_rows = self.bottom_row_is_chrome() as usize;
+        let (block_rows, block_lines) = self.org_block_layout(rows);
+        let list_rows = rows.saturating_sub(block_rows);
+        // The scroll policy (`clamp_sideline_scroll`) keeps the cursor inside
+        // the terminal minus the bottom chrome row; the widget area must
+        // answer to the same height, or the render-time scroll lands the
+        // selected row under the chrome that paints over it.
+        let table_rows_n = list_rows.saturating_sub(chrome_rows).saturating_sub(1); // strip row
+                                                                                    // The sticky menu row (h): when the rows overflow the region, the
+                                                                                    // menu/add-workspace footer pins directly above the org block
+                                                                                    // and the widget area gives up its last row, so the footer is never
+                                                                                    // covered and the rows scroll to their true end above it. A region
+                                                                                    // down to one row keeps that row as list, never as footer. The pinned
+                                                                                    // copy yields while the in-list NewSquad row is inside the visible
+                                                                                    // window - one instance of the label in every scroll state.
+        let sticky_footer = table_rows_n > 1 && display.len() > table_rows_n;
+        let table_h = table_rows_n.saturating_sub(sticky_footer as usize);
+        // The widget renders into a standalone Buffer (no terminal, no
+        // backend) and the blit copies it into the compositor's cells. The
+        // org block and the dock own the rows below the list, so the
+        // widget area stops above them. The dock paints into the SAME Buffer
+        // before that one blit.
+        let btn_reserved = self
+            .density_button_range(panel_w)
+            .map_or(text_w, |range| range.start);
+        let area = RtRect::new(0, 0, text_w as u16, rows as u16);
+        let mut buf = RtBuffer::empty(area);
+        // The widget area is the top slice of the column; the dock paints
+        // into the same Buffer below it, before the one blit. The strip row
+        // is painted AFTER this blit (it owns row 0, which the blit wipes).
+        let g = self.pin_gutter();
+        let table_area = RtRect::new(g, 1, (text_w as u16).saturating_sub(g), table_h as u16);
+        // The selector rides the TableState's `selected`, which is what the
+        // widget's render-time scroll keeps visible.
+        let mut st = self
+            .sideline_state
+            .get()
+            .with_selected(self.list_selector());
+        let mut off = st.offset();
+        let rects = self.worker_column_rects(text_w as u16);
+        if density != Density::Slim {
+            let name_w = rects[1].width as usize;
+            // The status column's SOLVED width rides the slots: the mark's
+            // cell budget reads the geometry the solver admitted, not the
+            // constraint's wish (the list's Length(5) collapses on a narrow
+            // panel, and a two-cell waiting mark there loses its hourglass
+            // to the column crop - the 2026-11-07 CI frame finding).
+            let status_w = rects.first().map_or(1, |r| r.width as usize);
+            // Card mode carries two columns; the meter slots it empties
+            // answer zero instead of indexing past the pair.
+            let slots = if card {
+                (name_w, 0, 0, status_w)
+            } else {
+                (
+                    name_w,
+                    rects.get(2).map_or(0, |r| r.width as usize),
+                    rects.get(4).map_or(0, |r| r.width as usize),
+                    status_w,
+                )
+            };
+            let table_rows: Vec<RtRow> = display
+                .iter()
+                .enumerate()
+                .map(|(i, drow)| {
+                    let depth = row_depths.get(i).copied().unwrap_or(0);
+                    self.sideline_table_row(drow, depth, slots, now)
+                })
+                .collect();
+            let table = RtTable::new(
+                table_rows,
+                self.worker_columns(text_w as u16).iter().copied(),
+            )
+            .flex(Flex::Start)
+            .highlight_spacing(HighlightSpacing::Never)
+            // The overlay pass is the one band painter: the Table's own
+            // row highlight (REVERSED by default) would paint an INVERSE
+            // band the spec forbids inside a highlight.
+            .row_highlight_style(RtStyle::new());
+            use ratatui_core::widgets::StatefulWidget;
+            StatefulWidget::render(&table, table_area, &mut buf, &mut st);
+            off = st.offset();
+            // The render-adjusted state IS the truth: persist it so the hit
+            // tests and the confirm anchor read the offset that painted.
+            self.sideline_state.set(st);
+        }
+        crate::ratatui_blit::blit(&buf, cells, cols);
+        // The strip row owns row 0 (R15), so its words go down after the
+        // one blit that would otherwise erase them.
+        self.paint_top_row(cells, cols, text_w);
+        // Card lines 2-3 indent to the name column's x (the operator's
+        // 2026-10-04 mockup); list rows never indent.
+        let card_indent = rects
+            .get(1)
+            .map_or(0, |r| (r.x as usize).min(text_w.saturating_sub(1)));
+        // Per-row overlays the widget cannot express: the full-width rows
+        // (bands, sublines, the idle fold, the footer, the empty state - see
+        // the catch-all in `sideline_table_row`), the active-squad caret
+        // accent, the row-scoped outcome stamp, and the selector / hover
+        // bar. The list bar XORs INVERSE so a focused row's standing band
+        // de-inverts under the cursor. Card mode clears the Table's selection
+        // style; its Agent and CardDetail rows use one paired overlay here.
+        let card_lines = self
+            .launcher
+            .as_ref()
+            .map(|l| l.card_lines(self, self.card_width()))
+            .unwrap_or_default();
+        for (i, drow) in display.iter().enumerate().skip(off) {
+            let r = i - off + 1; // content paints under the strip row
+            if r > table_h {
+                break;
+            }
+            let depth = row_depths.get(i).copied().unwrap_or(0);
+            let mark_caret = matches!(
+                drow,
+                DisplayRow::Sel(row)
+                    if row.tab.is_none() && row.squad == self.layout.active_squad
+            );
+            // A band's text keeps one spare cell off the rail border.
+            let band_w = if r == 0 {
+                btn_reserved
+            } else {
+                text_w.saturating_sub(1)
+            };
+            let legacy = match drow {
+                DisplayRow::Sel(row) => {
+                    let Some(squad) = self.layout.squads.iter().find(|s| s.id == row.squad) else {
+                        continue;
+                    };
+                    let is_active = squad.id == self.layout.active_squad;
+                    match row.tab {
+                        None => {
+                            let caret = view_caret(self.section_view(&section_key(squad)));
+                            let mark = if is_active { '*' } else { ' ' };
+                            let rollup = section_rollup(
+                                self.layout
+                                    .agents
+                                    .iter()
+                                    .filter(|a| a.squad == Some(squad.id))
+                                    .map(agent_lattice_state),
+                            );
+                            // The + takes the last two cells; counts give way
+                            // first, the + never does.
+                            let label = format!("{caret}{mark}{}", squad.name);
+                            // A name too long to leave the + its two cells
+                            // keeps its name; the tap range still answers.
+                            let label_w: usize = label.chars().map(super::glyph_cols).sum();
+                            let plus = self
+                                .header_plus_cols()
+                                .is_some_and(|c| c.end == band_w && label_w + 2 <= band_w);
+                            let hint = super::header_band::folder_hint(&squad.canonical_cwd);
+                            let w = if plus { band_w - 2 } else { band_w };
+                            let mut text =
+                                super::header_band::header_band_hinted(&label, &hint, &rollup, w);
+                            // The folder hint yields to the rule: a header that
+                            // lost its rule to the hint stops separating.
+                            if !text.contains('\u{2500}') {
+                                let bare =
+                                    super::header_band::header_band_hinted(&label, "", &rollup, w);
+                                if bare.contains('\u{2500}') {
+                                    text = bare;
+                                }
+                            }
+                            if plus {
+                                text.push_str(" +");
+                            }
+                            Some((text, header_band_flags(is_active)))
+                        }
+                        Some(t) => {
+                            let marker = if is_active && t == squad.active_tab {
+                                '*'
+                            } else {
+                                ' '
+                            };
+                            let label = match squad.tabs.get(t) {
+                                Some(tm) => tab_label_text(&tm.name, t, tm.named),
+                                None => (t + 1).to_string(),
+                            };
+                            Some((format!("  {marker}{label}"), 0))
+                        }
+                    }
+                }
+                DisplayRow::Header {
+                    label,
+                    rollup,
+                    view,
+                    ..
+                } => {
+                    let caret_label = format!("{}{label}", view_caret(*view));
+                    // A harness band names what it spent in the gap.
+                    let text = match super::agent_group::band_spend(self, label) {
+                        Some(spend) => super::header_band::header_band_hinted(
+                            &caret_label,
+                            &spend,
+                            rollup,
+                            band_w,
+                        ),
+                        None => header_band_text(&caret_label, rollup, band_w),
+                    };
+                    Some((text, header_band_flags(false)))
+                }
+                // Card lines 2 and 3 indent under the name TEXT (the
+                // operator's 2026-10-04 mockup): the name cell's own
+                // `{mark} ` prefix plus the row's lineage depth, on top of
+                // the name column's x.
+                DisplayRow::CardDetail(a) => Some((
+                    {
+                        let pad = card_indent + depth * 2;
+                        format!(
+                            "{:>iw$}{}",
+                            "",
+                            // One spare cell keeps the age off the rail border.
+                            self.card_detail_text(a, now, text_w.saturating_sub(pad + 1)),
+                            iw = pad
+                        )
+                    },
+                    cell_flags::DIM,
+                )),
+                DisplayRow::CardMetrics(a) => Some((
+                    {
+                        let pad = card_indent + depth * 2;
+                        format!(
+                            "{:>iw$}{}",
+                            "",
+                            card_line::metrics(
+                                a,
+                                self.card_graph,
+                                now,
+                                row_message_text(a).as_deref(),
+                                text_w.saturating_sub(pad + 1),
+                            ),
+                            iw = pad
+                        )
+                    },
+                    0,
+                )),
+                DisplayRow::Agent(a) if density == Density::Slim => {
+                    // Small mode (q-334c5e9d option 1): one line per live
+                    // agent - the animated glyph, then the slug, clipped to
+                    // the 16-column rail. Exited rows never reach here:
+                    // Slim drops them at the row fold.
+                    let lat = agent_lattice_state(a);
+                    Some((
+                        crate::chrome::clip(
+                            &format!(
+                                " {} {}",
+                                build_status_cell(a.build, lat, 2)
+                                    .unwrap_or_else(|| status_glyph(lat).to_string()),
+                                card_line::slug(a, &self.backlog)
+                            ),
+                            text_w,
+                        ),
+                        0,
+                    ))
+                }
+                DisplayRow::Card(k) => card_lines.get(*k).map(|cl| (cl.text.clone(), 0)),
+                DisplayRow::Ghost(squad) => self.launcher_closed.get(squad).map(|held| {
+                    (
+                        crate::chrome::clip(
+                            &format!(
+                                "  + new session \u{b7} {}",
+                                held.chip_label(
+                                    agent_launcher::Focus::Project,
+                                    &self.launcher_catalog
+                                )
+                            ),
+                            text_w,
+                        ),
+                        cell_flags::DIM,
+                    )
+                }),
+                DisplayRow::TableEmpty => Some(("  no agents".to_string(), cell_flags::DIM)),
+                // The card separator (the operator's 2026-10-04 spacing
+                // mockup): one dim dashed rule, full width.
+                DisplayRow::CardRule => Some(("\u{2504}".repeat(text_w), cell_flags::DIM)),
+                DisplayRow::IdleFold {
+                    hidden, expanded, ..
+                } => Some((
+                    if *expanded {
+                        "    - fewer".to_string()
+                    } else {
+                        format!("    +{hidden} more")
+                    },
+                    cell_flags::DIM,
+                )),
+                _ => None,
+            };
+            if let Some((text, flags)) = legacy {
+                paint_legacy_row(cells, r, cols, text_w, &text, flags);
+                if matches!(drow, DisplayRow::CardDetail(..)) {
+                    // Card line 2 on a light terminal: DIM washes the default
+                    // fg toward a light background until it vanishes. The
+                    // theme's muted tone (the palette's own gray under the
+                    // inherit theme) is tested at 4.5:1 against the base in
+                    // both theme twins, so the line reads at rest.
+                    let dim = crate::theme::dim_fg(&self.theme);
+                    for cell in &mut cells[r * cols..r * cols + text_w] {
+                        cell.fg = dim;
+                        cell.flags &= !cell_flags::DIM;
+                        cell.flags &= !cell_flags::BOLD;
+                    }
+                }
+                if matches!(drow, DisplayRow::Agent(_)) && density == Density::Slim {
+                    // The slim rail's agent lines wear the lattice color.
+                    if let DisplayRow::Agent(a) = drow {
+                        let fg = lattice_style(
+                            agent_lattice_state(a),
+                            self.theme.needs_you,
+                            self.theme.ok,
+                        )
+                        .fg;
+                        for cell in &mut cells[r * cols..r * cols + text_w] {
+                            cell.fg = fg;
+                        }
+                    }
+                }
+            }
+            if let DisplayRow::Card(k) = drow {
+                if let Some(cl) = card_lines.get(*k) {
+                    if cl.dim {
+                        let dim = crate::theme::dim_fg(&self.theme);
+                        for cell in &mut cells[r * cols..r * cols + text_w] {
+                            cell.fg = dim;
+                        }
+                    }
+                    if cl.alert {
+                        let fg = self.theme.needs_you;
+                        for cell in &mut cells[r * cols..r * cols + text_w] {
+                            cell.fg = fg;
+                        }
+                    }
+                    if cl.rule || cl.frame {
+                        let edge = self.theme.border;
+                        let last = cl.text.chars().count().min(text_w).saturating_sub(1);
+                        for c in 0..=last {
+                            if cl.rule || c == 0 || c == last {
+                                if let Some(cell) = cells.get_mut(r * cols + c) {
+                                    cell.fg = edge;
+                                }
+                            }
+                        }
+                    }
+                    for &(a, b, mark) in &cl.marks {
+                        let span = r * cols + a..r * cols + b.min(text_w);
+                        for cell in cells.get_mut(span).into_iter().flatten() {
+                            match mark {
+                                crate::client::agent_launcher::card::Mark::Dim => {
+                                    cell.fg = crate::theme::dim_fg(&self.theme);
+                                }
+                                crate::client::agent_launcher::card::Mark::Bold => {
+                                    cell.flags |= cell_flags::BOLD;
+                                }
+                                crate::client::agent_launcher::card::Mark::Accent => {
+                                    cell.fg = self.theme.ok;
+                                    cell.flags |= cell_flags::BOLD;
+                                }
+                            }
+                        }
+                    }
+                    if let Some((a, b)) = cl.focused.filter(|&(a, b)| a < b.min(text_w)) {
+                        // The agent row's selected fill, on both themes.
+                        let (fg, bg, flags) = crate::theme::chosen_card_style(&self.theme);
+                        let span = r * cols + a..r * cols + b.min(text_w);
+                        for cell in cells.get_mut(span).into_iter().flatten() {
+                            cell.fg = fg;
+                            cell.bg = bg;
+                            cell.flags |= flags;
+                        }
+                    }
+                    if let Some(c) = cl.cursor {
+                        self.card_cursor.set(Some((r as u16, c as u16)));
+                    }
+                }
+            }
+            if mark_caret && text_w >= 1 {
+                cells[r * cols].fg = self.theme.brand;
+            }
+            if matches!(drow, DisplayRow::NewSquad) {
+                self.paint_new_squad_footer(cells, r, cols, text_w, panel_w);
+            }
+            let chosen = matches!(drow, DisplayRow::Agent(a) if self.row_hosts_pane(a, self.layout.focus) && !a.exited);
+            let mut highlit =
+                chosen || self.list_selector() == Some(i) || self.hover_row == Some(i);
+            if card {
+                highlit = self.card_pair_highlit(&display, i, highlit);
+            }
+            let card_pair = card
+                && matches!(
+                    drow,
+                    DisplayRow::Agent(_) | DisplayRow::CardDetail(..) | DisplayRow::CardMetrics(..)
+                );
+            let card_chosen = card_pair
+                && matches!(drow, DisplayRow::Agent(a) | DisplayRow::CardDetail(a) | DisplayRow::CardMetrics(a)
+                    if self.row_hosts_pane(a, self.layout.focus) && !a.exited);
+            if card_chosen {
+                // The chosen card fills all 3 lines, full width, hover
+                // included: the chosen fill wins on hover.
+                highlit = true;
+            }
+            // The selector's cursor row (or card) inverts and wins over the chosen fill.
+            let head = match drow {
+                DisplayRow::CardDetail(..) => i.saturating_sub(1),
+                DisplayRow::CardMetrics(..) => i.saturating_sub(2),
+                _ => i,
+            };
+            let driven = self.list_selector().is_some_and(|s| {
+                if card_pair {
+                    (head..=head + 2).contains(&s)
+                } else {
+                    s == i
+                }
+            });
+            if highlit && card_chosen && !driven {
+                // The chosen card fills all 3 lines with the theme accent
+                // plus a left bar (the operator's 2026-10-04 sideline
+                // ruling): the fill wins on hover, and no lane accent rides
+                // over it. The bar paints after the fill so the fill's own
+                // bg backs it.
+                let (fg, bg, flags) = crate::theme::chosen_card_style(&self.theme);
+                for cell in &mut cells[r * cols..r * cols + text_w] {
+                    cell.bg = bg;
+                    cell.fg = fg;
+                    cell.flags = flags;
+                }
+                if text_w >= 1 && cells[r * cols].c != '*' {
+                    cells[r * cols].c = CARD_EDGE_BAR;
+                }
+            } else if highlit {
+                // One solid band across the full width of the row, gaps
+                // included: an explicit background and an explicit fg picked
+                // to contrast with it, never per-span inversion, so a span's
+                // own color cannot patch the highlight and the band reads the
+                // same on a dark and a light terminal.
+                let (fg, bg, flags) = if driven {
+                    crate::cursor::cursor_style(&self.theme)
+                } else {
+                    crate::cursor::resting_band_style(&self.theme)
+                };
+                for cell in &mut cells[r * cols..r * cols + text_w] {
+                    cell.bg = bg;
+                    cell.fg = fg;
+                    cell.flags = flags;
+                }
+                // The state accent survives the band on the glyph (and the
+                // list's state word) only (the operator's color ruling); the
+                // band owns the remaining cells. A row with no colored state
+                // (Default) keeps the band's own explicit pair everywhere.
+                // The inverted cursor row keeps its one pair throughout.
+                if let (false, DisplayRow::Agent(a)) = (driven, drow) {
+                    let lat = agent_lattice_state(a);
+                    let style = lattice_style(lat, self.theme.needs_you, self.theme.ok);
+                    let accent = if self.row_hosts_pane(a, self.layout.focus) && a.exited {
+                        self.theme.brand
+                    } else {
+                        agent_lane_fg(a, lat, style.fg)
+                    };
+                    if accent != Color::Default {
+                        let end = rects[0].x.saturating_add(rects[0].width).min(text_w as u16);
+                        for col in rects[0].x..end {
+                            cells[r * cols + col as usize].fg = accent;
+                        }
+                    }
+                }
+            }
+            let row_stamp = self.row_stamp_for(drow);
+            paint_row_stamp(cells, r, cols, text_w, row_stamp);
+            if card {
+                if card_pair && !card_chosen && !highlit && text_w >= 1 && cells[r * cols].c != '*'
+                {
+                    // The edge bar brackets every resting card's 3 lines, so
+                    // adjacent cards read as separate blocks (the operator's
+                    // 2026-10-04 separation ask). The chosen card's bar came
+                    // with its fill, a highlight supersedes the bar, and a
+                    // recruit-marked line 1 keeps its star.
+                    cells[r * cols].c = CARD_EDGE_BAR;
+                    cells[r * cols].fg = crate::theme::dim_fg(&self.theme);
+                }
+                self.paint_card_identity(cells, r, cols, text_w, drow, highlit);
+                if let DisplayRow::CardMetrics(a) = drow {
+                    self.paint_card_activity(cells, r, cols, text_w, a, card_indent + depth * 2);
+                }
+                if driven {
+                    let (fg, bg, flags) = crate::cursor::cursor_style(&self.theme);
+                    for cell in &mut cells[r * cols..r * cols + text_w] {
+                        (cell.fg, cell.bg, cell.flags) = (fg, bg, flags);
+                    }
+                }
+            }
+            // The pin star, painted after every band: filled in the accent
+            // when pinned, an outline on any highlighted row or card (chosen,
+            // cursor, hover).
+            if let Some((col, a)) = pin_star_cell(drow, &rects, card, density) {
+                if col < text_w && (a.pinned || highlit || driven) {
+                    let cell = &mut cells[r * cols + col];
+                    cell.c = if a.pinned { PIN_STAR } else { PIN_OUTLINE };
+                    if cell.bg == Color::Default {
+                        cell.fg = if a.pinned {
+                            self.theme.brand
+                        } else {
+                            crate::theme::dim_fg(&self.theme)
+                        };
+                    }
+                }
+            }
+        }
+        // The density button, painted LAST over the sideline's top row.
+        // Overlaying is what keeps it pinned to row 0 while the rows beneath it
+        // scroll, and it costs no display row - so the invariant (every
+        // painted line is exactly one display row) still holds and
+        // `sideline_row_at` needs no special case.
+        //
+        // Layout is [inverse glyph][plain pad]: the glyph leads and the
+        // divider-adjacent cell is a NON-inverse space, so the button reads one
+        // column in from the border (the operator's padding ask) without shifting
+        // `range.start`.
+        if rows > 0 && !full {
+            if let Some(range) = self.density_button_range(panel_w) {
+                let glyph = density_glyph(self.density);
+                let start = range.start;
+                for (n, c) in range.clone().enumerate() {
+                    let is_pad = n + 1 == DENSITY_BTN_W; // the trailing cell is the pad
+                                                         // The button yields to a blitted row's own cells: an
+                                                         // agent row scrolled to the top keeps its right-aligned
+                                                         // PR and age, and the density cycle keeps its keybind
+                                                         // (Locked Decision 5) - the button is never the only way.
+                    if cells[c].c != ' ' {
+                        continue;
+                    }
+                    cells[c] = Cell {
+                        c: if c == start { glyph } else { ' ' },
+                        fg: Color::Default,
+                        bg: Color::Default,
+                        flags: if is_pad { 0 } else { cell_flags::INVERSE },
+                    };
+                }
+            }
+        }
+        // The org block: the three-line glance, pinned to the bottom rows of
+        // the column. The full reading opens in a modal. The row
+        // list already stopped above it; the block renders DIM so it reads as
+        // chrome beside the live rows, and the painter truncates to the panel
+        // width - the same rule every sideline row follows.
+        // The sticky menu footer rides directly above the org block when
+        // the rows overflow (h). Its pinned copy yields while the in-list
+        // NewSquad row is inside the visible window.
+        let new_squad_visible = display
+            .iter()
+            .skip(off)
+            .take(table_h)
+            .any(|d| matches!(d, DisplayRow::NewSquad));
+        if sticky_footer && !new_squad_visible {
+            self.paint_new_squad_footer(cells, list_rows - 1, cols, text_w, panel_w);
+        }
+        org_block::paint_org_block(cells, block_lines, list_rows, rows, cols, text_w);
+        // The divider column, now full terminal height (the sideline owns row
+        // 0 too; the strip sits right of the divider) - US1.
+        //
+        // Accent it while hovered or dragged, the same signal a pane
+        // seam wears. A terminal cannot change the cursor shape, so this
+        // accent IS the affordance.
+        let border_active = self.hover_sideline_border || self.sideline_drag.is_some();
+        let (border_fg, border_flags) = if border_active {
+            (self.theme.brand, cell_flags::BOLD)
+        } else {
+            (Color::Default, cell_flags::DIM)
+        };
+        for r in 0..rows {
+            cells[r * cols + (panel_w - 1)] = Cell {
+                c: '\u{2502}',
+                fg: border_fg,
+                bg: Color::Default,
+                flags: border_flags,
+            };
+        }
+    }
+
+    /// One sideline display row as a five-cell Table row (status word, name,
+    /// message, PR, age - [`SIDELINE_COLUMNS`]). The glyph lattice moves to
+    /// the status column as its word, and the focused row's band rides the
+    /// row style. The full-width rows (bands, sublines, footer, spacers)
+    /// return empty cells and paint in the overlay pass.
+    fn sideline_table_row(
+        &self,
+        drow: &DisplayRow<'_>,
+        depth: usize,
+        (name_w, _meter_w, _right_slot_w, status_w): (usize, usize, usize, usize),
+        now: u64,
+    ) -> RtRow<'static> {
+        let card = self.sideline_layout == sideline_color::SidelineLayout::Card;
+        // An EXITED focus row is legibly dead: DIM accent on its cells and
+        // no band (a dead "you are here" never reads as a live one). A live
+        // focus row's band is the overlay's accent highlight.
+        let is_focus =
+            matches!(drow, DisplayRow::Agent(a) if self.row_hosts_pane(a, self.layout.focus));
+        let focus_exited = is_focus && matches!(drow, DisplayRow::Agent(a) if a.exited);
+        let (mut row_cells, _): (Vec<RtCell>, u8) = match drow {
+            // The full-width rows - squad and section bands, sublines, the
+            // idle fold, the footer, the empty state - paint in the overlay
+            // pass (`paint_legacy_row`): a band is edge-to-edge at EVERY
+            // width, which five columns cannot give a 16-column rail, and
+            // the narrow-panel pair-dropping in `header_band_text` survives
+            // untouched. The cells here only give the row its height and
+            // its scroll identity in the Table.
+            DisplayRow::Sel(_)
+            | DisplayRow::Header { .. }
+            | DisplayRow::NewSquad
+            | DisplayRow::Blank
+            | DisplayRow::TableEmpty
+            | DisplayRow::CardDetail(..)
+            | DisplayRow::CardMetrics(..)
+            | DisplayRow::CardRule
+            | DisplayRow::Card(..)
+            | DisplayRow::Ghost(..)
+            | DisplayRow::IdleFold { .. } => {
+                (vec![rt_cell(String::new(), Color::Default, 0, false); 5], 0)
+            }
+            DisplayRow::Agent(a) => {
+                let lat = agent_lattice_state(a);
+                let style = lattice_style(lat, self.theme.needs_you, self.theme.ok);
+                let mut flags = style.flags;
+                if a.external && lat != LatticeState::Blocked {
+                    flags |= cell_flags::DIM;
+                }
+                let status_fg = agent_lane_fg(a, lat, style.fg);
+                // An EXITED focus row is legibly dead: DIM accent, and the
+                // overlay gives it no band. A live focus row's band is the
+                // overlay's highlight; the cells stay ordinary. The
+                // state/lane accent rides the glyph and the state word only
+                // (the operator's color ruling) - the remaining cells read
+                // default.
+                let focus_bit = if focus_exited { cell_flags::DIM } else { 0 };
+                let cell_fg = if focus_exited {
+                    self.theme.brand
+                } else {
+                    status_fg
+                };
+                let body_fg = Color::Default;
+                let cell_flags_v = flags | focus_bit;
+                // The name cell keeps the compact row's identity vocabulary:
+                // recruit mark, DND, deviation token, portal index, tab
+                // context, orphan cwd, reason, team badge - depth-indented,
+                // ellipsized to the width the solver admits.
+                let mark = if a
+                    .attach_id
+                    .as_deref()
+                    .is_some_and(|id| self.marks.contains(id))
+                {
+                    '*'
+                } else {
+                    ' '
+                };
+                // The card name sits right after the glyph column: a blank
+                // mark contributes no cell, so the icon column reads one
+                // glyph wide (the operator's 2026-10-04 tightening).
+                let prefix = if depth > 0 {
+                    format!("{}{mark}", "  ".repeat(depth))
+                } else if card && mark == ' ' {
+                    String::new()
+                } else if card {
+                    mark.to_string()
+                } else {
+                    format!("{mark} ")
+                };
+                let mut suffix = String::new();
+                if a.dnd {
+                    // A machine-armed hold reads as its own state; a
+                    // lead seeing [DND] thinks it armed the hold and invents
+                    // a reason.
+                    suffix.push_str(if a.held_conversation {
+                        " [HELD]"
+                    } else {
+                        " [DND]"
+                    });
+                }
+                // The recipient harness is holding this row's submitted mail
+                // in its own busy queue: the count plus a do-not-disturb
+                // mark, both gone the moment the harness's release rows
+                // land. The marker itself is chosen at composition time,
+                // where the label's room is known.
+                let held_badge = a.mail_held.filter(|n| *n > 0);
+                // A card names its model on line 2; the token is the list's.
+                if let Some(tok) =
+                    sideline_color::deviation_token(a.harness.as_deref(), a.model.as_deref())
+                        .filter(|_| !card)
+                {
+                    suffix.push_str(&format!(" {tok}"));
+                }
+                if let Some(idx) = a.portal {
+                    suffix.push_str(&format!(" \u{25ab}{idx}"));
+                }
+                match self.agent_tab_context(a.squad, a.tab) {
+                    Some(_)
+                        if a.squad == Some(self.layout.active_squad)
+                            && a.tab == self.active_squad_active_tab_id() => {}
+                    Some(TabContext::Named(ctx)) => suffix.push_str(&format!(" \u{b7}{ctx}")),
+                    Some(TabContext::Ordinal(ord)) => suffix.push_str(&format!(" \u{b7}{ord}")),
+                    None => {
+                        // A squad-less row's cwd base disambiguates paneless
+                        // agents launched from arbitrary directories, minus
+                        // the node-repeat noise (`cwd_base_repeats_node`).
+                        // Squad members never read cwd here.
+                        if a.squad.is_none() && !cwd_base_repeats_node(a) {
+                            if let Some(base) = a.cwd_base.as_deref() {
+                                suffix.push_str(&format!(" ({base})"));
+                            }
+                        }
+                    }
+                }
+                if let Some(reason) = a.reason.as_deref().filter(|x| !x.is_empty()) {
+                    suffix.push_str(": ");
+                    suffix.push_str(reason);
+                }
+                let prefix_width = prefix.width();
+                // A card keeps one spare cell so the label never touches the border.
+                let base_width = name_w.saturating_sub(prefix_width + usize::from(card));
+                // Row 1 carries the role vocabulary: a lead's people title
+                // after its slug (`sorrel · lead of mux`), a worker's lead
+                // after its thread slug (`t-x0eee · sorrel`).
+                let card_parts =
+                    card.then(|| (card_line::slug(a, &self.backlog), self.lead_label(a)));
+                let label = match &card_parts {
+                    Some((slug, Some(role))) => format!("{slug} \u{b7} {role}"),
+                    Some((slug, None)) => slug.clone(),
+                    None => card_line::shown_name(a).to_string(),
+                };
+                // (US3, inline) A member with a different project or worktree
+                // path shows it inline in parens after the slug or name, only
+                // when it fits whole after the label; otherwise it drops. The
+                // dim `Sub` line under the row is gone (d-36438ea4).
+                let label = match self.foreign_base(a) {
+                    Some(base) => {
+                        let tagged = format!("{label} ({base})");
+                        if crate::chrome::str_cols(&tagged) <= base_width {
+                            tagged
+                        } else {
+                            label
+                        }
+                    }
+                    None => label,
+                };
+                // The held-mail marker renders whole or not at all: the full
+                // `[N held · dnd]` when the label keeps its room beside it,
+                // else the compact closed `[Nh]` - an unclosed ` [8` clip
+                // reads as broken paint, and a head-cut name misreads who
+                // holds the mail. A card row's line 1 lies about its width
+                // (the frame re-clips at the true cell), so the card carries
+                // the marker on its detail line instead; lists decide here.
+                let suffix = match held_badge.filter(|_| !card) {
+                    Some(held) => {
+                        let full = format!(" [{held} held \u{b7} dnd]");
+                        let compact = format!(" [{held}h]");
+                        let fits = |badge: &str| {
+                            crate::chrome::str_cols(&label)
+                                + crate::chrome::str_cols(badge)
+                                + suffix.width()
+                                <= base_width
+                        };
+                        let badge = if fits(&full) { full } else { compact };
+                        format!("{suffix}{badge}")
+                    }
+                    None => suffix,
+                };
+                let suffix_width = suffix.width();
+                let fit = |w: usize| match &card_parts {
+                    // A card cuts the role, never the slug it leads with.
+                    Some((slug, role)) if crate::chrome::str_cols(&label) > w => {
+                        card_line::card_label(slug, role.as_deref(), w)
+                    }
+                    _ => crate::chrome::clip_tail(&label, w),
+                };
+                let name = if suffix_width < base_width {
+                    format!("{prefix}{}{suffix}", fit(base_width - suffix_width))
+                } else {
+                    format!("{prefix}{}", fit(base_width))
+                };
+                // The message column reads the sentence, not the markup, and
+                // leads with the separator. A PR row with no output names the
+                // session driving it (the server's graph join: the live claim
+                // holder's session, else the node's last do/ship session); no
+                // session id says so. The widest column keeps the handle
+                // visible where the old inline suffix clipped.
+                let tail = row_message_text(a)
+                    .map(|t| format!("\u{b7} {t}"))
+                    .unwrap_or_default();
+                // Other bindings count after the PR (or the dash when this
+                // row has none): `+2 PRs` / `+1 open`.
+                let count = card_line::binding_suffix(a);
+                let pr =
+                    a.pr.map(|n| format!("#{n}{count}"))
+                        .unwrap_or_else(|| format!("\u{2014}{count}"));
+                let age = row_age(a, now);
+                let (pr_cell, age_cell) = if card {
+                    (String::new(), String::new())
+                } else {
+                    (pr, age)
+                };
+                let quiet = if flags & cell_flags::DIM != 0 {
+                    cell_flags::DIM
+                } else {
+                    0
+                };
+                (
+                    vec![
+                        // Card line 1: glyph, slug, context bar and node, PR.
+                        // The spinning glyph carries the state, so no word.
+                        // List mode paints the exact pre-card cells.
+                        // A Working row's spin glyph takes the blank lead
+                        // column of the right-aligned word, so the word stays put.
+                        rt_cell(
+                            match build_status_cell(
+                                a.build,
+                                lat,
+                                status_w.min(if card { 1 } else { 5 }),
+                            ) {
+                                // The build mark wins where it applies: a
+                                // compiling row renders the BRAILLE_SIX frame
+                                // in place of the working spin (never both),
+                                // a waiting row the hourglass and position.
+                                Some(text) => text,
+                                None => match (card, lat) {
+                                    // Card line 1 keeps the still lattice glyph
+                                    // (the operator's 2026-10-04 mockup): no spin
+                                    // frames, the state reads as a shape.
+                                    (true, _) => lattice_glyph(lat).0.to_string(),
+                                    (false, LatticeState::Working) => {
+                                        format!("{}{}", status_glyph(lat), status_word(lat))
+                                    }
+                                    (false, _) => status_word(lat).to_string(),
+                                },
+                            },
+                            cell_fg,
+                            cell_flags_v,
+                            true,
+                        ),
+                        rt_cell(
+                            crate::chrome::clip(&name, name_w),
+                            body_fg,
+                            cell_flags_v,
+                            false,
+                        ),
+                        rt_cell(
+                            if card { String::new() } else { tail },
+                            body_fg,
+                            quiet | focus_bit,
+                            false,
+                        ),
+                        rt_cell(pr_cell, body_fg, quiet | focus_bit, true),
+                        rt_cell(age_cell, body_fg, quiet | focus_bit, true),
+                    ],
+                    0,
+                )
+            }
+            DisplayRow::TableHead => {
+                let arrow = |column: AgentSortColumn| match self.agent_sort {
+                    sort if sort.column != column => "",
+                    sort if sort.direction == SortDirection::Ascending => "\u{2191}",
+                    _ => "\u{2193}",
+                };
+                // The card head names the two live columns: the glyph column
+                // stays blank and the identity caption rides the name cell's
+                // right edge, where node and PR paint.
+                let cells: Vec<RtCell> = if card {
+                    vec![
+                        rt_cell(String::new(), Color::Default, cell_flags::DIM, false),
+                        rt_cell(
+                            card_head_caption(
+                                self.group_by_lead,
+                                self.agent_sort.column,
+                                arrow(self.agent_sort.column),
+                                name_w,
+                            ),
+                            Color::Default,
+                            cell_flags::DIM,
+                            true,
+                        ),
+                    ]
+                } else {
+                    // A sort with no column of its own (created, modified,
+                    // manual) still has to be visible: its label and arrow
+                    // ride the age cell, the rightmost sortable slot.
+                    let fallback = matches!(
+                        self.agent_sort.column,
+                        AgentSortColumn::Created
+                            | AgentSortColumn::Modified
+                            | AgentSortColumn::Manual
+                    );
+                    head_sorts(false)
+                        .into_iter()
+                        .map(|sort| {
+                            let text = match sort {
+                                None => "ctx · node".to_string(),
+                                // No space before the age arrow: right-aligned or
+                                // spaced, it sits under the density button's two
+                                // overlay columns and the toggle reads dead.
+                                Some(AgentSortColumn::Age) if fallback => {
+                                    format!(
+                                        "{}{}",
+                                        head_label(self.agent_sort.column),
+                                        arrow(self.agent_sort.column)
+                                    )
+                                }
+                                Some(AgentSortColumn::Age) => {
+                                    format!("age{}", arrow(AgentSortColumn::Age))
+                                }
+                                Some(c) if arrow(c).is_empty() => head_label(c).to_string(),
+                                Some(c) => format!("{} {}", head_label(c), arrow(c)),
+                            };
+                            let right = sort == Some(AgentSortColumn::Status)
+                                || sort == Some(AgentSortColumn::Pr)
+                                || sort == Some(AgentSortColumn::Age);
+                            rt_cell(text, Color::Default, cell_flags::DIM, right)
+                        })
+                        .collect()
+                };
+                (cells, 0)
+            }
+        };
+        if self
+            .worker_columns(self.sideline_paint_w().saturating_sub(1) as u16)
+            .len()
+            == 7
+        {
+            let (ctx, up) = match drow {
+                DisplayRow::Agent(a) => (
+                    row_meter::ctx_cell(a.context_used_pct),
+                    row_meter::up_cell(a.started_at, now),
+                ),
+                DisplayRow::TableHead => ("ctx".into(), "up".into()),
+                _ => (String::new(), String::new()),
+            };
+            row_cells.push(rt_cell(ctx, Color::Default, cell_flags::DIM, false));
+            row_cells.push(rt_cell(up, Color::Default, cell_flags::DIM, false));
+        }
+        RtRow::new(row_cells)
+    }
+
+    /// Expand cards into exactly three painted rows; list mode is untouched.
+    pub(super) fn card_rows<'a>(
+        &self,
+        rows: Vec<DisplayRow<'a>>,
+        depths: Vec<usize>,
+    ) -> (Vec<DisplayRow<'a>>, Vec<usize>) {
+        if self.sideline_layout != sideline_color::SidelineLayout::Card {
+            return (rows, depths);
+        }
+        let mut out_rows = Vec::with_capacity(rows.len() * 3);
+        let mut out_depths = Vec::with_capacity(rows.len() * 3);
+        let mut rows_iter = rows.into_iter().peekable();
+        let depths_iter = depths.into_iter();
+        let mut depths_peek = depths_iter.peekable();
+        while let Some(row) = rows_iter.next() {
+            let depth = depths_peek.next().unwrap_or(0);
+            match row {
+                DisplayRow::Agent(a) => {
+                    out_rows.extend([
+                        DisplayRow::Agent(a),
+                        DisplayRow::CardDetail(a),
+                        DisplayRow::CardMetrics(a),
+                    ]);
+                    out_depths.extend([0, 0, 0]);
+                    // The dashed rule rides between adjacent cards (the
+                    // operator's 2026-10-04 spacing mockup): no rule before a
+                    // header, a blank, or the section's end.
+                    // Grouped by lead, a blank row follows the rule where a lead's
+                    // group ends, so the cards need no indent to show where it stops.
+                    if matches!(rows_iter.peek(), Some(DisplayRow::Agent(_))) {
+                        out_rows.push(DisplayRow::CardRule);
+                        out_depths.push(0);
+                        if self.group_by_lead && depths_peek.peek() == Some(&0) {
+                            out_rows.push(DisplayRow::Blank);
+                            out_depths.push(0);
+                        }
+                    }
+                }
+                DisplayRow::Blank => {
+                    out_rows.push(DisplayRow::Blank);
+                    out_depths.push(depth);
+                }
+                other => {
+                    out_rows.push(other);
+                    out_depths.push(depth);
+                }
+            }
+        }
+        // The card's `node · PR` caption rides at every width now,
+        // gated by the persisted toggle (prefix+Y). Extended inserts its own
+        // head before this runs, so the guard keeps one head, never two.
+        if self.show_card_head && !matches!(out_rows.first(), Some(DisplayRow::TableHead)) {
+            out_rows.insert(0, DisplayRow::TableHead);
+            out_depths.insert(0, 0);
+        }
+        (out_rows, out_depths)
+    }
+
+    /// The `+ new` footer row, painted over the blitted cells in its legacy
+    /// full-width composition: the menu button rides the footer's right edge
+    /// at the exact column [`View::footer_buttons`] names, because that
+    /// range routes a click there - paint and hit range cannot diverge.
+    fn paint_new_squad_footer(
+        &self,
+        cells: &mut [Cell],
+        r: usize,
+        cols: usize,
+        text_w: usize,
+        panel_w: usize,
+    ) {
+        let label = self.footer_buttons(panel_w).text;
+        paint_legacy_row(cells, r, cols, text_w, &label, cell_flags::BOLD);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn paint_card_identity(
+        &self,
+        cells: &mut [Cell],
+        row: usize,
+        cols: usize,
+        text_w: usize,
+        drow: &DisplayRow<'_>,
+        highlit: bool,
+    ) {
+        let DisplayRow::Agent(agent) = drow else {
+            return;
+        };
+        let line = &mut cells[row * cols..row * cols + text_w];
+        let lattice = agent_lattice_state(agent);
+        let status_fg = if self.row_hosts_pane(agent, self.layout.focus) && agent.exited {
+            self.theme.brand
+        } else {
+            agent_lane_fg(
+                agent,
+                lattice,
+                lattice_style(lattice, self.theme.needs_you, self.theme.ok).fg,
+            )
+        };
+        // A resting card's state glyph wears the state color, as a list row's does.
+        // A build-marked row paints the build glyph (the override's first char),
+        // so the color finds the cell that actually carries the state.
+        let glyph = build_status_cell(agent.build, lattice, 1)
+            .and_then(|text| text.chars().next())
+            .unwrap_or_else(|| status_glyph(lattice));
+        if let Some(cell) = line.iter_mut().find(|c| c.c == glyph).filter(|_| !highlit) {
+            if status_fg != Color::Default {
+                cell.fg = status_fg;
+            }
+        }
+        let spans = card_line::identity_spans(agent, text_w);
+        // Read before the ifs below move the span fields.
+        let identity_free = spans.node.is_none() && spans.pr.is_none();
+        // On the chosen card the accent fill owns the line: the node and PR
+        // spans read in the fill's base tone (brand-on-brand text would
+        // vanish - the composed contrast test pins this at 3:1).
+        let (fill_fg, _, _) = crate::theme::chosen_card_style(&self.theme);
+        let on_chosen_fill = self.row_hosts_pane(agent, self.layout.focus) && !agent.exited;
+        // The name matters most: the node may not start before the slug's
+        // end plus one space. It cuts its front, or drops, to fit. A slug
+        // clipped to fit is not found whole, and leaves the node no room.
+        let slug = card_line::slug(agent, &self.backlog);
+        let painted: String = line.iter().map(|c| c.c).collect();
+        let keep = painted.find(&slug).map_or(usize::MAX, |b| {
+            painted[..b].chars().count() + slug.chars().count() + 1
+        });
+        let fitted = agent
+            .node
+            .as_deref()
+            .zip(spans.node)
+            .and_then(|(node, span)| card_line::fit_node(node, span, keep));
+        self.card_node_spans.borrow_mut().insert(
+            agent.name.clone(),
+            fitted.as_ref().map(|(span, _)| span.clone()),
+        );
+        if let (Some(node), Some((span, text))) = (agent.node.as_deref(), fitted.as_ref()) {
+            let node_start = span.start;
+            // An inferred current binding dims the node: the row's node is
+            // a guess (branch, spawn, name, history), not a stamp.
+            let inferred = agent.bindings.iter().any(|b| b.node == node && b.inferred);
+            for (cell, ch) in line[span.clone()].iter_mut().zip(text.chars()) {
+                cell.c = ch;
+                cell.fg = if on_chosen_fill { fill_fg } else { status_fg };
+                cell.flags = if inferred {
+                    cell_flags::DIM
+                } else {
+                    cell_flags::BOLD
+                };
+            }
+            // The text after the slug yields before the node: an ellipsis
+            // marks the cut and one space keeps the gap. The slug itself
+            // never yields: with no room for ` …` past it, the cells
+            // between slug and node just blank. Under three columns the
+            // name side blanks past the glyph and the node stands alone.
+            if keep > 0 && node_start < keep + 2 {
+                for cell in line[keep.saturating_sub(1).max(1)..node_start].iter_mut() {
+                    cell.c = ' ';
+                }
+            } else if node_start >= 3 {
+                if line[node_start - 1].c != ' ' {
+                    line[node_start - 1].c = '…';
+                }
+                if line[node_start - 2].c != ' ' {
+                    line[node_start - 2].c = ' ';
+                }
+            } else {
+                for cell in line[1..node_start.max(1)].iter_mut() {
+                    cell.c = ' ';
+                }
+            }
+        }
+        if let Some(span) = spans.separator.filter(|_| fitted.is_some()) {
+            for (cell, ch) in line[span].iter_mut().zip(" · ".chars()) {
+                cell.c = ch;
+            }
+        }
+        if let Some(span) = spans.pr {
+            let text = format!("#{}{}", agent.pr.unwrap(), card_line::binding_suffix(agent));
+            for (cell, ch) in line[span].iter_mut().zip(text.chars()) {
+                cell.c = ch;
+                cell.fg = if on_chosen_fill {
+                    fill_fg
+                } else {
+                    self.theme.brand
+                };
+                cell.flags = 0;
+            }
+        }
+        // A lead's row 1 right side is the team roll-up: the
+        // section header's per-state count strip, over the workers beneath
+        // it. It yields to node · PR the way every right-edge occupant does:
+        // a lead holding a PR keeps its PR there, no roll-up this paint.
+        if agent.role_level.is_some() && identity_free {
+            // The lead's own glyph carries its state on the left; the strip
+            // counts the workers beneath it, so the lead row is out.
+            let members = self
+                .layout
+                .agents
+                .iter()
+                .filter(|x| {
+                    !std::ptr::eq(*x, *agent)
+                        && super::agent_group::team_lead_name(self, x).as_deref()
+                            == Some(agent.name.as_str())
+                })
+                .map(|x| agent_lattice_state(x));
+            let rollup = section_rollup(members);
+            if !rollup.is_empty() {
+                let pairs: String = rollup
+                    .iter()
+                    .map(|(s, n)| format!("{}{n}", lattice_glyph(*s).0))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let w = crate::chrome::str_cols(&pairs);
+                // One spare cell keeps the roll-up off the rail border.
+                let start = text_w.saturating_sub(w + 1);
+                // The strip yields to the surface that owns the line: the
+                // chosen fill's or the band's own fg there, dim only at
+                // rest (the composed contrast test pins 3:1 on both).
+                let rollup_fg = if on_chosen_fill {
+                    fill_fg
+                } else if highlit {
+                    crate::cursor::resting_band_style(&self.theme).0
+                } else {
+                    crate::theme::dim_fg(&self.theme)
+                };
+                for (cell, ch) in line[start..].iter_mut().zip(pairs.chars()) {
+                    cell.c = ch;
+                    cell.fg = rollup_fg;
+                    cell.flags = 0;
+                }
+            }
+        }
+    }
+
+    /// The activity ramp's failure colors: each glyph cell wears ok, warn
+    /// or error by its interval's failed share (the heights and the kinds
+    /// come from [`card_line::activity_cell`]). Painted over the metrics
+    /// row after the text lands, the same pass shape as the identity spans.
+    fn paint_card_activity(
+        &self,
+        cells: &mut [Cell],
+        row: usize,
+        cols: usize,
+        text_w: usize,
+        a: &AgentRow,
+        pad: usize,
+    ) {
+        if self.card_graph != crate::client::CardGraph::Activity {
+            return;
+        }
+        let Some(cell) = card_line::activity_cell(a, self.card_graph) else {
+            return;
+        };
+        let line = &mut cells[row * cols..row * cols + text_w];
+        for (n, kind) in cell.kinds.iter().enumerate() {
+            let col = pad + n;
+            if col >= text_w {
+                break;
+            }
+            line[col].fg = match kind {
+                0 => self.theme.ok,
+                1 => self.theme.warn,
+                _ => self.theme.error,
+            };
+        }
+    }
+
+    /// Line 2 keeps model and cost left, with created and activity ages
+    /// right. The lead name that used to ride this line moved to row 1
+    ///. Cost is served-only: a promoted lead never prices, and an
+    /// unserved cost renders nothing rather than a placeholder.
+    pub(super) fn card_detail_text(&self, a: &AgentRow, now: u64, text_w: usize) -> String {
+        let mut segments: Vec<String> = Vec::new();
+        // The card's detail line carries the held-mail marker, first so
+        // the line's own ellipsis never cuts it: line 1's name cell
+        // re-clips at its true width, so a marker there renders broken.
+        if let Some(held) = a.mail_held.filter(|n| *n > 0) {
+            segments.push(format!("[{held} held]"));
+        }
+        if let Some(model) = card_line::model_label(a) {
+            segments.push(model);
+        }
+        if let Some(cents) = a.session_cost_cents {
+            segments.push(row_meter::cost_cell(cents));
+        }
+        // Every binding rides the detail head in wire order (the fold's
+        // strongest-first order; the wire carries no ts), each as node,
+        // source, pr when known, state.
+        for b in &a.bindings {
+            let pr = b.pr.map(|n| format!(" #{n}")).unwrap_or_default();
+            segments.push(format!("{} {}{} {}", b.node, b.source, pr, b.state));
+        }
+        let left = segments.join(" \u{b7} ");
+        let created = a
+            .started_at
+            .map(|_| row_meter::up_cell(a.started_at, now))
+            .unwrap_or_else(|| "–".into());
+        let activity = if a.last_activity_age_s.is_some() || a.updated_at.is_some() {
+            row_age(a, now).trim().to_string()
+        } else {
+            "–".into()
+        };
+        let tail = format!("{created} · {activity}");
+        let tail_w = crate::chrome::str_cols(&tail).min(text_w);
+        // One space always parts the head from the tail, so a cut id never meets the age.
+        let gap = usize::from(text_w > tail_w);
+        let head_w = text_w.saturating_sub(tail_w + gap);
+        let head = crate::chrome::fit_ellipsis(&left, head_w);
+        let pad = " ".repeat(head_w.saturating_sub(crate::chrome::str_cols(&head)) + gap);
+        format!("{head}{pad}{tail}")
+    }
+
+    /// The card-mode highlight pairing: a card's lower half inverts when
+    /// the `Agent` row above it is selected or hovered, and an `Agent` row
+    /// also inverts when its lower half is hovered. `base` is the ordinary
+    /// (non-inert) highlight for this row. A `CardRule` between two cards
+    /// names no card: only the metrics line reaches two rows up (its own
+    /// card's Agent line), never the detail line, whose second row up is
+    /// the rule above the card.
+    pub(super) fn card_pair_highlit(
+        &self,
+        display: &[DisplayRow<'_>],
+        i: usize,
+        base: bool,
+    ) -> bool {
+        match display.get(i) {
+            Some(row @ (DisplayRow::CardDetail(..) | DisplayRow::CardMetrics(..))) => {
+                base || self.list_selector() == Some(i)
+                    || self.hover_row == Some(i)
+                    || self.list_selector() == Some(i.saturating_sub(1))
+                    || self.hover_row == Some(i.saturating_sub(1))
+                    || matches!(row, DisplayRow::CardMetrics(..))
+                        && (self.list_selector() == Some(i.saturating_sub(2))
+                            || self.hover_row == Some(i.saturating_sub(2)))
+                    // The detail line is the metrics line's upper half too:
+                    // a hover or selection on the card's last line bands it.
+                    // The metrics line never has a card row below.
+                    || matches!(row, DisplayRow::CardDetail(..))
+                        && matches!(display.get(i + 1), Some(DisplayRow::CardMetrics(..)))
+                        && (self.list_selector() == Some(i + 1)
+                            || self.hover_row == Some(i + 1))
+            }
+            Some(DisplayRow::Agent(_)) => {
+                base || matches!(display.get(i + 1), Some(DisplayRow::CardDetail(..)))
+                    && (self.list_selector() == Some(i + 1) || self.hover_row == Some(i + 1))
+                    || matches!(display.get(i + 2), Some(DisplayRow::CardMetrics(..)))
+                        && (self.list_selector() == Some(i + 2) || self.hover_row == Some(i + 2))
+            }
+            _ => base,
+        }
+    }
+
+    /// (US3, inline) The foreign-cwd base an agent shows inline in parens:
+    /// `Some` only when the agent's cwd basename differs from its squad's
+    /// project basename. The dim `Sub` row's join, moved into the label.
+    /// A base that repeats the row's own node id never tags: a node-backed
+    /// thread lives in its node's worktree, and the node is already painted
+    /// on the card's right edge.
+    pub(super) fn foreign_base<'a>(&self, a: &'a AgentRow) -> Option<&'a str> {
+        if cwd_base_repeats_node(a) {
+            return None;
+        }
+        let squad_id = a.squad?;
+        let squad = self.layout.squads.iter().find(|s| s.id == squad_id)?;
+        let base = super::section_project_base(&squad.canonical_cwd);
+        if super::agent_is_foreign(a, base) {
+            a.cwd_base.as_deref()
+        } else {
+            None
+        }
+    }
+
+    /// The lead label for row 1 of a card: the teamed row itself
+    /// shows its people title, else its team scope; a worker walks its
+    /// lineage to the first teamed ancestor and shows [`team_display_name`].
+    /// No teamed ancestor, or a lineage cycle (capped at one step per agent),
+    /// labels nothing.
+    pub(super) fn lead_label(&self, a: &AgentRow) -> Option<String> {
+        if a.role_level.is_some() {
+            if let Some(title) = a.role_title.as_deref().filter(|t| !t.is_empty()) {
+                return Some(title.to_string());
+            }
+            return a.role_scope.clone();
+        }
+        // A worker's lead name: the same walk the group bands run, so a
+        // row-1 label and its band can never disagree on the lead.
+        super::agent_group::team_lead_name(self, a)
+    }
+}
+
+/// The age cell's text, shared by the list row and the card's line 2 so the
+/// two cannot drift: the server's measured age when it carries one, else
+/// now minus the row's update stamp.
+fn row_age(a: &AgentRow, now: u64) -> String {
+    match (a.last_activity_age_s, a.updated_at) {
+        (Some(s), _) => humanize_age(Some(s)),
+        (None, Some(u)) => humanize_age(Some(now.saturating_sub(u))),
+        (None, None) => humanize_age(None),
+    }
+}
+
+/// The one cwd-base noise rule, shared by both tag sites: a worktree named
+/// for the row's own node repeats the id the card already paints, so its
+/// basename tags nothing.
+fn cwd_base_repeats_node(a: &AgentRow) -> bool {
+    a.node.is_some() && a.cwd_base == a.node
+}
+
+/// The message text an agent's row shows: the markup-stripped tail, or the
+/// PR-session fallback when the tail is empty. No separator - the list cell
+/// prefixes its dot and the card line joins with dots.
+fn row_message_text(a: &AgentRow) -> Option<String> {
+    match a.tail.as_deref().filter(|t| !t.is_empty()) {
+        Some(t) => Some(strip_md(t)),
+        None => match (a.pr, a.pr_session_short.as_deref()) {
+            (Some(_), Some(sid)) => Some(format!("attach {sid}")),
+            (Some(_), None) => Some("no session".to_string()),
+            (None, _) => None,
+        },
+    }
+}
+
+/// Full-screen sideline: the sideline owns every cell, so every report
+/// routes here - the dock first, then the hit path a normal-mode sideline
+/// click runs (clamped into the panel's column space) - and no byte ever
+/// reaches a pane.
+pub(super) async fn route_mouse(
+    view: &mut View,
+    rep: crate::mouse::MouseReport,
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<(), String> {
+    use crate::proto::{MouseButton, MouseKind};
+    match rep.kind {
+        MouseKind::WheelUp | MouseKind::WheelDown => {
+            view.scroll_sideline(matches!(rep.kind, MouseKind::WheelDown));
+        }
+        MouseKind::Press(MouseButton::Left) => {
+            let top = view.sideline_top() as u16;
+            if rep.row + 1 == top {
+                // The strip row: only its words act (R15).
+                let pw = view.sideline_paint_w().max(1) as u16;
+                let col = rep.col.min(pw.saturating_sub(2));
+                if let Some(hit) = view.chrome_hit(rep.row, col) {
+                    apply_hit(view, hit, sock_w).await?;
+                }
+                return Ok(());
+            }
+            if rep.row < top {
+                return Ok(());
+            }
+            let pw = view.sideline_paint_w().max(1) as u16;
+            let col = rep.col.min(pw.saturating_sub(2));
+            if let Some(hit) = view.chrome_hit(rep.row, col) {
+                apply_hit(view, hit, sock_w).await?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// The composer is a modal like every other: prefix chords still resolve
+/// while it holds the keyboard (which-key parity), so the chunk scans first
+/// and only the plain-byte chunks feed the composer's own folder. Nothing
+/// here reaches a pane.
+pub(super) async fn route_launcher_keys(
+    view: &mut View,
+    scanner: &mut Scanner,
+    passthrough: &[u8],
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<StdinFlow, String> {
+    // The composer owns every key while open: a bare H/J/K/L must be text
+    // for the draft, never a pane resize, so the repeat window a prefix
+    // chord armed closes the moment the composer takes the byte.
+    scanner.disarm_repeat();
+    for event in scanner.scan(passthrough, std::time::Instant::now()) {
+        match event {
+            Event::Forward(chunk) => {
+                agent_launcher::launcher_keys(view, &chunk, sock_w).await?;
+            }
+            event => match dispatch_event(view, event, sock_w).await? {
+                DispatchFlow::Continue => {}
+                DispatchFlow::Break => break,
+                DispatchFlow::Detach => return Ok(StdinFlow::Detach),
+            },
+        }
+    }
+    Ok(StdinFlow::Continue)
+}
+
+/// Toggle the composer: close retains the draft, as Esc does. Opening never
+/// touches the sideline or the pane's size - the sheet is an overlay; a
+/// terminal too short to admit it opens nothing and says so.
+pub(super) async fn toggle_composer(
+    view: &mut View,
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<(), String> {
+    if view
+        .launcher
+        .as_ref()
+        .is_some_and(|l| l.squad == view.layout.active_squad)
+    {
+        agent_launcher::close(view);
+    } else {
+        show_composer(view, sock_w).await?;
+    }
+    Ok(())
+}
+
+/// The show half of [`toggle_composer`], shared with the board's `t` key:
+/// open the composer under the width rule. The sheet needs no sideline and
+/// sends NO Resize - the sheet is an overlay, so no pane changes width; the
+/// bottom form is only reachable from the full-screen sideline, which also
+/// needs no Resize. `true` when the composer is open.
+pub(super) async fn show_composer(
+    show: &mut View,
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<bool, String> {
+    show_card(show, show.layout.active_squad, sock_w).await
+}
+
+/// The `+` on a workspace header: open that workspace's card, or fold it
+/// when it is already the open one.
+pub(super) async fn open_draft(
+    view: &mut View,
+    squad: u64,
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<(), String> {
+    if view.launcher.as_ref().is_some_and(|l| l.squad == squad) {
+        agent_launcher::close(view);
+    } else {
+        show_card(view, squad, sock_w).await?;
+    }
+    Ok(())
+}
+
+async fn show_card(
+    show: &mut View,
+    squad: u64,
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<bool, String> {
+    let was_here = show.launcher.as_ref().map(|l| l.squad) == Some(squad);
+    // An open card for this workspace keeps its held draft; another
+    // workspace's card folds into its own slot first.
+    if show.launcher.as_ref().is_none_or(|l| l.squad != squad) {
+        agent_launcher::open_in(show, squad);
+    }
+    // A hidden sideline reveals at its normal width: the card paints inside
+    // it, and the panes resize to the narrower content area.
+    if !show.panel_on {
+        show.panel_on = true;
+        let (r, c) = show.content_dims();
+        write_msg(sock_w, &ClientMsg::Resize { rows: r, cols: c })
+            .await
+            .map_err(|e| format!("resize send failed: {e}"))?;
+    }
+    // The card needs 12 rows for its prompt, tokens and keys, and a terminal
+    // wide enough to carry the sideline it lives in; nothing opens and the
+    // bottom row says why.
+    let refusal = if show.launcher.is_none() {
+        Some("the sideline is too narrow for a card; widen it")
+    } else if show.term.0 < 12 {
+        Some("terminal too short for the composer")
+    } else if show.panel_w() == 0 {
+        Some("terminal too narrow for the composer")
+    } else {
+        None
+    };
+    if let Some(why) = refusal {
+        if !was_here {
+            agent_launcher::close(show);
+        }
+        show.set_notice(why.into());
+        return Ok(false);
+    }
+    // Scroll the workspace's header to where its card shows: the card sits
+    // right under it, so a header out of view would hide the keyboard owner.
+    let header = show
+        .display_rows()
+        .iter()
+        .position(|r| matches!(r, DisplayRow::Sel(s) if s.tab.is_none() && s.squad == squad));
+    if let Some(at) = header {
+        let (off, visible) = (show.sideline_offset(), show.sideline_visible_rows());
+        let card_rows = show
+            .launcher
+            .as_ref()
+            .map_or(0, |l| l.card_lines(show, show.card_width()).len());
+        if at < off || at + 1 + card_rows > off + visible {
+            show.set_sideline_offset(at);
+            show.clamp_sideline_scroll();
+        }
+    }
+    Ok(true)
+}
+
+/// Full-screen is a display toggle: it flips `sideline_full` and reveals a
+/// hidden sideline on the way in. The composer stays owned by prefix+i
+/// (`toggle-composer`); F no longer opens it. Leaving leaves the composer
+/// as it is; content_dims never changed, so no Resize travels in either
+/// direction.
+pub(super) fn toggle_full(view: &mut View) {
+    view.sideline_full = !view.sideline_full;
+    if view.sideline_full {
+        view.panel_on = true;
+    }
+}

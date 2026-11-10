@@ -1,0 +1,210 @@
+//! The canonical backlog action catalog (wave 4).
+//!
+//! One table owns the vocabulary: eleven canonical groups, every legacy name
+//! mapped to exactly one `(group, action)` pair. `annotate` is retired: the
+//! note group owns findings now, and the old spellings ride a one-release
+//! forwarding shim. The catalog is
+//! the single source both the compatibility help and any future dispatcher
+//! must read - no second handwritten mapping in help or completion.
+
+/// One canonical group: its purpose line and the action vocabulary, where
+/// each action names the legacy first-level command it dispatches to (the
+/// group's action argument is the new spelling; the legacy name is kept for
+/// the compatibility window).
+#[derive(Debug)]
+pub struct Group {
+    pub name: &'static str,
+    pub purpose: &'static str,
+    /// `(action, legacy_command)` pairs: `fno backlog <group> <action>`
+    /// dispatches to the legacy command `<legacy_command>`.
+    pub actions: &'static [(&'static str, &'static str)],
+}
+
+/// The canonical table, in plan order.
+pub const GROUPS: &[Group] = &[
+    Group {
+        name: "add",
+        purpose: "Create or import a node",
+        actions: &[
+            ("node", "add"),
+            ("idea", "idea"),
+            ("scoped", "new"),
+            ("plan", "intake"),
+            ("requests", "import-requests"),
+        ],
+    },
+    Group {
+        name: "get",
+        purpose: "Read one node and its provenance",
+        actions: &[
+            ("node", "get"),
+            ("status", "status"),
+            ("provenance", "provenance"),
+            ("project-root", "project-root"),
+            ("version", "version"),
+            ("calibration", "calibration"),
+        ],
+    },
+    Group {
+        name: "find",
+        purpose: "Search node text",
+        actions: &[("text", "find")],
+    },
+    Group {
+        name: "list",
+        purpose: "Read saved node sets; bare `list <query>` is the native grammar door",
+        actions: &[
+            ("next", "next"),
+            ("ready", "ready"),
+            ("queued", "queued"),
+            ("worked", "worked"),
+            ("lanes", "lanes"),
+            ("undispatched", "undispatched"),
+            ("stuck-epics", "stuck-epics"),
+            ("wave-notes", "wave-notes"),
+        ],
+    },
+    Group {
+        name: "update",
+        purpose: "Change node fields",
+        actions: &[
+            ("node", "update"),
+            ("rank", "rank"),
+            ("priority", "reprioritize"),
+        ],
+    },
+    Group {
+        name: "note",
+        purpose: "Append a comment to the node thread (older comments stay)",
+        actions: &[
+            ("comment", "comment"),
+            ("state", "note"),
+            ("dispose", "wave-dispose"),
+        ],
+    },
+    Group {
+        name: "move",
+        purpose: "Change lifecycle or queue state",
+        actions: &[
+            ("done", "done"),
+            ("reopen", "reopen"),
+            ("defer", "defer"),
+            ("undefer", "undefer"),
+            ("queue", "queue"),
+            ("unqueue", "unqueue"),
+            ("requeue", "requeue"),
+            ("unclaim", "unclaim"),
+            ("retract", "retract"),
+        ],
+    },
+    Group {
+        name: "link",
+        purpose: "Change node relationships",
+        actions: &[
+            ("contain", "contain"),
+            ("decompose", "decompose"),
+            ("relatedness", "relatedness"),
+            ("collisions", "collisions"),
+            ("supersede", "supersede"),
+            ("unsupersede", "unsupersede"),
+            ("carveout", "carveout"),
+            ("epic", "epic"),
+        ],
+    },
+    Group {
+        name: "board",
+        purpose: "Show work and demand",
+        actions: &[
+            ("summary", "board"),
+            ("open", "view"),
+            ("roadmap", "roadmap"),
+            ("album", "album"),
+            ("bases", "bases"),
+            ("demand", "demand"),
+            ("cost", "cost"),
+            ("publish", "publish"),
+        ],
+    },
+    Group {
+        name: "triage",
+        purpose: "Analyze and order work",
+        actions: &[
+            ("run", "triage"),
+            ("groom", "groom"),
+            ("discover", "discover"),
+            ("pick", "pick"),
+            ("encounter", "encounter"),
+        ],
+    },
+    Group {
+        name: "admin",
+        purpose: "Operate storage and automation",
+        actions: &[
+            ("advance", "advance"),
+            ("archive", "archive"),
+            ("archive-dedupe-ids", "archive-dedupe-ids"),
+            ("backfill-deferred-kind", "backfill-deferred-kind"),
+            ("batch", "batch"),
+            ("capture", "capture"),
+            ("decide", "decide"),
+            ("decide-reindex", "decide-reindex"),
+            ("decide-retract", "decide-retract"),
+            ("decisions", "decisions"),
+            ("dispatch-lanes", "dispatch-lanes"),
+            ("join", "join"),
+            ("lane-fill", "lane-fill"),
+            ("maintain", "maintain"),
+            ("migrate-difficulty", "migrate-difficulty"),
+            ("migrate-priorities", "migrate-priorities"),
+            ("migrate-updated-at", "migrate-updated-at"),
+            ("reconcile", "reconcile"),
+            ("remove", "remove"),
+            ("render-views", "render-views"),
+            ("retro", "retro"),
+            ("session", "session"),
+            ("task", "task"),
+            ("unarchive", "unarchive"),
+        ],
+    },
+];
+
+/// Resolve `group + action` to the legacy command it dispatches to.
+pub fn resolve(group: &str, action: &str) -> Option<&'static str> {
+    GROUPS
+        .iter()
+        .find(|g| g.name == group)?
+        .actions
+        .iter()
+        .find(|(a, _)| *a == action)
+        .map(|(_, legacy)| *legacy)
+}
+
+/// Resolve a bare legacy command to `(group, action)`.
+pub fn from_legacy(command: &str) -> Option<(&'static str, &'static str)> {
+    GROUPS.iter().find_map(|g| {
+        g.actions
+            .iter()
+            .find(|(_, legacy)| *legacy == command)
+            .map(|(action, _)| (g.name, *action))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn every_legacy_name_maps_exactly_once() {
+        let mut seen: BTreeMap<&str, &str> = BTreeMap::new();
+        for g in GROUPS {
+            for (_, legacy) in g.actions {
+                assert_eq!(
+                    seen.insert(legacy, g.name),
+                    None,
+                    "{legacy} maps into both {seen:?} and {g:?}"
+                );
+            }
+        }
+    }
+}

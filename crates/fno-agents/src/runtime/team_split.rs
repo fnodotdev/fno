@@ -1,0 +1,244 @@
+//! Two rows on one territory, and which kind of two.
+//!
+//! `double_ruled` is an authority finding: more than one NON-TERMINAL row
+//! carries the same territory key. For a single-member scope that is the
+//! same condition `team_settle::resolve` refuses a grant on. Settle
+//! refuses any spawn a live team rivals, aliases normalized through
+//! `loop_lead::team_rivals`; the remaining gap is the Python lock-time
+//! compare during the launch window.
+//!
+//! `stale` is a board finding: a TERMINAL row still carrying team fields.
+//! Nothing clears a team when a row goes terminal, so these accumulate and
+//! are what a reader mistakes for two leads. Separate word, separate remedy.
+
+use crate::state::RegistryEntry;
+use std::collections::BTreeMap;
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ScopeSplit {
+    pub scope: String,
+    pub holders: Vec<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct StaleRole {
+    pub row: String,
+    /// The row's session id, so a reading joins on identity; `None` on a
+    /// legacy split read keeps the name join.
+    pub session: Option<String>,
+    pub scope: String,
+    pub stored_status: String,
+}
+
+/// The stale row's registry read, id-first: a split read after the id
+/// change joins through `StaleRole::session`; a legacy reading (no
+/// session recorded) falls back to the name join.
+pub(crate) fn terminal_join<'a>(
+    rows: &'a [crate::state::RegistryEntry],
+    stale: &StaleRole,
+) -> crate::lead_state::NameJoin<'a> {
+    match stale.session.as_deref() {
+        Some(session) => crate::agent_ref::resolve(
+            rows,
+            crate::agent_ref::Key::Id(session),
+            crate::lead_state::is_terminal,
+        ),
+        None => crate::lead_state::terminal_name_join(rows, &stale.row),
+    }
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct TeamSplits {
+    pub double_ruled: Vec<ScopeSplit>,
+    pub stale: Vec<StaleRole>,
+}
+
+/// Group teamed rows by normalized territory key over ALL rows, live and
+/// terminal. The org's own conflict scan filters to stored-live rows, so
+/// a terminal teamed row is invisible there by construction; this reader
+/// reads the registry directly for that reason. Same territory key is
+/// deliberately narrower than the org's overlap rule: a live level-1
+/// team over a project and a live level-2 team over one node never pair,
+/// which is the legitimate portfolio-and-org arrangement.
+pub(crate) fn read_team_splits(rows: &[RegistryEntry]) -> TeamSplits {
+    let mut live: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut stale: Vec<StaleRole> = Vec::new();
+    for row in rows {
+        let Some(scope) = row
+            .role_scope
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        let key = crate::lead_state::territory_key(scope);
+        if key.is_empty() {
+            continue;
+        }
+        if crate::lead_state::is_terminal(row) {
+            // The stored word, exactly as the registry serializes it, so the
+            // anomaly line and a org JSON read compare without a
+            // translation table.
+            let stored_status = serde_json::to_value(row.status)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_default();
+            stale.push(StaleRole {
+                row: row.name.clone(),
+                session: row.harness_session_id.clone(),
+                scope: key,
+                stored_status,
+            });
+        } else {
+            live.entry(key).or_default().push(row.name.clone());
+        }
+    }
+    // BTreeMap iteration is key-sorted, so the output order is a function of
+    // the registry alone and two beats over an unchanged registry render
+    // identically.
+    let double_ruled = live
+        .into_iter()
+        .filter(|(_, holders)| holders.len() > 1)
+        .map(|(scope, mut holders)| {
+            holders.sort();
+            ScopeSplit { scope, holders }
+        })
+        .collect();
+    stale.sort_by(|a, b| (&a.scope, &a.row).cmp(&(&b.scope, &b.row)));
+    TeamSplits {
+        double_ruled,
+        stale,
+    }
+}
+
+/// Why one stale teamed row is down, read from its transcript tail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeadCallReading {
+    /// The newest tool call has its result, or the tail holds none.
+    Clear,
+    /// The newest tool call has no result. `boot` is set only when the call
+    /// predates the host boot.
+    Open {
+        session_id: String,
+        tool: String,
+        at: String,
+        boot: Option<String>,
+    },
+    /// No reading; the reason is printed.
+    Unread(String),
+}
+
+/// The tail window for the dead-call reading: far past the few records a
+/// tool-call turn spans, and a bound on the read of a huge transcript.
+pub(crate) const DEAD_CALL_TAIL_BYTES: u64 = 1 << 20;
+
+pub(crate) fn dead_call(row: &RegistryEntry, boot_ms: Option<i64>) -> DeadCallReading {
+    dead_call_in(&crate::claude_drive::claude_projects_dir(), row, boot_ms)
+}
+
+fn dead_call_in(
+    projects: &std::path::Path,
+    row: &RegistryEntry,
+    boot_ms: Option<i64>,
+) -> DeadCallReading {
+    let harness = row.harness_name();
+    if harness != "claude" {
+        return DeadCallReading::Unread(format!("no tool-call reader for harness {harness}"));
+    }
+    let Some(sid) = row.harness_session_id.as_deref().filter(|s| !s.is_empty()) else {
+        return DeadCallReading::Unread("row carries no session id".to_string());
+    };
+    let Some(path) = crate::claude_drive::find_transcript_in(projects, sid) else {
+        return DeadCallReading::Unread(format!("no transcript for session {sid}"));
+    };
+    let tail = crate::tail_text(&path, DEAD_CALL_TAIL_BYTES);
+    if tail.is_empty() {
+        return DeadCallReading::Unread("transcript tail unreadable".to_string());
+    }
+    match crate::interrupt_classify::trailing_open_call(&tail) {
+        None => DeadCallReading::Clear,
+        Some(call) => {
+            let at = call
+                .at
+                .clone()
+                .unwrap_or_else(|| "an unrecorded time".to_string());
+            let boot = boot_ms.and_then(|ms| {
+                call.at
+                    .as_deref()
+                    .and_then(|a| chrono::DateTime::parse_from_rfc3339(a).ok())
+                    .filter(|t| t.timestamp_millis() < ms)
+                    .and_then(|_| chrono::DateTime::from_timestamp_millis(ms))
+                    .map(|b| b.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+            });
+            DeadCallReading::Open {
+                session_id: sid.to_string(),
+                tool: call.name,
+                at,
+                boot,
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::AgentStatus;
+
+    fn row(name: &str, scope: Option<&str>, status: AgentStatus) -> RegistryEntry {
+        RegistryEntry {
+            name: name.to_string(),
+            role_scope: scope.map(str::to_string),
+            status,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn two_live_rows_on_one_scope_are_one_double_rule() {
+        let rows = [
+            row("lead-b", Some("shared"), AgentStatus::Busy),
+            row("lead-a", Some("shared"), AgentStatus::Live),
+        ];
+        let out = read_team_splits(&rows);
+        assert!(out.stale.is_empty());
+        assert_eq!(out.double_ruled.len(), 1);
+        assert_eq!(out.double_ruled[0].scope, "shared");
+        assert_eq!(out.double_ruled[0].holders, vec!["lead-a", "lead-b"]);
+    }
+
+    fn claude_row(name: &str, sid: &str) -> RegistryEntry {
+        RegistryEntry {
+            name: name.to_string(),
+            role_scope: Some("fno".to_string()),
+            status: AgentStatus::Exited,
+            harness: Some("claude".to_string()),
+            harness_session_id: Some(sid.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn dead_call_is_unread_without_a_transcript_or_id() {
+        let dir = std::env::temp_dir().join(format!("cs-dc-c-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let row = claude_row("lead-c", "11111111-2222-4333-8444-555555555555");
+        let no_id = claude_row("lead-nosid", "");
+        let matches = |r: &DeadCallReading, want: &str| {
+            assert!(
+                matches!(r, DeadCallReading::Unread(m) if m == want),
+                "got {r:?}"
+            );
+        };
+        matches(
+            &dead_call_in(&dir, &row, None),
+            "no transcript for session 11111111-2222-4333-8444-555555555555",
+        );
+        matches(
+            &dead_call_in(&dir, &no_id, None),
+            "row carries no session id",
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

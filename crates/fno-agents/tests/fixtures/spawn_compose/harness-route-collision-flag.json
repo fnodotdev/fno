@@ -1,0 +1,94 @@
+{
+  "apply_permission_builtin": true,
+  "argv": [
+    "spawn",
+    "--name",
+    "w13",
+    "-P",
+    "zai",
+    "-m",
+    "glm-z",
+    "/fno:target x-11"
+  ],
+  "config_toml": "[agents.defaults]\nprovider = \"codex\"\n",
+  "env_node": null,
+  "expect": {
+    "argv": [
+      "spawn",
+      "--name",
+      "w13",
+      "-P",
+      "zai",
+      "-m",
+      "glm-z",
+      "/fno:target x-11"
+    ],
+    "exit": 0,
+    "journal": {
+      "data": {
+        "name": "w13",
+        "verb": "target",
+        "seed": "/fno:target x-11",
+        "fingerprint": "",
+        "resolved": {
+          "route": {
+            "value": "",
+            "rung": null
+          },
+          "account": {
+            "value": "",
+            "rung": null
+          },
+          "pane_group": {
+            "value": "",
+            "rung": null
+          }
+        },
+        "applied": [],
+        "suppressed": []
+      },
+      "type": "spawn_defaults_applied",
+      "source": "agents"
+    },
+    "stderr": [],
+    "stdout": null
+  },
+  "facts": {
+    "role_protected": null,
+    "role_resolves": false
+  },
+  "node": null,
+  "node_row": null,
+  "node_command": null,
+  "scan": {
+    "account_flag_present": false,
+    "explicit_harness": null,
+    "explicit_route": false,
+    "explicit_substrate": null,
+    "explicit_vendor": "zai",
+    "flag_node": null,
+    "has_effort": false,
+    "has_harness": false,
+    "has_model": true,
+    "has_permission": false,
+    "model_value": "glm-z",
+    "name": "w13",
+    "permission_value": null,
+    "positional_present": true,
+    "role": null,
+    "route_value": null,
+    "seed": "/fno:target x-11",
+    "seed_form": "positional",
+    "seed_index": 7,
+    "spawn_tokens": [
+      "--name",
+      "w13",
+      "-P",
+      "zai",
+      "-m",
+      "glm-z",
+      "/fno:target x-11"
+    ],
+    "tab_flag_present": false
+  }
+}

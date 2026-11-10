@@ -1,0 +1,3731 @@
+//! `fno-agents finalize` (control-plane step 6, x-aaaa): the terminal-only
+//! WRITER the stop-hook shim invokes on a terminal-allow `loop-check` decision.
+//!
+//! It re-homes the mechanical session side-effects out of the skill's
+//! pre-promise bash so they fire in EVERY mode (attended, autonomous, megawalk
+//! worker) and survive context compaction:
+//!
+//! - **Always** (any terminal reason): one ledger session-record, carrying
+//!   `graph_node_id` + `provider_id` + scalar `session_id` + `cost_usd` + a new
+//!   `termination_reason`, so a node's true cost and full session list roll up
+//!   by grouping ledger entries on `graph_node_id` (US7).
+//! - **Legacy ship** (`DonePRGreen` / `DoneAdvisory`): plan stamp + a mechanical
+//!   git-derived handoff artifact. A code ship (DonePRGreen) stamps `in_review`
+//!   only (done = merged, ; the flip happens at merge). An advisory ship
+//!   (DoneAdvisory) has no merge event, so it also graduates to `done` here.
+//! - **Generic delivery** (`DoneDelivery`): consume the selected strict verdict,
+//!   stamp or safely graduate with its receipt, and write a generic handoff.
+//! - **`DonePRGreen` only**, when the manifest approves it: arm GitHub's native
+//!   auto-merge. This is the one terminal that means "green and reviewed", and
+//!   arming it HERE rather than at PR creation is the whole point -
+//!   see `should_arm_auto_merge`.
+//!
+//! ## Why this does not break the read-only stop hook
+//!
+//! `loop-check` stays a pure read-only DECISION command; `finalize` is a separate
+//! WRITER the shim runs AFTER the allow decision. Nothing `finalize` writes is
+//! read by a future `loop-check` decision as a gate:
+//!
+//! - `loop-check`'s budget axis reads ledger `cost_usd` filtered by THIS
+//!   session's `session_id`. `finalize`'s terminal ledger row for the same
+//!   session can only push a re-fire toward termination (a higher cost trips
+//!   `Budget`, which is itself terminal-allow), never away from it - and a
+//!   re-fire early-returns on the `session_finalized` event anyway.
+//! - A DIFFERENT session's `loop-check` filters by its own `session_id`, so it
+//!   never reads this session's finalize row.
+//!
+//! ## Non-fatal + idempotent
+//!
+//! Every sub-step records failures in a `session_finalize_failed` event.
+//! Legacy terminal side effects remain non-blocking, while `DoneDelivery`
+//! returns failure so the stop-hook can keep the session alive and retry its
+//! required receipt, stamp, and handoff writes.
+//! `session_finalized` is emitted ONLY when every attempted sub-step succeeded;
+//! a partial failure leaves it unemitted so a later stop-hook fire retries the
+//! remaining work (each shelled script is itself idempotent: ledger flock +
+//! scalar-session-id dedup, first-writer-wins stamp, filename-keyed handoff).
+//!
+//! The proven cost/ledger legs are native now (`session_cost.rs` prices the
+//! transcript; `ledger_register.rs` parses the manifest, builds the row, and
+//! appends it under the ledger flock); the stamp is the in-process plan-doc
+//! writer. This command is a thin orchestrator (Locked Decision 6 - avoids
+//! the Python->Rust byte-parity trap), so the shim keeps its Rust-only
+//! dependency surface (Domain Pitfall).
+
+use crate::finalize_run_summary;
+use crate::loopcheck::{emit_to_both, now_rfc3339_utc, TerminationReason};
+use crate::run_outcome::classify_legacy;
+use serde_json::{json, Value};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+/// Whether a completion eval fires for this termination reason.
+///
+/// Before this, an eval only ran for `STUCK_REASONS` (then named
+/// `POSTMORTEM_REASONS`) - a failure-only sample. A failure-only sample
+/// writes rules in a predictable direction: nothing ever confirmed what a clean session did
+/// right, so every lesson skewed toward caution. The operator ruling
+/// (2026-08-14) is that the eval must run on every completion, success and
+/// failure alike, so the corpus stops being biased by construction.
+///
+/// `NoWork` is the sole exclusion: it means megawalk/backlog found nothing
+/// to do, so there is no session to evaluate. Every other terminal - every
+/// ship reason, every stuck reason, `DoneBatched`/`DoneAwaitingMerge`/
+/// `DoneUnreviewed`/`DoneAwaitingReview`/`DonePlanned` alike - gets an eval.
+fn eval_should_fire(reason: &str) -> bool {
+    classify_legacy(reason)
+        .map(|record| record.projection().record_ledger)
+        .unwrap_or(false)
+}
+
+fn is_stuck_reason(reason: &str) -> bool {
+    classify_legacy(reason)
+        .map(|record| record.projection().stuck)
+        .unwrap_or(false)
+}
+
+// ── arg parsing ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Default)]
+struct FinalizeArgs {
+    state: Option<PathBuf>,
+    transcript: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+    reason: Option<String>,
+    // Overrides (primarily for tests / non-default layouts).
+    events: Option<PathBuf>,
+    global_events: Option<PathBuf>,
+    settings: Option<PathBuf>,
+    handoffs_dir: Option<PathBuf>,
+    postmortems_dir: Option<PathBuf>,
+}
+
+fn parse_args(args: &[String]) -> Result<FinalizeArgs, String> {
+    let mut a = FinalizeArgs::default();
+    let mut it = args.iter();
+    while let Some(flag) = it.next() {
+        let take = |it: &mut std::slice::Iter<String>| -> Result<String, String> {
+            it.next()
+                .cloned()
+                .ok_or_else(|| format!("{flag} needs a value"))
+        };
+        match flag.as_str() {
+            "--state" => a.state = Some(PathBuf::from(take(&mut it)?)),
+            "--transcript" => a.transcript = Some(PathBuf::from(take(&mut it)?)),
+            "--cwd" => a.cwd = Some(PathBuf::from(take(&mut it)?)),
+            "--reason" => a.reason = Some(take(&mut it)?),
+            "--events" => a.events = Some(PathBuf::from(take(&mut it)?)),
+            "--global-events" => a.global_events = Some(PathBuf::from(take(&mut it)?)),
+            "--settings" => a.settings = Some(PathBuf::from(take(&mut it)?)),
+            "--handoffs-dir" => a.handoffs_dir = Some(PathBuf::from(take(&mut it)?)),
+            "--postmortems-dir" => a.postmortems_dir = Some(PathBuf::from(take(&mut it)?)),
+            other => return Err(format!("unknown flag: {other}")),
+        }
+    }
+    Ok(a)
+}
+
+const HELP: &str = "fno-agents finalize - terminal-only side-effect writer (step 6)\n\
+Usage: fno-agents finalize --state <target-state.md> --cwd <project-root> --reason <TerminationReason> \\\n\
+                           [--transcript <transcript.jsonl>] [--events <p>] [--global-events <p>] \\\n\
+                           [--settings <p>] [--handoffs-dir <p>] [--postmortems-dir <p>]\n\
+Reason values: DonePRGreen|DoneAdvisory|DoneDelivery|DoneBatched|DoneAwaitingMerge|DoneAwaitingReview|DoneAwaitingRuling|DonePlanned|NoWork|Budget|NoProgress|HeldOnQuestion|Interrupted|Aborted";
+
+// ── manifest fields finalize reads directly ────────────────────────────────
+
+/// The three manifest fields finalize needs itself (the ledger row reads the
+/// same manifest natively in `ledger_register::parse_target_state`).
+#[derive(Debug, Default)]
+pub(crate) struct ManifestFields {
+    /// Target-minted session id: idempotency key, handoff every manifest reader
+    /// consults, event data. Pub(crate): the worktree gate asks the session
+    /// verdict for it.
+    pub(crate) session_id: Option<String>,
+    /// Canonical target-minted id, retained separately so it wins regardless of
+    /// manifest key order over the one-release `session_id` fallback.
+    fno_id: Option<String>,
+    /// Claude transcript UUID: the native cost leg and ledger row key on it.
+    claude_transcript_id: Option<String>,
+    /// Plan to stamp/graduate (ship branch only). Empty/absent -> skip.
+    plan_path: Option<String>,
+    /// Feature title for the handoff header.
+    input: Option<String>,
+    /// Backlog node id (lives in the manifest BODY, below the frontmatter).
+    pub(crate) graph_node_id: Option<String>,
+    /// Harness (conversation) session id captured at init: the do-stamp's
+    /// identity-continuity input, passed through to the Python primitive.
+    /// Pub(crate): the worktree gate asks the session verdict for it.
+    pub(crate) harness_session_id: Option<String>,
+    /// HEAD at init: baseline for the `initial_head..HEAD` work-evidence range.
+    /// Absent on manifests minted before -> the do stamp skips.
+    initial_head: Option<String>,
+    /// Init instant: the author-date floor for work evidence, and the value the
+    /// do row carries as `started_at` (the start of the implementation window).
+    created_at: Option<String>,
+    /// Cross-project plan: graduation must wait for ALL project PRs, so the
+    /// expected URL count is derived from the plan's `projects:` map, never 1.
+    cross_project: bool,
+    /// Merge posture resolved by init (config folded with this run's modifiers,
+    /// where every refusal outranks every grant). Gates arming GitHub's native
+    /// auto-merge at a green terminal. `None` = the key was absent. Pub(crate):
+    /// loopcheck's delegated-merge park reads it beside the source.
+    pub(crate) auto_merge_approved: Option<bool>,
+    /// Which input set the posture: config | flag-no-merge |
+    /// env-target-auto-merge | default-off. `None` = pre-provenance manifest;
+    /// surfaced as `unknown`, never guessed. No longer advisory:
+    /// `env-target-auto-merge` on an approved run satisfies the standing
+    /// config arm on its own, exactly as init folded it and the docs promise.
+    pub(crate) auto_merge_source: Option<String>,
+    /// The run's node claim, written to the manifest body by init when it
+    /// claimed `node:<id>`. The cancel settle releases it with
+    /// `--stamp-do`, closing the do row the session's acquire opened.
+    target_claim_key: Option<String>,
+    /// Who holds the claim above: the `--holder` the release must match.
+    target_claim_holder: Option<String>,
+}
+
+/// Does this line close the double-quoted scalar `init-target-state.sh` opened?
+///
+/// The rule is NOT backslash parity. The writer escapes quotes and NOT
+/// backslashes (`${INITIAL_INPUT//\"/\\\"}`, init:811), so the manifest is not
+/// backslash-escaped YAML and a parity rule is wrong in both directions: user
+/// text ending in `\"` arrives as `\\"`, which parity reads as even and closes
+/// the scalar early, handing the forgery back.
+///
+/// What that escaping DOES guarantee is one-directional and enough: every quote
+/// the user typed gets exactly one `\` prepended, so a user quote is ALWAYS
+/// immediately preceded by a backslash, however many backslashes they typed. A
+/// closing quote with no backslash before it therefore cannot have come from the
+/// user, and is the terminator.
+///
+/// The residual ambiguity is input ending in a lone `\`: its own closing quote
+/// carries a preceding backslash and so reads as user text, and the scalar
+/// instead ends at the next quoted line - `plan_path: "..."` (init:840) in the
+/// real layout. That costs one line of reduced trust and nothing else, because
+/// `parse_manifest_fields` lets the terminator line fall through and parse; only
+/// the merge posture consults the mark, and `plan_path` does not.
+fn ends_quoted_scalar(line: &str) -> bool {
+    let Some(rest) = line.strip_suffix('"') else {
+        return false;
+    };
+    !rest.ends_with('\\')
+}
+
+/// Scan the WHOLE manifest (frontmatter AND body) for the keys we need.
+/// `graph_node_id`/`target_claim_*` live below the closing `---`, so a
+/// frontmatter-only parse (like loop-check's) would miss them.
+pub(crate) fn parse_manifest_fields(content: &str) -> ManifestFields {
+    let mut m = ManifestFields::default();
+    // Init writes the run's raw argument as `input: "<...>"` (init:839), so a
+    // MULTI-LINE argument spills real newlines into the manifest and every
+    // continuation line reaches this loop looking like a `key: value` pair.
+    // `input` is written BEFORE the canonical `auto_merge_approved` (init:886),
+    // so a pasted spec containing that key would be read as the merge posture
+    // and outrank the real refusal below it.
+    //
+    // Lines inside that scalar are tracked as UNTRUSTED rather than skipped.
+    // Skipping them is what an earlier cut of this did, and it silently ate
+    // `plan_path`: the scalar's terminator is ambiguous for input ending in a
+    // lone backslash (see `ends_quoted_scalar`), and an over-long skip swallowed
+    // the very next line - dropping the plan stamp with no error. Only the merge
+    // posture is withheld here, so every other field parses exactly as it did
+    // before this guard existed and an ambiguous scalar costs nothing.
+    //
+    // That asymmetry is the whole safety argument: an unterminated scalar marks
+    // MORE lines untrusted, and untrusted only ever withholds the grant, leaving
+    // `auto_merge_approved` as `None` -> no arming. Both directions fail closed.
+    let mut untrusted = false;
+    for line in content.lines() {
+        let line = line.trim();
+        // The terminator line closes the scalar for everything AFTER it, but is
+        // itself still untrusted: when the scalar ends on the same line as the
+        // user's last line of text, that line is user text wearing a closing
+        // quote (`auto_merge_approved: true"`). It must still FALL THROUGH and
+        // parse, never be consumed - for input ending in a lone backslash the
+        // real terminator is `plan_path: "..."` (init:840), and skipping it was
+        // how an earlier cut silently dropped the plan stamp.
+        let line_untrusted = untrusted;
+        if untrusted && ends_quoted_scalar(line) {
+            untrusted = false;
+        }
+        // Skip markdown headings and frontmatter fences; a `key: value` match
+        // below is all we want.
+        if line.is_empty() || line.starts_with('#') || line == "---" {
+            continue;
+        }
+        let Some((k, v)) = line.split_once(':') else {
+            continue;
+        };
+        let k = k.trim();
+        let raw = v.trim();
+        // A multi-line `input` opens a quoted scalar here; everything up to its
+        // closing quote is the user's text, not manifest keys.
+        if !line_untrusted
+            && k == "input"
+            && raw.starts_with('"')
+            && !(raw.len() >= 2 && ends_quoted_scalar(raw))
+        {
+            untrusted = true;
+        }
+        let v = raw.trim_matches(|c| c == '"' || c == '\'');
+        // First non-empty wins (frontmatter precedes body); never overwrite a
+        // real value with a later blank.
+        let set = |slot: &mut Option<String>, val: &str| {
+            if slot.is_none() && !val.is_empty() && val != "null" {
+                *slot = Some(val.to_string());
+            }
+        };
+        match k {
+            // fno_id is canonical regardless of key order; session_id is the
+            // pre-rename fallback.
+            "fno_id" => set(&mut m.fno_id, v),
+            "session_id" => set(&mut m.session_id, v),
+            // Current key is claude_session_id; accept the pre-rename
+            // claude_transcript_id as a fallback for one release. `set` keeps the
+            // first non-empty value, so the current key (written first) wins.
+            "claude_session_id" | "claude_transcript_id" => set(&mut m.claude_transcript_id, v),
+            "plan_path" => set(&mut m.plan_path, v),
+            "input" => set(&mut m.input, v),
+            "graph_node_id" => set(&mut m.graph_node_id, v),
+            "harness_session_id" => set(&mut m.harness_session_id, v),
+            "initial_head" => set(&mut m.initial_head, v),
+            "created_at" => set(&mut m.created_at, v),
+            "cross_project" => m.cross_project = v == "true",
+            // The merge-authority read, and the only key that consults
+            // `untrusted`. First occurrence wins, unlike cross_project's
+            // last-wins, so a trailing line cannot overwrite the canonical one
+            // either. A line inside the `input` scalar is ignored outright: the
+            // "arbitrary prose must never grant merge authority" rule init
+            // applies when it folds the posture has to hold here too,
+            // or the fold is decorative.
+            "auto_merge_approved" if !line_untrusted && m.auto_merge_approved.is_none() => {
+                m.auto_merge_approved = Some(v == "true")
+            }
+            // Provenance: same untrusted-line rule as the posture
+            // itself - prose inside the `input` scalar must not be able to
+            // claim an origin either. Advisory, so no separate trust gate.
+            "auto_merge_source" if !line_untrusted => set(&mut m.auto_merge_source, v),
+            // The run's node claim: init writes both keys into the
+            // manifest BODY, and this parser scans the body for exactly that
+            // reason. Plain `set`, never trust-gated: a cancelled run must
+            // release the claim the manifest NAMES, and prose cannot mint a
+            // claim the run does not hold (the release verifies the holder).
+            "target_claim_key" => set(&mut m.target_claim_key, v),
+            "target_claim_holder" => set(&mut m.target_claim_holder, v),
+            _ => {}
+        }
+    }
+    if m.fno_id.is_some() {
+        m.session_id = m.fno_id.clone();
+    }
+    m
+}
+
+fn canonical_session_id(m: &ManifestFields) -> Option<String> {
+    m.session_id
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+}
+
+// ── idempotency ─────────────────────────────────────────────────────────────
+
+/// Inspect prior `session_finalized` events for this session_id.
+///
+/// Returns:
+/// - `Some(true)`  - a prior finalize completed a SHIP (stamp/graduate/handoff
+///   ran); the session is fully done, nothing more to do on any later fire.
+/// - `Some(false)` - a prior finalize completed but only the non-ship ledger
+///   record (the always-branch); the ledger row exists, but the ship
+///   side-effects have NOT run.
+/// - `None`        - no completed finalize yet (or only `session_finalize_failed`,
+///   which is intentionally not counted so a later fire retries).
+///
+/// A successful finalize is recorded ONLY when every attempted sub-step
+/// succeeded, so a partially-failed prior run leaves this `None` and the next
+/// fire retries. The `ship` flag distinguishes a non-ship terminal (Budget /
+/// NoProgress / ...) from a real ship, so a session that terminated non-ship
+/// first and then ships within the same session still runs its ship
+/// side-effects on the ship fire (the lockout bug, sigma-review HIGH).
+fn prior_finalize_ship(project_events: &Path, session_id: &str) -> Option<bool> {
+    crate::event_store::import_all(project_events).ok()?;
+    let rows = crate::event_store::query_events(
+        project_events,
+        &crate::event_store::EventQuery {
+            types: vec!["session_finalized".to_string()],
+            ..Default::default()
+        },
+    )
+    .ok()?;
+    let mut seen = None;
+    for row in rows {
+        let Ok(val) = serde_json::from_str::<Value>(&row.line) else {
+            continue;
+        };
+        if val.pointer("/data/session_id").and_then(|v| v.as_str()) != Some(session_id) {
+            continue;
+        }
+        let ship = val
+            .pointer("/data/ship")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if ship {
+            return Some(true); // a completed ship is terminal-complete
+        }
+        seen = Some(false);
+    }
+    seen
+}
+
+/// The newest claim-releasing termination this session already finalized,
+/// if any. The post-terminal stop allow reads it: once a completed finalize
+/// carries a reason that releases the claim (DonePRGreen / DoneAdvisory /
+/// DoneDelivery / NoWork), the session's loop is over and later stops are
+/// plain conversation. Resumable terminals (DoneAwaiting*, DoneBatched) and
+/// failed finalizes answer None, so their stops keep gating. Any releasing
+/// row wins: a session that terminated non-ship first and shipped later
+/// carries both rows.
+pub(crate) fn prior_releasing_finalize(project_events: &Path, session_id: &str) -> Option<String> {
+    crate::event_store::import_all(project_events).ok()?;
+    let rows = crate::event_store::query_events(
+        project_events,
+        &crate::event_store::EventQuery {
+            types: vec!["session_finalized".to_string()],
+            session_id: Some(session_id.to_string()),
+            ..Default::default()
+        },
+    )
+    .ok()?;
+    let mut releasing: Option<String> = None;
+    for row in rows {
+        let Ok(val) = serde_json::from_str::<Value>(&row.line) else {
+            continue;
+        };
+        if val.pointer("/data/session_id").and_then(|v| v.as_str()) != Some(session_id) {
+            continue;
+        }
+        let reason = val
+            .pointer("/data/termination_reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        if TerminationReason::releases_claim_str(reason) {
+            releasing = Some(reason.to_string());
+        }
+    }
+    releasing
+}
+
+// ── public entry ────────────────────────────────────────────────────────────
+
+/// `fno-agents finalize ...`. Returns 0 for a completed write, 1 when generic
+/// delivery must retry, and 2 for CLI misuse. Legacy side-effect failures stay
+/// non-fatal.
+pub fn run_finalize(args: &[String]) -> i32 {
+    if args
+        .iter()
+        .any(|a| a == "-h" || a == "--help" || a == "help")
+    {
+        println!("{HELP}");
+        return 0;
+    }
+    let a = match parse_args(args) {
+        Ok(a) => a,
+        Err(msg) => {
+            eprintln!("finalize: {msg}\n{HELP}");
+            return 2;
+        }
+    };
+    let (Some(state), Some(cwd), Some(reason)) = (a.state, a.cwd, a.reason) else {
+        eprintln!("finalize: --state, --cwd and --reason are required\n{HELP}");
+        return 2;
+    };
+    let classification = match classify_legacy(&reason) {
+        Ok(record) => record,
+        Err(error) => {
+            eprintln!("finalize: {error}\n{HELP}");
+            return 2;
+        }
+    };
+    let predicates = classification.projection();
+    let delivery_ship = predicates.delivery_ship;
+
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let project_events = a
+        .events
+        .clone()
+        .unwrap_or_else(|| crate::paths::space_dir(&cwd).join("events.jsonl"));
+    let global_events = a.global_events.unwrap_or_else(|| {
+        home.clone()
+            .unwrap_or_else(|| cwd.clone())
+            .join(".fno/events.jsonl")
+    });
+
+    // Missing manifests are the non-fatal delegated-session path for legacy
+    // reasons. Generic delivery must retry because its required writes cannot
+    // be proven without the session-bound manifest.
+    let content = match fs::read_to_string(&state) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "finalize: manifest {} unreadable ({e}); nothing to finalize (likely delegated/archived)",
+                state.display()
+            );
+            return i32::from(delivery_ship);
+        }
+    };
+    let m = parse_manifest_fields(&content);
+    let Some(session_id) = canonical_session_id(&m) else {
+        eprintln!("finalize: manifest has no session_id; skipping (cannot dedup)");
+        return i32::from(delivery_ship);
+    };
+
+    let legacy_ship = predicates.ship_reason;
+    let ship = legacy_ship || delivery_ship;
+
+    // Idempotency, ship-aware (sigma-review HIGH): a prior COMPLETED ship means
+    // the whole session is done. A prior non-ship finalize means only the ledger
+    // row exists; if THIS fire is also non-ship there is nothing new to do, but
+    // if THIS fire is a SHIP it must still run the ship side-effects - a session
+    // that hit a non-ship terminal (Budget / NoProgress) and then shipped within
+    // the same session would otherwise never get stamped/graduated/handed off.
+    let mut skip_ledger = false;
+    match prior_finalize_ship(&project_events, &session_id) {
+        Some(true) if shadow_run_needs_finalize_done(&cwd, &session_id) => {
+            if record_finalize_done(&cwd, &session_id, &project_events, &global_events) {
+                eprintln!("finalize: repaired shadow closure for previously finalized session {session_id}");
+            } else {
+                eprintln!("finalize: shadow closure observer rejected previously finalized session {session_id}; legacy finalize remains complete");
+            }
+            return 0;
+        }
+        Some(true) => {
+            eprintln!("finalize: session {session_id} already finalized (ship); early-return");
+            return 0;
+        }
+        // `DoneAwaitingMerge` is not in SHIP_REASONS, so without this it would
+        // early-return here and never reach the always-run tail. A session that
+        // hits Budget and then resumes to DoneAwaitingMerge would silently lose
+        // its do stamp - the same "correct wiring, missing coverage" failure this
+        // backstop exists to fix. Ledger, stamps and handoff are idempotent;
+        // the run_summary emit and push are deduped by run and reason.
+        Some(false) if !ship && !predicates.do_stamp_terminal => {
+            eprintln!(
+                "finalize: session {session_id} ledger already recorded (non-ship); early-return"
+            );
+            return 0;
+        }
+        Some(false) if ship => {}
+        Some(false) => {
+            // A non-ship do-stamp terminal has no stronger ledger truth to add.
+            skip_ledger = true;
+        }
+        None => {}
+    }
+
+    // Transcript UUID for the cost/ledger scripts: prefer the manifest's
+    // canonical claude_transcript_id, fall back to the --transcript basename.
+    let transcript_uuid = m
+        .claude_transcript_id
+        .clone()
+        .or_else(|| {
+            a.transcript
+                .as_ref()
+                .and_then(|p| p.file_stem())
+                .map(|s| s.to_string_lossy().into_owned())
+        })
+        .unwrap_or_default();
+
+    let mut failed: Vec<String> = Vec::new();
+
+    // ── ALWAYS: rescue uncommitted work at the only terminal a worker gets
+    //    (HALF ONE) ──────────────────────────────────────────────────
+    // A provider 429 (or any other hard stop) gives a worker no future
+    // stop-hook fire to save it - this fire, whatever `reason` is, is the only
+    // one it gets. A dirty worktree here is one GC/orphan sweep from gone
+    // (measured: 950 insertions across 11 files, zero commits, rescued by
+    // hand). `git commit` is cheap and reversible; losing the diff is not.
+    let wip = commit_wip_if_dirty(&cwd, &reason, &session_id);
+
+    // ── SHIP ONLY: stamp (+ graduate for advisory) + handoff ───────────────
+    // For a CODE ship (DonePRGreen) the plan is stamped `in_review` only: done now
+    // means MERGED, and the `in_review -> done` flip happens at merge via
+    // the write-time status projection. An ADVISORY/doc ship (DoneAdvisory) has
+    // NO merge event - ship IS its completion - so it must still graduate to
+    // `done` here, else the plan is stranded at `in_review` on the active board
+    // (codex P2). expected_url_count is still recorded either way for the manual
+    // `graduate` command and the cross-project safety net.
+    let mut stamped = false;
+    let mut handoff_path: Option<String> = None;
+    let mut delivery_terminal_message: Option<String> = None;
+    // The advisory verdict captured from verify_advise::run's return, so the
+    // ledger row (and its run_recorded carrier) carries it at build time
+    // instead of a later stamp patching it.
+    let mut verifier_verdict: Option<String> = None;
+    if legacy_ship {
+        let plan = m.plan_path.clone().unwrap_or_default();
+        if !plan.is_empty() {
+            let expected = derive_expected_url_count(&cwd, &plan, m.cross_project);
+            // Graduate only for the merge-less advisory terminal; a cross-project
+            // advisory still waits for a derivable count (never graduate early).
+            let do_graduate = predicates.graduate && (!m.cross_project || expected.is_some());
+            match stamp_and_graduate(
+                &cwd,
+                &plan,
+                &session_id,
+                expected,
+                do_graduate,
+                None,
+                &project_events,
+            ) {
+                Ok(()) => stamped = true,
+                Err(step) => {
+                    eprintln!("finalize: {step} failed");
+                    failed.push(step);
+                }
+            }
+        }
+        match write_handoff(
+            &cwd,
+            &state,
+            &session_id,
+            &m,
+            &transcript_uuid,
+            a.handoffs_dir.as_deref(),
+            a.settings.as_deref(),
+            home.as_deref(),
+        ) {
+            Ok(p) => handoff_path = Some(p),
+            Err(e) => {
+                eprintln!("finalize: handoff failed: {e}");
+                failed.push("handoff".into());
+            }
+        }
+
+        // W6 verifier advisory: AC-vs-diff verdict, recorded then ignored.
+        // Log-only and never pushed to `failed` - an advisory must never
+        // wedge the loop or hold session_finalized open for retry. Events
+        // paths are forwarded so the exactly-once guard reads the same log
+        // finalize writes (a retried fire must not double-emit or re-spend
+        // on a spawn).
+        let verdict = crate::verify_advise::run(
+            &crate::verify_advise::AdviseArgs {
+                node_id: m.graph_node_id.clone(),
+                plan_path: m.plan_path.clone(),
+                session_id: session_id.clone(),
+                reason: reason.clone(),
+                cwd: cwd.clone(),
+                project_events: project_events.clone(),
+                global_events: global_events.clone(),
+                ledger: crate::paths_cli::ledger_json(&cwd),
+            },
+            &crate::verify_advise::spawn_verifier,
+        );
+        eprintln!("finalize: verify_advise: verdict={verdict}");
+        verifier_verdict = Some(verdict);
+    }
+
+    if delivery_ship {
+        match crate::delivery_completion::selected_receipt(
+            &project_events,
+            m.graph_node_id.as_deref(),
+            &session_id,
+        ) {
+            Some(receipt) => {
+                delivery_terminal_message =
+                    Some(format!("generic delivery finalized via {}", receipt.uri));
+                let plan = m.plan_path.clone().unwrap_or_default();
+                if !plan.is_empty() {
+                    let expected = derive_expected_url_count(&cwd, &plan, m.cross_project);
+                    let do_graduate = !m.cross_project || expected.is_some();
+                    match stamp_and_graduate(
+                        &cwd,
+                        &plan,
+                        &session_id,
+                        expected,
+                        do_graduate,
+                        Some(&receipt.uri),
+                        &project_events,
+                    ) {
+                        Ok(()) => stamped = true,
+                        Err(step) => failed.push(step),
+                    }
+                }
+                let dir = resolve_handoffs_dir(
+                    a.handoffs_dir.as_deref(),
+                    a.settings.as_deref(),
+                    &cwd,
+                    home.as_deref(),
+                );
+                match crate::delivery_completion::write_receipt_handoff(&dir, &session_id, &receipt)
+                {
+                    Ok(path) => handoff_path = Some(path),
+                    Err(error) => {
+                        eprintln!("finalize: generic handoff failed: {error}");
+                        failed.push("handoff".into());
+                    }
+                }
+            }
+            None => {
+                eprintln!("finalize: selected delivery verdict event missing");
+                failed.push("delivery_receipt".into());
+            }
+        }
+    }
+
+    // ── ALWAYS: ledger session-record (skipped only when a prior non-ship
+    //    finalize already wrote this session's row) ──────────────────────────
+    // After the ship legs so the row - and its run_recorded carrier - carries
+    // the advisory verdict from verify_advise::run's return, not a later stamp.
+    let ledger_written = if skip_ledger {
+        true // the prior non-ship finalize already wrote the row
+    } else {
+        match write_ledger_record(
+            &cwd,
+            &state,
+            &transcript_uuid,
+            &reason,
+            verifier_verdict.as_deref(),
+        ) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("finalize: ledger record failed: {e}");
+                failed.push("ledger".into());
+                false
+            }
+        }
+    };
+
+    // ── completion eval artifact, every terminal but NoWork ──
+    // Originally re-homed the BLOCKED-postmortem generator the control-plane
+    // wedge dropped, gated to stuck terminals only: NoProgress/Budget/
+    // Interrupted/Aborted. That gate made the eval's input a failure-only
+    // sample, and a failure-only sample writes rules -
+    // it never confirms what a clean session did right, so every lesson
+    // skewed toward caution nobody asked for. `eval_should_fire`
+    // now fires this for every terminal reason except NoWork (nothing to
+    // evaluate). `write_postmortem` branches its body on STUCK_REASONS so a
+    // stuck session still gets the failure-triage prose; every other reason
+    // gets a lighter completion-eval prose pointing at the pre-promise
+    // blocklist. Non-fatal and idempotent (filename keyed by date+session)
+    // like every other sub-step.
+    let mut postmortem_path: Option<String> = None;
+    if eval_should_fire(&reason) {
+        match write_postmortem(
+            &cwd,
+            &session_id,
+            &m,
+            &reason,
+            a.transcript.as_deref(),
+            a.postmortems_dir.as_deref(),
+            a.settings.as_deref(),
+            home.as_deref(),
+        ) {
+            Ok(p) => postmortem_path = Some(p),
+            Err(e) => {
+                eprintln!("finalize: postmortem failed: {e}");
+                failed.push("postmortem".into());
+            }
+        }
+    }
+
+    // ── non-delivery terminal: route on the help router ──
+    // The terminal becomes a help event with a node-scoped rung, the claim
+    // moves with the route, and a second terminal on one node asks the lead
+    // with both postmortems. Interrupted is respected and routes nothing.
+    // Wall-clock age of this run at the terminal, from the manifest's
+    // created_at (the implementation window's start): the elapsed the
+    // budget evidence quotes.
+    let elapsed_min = m
+        .created_at
+        .as_deref()
+        .and_then(parse_utc_epoch)
+        .map(|start| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            u64::try_from(now.saturating_sub(start)).unwrap_or(0) / 60
+        });
+
+    crate::terminal_route::route_terminal(&crate::terminal_route::TerminalRouteFacts {
+        cwd: &cwd,
+        session_id: &session_id,
+        harness_session_id: m.harness_session_id.as_deref(),
+        node: m.graph_node_id.as_deref(),
+        reason: &reason,
+        postmortem: postmortem_path.as_deref(),
+        elapsed_min,
+        claim_key: m.target_claim_key.as_deref(),
+        claim_holder: m.target_claim_holder.as_deref(),
+        project_events: &project_events,
+        global_events: &global_events,
+    });
+
+    // ── STUCK ONLY: file an unanswered operator question (HALF TWO) ──
+    // A worker that idles on an unanswered question and then dies (measured:
+    // 7h idle, "awaiting operator's terminal/mux info", `fno inbox outstanding`
+    // empty the whole time) takes the diagnosis it already completed down
+    // with it. The command (`fno inbox outstanding ask`) already exists; nothing
+    // forced the filing. Mechanical, not instructional: the same STUCK bucket
+    // that gets a postmortem, with an operator-directed question in its last
+    // message and nothing already filed for this session, gets it filed here.
+    let mut outstanding_filed = false;
+    if predicates.stuck {
+        let question = a
+            .transcript
+            .as_deref()
+            .and_then(last_assistant_text)
+            .as_deref()
+            .and_then(extract_operator_question);
+        if let Some(q) = question {
+            if !session_already_filed(&cwd, &session_id) {
+                outstanding_filed = file_outstanding_question(&cwd, &q, m.graph_node_id.as_deref());
+            }
+        }
+    }
+
+    // ── bg worker terminal-stop marker ────────────────────────────
+    // A fire-and-forget `claude --bg` /target|/think worker parks at its idle
+    // prompt on a terminal loop decision and never exits (the stop hook allows
+    // the TURN, not the PROCESS), piling up against agents.max_live. finalize
+    // cannot self-exit (it is the worker's child), so it drops a marker the
+    // external daemon sweep consumes to `claude stop` the parked worker. Gated
+    // to footnote-SPAWNED (FNO_AGENT_SELF) + non-loop-driven (FNO_DRIVER_LIB
+    // unset) sessions so an operator's own terminal /target and loop-run
+    // children stay parked. Best-effort + log-only: never held for retry, never
+    // rolls back the ledger/stamp (mirrors verify_advise's non-wedge contract).
+    let agent_self = std::env::var_os("FNO_AGENT_SELF").is_some();
+    let driver_lib = std::env::var_os("FNO_DRIVER_LIB").is_some();
+    let mut terminal_stop_marked = false;
+    // The open-PR gate: a session whose node's PR is open keeps its slot,
+    // so the marker waits for the merge. An unreadable read keeps the
+    // session (kept beats stranded). Read only for the sessions that could
+    // ever be marked: a spawn worker not driven by the loop library.
+    let open_pr = if agent_self && !driver_lib {
+        crate::terminal_stop::open_pr_label(
+            &crate::paths::AgentsHome::from_env(),
+            m.graph_node_id.as_deref(),
+            Path::new(&cwd),
+        )
+    } else {
+        None
+    };
+    if let Some(reason) = &open_pr {
+        eprintln!("finalize: terminal-stop marker skipped: {reason}");
+    }
+    if let Some(uuid) = crate::terminal_stop::should_mark(
+        agent_self,
+        driver_lib,
+        m.claude_transcript_id.as_deref(),
+        open_pr.is_some(),
+    ) {
+        let agents_home = crate::paths::AgentsHome::from_env();
+        match crate::terminal_stop::write_marker(&agents_home, uuid, &reason) {
+            Ok(p) => {
+                terminal_stop_marked = true;
+                eprintln!("finalize: terminal-stop marker written: {}", p.display());
+            }
+            Err(e) => eprintln!("finalize: terminal-stop marker failed (non-fatal): {e}"),
+        }
+    }
+
+    // ── terminal-run receipt (count, not stop) ────────────────────
+    // Beside the marker, WITHOUT the open-PR gate: a releasing terminal
+    // frees the lead's share while the parked session stays alive for late
+    // review mail. The next non-terminal loop-check fire clears the
+    // receipt, so a re-woken loop counts again.
+    if TerminationReason::releases_claim_str(&reason) {
+        if let Some(key) = crate::terminal_run::should_record(
+            agent_self,
+            driver_lib,
+            m.harness_session_id.as_deref(),
+        ) {
+            let agents_home = crate::paths::AgentsHome::from_env();
+            match crate::terminal_run::write_receipt(&agents_home, key, &reason) {
+                Ok(p) => eprintln!("finalize: terminal-run receipt written: {}", p.display()),
+                Err(e) => eprintln!("finalize: terminal-run receipt failed (non-fatal): {e}"),
+            }
+        }
+    }
+
+    // ── a2a status-breakpoint run_summary ──────────────────────────
+    // One per-run terminal summary carrying task counts + termination reason,
+    // in the extended envelope. Best-effort; the pull leg (events.jsonl) is
+    // authoritative and the push leg (task 1.4) rides it. gh is shelled for the
+    // PR url only on a ship terminal.
+    let run_summary_pr = if legacy_ship { gh_pr_url(&cwd) } else { None };
+    if finalize_run_summary::run_summary_already_emitted(&project_events, &session_id, &reason) {
+        eprintln!(
+            "finalize: run_summary for {session_id} ({reason}) already emitted; emit and push skipped"
+        );
+    } else {
+        finalize_run_summary::emit_run_summary(
+            &project_events,
+            &global_events,
+            &session_id,
+            m.graph_node_id.as_deref(),
+            ship,
+            &reason,
+            run_summary_pr.as_deref(),
+        );
+        finalize_run_summary::push_run_summary_to_parent(
+            &session_id,
+            m.graph_node_id.as_deref(),
+            &reason,
+        );
+    }
+
+    // ── node<->PR pr_number backstop stamp ────────────────────────
+    // Runs in the always-run tail (first fire of every reason), so it stamps
+    // even a non-ship/awaiting-merge terminal that left an open PR. Non-fatal;
+    // deliberately not returned into `failed`.
+    if !delivery_ship {
+        stamp_node_pr(&cwd, m.graph_node_id.as_deref());
+        // ── round-review backstop ─────────────────────────────────────
+        // A create flow that died between `gh pr create` and its
+        // publish-review step still owes the PR its pre-PR review.
+        // Idempotent by marker inside publish_round; log-only, never fatal.
+        // Reads the caller-pinned journal: events_path() migrates the
+        // checkout journal on read, and a backstop must not re-home the
+        // session's rows mid-finalize.
+        let round = round_review_backstop(&cwd, &project_events);
+        if round.status != "skipped" {
+            eprintln!(
+                "finalize: review round: {} ({})",
+                round.status, round.reason
+            );
+        }
+    }
+
+    // ── guarded do-provenance backstop ────────────────────────────
+    // Same shape and same fatality as the stamp above: log-only, deliberately
+    // not returned into `failed` (a guard skip must never wedge the loop).
+    stamp_node_do(&cwd, &m, &reason);
+
+    // ── cancel settle: release the claim a cancelled run still holds ────────
+    // Interrupted is deliberately absent from the stop hook's terminal release
+    // case (a hand-maintained mirror of this enum; growing it by one more
+    // entry is what the plan refused), so the settle belongs beside the
+    // classification. Same non-fatal shape as the stamp above.
+    if predicates.cancelled {
+        cancel_settle_claims(&cwd, &m);
+    }
+
+    // ── arm auto-merge at the green gate, not at PR creation ──────
+    // Last, so the plan stamp and both node<->PR stamps have already landed
+    // before the merge is handed to GitHub. Same log-only fatality as the two
+    // stamps above.
+    let approved = if crate::authorized_merge::posture_is_default_off(
+        m.auto_merge_approved,
+        m.auto_merge_source.as_deref(),
+    ) {
+        // A `default-off` stamp is init's failed config read, not a refusal:
+        // resolve the posture from the live config, the same arm the merge
+        // gate folds, so a stamped worker still arms at the green terminal.
+        crate::agents_config::auto_merge_enabled(&cwd)
+    } else {
+        m.auto_merge_approved.unwrap_or(false)
+    };
+    let should_arm = should_arm_auto_merge(&reason, approved);
+    // The posture fold, the standing switch and the automerge floor all live in
+    // `authorized_merge` now, so this arm and `fno do pr merge` cannot disagree
+    // about who may merge. What stays here is what only the terminal knows: the
+    // gating opt-out claim, and the optional-App review evidence.
+    //
+    // The manifest's `auto_merge_source` rides down rather than being re-read
+    // from the environment: a worker must not export the grant at finalize time
+    // to arm its own merge.
+    let (auto_merge_armed, auto_merge_blocked_reason) = if should_arm {
+        if let Some(blocked) = merge_gating_optout_block_reason() {
+            eprintln!("finalize: native auto-merge withheld: {blocked}");
+            (false, Some(blocked))
+        } else {
+            match optional_review_block_reason(&cwd) {
+                None => arm_auto_merge(&cwd, approved, m.auto_merge_source.as_deref()),
+                Some(blocked) => {
+                    eprintln!("finalize: native auto-merge withheld: {blocked}");
+                    (false, Some(blocked))
+                }
+            }
+        }
+    } else {
+        (false, None)
+    };
+    // Without this, "approved but this terminal is ineligible" and "never
+    // approved" are the same silence, and the event's `auto_merge_armed: false`
+    // cannot tell them apart either.
+    if approved && !should_arm {
+        // name the coverage reason when the autonomous path is declined.
+        // The generic "not an arming terminal" hides WHY behind a vocabulary
+        // term; an operator who armed auto-merge and sees it not fire needs to
+        // learn the diff was unreviewed, not decode a terminal name.
+        let why = if predicates.awaiting_review_notify {
+            "the PR is unreviewed (coverage 0); review the diff then re-run, or merge by hand"
+        } else {
+            "not an arming terminal"
+        };
+        eprintln!("finalize: auto-merge approved but {reason}: {why}; not armed");
+    }
+
+    // ── emit terminal event ────────────────────────────────────────────────
+    let mut data = json!({
+        "session_id": session_id,
+        "termination_reason": reason,
+        "ship": ship,
+        "ledger_written": ledger_written,
+        "stamped": stamped,
+        "handoff_path": handoff_path,
+        "postmortem_path": postmortem_path,
+        "terminal_stop_marked": terminal_stop_marked,
+        "graph_node_id": m.graph_node_id,
+        // Re-homed from `fno agents worker ship`'s return dict: the fact now
+        // belongs to the terminal that authorized it, not to PR creation.
+        "auto_merge_armed": auto_merge_armed,
+        // Provenance: `unknown` when the manifest predates the field,
+        // so an operator reading the event can always tell WHICH layer set the
+        // posture - or that the manifest cannot say.
+        "auto_merge_source": m.auto_merge_source.as_deref().unwrap_or("unknown"),
+        // HALF ONE: the sha of the rescue commit, or null on a clean
+        // tree / non-git dir / commit failure. `wip_branch` names the side
+        // branch when the rescue refused to move the checked-out branch.
+        "wip_commit_sha": wip.as_ref().map(|r| r.sha.clone()),
+        "wip_branch": wip.as_ref().and_then(|r| r.branch.clone()),
+        // HALF TWO: whether an operator question was auto-filed this fire.
+        "outstanding_filed": outstanding_filed,
+    });
+    if let Some(blocked) = auto_merge_blocked_reason {
+        data["auto_merge_blocked_reason"] = json!(blocked);
+    }
+    if delivery_ship && failed.is_empty() {
+        let emitted = delivery_terminal_message.as_deref().is_some_and(|message| {
+            crate::delivery_completion::emit_terminal(
+                &project_events,
+                &global_events,
+                &session_id,
+                message,
+            )
+        });
+        if !emitted {
+            failed.push("delivery_terminal".into());
+        }
+    }
+    if failed.is_empty() {
+        // Wave 3 is observer-only: telemetry rejection cannot change the
+        // legacy finalization result or turn a successful terminal into retry.
+        let _ = record_finalize_done(&cwd, &session_id, &project_events, &global_events);
+        emit_to_both(&project_events, &global_events, "session_finalized", data);
+    } else {
+        data["failed_steps"] = json!(failed);
+        // session_finalized intentionally NOT emitted: a later fire retries the
+        // failed step (each shelled helper is idempotent).
+        emit_to_both(
+            &project_events,
+            &global_events,
+            "session_finalize_failed",
+            data,
+        );
+    }
+    let should_retry = delivery_ship && !failed.is_empty();
+    if should_retry {
+        1
+    } else {
+        0
+    }
+}
+
+fn shadow_run_needs_finalize_done(cwd: &Path, run: &str) -> bool {
+    let path = run_log_path(cwd);
+    if !path.exists() {
+        return false;
+    }
+    !matches!(
+        crate::run_state::fold_run_state(&path, run),
+        Ok(crate::run_state::RunState::Closed | crate::run_state::RunState::Aborted)
+    )
+}
+
+/// The per-worktree run log: the worktree slice of the repo's space. A legacy
+/// checkout-local journal is migrated on first write; until then a read falls
+/// back to it so a pre-space daemon's journal is still honored (AC7-EDGE).
+fn run_log_path(cwd: &Path) -> PathBuf {
+    let new = crate::paths::worktree_space_dir(cwd).join("run-log.jsonl");
+    if new.exists() {
+        return new;
+    }
+    let old = cwd.join(".fno/run-log.jsonl");
+    if old.exists() {
+        if old.is_symlink() || crate::paths::migrate_from_checkout(&old, &new) {
+            if new.exists() {
+                return new;
+            }
+        } else {
+            eprintln!(
+                "finalize: run log pending migration: {} (space path {})",
+                old.display(),
+                new.display()
+            );
+            return old;
+        }
+    }
+    new
+}
+
+fn record_finalize_done(
+    cwd: &Path,
+    run: &str,
+    project_events: &Path,
+    global_events: &Path,
+) -> bool {
+    let path = run_log_path(cwd);
+    if !path.exists() {
+        return true;
+    }
+    if matches!(
+        crate::run_state::fold_run_state(&path, run),
+        Ok(crate::run_state::RunState::Closed | crate::run_state::RunState::Aborted)
+    ) {
+        return true;
+    }
+    crate::loopcheck::observe_shadow_transition(
+        &path,
+        run,
+        crate::run_state::RunEvent::FinalizeDone,
+        project_events,
+        global_events,
+    )
+}
+
+// ── ledger (always) ─────────────────────────────────────────────────────────
+
+/// Build the terminal ledger row in-process (the ported `fno.cost._register`):
+/// the native session-cost leg prices the transcript, then the row carries
+/// graph_node_id + provider_id + session_id + cost + termination_reason.
+/// Dedup/flock stay in the append (ported). A missing transcript yields
+/// cost=null - the row still lands (US7-ERR).
+fn write_ledger_record(
+    cwd: &Path,
+    state: &Path,
+    transcript_uuid: &str,
+    reason: &str,
+    verifier_verdict: Option<&str>,
+) -> Result<(), String> {
+    let cost_json = if transcript_uuid.is_empty() {
+        None
+    } else {
+        crate::session_cost::cost_json_for_transcript(transcript_uuid)
+    };
+    crate::ledger_register::register_target_entry(
+        cwd,
+        state,
+        transcript_uuid,
+        reason,
+        cost_json.as_ref(),
+        verifier_verdict,
+    )
+}
+
+// ── stamp (ship only) ────────────────────────────────────────────────────────
+
+/// After a stamp writes, validate the plan's frontmatter through the same
+/// check `fno do plan validate` runs. Non-fatal-but-loud: an invalid stamp
+/// (e.g. one that left `status` unset) is reported on stderr for the next
+/// session to fix; the stamp is never rolled back and finalize never fails on
+/// it (AC1-FR). A concurrent edit is fine - the check reads whatever snapshot
+/// is on disk.
+fn validate_stamped_frontmatter(cwd: &Path, plan_path: &str) {
+    if plan_path.is_empty() {
+        return;
+    }
+    match crate::plan_doc::cli::frontmatter_violations(&cwd.join(plan_path)) {
+        Ok(lines) if lines.is_empty() => {}
+        Ok(lines) => eprintln!(
+            "finalize: post-stamp plan validation FAILED; stamp NOT rolled back - fix the plan frontmatter next session:\n{}",
+            lines.join("\n")
+        ),
+        Err(e) => eprintln!("finalize: post-stamp plan validation could not run: {e}"),
+    }
+}
+
+/// Stamp the plan `in_review` and, when `do_graduate`, flip it to `done`.
+///
+/// For a CODE ship (`DonePRGreen`) the caller passes `do_graduate = false`: done
+/// means merged, so the `in_review -> done` flip happens later via the
+/// write-time projection at merge, not here. For an ADVISORY ship
+/// (`DoneAdvisory`) there is no merge event, so the caller passes `true` and
+/// this graduates the plan now. `expected_url_count` is recorded either way for
+/// the manual `graduate` command and the cross-project safety net.
+fn stamp_and_graduate(
+    cwd: &Path,
+    plan_path: &str,
+    session_id: &str,
+    expected_url_count: Option<u32>,
+    do_graduate: bool,
+    url_override: Option<&str>,
+    events_path: &Path,
+) -> Result<(), String> {
+    let pr_url = url_override.map(str::to_owned).or_else(|| gh_pr_url(cwd));
+    let urls: Vec<String> = pr_url.iter().map(|u| u.to_string()).collect();
+    let stamp_result = crate::plan_doc::stamp::cmd_stamp(
+        &cwd.join(plan_path),
+        session_id,
+        &urls,
+        expected_url_count,
+        false,
+        Some(events_path),
+    );
+    if stamp_result.exit != 0 {
+        eprintln!(
+            "finalize: plan stamp exit {}: {}",
+            stamp_result.exit,
+            stamp_result.message.trim()
+        );
+        return Err("stamp".into());
+    }
+
+    // Post-stamp schema check (AC1-FR): validate the freshly-stamped frontmatter
+    // against the plan schema. Non-fatal-but-loud -
+    // a schema-invalidating stamp is surfaced for the next session, never rolled
+    // back and never failing finalize (finalize is idempotent/non-fatal by design).
+    validate_stamped_frontmatter(cwd, plan_path);
+
+    // A code ship stamps `in_review` only; done flips at merge via the projection.
+    if !do_graduate {
+        return Ok(());
+    }
+
+    let grad_result =
+        crate::plan_doc::stamp::cmd_graduate(&cwd.join(plan_path), false, Some(events_path));
+    if grad_result.exit != 0 {
+        eprintln!(
+            "finalize: plan graduate exit {}: {}",
+            grad_result.exit,
+            grad_result.message.trim()
+        );
+        return Err("graduate".into());
+    }
+    Ok(())
+}
+
+/// Derive the expected URL count for graduation. Returns `None` for a
+/// single-project plan (let the plan-doc writer keep any declared count, else
+/// default to 1) and `Some(n)` for a cross-project plan, counting the direct keys under
+/// the plan's frontmatter `projects:` map. Returns `None` for a cross-project
+/// plan whose count can't be read (missing/garbled projects map) so the caller
+/// can skip graduate rather than guess. This restores the pre-promise contract:
+/// cross-project graduation waits for ALL project PRs (codex P1).
+fn derive_expected_url_count(cwd: &Path, plan_path: &str, cross_project: bool) -> Option<u32> {
+    if !cross_project {
+        return None;
+    }
+    let doc = cwd.join(plan_path);
+    let content = fs::read_to_string(&doc).ok()?;
+
+    let mut in_fm = false;
+    let mut in_projects = false;
+    let mut child_indent: Option<usize> = None;
+    let mut count: u32 = 0;
+    for line in content.lines() {
+        let t = line.trim();
+        if t == "---" {
+            if !in_fm {
+                in_fm = true;
+                continue;
+            }
+            break; // end of frontmatter
+        }
+        if !in_fm {
+            continue;
+        }
+        let indent = line.len() - line.trim_start().len();
+        if !in_projects {
+            if indent == 0 && t.starts_with("projects:") {
+                in_projects = true;
+            }
+            continue;
+        }
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        if indent == 0 {
+            break; // next top-level frontmatter key ends the projects map
+        }
+        match child_indent {
+            None => {
+                child_indent = Some(indent);
+                count += 1;
+            }
+            Some(ci) if indent == ci => count += 1,
+            _ => {} // deeper-nested key under a project entry; not a project
+        }
+    }
+    if count >= 1 {
+        Some(count)
+    } else {
+        None
+    }
+}
+
+// ── mechanical handoff artifact (ship only) ──────────────────────────────────
+
+/// Write a git-derived end-of-session summary to the persistent handoffs dir.
+/// Filename keyed by session-id so a re-run overwrites rather than duplicating.
+#[allow(clippy::too_many_arguments)]
+fn write_handoff(
+    cwd: &Path,
+    state: &Path,
+    session_id: &str,
+    m: &ManifestFields,
+    transcript_uuid: &str,
+    handoffs_override: Option<&Path>,
+    settings_override: Option<&Path>,
+    home: Option<&Path>,
+) -> Result<String, String> {
+    let dir = resolve_handoffs_dir(handoffs_override, settings_override, cwd, home);
+    fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+
+    let date = &now_rfc3339_utc()[..10]; // YYYY-MM-DD
+    let sid_prefix: String = session_id.chars().take(16).collect();
+    let file = dir.join(format!("{date}-{sid_prefix}-handoff.md"));
+
+    let title = m.input.clone().unwrap_or_else(|| "Untitled".into());
+    let plan = m.plan_path.clone().unwrap_or_else(|| "-".into());
+    let node = m.graph_node_id.clone().unwrap_or_else(|| "-".into());
+    let pr = gh_pr_url(cwd).unwrap_or_else(|| "-".into());
+    let diffstat = git_capture(cwd, &["diff", "--stat", "origin/main...HEAD"])
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| git_capture(cwd, &["diff", "--stat", "HEAD~5..HEAD"]))
+        .unwrap_or_else(|| "(diff unavailable)".into());
+    let commits = git_capture(cwd, &["log", "--oneline", "origin/main..HEAD"])
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| git_capture(cwd, &["log", "--oneline", "-10"]))
+        .unwrap_or_else(|| "(log unavailable)".into());
+    let cost = handoff_cost_line(cwd, transcript_uuid);
+    // Completed commit + idempotency keys: a worker that died after
+    // shipping but before the terminal journal write is reconcilable from this
+    // artifact. The keys are derived from the delivered HEAD so a resumed worker
+    // checking them skips a replayed publish/PR-create/comment/merge.
+    let head = git_capture(cwd, &["rev-parse", "HEAD"]).unwrap_or_else(|| "-".into());
+    let head_short: String = head.chars().take(7).collect();
+
+    let body = format!(
+        "# Session handoff: {title}\n\n\
+         - session: `{session_id}`\n\
+         - node: `{node}`\n\
+         - plan: `{plan}`\n\
+         - PR: {pr}\n\
+         - completed_commit: `{head}`\n\
+         - idempotency_keys: `pr_create:{head_short}`, `merge:{head_short}`\n\
+         - cost: {cost}\n\
+         - generated: {generated} (mechanical, by `fno-agents finalize`)\n\n\
+         ## Files changed (origin/main...HEAD)\n\n```\n{diffstat}\n```\n\n\
+         ## Commits\n\n```\n{commits}\n```\n",
+        generated = now_rfc3339_utc(),
+    );
+
+    // Keep the manifest path referenced so the variable is meaningful even when
+    // we add fields later; it is the canonical source of the fields above.
+    let _ = state;
+    fs::write(&file, body).map_err(|e| format!("write {}: {e}", file.display()))?;
+    Ok(file.to_string_lossy().into_owned())
+}
+
+/// One-line cost summary for the handoff header, priced by the native
+/// session-cost leg (the ported `_session_cost` extractor).
+fn handoff_cost_line(_cwd: &Path, transcript_uuid: &str) -> String {
+    if transcript_uuid.is_empty() {
+        return "(unavailable)".into();
+    }
+    match crate::session_cost::cost_json_for_transcript(transcript_uuid) {
+        Some(v) => match v.get("cost_usd").and_then(|c| c.as_f64()) {
+            Some(c) => format!("${c:.2}"),
+            None => "(unavailable)".into(),
+        },
+        None => "(unavailable)".into(),
+    }
+}
+
+// ── helpers ─────────────────────────────────────────────────────────────────
+
+/// Resolve the persistent handoffs directory:
+///   1. explicit `--handoffs-dir`
+///   2. `$HANDOFFS_DIR`
+///   3. `config.paths.handoffs_dir` from project then global settings.yaml,
+///      with `~` and `{project}` expanded (skipped if it still has `{...}`)
+///   4. vault-derived `<vault>/internal/<project>/handoffs/` when
+///      `obsidian.enabled` + `obsidian.vault` are set (placement rule,
+///      ab-f063 Wave 2 - mirrors `paths.handoffs_dir()` in the Python CLI)
+///   5. fallback `<FNO_STATE_DIR>/handoffs/<project>` when the env names a
+///      state root, else `<home>/.fno/handoffs/<project>`. A configured
+///      `state_dir` key is deliberately not read here: the hermetic `home`
+///      parameter owns the bare default, and the ambient global config read
+///      broke every hermetic fixture on a machine that pins the key.
+///
+/// Pure-Rust resolution: it never shells `fno`, so the command keeps its Python-CLI
+/// independence (it only ever runs the in-package metric modules via
+/// `python3 -m`).
+pub(crate) fn resolve_handoffs_dir(
+    override_dir: Option<&Path>,
+    settings_override: Option<&Path>,
+    cwd: &Path,
+    home: Option<&Path>,
+) -> PathBuf {
+    if let Some(d) = override_dir {
+        return d.to_path_buf();
+    }
+    if let Some(d) = env_dir_unless_null("HANDOFFS_DIR") {
+        return d;
+    }
+    let project = resolve_project_name(settings_override, home, cwd);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    // FNO_CONFIG is an explicit per-invocation pin (Python `_settings` reads
+    // it first); the ambient global config is deliberately NOT a candidate -
+    // that read broke every hermetic fixture on a machine pinning state_dir.
+    if let Some(cfg) = env_dir_unless_null("FNO_CONFIG") {
+        candidates.push(cfg);
+    }
+    if let Some(s) = settings_override {
+        candidates.push(s.to_path_buf());
+    }
+    candidates.push(cwd.join(".fno/config.toml"));
+    if let Some(h) = home {
+        candidates.push(h.join(".fno/config.toml"));
+    }
+    for sp in &candidates {
+        if let Some(raw) = read_path_setting(sp, "handoffs_dir") {
+            if let Some(expanded) = expand_handoffs_template(&raw, home, &project) {
+                return expanded;
+            }
+        }
+    }
+    if !vault_write_is_temp_stray(home, cwd) {
+        if let Some(vault) = resolve_obsidian_vault(&candidates) {
+            if let Some(vroot) = resolve_vault_root(&vault, home) {
+                return vroot.join("internal").join(&project).join("handoffs");
+            }
+        }
+    }
+    // FNO_STATE_DIR pins an isolated lane's root outright, so its handoff
+    // docs land in its own state root (Python state_dir env parity). A
+    // configured `state_dir` is NOT honored here - the resolver's hermetic
+    // `home` parameter owns the bare default, and reading the ambient global
+    // config for it broke every hermetic fixture on a machine that pins the
+    // key. Named gap, not an accident.
+    let base = match std::env::var_os("FNO_STATE_DIR") {
+        Some(v)
+            if !v.is_empty()
+                && !v
+                    .to_str()
+                    .map(|s| s.eq_ignore_ascii_case("null"))
+                    .unwrap_or(false) =>
+        {
+            PathBuf::from(v)
+        }
+        _ => home
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| cwd.to_path_buf())
+            .join(".fno"),
+    };
+    crate::state_layout::place_dir(&base, "handoffs")
+        .unwrap_or_else(|| base.join("handoffs"))
+        .join(project)
+}
+
+/// One file's `obsidian:` block, keyed per-field so a caller can merge across
+/// project/global candidates the same way `fno.config._deep_merge` merges
+/// settings.yaml: per KEY, not per file. `None` in either field means that
+/// file's `obsidian:` block (if any) did not set that key, so the caller
+/// should keep looking in the next, lower-priority candidate - NOT that the
+/// key is false/absent overall (codex review, PR #185: a project file that
+/// sets only `enabled: false` must still inherit `vault:` from global, and
+/// must NOT let its own absence of an opinion fall through to a lower-priority
+/// file that re-enables obsidian).
+#[derive(Default)]
+struct ObsidianBlock {
+    enabled: Option<bool>,
+    vault: Option<String>,
+}
+
+/// Parse a config.toml file into a table; None on a missing or unparseable file.
+pub(crate) fn load_config_toml(path: &Path) -> Option<toml::Table> {
+    fs::read_to_string(path).ok()?.parse::<toml::Table>().ok()
+}
+
+/// A dotted string value from a config.toml table (e.g. `["paths","handoffs_dir"]`).
+pub(crate) fn toml_string_at(t: &toml::Table, path: &[&str]) -> Option<String> {
+    let mut cur = t.get(*path.first()?)?;
+    for k in &path[1..] {
+        cur = cur.as_table()?.get(*k)?;
+    }
+    cur.as_str().map(str::to_string)
+}
+
+/// Read the `[obsidian]` block (enabled + vault) from a flat config.toml. `None`
+/// in a field means that file did not set the key, so the caller keeps looking
+/// in the next candidate (per-KEY merge, not per-file).
+fn read_obsidian_block(path: &Path) -> ObsidianBlock {
+    let Some(t) = load_config_toml(path) else {
+        return ObsidianBlock::default();
+    };
+    let ob = t.get("obsidian").and_then(|v| v.as_table());
+    ObsidianBlock {
+        enabled: ob.and_then(|o| o.get("enabled")).and_then(|v| v.as_bool()),
+        vault: ob
+            .and_then(|o| o.get("vault"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("null"))
+            .map(str::to_string),
+    }
+}
+
+/// Resolve `obsidian.enabled` + `obsidian.vault`, merged key-by-key across
+/// `candidates` in priority order (project before global) - matching
+/// `fno.config._deep_merge` semantics, NOT "first file with an opinion wins
+/// wholesale". Returns the vault name only when the merged `enabled` is true
+/// AND a `vault` value was found somewhere in the chain.
+pub(crate) fn resolve_obsidian_vault(candidates: &[PathBuf]) -> Option<String> {
+    let mut enabled: Option<bool> = None;
+    let mut vault: Option<String> = None;
+    for sp in candidates {
+        let block = read_obsidian_block(sp);
+        if enabled.is_none() {
+            enabled = block.enabled;
+        }
+        if vault.is_none() {
+            vault = block.vault;
+        }
+        if enabled.is_some() && vault.is_some() {
+            break;
+        }
+    }
+    if enabled == Some(true) {
+        vault
+    } else {
+        None
+    }
+}
+
+/// Expand a vault name to its filesystem root - mirrors `paths.vault_root()`:
+/// a bare name (e.g. `vault`) maps to `~/vault`; an already-absolute or
+/// `~`-prefixed value is honored as-is.
+pub(crate) fn resolve_vault_root(vault: &str, home: Option<&Path>) -> Option<PathBuf> {
+    if let Some(rest) = vault.strip_prefix("~/") {
+        return home.map(|h| h.join(rest));
+    }
+    if vault == "~" {
+        return home.map(Path::to_path_buf);
+    }
+    if Path::new(vault).is_absolute() {
+        return Some(PathBuf::from(vault));
+    }
+    home.map(|h| h.join(vault))
+}
+
+/// Read a `<key>:` path value from a settings.yaml (any indent level). The
+/// `config.paths.*` keys (`handoffs_dir`, `postmortems_dir`, ...) are
+/// distinctive enough that a flat scan is safe.
+/// Read a dir from an env var, treating an empty or literal-"null" value as
+/// unset. emit_shell never emits "null", but a stale/hand-edited environment
+/// can, and trusting it verbatim is what wrote `./null/` inside the repo
+///. Mirrors the same guard in read_path_setting.
+fn env_dir_unless_null(key: &str) -> Option<PathBuf> {
+    let v = std::env::var_os(key)?;
+    // Only the string-decodable "null"/empty sentinel is filtered; a non-UTF-8
+    // value (valid arbitrary-byte path on Unix) is preserved verbatim, matching
+    // the original var_os behavior (gemini review).
+    if let Some(s) = v.to_str() {
+        let t = s.trim();
+        if t.is_empty() || t.eq_ignore_ascii_case("null") {
+            return None;
+        }
+        return Some(PathBuf::from(t));
+    }
+    Some(PathBuf::from(v))
+}
+
+/// Read a `paths.<key>` value (e.g. `handoffs_dir`, `postmortems_dir`) from a
+/// flat config.toml. A literal `"null"` string is treated as absent (the "use
+/// default" sentinel), so the caller falls through to `~/.fno/<dir>`.
+pub(crate) fn read_path_setting(path: &Path, key: &str) -> Option<String> {
+    let t = load_config_toml(path)?;
+    toml_string_at(&t, &["paths", key]).filter(|v| !v.is_empty() && !v.eq_ignore_ascii_case("null"))
+}
+
+/// Expand `~` and `{project}` in a handoffs_dir template. Returns None when the
+/// result still contains an unresolved `{...}` token (e.g. `{vault}`), so the
+/// caller falls back rather than writing to a literal-brace path.
+pub(crate) fn expand_handoffs_template(
+    raw: &str,
+    home: Option<&Path>,
+    project: &str,
+) -> Option<PathBuf> {
+    let mut s = raw.to_string();
+    // Cannot expand a leading ~ without a home; return None so the caller falls
+    // back to the default dir rather than writing to a literal "~..." path
+    // (gemini review).
+    if let Some(stripped) = s.strip_prefix("~/") {
+        let h = home?;
+        s = h.join(stripped).to_string_lossy().into_owned();
+    } else if s == "~" {
+        let h = home?;
+        s = h.to_string_lossy().into_owned();
+    }
+    s = s.replace("{project}", project);
+    if s.contains('{') {
+        return None;
+    }
+    Some(PathBuf::from(s))
+}
+
+/// Project name = basename of the MAIN worktree (the first `git worktree list
+/// --porcelain` entry), so a linked worktree resolves to "fno", not the
+/// worktree directory name. The porcelain first-entry is robust across layouts
+/// (--separate-git-dir, bare) where the `--git-common-dir` parent is wrong
+/// (gemini review HIGH). Falls back to the cwd basename.
+fn repo_project_name(cwd: &Path) -> String {
+    if let Some(porcelain) = git_capture(cwd, &["worktree", "list", "--porcelain"]) {
+        if let Some(path_str) = porcelain
+            .lines()
+            .next()
+            .and_then(|l| l.strip_prefix("worktree "))
+        {
+            if let Some(name) = Path::new(path_str.trim()).file_name() {
+                return name.to_string_lossy().into_owned();
+            }
+        }
+    }
+    cwd.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "project".into())
+}
+
+/// Last path segment of a git remote URL, one trailing `.git` stripped. Takes
+/// the last `/`-or-`:` segment
+/// so scp-like (`git@host:org/repo.git`), https, and local-path remotes all
+/// resolve. Returns None for an empty URL or a degenerate segment that would
+/// escape `internal/<project>/`.
+fn slug_from_remote_url(url: &str) -> Option<String> {
+    let url = url.trim().trim_end_matches('/');
+    if url.is_empty() {
+        return None;
+    }
+    let tail = url.rsplit(['/', ':']).next()?;
+    let tail = tail.strip_suffix(".git").unwrap_or(tail);
+    // A Windows-style/local remote (`C:\repos\foo.git`) leaves backslashes in the
+    // tail; reject any separator so the slug can never become a stray path
+    // segment, matching the Python `_remote_url_to_slug` (paths.py).
+    if tail.is_empty() || tail == "." || tail == ".." || tail.contains(['/', '\\']) {
+        return None;
+    }
+    Some(tail.to_string())
+}
+
+/// Full repository identity `host/owner/repo` from a git remote URL, lowercased.
+///
+/// Distinct from `slug_from_remote_url`, which yields only the last path segment
+/// and is a PATH TOKEN (`internal/<project>/`) where collisions are cosmetic.
+/// This one keys `review_coverage` events in the cross-project global log, where
+/// a collision is a correctness hole: `org-a/widget` and `org-b/widget` both
+/// reduce to `widget`, so with a shared PR number one repo's coverage can
+/// satisfy the other's auto-merge review guard - and a fork shares head SHAs,
+/// which defeats the staleness check that would otherwise catch it.
+///
+/// Normalizes the forms git accepts so every clone of one repo agrees: scheme,
+/// credentials, and port are stripped, `:` after the host is treated as the
+/// path separator (scp form), one trailing `.git` and trailing slashes go, and
+/// the result is lowercased (hosts are case-insensitive and the forge treats
+/// owner/repo that way). Requires at least three segments (host + two path
+/// parts), so a local or degenerate remote returns None rather than a key that
+/// could alias another repo. Mirrored by `repo_identity_from_remote_url` in
+/// `fno/paths.py`; the two MUST agree or the reader stops finding the writer's
+/// events.
+pub(crate) fn repo_identity_from_remote_url(url: &str) -> Option<String> {
+    crate::repo_identity::repo_identity_from_remote_url(url)
+}
+
+/// `host/owner/repo` for `cwd` - stable across worktrees and clones, and unique
+/// across repos. Best-effort: any git failure or missing remote returns None,
+/// and the caller then omits the field so no reader can claim the event.
+pub(crate) fn repo_identity_from_git_remote(cwd: &Path) -> Option<String> {
+    let url = git_capture(cwd, &["config", "--get", "remote.origin.url"])?;
+    repo_identity_from_remote_url(&url)
+}
+
+/// `remote.origin.url` slug for `cwd` - stable across worktrees and clones.
+/// Best-effort: any git failure or missing remote returns None so the caller
+/// falls through to the basename.
+pub(crate) fn slug_from_git_remote(cwd: &Path) -> Option<String> {
+    let url = git_capture(cwd, &["config", "--get", "remote.origin.url"])?;
+    slug_from_remote_url(&url)
+}
+
+/// Resolve the `{project}` path token, matching the Python resolver
+/// `fno.paths._project_name`: `config.project.id` (project-local then global
+/// settings.yaml) -> git-remote slug (stable across worktrees/clones) ->
+/// git main-worktree basename via `repo_project_name`. The remote-slug tier is
+/// load-bearing for parity: the Python side writes `internal/<remote-slug>/` for
+/// an id-unset repo, so this terminal handoff writer must agree or it recreates
+/// the very `internal/<basename>/` strays the Python change removes. Non-fatal:
+/// a missing/malformed settings file, an unset/`null` id, or no remote degrades
+/// to the basename, so unconfigured installs never break. Uses the SAME
+/// project-then-global candidate order the callers use for `config.paths.*_dir`.
+pub(crate) fn resolve_project_name(
+    settings_override: Option<&Path>,
+    home: Option<&Path>,
+    cwd: &Path,
+) -> String {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(s) = settings_override {
+        candidates.push(s.to_path_buf());
+    }
+    candidates.push(cwd.join(".fno/config.toml"));
+    if let Some(h) = home {
+        candidates.push(h.join(".fno/config.toml"));
+    }
+    for sp in candidates {
+        if let Some(id) = read_project_id(&sp) {
+            return id;
+        }
+    }
+    if let Some(slug) = slug_from_git_remote(cwd) {
+        return slug;
+    }
+    repo_project_name(cwd)
+}
+
+/// True when [`resolve_project_name`] would fall back to the cwd's basename:
+/// no project id in the cwd or home config and no git remote slug. The vault
+/// writer refuses such a name for a temp-dir cwd, where a fallback scatters
+/// pages like `internal/fnoe123_0/questions` into the real vault.
+pub(crate) fn project_name_is_basename_fallback(home: Option<&Path>, cwd: &Path) -> bool {
+    if read_project_id(&cwd.join(".fno/config.toml")).is_some() {
+        return false;
+    }
+    if let Some(h) = home {
+        if read_project_id(&h.join(".fno/config.toml")).is_some() {
+            return false;
+        }
+    }
+    slug_from_git_remote(cwd).is_none()
+}
+
+/// A cwd under any standard temp root: the OS temp dir, or the macOS scratch
+/// trees (`/tmp`, `/private/tmp`, `/var/folders`) that `std::env::temp_dir()`
+/// does not cover. Tests and leaked daemons run there; real projects do not.
+pub(crate) fn cwd_is_temporary(cwd: &Path) -> bool {
+    let mut roots = vec![std::env::temp_dir()];
+    roots.push(PathBuf::from("/tmp"));
+    roots.push(PathBuf::from("/private/tmp"));
+    roots.push(PathBuf::from("/var/folders"));
+    roots.iter().any(|r| cwd.starts_with(r))
+}
+
+/// True when a vault write from `cwd` would be a temp-named stray: under a
+/// temp root with a basename-fallback project name. The vault writers
+/// (escalations, questions, handoffs) contain such writes in their
+/// space/fallback dir instead of scattering `internal/fnoe<pid>_<n>/` into
+/// the real vault.
+pub(crate) fn vault_write_is_temp_stray(home: Option<&Path>, cwd: &Path) -> bool {
+    cwd_is_temporary(cwd) && project_name_is_basename_fallback(home, cwd)
+}
+
+/// Read the project id from a flat config.toml (`[project]\nid = "..."`). The
+/// legacy top-level `project.id` and the canonical `config.project.id` both map
+/// to the same flat `project.id`, so one lookup covers both. An empty/`null`
+/// value, an unreadable file, or an id outside `[A-Za-z0-9._-]` yields None so
+/// the caller falls back to the basename.
+pub(crate) fn read_project_id(path: &Path) -> Option<String> {
+    let t = load_config_toml(path)?;
+    let id = toml_string_at(&t, &["project", "id"])?;
+    // The Python settings model rejects ids outside [A-Za-z0-9._-]
+    // (config/__init__.py). A hand-edited invalid value (e.g. `foo/bar`) must
+    // never be spliced into a `{project}` path segment, so degrade to the
+    // basename rather than write artifacts outside the project dir.
+    valid_project_id(&id).then_some(id)
+}
+
+/// Project ids are restricted to `[A-Za-z0-9._-]`, matching the Python
+/// `validate_project_id` regex. ASCII byte check (no `regex` dependency).
+pub(crate) fn valid_project_id(s: &str) -> bool {
+    !s.is_empty()
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
+}
+
+/// Best-effort PR metadata for the current HEAD/branch through the REST reader.
+pub(crate) fn pr_info(cwd: &Path, number: Option<u64>) -> Option<Value> {
+    let mut command = Command::new(crate::scrape::fno_bin());
+    command.args(["do", "pr", "info"]);
+    if let Some(number) = number {
+        command.arg(number.to_string());
+    }
+    let out = command.current_dir(cwd).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    serde_json::from_slice(&out.stdout).ok()
+}
+
+/// Best-effort PR URL for the current HEAD/branch through REST.
+fn gh_pr_url(cwd: &Path) -> Option<String> {
+    let url = pr_info(cwd, None)?.get("url")?.as_str()?.trim().to_string();
+    if url.is_empty() {
+        None
+    } else {
+        Some(url)
+    }
+}
+
+/// Resolve the branch's open PR as `(number, url)` for the node<->PR backstop
+/// stamp. Returns None when gh fails/rate-limits, no PR exists, or the
+/// JSON is malformed - all of which the caller treats as "nothing to stamp".
+pub(crate) fn gh_pr_ref(cwd: &Path) -> Option<(u64, String)> {
+    let payload = pr_info(cwd, None)?;
+    parse_pr_ref(&serde_json::to_vec(&payload).ok()?)
+}
+
+/// Pure parse of REST `fno do pr info` output, with the legacy GraphQL field kept
+/// for callers carrying cached payloads.
+fn parse_pr_ref(stdout: &[u8]) -> Option<(u64, String)> {
+    let v: Value = serde_json::from_slice(stdout).ok()?;
+    let number = v.get("pr").or_else(|| v.get("number"))?.as_u64()?;
+    let url = v.get("url")?.as_str()?.trim().to_string();
+    if url.is_empty() {
+        None
+    } else {
+        Some((number, url))
+    }
+}
+
+/// Deterministic node<->PR `pr_number` backstop: the create-time skill
+/// stamp (the create flow's bind step) is best-effort and was skipped for /#358,
+/// leaving `pr_number` null so the derived `in_review` status never engaged.
+/// Gated on node-presence + PR-exists (NOT `ship`) so `DoneAwaitingMerge` - the
+/// exact terminal `in_review` covers - is included. Best-effort + non-fatal +
+/// idempotent: never returned into `failed`, never changes the exit code; a
+/// re-stamp of the same value is a no-op via `fno backlog update`'s lock.
+fn stamp_node_pr(cwd: &Path, node: Option<&str>) {
+    let Some(node) = node else { return };
+    let Some((number, url)) = gh_pr_ref(cwd) else {
+        eprintln!("finalize: no open PR found for branch; skipped pr_number stamp for node {node}");
+        return;
+    };
+    let ok = Command::new(crate::scrape::fno_bin())
+        .args([
+            "backlog",
+            "update",
+            node,
+            &format!("pr_number={number}"),
+            &format!("pr_url={url}"),
+        ])
+        .current_dir(cwd)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if ok {
+        eprintln!("finalize: stamped pr_number {number} on node {node}");
+    } else {
+        eprintln!("finalize: pr_number stamp failed for node {node} (non-fatal)");
+    }
+}
+
+/// Whether this terminal fire should arm GitHub's native auto-merge.
+///
+/// Auto-merge used to be armed by `fno agents worker ship` at PR-CREATION time, gated
+/// only on the manifest's posture. That pre-authorized a merge before any gate
+/// had run: from the moment `--auto` is set GitHub owns the timing and fires the
+/// instant ITS OWN branch protections pass, so footnote is no longer in the
+/// decision path and a reviewer who posts a blocking finding after CI greens
+/// loses the race (the PR #566 shape). Arming here instead authorizes exactly
+/// the state `loop-check` just verified - PR up, CI green, no unaddressed
+/// blocking finding - and buys every reviewer the whole CI duration to post
+/// before the merge is armed at all.
+///
+/// `DonePRGreen` only. `DoneAdvisory` is the other `SHIP_REASONS` member but is
+/// a doc ship with no PR, and `DoneAwaitingMerge` is by definition a merge a
+/// human performs past pre-existing main-red - arming either would merge
+/// something no gate greened.
+fn should_arm_auto_merge(reason: &str, auto_merge_approved: bool) -> bool {
+    auto_merge_approved
+        && classify_legacy(reason)
+            .map(|record| record.projection().merge_armable)
+            .unwrap_or(false)
+}
+
+fn optout_release_command(key: &str) -> &'static str {
+    match key {
+        "review.optional_apps" => "fno config unset review.optional_apps",
+        "review.self_review_required" => "fno config set review.self_review_required true",
+        "auto_merge.require_checks_pass" => "fno config set auto_merge.require_checks_pass true",
+        _ => "fno agents claim release",
+    }
+}
+
+fn merge_gating_optout_block_reason_for(key: &str, claim: &crate::claims::ClaimRecord) -> String {
+    let expires = claim
+        .expires_at
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    format!(
+        "merge-gating opt-out in force (config-optout:{key}, held by {}, expires {expires}); an opt-out disarms UNATTENDED merge by design. Sanctioned path: merge deliberately (`fno do pr merge`) from the session holding the opt-out, or release it (`{}`) and let the gate green normally.",
+        claim.holder,
+        optout_release_command(key),
+    )
+}
+
+fn merge_gating_optout_block_reason() -> Option<String> {
+    for key in crate::claims::MERGE_GATING_OPTOUT_KEYS {
+        let claim_key = format!("config-optout:{key}");
+        let (state, claim) = crate::claims::status(&claim_key, None);
+        if state == crate::claims::ClaimState::Corrupted {
+            return Some(format!("merge-gating opt-out instrument unreadable for {claim_key}; restore claim store access before unattended merge"));
+        }
+        if matches!(
+            state,
+            crate::claims::ClaimState::Live | crate::claims::ClaimState::Suspect
+        ) {
+            if let Some(claim) = claim {
+                return Some(merge_gating_optout_block_reason_for(key, &claim));
+            }
+            return Some(format!(
+                "merge-gating opt-out claim {claim_key} is live but unreadable; sanctioned path: restore claims access before unattended merge"
+            ));
+        }
+    }
+    None
+}
+
+/// Return why configured optional-review evidence forbids native auto-merge,
+/// or `None` when arming may proceed.
+///
+/// coverage is the authority. When loop-check emitted a covered
+/// `review_coverage` event, a local lane reviewed the diff and a quota-refused
+/// or silent optional App no longer withholds (that recreates the wedge this
+/// node exists to escape). Without such an event (e.g. finalize run with no
+/// prior loop-check fire), the per-app check below is the fallback: a missing
+/// or usage-limited optional App still withholds so GitHub does not merge
+/// without the review coverage the operator configured.
+///
+/// The per-app check itself is `loopcheck::bot_verdict`, the ONE per-bot
+/// predicate (round 3, PR 917): this scan used to read review objects only,
+/// with no commit pin and no clean-pass lane, so an optional App whose pass is
+/// a pinned clean-pass comment (the shape loop-check and the Python gates
+/// already read) withheld arming forever - three readers, three answers. A
+/// verdict on an older commit now reads Stale and withholds as
+/// `optional-review-stale` rather than arming: arming on a review of a commit
+/// that is no longer HEAD re-arms exactly the post-green race (PR #566 shape)
+/// this gate moved to the terminal fire to escape.
+fn optional_review_block_reason(cwd: &Path) -> Option<String> {
+    let optional_apps = crate::agents_config::review_optional_apps(cwd);
+    if optional_apps.is_empty() {
+        return None;
+    }
+    // finding 1 (retraction): coverage bypasses ONLY the REFUSED case
+    // (quota-limited), NOT the ABSENT case. An absent optional App (nothing
+    // posted) must keep withholding, because unaddressed_findings is empty
+    // (built from POSTED comments only) and cannot wait for a review that does
+    // not exist yet.
+    let coverage_satisfied = coverage_satisfied_in_latest_event(cwd);
+
+    // The family's one env seam outranks the built-in adapter: a staged fake
+    // must win, exactly as it does for loop-check and review-coverage.
+    let gh_bin = std::env::var("FNO_LOOPCHECK_GH_BIN")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "fno-gh-coverage".to_string());
+    let mut cmd = Command::new(gh_bin);
+    cmd.args([
+        "pr",
+        "view",
+        "--json",
+        "reviews,comments,headRefOid,baseRefName",
+    ]);
+    cmd.current_dir(cwd);
+    let output = match crate::gh_budget::output(cmd) {
+        Ok(output) if output.status.success() => output,
+        Ok(output) => {
+            eprintln!(
+                "finalize: optional-review evidence read failed (non-fatal): {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            return Some("optional-review-read-failed".to_string());
+        }
+        Err(error) => {
+            eprintln!("finalize: optional-review evidence read failed (non-fatal): {error}");
+            return Some("optional-review-read-failed".to_string());
+        }
+    };
+
+    let payload: Value = match serde_json::from_slice(&output.stdout) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("finalize: optional-review evidence parse failed (non-fatal): {error}");
+            return Some("optional-review-read-failed".to_string());
+        }
+    };
+    let Some(reviews) = payload.get("reviews").and_then(Value::as_array) else {
+        return Some("optional-review-read-failed".to_string());
+    };
+    let Some(comments) = payload.get("comments").and_then(Value::as_array) else {
+        return Some("optional-review-read-failed".to_string());
+    };
+    // Freshness resolves against the PR head gh reports, the same pin the
+    // coverage gate uses. An exact-head pin is Fresh with no git call; a moved
+    // head needs the repo's git, and an unresolvable identity reads Stale -
+    // fail closed, never an arming on unpinned evidence.
+    let head = payload
+        .get("headRefOid")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let base = payload
+        .get("baseRefName")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let resolver = crate::loopcheck::FreshnessResolver::new("git", cwd, base, head, 100);
+
+    for app in optional_apps {
+        let (verdict, _, _) =
+            crate::loopcheck::bot_verdict(&app, reviews, comments, &|sha| resolver.freshness(sha));
+        match verdict {
+            crate::loopcheck::CoverageVerdict::Reviewed => continue,
+            crate::loopcheck::CoverageVerdict::Refused => {
+                // finding 1 (retraction): a REFUSED optional App bypasses
+                // the withhold ONLY when coverage is satisfied (a local lane
+                // reviewed). Without coverage, the refused bot still withholds.
+                if coverage_satisfied {
+                    continue;
+                }
+                return Some(format!("optional-review-usage-limited:{app}"));
+            }
+            crate::loopcheck::CoverageVerdict::Stale => {
+                return Some(format!("optional-review-stale:{app}"));
+            }
+            _ => return Some(format!("optional-review-outstanding:{app}")),
+        }
+    }
+
+    None
+}
+
+/// Whether the latest `review_coverage` event in the project log reports
+/// coverage satisfied (covered, count > 0). Used to defer the optional-app
+/// withhold to the coverage authority. Missing/unreadable -> false
+/// (fall back to the per-app check).
+fn coverage_satisfied_in_latest_event(cwd: &Path) -> bool {
+    let path = crate::paths::events_path(cwd);
+    let content = crate::event_store::journal_text(&path, &["review_coverage"]);
+    // Pin to the current HEAD: a coverage event for a prior commit doesn't
+    // describe what finalize is about to arm. (finding 2.)
+    let head = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    let mut latest: Option<Value> = None;
+    for line in content.lines() {
+        let Ok(val) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if val.get("type").and_then(|v| v.as_str()) != Some("review_coverage") {
+            continue;
+        }
+        if !head.is_empty() {
+            let ev_head = val
+                .pointer("/data/head_sha")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if ev_head != head {
+                continue;
+            }
+        }
+        latest = Some(val);
+    }
+    match latest {
+        Some(v) => {
+            v.pointer("/data/coverage").and_then(Value::as_str) == Some("covered")
+                && v.pointer("/data/reviewed_count")
+                    .and_then(Value::as_i64)
+                    .map_or(false, |n| n > 0)
+        }
+        None => false,
+    }
+}
+
+/// Arm GitHub's native auto-merge for the branch's open PR, through the one
+/// authorized merge operation. Returns whether it armed, for the terminal
+/// event's `auto_merge_armed` field, plus the refusal reason when it did not.
+///
+/// The whole decision lives in [`crate::authorized_merge`]: the posture fold,
+/// the dispatch hold, the in-flight review hold, the head pin and the base
+/// lineage. This arm used to carry a shorter, different chain of its own, so a
+/// merge `fno do pr merge` refused could still reach GitHub's queue from here.
+///
+/// Best-effort and log-only, the same fatality as `stamp_node_pr`: it is
+/// deliberately NOT returned into `failed`. Failing to arm leaves a green,
+/// reviewed, mergeable PR for a human, which is the safe direction.
+fn arm_auto_merge(cwd: &Path, approved: bool, source: Option<&str>) -> (bool, Option<String>) {
+    use crate::authorized_merge::{Effect, Outcome, Request};
+
+    // The merges hold gates this door too: arming is a merge effect (the
+    // queue merges when checks pass). Best-effort like everything here, and
+    // the safe direction - a held arm leaves the green PR for a human.
+    match crate::fleet_incident::verdict_for("merges") {
+        crate::fleet_incident::Verdict::Clear(_) => {}
+        crate::fleet_incident::Verdict::Stopped(r) => {
+            return (
+                false,
+                Some(format!(
+                    "fleet incident stop holds merges (generation {}, reason: {})",
+                    r.generation, r.reason
+                )),
+            );
+        }
+        crate::fleet_incident::Verdict::Unavailable(d) => {
+            return (
+                false,
+                Some(format!(
+                    "fleet incident state is unreadable ({d}); arm fails closed"
+                )),
+            );
+        }
+    }
+
+    let outcome = crate::authorized_merge::run(
+        &crate::authorized_merge::RealProbes,
+        &Request {
+            cwd: cwd.to_path_buf(),
+            pr: None,
+            effect: Effect::Arm,
+            approved: Some(approved),
+            auto_merge_source: source.map(str::to_owned),
+            // `--auto` IS waiting for the checks, so the queue enforces them
+            // server-side. Reading `require_checks_pass` here would let a config
+            // value turn arming into a no-op.
+            require_checks: false,
+            // The owner captures the head independently of review coverage.
+            covered_head: None,
+            decide_only: false,
+            authority: None,
+            accept_flake: false,
+            supplied_verdict: None,
+            supplied_counts: None,
+            supplied_rerun_recovered: None,
+            supplied_optional_unresolved: None,
+            supplied_github_blockers: None,
+            supplied_dispatch_hold: None,
+            supplied_review_hold: None,
+            supplied_facts: None,
+            supplied_evals_gate: None,
+        },
+    );
+    for warning in outcome.warnings() {
+        eprintln!("{}", warning.note());
+    }
+    match outcome {
+        Outcome::Armed { head, .. } => {
+            eprintln!("finalize: auto-merge armed for PR at {head}");
+            (true, None)
+        }
+        other => {
+            let detail = other.detail();
+            eprintln!(
+                "finalize: auto-merge NOT armed ({}): {detail}",
+                other.word()
+            );
+            (false, Some(detail))
+        }
+    }
+}
+
+/// The terminals a `do` stamp is allowed on. Planner-only sessions exit via
+/// Budget/NoProgress/Interrupted, so those never stamp.
+///
+/// Deliberately NOT `SHIP_REASONS`, which also contains `DoneAdvisory`: a doc
+/// ship authors no branch commits, so reusing that constant here would stamp
+/// every doc ship. The two sets disagree on purpose.
+fn is_do_stamp_terminal(reason: &str) -> bool {
+    classify_legacy(reason)
+        .map(|record| record.projection().do_stamp_terminal)
+        .unwrap_or(false)
+}
+
+/// Guarded `do` lifecycle stamp. `/execute` Step 1.5 is the earlier truthful
+/// stamp, but most `/target` runs implement inline and never invoke `/execute`, so the
+/// phase was recorded twice across ~2800 nodes. This is the backstop: one record
+/// per implementing session, at its own finish line.
+///
+/// `sessions[]` is append-only and every worker-session resolver trusts it, so a
+/// WRONG stamp is strictly worse than none - stamping at init recorded the
+/// PLANNER (PR #504, reverted). G1 (ship reason) and G4 (authored-commit
+/// evidence) evaluate here; G2 (identity continuity) and G3 (plan agreement)
+/// ride flags into `fno backlog session add`, which already owns ambient-identity
+/// precedence.
+///
+/// G1, G2 and G4 fail closed. G3 is the deliberate exception: an unreadable plan
+/// or an absent `claims:` counts as agreement (mirroring `/execute` Step 1.5, since
+/// absent evidence of conflict is not conflict), and only a positive
+/// disagreement skips. The primitive says so on stderr when it could not
+/// evaluate, so that leniency is never silent.
+///
+/// Log-only and never retried: a guard skip is a designed outcome, and retrying
+/// one would spin.
+///
+/// Also the do row's CLOSE, not only its backstop open: it now passes
+/// `--ended-at` alongside `--started-at`, so a do row that its release never
+/// closed - freed by `--force`, which stamps nothing, or by a release whose
+/// own stamp skipped - still gets `ended_at` here, at its own finish line.
+/// `append_session_record`'s duplicate-fill is the same one the release
+/// stamp uses: it fills only timestamps the row left open, so when the
+/// release already closed the row this is a no-op.
+fn stamp_node_do(cwd: &Path, m: &ManifestFields, reason: &str) {
+    let Some(node) = m.graph_node_id.as_deref() else {
+        return;
+    };
+    let skip = |guard: &str, why: String| {
+        eprintln!("finalize: do stamp skipped for node {node} ({guard}: {why})");
+    };
+    if !is_do_stamp_terminal(reason) {
+        return skip("G1", format!("{reason} is not a ship terminal"));
+    }
+    // G2 input: an absent id cannot prove continuity, so it is not stamped.
+    let Some(session) = m.harness_session_id.as_deref() else {
+        return skip("G2", "manifest carries no harness_session_id".into());
+    };
+    let (Some(created_at), Some(head)) = (m.created_at.as_deref(), m.initial_head.as_deref())
+    else {
+        return skip("G4", "manifest predates initial_head/created_at".into());
+    };
+    let Some(floor) = parse_utc_epoch(created_at) else {
+        return skip("G4", format!("unparseable created_at {created_at}"));
+    };
+    if !authored_work_since(cwd, head, floor) {
+        return skip(
+            "G4",
+            format!("no non-merge commit in {head}..HEAD authored at/after {created_at}"),
+        );
+    }
+
+    let args = do_stamp_args(
+        node,
+        session,
+        m.plan_path.as_deref(),
+        created_at,
+        &now_rfc3339_utc(),
+    );
+    let ok = Command::new(crate::scrape::fno_bin())
+        .args(&args)
+        .current_dir(cwd)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !ok {
+        eprintln!("finalize: do stamp failed for node {node} (non-fatal)");
+    }
+}
+
+/// Pure argument-vector builder for the `do` row stamp, split out so the
+/// `--ended-at` flag is assertable without a subprocess.
+fn do_stamp_args(
+    node: &str,
+    session: &str,
+    plan_path: Option<&str>,
+    started_at: &str,
+    ended_at: &str,
+) -> Vec<String> {
+    let mut args = vec![
+        "backlog".to_string(),
+        "session".to_string(),
+        "add".to_string(),
+        node.to_string(),
+        "--phase".to_string(),
+        "execute".to_string(),
+        "--require-session".to_string(),
+        session.to_string(),
+    ];
+    if let Some(plan) = plan_path {
+        args.push("--guard-plan".to_string());
+        args.push(plan.to_string());
+    }
+    args.push("--started-at".to_string());
+    args.push(started_at.to_string());
+    args.push("--ended-at".to_string());
+    args.push(ended_at.to_string());
+    args
+}
+
+/// Argument vector for the cancel settle's claim release, split out so the
+/// tests can assert `--stamp-do` without a subprocess.
+fn cancel_release_args(key: &str, holder: &str) -> Vec<String> {
+    vec![
+        "agents".to_string(),
+        "claim".to_string(),
+        "release".to_string(),
+        key.to_string(),
+        "--holder".to_string(),
+        holder.to_string(),
+        "--stamp-do".to_string(),
+    ]
+}
+
+/// The cancel settle. An `Interrupted` terminal never reaches the
+/// stop hook's terminal release case (a hand-maintained mirror of the Rust
+/// enum; the string `Interrupted` appears in that file zero times by design),
+/// so before this the claim stayed held and the do row stayed open, pinning
+/// the node at `in_progress` forever. The release does both halves: `release`
+/// frees the claim, `--stamp-do` fills `ended_at` on the row the session's
+/// acquire opened (fill-only: `append_session_record` never overwrites a set
+/// timestamp, so a retried finalize is a no-op on the row).
+///
+/// Non-fatal, like every finalize side effect: one named stderr line per
+/// skip or failure, the exit code untouched. A manifest naming no claim key
+/// prints one line and stops - the sweep is the path for a row no
+/// claim opened.
+fn cancel_settle_claims(cwd: &Path, m: &ManifestFields) {
+    let (Some(key), Some(holder)) = (
+        m.target_claim_key.as_deref(),
+        m.target_claim_holder.as_deref(),
+    ) else {
+        eprintln!(
+            "finalize: cancel settle skipped: manifest names no target_claim_key/target_claim_holder"
+        );
+        return;
+    };
+    if !key.starts_with("node:") {
+        eprintln!("finalize: cancel settle skipped for key {key} (not a node claim)");
+        return;
+    }
+    let ok = Command::new(crate::scrape::fno_bin())
+        .args(cancel_release_args(key, holder))
+        .current_dir(cwd)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !ok {
+        eprintln!("finalize: cancel claim release failed for {key} (non-fatal)");
+    }
+}
+
+/// True when `initial_head..HEAD` holds a non-merge commit on HEAD's own
+/// first-parent chain authored at or after `floor` (epoch seconds).
+///
+/// Author dates, never committer dates: `git rebase` rewrites the committer date
+/// to now while preserving the author date, so a successor that merely rebased a
+/// predecessor's branch onto main moves HEAD maximally while authoring nothing.
+/// `--since` filters on committer date and would re-open exactly that hole.
+///
+/// `--first-parent` closes the sibling hole. The range is set subtraction over
+/// the whole DAG, and `--no-merges` drops a merge commit but KEEPS its payload,
+/// so a session that authored nothing and only ran `git merge origin/main` would
+/// otherwise pass on other contributors' commits - genuinely recent, so the
+/// author-date floor cannot catch them. The session's own commits sit on HEAD's
+/// first-parent chain, so they still count.
+///
+/// The `:/` pathspec (repo root, cwd-independent) requires the commit to have
+/// actually changed a file, so an empty commit is not evidence of work.
+///
+/// The range survives a rebased-away `initial_head`; any git failure (GC'd
+/// baseline, deleted worktree) reads as no evidence, and so does a single
+/// unparseable timestamp - partial evidence is not evidence.
+///
+/// Accepted residual: the floor is inclusive at one-second resolution, so a
+/// predecessor commit authored in the same second as this session's init would
+/// count. Tightening to exclusive would instead drop a legitimate commit
+/// authored in the same second as init; both windows are one second wide, and
+/// this direction keeps the fast-implementer case covered.
+fn authored_work_since(cwd: &Path, initial_head: &str, floor: i64) -> bool {
+    let range = format!("{initial_head}..HEAD");
+    let args = [
+        "log",
+        "--no-merges",
+        "--first-parent",
+        "--format=%at",
+        &range,
+        "--",
+        ":/",
+    ];
+    let Some(out) = git_capture(cwd, &args) else {
+        return false;
+    };
+    let mut any_after_floor = false;
+    for line in out.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let Ok(at) = line.parse::<i64>() else {
+            return false; // unreadable evidence, not partial evidence
+        };
+        any_after_floor |= at >= floor;
+    }
+    any_after_floor
+}
+
+/// Parse a manifest ISO-8601 UTC instant to epoch seconds.
+fn parse_utc_epoch(ts: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(ts)
+        .ok()
+        .map(|d| d.timestamp())
+}
+
+/// Run `git <args>` in cwd, returning trimmed stdout on success.
+pub(crate) fn git_capture(cwd: &Path, args: &[&str]) -> Option<String> {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+}
+
+// ── WIP rescue commit (HALF ONE) ────────────────────────────────────
+
+/// If `cwd`'s worktree is dirty, rescue the uncommitted work. A linked
+/// worktree on a named feature branch gets today's WIP commit on that branch.
+/// The canonical checkout, a HEAD on the default branch, or a detached HEAD
+/// gets the work written to a `wip/<session>-<reason>-<sha8>` branch instead,
+/// leaving the checked-out branch, the index and the working tree untouched
+/// (: the canonical-main WIP commit that left canonical 1 ahead of
+/// origin and blocked every fast-forward). Returns the rescue sha plus, for a
+/// branch rescue, its branch name; `None` on a clean tree / non-git dir /
+/// commit failure.
+///
+/// `git add -A` is deliberate here, unlike the stale-base-rebase case this
+/// repo otherwise warns off `-A` for (AGENTS.md pitfalls corpus): this is the
+/// SAME worker's own in-flight work, not a merge in progress (checked below,
+/// not assumed), and only `-A` reliably captures new untracked files alongside
+/// modifications - the exact shape of the measured near-miss (950 insertions,
+/// 11 files, none staged).
+fn commit_wip_if_dirty(cwd: &Path, reason: &str, session_id: &str) -> Option<WipRescue> {
+    if !cwd.join(".git").exists() {
+        return None; // not a git worktree at all
+    }
+    // Refuse to touch a tree mid-merge/mid-rebase/mid-cherry-pick: `git add -A`
+    // would stage conflicted files (still holding `<<<<<<<` markers) as
+    // "resolved", and `git commit` would silently finish the operation on
+    // garbage content. `git rev-parse --git-path` resolves worktree-relative
+    // (a linked worktree's real gitdir lives under `.git/worktrees/<name>/`,
+    // not `<cwd>/.git/`), unlike a bare `cwd.join(".git")` check.
+    let in_progress = [
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "rebase-merge",
+        "rebase-apply",
+    ]
+    .iter()
+    .any(|marker| {
+        // `--git-path` prints a path relative to the git invocation's cwd
+        // (the worktree, via `current_dir(cwd)` inside `git_capture`), so
+        // it must be re-joined onto `cwd` before checking existence - this
+        // process's own cwd is unrelated.
+        git_capture(cwd, &["rev-parse", "--git-path", marker]).is_some_and(|p| cwd.join(p).exists())
+    });
+    if in_progress {
+        eprintln!("finalize: worktree is mid-merge/rebase; skipping WIP rescue commit ({reason})");
+        return None;
+    }
+    let status = git_capture(cwd, &["status", "--porcelain"])?;
+    if status.trim().is_empty() {
+        return None; // clean tree, nothing to rescue
+    }
+    let files: Vec<&str> = status.lines().collect();
+    let shown: Vec<&str> = files.iter().take(20).copied().collect();
+    let mut landed = shown.join("; ");
+    if files.len() > shown.len() {
+        landed.push_str(&format!("; +{} more", files.len() - shown.len()));
+    }
+
+    let head_branch = git_capture(cwd, &["symbolic-ref", "--quiet", "--short", "HEAD"]);
+    let on_default = head_branch
+        .as_deref()
+        .is_some_and(|b| b == crate::canonical_check::default_branch(cwd));
+    if crate::canonical_check::is_canonical_checkout(cwd) || head_branch.is_none() || on_default {
+        rescue_wip_to_branch(cwd, reason, session_id, &landed)
+    } else {
+        commit_wip_in_place(cwd, reason, &landed)
+    }
+}
+
+/// The rescue's outcome: the WIP commit sha and, when the work was rescued to
+/// a side branch instead of the checked-out one, that branch's name.
+pub(crate) struct WipRescue {
+    pub sha: String,
+    pub branch: Option<String>,
+}
+
+/// Branch-name-safe token: `[A-Za-z0-9._-]` only, capped at 40 chars.
+fn branch_token(raw: &str) -> String {
+    raw.chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        .take(40)
+        .collect()
+}
+
+/// Run git against a temporary index: a branch rescue must capture untracked
+/// files without staging anything in the real index.
+fn git_with_temp_index(cwd: &Path, index: &Path, args: &[&str]) -> Option<String> {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .env("GIT_INDEX_FILE", index)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&out.stdout).trim_end().to_string())
+}
+
+/// Write the rescue to a `wip/` branch via `commit-tree`, leaving HEAD, the
+/// index and the working tree untouched. The commit-tree path also bypasses
+/// hooks and signing config - the same failure modes the in-place path
+/// retries around - and the unsigned `-c commit.gpgsign=false` retry is kept
+/// for parity anyway.
+fn rescue_wip_to_branch(
+    cwd: &Path,
+    reason: &str,
+    session_id: &str,
+    landed: &str,
+) -> Option<WipRescue> {
+    let session = branch_token(session_id);
+    let reason_token = branch_token(reason);
+    let parent = git_capture(cwd, &["rev-parse", "--verify", "-q", "HEAD"]);
+    let index_path = std::env::temp_dir().join(format!(
+        "fno-wip-index-{}-{}.idx",
+        branch_token(&format!("{session_id}-{reason}")),
+        std::process::id()
+    ));
+    let message = format!(
+        "WIP: session terminated ({reason}) with uncommitted work\n\n\
+         Auto-committed by the terminal WIP-commit gate so a killed \
+         worker never loses in-flight work. Not reviewed, not tested - treat \
+         as a checkpoint, not a finished change.\n\n\
+         Landed:\n{landed}"
+    );
+    let outcome = (|| -> Option<(String, String)> {
+        // The provisional commit only NAMES the branch; the branch itself
+        // points at the final commit whose message carries that name.
+        if parent.is_some()
+            && git_with_temp_index(cwd, &index_path, &["read-tree", "HEAD"]).is_none()
+        {
+            eprintln!("finalize: WIP rescue read-tree failed");
+            return None;
+        }
+        if git_with_temp_index(cwd, &index_path, &["add", "-A"]).is_none() {
+            eprintln!("finalize: WIP rescue git add failed");
+            return None;
+        }
+        let Some(tree) = git_with_temp_index(cwd, &index_path, &["write-tree"]) else {
+            eprintln!("finalize: WIP rescue write-tree failed");
+            return None;
+        };
+        let commit_tree = |msg: &str| -> Option<String> {
+            let mut args: Vec<&str> = vec!["commit-tree", &tree];
+            if let Some(p) = parent.as_deref() {
+                args.extend(["-p", p]);
+            }
+            args.extend(["-m", msg]);
+            git_with_temp_index(cwd, &index_path, &args).or_else(|| {
+                let mut retry: Vec<&str> = vec!["-c", "commit.gpgsign=false"];
+                retry.extend(args);
+                git_with_temp_index(cwd, &index_path, &retry)
+            })
+        };
+        let Some(provisional) = commit_tree(&message) else {
+            eprintln!("finalize: WIP rescue commit-tree failed");
+            return None;
+        };
+        let tip8 = provisional.get(..8).unwrap_or(&provisional);
+        let name = format!("wip/{session}-{reason_token}-{tip8}");
+        let full_message =
+            format!("{message}\n\nRescued to branch {name}; the checked-out branch was not moved.");
+        let Some(sha) = commit_tree(&full_message) else {
+            eprintln!("finalize: WIP rescue commit-tree failed");
+            return None;
+        };
+        if git_capture(cwd, &["branch", &name, &sha]).is_none() {
+            eprintln!("finalize: WIP rescue branch {name} create failed");
+            return None;
+        }
+        Some((sha, name))
+    })();
+    let _ = std::fs::remove_file(&index_path);
+    let (sha, name) = outcome?;
+    eprintln!(
+        "finalize: rescued uncommitted work to branch {name}; {} left unmoved ({reason})",
+        cwd.display()
+    );
+    Some(WipRescue {
+        sha,
+        branch: Some(name),
+    })
+}
+
+/// Today's in-place WIP commit, kept for a linked worktree on a named feature
+/// branch - the one branch a session owns, where committing is safe.
+fn commit_wip_in_place(cwd: &Path, reason: &str, landed: &str) -> Option<WipRescue> {
+    let message = format!(
+        "WIP: session terminated ({reason}) with uncommitted work\n\n\
+         Auto-committed by the terminal WIP-commit gate so a killed \
+         worker never loses in-flight work. Not reviewed, not tested - treat \
+         as a checkpoint, not a finished change.\n\n\
+         Landed:\n{landed}"
+    );
+    let add_ok = Command::new("git")
+        .current_dir(cwd)
+        .args(["add", "-A"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !add_ok {
+        eprintln!("finalize: WIP git add failed; leaving worktree dirty");
+        return None;
+    }
+    // Try the repo's own commit hooks + signing config first; a hook
+    // rejection or an unavailable gpg key must never be the reason in-flight
+    // work is lost, so fall back to skipping both rather than leaving the
+    // tree uncommitted. This rescue commit is clearly labeled WIP, never
+    // mistaken for an authored, reviewed change.
+    let committed = Command::new("git")
+        .current_dir(cwd)
+        .args(["commit", "-q", "-m", &message])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+        || Command::new("git")
+            .current_dir(cwd)
+            .args([
+                "commit",
+                "-q",
+                "--no-verify",
+                "-c",
+                "commit.gpgsign=false",
+                "-m",
+                &message,
+            ])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+    if !committed {
+        eprintln!("finalize: WIP git commit failed");
+        return None;
+    }
+    match git_capture(cwd, &["rev-parse", "HEAD"]) {
+        Some(sha) => {
+            eprintln!("finalize: WIP commit {sha} saved uncommitted work ({reason})");
+            Some(WipRescue { sha, branch: None })
+        }
+        None => None,
+    }
+}
+
+// ── unanswered-question filing (HALF TWO) ────────────────────────────
+
+/// Positive-marker detector for an operator-directed question left in a
+/// worker's last message: matches the phrase, never an absence
+/// (scripts/lib/assert-absent.sh: 'assert a positive marker, never an
+/// absence'). Narrow and
+/// specimen-derived over "any text with a question mark" - a false positive
+/// costs a redundant outstanding row, a false negative loses the question,
+/// and the second failure mode is the one this fix exists for.
+const OPERATOR_QUESTION_MARKERS: &[&str] = &[
+    "awaiting operator",
+    "waiting for operator",
+    "waiting on operator",
+    "need the operator",
+    "need operator",
+    "ask the operator",
+    "operator's",
+    "operator to",
+    "need you to",
+    "need your",
+    "please advise",
+    "please confirm",
+    "need confirmation",
+];
+
+fn extract_operator_question(text: &str) -> Option<String> {
+    let lower = text.to_lowercase();
+    if !OPERATOR_QUESTION_MARKERS.iter().any(|m| lower.contains(m)) {
+        return None;
+    }
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Cap length: this becomes a CLI argument and an `outstanding` report line.
+    const MAX_CHARS: usize = 600;
+    if trimmed.chars().count() > MAX_CHARS {
+        Some(trimmed.chars().take(MAX_CHARS).collect::<String>() + "…")
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Has this session already filed an open question? Read via the same `fno
+/// inbox outstanding --json` an operator would run, so dedup can never drift
+/// from what is actually on record (never re-derived state).
+fn session_already_filed(cwd: &Path, session_id: &str) -> bool {
+    let out = match Command::new(crate::scrape::fno_bin())
+        .current_dir(cwd)
+        .args(["inbox", "outstanding", "--json"])
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => return false, // unreadable -> fail toward filing, never toward silence
+    };
+    let Ok(v) = serde_json::from_slice::<Value>(&out.stdout) else {
+        return false;
+    };
+    v.get("questions")
+        .and_then(|q| q.as_array())
+        .is_some_and(|qs| {
+            qs.iter()
+                .any(|q| q.get("session_id").and_then(|s| s.as_str()) == Some(session_id))
+        })
+}
+
+fn file_outstanding_question(cwd: &Path, question: &str, node: Option<&str>) -> bool {
+    let mut cmd = Command::new(crate::scrape::fno_bin());
+    cmd.current_dir(cwd).args([
+        "inbox",
+        "outstanding",
+        "ask",
+        question,
+        // A rescued question records as a pin: the asker is gone, so the
+        // page carries the action, not a question (the ask port refuses a
+        // question with no context). Wording never says the session ended:
+        // a session has no terminal state.
+        "--ask",
+        "the asker went quiet on this question; resume its session or re-dispatch its node, then clear this with done",
+    ]);
+    if let Some(n) = node {
+        cmd.args(["--node", n]);
+    }
+    match cmd.status() {
+        Ok(s) if s.success() => true,
+        Ok(s) => {
+            eprintln!("finalize: outstanding ask exited {:?}", s.code());
+            false
+        }
+        Err(e) => {
+            eprintln!("finalize: outstanding ask spawn failed: {e}");
+            false
+        }
+    }
+}
+
+// ── completion eval artifact, every terminal but NoWork ──
+
+/// Write a structured completion eval for this session to the postmortems
+/// dir. Filename keyed by date + session-id prefix so
+/// a retry overwrites rather than duplicating (idempotent). The body branches
+/// on `STUCK_REASONS`: a stuck session gets failure-triage prose (unchanged
+/// from the original stuck-only artifact); every other reason gets a lighter
+/// eval prose - the corpus this feeds must see both what went wrong and what
+/// went right, not failures only.
+#[allow(clippy::too_many_arguments)]
+fn write_postmortem(
+    cwd: &Path,
+    session_id: &str,
+    m: &ManifestFields,
+    reason: &str,
+    transcript: Option<&Path>,
+    postmortems_override: Option<&Path>,
+    settings_override: Option<&Path>,
+    home: Option<&Path>,
+) -> Result<String, String> {
+    let dir = resolve_postmortems_dir(postmortems_override, settings_override, home, cwd);
+    fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+
+    let now = now_rfc3339_utc();
+    // Defensive slice: now_rfc3339_utc() always returns a full RFC3339 string,
+    // but never index a str blindly (gemini review). Falls back to the whole
+    // string if it were ever shorter than the date prefix.
+    let date = now.get(..10).unwrap_or(&now); // YYYY-MM-DD
+    let sid_short: String = session_id.chars().take(16).collect();
+    let file = dir.join(format!("{date}-{sid_short}.md"));
+
+    let node = m.graph_node_id.clone().unwrap_or_else(|| "-".into());
+    let plan = m.plan_path.clone().unwrap_or_else(|| "-".into());
+    let title = m.input.clone().unwrap_or_else(|| "Untitled".into());
+    let last_msg = transcript
+        .and_then(last_assistant_text)
+        .unwrap_or_else(|| "(transcript unavailable)".into());
+    let commits = git_capture(cwd, &["log", "--oneline", "-10"])
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "(log unavailable)".into());
+    let tree = git_capture(cwd, &["status", "--short"])
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "(clean)".into());
+
+    // Header/commits/tree scaffolding is identical in both branches; only the
+    // heading word, the termination-line suffix, the trailing section name,
+    // and its prose differ. Share the scaffold, branch only what differs
+    // (was two ~20-line near-identical format! blocks).
+    let stuck = is_stuck_reason(reason);
+    let (heading, term_suffix, section, prose): (&str, &str, &str, String) = if stuck {
+        (
+            "Postmortem",
+            " (stuck: exited without shipping)",
+            "Triage",
+            format!(
+                "A `{reason}` terminal means `fno-agents loop-check` saw no forward \
+                 progress (or the budget cap tripped) and let the session exit. Review \
+                 the last message and working tree above: was the agent blocked on an \
+                 external dependency, looping without committing, or done but unable to \
+                 emit a promise? Feed recurring patterns back into the rules."
+            ),
+        )
+    } else {
+        (
+            "Completion eval",
+            "",
+            "Eval",
+            format!(
+                "A `{reason}` terminal means this session completed - a clean \
+                 completion still belongs in the eval corpus, not only a stuck \
+                 one (: a failure-only \
+                 sample writes rules in a predictable, overcautious direction). \
+                 Review the last message above for anything the pre-promise \
+                 memory pass should have captured and check it against the \
+                 blocklist in skills/target/references/pre-promise.md before \
+                 promoting it - do not write an env-dependent finding, a \
+                 negative tool claim, a transient error, or an unresolved \
+                 failure dressed up as a validated workflow."
+            ),
+        )
+    };
+    let body = format!(
+        "# {heading}: {sid_short}\n\n\
+         - session: `{session_id}`\n\
+         - termination: **{reason}**{term_suffix}\n\
+         - node: `{node}`\n\
+         - plan: `{plan}`\n\
+         - feature: {title}\n\
+         - generated: {now} (mechanical, by `fno-agents finalize`)\n\n\
+         ## Last assistant message\n\n```\n{last_msg}\n```\n\n\
+         ## Recent commits\n\n```\n{commits}\n```\n\n\
+         ## Working tree\n\n```\n{tree}\n```\n\n\
+         ## {section}\n\n{prose}\n",
+    );
+    fs::write(&file, &body).map_err(|e| format!("write {}: {e}", file.display()))?;
+
+    Ok(file.to_string_lossy().into_owned())
+}
+
+/// Resolve the postmortems dir: explicit override -> `$POSTMORTEMS_DIR`
+/// (exported by emit_shell.py from config.paths.postmortems_dir) -> the
+/// `--settings` override file then project then global settings.yaml
+/// `postmortems_dir:` -> default `~/.fno/postmortems`. Pure-Rust; never
+/// shells `fno` (Domain Pitfall), mirroring resolve_handoffs_dir (which also
+/// honors `--settings`, codex P2).
+fn resolve_postmortems_dir(
+    override_dir: Option<&Path>,
+    settings_override: Option<&Path>,
+    home: Option<&Path>,
+    cwd: &Path,
+) -> PathBuf {
+    if let Some(d) = override_dir {
+        return d.to_path_buf();
+    }
+    if let Some(d) = env_dir_unless_null("POSTMORTEMS_DIR") {
+        return d;
+    }
+    let project = resolve_project_name(settings_override, home, cwd);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    // FNO_CONFIG is an explicit per-invocation pin (Python `_settings` reads
+    // it first); the ambient global config is deliberately NOT a candidate -
+    // that read broke every hermetic fixture on a machine pinning state_dir.
+    if let Some(cfg) = env_dir_unless_null("FNO_CONFIG") {
+        candidates.push(cfg);
+    }
+    if let Some(s) = settings_override {
+        candidates.push(s.to_path_buf());
+    }
+    candidates.push(cwd.join(".fno/config.toml"));
+    if let Some(h) = home {
+        candidates.push(h.join(".fno/config.toml"));
+    }
+    for sp in candidates {
+        if let Some(raw) = read_path_setting(&sp, "postmortems_dir") {
+            if let Some(expanded) = expand_handoffs_template(&raw, home, &project) {
+                return expanded;
+            }
+        }
+    }
+    let base = home
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| cwd.to_path_buf());
+    let root = base.join(".fno");
+    crate::state_layout::place_dir(&root, "postmortems").unwrap_or_else(|| root.join("postmortems"))
+}
+
+/// Best-effort: the newest assistant text message in the transcript JSONL, used
+/// as the "what was it doing when it got stuck" signal. Bounded to keep the
+/// artifact readable. Returns None on any read/parse miss.
+fn last_assistant_text(transcript: &Path) -> Option<String> {
+    let content = fs::read_to_string(transcript).ok()?;
+    for line in content.lines().rev() {
+        let line = line.trim();
+        // Cheap pre-filter: an assistant entry always carries the literal
+        // "assistant" (its role), so skip the JSON parse for the many user /
+        // tool-output lines that don't (gemini review). No false negatives.
+        if line.is_empty() || !line.contains("assistant") {
+            continue;
+        }
+        let Ok(val) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let role = val
+            .pointer("/message/role")
+            .or_else(|| val.get("role"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if role != "assistant" {
+            continue;
+        }
+        let text = crate::loopcheck::extract_assistant_text(&val);
+        if !text.trim().is_empty() {
+            return Some(text.chars().take(4000).collect());
+        }
+    }
+    None
+}
+
+/// The round-review read for finalize: the caller-pinned journal only.
+/// `events_path` would migrate the checkout journal on read and re-home
+/// the session's rows mid-finalize; a finalize backstop scans for an
+/// unposted round without mutating path state as a side effect.
+fn round_review_backstop(cwd: &Path, journal: &Path) -> crate::publish_review::RoundAnswer {
+    let payload = serde_json::json!({ "cwd": cwd.to_string_lossy() });
+    crate::publish_review::publish_round(
+        &payload,
+        &crate::publish_review::GhReal,
+        &[journal.to_path_buf()],
+    )
+}
+
+// ── unit tests (process-free) ────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn held_backstop_reads_the_pinned_journal_and_never_migrates_it() {
+        let base = std::env::temp_dir().join(format!("fno-held-backstop-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let checkout_events = base.join("checkout").join(".fno").join("events.jsonl");
+        std::fs::create_dir_all(checkout_events.parent().unwrap()).unwrap();
+        std::fs::write(
+            &checkout_events,
+            "{\"ts\":\"t\",\"type\":\"delegated\",\"data\":{}}\n",
+        )
+        .unwrap();
+        let pinned = base.join("pinned-journal.jsonl");
+        std::fs::write(&pinned, "").unwrap();
+        let cwd = checkout_events
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let answer = round_review_backstop(&cwd, &pinned);
+        assert_eq!(answer.status, "skipped");
+        // A read must not re-home the checkout journal into the space dir;
+        // the pre-backstop regression moved it as a side effect of resolving
+        // the path through events_path.
+        assert!(
+            checkout_events.exists(),
+            "checkout journal was migrated by a read"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn parse_args_rejects_unknown_flag() {
+        assert!(parse_args(&["--bogus".into()]).is_err());
+    }
+
+    #[test]
+    fn manifest_reads_frontmatter_and_body_keys() {
+        let content = "---\n\
+            session_id: 20260607T220509Z-42092-ceefb9\n\
+            plan_path: \"internal/fno/design/step6.md\"\n\
+            input: \"x-aaaa no-merge\"\n\
+            claude_transcript_id: de977b03-aaaa\n\
+            ---\n\
+            # Target Session State\n\
+            graph_node_id: x-aaaa\n\
+            target_claim_key: \"node:x-aaaa\"\n";
+        let m = parse_manifest_fields(content);
+        assert_eq!(
+            m.session_id.as_deref(),
+            Some("20260607T220509Z-42092-ceefb9")
+        );
+        assert_eq!(m.plan_path.as_deref(), Some("internal/fno/design/step6.md"));
+        assert_eq!(m.claude_transcript_id.as_deref(), Some("de977b03-aaaa"));
+        assert_eq!(m.graph_node_id.as_deref(), Some("x-aaaa"));
+        assert_eq!(m.input.as_deref(), Some("x-aaaa no-merge"));
+    }
+
+    /// A git repo with deterministic author dates, so work evidence is testable
+    /// without sleeping. `git` env vars set both dates; the rebase case overrides
+    /// only the committer date, exactly as `git rebase` does.
+    fn git_fixture(dir: &Path) {
+        let run = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .status()
+                .unwrap()
+        };
+        run(&["init", "-q", "."]);
+        run(&["config", "user.email", "t@t"]);
+        run(&["config", "user.name", "t"]);
+    }
+
+    /// A commit that changes a file. Evidence requires a content change, so a
+    /// fixture built on `--allow-empty` would test a case the guard rejects.
+    /// The filename is derived from the message so parallel branches do not
+    /// collide when merged.
+    fn commit_at(dir: &Path, msg: &str, author_epoch: i64, committer_epoch: i64) {
+        let name: String = msg.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+        fs::write(dir.join(format!("{name}.txt")), msg).unwrap();
+        Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .status()
+            .unwrap();
+        commit_raw(dir, msg, author_epoch, committer_epoch, false);
+    }
+
+    fn commit_raw(dir: &Path, msg: &str, author: i64, committer: i64, empty: bool) {
+        let mut args = vec!["commit", "-q", "-m", msg];
+        if empty {
+            args.insert(1, "--allow-empty");
+        }
+        Command::new("git")
+            .args(&args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_DATE", format!("@{author} +0000"))
+            .env("GIT_COMMITTER_DATE", format!("@{committer} +0000"))
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .status()
+            .unwrap();
+    }
+
+    fn head_of(dir: &Path) -> String {
+        git_capture(dir, &["rev-parse", "HEAD"]).unwrap()
+    }
+
+    // ── HALF ONE: WIP-commit at every terminal ───────────────────────
+
+    #[test]
+    fn commit_wip_if_dirty_refuses_a_tree_mid_merge_conflict() {
+        // The specimen this guard exists for: a worker dies with an unresolved
+        // merge conflict on disk. `git add -A` would stage the conflicted file
+        // as "resolved" and commit garbage, silently finishing the merge.
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path();
+        git_fixture(d);
+        commit_at(d, "base on main", 1000, 1000);
+        Command::new("git")
+            .args(["checkout", "-qb", "other"])
+            .current_dir(d)
+            .status()
+            .unwrap();
+        std::fs::write(d.join("in_flight.txt"), "other side").unwrap();
+        commit_at(d, "other side", 1001, 1001);
+        Command::new("git")
+            .args(["checkout", "-q", "-"])
+            .current_dir(d)
+            .status()
+            .unwrap();
+        std::fs::write(d.join("in_flight.txt"), "main side").unwrap();
+        commit_at(d, "main side", 1002, 1002);
+        // Provoke a real conflict: silently ignore the failing merge exit code.
+        let _ = Command::new("git")
+            .args(["merge", "-q", "--no-edit", "other"])
+            .current_dir(d)
+            .status();
+        assert!(
+            d.join(".git/MERGE_HEAD").exists(),
+            "fixture must actually be mid-conflict"
+        );
+        let before = head_of(d);
+
+        let sha = commit_wip_if_dirty(d, "NoProgress", "s1");
+
+        assert!(
+            sha.is_none(),
+            "a mid-merge tree must never be auto-committed"
+        );
+        assert_eq!(head_of(d), before, "HEAD must not move");
+        assert!(
+            d.join(".git/MERGE_HEAD").exists(),
+            "the merge must still be in progress, not silently finished"
+        );
+    }
+
+    // ── HALF TWO: mandatory outstanding-question filing ─────────────
+
+    #[test]
+    fn extract_operator_question_matches_the_measured_specimen() {
+        let text = "mouse-mode root cause identified; awaiting operator's terminal/mux info";
+        assert_eq!(extract_operator_question(text).as_deref(), Some(text));
+    }
+
+    #[test]
+    fn work_evidence_accepts_a_commit_authored_after_init() {
+        // AC1-HP: the inline implementer. Its own commit is authored after its
+        // own init, so the range carries evidence.
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path();
+        git_fixture(d);
+        commit_at(d, "base", 1000, 1000);
+        let base = head_of(d);
+        commit_at(d, "work", 3000, 3000);
+        assert!(authored_work_since(d, &base, 2000));
+    }
+
+    #[test]
+    fn work_evidence_rejects_commits_merged_in_from_upstream() {
+        // A session that authored nothing and only ran `git merge origin/main`.
+        // `--no-merges` drops the merge commit but keeps its payload, so without
+        // --first-parent this passes on other contributors' commits - and their
+        // author dates are genuinely recent, so the floor cannot catch them.
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path();
+        git_fixture(d);
+        commit_at(d, "base", 1000, 1000);
+        let base = head_of(d);
+        let git = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(d)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .status()
+                .unwrap();
+        };
+        git(&["checkout", "-q", "-b", "upstream"]);
+        commit_at(d, "someone else's work", 5000, 5000);
+        git(&["checkout", "-q", "-"]);
+        git(&["merge", "-q", "--no-ff", "upstream", "-m", "merge upstream"]);
+        assert!(!authored_work_since(d, &base, 2000));
+
+        // ...and the session's own commit still counts: it lands on HEAD's
+        // first-parent chain.
+        commit_at(d, "my own work", 6000, 6000);
+        assert!(authored_work_since(d, &base, 2000));
+    }
+
+    #[test]
+    fn do_stamp_terminals_exclude_doc_ships_and_planner_exits() {
+        assert!(is_do_stamp_terminal("DonePRGreen"));
+        assert!(is_do_stamp_terminal("DoneAwaitingMerge"));
+        // DoneAdvisory is in SHIP_REASONS but must NOT stamp: a doc ship authors
+        // no branch commits. Swapping this predicate for SHIP_REASONS would
+        // stamp every doc ship, and this assertion is what catches that.
+        assert!(!is_do_stamp_terminal("DoneAdvisory"));
+        for planner in ["Budget", "NoProgress", "Interrupted", "NoWork"] {
+            assert!(!is_do_stamp_terminal(planner), "{planner} must not stamp");
+        }
+    }
+
+    // ── the cancel terminal settles its own claim ────────────────────────────
+
+    // ──: arm auto-merge at the green gate, not at PR creation ────────
+
+    #[test]
+    fn manifest_auto_merge_posture_cannot_be_forged_by_input_text() {
+        // Absent key -> no grant (a manifest minted before this field existed).
+        assert_eq!(
+            parse_manifest_fields("session_id: s1\n").auto_merge_approved,
+            None
+        );
+
+        let approved = parse_manifest_fields("session_id: s1\nauto_merge_approved: true\n");
+        assert_eq!(approved.auto_merge_approved, Some(true));
+        let refused = parse_manifest_fields("session_id: s1\nauto_merge_approved: false\n");
+        assert_eq!(refused.auto_merge_approved, Some(false));
+
+        // The load-bearing case, in the REAL manifest layout: init writes the
+        // untrusted `input` scalar (:839) BEFORE the canonical posture (:886).
+        // A multi-line argument - a pasted spec under a refusing posture - spills
+        // real newlines, so its lines reach the parser looking like manifest
+        // keys and arrive FIRST. Neither first-wins nor last-wins is safe here;
+        // the injected lines must not be read as keys at all.
+        let injected = parse_manifest_fields(
+            "---\n\
+             session_id: s1\n\
+             input: \"paste line one\n\
+             auto_merge_approved: true\n\
+             paste line three\"\n\
+             plan_path: plan.md\n\
+             auto_merge_approved: false\n\
+             ---\n\
+             graph_node_id: x-dddd\n",
+        );
+        assert_eq!(
+            injected.auto_merge_approved,
+            Some(false),
+            "input text must never forge the merge posture"
+        );
+        assert!(!should_arm_auto_merge(
+            "DonePRGreen",
+            injected.auto_merge_approved.unwrap_or(false)
+        ));
+        // Keys after the scalar closes are still real, and so is the body.
+        assert_eq!(injected.plan_path.as_deref(), Some("plan.md"));
+        assert_eq!(injected.graph_node_id.as_deref(), Some("x-dddd"));
+
+        // A single-line quoted input must NOT swallow the rest of the manifest.
+        let normal = parse_manifest_fields(
+            "session_id: s1\n\
+             input: \"ordinary feature\"\n\
+             auto_merge_approved: true\n",
+        );
+        assert_eq!(normal.auto_merge_approved, Some(true));
+
+        // An input whose text ends in an ESCAPED quote does not close the scalar
+        // early - otherwise the lines after it resume forging keys.
+        let escaped = parse_manifest_fields(
+            "session_id: s1\n\
+             input: \"he said \\\"go\\\"\n\
+             auto_merge_approved: true\n\
+             done\"\n\
+             auto_merge_approved: false\n",
+        );
+        assert_eq!(escaped.auto_merge_approved, Some(false));
+
+        // sigma P1: a line ENDING in a user-typed `\"`. The writer escapes the
+        // quote and NOT the backslash (init:811), so it lands as `\\"` - which a
+        // backslash-PARITY rule reads as even, closes the scalar, and hands the
+        // forgery back. Only "no backslash immediately before the quote" holds.
+        // Every fixture below quotes `plan_path`, because init:840 ALWAYS writes
+        // `plan_path: "..."`. An unquoted fixture is the decorative-guard shape:
+        // it does not end in a quote, so it can never be mistaken for the
+        // scalar's terminator, and the test passes on a shape no writer emits.
+        let trailing_escaped_quote = parse_manifest_fields(
+            "session_id: s1\n\
+             input: \"snippet ending in \\\\\"\n\
+             auto_merge_approved: true\n\
+             rest of spec\"\n\
+             plan_path: \"real.md\"\n\
+             auto_merge_approved: false\n",
+        );
+        assert_eq!(
+            trailing_escaped_quote.auto_merge_approved,
+            Some(false),
+            "a line ending in an escaped quote must not close the scalar"
+        );
+        assert_eq!(trailing_escaped_quote.plan_path.as_deref(), Some("real.md"));
+
+        // The terminator line is itself untrusted: here the scalar closes on the
+        // SAME line as the injection, so falling through must not grant it.
+        let injection_on_terminator = parse_manifest_fields(
+            "session_id: s1\n\
+             input: \"paste line one\n\
+             auto_merge_approved: true\"\n\
+             plan_path: \"real.md\"\n\
+             auto_merge_approved: false\n",
+        );
+        assert_eq!(
+            injection_on_terminator.auto_merge_approved,
+            Some(false),
+            "an injection wearing the closing quote must not grant the posture"
+        );
+        assert_eq!(
+            injection_on_terminator.plan_path.as_deref(),
+            Some("real.md")
+        );
+
+        // sigma P2, the other direction: input ending in a lone `\` makes the
+        // real terminator ambiguous, so the scalar reads as never closing. That
+        // must cost only TRUST, never data - `plan_path` still parses (an
+        // earlier cut skipped these lines and silently dropped the plan stamp),
+        // and the posture falls back to no-grant.
+        let trailing_backslash = parse_manifest_fields(
+            "session_id: s1\n\
+             input: \"fix the C:\\\\path\\\\\"\n\
+             plan_path: \"real.md\"\n\
+             graph_node_id: x-dddd\n\
+             auto_merge_approved: true\n",
+        );
+        assert_eq!(
+            trailing_backslash.plan_path.as_deref(),
+            Some("real.md"),
+            "an ambiguous scalar must never swallow a load-bearing field"
+        );
+        assert_eq!(trailing_backslash.graph_node_id.as_deref(), Some("x-dddd"));
+        // The scalar closed AT plan_path, so the canonical posture below it is
+        // trusted and honored. The grant is real here, not withheld - the cost
+        // of the ambiguity is one line of reduced trust, never a dropped field.
+        assert_eq!(trailing_backslash.auto_merge_approved, Some(true));
+    }
+
+    #[test]
+    fn ship_reasons_gate() {
+        assert!(
+            classify_legacy("DonePRGreen")
+                .unwrap()
+                .projection()
+                .ship_reason
+        );
+        assert!(
+            classify_legacy("DoneAdvisory")
+                .unwrap()
+                .projection()
+                .ship_reason
+        );
+        for non_ship in ["Budget", "NoProgress", "Interrupted", "Aborted", "NoWork"] {
+            assert!(!classify_legacy(non_ship).unwrap().projection().ship_reason);
+        }
+    }
+
+    /// AC3: a ruling-only wait terminal classifies clean - stamped terminal,
+    /// never stuck, the circuit breaker reads it as success - while staying
+    /// out of the ship, merge-arm, node-close, claim-release and delivered
+    /// sets, shaped like DoneAwaitingMerge.
+    #[test]
+    fn done_awaiting_ruling_is_a_clean_terminal() {
+        let record = classify_legacy("DoneAwaitingRuling").expect("the wire reason must parse");
+        let p = record.projection();
+        assert!(!p.stuck, "{p:?}");
+        assert!(p.do_stamp_terminal, "{p:?}");
+        assert!(p.circuit_breaker_success, "{p:?}");
+        assert!(!p.ship_reason, "{p:?}");
+        assert!(!p.merge_armable, "{p:?}");
+        assert!(!p.node_closable, "{p:?}");
+        assert!(!p.graduate, "{p:?}");
+        assert!(p.record_ledger, "{p:?}");
+        let reason = crate::loopcheck::TerminationReason::DoneAwaitingRuling;
+        assert!(!reason.releases_claim());
+        assert!(!reason.is_delivered());
+        assert_eq!(
+            crate::loop_target::exit_code_for_reason(&reason),
+            0,
+            "a clean stop for input exits 0"
+        );
+    }
+
+    #[test]
+    fn prior_finalize_ship_reads_ship_flag_and_session() {
+        let dir = std::env::temp_dir().join(format!("finalize-idem-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let log = dir.join("events.jsonl");
+        // S1: a non-ship finalize (Budget); S2: a ship finalize.
+        fs::write(
+            &log,
+            "{\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"loop_check\",\"source\":\"hook\",\"data\":{\"session_id\":\"S1\"}}\n\
+             {\"ts\":\"2026-01-01T00:00:01Z\",\"type\":\"session_finalized\",\"source\":\"hook\",\"data\":{\"session_id\":\"S1\",\"ship\":false}}\n\
+             {\"ts\":\"2026-01-01T00:00:02Z\",\"type\":\"session_finalized\",\"source\":\"hook\",\"data\":{\"session_id\":\"S2\",\"ship\":true}}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            prior_finalize_ship(&log, "S1"),
+            Some(false),
+            "non-ship prior"
+        );
+        assert_eq!(prior_finalize_ship(&log, "S2"), Some(true), "ship prior");
+        assert_eq!(prior_finalize_ship(&log, "S3"), None, "no prior for S3");
+        assert_eq!(
+            prior_finalize_ship(&dir.join("missing.jsonl"), "S1"),
+            None,
+            "missing log -> None"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The post-terminal stop allow's predicate: a COMPLETED finalize whose
+    /// termination releases the claim (DonePRGreen / DoneAdvisory /
+    /// DoneDelivery / NoWork) is the durable record that the session's loop
+    /// ended. A resumable terminal (DoneAwaitingMerge), a stuck terminal
+    /// (Budget) and a failed finalize answer None, so those stops keep
+    /// gating.
+    #[test]
+    fn prior_releasing_finalize_reads_the_releasing_reason_and_session() {
+        let dir = std::env::temp_dir().join(format!("finalize-postterm-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let log = dir.join("events.jsonl");
+        fs::write(
+            &log,
+            "{\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"session_finalized\",\"source\":\"hook\",\"data\":{\"session_id\":\"S1\",\"ship\":true,\"termination_reason\":\"DonePRGreen\"}}\n\
+             {\"ts\":\"2026-01-01T00:00:01Z\",\"type\":\"session_finalized\",\"source\":\"hook\",\"data\":{\"session_id\":\"S2\",\"ship\":false,\"termination_reason\":\"Budget\"}}\n\
+             {\"ts\":\"2026-01-01T00:00:02Z\",\"type\":\"session_finalized\",\"source\":\"hook\",\"data\":{\"session_id\":\"S3\",\"ship\":false,\"termination_reason\":\"DoneAwaitingMerge\"}}\n\
+             {\"ts\":\"2026-01-01T00:00:03Z\",\"type\":\"session_finalize_failed\",\"source\":\"hook\",\"data\":{\"session_id\":\"S4\",\"termination_reason\":\"DonePRGreen\"}}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            prior_releasing_finalize(&log, "S1"),
+            Some("DonePRGreen".to_string()),
+            "a released ship terminal ends the loop"
+        );
+        assert_eq!(
+            prior_releasing_finalize(&log, "S2"),
+            None,
+            "Budget keeps gating"
+        );
+        assert_eq!(
+            prior_releasing_finalize(&log, "S3"),
+            None,
+            "a resumable terminal keeps gating"
+        );
+        assert_eq!(
+            prior_releasing_finalize(&log, "S4"),
+            None,
+            "a failed finalize is not a completed terminal"
+        );
+        assert_eq!(prior_releasing_finalize(&log, "S5"), None, "no prior");
+        assert_eq!(
+            prior_releasing_finalize(&dir.join("missing.jsonl"), "S1"),
+            None,
+            "missing log -> None"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn finalize_failed_event_does_not_count_as_finalized() {
+        // A session_finalize_failed must NOT satisfy the idempotency guard, so
+        // a later fire retries.
+        let dir = std::env::temp_dir().join(format!("finalize-retry-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let log = dir.join("events.jsonl");
+        fs::write(
+            &log,
+            "{\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"session_finalize_failed\",\"source\":\"hook\",\"data\":{\"session_id\":\"S1\"}}\n",
+        )
+        .unwrap();
+        assert_eq!(prior_finalize_ship(&log, "S1"), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_handoffs_dir_refuses_temp_cwd_basename_fallback() {
+        // The runner exports these overrides; this fixture tests explicit home defaults.
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _pins = [
+            crate::claims::EnvVarGuard::unset("HANDOFFS_DIR"),
+            crate::claims::EnvVarGuard::unset("FNO_STATE_DIR"),
+            crate::claims::EnvVarGuard::unset("FNO_CONFIG"),
+        ];
+        // A temp cwd with NO project id takes the basename fallback; the vault
+        // branch would scatter internal/<tmp-basename>/handoffs into the real
+        // vault (the stray-dir leak). The refusal contains it in the default
+        // handoffs dir; a declared project id keeps the vault branch.
+        let dir = std::env::temp_dir().join(format!("fin-hd-stray-{}", std::process::id()));
+        let cwd = dir.join("fnoe999_0");
+        let home = dir.join("home");
+        let _ = fs::create_dir_all(&cwd);
+        let _ = fs::create_dir_all(&home);
+        write_settings(&home, "[obsidian]\nenabled = true\nvault = \"myvault\"\n");
+        let got = resolve_handoffs_dir(None, None, &cwd, Some(&home));
+        assert_eq!(
+            got,
+            home.join(".fno/db/handoffs/fnoe999_0"),
+            "a temp cwd with a fallback name never reaches the vault"
+        );
+        write_settings(&cwd, "[project]\nid = \"demo\"\n");
+        let declared = resolve_handoffs_dir(None, None, &cwd, Some(&home));
+        assert_eq!(
+            declared,
+            home.join("myvault/internal/demo/handoffs"),
+            "a declared project id keeps the vault branch"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_handoffs_dir_project_disabled_wins_over_global_enabled() {
+        // The runner exports these overrides; this fixture tests explicit home defaults.
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _pins = [
+            crate::claims::EnvVarGuard::unset("HANDOFFS_DIR"),
+            crate::claims::EnvVarGuard::unset("FNO_STATE_DIR"),
+            crate::claims::EnvVarGuard::unset("FNO_CONFIG"),
+        ];
+        // codex review, PR #185: project explicitly sets obsidian.enabled:
+        // false while GLOBAL enables it with a vault. fno.config._deep_merge
+        // merges per-key with project winning, so the merged `enabled` is
+        // false and handoffs must NOT resolve into the vault - a per-file
+        // "first file with an opinion wins wholesale" scan gets this wrong
+        // (it would see project's block, find no vault key there, and keep
+        // scanning into global's enabled:true+vault).
+        let dir = std::env::temp_dir().join(format!("fin-hd-proj-off-{}", std::process::id()));
+        let cwd = dir.join("repo");
+        let home = dir.join("home");
+        let _ = fs::create_dir_all(&cwd);
+        let _ = fs::create_dir_all(&home);
+        write_settings(
+            &cwd,
+            "[project]\nid = \"demo\"\n[obsidian]\nenabled = false\n",
+        );
+        write_settings(&home, "[obsidian]\nenabled = true\nvault = \"myvault\"\n");
+        let got = resolve_handoffs_dir(None, None, &cwd, Some(&home));
+        assert_eq!(got, home.join(".fno/db/handoffs/demo"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn eval_fires_on_every_reason_but_nowork() {
+        // the trigger used to be STUCK_REASONS-only (a failure-only
+        // sample). Verify by making it fail both ways - a successful
+        // completion DOES get an eval, a stuck one still does too, and the
+        // sole exclusion is NoWork (nothing happened, nothing to evaluate).
+        for shipped in [
+            "DonePRGreen",
+            "DoneAdvisory",
+            "DoneDelivery",
+            "DoneBatched",
+            "DoneAwaitingMerge",
+            "DoneUnreviewed",
+            "DoneAwaitingReview",
+            "DonePlanned",
+        ] {
+            assert!(eval_should_fire(shipped), "expected eval for {shipped}");
+        }
+        for stuck in ["NoProgress", "Budget", "Interrupted", "Aborted"] {
+            assert!(eval_should_fire(stuck), "expected eval for {stuck}");
+        }
+        assert!(!eval_should_fire("NoWork"));
+    }
+
+    #[test]
+    fn resolve_postmortems_dir_prefers_override_then_settings_then_default() {
+        let cwd = std::env::temp_dir().join(format!("finalize-pmdir-{}", std::process::id()));
+        let _ = fs::create_dir_all(&cwd);
+        let home = cwd.join("home");
+        let ovr = cwd.join("explicit");
+        std::env::remove_var("POSTMORTEMS_DIR");
+        assert_eq!(
+            resolve_postmortems_dir(Some(&ovr), None, Some(&home), &cwd),
+            ovr,
+            "explicit override wins"
+        );
+        // A `--settings` override file with postmortems_dir is honored (codex P2).
+        let settings = cwd.join("custom-settings.toml");
+        fs::write(&settings, "[paths]\npostmortems_dir = \"/srv/pm\"\n").unwrap();
+        assert_eq!(
+            resolve_postmortems_dir(None, Some(&settings), Some(&home), &cwd),
+            PathBuf::from("/srv/pm"),
+            "--settings postmortems_dir is honored"
+        );
+        // No override, no env, no settings -> ~/.fno/postmortems.
+        assert_eq!(
+            resolve_postmortems_dir(None, None, Some(&home), &cwd),
+            home.join(".fno/db/postmortems")
+        );
+        let _ = fs::remove_dir_all(&cwd);
+    }
+
+    #[test]
+    fn write_postmortem_writes_artifact_with_reason_and_node() {
+        let dir = std::env::temp_dir().join(format!("finalize-pm-{}", std::process::id()));
+        let pmdir = dir.join("postmortems");
+        let _ = fs::create_dir_all(&dir);
+        let m = ManifestFields {
+            graph_node_id: Some("x-eeee".into()),
+            plan_path: Some("plan.md".into()),
+            input: Some("a stuck feature".into()),
+            ..Default::default()
+        };
+        let path = write_postmortem(
+            &dir,
+            "20260607T010101Z-1-abc",
+            &m,
+            "NoProgress",
+            None,
+            Some(&pmdir),
+            None,
+            Some(&dir),
+        )
+        .expect("postmortem written");
+        let body = fs::read_to_string(&path).unwrap();
+        assert!(body.contains("termination: **NoProgress**"));
+        assert!(body.contains("x-eeee"));
+        assert!(body.contains("a stuck feature"));
+        assert!(body.contains("(transcript unavailable)"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn derive_expected_url_count_cases() {
+        let dir = std::env::temp_dir().join(format!("finalize-xpc-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        // Single-project always -> None (let stamp/graduate default to 1).
+        assert_eq!(derive_expected_url_count(&dir, "plan.md", false), None);
+
+        // Cross-project plan with a 2-key projects map (with nested sub-keys
+        // that must NOT be counted) -> Some(2). (codex P1 regression.)
+        let plan = dir.join("xproj.md");
+        fs::write(
+            &plan,
+            "---\nstatus: ready\nscope: cross-project\nprojects:\n  alpha:\n    repo: a\n    branch: x\n  beta:\n    repo: b\nwaves:\n  - 1\n---\n# plan\n",
+        )
+        .unwrap();
+        assert_eq!(
+            derive_expected_url_count(&dir, "xproj.md", true),
+            Some(2),
+            "counts direct project keys only, not nested repo/branch"
+        );
+
+        // Cross-project but no projects map -> None so the caller skips graduate.
+        let nomap = dir.join("nomap.md");
+        fs::write(&nomap, "---\nstatus: ready\n---\n# plan\n").unwrap();
+        assert_eq!(derive_expected_url_count(&dir, "nomap.md", true), None);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ── project name resolution ──────────────────────────────────
+
+    fn write_settings(dir: &Path, body: &str) {
+        let cfg = dir.join(".fno");
+        fs::create_dir_all(&cfg).unwrap();
+        fs::write(cfg.join("config.toml"), body).unwrap();
+    }
+
+    #[test]
+    fn repo_identity_agrees_across_remote_forms() {
+        // Parity with `repo_identity_from_remote_url` in fno/paths.py.
+        // Every clone form of one repo must produce ONE key: the writer is Rust
+        // and the reader is Python, so a disagreement means the reader silently
+        // stops finding coverage and the merge gate refuses a reviewed PR.
+        for url in [
+            "git@github.com:org-a/widget.git",
+            "https://github.com/org-a/widget",
+            "https://github.com/org-a/widget.git/",
+            "ssh://git@github.com:22/org-a/widget.git",
+            "https://user:token@github.com/org-a/widget.git",
+            "GIT@GitHub.com:Org-A/Widget.git",
+        ] {
+            assert_eq!(
+                repo_identity_from_remote_url(url).as_deref(),
+                Some("github.com/org-a/widget"),
+                "url={url:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn repo_identity_rejects_unusable_remotes() {
+        // No host or fewer than two path segments cannot identify a repo across
+        // projects; None makes the writer omit `repo`, and no reader claims it.
+        for url in [
+            "/local/path/widget.git",
+            "git@github.com:widget.git",
+            "",
+            "   ",
+        ] {
+            assert_eq!(repo_identity_from_remote_url(url), None, "url={url:?}");
+        }
+    }
+
+    #[test]
+    fn resolve_project_name_prefers_git_remote_slug_over_basename() {
+        // id-unset repo whose checkout is named differently from its remote:
+        // the remote slug must win so this writer agrees with the Python side
+        // (else it recreates internal/<basename>/ strays).
+        use std::process::Command;
+        let dir = std::env::temp_dir().join(format!("fin-rpn-slug-{}", std::process::id()));
+        let cwd = dir.join("athens");
+        let _ = fs::create_dir_all(&cwd);
+        let home = dir.join("home");
+        let _ = fs::create_dir_all(&home);
+        let git = |args: &[&str]| {
+            Command::new("git")
+                .args(args)
+                .current_dir(&cwd)
+                .output()
+                .expect("git")
+        };
+        git(&["init", "-q"]);
+        git(&["remote", "add", "origin", "git@github.com:org/footnote.git"]);
+        assert_eq!(resolve_project_name(None, Some(&home), &cwd), "footnote");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn write_yaml(dir: &Path, name: &str, body: &str) -> PathBuf {
+        let _ = fs::create_dir_all(dir);
+        let f = dir.join(name);
+        fs::write(&f, body).unwrap();
+        f
+    }
+
+    #[test]
+    fn project_id_ignores_false_positive_block_and_inline_comments() {
+        // A `project:` under another section appears BEFORE config.project, and
+        // both config: and project: carry inline comments (gemini HIGH).
+        let dir = std::env::temp_dir().join(format!("fin-fp-{}", std::process::id()));
+        let f = write_yaml(
+            &dir,
+            "s.yaml",
+            "[other_tool.project]\nid = \"wrong\"\n\n[project]\nid = \"right\"\n",
+        );
+        assert_eq!(read_project_id(&f).as_deref(), Some("right"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn project_id_rejects_invalid_chars() {
+        // A hand-edited id with a path separator must not reach a path segment
+        // (codex P2; mirrors validate_project_id). Falls back to None.
+        let dir = std::env::temp_dir().join(format!("fin-inval-{}", std::process::id()));
+        let f = write_yaml(&dir, "s.toml", "[project]\nid = \"foo/bar\"\n");
+        assert_eq!(read_project_id(&f), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // from a linked worktree (has cli/src, but cli/.venv is gitignored
+    // so it is NOT checked out) the interpreter must resolve the CANONICAL
+    // repo's venv, and cli/src must anchor on the worktree - neither via
+    // current_exe(). Reproduces the deployed-binary anchor failure.
+    #[test]
+    fn coverage_satisfied_reads_a_store_committed_covered_row() {
+        // AC5-EDGE: an older imported row with count 0 and a newer covered
+        // store-only row — the newest committed row answers.
+        let _root = crate::paths::DeclaredRoot::declare("fin_coverage_store_row");
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path();
+        let old = serde_json::json!({
+            "ts": "2026-09-17T11:00:00Z", "type": "review_coverage", "source": "target",
+            "data": {"pr": 123, "verdicts": [], "head_sha": "h0", "coverage": "covered", "reviewed_count": 0}
+        })
+        .to_string();
+        let new = serde_json::json!({
+            "ts": "2026-09-17T12:00:00Z", "type": "review_coverage", "source": "target",
+            "data": {"pr": 123, "verdicts": [], "head_sha": "h1", "coverage": "covered", "reviewed_count": 3}
+        })
+        .to_string();
+        let events = crate::paths::events_path(cwd);
+        crate::event_store::append_envelope(&events, &old, None).unwrap();
+        crate::event_store::append_envelope(&events, &new, None).unwrap();
+        let rows = crate::event_store::query_events(
+            &events,
+            &crate::event_store::EventQuery::of_types(&["review_coverage"]),
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 2, "both rows committed, oldest first");
+        assert_eq!(
+            rows[1].line.contains("\"reviewed_count\":3"),
+            true,
+            "seq order puts the covered row last: {}",
+            rows[1].line
+        );
+        assert!(
+            coverage_satisfied_in_latest_event(cwd),
+            "the store-only covered row satisfies"
+        );
+    }
+
+    // ── run_summary ──────────────────────────────────────────────────
+}

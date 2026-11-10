@@ -1,0 +1,10 @@
+{"msg_id":"fmail-HEX","subject":null,"to":"worker-1","status":"queued (durable) [not-injectable;waited-0s] - typically drains within ~6h - an empty unread before then is not a failure"}
+fmail-HEX NOT LANDED - not claimed on the bus, not in the recipient transcript
+  a claude bg thread is fully interactive: it has a pane (agent view
+  peek) and takes replies into its message queue. Never conclude it is
+  pane-less and resume-spawn a replacement - a resume mints a new id:
+  pane seated?            fno mux pane ls   # a seat answers by name; then:
+  read the frame:         fno mux pane read <pane>
+  envelope in composer?   fno mux pane send <pane> --raw --submit   # presses Enter
+  or attach directly:     fno agents attach worker-1
+  then verify:            fno agents peek worker-1 --grep fmail-HEX

@@ -1,0 +1,332 @@
+//! The sideline agents view's group-by axes (workspace / team / cwd /
+//! status / harness) and the manual-reorder editor behind the Manual sort column.
+//! Split from client.rs under the file-budget gate; everything here reaches
+//! the client's private items through `super::*`.
+
+use super::*;
+
+/// The team a row renders under: the row itself when teamed, else the first
+/// teamed ancestor on its lineage (the same walk [`View::lead_label`]
+/// runs). `None` = no teamed ancestor: the `~ unteamed` band.
+pub(super) fn team_lead_name(view: &View, a: &AgentRow) -> Option<String> {
+    if a.role_level.is_some() {
+        return Some(a.name.clone());
+    }
+    let mut parent = lineage_parent(a);
+    let mut steps = 0;
+    while let Some(pid) = parent {
+        if steps >= view.layout.agents.len() {
+            return None;
+        }
+        let row = view
+            .layout
+            .agents
+            .iter()
+            .find(|r| r.harness_session_id.as_deref() == Some(pid))?;
+        if row.role_level.is_some() {
+            return Some(row.name.clone());
+        }
+        parent = lineage_parent(row);
+        steps += 1;
+    }
+    None
+}
+
+/// The bucket label a row lands in on the active axis, shared by the row
+/// builder and the reorder guard so the two cannot disagree about membership.
+fn group_key_of(view: &View, name: &str) -> String {
+    let Some(a) = view.layout.agents.iter().find(|a| a.name == name) else {
+        return String::new();
+    };
+    match view.agent_group {
+        AgentGroup::Workspace => view
+            .layout
+            .squads
+            .iter()
+            .find(|s| a.squad == Some(s.id))
+            .map(|s| s.name.clone())
+            .unwrap_or_else(|| "~ elsewhere".into()),
+        AgentGroup::Team | AgentGroup::Cwd | AgentGroup::Harness => keyed_label(view, a),
+        AgentGroup::Flat => String::new(),
+        AgentGroup::Status => match agent_lattice_state(a) {
+            LatticeState::Blocked | LatticeState::DoneUnseen => "Needs input".into(),
+            LatticeState::Working | LatticeState::Unmeasured | LatticeState::Empty => {
+                "Working".into()
+            }
+            LatticeState::Idle | LatticeState::Exited => "Completed".into(),
+        },
+    }
+}
+
+/// The band a row joins on an axis whose bands are named by a row field.
+fn keyed_label(view: &View, a: &AgentRow) -> String {
+    match view.agent_group {
+        AgentGroup::Team => team_lead_name(view, a).unwrap_or_else(|| "~ unteamed".into()),
+        AgentGroup::Cwd => a.cwd_base.clone().unwrap_or_else(|| "(no cwd)".into()),
+        _ => a.harness.clone().unwrap_or_else(|| "(no harness)".into()),
+    }
+}
+
+/// What a harness band spent: its rows' session cost and tokens summed, or
+/// `None` off the harness axis or when no row in the band carries a figure.
+pub(super) fn band_spend(view: &View, label: &str) -> Option<String> {
+    if view.agent_group != AgentGroup::Harness {
+        return None;
+    }
+    let (mut cents, mut tokens, mut seen) = (0u64, 0u64, false);
+    for a in view
+        .layout
+        .agents
+        .iter()
+        .filter(|a| keyed_label(view, a) == label)
+    {
+        if let Some(c) = a.session_cost_cents {
+            cents += c;
+            seen = true;
+        }
+        if let Some(t) = a.session_tokens {
+            tokens += t;
+            seen = true;
+        }
+    }
+    seen.then(|| {
+        format!(
+            "{} · {}",
+            super::row_meter::cost_cell(cents),
+            super::row_meter::token_cell(tokens)
+        )
+    })
+}
+
+/// The [`ChromeHit`] for an agent row: focus its pane, else reach a paneless
+/// live row through the ONE dedicated thread pane, else resume a resumable row
+/// through its harness, else say it has no pane here. Shared by a sideline
+/// click ([`View::row_action`]) and the navigator's goto ([`View::nav_rows`])
+/// so the two inputs resolve the same entity identically. Pure - the
+/// agent's own fields decide, so no `&self` needed.
+pub(super) fn agent_hit(a: &AgentRow, _active_squad: u64) -> ChromeHit {
+    if let Some(remote) = &a.remote {
+        return ChromeHit::OpenRemote(remote.clone());
+    }
+    match a.pane_id {
+        Some(pid) => ChromeHit::Cmds(vec![Command::FocusPane(pid)]),
+        None if !a.exited => {
+            // Every paneless live row reaches a portal: Drive
+            // attaches, Follow tails the transcript, Locate renders the
+            // explanation screen. One command, no placement dialog - the
+            // server owns the tier (the row set lives there). The command's id
+            // is the attach id for a claude row and the row NAME for every
+            // other harness (Follow/Locate rows carry no attach id); the
+            // refusal invariant holds by construction because the
+            // client never chooses between attach and focus.
+            //
+            ChromeHit::Cmds(vec![Command::AttachAgent {
+                id: a.reach_key(),
+                placement: enter_placement(),
+            }])
+        }
+        None => {
+            // A paneless row whose harness owns a resume form resumes
+            // through that form: the server spawns `claude --resume <sid>` /
+            // `codex resume <sid>` as a pane in the recorded cwd. The
+            // operator's explicit gesture - restore never sends this.
+            if a.resumable {
+                ChromeHit::Cmds(vec![Command::ResumeAgent {
+                    name: a.name.clone(),
+                }])
+            } else {
+                ChromeHit::Notice(no_pane_notice(a))
+            }
+        }
+    }
+}
+
+/// Where Enter shows a paneless row, local or far: portal 0, which is exactly
+/// where the single thread pane always landed. `P` opens the next free
+/// portal beside it.
+pub(super) fn enter_placement() -> PanePlacement {
+    PanePlacement {
+        portal: Some(0),
+        ..PanePlacement::default()
+    }
+}
+
+type Bucket<'a> = (String, Vec<&'a AgentRow>);
+
+fn push<'a>(buckets: &mut Vec<Bucket<'a>>, key: String, a: &'a AgentRow) {
+    match buckets.iter_mut().find(|(k, _)| *k == key) {
+        Some((_, members)) => members.push(a),
+        None => buckets.push((key, vec![a])),
+    }
+}
+
+/// The row list on a non-workspace axis: one band per bucket, agents in
+/// layout order inside it. The post-pass run sort (`sort_agent_runs`) orders
+/// each band's contiguous agent run by the active column, exactly as it does
+/// the workspace sections.
+pub(super) fn grouped_rows_with_depths(view: &View) -> (Vec<DisplayRow<'_>>, Vec<usize>) {
+    let buckets: Vec<Bucket<'_>> = match view.agent_group {
+        AgentGroup::Workspace => Vec::new(), // unreachable: the caller guards
+        // No header to fold, so exited rows stay hidden, as a fresh band hides them.
+        AgentGroup::Flat => {
+            let rows: Vec<_> = (view.layout.agents.iter())
+                .filter(|a| !a.exited)
+                .map(DisplayRow::Agent)
+                .collect();
+            let depths = vec![0; rows.len()];
+            return (rows, depths);
+        }
+        AgentGroup::Team | AgentGroup::Cwd | AgentGroup::Harness => {
+            let mut buckets: Vec<Bucket<'_>> = Vec::new();
+            for a in &view.layout.agents {
+                push(&mut buckets, keyed_label(view, a), a);
+            }
+            buckets
+        }
+        AgentGroup::Status => {
+            let mut needs: Vec<&AgentRow> = Vec::new();
+            let mut working: Vec<&AgentRow> = Vec::new();
+            let mut done: Vec<&AgentRow> = Vec::new();
+            for a in &view.layout.agents {
+                match agent_lattice_state(a) {
+                    LatticeState::Blocked | LatticeState::DoneUnseen => needs.push(a),
+                    LatticeState::Working | LatticeState::Unmeasured | LatticeState::Empty => {
+                        working.push(a)
+                    }
+                    LatticeState::Idle | LatticeState::Exited => done.push(a),
+                }
+            }
+            vec![
+                ("Needs input".into(), needs),
+                ("Working".into(), working),
+                ("Completed".into(), done),
+            ]
+        }
+    };
+    emit(view, buckets)
+}
+
+fn emit<'a>(view: &'a View, buckets: Vec<Bucket<'a>>) -> (Vec<DisplayRow<'a>>, Vec<usize>) {
+    let mut out: Vec<DisplayRow<'a>> = Vec::new();
+    let mut depth_at: HashMap<usize, usize> = HashMap::new();
+    for (label, members) in buckets.iter() {
+        // An empty band renders nothing: a `Completed (0)` header is noise,
+        // and the Status axis always builds all three buckets.
+        if members.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(DisplayRow::Blank);
+        }
+        let key = SectionKey::Group(label.clone());
+        let sview = view.section_view(&key);
+        let rollup = section_rollup(members.iter().map(|a| agent_lattice_state(a)));
+        out.push(DisplayRow::Header {
+            label: label.clone(),
+            rollup,
+            key,
+            view: sview,
+        });
+        if sview == SectionView::Collapsed {
+            continue;
+        }
+        for a in members {
+            if sview == SectionView::Expanded || !a.exited {
+                depth_at.insert(out.len(), 0);
+                out.push(DisplayRow::Agent(a));
+            }
+        }
+    }
+    let depths = (0..out.len())
+        .map(|i| depth_at.get(&i).copied().unwrap_or(0))
+        .collect();
+    (out, depths)
+}
+
+/// Shift+up/down in the row selector: swap the focused agent with its
+/// neighbour agent row and record the display sequence as the manual order,
+/// switching the sort to Manual so the swap is visible at once. A band-edge
+/// move refuses on every axis: the run sort orders inside each contiguous
+/// band, so a cross-band swap would be silently undone on the next paint.
+pub(super) fn reorder_agent_rows(view: &mut View, cur: usize, delta: isize) {
+    // The selector cursor indexes display_rows(), the same catalog every
+    // other selector command reads - painted_rows() names a different row in
+    // full-screen mode, where the two catalogs diverge.
+    let rows = view.display_rows();
+    let name = match rows.get(cur) {
+        Some(DisplayRow::Agent(a)) if a.remote.is_some() => {
+            view.set_notice("reorder works on this machine's rows".into());
+            return;
+        }
+        Some(DisplayRow::Agent(a)) => a.name.clone(),
+        _ => {
+            view.set_notice("shift+arrow reorders an agent row".into());
+            return;
+        }
+    };
+    let dir = delta.signum();
+    let mut j = cur as isize + dir;
+    let neighbor_at;
+    let neighbor = loop {
+        if j < 0 || j as usize >= rows.len() {
+            view.set_notice("no agent row that way".into());
+            return;
+        }
+        if let DisplayRow::Agent(n) = &rows[j as usize] {
+            neighbor_at = j as usize;
+            break n.name.clone();
+        }
+        j += dir;
+    };
+    // Every axis guards the band edge, workspace included: the run sort
+    // orders inside each contiguous run, so a cross-band swap would persist
+    // an order the paint can never show.
+    if group_key_of(view, &name) != group_key_of(view, &neighbor) {
+        view.set_notice("reorder stays inside one band".into());
+        return;
+    }
+    let mut order: Vec<String> = rows
+        .iter()
+        .filter_map(|r| match r {
+            DisplayRow::Agent(x) => Some(x.name.clone()),
+            _ => None,
+        })
+        .collect();
+    // Same-named rows resolve by occurrence, not by first match, so a
+    // name-collision pair swaps the pair under the cursor.
+    let occurrence = |at: usize| -> usize {
+        let Some(DisplayRow::Agent(a)) = rows.get(at) else {
+            return 0;
+        };
+        let label = a.name.as_str();
+        rows[..at]
+            .iter()
+            .filter(|r| matches!(r, DisplayRow::Agent(x) if x.name == label))
+            .count()
+    };
+    let nth_of = |list: &[String], label: &str, nth: usize| -> Option<usize> {
+        list.iter()
+            .enumerate()
+            .filter(|(_, n)| *n == label)
+            .nth(nth)
+            .map(|(i, _)| i)
+    };
+    let (Some(i), Some(k)) = (
+        nth_of(&order, &name, occurrence(cur)),
+        nth_of(&order, &neighbor, occurrence(neighbor_at)),
+    ) else {
+        view.set_notice("row is not in the manual order yet".into());
+        return;
+    };
+    order.swap(i, k);
+    view.manual_order = order;
+    view_store::save_manual_order(&view.manual_order);
+    if view.agent_sort.column != AgentSortColumn::Manual {
+        view.agent_sort = AgentSort {
+            column: AgentSortColumn::Manual,
+            direction: SortDirection::Ascending,
+        };
+        view_store::save_prefs(view.density, view.agent_sort);
+        view.set_notice("sorted manually; shift+up/down reorders".into());
+    }
+}

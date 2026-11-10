@@ -1,0 +1,289 @@
+use serde::Deserialize;
+use std::path::Path;
+
+#[derive(Debug, Deserialize)]
+pub struct Contract {
+    pub identity: Identity,
+    pub recency: Recency,
+    pub pass: Pass,
+    pub failure: Failure,
+    pub takeaway: Takeaway,
+    pub tie: Tie,
+    pub output: Output,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Identity {
+    pub check_namespace: String,
+    pub check_name_field: String,
+    pub check_workflow_field: String,
+    pub status_namespace: String,
+    pub status_context_field: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Recency {
+    pub fields: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Pass {
+    pub bucket_values: Vec<String>,
+    pub conclusion_state_values: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Failure {
+    pub bucket_values: Vec<String>,
+    pub conclusion_state_values: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Takeaway {
+    pub bucket_values: Vec<String>,
+    pub conclusion_state_values: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Tie {
+    pub failure_replaces_non_failure: bool,
+    pub takeaway_never_replaces_settled: bool,
+    pub otherwise: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Output {
+    pub order: String,
+}
+
+pub fn load_contract(path: &Path) -> Result<Contract, Box<dyn std::error::Error>> {
+    let text = std::fs::read_to_string(path)?;
+    Ok(toml::from_str(&text)?)
+}
+
+/// One escaper for BOTH target languages: `\xHH` is a valid escape in Rust
+/// and Python alike, so a contract value carrying a control character cannot
+/// render a generated file that fails to parse. A trailing comma keeps a
+/// single-element list a list in Python (a 1-tuple, not a parenthesized
+/// string) and is legal in a Rust array too.
+fn quote_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 || (c as u32) == 0x7f => {
+                out.push_str(&format!("\\x{:02x}", c as u32))
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn quote_list(values: &[String]) -> String {
+    let mut out = values
+        .iter()
+        .map(|value| quote_string(value))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if !values.is_empty() {
+        out.push(',');
+    }
+    out
+}
+
+/// The generated selectors are correct only under these contract invariants;
+/// one validator shared by both renderers, so the two can never disagree
+/// about what a valid contract is.
+fn validate(contract: &Contract) {
+    assert_eq!(contract.tie.otherwise, "first_seen");
+    assert_eq!(contract.output.order, "first_seen_slots");
+    assert!(contract.tie.failure_replaces_non_failure);
+    assert!(contract.tie.takeaway_never_replaces_settled);
+    // Downstream classifiers read every takeaway as a fail; the takeaway set
+    // must stay inside the failure set or is_failure and is_takeaway diverge.
+    for value in &contract.takeaway.conclusion_state_values {
+        assert!(
+            contract.failure.conclusion_state_values.contains(value),
+            "takeaway conclusion {value} must also be a failure value"
+        );
+    }
+    for value in &contract.takeaway.bucket_values {
+        assert!(
+            contract.failure.bucket_values.contains(value),
+            "takeaway bucket {value} must also be a failure bucket"
+        );
+    }
+}
+
+const INVARIANT_PROSE: &str = concat!(
+    "Supersession invariants, carried from the deleted hand-written selectors:\n",
+    "a slot is replaced ONLY by a strictly newer row; equal timestamps replace\n",
+    "only fail over non-fail and otherwise keep first-seen (fail-closed against\n",
+    "a green that cannot prove its recency). A taken-away row (CANCELLED, STALE,\n",
+    "bucket cancel) never replaces a settled row: a cancelled run carries no\n",
+    "result, so the latest result on a head stands over an earlier-or-equal\n",
+    "cancellation, and a taken-away row replaces only a row that itself carries\n",
+    "no result (running or taken-away), and only when strictly newer. Check and\n",
+    "status namespaces key separately, so a StatusContext never supersedes a\n",
+    "CheckRun, and the workflow dimension keeps same-named jobs from different\n",
+    "workflows from superseding each other.",
+);
+
+fn comment_block(prefix: &str, body: &str) -> String {
+    body.lines()
+        .map(|line| format!("{prefix}{line}\n"))
+        .collect()
+}
+
+pub fn render_rust(contract: &Contract) -> String {
+    validate(contract);
+    let recency_fields = quote_list(&contract.recency.fields);
+    let pass_buckets = quote_list(&contract.pass.bucket_values);
+    let pass_values = quote_list(&contract.pass.conclusion_state_values);
+    let bucket_values = quote_list(&contract.failure.bucket_values);
+    let failure_values = quote_list(&contract.failure.conclusion_state_values);
+    let takeaway_buckets = quote_list(&contract.takeaway.bucket_values);
+    let takeaway_values = quote_list(&contract.takeaway.conclusion_state_values);
+    let identity = &contract.identity;
+    format!(
+        "// GENERATED by crates/fno-agents/codegen/check_supersession.rs.\n\
+         // Do not edit. Change codegen/check_supersession.toml and rebuild.\n\
+         {invariant_prose}\n\
+         use serde_json::Value;\n\n\
+         fn text_field<'a>(row: &'a Value, field: &str) -> &'a str {{\n\
+             row.get(field).and_then(Value::as_str).unwrap_or(\"\")\n\
+         }}\n\n\
+         fn identity(row: &Value) -> Option<(String, String, String)> {{\n\
+             let name = text_field(row, {check_name});\n\
+             if !name.is_empty() {{\n\
+                 return Some(({check_ns}.to_string(), name.to_string(), text_field(row, {workflow}).to_string()));\n\
+             }}\n\
+             let context = text_field(row, {status_context});\n\
+             if !context.is_empty() {{\n\
+                 return Some(({status_ns}.to_string(), context.to_string(), String::new()));\n\
+             }}\n\
+             None\n\
+         }}\n\n\
+         fn timestamp(row: &Value) -> &str {{\n\
+             for field in [{recency_fields}] {{\n\
+                 let value = text_field(row, field);\n\
+                 if !value.is_empty() {{\n\
+                     return value;\n\
+                 }}\n\
+             }}\n\
+             \"\"\n\
+         }}\n\n\
+         fn is_failure(row: &Value) -> bool {{\n\
+             let status = text_field(row, \"status\").to_ascii_uppercase();\n\
+             if !status.is_empty() && status != \"COMPLETED\" {{\n\
+                 return false;\n\
+             }}\n\
+             let bucket = text_field(row, \"bucket\").to_ascii_lowercase();\n\
+             if [{bucket_values}].iter().any(|value| bucket == *value) {{\n\
+                 return true;\n\
+             }}\n\
+             let conclusion = text_field(row, \"conclusion\");\n\
+             let conclusion = if conclusion.is_empty() {{\n\
+                 text_field(row, \"state\")\n\
+             }} else {{\n\
+                 conclusion\n\
+             }};\n\
+             [{failure_values}].iter().any(|value| conclusion.eq_ignore_ascii_case(value))\n\
+         }}\n\n\
+         fn is_takeaway(row: &Value) -> bool {{\n\
+             let status = text_field(row, \"status\").to_ascii_uppercase();\n\
+             if !status.is_empty() && status != \"COMPLETED\" {{\n\
+                 return false;\n\
+             }}\n\
+             let bucket = text_field(row, \"bucket\").to_ascii_lowercase();\n\
+             if [{takeaway_buckets}].iter().any(|value| bucket == *value) {{\n\
+                 return true;\n\
+             }}\n\
+             let conclusion = text_field(row, \"conclusion\");\n\
+             let conclusion = if conclusion.is_empty() {{\n\
+                 text_field(row, \"state\")\n\
+             }} else {{\n\
+                 conclusion\n\
+             }};\n\
+             [{takeaway_values}].iter().any(|value| conclusion.eq_ignore_ascii_case(value))\n\
+         }}\n\n\
+         fn is_settled(row: &Value) -> bool {{\n\
+             let status = text_field(row, \"status\").to_ascii_uppercase();\n\
+             if !status.is_empty() && status != \"COMPLETED\" {{\n\
+                 return false;\n\
+             }}\n\
+             let bucket = text_field(row, \"bucket\").to_ascii_lowercase();\n\
+             if [{pass_buckets}].iter().any(|value| bucket == *value) {{\n\
+                 return true;\n\
+             }}\n\
+             let conclusion = text_field(row, \"conclusion\");\n\
+             let conclusion = if conclusion.is_empty() {{\n\
+                 text_field(row, \"state\")\n\
+             }} else {{\n\
+                 conclusion\n\
+             }};\n\
+             let conclusion = conclusion.to_ascii_uppercase();\n\
+             if [{pass_values}].iter().any(|value| *value == conclusion) {{\n\
+                 return true;\n\
+             }}\n\
+             is_failure(row) && !is_takeaway(row)\n\
+         }}\n\n\
+         pub fn latest_per_name(checks: &Value) -> Value {{\n\
+             let Some(rows) = checks.as_array() else {{\n\
+                 return checks.clone();\n\
+             }};\n\
+             let mut slots: Vec<(Option<(String, String, String)>, Value)> = Vec::new();\n\
+             let mut positions: std::collections::HashMap<(String, String, String), usize> =\n\
+                 std::collections::HashMap::new();\n\
+             for row in rows {{\n\
+                 let Some(key) = identity(row) else {{\n\
+                     slots.push((None, row.clone()));\n\
+                     continue;\n\
+                 }};\n\
+                 let Some(&position) = positions.get(&key) else {{\n\
+                     positions.insert(key.clone(), slots.len());\n\
+                     slots.push((Some(key), row.clone()));\n\
+                     continue;\n\
+                 }};\n\
+                 let existing = &slots[position].1;\n\
+                 let incoming_time = timestamp(row);\n\
+                 let existing_time = timestamp(existing);\n\
+                 let replaces = if is_takeaway(row) {{\n\
+                     // A taken-away row is no result: it only takes a slot\n\
+                     // whose winner itself carries no result, and only when\n\
+                     // strictly newer.\n\
+                     !is_settled(existing) && incoming_time > existing_time\n\
+                 }} else {{\n\
+                     incoming_time > existing_time\n\
+                         || (incoming_time == existing_time\n\
+                             && is_failure(row)\n\
+                             && !is_failure(existing))\n\
+                 }};\n\
+                 if replaces {{\n\
+                     slots[position].1 = row.clone();\n\
+                 }}\n\
+             }}\n\
+             Value::Array(slots.into_iter().map(|(_, row)| row).collect())\n\
+         }}\n",
+        check_ns = quote_string(&identity.check_namespace),
+        check_name = quote_string(&identity.check_name_field),
+        workflow = quote_string(&identity.check_workflow_field),
+        status_ns = quote_string(&identity.status_namespace),
+        status_context = quote_string(&identity.status_context_field),
+        recency_fields = recency_fields,
+        bucket_values = bucket_values,
+        failure_values = failure_values,
+        pass_buckets = pass_buckets,
+        pass_values = pass_values,
+        takeaway_buckets = takeaway_buckets,
+        takeaway_values = takeaway_values,
+        invariant_prose = comment_block("// ", INVARIANT_PROSE),
+    )
+}

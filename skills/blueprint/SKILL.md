@@ -1,0 +1,611 @@
+---
+name: blueprint
+description: Create or update one implementation plan from an idea, node, or cited research.
+argument-hint: "[quick] [group N | no-group] [no-adopt] [no-collision-check] <design-doc-path | feature-description> [--no-linear]"
+---
+
+<!-- style-exception: mechanical command rename preserves pre-existing prose -->
+# Abilities Plan
+
+When `$CODEX_THREAD_ID` is nonblank, before any routing or work, Print exactly once:
+`codex posture: blueprint plans natively in this thread; it writes the plan, closes the blueprint session row, and dispatches nothing.`
+
+<HARD-GATE>
+NEVER edit ~/.fno/db/graph.db directly via Edit/Write tools or `sqlite3`/`jq -i`/`sed -i`.
+ALWAYS use `fno backlog` commands or call `locked_mutate_graph()` from Python.
+Direct edits are blocked by `hooks/write-gate.sh`.
+</HARD-GATE>
+
+Create implementation plans scaled to the task. The output shape is always one plan `.md` (`plan == PR == node`); the input decides the path (mutate a `/think` doc in place, or create a fresh doc from an idea). Which gates fire is a READ of the input and the plan, not a guess - the dispatch table below names each trigger.
+
+## Substrate
+
+Read the argument left to right: an optional leading `subagent` token (stripped before Plan Claims Ingestion reads the node id), then the input (node id, design-doc path, or feature description). No token: run it here, inline.
+
+`subagent` runs the whole skill in a subagent of this session, and it still takes the claim, writes the row and runs every gate. The skill body takes the node claim in every node-seeded run, inline or subagent: Plan Claims Ingestion opens a `blueprint-session:` claim when the node is free, and plans under the holder it finds when one is already held. The wrapper's step 1 below takes it earlier, so a held node refuses before a subagent launches. The reasons are measured, not speed. A subagent cannot orphan: its completion IS the tool result (four of four returned in one measurement; every codex thread blueprint in that same measurement orphaned, one after 623 minutes, one with a negative span). A subagent spends no spawn share: the gate counts spawned workers, so one lead was refused twice at 7 of 7 while two blueprint subagents ran. No timing is claimed. Both wall-clock comparisons on record are confounded, one by unmatched model tiers, one by heavy external machine load, so no trustworthy timing exists in either direction:
+
+1. Run `fno backlog session open <node> --json`. A nonzero exit is the answer. Relay the refusal line and launch nothing. Exit 0 with `status: joined` means a claim this session owns already holds the node: plan under it. A `spawn-handover:` holder is the spawn's claim, and steps 4 and 5 read it back and release it. A `target-session:` holder is this session's own target claim. The target run keeps it after the close. Step 4 reads only the session row, and step 5 never releases it.
+2. For several nodes at once, run `fno config assert-subagent-budget --width <n>` first. A refusal means one at a time.
+3. Launch one subagent with the Agent tool and `subagent_type: fno:architect`. Its whole prompt is: `Use the Skill tool to run fno:blueprint with args "<node>". Follow the skill to its end, including the blueprint close and its readback. Do not edit source files. Report the plan path and the readback line.` Add nothing to it. The architect definition (`agents/architect.md`) carries the planner stance and writes the plan file itself. When the Agent tool refuses the type, the plugin install predates it: take step 5's release path. Then run `fno doctor update`. Never relaunch without the type. A spawned blueprint names the same agent with `--agent fno:architect` on the spawn command. A codex session selects it with `spawn_agent` and `agent_type: architect`. A rule typed into a prompt is the drift this token removes. A node-specific constraint goes on the node with `fno backlog update <node> 'dispatch_brief+=...'`, where step 2a reads it.
+4. When it returns, and right after you stop it with TaskStop, read back two positive markers. `fno backlog get <node>` holds a `blueprint` session row with this session's id and an `ended_at`. `fno agents claim status node:<node> --json` no longer names the holder step 1's receipt printed. Skip this second marker for a `target-session:` holder, which stays held. When both markers pass and step 1's holder was a `blueprint-session:` claim, hand the plan to a build worker in the same turn. Run `fno agents spawn "/fno:target <node>"` with no `--name` and no `--model`, so `agents.profiles.target` picks the cheap lane. A spawn-gate refusal ends the step: the check-in's `plan-ready` line retries it next beat. Never spawn for a `target-session:` holder: that target run executes the plan itself.
+5. When either marker is missing, the subagent did not finish. Never release a `target-session:` holder: report the failure and stop. A stopped subagent never returns, so the stop is the trigger. The release names this session's own id, which the caller always has. It is holder-scoped: each planner holds a different `node:` key, so the parent never frees a sibling planner's node. Run `fno agents claim release node:<node> --holder <the holder step 1's receipt printed> --rollback-do` and report the failure. The failure release removes the execute row the acquire opened. The default fill records a completion, and nothing completed.
+
+## Gates (read by state)
+
+Each gate loads only when its trigger fires. The bodies (with verbatim scripts) live in [references/blueprint-gates.md](references/blueprint-gates.md); read a gate's section there when the trigger below is true. Do NOT run a gate whose trigger is false - a plan that fires no DB/executor/model/impeccable gate never mentions them.
+
+| Gate | Read its section when |
+|------|-----------------------|
+| Plan Claims Ingestion | the argument is an existing node id (`` / `ab-<hex>`) - runs FIRST, before any classifier |
+| Plan-level dispatch hold | named evidence must exist before this plan dispatches or merges |
+| Answerer Enumeration Gate | the plan changes a read, write, or feed - step 2b-bis |
+| Consolidation Gate | always, between discovery grounding (2b) and the write (3) - step 2d |
+| Five questions and the judge | every plan - answered at 2a-bis, judged at step 3 after finalize |
+| Code Index Audit | every plan - step 2-index |
+| Executor Lock Transcription | a design doc supplies a Locked Decision (executor) |
+| Model Pin / Model Routing | the plan frontmatter sets `model:`, or always for `difficulty:` |
+| Blueprint Provenance Stamp | always, after `$NODE_ID` is minted (tiny, best-effort) |
+| PRODUCT.md Prereq Check | the plan locks `executor: impeccable` (plan-level or per-task) |
+| impeccable_stages Pin Syntax | a task pins specific `/impeccable` stages |
+| done_probes | every code plan: the command that measures the `## Done` number (step 2e). A recurring or operational deliverable (a scheduler, watcher, daemon, cadence) also probes that it keeps running |
+| Join posture | the plan carries an `## Execution Strategy` - step 3, after enrichment, before validation |
+| Collision check | always, unless `no-collision-check` (step 3a) |
+| Cross-project peer heads-up | a `peers` block exists and a Files-to-Modify row matches a peer surface (step 3a-bis) |
+| Epic decomposition (`group N`) | see [references/epic-decomposition.md](references/epic-decomposition.md) - `group`/`max_prs:`/`scope: epic` |
+
+**Kill Criteria (MANDATORY, every plan - the one gate that is always inline).** Every plan `/blueprint` writes MUST declare `kill_criteria:` in its `.md` frontmatter (including quick plans; the markdown-heading form is invisible to the parser). Emit these defaults when the plan does not override:
+
+```yaml
+kill_criteria:
+  - name: iteration_ceiling
+    predicate: iteration > 15
+    reason: "Too many iterations - planning likely wrong"
+  - name: stuck_test
+    predicate: same_test_failing_for >= 3
+    reason: "Same test failing 3+ iterations - root cause unclear"
+```
+
+Full schema + predicate vocabulary: [references/blueprint-gates.md](references/blueprint-gates.md#kill-criteria-declaration-mandatory---full-detail).
+
+## One output shape: a single `.md`
+
+Every `/blueprint` invocation produces **one** plan `.md` - never a folder. The
+input decides which path runs; the output shape is always the same (`plan == PR
+== node`):
+
+| Input | Path | What happens |
+|-------|------|--------------|
+| A `/think` design-doc path | **[Single-doc mutation](#single-doc-mutation-design-doc-input)** | Mutate the doc in place (append Execution Strategy + File Ownership + kill_criteria) |
+| A raw idea / feature description | **[Single-doc creation](#single-doc-creation-idea-input)** | Write a fresh single `.md` with full frontmatter |
+| A plan that reads `status: ready`, changed by a new ruling, a seat order, or a landed blocker | **[Amend](#amend-a-plan-that-is-already-ready)** | Edit the plan in place: read rulings once, validate once, hand to execute |
+
+`quick` is a **size knob** on either path (fewer sections, single task), not a
+separate mode - a quick plan still carries full frontmatter (`kill_criteria`,
+`claims`, `executor`, `status`). Waves live in the doc's `## Execution Strategy`
+block; there is no `00-INDEX.md` and no phase files.
+
+A batched dispatch can run this skill up to three times in sequence. Each run still produces exactly one `.md`. When two of the three share a shape, step 2d absorbs the sibling into one node before either becomes a plan.
+
+---
+
+## Amend (a plan that is already ready)
+
+An amend is not a rewrite. Skip discovery, the five questions, answerer enumeration, the design step, the code index audit, the collision check and intake. They ran at write time. One seated worker spent 48 minutes on an amend that re-ran them before its first source edit. A ruling that adds a route or an unknown is not an amend: re-run step 2e for that part.
+
+1. A seat order that says "build wave one, then re-blueprint" means the first source edit comes first. Make it, then amend between waves. A seated worker never amends before its first edit.
+2. Read the live rulings once: `fno backlog decisions <node> --state live --json`. Add every missing `decisions_acknowledged` entry in one edit. Change only the tasks a ruling names.
+3. Validate once: `bash "${SKILL_DIR}/scripts/validate-plan.sh" "$PLAN_PATH"`. Fix everything that one output names, then validate one more time. A third run is a blocker, not a retry.
+4. A validator line that starts with `STOP`, or a timeout, ends the amend. Name the blocker in one `<help>` or mail your lead. Do not run the validator again.
+5. Hand the plan to `/fno:execute` or `/fno:target` in the same turn. The plan stays `status: ready`. If you changed the Execution Strategy, run `--finalize`. Otherwise skip it.
+
+---
+
+## Single-doc creation (idea input)
+
+When the argument is a raw idea / feature description (not a design-doc path),
+write one flat plan `.md`. Includes lightweight BDD acceptance criteria per
+change (1-2 Given/When/Then per change for happy path and primary error case)
+and always carries full frontmatter (see the Kill Criteria block under [Gates](#gates-read-by-state)).
+
+### Plan Save Location
+
+Resolve the save path with `fno do plan path --slug "<slug>" [--node "<node-id>"]`. The command joins the plans dir (`.claude/settings.local.json` → `plansDirectory`, then `.claude/settings.json`, then `plans_dir` in `.fno/config.toml` / `~/.fno/config.toml`) with the `config.plans_filename` template (default `%Y%m%d-{slug}-{node}.md`). Do NOT hand-assemble the filename. The command is the convention. Run the command from the node's project root, never from this session's cwd. The plans dir is project-anchored. From a foreign cwd the command names that session's own plans dir, which sits outside git. `fno backlog get <node>` prints the project root as `cwd`. If the session is anchored elsewhere, `cd` there first. If `fno` is unavailable, ask the user where to save and suggest running `/setup`.
+
+### Session State Initialization
+
+Initialize session state for cost tracking (replaces the PreToolUse hook for portability). State lives in the repo's space, not the checkout; resolve the dir through the command:
+```bash
+STATE_DIR=$(dirname "$(fno-agents state path target-state 2>/dev/null)" 2>/dev/null)
+[[ -z "$STATE_DIR" || "$STATE_DIR" == "." ]] && STATE_DIR=".fno"
+mkdir -p "$STATE_DIR"
+# Don't overwrite if target is running (it has its own state)
+if [[ ! -f "$STATE_DIR/target-state.md" ]]; then
+  rm -f "$STATE_DIR/.session-registered"
+  TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  cat > "$STATE_DIR/session-state.md" << STEOF
+---
+type: plan
+status: IN_PROGRESS
+created_at: ${TIMESTAMP}
+---
+STEOF
+fi
+```
+
+### Process
+
+1. **Understand** the request. Clarify anything ambiguous before proceeding. If the design doc carries a
+   `## Failure Modes` section, use it as the seed for error-path acceptance
+   criteria (AC4-EDGE) cited inline in the Changes section. A research doc
+   without one is fine: the `what-if` brief asks that question against source.
+2-index. **Ask the code index** - every plan, before the premise check. Run `bash "${SKILL_DIR}/scripts/lib/code-index-detect.sh"` and list every symbol, command, flag, file and prior-art claim the node or doc makes. Ask the first `ready` `symbol` provider about each code claim and the first `ready` `semantic` provider about each prior-art claim. Run the manifest's `ask` argv under its `timeout_secs` with `{term}` replaced. When the manifest has a `fresh` probe, run it. Write the `code_index:` frontmatter block (`main_sha`, one provider entry with `status:` and `fresh:`) and the `## Existence audit` table as the plan's first section. An index answers only for the files it indexed. Ask it about the claims on that surface, and open every hit: a hit on another surface is not an answer. For a claim the index does not cover, take the verdict from the AGENTS.md search convention. Say in the evidence cell that the index did not cover it. Verdicts read `exists at <file:line>`, `exists as <other name> at <file:line>`, or `absent after <exact command>`. If neither an index nor a search settles a claim, the verdict reads `unanswered: <why>`. Confirm an `absent` verdict, and every verdict from a provider with `fresh: no` or `unknown`, with the AGENTS.md search convention before you write it. `docs/graph-search.md` says why an index never makes a zero trustworthy. A provider that errors or times out is recorded `status: error` and the step continues. With no provider present, write one line saying so and continue. Never build an index during a blueprint. The Code Index Audit gate ([references/blueprint-gates.md](references/blueprint-gates.md#code-index-audit-every-plan---step-2-index)) refuses a post-gate plan that skipped this. After the index and `rg` sweep, name exact source line ranges and read only those ranges. A whole-file read needs a stated reason in the plan's Existence audit.
+
+2a. **Verify the premise** - applies to node-seeded and raw-prose input. A supplied design doc already carries cited findings. When the node carries a `dispatch-brief` field (`dispatch_brief`), read it first. It is confirmed scope and known files or commands, not an ignore list or a fence. Then read the whole node with `fno backlog get <id>`, including `dispatch_brief` and `progress_notes`. A later correcting note wins over the details. When a plan is bound, add `--plan <path>`. Run `fno backlog freshness <id>` before you measure the claim. Its `shipped`, `partly_shipped` and `changed` verdicts are warnings that name the PRs to read before designing. Each reading is recorded as an event, and v1 never halts. Name the one claim the plan rests on (what a line does, a count, a stall). Measure it again at its source, with a positive control, before writing. When it holds, cite the reading in Context. When it does not, record the real reading with `fno backlog note <id> "<reading>"`, then plan the real defect or halt and say the node is wrong. A plan on a premise nobody re-measured sends a worker after a defect that does not exist. Reach for `fno:verify-footnotes` and run its Premises section over the full premise list. Each claim gets one falsifiable sentence, a declared denominator, a refuse arm plus a positive control, and a CONFIRMED, REFUTED, PARTIAL or UNMEASURED verdict.
+
+Then read what already moves on the same files. Run `fno backlog collisions prs <plan>`: the shared `list_pulls` + `pr_file_paths` reads through one fno-agents read, and it notes, never blocks. Run `fno agents claim list` and read each live `node:` claim's plan. Cite every overlap in Context, or write that no overlap was found and name the commands. When an open PR can hold the same files, pair `fno backlog collisions check` (step 3a, pending plans only) with `collisions prs`.
+
+2a-bis. **The five questions** - answer them BEFORE designing, each as a named thing or the word `none`, into a `## Five questions` section: who hits this and what it costs them today (a named person, a sourced cost); which existing command, skill or config it extends; which case the design will not cover; what could be deleted; which existing module already implements this or could be extended. For the last one, ask the `symbol` provider step 2-index found; otherwise run `rg` for the node's key symbols and read `docs/architecture/dual-implementation-inventory.md`. The schema lives in [references/quick-template.md](references/quick-template.md). The pass criteria stay in the judge's own lens files. This skill never links them and never copies them here, so a plan cannot learn to write to its judge. The drafting lenses, and the rule that the grader's own files stay unread while drafting: [references/product-lenses.md](references/product-lenses.md). An answer that changes the deliverable changes the plan; that is the point of asking before designing. Step 3's judge call grades the answers. The vet can end the node in its own hand. Measure nobody who hits the gap and no cost. Then release this session's claim on the node first. A status move refuses while `locked_by` holds. The refusal names the release command. Then run `fno backlog defer <id> -K wont_do -R "<the measured no-cost finding>"`. Write no ready plan. Close the session with `--summary`. This verdict is the in-hand twin of the consolidation outcome `rejected`. The rejected outcome rules out ANOTHER node. `fno backlog undefer` reverses it. A refused defer becomes a question row, never a ready plan. The cost answer also acts on priority. When the measured cost disagrees with the current priority, run `fno backlog update <id> --set priority=<p0..p3>`. Record the old and new value in the plan Context. Priority stays the importance axis. The rulings this step runs inside: a ruling surfaced in the stage block (`## Law governing blueprint`) or owed an entry in `decisions_acknowledged` is fixed - the blueprint obeys it and neither re-derives it nor re-asks it. A directive from the user or the lead with no ruling behind it gets exactly one challenge: name the alternative, ask once with the cost of each side, then follow the answer; a second challenge on the same subject in the same session is a violation of this rule, not diligence. A blueprint that concludes the node should be superseded or narrowed writes that as a question row (`fno inbox outstanding ask --question-file <file> --node <id>`, which lists it in `fno inbox outstanding`; the port refuses a question whose file carries no what, why, two options, recommendation with its reason, or a reversible one with no `why_user:` - the context fields come from the template in `docs/architecture/attention-items.md` "Asking with context") and closes its session with `--summary`; it never records the decision itself.
+
+2b. **Discovery grounding** - A supplied design doc carries cited findings, and `/blueprint` compiles it without re-running discovery. When a fresh plan starts from raw prose or a node-seeded path with no cited findings, blueprint grounds itself first. Run `fno do think inspect "<seed>" --json` for the receipt. It reports duplicate candidates, database signals, and the active pitfalls. Then load `references/discovery-gate.md`. Ask at most 3 questions with `quick`, or 5 otherwise. For a plan that needs deeper investigation than the receipt, run `/think` first. Think writes cited findings that blueprint then compiles.
+
+2b-bis. **Answerer enumeration** - every plan that changes a read, write, or feed. Run [references/answerer-enumeration.md](references/answerer-enumeration.md)'s four steps. Phrase the question in one line. Enumerate every answerer: sites repo-wide, feeds measured at each site the plan changes. State the count as the PR estimate. Dispose of every answerer in principle 9's vocabulary. Record the outcome as the `surface:` block of the `## Gate records` section (schema: [references/quick-template.md](references/quick-template.md)). The validator refuses a post-2026-09-03 non-quick plan without one. The step sits before the Consolidation Gate (2d) because the order is load-bearing. Enumerating answerers finds sibling SITES. Consolidation finds sibling NODES. A question with four answerers often already has two nodes filed against it. Sweeping first is what lets 2d see them.
+
+2d. **Consolidation Gate** - every plan, on the full-context main thread, between grounding (2b) and the write (3). A supplied design doc skips 2b, so no receipt exists on that path. Run `fno do think inspect "<node id or seed>" --json` here to get one, because the gate applies to that path too. Read the receipt's `graph` payload: `duplicates` (ranked top-K, each row carrying `id`, `score`, `reason`, and `superseded_by` when set), `closure` for the resolved node (`status`, `pr_number`, `superseded_by`, `deferred_kind`), and `decisions` (the node's own live rulings, newest first, each row carrying `decision_id`, `ts`, `lane`, `subject`, a truncated `text`; a failed read shows in `decisions_status`/`decisions_detail` rather than reading as "no rulings"). The scores are a reading aid, not a verdict. A real family and pure noise both sit near 0.26. A candidate carrying `superseded_by` is a dead row, never a live fold target; that field settles liveness where the score does not. So is a candidate whose row reads `deferred_kind: retracted` (the stamp `fno backlog retract` writes): a retracted row is a proven false premise, never a fold target. Make the judgment here, with the node details, the plan seed, and the code in hand. Never delegate this call to a subprocess or a spawned agent. A truncated context reading that list decides confidently and is wrong in both directions. On the design-doc path, pass the doc's title and body as the seed, not a phrase: recall tracks seed width, so ten tokens rank noise while the same node's title plus details ranks the true family. Read `graph.recall.lane` alongside `duplicates`: when it reads `seed` and the list is empty, that is not a measured zero, so run `fno backlog find "<2-3 salient terms>"` before recording `proceed_alone` against nothing. Picking that short salient query is the reader's job; the receipt cannot do it for you.
+
+   When `graph.closure.status` is `done` or `superseded`, halt before compiling. The same halt applies to a retraction: status `deferred` with `deferred_kind: retracted` (the stamp `fno backlog retract` writes) is a row filed on a false premise, not a delay; plain `deferred` does not halt. Report the closure fields. Do not finalize `status: ready` onto work that already shipped.
+
+   When a ruling in `graph.decisions` records a verdict for the work being planned, halt before compiling and report the ruling - the same halt closure already forces. Closure is the node's own state; a ruling is somebody's judgment about it, so it is weighed here rather than merged into the closure check. Whether a given ruling is closure-bearing is the author's call, made with the ruling in hand, and the call is recorded either way (see `decisions_acknowledged` below).
+
+   Read `graph.plan_rulings` on the same receipt, next to `graph.decisions`. It carries rows from sibling plans' `consolidation.rejected` records, the `## Gate records` section or legacy frontmatter. They name plans elsewhere that ruled THIS node out. A row that rejects the node halts the compile like a live ruling. The halt report names the plan path and its reason. The decision index cannot hold a plan's ruling (agent sessions cannot write it). This row is the only place that verdict reaches the node it rejects. An absent row on an `error` status reads as unknown, never as none.
+
+   **Judge the candidates (the three-titles lesson).** Weigh what actually identifies a family over title words: the same file-and-line pair and the verbatim error string. Three sessions filed one bug as three titles sharing almost no words. The file and the error string were the identity. A familiar file alone is not family. A genuinely new bug in a familiar file gets its own node. The failure mode to avoid is a gate so strict that it swallows new work into an old node.
+
+   **Record exactly one outcome** in the plan's `## Gate records` section as the `consolidation:` block of one fenced YAML record (schema: [references/quick-template.md](references/quick-template.md)). `validate-plan.sh` refuses a plan written after 2026-08-17 without a well-formed one. Plans created before the gate warn until backfilled:
+
+   - **absorb** - the other node is a wave of THIS deliverable. Record its id and a reason a later reader can check. After intake (3b), run `fno backlog supersede <this-node> --replaces <other> --cause "<inherited-cause>" --surface <repo-relative-path> --reason "<why>" --covers "<how-it-covers>"`. The door requires `--cause`, `--surface` and `--reason`, plus `--covers` or `--leftover <id>`. The old row stays active until a merged PR covers every declared surface, which is what `--surface` is for. Record the reversal (`fno backlog unsupersede <other>`) in the block.
+   - **append** - THIS node's content belongs on the OTHER node. Record the id and reason, write no second plan, and stop. The validator rejects an append outcome inside a written plan, because the file contradicts the decision. The content reaches the other node through its own channel (`fno backlog update <other> details=...`).
+   - **proceed_alone** - record every id considered under `proceed_alone_against:` with the reason each is not the same work. An empty candidate list is a legal `proceed_alone`.
+   - **rejected** - names a node whose proposal THIS plan rules out. Stronger than "not the same work": this plan's verdict is that the other node should not proceed. Its reason says why, and where the idea belongs instead. It sits beside any outcome - an absorb plan can still reject a third node. If that node is not deferred after intake (3b), run `fno backlog defer <id> -K wont_do -R "rejected by <this node> in <plan path>"` so the board matches the verdict. `fno backlog undefer` and `fno backlog decisions <id>` print the ruling back to whoever reverses it.
+
+   Whatever the outcome, also record `decisions_acknowledged:` - one entry per row in `graph.decisions`, each carrying the `decision_id` and one line saying why that ruling does not close this work. An empty list is legal only when `graph.decisions` is itself empty; a live ruling with no matching entry is the same silence `proceed_alone_against` already refuses.
+
+   The `## Law governing blueprint` block lists the project laws for this plan. Each of those needs a `decisions_acknowledged` entry too, because validate-plan checks the same list. When no block reached this session, print it yourself: `printf '{"mode":"stage","hook":{"tool_name":"Skill","tool_input":{"skill":"fno:blueprint","args":"<node>"}}}' | fno inbox law stage | jq -r '.hook_output.hookSpecificOutput.additionalContext // "no stage law"'`.
+
+   Silence is not an outcome. A plan that ignores its sibling is the failure this gate exists to prevent. Do not build a second consolidator here: `fno backlog groom` already owns the daily levers-only pass and its allowlist already carries `supersede`. This gate is the pre-write half only.
+
+2e. **Name the routes and the unknowns before the tasks** - every plan, after 2d and before any task or wave exists. A blueprint does not tell the worker how to build it. It names the routes the worker can take and the facts nobody has measured yet. `/target` measures those facts before it writes code. Two misses had one shape. One plan said to forward a call to Python, and the code went through the front door. Another plan guessed which callers read a cache and missed two. Each plan settled a fact it never measured. Write three sections:
+
+   - **`## Routes`.** Two or three candidate routes, numbered. Each route names what rules it out: the measured fact that kills it. Rule out on sight a route that lets code write an illegal state. Do the same for a route that gives one fact two writers. Do not pick one. `/target` appends the `chosen: <n> - <why>` line after it measures. When only one route is honest, write it and add `only route: <why no other exists>`.
+   - **`## Unknowns`.** Write one line per fact the plan depends on but did not measure. The form is `- [ ] <question> - measure: <how>`. Examples are the callers of a symbol, the path the code takes, a count, and a cause. A fact you measured in discovery or 2b-bis is not an unknown. Cite it in Context with its source. When every fact is measured, write `none: <why>` instead. `fno do pr create` refuses (exit 6) while one `- [ ]` line stays open. A fact only the user can settle (a law conflict, a product call) is not a `- [ ]` line. File it with `fno inbox outstanding ask --question-file <file> --node <id>` and cite the question id in Context.
+   - **`## Done`.** State the deliverable as a measured number, and give the command that measures it. Declare that command in frontmatter `done_probes:` so the stop gate reads it, under the probe rules in [the done_probes gate](references/blueprint-gates.md).
+
+   Then cut the tasks. A task names the files it expects to touch and the unknown it depends on, never the route. A plan that changes prose, docs or config values only writes one route and `none:` under Unknowns. A supplied design doc whose `## Architecture` already lists routes cites it under `## Routes` and does not repeat it. A plan with a UI question shows its options as a rendered visual mockup (an artifact page or images), never an ASCII text block.
+
+3. **Write** the plan.
+
+   - **A design doc was supplied** (mutate-in-place, the common path): keep its
+     existing path unchanged - `fno-agents plan-cli mutate` writes back to the same file
+     (an atomic rename onto the resolved path), so an already-node-bearing name is
+     preserved as-is and the `-<node-id>` suffix is never dropped or duplicated
+     into `…--.md` (US4). Do NOT rename a supplied doc.
+   - **Creating fresh** (no design doc): write to the path printed by
+     `fno do plan path --slug "{slug}"`, run from the node's project root (see
+     Plan Save Location). For a **node-seeded** run (`$CLAIMS_ID` set, e.g. a
+     direct `/blueprint ` with no prior `/think`), pass the node too:
+     `cd <project-root> && fno do plan path --slug "{slug}" --node "$CLAIMS_ID"`. `/blueprint` is the first
+     artifact author on the direct path and cannot lean on `/think`'s save rule,
+     so it must produce the node-bearing name itself. First **reuse if claimed**:
+     if a plans-dir file already carries `$CLAIMS_ID` in its frontmatter or ends
+     `-$CLAIMS_ID.md`, finalize into it instead of minting a second file. The
+     raw-prose (no `$CLAIMS_ID`) case stays id-less here and is renamed at intake
+     (step 3b-bis).
+
+   If a design doc was supplied, run the **Executor Lock Transcription** gate
+   ([references/blueprint-gates.md](references/blueprint-gates.md#executor-lock-transcription-when-a-design-doc-supplies-a-locked-decision)) before writing the plan body so the parser's output can be
+   inlined into the plan's frontmatter as `executor: <value>`. The gate runs
+   [references/detect-surface.sh](references/detect-surface.sh) over the design
+   text to classify the surface (frontend-touching, backend-only, mixed), then
+   applies the decision rules in
+   [references/executor-routing-prompt.md](references/executor-routing-prompt.md)
+   to pick the executor and write it as a Locked Decision. Empty parser output
+   leaves the frontmatter without an `executor:` field, falling through to
+   runtime surface inference (overridable via `FNO_EXECUTOR_OVERRIDE`).
+
+   **Enrich the Execution Strategy before it becomes executable.**
+
+   Run `fno-agents plan-cli mutate "$PLAN_PATH" --draft`. It produces the deterministic wave/task skeleton and keeps a design-status document in `design`.
+
+   On the full-context main thread, replace every placeholder and populate each task's `surface`, concrete `verify` command, and `acceptance` list from the design and inspected codebase.
+
+   **Then ask the join posture.** The trigger is every plan that carries an `## Execution Strategy`. One question, one key: `join: manual | auto   # default manual`.
+
+   `manual` waits for a person or a titled `/fno:lead` lead to hand the remaining waves out with `fno backlog join <node>`. That is today's behavior for every plan. `auto` fires join at `fno do target init`.
+
+   Print the plan's measured width beside the question. Run `fno backlog join width "$PLAN_PATH"`, the same probe `init-target-state.sh` uses. Branch on its exit code, never on empty output. When the width is 1, record `manual` without asking. When the probe exits 1, record `manual` and name the width as unmeasured.
+
+   Full body: [references/blueprint-gates.md](references/blueprint-gates.md#join-posture-step-3-every-plan-carrying-an-execution-strategy).
+
+   Then validate the exact saved file before collision checking or intake:
+
+   ```bash
+   bash "${SKILL_DIR}/scripts/validate-plan.sh" "$PLAN_PATH" \
+     && fno-agents plan-cli mutate "$PLAN_PATH" --finalize
+   fno doctor observer judge --plan "$PLAN_PATH" --node "${CLAIMS_ID:-}" --force || true   ```
+
+   A nonzero exit from the validate-and-finalize chain stops Blueprint before `3a` and `3b`. Never register a draft that the executor rejects.
+
+   The `&&` is load-bearing. `--finalize` re-checks only the execution contract. An unchained run stamps `status: ready` onto a plan the validator rejected for anything else, such as stub markers or malformed `kill_criteria`.
+
+   The judge call is advisory and level-gated. It prints `skipped level=report` unless `config.loops.blueprint_judge.level` is `assisted` or `--force` is set. The judge asks the dimensions the node's kind calls for:
+
+   - Every plan gets the shared readers: surface_fit, deletable, duplication, epic_fit, mission_fit and code_truth.
+   - A feature, epic or roadmap node also gets the product readers: persona, uncovered_case and customer_fit.
+   - The product readers add `competitive_fit`, an AI ship-quality read `ship_quality`, and the partner questions `partner_challenge`.
+   - A bug node gets the cause readers instead: `reproduced`, `root_cause`, `sibling_callers` and `regression_test`.
+
+   Each source reader reads one source. epic_fit reads the parent epic and its siblings. customer_fit and competitive_fit read `PRODUCT.md`. code_truth reads the plan's own line citations.
+
+   mission_fit reads the nearest vision_path ancestors and `config.project.vision`. It also reads the first readable `VISION.md`, `.agents/context/VISION.md` or `docs/vision.md`.
+
+   A missing source or a missing lens file is a coverage gap, not a fail. A source reader's fail quotes its source. On a fail, revise the plan once, or write a one-line disposition under that question in `## Five questions`. Never loop, and never block intake.
+
+3a. **Collision check + peer heads-up** (conditional). Between writing the plan and auto-intake, run the collision check (skip with `no-collision-check`). When a `peers` block exists, also run the cross-project peer heads-up. Both are gate-shaped, skip-flagged steps. Full procedure (the collisions read, the high-severity disposition by beastmode, nobody to answer, or AskUserQuestion, the four options, the peer heads-up) is in [references/blueprint-gates.md](references/blueprint-gates.md#collision-check-step-3a-skip-with-no-collision-check).
+
+3b. **Auto-intake to backlog** (skip if `no-adopt` modifier or `--no-adopt` flag)
+
+   After writing the plan file, register it on the graph so it is visible
+   to future `/target` invocations and to the kanban renderer:
+
+   ```bash
+   if command -v fno >/dev/null 2>&1; then
+     fno backlog intake "$PLAN_PATH" --title "$TITLE" 2>&1 \
+       || echo "Warning: auto-intake failed (plan file still saved)" >&2
+   else
+     echo "Warning: fno CLI not found on PATH; skipping auto-intake. Install the footnote plugin to enable." >&2
+   fi
+   ```
+
+   If the plan file's frontmatter includes a `depends_on:` list (sibling
+   plan slugs or `ab-` IDs), the intake handler resolves those to graph
+   node IDs and wires up `blocked_by` edges automatically. Unresolvable
+   references emit a warning and are skipped so intake never fails on
+   a missing sibling.
+
+   The user-facing `no-adopt` modifier (and `--no-adopt` flag) keep their
+   names: that surface is a separate breaking change (see the rename plan's
+   Out of Scope). Setting either skips this step entirely. The plan file is
+   already durably written, so intake failures never block the handoff
+   message.
+
+   After `$NODE_ID` is minted, run the **Model Pin / Routing** and **Blueprint Provenance Stamp** gates ([references/blueprint-gates.md](references/blueprint-gates.md#model-pin-transcription--when-a-plan-supplies-a-model)) when their triggers fire.
+
+3b-bis. **Node-bearing filename for raw-prose intake** (US5)
+
+   A node-seeded plan is authored with its id already in the name (step 3, and
+   `/think`'s save rule). Only the **raw-prose** path - `/blueprint "some
+   feature"` with no node - lands id-less, and auto-intake has just minted its
+   node id (`$NODE_ID`, the `intake <id> -> backlog` line). Give the artifact
+   its node-bearing name and repoint `plan_path`, so a roadmap base keyed on the
+   node id finds it:
+
+   ```bash
+   "${SKILL_DIR}/scripts/rename-plan-to-node-id.sh" "$PLAN_PATH" "$NODE_ID"
+   ```
+
+   The helper is idempotent and non-fatal: a plan already ending `-$NODE_ID.md`
+   (every node-seeded path) is a no-op, a pre-existing target is never
+   clobbered, and any failure leaves the id-less file intact and re-runnable -
+   it never blocks the handoff. If `$PLAN_PATH` still points at the old name in
+   the same session, read the helper's `renamed <new-path>` line and use that
+   path downstream.
+
+3b-ter. **Commit the plan write.** The rename runs first so the commit names the final path. Every blueprint write is one commit in the plans dir's own git repo, on the design-doc path too. The cause names what moved this write: a finding, a ruling id, or a note timestamp. A first write says `initial blueprint`.
+
+   ```bash
+   VERSION_LINE="$(bash "${SKILL_DIR}/scripts/commit-plan.sh" "$PLAN_PATH" "$NODE_ID" "<cause>")" \
+     || fno backlog note "$NODE_ID" "blueprint write not versioned: $VERSION_LINE"
+   ```
+
+   A `failed` line never blocks the close. The plan is already intaken and the claim must release, so the failure lands on the node as a note instead. `unversioned` means the plans dir is not in a git repo and the write has no history. Name the status word in the handoff message.
+
+   After successful adoption, close the blueprint phase before returning the completion message:
+
+   ```bash
+   CLOSE_RECEIPT="$(mktemp)"
+   test -n "${NODE_ID:-}" || { echo "Blueprint close refused: intake produced no node." >&2; exit 2; }
+   set -- --summary "<short plan summary>" --launch "/fno:target $NODE_ID" --json
+   if [ -n "${BLUEPRINT_STARTED_AT:-}" ]; then set -- --started-at "$BLUEPRINT_STARTED_AT" "$@"; fi
+   fno backlog session close "$NODE_ID" "$@" >"$CLOSE_RECEIPT"
+   ```
+
+   This is an identity-guarded write. An unresolved harness or session id is a hard refusal, not a skipped provenance stamp. Raw-prose plans with `no-adopt` stop before this close because they have no adopted node.
+
+   Read the adopted node back and require the exact close receipt's harness and full session id in a `blueprint` entry before presenting the saved-plan summary or launch instruction. The readback is a positive marker produced only by the completed close:
+
+   ```bash
+   NODE_READBACK="$(mktemp)"
+   test -s "${CLOSE_RECEIPT:-}" || { echo "Blueprint close refused: no close receipt." >&2; exit 2; }
+   fno backlog get "$NODE_ID" >"$NODE_READBACK"
+   # The exact blueprint session entry the close wrote: same harness, same full session id, ended.
+   jq -e --slurpfile r "$CLOSE_RECEIPT" '[.sessions[]? | select(.phase == "blueprint" and .harness == $r[0].harness and .session_id == $r[0].session_id and .ended_at)] | length > 0' "$NODE_READBACK" >/dev/null \
+     || { echo "Blueprint close refused: exact blueprint session entry was not read back." >&2; exit 2; }
+   # The close readback is the one place that sees both the doc and the node after the projection ran.
+   # Every blocker the plan declares must have landed on the adopted node's blocked_by.
+   # Intake warns and skips; a close refuses, naming the id and the repair command.
+   MISSING="$(fno do plan parse "$PLAN_PATH" | jq -r --slurpfile n "$NODE_READBACK" '(.frontmatter.blocked_by // []) | (if type == "array" then . else [.] end) | map(tostring) - ($n[0].blocked_by // []) | join(", ")')"
+   if [ -n "$MISSING" ]; then
+     echo "Blueprint close refused: the plan declares blocker(s) the adopted node does not carry: $MISSING. Repair with: fno backlog update $NODE_ID blocked_by+=<id> (or fix the plan's blocked_by), then re-run the close." >&2
+     exit 2
+   fi
+   echo "blueprint close readback: matched"
+   ```
+
+   Plan binding is artifact-only and never claims that the Blueprint phase completed.
+
+4. **Present** plan and offer execution
+
+### Template
+
+Load [references/quick-template.md](references/quick-template.md) for the full template. The structure (frontmatter is MANDATORY - every plan carries it, quick or not):
+
+```markdown
+---
+status: ready
+kind: quick-plan
+created: <YYYY-MM-DD>      # required; the consolidation gate reads it
+difficulty: <low|medium|high> # required for plans created after 2026-08-26
+join: <manual|auto>        # who hands out the remaining waves; the join-posture gate asks
+# carveouts: forbidden     # set when the plan says one PR, no follow-up nodes; the fidelity gate refuses a PR that declares an exclusion
+# claims: ab-XXXXXXXX      # only when the input was an ab-id
+# executor: tdd            # transcribed from a Locked Decision, if any
+consolidation:             # step 2d, exactly one outcome (see 2d above)
+  outcome: proceed_alone
+  proceed_alone_against: []
+kill_criteria:
+  - name: iteration_ceiling
+    predicate: iteration > 15
+    reason: "Too many iterations - planning likely wrong"
+  - name: stuck_test
+    predicate: same_test_failing_for >= 3
+    reason: "Same test failing 3+ iterations - root cause unclear"
+---
+
+# [Title]
+
+## Context
+[Problem, root cause, what we found]
+
+## Routes
+1. [Candidate route] - ruled out by: [the measured fact that kills it]
+2. [Candidate route] - ruled out by: [...]
+
+## Unknowns
+- [ ] [Question the plan depends on] - measure: [command or read that settles it]
+
+## Done
+[The measured number and the command that measures it; the same command sits in `done_probes:`.]
+
+## Changes
+
+### 1. [Change name]
+**Files:** `path/to/file.ts` (lines if known)
+[What to do and why. Code snippets when helpful.]
+
+### 2. [Change name]
+**Files:** `path/to/other.ts`
+[What to do and why.]
+
+## Files to Modify
+| File | Action |
+|------|--------|
+
+## Patterns to Reuse
+| Pattern | Source |
+|---------|--------|
+
+## Verification
+1. [Concrete runnable check]
+```
+
+**Required sections:** Context, Routes, Unknowns, Done, Changes, Files to Modify, Verification.
+**Optional sections:** Patterns to Reuse (omit if no relevant patterns exist).
+
+### Writing Principles
+
+Write for a fresh-context agent that knows nothing about this conversation:
+
+| Bad (assumes context) | Good (self-contained) |
+|----------------------|----------------------|
+| "Update the API as discussed" | "Add `GET /api/users/:id` returning `{ id, name, email }`" |
+| "Fix the bug from earlier" | "Fix: `calculateTotal()` returns NaN when cart is empty (returns 0 instead)" |
+| "Use the approach we agreed on" | "Use server actions (not API routes) because Next.js 15 app router" |
+| "Add validation to the API endpoints" | "Add Zod schema to POST /api/facilities in `src/routes/facilities.ts:78`: `{ name: z.string().min(1).max(100), capacity: z.number().int().min(1).max(500) }`. Pattern: `src/routes/users.ts:34`" |
+
+When the receipt detects a database, plan DB-aware:
+
+| Bad (misses DB) | Good (DB-aware) |
+|-----------------|-----------------|
+| "Add recording_method: 'biometric' to the insert" | "Add 'biometric' to attendance_recording_method enum (migration), update signature_type_check constraint, THEN add to insert code" |
+| "Store the public key as base64" | "Column is bytea - store as hex with \\x prefix, or change column to text (migration)" |
+
+Each change must include:
+1. **What** to change (specific files, functions, lines if known)
+2. **Why** this approach (the actual reason, not "because we discussed it")
+3. **How** to verify (runnable command, not "check that it works")
+4. **Enough for synthesis** - The orchestrator will construct worker prompts from this plan. Every task must contain enough detail that the orchestrator can write a specific, actionable prompt WITHOUT re-reading the entire codebase. If you find yourself writing "update the relevant files" or "add appropriate validation," you have not done the research - go back and find the specific files, the specific validation rules, and the specific patterns to follow.
+
+### Handoff
+
+> "Plan saved to `{path}` and adopted to the backlog as `ab-xxxxxxxx`.
+> Run `/execute {path}` to execute, `/target {path}` for the full pipeline, or
+> review first. Use `/blueprint quick no-adopt` next time to skip auto-adopt."
+
+Include the adopted ID only when adopt succeeded. On failure, omit the
+"and adopted..." clause and note the adopt warning in its place.
+
+### Opting out of auto-adopt
+
+Every plan calls `fno backlog intake` after being written so it appears on the
+graph kanban. To skip that step:
+
+```bash
+/blueprint quick no-adopt "feature X"        # positional modifier
+/blueprint quick "feature X" --no-adopt      # flag form
+/blueprint no-adopt "feature X"              # default (non-quick), positional
+```
+
+Use this for throwaway specs, exploratory scratchpads, or when you want
+to curate the graph manually.
+
+### Opting out of the collision check
+
+Every plan runs `fno backlog collisions check` between writing the plan and
+auto-intake (step 3a). To skip when you know the collision is intentional:
+
+```bash
+/blueprint quick no-collision-check "feature X"        # positional modifier
+/blueprint quick "feature X" --no-collision-check      # flag form
+/blueprint no-collision-check "feature X"              # default (non-quick), positional
+```
+
+A skipped check still records `collisions_acknowledged: ["__skipped_check__"]`
+on the new node so the audit trail distinguishes "I checked and accepted"
+from "I never checked at all."
+
+## Single-doc mutation (design-doc input)
+
+When the input to `/blueprint` is a path to an existing design doc (produced by `/think`), the skill mutates that doc in place rather than creating a folder plan. The doc grows through /think -> /blueprint -> /execute -> /review -> /ship; the single file is the canonical artifact.
+
+### How it works
+
+```
+1. Read design doc + frontmatter
+1b. Ask the code index: run the creation path's step 2-index against the doc's claims and write its `code_index:` block and `## Existence audit` table into the doc
+1c. Name the routes and unknowns: run the creation path's step 2e. Write `## Routes`, `## Unknowns` and `## Done` before any task exists
+2. Validate: status must be "design" (or "ready" if `rewrite` passed)
+3. Detect codebase state (--mode greenfield|brownfield skips this):
+   - Read ## Architecture section, extract file path mentions
+   - >= 50% exist -> brownfield; < 50% exist -> greenfield
+4. Build ## Execution Strategy (waves YAML block)
+5. Brownfield only: ## File Ownership Map, ## Patterns to Reuse
+6. Update frontmatter: status -> ready (design stays a draft until `--finalize`), execution_mode, waves, kill_criteria
+7. On `--finalize`: validate the proposed ready + `acceptance_contract: compiled-v1` contract (every task acceptance reference resolves) and atomically stamp both
+8. Write atomically (tempfile + os.replace in same directory)
+9. Auto-intake to backlog via `fno backlog intake` (handled by skill body)
+```
+
+### Modifiers
+
+| Modifier | Effect |
+|---|---|
+| `subagent` | Run the whole skill in a subagent of this session, see [Substrate](#substrate). |
+| `quick` | Emit ## Execution Strategy as one parallel wave, one task per numbered change (stamp status + kill_criteria) |
+| `group N` | Bounded epic decomposition: after intake, partition the waves into at most `N` cohesive delivery groups (one child node + PR each). See [references/epic-decomposition.md](references/epic-decomposition.md). Omit `N` to fall back to the epic's `max_children`, else `config.blueprint.max_prs_per_epic`. That config value is a hard ceiling: `N` and `max_children` can only tighten it. A group bundles several leaves into one PR. Auto-enabled for `scope: epic` docs. |
+| `no-group` | Opt OUT of auto-decomposition on a `scope: epic` doc: run the single-doc lean mutation (one epic node, one PR), the pre-auto-group behavior. |
+| `greenfield` | Skip File Ownership Map + Patterns to Reuse regardless of codebase state |
+| `brownfield` | Force file binding even on empty-codebase detect |
+| `rewrite` | Allow re-running on `status: ready` (replaces /blueprint sections only) |
+| `verbose` | Inline content instead of cross-references |
+| `no-adopt` | Skip auto-intake |
+| `no-collision-check` | Skip collision check |
+
+Modifiers are composable in any order: `/blueprint quick greenfield rewrite <doc-path>` works.
+
+### Script invocation
+
+The mutation is implemented in `crates/fno-agents/src/backlog/plan_doc/mutate.rs`.
+Arguments mirror the modifiers above:
+
+```bash
+fno-agents plan-cli mutate <doc-path> \
+  [--mode greenfield|brownfield|auto] \
+  [--rewrite] \
+  [--draft | --finalize] \
+  [--no-emit]
+```
+
+`--no-emit` is a dry-run: prints the proposed doc to stdout without writing.
+
+Exit codes:
+- `0` success
+- `1` doc already at status:ready without --rewrite; or the argument is not a path or names a missing file (remedy: `fno do plan path`)
+- `2` section ownership violation, or a bad argument (the usage line names it)
+- `3` frontmatter status missing / invalid
+
+### Section ownership
+
+/blueprint ONLY writes sections in `BLUEPRINT_WRITE_ALLOWLIST`:
+- `Execution Strategy`
+- `File Ownership Map` (brownfield only)
+- `Five questions` (the step 2a-bis answers; the judge's fail dispositions land there too)
+- `Patterns to Reuse` (brownfield only)
+- `kill_criteria` (frontmatter)
+- `execution_mode`, `waves` (frontmatter)
+- `acceptance_contract` (frontmatter; stamped `compiled-v1` at finalize)
+- `consolidation` (the step 2d outcome, inside the `## Gate records` section; the frontmatter key stays legal for legacy docs)
+- `difficulty` (frontmatter; the floor band the mint stamps so a post-2026-08-26 doc is born passing its own gate)
+
+Any attempt to write outside this allowlist exits 2. Author-owned sections (Overview, Architecture, User Stories, Failure Modes, Acceptance Criteria, Locked Decisions, etc.) are never touched.
+
+### Acceptance criteria compilation
+
+The `## Acceptance Criteria` section is **source**: authors and native plan modes have creative freedom in how they phrase a criterion. Blueprint compiles that source into strict execution semantics through one canonical compiler (`crates/fno-agents/src/backlog/plan_doc/criteria.rs`). The mutation script, the semantic validator, and the worker-brief generator all call it.
+
+Accepted source shapes (container syntax alone does not decide validity; a candidate is valid when it yields a non-empty statement):
+
+- legacy bold labels: `**AC1-HP:** Given ... when ... then ...`
+- headings: `### AC1-HP: Title` or `### Title`
+- numbered items: `1. Given ... when ... then ...`
+- bullets: `-` / `*` / `+` behavior
+- table rows: `| label | behavior |` (cells concatenate in column order)
+- a descriptive label followed by a contiguous Given/When/Then block
+
+Explicit AC identifiers (`AC1-HP`, `AC7`) are preserved verbatim. Unlabeled criteria get deterministic `AC1`, `AC2`, ... in document order, with `GENERAL` as the compatibility kind. This is execution metadata, not a formatting correction; Blueprint does not rewrite the source for style.
+
+**Normalization vs refusal.** Formatting preferences (missing AC prefix, list-marker style, heading order, category suffix) are silent normalization or advisory. Semantic failures are hard errors at finalize:
+
+- a non-empty `## Acceptance Criteria` section that yields no criterion;
+- two criteria sharing one explicit identifier (both source locations named);
+- a task `acceptance` reference that resolves to no compiled criterion;
+- a task with no acceptance reference.
+
+Finalize validates the proposed ready + `compiled-v1` contract and atomically stamps `status: ready` and `acceptance_contract: compiled-v1` together, so a half-promoted plan never lands. Plans finalized before this feature carry no marker and keep their existing permissive brief behavior; strict reference resolution begins at `compiled-v1`.
+
+## A missing supplied path fails loudly
+
+A string is classified as a path (not a feature description) when it:
+- Contains `/`
+- Ends in `.md`
+- Starts with `~`, `./`, `../`, or `/`
+
+A path-shaped argument that does not exist on disk exits 1 with "file not found" naming the path - never a silent fall-through to raw-description mode. A typo in a supplied path is a loud refusal, not a guess.
+
+A NON-path-shaped argument is a raw feature description, not a missing-doc case: it runs [Single-doc creation](#single-doc-creation-idea-input), which self-grounds through step 2b's discovery gate (`fno do think inspect` + [references/discovery-gate.md](references/discovery-gate.md)). This never redirects to `/think` as a prerequisite - `/think` is a deliberate escalation step 2b takes only when the receipt shows the plan needs deeper investigation than 3-5 questions can ground.
+
+## Gotchas
+
+Environment-specific traps that defy reasonable assumptions.
+
+- **A hand-typed planning prompt in the Agent tool is prompt drift: a rule typed into a prompt is the drift this token removes.** Use `/fno:blueprint subagent <node>` instead. On 2026-09-10 four such prompts produced plans that fail `validate-plan.sh`.
+- **A node-id argument must render `claims:` into the plan frontmatter, or intake DUPLICATES the node.** `/blueprint ` claims that node only if the plan writes a literal `claims: ` line; the template's commented `# claims:` is a doc note, not a substitute. The post-write refusal (Plan Claims Ingestion gate) halts before adoption when it is missing.
+- **A design-doc path with a typo must fail loud, never degrade to raw-description mode.** The path-shape classifier treats anything with `/`, `.md`, `~`, `./`, `../`, `/` as a path; a nonexistent one exits 1 with "file not found" rather than silently planning from the literal string.
+- **A malformed epic `max_children` (non-integer, `< 1`) is refused UP FRONT, before grouping** - not deferred to decompose, because a single-group collapse skips decompose entirely and would let the bad cap pass silently.
+- **`done_probes` must end in a predicate and assert freshness.** `... | tail -5` masks the real exit status (reads as a pass); `test -f <file>` passes vacuously against launch-day residue. Bound every probe in time.
+- **Plans save to the Obsidian vault, not git `docs/`.** Use `fno do plan path --slug`; never hand-assemble the filename.
+
+## Known Limitations and Deferred Work
+
+- Blueprints cannot resolve unanswered architecture decisions. See [LIMITATIONS.md](LIMITATIONS.md).
+
+## References
+
+- [references/blueprint-gates.md](references/blueprint-gates.md) - All state-keyed gates (claims, schema, executor, model, provenance, PRODUCT.md, impeccable_stages, done_probes, kill-criteria detail, collision, peer heads-up)
+- [references/answerer-enumeration.md](references/answerer-enumeration.md) - Answerer enumeration protocol (step 2b-bis)
+- [references/epic-decomposition.md](references/epic-decomposition.md) - `group N` bounded epic decomposition
+- [references/discovery-gate.md](references/discovery-gate.md) - Discovery-gate question protocol
+- [references/quick-template.md](references/quick-template.md) - Full plan template
+- [references/single-doc-spec.md](references/single-doc-spec.md) - Single-doc mutation spec
+- [references/section-headers.md](references/section-headers.md) - Canonical section headers
+- [references/dependency-detection.md](references/dependency-detection.md) - depends_on resolution
+- [references/kill-criteria-howto.md](references/kill-criteria-howto.md) - Kill-criteria authoring guide
+- [references/linear-integration.md](references/linear-integration.md) - Linear sync

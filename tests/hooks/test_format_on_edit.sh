@@ -1,0 +1,223 @@
+#!/usr/bin/env bash
+# Test suite for hooks/format-on-edit.sh.
+#
+# The hook formats a .rs or .py file right after an Edit or a Write, so an
+# agent never spends a gated Bash call on `cargo fmt`. Its one invariant: a
+# formatter must NEVER fail the edit, so every failure path exits 0 silently.
+#
+# Tests:
+#   T1  an unformatted .rs under crates/  -> rewritten, "format-on-edit: rewrote"
+#   T2  an already-formatted .rs          -> exit 0, silent (no needless line)
+#   T3  a .md path                        -> exit 0, silent
+#   T4  a .rs OUTSIDE crates/             -> exit 0, silent, file untouched
+#   T5  a .rs with a syntax error         -> exit 0, never fails the edit, and
+#                                           the parse break rides additionalContext
+#   T5b/c/d JSON shape, codex payload, and mixed-payload stdout purity
+#   T6  a missing file / empty payload    -> exit 0, silent
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+HOOK="${REPO_ROOT}/hooks/format-on-edit.sh"
+PINNED_FMT="1.94.1"
+
+PASS=0; FAIL=0
+pass() { PASS=$((PASS+1)); printf '[format-on-edit] PASS: %s\n' "$*"; }
+fail() { FAIL=$((FAIL+1)); printf '[format-on-edit] FAIL: %s\n' "$*" >&2; }
+
+[[ -f "$HOOK" ]] || { fail "hook not found at $HOOK"; exit 1; }
+if ! rustfmt "+${PINNED_FMT}" --version >/dev/null 2>&1; then
+  echo "[format-on-edit] SKIP: rustfmt +${PINNED_FMT} not installed"
+  exit 77
+fi
+
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR"' EXIT
+REPO="${TMP_DIR}/repo"
+mkdir -p "${REPO}/crates/demo/src" "${REPO}/docs" "${REPO}/scripts"
+# A bare .git DIRECTORY is enough: the hook walks up looking for `.git`, it
+# never runs a git command.
+mkdir -p "${REPO}/.git"
+
+run_hook() {
+  python3 -c '
+import json, sys
+print(json.dumps({"tool_name": "Edit", "tool_input": {"file_path": sys.argv[1]}}))
+' "$1" | bash "$HOOK"
+}
+
+UGLY='fn  main( ) {let x=1;println!("{}",x);}'
+
+# T1: an unformatted .rs under crates/ is rewritten and the line is printed
+# on stderr. Stdout stays empty: it belongs to the additionalContext JSON,
+# which a harness reads only when the whole stream is the object.
+F="${REPO}/crates/demo/src/lib.rs"
+printf '%s\n' "$UGLY" > "$F"
+OUT="$(run_hook "$F" 2>"$TMP_DIR/t1.err")"; RC=$?
+ERR="$(cat "$TMP_DIR/t1.err")"
+if [[ $RC -eq 0 && -z "$OUT" && "$ERR" == *"format-on-edit: rewrote crates/demo/src/lib.rs"* ]] \
+   && ! grep -q 'fn  main' "$F"; then
+  pass "T1 an unformatted .rs under crates/ is rewritten and announced on stderr"
+else
+  fail "T1 rc=$RC out='$OUT' err='$ERR' file=$(cat "$F")"
+fi
+
+# T2: running again changes nothing, so the hook stays silent.
+OUT="$(run_hook "$F")"
+if [[ -z "$OUT" ]]; then
+  pass "T2 an already-formatted file produces no output"
+else
+  fail "T2 expected silence, got '$OUT'"
+fi
+
+# T3: a .md path is not this hook's business.
+M="${REPO}/docs/notes.md"
+printf 'a  b\n' > "$M"
+OUT="$(run_hook "$M")"; RC=$?
+if [[ $RC -eq 0 && -z "$OUT" && "$(cat "$M")" == 'a  b' ]]; then
+  pass "T3 a .md path exits 0 silently and is untouched"
+else
+  fail "T3 rc=$RC out='$OUT'"
+fi
+
+# T4: a .rs outside crates/ is left alone - the pin is scoped to the workspace.
+S="${REPO}/scripts/stray.rs"
+printf '%s\n' "$UGLY" > "$S"
+OUT="$(run_hook "$S")"; RC=$?
+if [[ $RC -eq 0 && -z "$OUT" ]] && grep -q 'fn  main' "$S"; then
+  pass "T4 a .rs outside crates/ is untouched"
+else
+  fail "T4 rc=$RC out='$OUT'"
+fi
+
+# T5: rustfmt refuses a file it cannot parse. The edit still succeeds, the
+# file is left unrewritten, and the break rides additionalContext in the same
+# turn instead of waiting for the next cargo build.
+B="${REPO}/crates/demo/src/broken.rs"
+printf 'fn main( { unbalanced\n' > "$B"
+OUT="$(run_hook "$B")"; RC=$?
+if [[ $RC -eq 0 && "$OUT" == *'hookSpecificOutput'* ]] \
+   && [[ "$OUT" == *"parse-check: crates/demo/src/broken.rs did not parse"* ]] \
+   && grep -q 'fn main( { unbalanced' "$B"; then
+  pass "T5 a parse break exits 0, is reported as additionalContext, file unrewritten"
+else
+  fail "T5 rc=$RC out='$OUT'"
+fi
+
+# T5b: the finding is machine-readable JSON whose additionalContext is a
+# string carrying the rustfmt diagnostic, so a harness can rely on the shape.
+B2="${REPO}/crates/demo/src/broken2.rs"
+printf 'fn second( {\n' > "$B2"
+OUT="$(run_hook "$B2")"; RC=$?
+CTX="$(OUT_ENV="$OUT" python3 -c '
+import json, os, sys
+sys.stdout.write(json.loads(os.environ["OUT_ENV"])["hookSpecificOutput"]["additionalContext"])
+' 2>/dev/null)"
+if [[ $RC -eq 0 && -n "$CTX" && "$CTX" == *"crates/demo/src/broken2.rs"* ]] \
+   && [[ "$CTX" == *"error:"* ]]; then
+  pass "T5b the parse finding is valid additionalContext JSON with the rustfmt error"
+else
+  fail "T5b rc=$RC ctx='$CTX'"
+fi
+
+# T5c: a codex apply_patch payload gets the same parse finding for its
+# header path, resolving the relative path against the payload cwd.
+CB="${REPO}/crates/demo/src/patched-broken.rs"
+printf 'fn patched( {\n' > "$CB"
+CODEX_BROKEN="$(cd "${REPO}" && python3 -c '
+import json, sys
+print(json.dumps({
+    "tool_name": "apply_patch",
+    "cwd": sys.argv[1],
+    "tool_input": {"command": "*** Begin Patch\n*** Update File: crates/demo/src/patched-broken.rs\n@@\n"},
+}))' "$REPO")"
+OUT="$(printf '%s' "$CODEX_BROKEN" | bash "$HOOK")"; RC=$?
+if [[ $RC -eq 0 && "$OUT" == *"parse-check: crates/demo/src/patched-broken.rs did not parse"* ]]; then
+  pass "T5c a codex apply_patch payload reports its header path's parse break"
+else
+  fail "T5c rc=$RC out='$OUT'"
+fi
+
+# T5d: a payload with one clean file and one broken file still leaves stdout
+# as pure JSON. The rewrote notice moves to stderr so the harness can parse
+# the additionalContext object instead of meeting mixed output.
+GOOD_FILE="${REPO}/crates/demo/src/mixed-good.rs"
+BAD_FILE="${REPO}/crates/demo/src/mixed-broken.rs"
+printf '%s\n' "$UGLY" > "$GOOD_FILE"
+printf 'fn mixed( {\n' > "$BAD_FILE"
+MIXED_PAYLOAD="$(cd "${REPO}" && python3 -c '
+import json, sys
+print(json.dumps({
+    "tool_name": "apply_patch",
+    "cwd": sys.argv[1],
+    "tool_input": {"command": "*** Begin Patch\n*** Update File: crates/demo/src/mixed-good.rs\n@@\n*** Update File: crates/demo/src/mixed-broken.rs\n@@\n"},
+}))' "$REPO")"
+OUT="$(printf '%s' "$MIXED_PAYLOAD" | bash "$HOOK" 2>"$TMP_DIR/t5d.err")"; RC=$?
+JSON_OK="$(OUT_ENV="$OUT" python3 -c '
+import json, os, sys
+d = json.loads(os.environ["OUT_ENV"])
+ctx = d["hookSpecificOutput"]["additionalContext"]
+assert "mixed-broken.rs" in ctx
+sys.stdout.write("ok")
+' 2>/dev/null)"
+if [[ $RC -eq 0 && "$JSON_OK" == "ok" ]] \
+   && [[ "$(cat "$TMP_DIR/t5d.err")" == *"format-on-edit: rewrote crates/demo/src/mixed-good.rs"* ]]; then
+  pass "T5d a mixed clean+broken payload keeps stdout pure JSON and moves the notice to stderr"
+else
+  fail "T5d rc=$RC out='$OUT' err='$(cat "$TMP_DIR/t5d.err")'"
+fi
+
+# T6: a payload naming a file that does not exist.
+OUT="$(run_hook "${REPO}/crates/demo/src/gone.rs")"; RC=$?
+if [[ $RC -eq 0 && -z "$OUT" ]]; then
+  pass "T6 a missing file exits 0 silently"
+else
+  fail "T6 rc=$RC out='$OUT'"
+fi
+
+# T7: Python is deliberately NOT formatted, and that is pinned by a test rather
+# than only by a comment. CI runs `ruff check`, never `ruff format`, so the repo
+# has never been ruff-formatted; formatting on edit would put that churn in
+# every PR touching a Python file and satisfy no gate.
+mkdir -p "${REPO}/cli/src"
+P="${REPO}/cli/src/thing.py"
+printf 'x  =  1\n' > "$P"
+OUT="$(run_hook "$P")"; RC=$?
+if [[ $RC -eq 0 && -z "$OUT" && "$(cat "$P")" == 'x  =  1' ]]; then
+  pass "T7 a .py file is left alone (no ruff format leg)"
+else
+  fail "T7 rc=$RC out='$OUT' file=$(cat "$P")"
+fi
+
+# T8: a codex apply_patch payload carries the path in tool_input.command
+# patch headers, not tool_input.file_path; the hook formats that file the
+# same way, resolving the relative header path against the payload cwd.
+C="${REPO}/crates/demo/src/patched.rs"
+printf '%s\n' "$UGLY" > "$C"
+CODEX_PAYLOAD="$(cd "${REPO}" && python3 -c '
+import json, sys
+print(json.dumps({
+    "tool_name": "apply_patch",
+    "cwd": sys.argv[1],
+    "tool_input": {"command": "*** Begin Patch\n*** Update File: crates/demo/src/patched.rs\n@@\n"},
+}))' "$REPO")"
+OUT="$(printf '%s' "$CODEX_PAYLOAD" | bash "$HOOK" 2>"$TMP_DIR/t8.err")"; RC=$?
+ERR="$(cat "$TMP_DIR/t8.err")"
+if [[ $RC -eq 0 && -z "$OUT" && "$ERR" == *"format-on-edit: rewrote crates/demo/src/patched.rs"* ]] \
+   && ! grep -q 'fn  main' "$C"; then
+  pass "T8 a codex apply_patch payload formats the header path"
+else
+  fail "T8 rc=$RC out='$OUT' err='$ERR' file=$(cat "$C")"
+fi
+
+# T9: a payload with neither file_path nor a patch header does nothing.
+OUT="$(printf '%s' '{"tool_name": "Bash", "tool_input": {"command": "echo hi"}}' | bash "$HOOK")"; RC=$?
+if [[ $RC -eq 0 && -z "$OUT" ]]; then
+  pass "T9 a payload with no write target exits 0 silently"
+else
+  fail "T9 rc=$RC out='$OUT'"
+fi
+
+printf '[format-on-edit] %d passed, %d failed\n' "$PASS" "$FAIL"
+[[ "$FAIL" -eq 0 ]]

@@ -1,0 +1,192 @@
+# Install-channel matrix: every advertised install path installs footnote on a
+# clean runner and runs one shared smoke. Rows the product does not satisfy
+# yet carry expect: fail and name the node whose work flips them; when such a
+# row starts passing, its job FAILS and names the flip, so every repair PR
+# turns its own row. Runs daily, on every workflow_dispatch, and on any PR
+# that touches an install surface (no branches filter, so stacked PRs run it).
+# README.md is deliberately NOT a trigger: a README-only PR would pay the
+# full clean-runner matrix for a proof that takes seconds. The proof that
+# every advertised install command has an expect: pass row
+# (scripts/ci/check-readme-install-commands.sh) runs as a guards.yml step on
+# every PR instead; the matrix keeps the readme-commands row for the runs it
+# still fires on.
+name: install-channels
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/install/**'
+      - '.claude-plugin/**'
+      - '.codex-plugin/**'
+      - '.agents/plugins/**'
+      - 'hooks/context-run.sh'
+      - 'hooks/frontdoor-nudge-session-start.sh'
+      - 'hooks/frontdoor-nudge-prompt-submit.sh'
+      - 'hooks/hooks.json'
+      - 'hooks/context-hooks.json'
+      - 'hooks/codex-hooks.json'
+      - 'scripts/setup.sh'
+      - 'scripts/preflight.sh'
+      - 'skills/tdd/SKILL.md'
+      - '.github/workflows/install-channels.yml'
+      - 'tests/smoke/channel_matrix_smoke.sh'
+      - 'scripts/ci/check-readme-install-commands.sh'
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  channel:
+    runs-on: ${{ matrix.row.runs-on }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        row:
+          - id: claude-marketplace
+            runs-on: ubuntu-24.04
+            expect: pass
+            node: ''
+            readme: ['/plugin marketplace add fnodotdev/fno#stable', '/plugin install fno@fno']
+          - id: claude-plugin-session
+            runs-on: ubuntu-24.04
+            expect: pass
+            node: ''
+            readme: []
+          - id: claude-plugin-session-macos
+            runs-on: macos-15
+            expect: pass
+            node: ''
+            readme: []
+          - id: codex-plugin-session
+            runs-on: ubuntu-24.04
+            expect: pass
+            node: ''
+            readme: ['codex plugin marketplace add fnodotdev/fno@stable', 'codex plugin add fno@fno']
+          - id: fno-sh-served
+            runs-on: ubuntu-24.04
+            expect: pass
+            node: ''
+            readme: ['curl -fsSL fno.sh | sh']
+          - id: fno-sh-served-macos
+            runs-on: macos-15
+            expect: pass
+            node: ''
+            readme: ['curl -fsSL fno.sh | sh']
+          # Passes since the source update lost its Python step: run inside
+          # the checkout, the released fno updates from source cleanly.
+          - id: fno-update-released
+            runs-on: ubuntu-24.04
+            expect: pass
+            node: ''
+            readme: []
+          - id: fno-update-released-macos
+            runs-on: macos-15
+            expect: pass
+            node: ''
+            readme: []
+          - id: fno-sh-head
+            runs-on: ubuntu-24.04
+            expect: pass
+            node: ''
+            readme: []
+          - id: fno-sh-head-macos
+            runs-on: macos-15
+            expect: pass
+            node: ''
+            readme: []
+          # Fails until a nightly is built from a main carrying the binary
+          # front door: the older nightly fno answers --version by
+          # bootstrapping the stable wheel. The first such nightly flips it.
+          - id: fno-sh-nightly
+            runs-on: ubuntu-24.04
+            expect: fail
+            node: x-6f1d
+            readme: []
+          - id: fno-sh-fresh
+            runs-on: ubuntu-24.04
+            expect: pass
+            node: x-f867
+            readme: []
+          - id: install-sh-alias
+            runs-on: ubuntu-24.04
+            expect: pass
+            node: ''
+            readme: []
+          - id: pypi-uv
+            runs-on: ubuntu-24.04
+            expect: pass
+            node: ''
+            readme: ['uv tool install fno']
+          - id: pypi-uv-pinned
+            runs-on: ubuntu-24.04
+            expect: pass
+            node: ''
+            readme: []
+          - id: brew
+            runs-on: macos-15
+            expect: pass
+            node: ''
+            readme: ['brew install bllshttng/fno/fno']
+          - id: cargo
+            runs-on: ubuntu-24.04
+            expect: pass
+            node: ''
+            readme: ['cargo install fno']
+          - id: skills-sh
+            runs-on: ubuntu-24.04
+            expect: pass
+            node: ''
+            readme: ['npx skills add fnodotdev/fno --skill tdd']
+          - id: clone-setup
+            runs-on: ubuntu-24.04
+            expect: pass
+            node: ''
+            readme: ['bash scripts/setup.sh']
+          - id: setup-scratch-home
+            runs-on: ubuntu-24.04
+            expect: pass
+            node: ''
+            readme: []
+          - id: setup-scratch-home-macos
+            runs-on: macos-15
+            expect: pass
+            node: ''
+            readme: []
+          - id: readme-commands
+            runs-on: ubuntu-24.04
+            expect: pass
+            node: ''
+            readme: []
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 'row: ${{ matrix.row.id }}'
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          bash tests/smoke/channel_matrix_smoke.sh '${{ matrix.row.id }}'
+          rc=$?
+          set -e
+          expect='${{ matrix.row.expect }}'
+          if [ "$rc" -eq 42 ] || [ "$rc" -eq 3 ] || [ "$rc" -eq 43 ]; then
+            echo "row ${{ matrix.row.id }}: driver refused the run (rc=$rc: dirty machine, unknown row, or a hang); the job fails regardless of the row's expectation"
+            exit 1
+          fi
+          if [ "$expect" = pass ]; then
+            if [ "$rc" -eq 0 ]; then
+              exit 0
+            fi
+            echo "row ${{ matrix.row.id }} is expected to pass but failed (rc=$rc)"
+            exit 1
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "expected-fail ${{ matrix.row.id }}: ${{ matrix.row.node }}" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "row ${{ matrix.row.id }} now passes: set expect: pass in this PR"
+          exit 1

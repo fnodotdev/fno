@@ -1,0 +1,507 @@
+#!/usr/bin/env bash
+# check-placement-rule.sh - CI gate enforcing the placement rule (ab-f063
+# Wave 2, amended 2026-09-03 by the spaces move): footnote's own accumulating
+# state (logs, telemetry) lives ONLY under ~/.fno/, the repo's
+# space (~/.fno/spaces/<slug>/), or internal/<project>/ - never under .claude/
+# or ~/.claude/. Inside a checkout only .fno/config.toml (committed project
+# config) and the sandbox-denied breadcrumb (.fno/state-root-denied.json) are
+# legal.
+#
+# Complements check-no-hardcoded-paths.sh (which bans bare $HOME/.fno and
+# Path.home()/".fno" - i.e. paths that bypass the registry but still land in
+# the RIGHT place). This script checks two different things:
+#
+#   (a) NEW `.claude/` or `~/.claude` path construction in cli/src, crates,
+#       hooks, scripts. Run: bash scripts/ci/check-placement-rule.sh
+#       Exits 0 when clean, 1 with a report when a non-allowlisted hit is
+#       found.
+#
+#   (b) A `.fno/` write in hooks/*.sh built from a bare relative string
+#       (`>> ".fno/x"`) instead of a $REPO_ROOT-anchored path or a registry
+#       accessor - the exact cwd-anchoring bug class the Wave 2 audit found
+#       (hooks firing with an unexpected cwd nest ~/.fno/.fno, ~/.fno/.claude,
+#       etc). Scoped to hooks/ only: cli/src's CLI commands intentionally
+#       default state args to a bare cwd-relative Path(".fno/...") (the
+#       expected UX for a tool invoked from a repo root, like git), and
+#       scripts/ contains slash-command setup scripts that only ever run
+#       with cwd = the agent's project root. Neither is the "fires with an
+#       unpredictable cwd" risk class this check targets.
+#
+# Allowlist rationale for (a)
+# ----------------------------
+# `.claude/` is legitimately touched, in code that is NOT a placement-rule
+# violation, for three separate reasons - all pre-existing and out of this
+# wave's scope:
+#   1. Reading Claude Code's OWN files: ~/.claude/sessions, ~/.claude/projects
+#      (transcripts), ~/.claude/jobs, .claude/settings.json /
+#      settings.local.json (Claude Code's config, not footnote's state), and
+#      hook/save_session.rs's read of the ~/.claude/.session-context.json
+#      statusline sidecar (its OWN transcript writes were re-homed to
+#      ${FNO_HOME}/saved-sessions - see below - so only the sidecar READ remains).
+#      crates/fno/src/cli_hooks.rs WRITES ~/.claude/settings.json for the same reason
+#      its siblings write ~/.gemini/settings.json and ~/.codex/config.toml:
+#      it wires a hook into the CLI's OWN config. `claude rm` runs with no
+#      agent session and so never loads plugin hooks, which leaves the
+#      settings file the only place a WorktreeRemove hook can reach it. That
+#      is Claude Code config, not footnote state - nothing accumulates there.
+#      setup_run.rs names the active Claude Code settings file in the consent
+#      step description; it constructs no path and writes no Footnote state.
+#      cli_hooks_tests.rs uses synthetic home and config roots to check the
+#      settings-path resolver; the test writes no files at either root.
+#      plans_path.rs reads Claude's own plansDirectory setting to place plan
+#      docs in the project-selected directory; it does not write footnote state
+#      under .claude.
+#      This is a large, actively-developed surface (multi-provider agent
+#      discovery) - allowlisted by file below rather than re-derived here.
+#      crates/fno-agents/src/backlog/plans_path.rs reads Claude Code's own
+#      plansDirectory setting to resolve the user-selected plan location; it
+#      writes no footnote state under .claude/.
+#      context_audit.rs (the ported census; was context_audit.py) reads
+#      project-owned .claude/rules/*.md to census the
+#      exact progressive instructions Claude loads; it never writes there.
+#      guard-corpus-sweep.py joins ~/.claude/projects for the same reason: it
+#      READS Claude Code's own transcripts to replay every real Bash command
+#      hooks/target-stop-hook.sh compares the transcript path Claude Code
+#      backlog/birth.rs searches the same read-only transcript store by
+#      session id across project slugs when recreating a plan stub.
+#      hands it against the ~/.claude/projects prefix to prove the session's
+#      harness (an env marker alone is inheritable and can mislabel a claude
+#      session as codex). A string prefix match on the harness's own file;
+#      footnote state never lands there.
+#      through crates/fno-agents/src/runtime/hook/bg_process_guard.rs. That corpus is the only source of
+#      the commands agents actually write, and it found three false refusals
+#      that eight rounds of hand-written cases missed. Read-only rglob over
+#      the harness's data; footnote stores nothing there, and a missing root
+#      exits 1 with a message rather than creating anything.
+#      hooks/lead-delegation-guard.sh compares write paths a teamed session
+#      hands it against the ~/.claude/projects prefix too: auto-memory is
+#      Claude Code's own file store, so the memory carveout must name that
+#      root to allow exactly it and nothing wider. Comparison only; no
+#      footnote state lands there.
+#      scripts/metrics/port-order.sh reads the same transcripts: a 30-day
+#      scan counts `fno <command-group>` occurrences for the port-order
+#      table's use column. Read-only; footnote stores nothing there, and a
+#      missing root leaves use at zero rather than creating anything.
+#      the harness's data; footnote stores nothing there, and a missing root
+#      exits 1 with a message rather than creating anything.
+#      The inherited-model-env remedy strings (model_routing.py,
+#      model_env_scrub.rs, attest-model.sh) NAME ~/.claude/settings.json in
+#      operator-facing text - they advise a pin in Claude Code's own config,
+#      never construct or write a path there.
+#      self_stamp.py's identity-ambiguity remedy likewise NAMES the Codex and
+#      Claude transcript roots so an operator can locate the conflicting
+#      session marker. It constructs and writes no path there.
+#      The native skill-presence probe (dispatch_resolve.rs `skill_presence`,
+#      shared by the capability door) globs the two roots Claude resolves a
+#      bare skill name from (~/.claude/skills and <cwd>/.claude/skills) to
+#      answer "is this registered reviewer's skill installed here" at init.
+#      Read-only `is_dir`/`is_file` probes against Claude Code's OWN skill
+#      dirs; footnote stores nothing there, and an unreadable root resolves
+#      `unverifiable` rather than being reported absent.
+#      usage.py joins for the same reason accounts/env.rs already does: its
+#      shared-slot probe resolves the CANONICAL ~/.claude to read Claude
+#      Code's own credential for the stamped active account. It must be the
+#      literal path rather than the CLAUDE_CONFIG_DIR-honoring helper,
+#      because a worker pinned to another account exports that variable and
+#      would otherwise make the probe read ITS credential and file the usage
+#      under the wrong account id. Read-only; footnote stores nothing there.
+#      slot_cutover.rs compares `accounts.records[].config_dir` to the exact
+#      `~/.claude` config value to distinguish shared-slot records from
+#      per-config-dir accounts. It constructs and reads no path from the value.
+#      test_usage.py is its test, which builds a fake slot under tmp_path.
+#      binding.py is the shared effective-account read those callers now go
+#      through, and accounts/binding.rs is its Rust port: both read the
+#      shared ~/.claude slot's credential file to prove who it serves.
+#      accounts_binding_parity.rs builds a canonical ~/.claude and an alt dir
+#      under a temp root to prove two roots keep distinct credential
+#      identity. Read-only; footnote stores nothing under either.
+#      accounts/staging.rs, accounts/env.rs and accounts/launch.rs port
+#      staging.py, dispatch.py and the account_env.py overlay: they name a
+#      staged account's
+#      `<id>/.claude` dir and pin the shared ~/.claude slot for the active
+#      managed account. They build env values and write nothing there.
+#      managed.py resolves the same canonical path for the same reason, in
+#      reconcile-slot: an identity read must not follow an ambient
+#      CLAUDE_CONFIG_DIR, or the repair proves the pinned account and stamps
+#      it onto the shared slot. test_managed.py is its test and asserts on
+#      exactly that path, again under tmp_path.
+#      accounts/store.rs ports managed.py's store layer: it names the same
+#      shared ~/.claude slot to read and write the credential claude reads,
+#      and to tell which live claude pins it. Footnote's own store stays
+#      under the state dir.
+#      project_sandbox.rs and scripts/ops/sandbox-leak-probe.sh construct
+#      the SANDBOX's own harness home (`<sandbox root>/home/.claude`): the
+#      claude config dir of the named sandbox, resolved through the env
+#      table's CLAUDE_CONFIG_DIR, never the ambient ~/.claude. The person's
+#      login writes there; footnote stores nothing of its own inside it.
+#      The probe touches marker files under the sandbox home for the reset
+#      check.
+#      accounts/reconcile.rs ports reconcile-slot: it names the canonical
+#      ~/.claude slot in its sign-in remedy text, for the reason above.
+#      test_run.rs's hold-marker tests build fixture checkouts under a
+#      TempDir, including a nested `.claude/worktrees/x` path, to prove a
+#      nested checkout never reads its parent's hold. Fixture paths only;
+#      footnote stores nothing under any real .claude.
+#      The mux Connections UI (crates/fno/src/connections_view.rs) belongs
+#      here too: its login-wizard default config dir `~/.claude-<id>` is a
+#      per-account CLAUDE_CONFIG_DIR (a Claude Code config dir, not footnote
+#      state), the same multi-account convention managed.py already uses.
+#      capability_leaves.rs pins a loop-gate refusal whose message NAMES the
+#      untrusted plugin-cache path Claude Code itself owns; its test asserts
+#      on that message. Comparison only; footnote stores nothing there.
+#      crates/fno/src/transcript_tail.rs reads Claude Code's own
+#      ~/.claude/projects transcript tree (the sideline's last-msg column) -
+#      read-only, same category as agents_view.rs above.
+#      crates/fno/src/claude_fallback.rs joins the same
+#      ~/.claude/projects transcript tree to count sessions on node
+#      worktrees within a window (FNO_CLAUDE_PROJECTS_DIR overrides,
+#      CLAUDE_CONFIG_DIR first). Read-only; footnote stores nothing there.
+#      crates/fno-agents/src/runtime/whoami.rs reads the same transcript stores its
+#      deleted singular-whoami Python twin read: the own-transcript globs
+#      under ~/.claude/projects (FNO_CLAUDE_PROJECTS_DIR overrides) and the
+#      ambiguity refusal whose remedy names those roots as the resolve hint.
+#      Read-only; footnote stores nothing there.
+#      gc_inventory.rs and receipt.rs are the retirement census and the reap
+#      receipt: they resolve Claude Code's own ~/.claude/projects transcript
+#      tree to join a session's store existence and locator - read-only, the
+#      same category as claude_roster.rs/client_commands.rs/daemon.rs, from
+#      which this code moved. roster_reap.rs is the roster-side twin of the
+#      same census: it stages reap receipts and measures resume evidence off
+#      that transcript tree, and its test stages one under a tmp HOME.
+#      Footnote stores nothing there.
+#      occupancy_classify.rs names Claude Code's own shell-snapshots dir to
+#      spot an orphaned Bash-tool shell by its argv, and reads
+#      ~/.claude/jobs/<job>/state.json to tell a live job from a dead one.
+#      Read-only; footnote stores nothing there.
+#      scratch.rs is the scratch-shape sweep: its whole subject IS
+#      Claude Code's own ~/.claude/jobs/<job>/tmp tree, read-only rglob for
+#      authored py/sh scratch; it writes only the global events journal
+#      under the state root. scratch_cli.py is its Python leaf, which only
+#      NAMES the default jobs dir in help text (the remedy-string category:
+#      model_routing.py et al). Footnote stores nothing under the harness
+#      dir in either file.
+#      gh_spend.rs's caller label DETECTS a jobs script by a `contains`
+#      predicate over an ancestor process's argv, so the journal can name
+#      the worker that spent the request. Read-only comparison only; no
+#      path is constructed and footnote stores nothing there.
+#      claude_config_tmp.rs is the orphaned-tmp sweep: its whole
+#      subject is Claude Code's OWN `.claude.json.tmp.*` litter at the top
+#      level of each config dir (CLAUDE_CONFIG_DIR, else ~/.claude, plus the
+#      roster's isolated account roots). It removes only dead-pid temp files
+#      Claude Code itself created; footnote stores nothing there.
+#      setup_autowire.rs belongs here for the same site integration.py is
+#      listed for: its claude skills-dir fallback probes and clones the
+#      plugin drop into Claude Code's OWN ~/.claude/skills/fno, where
+#      Claude Code loads it as fno@skills-dir - the harness's plugin store,
+#      not footnote state (the Rust leg of the wizard adapter,
+#      dual-implementation-inventory 2026-10-02). Its test builds the same
+#      tree under temp_dir as a fixture and asserts on that.
+#      hooks/write-gate.sh is the PreToolUse write gate for the
+#      same dir: the config dir IS the thing being guarded, so every token
+#      it matches (the ambient root, CLAUDE_CONFIG_DIR, the regex-quoted
+#      arms) names its subject on purpose. Comparison only; it writes
+#      nothing there.
+#      crates/fno-agents/src/backlog/birth.rs joins ~/.claude/projects to
+#      birth a session row from the harness's own transcript tree: read-only,
+#      the same category as transcript_tail.rs. Footnote stores nothing there.
+#      crates/fno-agents/src/backlog/maintenance.rs parses a node's
+#      cwd for the `/.claude/worktrees/` segment to name its repo. String
+#      parsing of a path the harness made; it writes nothing there.
+#      crates/fno-agents/src/backlog/plans_path.rs reads the project's
+#      .claude/settings.local.json / .claude/settings.json - the
+#      plansDirectory tier of the plans-dir chain, i.e. Claude Code's own
+#      config (not footnote state); its inline tests write fixture copies
+#      under a tempdir. Nothing accumulates in either.
+#      crates/fno-agents/src/eval/eval_part4.rs answers over the plans-dir
+#      chain and its inline test writes the same tempdir fixture copy of
+#      Claude Code's own settings.local.json. Nothing accumulates there.
+#      crates/fno-agents/src/gate/review_capability.rs probes skill presence
+#      through dispatch_resolve's root set, and its inline test builds a
+#      tempdir .claude/skills fixture root so the absent/unverifiable
+#      boundary is hermetic. Read-only against real roots; nothing
+#      accumulates there.
+#      crates/fno/src/uninstall.rs reads Claude Code's plugin registry and
+#      removes the hook entry cli_hooks.rs merged into its settings.json:
+#      the reverse of that write, in Claude Code's own config. It stores
+#      nothing there.
+#      crates/fno-agents/src/runtime/mail_cli/send/resolve.rs reads Claude Code's
+#      own stores for recipient discovery: projects_dir() joins
+#      ~/.claude/projects (the transcript tree, CLAUDE_CONFIG_DIR first;
+#      the port of the Python _projects_dir read) and roster_path()
+#      joins ~/.claude/daemon for the daemon roster.json. Read-only;
+#      footnote stores nothing there.
+#      crates/fno-agents/src/runtime/register.rs prints the ambiguity refusal's
+#      resolve hint, the same `find ~/.claude/projects` line the Python
+#      identity_ambiguity_message prints: it points the human at Claude
+#      Code's own transcript tree to identify their session. A string in a
+#      refusal; nothing is constructed or stored.
+#   2. The worktree-harness integration: `.claude/worktrees/<name>` is the
+#      documented, SANCTIONED harness-native worktree default (see
+#      .claude/rules/worktrees.md - "this is now allowed"), and
+#      scripts/setup/setup-worktree.sh symlinks .claude/{agents,commands,
+#      skills,settings.local.json,scheduled_tasks.*,...} from the canonical
+#      checkout into a worktree per that same documented contract.
+#      the Rust gate (worktree_reapable.rs) reads the OTHER end of that
+#      contract: to decide whether an untracked path is one of those links,
+#      it has to name the `.claude` segment setup wrote. It never constructs
+#      a path to store anything - the only `.claude` it forms is a link
+#      target it compares. law_match.rs detects the same harness-native
+#      layout for the same reason: a law recorded from a worktree session
+#      attributes to the parent repo's project, and naming the `.claude`
+#      segment is how it tells that layout from the fno-managed and conductor
+#      ones. Comparison only; footnote stores nothing there.
+#      archive-worktree.sh's salvage step skips the same
+#      shape for the same reason: copying a setup-written link would copy a
+#      slice of the canonical checkout through it.
+#
+# Carveout cv-8dc3c6dc (RESOLVED): the git-protection hook's state
+# (git-protection.json + approve_no_verify.flag) and save-session.py's
+# transcripts used to write under the harness state dir. Both were re-homed
+# to ${FNO_HOME:-~/.fno} in the git-protection-hook re-home change:
+#   - the hook (now crates/fno-agents/src/runtime/hook/git_protection/) is OFF this allowlist entirely - it writes
+#     nothing under the harness dir and holds no reference to it, so CI
+#     enforces the placement rule for it with no exception.
+#   - crates/fno-agents/src/runtime/hook/save_session.rs (the save-session port) stays
+#     listed above under category (1): its transcript WRITES go to
+#     ${FNO_HOME}/saved-sessions, and its only remaining reference is the
+#     legitimate READ of Claude Code's own statusline sidecar.
+#
+#      The native doctor family (the 2026-10 port of the deleted
+#      cli/src/fno/doctor.py) reads the harness's own surfaces in three
+#      files. report.rs detects Claude Code's own plugin-cache layout
+#      (`/.claude/plugins/cache/`) to answer "is the deployed plugin stale";
+#      read-only string comparison and path-segment parsing, no writes.
+#      report/advisors.rs counts auto_merge-armed manifests under the
+#      repo's harness-native `.claude/worktrees` placement; read-only
+#      manifest reads, footnote state never lands there. report/ops.rs
+#      joins ~/.claude/projects for the find-transcript op, the same
+#      own-transcript store its deleted Python twin walked at doctor.py:887;
+#      read-only. Footnote stores nothing in any of them. config_doctor/
+#      checks.rs (the setup-family port) prints an advisory line naming
+#      ~/.claude/settings.json as the file a human edits to widen
+#      permissions.additionalDirectories; message prose, no path is built.
+#
+# A file not on this list that starts referencing .claude/ must be a
+# conscious addition: either it's another instance of (1)-(3) above (add it
+# to the list here, in the same PR), or it's a genuine new footnote-state
+# write that belongs under ~/.fno/ instead.
+
+set -euo pipefail
+
+REPO_ROOT=""
+if git_root=$(git rev-parse --show-toplevel 2>/dev/null); then
+    REPO_ROOT="$git_root"
+fi
+if [[ -z "$REPO_ROOT" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    candidate="$SCRIPT_DIR"
+    while [[ "$candidate" != "/" && "$candidate" != "." ]]; do
+        if [[ -e "$candidate/.git" ]]; then
+            REPO_ROOT="$candidate"
+            break
+        fi
+        candidate="$(dirname "$candidate")"
+    done
+fi
+if [[ -z "$REPO_ROOT" ]]; then
+    echo "ERROR: could not resolve repo root" >&2
+    exit 2
+fi
+cd "$REPO_ROOT"
+
+VIOLATIONS=0
+REPORT=""
+
+add_violation() {
+    local heading="$1"
+    local hits="$2"
+    if [[ -n "$hits" ]]; then
+        local count
+        count=$(echo "$hits" | wc -l | tr -d ' ')
+        VIOLATIONS=$((VIOLATIONS + count))
+        REPORT+=$'\n'"$heading"$'\n'"$hits"$'\n'
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# (a) .claude/ path construction, allowlisted by file (relative to repo root)
+# ---------------------------------------------------------------------------
+
+CLAUDE_ALLOWLIST=$(cat <<'EOF'
+crates/fno/src/config_doctor/checks.rs
+crates/fno/src/doctor/report.rs
+crates/fno/src/doctor/report/advisors.rs
+crates/fno/src/doctor/report/ops.rs
+crates/fno/src/doctor_update.rs
+crates/fno-agents/src/backlog/birth.rs
+crates/fno-agents/src/backlog/session_cli.rs
+crates/fno-agents/src/runtime/claude_vault.rs
+crates/fno-agents/src/runtime/resume_reroute.rs
+crates/fno-agents/src/spawn/accounts/binding.rs
+crates/fno-agents/src/spawn/accounts/credentials.rs
+crates/fno-agents/src/spawn/accounts/env.rs
+crates/fno-agents/src/spawn/accounts/launch.rs
+crates/fno-agents/src/spawn/accounts/staging.rs
+crates/fno-agents/src/spawn/accounts/store.rs
+crates/fno-agents/src/spawn/project_sandbox.rs
+scripts/ops/sandbox-leak-probe.sh
+crates/fno-agents/src/spawn/accounts/reconcile.rs
+crates/fno-agents/src/spawn/capability_leaves.rs
+crates/fno-agents/src/runtime/slot_cutover.rs
+crates/fno-agents/src/backlog/dispatch_resolve.rs
+crates/fno-agents/src/backlog/autobrief.rs
+crates/fno-agents/src/backlog/advance_join.rs
+crates/fno-agents/src/backlog/maintenance.rs
+crates/fno-agents/src/backlog/maintenance_tests.rs
+crates/fno-agents/src/gate/review_capability.rs
+crates/fno-agents/src/eval/context_audit.rs
+crates/fno-agents/src/runtime/observer/fold.rs
+crates/fno-agents/src/runtime/footprint_cause.rs
+cli/src/fno/paths.py
+crates/fno-agents/src/runtime/transcript_resolve.rs
+# spawn_promote.rs's composer proof reads Claude's own transcripts through the
+# transcript_resolve.rs root; the only .claude path it builds is the TEST
+# fixture's synthetic transcript under a temp HOME. Footnote state never lands there.
+crates/fno-agents/src/spawn/spawn_promote.rs
+crates/fno-agents/src/eval/scoreboard/views.rs
+crates/fno/src/setup_autowire.rs
+crates/fno/src/setup_autowire_tests.rs
+crates/fno-agents/src/runtime/claude_adopt.rs
+crates/fno-agents/src/spawn/claude_ask.rs
+crates/fno-agents/src/spawn/claude_config_tmp.rs
+crates/fno-agents/src/backlog/birth.rs
+crates/fno-agents/src/runtime/claude_drive.rs
+crates/fno-agents/src/runtime/claude_roster.rs
+crates/fno-agents/src/runtime/whoami.rs
+crates/fno-agents/src/backlog/plans_path.rs
+# plan_carry.rs tests build a per-project Claude settings fixture (the same
+# Claude's-own-config class as plans_path.rs); footnote state never lands there.
+crates/fno-agents/src/backlog/plan_carry.rs
+# evals/runner.rs copies the project's own .claude config tree into a golden
+# tree (the rules a worker reads); it reads that tree and writes no footnote state there.
+crates/fno-agents/src/eval/evals/runner.rs
+crates/fno-agents/src/backlog/law_match.rs
+crates/fno-agents/src/runtime/mail_cli/send/resolve.rs
+crates/fno-agents/src/client_commands.rs
+crates/fno-agents/src/runtime/discovered_sessions.rs
+crates/fno-agents/src/runtime/discovered_sessions/sources.rs
+crates/fno-agents/src/runtime/daemon.rs
+crates/fno-agents/src/runtime/daemon_tests.rs
+crates/fno-agents/src/eval/eval_part4.rs
+crates/fno-agents/src/gate/finalize.rs
+crates/fno-agents/src/runtime/hook/lead_guard.rs
+crates/fno-agents/src/runtime/hook/stop.rs
+crates/fno-agents/src/runtime/gc_inventory.rs
+crates/fno-agents/src/spawn/model_env_scrub.rs
+crates/fno-agents/src/backlog/plans_path.rs
+crates/fno-agents/src/backlog/plans_dirs.rs
+crates/fno-agents/src/backlog/plans_path.rs
+crates/fno-agents/src/runtime/orphans.rs
+crates/fno-agents/src/spawn/plugin_install.rs
+crates/fno/src/uninstall.rs
+crates/fno/src/cli_hooks.rs
+# setup_run.rs names the Claude Code user settings file in an approval description.
+crates/fno/src/setup_run.rs
+# cli_hooks_tests.rs uses synthetic roots to check settings-path selection.
+crates/fno/src/cli_hooks_tests.rs
+crates/fno-agents/src/spawn/provider.rs
+crates/fno-agents/src/gate/gh_spend.rs
+crates/fno-agents/src/runtime/reclaim.rs
+crates/fno-agents/src/runtime/receipt.rs
+crates/fno-agents/src/runtime/register.rs
+crates/fno-agents/src/runtime/roster_reap.rs
+crates/fno-agents/src/runtime/scratch.rs
+crates/fno-agents/src/spawn/occupancy_classify.rs
+crates/fno-agents/src/runtime/hook/save_session.rs
+crates/fno-agents/src/runtime/session_start_bytes.rs
+crates/fno-agents/src/runtime/state.rs
+crates/fno-agents/src/runtime/stream_worker.rs
+crates/fno-agents/src/gate/test_run.rs
+crates/fno-agents/src/runtime/worktree/ensure.rs
+crates/fno-agents/src/runtime/worktree/status.rs
+crates/fno-agents/src/runtime/worktree_reapable.rs
+crates/fno-agents/src/bin/client.rs
+crates/fno/src/worktree_door.rs
+crates/fno-agents/tests/claude_ask_dispatch.rs
+crates/fno-agents/src/runtime/mail_cli/reply.rs
+crates/fno/src/agents_view.rs
+crates/fno/src/connections_view.rs
+crates/fno/src/transcript_tail.rs
+crates/fno/src/claude_fallback.rs
+hooks/attest-model.sh
+hooks/cache-keepalive-inject.sh
+hooks/write-gate.sh
+crates/fno-agents/src/runtime/hook/write_gate.rs
+hooks/lead-delegation-guard.sh
+hooks/session-start.sh
+hooks/target-stop-hook.sh
+hooks/worktree-setup.sh
+hooks/helpers/check-impl-location.sh
+scripts/ci/check-no-internal-refs.sh
+scripts/ci/check-no-stale-skill-refs.sh
+scripts/ci/check-placement-rule.sh
+scripts/diagnostics/guard-corpus-sweep.py
+scripts/release/hookagg.py
+scripts/ensure-global-dir.sh
+scripts/lib/config.sh
+scripts/lib/worktree-lifecycle.sh
+scripts/lib/worktree-manager.sh
+scripts/lint/no-invalid-events.sh
+scripts/metrics/port-order.sh
+scripts/rename/rename-to-fno.sh
+scripts/setup/archive-worktree.sh
+scripts/setup/setup-worktree.sh
+scripts/setup/worktree-create-hook.sh
+scripts/worktree-lifecycle.sh
+EOF
+)
+
+# scripts/tests/ (sandboxed harnesses that legitimately reference .claude/ as
+# fixture text, e.g. this lint's own test) and scripts/ci/ (this script and
+# its siblings) are excluded wholesale, mirroring check-no-hardcoded-paths.sh's
+# own convention - never scanned, not even via the allowlist above.
+# The leading boundary refuses an identifier char before .claude, so a dotted
+# config key ending in .claude (e.g. "spawn.harness.claude") is not mistaken
+# for path construction, while quote-, slash-, space- and line-start-preceded
+# .claude still is.
+CLAUDE_HITS=$(
+    grep -rnE '(^|[^A-Za-z0-9_.])\.claude([/"'"'"']|$)' \
+        cli/src crates hooks scripts \
+        --include='*.py' --include='*.rs' --include='*.sh' \
+        --exclude-dir=tests --exclude-dir=ci \
+        2>/dev/null \
+    | grep -v -F -f <(printf '%s\n' "$CLAUDE_ALLOWLIST") \
+    || true
+)
+add_violation "New .claude/ or ~/.claude path construction (see allowlist rationale at the top of this script):" "$CLAUDE_HITS"
+
+# ---------------------------------------------------------------------------
+# (b) hooks/*.sh: a .fno/ write built from a bare relative string, not
+# anchored to $REPO_ROOT / a registry accessor. Matches an append (>>) or
+# clobber (>, not 2>) redirect targeting a literal ".fno/..." path.
+# ---------------------------------------------------------------------------
+
+HOOKS_FNO_WRITE_HITS=$(
+    grep -rnE '(>>|[^0-9]>) *"?\.fno/' \
+        hooks/*.sh \
+        2>/dev/null \
+    || true
+)
+add_violation "hooks/*.sh: .fno/ write using a bare cwd-relative string (anchor to \$REPO_ROOT or a registry accessor instead):" "$HOOKS_FNO_WRITE_HITS"
+
+# ---------------------------------------------------------------------------
+# Report
+# ---------------------------------------------------------------------------
+
+if [[ $VIOLATIONS -eq 0 ]]; then
+    echo "check-placement-rule: no violations found"
+    exit 0
+fi
+
+{
+    echo "check-placement-rule: $VIOLATIONS violation(s) found"
+    echo "$REPORT"
+    echo
+    echo "See the allowlist rationale at the top of scripts/ci/check-placement-rule.sh."
+} >&2
+exit 1

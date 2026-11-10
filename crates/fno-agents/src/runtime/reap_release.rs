@@ -1,0 +1,184 @@
+//! `fno agents reap --release <row>` : apply an operator ruling to
+//! one escalated hold. The command classifies with the dry run the report came
+//! from, refuses a fresh hold or open work by name, and applies through the
+//! sweep's own door: `run_with_release` runs the full real sweep with the
+//! ruling, so other retire-eligible rows retire on it too and the receipt
+//! prints every row's verdict.
+//!
+//! The refusals are the contract, never a downgrade:
+//! - a row with no releasable hold (`is not held under a releasable reason`);
+//! - a fresh hold (`below agents.hold_escalate_after_s`);
+//! - a `sources disagree` witness that is not done (`a release never
+//!   retires open work`).
+//!
+//! Split from `client.rs`, which is shrink-only, and beside `reap_render`,
+//! for the same file-budget reason.
+
+use crate::agents_config;
+use crate::gc_sweep::{self, Release};
+use crate::paths::AgentsHome;
+use crate::state;
+use std::path::Path;
+
+/// Apply one release. Exits 2 on a named refusal or when the released row
+/// did not retire, 0 when it did (the receipt prints the whole sweep, other
+/// rows included).
+pub fn run(home: &AgentsHome, cwd: &Path, handle: &str) -> i32 {
+    let grace_secs = agents_config::retire_grace_secs(cwd) as i64;
+    let escalate_after = agents_config::hold_escalate_after(cwd);
+    // Classify with the same instrument the report came from.
+    let mut dry = crate::gc::gc_sweep_dry_run(home, grace_secs);
+    dry.mark_escalated(escalate_after);
+
+    // Resolve the handle: exact hold id first, then the registry identities
+    // (name, short id, session id) mapped onto the row handle.
+    let hold = dry
+        .holds
+        .iter()
+        .find(|h| h.id == handle)
+        .or_else(|| {
+            let row = load_registry_row(home, handle)?;
+            // Hold ids are REPORT ids (row_label, the short id), never the
+            // probe handle: row_handle answers the session uuid for a row
+            // carrying one, which no hold is keyed by.
+            let id = crate::gc::row_label(&row);
+            dry.holds.iter().find(|h| h.id == id)
+        })
+        .cloned();
+
+    let Some(hold) = hold else {
+        // No hold: name where the row actually sits, so the refusal is a
+        // positive statement about the row's state, never a bare no.
+        let bucket = row_bucket(home, cwd, grace_secs, handle);
+        eprintln!("{handle} is not held under a releasable reason; it sits in {bucket}");
+        return 2;
+    };
+
+    if !hold.escalated {
+        eprintln!("{}", fresh_hold_refusal(&hold, escalate_after.as_secs()));
+        return 2;
+    }
+
+    let release = Release {
+        handle: hold.id.clone(),
+        reason: hold.reason.to_string(),
+        detail: hold.detail.clone(),
+    };
+    let emitter = crate::events::EventEmitter::new(home.events_jsonl(), "reap --release");
+    let mut summary = crate::gc::gc_sweep_release(
+        home,
+        &emitter,
+        grace_secs,
+        agents_config::reap_receipt_retain_days(cwd),
+        &release,
+    );
+    summary.mark_escalated(escalate_after);
+    print!(
+        "{}",
+        crate::reap_render::render_reap(&summary, false, false)
+    );
+    if summary.release_refused.is_empty() && summary.retired.iter().any(|(id, _)| *id == hold.id) {
+        return 0;
+    }
+    eprintln!(
+        "{}: the release retired nothing; the receipt above names the hold",
+        hold.id
+    );
+    2
+}
+
+/// The `--release <row>` arm, parsed beside the sweep. Moved out of
+/// `bin/client.rs` byte for byte (file budget: client.rs is shrink-only):
+/// same refusals, same exit codes, `None` when no `--release` is present.
+pub fn from_args(rest: &[String]) -> Option<i32> {
+    let pos = rest.iter().position(|a| a == "--release")?;
+    let handle = rest.get(pos + 1).map(String::as_str).unwrap_or("");
+    if handle.is_empty() || handle.starts_with("--") {
+        eprintln!("fno-agents: reap --release needs a row handle (name, short id or session id)");
+        return Some(2);
+    }
+    // Everything except the flag pair and the handle is an error; only
+    // --json is legal beside a release.
+    let extras: Vec<String> = rest
+        .iter()
+        .enumerate()
+        .filter(|(i, a)| *i != pos && *i != pos + 1 && !matches!(a.as_str(), "--json" | "-J"))
+        .map(|(_, a)| a.clone())
+        .collect();
+    if !extras.is_empty() {
+        eprintln!(
+            "fno-agents: reap --release takes only a handle and --json (got: {})",
+            extras.join(" ")
+        );
+        return Some(2);
+    }
+    let home = AgentsHome::from_env();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    Some(run(&home, &cwd, handle))
+}
+
+/// The fresh-hold refusal line: the age, the threshold, and what
+/// a release needs before it applies.
+pub(crate) fn fresh_hold_refusal(hold: &gc_sweep::Hold, threshold_s: u64) -> String {
+    format!(
+        "{} held {} under {}, below agents.hold_escalate_after_s {}; a fresh hold is not released",
+        hold.id,
+        crate::reap_render::human_duration(hold.age_s.unwrap_or(0)),
+        hold.reason,
+        threshold_s
+    )
+}
+
+/// The registry row a handle names: name, short id, or session id.
+pub(crate) fn load_registry_row(home: &AgentsHome, handle: &str) -> Option<state::RegistryEntry> {
+    let registry = state::load_registry(&home.registry_json()).ok()?;
+    let handle_lc = handle.to_ascii_lowercase();
+    registry.entries.into_iter().find(|e| {
+        e.name.eq_ignore_ascii_case(&handle_lc)
+            || e.short_id == handle
+            || e.harness_session_id.as_deref() == Some(handle)
+            || e.session_id.as_deref() == Some(handle)
+    })
+}
+
+/// Where a row sits when it has no hold, by scanning the dry run's buckets.
+fn row_bucket(home: &AgentsHome, _cwd: &Path, grace_secs: i64, handle: &str) -> String {
+    row_bucket_in(home, &crate::gc::gc_sweep_dry_run(home, grace_secs), handle)
+}
+
+/// The classifier over an already-computed summary, split from
+/// [`row_bucket`] so a test can stage a summary production seams cannot
+/// produce (a dry-run-unverified row needs terminal roster evidence).
+pub(crate) fn row_bucket_in(home: &AgentsHome, dry: &gc_sweep::GcSummary, handle: &str) -> String {
+    let in_plain = dry
+        .kept_teamed
+        .iter()
+        .chain(&dry.kept_graph_unreadable)
+        .any(|id| id == handle);
+    if in_plain {
+        return "a keep bucket this report names".to_string();
+    }
+    if dry.retired.iter().any(|(id, _)| id == handle) {
+        return "retired".to_string();
+    }
+    if dry.kept_active.iter().any(|(id, _)| id == handle) {
+        return "kept active".to_string();
+    }
+    if dry.kept_open_do_row.iter().any(|(id, _)| id == handle) {
+        return "kept open do row".to_string();
+    }
+    if dry.needs_live_stop.iter().any(|(id, _)| id == handle) {
+        return "needs live stop".to_string();
+    }
+    if dry.stop_refused.iter().any(|(id, _)| id == handle) {
+        return "stop refused".to_string();
+    }
+    if dry.dry_run_unverified.iter().any(|(id, _)| id == handle) {
+        return "dry-run-unverified (a retirement gate was not evaluated)".to_string();
+    }
+    if load_registry_row(home, handle).is_some() {
+        "a keep bucket this report does not name".to_string()
+    } else {
+        "no registry row names this handle".to_string()
+    }
+}

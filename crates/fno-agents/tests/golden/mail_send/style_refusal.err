@@ -1,0 +1,6 @@
+style notes (not blocking):
+
+rule 1 (length): sentence 1 is 36 words. The cap is 25. "This single sentence deliberately pads itself with one filler word after another ..."
+
+run "fno doctor lint style --stdin --surface mail" to check a rewrite next time.
+unknown agent or live-session handle: 'worker-1'.

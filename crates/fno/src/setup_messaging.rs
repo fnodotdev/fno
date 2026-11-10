@@ -1,0 +1,693 @@
+//! The `messaging` setup step: turn on a chat channel for open questions.
+//! BlueBubbles (iMessage), Telegram and Discord are each off until the user
+//! picks one here. For each pick the step walks the channel's own setup
+//! inline, writes the secret to `~/.fno/.env` (0600), appends one
+//! `[[attention.sinks]]` row stamped with this machine's id, and sends one
+//! test message. The no-prompt path (`--yes`, a non-TTY stdin, an agent
+//! env) writes nothing and names the re-entry command.
+//!
+//! The attention arm on this machine delivers each open question to the
+//! channel and reads replies back (`fno-agents` `attention_chat`).
+
+use serde_json::{json, Value};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+/// The re-entry command every skip names.
+pub const REENTER: &str = "fno config setup run --only messaging";
+
+/// The channels in the order the checklist shows them: row type, label.
+pub const CHANNELS: [(&str, &str); 3] = [
+    ("bluebubbles", "BlueBubbles (iMessage)"),
+    ("telegram", "Telegram"),
+    ("discord", "Discord"),
+];
+
+const ENV_FILE: &str = "~/.fno/.env";
+
+/// What the step did, folded into the setup report by the caller.
+#[derive(Debug, Default)]
+pub struct Outcome {
+    pub done: Vec<String>,
+    pub skipped: Vec<String>,
+    pub needs_human: Vec<String>,
+    pub paths: Vec<String>,
+}
+
+/// Each channel and whether this machine has a row of that type whose
+/// token resolves.
+pub fn channel_states(rows: &[Value], machine: &str) -> Vec<(&'static str, bool)> {
+    CHANNELS
+        .iter()
+        .map(|(kind, _)| {
+            let configured = rows.iter().any(|r| {
+                r["type"] == *kind
+                    && r["machine"] == machine
+                    && r["token_env"]
+                        .as_str()
+                        .is_some_and(|env| crate::provider_key::key_present(env, Some(ENV_FILE)))
+            });
+            (*kind, configured)
+        })
+        .collect()
+}
+
+/// The `attention.sinks` rows of the global config, as JSON. A missing
+/// file is no rows; an unreadable one is an error, never "unconfigured".
+pub fn sink_rows() -> Result<Vec<Value>, String> {
+    let global = crate::config_defaults::global_config_path();
+    let map = crate::config_defaults::read_flat(&global)
+        .map_err(|e| format!("cannot read {}: {e}", global.display()))?;
+    Ok(map
+        .and_then(|map| map.get("attention.sinks").cloned())
+        .map(|v| match crate::setup_run::toml_as_json(&v) {
+            Value::Array(a) => a,
+            _ => Vec::new(),
+        })
+        .unwrap_or_default())
+}
+
+/// A row's id as text, string or integer, as the runtime loader reads it.
+fn id_text(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        _ => String::new(),
+    }
+}
+
+/// This machine's id: the one the attention arm compares against `machine`.
+pub fn machine() -> String {
+    crate::agents_view::machine_id()
+}
+
+/// The no-prompt report: each channel's state and the re-entry command.
+pub fn summary_line(rows: &[Value], machine: &str) -> String {
+    let states: Vec<String> = channel_states(rows, machine)
+        .iter()
+        .map(|(k, on)| format!("{k} {}", if *on { "configured" } else { "unconfigured" }))
+        .collect();
+    format!(
+        "messaging: chat channels ({}) - set one up with `{REENTER}`",
+        states.join(", ")
+    )
+}
+
+/// The terminal asks the step makes. Tests answer from a queue.
+pub trait Ask {
+    fn say(&mut self, text: &str);
+    fn line(&mut self, prompt: &str) -> Option<String>;
+    fn secret(&mut self, prompt: &str) -> Option<String>;
+}
+
+/// The prompting step over the current `rows`; the no-prompt path prints
+/// `summary_line` instead. `picked` carries the wizard's channel picks;
+/// `None` shows the checklist. `set` writes `attention.sinks` (the
+/// validated `fno config set` path); `http` carries the channel probes;
+/// `home` is where the token env file lives (`$HOME` in production, a
+/// temp dir in tests).
+pub fn step(
+    mut rows: Vec<Value>,
+    picked: Option<&[&str]>,
+    ask: &mut dyn Ask,
+    set: &dyn Fn(&str) -> Result<PathBuf, String>,
+    http: &mut dyn Http,
+    home: &Path,
+) -> Outcome {
+    let mut out = Outcome::default();
+    let me = machine();
+    let states = channel_states(&rows, &me);
+    let picks: Vec<usize> = match picked {
+        Some(kinds) => (0..CHANNELS.len())
+            .filter(|i| kinds.contains(&CHANNELS[*i].0))
+            .collect(),
+        None => {
+            ask.say("Chat channels deliver open questions; a reply in the thread answers it.");
+            for (i, ((_, label), (_, on))) in CHANNELS.iter().zip(&states).enumerate() {
+                let mark = if *on { "configured" } else { "not configured" };
+                ask.say(&format!("  {}. {label} ({mark})", i + 1));
+            }
+            ask.line("Set up which? Numbers, comma separated; Enter skips:")
+                .unwrap_or_default()
+                .split(',')
+                .filter_map(|w| w.trim().parse::<usize>().ok())
+                .filter(|n| (1..=CHANNELS.len()).contains(n))
+                .map(|n| n - 1)
+                .collect()
+        }
+    };
+    if picks.is_empty() {
+        out.skipped.push(format!(
+            "messaging: skipped - set one up later with `{REENTER}`"
+        ));
+        return out;
+    }
+    for i in picks {
+        let kind = CHANNELS[i].0;
+        match setup_channel(kind, ask, &me, http) {
+            Ok((row, env, token)) => {
+                let env_file = home.join(".fno/.env");
+                // `set` validates the row's token, so the env write lands
+                // first. Keep the old value: a failed `set` leaves the old
+                // rows behind, and they must keep resolving to the old
+                // token.
+                let old =
+                    crate::provider_key::read_var_from_env_file(&env_file.to_string_lossy(), env);
+                if let Err(e) = write_env(&env_file, env, Some(&token)) {
+                    out.needs_human
+                        .push(format!("messaging: {kind}: cannot write {ENV_FILE}: {e}"));
+                    continue;
+                }
+                let removed: Vec<Value> = rows
+                    .iter()
+                    .filter(|r| r["type"] == kind && r["machine"] == me.as_str())
+                    .cloned()
+                    .collect();
+                rows.retain(|r| !(r["type"] == kind && r["machine"] == me.as_str()));
+                rows.push(row.clone());
+                match set(&Value::Array(rows.clone()).to_string()) {
+                    Ok(path) => {
+                        out.done
+                            .push(format!("messaging: {kind} added to attention.sinks"));
+                        out.paths.push(path.display().to_string());
+                        match test_send(kind, &row, &token, http).as_str() {
+                            "sent" => out
+                                .done
+                                .push(format!("messaging: {kind} test message sent")),
+                            why => out.needs_human.push(format!(
+                                "messaging: {kind} test message {why} - rerun `{REENTER}`"
+                            )),
+                        }
+                    }
+                    Err(e) => {
+                        // The config kept the old rows, so the shared
+                        // buffer must too: a later pick's write would
+                        // otherwise land this row with the restored old
+                        // token.
+                        rows.pop();
+                        rows.extend(removed);
+                        out.needs_human.push(format!("messaging: {kind}: {e}"));
+                        if let Err(re) = write_env(&env_file, env, old.as_deref()) {
+                            out.needs_human.push(format!(
+                                "messaging: {kind}: cannot restore {env} in {ENV_FILE}: {re}"
+                            ));
+                        }
+                    }
+                }
+            }
+            Err(why) => out
+                .needs_human
+                .push(format!("messaging: {kind}: {why} - rerun `{REENTER}`")),
+        }
+    }
+    out
+}
+
+/// The HTTP the setup needs: one call, secrets off argv.
+pub trait Http {
+    fn call(
+        &mut self,
+        method: &str,
+        url: &str,
+        headers: &[(&str, String)],
+        body: Option<&str>,
+    ) -> Option<(u16, String)>;
+}
+
+/// One curl child: the config (URL, headers, body) on stdin, never argv.
+pub struct Curl;
+
+impl Http for Curl {
+    fn call(
+        &mut self,
+        method: &str,
+        url: &str,
+        headers: &[(&str, String)],
+        body: Option<&str>,
+    ) -> Option<(u16, String)> {
+        fn quoted(v: &str) -> String {
+            v.replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+        }
+        let mut config = format!(
+            "url = \"{}\"\nrequest = \"{method}\"\nmax-time = \"20\"\nsilent\nwrite-out = \"\\n%{{http_code}}\"\n",
+            quoted(url)
+        );
+        for (name, value) in headers {
+            config.push_str(&format!("header = \"{name}: {}\"\n", quoted(value)));
+        }
+        if let Some(b) = body {
+            config.push_str(&format!("data = \"{}\"\n", quoted(b)));
+        }
+        let out = std::process::Command::new("curl")
+            .args(["--config", "-"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .and_then(|mut child| {
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(config.as_bytes());
+                }
+                child.wait_with_output()
+            })
+            .ok()?;
+        // A failed transfer still prints `000`: no answer, not a refusal.
+        if !out.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&out.stdout).to_string();
+        let (body, code) = text.rsplit_once('\n')?;
+        Some((code.trim().parse().ok()?, body.to_string()))
+    }
+}
+
+/// Walk one channel's setup. Returns the row, its token env name and the
+/// secret.
+fn setup_channel(
+    kind: &str,
+    ask: &mut dyn Ask,
+    machine: &str,
+    http: &mut dyn Http,
+) -> Result<(Value, &'static str, String), String> {
+    match kind {
+        "telegram" => {
+            ask.say("Telegram: message @BotFather, send /newbot, and copy the token it gives you.");
+            let token = ask.secret("Bot token:").ok_or("no token")?;
+            ask.say("Now send your new bot any message from your own Telegram account.");
+            ask.line("Press Enter once you have sent it:");
+            let url = format!("https://api.telegram.org/bot{token}/getUpdates");
+            let (code, body) = http
+                .call(
+                    "POST",
+                    &url,
+                    &[("Content-Type", "application/json".into())],
+                    Some("{}"),
+                )
+                .ok_or("cannot reach api.telegram.org")?;
+            if code != 200 {
+                return Err(format!("getUpdates answered {code}: check the token"));
+            }
+            let v: Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+            let last = v["result"]
+                .as_array()
+                .and_then(|a| a.iter().rev().find(|u| u.get("message").is_some()))
+                .ok_or("the bot has no message yet: send it one first")?;
+            let chat = last["message"]["chat"]["id"].to_string();
+            let from = last["message"]["from"]["id"].to_string();
+            Ok((
+                json!({"name": "telegram", "type": "telegram", "machine": machine,
+                       "token_env": "FNO_CHAT_TELEGRAM_TOKEN", "chat_id": chat, "allow": [from]}),
+                "FNO_CHAT_TELEGRAM_TOKEN",
+                token,
+            ))
+        }
+        "discord" => {
+            ask.say("Discord: at discord.com/developers/applications create an application, open Bot, reset and copy the token, and turn on Message Content Intent.");
+            ask.say("Then under OAuth2 > URL Generator pick the bot scope with Send Messages, Create Public Threads, Send Messages in Threads and Read Message History, and open the URL to invite the bot.");
+            let token = ask.secret("Bot token:").ok_or("no token")?;
+            ask.say(
+                "Turn on Developer Mode (User Settings > Advanced) to copy ids with a right click.",
+            );
+            let channel = ask
+                .line("Channel id for questions:")
+                .filter(|s| !s.is_empty())
+                .ok_or("no channel id")?;
+            let user = ask
+                .line("Your user id:")
+                .filter(|s| !s.is_empty())
+                .ok_or("no user id")?;
+            Ok((
+                json!({"name": "discord", "type": "discord", "machine": machine,
+                       "token_env": "FNO_CHAT_DISCORD_TOKEN", "channel_id": channel, "allow": [user]}),
+                "FNO_CHAT_DISCORD_TOKEN",
+                token,
+            ))
+        }
+        _ => {
+            ask.say("BlueBubbles: install BlueBubbles Server on this Mac from github.com/BlueBubblesApp/bluebubbles-server and sign in to iMessage there.");
+            ask.say("The server URL and password are in BlueBubbles Server under Settings > API.");
+            let url = ask
+                .line("Server URL [http://localhost:1234]:")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "http://localhost:1234".into());
+            let password = ask.secret("Server password:").ok_or("no password")?;
+            let handle = ask
+                .line("Your phone number or Apple ID email (questions go to this chat):")
+                .filter(|s| !s.is_empty())
+                .ok_or("no handle")?;
+            Ok((
+                json!({"name": "bluebubbles", "type": "bluebubbles", "machine": machine,
+                       "token_env": "FNO_CHAT_BLUEBUBBLES_PASSWORD", "url": url,
+                       "chat_guid": format!("iMessage;-;{handle}"), "allow": [handle]}),
+                "FNO_CHAT_BLUEBUBBLES_PASSWORD",
+                password,
+            ))
+        }
+    }
+}
+
+/// Send one test message and say what landed.
+pub fn test_send(kind: &str, row: &Value, token: &str, http: &mut dyn Http) -> String {
+    let text =
+        "fno: this chat now receives open questions. Reply in a question's thread to answer it.";
+    let json_h = ("Content-Type", "application/json".to_string());
+    let call = match kind {
+        "telegram" => http.call(
+            "POST",
+            &format!("https://api.telegram.org/bot{token}/sendMessage"),
+            &[json_h],
+            Some(&json!({"chat_id": row["chat_id"], "text": text}).to_string()),
+        ),
+        "discord" => http.call(
+            "POST",
+            &format!(
+                "https://discord.com/api/v10/channels/{}/messages",
+                id_text(&row["channel_id"])
+            ),
+            &[json_h, ("Authorization", format!("Bot {token}"))],
+            Some(&json!({ "content": text }).to_string()),
+        ),
+        _ => http.call(
+            "POST",
+            &format!(
+                "{}/api/v1/message/text?password={}",
+                row["url"].as_str().unwrap_or_default().trim_end_matches('/'),
+                token
+                    .bytes()
+                    .map(|b| if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+                        (b as char).to_string()
+                    } else {
+                        format!("%{b:02X}")
+                    })
+                    .collect::<String>()
+            ),
+            &[json_h],
+            Some(&json!({"chatGuid": row["chat_guid"], "tempGuid": "fno-setup", "message": text, "method": "apple-script"}).to_string()),
+        ),
+    };
+    match call {
+        Some((code, _)) if (200..300).contains(&code) => "sent".into(),
+        Some((code, _)) => format!("refused with {code}; check the ids and the token"),
+        None => "no answer from the server".into(),
+    }
+}
+
+/// Write `key=value` to the env file, replacing an existing line, mode
+/// 0600; `None` removes the line instead. The new file lands beside it and
+/// renames over it, so a failed write never loses the other keys.
+fn write_env(path: &Path, key: &str, value: Option<&str>) -> std::io::Result<()> {
+    let old = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e),
+    };
+    let mut lines: Vec<String> = old
+        .lines()
+        .filter(|l| {
+            let l = l.trim().strip_prefix("export ").unwrap_or(l.trim());
+            l.split_once('=').map(|(k, _)| k.trim()) != Some(key)
+        })
+        .map(str::to_string)
+        .collect();
+    if let Some(value) = value {
+        lines.push(format!("{key}={value}"));
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_file_name(".env.fno-tmp");
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts.open(&tmp)?;
+    file.write_all(format!("{}\n", lines.join("\n")).as_bytes())?;
+    file.sync_all()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+    }
+    std::fs::rename(&tmp, &path)
+}
+
+/// The terminal: plain line reads, and a masked read for a secret. A raw
+/// mode the wizard left on is paused for the step and restored after.
+pub struct TermAsk {
+    was_raw: bool,
+}
+
+impl TermAsk {
+    pub fn new() -> Self {
+        let was_raw = crossterm::terminal::is_raw_mode_enabled().unwrap_or(false);
+        if was_raw {
+            let _ = crossterm::terminal::disable_raw_mode();
+        }
+        TermAsk { was_raw }
+    }
+}
+
+impl Default for TermAsk {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for TermAsk {
+    fn drop(&mut self) {
+        if self.was_raw {
+            let _ = crossterm::terminal::enable_raw_mode();
+        }
+    }
+}
+
+impl Ask for TermAsk {
+    fn say(&mut self, text: &str) {
+        println!("{text}");
+    }
+
+    fn line(&mut self, prompt: &str) -> Option<String> {
+        print!("{prompt} ");
+        let _ = std::io::stdout().flush();
+        let mut s = String::new();
+        match std::io::stdin().read_line(&mut s) {
+            Ok(0) | Err(_) => None,
+            Ok(_) => Some(s.trim().to_string()),
+        }
+    }
+
+    fn secret(&mut self, prompt: &str) -> Option<String> {
+        use crossterm::event::{read, Event, KeyCode, KeyEventKind, KeyModifiers};
+        print!("{prompt} ");
+        let _ = std::io::stdout().flush();
+        let _ = crossterm::terminal::enable_raw_mode();
+        let mut value = String::new();
+        let ok = loop {
+            match read() {
+                Ok(Event::Key(k)) if k.kind == KeyEventKind::Press => match k.code {
+                    KeyCode::Enter => break true,
+                    KeyCode::Esc => break false,
+                    KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        break false
+                    }
+                    KeyCode::Backspace => {
+                        value.pop();
+                    }
+                    KeyCode::Char(c) => value.push(c),
+                    _ => {}
+                },
+                Ok(_) => {}
+                Err(_) => break false,
+            }
+        };
+        let _ = crossterm::terminal::disable_raw_mode();
+        println!();
+        (ok && !value.is_empty()).then_some(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Scripted(Vec<String>);
+
+    impl Http for Scripted {
+        fn call(
+            &mut self,
+            _method: &str,
+            url: &str,
+            _headers: &[(&str, String)],
+            _body: Option<&str>,
+        ) -> Option<(u16, String)> {
+            self.0.push(url.into());
+            Some((200, "{}".into()))
+        }
+    }
+
+    /// AC12: the list carries the messaging step with every channel
+    /// unconfigured, the report names the re-entry command, and the test
+    /// message reaches each channel's own send endpoint.
+    #[test]
+    fn ac12_messaging_lists_unconfigured_channels_and_sends_one_test_message() {
+        let list = crate::setup_run::list_json();
+        let row = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == "messaging")
+            .expect("messaging step listed");
+        assert_eq!(row["kind"], "human");
+        let channels: Vec<&str> = row["channels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["type"].as_str().unwrap())
+            .collect();
+        assert_eq!(channels, ["bluebubbles", "telegram", "discord"]);
+        assert!(channel_states(&[], "this-mac").iter().all(|(_, on)| !on));
+        assert!(summary_line(&[], "this-mac").ends_with(&format!("`{REENTER}`")));
+
+        let mut http = Scripted(Vec::new());
+        let row = json!({"url": "http://localhost:1234/", "chat_guid": "iMessage;-;a@b.c"});
+        assert_eq!(test_send("bluebubbles", &row, "p w&", &mut http), "sent");
+        let row = json!({"chat_id": "100"});
+        assert_eq!(test_send("telegram", &row, "tok", &mut http), "sent");
+        let row = json!({"channel_id": 200});
+        assert_eq!(test_send("discord", &row, "tok", &mut http), "sent");
+        assert_eq!(
+            http.0,
+            [
+                "http://localhost:1234/api/v1/message/text?password=p%20w%26",
+                "https://api.telegram.org/bottok/sendMessage",
+                "https://discord.com/api/v10/channels/200/messages",
+            ]
+        );
+    }
+
+    struct Answers(Vec<&'static str>);
+
+    impl Ask for Answers {
+        fn say(&mut self, _t: &str) {}
+        fn line(&mut self, _p: &str) -> Option<String> {
+            Some(self.0.remove(0).into())
+        }
+        fn secret(&mut self, _p: &str) -> Option<String> {
+            Some(self.0.remove(0).into())
+        }
+    }
+
+    /// The Telegram `getUpdates` answer for any token, and a success for
+    /// every other endpoint the walks reach.
+    struct TwoChannel;
+
+    impl Http for TwoChannel {
+        fn call(
+            &mut self,
+            _m: &str,
+            url: &str,
+            _h: &[(&str, String)],
+            _b: Option<&str>,
+        ) -> Option<(u16, String)> {
+            if url.contains("getUpdates") {
+                return Some((
+                    200,
+                    r#"{"result":[{"message":{"chat":{"id":100},"from":{"id":42}}}]}"#.into(),
+                ));
+            }
+            Some((200, "{}".into()))
+        }
+    }
+    /// A failed config write puts the old token back (Codex P2): `set`
+    /// validates the row's token, so the env write lands first, and the
+    /// kept sink rows must keep resolving to the old value.
+    #[test]
+    fn failed_config_write_restores_the_old_token() {
+        let set = |_: &str| -> Result<PathBuf, String> { Err("config write boom".into()) };
+        let home =
+            std::env::temp_dir().join(format!("fno-setup-msg-restore-{}", std::process::id()));
+        let env_file = home.join(".fno/.env");
+        std::fs::create_dir_all(env_file.parent().unwrap()).unwrap();
+
+        // A token the file already carried survives the failure untouched,
+        // and the other keys keep their lines.
+        std::fs::write(
+            &env_file,
+            "OTHER=keep\nexport FNO_CHAT_TELEGRAM_TOKEN=old-tok\n",
+        )
+        .unwrap();
+        let out = step(
+            Vec::new(),
+            Some(&["telegram"]),
+            &mut Answers(vec!["new-tok", ""]),
+            &set,
+            &mut TwoChannel,
+            &home,
+        );
+        assert_eq!(
+            out.needs_human,
+            vec!["messaging: telegram: config write boom"]
+        );
+        let text = std::fs::read_to_string(&env_file).unwrap();
+        assert!(text.contains("FNO_CHAT_TELEGRAM_TOKEN=old-tok"), "{text}");
+        assert!(!text.contains("new-tok"), "{text}");
+        assert!(text.contains("OTHER=keep"), "{text}");
+
+        // A key the file did not carry is gone again after the failure.
+        std::fs::write(&env_file, "OTHER=keep\n").unwrap();
+        let out = step(
+            Vec::new(),
+            Some(&["telegram"]),
+            &mut Answers(vec!["new-tok", ""]),
+            &set,
+            &mut TwoChannel,
+            &home,
+        );
+        assert_eq!(
+            out.needs_human,
+            vec!["messaging: telegram: config write boom"]
+        );
+        assert_eq!(
+            std::fs::read_to_string(&env_file).unwrap().trim(),
+            "OTHER=keep"
+        );
+
+        // A failed write also rolls the shared rows back: a later pick's
+        // successful write must not land the failed channel's row.
+        std::fs::write(&env_file, "export FNO_CHAT_TELEGRAM_TOKEN=old-tok\n").unwrap();
+        let calls = std::cell::RefCell::new(Vec::<String>::new());
+        let set = |value: &str| -> Result<PathBuf, String> {
+            calls.borrow_mut().push(value.to_string());
+            if calls.borrow().len() == 1 {
+                Err("config write boom".into())
+            } else {
+                Ok(PathBuf::from("/cfg"))
+            }
+        };
+        let out = step(
+            Vec::new(),
+            Some(&["telegram", "discord"]),
+            &mut Answers(vec!["tok-a", "", "tok-d", "chan-1", "user-1"]),
+            &set,
+            &mut TwoChannel,
+            &home,
+        );
+        assert_eq!(
+            out.needs_human,
+            vec!["messaging: telegram: config write boom"]
+        );
+        let calls = calls.into_inner();
+        assert_eq!(calls.len(), 2);
+        assert!(!calls[1].contains("telegram"), "{}", calls[1]);
+        assert!(calls[1].contains("discord"), "{}", calls[1]);
+        let text = std::fs::read_to_string(&env_file).unwrap();
+        assert!(text.contains("FNO_CHAT_TELEGRAM_TOKEN=old-tok"), "{text}");
+        assert!(text.contains("FNO_CHAT_DISCORD_TOKEN=tok-d"), "{text}");
+        std::fs::remove_dir_all(&home).ok();
+    }
+}

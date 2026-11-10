@@ -1,0 +1,765 @@
+//! Build script: embed the source git revision into the fno-agents bins so a
+//! built binary can self-report which commit it came from.
+//!
+//! Rust-side `fno doctor` staleness now keys on a rev baked INTO the binary
+//! instead of the external `~/.fno/installed-rust-rev` marker (which was
+//! written only by `fno doctor update`, so a bare `cargo install` or dirty dev build
+//! was misjudged). `FNO_AGENTS_CRATES_REV` is the crates/ subtree rev the
+//! verdict compares against the source's crates/ subtree rev ;
+//! `FNO_AGENTS_GIT_REV` is the full HEAD identity. Both surface
+//! via `fno-agents version --json`, so the verdict needs no marker.
+//!
+//! Always emits all three env vars (falling back to "unknown"/"0") so `env!`
+//! in the crate compiles even when git is unavailable -- e.g. a crates.io
+//! tarball build, where there is no `.git` (the crate is `publish = true`).
+
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+#[path = "codegen/event_retention.rs"]
+mod event_retention;
+
+#[path = "codegen/check_supersession.rs"]
+mod check_supersession_codegen;
+
+fn manifest_dir() -> PathBuf {
+    std::env::var_os("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .expect("Cargo must provide the build script's current manifest directory")
+}
+
+fn main() {
+    // Produce the cross-tree copies instead of checking them; the two
+    // events-schema syncs are the exception: they CHECK their tracked copies so
+    // a build never dirties a stale checkout (see check_generated_copy). These
+    // run before the env-var work so a build that later fails still leaves the
+    // copies fresh.
+    sync_harness_capabilities();
+    sync_event_store();
+    sync_notify_dispatch();
+    sync_module_copy("backlog/live_store_fence");
+    sync_module_copy("spawn/role_migration");
+    sync_module_copy("backlog/store_conn");
+    sync_module_copy("gate/chokepoint");
+    sync_module_copy("eval/otel_read");
+    sync_module_copy("runtime/registry_read");
+    sync_module_copy("gate/effect_map");
+    sync_module_copy("runtime/footnote_transcript");
+    sync_module_copy("backlog/rules");
+    sync_module_copy("runtime/repo_identity");
+    sync_module_copy("glob");
+    sync_model_reach();
+    sync_registry_schema();
+    sync_events_limits();
+    sync_events_schema();
+    sync_check_supersession();
+    sync_provider_key();
+
+    let rev = git_rev().unwrap_or_else(|| "unknown".to_string());
+    // A release build stamps the version into the workspace without
+    // committing (scripts/release/sync-version.sh sets FNO_RELEASE_STAMP),
+    // which dirties crates/ by construction. A stamped build reads clean:
+    // the only diff is the release identity the binary exists to report.
+    let stamped = std::env::var_os("FNO_RELEASE_STAMP").is_some_and(|v| !v.is_empty());
+    let dirty = !stamped && git_dirty();
+    // The crates/ subtree rev (last commit touching crates/) is the rev `fno
+    // doctor` keys its rust-staleness verdict on. It must be the
+    // SAME quantity Python's update._rust_subtree_rev computes -- the last
+    // commit touching crates/ -- so the binary's self-reported rev and the
+    // source rev compare apples-to-apples (both subtree revs, not HEAD).
+    let crates_rev = git_crates_rev().unwrap_or_else(|| "unknown".to_string());
+
+    // Both vars are ALWAYS set so `env!("FNO_AGENTS_GIT_REV")` never fails to
+    // compile, regardless of whether git was reachable at build time.
+    println!("cargo:rustc-env=FNO_AGENTS_GIT_REV={rev}");
+    println!("cargo:rustc-env=FNO_AGENTS_GIT_DIRTY={}", u8::from(dirty));
+    println!("cargo:rustc-env=FNO_AGENTS_CRATES_REV={crates_rev}");
+    // Baked for state::source_root_for_exe: a detached OUT_DIR (a build-dir
+    // override like the machine pool) marks this binary as a dev build whose
+    // manifest dir can recover the source root.
+    println!(
+        "cargo:rustc-env=FNO_AGENTS_BUILD_OUT_DIR={}",
+        std::env::var("OUT_DIR").unwrap_or_default()
+    );
+
+    // Rebuild when HEAD moves so an incremental dev build does not bake a stale
+    // rev. (The install path -- `cargo install` -- always does a clean build, so
+    // it is correct regardless; this is dev-iteration hygiene.) Best-effort:
+    // a missing ref path just makes cargo re-run this script, never an error.
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=FNO_RELEASE_STAMP");
+    if let Some(gitdir) = run("git", &["rev-parse", "--absolute-git-dir"]) {
+        let gitdir = gitdir.trim();
+        println!("cargo:rerun-if-changed={gitdir}/HEAD");
+        if let Ok(head) = std::fs::read_to_string(format!("{gitdir}/HEAD")) {
+            if let Some(reference) = head.strip_prefix("ref: ") {
+                if let Some(path) = run("git", &["rev-parse", "--git-path", reference.trim()]) {
+                    println!("cargo:rerun-if-changed={}", path.trim());
+                }
+            }
+        }
+    }
+}
+
+/// Full HEAD SHA, or `None` when git is unavailable / this is not a checkout.
+fn git_rev() -> Option<String> {
+    let out = run("git", &["rev-parse", "HEAD"])?;
+    let rev = out.trim().to_string();
+    if rev.is_empty() {
+        None
+    } else {
+        Some(rev)
+    }
+}
+
+/// True when `crates/` has uncommitted changes. Scoped to the same pathspec as
+/// [`git_crates_rev`]: consumers pair `dirty` with `crates_rev` to decide whether
+/// a binary matches its source, and a dirty file elsewhere in the repo says
+/// nothing about that. Conservative: any git failure reports `false` (a
+/// published/CI build is treated as clean rather than spuriously flagged dirty).
+fn git_dirty() -> bool {
+    let Some(top) = run("git", &["rev-parse", "--show-toplevel"]) else {
+        return false;
+    };
+    match run(
+        "git",
+        &["-C", top.trim(), "status", "--porcelain", "--", "crates/"],
+    ) {
+        Some(s) => !s.trim().is_empty(),
+        None => false,
+    }
+}
+
+/// Last commit SHA that touched `crates/`, or `None` when git is unavailable.
+///
+/// Mirrors Python `update._rust_subtree_rev` exactly: `git -C <repo-root> log -1
+/// --format=%H -- crates/`. Resolving the repo root via `--show-toplevel` keeps
+/// the pathspec correct regardless of build.rs's cwd (the crate dir).
+fn git_crates_rev() -> Option<String> {
+    let top = run("git", &["rev-parse", "--show-toplevel"])?;
+    let top = top.trim();
+    let out = run(
+        "git",
+        &["-C", top, "log", "-1", "--format=%H", "--", "crates/"],
+    )?;
+    let rev = out.trim().to_string();
+    if rev.is_empty() {
+        None
+    } else {
+        Some(rev)
+    }
+}
+
+/// Repo root as a path, or `None` when git is unavailable (crates.io tarball).
+fn repo_root() -> Option<PathBuf> {
+    let top = run("git", &["rev-parse", "--show-toplevel"])?;
+    let top = top.trim();
+    if top.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(top))
+    }
+}
+
+/// Write `bytes` to `path` only when they differ from what is already there.
+///
+/// An unconditional write restamps the mtime on every build, which makes cargo
+/// re-run downstream work forever. Write-on-difference converges. The write
+/// lands in a sibling temp file and renames, so a concurrent reader (a
+/// parallel `cargo build --workspace` compiling the copy) never sees a torn
+/// file.
+fn write_if_different(path: &Path, bytes: &[u8]) {
+    if let Ok(existing) = std::fs::read(path) {
+        if existing == bytes {
+            return;
+        }
+    }
+    let temp = path.with_extension(format!(
+        "{}.tmp{}",
+        path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default(),
+        std::process::id()
+    ));
+    let written = std::fs::write(&temp, bytes).and_then(|()| std::fs::rename(&temp, path));
+    if let Err(err) = written {
+        let _ = std::fs::remove_file(&temp);
+        println!(
+            "cargo:warning=fno-agents build: could not write {}: {err}",
+            path.display()
+        );
+    }
+}
+
+/// CHECK a tracked generated copy instead of writing it.
+///
+/// These copies ship in the crates.io packages (the generators' inputs cannot:
+/// package include paths cannot leave the crate dir), so a build that rewrote
+/// them dirtied the tree at any head whose committed copy lagged its source and
+/// blocked the next git pull. A drift fails the build; `FNO_SYNC_EVENTS_SCHEMA=1`
+/// restores produce behavior for the regen-and-commit flow.
+fn check_generated_copy(path: &Path, bytes: &[u8], produce: bool) {
+    if std::fs::read(path).is_ok_and(|existing| existing == bytes) {
+        return;
+    }
+    if !produce {
+        panic!(
+            "tracked copy drifted from its source: {}. Rebuild once with \
+             FNO_SYNC_EVENTS_SCHEMA=1 to regenerate it, then commit.",
+            path.display()
+        );
+    }
+    write_if_different(path, bytes);
+}
+
+/// PRODUCE the downstream copy of the capability table instead of checking
+/// it.
+///
+/// `harness_capabilities.rs` `include_str!`s the canonical TOML, so the Rust
+/// tree owns it. One byte copy hangs off it, generated per build:
+/// `crates/fno/src/harness_capabilities.toml` (`include_str!`ed by
+/// the mux's registry reader). The fno crate stays copy-fed rather than
+/// dep-fed on purpose: the two crates publish to crates.io independently
+/// (the crates-publish workflow states the order is irrelevant because fno
+/// does not depend on fno-agents as a cargo dep), so a dep would tie fno's
+/// publishability to a registry state that lags this repo. The developer who
+/// edits the canonical is the developer who builds this crate, so the sync
+/// happens where the edit happens and silent drift is impossible. The
+/// rust-ci generated-copies dirty-tree step is the tripwire for a copy
+/// edited by hand.
+///
+/// No-op when the sibling crate is absent: that is the `cargo
+/// package` / crates.io tarball case, where the crate must still build
+/// (`publish = true`).
+fn sync_harness_capabilities() {
+    println!("cargo:rerun-if-changed=src/harness_capabilities.toml");
+    let canonical = manifest_dir().join("src/harness_capabilities.toml");
+    let Ok(bytes) = std::fs::read(&canonical) else {
+        return;
+    };
+    let Some(root) = repo_root() else { return };
+    let mux_copy = root.join("crates/fno/src/harness_capabilities.toml");
+    if !mux_copy.is_file() {
+        return;
+    }
+    write_if_different(&mux_copy, &bytes);
+}
+
+/// PRODUCE the fno crate's event-store copies from this crate's implementation.
+///
+/// The two crates publish independently, so fno must compile a checked-in copy
+/// instead of depending on fno-agents. The module file feeds over minus its
+/// test-module declaration; the observation submodule feeds verbatim. The
+/// generated-copies CI step checks both copies against this owner after every
+/// build.
+fn sync_event_store() {
+    println!("cargo:rerun-if-changed=src/runtime/event_store.rs");
+    println!("cargo:rerun-if-changed=src/runtime/event_store/observation.rs");
+    println!("cargo:rerun-if-changed=src/runtime/event_store/validate.rs");
+    println!("cargo:rerun-if-changed=src/runtime/event_store/runs.rs");
+    let manifest = manifest_dir();
+    let Some(root) = repo_root() else { return };
+    let canonical = manifest.join("src/runtime/event_store.rs");
+    let Ok(text) = std::fs::read_to_string(&canonical) else {
+        return;
+    };
+    // A Windows checkout can carry CRLF while the generated copies are LF:
+    // the suffix strip below and write_if_different both compare LF shapes.
+    let text = text.replace("\r\n", "\n");
+    let copy = root.join("crates/fno/src/event_store.rs");
+    if !copy.is_file() {
+        return;
+    }
+    let body = text.strip_suffix("\n#[cfg(test)]\nmod tests;\n").expect(
+        "src/runtime/event_store.rs must end with its test module declaration; update sync_event_store",
+    );
+    let body = body.trim_end_matches('\n');
+    let out = format!(
+        "// @generated by crates/fno-agents/build.rs from crates/fno-agents/src/runtime/event_store.rs. Do not edit.\n{body}\n"
+    );
+    write_if_different(&copy, out.as_bytes());
+    let observation = manifest.join("src/runtime/event_store/observation.rs");
+    let Ok(observation_text) = std::fs::read_to_string(&observation) else {
+        return;
+    };
+    let observation_text = observation_text.replace("\r\n", "\n");
+    let observation_copy = root.join("crates/fno/src/event_store/observation.rs");
+    if !observation_copy.is_file() {
+        return;
+    }
+    let out = format!(
+        "// @generated by crates/fno-agents/build.rs from crates/fno-agents/src/runtime/event_store/observation.rs. Do not edit.\n{observation_text}"
+    );
+    write_if_different(&observation_copy, out.as_bytes());
+    let validate_rs = manifest.join("src/runtime/event_store/validate.rs");
+    let Ok(validate_text) = std::fs::read_to_string(&validate_rs) else {
+        return;
+    };
+    let validate_text = validate_text.replace("\r\n", "\n");
+    let validate_copy = root.join("crates/fno/src/event_store/validate.rs");
+    if !validate_copy.is_file() {
+        return;
+    }
+    let out = format!(
+        "// @generated by crates/fno-agents/build.rs from crates/fno-agents/src/runtime/event_store/validate.rs. Do not edit.\n{validate_text}"
+    );
+    write_if_different(&validate_copy, out.as_bytes());
+    let runs = manifest.join("src/runtime/event_store/runs.rs");
+    let Ok(runs_text) = std::fs::read_to_string(&runs) else {
+        return;
+    };
+    let runs_text = runs_text.replace("\r\n", "\n");
+    let runs_copy = root.join("crates/fno/src/event_store/runs.rs");
+    if !runs_copy.is_file() {
+        return;
+    }
+    let out = format!(
+        "// @generated by crates/fno-agents/build.rs from crates/fno-agents/src/runtime/event_store/runs.rs. Do not edit.\n{runs_text}"
+    );
+    write_if_different(&runs_copy, out.as_bytes());
+}
+
+/// PRODUCE the fno crate's copy of the notify dispatch owner.
+///
+/// Same publish story as [`sync_event_store`]: one decision table, and fno
+/// compiles the generated copy its front door execs (`fno inbox notify` and
+/// the deprecated `fno notify` move). The marked `// @fno-copy:` regions are
+/// spliced rather than shared: the fno copy keeps its in-process `mux_cli`
+/// control roundtrip and its `review_invocation` journal resolver, while the
+/// owner's daemon bodies spawn the narrow `fno mux notify` one-shot (the mux
+/// server owns attached clients; a production fno-agents cannot link the mux
+/// crate) and resolve the journal through `state_path`. The owner's inline
+/// test module stays with the owner; the copy is the code alone.
+fn sync_notify_dispatch() {
+    println!("cargo:rerun-if-changed=src/runtime/notify_dispatch.rs");
+    let canonical = manifest_dir().join("src/runtime/notify_dispatch.rs");
+    let Ok(text) = std::fs::read_to_string(&canonical) else {
+        return;
+    };
+    // A Windows checkout can carry CRLF while the generated copies are LF:
+    // the splice and write_if_different both compare LF shapes.
+    let text = text.replace("\r\n", "\n");
+    let Some(root) = repo_root() else { return };
+    let copy = root.join("crates/fno/src/notify_dispatch.rs");
+    if !copy.is_file() {
+        return;
+    }
+    let marker = "\n#[cfg(test)]\nmod tests {";
+    assert_eq!(
+        text.matches(marker).count(),
+        1,
+        "src/runtime/notify_dispatch.rs must carry exactly one test module; update sync_notify_dispatch"
+    );
+    let body = text
+        .split_once(marker)
+        .expect("matches() above guarantees the marker")
+        .0
+        .trim_end_matches('\n');
+    let body = splice_fno_copy_region(body, "mux_channel", FNO_COPY_MUX_BODY);
+    let body = splice_fno_copy_region(&body, "journal_path", FNO_COPY_JOURNAL_BODY);
+    let out = format!(
+        "// @generated by crates/fno-agents/build.rs from crates/fno-agents/src/runtime/notify_dispatch.rs. Do not edit.\n{body}\n"
+    );
+    write_if_different(&copy, out.as_bytes());
+}
+
+/// Replace the region between the exact `// @fno-copy:begin <name>` /
+/// `// @fno-copy:end <name>` marker lines (inclusive) with `replacement`.
+fn splice_fno_copy_region(body: &str, name: &str, replacement: &str) -> String {
+    let begin = format!("    // @fno-copy:begin {name}\n");
+    let end = format!("    // @fno-copy:end {name}\n");
+    let start = body
+        .find(&begin)
+        .unwrap_or_else(|| panic!("notify_dispatch.rs must carry the {name} begin marker"));
+    let after_begin = start + begin.len();
+    let stop = body[after_begin..]
+        .find(&end)
+        .unwrap_or_else(|| panic!("notify_dispatch.rs must carry the {name} end marker"))
+        + after_begin;
+    format!(
+        "{}{replacement}{}",
+        &body[..start],
+        &body[stop + end.len()..]
+    )
+}
+
+/// The fno copy's mux-channel body: the in-process control roundtrip beside
+/// the other mux one-shots (the owner spawns the narrow `fno mux notify`
+/// one-shot instead). Kept here so one build.rs run renders both copies; the
+/// fno crate's own build is the drift test for the `mux_cli` API shape.
+const FNO_COPY_MUX_BODY: &str = r#"    let session = crate::mux_cli::resolve_session(None, crate::mux_cli::env_server().as_deref());
+    let sock = crate::proto::socket_path(&session).ok()?;
+    match crate::mux_cli::control_roundtrip(
+        &sock,
+        &session,
+        crate::proto::ControlCommand::Notify {
+            title: title.to_string(),
+            body: message.to_string(),
+        },
+    ) {
+        Ok(crate::proto::ServerMsg::NoticeSent { clients }) => Some(clients as u64),
+        _ => None,
+    }
+"#;
+
+/// The fno copy's journal body: the front door's one resolver (the pin, else
+/// the `fno-agents state path events` subprocess answer).
+const FNO_COPY_JOURNAL_BODY: &str = "    crate::review_invocation::review_events_path()\n";
+
+/// PRODUCE the fno crate's copy of a store module from this crate's
+/// implementation.
+///
+/// Same publish story as [`sync_event_store`]: the live-store fence and the
+/// store-connection seam guard and open the operator stores in both
+/// binaries, and fno compiles a generated copy. The owner's inline test
+/// module stays with the owner; the copy is the code alone.
+///
+/// `src_path` is the module's path under `src/` without `.rs`; the copy keeps
+/// its last component as its name at the root of `crates/fno/src`.
+fn sync_module_copy(src_path: &str) {
+    let name = src_path.rsplit('/').next().unwrap_or(src_path);
+    println!("cargo:rerun-if-changed=src/{src_path}.rs");
+    let canonical = manifest_dir().join(format!("src/{src_path}.rs"));
+    let Ok(text) = std::fs::read_to_string(&canonical) else {
+        return;
+    };
+    let Some(root) = repo_root() else { return };
+    let copy = root.join(format!("crates/fno/src/{name}.rs"));
+    if !copy.parent().is_some_and(Path::is_dir) {
+        return;
+    }
+    let marker = "\n#[cfg(test)]\nmod tests {";
+    assert_eq!(
+        text.matches(marker).count(),
+        1,
+        "src/{src_path}.rs must carry exactly one test module; update sync_module_copy"
+    );
+    let body = text
+        .split_once(marker)
+        .expect("matches() above guarantees the marker")
+        .0
+        .trim_end_matches('\n');
+    let body = if name == "otel_read" {
+        println!("cargo:rerun-if-changed=src/otel_schema.sql");
+        let schema = std::fs::read_to_string(manifest_dir().join("src/otel_schema.sql"))
+            .expect("canonical OTEL schema must be readable");
+        body.replace(
+            "include_str!(\"../otel_schema.sql\")",
+            &format!("{schema:?}"),
+        )
+    } else {
+        body.to_string()
+    };
+    let out = format!(
+        "// @generated by crates/fno-agents/build.rs from crates/fno-agents/src/{src_path}.rs. Do not edit.\n{body}\n"
+    );
+    write_if_different(&copy, out.as_bytes());
+}
+
+/// PRODUCE the downstream copy of the vendor reach + built-in provider preset.
+///
+/// The canonical TOML lives in this crate (`provider_route.rs`
+/// `include_str!`s it, and `crates/fno/src/model_catalog.rs` reads the byte
+/// copy), so the built-in zai preset is written once and the composer's
+/// prediction of what the spawn door resolves cannot drift from the door's
+/// answer. No-op when the sibling crate is absent: the crates.io tarball.
+fn sync_model_reach() {
+    println!("cargo:rerun-if-changed=src/model_reach.toml");
+    let canonical = manifest_dir().join("src/model_reach.toml");
+    let Ok(bytes) = std::fs::read(&canonical) else {
+        return;
+    };
+    let Some(root) = repo_root() else { return };
+    let fno_copy = root.join("crates/fno/src/model_reach.toml");
+    if !fno_copy.is_file() {
+        return;
+    }
+    write_if_different(&fno_copy, &bytes);
+}
+
+/// Render the registry schema version and writer floor from their single
+/// owner.
+///
+/// `src/registry_schema.toml` owns both values. `state.rs` `include!`s
+/// the generated constants, so a bump is one edit in one file. This replaces
+/// the parity script that compared two independent literals.
+fn sync_registry_schema() {
+    println!("cargo:rerun-if-changed=src/registry_schema.toml");
+    let canonical = manifest_dir().join("src/registry_schema.toml");
+    let text = std::fs::read_to_string(&canonical)
+        .expect("src/registry_schema.toml must exist (it owns the schema and writer floor)");
+    let parsed: toml::Value =
+        toml::from_str(&text).expect("src/registry_schema.toml must parse as TOML");
+    let version = parsed
+        .get("version")
+        .and_then(|value| value.as_integer())
+        .expect("src/registry_schema.toml must carry an integer `version`");
+    let min_writer = parsed
+        .get("min_writer")
+        .and_then(|value| value.as_integer())
+        .expect("src/registry_schema.toml must carry an integer `min_writer`");
+    assert!(
+        min_writer <= version,
+        "src/registry_schema.toml `min_writer` must not exceed `version`"
+    );
+    let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR must be set"));
+    std::fs::write(
+        out_dir.join("registry_schema.rs"),
+        format!(
+            "pub const REGISTRY_SCHEMA_VERSION: u32 = {version};\npub const REGISTRY_MIN_WRITER_VERSION: u32 = {min_writer};\n"
+        ),
+    )
+    .expect("generated registry_schema.rs must be writable");
+}
+
+/// CHECK `src/events_limits.toml` against the event schema it now lives beside.
+///
+/// `src/runtime/event_store/schema.yaml` is canonical (the wheel shipped no schema
+/// reader). Rust used to MIRROR the two scalars as literals in
+/// `verify_evidence.rs`, linked only by a comment; you cannot generate from a
+/// comment. Now the build renders the block into a tracked TOML sibling that
+/// `events_limits.rs` `include_str!`s, so the committed file is what a
+/// crates.io build compiles against and the link is a real dependency edge.
+///
+/// No-op when the schema is absent (tarball case) and on any parse failure: the
+/// committed file is then the value, and the build-time drift check is the
+/// tripwire against a hand edit.
+fn sync_events_limits() {
+    let manifest = manifest_dir();
+    let generated = manifest.join("src/events_limits.toml");
+    let schema = manifest.join("src/runtime/event_store/schema.yaml");
+    if !schema.is_file() {
+        return;
+    }
+    println!("cargo:rerun-if-changed={}", schema.display());
+    let Ok(text) = std::fs::read_to_string(&schema) else {
+        return;
+    };
+    let parsed: serde_yaml_ng::Value = match serde_yaml_ng::from_str(&text) {
+        Ok(value) => value,
+        Err(err) => {
+            println!("cargo:warning=fno-agents build: schema.yaml did not parse: {err}");
+            return;
+        }
+    };
+    let limits = &parsed["limits"];
+    let (Some(max_data_bytes), Some(encoding)) = (
+        limits["max_data_bytes"].as_u64(),
+        limits["data_size_encoding"].as_str(),
+    ) else {
+        println!("cargo:warning=fno-agents build: schema.yaml limits block incomplete");
+        return;
+    };
+    let produce = std::env::var_os("FNO_SYNC_EVENTS_SCHEMA").is_some_and(|v| v == "1");
+    check_generated_copy(
+        &generated,
+        render_events_limits(max_data_bytes, encoding).as_bytes(),
+        produce,
+    );
+}
+
+/// CHECK the native judge's rule set against the Python-owned event schema.
+///
+/// `src/runtime/event_store/schema.yaml` is canonical; `src/runtime/event_store/validate.rs`
+/// `include_str!`s its JSON projection (`events_schema.json`) so the judge
+/// needs no YAML parser and cannot drift from the schema Python reads. Every
+/// `data.properties.<field>.enum` projects as `<field>`, and a list item's
+/// enum as `<field>[].<sub>` (the review_attestation dispositions rule). A
+/// sibling copy lives in crates/fno beside its generated `validate.rs`.
+/// No-op when the schema is absent (tarball case); an unreadable or invalid
+/// source schema and a tracked copy that drifted fail the build (see
+/// [`check_generated_copy`]).
+fn sync_events_schema() {
+    let manifest = manifest_dir();
+    let Some(root) = repo_root() else { return };
+    let schema = manifest.join("src/runtime/event_store/schema.yaml");
+    if !schema.is_file() {
+        return;
+    }
+    println!("cargo:rerun-if-changed={}", schema.display());
+    let text = std::fs::read_to_string(&schema)
+        .unwrap_or_else(|error| panic!("cannot read event schema {}: {error}", schema.display()));
+    let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&text)
+        .unwrap_or_else(|error| panic!("cannot parse event schema {}: {error}", schema.display()));
+    event_retention::validate(&parsed)
+        .unwrap_or_else(|error| panic!("invalid event retention schema: {error}"));
+    let mut event_types = serde_json::Map::new();
+    for entry in parsed["event_types"].as_sequence().into_iter().flatten() {
+        let Some(name) = entry["name"].as_str() else {
+            continue;
+        };
+        let data = &entry["data"];
+        let mut enums = serde_json::Map::new();
+        for (field, prop) in data["properties"].as_mapping().into_iter().flatten() {
+            let Some(field_name) = field.as_str() else {
+                continue;
+            };
+            if prop["enum"].as_sequence().is_some() {
+                enums.insert(field_name.to_string(), seq_to_json(&prop["enum"]));
+            }
+            if let Some(subs) = prop["items"]["properties"].as_mapping() {
+                for (sub, subprop) in subs {
+                    let Some(sub_name) = sub.as_str() else {
+                        continue;
+                    };
+                    if subprop["enum"].as_sequence().is_some() {
+                        enums.insert(
+                            format!("{field_name}[].{sub_name}"),
+                            seq_to_json(&subprop["enum"]),
+                        );
+                    }
+                }
+            }
+        }
+        event_types.insert(
+            name.to_string(),
+            serde_json::json!({
+                "sources": seq_to_json(&entry["sources"]),
+                "required": seq_to_json(&data["required"]),
+                "forbidden": seq_to_json(&data["forbidden"]),
+                "enums": enums,
+            }),
+        );
+    }
+    let family = &parsed["protocol_family"];
+    let projection = serde_json::json!({
+        "envelope_required": seq_to_json(&parsed["envelope"]["required"]),
+        "events_schema_marker": "GENERATED by crates/fno-agents/build.rs from src/runtime/event_store/schema.yaml. Do not edit; rebuild instead.",
+        "allowed_sources": seq_to_json(&parsed["envelope"]["properties"]["source"]["enum"]),
+        "source_patterns": seq_to_json(&parsed["envelope"]["properties"]["source"]["patterns"]),
+        "max_data_bytes": parsed["limits"]["max_data_bytes"].as_u64().unwrap_or(65536),
+        "gates": seq_to_json(&parsed["gates"]),
+        "protocol_family": {
+            "types": seq_to_json(&family["types"]),
+            "version": family["version"].as_i64().unwrap_or(1),
+            "envelope_allowed": seq_to_json(&family["envelope"]["allowed"]),
+            "envelope_required": seq_to_json(&family["envelope"]["required"]),
+            "outcome_enum": seq_to_json(&family["outcome"]["enum"]),
+            "outcome_present_on": seq_to_json(&family["outcome"]["present_on"]),
+        },
+        "event_types": event_types,
+    });
+    let body = serde_json::to_vec(&projection).expect("schema projection serializes");
+    let produce = std::env::var_os("FNO_SYNC_EVENTS_SCHEMA").is_some_and(|v| v == "1");
+    check_generated_copy(
+        &manifest.join("src/runtime/event_store/events_schema.json"),
+        &body,
+        produce,
+    );
+    check_generated_copy(
+        &root.join("crates/fno/src/event_store/events_schema.json"),
+        &body,
+        produce,
+    );
+}
+
+/// YAML sequence to a JSON array of scalars. The schema blocks the judge
+/// reads are lists of strings and numbers; anything else degrades to null
+/// rather than failing the build.
+fn seq_to_json(v: &serde_yaml_ng::Value) -> serde_json::Value {
+    serde_json::Value::Array(
+        v.as_sequence()
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|item| match item {
+                        serde_yaml_ng::Value::String(s) => serde_json::Value::String(s.clone()),
+                        serde_yaml_ng::Value::Number(n) => {
+                            // Keep ints exact so enum reprs match Python's
+                            // (1, never 1.0); only true floats go via f64.
+                            if let Some(i) = n.as_i64() {
+                                serde_json::Value::Number(i.into())
+                            } else if let Some(u) = n.as_u64() {
+                                serde_json::Value::Number(u.into())
+                            } else {
+                                serde_json::Number::from_f64(n.as_f64().unwrap_or(0.0))
+                                    .map(serde_json::Value::Number)
+                                    .unwrap_or(serde_json::Value::Null)
+                            }
+                        }
+                        serde_yaml_ng::Value::Bool(b) => serde_json::Value::Bool(*b),
+                        _ => serde_json::Value::Null,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    )
+}
+
+/// Generate the shared latest-attempt selector for both runtime languages.
+fn sync_check_supersession() {
+    let contract_path = manifest_dir().join("codegen/check_supersession.toml");
+    println!("cargo:rerun-if-changed={}", contract_path.display());
+    println!("cargo:rerun-if-changed=codegen/check_supersession.rs");
+    let contract = check_supersession_codegen::load_contract(&contract_path)
+        .expect("check_supersession.toml must parse");
+
+    let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR must be set"));
+    std::fs::write(
+        out_dir.join("check_supersession.rs"),
+        check_supersession_codegen::render_rust(&contract),
+    )
+    .expect("generated Rust supersession source must be writable");
+}
+
+/// PRODUCE the fno crate's provider-key copy from this crate's implementation.
+///
+/// Same publish story as [`sync_module_copy`]: the key rule is one
+/// canonical file whose copy the composer crate compiles (crates/fno does not
+/// depend on fno-agents), so the two cannot drift. The owner's inline test
+/// module stays with the owner; the copy is the code alone.
+fn sync_provider_key() {
+    println!("cargo:rerun-if-changed=src/spawn/provider_key.rs");
+    let canonical = manifest_dir().join("src/spawn/provider_key.rs");
+    let Ok(text) = std::fs::read_to_string(&canonical) else {
+        return;
+    };
+    let Some(root) = repo_root() else { return };
+    let copy = root.join("crates/fno/src/provider_key.rs");
+    if !copy.is_file() {
+        return;
+    }
+    let marker = "\n#[cfg(test)]\nmod tests {";
+    assert_eq!(
+        text.matches(marker).count(),
+        1,
+        "src/spawn/provider_key.rs must carry exactly one test module; update sync_provider_key"
+    );
+    let body = text
+        .split_once(marker)
+        .expect("matches() above guarantees the marker")
+        .0
+        .trim_end_matches('\n');
+    let out = format!(
+        "// @generated by crates/fno-agents/build.rs from crates/fno-agents/src/spawn/provider_key.rs. Do not edit.\n{body}\n"
+    );
+    write_if_different(&copy, out.as_bytes());
+}
+
+/// Render the generated `events_limits.toml` body. The CI tripwire renders the
+/// same shape from the same source, so the two can be read against each other.
+fn render_events_limits(max_data_bytes: u64, encoding: &str) -> String {
+    format!(
+        "# GENERATED by crates/fno-agents/build.rs from src/runtime/event_store/schema.yaml.\n\
+         # Do not edit. Change the limits block in schema.yaml and rebuild.\n\
+         max_data_bytes = {max_data_bytes}\n\
+         data_size_encoding = \"{encoding}\"\n"
+    )
+}
+
+/// Run a command, returning trimmed stdout on a zero exit, else `None`.
+/// Stdout is piped explicitly and stderr discarded: `Command::output()` is
+/// a disallowed method (it bypasses the spawn seams and buries stderr).
+fn run(cmd: &str, args: &[&str]) -> Option<String> {
+    let child = Command::new(cmd)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let output = child.wait_with_output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout).ok()
+}

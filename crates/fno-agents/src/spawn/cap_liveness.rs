@@ -1,0 +1,312 @@
+//! Which registry rows are live for the worker-slot cap. Split from
+//! spawn_gate under the file budget: the cap's one liveness filter, the
+//! report-freshness source that reaches rows no probe can, and the tests
+//! that pin it. `spawn_gate` re-exports [`live_rows`] so every existing
+//! reader keeps its path.
+
+use std::path::Path;
+use std::time::Duration;
+
+use crate::claude_roster::ClaudeRoster;
+use crate::daemon::pid_is_ours;
+use crate::spawn_gate::NOTE;
+use crate::state::{load_registry, Registry, RegistryEntry};
+
+/// The liveness-filtered registry rows behind [`slot_count`], exposed so the
+/// per-territory cap can read the rows' worked NODES without a second
+/// liveness implementation.
+pub(crate) fn live_rows(registry_path: &Path, warnings: &mut Vec<String>) -> Vec<RegistryEntry> {
+    live_rows_with_blocked(
+        registry_path,
+        &crate::claude_roster::read_blocked_short_ids,
+        warnings,
+    )
+}
+
+/// [`live_rows`] with the harness blocked-set read injected: tests pin the
+/// set instead of shelling out to `claude agents`.
+fn live_rows_with_blocked(
+    registry_path: &Path,
+    read_blocked: &dyn Fn() -> std::collections::HashSet<String>,
+    warnings: &mut Vec<String>,
+) -> Vec<RegistryEntry> {
+    let live_roster_short_ids: std::collections::HashSet<String> = match ClaudeRoster::load_default(
+    ) {
+        Ok(roster) => roster
+            .workers_deduped()
+            .iter()
+            .filter(|w| w.pid.map(|p| pid_is_ours(p, w.proc_start)).unwrap_or(false))
+            .map(|w| w.short_id().to_string())
+            .collect(),
+        Err(e) => {
+            warnings.push(format!(
+                    "{NOTE} claude roster unreadable ({e}); pid-less roster-backed rows uncounted, report-stamped rows still counted"
+                ));
+            Default::default()
+        }
+    };
+    let now_secs = crate::daemon::now_epoch_secs();
+    let mut rows = Vec::new();
+    let mut blocked: Option<std::collections::HashSet<String>> = None;
+    let mut dropped_blocked: Vec<String> = Vec::new();
+    match load_registry(registry_path) {
+        Ok(Registry { entries, .. }) => {
+            for e in entries {
+                if !crate::spawn_gate::status_is_liveish(&e.status) {
+                    continue;
+                }
+                let mut alive = match e.pid {
+                    Some(p) => pid_is_ours(p, e.pid_start_time),
+                    None => {
+                        let roster_live = e
+                            .transport_short()
+                            .map(|sid| live_roster_short_ids.contains(sid));
+                        if roster_live == Some(true) {
+                            true
+                        } else if roster_live == Some(false) && is_roster_policed(&e) {
+                            // The roster polices this row (a claude fleet
+                            // mint) and answers no: dead, at once - a dead
+                            // bg worker frees its slot (Codex P1, PR #235).
+                            false
+                        } else {
+                            // No oracle answers for this row: the user's own
+                            // session, a non-claude native, or an unreadable
+                            // roster. The last session report's freshness
+                            // stands in (d-d0c63de7).
+                            report_is_fresh(&e, now_secs)
+                        }
+                    }
+                };
+                if alive && e.harness_name() == "claude" {
+                    // A usage-blocked session holds no working slot: the
+                    // harness's own state is the witness transcript recency
+                    // cannot give. Positive readings only - a row absent
+                    // from the agents list, or a root that failed to parse,
+                    // answers nothing here; the roster polices death.
+                    if blocked.is_none() {
+                        blocked = Some(read_blocked());
+                    }
+                    if e.transport_short()
+                        .is_some_and(|sid| blocked.as_ref().unwrap().contains(sid))
+                    {
+                        alive = false;
+                        dropped_blocked.push(e.name.clone());
+                    }
+                }
+                if alive {
+                    rows.push(e);
+                }
+            }
+        }
+        Err(e) => warnings.push(format!(
+            "{NOTE} fno registry unreadable ({e}); slot count degraded to 0"
+        )),
+    }
+    if !dropped_blocked.is_empty() {
+        warnings.push(format!(
+            "{NOTE} {} claude row(s) usage-blocked per claude agents, slot(s) freed: {}",
+            dropped_blocked.len(),
+            dropped_blocked.join(", ")
+        ))
+    }
+    rows
+}
+
+/// How long one session report asserts occupancy for a pid-less row the
+/// roster cannot answer. SessionStart re-fires on resume, clear and compact,
+/// so a working session refreshes the stamp; a vanished session occupies a
+/// slot at most this long after its last report. 24h: a user chat spans a
+/// workday, and no shorter bound may drop a live chat mid-session
+/// (d-d0c63de7). Bounded, never terminal (d-10a72d88): no exit is modeled.
+const REPORT_FRESHNESS: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// The row shapes the claude roster POLICES: a claude bg worker minted by
+/// the ask lane (origin `spawn`, substrate `thread`, no pane ref, no
+/// unproven-lineage receipt), whose liveness the daemon roster settles. A
+/// roster miss on one of these is a definitive death. Every other pid-less
+/// row - the user's own session (origin `operator`, d-d0c63de7), an adopted
+/// row, a non-claude native, a hosted pane row whose pid lookup failed, a
+/// spawned row re-minted at its session report - is outside the roster's
+/// jurisdiction, and its report freshness is the evidence.
+fn is_roster_policed(e: &RegistryEntry) -> bool {
+    if e.harness_name() != "claude" || e.origin.as_deref() != Some("spawn") {
+        return false;
+    }
+    // A hosted pane row is not a daemon job: pid None is a supported
+    // outcome there (the pane pid lookup can fail) and the roster never
+    // lists it. The mux ref the pane restamp heals, or an explicit
+    // interactive host mode, names the shape.
+    if e.mux.is_some() || e.host_mode.as_deref() == Some(crate::state::HOST_MODE_INTERACTIVE) {
+        return false;
+    }
+    // A spawned row whose original went missing before its first report
+    // re-mints at that report under an unproven lineage; the receipt names
+    // it, and freshness is its evidence too.
+    if e.lineage_reason.as_deref().is_some_and(|r| !r.is_empty()) {
+        return false;
+    }
+    true
+}
+
+/// Whether the row's last session report is inside [`REPORT_FRESHNESS`].
+/// Absent or unparseable fails closed (never counted) - the discipline of
+/// `InsideLegReport::is_live_at`.
+fn report_is_fresh(e: &RegistryEntry, now_secs: i64) -> bool {
+    match e
+        .last_report_at
+        .as_deref()
+        .and_then(crate::state::rfc3339_like_to_secs)
+    {
+        Some(at) => now_secs.saturating_sub(at as i64) <= REPORT_FRESHNESS.as_secs() as i64,
+        None => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::RegistryEntry;
+    use crate::{claims, AgentStatus};
+
+    /// A pid-less session-report row: the native-adopt shape. `short_id` is
+    /// set (every mint derives one) but absent from the pinned empty roster,
+    /// which is exactly the population `live_rows` cannot answer today.
+    fn pidless_reported_row(name: &str, origin: &str, harness: &str) -> RegistryEntry {
+        let mut e = RegistryEntry::default();
+        e.name = name.into();
+        e.short_id = format!("{name}-transport");
+        e.status = AgentStatus::Busy;
+        e.origin = Some(origin.into());
+        e.harness = Some(harness.into());
+        e
+    }
+
+    /// The wall clock `live_rows` reads, rendered as a registry stamp.
+    fn stamp_ago(secs: u64) -> String {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let t = chrono::DateTime::from_timestamp((now - secs) as i64, 0).unwrap();
+        t.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+    }
+
+    /// The empty-roster pin every live_rows liveness test needs: an empty
+    /// daemon dir reads as a roster with zero workers, so no real worker on
+    /// this machine can answer a row's transport lookup. The caller holds
+    /// the env lock.
+    fn empty_roster_dir() -> tempfile::TempDir {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("daemon")).unwrap();
+        std::env::set_var("FNO_CLAUDE_DAEMON_DIR", dir.path().join("daemon"));
+        std::env::set_var("FNO_CLAIMS_ROOT", dir.path().join("claims-root"));
+        dir
+    }
+
+    fn write_reg(dir: &tempfile::TempDir, entries: &[RegistryEntry]) -> std::path::PathBuf {
+        let reg = dir.path().join("registry.json");
+        let rows: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|e| serde_json::to_value(e).unwrap())
+            .collect();
+        std::fs::write(
+            &reg,
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "entries": rows
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        reg
+    }
+
+    #[test]
+    fn a_fresh_session_report_makes_a_pidless_native_row_an_occupant() {
+        let _g = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = empty_roster_dir();
+        let mut op = pidless_reported_row("user-chat", "operator", "claude");
+        op.last_report_at = Some(stamp_ago(3600));
+        // A native launch child: origin spawn, but the roster is claude-only,
+        // so a codex row is outside its jurisdiction.
+        let mut codex_native = pidless_reported_row("codex-native", "spawn", "codex");
+        codex_native.last_report_at = Some(stamp_ago(3600));
+        let reg = write_reg(&dir, &[op, codex_native]);
+        let mut warnings = Vec::new();
+        let rows = live_rows(&reg, &mut warnings);
+        assert_eq!(rows.len(), 2, "{warnings:?}");
+        assert_eq!(crate::spawn_gate::slot_count(&reg, &mut warnings), 2);
+        std::env::remove_var("FNO_CLAUDE_DAEMON_DIR");
+        std::env::remove_var("FNO_CLAIMS_ROOT");
+    }
+
+    #[test]
+    fn a_stale_report_drops_the_occupant() {
+        let _g = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = empty_roster_dir();
+        let mut op = pidless_reported_row("user-chat", "operator", "claude");
+        op.last_report_at = Some(stamp_ago(25 * 3600));
+        let reg = write_reg(&dir, &[op]);
+        let mut warnings = Vec::new();
+        let rows = live_rows(&reg, &mut warnings);
+        assert_eq!(rows.len(), 0, "{warnings:?}");
+        std::env::remove_var("FNO_CLAUDE_DAEMON_DIR");
+        std::env::remove_var("FNO_CLAIMS_ROOT");
+    }
+
+    /// A blocked fleet row frees its slot: the harness's positive blocked
+    /// reading drops a row the roster would keep. The unblocked
+    /// control row keeps its count.
+    #[test]
+    fn a_blocked_fleet_row_does_not_count_toward_max_live() {
+        let _g = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = empty_roster_dir();
+        // Both workers ride our own live pid, so the roster answers live
+        // for both and the pid-less fleet arm counts them before the join.
+        let start = crate::daemon::process_start_time(std::process::id())
+            .expect("our own start time reads");
+        let worker = |short: &str| {
+            serde_json::json!({
+                "sessionId": format!("{short}-0000-0000-0000-000000000000"),
+                "pid": std::process::id(),
+                "procStart": start,
+            })
+        };
+        std::fs::write(
+            dir.path().join("daemon/roster.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "proto": 1,
+                "workers": {"deadbeef": worker("deadbeef"), "aaaa1111": worker("aaaa1111")}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut fleet_a = pidless_reported_row("bg-a", "spawn", "claude");
+        fleet_a.short_id = "deadbeef".into();
+        fleet_a.last_report_at = Some(stamp_ago(60));
+        let mut fleet_b = pidless_reported_row("bg-b", "spawn", "claude");
+        fleet_b.short_id = "aaaa1111".into();
+        fleet_b.last_report_at = Some(stamp_ago(60));
+        let reg = write_reg(&dir, &[fleet_a, fleet_b]);
+        let mut warnings = Vec::new();
+        let rows = live_rows_with_blocked(
+            &reg,
+            &|| std::collections::HashSet::from(["deadbeef".to_string()]),
+            &mut warnings,
+        );
+        assert_eq!(rows.len(), 1, "{warnings:?}");
+        assert_eq!(rows[0].name, "bg-b");
+        assert!(
+            warnings.iter().any(|w| w.contains("usage-blocked")),
+            "{warnings:?}"
+        );
+        std::env::remove_var("FNO_CLAUDE_DAEMON_DIR");
+        std::env::remove_var("FNO_CLAIMS_ROOT");
+    }
+}

@@ -1,0 +1,678 @@
+---
+created: 2026-06-26T00:00
+title: Using the backlog
+---
+
+# Using the backlog
+
+A practical guide to driving `fno backlog` day to day. For the internals
+(lane key, rank model, WIP caps, board rendering) see
+[architecture/backlog-board-ordering.md](architecture/backlog-board-ordering.md).
+
+## Is this page for you?
+
+You create, update, rank, or close backlog cards from a terminal, or you wonder why a command refused. This page owns the day-to-day commands and the node lifecycle. Misreading it costs a lost edit: a field you change by hand does not move the card. The board renders from node fields, never from the board file.
+
+Not for: why one card sits above another, or how the render pipeline works. That is [architecture/backlog-board-ordering.md](architecture/backlog-board-ordering.md). Sorting deferred work at intake is [backlog-triage.md](backlog-triage.md).
+
+## Mental model: the board is derived
+
+You never drag a card. Every board renders from node fields: the `graph.md` Obsidian Kanban, the HTML board, and the mux board. So you "move" a card by changing the field that drives its placement. [See the backlog](#see-the-backlog) lists each board.
+
+| What you see | What controls it |
+|--------------|------------------|
+| **Column** (Now / Next / Later / Triage / Done) | `_kanban_column` over lifecycle overlays plus live-epic effective priority |
+| **Swimlane** (the per-project cluster inside a column) | `project` |
+| **Position within a lane** | `rank` (the operator's pin), else the shared epic-aware work-order suffix, which ends in the encounter-driven importance score |
+
+`_kanban_column` is the sole column authority, `make_kanban_column(entries)` binds its whole-graph overlays, and `rank` never changes a card's column.
+
+## Reading one node
+
+`fno backlog get <id>` emits the flat, indented JSON record used by Footnote's dispatchers, hooks, and loop runtime. Treat the default output as a machine contract. Do not parse the grouped view from a script.
+
+Use `fno backlog get <id> --grouped` for a human scan. It renders populated fields under concept headings and places fields without a group under `Residual`, so new or legacy data stays visible. When combined with `--grouped`, `--field <name>` remains the precise machine-friendly read and takes precedence.
+
+Nodes hold short numbers beside the hash. `fno backlog get x-15` resolves the number to its node, and the record's `_number` field prints the node's own number (`x-5555` for `x-aaaa`). `fno backlog list` carries it as the `number` field and column, and the mux board and the lead check-in print it beside the hash. A node filed in the last minute prints the hash alone until the numbering beat reaches it.
+
+## Creating nodes
+
+There are three plan-less creation commands. They overlap; pick by how much
+ceremony you need:
+
+| Goal | Command |
+|------|---------|
+| Capture an idea, minimal ceremony | `fno backlog idea "title" --difficulty medium --details "why"` |
+| Add a fuller node (type/size/blockers/parent) | `fno backlog add "title" --difficulty medium --priority p2 --details "..."` |
+| Create one auto-scoped to the current git repo (carries source provenance) | `fno backlog new "title" --difficulty medium` |
+| Pull an existing plan file in as a node | `fno backlog intake path/to/plan.md` |
+
+Differences:
+
+- **`idea`** signals "skip the spec/plan ceremony for now"; the lightest command.
+- **`add`** is the fullest manual form: also takes `--type`, `--size`,
+  `--blocked-by`, `--parent`, `--roadmap-id`.
+- **`new`** auto-scopes `project`/`cwd` from the current git repo (pass
+  `--unscoped` to opt out) and records `--source-*` provenance; built for
+  agent/automated creation.
+
+All three accept `--details`/`--description`. A node with no `plan_path`
+derives to `status: idea` until a plan is associated.
+
+Every node-birth path states its difficulty. `add`, `idea`, `new`, `intake`, `decompose`, `capture promote`, and retro either carry a band or refuse. Decompose inherits its epic's band. Intake reads the plan. Retro maps severity. Inbox-created nodes use the named medium default. `fno backlog migrate-difficulty --backfill` fills legacy nulls with an attributable `backfill` history entry. It reports rows with no signal as skipped.
+
+`fno backlog intake` is the one creation command that reads a plan file. The plan's file table is load-bearing downstream: parallel lane fill collision-checks dispatches against it. Intake therefore refuses a plan whose `## Files to Modify` parses empty (exit 2) unless you pass `--allow-no-surface`. Such a node cannot be collision-checked and dispatches fail-open. A multi-path intake refuses the whole batch before any write. The plan-less creation commands above are unaffected.
+
+## Editing a node
+
+`fno backlog update <id>` edits a node in place. Use this instead of
+recreating via `idea` (which produces duplicates). Editable fields:
+
+```bash
+fno backlog update <id> title="..."            # rename
+fno backlog update <id> details="..."          # rationale ('null' clears)
+fno backlog update <id> priority=p1            # see "Moving cards"
+fno backlog update <id> domain=code            # domain
+fno backlog update <id> size=L                 # S | M | L
+fno backlog update <id> type=epic              # feature | epic | bug
+fno backlog update <id> project=fno cwd=/path  # reproject (move swimlane)
+fno backlog update <id> plan_path=path/to/plan.md
+fno backlog update <id> public=false           # exclude from public projections
+fno backlog update <id> source_node_id=x-aaaa  # origin edge (see "Node-to-node edges")
+fno backlog update <id> related=x-bbbb         # affinity edge, symmetric
+fno backlog update <id> 'details+=<paragraph>' # append without re-reading the node
+fno backlog update <id> blocked_by+=<id>       # add one blocker
+fno backlog update <id> blocked_by-=<id>       # remove one blocker
+fno backlog update <id> tags+=<tag>            # add one tag ([a-z0-9-:.], e.g. release:0.4.8)
+```
+
+The operator form (`field=value`, `field+=value`, `field-=value`) covers every field. `fno backlog update --help` lists them by kind.
+
+
+`<id>` resolves by canonical id (`ab-1a2b3c4d`), title-derived slug
+(`dashless-spawn`), or bare hex (`1a2b3c4d`).
+
+When a PR opens outside the Footnote PR path, acquire the owner claim with `fno agents claim acquire node:<id> --holder <worker>`, then record the primary PR with `fno backlog update <id> pr_number=<n>`. The claim lockfile is the owner source, and the update receipt reports its owner, PR, and status. `--add-pr` records only an additional PR and can leave a ready node offered for dispatch. Without a claim lockfile, the owner reads as `unknown`.
+
+## Demand signal: what the agents keep hitting
+
+Every other agent pushback surface is shaped for BLOCKAGE. `fno inbox outstanding ask` means "I need a decision". `fno agents org escalate` means "the board is stalled". The `<help>` tag means "I am stuck". None of them means "this keeps costing me". `fno backlog encounter` is the one that does.
+
+A repeat `fno backlog note` on a node with no encounter from the same session ends its receipt with the encounter command. A note is prose nothing ranks. An encounter is the row `fno backlog demand` reads.
+
+```bash
+fno backlog encounter <id> --evidence "cost two wrong diagnoses before I found the real seam."
+fno backlog encounter <id> --operator --evidence "the operator hit the same seam."
+fno backlog idea "title" --evidence "hit this while doing something else."
+fno backlog add "title" --evidence "hit this while doing something else."
+fno backlog demand                 # the divergence table
+fno backlog demand --json          # the same rows, for a groom pass or a lead
+```
+
+An encounter is a thing that HAPPENED, not a preference. Agents have no preferences, they have contexts. A poll count of N agents who like a node is unfalsifiable. N distinct sessions that each name what the node cost them is falsifiable against a transcript. So evidence is required. `config.style.word_cap.encounter` caps it at 80 words by default. Over-length evidence is refused rather than truncated.
+
+One voter votes once per node. Agent voters use their session identity. The operator uses the stable `operator` voter key with `--operator`, so a plain terminal does not need a harness session. A second attempt is refused, never silently dropped. The refusal names the timestamp of the vote already on file, so the caller can add a `fno backlog note` instead. An agent whose identity cannot be proven cannot vote at all: no provenance means no falsifiability. Run `fno whoami` to see what a session can prove.
+
+`demand` sorts by DIVERGENCE, not by raw vote volume. A p0 with many encounters tells you nothing, because you already ranked it. A p3 or a never-dispatched node with many encounters is the whole point of the read. When the operator voted, the `enc` column shows the split, for example `3 (2a/1o)`. It counts both kinds of voter. The `dispatched` column counts the encountering sessions that were also sent to that node. A row reading `enc 12, dispatched 12` is one lead that fanned out. A row reading `enc 3, dispatched 0` is three sessions that hit the node while doing something else. The context renders beside the number rather than being subtracted out of it.
+
+`idea` and `add` accept optional `--evidence`. With it, the creator's encounter is recorded after the node is minted. Without it, the node has no `encounters` key. If identity cannot be proven or the best-effort encounter is refused, creation still succeeds. Stderr names the skipped vote. A new vote is never minted without evidence.
+
+The board (the served web backlog, and the same page written to disk by the render pass with the rows embedded) shows a vote pill on EVERY row and the count in the detail panel's demand group. A row with no encounter yet reads `0`, muted. On the served board the panel's upvote action posts the encounter with the evidence you type; on a page opened from disk the copy button hands you `fno backlog encounter <id> --operator --evidence "REPLACE: what it cost"` to paste and fill. The page never writes the store from a `file://` open.
+
+`demand` is a READ. It never writes `rank` and never touches `_kanban_column`. The command itself reorders nothing.
+
+Votes do move the order, in one place and below every decision. `demand.importance_score` is a projection: divergence plus a capped age term, zero for a node nobody voted on. Nothing stores it. `make_selection_sort_key` reads it after priority and fan-out. A measurement must not outrank a judgement, and an operator's pin outranks both. A graph with no encounters sorts as it did before the term existed.
+
+Votes also stop the age drain. `maintain` counts an encounter as movement, so a node somebody paid for is never deferred for sitting still. Before that, 807 rows were drained by age with no reader. The top demand row was 15 days from being one of them.
+
+An encounter has no correction command. It cannot be edited or withdrawn, because an edit path makes the record deniable. A later correction is a progress note.
+
+### Progress notes reach the people building the node
+
+`fno backlog note <id> "<text>"` appends the note AND mails it. A worker reads its node once, at dispatch. So a note written after that reaches nobody on its own. The command sends a short pointer to every bound reader. The node's live claim holder. The node's graph sessions. Workers named on the node in the registry. The same chain runs for the owner node. Then the role walk, from the epic out to the project. Every outcome prints, including "nobody to reach". When nobody bound to the node can hear it, the command refuses, writes nothing, and exits 3. `--quiet` writes it anyway.
+
+Pass `--quiet` to note without mailing. Delivery is the default on purpose. A forgotten flag costs a redundant mail. A forgotten mail cost the finding.
+
+### Blocking findings hold the gate
+
+`fno backlog note <id> "<finding>" --blocking` records the body as a review finding instead of a progress note. An open finding denies the session's terminal-allow until someone runs `fno backlog note --resolve <finding-id>`. With no live reader the finding still writes: the receipt says it gates the next worker. `fno backlog notes findings [<id>] [--open]` reads them back: one count line first, then one line per finding, and a store read error exits 1 instead of printing zero. The retired `fno backlog annotate` spellings refuse with one line naming these replacements.
+
+## Moving cards
+
+### Between columns
+
+Columns are derived, so change the driving field:
+
+| Target column | How |
+|---------------|-----|
+| **Now** | `fno backlog update <id> priority=p1` (p0/p1 -> Now), or it auto-moves when a live session claims it |
+| **Next** | `fno backlog update <id> priority=p2` |
+| **Later** | `fno backlog update <id> priority=p3` |
+| **Triage** | the queued / pick flow (queued = awaiting human ack); not a priority |
+| **Done** | `fno backlog done <id>` |
+| **Off-board** | `fno backlog defer <id> --reason "..."` (deferred and superseded leave the board) |
+
+### To a different swimlane
+
+The swimlane is the project cluster, so reproject the node:
+
+```bash
+fno backlog update <id> project=<name> cwd=<path>
+```
+
+### Reorder within a lane (operator only)
+
+`rank` floats a card inside its `(column, project)` lane without changing its column. Board order == work order, so `--top` decides where the card sits in that order. It does not dispatch the node. When the node is inside an active mission scope, a drain reaches it. A top-ranked node outside every active mission scope stays undispatched.
+
+`--top` means top of that scope and nothing wider. A node with a live epic parent ranks among its epic's children. A pinned child is therefore not the project's next node. The receipt names the scope it ordered within.
+
+```bash
+fno backlog rank <id> --top            # front of the scope (order only, no dispatch)
+fno backlog rank <id> --bottom
+fno backlog rank <id> --before <id>    # anchor must already be ranked
+fno backlog rank <id> --after <id>
+fno backlog rank <id> --clear          # rejoin the priority fallback
+fno backlog rank <id> --top --operator # from inside an agent shell
+```
+
+An agent session is refused. `--top` writes `min(rank) - 1`. With several callers on the same lever, every writer undercut the last. The resulting order was arrival order wearing the word "importance". Agents vote instead, and the selection key reads the votes:
+
+```bash
+fno backlog encounter <id> --evidence "what this cost me"   # the vote
+fno backlog update <id> priority=p1                        # the proposal
+```
+
+Priority is bounded to four values, so two agents disagreeing about a node produce a visible split on `fno backlog demand` instead of a silent stack. The pin stays with the operator, and it outranks every vote.
+
+## Lifecycle
+
+`fno backlog ready` accepts `--created-before`, `--created-after`, `--touched-before`, and `--touched-after`. Their values are forms such as `30d` or an ISO date. `--sort created|touched` lists the oldest first. Touched uses `touched_at`, then `created_at`. Preview the 60-day stale-idea sweep with `fno backlog ready --ideas --touched-before 60d --sort touched --json`. The sweep skips p0 and p1 rows, so ignore those in the preview.
+
+`intake -> triage -> ready/next -> done`, with two reversible side states:
+
+| Action | Command | Effect |
+|--------|---------|--------|
+| Move any stored field, status included | `fno backlog update <id> --status <word>` and `--set <field>=<value>` | the patch door: lifecycle rules refuse a move whose facts are missing and name the flag or command that supplies them; `--leave deferred\|--superseded` reverses one park without touching the other. The operator form (`field=value`, `field+=value`, `field-=value`) writes the same five fields the operators cover |
+| Pause a node | `fno backlog defer <id> --reason "..."` | leaves the board; `status: deferred` |
+| Retract a false row | `fno backlog retract <id> "the false premise"` | defers + stamps `deferred_kind: retracted` in one act; the blueprint consolidation gate halts on the stamp |
+| Resume it | `fno backlog undefer <id>` | returns to `ready`/`idea`; refuses a still-superseded node and names `fno backlog update <id> --status idea` instead |
+| Replace with a newer node | `fno backlog supersede <new> --replaces <old> --cause "..." --surface <path> --reason "..." --covers "..."` (or `--leftover <id>`) | old's status reads `superseded` from the edge alone; a merged PR touching every `--surface` stamps the record's `verified_at` |
+| Mark complete | `fno backlog done <id>` | closes only on a MERGED PR; sets `completed_at`, unblocks dependents |
+| Reopen it | `fno backlog reopen <id> --reason "..."` | clears `completed_at`; refuses when a referenced PR is MERGED |
+| Remove permanently | `fno backlog remove <id>` | hard delete (use for dupes / dead nodes) |
+| Sweep old terminal nodes | `fno backlog archive --apply` | stamps `archived_at` in the same store, still readable; runs daily via `fno backlog groom` |
+| Bring one back | `fno backlog unarchive <id>` | returns it to the working graph |
+| Browse what shipped | `fno backlog album` | pages the archive newest-first; `--project`, `--json` |
+| Fix a working/archive id collision | `fno backlog archive-dedupe-ids --apply` | reminds the archived side; old id resolves via `previous_id` |
+
+Blockers: `blocked_by=`, `blocked_by+=`, `blocked_by-=` on `update`.
+A node with an open blocker derives to `status: blocked` automatically.
+
+**Every transition here has a correction.** An inverse that nothing a caller reads ever names is as bad as a missing one. `fno backlog remove` existed and worked for a long time while nothing mentioned it. An agent therefore ruled that no delete command existed, and another project kept 23 nodes it believed un-file-able.
+
+Reopening is guarded rather than free.
+When a referenced PR is MERGED, `reopen` refuses.
+That is `done`'s gate inverted: the work is in main, and clearing the completion makes the graph assert that shipped work did not ship.
+The usual remedy is to file what remains as its own node.
+`--force --reason` records a deliberate reopen of shipped work.
+Ancestor epics the cascade auto-closed come back with the child.
+An epic closed on its own evidence is left alone and named, because reopening it discards a judgment the command never made.
+
+Two facts hold a reopen against the children rollup, which otherwise re-derives `done` from the closed children on the next read. A parent with a bound plan and no PR of its own is never auto-closed. Its deliverables are unverified, so it closes through its own door on its own evidence. A reopen that postdates every child's close stamps `reopened_at`, and the rollup respects that stamp until a new child close lands.
+
+## Deferred kinds
+
+A deferral is two facts wearing one status. One is an expiry: a hygiene sweep aged it out, nobody ruled. One is a decision: a human said no, not now, or wait-for-X. `deferred_kind` separates the two. The difference is load-bearing: a wont-do or retracted child never holds its epic open, while an expired one is just drift.
+
+| Kind | Means |
+|------|-------|
+| `expired` | aged out by machinery, no human judgment |
+| `blocked` | waiting on a named thing |
+| `wont_do` | an operator or author ruled against it |
+| `retracted` | the row was filed on a false premise; stamped only by `fno backlog retract`, and the blueprint consolidation gate halts on it |
+| `superseded` | the work moved elsewhere |
+| `later` | real intent, not now |
+| `contingent` | fires only if a named condition fires |
+| `carveout` | harvested carve-out backlog |
+| `internal_only` | cut by a build-for-others ruling |
+| `junk` | empty or corrupt placeholder parked in a status |
+
+Classification is EXACT STRING MATCH only, never inference. `fno backlog defer <id> -R "..." --kind wont_do` stamps the kind directly. Without `--kind`, a reason that exactly matches a machine-stamped string (the maintain drain, the stale-ready quarantine) self-classifies. Anything else stays unclassified. That is the contract: an honest unknown beats a wrong label, because a wrong kind silently changes whether an epic can close. `undefer`, `done`, `reopen`, and `unsupersede` clear the kind with the rest of the deferral state.
+
+Two hidden commands serve the migration and the operator:
+
+- `fno backlog backfill-deferred-kind [--map FILE] [--apply]` classifies existing deferred rows by exact match against the built-in table plus a TSV map (`kind<TAB>exact reason` per line). Dry run by default. It never overwrites an existing kind and never closes or undefers anything.
+- `fno backlog stuck-epics` lists epics whose only incomplete children are deferred or superseded, each with a `closable` verdict and its holders. Read-only: closing one is always an operator ruling.
+- `fno backlog reopen <child> --reason ...` against a done-on-its-own-evidence parent stamps a `reopen_warning` on that parent, alongside the stderr warning. The marker names the child and the time, so the fact stays findable after the terminal with the warning is gone. When the parent is reopened directly, or the named child closes again, the marker clears.
+
+### Epic child cap
+
+`backlog.epic_max_open_children` bounds how many open direct children one epic can hold. The graph store reads the global config first, then a config.toml beside the store. Unset means no cap.
+
+A child is open: not done, not superseded, not deferred. Children are direct. A sub-epic counts as one child of its parent and carries its own cap.
+
+Every write that sets a parent meets the refusal: `update parent=`, `idea --parent`, `contain`, `decompose`, the rollup role auto-link, and the api node_create. A hand-up is exempt. That write moves the live children of a closing node to the nearest live ancestor. It moves existing work and adds none. If the role's single epic is full, a titled `idea` with no `--parent` meets the same refusal. The auto-link sets the parent in the same write. The filer re-runs with `--parent <new epic>`.
+
+The refusal names the epic, its open count, the cap, and the next step. Run `fno backlog idea "EPIC: <theme>" --type epic` to start a new small epic, then point the write at the new epic id. If a lead leads the full epic, it adds the new epic to its own role: `fno agents org promote <its handle> --scope <each epic it holds> --scope <new-epic-id>`. That works for an epic the lead's own session created. Any other epic needs a grant the user makes in chat, or a role that contains both. The user says it, you record their exact words with `fno inbox law set 'role-grant:<new-epic-id>' '<your handle>' --rationale 'user in chat: <their words>'`, and the next check-in stamps the role.
+
+The same count reads before any write, on the `epics:` line of `fno agents org checkin`. `19/15 full` means the next open child is refused at the current cap. `19/- (cap unset)` means no cap is configured, which is the OSS default. `fno agents org --nodes --json` carries the list per role as `epics` and `epic_cap`.
+
+### Unplanned idea cap
+
+Machine-filed, unplanned idea rows use `backlog.max_open_ideas` in each nearest-epic scope. Rows without an epic use `project:<project>`. The default is 25. Every measured epic scope held nine or fewer ideas. A fresh install can accept a readable first batch. `0` turns the cap off. Rows with a plan, epic type, decompose group, or `source_kind = operator_request` are not capped. A refusal reports the count, cap, oldest rows, and fold path (`--wave-of`). It suggests an epic parent or closing stale ideas. Setting this key prints the Python loader's unknown-key warning until the config model carries it. Rust still reads the key at the publication seams.
+
+A wave note (`fno backlog idea --wave-of <node>`) folds a finding onto a live node and mints no id. Nothing acts on it, so it stays open until someone records where it went. `fno backlog find` searches its text. `fno backlog list wave-notes` lists the undisposed notes on closed hosts, with each note's `ts`. `--all` adds notes on hosts that closed before 2026-11-01. Nobody triaged those older notes, so they stay out of the working list. `fno backlog note dispose <host> <note-ts> --absorbed <pr>` or `--refiled <node>` records the outcome, and the note stays on its host. `fno backlog done` and `fno backlog reconcile` name a closing host's undisposed notes on stderr. They never refuse a close over them, because a merged PR has nothing left to stop. A `done` with completion flags (`--pr`, `--note`) and a `supersede` print no line. `find --fts` does not read wave text. The list still holds every such note.
+
+## Finding work by meaning: find --fts
+
+`fno backlog find --fts "free text query"` searches title, slug, and details through an FTS5 index (BM25-ranked whole-word matching) and finds concepts that share only some of the original words. The index is an FTS5 table inside the graph.db store, never a second source of truth. It is rebuilt from scratch whenever the store moves under it, so the index cannot answer stale. A build without FTS5 degrades to the ordinary substring search with a warning. The honest limit: a query sharing no words with the node still misses, so filing duplicates before searching stays the failure mode to watch.
+
+## Reviewing duplicate and expired work
+
+`fno backlog discover --json` produces a read-only worklist for deferred rows whose `deferred_kind` is `expired`. It never closes or undefers a node.
+
+The pass joins the filing gate's two recall lanes. FTS5 catches vocabulary differences. Relatedness keeps the calibrated score and domain signal.
+
+The filing gate already exists, but it previously read only relatedness. The union labels each hit as `fts`, `relatedness`, or both.
+
+The pass reads `deferred_kind` as a field. It does not parse reason text. Decided kinds stay excluded and appear in `excluded_by_kind`.
+
+Each row reports `duplicate`, `satisfied`, `still_real`, or `undecided`. Evidence names a candidate node, merged PR, existing file, or the reason for uncertainty.
+
+The operator owns the ruling. The pass never auto-closes, auto-undefers, or changes the graph store. An empty result includes a positive control. An all-match result is refused as a failed instrument.
+
+## Node-to-node edges
+
+Four edges connect nodes, and only the first two gate anything.
+
+| Edge | Set with | Meaning | Gates? |
+|------|----------|---------|--------|
+| `blocked_by` | `--blocked-by` / `--add-blocker` / `--remove-blocker` | this cannot start until that lands | yes: derives `_status: blocked` |
+| `parent` | `--parent` | this was decomposed into that epic | yes: rollup, epic depth |
+| `contained_in` | `fno backlog contain <owner> <id>...` (lift out: `contain --release <id>...`) | this ships inside that node's PR | yes: skipped by both dispatch paths, closed by the owner's merge |
+| `source_node_id` | `--source-node`, or captured ambiently | this came *out of* working on that | no |
+| `related` | `--related` | affinity: two sides of the same coin, or work that co-delivers | no |
+
+`source_node_id` and `related` are deliberately different questions.
+
+`contained_in` is not defer. Containment says the node's work ships inside the owner's PR. The row stays on the board with a `ships inside: <owner>` line and never dispatches alone. When the owner's merge cascades, the row closes with it. Pass `--surface <repo-relative-path>` at contain time. Pass the flag once per path. When the owner's merged PR touches a declared surface, the cascade closes the row. When the owner's PR body binds the child through a closure line, the cascade closes the row too. With neither, the cascade releases the containment. The row stays open and dispatches again. Undeclared children close as before. Defer is a judgement any groom pass can make and it hides the row. If the intent is "this ships with that", adopt, never defer. Full contract: [subtask-containment](architecture/subtask-containment.md).
+Origin is where the decision to think about this was made; affinity is asserted by whoever notices it, in either direction, and neither implies the other.
+
+**Origin capture is ambient first.** Filing a node from a session that already knows its node stamps the origin with no flag, through three branches in precedence order: an explicit `--source-node`, then an owned `.fno/target-state.md`, then the `FNO_NODE` a spawn exported. Pass `--source-node <id>` only when none of those apply, or to override them.
+
+The two paths fail in opposite directions on purpose. Ambient capture that resolves nothing files the node anyway with a null origin, because provenance must never block a filing. An explicit `--source-node` that does not resolve **refuses the command** and writes nothing, because silently dropping an assertion would leave a node looking organically filed.
+
+```bash
+fno backlog idea "follow-up" --source-node x-aaaa    # or a slug, or bare hex
+fno backlog update <id> source_node_id=null           # clear it
+```
+
+**`related` is symmetric and stored on both endpoints.** Declaring it on one node writes the inverse on each peer, in the same locked write, so the two sides cannot disagree. It replaces the list rather than appending, and a dropped peer loses its inverse edge too.
+
+```bash
+fno backlog update x-aaaa related=x-bbbb,x-cccc   # sets both directions
+fno backlog idea "co-delivered work" --related x-bbbb
+fno backlog update x-aaaa related=null            # clears both sides
+```
+
+Not to be confused with `fno backlog relatedness`, which builds a *computed* similarity sidecar from token overlap and shared domain/epic. That sidecar is regenerable and rebuilt from scratch on every `relatedness build`; `related` is an assertion and lives on the node so it survives.
+
+### Reading the edges back
+
+```bash
+fno backlog provenance <id>              # origin (with its title), related, birth + spawn sessions
+fno backlog provenance <id> --spawned    # invert the origin edge: what did this node produce?
+```
+
+`--spawned` walks transitively with traversal-derived depth. A cycle truncates the walk and says so, keeping the descendants it already found.
+
+`fno backlog epic status <epic>` reports **scope growth**: follow-ups the epic accumulated after decomposition (reachable by `source_node_id`, not already children by `parent`). The figure is withheld when origin-capture coverage across the epic's window sits below 50%, since at low capture a small number is indistinguishable from a missed one. Coverage counts only origins that still resolve to a live node, because an origin naming a deleted node joins nothing and would otherwise inflate coverage while contributing no growth; any such danglers are reported separately. Realized node and PR counts print either way, so a withheld figure explains itself.
+
+### Request origin: who asked for this
+
+`request_origin` names who requested the work. The native decision in `crates/fno-agents/src/backlog/node_origin.rs` decides it once at birth. Later edits, re-intakes, and rulings never rewrite it. The buckets:
+
+- `operator_request`: a human asked, via `--source-kind operator_request`. Birth requires an unacked operator turn in the filing session (`fno inbox operator status` above 0). File the ask before you ack the turn.
+- `agent_discovery`: an agent found it. Declare it with `--source-kind from_observation` or `from_supervisor` plus `--origin-evidence`.
+- `automated_followup`: a machine follow-up. Retro landings and decomposed children.
+- `unknown`: everything else.
+
+A node carries `origin_evidence`, the producing-event reference the birth had: a capture fu-id and its substrate ref, a plan's sources, or a causal node id.
+
+Unknown stays unknown. A recorder harness, an organic default, or the words "operator raised" in a title never establish origin. Every node born before this field existed reads unknown.
+
+Two writers backfill the ORIGIN SESSION (a different fact from request origin: which session filed or first touched the node). An `idea` filing appends one `think` session row for the filing session. `started_at` reads that session's first user turn. `ended_at` reads the filing time. An unreadable transcript stamps the filing time for both. The receipt says so, and the filing still lands. `fno backlog session add <node> --phase think --session-id <earlier> --harness <h> --origin` fills `started_at` from that session's transcript. It appends the row. When `source_session_id`/`source_harness` are empty, it first-fills them. A filled origin is never overwritten. The receipt names the session that holds it. When the transcript is missing, the command exits 2 and names `--started-at` as the by-hand door.
+
+On the local board the buckets appear as an `All origins` filter. Rows with a known origin wear a dashed pill. Each detail panel shows an origin line and its evidence. The public board omits origin evidence entirely, since evidence can carry private paths and ids. Read either back with `fno backlog get <id> --grouped` under Provenance.
+
+**done = merged.** `fno backlog done` closes a node only when a referenced PR is
+MERGED. An OPEN PR (even with green CI) exits 5 (awaiting merge): the node stays
+`in_review` and closes on the actual merge via `reconcile` / merge-triggered
+`advance`. A session finishes at PR-up + CI-green + reviewed (it never waits on a
+human merge); only the graph close waits for the merge, so the "done" state means
+"landed on main" uniformly, whoever closes it. Exit codes: 0 closed, 3 refusal
+(CLOSED-unmerged / no evidence), 4 gh outage (retryable), 5 awaiting merge.
+
+`fno backlog update` cannot close a node. It once carried a `--completed` flag that applied completion with no gh evidence check and emitted no event. That silence is what let a ledger append close nodes hours before their PRs merged, so the flag is removed. The only closers are `fno backlog done`, its deprecated one-release `done` spelling, and `reconcile`. `backlog done` is merge-gated with `--force --reason TEXT` for the un-cross-checked case. The deprecated spelling is merge-gated with no bypass. Both surfaces resolve merge evidence through one shared helper and share the exit codes: 0 closed, 3 refusal, 4 gh outage (retryable), 5 awaiting merge.
+
+## Priority tiers
+
+Lower N is more urgent. Priority and size are orthogonal.
+
+- **p0** drop everything (incidents, blocking bugs, hotfixes) -> Now
+- **p1** next-up, typically small -> Now
+- **p2** normal (default) -> Next
+- **p3** long-tail / experimental -> Later
+
+## Finding work
+
+```bash
+fno backlog next                  # highest-priority unblocked node
+fno backlog ready                 # the ready queue
+fno backlog get <id|slug|hex>     # resolve and inspect one node
+fno backlog find "query"          # high-recall search over title/slug/details
+```
+
+## See the backlog
+
+One graph feeds every view. Pick the view by where you are.
+
+| Where | Command | What you see |
+|-------|---------|--------------|
+| Terminal | `fno backlog board` | Three short sections: just finished, in progress, on deck |
+| The mux | prefix+O inside `fno mux` | The full kanban board, with keys to search, filter, rank and dispatch |
+| A local HTML file | `backlog.render_targets` in the global config | The board page as a file, re-rendered in the background |
+| A browser, private | `fno mux serve --web`, then the backlog link | The live board behind the bridge token |
+| A browser, public | `fno backlog publish` | Open, public rows only, on any static host |
+
+### In the terminal
+
+```bash
+fno backlog board                  # three sections, one line each: just finished, in progress, on deck
+fno backlog board --project fno    # scope to one project (default: the current repo's)
+fno backlog board --json           # same three sections, machine-readable
+```
+
+It reads the graph, the on-disk pr-status cache under the state root, and local git against `origin/main`. It never makes a live GitHub call, so this command can never exhaust the GraphQL quota.
+
+Each section caps at five rows and shows `... and N more` past that. Each row caps at twelve words after the node id, so the whole board fits on one screen.
+
+When a source cannot be read, the section renders an explicit `(unknown: ...)`. It never renders as an empty section: an empty "Just finished" means nothing landed, not that the read failed.
+
+The "In progress" blocking fact comes from the cache's newest row for that PR. That row can be stale by up to the cache TTL. When the PR stays quiet, the row can be older still. The line prints the age beside the verdict, so nobody reads it as the current state.
+
+### In the mux
+
+Press prefix+O in `fno mux` to open the backlog board. The default prefix is Ctrl-b. The sideline menu has a `backlog` row that opens the same board.
+
+![The mux backlog board: one lane per project, one lane open by column, and the selected node's details](images/backlog-mux-board.png)
+
+The board shows one lane per project or epic, and a card for each node. `Tab` cycles kanban, list and graph. `/` searches and `f` filters. `enter` opens the selected node's details. `T`, `K` and `J` rank a card. `b`, `t` and `A` start a blueprint, a target, or a lead on the card. `?` lists every key, and `esc` closes the board.
+
+The graph shows the focused node's family. Parent and contained edges form its layers. Done children fold into one count under each parent. A one-hop `blocked_by` or `related` link outside the family appears as a stub. The graph displays at most 80 nodes. Press `h` or `l` to move between layers. Press `j` or `k` to move between nodes. Other node actions use the selected node.
+
+![The mux backlog graph: three layers of parent-linked nodes, a selected node, and an outside blocker stub](images/backlog-mux-graph.png)
+
+This screenshot uses seeded demo data. Its counts do not describe a live project.
+
+The details view shows the node's plan, parent, pull requests, sessions and comment thread. Each session row carries the command that adopts it.
+
+![The mux node details view: a node's fields, plan path, parent epic, pull request, two sessions with their adopt commands, and its comment thread](images/backlog-mux-details.png)
+
+The list view shows the same nodes as rows, grouped by project and column. The filter bar at the top narrows it, here to in-progress and ready nodes in two projects.
+
+![The mux backlog list view filtered to in-progress and ready nodes, with an epic's details and its children on the right](images/backlog-mux-list.png)
+
+Press prefix+V to cycle the left sideline between agents, backlog and org. The backlog view there is a short work queue in board order.
+
+![The mux sideline in its backlog view: a short queue of demo nodes grouped by column, beside an idle pane](images/backlog-mux-sideline.png)
+
+### A local HTML file
+
+The daemon writes the board page to `~/.fno/cache/pages/graph.html` with no setup. The page looks like this:
+
+![The HTML backlog page: a search bar and filters above kanban columns, with a node's fields, details, parent and sessions open in the side panel](images/backlog-html-page.png)
+
+When the graph changes, the daemon re-renders the page within about five minutes. The page is the web backlog page with its data embedded. Filters and search run in the browser. The file has no write controls.
+
+The page follows your OS light or dark setting by default. The theme button at the right end of the filter bar forces light or dark instead. The choice stays in that browser until you click back to auto. The graph view needs the live board, so this embedded page disables its graph button and shows `graph view needs the live board (fno mux serve --web)`.
+
+`fno backlog board open` renders the page and opens it in your default browser. `fno backlog view` is the same command. Set `FNO_NO_OPEN=1` to print the path only.
+
+To keep more boards current, add rows to `backlog.render_targets` (see [configuration-guide.md](configuration-guide.md)). Each row is a `path`, a `scope`, and a `projection`. The `scope` is one project slug, or `all` for every project. The `projection` is `local`, which is the default. The `backlog` and `roadmap` projections are retired and skip with a warning.
+
+```bash
+fno config set backlog.render_targets '[{"path": "~/notes/fno/backlog.html", "scope": "fno"}, {"path": "~/notes/all/backlog.html", "scope": "all"}]'
+```
+
+`fno config set` writes the global config by default. Keep these rows there. The renderer reads the global config only and warns about a project-local list.
+
+Set `backlog.render_default` to `false` in the global config to stop the automatic page render. The daemon then re-renders only your `backlog.render_targets` rows, and `fno backlog view` rebuilds the page on demand before it opens. This suits machines where the ~28 MB page rewrite after every graph burst costs more than the page is worth.
+
+```bash
+fno config set backlog.render_default false
+```
+
+Like `render_targets`, the renderer reads `backlog.render_default` from the global config only.
+
+The path must be absolute or start with `~/`. A row with an unknown key, an empty scope, or a duplicate path skips with a warning. A row that names a graph state file skips too.
+
+Do not point a row at the state root, for example `~/.fno/graph.html`. The daemon already writes the canonical page under `~/.fno/cache/pages/`, so a state-root row only adds a stray file.
+
+`fno backlog admin render-views` runs one render pass now. It writes `graph.md` and every configured board target. It is the same pass the daemon runs.
+
+### Served on the web
+
+`fno mux serve --web` starts the web bridge on `127.0.0.1:8722`. It prints the URL with a token once. The page's backlog link opens `/backlog` through the same token. The board reads the store live, needs no render step, and never caches. Its graph button draws the selected node's family from the same model answer. Clicking a graph node opens its existing detail panel. On a loopback bind the page can also write. It runs the same backlog commands an agent runs. [guides/web-view.md](guides/web-view.md) covers the token, remote access, and the JSON routes.
+
+For a board anyone can open, use `fno backlog publish` (also `fno backlog board publish`). It renders the public projection: open, public rows only, with titles gated for leaks. [Publish a public board](#publish-a-public-board) covers the targets and the schedule.
+
+## Delivery flow panel
+
+The HTML boards carry a flow panel under the status tiles. It answers three questions: how fast work ships, how long a PR stays open, and where work waits. The numbers come from the one delivery classifier in the Rust keeper, computed once per board render for the board's own scope.
+
+The panel has three groups. Delivered counts confirmed deliveries in the window, split into code and documents, with per-local-week counts and a `*` marker on partial weeks. Code means merged PRs and explicit delivery terminals. Documents mean DoneAdvisory. Elapsed shows the PR open-to-merge median and nearest-rank p85 with the sample count, plus the current open PR population and its oldest age. Waiting shows the canonical in-progress, review and blocked counts with the oldest age of each.
+
+Read the fine print before comparing numbers. The scope line names the window, the local timezone, and the fact that the panel does not follow row filters. Searching, hiding Done, or picking projects moves the rows, never the throughput denominator. Ages are measured from node `created_at`, and accumulated blocked time is unmeasured because the graph keeps no interval history. PRs the graph cannot link to a node ride the coverage line as unlinked deliveries instead of the weekly counts. When the ledger or the keeper cannot be read, the panel names the reason and shows no numbers at all.
+
+## Scorecard by lane
+
+`fno backlog calibration --by-lane` answers which lane did which kind of work, and how it went. It folds every node whose last execute session ended inside the window into cells keyed by task kind, harness, provider and model. The window defaults to 28 days. `--since 90` widens it.
+
+Each cell carries outcome and cost columns. `nodes` counts the records in the cell. `merged` and `merged_pct` give the merge outcome. `merged_ci95` is the Wilson 95% interval over the merged share, computed from the cell's own counts. `spend_usd` and `cost_per_merged_usd` are the money columns. `median_work_hours` is elapsed worker time. `bounce_pct` is the share of merged nodes that drew a fix node in the follow-up window. `ci_failure_per_node` is the friction count per node. `shared` counts nodes whose execute sessions ran on more than one lane.
+
+The PR-keyed outcome columns measure only merged nodes that carry a PR number on this repo. A `pr_url` naming another repository joins no feed. A node without a `pr_url` stays in scope. Each column carries its own coverage percent, so a rate over nobody reads null, never 0. `ci_red_pct` is the share of those nodes that recorded at least one red CI head in the friction store. It measures only where a review-coverage row proves the loop gate read that PR. `review_findings_per_node` is the mean count of fail review verdicts on the node's PR. The latest verdict per reviewer and head decides, so a round answered with a pass counts resolved. `fix_of_fix_pct` is the share of measured fix PRs whose diff removed lines that a PR merged within the 7 days before the fix had introduced. `fix_of_fix_pct` walks the merged line of the repo at the current directory, so outside a git repo it reads unknown. The friction-based `review_round_per_node` column is gone. The review feed replaced it.
+
+The coverage block reports what share of records carry each lane axis and a measured cost. A record whose last execute session carries no harness lands in the `unattributed` bucket, sorted last, never dropped. Provider reads `unrecorded` without a ledger row. Model reads `unknown` without a session or ledger value. One axis going missing never hides a record.
+
+`--kind-depth` splits the kind by the node's merge commit on the default branch. Depth 2 appends the conventional type: fix, feat, docs, refactor, other. Depth 3 appends the type-surface pair. The surface reads rust for crates/ and Cargo.lock, python for cli/ with its tests, and ui for the web pages and the mux-server lane. docs covers a commit whose every changed path is docs or markdown. Support paths (scripts, skills, hooks, the root tests/) carry no vote. Anything else reads mixed. A node with no in-repo PR, or whose diff read fails, reads unknown at deeper depths - an unmeasured part groups visibly instead of guessing. A node with a blueprint session row also credits that session's lane with the node's downstream outcome under a blueprint kind, beside its target cell. The planning lane then shows up in the same fold at every depth. Its cost is its own session's ledger row, not the node's whole bill. The coverage block counts the population once: credit records never double it. The default depth stays 1. The plain by-lane read keeps its cell shape, and the blueprint kind is the one addition at that depth. The router rides the same read. `--propose --stage <command>` folds one verdict per candidate lane per kind, names the contradicted seat laws, and writes nothing to config. The stage takes target or blueprint. A blueprint proposal comes only from the blueprint seat law's model families.
+
+The plain read, `fno backlog calibration --json`, emits four keys. `nodes` and `aggregate` cover done nodes with a `cost_sessions` row. The aggregate groups by domain, filed difficulty and planned size. `revisions` covers every done node with a `difficulty_history`, and counts per domain and filed band how many nodes ended above or below it. `friction_since` names the journal's first friction row. A node created before that row had no recorder, so its `smooth` reads null. A friction row or a re-estimate still marks it rough. The aggregate counts smooth only among its `measured_count` nodes. The blueprint's difficulty step reads the `revisions` row. `--since` requires `--by-lane`. `--kind-depth` requires `--by-lane`. `--json` gives the machine shape and `--domain` filters by domain.
+
+## Health and hygiene
+
+```bash
+fno backlog triage health          # idea pile, stale ready, collisions, dupes
+fno backlog maintain --apply       # recurring sweep: re-scope, prune, pr_url backfill, auto-defer
+fno backlog reconcile              # close nodes whose PR merged outside the gate
+```
+
+`reconcile` also moves a node off `in_review` when every PR on it closed without a merge. The closed PR stays on the node as an additional PR stamped `closed`, so a later reopen and merge still closes the node. The node returns to the queue, its thread gets the recovery command, and the sweep sends one notice. A live worker claim holds the node until the claim ends. To stop the work, defer the node.
+
+### Abandoned do rows
+
+An open do row wedges its node `in_progress`. The in-progress status hides the row from the Rust settle's done+merged gate. A session that died mid-do strands its node forever. `fno backlog maintain` carries the leg that watches this population. Read mode reports every candidate with its verdict (`gone` or `held`) and the reason. `--apply` reaps a `gone` row. The row's own idle clock decides, never the liveness of its session. A live session proves only that it lives, and a dead session's row goes idle too. Idle counts from the row's `started_at` or the newest progress note its own session wrote. A row idle past `config.backlog.maintain.abandoned_do_row_hours` (default 24) is `gone`. A live claim holds the row. A reachable roster worker on the node holds the row at any age. An unread roster reaps nothing. `fno backlog requeue` asks the same question for a session that still reads reachable. A held row can still be reaped by hand. Run `fno backlog session reap-open` after you have proven the session dead yourself.
+
+### The daily pass
+
+`fno backlog groom` is the single grooming surface, and it runs the whole pass:
+
+1. The mechanical legs, in order - `archive --apply` (age-gated, `--age`, default 14 days), `reconcile`, `maintain --apply`, then `relatedness build` last so the map reflects the post-groom graph.
+   Best-effort: one failing leg is named in the receipt and does not cost you the other three.
+   A leg is `ok` only on exit 0; exit 4 is recorded as `partial` (in this CLI it always means a degraded result, such as PR queries `reconcile` could not resolve, never "nothing to do").
+   If any leg comes back other than `ok` the receipt status is `degraded` and the command exits non-zero, and the worker names the leg in its report - a scheduler log nobody reads is not a signal.
+2. One Sonnet worker for the judgment calls, working from a fixed allowlist of reversible levers, finishing by mailing a one-screen report that leads with the mechanical outcomes.
+
+The maintain pass carries a repo-rename sweep. An open node's PR url recorded under the repo's former name rewrites in place, primary or additional. The alias comes from config `[repo_aliases]` or GitHub's own redirect answer, cached in gh-facts. Closed rows keep their history.
+
+That sweep answers a true rename, where GitHub keeps redirecting. A cutover that hands the old name to a new repo kills the redirects. The alias probe then answers the new repo's own name, so the sweep cannot see the move. That shape has its own one-shot pass. It must run before the new repo binds its first PR. After that point old and new rows share both the slug and the number, and nothing can tell them apart:
+
+```bash
+fno backlog maintain --repo-moved fnodotdev/fno=fnodotdev/fno-workshop --apply
+```
+
+The pass moves every stored url naming the old slug to the new one. It covers open and closed rows alike. A closed row left behind collides with the new repo's first PR. It rewrites primary and `additional_prs` slots. Url-less rows whose cwd still resolves to the moved repo get filled. Dry run by default. `--json` reports candidates and applied rows. After it runs, every PR read binds by repo plus number. A url naming another repo never binds. A located ref outranks a bare number. Two bare rows naming one number refuse rather than guess.
+
+A UTC-day claim, not the scheduler, enforces once-a-day, so a double-fire or a manual run on a day that already groomed is a no-op (`already-ran`, zero subprocesses).
+That makes the cadence boring to install:
+
+```bash
+fno backlog groom --install-agent          # daily LaunchAgent at 2am local (macOS)
+fno backlog groom --install-agent --hour 3 # pick another hour
+```
+
+After an update, `fno doctor update` re-renders the agent onto the fresh binary through `--refresh-agent`. This automatic tail step preserves the installed hour and working directory.
+Without that, an update replaces the binary the plist points at and a migration that breaks the old entry point leaves the agent wedged with no self-heal.
+The command is a no-op when no agent is installed, so it costs nothing if you schedule grooming another way.
+
+Non-macOS gets a cron line instead; the command itself is scheduler-agnostic:
+
+```cron
+0 2 * * * fno backlog groom
+```
+
+This replaces the former `scripts/nightly-groom.sh` compatibility shim.
+`~/.fno/groom-digest.md` is retired - nothing writes or reads it, and you can delete it.
+The worker re-derives its proposals by running read-only `fno backlog maintain` at pass start, so there is no intermediate file left to go stale.
+
+## Parallel lanes
+
+With `config.parallel.max_lanes >= 2`, the active-backlog daemon dispatches up to that many ready nodes concurrently, each as an isolated bg worktree lane. When file surfaces are disjoint, same-domain nodes co-schedule: the dispatch is collision-gated. Merges stay serialized (`fno do pr merge` takes a repo-wide lock, and holds a stale-base PR for `fno do pr rebase` while lanes run). This covers immediate merges. A queued `--auto` merge lands asynchronously on GitHub's side. If you use `require_checks_pass`, pair lanes with branch protection requiring up-to-date branches.
+
+```bash
+fno backlog lane-fill --max 3      # preview which nodes would dispatch as lanes
+fno backlog dispatch-lanes         # manually fire one lane-fill round
+fno backlog lanes                  # rollup: live lanes vs the cap, per-node status
+```
+
+`dispatch-lanes` uses the same axis names as `fno agents spawn`: `-H/--harness` selects the CLI binary and `-P/--provider` selects the model vendor. For example, `fno backlog dispatch-lanes -H claude -P zai --model "glm-5.3-flash[1m]"` launches Claude lanes routed to Z.ai.
+
+The command prints one object with `lanes` receipts and a `fill` receipt. `fill` includes `requested`, `selected`, `dispatched`, `skipped`, `stop`, and capped `excluded` rows. Every selected lane appears in `lanes`, including refusals. If lanes are selected but none dispatch, it exits 1. If no lane is selected or at least one dispatches, it exits 0.
+
+## Worktree isolation policy
+
+Every code payload launched from a repo main checkout is auto-isolated into a worktree by `fno agents workspace worktree ensure`. `config.worktree.policy` opts a project out of that. Values (`never | harness-native | external`):
+
+- `never` - launch in place, no worktree. For a checkout whose working tree IS the product (e.g. an Obsidian vault attached live, committing straight to main). `ensure` prints the repo root and exits 0 (not a failure, so dispatch lanes are never skipped).
+- `harness-native` (default) - the harness's own worktree lifecycle. Claude -> `<repo>/.claude/worktrees/<name>`. Codex Desktop -> same-thread `/worktree` or **Hand off -> Worktree** under `$CODEX_HOME/worktrees`. A substrate with no native transition degrades to the Footnote-owned `<state_dir>/worktrees` fallback (normally `~/.fno/worktrees`). It never inherits an external allocator from `paths.worktrees_base`.
+- `external` - `<config.paths.worktrees_base>/<repo>/<name>` (the maintainer's
+  `~/conductor/workspaces` when that knob is set).
+
+Precedence (first match wins): a per-project entry's `worktree` key >
+`config.worktree.policy` > the `harness-native` default.
+
+```toml
+# global default
+[worktree]
+policy = "harness-native"
+
+# per-project override (matched by realpath of `path`, else `name`)
+[[work.workspaces.default.projects]]
+name = "vault"
+path = "~/vault"
+worktree = "never"
+```
+
+Fail-closed: a config that exists but fails to parse, or an out-of-enum value
+(`conductor` is a `worktrees_base`, not a mode), refuses creation rather than
+silently auto-isolating. `fno config doctor` flags an out-of-enum value and a
+per-project key mistyped within one edit of `worktree` (the `extra="ignore"`
+trap: a misspelled key silently means "default policy"). Read the resolved
+verdict without creating anything:
+
+```bash
+fno agents workspace worktree policy --repo <path> [--harness claude]
+```
+
+## Public roadmap
+
+A curated view for advertising an OSS project's roadmap. Qualifying nodes are public by default. Use `--no-public` for an explicit exclusion. One fail-closed title gate protects both public projections.
+
+```bash
+fno backlog update <id> public=false
+fno backlog roadmap --project fno --out ROADMAP.md
+```
+
+The roadmap emits only title / priority / size grouped Now / Next / Later / Shipped (Triage folds into Later), markdown only. The output emits no IDs, details, plan paths, cwd, blockers, PR links, or sessions. The public HTML board now rides `fno backlog publish` (below), or `fno backlog roadmap --backlog-html <path>` for a local file.
+
+Before any public file is replaced, the shared gate scans every emitted title for home paths and session IDs. One offender makes the command exit nonzero, prints the complete cleanup queue on private stderr, and leaves every requested output unchanged.
+
+## Publish a public board
+
+One command puts a project's open backlog on a page anyone can open. The board is the web backlog page in its public projection. Only open rows (in progress, ready, blocked, idea) and rows not marked `--no-public` appear. Every title clears the leak gate (home paths, session ids) before anything is written. The payload carries the board facts only: no details, plan paths, cwd, sessions, leads, or demand copy.
+
+```bash
+fno backlog publish --project fno --out site/backlog
+```
+
+Three targets:
+
+- `--out <dir>` writes `<dir>/index.html` for any static host and prints a `file://` URL. Pass `--url` to print a different address.
+- `--exec '<command with {file}>'` hands the staged page to any uploader. The Cloudflare KV line that serves footnote.sh/backlog:
+
+```bash
+fno backlog publish --project fno --exec 'npx wrangler kv key put --binding ROADMAP fno-backlog --path {file} --remote' --url https://footnote.sh/backlog
+```
+
+- With neither flag, the board publishes a `backlog/` subtree to the project repo's `gh-pages` branch through git plumbing. Your checkout never moves. The first publish enables Pages (`gh-pages`, `/`). An unchanged board pushes nothing (`unchanged: <url>`). A repo whose origin is not GitHub, and a project with no path in `work.workspaces`, refuse naming `--out` and `--exec`.
+
+Keep it fresh with cron or launchd. A rerun over an unchanged graph writes byte-identical output, so a scheduler can run the command as often as it wants.
+
+```bash
+*/15 * * * * fno backlog publish --project <slug>
+```
+
+Cards whose titles carry a home path or session id are withheld with one warning line on stderr. The rest publish.
+
+## Take requests from the public board
+
+With `--requests`, `fno backlog publish` renders three links. A header link opens a prefilled issue form. Each open card gets an Upvote link. Each open card that nobody holds also gets a Claim link. The links appear only after you pass the flag. On a project whose origin is not a GitHub repo the command refuses and names the reason. The label is `fno-request` by default and `--label` renames it.
+
+The prefilled form comes from an issue form you commit by hand to `.github/ISSUE_TEMPLATE/` in your repo, named for the label (`fno-request.yml` by default). fno never writes it for you. Publish warns when the file is missing. The form applies the request label to every visitor issue.
+
+Spam control is a second label. Create an approval label, `fno-approved` by default, and apply it by hand to each issue you want imported. Only a maintainer with triage rights can apply a label by hand, so the label is the trust signal. Name yours differently and the import reads it with `--approved-label`.
+
+Never list the approval label in any issue template, yours or your organization's. A template that applies it lets a visitor approve their own issue. If a template file names the label, the import refuses to run.
+
+The import command is `fno backlog add requests`. It is a dry run by default and prints each filing before anything is written. Pass `--apply` to write. It reads the local graph, the claim store and GitHub. It writes only to the graph and, for takes, the claim store. It never writes to GitHub: no comment, no label, no close.
+
+The same command has a second mode for a teammate. `--epic <n>` reads a shared epic issue and files the nodes you claimed on it, as [Team mode](architecture/multiplayer.md#team-mode) describes. That mode ignores the labels and limits on this page.
+
+Four limits hold on every run:
+
+- `--limit` (100): at most this many issues read per run.
+- `--max-new` (20): at most this many new rows filed per run.
+- `--max-open` (50): at most this many open imported rows per project. At the ceiling the import refuses and names the count.
+- `--max-per-author` (3): at most this many open requests from one author.
+
+An imported row is born `idea`, priority `p3`, marked private, tagged `external-request`, with no difficulty and no plan. Its details open with a fixed warning and hold the visitor's text quoted line by line. The title starts `Request: `. Nothing from the visitor runs anywhere. To accept a request, write a new title and details in your own words on the row, then publish it with `--public`. Never promote the visitor's text. To reject one, close the issue on GitHub or remove the approval label, and defer the row.
+
+One caution: a difficulty makes an imported row a candidate for autonomous dispatch. Rewrite the row before you set one.
+
+An upvote becomes an encounter on the card, shown on the board and in the panel's demand line. Outside votes stay out of `fno backlog demand` and out of the board's ordering.
+
+### Claim a card
+
+A contributor can claim a card. The Claim link in the detail panel of an open card that nobody holds opens an issue titled `Claim <id>`. The title carries the card id and nothing else.
+
+The import treats a claim like a request. It needs the request label and your approval label. On `--apply` an approved claim issue becomes a node claim, held by `github:<login>` for 24 hours. Every dispatcher skips a node under a live claim, so the fleet leaves the card alone. The board marks the card claimed.
+
+Each import run renews the claim while the issue stays open and keeps both labels. Run the import on a schedule, at least once a day, to keep claims alive. A run that no longer sees the issue releases the claim. A run that reads a full page of `--limit` issues releases nothing, because it cannot see the issues past the page.
+
+A claim ends in one of three ways:
+
+- The issue closes, or you remove a label. The next import run releases the claim.
+- The contributor opens a pull request that closes the Claim issue. The steward tags the node `claim-delivered`, releases the claim and adds a note with the credit trailer. The fleet builds the node from its own plan. The import never grants a node that carries the tag.
+- No import run renews the claim for 24 hours. The claim goes stale and the node is free.
+
+One login holds at most `--max-per-author` claims (3). The import refuses a claim on a node that another holder already holds, and the receipt names the holder.

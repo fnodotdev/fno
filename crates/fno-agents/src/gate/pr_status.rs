@@ -1,0 +1,1623 @@
+//! One PR-status owner: the REST reader, the verdict, the failure detail,
+//! and the job-log cache that heal and the status command share.
+//!
+//! Ported from the Python legs this module retires (`fno.pr._rest`
+//! `fetch_pr_rest`, `fno.pr._status` `verdict_for`, `fno.pr._failures`
+//! `collect_failures`); the port protocol and the golden fixtures it must
+//! replay live in docs/architecture/dual-implementation-inventory.md and
+//! crates/fno-agents/tests/fixtures/pr_status/. Every gh read rides the
+//! `GhProbe` seam so tests run offline.
+
+use crate::org_board::prs::classify_check;
+use crate::pr_status_facts::{failure_cause, zero_job_scan, GhProbe};
+use regex::Regex;
+use serde_json::{json, Value};
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+/// The rollup contexts that project review coverage, not generic CI; the
+/// verdict drops them before classifying (the Python `_status` filter).
+pub(crate) const COVERAGE_STATUS_CONTEXTS: [&str; 2] =
+    ["fno/review-coverage", "fno/review-coverage-unavailable"];
+
+/// The evals gate posts this StatusContext at a head. A red gate is an eval
+/// fact, not a CI failure: it rides beside the verdict (`evals_gate_fact`)
+/// and the merge gate reads it there, never through the CI verdict, so a
+/// waiting worker's fail-fast cannot cancel the head's CI runs over it.
+pub(crate) const EVALS_GATE_CONTEXT: &str = "evals/gate";
+
+/// Conclusions that prove a result EXISTS: pass states plus fail states minus
+/// the two taken-away conclusions (CANCELLED, STALE). A cancelled run is red
+/// AND unsettled; the exit code is always the verdict's.
+const SETTLED_STATES: [&str; 8] = [
+    "SUCCESS",
+    "NEUTRAL",
+    "SKIPPED",
+    "FAILURE",
+    "TIMED_OUT",
+    "ACTION_REQUIRED",
+    "STARTUP_FAILURE",
+    "ERROR",
+];
+
+/// Cap on failing checks detailed per status read; the truncation is itself
+/// reported, never silent (`_failures.MAX_DETAILED_FAILURES`).
+pub(crate) const MAX_DETAILED_FAILURES: usize = 5;
+
+/// A failed REST read, carrying the machine-consumable rate-limit class the
+/// cache arms its backoff on (`_rest.RestReason`).
+#[derive(Debug, Clone)]
+pub(crate) struct RestReason {
+    pub text: String,
+    pub rate_limit_class: String,
+}
+
+impl RestReason {
+    pub(crate) fn new(text: impl Into<String>, rate_limit_class: &str) -> Self {
+        RestReason {
+            text: text.into(),
+            rate_limit_class: rate_limit_class.to_string(),
+        }
+    }
+}
+
+fn s_str<'a>(check: &'a Value, key: &str) -> &'a str {
+    check.get(key).and_then(Value::as_str).unwrap_or("")
+}
+
+fn alt_conclusion(check: &Value) -> String {
+    let conclusion = s_str(check, "conclusion");
+    if !conclusion.is_empty() {
+        return conclusion.to_uppercase();
+    }
+    s_str(check, "state").to_uppercase()
+}
+
+/// A rollup entry's pass/fail/pending class, mirroring
+/// `org_board::prs::classify_check` with the same case handling.
+pub(crate) fn has_settled_marker(check: &Value) -> bool {
+    let status = s_str(check, "status").to_uppercase();
+    if !status.is_empty() && status != "COMPLETED" {
+        return false;
+    }
+    SETTLED_STATES.contains(&alt_conclusion(check).as_str())
+}
+
+/// Drop the projections that are not generic CI (review coverage, the evals
+/// gate) before classifying. The evals gate is a commit status like coverage,
+/// so the same shape drops it. An `advisory` row (a GitHub-native workflow no
+/// retry can reach) never reads red and never cancels a sibling run.
+pub(crate) fn generic_ci_rollup(rollup: &[Value]) -> Vec<Value> {
+    rollup
+        .iter()
+        .filter(|check| {
+            let context = s_str(check, "context");
+            let name = s_str(check, "name");
+            let excluded = |value: &str| {
+                COVERAGE_STATUS_CONTEXTS.contains(&value) || value == EVALS_GATE_CONTEXT
+            };
+            let advisory = check.get("advisory").and_then(Value::as_bool) == Some(true);
+            !excluded(context) && !excluded(name) && !advisory
+        })
+        .cloned()
+        .collect()
+}
+
+/// The evals gate's fact at this head, read from the WHOLE rollup (the call
+/// sites that classify generic CI have already dropped it). Supersession is
+/// the shared rule (`latest_per_name` keys statuses by context); `None` when
+/// the daemon never posted one. The description rides: each red names its
+/// cause and its clearing command (evals_gate.rs).
+pub(crate) fn evals_gate_fact(rollup: &[Value]) -> Option<Value> {
+    let deduped = crate::check_supersession::latest_per_name(&Value::Array(rollup.to_vec()));
+    let row = deduped
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|row| s_str(row, "context") == EVALS_GATE_CONTEXT)?;
+    Some(json!({
+        "state": s_str(row, "state"),
+        "description": s_str(row, "description"),
+    }))
+}
+
+/// The rows a live cancel may answer, in the `read_checks_rows` shape: the
+/// evals gate is not CI (its red holds the merge, it never reds a verdict),
+/// and an outside hold's red is external truth no commit on this repo can
+/// heal. The wait's cancel read and the push's in-flight read share the
+/// rule, so neither door cancels the PR's own runs over a red those rows
+/// carry.
+pub(crate) fn cancellable_rows(rows: Vec<Value>) -> Vec<Value> {
+    rows.into_iter()
+        .filter(|row| {
+            let name = row.get("name").and_then(Value::as_str).unwrap_or("");
+            name != EVALS_GATE_CONTEXT && !crate::outside_holds::is_outside_hold(name)
+        })
+        .collect()
+}
+
+/// Conclusions that prove a check genuinely failed, for the infra-kill
+/// shape. A CANCELLED row classifies pending upstream (no result), and this
+/// list keeps that shape's own reading explicit.
+const REAL_FAIL_STATES: [&str; 5] = [
+    "FAILURE",
+    "TIMED_OUT",
+    "STARTUP_FAILURE",
+    "ACTION_REQUIRED",
+    "ERROR",
+];
+
+/// True when every non-green row is a CANCELLED take-away: no real failure,
+/// nothing still running. That is the infra-kill signature - a platform that
+/// takes runners away reds nothing and finishes nothing - and the gate that
+/// decides the payload carries GitHub's incident word. Empty rollups and
+/// in-progress rows read false: the shape must be settled-and-taken-away.
+pub(crate) fn cancelled_only(rollup: &[Value]) -> bool {
+    let deduped = crate::check_supersession::latest_per_name(&Value::Array(rollup.to_vec()));
+    let deduped = deduped.as_array().cloned().unwrap_or_default();
+    let mut cancelled = 0;
+    for check in &deduped {
+        let raw = alt_conclusion(check);
+        if raw == "CANCELLED" {
+            cancelled += 1;
+            continue;
+        }
+        if !has_settled_marker(check) {
+            return false;
+        }
+        if REAL_FAIL_STATES.contains(&raw.as_str()) {
+            return false;
+        }
+    }
+    cancelled > 0
+}
+
+/// The pure verdict: (word, exit code, counts). Empty rollup reads unknown
+/// and so does an all-StatusContext one - zero real check-runs never reads
+/// green (docs/architecture/pr-status-verdict.md).
+pub(crate) fn verdict_for(rollup: &[Value]) -> (String, i32, Value) {
+    let deduped = crate::check_supersession::latest_per_name(&Value::Array(rollup.to_vec()));
+    let deduped = deduped.as_array().cloned().unwrap_or_default();
+    let mut counts = json!({
+        "total": deduped.len(),
+        "check_runs": 0,
+        "statuses": 0,
+        "fail_check_runs": 0,
+        "fail_statuses": 0,
+        "pass": 0,
+        "fail": 0,
+        "pending": 0,
+        "unsettled": 0,
+        "unsettled_fail": 0,
+    });
+    for c in &deduped {
+        let kind = classify_check(c);
+        counts[kind] = json!(counts[kind].as_i64().unwrap_or(0) + 1);
+        if !has_settled_marker(c) {
+            counts["unsettled"] = json!(counts["unsettled"].as_i64().unwrap_or(0) + 1);
+            if kind == "fail" {
+                counts["unsettled_fail"] =
+                    json!(counts["unsettled_fail"].as_i64().unwrap_or(0) + 1);
+            }
+        }
+        if !s_str(c, "name").is_empty() {
+            counts["check_runs"] = json!(counts["check_runs"].as_i64().unwrap_or(0) + 1);
+            if kind == "fail" {
+                counts["fail_check_runs"] =
+                    json!(counts["fail_check_runs"].as_i64().unwrap_or(0) + 1);
+            }
+        } else if !s_str(c, "context").is_empty() {
+            counts["statuses"] = json!(counts["statuses"].as_i64().unwrap_or(0) + 1);
+            if kind == "fail" {
+                counts["fail_statuses"] = json!(counts["fail_statuses"].as_i64().unwrap_or(0) + 1);
+            }
+        }
+    }
+    if deduped.is_empty() {
+        return ("unknown".into(), 3, counts);
+    }
+    if counts["fail"].as_i64().unwrap_or(0) > 0 {
+        return ("red".into(), 1, counts);
+    }
+    if counts["pending"].as_i64().unwrap_or(0) > 0 {
+        return ("pending".into(), 2, counts);
+    }
+    if counts["check_runs"].as_i64().unwrap_or(0) == 0 {
+        return ("unknown".into(), 3, counts);
+    }
+    ("green".into(), 0, counts)
+}
+
+// ---------------------------------------------------------------------------
+// The REST reader (fetch_pr_rest)
+// ---------------------------------------------------------------------------
+
+pub(crate) fn map_pr_state(pulls: &Value) -> String {
+    if !pulls.get("merged").unwrap_or(&Value::Null).is_null()
+        && pulls.get("merged").and_then(Value::as_bool) != Some(false)
+        || pulls.get("merged_at").and_then(Value::as_str).is_some()
+    {
+        return "MERGED".into();
+    }
+    match pulls.get("state").and_then(Value::as_str).unwrap_or("") {
+        "open" => "OPEN".into(),
+        "closed" => "CLOSED".into(),
+        _ => "UNKNOWN".into(),
+    }
+}
+
+pub(crate) fn map_mergeable(value: &Value) -> String {
+    match value {
+        Value::Bool(true) => "MERGEABLE".into(),
+        Value::Bool(false) => "CONFLICTING".into(),
+        _ => "UNKNOWN".into(),
+    }
+}
+
+fn probe_json<P: GhProbe>(probe: &P, cwd: &Path, path: &str) -> Result<Value, RestReason> {
+    let args = vec!["api".to_string(), path.to_string()];
+    let (ok, stdout, stderr) = match probe.run_gh(cwd, &args) {
+        Ok(triple) => triple,
+        Err(why) => return Err(RestReason::new(why, "")),
+    };
+    if !ok {
+        return Err(rest_reason(probe, cwd, &stderr));
+    }
+    serde_json::from_str::<Value>(&stdout).map_err(|e| {
+        RestReason::new(
+            format!("gh api {path} returned unparseable output: {e}"),
+            "",
+        )
+    })
+}
+
+/// Explain a failed REST read, naming the class that changes what the caller
+/// does next: back off (secondary), wait for reset (core), log in (auth),
+/// pause (transport), or check the PR number (not found).
+///
+/// The fleet-backoff record arm Python's classifier carried (`_quota.
+/// record_refusal`) lands with the cache port, where the gh_budget door is
+/// already in scope.
+pub(crate) fn rest_reason<P: GhProbe>(probe: &P, cwd: &Path, stderr: &str) -> RestReason {
+    let lines: Vec<&str> = stderr
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    // The proxy's admit banner rides ahead of gh's own stderr, and a Python
+    // traceback opens with a header that names nothing: its cause is the
+    // last line.
+    let meaningful: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|l| !crate::authorized_merge::is_proxy_noise_line(l))
+        .collect();
+    let fallback = match meaningful.first() {
+        Some(first) if first.starts_with("Traceback ") => {
+            meaningful.last().copied().unwrap_or(first)
+        }
+        Some(first) => first,
+        None => lines
+            .first()
+            .copied()
+            .unwrap_or("gh api failed with no message"),
+    };
+    let text = lines.join(" ");
+    let matched = |pred: &dyn Fn(&str) -> bool| -> String {
+        lines
+            .iter()
+            .copied()
+            .find(|l| pred(l))
+            .unwrap_or(fallback)
+            .to_string()
+    };
+    if text.to_lowercase().contains("rate limit") {
+        let base = matched(&|l| l.to_lowercase().contains("rate limit"));
+        // A live fleet hold already names the class: GitHub is refusing this
+        // account, so the exempt classify probe would be a network call that
+        // sustains the refusal. The first refusal still probes (no hold
+        // exists yet) - that is the read that OPENS the hold.
+        let hold_live = {
+            let now = crate::gh_budget::now_ms();
+            crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now).backoff_remaining_s
+                > 0
+        };
+        if hold_live {
+            return RestReason::new(
+                format!(
+                    "{base} | secondary rate limit (request rate, not budget: a fleet hold \
+is already live, so the exempt classify probe is skipped)"
+                ),
+                "secondary",
+            );
+        }
+        // The wording never decides: a measured secondary refusal read
+        // "API rate limit exceeded" with no "secondary" anywhere. The one
+        // exempt probe asks the CORE bucket - exhausted means core, healthy
+        // or unreadable means secondary (back off rather than trust wording).
+        let probe_read = probe
+            .run_gh(cwd, &["api".to_string(), "rate_limit".to_string()])
+            .ok()
+            .filter(|(ok, _, _)| *ok)
+            .and_then(|(_, stdout, _)| serde_json::from_str::<Value>(&stdout).ok());
+        let remaining = probe_read.as_ref().and_then(|v| {
+            v.pointer("/resources/core/remaining")
+                .and_then(Value::as_i64)
+        });
+        let core_reset = probe_read
+            .as_ref()
+            .and_then(|v| v.pointer("/resources/core/reset").and_then(Value::as_i64));
+        if remaining == Some(0) {
+            crate::gh_budget::record_core_observation(0, core_reset.unwrap_or(0));
+            return RestReason::new(
+                format!(
+                    "{base} | core REST quota exhausted (the live exempt bucket reads 0 \
+core remaining)"
+                ),
+                "core",
+            );
+        }
+        let budget = match remaining {
+            Some(n) => format!("the live exempt bucket reads {n} core remaining"),
+            None => "the exempt rate_limit endpoint itself was unreadable, so the bucket \
+could not be checked; classified secondary rather than trust the wording"
+                .to_string(),
+        };
+        return RestReason::new(
+            format!("{base} | secondary rate limit (request rate, not budget: {budget})"),
+            "secondary",
+        );
+    }
+    if text.contains("gh auth login")
+        || text.contains("401")
+        || text.to_lowercase().contains("authentication")
+    {
+        return RestReason::new(
+            format!(
+                "{base} | this is an AUTHENTICATION failure (gh is not logged in). \
+Run `gh auth login`. It is not a verdict about this PR, and any blocker derived \
+from this read is not content.",
+                base = matched(&|l| l.contains("gh auth login") || l.contains("401"))
+            ),
+            "",
+        );
+    }
+    if text.to_lowercase().contains("not found") || text.split_whitespace().any(|w| w == "404") {
+        return RestReason::new(
+            format!(
+                "{base} | not found. Check the PR number (and that this branch still has an \
+open PR); this is not a verdict about any PR.",
+                base = matched(&|l| {
+                    l.to_lowercase().contains("not found")
+                        || l.split_whitespace().any(|w| w == "404")
+                })
+            ),
+            "",
+        );
+    }
+    RestReason::new(fallback, "")
+}
+
+/// The assembled pr_json every caller reads: the keys `run_status` read on
+/// the Python side, byte-shape-identical (docs/architecture/
+/// pr-status-verdict.md). `slug` is resolved once by the cache layer; the
+/// reader never runs git. `known_pulls` is the payload the caller (the cache
+/// layer's head read) already fetched; Some reuses it, None reads live.
+pub(crate) fn read_pr<P: GhProbe>(
+    probe: &P,
+    cwd: &Path,
+    slug: &str,
+    pr: u64,
+    known_pulls: Option<&Value>,
+) -> Result<Value, RestReason> {
+    let owned;
+    let pulls = match known_pulls {
+        Some(pulls) if pulls.is_object() => pulls,
+        _ => {
+            owned = probe_json(probe, cwd, &format!("repos/{slug}/pulls/{pr}"))?;
+            &owned
+        }
+    };
+    let Some(sha) = pulls
+        .pointer("/head/sha")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+    else {
+        return Err(RestReason::new("the PR read carried no head sha", ""));
+    };
+    let head_ref = pulls
+        .pointer("/head/ref")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+
+    // Check-run pages: total_count bounds the loop; a runner that omits it
+    // stops after page 1.
+    let mut check_runs: Vec<Value> = Vec::new();
+    let mut page = 1;
+    loop {
+        let payload = probe_json(
+            probe,
+            cwd,
+            &format!("repos/{slug}/commits/{sha}/check-runs?per_page=100&page={page}"),
+        )?;
+        let Some(rows) = payload.get("check_runs").and_then(Value::as_array) else {
+            return Err(RestReason::new(
+                "gh api check-runs carried malformed check_runs",
+                "",
+            ));
+        };
+        check_runs.extend(rows.iter().cloned());
+        let total = payload.get("total_count").and_then(Value::as_i64);
+        match total {
+            Some(total) if check_runs.len() < total as usize && page < 10 => page += 1,
+            _ => break,
+        }
+    }
+
+    // The zero-job scan: the runs listing, the timed-out relabel, and the
+    // shared rule, in process now instead of through the op door.
+    let scan =
+        zero_job_scan(probe, cwd, slug, &sha, &check_runs).map_err(|e| RestReason::new(e, ""))?;
+    let mut run_names: BTreeMap<String, String> = BTreeMap::new();
+    let mut dynamic_runs: BTreeSet<String> = BTreeSet::new();
+    for run in &scan.listing {
+        if let (Some(id), Some(name)) = (
+            run.get("id").and_then(Value::as_i64),
+            run.get("name").and_then(Value::as_str),
+        ) {
+            run_names.insert(id.to_string(), name.to_string());
+            if is_dynamic_workflow_path(s_str(run, "path")) {
+                dynamic_runs.insert(id.to_string());
+            }
+        }
+    }
+    let actions_run_re = actions_run_re();
+    let mut rollup: Vec<Value> = scan
+        .check_runs
+        .iter()
+        .map(|cr| {
+            let details_url = s_str(cr, "details_url");
+            let run_id = actions_run_re
+                .captures(details_url)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().to_string());
+            let workflow = run_id
+                .as_ref()
+                .and_then(|id| run_names.get(id))
+                .cloned()
+                .unwrap_or_default();
+            let mut row = json!({
+                "name": cr.get("name").cloned().unwrap_or(Value::Null),
+                "status": cr.get("status").cloned().unwrap_or(json!("")),
+                "conclusion": cr.get("conclusion").cloned().unwrap_or(json!("")),
+                "startedAt": cr.get("started_at").cloned().unwrap_or(json!("")),
+                "detailsUrl": details_url,
+                "workflow": workflow,
+            });
+            if let Some(timeout) = cr.get("timeout") {
+                row["timeout"] = timeout.clone();
+            }
+            if run_id.is_some_and(|id| dynamic_runs.contains(&id)) {
+                row["advisory"] = json!(true);
+            }
+            row
+        })
+        .collect();
+    rollup.extend(scan.rows);
+
+    // Legacy StatusContexts: a separate check class, so a failed read is
+    // always loud - green CheckRuns do not prove an unread context is green.
+    let status_payload = probe_json(probe, cwd, &format!("repos/{slug}/commits/{sha}/status"))?;
+    let Some(status_rows) = status_payload.get("statuses").and_then(Value::as_array) else {
+        return Err(RestReason::new(
+            "gh api status carried malformed statuses",
+            "",
+        ));
+    };
+    for sc in status_rows {
+        rollup.push(json!({
+            "context": sc.get("context").cloned().unwrap_or(Value::Null),
+            "state": s_str(sc, "state").to_uppercase(),
+            "createdAt": sc.get("created_at").cloned().unwrap_or(json!("")),
+            "targetUrl": sc.get("target_url").cloned().unwrap_or(json!("")),
+            // The evals gate fact quotes it: a red names cause and clearing
+            // command here.
+            "description": sc.get("description").cloned().unwrap_or(json!("")),
+        }));
+    }
+
+    // A stale refs/pull/N/head (GitHub can leave it behind a branch push
+    // after a repo transfer) makes the conflict read answer against an old
+    // head. When mergeable says NO, ask the pull ref once; a divergence
+    // travels as pull_head_stale so the verdict names the remedy, not a
+    // fake conflict.
+    let mut pull_head_stale: Value = Value::Null;
+    if pulls.get("mergeable") == Some(&Value::Bool(false)) {
+        let read = probe.run_gh(
+            cwd,
+            &[
+                "api".to_string(),
+                "--jq".to_string(),
+                ".object.sha".to_string(),
+                format!("repos/{slug}/git/refs/pull/{pr}/head"),
+            ],
+        );
+        if let Ok((true, stdout, _)) = read {
+            let ref_sha = stdout.trim().to_string();
+            if !ref_sha.is_empty() && ref_sha != sha {
+                pull_head_stale = json!({"ref_sha": ref_sha, "head_sha": sha});
+            }
+        }
+    }
+
+    Ok(json!({
+        "number": pulls.get("number").cloned().unwrap_or(Value::Null),
+        "state": map_pr_state(&pulls),
+        "statusCheckRollup": rollup,
+        "headRefOid": sha,
+        "headRefName": head_ref,
+        "mergeable": map_mergeable(pulls.get("mergeable").unwrap_or(&Value::Null)),
+        "mergeStateStatus": pulls.get("mergeable_state").cloned().unwrap_or(Value::Null),
+        "baseRefName": pulls.pointer("/base/ref").cloned().unwrap_or(Value::Null),
+        // The stale-pull-ref story the merge blocker names (null = not stale
+        // or unread).
+        "pull_head_stale": pull_head_stale,
+        // The fields facts_from_pulls needs, so the walk parses facts from
+        // this projection instead of spawning `fno do pr info`.
+        "html_url": pulls.get("html_url").cloned().unwrap_or(Value::Null),
+        "body": pulls.get("body").cloned().unwrap_or(Value::Null),
+        "auto_merge": pulls.get("auto_merge").cloned().unwrap_or(Value::Null),
+        // The raw listing rerun recovery and the workflow mapping share.
+        "workflowRuns": scan.listing,
+    }))
+}
+
+/// One PR read through the route chain. REST first; a rate-limited refusal
+/// answers through the GraphQL route inside the same call; a total failure
+/// names each route it tried and carries no wait-out guidance.
+pub(crate) fn read_pr_routes<P: GhProbe>(
+    probe: &P,
+    cwd: &Path,
+    slug: &str,
+    pr: u64,
+    known_pulls: Option<&Value>,
+) -> Result<Value, RestReason> {
+    match read_pr(probe, cwd, slug, pr, known_pulls) {
+        Ok(v) => Ok(v),
+        Err(reason) if !reason.rate_limit_class.is_empty() => {
+            match graphql_pr_read(probe, cwd, slug, pr) {
+                Ok(mut v) => {
+                    if let Some(map) = v.as_object_mut() {
+                        map.insert("transport".into(), json!("graphql"));
+                    }
+                    Ok(v)
+                }
+                Err(gql) => Err(RestReason::new(
+                    format!(
+                        "{} | routes tried: rest (both auth buckets), graphql: {}",
+                        reason.text, gql.text
+                    ),
+                    &reason.rate_limit_class,
+                )),
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// The GraphQL route for one PR read: one rollup query mapped to the same
+/// pr_json shape the REST read produces, so every caller composes the same
+/// answer from either transport.
+fn graphql_pr_read<P: GhProbe>(
+    probe: &P,
+    cwd: &Path,
+    slug: &str,
+    pr: u64,
+) -> Result<Value, RestReason> {
+    let Some((owner, repo)) = slug.split_once('/') else {
+        return Err(RestReason::new(
+            "graphql: slug does not split into owner/repo",
+            "",
+        ));
+    };
+    let query = format!(
+        "query{{repository(owner:\"{owner}\",name:\"{repo}\"){{pullRequest(number:{pr}){{\
+number state merged mergedAt url body autoMergeRequest \
+headRefOid headRefName baseRefName mergeable mergeStateStatus \
+statusCheckRollup(first:100){{totalCount nodes{{\
+__typename \
+... on CheckRun{{name status conclusion startedAt detailsUrl}} \
+... on StatusContext{{context state createdAt targetUrl description}}\
+}}}}}}}}}}"
+    );
+    let argv = vec![
+        "api".to_string(),
+        "graphql".to_string(),
+        "-f".to_string(),
+        format!("query={query}"),
+    ];
+    let (ok, stdout, stderr) = probe
+        .run_gh(cwd, &argv)
+        .map_err(|e| RestReason::new(format!("graphql: {e}"), ""))?;
+    if !ok {
+        let reason = rest_reason(probe, cwd, &stderr);
+        return Err(RestReason::new(
+            format!("graphql: {}", reason.text),
+            &reason.rate_limit_class,
+        ));
+    }
+    parse_graphql_pr(&stdout, pr)
+}
+
+/// Map the one-rollup-query reply to the pr_json shape. `pull_head_stale`
+/// stays null (the REST-only conflict probe), `workflowRuns` stays empty
+/// (the Actions listing has no GraphQL equivalent in this query), and the
+/// verdict still composes: state, head, mergeable and the rollup are all
+/// present. A rollup larger than the query's 100-node page names the
+/// truncation in `rollup_truncated` rather than understating silently.
+fn parse_graphql_pr(stdout: &str, pr: u64) -> Result<Value, RestReason> {
+    let v: Value = serde_json::from_str(stdout)
+        .map_err(|e| RestReason::new(format!("graphql: unparseable reply: {e}"), ""))?;
+    let pull = v
+        .pointer("/data/repository/pullRequest")
+        .ok_or_else(|| RestReason::new("graphql: reply names no repository", ""))?;
+    if pull.is_null() {
+        return Err(RestReason::new(
+            format!("graphql: no pull request {pr} in this repo"),
+            "",
+        ));
+    }
+    let nodes = pull
+        .pointer("/statusCheckRollup/nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let rollup: Vec<Value> = nodes
+        .iter()
+        .filter_map(|node| {
+            let kind = s_str(node, "__typename");
+            if kind == "CheckRun" {
+                Some(json!({
+                    "name": node.get("name").cloned().unwrap_or(Value::Null),
+                    "status": node.get("status").cloned().unwrap_or(json!("")),
+                    "conclusion": node.get("conclusion").cloned().unwrap_or(json!("")),
+                    "startedAt": node.get("startedAt").cloned().unwrap_or(json!("")),
+                    "detailsUrl": node.get("detailsUrl").cloned().unwrap_or(json!("")),
+                }))
+            } else if kind == "StatusContext" {
+                Some(json!({
+                    "context": node.get("context").cloned().unwrap_or(Value::Null),
+                    "state": node.get("state").cloned().unwrap_or(json!("")),
+                    "createdAt": node.get("createdAt").cloned().unwrap_or(json!("")),
+                    "targetUrl": node.get("targetUrl").cloned().unwrap_or(json!("")),
+                    "description": node.get("description").cloned().unwrap_or(json!("")),
+                }))
+            } else {
+                None
+            }
+        })
+        .collect();
+    let merged = pull.get("merged").and_then(Value::as_bool) == Some(true)
+        || pull
+            .get("mergedAt")
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.is_empty());
+    let state = if merged {
+        "MERGED".to_string()
+    } else {
+        pull.get("state")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_uppercase()
+    };
+    let total = pull
+        .pointer("/statusCheckRollup/totalCount")
+        .and_then(Value::as_i64)
+        .unwrap_or(0) as usize;
+    let mut out = json!({
+        "number": pr,
+        "state": state,
+        "statusCheckRollup": rollup,
+        "headRefOid": pull.get("headRefOid").and_then(Value::as_str).unwrap_or(""),
+        "headRefName": pull.get("headRefName").and_then(Value::as_str).unwrap_or(""),
+        "mergeable": pull.get("mergeable").and_then(Value::as_str).unwrap_or("UNKNOWN"),
+        "mergeStateStatus": pull.get("mergeStateStatus").cloned().unwrap_or(Value::Null),
+        "baseRefName": pull.get("baseRefName").cloned().unwrap_or(Value::Null),
+        "pull_head_stale": Value::Null,
+        "html_url": pull.get("url").cloned().unwrap_or(Value::Null),
+        "body": pull.get("body").cloned().unwrap_or(Value::Null),
+        "auto_merge": pull.get("autoMergeRequest").cloned().unwrap_or(Value::Null),
+        "workflowRuns": json!([]),
+    });
+    if total > nodes.len() {
+        if let Some(map) = out.as_object_mut() {
+            map.insert(
+                "rollup_truncated".into(),
+                json!({"total": total, "shown": nodes.len()}),
+            );
+        }
+    }
+    Ok(out)
+}
+
+/// A GitHub-native workflow (CodeQL default setup) has no file in the repo:
+/// its run path starts `dynamic/`. GitHub refuses a rerun of a cancelled one,
+/// so a cancel there would pin the PR red for good.
+fn is_dynamic_workflow_path(path: &str) -> bool {
+    path.starts_with("dynamic/")
+}
+
+fn actions_run_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"/actions/runs/(\d+)").unwrap())
+}
+
+// ---------------------------------------------------------------------------
+// Failure detail (collect_failures) and the shared job-log cache
+// ---------------------------------------------------------------------------
+
+fn ts_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^\d{4}-\d{2}-\d{2}T[\d:.]+Z?\s*").unwrap())
+}
+
+fn content(line: &str) -> String {
+    let no_ts = ts_re().replace(line.trim_end(), "");
+    no_ts.trim().to_string()
+}
+
+/// The step name on the first `step failed, stopping (fail-fast)` line;
+/// fail-fast breaks at the first failure, so the first match is THE failure.
+pub(crate) fn failing_step(log: &str) -> Option<String> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE
+        .get_or_init(|| Regex::new(r"step failed, stopping \(?fail-fast\)?:\s*(.+?)\s*$").unwrap());
+    log.lines()
+        .map(content)
+        .find_map(|line| re.captures(&line).map(|c| c[1].to_string()))
+}
+
+/// The failing step's cause, from the one owner: the failure-cause scan that
+/// Python reached through the op door, called in process now.
+pub(crate) fn first_error(
+    log: &str,
+    step: Option<&str>,
+    window: Option<&Vec<Value>>,
+) -> Option<String> {
+    let payload = json!({
+        "log": log,
+        "step": step,
+        "window": window,
+    });
+    let out = failure_cause(&payload);
+    out.get("cause").and_then(Value::as_str).map(str::to_string)
+}
+
+/// Planned smoke steps with no completion line; None on a log with no
+/// `smoke: planned:` prologue (an honest unknown beats a fabricated empty).
+pub(crate) fn unreached_runner_steps(log: &str) -> Option<Vec<String>> {
+    static PLANNED: OnceLock<Regex> = OnceLock::new();
+    static DONE: OnceLock<Regex> = OnceLock::new();
+    let planned_re = PLANNED.get_or_init(|| Regex::new(r"^smoke: planned:\s*(.+?)\s*$").unwrap());
+    let done_re = DONE
+        .get_or_init(|| Regex::new(r"^smoke: (?:pass|fail)\s+\d+(?:\.\d+)?s\s+(.+?)\s*$").unwrap());
+    let mut planned: Vec<String> = Vec::new();
+    let mut done: Vec<String> = Vec::new();
+    for raw in log.lines() {
+        let line = content(raw);
+        if let Some(c) = planned_re.captures(&line) {
+            planned.push(c[1].to_string());
+        }
+        if let Some(c) = done_re.captures(&line) {
+            done.push(c[1].to_string());
+        }
+    }
+    if planned.is_empty() {
+        return None;
+    }
+    Some(
+        planned
+            .into_iter()
+            .filter(|name| !done.contains(name))
+            .collect(),
+    )
+}
+
+/// The step whose conclusion is `failure`, or None.
+fn failed_job_step(steps: &[Value]) -> Option<String> {
+    steps
+        .iter()
+        .find(|s| s_str(s, "conclusion").to_lowercase() == "failure")
+        .and_then(|s| s.get("name"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+/// Steps after the failed one whose OWN conclusion is `skipped`: the work
+/// fail-fast never reached. `Post *` and `Complete job` are GitHub cleanup,
+/// never counted; no failed step yields [] (position says nothing).
+pub(crate) fn unreached_job_steps(steps: &[Value]) -> Vec<String> {
+    let failed_at = steps
+        .iter()
+        .position(|s| s_str(s, "conclusion").to_lowercase() == "failure");
+    let Some(failed_at) = failed_at else {
+        return Vec::new();
+    };
+    steps[failed_at + 1..]
+        .iter()
+        .filter_map(|s| {
+            let name = s_str(s, "name");
+            if name.is_empty() || name.starts_with("Post ") || name == "Complete job" {
+                return None;
+            }
+            if s_str(s, "conclusion").to_lowercase() != "skipped" {
+                return None;
+            }
+            Some(name.to_string())
+        })
+        .collect()
+}
+
+pub(crate) fn check_name(check: &Value) -> String {
+    let name = s_str(check, "name");
+    if !name.is_empty() {
+        return name.to_string();
+    }
+    let context = s_str(check, "context");
+    if !context.is_empty() {
+        return context.to_string();
+    }
+    "(unnamed check)".to_string()
+}
+
+/// (owner, repo, job_id) from a CheckRun's detailsUrl, else None: a
+/// StatusContext carries a targetUrl no jobs API can serve.
+pub(crate) fn job_ref(check: &Value) -> Option<(String, String, String)> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r"^https?://[^/]+/([^/]+)/([^/]+)/actions/runs/\d+/job/(\d+)").unwrap()
+    });
+    let url = {
+        let details = s_str(check, "detailsUrl");
+        if !details.is_empty() {
+            details
+        } else {
+            s_str(check, "targetUrl")
+        }
+    };
+    re.captures(url)
+        .map(|c| (c[1].to_string(), c[2].to_string(), c[3].to_string()))
+}
+
+/// One completed attempt's log, cached by job id: `<cache>/job-<slug-key>-<job_id>.json`
+/// holds `{ts, log}`. A job id names one attempt, so the file never needs a
+/// TTL; the gc reaper's window bounds it. A failed read is never cached.
+pub(crate) fn job_log<P: GhProbe>(
+    probe: &P,
+    cwd: &Path,
+    slug_key: &str,
+    owner: &str,
+    repo: &str,
+    job_id: &str,
+) -> Result<String, String> {
+    let dir = crate::agents_config::pr_status_cache_dir(cwd)
+        .ok_or_else(|| "no pr-status cache dir".to_string())?;
+    let path: PathBuf = dir.join(format!("job-{slug_key}-{job_id}.json"));
+    if let Ok(row) = std::fs::read_to_string(&path) {
+        if let Ok(parsed) = serde_json::from_str::<Value>(&row) {
+            if let Some(log) = parsed.get("log").and_then(Value::as_str) {
+                // Rows written before the strip carry raw ANSI; the strip is
+                // idempotent, so normalizing the hit costs nothing on clean text.
+                return Ok(crate::claude_ask::strip_ansi_csi(log).into_owned());
+            }
+        }
+    }
+    let endpoint = format!("repos/{owner}/{repo}/actions/jobs/{job_id}/logs");
+    let args = vec![
+        "api".to_string(),
+        "--allow-escape-sequences".to_string(),
+        endpoint.clone(),
+    ];
+    let (mut ok, mut stdout, mut stderr) = probe.run_gh(cwd, &args)?;
+    if !ok && stderr.to_lowercase().contains("unknown flag") {
+        let plain = vec!["api".to_string(), endpoint];
+        (ok, stdout, stderr) = probe.run_gh(cwd, &plain)?;
+    }
+    if !ok {
+        return Err(if stderr.trim().is_empty() {
+            "gh error".to_string()
+        } else {
+            stderr.trim().to_string()
+        });
+    }
+    // Actions logs carry ANSI color on nearly every line; strip once here so
+    // the failing-test scans and every cache consumer read clean text.
+    let log = crate::claude_ask::strip_ansi_csi(&stdout).into_owned();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut f) = std::fs::File::create(&path) {
+        let _ = f.write_all(json!({"ts": ts, "log": log}).to_string().as_bytes());
+    }
+    Ok(log)
+}
+
+/// The escape refusal's remedy, for the one caller class that still meets
+/// it: a gh build without `--allow-escape-sequences` refuses escape-laden
+/// log output on stdout, and the raw bytes only reach such a caller through
+/// the flag or a file redirect.
+pub(crate) fn escape_refusal_remedy(stderr: &str, endpoint: &str) -> Option<String> {
+    if !stderr.to_lowercase().contains("terminal escape sequences") {
+        return None;
+    }
+    Some(format!(
+        " fetch the raw log to a file: gh api {endpoint} --allow-escape-sequences > ci-log.txt"
+    ))
+}
+
+/// Detail entries for the failing rollup rows, loudest facts first. The log
+/// answers first; the job object's steps[] only when the log cannot. A row
+/// that is not an Actions job is named with no log claim; a fetch failure
+/// names its class rather than vanishing. Capped at MAX_DETAILED_FAILURES
+/// with an explicit truncation entry. `known` maps job id -> a prior entry
+/// for the SAME job, replayed with no read (a job id is minted per attempt).
+pub(crate) fn collect_failures<P: GhProbe>(
+    probe: &P,
+    cwd: &Path,
+    slug_key: &str,
+    failing: &[Value],
+    known: &BTreeMap<String, Value>,
+) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    for check in failing.iter().take(MAX_DETAILED_FAILURES) {
+        let mut entry = json!({"check": check_name(check)});
+        if let Some(timeout) = check.get("timeout").and_then(Value::as_str) {
+            entry["first_error"] = json!(timeout);
+        }
+        let Some((owner, repo, job_id)) = job_ref(check) else {
+            entry["detail"] = json!("not an Actions job (commit status); no job log to read");
+            out.push(entry);
+            continue;
+        };
+        entry["job_id"] = json!(job_id);
+        if let Some(prior) = known.get(&job_id) {
+            out.push(prior.clone());
+            continue;
+        }
+        let log_text = job_log(probe, cwd, slug_key, &owner, &repo, &job_id);
+        match log_text {
+            Err(why) => {
+                let remedy = escape_refusal_remedy(
+                    &why,
+                    &format!("repos/{owner}/{repo}/actions/jobs/{job_id}/logs"),
+                )
+                .unwrap_or_default();
+                entry["detail"] =
+                    json!(format!("log unavailable: {}{remedy}", truncate(&why, 160)));
+            }
+            Ok(log) if log.is_empty() => {
+                // No log text (an empty log): the job object still names WHICH
+                // step failed beside the consequence the unreached steps spell out.
+                let steps = fetch_job_steps(probe, cwd, &owner, &repo, &job_id);
+                let unreached = unreached_job_steps(&steps);
+                if !unreached.is_empty() {
+                    entry["unreached_steps"] = json!(unreached);
+                }
+                if let Some(step) = failed_job_step(&steps) {
+                    if entry.get("step").is_none() {
+                        entry["step"] = json!(step);
+                    }
+                }
+            }
+            Ok(log) => {
+                if let Some(step) = failing_step(&log) {
+                    entry["step"] = json!(step);
+                    if let Some(err) = first_error(&log, Some(&step), None) {
+                        if entry.get("first_error").is_none() {
+                            entry["first_error"] = json!(err);
+                        }
+                    }
+                }
+                match unreached_runner_steps(&log) {
+                    Some(runner_unreached) if !runner_unreached.is_empty() => {
+                        entry["unreached_steps"] = json!(runner_unreached);
+                    }
+                    Some(_) => {}
+                    None => {
+                        // No runner lines: a plain multi-step job, so the
+                        // GitHub steps after the failed one are the unreached work.
+                        let steps = fetch_job_steps(probe, cwd, &owner, &repo, &job_id);
+                        let unreached = unreached_job_steps(&steps);
+                        if !unreached.is_empty() {
+                            entry["unreached_steps"] = json!(unreached);
+                        }
+                        if let Some(step) = failed_job_step(&steps) {
+                            if entry.get("step").is_none() {
+                                entry["step"] = json!(step);
+                            }
+                            if entry.get("first_error").is_none() {
+                                if let Some(err) = first_error(&log, Some(&step), Some(&steps)) {
+                                    entry["first_error"] = json!(err);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out.push(entry);
+    }
+    if failing.len() > MAX_DETAILED_FAILURES {
+        out.push(json!({"check": format!(
+            "({} more failing check(s) not detailed)",
+            failing.len() - MAX_DETAILED_FAILURES
+        )}));
+    }
+    out
+}
+
+fn fetch_job_steps<P: GhProbe>(
+    probe: &P,
+    cwd: &Path,
+    owner: &str,
+    repo: &str,
+    job_id: &str,
+) -> Vec<Value> {
+    let args = vec![
+        "api".to_string(),
+        format!("repos/{owner}/{repo}/actions/jobs/{job_id}"),
+    ];
+    let Ok((ok, stdout, _)) = probe.run_gh(cwd, &args) else {
+        return Vec::new();
+    };
+    if !ok {
+        return Vec::new();
+    }
+    serde_json::from_str::<Value>(&stdout)
+        .ok()
+        .and_then(|job| job.get("steps").and_then(Value::as_array).cloned())
+        .unwrap_or_default()
+}
+
+fn truncate(text: &str, cap: usize) -> String {
+    if text.len() <= cap {
+        return text.to_string();
+    }
+    let mut end = cap;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_string()
+}
+
+/// The live read behind the cache: `run_status`'s whole flow, returning the
+/// exit code, the payload, and the stderr lines. `prior` is the same-head
+/// previous payload; detail and rerun facts are reused within one head only.
+pub(crate) fn status_payload<P: GhProbe>(
+    probe: &P,
+    cwd: &Path,
+    pr: u64,
+    prior: Option<&Value>,
+    slug: &str,
+    known_pulls: Option<&Value>,
+    hold_probe: Option<seams::HoldVerdict>,
+) -> (i32, Value, Vec<String>) {
+    let pr_json = match read_pr_routes(probe, cwd, slug, pr, known_pulls) {
+        Ok(pr_json) => pr_json,
+        Err(reason) => return compose::error_payload(&pr.to_string(), &reason),
+    };
+    let rollup = pr_json
+        .get("statusCheckRollup")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let generic_rollup = generic_ci_rollup(&rollup);
+    let (verdict, _code, counts) = verdict_for(&generic_rollup);
+    let green = verdict == "green";
+    let head_sha = pr_json
+        .get("headRefOid")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let is_terminal = matches!(
+        pr_json
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_uppercase()
+            .as_str(),
+        "MERGED" | "CLOSED"
+    );
+    let latest_rows: Vec<Value> =
+        crate::check_supersession::latest_per_name(&Value::Array(generic_rollup.clone()))
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+
+    // A job id is minted per attempt, so a known id is the same completed job.
+    let prior_payload = prior.unwrap_or(&Value::Null);
+    let mut known: BTreeMap<String, Value> = BTreeMap::new();
+    if let Some(failures) = prior_payload.get("failures").and_then(Value::as_array) {
+        for f in failures {
+            if let Some(id) = f.get("job_id").and_then(Value::as_str) {
+                known.insert(id.to_string(), f.clone());
+            }
+        }
+    }
+
+    // Only SETTLED fails: a CANCELLED or STALE latest run is a taken-away
+    // run, not a concluded failure - its instruction is already the "push
+    // again or rerun" note, and a detail entry would read as a diagnosed
+    // defect that does not exist.
+    let failures: Value = if verdict == "red" {
+        let failing: Vec<Value> = latest_rows
+            .iter()
+            .filter(|c| classify_check(c) == "fail" && has_settled_marker(c))
+            .cloned()
+            .collect();
+        let slug_key = slug.replace('/', "--");
+        Value::Array(collect_failures(probe, cwd, &slug_key, &failing, &known))
+    } else {
+        Value::Null
+    };
+
+    // A terminal PR has no would-merge left: the review probes are live
+    // reads a closed PR can still burn. Skip all of them; the report prints
+    // the no-pending answers rather than `unknown`, because nothing was
+    // failed, it was deliberately not asked.
+    let (reviews_input, coverage, lane, hold, activity, hold_state) = if is_terminal {
+        (
+            json!({
+                "optional_reviews": [],
+                "optional_reviews_unresolved": 0,
+                "optional_reviews_resolved_unchanged": 0,
+            }),
+            json!({
+                "coverage": "not_asked",
+                "reviewed_count": null,
+                "self_attested_count": 0,
+                "head_sha": null,
+                "stale_verdicts": [],
+                "note": "not asked: PR is terminal (merged or closed); this says nothing about coverage at merge time",
+            }),
+            false,
+            Value::Null,
+            json!({
+                "blocker": "",
+                "detail": "",
+                "hold": null,
+                "worktree": {
+                    "probed": false,
+                    "path": null,
+                    "dirty": null,
+                    "head": null,
+                    "note": "not asked: PR is terminal",
+                },
+            }),
+            None,
+        )
+    } else {
+        let reviews_input = reviews::optional_reviews(probe, cwd, pr, slug);
+        let lane = reviews::review_lane(cwd, pr, Some(&head_sha));
+        let coverage = reviews::read_review_coverage(cwd, pr, Some(&head_sha), lane, false);
+        // The cache layer passes the probe it already ran for the key
+        // material; a degraded path (no slug, no cache dir) probes here.
+        let hold_state = hold_probe.or_else(|| Some(seams::hold_verdict(cwd, pr, Some(&pr_json))));
+        let hold = match hold_state.as_ref() {
+            Some(seams::HoldVerdict::Held(reason)) => json!(reason),
+            _ => Value::Null,
+        };
+        let branch = pr_json
+            .get("headRefName")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let activity = reviews::review_activity(cwd, branch, &head_sha);
+        (reviews_input, coverage, lane, hold, activity, hold_state)
+    };
+
+    // GitHub's mergeStateStatus as named ready blockers; unasked on a
+    // terminal PR and null mergeStateStatus.
+    let github_merge: Value = if is_terminal
+        || pr_json
+            .get("mergeStateStatus")
+            .map(Value::is_null)
+            .unwrap_or(true)
+    {
+        Value::Null
+    } else {
+        let op_payload = json!({
+            "op": "status-merge-blocker",
+            "cwd": cwd.to_string_lossy(),
+            "pr": pr,
+            "mergeStateStatus": pr_json.get("mergeStateStatus").cloned().unwrap_or(Value::Null),
+            "baseRefName": pr_json.get("baseRefName").cloned().unwrap_or(Value::Null),
+            "mergeable": pr_json.get("mergeable").cloned().unwrap_or(Value::Null),
+            "pull_head_stale": pr_json.get("pull_head_stale").cloned().unwrap_or(Value::Null),
+            "rollup": rollup,
+        });
+        let out = crate::pr_status_facts::run_op("status-merge-blocker", &op_payload);
+        serde_json::from_str(&out).unwrap_or_else(
+            |e| json!({"blockers": ["github_merge_state_unknown"], "source": e.to_string()}),
+        )
+    };
+
+    // A cancelled or timed-out latest run has a branch-history story: which
+    // run, which attempt, what the re-run shows.
+    let mut branch_history = Value::Null;
+    if verdict == "red"
+        && !is_terminal
+        && latest_rows
+            .iter()
+            .any(|c| matches!(alt_conclusion(c).as_str(), "CANCELLED" | "TIMED_OUT"))
+    {
+        let op_payload = json!({
+            "op": "status-branch-history",
+            "cwd": cwd.to_string_lossy(),
+            "branch": pr_json.get("headRefName").and_then(Value::as_str).unwrap_or(""),
+            "rollup": generic_rollup,
+            "workflow_runs": pr_json.get("workflowRuns").cloned().unwrap_or(json!([])),
+            "prior": prior_payload.get("branch_history").cloned().unwrap_or(Value::Null),
+        });
+        let out = crate::pr_status_facts::run_op("status-branch-history", &op_payload);
+        if let Ok(parsed) = serde_json::from_str::<Value>(&out) {
+            let has_line = parsed
+                .get("line")
+                .and_then(Value::as_str)
+                .map(|l| !l.is_empty())
+                .unwrap_or(false);
+            if has_line {
+                branch_history = parsed;
+            }
+        }
+    }
+
+    // Rerun recovery rides green reads of live PRs (fail-open); a prior
+    // green at the same head with the same check total replays instead of
+    // re-probing.
+    let rerun: Option<Value> = if green && !is_terminal {
+        let prior_green = prior_payload.get("verdict").and_then(Value::as_str) == Some("green")
+            && prior_payload.get("head") == Some(&json!(head_sha))
+            && prior_payload.get("rerun_recovered").is_some()
+            && prior_payload
+                .pointer("/checks/total")
+                .and_then(Value::as_i64)
+                == counts.get("total").and_then(Value::as_i64);
+        if prior_green {
+            Some(json!({
+                "recovered": prior_payload
+                    .get("rerun_recovered")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                "failed": prior_payload
+                    .get("recovered_failures")
+                    .cloned()
+                    .unwrap_or(json!([])),
+            }))
+        } else {
+            let runs = pr_json
+                .get("workflowRuns")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            Some(seams::rerun_recovery(
+                probe,
+                cwd,
+                slug,
+                &head_sha,
+                Some(&runs),
+            ))
+        }
+    } else {
+        None
+    };
+
+    // ONE merge decision: the probes this read already paid for ride the
+    // ask, so the owner never spawns a second status read.
+    let reviews_unresolved = reviews_input
+        .get("optional_reviews_unresolved")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let rerun_recovered_fact: Value = match &rerun {
+        Some(r) => json!(r.get("recovered").and_then(Value::as_bool).unwrap_or(false)),
+        None => Value::Null,
+    };
+    let mut receipt_ask = json!({
+        "cwd": cwd.to_string_lossy(),
+        "pr": pr,
+        "effect": "preview",
+        "verdict": verdict,
+        "counts": counts,
+        "rerun_recovered": rerun_recovered_fact,
+        "optional_reviews_unresolved": reviews_unresolved,
+        "github_blockers": github_merge.get("blockers").and_then(Value::as_array).cloned().unwrap_or_default(),
+        "covered_head": head_sha,
+    });
+    // The gate row this read already has rides the ask, so the walk never
+    // answers pending or red from a stale absence: present object = a row,
+    // null = no row at this head. This is the seam the hole ran through: the
+    // composer had the PENDING fact and never handed it to the decision. A
+    // projection with no rollup key omits the key entirely, so the walk's
+    // tri-state probes instead of asserting a no-row from a payload that
+    // never said one.
+    if let Some(rollup) = pr_json.get("statusCheckRollup").and_then(Value::as_array) {
+        receipt_ask["evals_gate"] = evals_gate_fact(rollup).unwrap_or(Value::Null);
+    }
+    // This read already paid the hold-check probe above; the preview reuses
+    // the answer instead of spawning the command a second time. The key is
+    // present only on a clean probe: a crashed or unasked probe must let the
+    // walk's own fail-closed probe run.
+    if let Some(seams::HoldVerdict::Clear | seams::HoldVerdict::Held(_)) = hold_state.as_ref() {
+        receipt_ask["dispatch_hold_reason"] = hold.clone();
+    }
+    // The read's own PR projection rides the ask: the walk parses facts from
+    // it instead of spawning `fno do pr info`. An old cache row without the
+    // new fields simply omits the key and the walk spawns as before.
+    let facts_ridable = pr_json
+        .get("html_url")
+        .and_then(Value::as_str)
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
+        && pr_json.get("body").map(Value::is_string).unwrap_or(false);
+    if facts_ridable {
+        receipt_ask["facts"] = pr_json.clone();
+    }
+    // The review-activity probe this read already ran answers the walk's
+    // review-hold question: same registry, same verdict words. A probed clear
+    // rides as null; the terminal not-asked shape stays absent, so the walk
+    // keeps its own probe there (it returns before holds anyway).
+    if !is_terminal {
+        let blocker = activity
+            .get("blocker")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let detail = activity.get("detail").and_then(Value::as_str).unwrap_or("");
+        receipt_ask["review_hold_reason"] = if blocker.is_empty() {
+            Value::Null
+        } else if detail.is_empty() {
+            json!(blocker)
+        } else {
+            json!(format!("{blocker}: {detail}"))
+        };
+    }
+    let mut receipt = crate::authorized_merge::preview_receipt_payload(&receipt_ask);
+    if !receipt
+        .get("blockers")
+        .map(Value::is_array)
+        .unwrap_or(false)
+    {
+        receipt["blockers"] = json!([{
+            "code": "merge_decision_unknown",
+            "class": "unknown",
+            "detail": receipt
+                .get("detail")
+                .and_then(Value::as_str)
+                .unwrap_or("authorized-merge receipt unreadable"),
+        }]);
+    }
+
+    // The infra-kill receipt: only a cancelled-only take-away spends the
+    // status-page read, and an unreachable page leaves the field out.
+    let mut ci_tier_keeper = Value::Null;
+    let platform_incident = if !is_terminal {
+        let rollup = pr_json
+            .get("statusCheckRollup")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if cancelled_only(&generic_ci_rollup(&rollup)) {
+            // The cancelled-only shape is the tier story: a live keeper
+            // reruns the taken-away runs, an absent one strands the head
+            // red forever, so the remedy flips from hold to rerun.
+            if !head_sha.is_empty() {
+                ci_tier_keeper = crate::ci_tier::stranded_fact(cwd, slug, &head_sha);
+            }
+            seams::platform_incident()
+        } else {
+            Value::Null
+        }
+    } else {
+        Value::Null
+    };
+
+    // The base name outlives the move below: the green memo write reads it
+    // after `pr_json` has gone into the compose inputs.
+    let base_ref_name = pr_json
+        .get("baseRefName")
+        .and_then(Value::as_str)
+        .unwrap_or("main")
+        .to_string();
+    let inputs = compose::ComposeInputs {
+        pr: pr.to_string(),
+        pr_json,
+        rerun_recovery: rerun.unwrap_or(Value::Null),
+        branch_history,
+        optional_reviews: reviews_input,
+        coverage_row: coverage,
+        hold_reason: hold,
+        review_activity: activity,
+        receipt,
+        github_merge_blockers: github_merge,
+        merge_authority: seams::merge_authority(cwd),
+        merge_execution: if is_terminal {
+            Value::Null
+        } else {
+            seams::merge_execution(cwd, pr)
+        },
+        failures,
+        review_lane: lane,
+        platform_incident,
+        ci_tier_keeper,
+    };
+    let (code, payload, stderr) = compose::compose_payload(&inputs);
+    // A green verdict at a head is a GitHub fact that never changes once
+    // read: memo it so a later main-merge-only head move can carry it
+    // (green_carry). A red or pending read writes nothing, and so does a
+    // head whose code identity does not resolve - the carry only rides rows
+    // with a recorded base and patch hash.
+    if green && !is_terminal && !head_sha.is_empty() {
+        let base = base_ref_name.as_str();
+        if let Some(identity) = crate::review_freshness::pr_code_diff_identity(
+            "git",
+            cwd,
+            &crate::green_carry::qualified_base(base),
+            &head_sha,
+        ) {
+            let prefix = crate::pr_status::memo::memo_prefix(slug, pr);
+            let row = serde_json::json!({
+                "ts": now_ms(),
+                "base": base,
+                "patch_hash": identity.hash,
+                "optional_unresolved": payload.get("optional_reviews_unresolved").cloned().unwrap_or(Value::Null),
+                "rerun_recovered": payload.get("rerun_recovered").cloned().unwrap_or(Value::Null),
+                "rerun_failures": payload.get("recovered_failures").cloned().unwrap_or(Value::Null),
+            });
+            crate::pr_status::memo::write(
+                cwd,
+                crate::pr_status::memo::GREEN_VERDICT,
+                &format!("{prefix}{head_sha}"),
+                &row,
+                Some(&prefix),
+            );
+        }
+    }
+    (code, payload, stderr)
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Serializes tests that point the process-global FNO_PR_STATUS_CACHE_DIR
+/// env override at their own tempdir: cargo runs tests in parallel threads.
+#[cfg(test)]
+pub(crate) fn cache_env_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::LazyLock<&'static std::sync::Mutex<()>> =
+        std::sync::LazyLock::new(crate::claims::test_env_lock);
+    LOCK.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// The `status-ci` door op: `read_pr`'s rollup mapped to the
+/// name/state/bucket/startedAt/workflow rows the internal gh adapter and the
+/// verify precondition read (`_internal_gh._checks`,
+/// `_verify._failing_required`). `drop_coverage` removes the review-coverage
+/// projections, the same rows the merge command's covered path ignores.
+pub(crate) fn status_ci(payload: &Value) -> (i32, String, String) {
+    let cwd_str = payload.get("cwd").and_then(Value::as_str).unwrap_or("");
+    let pr = payload.get("pr").and_then(Value::as_u64).unwrap_or(0);
+    let drop_coverage = payload
+        .get("drop_coverage")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let cwd = Path::new(cwd_str);
+    let Some(slug) = cache::git_slug(cwd) else {
+        return (
+            1,
+            String::new(),
+            "status-ci: cannot resolve the repo slug from cwd\n".into(),
+        );
+    };
+    let probe = cache::CountingProbe {
+        inner: crate::pr_status_facts::RealGhProbe,
+        calls: std::sync::atomic::AtomicUsize::new(0),
+    };
+    match status_ci_rows(&probe, cwd, &slug, pr, drop_coverage) {
+        Err(reason) => (1, String::new(), format!("status-ci: {}\n", reason.text)),
+        Ok(rows) => (
+            0,
+            format!("{}\n", serde_json::to_string(&rows).unwrap_or_default()),
+            String::new(),
+        ),
+    }
+}
+
+/// The `status-ci` row mapping over one `read_pr`: name/state/bucket/
+/// startedAt/workflow, the rows the internal gh adapter and the verify
+/// precondition read.
+pub(crate) fn status_ci_rows<P: GhProbe>(
+    probe: &P,
+    cwd: &Path,
+    slug: &str,
+    pr: u64,
+    drop_coverage: bool,
+) -> Result<Vec<Value>, RestReason> {
+    let pr_json = read_pr_routes(probe, cwd, slug, pr, None)?;
+    let rollup = pr_json
+        .get("statusCheckRollup")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let rollup = if drop_coverage {
+        generic_ci_rollup(&rollup)
+    } else {
+        rollup
+    };
+    Ok(rollup
+        .iter()
+        .map(|check| {
+            let raw = {
+                let c = s_str(check, "conclusion");
+                if c.is_empty() {
+                    s_str(check, "state")
+                } else {
+                    c
+                }
+            };
+            let bucket = match raw.to_uppercase().as_str() {
+                "CANCELLED" => "cancel",
+                "SKIPPED" | "NEUTRAL" => "skipping",
+                _ => classify_check(check),
+            };
+            let name = {
+                let n = s_str(check, "name");
+                if n.is_empty() {
+                    s_str(check, "context")
+                } else {
+                    n
+                }
+            };
+            let started = {
+                let st = s_str(check, "startedAt");
+                if st.is_empty() {
+                    s_str(check, "createdAt")
+                } else {
+                    st
+                }
+            };
+            json!({
+                "name": name,
+                "state": raw,
+                "bucket": bucket,
+                "startedAt": started,
+                "workflow": "",
+            })
+        })
+        .collect())
+}
+
+pub(crate) mod cache;
+pub(crate) mod compose;
+pub(crate) mod gh_run;
+pub(crate) mod lists;
+pub(crate) mod logs;
+pub(crate) mod memo;
+pub(crate) mod reviews;
+pub(crate) mod seams;
+#[cfg(test)]
+mod tests;
+pub(crate) mod wait;
+// The two client.rs's main execs through: the `gh` / `gh-adapter` transport
+// arms, and the pr namespace dispatcher.
+pub mod adapter;
+pub mod proxy;
+pub mod quota;

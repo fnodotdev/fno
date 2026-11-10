@@ -1,0 +1,83 @@
+//! Where a node tap goes: the plan in Obsidian when it lives in the
+//! configured vault, else the node in the backlog details pane.
+
+use std::path::{Path, PathBuf};
+
+use super::*;
+use crate::link::PlanLink;
+
+pub(super) async fn open(view: &mut View, id: String) {
+    let plan = view
+        .backlog
+        .iter()
+        .find(|c| c.id == id)
+        .and_then(|c| c.plan_path.clone());
+    if let Some(plan) = plan {
+        // Off-loop: the config read and a cold Obsidian launch must not
+        // stall the render loop.
+        let outcome = tokio::task::spawn_blocking(move || {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let cfg = crate::digest_overlay::ObsidianCfg::read(&cwd);
+            match crate::link::plan_link(Some(Path::new(&plan)), &cfg) {
+                PlanLink::Obsidian { uri } => Some(crate::link::open_fno_uri(&uri)),
+                _ => None,
+            }
+        })
+        .await
+        .unwrap_or_else(|_| Some(Err("opener task failed".to_string())));
+        match outcome {
+            Some(Ok(crate::link::OpenOutcome::Opened)) => {
+                return view.set_notice(format!("opened the plan for {id}"))
+            }
+            Some(Ok(crate::link::OpenOutcome::CopiedToTerminal)) => {
+                return view.set_notice(format!("copied the plan link for {id} - paste to open"))
+            }
+            Some(Err(e)) => return view.set_notice(format!("open failed: {e}")),
+            None => {}
+        }
+    }
+    // The cascade's middle leg: no vault plan opens the GitHub-or-Linear
+    // link the node stores, through the PR tap's opener.
+    if let Some(link) = view
+        .backlog
+        .iter()
+        .find(|c| c.id == id)
+        .and_then(|c| c.link.clone())
+    {
+        return update_menu::open_pr(view, link).await;
+    }
+    open_detail(view, id);
+}
+
+/// The node id painted at `(row, col)`, from the spans the last compose
+/// recorded - the one board-tap check, whichever backlog pane drew them.
+pub(super) fn span_at(row: u16, col: u16) -> Option<String> {
+    backlog_style::span_at(row as usize, col as usize)
+}
+
+/// The review of a seat's PR, on the board, named for that seat. Esc goes back
+/// to the org view.
+pub(super) fn open_review(view: &mut View, node: String, url: &str, seat: String, machine: String) {
+    if view.backlog_board.is_none() {
+        View::open(view);
+    }
+    let seat = backlog_board::pr_review::SeatName { seat, machine };
+    backlog_board::pr_review::open(view, node, url, Some(seat));
+}
+
+/// The node in the backlog details pane. A board already open keeps its
+/// gathered state - the tap opens the detail ON it, never a fresh board
+/// that reads back to empty.
+pub(super) fn open_detail(view: &mut View, id: String) {
+    if view.backlog_board.is_none() {
+        View::open(view);
+    }
+    if let Some(b) = view.backlog_board.as_mut() {
+        b.detail = Some(node_detail::NodeDetailOverlay {
+            node_id: id,
+            trail: Vec::new(),
+            sel: 0,
+            scroll: 0,
+        });
+    }
+}

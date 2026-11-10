@@ -1,0 +1,1720 @@
+//! The one native owner of every non-journal input to `lead-verdict` :
+//! caller team, canonical scope, manifest, config values, graph rows, the
+//! check-in window, and the inherited/filed delivery split. `lead_history.rs`
+//! keeps the journal scan, verdict, payload, and rendering it already owns.
+//!
+//! Python assembled these nine values and passed them on the argv (PR 1911);
+//! this module is the port that lets the Python shell shrink to a transport
+//! (law d-b6cc1a2a: new code in `crates/`, existing Python ported, never
+//! extended). Every refusal is a typed `Err` naming the failed reading -
+//! nothing here degrades to fleet-wide, zero, or a default verdict.
+
+use crate::AgentStatus;
+use serde_json::Value;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+/// The default check-in interval (`config.lead.checkin_interval`, "55m").
+const DEFAULT_CHECKIN_SECS: i64 = 3300;
+/// The window is three check-in intervals.
+const WINDOW_INTERVALS: i64 = 3;
+/// The default compaction ceiling for a harness with no override.
+pub(crate) const DEFAULT_COMPACTION_CEILING: i64 = 3;
+/// Codex compacts about four times as often per hour (the 2026-10-03 lead
+/// comparison), so its built-in handoff point sits four claude ceilings out.
+const DEFAULT_COMPACTION_CEILING_CODEX: i64 = 12;
+
+/// A sortable instant: the `Z` and `+00:00` UTC spellings must compare equal,
+/// so a Z-suffixed manifest date and a +00:00 graph date cannot misorder at
+/// the same-second teaming boundary.
+fn ts_key(raw: &str) -> String {
+    if let Some(stripped) = raw.strip_suffix('Z') {
+        format!("{stripped}+00:00")
+    } else {
+        raw.to_string()
+    }
+}
+
+/// The delivery trend split so filing cannot inflate it (Python `scope_split`,
+/// lead/scope.py). A lead filing real nodes raises undelivered by working
+/// well, so the undelivered sides stay split inherited vs filed. Every
+/// in-window close counts, whoever filed or closed the row. The close side
+/// once carried a guard that dropped a row the lead's own session filed, but
+/// the projected row never carried a filer field, so the guard never fired
+/// while its tests passed on hand-built rows - and a filer-based exclusion
+/// would read a delivering team as stalled anyway, which is what the guard
+/// was written to prevent. The graph records no closer (a reconcile is
+/// detached on purpose), so there is no closer key to honor and counting
+/// every close is the only honest read. A row with no birth date reads as
+/// inherited: an old undated backlog is work the lead can be stalled on,
+/// never fresh filing that excuses it.
+pub(crate) fn scope_split(
+    ids: &std::collections::HashSet<String>,
+    entries: &[Value],
+    generation_start: &str,
+    window_start: &str,
+) -> (u64, u64, u64, u64) {
+    let generation_start = ts_key(generation_start);
+    let window = ts_key(window_start);
+    let mut inherited_undelivered: u64 = 0;
+    let mut filed_undelivered: u64 = 0;
+    let mut inherited_closed_in_window: u64 = 0;
+    let mut filed_closed_in_window: u64 = 0;
+    for row in entries {
+        let Some(id) = row.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        if !ids.contains(id) {
+            continue;
+        }
+        let created = ts_key(row.get("created_at").and_then(Value::as_str).unwrap_or(""));
+        let inherited = created < generation_start;
+        if !crate::graph_store::is_terminal_entry(row) {
+            if inherited {
+                inherited_undelivered += 1;
+            } else {
+                filed_undelivered += 1;
+            }
+        } else {
+            let completed = ts_key(
+                row.get("completed_at")
+                    .and_then(Value::as_str)
+                    .unwrap_or(""),
+            );
+            if completed >= window {
+                if inherited {
+                    inherited_closed_in_window += 1;
+                } else {
+                    filed_closed_in_window += 1;
+                }
+            }
+        }
+    }
+    (
+        inherited_undelivered,
+        filed_undelivered,
+        inherited_closed_in_window,
+        filed_closed_in_window,
+    )
+}
+
+/// `f"{window_s // 3600}h" if window_s % 3600 == 0 else f"{window_s // 60}m"`
+/// - the display spelling Python passed as `--window`.
+fn window_display(window_secs: i64) -> String {
+    if window_secs % 3600 == 0 {
+        format!("{}h", window_secs / 3600)
+    } else {
+        format!("{}m", window_secs / 60)
+    }
+}
+
+/// Every input the verdict read needs, resolved. `window` is the display
+/// spelling the payload carries.
+#[derive(Debug)]
+pub(crate) struct VerdictInputs {
+    pub scope: String,
+    /// The parsed manifest, carried so the verdict command never re-reads it.
+    pub manifest: crate::loopcheck::LeadManifest,
+    pub manifest_path: PathBuf,
+    pub harness: String,
+    /// Where the harness answer came from: `manifest`, or `registry` when the
+    /// holder row outranked a manifest naming a foreign harness.
+    pub harness_source: String,
+    /// Set when the holder row's harness differs from the manifest's claim:
+    /// the manifest is stale, the row wins, and the payload says so.
+    pub harness_disagreement: Option<String>,
+    pub now: chrono::DateTime<chrono::Utc>,
+    pub window: String,
+    pub checkin_interval_secs: i64,
+    pub team_age_secs: i64,
+    pub generation_start: String,
+    pub generation_start_source: String,
+    pub team_inherited: Option<bool>,
+    pub team_from_session: Option<String>,
+    pub compaction_ceiling: u64,
+    pub inherited_undelivered: u64,
+    pub filed_undelivered: u64,
+    pub inherited_closed_in_window: u64,
+    /// In-window closes on rows filed after the team's generation start,
+    /// whoever filed or closed them.
+    pub filed_closed_in_window: u64,
+}
+
+/// The caller's canonical team scope: explicit `--scope` wins (canonicalized,
+/// refused when it names nothing); else the live registry row for this
+/// session's own identity, requiring a stamped team on a row the
+/// `row_verdict` door has not finished. Shared by the
+/// verdict, checkin and history commands: the Rust reader tolerates unknown
+/// keys, so a registry row carrying a field this binary predates no longer
+/// blinds the team resolution the way the strict Python reader did.
+pub(crate) fn resolve_scope(
+    explicit_scope: Option<&str>,
+    registry_path: &Path,
+) -> Result<String, String> {
+    with_live_grants(|grants| {
+        resolve_scope_in(
+            explicit_scope,
+            registry_path,
+            grants,
+            &crate::team_reap::transcript_age_now,
+        )
+    })
+}
+
+/// Call `f` with the grant receipts this machine holds.
+fn with_live_grants<T>(f: impl FnOnce(&Grants) -> T) -> T {
+    let role_of = |scope: &str| {
+        let answer =
+            crate::territory::resolve_role_kind(&serde_json::json!({"scopes": [scope]})).ok()?;
+        Some((
+            answer.get("level")?.as_u64()? as u32,
+            answer.get("scope")?.as_str()?.to_string(),
+        ))
+    };
+    // A grant recorded for another project on this machine never stamps here.
+    let laws = || {
+        let mut index = crate::decision_index::default_store_live().map_err(|e| e.to_string())?;
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let project =
+            crate::law_match::resolve_project(Some(&cwd), &crate::law_match::settings_sources())
+                .ok();
+        crate::decision_index::retain_in_scope(&mut index, project.as_deref());
+        Ok(index)
+    };
+    let vacated_at = |session: &str| {
+        newest_vacate(
+            &crate::paths::AgentsHome::from_env().events_jsonl(),
+            session,
+        )
+    };
+    let promoted_at = |name: &str| {
+        newest_promote(
+            &crate::client_commands::trace_events_path(&crate::paths::AgentsHome::from_env()),
+            name,
+        )
+    };
+    f(&Grants {
+        spaces_root: &crate::paths::spaces_root(),
+        laws: &laws,
+        role_of: &role_of,
+        vacated_at: &vacated_at,
+        promoted_at: &promoted_at,
+    })
+}
+
+/// Where a user grant can live when the registry row lost its stamp: the
+/// session's lead manifest, or a law row the agent recorded from the user's
+/// chat words. Injected so a test reads no machine state.
+struct Grants<'a> {
+    spaces_root: &'a Path,
+    laws: &'a dyn Fn() -> Result<crate::decision_index::Index, String>,
+    role_of: &'a dyn Fn(&str) -> Option<(u32, String)>,
+    /// When this session last gave up a role (`agent_role_vacated`). A chat
+    /// grant older than that is spent: `org done` must not be undone by it.
+    vacated_at: &'a dyn Fn(&str) -> Option<chrono::DateTime<chrono::Utc>>,
+    /// When this row last took a role by name (`agent_promoted`). A grant older
+    /// than that never widens: a later promote may have narrowed it on purpose.
+    promoted_at: &'a dyn Fn(&str) -> Option<chrono::DateTime<chrono::Utc>>,
+}
+
+fn parse_ts(raw: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|t| t.with_timezone(&chrono::Utc))
+}
+
+/// The newest `kind` event in a journal whose `pointer` field equals `value`.
+fn newest_event(
+    events: &Path,
+    kind: &str,
+    pointer: &str,
+    value: &str,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    std::fs::read_to_string(events)
+        .ok()?
+        .lines()
+        .filter(|line| line.contains(kind))
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|e| e.get("type").and_then(Value::as_str) == Some(kind))
+        .filter(|e| e.pointer(pointer).and_then(Value::as_str) == Some(value))
+        .filter_map(|e| parse_ts(e.get("ts")?.as_str()?))
+        .max()
+}
+
+/// The newest `agent_role_vacated` time for `session` in the agents journal.
+fn newest_vacate(events: &Path, session: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    newest_event(
+        events,
+        "agent_role_vacated",
+        "/data/holder_session",
+        session,
+    )
+}
+
+/// The newest `agent_promoted` time for the row named `name`.
+fn newest_promote(events: &Path, name: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    newest_event(events, "agent_promoted", "/data/name", name)
+}
+
+/// The line that tells an agent how to record a grant the user says in chat.
+pub(crate) fn chat_grant_line(scope: &str, handle: &str) -> String {
+    format!(
+        "When the user grants it in chat, record their exact words: fno inbox law set \
+         'role-grant:{scope}' '{handle}' --rationale 'user in chat: <their words>'. The \
+         next check-in stamps the role."
+    )
+}
+
+fn resolve_scope_in(
+    explicit_scope: Option<&str>,
+    registry_path: &Path,
+    grants: &Grants,
+    transcript_age_s: &dyn Fn(&str) -> Option<i64>,
+) -> Result<String, String> {
+    if let Some(raw) = explicit_scope {
+        let canonical = crate::territory::canonical_scope(raw.trim());
+        if canonical.is_empty() {
+            return Err("--scope names no team territory.".to_string());
+        }
+        return Ok(canonical);
+    }
+    let (session, harness) = crate::claims::resolve_identity();
+    let (Some(session), Some(harness)) = (session, harness) else {
+        return Err("cannot resolve the caller's team: no teamed registry row. \
+             Pass --scope explicitly."
+            .to_string());
+    };
+    let registry = crate::state::load_registry(registry_path).map_err(|e| {
+        format!("cannot resolve the caller's team: the agent registry could not be read: {e}")
+    })?;
+    let Some(row) = crate::lead_state::find_by_session(&registry.entries, &session, Some(&harness))
+    else {
+        return Err(format!(
+            "cannot resolve the caller's team: no registry row names session {session}"
+        ));
+    };
+    // A stored terminal word refuses only a session the harness is not
+    // writing: the sweep can stamp `exited` over a live session (measured
+    // 2026-11-03 on a lead whose transcript kept moving), and the check-in
+    // is the one command that session runs from inside itself.
+    let served_live = crate::lead_state::served_live(&session, transcript_age_s);
+    if matches!(row.status, AgentStatus::Failed) && !served_live {
+        return Err(format!(
+            "the registry row for {session} is failed, a terminal state"
+        ));
+    }
+    if !served_live {
+        if let crate::row_verdict::RowVerdict::Finished(why) = crate::row_verdict::fno_verdict(row)
+        {
+            return Err(format!(
+                "the registry row for {session} is finished ({why}), a terminal state"
+            ));
+        }
+    }
+    let stamped = row
+        .role_scope
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let team = match stamped.filter(|_| row.role_level.is_some()) {
+        Some(team) => team,
+        None => heal_role(registry_path, grants, &session, row).ok_or_else(|| {
+            format!(
+                "the registry row for {session} carries no complete role, and no live lead \
+                 manifest or chat grant holds a grant the user made: the row is \
+                 unstamped, so no team proves this session's authority. Ask your lead \
+                 to grant the team. {}",
+                chat_grant_line("<scope>", &row.name)
+            )
+        })?,
+    };
+    let team = team.as_str();
+    let canonical = crate::territory::canonical_scope(team);
+    if canonical.is_empty() {
+        return Err("this session holds no team. Pass --scope <territory>.".to_string());
+    }
+    Ok(canonical)
+}
+
+/// A hand-off can leave the registry row unstamped while the user's grant
+/// still stands. Two receipts hold it: a live (not superseded) lead manifest
+/// for this exact session granted by `human`, or the newest user-ruling law
+/// at `role-grant:<scope>` naming this row. The row re-stamps from the first
+/// one found and the check-in goes on.
+fn heal_role(
+    registry_path: &Path,
+    grants: &Grants,
+    session: &str,
+    row: &crate::state::RegistryEntry,
+) -> Option<String> {
+    let (scope, level) =
+        manifest_grant(grants.spaces_root, session).or_else(|| chat_grant(grants, session, row))?;
+    stamp_role(registry_path, session, scope, level)
+}
+
+/// A law may name a row by handle, by short id, or by the 8-character session
+/// prefix a user reads off a status line.
+fn law_names_session(decision: &str, names: &[&str], session: &str) -> bool {
+    !decision.is_empty()
+        && (names.contains(&decision) || (decision.len() >= 8 && session.starts_with(decision)))
+}
+
+/// A user-ruling law row at `role-grant:<scope>` whose decision names this
+/// row's handle, short id or session. The scope resolves to its level.
+/// The user's words are stored, not checked against a transcript: the same
+/// limit `law set --rationale` and the freeze lift carry (lead ruling C). A
+/// live rival holder still refuses the stamp in `stamp_role`.
+fn chat_grant(
+    grants: &Grants,
+    session: &str,
+    row: &crate::state::RegistryEntry,
+) -> Option<(String, u32)> {
+    let index = (grants.laws)().ok()?;
+    let subject = newest_grant_law(&index, grants, session, row)?
+        .get("subject")?
+        .as_str()?;
+    let (level, scope) = (grants.role_of)(subject.strip_prefix("role-grant:")?.trim())?;
+    Some((scope, level))
+}
+
+/// The newest unspent user grant that names this row.
+fn newest_grant_law<'a>(
+    index: &'a crate::decision_index::Index,
+    grants: &Grants,
+    session: &str,
+    row: &crate::state::RegistryEntry,
+) -> Option<&'a Value> {
+    let names = [row.name.as_str(), row.short_id.as_str(), session];
+    let spent_before = (grants.vacated_at)(session);
+    let mut rows: Vec<&Value> = index
+        .rows
+        .iter()
+        .filter(|r| crate::decision_index::is_user_ruling(r))
+        .filter(|r| {
+            r.get("decision")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .is_some_and(|d| law_names_session(d, &names, session))
+        })
+        .filter(|r| {
+            r.get("subject")
+                .and_then(Value::as_str)
+                .is_some_and(|s| s.starts_with("role-grant:"))
+        })
+        .filter(|r| match spent_before {
+            Some(vacated) => r
+                .get("ts")
+                .and_then(Value::as_str)
+                .and_then(parse_ts)
+                .is_some_and(|ts| ts > vacated),
+            None => true,
+        })
+        .collect();
+    rows.sort_by_key(|r| {
+        r.get("ts")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    });
+    rows.last().copied()
+}
+
+/// The role the newest grant names, when it strictly contains the role the row
+/// holds and postdates the row's last promote.
+fn wider_grant(
+    grants: &Grants,
+    session: &str,
+    row: &crate::state::RegistryEntry,
+    held: &str,
+    contains: &dyn Fn(&str, &str) -> bool,
+) -> Option<(String, u32)> {
+    let index = (grants.laws)().ok()?;
+    let law = newest_grant_law(&index, grants, session, row)?;
+    if let Some(promoted) = (grants.promoted_at)(&row.name) {
+        if parse_ts(law.get("ts")?.as_str()?)? <= promoted {
+            return None;
+        }
+    }
+    let subject = law.get("subject")?.as_str()?;
+    let (level, scope) = (grants.role_of)(subject.strip_prefix("role-grant:")?.trim())?;
+    contains(&scope, held).then_some((scope, level))
+}
+
+/// The user widened a lead that already holds a role: `heal_role` skips a
+/// stamped row, and `promote` refuses a self-edit. Re-stamp from the newest
+/// wider grant. Answers `(held, wider)` when the role moved.
+pub(crate) fn honor_wider_grant(home: &crate::paths::AgentsHome) -> Option<(String, String)> {
+    // Most callers hold no stamped row: they read no graph and no law store.
+    let (row, session) = stamped_live_row(home)?;
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    // Rung derivation reads this map: a guessed empty one would hide a rival.
+    let projects = crate::org_board::project_map(&cwd).ok()?;
+    let entries = crate::territory::graph_entries(&cwd).unwrap_or_default();
+    let lead_enabled = crate::lead_state::lead_loop_enabled(&cwd);
+    let (name, held, scope, level) = with_live_grants(|grants| {
+        widen_stamped_role(
+            home,
+            grants,
+            &row,
+            &session,
+            &projects,
+            &entries,
+            lead_enabled,
+        )
+    })?;
+    crate::role_grant::settle_user_rescope(home, &name, &held, &scope, level);
+    Some((held, scope))
+}
+
+/// This session's registry row, when it is live and holds a whole role.
+fn stamped_live_row(
+    home: &crate::paths::AgentsHome,
+) -> Option<(crate::state::RegistryEntry, String)> {
+    let (session, harness) = crate::claims::resolve_identity();
+    let (session, harness) = (session?, harness?);
+    let registry = crate::state::load_registry(&home.registry_json()).ok()?;
+    let row = crate::lead_state::find_by_session(&registry.entries, &session, Some(&harness))?;
+    if matches!(row.status, AgentStatus::Failed)
+        || matches!(
+            crate::row_verdict::fno_verdict(row),
+            crate::row_verdict::RowVerdict::Finished(_)
+        )
+    {
+        return None;
+    }
+    row.role_level?;
+    row.role_scope.as_deref().filter(|s| !s.trim().is_empty())?;
+    Some((row.clone(), session))
+}
+
+fn widen_stamped_role(
+    home: &crate::paths::AgentsHome,
+    grants: &Grants,
+    row: &crate::state::RegistryEntry,
+    session: &str,
+    projects: &std::collections::HashMap<String, String>,
+    entries: &[Value],
+    lead_enabled: bool,
+) -> Option<(String, String, String, u32)> {
+    let held = row.role_scope.clone()?;
+    let entry_of = |id: &str| entries.iter().find(|e| e["id"].as_str() == Some(id));
+    let contains = |outer: &str, inner: &str| {
+        crate::territory::scope_contains(outer, inner, &entry_of, projects)
+    };
+    let (scope, level) = wider_grant(grants, session, row, &held, &contains)?;
+    match crate::role_grant::rescope_from_user_grant(
+        home,
+        row,
+        &scope,
+        level,
+        projects,
+        lead_enabled,
+    ) {
+        Ok(()) => {
+            eprintln!("lead: the user's grant widened this role from {held} to {scope}");
+            Some((row.name.clone(), held, scope, level))
+        }
+        Err(e) => {
+            eprintln!("lead: the user's grant over {scope} did not apply: {e}");
+            None
+        }
+    }
+}
+
+fn manifest_grant(spaces_root: &Path, session: &str) -> Option<(String, u32)> {
+    use crate::claude_adopt::manifest_field;
+    let manifests = crate::lead_state::collect_lead_manifests(spaces_root);
+    let superseded = crate::lead_state::superseded_manifests(&manifests);
+    manifests
+        .iter()
+        .filter(|(path, _)| !superseded.contains(path))
+        .find_map(|(_, content)| {
+            let ours = manifest_field(content, "harness_session_id").as_deref() == Some(session);
+            let user = manifest_field(content, "role_grantor").as_deref() == Some("human");
+            let scope = manifest_field(content, "role_scope").filter(|s| !s.trim().is_empty())?;
+            let level =
+                manifest_field(content, "role_level").and_then(|l| l.parse::<u32>().ok())?;
+            (ours && user).then_some((scope, level))
+        })
+}
+
+fn stamp_role(registry_path: &Path, session: &str, scope: String, level: u32) -> Option<String> {
+    crate::state::update_registry(registry_path, |doc| {
+        // Another live holder of the territory means a real conflict, not a
+        // dropped stamp: healing would mint a second holder.
+        let key = crate::lead_state::territory_key(&scope);
+        let mine = |r: &crate::state::RegistryEntry| {
+            [
+                r.harness_session_id.as_deref(),
+                r.cc_session_id.as_deref(),
+                r.session_id.as_deref(),
+            ]
+            .contains(&Some(session))
+        };
+        if doc.entries.iter().any(|r| {
+            !mine(r)
+                && !crate::lead_state::is_terminal(r)
+                && r.role_scope
+                    .as_deref()
+                    .is_some_and(|s| crate::lead_state::territory_key(s) == key)
+        }) {
+            return None;
+        }
+        let row = doc.entries.iter_mut().find(|r| {
+            [
+                r.harness_session_id.as_deref(),
+                r.cc_session_id.as_deref(),
+                r.session_id.as_deref(),
+            ]
+            .contains(&Some(session))
+        })?;
+        // Half a role is no role: the grant completes it.
+        if row.role_level.is_some()
+            && row
+                .role_scope
+                .as_deref()
+                .is_some_and(|s| !s.trim().is_empty())
+        {
+            return None;
+        }
+        row.role_scope = Some(scope.clone());
+        row.role_level = Some(level);
+        row.role_grantor = Some("human".to_string());
+        eprintln!(
+            "lead: re-stamped the registry row for {session} over {scope:?} from the user's grant"
+        );
+        Some(scope.clone())
+    })
+    .ok()
+    .flatten()
+}
+
+/// The manifest the verdict reads: explicit and authoritative, else
+/// `<space>/leads/<scope>.md` for the named scope (a deliberate change from
+/// Python, which resolved the CALLER's manifest even under an explicit scope
+/// - reading one team's lead through another team's manifest is the bug
+/// closes).
+fn resolve_manifest(
+    cwd: &Path,
+    scope: &str,
+    explicit_manifest: Option<&Path>,
+) -> Result<PathBuf, String> {
+    if let Some(p) = explicit_manifest {
+        let path = p.to_path_buf();
+        if !path.is_file() {
+            return Err(format!("{}: manifest not found", path.display()));
+        }
+        return Ok(path);
+    }
+    let path = crate::lead_state::manifest_path(&crate::paths::space_dir(cwd), scope)?;
+    if !path.is_file() {
+        return Err(format!("{}: manifest not found", path.display()));
+    }
+    Ok(path)
+}
+
+fn generation_start(
+    registry: &crate::state::Registry,
+    harness: &str,
+    manifest: &crate::loopcheck::LeadManifest,
+    manifest_created_at: &str,
+    manifest_created: &chrono::DateTime<chrono::FixedOffset>,
+    registry_path: &Path,
+) -> Result<(String, String), String> {
+    let Some(session_id) = manifest
+        .harness_session_id
+        .as_deref()
+        .filter(|session_id| !session_id.trim().is_empty())
+    else {
+        return Ok((manifest_created_at.to_string(), "manifest".to_string()));
+    };
+    let Some(row) = registry.find_by_session(harness, session_id) else {
+        return Ok((manifest_created_at.to_string(), "manifest".to_string()));
+    };
+    let row_created = chrono::DateTime::parse_from_rfc3339(&row.created_at).map_err(|error| {
+        format!(
+            "{}: registry row for session {session_id} has invalid created_at: {error}",
+            registry_path.display()
+        )
+    })?;
+    let (start, source) = if row_created < manifest_created.clone() {
+        (row.created_at.clone(), "registry")
+    } else {
+        (manifest_created_at.to_string(), "manifest")
+    };
+    Ok((start, source.to_string()))
+}
+
+/// Alias members (a project's `short_name` spelling) resolve to their
+/// canonical project, so the manifest path and the graph compile select what
+/// the team actually wrote at `<space>/leads/<canonical>.md`. Canonical
+/// members map to themselves, so a registry-derived scope is unchanged.
+pub(crate) fn canonical_members_with_aliases(scope: &str, cwd: &Path) -> String {
+    let map = crate::org_board::scope::project_map(cwd).unwrap_or_default();
+    let members: Vec<String> = scope
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|m| map.get(m).cloned().unwrap_or_else(|| m.to_string()))
+        .collect();
+    crate::territory::canonical_scope(&members.join(","))
+}
+
+/// `lead.checkin_interval` through the layered config lookup, with Python's
+/// default. An unparseable interval IS the default (the Pydantic validator's
+/// behavior). Shared by the verdict window and the hook beat's due check.
+pub(crate) fn checkin_interval_secs(cwd: &Path) -> i64 {
+    match crate::agents_config::config_lookup(cwd, &["lead", "checkin_interval"]) {
+        Some(v) => crate::territory::parse_duration_to_seconds(&v).unwrap_or(DEFAULT_CHECKIN_SECS),
+        None => DEFAULT_CHECKIN_SECS,
+    }
+}
+
+/// The built-in handoff point for a harness with no config override.
+pub(crate) fn default_ceiling(harness: &str) -> i64 {
+    if harness == "codex" {
+        DEFAULT_COMPACTION_CEILING_CODEX
+    } else {
+        DEFAULT_COMPACTION_CEILING
+    }
+}
+
+/// The lead's handoff point for one harness: `lead.handoff.<harness>.
+/// compaction_ceiling`, then the global `lead.compaction_ceiling`, then the
+/// built-in default. A non-integer or negative value is a named refusal
+/// naming the full key, never zero. Zero itself is a legitimate ceiling: it
+/// declares that no compaction is ever acceptable.
+pub(crate) fn compaction_ceiling_for(cwd: &Path, harness: &str) -> Result<i64, String> {
+    let specific = format!("lead.handoff.{harness}.compaction_ceiling");
+    for (keys, name) in [
+        (
+            vec!["lead", "handoff", harness, "compaction_ceiling"],
+            specific,
+        ),
+        (
+            vec!["lead", "compaction_ceiling"],
+            "lead.compaction_ceiling".to_string(),
+        ),
+    ] {
+        let Some(v) = crate::agents_config::config_lookup(cwd, &keys) else {
+            continue;
+        };
+        return match v.as_integer() {
+            Some(n) if n >= 0 => Ok(n),
+            Some(_) => Err(format!("config {name} must be a non-negative integer")),
+            None => Err(format!("config {name} must be an integer")),
+        };
+    }
+    Ok(default_ceiling(harness))
+}
+
+/// `lead.checkin_interval` and the per-harness handoff point through the
+/// layered config lookup, with the defaults above.
+fn read_config(cwd: &Path, harness: &str) -> Result<(i64, i64), String> {
+    let interval = checkin_interval_secs(cwd);
+    let ceiling = compaction_ceiling_for(cwd, harness)?;
+    Ok((interval, ceiling))
+}
+
+/// The one entry point. `now` is injectable so tests pin the window; `cwd`
+/// anchors the config candidates, the graph, and the space dir exactly as the
+/// Python shell did.
+pub(crate) fn resolve_verdict_inputs(
+    cwd: &Path,
+    explicit_scope: Option<&str>,
+    explicit_manifest: Option<&Path>,
+    registry_path: &Path,
+    now: impl Fn() -> chrono::DateTime<chrono::Utc>,
+) -> Result<VerdictInputs, String> {
+    if crate::graph_get::external_backend_selected() {
+        return Err("tracker metadata unavailable under an external tracker backend".to_string());
+    }
+    let scope = resolve_scope(explicit_scope, registry_path)?;
+    let scope = canonical_members_with_aliases(&scope, cwd);
+    let manifest_path = resolve_manifest(cwd, &scope, explicit_manifest)?;
+
+    let content = std::fs::read_to_string(&manifest_path)
+        .map_err(|e| format!("{}: unreadable manifest: {e}", manifest_path.display()))?;
+    let manifest = crate::loopcheck::parse_lead_manifest(&content)
+        .ok_or_else(|| "lead manifest has no frontmatter".to_string())?;
+    let registry = crate::state::load_registry(registry_path)
+        .map_err(|error| format!("{}: registry unreadable: {error}", registry_path.display()))?;
+    let manifest_harness = crate::loopcheck::scan_manifest_field(&content, "harness")
+        .unwrap_or_else(|| "claude".into());
+    let holder_session = manifest
+        .harness_session_id
+        .clone()
+        .filter(|s| !s.trim().is_empty());
+    // The row outranks the manifest on a harness disagreement: a role write
+    // that stamped the arming caller's harness (fixed at the write) leaves
+    // older manifests naming a foreign harness, and every transcript reader
+    // keyed on the manifest harness resolves blind. Prefer the holder row's
+    // own harness and name the source so the payload can print the split.
+    let (harness, harness_source, harness_disagreement) = match holder_session.as_deref() {
+        Some(session_id) => {
+            let row = crate::lead_state::find_by_session(
+                &registry.entries,
+                session_id,
+                Some(&manifest_harness),
+            )
+            .or_else(|| crate::lead_state::find_by_session(&registry.entries, session_id, None));
+            match row {
+                Some(row) if row.harness.as_deref().is_some_and(|h| !h.is_empty()) => {
+                    let row_harness = row.harness.clone().unwrap();
+                    let disagreement = (row_harness != manifest_harness).then(|| {
+                        format!(
+                            "manifest names harness {manifest_harness}; the holder row says \
+                             {row_harness}, which wins"
+                        )
+                    });
+                    (row_harness, "registry".to_string(), disagreement)
+                }
+                _ => (manifest_harness.clone(), "manifest".to_string(), None),
+            }
+        }
+        None => (manifest_harness.clone(), "manifest".to_string(), None),
+    };
+    let (interval, ceiling) = read_config(cwd, &harness)?;
+    let teamed_at = manifest.created_at.clone().ok_or_else(|| {
+        format!(
+            "{}: no created_at; no measurable split.",
+            manifest_path.display()
+        )
+    })?;
+
+    let created_at = chrono::DateTime::parse_from_rfc3339(&teamed_at).map_err(|e| {
+        format!(
+            "{}: created_at is not RFC3339: {e}",
+            manifest_path.display()
+        )
+    })?;
+    let holder_row = holder_session
+        .as_deref()
+        .and_then(|session_id| registry.find_by_session(&harness, session_id));
+    let (generation_start, generation_start_source) = generation_start(
+        &registry,
+        &harness,
+        &manifest,
+        &teamed_at,
+        &created_at,
+        registry_path,
+    )?;
+    let (team_inherited, team_from_session) = match holder_row {
+        Some(row) => {
+            let parent = row
+                .spawned_by_session
+                .as_deref()
+                .filter(|session| !session.trim().is_empty());
+            let inherited = parent.is_some() && row.role_grantor.as_deref() != Some("human");
+            (
+                Some(inherited),
+                inherited.then(|| parent.map(str::to_string)).flatten(),
+            )
+        }
+        None => (None, None),
+    };
+    let current = now();
+    let team_age_secs = current
+        .signed_duration_since(created_at.with_timezone(&chrono::Utc))
+        .num_seconds()
+        .max(0);
+    let window_secs = WINDOW_INTERVALS * interval;
+    let window_start = (current - chrono::Duration::seconds(window_secs))
+        .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, false);
+
+    let entries = crate::graph_store::read_rows_where(
+        &crate::org_board::scope::graph_json_path(cwd),
+        &crate::backlog::RowQuery {
+            fields: Some(
+                [
+                    "deferred_kind",
+                    "superseded_by",
+                    "completed_at",
+                    "id",
+                    "type",
+                    "parent",
+                    "project",
+                    "status",
+                    "created_at",
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            ),
+            with_blockers: true,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| format!("scope {scope} graph unreadable: {e}"))?;
+    let projects: Result<HashMap<String, String>, String> =
+        crate::org_board::scope::project_map(cwd);
+    let ids = crate::territory::compile_scope_ids(&scope, &entries, &projects)
+        .map_err(|e| format!("scope {scope} unreadable: {e}"))?;
+    let (
+        inherited_undelivered,
+        filed_undelivered,
+        inherited_closed_in_window,
+        filed_closed_in_window,
+    ) = scope_split(&ids, &entries, &generation_start, &window_start);
+
+    Ok(VerdictInputs {
+        scope,
+        manifest,
+        manifest_path,
+        harness,
+        harness_source,
+        harness_disagreement,
+        now: current,
+        window: window_display(window_secs),
+        checkin_interval_secs: interval,
+        team_age_secs,
+        generation_start,
+        generation_start_source,
+        team_inherited,
+        team_from_session,
+        compaction_ceiling: ceiling as u64,
+        inherited_undelivered,
+        filed_undelivered,
+        inherited_closed_in_window,
+        filed_closed_in_window,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn tmp(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("kvi-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn entry(id: &str, parent: &str, created_at: &str, extra: Value) -> Value {
+        let mut v = serde_json::json!({"id": id, "type": "feature", "project": "fno"});
+        if !parent.is_empty() {
+            v["parent"] = Value::String(parent.to_string());
+        }
+        if !created_at.is_empty() {
+            v["created_at"] = Value::String(created_at.to_string());
+        }
+        if let Value::Object(map) = extra {
+            for (k, val) in map {
+                v[k] = val;
+            }
+        }
+        v
+    }
+
+    // --- AC1/AC2-ERR: the resolver's refusal paths ---
+
+    fn pinned_now() -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::from_timestamp(1789500000, 0).unwrap()
+    }
+
+    fn write_manifest(dir: &Path, scope: &str) -> PathBuf {
+        let path = dir.join(format!("leads/{scope}.md"));
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            "---\nscope: x\nshape: pass\nfno_id: kd-test\ncreated_at: 2026-09-10T00:00:00Z\n\
+             harness_session_id: sess-k\nmax_iterations: 40\n---\n",
+        )
+        .unwrap();
+        path
+    }
+
+    /// Snapshot-and-restore scope for env vars a test pins; the original
+    /// value (or its absence) is put back on drop, panic included.
+    struct EnvPin(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+    impl EnvPin {
+        fn take(vars: &[&'static str]) -> Self {
+            Self(
+                vars.iter()
+                    .map(|var| (*var, std::env::var_os(var)))
+                    .collect(),
+            )
+        }
+    }
+
+    impl Drop for EnvPin {
+        fn drop(&mut self) {
+            for (var, saved) in &self.0 {
+                match saved {
+                    Some(v) => std::env::set_var(var, v),
+                    None => std::env::remove_var(var),
+                }
+            }
+        }
+    }
+
+    /// The graph store the resolver reads lives at `$FNO_HOME/graph.json`
+    /// (SQLite beside it); `paths.graph_json` no longer redirects it.
+    fn pin_home(dir: &Path) -> EnvPin {
+        let pin = EnvPin::take(&["FNO_HOME"]);
+        std::env::set_var("FNO_HOME", dir.join("home"));
+        pin
+    }
+
+    fn generation_setup(dir: &Path, registry_rows: &[Value]) -> (PathBuf, PathBuf) {
+        let manifest = dir.join("leads/x-root.md");
+        fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        fs::write(
+            &manifest,
+            "---\nscope: x-root\nshape: pass\nfno_id: kd-test\n\
+             created_at: 2026-09-18T20:48:22Z\nharness: claude\nharness_session_id: sess-k\n---\n",
+        )
+        .unwrap();
+
+        fs::create_dir_all(dir.join(".fno")).unwrap();
+        let graph = dir.join("home/graph.json");
+        fs::create_dir_all(graph.parent().unwrap()).unwrap();
+        fs::write(
+            dir.join(".fno/config.toml"),
+            format!(
+                "[paths]\ngraph_json = {:?}\n[[work.workspaces.t.projects]]\nname = \"fno\"\n",
+                graph.display()
+            ),
+        )
+        .unwrap();
+        crate::graph_store::seed_rows(
+            &graph,
+            &[
+                entry(
+                    "x-root",
+                    "",
+                    "2026-09-18T01:00:00Z",
+                    serde_json::json!({"type": "epic", "project": "fno"}),
+                ),
+                entry(
+                    "x-delivery",
+                    "x-root",
+                    "2026-09-18T01:14:01Z",
+                    serde_json::json!({"project": "fno", "status": "ready"}),
+                ),
+            ],
+        )
+        .unwrap();
+        let registry = dir.join("registry.json");
+        fs::write(
+            &registry,
+            serde_json::json!({"schema_version": 11, "agents": registry_rows}).to_string(),
+        )
+        .unwrap();
+        (manifest, registry)
+    }
+
+    fn inherited_holder_row(created_at: &str) -> Value {
+        serde_json::json!({
+            "name": "lead",
+            "cwd": "/tmp",
+            "status": "busy",
+            "created_at": created_at,
+            "harness": "claude",
+            "harness_session_id": "sess-k",
+            "spawned_by_session": "grantor-session",
+            "role_level": 2,
+            "role_scope": "x-root",
+            "role_grantor": "spawn"
+        })
+    }
+
+    #[test]
+    fn a_missing_manifest_refuses() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // This test holds the env lock; declare() takes it too, so the
+        // held variant is the one that cannot deadlock.
+        let _root = crate::paths::DeclaredRoot::declare_held("kvi");
+        let dir = tmp("no-manifest");
+        let err = resolve_verdict_inputs(
+            &dir,
+            Some("x-root"),
+            None,
+            &dir.join("registry.json"),
+            pinned_now,
+        )
+        .expect_err("no manifest exists");
+        assert!(err.contains("manifest not found"), "{err}");
+    }
+
+    #[test]
+    fn a_manifest_without_created_at_refuses_the_split() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tmp("no-created-at");
+        let path = dir.join("leads/x-root.md");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            "---\nscope: x-root\nshape: pass\nfno_id: kd-test\n---\n",
+        )
+        .unwrap();
+        let err = resolve_verdict_inputs(
+            &dir,
+            Some("x-root"),
+            Some(&path),
+            &dir.join("registry.json"),
+            pinned_now,
+        )
+        .expect_err("no created_at means no measurable split");
+        assert!(err.contains("no created_at"), "{err}");
+    }
+
+    #[test]
+    fn delivery_split_starts_at_the_holder_generation() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("FNO_CONFIG");
+        let dir = tmp("holder-generation-start");
+        let (manifest, registry) =
+            generation_setup(&dir, &[inherited_holder_row("2026-09-17T22:47:08Z")]);
+        let _home = pin_home(&dir);
+        let inputs =
+            resolve_verdict_inputs(&dir, Some("x-root"), Some(&manifest), &registry, pinned_now)
+                .expect("the holder generation makes the split measurable");
+        assert_eq!(inputs.generation_start, "2026-09-17T22:47:08Z");
+        assert_eq!(inputs.generation_start_source, "registry");
+        assert_eq!(inputs.team_inherited, Some(true));
+        assert_eq!(inputs.team_from_session.as_deref(), Some("grantor-session"));
+        assert_eq!(inputs.inherited_undelivered, 0);
+        assert_eq!(inputs.filed_undelivered, 2);
+    }
+
+    #[test]
+    fn an_unparseable_ceiling_refuses_and_never_reads_zero() {
+        // Hold the env lock: the external-backend test flips
+        // FNO_TRACKER_BACKEND process-wide, and this read must not race it.
+        // The config anchors on the test's own cwd, so a dangling FNO_CONFIG
+        // left by an earlier test's window is cleared first - under the same
+        // lock, so no setter can race the clear.
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("FNO_CONFIG");
+        let dir = tmp("bad-ceiling");
+        let manifest = write_manifest(&dir, "x-root");
+        fs::create_dir_all(dir.join(".fno")).unwrap();
+        // The scope read needs work.workspaces in a candidate config; without
+        // a stanza here the suite only passes where the operator's live
+        // config supplies one (the flake shape the FNO_CONFIG pin fixed).
+        fs::write(
+            dir.join(".fno/config.toml"),
+            "[[work.workspaces.t.projects]]\nname = \"x-root\"\n[lead]\ncompaction_ceiling = \"three\"\n",
+        )
+        .unwrap();
+        let err = resolve_verdict_inputs(
+            &dir,
+            Some("x-root"),
+            Some(&manifest),
+            &dir.join("registry.json"),
+            pinned_now,
+        )
+        .expect_err("a non-integer ceiling is a named refusal");
+        assert!(err.contains("compaction_ceiling"), "{err}");
+        // AC1-ERR: a bad per-harness value names the full per-harness key.
+        // The helper manifest carries no harness field, so the effective
+        // harness reads claude and the claude key is the one read.
+        fs::write(
+            dir.join(".fno/config.toml"),
+            "[[work.workspaces.t.projects]]\nname = \"x-root\"\n[lead.handoff.claude]\ncompaction_ceiling = \"x\"\n",
+        )
+        .unwrap();
+        let err = resolve_verdict_inputs(
+            &dir,
+            Some("x-root"),
+            Some(&manifest),
+            &dir.join("registry.json"),
+            pinned_now,
+        )
+        .expect_err("a bad per-harness value names the full key");
+        assert!(
+            err.contains("lead.handoff.claude.compaction_ceiling"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_corrupt_graph_refuses_instead_of_reading_zero() {
+        // Same discipline as the ceiling test: lock held, dangling
+        // FNO_CONFIG cleared, the config anchors on this test's own cwd.
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("FNO_CONFIG");
+        let dir = tmp("corrupt-graph");
+        let manifest = write_manifest(&dir, "x-root");
+        let graph = dir.join("graph.json");
+        fs::write(&graph, "{not json").unwrap();
+        // Point the graph read at the corrupt file through the cwd-anchored
+        // config: no env pin, no race with a parallel test's resolution.
+        fs::create_dir_all(dir.join(".fno")).unwrap();
+        fs::write(
+            dir.join(".fno/config.toml"),
+            format!("[paths]\ngraph_json = {:?}\n", graph.display()),
+        )
+        .unwrap();
+        let err = resolve_verdict_inputs(
+            &dir,
+            Some("x-root"),
+            Some(&manifest),
+            &dir.join("registry.json"),
+            pinned_now,
+        )
+        .expect_err("a corrupt graph must never read as drained");
+        assert!(
+            err.contains("unreadable") || err.contains("corrupt"),
+            "{err}"
+        );
+    }
+
+    // --- the caller-team resolution survives an unknown field ----
+
+    fn write_registry(dir: &Path, rows: Value) -> PathBuf {
+        let path = dir.join("registry.json");
+        crate::registry_store::seed_raw(
+            &path,
+            serde_json::json!({
+                "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
+                "agents": rows,
+            })
+            .to_string(),
+        );
+        path
+    }
+
+    fn teamed_row(extra: Value) -> Value {
+        let mut row = serde_json::json!({
+            "name": "lead-a792",
+            "cwd": "/tmp/x",
+            "created_at": "2026-09-01T00:00:00Z",
+            "status": "idle",
+            "harness": "claude",
+            "harness_session_id": "ses-team",
+            "role_level": 2,
+            "role_scope": "probe fleet",
+        });
+        if let Value::Object(map) = extra {
+            for (k, v) in map {
+                row[k] = v;
+            }
+        }
+        row
+    }
+
+    /// Identity env for the caller, with every vendor marker cleared so the
+    /// canonical markers win unambiguously. Callers hold the env lock.
+    fn with_teamed_identity<T>(f: impl FnOnce() -> T) -> T {
+        for (marker, _) in crate::claims::HARNESS_SESSION_MARKERS
+            .iter()
+            .chain(crate::claims::LEGACY_HARNESS_SESSION_MARKERS.iter())
+        {
+            std::env::remove_var(marker);
+        }
+        std::env::set_var("FNO_HARNESS_NAME", "claude");
+        std::env::set_var("FNO_HARNESS_SESSION_ID", "ses-team");
+        let out = f();
+        std::env::remove_var("FNO_HARNESS_NAME");
+        std::env::remove_var("FNO_HARNESS_SESSION_ID");
+        out
+    }
+
+    /// The node's requested test, on the surviving leg: an equal-version
+    /// registry whose teamed row carries a field this binary does not
+    /// model still resolves the caller's team. The strict Python reader
+    /// refused the whole file in this shape and took checkin down with it.
+    #[test]
+    fn teamed_row_with_unknown_field_still_resolves_the_scope() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tmp("unknown-field");
+        let path = write_registry(
+            &dir,
+            serde_json::json!([teamed_row(serde_json::json!({"future_field": "x"}))]),
+        );
+        with_teamed_identity(|| {
+            let scope = resolve_scope(None, &path).expect("unknown key must not blind the read");
+            assert_eq!(scope, crate::territory::canonical_scope("probe fleet"));
+        });
+        // An orphaned row with a live pid is not finished: the row_verdict
+        // door decides, not a copied terminal-status list.
+        let live = write_registry(
+            &dir,
+            serde_json::json!([teamed_row(serde_json::json!({
+                "status": "orphaned",
+                "pid": std::process::id(),
+            }))]),
+        );
+        with_teamed_identity(|| {
+            let scope =
+                resolve_scope(None, &live).expect("an orphaned row with a live pid resolves");
+            assert_eq!(scope, crate::territory::canonical_scope("probe fleet"));
+        });
+        // The same orphaned shape with a reaped pid is finished.
+        let mut gone = std::process::Command::new("true").spawn().unwrap();
+        let gone_pid = gone.id();
+        gone.wait().unwrap();
+        let dead = write_registry(
+            &dir,
+            serde_json::json!([teamed_row(serde_json::json!({
+                "status": "orphaned",
+                "pid": gone_pid,
+            }))]),
+        );
+        with_teamed_identity(|| {
+            let err = resolve_scope(None, &dead)
+                .expect_err("an orphaned row with a gone pid is finished");
+            assert!(err.contains("terminal"), "{err}");
+        });
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The measured 2026-11-03 refusal: the sweep stamped `exited` over a
+    /// live lead (`pid_proven` on a stale row pid) and the check-in refused
+    /// a session that was mid-turn running the command. A transcript moving
+    /// inside the attention window is the served harness fact (law
+    /// d-10a72d88: a session never ends, harness facts are served), so it
+    /// outranks the stored word at BOTH terminal arms; a quiet transcript
+    /// keeps the stored word's veto.
+    #[test]
+    fn a_transcript_moving_inside_the_window_overrides_a_stored_terminal_word() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tmp("served-live");
+        let exited = teamed_row(serde_json::json!({
+            "status": "exited",
+            "exited_at": "2026-11-03T12:00:22Z",
+        }));
+        let path = write_registry(&dir, serde_json::json!([exited]));
+        let fresh = |_: &str| Some(30);
+        let quiet = |_: &str| Some(10_000);
+        with_teamed_identity(|| {
+            let scope =
+                resolve_scope_in(None, &path, &grants(&dir, vec![]), &fresh).expect("writing");
+            assert_eq!(scope, crate::territory::canonical_scope("probe fleet"));
+        });
+        with_teamed_identity(|| {
+            let err = resolve_scope_in(None, &path, &grants(&dir, vec![]), &quiet)
+                .expect_err("a quiet transcript keeps the stored word's veto");
+            assert!(err.contains("terminal"), "{err}");
+        });
+        fs::remove_dir_all(&dir).expect("tmp cleaned");
+    }
+
+    fn grants(dir: &Path, laws: Vec<Value>) -> Grants<'static> {
+        let root: &'static Path = Box::leak(dir.join("spaces").into_boxed_path());
+        let laws: &'static dyn Fn() -> Result<crate::decision_index::Index, String> =
+            Box::leak(Box::new(move || {
+                Ok(crate::decision_index::Index {
+                    rows: laws.clone(),
+                    damaged: 0,
+                })
+            }));
+        Grants {
+            spaces_root: root,
+            laws,
+            role_of: &|scope: &str| Some((2, scope.to_string())),
+            vacated_at: &|_: &str| None,
+            promoted_at: &|_: &str| None,
+        }
+    }
+
+    /// The seam most refusal tests want: no transcript resolves, so a stored
+    /// terminal word keeps its veto (the pre-fix behavior).
+    fn no_transcript(session: &str) -> Option<i64> {
+        let _ = session;
+        None
+    }
+
+    /// The user said "muriel leads fno-web too" to a lead that already holds a
+    /// role. The check-in moves the row and the manifest, and a project lead
+    /// under the wider portfolio stays. A narrower grant, a grant older than the
+    /// last promote, and a live rival on the same rung each change nothing.
+    #[test]
+    fn a_users_wider_grant_restamps_a_stamped_lead() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tmp("wider-grant");
+        let session = "41f999e9-d3ba-41cb-9647-501a0b77551d";
+        let saved: Vec<_> = ["FNO_SPACES_DIR", crate::paths::HOME_ENV]
+            .iter()
+            .map(|k| (*k, std::env::var_os(k)))
+            .collect();
+        std::env::set_var("FNO_SPACES_DIR", dir.join("spaces"));
+        // A nested home keeps the journal beside it inside the test's directory.
+        let agents = dir.join("agents");
+        fs::create_dir_all(&agents).unwrap();
+        std::env::set_var(crate::paths::HOME_ENV, &agents);
+        std::env::set_var("FNO_HARNESS_NAME", "claude");
+        std::env::set_var("FNO_HARNESS_SESSION_ID", session);
+        let cwd = dir.join("repo");
+        fs::create_dir_all(&cwd).unwrap();
+        let home = crate::paths::AgentsHome::from_env();
+        let projects: std::collections::HashMap<String, String> =
+            ["fnh", "fno", "fno-web", "fno-books"]
+                .iter()
+                .map(|p| (p.to_string(), p.to_string()))
+                .collect();
+        let lead = teamed_row(serde_json::json!({
+            "name": "muriel", "harness_session_id": session, "role_level": 0,
+            "role_scope": "fnh,fno", "role_grantor": "human", "cwd": cwd,
+            "pid": std::process::id(),
+        }));
+        let other = |name: &str, level: u32, scope: &str| {
+            teamed_row(serde_json::json!({
+                "name": name, "harness_session_id": format!("ses-{name}"), "role_level": level,
+                "role_scope": scope, "pid": std::process::id(),
+            }))
+        };
+        let law = |subject: &str| {
+            serde_json::json!({
+                "decision_id": "d-1", "subject": subject, "decision": "muriel",
+                "authority_source": "chat_attested", "ts": "2026-11-02T20:11:31Z",
+                "rationale": "user in chat: yes muriel leads fno-web too",
+            })
+        };
+        let wider = "role-grant:fnh,fno,fno-web";
+        let holds = |scope: &str| {
+            crate::state::load_registry(&agents.join("registry.json"))
+                .unwrap()
+                .entries
+                .iter()
+                .find(|r| r.name == "muriel")
+                .and_then(|r| r.role_scope.clone())
+                .as_deref()
+                == Some(scope)
+        };
+        let widen = |grants: &Grants| {
+            let (row, session) = stamped_live_row(&home)?;
+            widen_stamped_role(&home, grants, &row, &session, &projects, &[], true)
+        };
+
+        write_registry(&agents, serde_json::json!([lead.clone()]));
+        assert!(widen(&grants(&dir, vec![law("role-grant:fnh")])).is_none());
+        assert!(holds("fnh,fno"), "a narrower grant moves nothing");
+
+        let later = |_: &str| parse_ts("2026-11-02T21:00:00Z");
+        let mut stale = grants(&dir, vec![law(wider)]);
+        stale.promoted_at = &later;
+        assert!(widen(&stale).is_none());
+        assert!(holds("fnh,fno"), "a later promote spends the grant");
+
+        write_registry(
+            &agents,
+            serde_json::json!([lead.clone(), other("rival", 0, "fno-web,fno-books")]),
+        );
+        assert!(widen(&grants(&dir, vec![law(wider)])).is_none());
+        assert!(holds("fnh,fno"), "a same-rung rival refuses");
+
+        write_registry(
+            &agents,
+            serde_json::json!([lead.clone(), other("rosa", 1, "fno-web")]),
+        );
+        let space = crate::paths::space_dir(&cwd);
+        let old = crate::lead_state::manifest_path(&space, "fnh,fno").unwrap();
+        fs::create_dir_all(old.parent().unwrap()).unwrap();
+        fs::write(
+            &old,
+            format!("---\nscope: fnh,fno\nharness_session_id: {session}\n---\n"),
+        )
+        .unwrap();
+        let moved = widen(&grants(&dir, vec![law(wider)])).expect("widens");
+        assert_eq!(moved.2, "fnh,fno,fno-web");
+        assert!(holds("fnh,fno,fno-web"));
+        assert!(!old.exists(), "the old manifest goes with the old role");
+        let armed = crate::lead_state::manifest_path(&space, "fnh,fno,fno-web").unwrap();
+        let armed = fs::read_to_string(armed).expect("the manifest moves with the row");
+        assert!(
+            armed.contains(&format!("harness_session_id: {session}")),
+            "{armed}"
+        );
+
+        for (key, value) in saved {
+            match value {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+        std::env::remove_var("FNO_HARNESS_NAME");
+        std::env::remove_var("FNO_HARNESS_SESSION_ID");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The user said "promote lead-a792 over fno-books" in chat and the agent
+    /// recorded it: the next check-in stamps the row. A bare chat row with no
+    /// words, or one naming another handle, stamps nothing.
+    #[test]
+    fn unstamped_row_heals_from_the_users_chat_grant() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tmp("chat-grant");
+        let mut row = teamed_row(serde_json::json!({}));
+        row.as_object_mut().unwrap().remove("role_scope");
+        row.as_object_mut().unwrap().remove("role_level");
+        let law = |decision: &str, rationale: &str| {
+            serde_json::json!({
+                "decision_id": "d-1", "subject": "role-grant:fno-books", "decision": decision,
+                "authority_source": "chat_attested", "rationale": rationale,
+                "ts": "2026-10-28T12:00:00Z",
+            })
+        };
+        let path = write_registry(&dir, serde_json::json!([row.clone()]));
+        for refused in [
+            law("lead-a792", ""),
+            law("someone-else", "user in chat: promote someone-else"),
+        ] {
+            with_teamed_identity(|| {
+                resolve_scope_in(None, &path, &grants(&dir, vec![refused]), &no_transcript)
+                    .expect_err("no grant names this row");
+            });
+        }
+        let granted = law(
+            "lead-a792",
+            "user in chat: promote lead-a792 over fno-books",
+        );
+        with_teamed_identity(|| {
+            let scope = resolve_scope_in(None, &path, &grants(&dir, vec![granted]), &no_transcript)
+                .expect("heals");
+            assert_eq!(scope, crate::territory::canonical_scope("fno-books"));
+        });
+        let healed = crate::state::load_registry(&path).unwrap();
+        assert_eq!(healed.entries[0].role_level, Some(2));
+        // After `org done` vacates the role, the same grant is spent.
+        let spent = write_registry(&dir, serde_json::json!([row]));
+        let later = |_: &str| parse_ts("2026-10-28T13:00:00Z");
+        let mut after_done = grants(&dir, vec![law("lead-a792", "user in chat: promote")]);
+        after_done.vacated_at = &later;
+        with_teamed_identity(|| {
+            resolve_scope_in(None, &spent, &after_done, &no_transcript)
+                .expect_err("a vacated role stays vacated");
+        });
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A law recorded against a session prefix counts, and a half role heals
+    /// from it: the row ends with a level and the granted scope.
+    #[test]
+    fn half_a_role_heals_from_a_law_naming_the_session_prefix() {
+        let id = "41f999e9-d3ba-41cb-9647-501a0b77551d";
+        assert!(law_names_session("41f999e9", &[], id));
+        assert!(!law_names_session("41f9", &[], id));
+        assert!(!law_names_session("", &[""], id));
+
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tmp("half-role");
+        let mut row = teamed_row(serde_json::json!({"role_scope": "fno-books"}));
+        row.as_object_mut().unwrap().remove("role_level");
+        let path = write_registry(&dir, serde_json::json!([row]));
+        let law = serde_json::json!({
+            "decision_id": "d-1", "subject": "role-grant:fno-books", "decision": "ses-team",
+            "authority_source": "chat_attested", "rationale": "user in chat: lead fno-books",
+            "ts": "2026-10-28T12:00:00Z",
+        });
+        with_teamed_identity(|| {
+            resolve_scope_in(None, &path, &grants(&dir, vec![law]), &no_transcript).expect("heals");
+        });
+        let healed = crate::state::load_registry(&path).unwrap();
+        assert_eq!(healed.entries[0].role_level, Some(2));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A hand-off left the row unstamped, but this session's live lead
+    /// manifest holds the user's grant: check-in re-stamps and goes on. The
+    /// same manifest with a non-user grantor still refuses.
+    #[test]
+    fn unstamped_row_heals_from_the_users_manifest_grant() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tmp("heal");
+        let unstamped = || {
+            let mut row = teamed_row(serde_json::json!({}));
+            row.as_object_mut().unwrap().remove("role_scope");
+            row.as_object_mut().unwrap().remove("role_level");
+            row
+        };
+        let manifest = |grantor: &str| {
+            let leads = dir.join("spaces/space-a/leads");
+            fs::create_dir_all(&leads).unwrap();
+            fs::write(
+                leads.join("fno-books.md"),
+                format!(
+                    "---\nscope: fno-books\nharness_session_id: ses-team\nrole_level: 2\n\
+                     role_scope: fno-books\nrole_grantor: {grantor}\n---\n"
+                ),
+            )
+            .unwrap();
+        };
+        manifest("someone-else");
+        let path = write_registry(&dir, serde_json::json!([unstamped()]));
+        with_teamed_identity(|| {
+            let err = resolve_scope_in(None, &path, &grants(&dir, vec![]), &no_transcript)
+                .expect_err("no user grant");
+            assert!(err.contains("unstamped"), "{err}");
+            assert!(!err.contains(&["attended", " shell"].concat()), "{err}");
+        });
+        manifest("human");
+        let mut rival = teamed_row(serde_json::json!({
+            "name": "rival", "harness_session_id": "ses-rival", "role_scope": "fno-books",
+        }));
+        rival["pid"] = serde_json::json!(std::process::id());
+        let contested = write_registry(&dir, serde_json::json!([unstamped(), rival]));
+        with_teamed_identity(|| {
+            resolve_scope_in(None, &contested, &grants(&dir, vec![]), &no_transcript)
+                .expect_err("a live rival holds the territory");
+        });
+        let path = write_registry(&dir, serde_json::json!([unstamped()]));
+        with_teamed_identity(|| {
+            let scope = resolve_scope_in(None, &path, &grants(&dir, vec![]), &no_transcript)
+                .expect("heals");
+            assert_eq!(scope, crate::territory::canonical_scope("fno-books"));
+        });
+        let healed = crate::state::load_registry(&path).unwrap();
+        assert_eq!(healed.entries[0].role_scope.as_deref(), Some("fno-books"));
+        assert_eq!(healed.entries[0].role_level, Some(2));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An unreadable registry refuses naming the read failure, never the
+    /// misleading "no teamed registry row" the Python leg printed for this
+    /// case. A MISSING file is a valid empty registry, so the fixture is a
+    /// corrupt one: the defect class is a registry the reader cannot parse.
+    #[test]
+    fn unreadable_registry_refuses_by_name_not_no_teamed_row() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tmp("unreadable");
+        let path = dir.join("registry.json");
+        fs::write(&path, "{not json").unwrap();
+        with_teamed_identity(|| {
+            let err = resolve_scope(None, &path).expect_err("must refuse");
+            assert!(
+                err.contains("the agent registry could not be read"),
+                "{err}"
+            );
+            assert!(!err.contains("no teamed registry row"), "{err}");
+        });
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    // --- the close-count guard (lead ruling, 2026-10-26) ---
+
+    fn scope_ids() -> std::collections::HashSet<String> {
+        ["x-root".to_string(), "x-kid".to_string()]
+            .into_iter()
+            .collect()
+    }
+
+    fn close_row(id: &str, created_at: &str, extra: Value) -> Value {
+        let mut v = entry(
+            id,
+            "",
+            created_at,
+            serde_json::json!({
+                "status": "done",
+                "completed_at": "2026-10-26T04:00:00+00:00",
+            }),
+        );
+        if let (Value::Object(map), Value::Object(base)) = (&extra, &mut v) {
+            for (k, val) in map {
+                base.insert(k.clone(), val.clone());
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn an_other_session_filed_close_counts_in_window() {
+        let rows = [close_row(
+            "x-kid",
+            "2026-10-25T23:00:30+00:00",
+            serde_json::json!({"source_session_id": "worker-session"}),
+        )];
+        let (inherited_open, filed_open, inherited_closed, filed_closed) = scope_split(
+            &scope_ids(),
+            &rows,
+            "2026-10-25T20:13:46+00:00",
+            "2026-10-26T01:51:00+00:00",
+        );
+        assert_eq!(inherited_open, 0);
+        assert_eq!(filed_open, 0);
+        assert_eq!(inherited_closed, 0);
+        assert_eq!(filed_closed, 1);
+    }
+
+    #[test]
+    fn a_close_counts_even_when_the_row_names_the_lead_as_its_filer() {
+        // The close side carries no filer exclusion: the projected row never
+        // carried the filer field, so the old guard never fired in production,
+        // and a filer-based drop would read a delivering team as stalled. The
+        // row here names the lead as filer the way a future projection would;
+        // the close still counts.
+        let rows = [close_row(
+            "x-kid",
+            "2026-10-25T20:14:03+00:00",
+            serde_json::json!({"source_session_id": "lead-session"}),
+        )];
+        let (_, _, inherited_closed, filed_closed) = scope_split(
+            &scope_ids(),
+            &rows,
+            "2026-10-25T20:13:46+00:00",
+            "2026-10-26T01:51:00+00:00",
+        );
+        assert_eq!(inherited_closed, 0);
+        assert_eq!(filed_closed, 1);
+    }
+
+    #[test]
+    fn an_inherited_close_still_counts_and_a_filerless_row_counts_as_filed() {
+        let rows = [
+            // created before generation_start, no filer recorded: inherited
+            // close that still counts (old undated backlog behavior kept).
+            close_row("x-root", "2026-10-03T22:26:33+00:00", serde_json::json!({})),
+            // filed after generation_start, no filer recorded: counts as a
+            // filed close - an absence of a filer is not the lead's own hand.
+            close_row("x-kid", "2026-10-25T23:00:30+00:00", serde_json::json!({})),
+        ];
+        let (inherited_open, filed_open, inherited_closed, filed_closed) = scope_split(
+            &scope_ids(),
+            &rows,
+            "2026-10-25T20:13:46+00:00",
+            "2026-10-26T01:51:00+00:00",
+        );
+        assert_eq!(inherited_open, 0);
+        assert_eq!(filed_open, 0);
+        assert_eq!(inherited_closed, 1);
+        assert_eq!(filed_closed, 1);
+    }
+
+    #[test]
+    fn an_open_filed_child_still_lands_in_filed_undelivered() {
+        let rows = [entry(
+            "x-kid",
+            "x-root",
+            "2026-10-25T23:00:30+00:00",
+            serde_json::json!({"status": "in_progress"}),
+        )];
+        let (inherited_open, filed_open, _, _) = scope_split(
+            &scope_ids(),
+            &rows,
+            "2026-10-25T20:13:46+00:00",
+            "2026-10-26T01:51:00+00:00",
+        );
+        assert_eq!(inherited_open, 0);
+        assert_eq!(filed_open, 1);
+    }
+}

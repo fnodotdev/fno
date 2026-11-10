@@ -1,0 +1,65 @@
+//! Hidden binary-direct review doors. Dispatched from the client's
+//! hidden-command run BEFORE the routable-command table, so the routable-command
+//! parity guard and CLIENT_COMMAND_USAGE never see these commands: they read
+//! state and print, they are not `fno agents` commands.
+
+/// Route a hidden review door by command, `None` when the command is not one.
+/// Returning `Some(exit)` is terminal for the dispatch (the caller returns
+/// the code).
+pub fn dispatch(command: &str, rest: &[String]) -> Option<i32> {
+    match command {
+        "review-summary" => Some(crate::review_summary::run_review_summary(rest)),
+        "review-level" => Some(run_review_level_door(rest)),
+        "review-policy" => Some(crate::review_policy::run_review_policy(rest)),
+        "target-init" => Some(crate::target_init::run(rest)),
+        "target-start" => Some(crate::target_start::run(rest)),
+        "target-blast-check" => Some(crate::target_blast::run_blast_check(rest)),
+        "node-bind" => Some(crate::node_bind::run(rest)),
+        "research" => Some(crate::research::run(rest)),
+        "think-inspect" => Some(crate::think_inspect::run(rest)),
+        "visual" => Some(run_visual_door(rest)),
+        "think-dispatch" => Some(crate::think_dispatch::run(rest)),
+        _ => None,
+    }
+}
+
+/// The `visual` door: `critique-prep` and `frames` ride under it, so
+/// fno-agents gains no root command. Anything else falls through to
+/// critique-prep's usage refusal.
+fn run_visual_door(rest: &[String]) -> i32 {
+    match rest.first().map(String::as_str) {
+        Some("frames") => crate::frames::run_frames(rest),
+        _ => crate::visual_screen::run_critique_prep(rest),
+    }
+}
+
+/// The `review-level` door: the capability group and the findings actions
+/// ride UNDER it, so fno-agents gains no root command and menu-caps stays at
+/// root 12/12. The interception runs before the level parser, and only when
+/// the second token is one of the action words - `capability` and
+/// `findings` are not level words, so no valid level call changes, and a
+/// bare `review-level capability` or `review-level findings` falls through
+/// to the level door (its usage refusal).
+fn run_review_level_door(rest: &[String]) -> i32 {
+    if rest.first().map(String::as_str) == Some("capability")
+        && rest.get(1).map(String::as_str).is_some_and(|action| {
+            matches!(
+                action,
+                "reviewers" | "github-apps" | "invocation" | "skill-presence"
+            )
+        })
+    {
+        crate::review_capability::run(&rest[1..])
+    } else if rest.first().map(String::as_str) == Some("findings")
+        && rest
+            .get(1)
+            .map(String::as_str)
+            .is_some_and(|action| matches!(action, "record" | "categories" | "post" | "classify"))
+    {
+        crate::review_findings::run_findings_door(&rest[1..])
+    } else if rest.first().map(String::as_str) == Some("invocations") {
+        crate::review_invocation::run_invocations_door(&rest[1..])
+    } else {
+        crate::review_level::run_review_level(rest)
+    }
+}

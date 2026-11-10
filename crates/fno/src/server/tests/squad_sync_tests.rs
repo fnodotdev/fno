@@ -1,0 +1,324 @@
+//! Squad-store sync (v71): a prune that only writes `squads.json` is undone
+//! by the next `persist_squad`, because the server's in-memory member list is
+//! authoritative and rewrites the file on every pane event. These tests pin
+//! the fix (`reload_members_from_store` between the file pass and the next
+//! persist) and keep the negative control that documents the original defect:
+//! a "the file shrank" assertion passes today and proves nothing, because
+//! today's file shrinks and then refills. Mounted as a child of server.rs's
+//! `mod tests` (use super::*), so server.rs pays one line for it.
+
+use super::*;
+
+/// (x-78c1) The reload is the prune's server-side arm: it must end in a
+/// layout push so EVERY attached client's catalog re-converges, not just the
+/// caller's receipt. Two clients, one reload, both reliable channels carry a
+/// Layout naming the live squads.
+#[test]
+fn squad_reload_pushes_a_layout_to_every_attached_client() {
+    let _s = StoreScratch::new("squad-sync-reload-push");
+    let mut core = empty_core();
+    core.session.add_squad(
+        7,
+        vec!["/repo".into()],
+        Some("harden".into()),
+        Tab {
+            name: None,
+            id: 5,
+            root: Node::Leaf(1),
+            focus: 1,
+        },
+    );
+    let (c1, mut rx1) = client_with_rx(1);
+    let (c2, mut rx2) = client_with_rx(2);
+    core.clients.push(c1);
+    core.clients.push(c2);
+    let layout_tabs = |rx: &mut mpsc::Receiver<ServerMsg>| -> Option<usize> {
+        let mut tabs = None;
+        while let Ok(ServerMsg::Layout { squads, .. }) = rx.try_recv() {
+            tabs = squads.iter().find(|s| s.id == 7).map(|s| s.tabs.len());
+        }
+        tabs
+    };
+    // The receipt counts squads the server holds members for.
+    core.squad_members
+        .insert(7, vec![stored_member("feed0002", false)]);
+
+    // Clients pushed directly onto the roster emit nothing until a mutation;
+    // drain both so only POST-reload traffic can satisfy the marker.
+    assert!(layout_tabs(&mut rx1).is_none());
+    assert!(layout_tabs(&mut rx2).is_none());
+
+    let (tx, mut rrx) = tokio::sync::oneshot::channel();
+    core.handle_squad_reload(tx);
+    let receipt = match rrx.try_recv() {
+        Ok(ServerMsg::SquadReloaded { squads, .. }) => squads,
+        other => panic!("reload answered with a receipt: {other:?}"),
+    };
+    assert_eq!(receipt, 1);
+    assert_eq!(
+        layout_tabs(&mut rx1),
+        Some(1),
+        "client 1 got a post-reload Layout"
+    );
+    assert_eq!(
+        layout_tabs(&mut rx2),
+        Some(1),
+        "client 2 got a post-reload Layout"
+    );
+}
+
+/// The operator's sequence with the fix in place: the CLI's file pass, the
+/// reload, then one pane event's persist. The reaped member is absent from
+/// BOTH the store and memory - the positive marker.
+#[test]
+fn prune_reload_survives_the_next_persist() {
+    let _s = StoreScratch::new("squad-sync-marker");
+    let mut core = empty_core();
+    core.session.add_squad(
+        7,
+        vec!["/repo".into()],
+        Some("harden".into()),
+        Tab {
+            name: None,
+            id: 5,
+            root: Node::Leaf(1),
+            focus: 1,
+        },
+    );
+    core.squad_members.insert(
+        7,
+        vec![
+            stored_member("deadbee1", true),
+            stored_member("feed0002", false),
+        ],
+    );
+    core.persist_squad(7);
+    // The CLI's file pass: evidence marks deadbee1 dead; every squad row is
+    // kept (--dead-only shape), so only its dead member is reaped.
+    let evidence = crate::squad_store::MemberEvidence::from_sets(
+        std::collections::HashSet::new(),
+        ["deadbee1".to_string()].into_iter().collect(),
+    );
+    let outcome = crate::squad_store::prune_with_evidence(
+        |_| crate::squad_store::PruneDecision::Keep,
+        &evidence,
+    )
+    .unwrap();
+    assert_eq!(
+        outcome.members_reaped, 1,
+        "the file pass reaped the dead member"
+    );
+    // The fix: the live server re-reads the file it did not write.
+    let receipt = core.reload_members_from_store();
+    assert_eq!((receipt.squads, receipt.members), (1, 1));
+    // One pane event's write: with the reload, it cannot resurrect the reaped
+    // member from memory.
+    core.persist_squad(7);
+    let expected = vec![stored_member("feed0002", false)];
+    assert_eq!(
+        crate::squad_store::load().squads[0].members,
+        expected,
+        "the reaped member stays reaped in the store"
+    );
+    assert_eq!(
+        core.squad_members[&7], expected,
+        "and in the server's own member list"
+    );
+}
+/// (x-688b) The daemon's cached-row fold agrees with the CLI's file-read
+/// fold: both go through `fold_registry_rows`, so a journal-spawned name the
+/// published rows no longer carry reads Dead - but only while the reader's
+/// read itself succeeded (`read_ok`); a reader that never resolved its stores
+/// keeps every member fail-safe Unknown.
+#[test]
+fn daemon_fold_reaps_absent_spawned_names_only_on_a_good_read() {
+    let mut core = empty_core();
+    let member = crate::squad_store::StoredMember {
+        attach_id: String::new(),
+        tombstone: false,
+        tombstone_reason: None,
+        detached: false,
+        tab_name: None,
+        cwd: None,
+        worker: Some("w1".into()),
+        harness: Some("claude".into()),
+        harness_session_id: None,
+        pane_id: None,
+    };
+    let journal = crate::spawn_journal::SpawnJournal {
+        receipts: HashMap::new(),
+        never_bound: HashMap::new(),
+        reaped: HashMap::new(),
+        spawned_names: ["w1".to_string()].into_iter().collect(),
+        error: None,
+    };
+    core.handle_msg(CoreMsg::AgentRows {
+        rows: Vec::new(),
+        branches: HashMap::new(),
+        tails: HashMap::new(),
+        ctx: HashMap::new(),
+        read_ok: true,
+    });
+    assert_eq!(
+        core.member_evidence_with_journal(&journal).verdict(&member),
+        crate::squad_store::MemberLiveness::Dead,
+        "the daemon sweep and the CLI apply reap the same reaped worker"
+    );
+    core.handle_msg(CoreMsg::AgentRows {
+        rows: Vec::new(),
+        branches: HashMap::new(),
+        tails: HashMap::new(),
+        ctx: HashMap::new(),
+        read_ok: false,
+    });
+    assert_eq!(
+        core.member_evidence_with_journal(&journal).verdict(&member),
+        crate::squad_store::MemberLiveness::Unknown,
+        "an unresolved read keeps the daemon fail-safe"
+    );
+    // The activity ring rides the same fold: a counted row enters a ring,
+    // one cell per 5s gate, and the served row carries the intervals; a row
+    // with no counts never enters one.
+    let mut counted = RegistryAgent::default();
+    counted.name = "act".into();
+    counted.harness_session_id = Some("sess-act".into());
+    counted.tool_counts = Some((10, 2));
+    let uncounted = RegistryAgent::default();
+    let t = std::time::Instant::now();
+    let rows = vec![counted.clone(), uncounted.clone()];
+    crate::server::row_set::sample_rings(&mut *crate::server::row_set::rings(), &rows, t);
+    crate::server::row_set::sample_rings(
+        &mut *crate::server::row_set::rings(),
+        &rows,
+        t + std::time::Duration::from_secs(1),
+    );
+    assert_eq!(
+        core.activity_of(&counted).as_deref(),
+        Some(&[(10u8, 2u8)][..]),
+        "the first sample lands and the 1s re-sample is gated out"
+    );
+    crate::server::row_set::sample_rings(
+        &mut *crate::server::row_set::rings(),
+        &rows,
+        t + std::time::Duration::from_secs(6),
+    );
+    assert_eq!(
+        core.activity_of(&counted).as_deref(),
+        Some(&[(10u8, 2u8), (0u8, 0u8)][..]),
+        "unchanged counts read an idle interval"
+    );
+    // Samples past the gate with growing counts: the ninth cell pushes the
+    // oldest out, and eight remain.
+    for k in 3..=9 {
+        let mut grown = counted.clone();
+        grown.tool_counts = Some((10 + k, 2 + k));
+        let rows = vec![grown, RegistryAgent::default()];
+        crate::server::row_set::sample_rings(
+            &mut *crate::server::row_set::rings(),
+            &rows,
+            t + std::time::Duration::from_secs(k * 6),
+        );
+    }
+    assert_eq!(
+        core.activity_of(&counted).as_deref().map(<[(u8, u8)]>::len),
+        Some(8),
+        "the ring caps at eight"
+    );
+    assert!(core.activity_of(&uncounted).is_none());
+}
+
+/// A dismissed workspace's stored row leaves the store even when another
+/// writer moved its generation under the server. The remove used to ride the
+/// same baseline check as a topology write, so it came back as a stale
+/// conflict, wrote nothing, and the name stayed taken after the operator
+/// deleted the workspace.
+#[test]
+fn removing_a_workspace_frees_its_name_when_the_store_baseline_is_stale() {
+    let _s = StoreScratch::new("squad-remove-stale-baseline");
+    let mut core = empty_core();
+    core.session
+        .add_squad(1, vec![], Some("footnote".into()), leaf_tab(5, 1));
+    core.session
+        .add_squad(2, vec!["/b".into()], Some("other".into()), leaf_tab(6, 2));
+    core.persist_squad(1);
+    crate::squad_store::upsert("footnote", "", &["/moved".to_string()], &[]).unwrap();
+    core.clients.push(client(1, 5, (24, 80), false));
+    let flow = core.command(1, Command::RemoveSquad(1));
+    assert!(matches!(flow, Flow::Continue), "squad 2 keeps the session");
+    assert!(
+        !crate::squad_store::load()
+            .squads
+            .iter()
+            .any(|s| s.name == "footnote"),
+        "the removed workspace's row left the store"
+    );
+    assert!(
+        !core.named_squad_taken("footnote"),
+        "the name is free again"
+    );
+}
+
+/// The refusal for a taken name says what holds it. A stored row with no open
+/// workspace read as a bare "name taken" over a sideline that showed no such
+/// workspace.
+#[test]
+fn name_holder_says_whether_the_row_is_open_or_stored_and_where() {
+    let _s = StoreScratch::new("name-holder");
+    let mut core = empty_core();
+    core.session
+        .add_squad(1, vec![], Some("bare".into()), leaf_tab(5, 1));
+    core.session
+        .add_squad(2, vec!["/a".into()], Some("rooted".into()), leaf_tab(6, 2));
+    crate::squad_store::upsert("kept", "", &[], &[]).unwrap();
+    assert_eq!(core.name_holder("bare").as_deref(), Some("open, no folder"));
+    assert_eq!(
+        core.name_holder("rooted").as_deref(),
+        Some("open, folder /a")
+    );
+    assert_eq!(
+        core.name_holder("kept").as_deref(),
+        Some("stored, no folder")
+    );
+    assert_eq!(core.name_holder("free"), None);
+}
+
+/// The origin command edits the open workspace and its stored row together, is
+/// idempotent both ways, and refuses an unknown name or a relative path.
+#[test]
+fn workspace_origin_edits_the_open_workspace_and_its_stored_row() {
+    let _s = StoreScratch::new("workspace-origin");
+    let mut core = empty_core();
+    core.session
+        .add_squad(1, vec![], Some("w".into()), leaf_tab(5, 1));
+    core.persist_squad(1);
+    let ask = |core: &mut Core, workspace: &str, path: &str, remove: bool| {
+        let (tx, mut rx) = oneshot::channel();
+        core.handle_workspace_origin(workspace, path, remove, tx);
+        rx.try_recv().expect("the handler replies once")
+    };
+    let stored = || {
+        crate::squad_store::load()
+            .squads
+            .iter()
+            .find(|s| s.name == "w")
+            .map(|s| s.origins.clone())
+    };
+
+    assert!(matches!(ask(&mut core, "w", "/a", false), ServerMsg::Ok));
+    assert!(matches!(ask(&mut core, "w", "/a", false), ServerMsg::Ok));
+    assert_eq!(core.session.squad(1).unwrap().origins, ["/a"]);
+    assert_eq!(stored(), Some(vec!["/a".to_string()]));
+
+    assert!(matches!(ask(&mut core, "w", "/a", true), ServerMsg::Ok));
+    assert!(core.session.squad(1).unwrap().origins.is_empty());
+    assert_eq!(stored(), Some(Vec::new()));
+
+    assert!(matches!(
+        ask(&mut core, "nope", "/a", false),
+        ServerMsg::Err { code, .. } if code == err_code::NOT_FOUND
+    ));
+    assert!(matches!(
+        ask(&mut core, "w", "relative", false),
+        ServerMsg::Err { code, .. } if code == err_code::BAD_REQUEST
+    ));
+}

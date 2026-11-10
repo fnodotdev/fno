@@ -1,0 +1,19 @@
+# Registered node-claim occupancy readers (x-74aa). One entry per site:
+# <relpath>:<exact source line>. A new reader fails
+# scripts/ci/check-node-occupancy-readers.sh until registered here with the
+# control that covers it. The four-way control is
+# cli/tests/unit/test_occupancy_four_way_control.py; "core routing" is
+# test_claims_core.py::TestStatus::test_rootless_node_key_routes_to_global_root
+# (the fix that makes the default read the global root for node: keys).
+
+# --- the three sites the plan corrects; each has its own regression ---
+# control: core routing + four-way control (rootless read reaches the global root)
+
+# --- already-routed sites; their explicit root stays true under the fix ---
+# control: core routing (the native leg roots these keys globally)
+# control: core routing
+# control: core routing
+# control: core routing
+# control: core routing
+# control: core routing
+# control: core routing

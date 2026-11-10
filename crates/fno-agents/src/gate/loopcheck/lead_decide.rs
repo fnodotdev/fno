@@ -1,0 +1,1015 @@
+//! The lead's decision path (`--driver lead`): the terminal short-circuit,
+//! the watching lease, board reads, and the budget ceiling - split beside the
+//! other loopcheck children so `loopcheck.rs` keeps shrinking.
+
+use super::*;
+
+/// Per-phase elapsed clock for one lead fire. The earlier drain-message fix
+/// told the truth about the drain's slice, but the kills it reported
+/// (260-297ms margins) were spent BEFORE the drain and no row recorded
+/// where. The receipt emits immediately before the drain read, so a
+/// mid-drain kill still leaves the row that names the spender.
+pub(crate) struct PhaseClock {
+    started: std::time::Instant,
+    phases: Vec<(&'static str, u64)>,
+    open: Option<&'static str>,
+}
+
+impl PhaseClock {
+    pub(crate) fn new() -> Self {
+        Self {
+            started: std::time::Instant::now(),
+            phases: Vec::new(),
+            open: None,
+        }
+    }
+}
+
+impl Default for PhaseClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PhaseClock {
+    /// Close the open phase (if any) and open `name`.
+    pub(crate) fn mark(&mut self, name: &'static str) {
+        let elapsed = self.started.elapsed().as_millis() as u64;
+        if let Some(open) = self.open.take() {
+            self.phases.push((open, elapsed));
+        }
+        self.open = Some(name);
+    }
+
+    /// The `lead_fire_phases` row: every completed phase with its cumulative
+    /// elapsed ms, the pre-drain total, and what the fire clock still held.
+    /// Cumulative (not per-phase) so the reader can see each phase's own
+    /// length by subtraction without two clocks agreeing to disagree.
+    pub(crate) fn receipt_body(&self, session_id: &str, scope: &str) -> serde_json::Value {
+        let mut phases_ms = serde_json::Map::new();
+        for (name, ms) in &self.phases {
+            phases_ms.insert((*name).to_string(), serde_json::json!(ms));
+        }
+        let pre_drain_total_ms = self.started.elapsed().as_millis() as u64;
+        serde_json::json!({
+            "session_id": session_id,
+            "scope": scope,
+            "phases_ms": phases_ms,
+            "pre_drain_total_ms": pre_drain_total_ms,
+            "budget_remaining_ms": crate::loopcheck::stopgate_fire_remaining_ms(),
+            "harness_margin_remaining_ms": crate::loopcheck::stopgate_harness_margin_remaining_ms(),
+        })
+    }
+}
+
+/// The drain invocation and its pre-drain receipt, one seam so the ordering
+/// the kills depend on (row on disk BEFORE the drain starts) is testable
+/// without driving a full board read.
+pub(super) fn drain_with_phase_receipt(
+    fno_bin: &str,
+    cwd: &Path,
+    scope: &str,
+    session_id: &str,
+    emit: &impl Fn(&str, serde_json::Value),
+    phases: &PhaseClock,
+) -> (i64, Option<crate::loop_lead::ScopeDrainError>) {
+    emit("lead_fire_phases", phases.receipt_body(session_id, scope));
+    crate::loop_lead::scope_undelivered_with_reserve_watch(fno_bin, cwd, scope, session_id, emit)
+}
+
+/// The newest assistant text in the transcript tail, if any.
+fn last_assistant_text(transcript_path: &Path) -> Option<String> {
+    read_tail_lines(transcript_path, 1 << 20)
+        .iter()
+        .rev()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line.trim()).ok())
+        .filter(|val| {
+            val.pointer("/message/role")
+                .or_else(|| val.get("role"))
+                .and_then(|v| v.as_str())
+                == Some("assistant")
+        })
+        .map(|val| extract_assistant_text(&val))
+        .find(|text| !text.is_empty())
+}
+
+pub(super) fn lead_decide(
+    parsed: &LoopCheckArgs,
+    // The registry the session-binding gate already loaded on the Team
+    // route: the board's driver feed reuses it instead of paying a second
+    // store read inside the board's budgeted slice. The bare `--driver lead`
+    // hook never loaded one and passes None.
+    registry: Option<crate::state::Registry>,
+) -> (i32, String) {
+    // The drain reserve arms HERE, on the shared lead entry, and not at the
+    // fire stamp: both lead routes (the `--driver lead` hook and the bound
+    // Team row) converge on this function, so the route into it, not the
+    // driver string the fire was stamped with, decides who pays for the
+    // drain. A missing manifest allows right after the hold - an unpromoted
+    // session pays nothing.
+    super::stopgate_hold_drain_reserve();
+    // A missing manifest is the only safe silent allow, exactly as on the
+    // target path: a session nobody teamed is not a lead, and blocking one
+    // would trap every ordinary session here.
+    let Ok(content) = std::fs::read_to_string(&parsed.state_path) else {
+        return (
+            0,
+            lead_output("allow", None, "no lead manifest; allowing exit", 0, 0),
+        );
+    };
+    let Some(manifest) = parse_lead_manifest(&content) else {
+        eprintln!("loop-check: corrupt lead manifest (no frontmatter)");
+        return (
+            0,
+            lead_output("allow", None, "corrupt lead manifest; allowing exit", 0, 0),
+        );
+    };
+    // The lead view carries the clock across a re-scope. The cancel
+    // sentinel and the terminal-vs-arm read below keep the raw manifest:
+    // both ask about THIS arm, not the lead - a pre-re-scope terminal must
+    // not end the re-armed loop (AC7-EDGE).
+    let lead = crate::team_names::lead_view(&manifest);
+    let mut phases = PhaseClock::new();
+
+    let project_events = parsed
+        .events_path
+        .clone()
+        .unwrap_or_else(|| crate::paths::events_path(&parsed.cwd));
+    let global_events = parsed
+        .global_events_path
+        .clone()
+        .unwrap_or_else(|| project_events.clone());
+    let session_id = std::env::var(crate::loop_lead::WALK_SESSION_KEY_ENV)
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| manifest.fno_id.clone());
+    // A walk-spawned pass tags its terminal with the per-invocation key so
+    // the walk's resume guard never sees a PRIOR lead's terminal; every
+    // other reader still filters on the driver tag, so both spellings agree.
+    let emit = |event_type: &str, data: serde_json::Value| {
+        emit_to_both(&project_events, &global_events, event_type, data);
+    };
+    // Every NoProgress or Budget terminal escalates, in the shared closure: a
+    // lead that quits with work pending is this feature's own failure, and
+    // 15 Budget ceiling hits once told nobody because only one terminal did.
+    let terminate = |reason: TerminationReason,
+                     message: &str,
+                     actionable: i64,
+                     fires: u64,
+                     stalled: &[String]| {
+        let mut message = message.to_string();
+        if matches!(
+            reason,
+            TerminationReason::NoProgress | TerminationReason::Budget
+        ) {
+            let outcome = crate::loop_lead::escalate_stalled(
+                &parsed.fno_bin,
+                &parsed.cwd,
+                stalled,
+                &format!("{reason:?}"),
+                &manifest.scope,
+            );
+            message = format!("{message}; {outcome}");
+        }
+        emit(
+            "termination",
+            serde_json::json!({
+                "session_id": session_id,
+                "driver": "lead",
+                "reason": format!("{reason:?}"),
+                "message": message,
+            }),
+        );
+        (
+            0,
+            lead_output("allow", Some(reason), &message, actionable, fires),
+        )
+    };
+
+    if let Some(hit) = check_cancel_sentinel(
+        &parsed.cwd,
+        &parsed.state_path,
+        &manifest.created_at,
+        "lead",
+    ) {
+        return terminate(
+            TerminationReason::Interrupted,
+            &format!("cancel sentinel present{}", hit.attribution()),
+            0,
+            0,
+            &[],
+        );
+    }
+
+    let history = {
+        phases.mark("history");
+        crate::loop_lead::lead_fire_history(&project_events, &session_id)
+    };
+    // The hook's half of the lead record: a beat the model skipped still
+    // lands a row. Sits after the cancel-sentinel check, so a cancelled team
+    // writes none. The return value is ignored, so no decision changes.
+    phases.mark("hook_beat");
+    crate::lead_history::hook_beat(
+        &project_events,
+        &parsed.cwd,
+        &manifest.scope,
+        &session_id,
+        manifest.harness_session_id.as_deref(),
+        &history,
+        chrono::Utc::now(),
+    );
+
+    // A lead that already ended does not read the board again :
+    // the journal's newest lead termination row for this session, when newer
+    // than the manifest's created_at, IS the verdict. 675 of 728 lead Stop
+    // fires in the operator's 15-day session were repeat terminals; each paid
+    // a full board read (one measured 40,776ms against a 30,000ms budget) to
+    // reach a verdict the journal already held. No new termination row, no
+    // escalation, no board read.
+    if let (Some((ts, reason)), Some(created_at)) = (
+        &history.last_terminal,
+        manifest
+            .created_at
+            .as_deref()
+            .and_then(|s| s.parse::<DateTime<Utc>>().ok()),
+    ) {
+        if let Ok(terminal_at) = ts.parse::<DateTime<Utc>>() {
+            if terminal_at > created_at {
+                return (
+                    0,
+                    lead_output(
+                        "allow",
+                        None,
+                        &format!("lead already terminal ({reason} at {ts}); re-arm with fno agents org init"),
+                        0,
+                        history.total,
+                    ),
+                );
+            }
+        }
+    }
+
+    // Budget before the board : the total-fires half of
+    // bound_breached needs no board evidence, so it runs before the read; the
+    // dry half stays after, because a cleared row resets it. The waiting text
+    // reuses the last journal-recorded undelivered count so a repeat-ceiling
+    // terminal says the same thing the board-reading path said.
+    if history.total + 1 >= manifest.max_iterations {
+        let waiting = match history.last_undelivered {
+            Some(n) if n != i64::MAX => format!("{n} scope nodes still undelivered"),
+            _ => "the board was not read".to_string(),
+        };
+        return terminate(
+            TerminationReason::Budget,
+            &format!(
+                "{} fires reached the manifest ceiling of {}; {waiting}",
+                history.total + 1,
+                manifest.max_iterations
+            ),
+            0,
+            history.dry,
+            &[],
+        );
+    }
+    let dry = history.dry;
+    // The bounds every block below owes, in one place, so no branch grows its own.
+    let bounded = |dry: u64, waiting: &str| {
+        bound_breached(history.total, dry, manifest.max_iterations, waiting)
+    };
+    let (reading, term_json) = crate::lead_term::current_reading(&lead);
+    let emit_term = |body| crate::lead_term::emit_journal(&emit, &term_json, body);
+    // Shared spine of both blind-board blocks: bounded, quiet emit, block.
+    // The reading is what the branch measured, never a guess.
+    let blind_block = |reading: &str, message: &str, actionable: i64, dry: u64| -> (i32, String) {
+        if let Some(b) = bounded(dry, message) {
+            return terminate(b.reason, &b.message, 0, b.fires, &[reading.to_owned()]);
+        }
+        emit_term(lead_quiet_body(&session_id, actionable));
+        (0, lead_output("block", None, message, actionable, dry + 1))
+    };
+
+    phases.mark("stand_down");
+    if let Some(gate) =
+        crate::lead_termination::stand_down_gate(&manifest, &parsed.transcript_path, &parsed.cwd)
+    {
+        return blind_block(&gate.reading, &gate.message, 0, dry);
+    }
+    if let Some(result) = crate::lead_term::gate(&reading, &manifest.scope, dry, &blind_block) {
+        return result;
+    }
+    phases.mark("stale_doc");
+    if let Some((gate_reading, gate_message)) = stale_team_doc_gate(
+        &lead,
+        &parsed.transcript_path,
+        &parsed.cwd,
+        &parsed.fno_bin,
+        std::time::SystemTime::now(),
+    ) {
+        return blind_block(&gate_reading, &gate_message, 0, dry);
+    }
+
+    phases.mark("board");
+    let board = match read_org_board(
+        &parsed.fno_bin,
+        &parsed.cwd,
+        &parsed.state_path,
+        registry.as_ref(),
+    ) {
+        Ok(b) => b,
+        Err(e) => {
+            // Blind is not clean. Block on exit 2, but bounded: a board
+            // that never answers still reaches a ceiling. The exit code
+            // marks the degraded path; the shim keys on the decision field.
+            if let Some(b) = bounded(dry, &format!("lead board unreadable: {e}")) {
+                let reading = crate::lead_escalation::reading_board_unreadable();
+                return terminate(b.reason, &b.message, 0, b.fires, &[reading]);
+            }
+            emit(
+                "lead_loop_check",
+                serde_json::json!({
+                    "session_id": session_id,
+                    "board_error": e,
+                }),
+            );
+            return (
+                2,
+                lead_output(
+                    "block",
+                    None,
+                    &format!("lead board unreadable: {e}"),
+                    0,
+                    dry + 1,
+                ),
+            );
+        }
+    };
+
+    if board.actionable == 0 {
+        if board.operator_questions_unreadable {
+            // Bounded, and each blocking fire emits its row so the counters advance.
+            return blind_block(
+                &crate::lead_escalation::reading_questions_unreadable(),
+                "board clean but outstanding operator questions are unreadable; blocking completion",
+                0,
+                dry,
+            );
+        }
+        // A lead that ends its turn naming a user question another session
+        // asked is waiting on the user too: its beat stays quiet until the
+        // question closes, whoever owns it now.
+        let open_question = board
+            .operator_question_sessions
+            .iter()
+            .any(|owner| owner == &session_id)
+            || last_assistant_text(&parsed.transcript_path).is_some_and(|text| {
+                !crate::event_rules::stop_open_questions(&parsed.cwd, &text).is_empty()
+            });
+        if open_question {
+            return terminate(
+                TerminationReason::NoWork,
+                "waiting on the user: an operator question this lead raised is open; the answer wakes the lead",
+                0,
+                dry,
+                &[],
+            );
+        }
+        if board.unreadable_sources {
+            return blind_block(
+                &crate::lead_escalation::reading_sources_unreadable(),
+                "board quiet but some sources are unreadable; blocking completion",
+                0,
+                dry,
+            );
+        }
+        // The goal keys completion on the team draining, not on any queue
+        // (2026-09-06 ruling): a board clean while driven-but-unshipped rows
+        // sit is a quiet beat, never a finish line. An unreadable drain read
+        // must not certify drained; the dry-fire ceiling bounds the wait.
+        // Timeout and command failure demand opposite responses: both named.
+        let (undelivered, drain_error) = if manifest.scope.is_empty() {
+            (0, None)
+        } else {
+            phases.mark("pre_drain");
+            drain_with_phase_receipt(
+                &parsed.fno_bin,
+                &parsed.cwd,
+                &manifest.scope,
+                &session_id,
+                &emit,
+                &phases,
+            )
+        };
+        if undelivered == 0 {
+            // The quiet exit names the reads it did not get (timeout-killed
+            // truth batches included): the receipt is the record the next
+            // wake re-reads against, never a silent clean. The provider goal
+            // parks here too: an exit that leaves the goal active
+            // leaves the codex thread asking what to do next forever, which
+            // is the usage the parked beat exists to save.
+            let mut parked = false;
+            let provider_goal_error =
+                if should_pause_codex_goal(manifest.harness.as_deref(), drain_error.is_none())
+                    && !manifest.scope.trim().is_empty()
+                {
+                    match crate::lead_goal::pause_codex_lead_goal(&manifest, &parsed.cwd) {
+                        Ok(provider_receipt) => {
+                            parked = true;
+                            emit(
+                                "quiet-clean",
+                                serde_json::json!({
+                                    "session_id": session_id,
+                                    "scope": manifest.scope,
+                                    "provider_receipt": provider_receipt,
+                                }),
+                            );
+                            None
+                        }
+                        Err(error) => Some(error),
+                    }
+                } else {
+                    None
+                };
+            let quiet = match provider_goal_error.as_deref() {
+                // The refusal blocks, so its message never claims an exit.
+                Some(error) => format!(
+                    "board clean{}; Codex provider goal pause refused: {error}",
+                    board.not_read_receipt()
+                ),
+                None => {
+                    let mut quiet =
+                        format!("board clean; exiting NoWork{}", board.not_read_receipt());
+                    if parked {
+                        quiet = format!("{quiet}; Codex provider goal parked; the beat resumes it");
+                    }
+                    quiet
+                }
+            };
+            if let Some(error) = provider_goal_error.as_deref() {
+                let readings = vec![format!(
+                    "reading:provider-goal-pause:{}",
+                    manifest.scope.replace(',', "+")
+                )];
+                let body = provider_goal_pause_refusal_body(&session_id, error);
+                emit("lead_loop_check", body);
+                if let Some(b) = bounded(dry, &quiet) {
+                    return terminate(b.reason, &b.message, 0, b.fires, &readings);
+                }
+                return (0, lead_output("block", None, &quiet, 0, dry + 1));
+            }
+            return terminate(TerminationReason::NoWork, &quiet, 0, dry, &[]);
+        }
+        // A readable quiet-undelivered fire is a park edge. Codex owns the
+        // preserved objective, so verify it is paused before finishing NoWork;
+        // any provider refusal keeps the existing bounded block.
+        let provider_goal_error =
+            if should_pause_codex_goal(manifest.harness.as_deref(), drain_error.is_none()) {
+                match crate::lead_goal::pause_codex_lead_goal(&manifest, &parsed.cwd) {
+                    Ok(provider_receipt) => {
+                        emit(
+                            "quiet-undelivered",
+                            serde_json::json!({
+                                "session_id": session_id,
+                                "scope": manifest.scope,
+                                "undelivered": undelivered,
+                                "provider_receipt": provider_receipt,
+                            }),
+                        );
+                        return terminate(
+                            TerminationReason::NoWork,
+                            "board quiet; provider goal paused with undelivered scope delivery",
+                            0,
+                            dry,
+                            &[],
+                        );
+                    }
+                    Err(error) => Some(error),
+                }
+            } else {
+                None
+            };
+        let mut message =
+            crate::lead_termination::lead_quiet_message(undelivered, drain_error.as_ref());
+        if let Some(error) = provider_goal_error.as_deref() {
+            message = format!("{message}; Codex provider goal pause refused: {error}");
+        }
+        let shrank = undelivered != i64::MAX
+            && history
+                .last_undelivered
+                .is_some_and(|prev| undelivered < prev);
+        let dry = if shrank { 0 } else { dry };
+        let mut readings = Vec::new();
+        if drain_error.is_some() {
+            readings.push(crate::lead_escalation::reading_delivery_unreadable(
+                &manifest.scope,
+            ));
+        } else if provider_goal_error.is_none() {
+            readings.push(crate::lead_escalation::reading_undelivered(&manifest.scope));
+        }
+        if provider_goal_error.is_some() {
+            readings.push(format!(
+                "reading:provider-goal-pause:{}",
+                manifest.scope.replace(',', "+")
+            ));
+        }
+        let body = match provider_goal_error.as_deref() {
+            Some(error) if drain_error.is_none() => {
+                provider_goal_pause_refusal_body(&session_id, error)
+            }
+            Some(error) => {
+                let mut body = crate::lead_termination::lead_undelivered_body(
+                    &session_id,
+                    undelivered,
+                    shrank,
+                );
+                body["provider_goal_pause_error"] = serde_json::json!(error);
+                body
+            }
+            None => {
+                crate::lead_termination::lead_undelivered_body(&session_id, undelivered, shrank)
+            }
+        };
+        emit("lead_loop_check", body);
+        if drain_error.is_none() && provider_goal_error.is_none() {
+            return terminate(
+                TerminationReason::NoWork,
+                &format!(
+                    "waiting on CI or a worker: {undelivered} driven rows undelivered; a quiet beat, not a finish line"
+                ),
+                0,
+                dry,
+                &[],
+            );
+        }
+        if let Some(b) = bounded(dry, &message) {
+            return terminate(b.reason, &b.message, 0, b.fires, &readings);
+        }
+        return (0, lead_output("block", None, &message, 0, dry + 1));
+    }
+
+    // A row the previous fire called actionable and this one does not is work
+    // the lead cleared - the progress signal, read off the board; applied
+    // BEFORE the bound, so a clearing fire is judged on its post-reset streak.
+    let cleared = crate::loop_lead::lead_cleared_a_row(&history.last_ids, &board.actionable_ids);
+    let dry = if cleared { 0 } else { dry };
+
+    // The bounds `--max-iterations` advertises, checked after NoWork so a
+    // clean board still exits clean; Budget before NoProgress names what
+    // actually stopped it.
+    let waiting = format!("{} rows still actionable", board.actionable);
+    if let Some(b) = bounded(dry, &waiting) {
+        // An actionable floor with no readable rows is the partially-blind
+        // board: it names its reading, never an empty set.
+        let stalled = if board.actionable_ids.is_empty() {
+            vec![crate::lead_escalation::reading_board_unreadable()]
+        } else {
+            board.actionable_ids.clone()
+        };
+        return terminate(b.reason, &b.message, board.actionable, b.fires, &stalled);
+    }
+
+    // The blueprint-ceiling reading: the same ceiling the check-in reads,
+    // against the same claims source, so a row the beat skips at ceiling
+    // cannot hold this stop open. None keeps the ceiling leg inert.
+    let blueprint = crate::lead_checkin_blueprint::stop_check_reading(&parsed.cwd);
+    match crate::lead_termination::capacity_gate(
+        &board,
+        &parsed.fno_bin,
+        &parsed.cwd,
+        &session_id,
+        dry,
+        &emit,
+        blueprint.as_ref(),
+    ) {
+        Some(crate::lead_termination::CapacityGate::Saturated {
+            message,
+            blocked,
+            fires,
+        }) => {
+            return terminate(TerminationReason::NoWork, &message, blocked, fires, &[]);
+        }
+        Some(crate::lead_termination::CapacityGate::SaturatedBlind {
+            message,
+            actionable,
+        }) => {
+            let reading = crate::lead_escalation::reading_sources_unreadable();
+            return blind_block(&reading, &message, actionable, dry);
+        }
+        Some(crate::lead_termination::CapacityGate::Split {
+            message,
+            actionable,
+            fires,
+            journal,
+        }) => {
+            emit("lead_loop_check", journal);
+            return (0, lead_output("block", None, &message, actionable, fires));
+        }
+        None => {}
+    }
+
+    emit(
+        "lead_loop_check",
+        serde_json::json!({
+            "session_id": session_id,
+            "actionable": board.actionable,
+            "actionable_ids": board.actionable_ids,
+            // Durable, because the dry-fire counter is rebuilt from this
+            // journal on every fire. A reset that lived only in the local
+            // binding was forgotten the moment this process exited.
+            "cleared": cleared,
+        }),
+    );
+    // decide()'s documented contract, one screen up: exit 0 for allow and for
+    // this healthy block; the ONLY other verdict-bearing exit is the degraded
+    // unreadable-board block above, which carries the same payload on 2. Any
+    // non-zero without a `decision` field is an internal/CLI error. Encoding a
+    // healthy block in the exit code made the shim read it as a broken checker
+    // and count it toward the unavailable budget that ends in a ship-gate-off
+    // allow. The JSON `decision` field is the block signal; the exit code
+    // never is.
+    (
+        0,
+        lead_output(
+            "block",
+            None,
+            &org_board_block_message(&board),
+            board.actionable,
+            dry + 1,
+        ),
+    )
+}
+
+fn provider_goal_pause_refusal_body(session_id: &str, error: &str) -> serde_json::Value {
+    serde_json::json!({
+        "session_id": session_id,
+        "actionable": 0,
+        "actionable_ids": [],
+        "cleared": false,
+        "provider_goal_pause_error": error,
+    })
+}
+
+fn should_pause_codex_goal(harness: Option<&str>, drain_readable: bool) -> bool {
+    harness == Some("codex") && drain_readable
+}
+
+fn org_board_block_message(board: &crate::lead_termination::OrgBoard) -> String {
+    let top = board.top_row.as_deref().unwrap_or("an actionable queue");
+    let mut message = format!("{} actionable; next: {top}", board.actionable);
+    message.push_str(&board.not_read_receipt());
+    message
+}
+
+/// The stale-team-doc gate: past the compaction ceiling, a team handoff doc
+/// that is gone or 24h stale means the lead acts on a snapshot nothing has
+/// refreshed. Claude-only: the boundary count is measured on claude
+/// transcripts, and a harness whose transcript carries no `compact_boundary`
+/// line counts zero, so the gate stays silent there by design. Fail-open on
+/// anything it cannot measure: it blocks exit, and a false block traps a
+/// session for a fact it cannot see.
+fn stale_team_doc_gate(
+    manifest: &LeadManifest,
+    transcript: &Path,
+    cwd: &Path,
+    fno_bin: &str,
+    now: std::time::SystemTime,
+) -> Option<(String, String)> {
+    // Past the reserve line a transcript scan spends the drain's slice: this
+    // gate already fails open (None) on any fact it cannot measure, so a
+    // spent fire takes the same silence instead of scanning. The board makes
+    // the identical refusal (lead_termination.rs read_org_board).
+    if crate::loopcheck::stopgate_pre_drain_spent() {
+        return None;
+    }
+    if manifest.harness.as_deref().unwrap_or("claude") != "claude" {
+        return None;
+    }
+    let scope = manifest.scope.trim();
+    if scope.is_empty() {
+        return None;
+    }
+    let harness = manifest.harness.as_deref().unwrap_or("claude");
+    let ceiling = crate::lead_verdict_inputs::compaction_ceiling_for(cwd, harness)
+        .unwrap_or_else(|_| crate::lead_verdict_inputs::default_ceiling(harness))
+        as u64;
+    // Count first: a scan of the transcript this fire already holds. The doc
+    // resolution (a subprocess) is paid only past the ceiling, so the common
+    // path adds no cost to the board read.
+    let team_start = manifest
+        .created_at
+        .as_deref()
+        .and_then(|s| s.parse::<DateTime<Utc>>().ok())?;
+    let boundaries =
+        crate::compaction::count_boundaries_since(transcript, Some(team_start.timestamp())).ok()?;
+    if boundaries <= ceiling {
+        return None;
+    }
+    // The handoffs-dir resolver lives only in the Python CLI; shell it rather
+    // than copy it, then pick newest + mtime with the same resolver
+    // lead_checkin uses, so the two cannot drift.
+    let out = match run_bounded(
+        std::ffi::OsStr::new(fno_bin),
+        &["config", "paths", "handoff", "--scope", scope],
+        cwd,
+        stopgate_read_timeout(),
+    ) {
+        BoundedRun::Completed(out) => out,
+        _ => return None,
+    };
+    if !out.status.success() {
+        return None;
+    }
+    let printed = String::from_utf8_lossy(&out.stdout);
+    let printed = printed.lines().next()?.trim();
+    if printed.is_empty() {
+        return None;
+    }
+    let dir = std::path::Path::new(printed).parent()?;
+    let doc = match crate::lead_checkin::team_handoff_doc(dir, scope) {
+        Ok(doc) => doc,
+        Err(_) => return Some(stale_doc_block(scope, ceiling, boundaries, None)),
+    };
+    let age_secs = match std::fs::metadata(&doc).and_then(|m| m.modified()) {
+        Ok(mtime) => now.duration_since(mtime).map(|d| d.as_secs()).unwrap_or(0),
+        // An unstattable doc cannot prove itself fresh; treat it as ancient,
+        // the same direction the resolver's own UNIX_EPOCH floor takes.
+        Err(_) => u64::MAX,
+    };
+    if age_secs <= crate::lead_term::STALE_TEAM_DOC_MAX_AGE_SECS as u64 {
+        return None;
+    }
+    Some(stale_doc_block(
+        scope,
+        ceiling,
+        boundaries,
+        Some(age_secs / 3600),
+    ))
+}
+
+fn stale_doc_block(
+    scope: &str,
+    ceiling: u64,
+    boundaries: u64,
+    age_hours: Option<u64>,
+) -> (String, String) {
+    let age = match age_hours {
+        Some(h) => format!("{h}h old"),
+        None => "missing".to_string(),
+    };
+    (
+        crate::lead_escalation::reading_stale_team_doc(),
+        format!(
+            "the team's handoff doc for {scope} is {age} and this lead is past its compaction ceiling ({boundaries} > {ceiling}); refresh it: fno agents org refresh-canon (runs the precompact-canon-doc.sh hook)"
+        ),
+    )
+}
+
+#[cfg(test)]
+mod stale_team_doc_tests {
+    use super::*;
+    use std::time::Duration;
+
+    const TEAM_START: &str = "2026-09-15T00:00:00Z";
+
+    #[test]
+    fn lead_decide_holds_the_drain_reserve_on_entry() {
+        // The Team route enters the lead path under a fire stamped reserve 0
+        // (the entry stamp is driver-blind now). The hold on the first line
+        // is what arms the drain slice on BOTH lead routes; a missing
+        // manifest lets the call return at its first read with the hold
+        // already landed.
+        let dir = tempfile::tempdir().unwrap();
+        let parsed = LoopCheckArgs {
+            state_path: dir.path().join("no-such-lead.md"),
+            transcript_path: dir.path().join("t.jsonl"),
+            cwd: dir.path().to_path_buf(),
+            global_settings_path: None,
+            events_path: Some(dir.path().join("events.jsonl")),
+            global_events_path: Some(dir.path().join("global-events.jsonl")),
+            settings_path: None,
+            ledger_path: None,
+            gh_budget_ledger: None,
+            now_override: None,
+            gh_bin: "/nonexistent-gh".into(),
+            git_bin: "/nonexistent-git".into(),
+            author_harness_override: Some("none".into()),
+            hook_input_stdin: false,
+            driver: "target".into(),
+            fno_bin: "/nonexistent-fno".into(),
+            read_timeout_ms: None,
+            harness: None,
+            harness_session: None,
+        };
+        super::stopgate_stamp_fire(0, std::time::Instant::now() + Duration::from_secs(50), 0);
+        let (code, out) = lead_decide(&parsed, None);
+        assert_eq!(code, 0);
+        assert!(out.contains("no lead manifest"), "{out}");
+        // The reserve is armed despite the driver-blind stamp: pre-drain
+        // reads clamp to remaining-minus-reserve (34s) under the 30s read
+        // ceiling, so 30s stands; the drain reads the full remaining.
+        let pre_drain = super::stopgate_read_timeout();
+        assert!(
+            pre_drain <= Duration::from_secs(30) && pre_drain >= Duration::from_secs(29),
+            "{pre_drain:?}"
+        );
+        let drain = super::stopgate_drain_timeout();
+        assert!(
+            drain <= Duration::from_secs(50) && drain >= Duration::from_secs(49),
+            "{drain:?}"
+        );
+    }
+
+    fn manifest(harness: &str) -> LeadManifest {
+        LeadManifest {
+            scope: "footnote".into(),
+            created_at: Some(TEAM_START.into()),
+            harness: Some(harness.into()),
+            ..Default::default()
+        }
+    }
+
+    fn write_transcript(dir: &Path, name: &str, boundaries: usize) -> PathBuf {
+        let path = dir.join(name);
+        let mut body = String::new();
+        for i in 0..boundaries {
+            body.push_str(&format!(
+                "{{\"type\":\"system\",\"subtype\":\"compact_boundary\",\"timestamp\":\"2026-09-16T0{i}:00:00Z\"}}\n"
+            ));
+        }
+        body.push_str("{\"type\":\"user\",\"message\":\"tail\"}\n");
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    /// The CLI stub answers `config paths handoff --scope` with a path inside
+    /// `handoffs_dir`, the way the real command prints the scope's newest doc.
+    fn stub_fno(dir: &Path, handoffs_dir: &Path) -> String {
+        std::fs::create_dir_all(dir).unwrap();
+        let stub = crate::write_exec_stub(
+            dir,
+            "fno-stub.sh",
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' '{}'\n",
+                handoffs_dir.join("unused-team-footnote.md").display()
+            ),
+        );
+        stub.to_string_lossy().into_owned()
+    }
+
+    fn seed_doc(handoffs_dir: &Path) {
+        std::fs::create_dir_all(handoffs_dir).unwrap();
+        std::fs::write(handoffs_dir.join("20260916-role-footnote.md"), "# canon").unwrap();
+    }
+
+    #[test]
+    fn stale_doc_past_ceiling_blocks_and_names_the_refresh() {
+        let tmp = tempfile::tempdir().unwrap();
+        let transcript = write_transcript(tmp.path(), "t.jsonl", 4);
+        let handoffs = tmp.path().join("handoffs");
+        seed_doc(&handoffs);
+        let fno = stub_fno(&tmp.path().join("bin"), &handoffs);
+        let now = std::time::SystemTime::now() + Duration::from_secs(30 * 3600);
+        let gate = stale_team_doc_gate(&manifest("claude"), &transcript, tmp.path(), &fno, now);
+        let (reading, message) = gate.expect("gate must block on a 30h-old doc");
+        assert_eq!(reading, crate::lead_escalation::reading_stale_team_doc());
+        assert!(message.contains("precompact-canon-doc.sh"), "{message}");
+        assert!(message.contains("4 > 3"), "{message}");
+    }
+
+    #[test]
+    fn a_spent_fire_skips_the_transcript_gates() {
+        // The identical fixture unspent blocks (the test above); a spent
+        // fire takes the fail-open silence before scanning. 16_000 is the
+        // production reserve.
+        let tmp = tempfile::tempdir().unwrap();
+        let transcript = write_transcript(tmp.path(), "t.jsonl", 4);
+        let handoffs = tmp.path().join("handoffs");
+        seed_doc(&handoffs);
+        let fno = stub_fno(&tmp.path().join("bin"), &handoffs);
+        let now = std::time::SystemTime::now() + Duration::from_secs(30 * 3600);
+        super::stopgate_stamp_fire(0, std::time::Instant::now(), 16_000);
+        assert!(crate::loopcheck::stopgate_pre_drain_spent());
+        let gate = stale_team_doc_gate(&manifest("claude"), &transcript, tmp.path(), &fno, now);
+        assert!(gate.is_none(), "{gate:?}");
+        let mut held = manifest("claude");
+        held.harness_session_id = Some("holder-session".into());
+        assert!(crate::lead_termination::stand_down_gate(&held, &transcript, tmp.path()).is_none());
+    }
+
+    #[test]
+    fn the_phases_row_lands_before_the_drain_read() {
+        // AC1: the receipt is emitted BEFORE the drain child spawns, so a
+        // fire the harness kills mid-drain still leaves the row that names
+        // the spender. The stub drain sleeps far past its injected bound, so
+        // the call returns TimedOut - and the receipt is already recorded.
+        let dir = tempfile::tempdir().unwrap();
+        let fno = crate::write_exec_stub(
+            dir.path(),
+            "fno",
+            "#!/bin/sh\nif [ \"$3\" = drain ]; then sleep 5; printf '{\"undelivered\": 2}\\n'; fi\n",
+        );
+        super::stopgate_stamp_fire(150, std::time::Instant::now() + Duration::from_secs(50), 0);
+        let mut phases = PhaseClock::new();
+        for name in ["history", "hook_beat", "stand_down", "stale_doc", "board"] {
+            phases.mark(name);
+        }
+        phases.mark("pre_drain");
+        let recorded: std::rc::Rc<std::cell::RefCell<Vec<(String, serde_json::Value)>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let sink = recorded.clone();
+        let emit = move |event_type: &str, data: serde_json::Value| {
+            sink.borrow_mut().push((event_type.to_string(), data));
+        };
+        let (undelivered, error) = drain_with_phase_receipt(
+            fno.to_str().unwrap(),
+            dir.path(),
+            "footnote",
+            "lead-session",
+            &emit,
+            &phases,
+        );
+        assert_eq!(undelivered, i64::MAX, "the wedged drain must time out");
+        assert!(
+            matches!(
+                error,
+                Some(crate::loop_lead::ScopeDrainError::TimedOut { .. })
+            ),
+            "{error:?}"
+        );
+        let rows = recorded.borrow();
+        assert_eq!(
+            rows[0].0, "lead_fire_phases",
+            "the receipt precedes every other event"
+        );
+        let body = &rows[0].1;
+        let phases_ms = body["phases_ms"].as_object().unwrap();
+        for name in ["history", "hook_beat", "stand_down", "stale_doc", "board"] {
+            assert!(phases_ms.contains_key(name), "{phases_ms:?}");
+        }
+        // Sub-millisecond elapsed between the marks and the receipt reads 0
+        // on a fast machine, so the total claims presence, not a minimum.
+        assert!(body["pre_drain_total_ms"].as_u64().is_some());
+        assert!(body["budget_remaining_ms"].as_u64().unwrap() > 0);
+        assert!(body.get("harness_margin_remaining_ms").is_some());
+    }
+}
+
+#[cfg(test)]
+mod provider_goal_pause_tests {
+    use super::{provider_goal_pause_refusal_body, should_pause_codex_goal};
+    use crate::loop_lead::lead_fire_history;
+
+    #[test]
+    fn unreadable_drain_never_enters_the_codex_quiet_park() {
+        assert!(should_pause_codex_goal(Some("codex"), true));
+        assert!(!should_pause_codex_goal(Some("codex"), false));
+        assert!(!should_pause_codex_goal(Some("claude"), true));
+    }
+
+    #[test]
+    fn pause_refusal_is_counted_without_recording_a_quiet_baseline() {
+        let directory = tempfile::tempdir().unwrap();
+        let events = directory.path().join("events.jsonl");
+        let body = provider_goal_pause_refusal_body("lead-session", "app-server unavailable");
+        assert_eq!(body["provider_goal_pause_error"], "app-server unavailable");
+        assert!(body.get("undelivered").is_none());
+        std::fs::write(
+            &events,
+            serde_json::json!({
+                "ts": "2026-09-23T21:00:00Z",
+                "type": "lead_loop_check",
+                "data": body,
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let history = lead_fire_history(&events, "lead-session");
+        assert_eq!(history.total, 1);
+        assert_eq!(history.dry, 1);
+        assert_eq!(history.last_undelivered, None);
+    }
+}
+
+#[cfg(test)]
+mod org_board_message_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn the_final_block_names_queues_that_were_not_read() {
+        let board = crate::lead_termination::parse_org_board_value(&json!({
+            "actionable": 3,
+            "queues": [
+                {"name": "unplanned", "status": "unreadable", "actionable": true,
+                 "error": "truth probe timed out", "rows": []},
+                {"name": "mergeable_pr", "status": "ok", "actionable": true,
+                 "rows": [{"number": 2398}]},
+            ],
+        }))
+        .unwrap();
+        assert_eq!(
+            org_board_block_message(&board),
+            "3 actionable; next: mergeable_pr:2398; not read: unplanned is unreadable: truth probe timed out"
+        );
+    }
+}

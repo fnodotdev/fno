@@ -1,0 +1,26 @@
+# Capability tier: does the reader of the agent skill's spawn flag contract
+# apply the positional boundary and the lane check? The contract changed:
+# post-prompt tokens are harness argv, a spawn-owned flag there refuses with
+# the corrected line, unowned flags before the prompt take the = form only,
+# and a bare --model on a lane-served model must ride --route instead.
+# Graded on the corrected line, the = form and the lane name.
+id: capability-spawn-positional-boundary
+tier: capability
+prompt: |
+  Read the spawn flag contract in skills/agent/SKILL.md (the paragraph
+  that starts "Spawn owns its own flags"). Answer three questions in
+  spawn-boundary-answers.md at the repo root, one answer per line, in
+  this order:
+  1. The corrected invocation for a spawn that typed
+     `fno agents spawn w 'msg' --name other`: write the command the
+     refusal prints, without the refusal's prose.
+  2. The form an unowned harness flag must take before the prompt.
+  3. The flag a bare `--model glm-5.3-flash[1m]` on harness claude must
+     ride instead, when the declared lane row is named zai-flash.
+grade:
+  - kind: file-exists
+    path: spawn-boundary-answers.md
+  - kind: exit
+    command: "python3 -c \"a = open('spawn-boundary-answers.md').read(); assert '--name other w msg' in a, 'answer 1 missing the corrected line'; assert 'flag=value' in a, 'answer 2 missing the = form'; assert '--route zai-flash' in a, 'answer 3 missing the lane'\""
+timeout_minutes: 10
+tags: [capability, agent]

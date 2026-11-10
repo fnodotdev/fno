@@ -1,0 +1,3968 @@
+//! The graph store, ported from `cli/src/fno/graph/store.py` under the
+//! four-step protocol in `docs/architecture/dual-implementation-inventory.md`.
+//!
+//! This is the ported half of the graph store: byte-compatible JSON I/O, the
+//! defaults/migration pipeline every read applies, `recompute_statuses`, the
+//! canonical key ordering, slug assignment, a bounded advisory lock, and the
+//! atomic publish with its backup. The Python module that
+//! mirrors it becomes the RPC client in
+//! `crates/fno-agents/src/backlog/graph_keeper.rs`'s protocol; the store logic lives
+//! HERE and only here.
+//!
+//! Two invariants are why this is a port and not a rewrite, and both are
+//! expressed in types rather than comments:
+//!
+//! - A field update carries presence ([`FieldUpdate`]). Replacing a populated
+//!   text field with an empty value is a distinct operation from leaving it
+//!   unchanged, and the empty overwrite is not constructible from the update
+//!   path: [`TextField::parse`] refuses empty and whitespace-only values, so
+//!   the `fno backlog update details=` wipe measured on 2026-09-02
+//!   (3,036 characters lost to a failed shell substitution) is unrepresentable.
+//! - The lock is bounded ([`BoundedLock::acquire`]). Acquisition takes a
+//!   deadline and returns [`StoreError::LockTimeout`], mirroring the
+//!   `LOCK_EX|LOCK_NB` polling idiom in `cli/src/fno/plan/locking.py`. There
+//!   is no unbounded acquire to call.
+
+use crate::backlog::row_facts::{key, RowFacts, SessionFacts};
+use serde_json::{json, Map, Value};
+use std::collections::{BTreeMap, HashMap};
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+/// Keep at most this many timestamped backups on disk (store.py
+/// GRAPH_BACKUP_KEEP).
+pub const GRAPH_BACKUP_KEEP: usize = 10;
+
+/// Byte cap on the whole rotation pile (the 2026-10-08 slowness audit's
+/// "backups under 2 GB"): a count cap cannot hold a byte bound, and ten
+/// snapshots of a 1.9 GB store stand at 19 GB by design. The newest copy
+/// always survives, so even a store past the cap keeps one rollback copy.
+pub const GRAPH_BACKUP_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Bounded lock default deadline. A wedged writer must surface as
+/// [`StoreError::LockTimeout`] inside this budget instead of blocking a graph
+/// caller forever (store.py's unbounded `fcntl.flock` was the original defect
+/// this port retires).
+pub const DEFAULT_LOCK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Poll interval for the bounded lock, mirroring plan/locking.py's 20ms.
+const LOCK_POLL: Duration = Duration::from_millis(20);
+
+/// Canonical key order for serialized graph entries (store.py
+/// CANONICAL_FIELD_ORDER). Keys NOT listed are appended in their original
+/// order after the canonical block, so forward-compat additions and legacy
+/// extras are reordered-around, never dropped.
+pub const CANONICAL_FIELD_ORDER: &[&str] = &[
+    "id",
+    "status",
+    "slug",
+    "title",
+    "priority",
+    "rank",
+    "type",
+    "parent",
+    "children",
+    "project",
+    "cwd",
+    "domain",
+    "blocked_by",
+    "related",
+    "dep",
+    "stub_against",
+    "contract_version",
+    "locked_by",
+    "locked_by_harness",
+    "locked_by_harness_session",
+    "session_id",
+    "locked_at",
+    "ownership_defect",
+    "completed_at",
+    "deferred_at",
+    "deferred_reason",
+    "deferred_kind",
+    "touched_at",
+    "has_brief",
+    "roadmap_id",
+    "vision_path",
+    "details",
+    "size",
+    "batch",
+    "cost_usd",
+    "cost_sessions",
+    "contained_in",
+    "containment_surfaces",
+    "plan_path",
+    "pr_number",
+    "pr_url",
+    "additional_prs",
+    "merge_status",
+    "artifact_url",
+    "completion_note",
+    "progress_notes",
+    "created_at",
+    "supersedes",
+    "superseded_by",
+    "supersession",
+    "collisions_acknowledged",
+    "source",
+    "source_kind",
+    "source_project",
+    "source_session_id",
+    "source_harness",
+    "source_cwd",
+    "source_model",
+    "source_effort",
+    "source_parent_session",
+    "source_team",
+    "source_node_id",
+    "source_plan_path",
+    "source_inbox_msg",
+    "request_origin",
+    "origin_evidence",
+    "spawned_by_session",
+    "spawned_by_harness",
+    "spawned_by_cwd",
+    "sessions",
+    "encounters",
+    "queued_at",
+    "queued_reason",
+];
+
+/// Fields copied into each parent's `children` summary (store.py
+/// CHILD_SUMMARY_FIELDS).
+pub const CHILD_SUMMARY_FIELDS: &[&str] = &["id", "title", "project", "status"];
+
+/// Fields whose change marks a node as human-curated "just now".
+pub(crate) const CURATION_FIELDS: &[&str] =
+    &["status", "priority", "rank", "parent", "blocked_by", "size"];
+
+/// Legacy `priority` vocabulary -> current (constants.PRIORITY_MIGRATION).
+const PRIORITY_MIGRATION: &[(&str, &str)] = &[("high", "p1"), ("medium", "p2"), ("low", "p3")];
+
+/// Legacy `status` vocabulary -> current (statuses.STATUS_MIGRATION).
+const STATUS_MIGRATION: &[(&str, &str)] = &[("claimed", "in_progress")];
+
+/// Legacy session `phase` vocabulary -> current (2026-09-25 rename).
+const PHASE_MIGRATION: &[(&str, &str)] = &[("do", "execute")];
+
+/// Derived `status` vocabulary that outranks the blocked read-time overlay.
+const OVERLAY_TERMINAL_STATUSES: &[&str] = &["done", "superseded", "deferred", "in_review"];
+
+/// Terminal rungs (statuses.TERMINAL_RUNGS): past these a node is closed.
+pub const TERMINAL_RUNGS: &[&str] = &["done", "superseded"];
+
+pub const CLOSING_DEFER_KINDS: &[&str] = &["wont_do", "retracted"];
+
+/// Sentinel prefix the pre-feature workaround overloaded `completed_at` with
+/// to encode deferral (statuses._LEGACY_DEFER_PREFIX).
+const LEGACY_DEFER_PREFIX: &str = "deferred:";
+
+/// Plan-frontmatter status -> rung (ladder._STATUS_TO_RUNG), after
+/// canonical_status resolved the retired spellings.
+pub(crate) const STATUS_TO_RUNG: &[(&str, &str)] = &[
+    ("idea", "idea"),
+    ("design", "design"),
+    ("ready", "ready"),
+    ("in_progress", "in_progress"),
+    ("in_review", "in_review"),
+    ("done", "done"),
+    ("superseded", "superseded"),
+];
+
+/// Retired plan spellings (plan._status.STATUS_ALIASES), accepted on read.
+pub(crate) const PLAN_STATUS_ALIASES: &[(&str, &str)] = &[
+    ("shipped", "in_review"),
+    ("archived", "superseded"),
+    ("stub", "idea"),
+];
+
+/// Rung -> derived graph status (statuses._rung_to_graph_status). NONE and
+/// IDEA both derive `idea`; the plan-side terminals map to `ready`: graph
+/// truth for them is completed_at/pr_number/superseded_by, which the
+/// precedence block consumes first.
+fn rung_to_graph_status(rung: &str) -> &'static str {
+    match rung {
+        "none" | "idea" => "idea",
+        "design" => "design",
+        _ => "ready",
+    }
+}
+
+/// Store-level failure taxonomy, mirroring the Python exceptions by name.
+#[derive(Debug, thiserror::Error)]
+pub enum StoreError {
+    #[error("{0}")]
+    Corrupt(String),
+    #[error("graph at {0} could not be read: {1}")]
+    Unreadable(String, String),
+    #[error("graph at {0} root object has no 'entries' key")]
+    MalformedRoot(String),
+    #[error("lock at {0} stayed busy past the {1:?} deadline; {2}")]
+    LockTimeout(String, Duration, String),
+    #[error("version conflict: the graph changed since the caller's snapshot")]
+    Conflict,
+    #[error("a field update carries no value: {0}")]
+    EmptyFieldUpdate(String),
+    #[error("{0}")]
+    Invalid(String),
+    #[error("{0}")]
+    ClaimsUnavailable(String),
+    #[error("sqlite: {0}")]
+    Db(#[from] crate::backlog::StoreDbError),
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+/// The text fields the presence invariant guards. A populated value replaced
+/// by an empty one is the measured wipe class; the update type makes it
+/// unconstructible.
+pub const PRESENCE_TEXT_FIELDS: &[&str] = &["details", "completion_note", "title"];
+
+/// Refuse a write that introduces an empty presence field. A row that
+/// already held the same value passes: refusing it would stop every write
+/// over a value nobody is writing.
+pub(crate) fn refuse_new_empty_presence(before: &[Value], after: &[Value]) -> Result<(), String> {
+    let pre = index_by_id(before);
+    for e in after {
+        let Some(obj) = e.as_object() else {
+            continue;
+        };
+        let id = RowFacts::id_of(e).unwrap_or("<no id>");
+        for field in PRESENCE_TEXT_FIELDS {
+            if let Some(Value::String(s)) = obj.get(*field) {
+                if s.trim().is_empty() && pre.get(id).and_then(|b| b.get(*field)) != obj.get(*field)
+                {
+                    return Err(format!(
+                        "refusing to persist an empty '{field}' on entry '{id}': \
+                         pass real content, or remove the key to clear it"
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A non-empty text value. `TextField::parse` is the only constructor, so a
+/// `FieldUpdate::Set` can never carry the empty overwrite: the caller that
+/// tried is refused with [`StoreError::EmptyFieldUpdate`] naming the field.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextField(String);
+
+impl TextField {
+    /// Accept a text value for a store write, refusing empty/whitespace-only.
+    pub fn parse(field: &str, raw: &str) -> Result<Self, StoreError> {
+        if raw.trim().is_empty() {
+            return Err(StoreError::EmptyFieldUpdate(format!(
+                "refusing to write an empty value to '{field}': pass real content; \
+                 clearing a populated field is a separate explicit operation"
+            )));
+        }
+        Ok(TextField(raw.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// One field update, carrying its own presence (change 1's first invariant).
+#[derive(Debug, Clone, PartialEq)]
+pub enum FieldUpdate {
+    /// Write this (non-empty) text value.
+    Set(TextField),
+    /// Leave the field exactly as it is. The default; a no-op is expressible,
+    /// a silent wipe is not.
+    Keep,
+    /// Remove the key explicitly. Deliberate; never reachable by passing an
+    /// empty value to [`FieldUpdate::parse`].
+    Clear,
+    /// Write a non-text JSON value verbatim (a rank number, a flag bool).
+    /// Only reachable for fields OUTSIDE [`PRESENCE_TEXT_FIELDS`]: the
+    /// presence invariant governs text, not structured values.
+    Raw(Value),
+}
+
+impl FieldUpdate {
+    /// Build the update a caller's raw value means. `None` (flag absent)
+    /// keeps; a present-but-empty string is refused for the presence-guarded
+    /// text fields, which is the whole point of the type.
+    pub fn from_cli(field: &str, raw: Option<&str>) -> Result<Self, StoreError> {
+        match raw {
+            None => Ok(FieldUpdate::Keep),
+            Some(v) => Ok(FieldUpdate::Set(TextField::parse(field, v)?)),
+        }
+    }
+
+    /// Build the update a JSON request value means. Strings on a presence
+    /// field go through [`TextField::parse`]; non-text values on other
+    /// fields (the board rank's float, most notably) set verbatim.
+    pub fn from_value(field: &str, value: &Value) -> Result<Self, StoreError> {
+        match value {
+            Value::Null => Ok(FieldUpdate::Keep),
+            Value::Object(o) if o.get("clear") == Some(&Value::Bool(true)) => {
+                Ok(FieldUpdate::Clear)
+            }
+            Value::String(s) => Ok(FieldUpdate::Set(TextField::parse(field, s)?)),
+            other => {
+                if PRESENCE_TEXT_FIELDS.contains(&field) {
+                    let s = other.as_str().unwrap_or_default();
+                    Ok(FieldUpdate::Set(TextField::parse(field, s)?))
+                } else {
+                    Ok(FieldUpdate::Raw(other.clone()))
+                }
+            }
+        }
+    }
+}
+
+/// Apply one field update to an entry. Unknown fields are set verbatim (the
+/// graph is schema-extra-allow); the presence invariant is enforced by the
+/// [`FieldUpdate`] constructors, not here.
+pub fn apply_field_update(entry: &mut Map<String, Value>, field: &str, update: &FieldUpdate) {
+    match update {
+        FieldUpdate::Keep => {}
+        FieldUpdate::Set(text) => {
+            entry.insert(field.to_string(), Value::String(text.as_str().to_string()));
+        }
+        FieldUpdate::Clear => {
+            entry.shift_remove(field);
+        }
+        FieldUpdate::Raw(value) => {
+            entry.insert(field.to_string(), value.clone());
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Python-compatible JSON serialization
+// ---------------------------------------------------------------------------
+
+/// Serialize `value` exactly as Python's `json.dumps(value, indent=2,
+/// ensure_ascii=True)` would: two-space indent, `": "` separator, `\uXXXX`
+/// escapes for every non-ASCII code point (surrogate pairs beyond the BMP),
+/// and the four short control escapes where Python uses them.
+///
+/// Byte compatibility is a port requirement, not cosmetic: the differential
+/// parity stage asserts the Rust store publishes the same bytes the Python
+/// store did, and every `fno backlog` consumer reads this file.
+pub fn to_python_pretty_json(value: &Value) -> String {
+    let mut out = String::new();
+    write_value(value, 0, &mut out);
+    out
+}
+
+fn write_value(value: &Value, indent: usize, out: &mut String) {
+    match value {
+        Value::Null => out.push_str("null"),
+        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Value::Number(n) => out.push_str(&n.to_string()),
+        Value::String(s) => write_json_string(s, out),
+        Value::Array(items) => {
+            if items.is_empty() {
+                out.push_str("[]");
+                return;
+            }
+            out.push_str("[\n");
+            let pad = "  ".repeat(indent + 1);
+            for (i, item) in items.iter().enumerate() {
+                out.push_str(&pad);
+                write_value(item, indent + 1, out);
+                if i + 1 < items.len() {
+                    out.push(',');
+                }
+                out.push('\n');
+            }
+            out.push_str(&"  ".repeat(indent));
+            out.push(']');
+        }
+        Value::Object(map) => {
+            if map.is_empty() {
+                out.push_str("{}");
+                return;
+            }
+            out.push_str("{\n");
+            let pad = "  ".repeat(indent + 1);
+            for (i, (k, v)) in map.iter().enumerate() {
+                out.push_str(&pad);
+                write_json_string(k, out);
+                out.push_str(": ");
+                write_value(v, indent + 1, out);
+                if i + 1 < map.len() {
+                    out.push(',');
+                }
+                out.push('\n');
+            }
+            out.push_str(&"  ".repeat(indent));
+            out.push('}');
+        }
+    }
+}
+
+fn write_json_string(s: &str, out: &mut String) {
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0c}' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c if (c as u32) <= 0x7e => out.push(c),
+            // ensure_ascii: everything above DEL becomes \uXXXX, with a
+            // surrogate pair past the BMP, matching Python's json module.
+            c => {
+                let cp = c as u32;
+                if cp <= 0xffff {
+                    out.push_str(&format!("\\u{:04x}", cp));
+                } else {
+                    let v = cp - 0x1_0000;
+                    let hi = 0xd800 + (v >> 10);
+                    let lo = 0xdc00 + (v & 0x3ff);
+                    out.push_str(&format!("\\u{:04x}\\u{:04x}", hi, lo));
+                }
+            }
+        }
+    }
+    out.push('"');
+}
+
+/// The serialized graph file body: `{"entries": [...]}` pretty-printed with a
+/// trailing newline, byte-identical to Python's
+/// `json.dumps({"entries": entries}, indent=2) + "\n"`.
+pub fn serialize_graph_file(entries: &[Value]) -> String {
+    let mut root = Map::new();
+    root.insert("entries".to_string(), Value::Array(entries.to_vec()));
+    let mut out = to_python_pretty_json(&Value::Object(root));
+    out.push('\n');
+    out
+}
+
+/// The serialized READ result: the defaulted entries as a JSON array,
+/// byte-identical to Python's `json.dumps(read_graph(path), indent=2)`.
+pub fn serialize_entries(entries: &[Value]) -> String {
+    to_python_pretty_json(&Value::Array(entries.to_vec()))
+}
+
+// ---------------------------------------------------------------------------
+// Raw read: the four-shape taxonomy from _read_json / read_graph_strict
+// ---------------------------------------------------------------------------
+
+/// The strict read outcome. `Empty` covers an absent file (an absent graph is
+/// empty, not unreadable - matching read_graph and read_graph_strict).
+pub enum RawRead {
+    /// File absent: zero entries, no error.
+    Empty,
+    /// Parsed `entries` list.
+    Entries(Vec<Value>),
+    /// Root not a JSON object, bad JSON, or `entries` not a list.
+    Corrupt(String),
+    /// Root is an object but carries no `entries` key.
+    MalformedRoot,
+}
+
+/// Defuse the non-finite float literals Python's `json.dumps` writes bare
+/// (`Infinity`, `-Infinity`, `NaN`) into JSON-null, string-aware. The old
+/// Python store read such a file happily and its rank math treated a
+/// non-finite rank as unranked; the ported store cannot carry a non-finite
+/// f64 at all, so the honest equivalent is to read them as null (unranked)
+/// and let the next write publish a finite file. Tokens OUTSIDE strings
+/// only: a string value spelling "Infinity" is data, not a float.
+fn defuse_nonfinite(text: &str) -> String {
+    const TOKENS: [&str; 3] = ["Infinity", "-Infinity", "NaN"];
+    let mut out = String::with_capacity(text.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut rest = text;
+    while !rest.is_empty() {
+        let c = rest.chars().next().unwrap();
+        if in_string {
+            out.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+            rest = &rest[c.len_utf8()..];
+            continue;
+        }
+        if c == '"' {
+            in_string = true;
+            out.push(c);
+            rest = &rest[c.len_utf8()..];
+            continue;
+        }
+        let hit = TOKENS.iter().find(|t| rest.starts_with(**t));
+        if let Some(tok) = hit {
+            let after = &rest[tok.len()..];
+            let next = after.chars().next();
+            let delimited = next.is_none()
+                || matches!(
+                    next,
+                    Some(',')
+                        | Some('}')
+                        | Some(']')
+                        | Some(' ')
+                        | Some('\n')
+                        | Some('\r')
+                        | Some('\t')
+                );
+            if delimited {
+                out.push_str("null");
+                rest = after;
+                continue;
+            }
+        }
+        out.push(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    out
+}
+
+/// Parse an archived graph file without applying store defaults.
+/// The store a person can open for a graph spelling, for error text.
+fn store_label(path: &Path) -> String {
+    crate::backlog::database_path(path).display().to_string()
+}
+
+pub(crate) fn read_archive_raw(path: &Path) -> Result<RawRead, StoreError> {
+    if !path.exists() {
+        return Ok(RawRead::Empty);
+    }
+    let raw = match std::fs::read(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(RawRead::Empty);
+        }
+        Err(error) => {
+            return Err(StoreError::Unreadable(
+                store_label(path),
+                format!("{error}"),
+            ));
+        }
+    };
+    let text = String::from_utf8(raw)
+        .map_err(|e| StoreError::Unreadable(store_label(path), format!("not UTF-8: {e}")))?;
+    if text.trim().is_empty() {
+        return Err(StoreError::Unreadable(
+            store_label(path),
+            "empty (zero bytes)".to_string(),
+        ));
+    }
+    let text = if text.contains("Infinity") || text.contains("NaN") {
+        defuse_nonfinite(&text)
+    } else {
+        text
+    };
+    // The three parse shapes answer as RawRead::Corrupt (not Err) so the
+    // caller decides strictness: the soft read backs the bytes up before
+    // surfacing them; the strict read just diagnoses.
+    let data: Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(_) => {
+            return Ok(RawRead::Corrupt(format!(
+                "{} is not valid JSON",
+                path.display()
+            )))
+        }
+    };
+    let Some(obj) = data.as_object() else {
+        return Ok(RawRead::Corrupt(format!(
+            "{} root is not a JSON object",
+            path.display()
+        )));
+    };
+    let Some(entries) = obj.get("entries") else {
+        return Ok(RawRead::MalformedRoot);
+    };
+    let Some(list) = entries.as_array() else {
+        return Ok(RawRead::Corrupt(format!(
+            "{} 'entries' is not a list",
+            path.display()
+        )));
+    };
+    Ok(RawRead::Entries(list.clone()))
+}
+
+/// The shared archive read both archive consumers ask for: the
+/// reaper's graph read (`gc_sweep::read_graph_rows`) and the backlog get
+/// command's archived tier (`backlog::get_cli`). The migrated `db/` spelling
+/// of the SQLite archive first, then the legacy top-level JSON; every read
+/// is advisory - a missing or unparsable file contributes nothing, so a
+/// broken archive can never blind a consumer to the working graph.
+pub(crate) fn archive_rows(state_dir: &Path) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    // A root mid-migration holds BOTH spellings of the same archive; the
+    // first reading wins per id, so a row never enters the fold twice and
+    // the consumers' mention counts stay single.
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for name in ["graph-archive.db", "graph-archive.json"] {
+        push_archive_rows(&mut out, &mut seen, archive_rows_from(state_dir, name));
+    }
+    out
+}
+
+/// One archive NAME's rows, the migrated `db/` spelling first, then the
+/// legacy top-level spelling, deduped per id within the name. The per-name
+/// reader `backlog get`'s archive tier iterates, so a hit serves from the
+/// spelling that actually matched (the legacy JSON root serves the JSON).
+pub(crate) fn archive_rows_from(state_dir: &Path, name: &str) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if let Some(row) = crate::state_layout::find(name) {
+        push_archive_rows(
+            &mut out,
+            &mut seen,
+            archive_rows_at(&state_dir.join(&row.new)),
+        );
+    }
+    push_archive_rows(&mut out, &mut seen, archive_rows_at(&state_dir.join(name)));
+    out
+}
+
+/// The file one archive NAME reads: the migrated `db/` spelling when the
+/// layout names it, else the legacy top-level spelling.
+pub(crate) fn archive_file_path(state_dir: &Path, name: &str) -> PathBuf {
+    crate::state_layout::find(name)
+        .map(|row| state_dir.join(&row.new))
+        .unwrap_or_else(|| state_dir.join(name))
+}
+
+/// Extend `out` with `rows` whose id is new; an id already read from an
+/// earlier spelling is dropped. A row without an id keeps - there is
+/// nothing to dedupe it on.
+fn push_archive_rows(
+    out: &mut Vec<Value>,
+    seen: &mut std::collections::HashSet<String>,
+    rows: Vec<Value>,
+) {
+    for row in rows {
+        match row.get("id").and_then(Value::as_str) {
+            Some(id) if seen.insert(id.to_string()) => out.push(row),
+            Some(_) => {}
+            None => out.push(row),
+        }
+    }
+}
+
+/// One archive file's rows, dispatched by suffix: the SQLite archive over
+/// every row shape the store has used, or the JSON `entries` shape. The
+/// open is read-only, with the WAL-twin immutable retry a plain read-only
+/// open needs when the -shm sidecar is gone.
+fn archive_rows_at(path: &Path) -> Vec<Value> {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("db") => archive_db_rows(path),
+        _ => std::fs::read(path)
+            .ok()
+            .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
+            .and_then(|v| v.get("entries").and_then(|e| e.as_array().cloned()))
+            .unwrap_or_default(),
+    }
+}
+
+/// One SQLite archive's rows, in the store's own shape (blob rows as TEXT,
+/// store order). Read-only open with the immutable retry a WAL-mode twin
+/// needs when its -shm sidecar is gone; a file that opens to none of the
+/// store's shapes contributes nothing.
+fn archive_db_rows(path: &Path) -> Vec<Value> {
+    let Some(conn) = open_read_only_wal_safe(path) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    // The store's own read shape: blob rows as TEXT, store order.
+    let Ok(mut stmt) = conn.prepare("SELECT row FROM entries ORDER BY ordinal, id") else {
+        return out;
+    };
+    let Ok(blob_rows) = stmt.query_map([], |row| row.get::<_, String>(0)) else {
+        return out;
+    };
+    for row in blob_rows {
+        let Ok(body) = row else { continue };
+        if let Ok(v) = serde_json::from_str::<Value>(&body) {
+            out.push(v);
+        }
+    }
+    out
+}
+
+/// The one read-only open over a WAL-mode store, shared by the archive and
+/// session readers: an ordinary read-only open, then the immutable retry a
+/// store whose daemon exited clean (the -shm sidecar gone while the header
+/// stays WAL) needs. The URI spelling percent-encodes the path so the
+/// `?immutable=1` query survives reserved characters in the path itself.
+/// The retry fires only when the plain open refused, so a live writer never
+/// takes it. `None` when neither opens.
+pub(crate) fn open_read_only_wal_safe(path: &Path) -> Option<rusqlite::Connection> {
+    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY;
+    if let Ok(conn) = rusqlite::Connection::open_with_flags(path, flags) {
+        return Some(conn);
+    }
+    let mut encoded = String::new();
+    for byte in path.to_string_lossy().as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'.' | b'_' | b'-' | b'~' => {
+                encoded.push(*byte as char);
+            }
+            other => encoded.push_str(&format!("%{other:02X}")),
+        }
+    }
+    let uri = format!("file:{encoded}?immutable=1");
+    let uri_flags = flags | rusqlite::OpenFlags::SQLITE_OPEN_URI;
+    rusqlite::Connection::open_with_flags(uri, uri_flags).ok()
+}
+
+// ---------------------------------------------------------------------------
+// Time helpers matching the Python stamps byte-for-byte
+// ---------------------------------------------------------------------------
+
+/// Python `datetime.now(timezone.utc).isoformat()`: seconds, plus
+/// microseconds only when nonzero, `+00:00` suffix.
+pub fn now_isoformat() -> String {
+    let now = chrono::Utc::now();
+    let micros = now.timestamp_subsec_micros();
+    if micros == 0 {
+        now.format("%Y-%m-%dT%H:%M:%S+00:00").to_string()
+    } else {
+        now.format("%Y-%m-%dT%H:%M:%S%.6f+00:00").to_string()
+    }
+}
+
+/// Python `strftime("%Y%m%dT%H%M%S%f")` in UTC, the backup filename stamp.
+pub(crate) fn backup_stamp() -> String {
+    chrono::Utc::now().format("%Y%m%dT%H%M%S%f").to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Row reads go through RowFacts; rows stay Values so writes land in place
+// ---------------------------------------------------------------------------
+
+/// The parent a row names, for the edges that link a row to its parent.
+fn parent_of(entry: &Value) -> Option<&str> {
+    RowFacts::of(entry).and_then(|facts| facts.parent().as_str())
+}
+
+// ---------------------------------------------------------------------------
+// Defaults pipeline (_apply_graph_defaults and friends)
+// ---------------------------------------------------------------------------
+
+/// Populate each entry's `children` with summaries of its direct children,
+/// rebuilt from scratch so it can never drift. The summary's `status` derives
+/// through the same readiness overlay every live read applies. Mirrors
+/// store._compute_children.
+pub fn compute_children(entries: &mut [Value]) {
+    let id_to_entry = index_by_id(entries);
+    let mut kids: std::collections::BTreeMap<String, Vec<Value>> = Default::default();
+    for e in entries.iter() {
+        if !e.is_object() {
+            // A junk row is skipped, never dropped here: the read path's
+            // evidence caller needs malformed rows to survive the pass.
+            continue;
+        }
+        let (Some(cid), Some(parent)) = (RowFacts::id_of(e).map(str::to_string), parent_of(e))
+        else {
+            continue;
+        };
+        // A self-parented node must not become its own child: that would
+        // accumulate on every write with no self-healing path.
+        if !id_to_entry.contains_key(parent) || cid == parent {
+            continue;
+        }
+        let mut summary = Map::new();
+        for f in CHILD_SUMMARY_FIELDS {
+            summary.insert((*f).to_string(), e.get(*f).cloned().unwrap_or(Value::Null));
+        }
+        let (status, _reason) = readiness_status(e, &id_to_entry);
+        summary.insert(
+            "status".to_string(),
+            status.map(Value::String).unwrap_or(Value::Null),
+        );
+        kids.entry(parent.to_string())
+            .or_default()
+            .push(Value::Object(summary));
+    }
+    for e in entries.iter_mut() {
+        if !e.is_object() {
+            continue;
+        }
+        let eid = RowFacts::id_of(e).map(str::to_string);
+        let summaries = eid.as_deref().and_then(|id| kids.get_mut(id));
+        match summaries {
+            Some(summaries) => {
+                summaries.sort_by(|a, b| {
+                    RowFacts::id_of(a)
+                        .unwrap_or("")
+                        .cmp(RowFacts::id_of(b).unwrap_or(""))
+                });
+                e.as_object_mut().unwrap().insert(
+                    "children".to_string(),
+                    Value::Array(std::mem::take(summaries)),
+                );
+            }
+            None => {
+                e.as_object_mut()
+                    .unwrap()
+                    .insert("children".to_string(), Value::Array(vec![]));
+            }
+        }
+    }
+}
+
+/// Reconcile the lock-owner field to locked_by, mirroring session_id
+/// (store._normalize_lock_fields). Idempotent; mutates in place.
+pub fn normalize_lock_fields(entries: &mut [Value]) {
+    for e in entries.iter_mut() {
+        if !e.is_object() {
+            continue;
+        }
+        let (lock_absent, completed, session_owner) = {
+            let facts = RowFacts::of(e).expect("an object row");
+            (
+                facts.locked_by().is_absent(),
+                facts.completed_at().is_set(),
+                facts.session_id().value().cloned().unwrap_or(Value::Null),
+            )
+        };
+        if lock_absent {
+            // Legacy row: on a LIVE node session_id IS the lock owner; on a
+            // done node it is work/cost provenance, never a lock.
+            let adopted = if completed {
+                Value::Null
+            } else {
+                session_owner
+            };
+            e.as_object_mut()
+                .unwrap()
+                .insert(key::LOCKED_BY.to_string(), adopted);
+        }
+        let owner = RowFacts::of(e)
+            .and_then(|facts| facts.locked_by().value().cloned())
+            .unwrap_or(Value::Null);
+        let resolved = !owner.is_null();
+        let obj = e.as_object_mut().unwrap();
+        if resolved {
+            obj.insert("session_id".to_string(), owner);
+        } else if !completed {
+            // Released and not done: drop the stale mirror.
+            obj.insert("session_id".to_string(), Value::Null);
+        }
+        if !resolved {
+            // A cleared owner must not retain a holder identity.
+            obj.insert("locked_by_harness".to_string(), Value::Null);
+            obj.insert("locked_by_harness_session".to_string(), Value::Null);
+        }
+    }
+}
+
+/// A blocker that is deferred holds its dependents, but the KIND of hold is
+/// a human decision, not an in-flight one: `fno backlog defer` parked it.
+fn is_deferred_blocker(blocker: &RowFacts<'_>) -> bool {
+    blocker.deferred_at().is_set() || blocker.status().as_str() == Some("deferred")
+}
+
+/// Whether the row carries a non-null completed_at.
+fn is_completed(entry: &Value) -> bool {
+    RowFacts::of(entry).is_some_and(|facts| facts.completed_at().is_set())
+}
+
+pub(crate) const MAX_CHAIN_HOPS: usize = 8;
+
+/// Follow a superseded blocker to the node that actually owns the work
+/// (the `superseded_by` chain, bounded so a cycle reads as an unknown dep
+/// instead of looping). `Ok` carries the effective entry and id; `Err`
+/// carries the last id visited when the chain hits a missing row or
+/// overruns the hop bound.
+fn effective_blocker<'a>(
+    blocker: &'a Value,
+    blocker_id: &str,
+    by_id: &std::collections::HashMap<&str, &'a Value>,
+) -> Result<(&'a Value, String), String> {
+    let mut current = blocker;
+    let mut current_id = blocker_id;
+    for _ in 0..MAX_CHAIN_HOPS {
+        let Some(next_id) = RowFacts::of(current).and_then(|f| f.superseded_by().as_str()) else {
+            return Ok((current, current_id.to_string()));
+        };
+        let Some(next) = by_id.get(next_id) else {
+            return Err(next_id.to_string());
+        };
+        current_id = next_id;
+        current = *next;
+    }
+    Err(current_id.to_string()) // overrun: a chain this long is a cycle in disguise
+}
+
+/// Read-time dependency readiness for one entry: never a boolean
+/// (statuses.compute_readiness). A blocker superseded by another node is
+/// chased to its live successor, so a done successor releases the dependent
+/// and an open one is named in the reason; a deferred blocker holds with a
+/// kind of its own (statuses stays blocked for both).
+pub fn compute_readiness(
+    entry: &Value,
+    by_id: &std::collections::HashMap<&str, &Value>,
+) -> (String, Option<String>) {
+    let Some(facts) = RowFacts::of(entry) else {
+        return ("ready".to_string(), None);
+    };
+    for bid in facts.blocked_by().str_items() {
+        let Some(blocker) = by_id.get(bid) else {
+            return ("unknown-dep".to_string(), Some(bid.to_string()));
+        };
+        if !is_completed(blocker) {
+            let (effective, effective_id) = match effective_blocker(blocker, bid, by_id) {
+                Ok(pair) => pair,
+                // Chain overrun or missing link (a cycle in disguise): the
+                // last id visited is the honest name for what holds this edge.
+                Err(last_id) => return ("unknown-dep".to_string(), Some(last_id)),
+            };
+            if !is_completed(effective) {
+                if RowFacts::of(effective).is_some_and(|f| is_deferred_blocker(&f)) {
+                    return ("blocked-by-deferred".to_string(), Some(effective_id));
+                }
+                return ("blocked-by".to_string(), Some(effective_id));
+            }
+        }
+    }
+    ("ready".to_string(), None)
+}
+
+/// Open in the `_reconcile.node_is_open` sense: neither done nor
+/// superseded-closed. Keyed off the underlying fields so it holds on rows
+/// that have not been through a status recompute.
+fn is_open_entry(entry: &Value) -> bool {
+    let Some(facts) = RowFacts::of(entry) else {
+        return true;
+    };
+    if facts.completed_at().is_set() {
+        return false;
+    }
+    let Some(successor) = facts.superseded_by().as_str() else {
+        return true;
+    };
+    if successor.is_empty() {
+        return true;
+    }
+    match facts.supersession().as_object() {
+        Some(record) => !record
+            .get(key::VERIFIED_AT)
+            .is_some_and(|verified| !verified.is_null()),
+        None => false,
+    }
+}
+
+/// The blocked_by edge settlement: the write-side twin of the chase in
+/// `compute_readiness`. For every open node, prune an edge whose blocker is
+/// done (directly or through its supersession chain), rewire one superseded
+/// to its live successor, and hold the deferred or missing with a receipt -
+/// a deferred blocker is a human decision and a missing one is data loss,
+/// neither is a sweep's to erase. A live blocker gets no receipt: a correct
+/// edge is not a finding. Returns the rewritten entries, one receipt per
+/// settled edge, and the per-node new `blocked_by` list for every node the
+/// sweep changed; the caller persists under the graph lock (the Python full
+/// sweep applies the change map and reports the receipts).
+pub fn settle_blocked_by_edges(
+    mut entries: Vec<Value>,
+) -> (
+    Vec<Value>,
+    Vec<Value>,
+    std::collections::BTreeMap<String, Vec<Value>>,
+) {
+    let by_id = index_by_id(&entries);
+    let mut receipts: Vec<Value> = Vec::new();
+    let mut changes: std::collections::BTreeMap<String, Vec<Value>> = Default::default();
+    // Pass 1 computes every settlement against the pre-sweep rows (the old
+    // cloned index read the same pre-sweep list, never a half-settled one);
+    // pass 2 applies. The receipts keep their emission order either way.
+    let settled_lists: Vec<Option<Vec<Value>>> = entries
+        .iter()
+        .map(|e| {
+            if !e.is_object() || !is_open_entry(e) {
+                return None;
+            }
+            let Some(blockers) = RowFacts::of(e).and_then(|facts| facts.blocked_by().as_array())
+            else {
+                return None;
+            };
+            if blockers.is_empty() {
+                return None;
+            }
+            // An id-less row is malformed: the change map keys on the node
+            // id, so no caller could apply its settlement - emit nothing,
+            // touch nothing.
+            let Some(node_id) = RowFacts::id_of(e) else {
+                return None;
+            };
+            let node_id = node_id.to_string();
+            let mut settled: Vec<Value> = Vec::with_capacity(blockers.len());
+            let mut changed = false;
+            for blocker_id in blockers {
+                let Some(bid) = blocker_id.as_str() else {
+                    settled.push(blocker_id.clone());
+                    continue;
+                };
+                let Some(target) = by_id.get(bid) else {
+                    receipts.push(json_receipt(
+                        "blocked_by_held",
+                        &node_id,
+                        bid,
+                        "blocker missing from graph",
+                    ));
+                    settled.push(blocker_id.clone());
+                    continue;
+                };
+                let target_facts = RowFacts::of(target).expect("an indexed row is an object");
+                if target_facts.completed_at().is_set() {
+                    receipts.push(json_receipt(
+                        "blocked_by_pruned",
+                        &node_id,
+                        bid,
+                        "blocker done",
+                    ));
+                    changed = true;
+                    continue;
+                }
+                if target_facts.superseded_by().as_str().is_none() {
+                    if is_deferred_blocker(&target_facts) {
+                        receipts.push(json_receipt(
+                            "blocked_by_held",
+                            &node_id,
+                            bid,
+                            "blocker deferred",
+                        ));
+                        settled.push(blocker_id.clone());
+                    } else {
+                        settled.push(blocker_id.clone());
+                    }
+                    continue;
+                }
+                let (effective, effective_id) = match effective_blocker(target, bid, &by_id) {
+                    Ok(pair) => pair,
+                    Err(last_id) => {
+                        receipts.push(json_receipt(
+                            "blocked_by_held",
+                            &node_id,
+                            bid,
+                            &format!("supersession chain stops at {last_id}"),
+                        ));
+                        settled.push(blocker_id.clone());
+                        continue;
+                    }
+                };
+                if !is_completed(effective) {
+                    let already_named = settled
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .any(|s| s == effective_id);
+                    if !already_named {
+                        settled.push(Value::String(effective_id.clone()));
+                    }
+                    receipts.push(json_receipt(
+                        "blocked_by_rewired",
+                        &node_id,
+                        bid,
+                        "blocker superseded; edge now names the live successor",
+                    ));
+                    changed = true;
+                } else {
+                    receipts.push(json_receipt(
+                        "blocked_by_pruned",
+                        &node_id,
+                        bid,
+                        &format!("superseded by {effective_id}, which is done"),
+                    ));
+                    changed = true;
+                }
+            }
+            if changed {
+                changes.insert(node_id, settled.clone());
+                Some(settled)
+            } else {
+                None
+            }
+        })
+        .collect();
+    for (e, settled) in entries.iter_mut().zip(settled_lists) {
+        if let Some(settled) = settled {
+            e.as_object_mut()
+                .unwrap()
+                .insert("blocked_by".to_string(), Value::Array(settled));
+        }
+    }
+    write_pruned_dependents_trail(&mut entries, &receipts);
+    (entries, receipts, changes)
+}
+
+/// The reopen-side trail: a pruned edge is a fact about the blocker's
+/// close that a reopen reverses, so the pruner records EVERY pruned
+/// dependent on the blocker's row. A reopen restores the edge, consuming
+/// its trail row; a stale row (the dependent terminal) is dropped there.
+/// Called by [`settle_blocked_by_edges`] on its own result and by the
+/// reconcile close mutator's `apply_edge_settlement`, which applies the
+/// settlement change map to the LIVE rows under the lock - the sweep's
+/// own copy is a throwaway, so the trail must land where the commit is.
+pub(crate) fn write_pruned_dependents_trail(entries: &mut [Value], receipts: &[Value]) {
+    let mut pruned: std::collections::BTreeMap<&str, Vec<&str>> = Default::default();
+    for receipt in receipts {
+        if receipt.get("kind").and_then(Value::as_str) != Some("blocked_by_pruned") {
+            continue;
+        }
+        if let (Some(node), Some(blocker)) = (
+            receipt.get("node").and_then(Value::as_str),
+            receipt.get("blocker").and_then(Value::as_str),
+        ) {
+            let rows = pruned.entry(blocker).or_default();
+            if !rows.contains(&node) {
+                rows.push(node);
+            }
+        }
+    }
+    if pruned.is_empty() {
+        return;
+    }
+    for e in entries.iter_mut() {
+        let Some(id) = RowFacts::id_of(e) else {
+            continue;
+        };
+        let Some(dependents) = pruned.get(id) else {
+            continue;
+        };
+        let now = now_isoformat();
+        let obj = e.as_object_mut().unwrap();
+        let trail = obj
+            .entry("pruned_dependents".to_string())
+            .or_insert_with(|| Value::Array(Vec::new()));
+        let rows = trail.as_array_mut().expect("trail is an array");
+        for dependent in dependents {
+            if rows
+                .iter()
+                .any(|r| r.get("node").and_then(Value::as_str) == Some(*dependent))
+            {
+                continue; // already recorded: the sweep is idempotent
+            }
+            rows.push(json!({"node": dependent, "pruned_at": now}));
+        }
+    }
+}
+
+fn json_receipt(kind: &str, node: &str, blocker: &str, reason: &str) -> Value {
+    serde_json::json!({"kind": kind, "node": node, "blocker": blocker, "reason": reason})
+}
+
+/// The one overlay wrapper every status consumer shares
+/// (statuses.readiness_status): terminal statuses pass through, everything
+/// else overlays compute_readiness.
+pub fn readiness_status(
+    entry: &Value,
+    by_id: &std::collections::HashMap<&str, &Value>,
+) -> (Option<String>, Option<String>) {
+    let status = RowFacts::of(entry).and_then(|facts| facts.status().as_str());
+    if let Some(s) = status {
+        if OVERLAY_TERMINAL_STATUSES.contains(&s) {
+            return (Some(s.to_string()), None);
+        }
+    }
+    let (kind, blocker_id) = compute_readiness(entry, by_id);
+    if kind == "ready" {
+        return (status.map(str::to_string), None);
+    }
+    (
+        Some("blocked".to_string()),
+        Some(match blocker_id {
+            Some(id) => format!("{kind}:{id}"),
+            None => kind,
+        }),
+    )
+}
+
+/// The borrowed id index: one `&Value` per row, no copy of any row. The
+/// cache's entries are shared `Arc` data; a read-side overlay must not
+/// clone a full graph to look up a handful of blockers.
+pub(crate) fn index_by_id(entries: &[Value]) -> std::collections::HashMap<&str, &Value> {
+    entries
+        .iter()
+        .filter(|e| e.is_object())
+        .filter_map(|e| RowFacts::id_of(e).map(|i| (i, e)))
+        .collect()
+}
+
+/// Overlay read-time dependency readiness onto `status`/`blocked_reason`
+/// (store._apply_readiness_overlay).
+pub fn apply_readiness_overlay(entries: &mut [Value]) {
+    let by_id = index_by_id(entries);
+    // Compute first against the pre-overlay rows, mutate after the index
+    // borrow ends: every overlay answer must come from the same list the
+    // old cloned index read, not from half-overlaid rows.
+    let computed: Vec<(Option<String>, Option<String>)> = entries
+        .iter()
+        .map(|e| {
+            if e.is_object() {
+                readiness_status(e, &by_id)
+            } else {
+                (None, None)
+            }
+        })
+        .collect();
+    for (e, (status, reason)) in entries.iter_mut().zip(computed) {
+        if !e.is_object() {
+            continue;
+        }
+        let obj = e.as_object_mut().unwrap();
+        obj.insert(
+            "status".to_string(),
+            status.map(Value::String).unwrap_or(Value::Null),
+        );
+        obj.insert(
+            "blocked_reason".to_string(),
+            reason.map(Value::String).unwrap_or(Value::Null),
+        );
+    }
+}
+
+/// The lock TTL, read from TASK_LOCK_TTL_HOURS at first use (statuses:
+/// LOCK_TTL_HOURS env read).
+pub(crate) fn lock_ttl_hours() -> f64 {
+    static TTL: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    *TTL.get_or_init(|| {
+        std::env::var("TASK_LOCK_TTL_HOURS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(2.0)
+    })
+}
+
+/// Classify the graph lock timestamp without deciding owner death
+/// (statuses.lock_timestamp_quality).
+pub fn lock_timestamp_quality(entry: &Value) -> &'static str {
+    let Some(facts) = RowFacts::of(entry) else {
+        return "fresh";
+    };
+    if !(facts.locked_by().is_set() || facts.session_id().is_set()) {
+        return "fresh";
+    }
+    let lock_time_str = facts
+        .locked_at()
+        .as_str()
+        .or_else(|| facts.claimed_at().as_str());
+    let Some(ts) = lock_time_str else {
+        return "unreadable";
+    };
+    // Python: datetime.fromisoformat(ts.replace("Z", "+00:00")).
+    let parsed = chrono::DateTime::parse_from_rfc3339(&ts.replace('Z', "+00:00"));
+    let Ok(parsed) = parsed else {
+        return "unreadable";
+    };
+    let elapsed = (chrono::Utc::now() - parsed.with_timezone(&chrono::Utc)).num_seconds();
+    if (elapsed as f64) / 3600.0 > lock_ttl_hours() {
+        "old"
+    } else {
+        "fresh"
+    }
+}
+
+/// The open-do-row TTL, read from TASK_DO_TTL_HOURS at first use. 12.0 sits
+/// far above any legitimate do window (was live at 2.5 hours) and far
+/// above the seventeen-minute spawn-handover window that made look
+/// identical to a strand, so youth is never misread as strandedness.
+pub(crate) fn do_ttl_hours() -> f64 {
+    static TTL: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    *TTL.get_or_init(|| {
+        std::env::var("TASK_DO_TTL_HOURS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(12.0)
+    })
+}
+
+/// The open do row `open_do_row_quality` reports: quality plus the offending
+/// row's session_id (the first row past the TTL, else the first whose
+/// started_at will not parse). None means fresh.
+fn open_do_quality_and_holder(entry: &Value) -> Option<(&'static str, String)> {
+    let facts = RowFacts::of(entry)?;
+    facts.sessions().as_array()?;
+    let mut unreadable_holder: Option<String> = None;
+    for row in facts
+        .session_rows()
+        .filter(|r| is_open_phase_facts(r, "execute"))
+    {
+        let ts = row.started_at.as_str().unwrap_or_default();
+        let holder = row.session_id.as_str().unwrap_or("");
+        let parsed = chrono::DateTime::parse_from_rfc3339(&ts.replace('Z', "+00:00"));
+        let Ok(parsed) = parsed else {
+            if unreadable_holder.is_none() {
+                unreadable_holder = Some(holder.to_string());
+            }
+            continue;
+        };
+        let elapsed = (chrono::Utc::now() - parsed.with_timezone(&chrono::Utc)).num_seconds();
+        if (elapsed as f64) / 3600.0 > do_ttl_hours() {
+            return Some(("old", holder.to_string()));
+        }
+    }
+    unreadable_holder.map(|h| ("unreadable", h))
+}
+
+/// Classify the node's open do row(s) by age without deciding writer death -
+/// the open-do counterpart of [`lock_timestamp_quality`] (change 4).
+/// `fresh` when no open do row exists or the youngest reading is inside the
+/// TTL, `unreadable` when a row's started_at will not parse as RFC3339, `old`
+/// past the TTL.
+pub fn open_do_row_quality(entry: &Value) -> &'static str {
+    match open_do_quality_and_holder(entry) {
+        Some((quality, _)) => quality,
+        None => "fresh",
+    }
+}
+
+/// Apply lazy migration defaults to graph entries (store._apply_graph_defaults)
+/// - the one migration seam every reader routes through. Mutates in place.
+pub fn apply_defaults(entries: &mut Vec<Value>, keep_malformed: bool) {
+    apply_defaults_inner(entries, keep_malformed, true);
+}
+
+/// The writer-side defaults pass: every default except the readiness
+/// overlay. The whole-graph write path reads, baselines, and publishes
+/// through it, so a publish never stores the overlay's answer for an open
+/// blocker; that stored `blocked` is the status flip the primary logs.
+pub(crate) fn apply_defaults_without_readiness_overlay(
+    entries: &mut Vec<Value>,
+    keep_malformed: bool,
+) {
+    apply_defaults_inner(entries, keep_malformed, false);
+}
+
+fn apply_defaults_inner(entries: &mut Vec<Value>, keep_malformed: bool, readiness_overlay: bool) {
+    let migration = |raw: &str| -> Option<&'static str> {
+        PRIORITY_MIGRATION
+            .iter()
+            .find(|(from, _)| *from == raw)
+            .map(|(_, to)| *to)
+    };
+    for e in entries.iter_mut() {
+        if !e.is_object() {
+            continue;
+        }
+        let obj = e.as_object_mut().unwrap();
+        if let Some(old) = obj.get("_status").cloned() {
+            obj.entry("status".to_string()).or_insert(old);
+            obj.shift_remove("_status");
+        }
+        if let Some(old) = obj.get("priority").and_then(Value::as_str) {
+            if let Some(new) = migration(old) {
+                obj.insert("priority".to_string(), Value::String(new.to_string()));
+            }
+        }
+        if let Some(old) = obj.get("status").and_then(Value::as_str) {
+            if let Some((_, to)) = STATUS_MIGRATION.iter().find(|(from, _)| *from == old) {
+                obj.insert("status".to_string(), Value::String(to.to_string()));
+            }
+        }
+        if let Some(rows) = obj.get_mut("sessions").and_then(Value::as_array_mut) {
+            for row in rows.iter_mut() {
+                let Some(row_obj) = row.as_object_mut() else {
+                    continue;
+                };
+                if let Some(old) = row_obj.get("phase").and_then(Value::as_str) {
+                    if let Some((_, to)) = PHASE_MIGRATION.iter().find(|(from, _)| *from == old) {
+                        row_obj.insert("phase".to_string(), Value::String(to.to_string()));
+                    }
+                }
+            }
+        }
+    }
+    for e in entries.iter_mut() {
+        if !e.is_object() {
+            continue;
+        }
+        let obj = e.as_object_mut().unwrap();
+        // Insertion order IS the byte contract: Python's dict remembers the
+        // order each setdefault first ran, so a legacy row's fresh keys land
+        // in exactly this sequence - locked_at is inserted by its own
+        // conditional block BETWEEN locked_by_harness_session and
+        // completed_at, not after the tail.
+        for (k, v) in [
+            ("parent", Value::Null),
+            ("tags", Value::Array(vec![])),
+            ("type", Value::String("feature".into())),
+            ("project", Value::Null),
+            ("cwd", Value::Null),
+            ("priority", Value::String("p2".into())),
+            ("rank", Value::Null),
+            ("domain", Value::String("code".into())),
+            ("blocked_by", Value::Array(vec![])),
+            ("session_id", Value::Null),
+            ("locked_by_harness", Value::Null),
+            ("locked_by_harness_session", Value::Null),
+        ] {
+            obj.entry(k.to_string()).or_insert_with(|| v.clone());
+        }
+        if !obj.contains_key("locked_at") {
+            let legacy = obj.get("claimed_at").and_then(Value::as_str);
+            let stamped = match legacy {
+                Some(s) if !s.trim().is_empty() => {
+                    chrono::DateTime::parse_from_rfc3339(&s.replace('Z', "+00:00"))
+                        .map(|_| Value::String(s.to_string()))
+                        .unwrap_or(Value::Null)
+                }
+                _ => Value::Null,
+            };
+            obj.insert("locked_at".to_string(), stamped);
+        }
+        for (k, v) in [
+            ("completed_at", Value::Null),
+            ("status", Value::String("ready".into())),
+            ("slug", Value::Null),
+            ("children", Value::Array(vec![])),
+            ("has_brief", Value::Bool(false)),
+            ("roadmap_id", Value::Null),
+            ("vision_path", Value::Null),
+            ("details", Value::Null),
+            ("cost_usd", Value::Null),
+            ("cost_sessions", Value::Array(vec![])),
+            ("size", Value::Null),
+            ("batch", Value::Null),
+            ("plan_path", Value::Null),
+            ("pr_number", Value::Null),
+            ("pr_url", Value::Null),
+            ("additional_prs", Value::Array(vec![])),
+            ("merge_status", Value::Null),
+            ("artifact_url", Value::Null),
+            ("completion_note", Value::Null),
+            ("progress_notes", Value::Array(vec![])),
+            ("collisions_acknowledged", Value::Array(vec![])),
+            ("related", Value::Array(vec![])),
+            ("supersedes", Value::Array(vec![])),
+            ("superseded_by", Value::Null),
+            ("supersession", Value::Null),
+            ("source_kind", Value::String("organic".into())),
+            ("source_project", Value::Null),
+            ("source_session_id", Value::Null),
+            ("source_harness", Value::Null),
+            ("source_cwd", Value::Null),
+            ("source_node_id", Value::Null),
+            ("source_plan_path", Value::Null),
+            ("source_inbox_msg", Value::Null),
+            ("request_origin", Value::Null),
+            ("origin_evidence", Value::Null),
+            ("spawned_by_session", Value::Null),
+            ("spawned_by_harness", Value::Null),
+            ("spawned_by_cwd", Value::Null),
+            ("sessions", Value::Array(vec![])),
+            ("decisions", Value::Array(vec![])),
+            ("queued_at", Value::Null),
+            ("queued_reason", Value::Null),
+        ] {
+            obj.entry(k.to_string()).or_insert_with(|| v.clone());
+        }
+        // A row that carries current_state keeps its prose in the note
+        // journal; an empty progress_notes beside it reads as a field empty
+        // forever, indistinguishable from a node that never had a note. Drop
+        // only the empty form: rows holding real pre-cutover notes keep them.
+        if obj.contains_key(crate::backlog::node_state::STATE_KEY) {
+            let empty_notes = obj
+                .get("progress_notes")
+                .and_then(Value::as_array)
+                .is_some_and(|a| a.is_empty());
+            if empty_notes {
+                obj.shift_remove("progress_notes");
+            }
+        }
+    }
+    normalize_lock_fields(entries);
+    if readiness_overlay {
+        apply_readiness_overlay(entries);
+    }
+    compute_children(entries);
+    if !keep_malformed {
+        entries.retain(|e| e.is_object());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// plan_rung: supplied by the client, never read here
+// ---------------------------------------------------------------------------
+
+/// The rung a node's linked plan sits on, as the CLIENT supplied it
+/// (ladder.plan_rung answers on the Python side of the seam: repo law keeps
+/// plan-document reading in the Python rung table, so the store consumes
+/// rungs as data). `rungs` maps node id to the ladder rung string; a node
+/// absent from the map reads as rung "none".
+pub fn supplied_plan_rung(entry: &Value, rungs: &BTreeMap<String, String>) -> &'static str {
+    let raw = match (entry.is_object(), RowFacts::id_of(entry)) {
+        (true, Some(id)) => rungs.get(id).map(String::as_str),
+        _ => None,
+    }
+    .unwrap_or("none");
+    plan_rung_from_status(raw)
+}
+
+/// The rung for one plan-frontmatter status scalar (`ladder.plan_rung`'s
+/// word mapping, shared with the supplied-map reader above): norm, retired
+/// spellings resolved, then the total rung table with UNREADABLE default.
+pub(crate) fn plan_rung_from_status(raw: &str) -> &'static str {
+    let s = raw.trim().trim_matches(['\'', '"']).to_lowercase();
+    if s == "none" {
+        // Not a table member: "nothing on disk" answers NONE directly.
+        return "none";
+    }
+    let canonical = PLAN_STATUS_ALIASES
+        .iter()
+        .find(|(from, _)| *from == &s)
+        .map(|(_, to)| *to)
+        .unwrap_or(s.as_str());
+    STATUS_TO_RUNG
+        .iter()
+        .find(|(from, _)| *from == canonical)
+        .map(|(_, rung)| *rung)
+        .unwrap_or("unreadable")
+}
+
+// ---------------------------------------------------------------------------
+// recompute_statuses
+// ---------------------------------------------------------------------------
+
+/// Is this entry closed for good (statuses.is_terminal_entry semantics
+/// without the legacy-sentinel nuance the store's callers need)?
+pub fn is_terminal_entry(entry: &Value) -> bool {
+    let Some(facts) = RowFacts::of(entry) else {
+        return false;
+    };
+    let status = facts.status().as_str();
+    if status.is_some_and(|s| TERMINAL_RUNGS.contains(&s)) || facts.superseded_by().is_set() {
+        return true;
+    }
+    if status == Some("deferred")
+        && facts
+            .deferred_kind()
+            .as_str()
+            .is_some_and(|kind| CLOSING_DEFER_KINDS.contains(&kind))
+    {
+        return true;
+    }
+    facts
+        .completed_at()
+        .as_str()
+        .is_some_and(|c| !c.is_empty() && !c.starts_with(LEGACY_DEFER_PREFIX))
+}
+
+/// A lifecycle row that is identified (harness + session_id), bounded
+/// (started_at) and not yet closed. Mirrors the Python authority
+/// `statuses.is_open_phase_row` shape for shape, so both legs answer one
+/// question about the same row.
+pub fn is_open_phase_row(row: &Value, phase: &str) -> bool {
+    SessionFacts::of(row).is_some_and(|facts| is_open_phase_facts(&facts, phase))
+}
+
+fn is_open_phase_facts(row: &SessionFacts<'_>, phase: &str) -> bool {
+    let filled = |slot: crate::backlog::row_facts::Slot<'_>| {
+        slot.as_str().is_some_and(|text| !text.trim().is_empty())
+    };
+    row.phase.as_str() == Some(phase)
+        && filled(row.harness)
+        && filled(row.session_id)
+        && filled(row.started_at)
+        && row.ended_at.is_absent()
+}
+
+/// Whether a session row is a valid, unfinished `execute` window.
+pub fn is_open_do_row(row: &Value) -> bool {
+    is_open_phase_row(row, "execute")
+}
+
+/// The WORK-done verdict for one session, read through the reverse join over
+/// `sessions[]`. This is the one WORK-done reader on the Rust side
+/// retirement asks it, never `row.node`, and no second predicate
+/// folds WORK, SHIP, WRITING or HOLDING into one boolean.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkState {
+    /// Named on n nodes, every one `done`.
+    AllDone { nodes: Vec<String> },
+    /// At least one named node is not done; the first is reported.
+    Open { node: String, status: String },
+    /// Named on no node's `sessions[]`.
+    NoProvenance,
+}
+
+/// Normalize one session id for identity comparison, `session_identity_key`'s
+/// rule: uuid-family ids are case-insensitive, opencode's `ses_` ids are not.
+pub(crate) fn work_state_key(session_id: &str) -> String {
+    if session_id.starts_with("ses_") {
+        session_id.to_string()
+    } else {
+        session_id.to_ascii_lowercase()
+    }
+}
+
+/// The reverse-join index: normalised `session_id` -> `[(node_id, status)]`
+/// over every entry's `sessions[]` rows. Build once per sweep over the
+/// working graph plus the archive; `status` is the entry's stored `status`
+/// field only, never a derived overlay.
+///
+/// Each session's list puts its CURRENT node first: open non-ship rows
+/// before ended or ship rows, then the newest `started_at`. A worker rebound to a new
+/// node keeps its ended row on the old one, and graph order alone made the
+/// old node the one every first-row reader judged it by.
+pub fn sessions_index(entries: &[Value]) -> HashMap<String, Vec<(String, String)>> {
+    sessions_index_with(entries, true)
+}
+
+/// The same reverse join with PR-link ship rows EXCLUDED: the stamp opens the
+/// row and no terminal closes it, so a ship row is provenance of the link,
+/// never of work. Feeds [`work_state`]; node attribution keeps the
+/// full [`sessions_index`].
+pub fn work_index(entries: &[Value]) -> HashMap<String, Vec<(String, String)>> {
+    sessions_index_with(entries, false)
+}
+
+fn sessions_index_with(
+    entries: &[Value],
+    include_ship: bool,
+) -> HashMap<String, Vec<(String, String)>> {
+    let mut index: HashMap<String, Vec<(bool, String, String, String)>> = HashMap::new();
+    for entry in entries {
+        let Some(facts) = RowFacts::of(entry) else {
+            continue;
+        };
+        let Some(node_id) = facts.id().as_str() else {
+            continue;
+        };
+        let status = facts.status().as_str().unwrap_or("").to_string();
+        if facts.sessions().as_array().is_none() {
+            continue;
+        }
+        for row in facts.session_rows() {
+            let Some(sid) = row.session_id.as_str() else {
+                continue;
+            };
+            let sid = sid.trim();
+            if sid.is_empty() {
+                continue;
+            }
+            let ship = row.phase.as_str() == Some("ship");
+            if !include_ship && ship {
+                continue;
+            }
+            // No terminal closes a ship row, so it never ranks as current work.
+            let ended = ship || !row.ended_at.is_absent();
+            let started = row.started_at.as_str().unwrap_or("").to_string();
+            index.entry(work_state_key(sid)).or_default().push((
+                ended,
+                started,
+                node_id.to_string(),
+                status.clone(),
+            ));
+        }
+    }
+    index
+        .into_iter()
+        .map(|(sid, mut rows)| {
+            // Stable: equal keys keep graph order.
+            rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)));
+            let rows = rows.into_iter().map(|(_, _, node, status)| (node, status));
+            (sid, rows.collect())
+        })
+        .collect()
+}
+
+/// The WORK-done question for one session against a [`work_index`]: a ship
+/// row is provenance of the PR link, never of work, so the caller
+/// must pass the ship-excluded join. Attribution asks [`sessions_index`].
+pub fn work_state(index: &HashMap<String, Vec<(String, String)>>, session_id: &str) -> WorkState {
+    let Some(named) = index.get(&work_state_key(session_id)) else {
+        return WorkState::NoProvenance;
+    };
+    if named.is_empty() {
+        return WorkState::NoProvenance;
+    }
+    // A parked or never-started node is not active work: beside a done node
+    // it never holds the session open. Named on parked nodes only, the
+    // session stays Open on the first of them.
+    let parked = |status: &str| crate::gc::INACTIVE_NODE_STATUSES.contains(&status);
+    let open = named
+        .iter()
+        .find(|(_, status)| status != "done" && !parked(status));
+    let done: Vec<String> = named
+        .iter()
+        .filter(|(_, status)| status == "done")
+        .map(|(node, _)| node.clone())
+        .collect();
+    match open.or_else(|| done.is_empty().then(|| &named[0])) {
+        Some((node, status)) => WorkState::Open {
+            node: node.clone(),
+            status: status.clone(),
+        },
+        None => WorkState::AllDone { nodes: done },
+    }
+}
+
+/// True when a row carries plan work of its own with no PR to evidence it:
+/// the shape the children rollup once false-closed, where the UNVERIFIED
+/// completion note used to be the only flag. No rollup may close such a
+/// row; its own door does, on its own evidence. Any PR ref counts as
+/// evidence, an additional-PR list included: the model permits that list
+/// without a primary PR.
+pub fn has_own_plan_work(entry: &Value) -> bool {
+    let Some(facts) = RowFacts::of(entry) else {
+        return false;
+    };
+    let has_pr = facts.pr_number().as_i64().is_some()
+        || facts.additional_prs().as_array().is_some_and(|rows| {
+            rows.iter()
+                .any(|r| r.get(key::NUMBER).and_then(Value::as_i64).is_some())
+        });
+    facts
+        .plan_path()
+        .as_str()
+        .is_some_and(|p| !p.trim().is_empty())
+        && !has_pr
+}
+
+/// One comparison core for the reopen guard: a deliberate reopen postdating
+/// every child completion holds against an automatic close. Ambiguity
+/// favours the human: an unreadable reopen stamp protects, an unreadable
+/// child stamp protects. `reopened` is None when there is no reopen.
+pub fn reopen_outranks_stamps(reopened: Option<&str>, kid_completed: &[Option<&str>]) -> bool {
+    let Some(raw) = reopened else { return false };
+    if raw.trim().is_empty() {
+        return false;
+    }
+    let Some(reopened) = parse_rfc3339_stamp(raw) else {
+        return true;
+    };
+    for closed in kid_completed.iter().flatten() {
+        if let Some(closed_t) = parse_rfc3339_stamp(closed) {
+            if closed_t >= reopened {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// The epic form of the reopen guard. `kids` pairs each child's join stamp
+/// ([`joined_parent_at`]) with its completion stamp. Only a child that joined
+/// at or before the reopen can expire it: its close is evidence the reopened
+/// work finished. A child that joined after the reopen proves nothing about
+/// the unfiled work the reopen named, so its close never re-arms the
+/// auto-close. An unreadable join stamp counts as after: ambiguity favours
+/// the human.
+pub fn reopen_holds_epic(reopened: Option<&str>, kids: &[(Option<&str>, Option<&str>)]) -> bool {
+    let cutoff = reopened.and_then(parse_rfc3339_stamp);
+    let prior: Vec<Option<&str>> = kids
+        .iter()
+        .filter(|(filed, _)| match cutoff {
+            Some(reopen) => filed
+                .and_then(parse_rfc3339_stamp)
+                .is_some_and(|f| f <= reopen),
+            None => true,
+        })
+        .map(|(_, done)| *done)
+        .collect();
+    reopen_outranks_stamps(reopened, &prior)
+}
+
+/// When a row joined its current parent: the `parented_at` stamp both write
+/// seams set under the store lock, else `created_at` for a row written
+/// before that stamp existed.
+pub fn joined_parent_at(row: &Value) -> Option<&str> {
+    let facts = RowFacts::of(row)?;
+    facts
+        .parented_at()
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| facts.created_at().as_str())
+}
+
+/// Stamp `parented_at` on every row this write gives a parent or moves to a
+/// new one. Both write seams call it under the store lock, so the stamp
+/// orders a child's arrival against a reopen the same lock serialized.
+/// `created_at` cannot do that: a creator stamps it before taking the lock,
+/// and a reparent never touches it.
+pub fn stamp_parent_edges(before: &[Value], after: &mut [Value], now: &str) {
+    let prior: std::collections::HashMap<&str, Option<&str>> = before
+        .iter()
+        .filter_map(|e| RowFacts::id_of(e).map(|id| (id, parent_of(e))))
+        .collect();
+    for row in after.iter_mut() {
+        let Some(parent) = parent_of(row).filter(|p| !p.trim().is_empty()) else {
+            continue;
+        };
+        let moved = match RowFacts::id_of(row).and_then(|id| prior.get(id)) {
+            Some(old) => *old != Some(parent),
+            None => true,
+        };
+        if moved {
+            if let Some(obj) = row.as_object_mut() {
+                obj.insert("parented_at".to_string(), Value::String(now.to_string()));
+            }
+        }
+    }
+}
+
+/// Stamp parser for the guard comparisons: None on blank or unreadable.
+/// Mirrors the Python twin's _parse_iso: an RFC3339 stamp parses as itself,
+/// a naive stamp reads UTC (the graph carries both spellings).
+fn parse_rfc3339_stamp(raw: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if let Ok(stamp) = chrono::DateTime::parse_from_rfc3339(raw) {
+        return Some(stamp);
+    }
+    chrono::NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M:%S%.f")
+        .ok()
+        .map(|naive| naive.and_utc().fixed_offset())
+}
+
+/// The one-shot priority and status vocabulary backfill on a row in place.
+fn migrate_vocabulary(obj: &mut Map<String, Value>) {
+    for (field, table) in [
+        ("priority", PRIORITY_MIGRATION),
+        (key::STATUS, STATUS_MIGRATION),
+    ] {
+        let Some(old) = obj.get(field).and_then(Value::as_str) else {
+            continue;
+        };
+        if let Some((_, to)) = table.iter().find(|(from, _)| *from == old) {
+            obj.insert(field.to_string(), Value::String(to.to_string()));
+        }
+    }
+}
+
+/// Recompute status for all entries based on graph state
+/// (statuses.recompute_statuses). The write path's derivation: blocked_by is
+/// deliberately NOT derived here - dependency satisfaction is answered fresh
+/// on every read instead.
+pub fn recompute_statuses(entries: &mut [Value]) {
+    recompute_statuses_with_plan_rungs(entries, None)
+}
+
+/// `plan_rungs` is None when the caller supplies no plan data: plan-derived
+/// statuses then keep their stored values instead of re-deriving (a mux-side
+/// op write never flips a node's status behind the plan's back). The Python
+/// client always supplies the map, computed by `ladder.plan_rung`.
+pub fn recompute_statuses_with_plan_rungs(
+    entries: &mut [Value],
+    plan_rungs: Option<&BTreeMap<String, String>>,
+) {
+    normalize_lock_fields(entries);
+
+    let valid_ids: std::collections::HashSet<String> = entries
+        .iter()
+        .filter(|e| e.is_object())
+        .filter_map(|e| RowFacts::id_of(e).map(str::to_string))
+        .collect();
+
+    // children_by_parent, excluding self-parents.
+    let mut children_by_parent: std::collections::BTreeMap<String, Vec<usize>> = Default::default();
+    for (i, e) in entries.iter().enumerate() {
+        if !e.is_object() {
+            continue;
+        }
+        let (Some(parent), Some(cid)) = (
+            parent_of(e).map(str::to_string),
+            RowFacts::id_of(e).map(str::to_string),
+        ) else {
+            continue;
+        };
+        if valid_ids.contains(&parent) && cid != parent {
+            children_by_parent.entry(parent).or_default().push(i);
+        }
+    }
+
+    // One-shot priority/status vocabulary backfill.
+    for e in entries.iter_mut() {
+        if !e.is_object() {
+            continue;
+        }
+        migrate_vocabulary(e.as_object_mut().unwrap());
+    }
+
+    normalize_legacy_deferred(entries);
+
+    for e in entries.iter_mut() {
+        if RowFacts::id_of(e).is_none() {
+            continue;
+        }
+        // Never persist a stale readiness detail; clear the ownership defect
+        // marker so an owner replacement cannot retain an obsolete diagnosis.
+        // Decisions read first, mutations after: the derivation functions
+        // borrow immutably, the writes need the mutable borrow.
+        let facts = RowFacts::of(e).expect("a row with an id is an object");
+        let completed = facts.completed_at().is_set();
+        let superseded = facts.superseded_by().is_set();
+        let deferred = facts.deferred_at().is_set();
+        let locked = facts.locked_by().is_set();
+        let lock_quality = if locked {
+            Some(lock_timestamp_quality(e))
+        } else {
+            None
+        };
+        let has_pr = facts.pr_number().is_set();
+        // Computed before the mutable borrow below, same as lock_quality:
+        // decisions read first, mutations after.
+        let do_quality = if !locked {
+            open_do_quality_and_holder(e)
+        } else {
+            None
+        };
+        let open_do = facts
+            .session_rows()
+            .any(|row| is_open_phase_facts(&row, "execute"));
+        let node_id = facts.id().value().cloned().unwrap_or(Value::Null);
+        let holder = facts.locked_by().value().cloned().unwrap_or(Value::Null);
+        let rung = if !locked && !open_do && !completed && !superseded && !deferred && !has_pr {
+            match plan_rungs {
+                Some(map) => Some(supplied_plan_rung(e, map)),
+                // No plan data supplied: the ladder write below is skipped and
+                // the entry keeps its stored status.
+                None => None,
+            }
+        } else {
+            None
+        };
+
+        let obj = e.as_object_mut().unwrap();
+        obj.insert("blocked_reason".to_string(), Value::Null);
+        obj.shift_remove("ownership_defect");
+
+        if completed {
+            obj.insert("status".to_string(), Value::String("done".into()));
+            continue;
+        }
+        // A superseded_by edge is the terminal fact: supersession
+        // evidence stays with the record and the reconcile receipts, never in
+        // status, so a superseded row can no longer read as live held work.
+        if superseded {
+            obj.insert("status".to_string(), Value::String("superseded".into()));
+            continue;
+        }
+        if deferred {
+            obj.insert("status".to_string(), Value::String("deferred".into()));
+            continue;
+        }
+        if let Some(quality) = lock_quality {
+            // A graph timestamp is diagnostic only: age or malformed data
+            // records uncertainty, never clears an owner that may be working.
+            if matches!(quality, "old" | "unreadable") {
+                let kind = if quality == "old" {
+                    "stale-active-owner-unverified"
+                } else {
+                    "lock-timestamp-unreadable"
+                };
+                let mut defect = Map::new();
+                defect.insert("kind".to_string(), Value::String(kind.into()));
+                defect.insert("node_id".to_string(), node_id.clone());
+                defect.insert("holder".to_string(), holder.clone());
+                defect.insert("liveness".to_string(), Value::String("unverified".into()));
+                obj.insert("ownership_defect".to_string(), Value::Object(defect));
+            }
+        } else {
+            // The open-do route gets the same diagnostic, symmetric with the
+            // lock route above: a row whose writer died is otherwise
+            // indistinguishable from one whose writer is typing. The
+            // status word is not touched - age records uncertainty, it never
+            // clears an owner. A lock defect already stamped keeps priority.
+            if let Some((quality, holder)) = do_quality {
+                let kind = if quality == "old" {
+                    "stale-open-do-unverified"
+                } else {
+                    "do-row-timestamp-unreadable"
+                };
+                let mut defect = Map::new();
+                defect.insert("kind".to_string(), Value::String(kind.into()));
+                defect.insert("node_id".to_string(), node_id.clone());
+                if !holder.is_empty() {
+                    defect.insert("holder".to_string(), Value::String(holder.to_string()));
+                } else {
+                    defect.insert("holder".to_string(), Value::Null);
+                }
+                defect.insert("liveness".to_string(), Value::String("unverified".into()));
+                obj.insert("ownership_defect".to_string(), Value::Object(defect));
+            }
+        }
+        if has_pr {
+            obj.insert("status".to_string(), Value::String("in_review".into()));
+            continue;
+        }
+        if locked || open_do {
+            obj.insert("status".to_string(), Value::String("in_progress".into()));
+        } else if let Some(derived) = rung {
+            obj.insert(
+                "status".to_string(),
+                Value::String(rung_to_graph_status(derived).to_string()),
+            );
+        }
+    }
+
+    // Container rollup, deepest first, keyed by id for index lookups.
+    let id_index: std::collections::HashMap<String, usize> = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.is_object())
+        .filter_map(|(i, e)| RowFacts::id_of(e).map(|id| (id.to_string(), i)))
+        .collect();
+
+    fn depth_of(
+        id: &str,
+        children_by_parent: &std::collections::BTreeMap<String, Vec<usize>>,
+        id_index: &std::collections::HashMap<String, usize>,
+        entries: &[Value],
+        visiting: &mut std::collections::HashSet<String>,
+    ) -> usize {
+        if !visiting.insert(id.to_string()) {
+            return 0;
+        }
+        let Some(idx) = id_index.get(id) else {
+            return 0;
+        };
+        let Some(parent) = entries.get(*idx).and_then(parent_of) else {
+            return 0;
+        };
+        if !children_by_parent.contains_key(parent) {
+            return 0;
+        }
+        1 + depth_of(parent, children_by_parent, id_index, entries, visiting)
+    }
+
+    let mut parents: Vec<(String, usize)> = children_by_parent
+        .keys()
+        .map(|pid| {
+            let mut visiting = std::collections::HashSet::new();
+            let d = depth_of(pid, &children_by_parent, &id_index, entries, &mut visiting);
+            (pid.clone(), d)
+        })
+        .collect();
+    parents.sort_by(|a, b| b.1.cmp(&a.1));
+
+    for (pid, _) in parents {
+        let Some(&pidx) = id_index.get(&pid) else {
+            continue;
+        };
+        let Some(parent_facts) = entries.get(pidx).and_then(RowFacts::of) else {
+            continue;
+        };
+        let parent_status = parent_facts.status().as_str().map(str::to_string);
+        let parent_superseded = parent_facts.superseded_by().is_set();
+        let parent_deferred = parent_facts.deferred_at().is_set();
+        let parent_reopened = parent_facts.reopened_at().as_str().map(str::to_string);
+        if parent_facts.completed_at().is_set() {
+            entries[pidx]
+                .as_object_mut()
+                .unwrap()
+                .insert("status".to_string(), Value::String("done".into()));
+            continue;
+        }
+        if parent_superseded {
+            entries[pidx]
+                .as_object_mut()
+                .unwrap()
+                .insert("status".to_string(), Value::String("superseded".into()));
+            continue;
+        }
+        if parent_deferred {
+            entries[pidx]
+                .as_object_mut()
+                .unwrap()
+                .insert("status".to_string(), Value::String("deferred".into()));
+            continue;
+        }
+        let child_statuses: Vec<Option<String>> = children_by_parent[&pid]
+            .iter()
+            .filter_map(|ci| entries.get(*ci))
+            .map(|c| {
+                RowFacts::of(c)
+                    .and_then(|kid| kid.status().as_str())
+                    .map(str::to_string)
+            })
+            .collect();
+        // A container carrying live work of its own is NOT done just because
+        // its children are: a lock or an open PR reads live from the
+        // derivation above; a bound plan's own deliverables are unverified
+        // until its own door closes the row; and a deliberate reopen holds
+        // until a child filed before it closes after it.
+        let own_work_live = matches!(
+            parent_status.as_deref(),
+            Some("in_review") | Some("in_progress")
+        );
+        let holds = {
+            let kid_stamps: Vec<(Option<&str>, Option<&str>)> = children_by_parent[&pid]
+                .iter()
+                .filter_map(|ci| entries.get(*ci))
+                .map(|k| {
+                    (
+                        joined_parent_at(k),
+                        RowFacts::of(k).and_then(|kid| kid.completed_at().as_str()),
+                    )
+                })
+                .collect();
+            own_work_live
+                || has_own_plan_work(&entries[pidx])
+                || reopen_holds_epic(parent_reopened.as_deref(), &kid_stamps)
+        };
+        if !child_statuses.is_empty() && child_statuses.iter().all(|s| s.as_deref() == Some("done"))
+        {
+            if !holds {
+                entries[pidx]
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("status".to_string(), Value::String("done".into()));
+            }
+        } else if child_statuses
+            .iter()
+            .any(|s| matches!(s.as_deref(), Some("in_review") | Some("in_progress")))
+        {
+            entries[pidx]
+                .as_object_mut()
+                .unwrap()
+                .insert("status".to_string(), Value::String("in_progress".into()));
+        } else if child_statuses.iter().any(|s| s.as_deref() == Some("ready")) {
+            entries[pidx]
+                .as_object_mut()
+                .unwrap()
+                .insert("status".to_string(), Value::String("ready".into()));
+        } else {
+            // "Open" = not terminal (done/superseded). A container with at
+            // least one open child, none of them building/in_review/ready,
+            // where every open child reads literally "blocked", rolls up to
+            // blocked. Falling through (no open children, or a mix that is
+            // neither all-blocked nor done/building/ready, e.g. idea/design)
+            // leaves the parent's own leaf-derived status untouched.
+            let open: Vec<&Option<String>> = child_statuses
+                .iter()
+                .filter(|s| !matches!(s.as_deref(), Some("done") | Some("superseded")))
+                .collect();
+            if !open.is_empty() && open.iter().all(|s| s.as_deref() == Some("blocked")) {
+                entries[pidx]
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("status".to_string(), Value::String("blocked".into()));
+            }
+        }
+    }
+}
+
+/// Move the pre-migration defer sentinel out of the terminal completion field
+/// before rows are materialized into the schema-constrained store.
+pub(crate) fn normalize_legacy_deferred(entries: &mut [Value]) {
+    for e in entries {
+        if !e.is_object() {
+            continue;
+        }
+        let legacy = RowFacts::of(e)
+            .and_then(|facts| facts.completed_at().as_str())
+            .filter(|c| c.starts_with(LEGACY_DEFER_PREFIX))
+            .map(str::to_string);
+        let obj = e.as_object_mut().unwrap();
+        if let Some(completed) = legacy {
+            obj.insert(
+                "deferred_at".to_string(),
+                Value::String(completed[LEGACY_DEFER_PREFIX.len()..].to_string()),
+            );
+            obj.insert("completed_at".to_string(), Value::Null);
+            obj.entry("deferred_reason".to_string())
+                .or_insert(Value::String(String::new()));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Canonical ordering + slugs
+// ---------------------------------------------------------------------------
+
+/// Reorder each entry's keys status-forward and refresh the children index
+/// (store.canonicalize_entries).
+pub fn canonicalize_entries(entries: &mut Vec<Value>) {
+    compute_children(entries);
+    normalize_lock_fields(entries);
+    let mut out = Vec::with_capacity(entries.len());
+    for e in entries.drain(..) {
+        if !e.is_object() {
+            out.push(e);
+            continue;
+        }
+        let mut obj = e.as_object().unwrap().clone();
+        // One-write migration: remove only the legacy top-level lock key.
+        obj.shift_remove("claimed_at");
+        let mut ordered = Map::new();
+        for k in CANONICAL_FIELD_ORDER {
+            if let Some(v) = obj.shift_remove(*k) {
+                ordered.insert((*k).to_string(), v);
+            }
+        }
+        // Unknown keys append in their original relative order.
+        for (k, v) in obj {
+            ordered.insert(k, v);
+        }
+        out.push(Value::Object(ordered));
+    }
+    *entries = out;
+}
+
+/// Slugify a title into a base handle (slug.derive_base_slug).
+pub fn derive_base_slug(title: &str) -> String {
+    let lower = title.to_lowercase();
+    let mut raw = String::new();
+    let mut prev_dash = false;
+    for ch in lower.chars() {
+        if ch.is_ascii_lowercase() || ch.is_ascii_digit() {
+            raw.push(ch);
+            prev_dash = false;
+        } else if !prev_dash {
+            raw.push('-');
+            prev_dash = true;
+        }
+    }
+    let raw = raw.trim_matches('-').to_string();
+    if raw.is_empty() {
+        return String::new();
+    }
+    let words: Vec<&str> = raw.split('-').filter(|w| !w.is_empty()).collect();
+    const STOPWORDS: &[&str] = &[
+        "a", "an", "the", "of", "for", "to", "and", "or", "in", "on", "with",
+    ];
+    let kept: Vec<&str> = {
+        let filtered: Vec<&str> = words
+            .iter()
+            .copied()
+            .filter(|w| !STOPWORDS.contains(w))
+            .collect();
+        if filtered.is_empty() {
+            words
+        } else {
+            filtered
+        }
+    };
+    const WORD_BUDGET: usize = 6;
+    const LEN_CAP: usize = 48;
+    let mut out: Vec<&str> = Vec::new();
+    let mut length = 0usize;
+    for w in kept.iter().take(WORD_BUDGET) {
+        let add = w.len() + if out.is_empty() { 0 } else { 1 };
+        if length + add > LEN_CAP {
+            break;
+        }
+        out.push(w);
+        length += add;
+    }
+    if out.is_empty() {
+        return kept[0].chars().take(LEN_CAP).collect();
+    }
+    out.join("-")
+}
+
+fn hex_fallback_slug(node_id: &str) -> String {
+    let suffix = node_id.split_once('-').map(|(_, s)| s).unwrap_or(node_id);
+    format!(
+        "node-{}",
+        if suffix.is_empty() { "unknown" } else { suffix }
+    )
+}
+
+/// Assign a slug to every entry lacking one (slug.ensure_slugs). Idempotent.
+pub fn ensure_slugs(entries: &mut [Value]) -> usize {
+    let mut taken: std::collections::HashSet<String> = entries
+        .iter()
+        .filter_map(|e| RowFacts::of(e).and_then(|facts| facts.slug().as_str()))
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect();
+    let mut assigned = 0;
+    for e in entries.iter_mut() {
+        let Some(facts) = RowFacts::of(e) else {
+            continue;
+        };
+        if facts.slug().as_str().is_some_and(|s| !s.is_empty()) {
+            continue;
+        }
+        let title = facts.title().as_str().unwrap_or("");
+        let id = facts.id().as_str().unwrap_or("");
+        let base = derive_base_slug(title);
+        let candidate = if !base.is_empty() && !taken.contains(&base) {
+            base
+        } else if !base.is_empty() {
+            let mut n = 2;
+            while taken.contains(&format!("{base}-{n}")) {
+                n += 1;
+            }
+            format!("{base}-{n}")
+        } else {
+            hex_fallback_slug(id)
+        };
+        taken.insert(candidate.clone());
+        e.as_object_mut()
+            .unwrap()
+            .insert("slug".to_string(), Value::String(candidate));
+        assigned += 1;
+    }
+    assigned
+}
+
+// ---------------------------------------------------------------------------
+// Curation key + touched_at stamping
+// ---------------------------------------------------------------------------
+
+pub(crate) fn curation_key(entry: &Value) -> Value {
+    let mut parts = Vec::with_capacity(CURATION_FIELDS.len());
+    for f in CURATION_FIELDS {
+        match entry.get(*f) {
+            Some(Value::Array(items)) => parts.push(Value::Array(items.clone())),
+            Some(v) => parts.push(v.clone()),
+            None => parts.push(Value::Null),
+        }
+    }
+    Value::Array(parts)
+}
+
+// ---------------------------------------------------------------------------
+// Bounded lock
+// ---------------------------------------------------------------------------
+
+/// The sibling lockfile for a graph file. Every spelling of one store (the
+/// anchor, its `db/` twin, the legacy root spelling) converges through
+/// `anchor_path` first, so they flock one inode. The name stays
+/// `graph.json.lock` so an older binary that only knows the anchor spelling
+/// shares the same lock.
+pub fn graph_lock_path(path: &Path) -> PathBuf {
+    // Other callers lock their own sibling files (`graph.share`, a chats db):
+    // those keep their raw name, so each stays its own lock.
+    let anchor = if crate::backlog::is_store_spelling(path) {
+        crate::backlog::anchor_path(path)
+    } else {
+        path.to_path_buf()
+    };
+    let base = anchor.canonicalize().unwrap_or(anchor);
+    PathBuf::from(format!("{}.lock", base.display()))
+}
+
+/// A hold that runs past this threshold journals one `graph_lock_held` row
+/// on release, naming the holder and where the time went.
+const HOLD_EVENT_MIN: Duration = Duration::from_secs(2);
+
+/// A held bounded lock. Release on drop.
+#[derive(Debug)]
+pub struct BoundedLock {
+    file: File,
+    path: PathBuf,
+    ticket: Option<PathBuf>,
+    acquired_at: Instant,
+    /// Sub-phase timings of the work this holder did under the lock, filled
+    /// by `locked_mutate_flavored` and carried onto the hold event.
+    phases: std::cell::RefCell<serde_json::Map<String, serde_json::Value>>,
+}
+
+impl BoundedLock {
+    /// Acquire the exclusive advisory lock on `<graph>.lock` with a deadline
+    /// (plan/locking.py's LOCK_EX|LOCK_NB polling idiom; std's stabilized
+    /// File::try_lock is the same flock(2) Python's fcntl takes, proven by
+    /// tests/flock_interop.rs).
+    pub fn acquire(path: &Path, timeout: Duration) -> Result<Self, StoreError> {
+        let lock_path = graph_lock_path(path);
+        if let Some(parent) = lock_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&lock_path)?;
+        let deadline = Instant::now() + timeout;
+        let ticket = crate::lock_queue::register(&lock_path).ok();
+        // The head scan walks the ticket directory, so it runs every fifth
+        // poll while try_lock keeps the 20 ms cycle once this waiter is
+        // head (a ticket only leaves the queue by withdrawal or holder
+        // death - dead pid, zombie, or recycled pid - so the head verdict
+        // never flips back).
+        const QUEUE_SCAN_EVERY: u32 = 5;
+        let mut since_scan = QUEUE_SCAN_EVERY;
+        let mut my_turn = ticket.is_none();
+        loop {
+            since_scan += 1;
+            if since_scan >= QUEUE_SCAN_EVERY {
+                since_scan = 0;
+                if let Some(t) = ticket.as_deref() {
+                    my_turn = crate::lock_queue::am_head(t);
+                }
+            }
+            if my_turn {
+                match file.try_lock() {
+                    Ok(()) => {
+                        crate::chokepoint::stamp(&file, crate::chokepoint::GRAPH_STORE.name, "");
+                        return Ok(BoundedLock {
+                            file,
+                            path: lock_path,
+                            ticket,
+                            acquired_at: Instant::now(),
+                            phases: Default::default(),
+                        });
+                    }
+                    Err(_) if Instant::now() >= deadline => break,
+                    Err(_) => {}
+                }
+            } else if Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(LOCK_POLL);
+        }
+        crate::lock_queue::withdraw(ticket.as_deref());
+        let _ =
+            crate::chokepoint::report_expiry(&crate::chokepoint::GRAPH_STORE, &lock_path, timeout);
+        Err(StoreError::LockTimeout(
+            lock_path.display().to_string(),
+            timeout,
+            holder_summary(&lock_path),
+        ))
+    }
+
+    pub fn lock_path(&self) -> &Path {
+        &self.path
+    }
+
+    /// How long this holder has held the lock.
+    pub fn held_for(&self) -> Duration {
+        self.acquired_at.elapsed()
+    }
+
+    /// Record one under-lock sub-phase's duration for the hold event.
+    pub fn note_phase(&self, name: &str, started: Instant) {
+        self.phases.borrow_mut().insert(
+            format!("{name}_ms"),
+            serde_json::Value::from(started.elapsed().as_millis() as u64),
+        );
+    }
+
+    /// Record a named counter (a busy-retry count) for the hold event.
+    pub fn note_count(&self, name: &str, value: u64) {
+        self.phases
+            .borrow_mut()
+            .insert(name.to_string(), serde_json::Value::from(value));
+    }
+}
+
+/// The holder line for a timeout refusal: the recorded pid and hold age,
+/// with a dead pid named as dead rather than restated as fact. Same contract
+/// as `agent_lock::holder_note`, pointed at the graph lock.
+fn holder_summary(lock_path: &Path) -> String {
+    let text = match std::fs::read_to_string(lock_path) {
+        Ok(text) => text,
+        Err(_) => return unstamped_summary(lock_path),
+    };
+    let parsed: serde_json::Value = match serde_json::from_str(text.lines().next().unwrap_or("")) {
+        Ok(value) => value,
+        Err(_) => return unstamped_summary(lock_path),
+    };
+    let (Some(pid), Some(at)) = (
+        parsed.get("pid").and_then(serde_json::Value::as_u64),
+        parsed
+            .get("acquired_at")
+            .and_then(serde_json::Value::as_str),
+    ) else {
+        return unstamped_summary(lock_path);
+    };
+    let age = chrono::DateTime::parse_from_rfc3339(at)
+        .ok()
+        .map(|started| {
+            (chrono::Utc::now() - started.with_timezone(&chrono::Utc))
+                .num_seconds()
+                .max(0)
+        })
+        .map(|secs| format!("held {secs}s since {at}"))
+        .unwrap_or_else(|| format!("held since {at}"));
+    if crate::agent_lock::pid_is_alive(pid) {
+        format!("recorded holder pid {pid}, {age}")
+    } else {
+        // The stamp can outlive its holder: a crashed writer's line stays
+        // until the next successful stamp, so a LIVE flock holder can sit
+        // behind a dead pid. The holder's own queue ticket is still
+        // registered, so the oldest ticket names the real holder.
+        match crate::lock_queue::head_pid(lock_path) {
+            Some(live) if live != pid && crate::agent_lock::pid_is_alive(live) => format!(
+                "holder record pid {pid} is dead (a crashed writer), {age}; the live lock holder is queue-head pid {live}"
+            ),
+            _ => format!("holder record pid {pid} is dead (a crashed writer), {age}"),
+        }
+    }
+}
+
+/// The holder line when the lock file carries no stamp. A release empties
+/// the stamp, so a waiter that timed out in the ticket queue reads an empty
+/// file; name the oldest queued ticket instead, the pid it waited behind.
+fn unstamped_summary(lock_path: &Path) -> String {
+    match crate::lock_queue::head_pid(lock_path) {
+        Some(pid) if crate::agent_lock::pid_is_alive(pid) => {
+            format!("no holder recorded in the lock file; oldest queued ticket is pid {pid}")
+        }
+        Some(pid) => {
+            format!("no holder recorded in the lock file; oldest queued ticket pid {pid} is dead")
+        }
+        None => "no holder recorded in the lock file".to_string(),
+    }
+}
+
+impl Drop for BoundedLock {
+    fn drop(&mut self) {
+        let held = self.acquired_at.elapsed();
+        crate::lock_queue::withdraw(self.ticket.as_deref());
+        let _ = self.file.set_len(0);
+        let _ = self.file.unlock();
+        // The holder's own measurement of a long hold: a waiter
+        // sees only its timeout; this row names who held and where the time
+        // went. Best effort, past a 2 s threshold so a quiet store journals
+        // nothing.
+        if held >= HOLD_EVENT_MIN {
+            crate::chokepoint_events::append_row(
+                "graph_lock_held",
+                serde_json::json!({
+                    "pid": std::process::id(),
+                    "command": crate::chokepoint::process_command(u64::from(
+                        std::process::id(),
+                    )),
+                    "lock": self.path.display().to_string(),
+                    "hold_ms": held.as_millis() as u64,
+                    "phases_ms": serde_json::Value::Object(self.phases.borrow().clone()),
+                }),
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Atomic publish: backup, write
+// ---------------------------------------------------------------------------
+
+/// Shared backup-rotation prune: keep the newest GRAPH_BACKUP_KEEP files
+/// matching `prefix` in `dir`, hold the pile under [`GRAPH_BACKUP_MAX_BYTES`]
+/// (the newest copy always survives), and on a collapse (newest at most a
+/// tenth of its predecessor, the state canary's threshold) rename that
+/// predecessor to `pre-shrink.<name>` so the last good copy survives
+/// rotation. Returns the pin path. Pins are never pruned: `pre-shrink.`
+/// never starts with a backup prefix.
+/// ponytail: one pin per collapse, uncapped; cap pre-shrink.* if pins pile up.
+pub(crate) fn rotate_backups(dir: &Path, prefix: &str) -> Option<PathBuf> {
+    rotate_backups_capped(dir, prefix, GRAPH_BACKUP_MAX_BYTES)
+}
+
+fn rotate_backups_capped(dir: &Path, prefix: &str, max_bytes: u64) -> Option<PathBuf> {
+    let mut existing: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.file_name()
+                .map(|n| n.to_string_lossy().starts_with(prefix))
+                .unwrap_or(false)
+        })
+        .collect();
+    existing.sort();
+    let mut pin = None;
+    if existing.len() >= 2 {
+        let prev = existing[existing.len() - 2].clone();
+        let now = std::fs::metadata(existing.last()?)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let was = std::fs::metadata(&prev).map(|m| m.len()).unwrap_or(0);
+        if was > 0 && now <= was / 10 {
+            let pin_path = dir.join(format!(
+                "pre-shrink.{}",
+                prev.file_name()?.to_string_lossy()
+            ));
+            match std::fs::rename(&prev, &pin_path) {
+                Ok(()) => {
+                    eprintln!(
+                        "backups in {} collapsed from {was} to {now} bytes; the last good copy is kept out of rotation at {}",
+                        dir.display(),
+                        pin_path.display()
+                    );
+                    pin = Some(pin_path);
+                }
+                // Rename failed: leave the copy in place and drop it from the
+                // prune list either way, so this pass cannot delete it.
+                Err(_) => {}
+            }
+            existing.remove(existing.len() - 2);
+        }
+    }
+    if existing.len() > GRAPH_BACKUP_KEEP {
+        for old in &existing[..existing.len() - GRAPH_BACKUP_KEEP] {
+            let _ = std::fs::remove_file(old);
+        }
+        existing.drain(..existing.len() - GRAPH_BACKUP_KEEP);
+    }
+    // The count cap cannot hold a byte bound: ten copies of a grown store
+    // outscale the cap no matter how few are kept. Oldest first, and the
+    // newest never goes, so an oversized store still holds one rollback copy.
+    let mut total: u64 = existing
+        .iter()
+        .map(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
+        .sum();
+    while existing.len() > 1 && total > max_bytes {
+        let bytes = std::fs::metadata(&existing[0])
+            .map(|m| m.len())
+            .unwrap_or(0);
+        if std::fs::remove_file(&existing[0]).is_err() {
+            break;
+        }
+        total = total.saturating_sub(bytes);
+        existing.remove(0);
+    }
+    pin
+}
+
+/// Atomic whole-file write: temp sibling + rename (store._write_json).
+/// A publish answers Ok only after its bytes are durable:
+/// the file fsync propagates (the swallowed `.ok()` let a publish answer Ok
+/// before it could survive a crash), and the rename itself is synced by
+/// fsyncing the parent directory.
+pub fn write_atomic(path: &Path, body: &str) -> Result<(), StoreError> {
+    let tmp = path.with_file_name(format!(
+        "{}.tmp-{}",
+        path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default(),
+        std::process::id()
+    ));
+    {
+        let mut f = File::create(&tmp)?;
+        f.write_all(body.as_bytes())?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)?;
+    let dir = File::open(
+        path.parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new(".")),
+    )?;
+    dir.sync_all()?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// The locked mutate cycle (store.locked_mutate_graph, store-side half)
+// ---------------------------------------------------------------------------
+
+/// What the store-side mutate cycle reports to its caller, so the client can
+/// run its post-lock duties (claim releases, renders, nudge) on the same
+/// facts the store produced.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MutateOutcome {
+    /// The final, canonicalized entries.
+    pub entries: Vec<Value>,
+    /// Entries dropped because they were not JSON objects.
+    pub dropped: usize,
+    pub backup: Option<String>,
+    /// Kept empty for clients that still decode the legacy response field.
+    pub shadow_warning: Option<String>,
+    /// `(node_id, rung)` pairs whose status newly entered a terminal rung
+    /// during this mutation; the caller releases their claims after the lock
+    /// drops.
+    pub closure_releases: Vec<(String, String)>,
+    /// True when this path is the configured canonical graph anchor
+    /// (~/.fno/graph.json), which gates claim release and board renders.
+    pub is_canonical: bool,
+    /// The store content digest stamped with the published rows.
+    pub version: String,
+    /// How long this publish held the graph lock, the holder-side slice the
+    /// hold-ratio contract judges (`lock_held < wall/4` on a one-row change).
+    pub lock_held: Duration,
+}
+
+/// Inputs to the store-side mutate cycle that the CLIENT computes
+/// (Python-owned facts: the mutator's output and the company-work
+/// validation, which is pydantic and stays on the Python side).
+pub struct MutateInput {
+    /// The mutator's output: entries already defaulted (the begin snapshot)
+    /// and mutated client-side. Presence-refusing writes were enforced by
+    /// the FieldUpdate constructors before this was built.
+    pub entries: Vec<Value>,
+    /// Configured canonical graph path, when the caller knows it; the
+    /// closure-release and board-render gates key on it.
+    pub canonical_path: Option<PathBuf>,
+    /// The snapshot version ([`base_version`] at the caller's read time).
+    /// Required, never optional: a whole-store publish is only safe when the
+    /// version is the one the caller read. The cycle refuses to publish over
+    /// a changed store, so a caller whose read ran outside the
+    /// lock retries on [`StoreError::Conflict`] instead of silently
+    /// clobbering an interleaved writer (`None` let four writers
+    /// publish stale snapshots that dropped every row landed in between).
+    pub base_version: String,
+    /// Node id -> the rung of the node's linked plan, as the client computed
+    /// it with the Python rung table (`ladder.plan_rung`). Repo law keeps
+    /// plan-document reading on the Python side, so the store derives
+    /// plan-based statuses ONLY from this map; `None` keeps stored statuses
+    /// (a caller that is not re-deriving from plans).
+    pub plan_rungs: Option<BTreeMap<String, String>>,
+}
+
+/// The stamp [`MutateInput::base_version`] carries: the store version
+/// `locked_mutate` re-derives under the lock. A caller snapshots it before
+/// its read and holds it to publish, so an interleaved writer surfaces as
+/// [`StoreError::Conflict`] instead of a lost write.
+pub fn base_version(path: &Path) -> Result<String, StoreError> {
+    crate::backlog::version(path).map_err(StoreError::Db)
+}
+
+/// The store-side half of the locked read-modify-write cycle. Holds the
+/// bounded lock; re-derives the pre-image; runs slugs, recompute, the
+/// touched_at stamp, the closure-detection hook, canonicalization, and the
+/// atomic publish with backup. Contention is resolved by the caller
+/// retrying on [`StoreError::LockTimeout`] or a version conflict.
+/// wave 1: the publication-seam prose policy. Every locked mutation
+/// passes through it, so every writer obeys the combined
+/// `details`+`current_state.body` budget, and a migrated row's
+/// `progress_notes` can never grow again. An oversized legacy row may be
+/// edited DOWN; an unrelated status/claim/PR update on it still succeeds
+/// because unchanged prose fields are skipped.
+pub fn enforce_node_state_policy(pre: &[Value], entries: &[Value]) -> Result<(), StoreError> {
+    use crate::backlog::node_state;
+    let pre_by_id = index_by_id(pre);
+    for cand in entries {
+        let Some(id) = RowFacts::id_of(cand) else {
+            continue;
+        };
+        let pre_row = pre_by_id.get(id).copied();
+        let cand_details = cand.get("details");
+        let pre_details = pre_row.and_then(|r| r.get("details"));
+        let cand_state = cand.get(node_state::STATE_KEY);
+        let pre_state = pre_row.and_then(|r| r.get(node_state::STATE_KEY));
+        // Unchanged prose: the row is untouched by this policy.
+        if cand_details == pre_details && cand_state == pre_state {
+            continue;
+        }
+        // Budget: the candidate total must fit, or be no larger than the
+        // pre-image total (editing an oversized legacy row DOWN is legal).
+        let cand_total = node_state::prose_total(cand);
+        let pre_total = pre_row.map(node_state::prose_total).unwrap_or(0);
+        if cand_total > node_state::PROSE_LIMIT && cand_total > pre_total {
+            return Err(StoreError::Invalid(node_state::budget_message(id, cand)));
+        }
+        // Migrated rows: history is authoritative; the hot append feed must
+        // not reappear through any writer, this one included.
+        let migrated = pre_row
+            .map(|r| r.get(node_state::HISTORY_MARKER_KEY).is_some())
+            .unwrap_or(false);
+        if migrated {
+            let count = |v: Option<&Value>| {
+                v.and_then(|r| r.get("progress_notes"))
+                    .and_then(Value::as_array)
+                    .map(|a| a.len())
+                    .unwrap_or(0)
+            };
+            if count(cand.get("progress_notes")) > count(pre_row) {
+                return Err(StoreError::Invalid(format!(
+                    "refusing to grow progress_notes on migrated node {id}: the row is migrated; use current_state"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The store-side half of the locked read-modify-write cycle. Holds the
+/// bounded lock; re-derives the pre-image; runs slugs, recompute, the
+/// touched_at stamp, the closure-detection hook, canonicalization, and the
+/// atomic publish with backup. Contention is resolved by the caller
+/// retrying on [`StoreError::LockTimeout`] or a version conflict.
+pub fn locked_mutate(
+    path: &Path,
+    input: MutateInput,
+    timeout: Duration,
+) -> Result<MutateOutcome, StoreError> {
+    locked_mutate_with_hook(path, input, timeout, None)
+}
+
+/// Same cycle with one pre-publication hook. The hook runs INSIDE the
+/// mutation lock, after every guard, right before the bytes are written, and
+/// receives the raw begin snapshot. An error refuses the whole mutation;
+/// `node_state` uses this to journal the exact pre-image before any
+/// replacement publishes (wave 1).
+pub fn locked_mutate_with_hook(
+    path: &Path,
+    input: MutateInput,
+    timeout: Duration,
+    before_publish: Option<&mut dyn FnMut(&[Value]) -> Result<(), StoreError>>,
+) -> Result<MutateOutcome, StoreError> {
+    locked_mutate_flavored(path, input, timeout, before_publish, false)
+}
+
+/// The stored-status seam: `raw`, and with it the curation baseline and the
+/// store diff, reads the rows as STORED, no readiness overlay. The
+/// whole-graph writer uses this so a publish diffs stored rows against
+/// stored rows; a caller whose entries came from an overlaid read keeps the
+/// default seam, where baseline and entries always agree.
+pub(crate) fn locked_mutate_with_hook_stored(
+    path: &Path,
+    input: MutateInput,
+    timeout: Duration,
+    before_publish: Option<&mut dyn FnMut(&[Value]) -> Result<(), StoreError>>,
+) -> Result<MutateOutcome, StoreError> {
+    locked_mutate_flavored(path, input, timeout, before_publish, true)
+}
+
+fn locked_mutate_flavored(
+    path: &Path,
+    input: MutateInput,
+    timeout: Duration,
+    before_publish: Option<&mut dyn FnMut(&[Value]) -> Result<(), StoreError>>,
+    stored_statuses: bool,
+) -> Result<MutateOutcome, StoreError> {
+    let prepared = prepare_mutate(path, input, stored_statuses)?;
+    commit_prepared(path, prepared, timeout, before_publish)
+}
+
+/// The pure half of the mutate cycle, computed from `raw` and the caller's
+/// input BEFORE the lock is taken: defaults, recompute, touched_at, closure
+/// collection, canonicalize, the row-snapshot gates, the baseline
+/// canonicalize, the changed-id diff and the content version. Under the
+/// lock, `commit_prepared` keeps only the version re-check, the two
+/// config-cap gates (their cap reads config.toml, which an edit can move
+/// without moving the graph version), the hook and the write of the changed
+/// rows - so a whole-graph publish holds the store for its write, not for
+/// its thinking.
+struct PreparedMutate {
+    raw: Vec<Value>,
+    entries: Vec<Value>,
+    baseline: Vec<Value>,
+    begin_version: String,
+    base_version: String,
+    dropped: usize,
+    closure_releases: Vec<(String, String)>,
+    is_canonical: bool,
+    changed_ids: Vec<String>,
+    version: String,
+}
+
+fn prepare_mutate(
+    path: &Path,
+    input: MutateInput,
+    stored_statuses: bool,
+) -> Result<PreparedMutate, StoreError> {
+    let MutateInput {
+        entries: working_entries,
+        canonical_path,
+        base_version,
+        plan_rungs,
+    } = input;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    // The expensive pre-image read runs OUTSIDE the lock. Every content
+    // writer stamps a fresh content version (authoritative_sync,
+    // mutate_single_row_once), so the under-lock version re-check in
+    // `commit_prepared` proves `raw` current; a write landing between the
+    // two reads surfaces as Conflict and the caller retries, the same
+    // surface a stale base_version already produced.
+    let begin_version = crate::backlog::version(path).map_err(StoreError::Db)?;
+    let raw = if stored_statuses {
+        crate::backlog::read_entries_stored(path).map_err(StoreError::Db)?
+    } else {
+        crate::backlog::read_entries(path).map_err(StoreError::Db)?
+    };
+
+    // Pre-image defaults for the curation snapshot, re-derived through the
+    // same pipeline (store.py's _status_normalized + _pre_curation). The
+    // overlay stays out: the baseline must describe the rows as stored, or a
+    // status the overlay alone differs on restamps touched_at and ships a
+    // change nobody asked for.
+    let mut pre = raw.clone();
+    apply_defaults_without_readiness_overlay(&mut pre, false);
+    let mut pre_normalized = pre.clone();
+    recompute_statuses_with_plan_rungs(&mut pre_normalized, plan_rungs.as_ref());
+    // The baseline is the rows as read: the db holds the last publish, so
+    // `raw` is that publish. A change normalization alone makes
+    // (defaults, settles, ownership stamps, children) must compare unequal
+    // against this baseline to reach the store. Deriving the baseline from
+    // the normalized pre-image instead hid exactly those changes, and the
+    // db row stayed stale for good.
+    let status_normalized: std::collections::HashMap<String, String> = pre_normalized
+        .iter()
+        .filter(|e| e.is_object())
+        .filter_map(|e| {
+            RowFacts::id_of(e).map(|id| {
+                (
+                    id.to_string(),
+                    RowFacts::of(e)
+                        .and_then(|facts| facts.status().as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                )
+            })
+        })
+        .collect();
+    let mut pre_curation: std::collections::HashMap<String, Value> = Default::default();
+    for e in pre.iter() {
+        let (Some(id), true) = (RowFacts::id_of(e).map(str::to_string), e.is_object()) else {
+            continue;
+        };
+        let mut snapshot = e.clone();
+        if let Some(obj) = snapshot.as_object_mut() {
+            obj.insert(
+                "status".to_string(),
+                status_normalized
+                    .get(&id)
+                    .map(|s| Value::String(s.clone()))
+                    .unwrap_or_else(|| status_value(e)),
+            );
+        }
+        pre_curation.insert(id, curation_key(&snapshot));
+    }
+
+    let dropped = raw
+        .len()
+        .saturating_sub(raw.iter().filter(|e| e.is_object()).count());
+    let mut entries = working_entries;
+
+    // The presence invariant holds at the STORE boundary, not only at the
+    // typed update path: the Python mutator runs client-side against plain
+    // dicts, so `FieldUpdate` alone cannot see everything a commit carries.
+    // The guard refuses an empty value the write introduces; an unchanged
+    // stored value passes.
+    refuse_new_empty_presence(&raw, &entries).map_err(StoreError::EmptyFieldUpdate)?;
+
+    // Slug assignment on EVERY persisted mutation.
+    ensure_slugs(&mut entries);
+    // The join stamp lands before the status recompute: a write that moves a
+    // done child under a reopened epic must derive the epic's status from the
+    // late join, not the child's older created_at.
+    let now_iso = now_isoformat();
+    stamp_parent_edges(&raw, &mut entries, &now_iso);
+    recompute_statuses_with_plan_rungs(&mut entries, plan_rungs.as_ref());
+
+    // touched_at stamp: a curation-field change vs the pre-image. The
+    // pre-image is defaulted, so the compare reads the defaulted view too:
+    // a caller that ships raw untouched rows (commit_rows merges the raw
+    // export) would otherwise re-stamp every row missing a defaulted field.
+    // Status stays the row's own: the pre-image carries the recomputed
+    // status, not the readiness overlay the defaults pass applies.
+    let mut defaulted = entries.clone();
+    apply_defaults_without_readiness_overlay(&mut defaulted, true);
+    for (e, view) in entries.iter_mut().zip(defaulted.iter_mut()) {
+        let (Some(id), true) = (RowFacts::id_of(e).map(str::to_string), e.is_object()) else {
+            continue;
+        };
+        let Some(before) = pre_curation.get(&id) else {
+            continue; // absent from the pre-image: new node, created_at carries it
+        };
+        if let Some(obj) = view.as_object_mut() {
+            obj.insert("status".to_string(), status_value(e));
+        }
+        if curation_key(view) != *before {
+            e.as_object_mut()
+                .unwrap()
+                .insert("touched_at".to_string(), Value::String(now_iso.clone()));
+        }
+    }
+
+    // Node closure releases the node claim: a transition into a
+    // terminal rung during THIS mutation is the one moment every closure path
+    // shares. Ids are COLLECTED here; the release runs in the caller after
+    // the lock drops. Only the CONFIGURED graph owns the global node-id space.
+    let is_canonical = match &canonical_path {
+        Some(cfg) => same_file(path, cfg),
+        None => false,
+    };
+    let mut closure_releases = Vec::new();
+    for e in entries.iter_mut() {
+        let (Some(id), true) = (RowFacts::id_of(e).map(str::to_string), e.is_object()) else {
+            continue;
+        };
+        let rung = RowFacts::of(e)
+            .and_then(|facts| facts.status().as_str())
+            .map(str::to_string)
+            .unwrap_or_default();
+        let pre_rung = status_normalized.get(&id).map(String::as_str);
+        if !TERMINAL_RUNGS.contains(&rung.as_str())
+            || pre_rung
+                .map(|r| TERMINAL_RUNGS.contains(&r))
+                .unwrap_or(false)
+        {
+            continue;
+        }
+        let obj = e.as_object_mut().unwrap();
+        obj.insert("locked_by".to_string(), Value::Null);
+        obj.insert("locked_at".to_string(), Value::Null);
+        if is_canonical {
+            closure_releases.push((id, rung));
+        }
+    }
+
+    canonicalize_entries(&mut entries);
+
+    // wave 1: the publication-seam prose policy. Every writer goes
+    // through here, so every writer obeys the combined details+current_state
+    // budget, and a migrated row's progress_notes can never grow again.
+    enforce_node_state_policy(&raw, &entries)?;
+    // The write-time title leak gate: a NEW or CHANGED title the
+    // render gate would refuse never publishes; a stored leaky title passes
+    // an unrelated update.
+    crate::backlog::title_gate::enforce_title_gate(&raw, &entries)?;
+    // The close-evidence rule holds at this seam too: a write that sets
+    // completed_at on an existing open row must leave the row a record of
+    // why, or the whole publish refuses and nothing lands.
+    crate::backlog::done_evidence::enforce(&raw, &entries).map_err(StoreError::Invalid)?;
+
+    // The store diff runs against the baseline in the same canonical shape
+    // the publish itself carries: canonicalize injects default keys
+    // (children, lock mirrors) into every row, so a raw-baseline diff would
+    // rewrite every row and bump every version on every publish, defeating
+    // row-level conflict detection for untouched rows.
+    let mut baseline = raw.clone();
+    canonicalize_entries(&mut baseline);
+    let changed_ids = crate::backlog::diff_rows(&baseline, &entries);
+    let version = crate::backlog::content_version(&entries);
+    Ok(PreparedMutate {
+        raw,
+        entries,
+        baseline,
+        begin_version,
+        base_version,
+        dropped,
+        closure_releases,
+        is_canonical,
+        changed_ids,
+        version,
+    })
+}
+
+/// The locked half of the mutate cycle: re-check the version, re-run the two
+/// config-cap gates (the only gate inputs an edit can move without moving
+/// the graph version), run the hook, publish the changed rows, then release
+/// and snapshot. Every pure step already ran in `prepare_mutate`.
+fn commit_prepared(
+    path: &Path,
+    prepared: PreparedMutate,
+    timeout: Duration,
+    before_publish: Option<&mut dyn FnMut(&[Value]) -> Result<(), StoreError>>,
+) -> Result<MutateOutcome, StoreError> {
+    let _lock = BoundedLock::acquire(path, timeout)?;
+    let recheck_started = Instant::now();
+    let current = crate::backlog::version(path).map_err(StoreError::Db)?;
+    if current != prepared.begin_version || current != prepared.base_version {
+        return Err(StoreError::Conflict);
+    }
+    _lock.note_phase("version_recheck", recheck_started);
+    // The epic child cap holds at this seam too: every whole-graph writer
+    // (update parent=, idea --parent, contain, decompose, the rollup
+    // auto-link) meets the same refusal. The single-row seam answers for
+    // api node_create under sqlite.
+    let caps_started = Instant::now();
+    crate::backlog::epic_cap::enforce(
+        &prepared.raw,
+        &prepared.entries,
+        crate::backlog::epic_cap::configured_cap(path),
+    )
+    .map_err(StoreError::Invalid)?;
+    if let Some(warning) = crate::backlog::idea_cap::enforce(
+        &prepared.raw,
+        &prepared.entries,
+        crate::backlog::idea_cap::configured_cap(path).0,
+    ) {
+        eprintln!("{warning}");
+    }
+    _lock.note_phase("cap_gates", caps_started);
+    if let Some(hook) = before_publish {
+        let hook_started = Instant::now();
+        hook(&prepared.raw)?;
+        _lock.note_phase("before_publish", hook_started);
+    }
+
+    let publish_started = Instant::now();
+    let (version, publish_retries) = crate::backlog::retry_on_busy(|| {
+        crate::backlog::authoritative_sync_prepared(
+            path,
+            &prepared.baseline,
+            &prepared.entries,
+            &prepared.changed_ids,
+            &prepared.version,
+        )
+    })
+    .map_err(StoreError::Db)?;
+    _lock.note_phase("authoritative_sync", publish_started);
+    _lock.note_count("publish_retries", publish_retries as u64);
+    let lock_held = _lock.held_for();
+    drop(_lock);
+    // The hourly snapshot copy runs with the lock gone, so a slow VACUUM
+    // INTO never widens the hold.
+    crate::backlog::snapshot_db(path, crate::backlog::now_ms()).map_err(StoreError::Db)?;
+    let backup: Option<PathBuf> = None;
+    let shadow_warning = None;
+
+    Ok(MutateOutcome {
+        entries: prepared.entries,
+        dropped: prepared.dropped,
+        backup: backup.map(|p| p.display().to_string()),
+        shadow_warning,
+        closure_releases: prepared.closure_releases,
+        is_canonical: prepared.is_canonical,
+        version,
+        lock_held,
+    })
+}
+
+/// A row's status as stored, null when absent.
+fn status_value(entry: &Value) -> Value {
+    RowFacts::of(entry)
+        .and_then(|facts| facts.status().value().cloned())
+        .unwrap_or(Value::Null)
+}
+
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a == b,
+    }
+}
+
+/// Fields used by live board and selection readers.
+pub const SLIM_FIELDS: &[&str] = &[
+    "id",
+    "slug",
+    "title",
+    "type",
+    "status",
+    "priority",
+    "rank",
+    "project",
+    "cwd",
+    "domain",
+    "difficulty",
+    "parent",
+    "blocked_by",
+    "plan_path",
+    "pr_number",
+    "archived_at",
+    "created_at",
+    "touched_at",
+    "completed_at",
+    "locked_by",
+    "locked_by_harness",
+    "locked_by_harness_session",
+    "locked_at",
+    "session_id",
+];
+
+/// The whole defaulted read shared by writers and unfiltered callers.
+pub fn read_rows(path: &Path) -> Result<Vec<Value>, StoreError> {
+    read_rows_where(path, &crate::backlog::RowQuery::default())
+}
+
+/// The whole-graph write read: stored statuses only, no readiness overlay.
+/// A publish must ship the statuses it mutated, never the overlay's answer
+/// for an open blocker; two machines publishing at different blocker
+/// visibility is what flipped stored statuses back and forth on the shared
+/// primary.
+pub(crate) fn read_rows_for_write(path: &Path) -> Result<Vec<Value>, StoreError> {
+    crate::backlog::read_entries_where_defaulted_no_overlay(
+        path,
+        &crate::backlog::RowQuery::default(),
+        false,
+    )
+    .map_err(StoreError::Db)
+}
+
+pub fn read_rows_where(
+    path: &Path,
+    query: &crate::backlog::RowQuery,
+) -> Result<Vec<Value>, StoreError> {
+    crate::backlog::read_entries_where_defaulted(path, query, false).map_err(StoreError::Db)
+}
+
+/// The graph rows whose dependency is `contract`, materialized in graph order.
+pub(crate) fn read_contract_rows(path: &Path) -> Result<Vec<Value>, StoreError> {
+    const ID_BATCH: usize = 400;
+    let connection = crate::backlog::read_connection(path).map_err(StoreError::Db)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT id, ordinal FROM nodes
+             WHERE json_extract(extras, '$.dep') = 'contract'
+             UNION
+             SELECT id, ordinal FROM nodes_raw
+             WHERE CASE WHEN json_valid(body)
+                        THEN json_extract(body, '$.dep') END = 'contract'
+             ORDER BY ordinal, id",
+        )
+        .map_err(|error| StoreError::Db(error.into()))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(|error| StoreError::Db(error.into()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| StoreError::Db(error.into()))?;
+    drop(statement);
+    drop(connection);
+
+    let ids: Vec<String> = rows.into_iter().map(|(id, _)| id).collect();
+    let mut by_id = HashMap::new();
+    for batch in ids.chunks(ID_BATCH) {
+        let query = crate::backlog::RowQuery {
+            filter: crate::backlog::api::NodeFilter {
+                id_in: Some(batch.to_vec()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        for row in read_rows_where(path, &query)? {
+            if let Some(id) =
+                RowFacts::id_of(&row).filter(|id| batch.iter().any(|candidate| candidate == id))
+            {
+                by_id.insert(id.to_string(), row);
+            }
+        }
+    }
+    Ok(ids.into_iter().filter_map(|id| by_id.remove(&id)).collect())
+}
+
+pub fn read_rows_where_strict(
+    path: &Path,
+    query: &crate::backlog::RowQuery,
+) -> Result<Vec<Value>, StoreError> {
+    crate::backlog::read_entries_where_defaulted(path, query, true).map_err(StoreError::Db)
+}
+
+/// One row by exact id or slug (the same tiers `find_entry` applies), read
+/// from the rows store without loading every row. None when nothing matches,
+/// so the caller keeps its whole-graph fallback.
+pub fn read_one(path: &Path, token: &str) -> Result<Option<Value>, StoreError> {
+    let query = crate::backlog::RowQuery {
+        filter: crate::backlog::api::NodeFilter {
+            id_in: Some(vec![token.to_string()]),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut rows = read_rows_where(path, &query)?;
+    match rows.len() {
+        0 => Ok(None),
+        // find_entry prefers the id tier over the slug tier.
+        1 => Ok(rows.pop()),
+        _ => Ok(rows
+            .into_iter()
+            .find(|row| crate::graph_get::field_eq(row, "id", token))),
+    }
+}
+
+#[doc(hidden)]
+pub fn seed_rows(path: &Path, rows: &[Value]) -> Result<(), StoreError> {
+    let _lock = BoundedLock::acquire(path, Duration::from_secs(10))?;
+    crate::backlog::authoritative_sync(path, &[], rows)
+        .map(|_| ())
+        .map_err(StoreError::Db)
+}
+
+/// Fixture door for the create-surface golden replays: the Python fixture
+/// path derived slugs on every store write, so the captured fixtures carry
+/// them; the plain seed does not assign them.
+#[doc(hidden)]
+pub fn seed_rows_with_slugs(path: &Path, rows: &[Value]) -> Result<(), StoreError> {
+    let _lock = BoundedLock::acquire(path, Duration::from_secs(10))?;
+    let mut seeded = rows.to_vec();
+    ensure_slugs(&mut seeded);
+    crate::backlog::authoritative_sync(path, &[], &seeded)
+        .map(|_| ())
+        .map_err(StoreError::Db)
+}
+
+/// The narrowed read the merge-grant ops pay for: only the nodes a grant op
+/// can use (a PR's carriers, or the queue's grant candidates plus every
+/// carrier of their PR numbers).
+pub fn read_pr_rows(path: &Path, pr: Option<i64>) -> Result<Vec<Value>, StoreError> {
+    let mut rows = crate::backlog::read_pr_entries(path, pr).map_err(StoreError::Db)?;
+    apply_defaults(&mut rows, false);
+    Ok(rows)
+}
+
+/// A strict rows read for consumers whose boundary contract needs unreadable
+/// stores to remain unknown, never an empty list.
+pub fn read_rows_strict(path: &Path) -> Result<Vec<Value>, StoreError> {
+    read_rows_where_strict(path, &crate::backlog::RowQuery::default())
+}
+
+/// The optimistic mutation cycle every whole-graph writer shares: stamp a
+/// base, read fresh rows, apply, publish over that base, and retry the whole
+/// cycle on [`StoreError::Conflict`] or [`StoreError::LockTimeout`]. `apply`
+/// re-runs over a FRESH read every attempt, so a retry never overwrites what
+/// another writer just landed; `Ok(false)` is a domain refusal that writes
+/// nothing. Lifted from `backlog::api::mutate` so the writers that used to
+/// publish stale snapshots share one loop instead of four shapes.
+pub fn mutate_rows(
+    path: &Path,
+    timeout: Duration,
+    plan_rungs: Option<BTreeMap<String, String>>,
+    mut hook: Option<&mut dyn FnMut(&[Value]) -> Result<(), StoreError>>,
+    mut apply: impl FnMut(&mut Vec<Value>) -> Result<bool, StoreError>,
+) -> Result<Option<MutateOutcome>, StoreError> {
+    const ATTEMPTS: usize = 5;
+    const RETRY_BACKOFF: Duration = Duration::from_millis(100);
+    let mut rebased = false;
+    for attempt in 0..ATTEMPTS {
+        let base = base_version(path)?;
+        let mut working = read_rows_for_write(path)?;
+        if !apply(&mut working)? {
+            return Ok(None);
+        }
+        // The hook reborrow is block-scoped: a binding held across the match
+        // would keep `hook` mutably borrowed into the next loop iteration
+        // (E0499).
+        let published = {
+            let h: Option<&mut dyn FnMut(&[Value]) -> Result<(), StoreError>> = match hook.as_mut()
+            {
+                Some(h) => Some(&mut **h),
+                None => None,
+            };
+            locked_mutate_with_hook_stored(
+                path,
+                MutateInput {
+                    entries: working,
+                    canonical_path: None,
+                    base_version: base,
+                    plan_rungs: plan_rungs.clone(),
+                },
+                timeout,
+                h,
+            )
+        };
+        match published {
+            // The graph lock is gone here, so the shared-backlog flush holds
+            // up no writer. A refusal took the primary's rows back: retry on
+            // a fresh read.
+            Ok(outcome) => match crate::backlog_share::publish_after_write(path) {
+                Ok(()) => return Ok(Some(outcome)),
+                // A stale-row refusal already rebased this machine on the
+                // primary's rows: one resend on the fresh read, then the
+                // refusal goes back to the caller. Five full publish cycles
+                // per write at a seconds-long primary RTT was the refusal
+                // storm the primary stalled under. The loop bound holds: a
+                // continue past the last attempt would reach unreachable!.
+                Err(refusal)
+                    if crate::backlog_share::is_stale_row_refusal(&refusal)
+                        && attempt + 1 < ATTEMPTS =>
+                {
+                    if rebased {
+                        return Err(StoreError::Db(refusal.into()));
+                    }
+                    rebased = true;
+                    std::thread::sleep(RETRY_BACKOFF);
+                }
+                // An unreachable primary keeps every attempt: the write stays
+                // in the outbox until the store answers again.
+                Err(_) if attempt + 1 < ATTEMPTS => std::thread::sleep(RETRY_BACKOFF),
+                Err(refusal) => return Err(StoreError::Db(refusal.into())),
+            },
+            Err(err @ (StoreError::Conflict | StoreError::LockTimeout(..)))
+                if attempt + 1 < ATTEMPTS =>
+            {
+                let _ = err;
+                std::thread::sleep(RETRY_BACKOFF);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    unreachable!("every loop arm returns")
+}
+
+// ---------------------------------------------------------------------------
+// Read path with defaults (read_graph / read_graph_strict, store-side)
+// ---------------------------------------------------------------------------
+
+/// Read graph-archive.json and apply the default view. The live store is read
+/// through [`read_rows`].
+pub fn read_archive(path: &Path, keep_malformed: bool) -> Result<Vec<Value>, StoreError> {
+    match read_archive_raw(path) {
+        Ok(RawRead::Empty) => Ok(vec![]),
+        Ok(RawRead::MalformedRoot) => Err(StoreError::MalformedRoot(store_label(path))),
+        Ok(RawRead::Corrupt(reason)) => Err(StoreError::Corrupt(reason)),
+        Ok(RawRead::Entries(mut v)) => {
+            apply_defaults(&mut v, keep_malformed);
+            Ok(v)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// The working graph plus archived nodes, the working graph winning on id
+/// (store.entries_with_archive). The archive's read failures degrade to the
+/// working graph: the archive is advisory.
+pub fn entries_with_archive(entries: &[Value], archive_path: &Path) -> Vec<Value> {
+    if !archive_path.exists() {
+        return entries.to_vec();
+    }
+    let archived = match read_archive(archive_path, false) {
+        Ok(v) => v,
+        Err(_) => return entries.to_vec(),
+    };
+    let live: std::collections::HashSet<String> = entries
+        .iter()
+        .filter(|e| e.is_object())
+        .filter_map(|e| RowFacts::id_of(e).map(str::to_string))
+        .collect();
+    let mut out = entries.to_vec();
+    for a in archived {
+        if a.is_object() {
+            let id = RowFacts::id_of(&a).map(str::to_string);
+            if let Some(id) = id {
+                if !live.contains(&id) {
+                    out.push(a);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Normalize a plan_path for comparison (store.normalize_plan_path):
+/// os.path.normpath's LEXICAL fold (dot segments collapsed, no symlink
+/// resolution) plus trailing-separator strip, so abs/rel spellings of one
+/// plan compare equal at every guard site.
+pub fn normalize_plan_path(path: Option<&str>) -> Option<String> {
+    let path = path?;
+    if path.is_empty() {
+        return None;
+    }
+    let absolute = path.starts_with('/');
+    let mut stack: Vec<&str> = Vec::new();
+    for seg in path.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                if !stack.is_empty() && *stack.last().unwrap() != ".." {
+                    stack.pop();
+                } else if !absolute {
+                    stack.push("..");
+                }
+                // An absolute path popping past root stays at root, like
+                // normpath.
+            }
+            seg => stack.push(seg),
+        }
+    }
+    let joined = stack.join("/");
+    let mut s = if absolute {
+        format!("/{joined}")
+    } else {
+        joined
+    };
+    if s.is_empty() {
+        s = ".".to_string();
+    }
+    Some(s)
+}
+
+/// The id of another node already bound to the same plan_path
+/// (store.plan_path_owner_conflict).
+pub fn plan_path_owner_conflict(
+    entries: &[Value],
+    node_id: Option<&str>,
+    plan_path: Option<&str>,
+) -> Option<String> {
+    let new_norm = normalize_plan_path(plan_path)?;
+    for e in entries {
+        let Some(facts) = RowFacts::of(e) else {
+            continue;
+        };
+        let Some(eid) = facts.id().as_str() else {
+            continue;
+        };
+        if Some(eid) == node_id {
+            continue;
+        }
+        if normalize_plan_path(facts.plan_path().as_str()).as_deref() == Some(new_norm.as_str()) {
+            return Some(eid.to_string());
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn python_json_matches_reference_shapes() {
+        // Byte-compat with json.dumps(indent=2, ensure_ascii=True), verified
+        // against fixtures the differential parity corpus also drives through
+        // the Python leg.
+        let v = json!({"entries": [{"id": "ab-1", "n": 2, "ok": true, "none": null,
+            "nested": {"a": [1, 2]}, "uni": "h\u{e9}llo", "emoji": "\u{1f600}"}]});
+        let out = to_python_pretty_json(&v);
+        assert!(out.contains("\"uni\": \"h\\u00e9llo\""), "{out}");
+        assert!(out.contains("emoji\": \"\\ud83d\\ude00\""), "{out}");
+        assert!(out.starts_with("{\n  \"entries\": [\n    {\n      \"id\": \"ab-1\","));
+    }
+
+    #[test]
+    fn an_evidence_less_close_is_refused_at_the_publication_seam() {
+        // The whole-graph seam refuses the write outright and the store keeps
+        // its rows: a refusal leaves no trace.
+        let root = tempfile::tempdir().unwrap();
+        let graph = root.path().join("graph.json");
+        let original = json!({
+            "id": "ab-evid0001", "title": "no record", "slug": "no-record",
+            "type": "feature", "status": "ready", "priority": "p2",
+        });
+        seed_rows(&graph, &[original]).unwrap();
+        let before = read_rows(&graph).unwrap();
+        let entries = vec![json!({
+            "id": "ab-evid0001", "title": "no record", "slug": "no-record",
+            "type": "feature", "status": "done", "priority": "p2",
+            "completed_at": "2026-09-23T00:00:00+00:00",
+        })];
+        let input = MutateInput {
+            entries,
+            canonical_path: None,
+            base_version: crate::backlog::version(&graph).unwrap(),
+            plan_rungs: None,
+        };
+        let err = locked_mutate(&graph, input, std::time::Duration::from_secs(5))
+            .err()
+            .expect("an evidence-less close must refuse");
+        assert!(
+            matches!(&err, StoreError::Invalid(text) if text.contains("ab-evid0001")),
+            "expected an Invalid naming the id, got {err:?}"
+        );
+        assert_eq!(read_rows(&graph).unwrap(), before);
+    }
+
+    #[test]
+    fn a_leaky_title_is_refused_at_the_publication_seam() {
+        // The render gate fires at PUBLISH time, so a leaking title
+        // killed the live push instead of the write. The seam refuses a NEW
+        // leaky title and leaves the store untouched; a stored leaky title
+        // passes an unrelated update untouched by this gate.
+        let root = tempfile::tempdir().unwrap();
+        let graph = root.path().join("graph.json");
+        let original = json!({
+            "id": "ab-titl0001", "title": "a clean title", "slug": "a-clean-title",
+            "type": "feature", "status": "idea", "priority": "p2",
+        });
+        seed_rows(&graph, &[original]).unwrap();
+        let before = read_rows(&graph).unwrap();
+
+        let input = MutateInput {
+            entries: vec![
+                json!({
+                    "id": "ab-titl0001", "title": "a clean title", "slug": "a-clean-title",
+                    "type": "feature", "status": "ready", "priority": "p2",
+                }),
+                json!({
+                    "id": "ab-titl0002", "title": "fix the bug in /home/u/notes",
+                    "slug": "fix-the-bug",
+                    "type": "feature", "status": "idea", "priority": "p2",
+                }),
+            ],
+            canonical_path: None,
+            base_version: crate::backlog::version(&graph).unwrap(),
+            plan_rungs: None,
+        };
+        let err = locked_mutate(&graph, input, std::time::Duration::from_secs(5))
+            .err()
+            .expect("a leaky title must refuse at write time");
+        assert!(
+            matches!(&err, StoreError::Invalid(text)
+                if text.contains("ab-titl0002") && text.contains("home-path") && text.contains("--details")),
+            "expected a refusal naming the id, class and rule, got {err:?}"
+        );
+        assert_eq!(read_rows(&graph).unwrap(), before);
+
+        // A stored leaky title passes an unrelated update: the gate refuses
+        // only titles this write introduces.
+        let root = tempfile::tempdir().unwrap();
+        let graph = root.path().join("graph.json");
+        let legacy = json!({
+            "id": "ab-titl0003", "title": "legacy title about /home/u/notes",
+            "slug": "legacy-title", "type": "feature", "status": "idea", "priority": "p2",
+        });
+        seed_rows(&graph, &[legacy]).unwrap();
+        let input = MutateInput {
+            entries: vec![json!({
+                "id": "ab-titl0003", "title": "legacy title about /home/u/notes",
+                "slug": "legacy-title", "type": "feature", "status": "in_progress",
+                "priority": "p2",
+            })],
+            canonical_path: None,
+            base_version: crate::backlog::version(&graph).unwrap(),
+            plan_rungs: None,
+        };
+        locked_mutate(&graph, input, std::time::Duration::from_secs(5))
+            .expect("an unrelated update on a stored leaky title must pass");
+    }
+
+    fn count_prefixed(dir: &Path, prefix: &str) -> usize {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(prefix))
+            .count()
+    }
+
+    #[test]
+    fn rotate_backups_pins_the_last_good_copy_on_a_collapse() {
+        // AC1-HP: a 10,000-byte backup followed by a 64-byte one pins the
+        // good copy out of rotation, and 12 further small writes cannot
+        // delete the pin. The 2026-09-06 wipe shape.
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("backups");
+        std::fs::create_dir(&dir).unwrap();
+        let good = dir.join("graph.db.20260914T000000000000");
+        std::fs::write(&good, vec![b'x'; 10_000]).unwrap();
+        std::fs::write(dir.join("graph.db.20260914T000001000000"), vec![b'y'; 64]).unwrap();
+
+        let pin = rotate_backups(&dir, "graph.db.").expect("pin on collapse");
+
+        let expected = dir.join("pre-shrink.graph.db.20260914T000000000000");
+        assert_eq!(pin, expected);
+        assert_eq!(std::fs::read(&expected).unwrap().len(), 10_000);
+        assert!(!good.exists(), "good copy moved out of rotation");
+
+        for i in 2..14 {
+            std::fs::write(
+                dir.join(format!("graph.db.20260914T0000{i:02}000000")),
+                vec![b'z'; 64],
+            )
+            .unwrap();
+            rotate_backups(&dir, "graph.db.");
+        }
+        assert_eq!(count_prefixed(&dir, "graph.db."), 10);
+        assert_eq!(std::fs::read(&expected).unwrap().len(), 10_000);
+
+        // AC1-EDGE: exactly one tenth is the collapse boundary (now <= was/10).
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("backups");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(
+            dir.join("graph.db.20260914T100000000000"),
+            vec![b'x'; 10_000],
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("graph.db.20260914T100001000000"),
+            vec![b'y'; 1_000],
+        )
+        .unwrap();
+        assert!(rotate_backups(&dir, "graph.db.").is_some());
+        assert_eq!(count_prefixed(&dir, "pre-shrink."), 1);
+    }
+
+    #[test]
+    fn presence_type_refuses_the_measured_wipe() {
+        // The 2026-09-02 defect: `--details ""` wiped 3,036 characters. The
+        // type cannot express it.
+        assert!(TextField::parse("details", "").is_err());
+        assert!(TextField::parse("details", "   ").is_err());
+        assert!(FieldUpdate::from_cli("details", Some("")).is_err());
+        assert!(matches!(
+            FieldUpdate::from_cli("details", Some("real content")),
+            Ok(FieldUpdate::Set(_))
+        ));
+        assert!(matches!(
+            FieldUpdate::from_cli("details", None),
+            Ok(FieldUpdate::Keep)
+        ));
+    }
+
+    /// Every spelling of one store derives the one lockfile an older binary
+    /// holding the anchor spelling also takes.
+    #[test]
+    fn every_spelling_of_a_store_shares_one_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("db")).unwrap();
+        std::fs::write(root.join("db/graph.db"), b"").unwrap();
+        let want = root.join("db/graph.json.lock");
+        for spelling in ["db/graph.db", "db/graph.json", "graph.json"] {
+            assert_eq!(
+                graph_lock_path(&root.join(spelling)).file_name(),
+                want.file_name(),
+                "{spelling}"
+            );
+            assert_eq!(
+                graph_lock_path(&root.join(spelling))
+                    .parent()
+                    .map(|p| p.ends_with("db")),
+                Some(true),
+                "{spelling}"
+            );
+        }
+        // A sibling lock that is not a graph spelling stays its own file.
+        assert_eq!(
+            graph_lock_path(&root.join("db/graph.share")).file_name(),
+            Some(std::ffi::OsStr::new("graph.share.lock"))
+        );
+    }
+
+    #[test]
+    fn recompute_derives_the_ladder_and_the_rollup() {
+        let mut entries = vec![
+            json!({"id": "parent", "parent": null}),
+            json!({"id": "kid", "parent": "parent", "completed_at": "2026-01-01T00:00:00+00:00"}),
+            // Own plan work: the parent's own deliverables are unverified, so
+            // the children rollup never closes it.
+            json!({"id": "plan-parent", "parent": null, "status": "ready",
+                   "plan_path": "plans/p.md"}),
+            json!({"id": "plan-kid", "parent": "plan-parent",
+                   "completed_at": "2026-01-01T00:00:00+00:00"}),
+            // An additional-PR list is PR evidence too: the plan parent with
+            // one closes like a PR-shipped parent.
+            json!({"id": "plan2-parent", "parent": null, "status": "ready",
+                   "plan_path": "plans/p2.md",
+                   "additional_prs": [{"number": 9, "url": null}]}),
+            json!({"id": "plan2-kid", "parent": "plan2-parent",
+                   "completed_at": "2026-01-01T00:00:00+00:00"}),
+            // A deliberate reopen postdating every child's close holds.
+            json!({"id": "reopened-parent", "parent": null, "status": "idea",
+                   "reopened_at": "2026-02-01T00:00:00+00:00"}),
+            json!({"id": "reopened-kid", "parent": "reopened-parent",
+                   "completed_at": "2026-01-01T00:00:00+00:00"}),
+            // A reopen that a child filed before it closes after expires:
+            // re-close. The child stamp is the naive spelling the graph also
+            // carries.
+            json!({"id": "stale-parent", "parent": null, "status": "idea",
+                   "reopened_at": "2026-01-01T00:00:00+00:00"}),
+            json!({"id": "stale-kid", "parent": "stale-parent",
+                   "created_at": "2025-12-01T00:00:00+00:00",
+                   "completed_at": "2026-03-01T00:00:00"}),
+            // A child filed after the reopen proves nothing about the work
+            // the reopen named: its close leaves the epic open.
+            json!({"id": "epic-parent", "parent": null, "status": "idea",
+                   "reopened_at": "2026-01-01T00:00:00+00:00"}),
+            json!({"id": "late-kid", "parent": "epic-parent",
+                   "created_at": "2026-02-01T00:00:00+00:00",
+                   "completed_at": "2026-03-01T00:00:00+00:00"}),
+        ];
+        recompute_statuses(&mut entries);
+        // Parent with all-done children and no live work of its own -> done.
+        assert_eq!(
+            entries
+                .get(0)
+                .and_then(RowFacts::of)
+                .and_then(|f| f.status().as_str()),
+            Some("done")
+        );
+        assert_eq!(
+            entries
+                .get(2)
+                .and_then(RowFacts::of)
+                .and_then(|f| f.status().as_str()),
+            Some("ready"),
+            "own plan work holds against the rollup"
+        );
+        assert_eq!(
+            entries
+                .get(4)
+                .and_then(RowFacts::of)
+                .and_then(|f| f.status().as_str()),
+            Some("done"),
+            "an additional PR is evidence: the plan parent closes"
+        );
+        assert_eq!(
+            entries
+                .get(6)
+                .and_then(RowFacts::of)
+                .and_then(|f| f.status().as_str()),
+            Some("idea"),
+            "a deliberate reopen outranks the child closes"
+        );
+        assert_eq!(
+            entries
+                .get(8)
+                .and_then(RowFacts::of)
+                .and_then(|f| f.status().as_str()),
+            Some("done"),
+            "a naive child close postdating the reopen re-closes"
+        );
+        assert_eq!(
+            entries
+                .get(10)
+                .and_then(RowFacts::of)
+                .and_then(|f| f.status().as_str()),
+            Some("idea"),
+            "a child filed after the reopen never re-arms the close"
+        );
+    }
+
+    #[test]
+    fn mutate_rows_retries_when_a_row_lands_between_read_and_publish() {
+        // First acceptance line: a concurrent writer lands
+        // between the cycle's read and publish; the loop conflicts, re-reads,
+        // and both rows persist.
+        let dir = tempfile::tempdir().unwrap();
+        let graph = dir.path().join("graph.json");
+        seed_rows(&graph, &[]).unwrap();
+        let mut apply_runs = 0usize;
+        let outcome = mutate_rows(&graph, Duration::from_secs(5), None, None, |rows| {
+            apply_runs += 1;
+            if apply_runs == 1 {
+                // The concurrent idea: a fresh-base whole publish of a row
+                // this cycle's snapshot does not hold.
+                let base = base_version(&graph).unwrap();
+                let mut foreign = read_rows(&graph).unwrap();
+                foreign.push(json!({"id": "x-fresh", "title": "landed mid-cycle"}));
+                locked_mutate(
+                    &graph,
+                    MutateInput {
+                        entries: foreign,
+                        canonical_path: None,
+                        base_version: base,
+                        plan_rungs: None,
+                    },
+                    Duration::from_secs(5),
+                )
+                .unwrap();
+            }
+            rows.push(json!({"id": "x-mine", "title": "mine"}));
+            Ok(true)
+        })
+        .unwrap();
+        assert!(outcome.is_some(), "the cycle landed on its second attempt");
+        assert_eq!(apply_runs, 2, "apply ran once per attempt, exactly twice");
+        let ids: Vec<String> = read_rows(&graph)
+            .unwrap()
+            .iter()
+            .filter_map(|r| r.get("id").and_then(Value::as_str).map(str::to_string))
+            .collect();
+        assert!(ids.contains(&"x-fresh".to_string()), "ids: {ids:?}");
+        assert!(ids.contains(&"x-mine".to_string()), "ids: {ids:?}");
+    }
+
+    #[test]
+    fn the_whole_graph_seam_refuses_a_child_past_the_epic_cap() {
+        // A 16th-child write through locked_mutate is refused, the version
+        // is unchanged, and the same
+        // child aimed at a fresh epic lands.
+        let dir = tempfile::tempdir().unwrap();
+        let graph = dir.path().join("graph.json");
+        let mut rows = vec![json!({"id": "e-1", "slug": "e-1", "title": "the full epic",
+                                   "type": "epic", "status": "in_progress",
+                                   "priority": "p1", "domain": "code"})];
+        for i in 1..=15 {
+            rows.push(
+                json!({"id": format!("c-{i:02}"), "slug": format!("c-{i:02}"),
+                             "title": format!("child {i}"), "type": "feature",
+                             "status": "idea", "priority": "p2", "domain": "code",
+                             "parent": "e-1"}),
+            );
+        }
+        seed_rows(&graph, &rows).unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[backlog]\nepic_max_open_children = 15\n",
+        )
+        .unwrap();
+        let before = crate::backlog::version(&graph).unwrap();
+        let pre = read_rows(&graph).unwrap();
+        let mut entries = pre.clone();
+        entries.push(json!({"id": "c-16", "slug": "c-16", "title": "child 16",
+                            "type": "feature", "status": "idea", "priority": "p2",
+                            "domain": "code", "parent": "e-1"}));
+        let error = locked_mutate(
+            &graph,
+            MutateInput {
+                entries,
+                canonical_path: None,
+                base_version: base_version(&graph).unwrap(),
+                plan_rungs: None,
+            },
+            Duration::from_secs(5),
+        )
+        .unwrap_err();
+        let StoreError::Invalid(message) = error else {
+            panic!("want Invalid, got {error:?}");
+        };
+        assert!(message.contains("epic cap: refusing to add"), "{message}");
+        assert!(
+            message.contains("backlog.epic_max_open_children"),
+            "{message}"
+        );
+        assert_eq!(
+            crate::backlog::version(&graph).unwrap(),
+            before,
+            "version unchanged"
+        );
+        // The same child under a fresh epic lands.
+        let pre = read_rows(&graph).unwrap();
+        let mut entries = pre.clone();
+        entries.push(json!({"id": "e-2", "slug": "e-2", "title": "the new epic",
+                            "type": "epic", "status": "idea", "priority": "p2",
+                            "domain": "code"}));
+        entries.push(json!({"id": "c-16", "slug": "c-16", "title": "child 16",
+                            "type": "feature", "status": "idea", "priority": "p2",
+                            "domain": "code", "parent": "e-2"}));
+        locked_mutate(
+            &graph,
+            MutateInput {
+                entries,
+                canonical_path: None,
+                base_version: base_version(&graph).unwrap(),
+                plan_rungs: None,
+            },
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        let rows = read_rows(&graph).unwrap();
+        assert!(
+            rows.iter().any(|r| RowFacts::id_of(r) == Some("c-16")),
+            "the child landed under the fresh epic"
+        );
+    }
+
+    #[test]
+    fn settle_prunes_rewires_and_holds_blocked_by_edges() {
+        let entries = vec![
+            json!({"id": "ab-1", "blocked_by": ["ab-done"]}),
+            json!({"id": "ab-done", "completed_at": "2026-09-01T00:00:00Z"}),
+            json!({"id": "ab-2", "blocked_by": ["ab-old"]}),
+            json!({"id": "ab-old", "superseded_by": "ab-new"}),
+            json!({"id": "ab-new"}),
+            json!({"id": "ab-3", "blocked_by": ["ab-old2"]}),
+            json!({"id": "ab-old2", "superseded_by": "ab-done2"}),
+            json!({"id": "ab-done2", "completed_at": "2026-09-01T00:00:00Z"}),
+            json!({"id": "ab-4", "blocked_by": ["ab-def"]}),
+            json!({"id": "ab-def", "deferred_at": "2026-08-01T00:00:00Z"}),
+            // A record-less superseded row is itself closed: never settled.
+            json!({"id": "ab-9", "superseded_by": "ab-new", "blocked_by": ["ab-done"]}),
+        ];
+        let (entries, receipts, _) = settle_blocked_by_edges(entries);
+        let by_id = index_by_id(&entries);
+        let edge = |id: &str| {
+            by_id
+                .get(id)
+                .map(|e| e.get("blocked_by").cloned())
+                .unwrap_or(None)
+        };
+        assert_eq!(edge("ab-1"), Some(json!([])));
+        assert_eq!(edge("ab-2"), Some(json!(["ab-new"])));
+        assert_eq!(edge("ab-3"), Some(json!([])));
+        assert_eq!(edge("ab-4"), Some(json!(["ab-def"])));
+        // ab-9 is closed (superseded, no record): its edge is untouched.
+        assert_eq!(edge("ab-9"), Some(json!(["ab-done"])));
+        let kinds: Vec<&str> = receipts
+            .iter()
+            .filter_map(|r| r.get("kind").and_then(Value::as_str))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "blocked_by_pruned",
+                "blocked_by_rewired",
+                "blocked_by_pruned",
+                "blocked_by_held",
+            ]
+        );
+        let pruned2 = receipts
+            .iter()
+            .find(|r| r.get("blocker").and_then(Value::as_str) == Some("ab-old2"))
+            .unwrap();
+        assert!(pruned2["reason"]
+            .as_str()
+            .unwrap()
+            .contains("superseded by ab-done2"));
+    }
+}

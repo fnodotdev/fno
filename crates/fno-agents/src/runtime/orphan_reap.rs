@@ -1,0 +1,1164 @@
+//! Orphaned cargo test binaries: detect, confirm, reap.
+//!
+//! A wedged cargo test binary never exits and never reaps its children; its
+//! dead children stack up as `<defunct>` rows until the machine runs out of
+//! pids. A deps binary that is parentless (ppid 1) or holds a zombie pile at
+//! any ppid is always wrong. Confirmation demands a CACHEDIR.TAG in the
+//! owning target dir, because a path-shape match alone is a name match:
+//! `cli/src/fno/target` is a source tree. This module owns the whole question
+//! natively so the Python compatibility shell does not grow it.
+//!
+//! The daemon tick's whole arm lives here because its waitpid sweep sees only
+//! daemon children; this sweep catches wedged test binaries with ppid 1.
+
+use crate::events::EventEmitter;
+use regex::Regex;
+use serde::Serialize;
+use std::collections::BTreeSet;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+pub const ORPHAN_MIN_ZOMBIES: usize = 20;
+pub const ENV_MIN_ELAPSED: &str = "FNO_TEST_ORPHAN_MIN_ELAPSED_SECONDS";
+pub const OWNER_SERVER_MIN_AGE_SECS: u64 = 600;
+
+#[derive(Debug, PartialEq, Serialize)]
+pub struct OrphanedTestBinary {
+    pub pid: u32,
+    pub command: String,
+    pub zombies: usize,
+    pub elapsed_seconds: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReapRow {
+    pub pid: u32,
+    pub elapsed_seconds: u64,
+    pub zombies: usize,
+    pub command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_session: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<&'static str>,
+    pub reaped: bool,
+    pub reason: String,
+}
+
+fn deps_binary_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        // No `/target` segment: under build.build-dir the deps dir lives at
+        // <build-base>/<h2>/<hash>/debug/deps, with no dir named target.
+        Regex::new(r"/(?:debug|release)/deps/[A-Za-z0-9_]+-[0-9a-f]{16}$").unwrap()
+    })
+}
+
+fn argv0(command: &str) -> &str {
+    command.split_whitespace().next().unwrap_or("")
+}
+
+pub(crate) fn is_deps_test_binary(command: &str) -> bool {
+    deps_binary_re().is_match(argv0(command))
+}
+
+/// Parse the `ps etime` forms `DD-HH:MM:SS`, `HH:MM:SS`, `MM:SS`.
+fn elapsed_seconds(value: &str) -> Option<u64> {
+    let (days, rest) = match value.split_once('-') {
+        Some((d, r)) => (d.parse::<u64>().ok()?, r),
+        None => (0, value),
+    };
+    let parts: Vec<u64> = rest
+        .split(':')
+        .map(|p| p.parse::<u64>().ok())
+        .collect::<Option<Vec<_>>>()?;
+    match parts.as_slice() {
+        [h, m, s] => Some(days * 86400 + h * 3600 + m * 60 + s),
+        [m, s] => Some(days * 86400 + m * 60 + s),
+        _ => None,
+    }
+}
+
+/// Detect candidates from one `ps -Ao pid,ppid,state,etime,%cpu,rss,command`
+/// snapshot: a deps test binary that is parentless or holds a zombie pile,
+/// with its dead children counted from the same snapshot. Rows that do not
+/// parse are skipped; they carry no candidate.
+pub fn detect(ps_output: &str) -> Vec<OrphanedTestBinary> {
+    let mut processes: Vec<(u32, u32, u64, String)> = Vec::new();
+    for line in ps_output.lines().skip(1) {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with("PID ") {
+            continue;
+        }
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 7 {
+            continue;
+        }
+        let (Ok(pid), Ok(ppid)) = (fields[0].parse::<u32>(), fields[1].parse::<u32>()) else {
+            continue;
+        };
+        let Some(elapsed) = elapsed_seconds(fields[3]) else {
+            continue;
+        };
+        // The command is the tail; rejoin so argv words survive.
+        let command = fields[6..].join(" ");
+        processes.push((pid, ppid, elapsed, command));
+    }
+    // A defunct row is a dead child: count it against its PPID.
+    let mut zombies_of: std::collections::BTreeMap<u32, usize> = std::collections::BTreeMap::new();
+    for (_, ppid, _, command) in &processes {
+        if command == "<defunct>" {
+            *zombies_of.entry(*ppid).or_insert(0) += 1;
+        }
+    }
+    let mut candidates: Vec<OrphanedTestBinary> = processes
+        .iter()
+        .filter(|(pid, ppid, _, command)| {
+            if !is_deps_test_binary(command) {
+                return false;
+            }
+            *ppid == 1 || zombies_of.get(pid).copied().unwrap_or(0) >= ORPHAN_MIN_ZOMBIES
+        })
+        .map(|(pid, _, elapsed, command)| OrphanedTestBinary {
+            pid: *pid,
+            zombies: zombies_of.get(pid).copied().unwrap_or(0),
+            elapsed_seconds: *elapsed,
+            command: command.clone(),
+        })
+        .collect();
+    candidates.sort_by(|a, b| b.zombies.cmp(&a.zombies).then(a.pid.cmp(&b.pid)));
+    candidates
+}
+
+/// A candidate is confirmed only when its owning build tree carries
+/// CACHEDIR.TAG. A path-shape match alone is a name match. Under
+/// build.build-dir the grandparent of `deps` is the hash dir, which is where
+/// cargo puts the marker (no ancestor is named `target` there).
+pub fn confirmed(orphan: &OrphanedTestBinary) -> bool {
+    let path = Path::new(argv0(&orphan.command));
+    let Some(build_root) = path.parent().and_then(Path::parent).and_then(Path::parent) else {
+        return false;
+    };
+    build_root.join("CACHEDIR.TAG").is_file()
+}
+
+/// `config.test.orphan_min_elapsed_seconds` (900); the env override lets a
+/// positive control plant a fresh orphan and still exercise the kill.
+pub fn min_elapsed_secs(cwd: &Path) -> u64 {
+    if let Some(v) = std::env::var(ENV_MIN_ELAPSED)
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+    {
+        return v;
+    }
+    crate::agents_config::orphan_min_elapsed_secs(cwd)
+}
+
+/// One row per confirmed orphan: named, and killed only when asked. SIGKILL
+/// goes to exactly the pids the confirmed detector named, never an argv match.
+pub fn reap_rows(ps_output: &str, apply: bool, min_elapsed: u64) -> Vec<ReapRow> {
+    let mut rows = Vec::new();
+    for orphan in detect(ps_output) {
+        if !confirmed(&orphan) {
+            continue;
+        }
+        let mut row = ReapRow {
+            pid: orphan.pid,
+            elapsed_seconds: orphan.elapsed_seconds,
+            zombies: orphan.zombies,
+            command: orphan.command.clone(),
+            owner_session: None,
+            kind: None,
+            reaped: false,
+            reason: String::new(),
+        };
+        if orphan.elapsed_seconds < min_elapsed {
+            row.reason = format!(
+                "held: elapsed {}s is under the {}s guard (may be a live run)",
+                orphan.elapsed_seconds, min_elapsed
+            );
+        } else if !apply {
+            row.reason = "dry-run: pass --apply to kill".into();
+        } else {
+            // SAFETY: SIGKILL to a ppid-1 deps binary the confirmed detector named.
+            let rc = unsafe { libc::kill(orphan.pid as libc::pid_t, libc::SIGKILL) };
+            if rc == 0 {
+                row.reaped = true;
+                row.reason = "SIGKILL sent".into();
+            } else {
+                row.reason = match std::io::Error::last_os_error().kind() {
+                    std::io::ErrorKind::NotFound => "already gone".into(),
+                    other => format!("kill failed: {other}"),
+                };
+            }
+        }
+        rows.push(row);
+    }
+    rows
+}
+
+fn read_ps() -> Option<String> {
+    let output = std::process::Command::new("ps")
+        .args(["-Ao", "pid,ppid,state,etime,%cpu,rss,command"])
+        .output()
+        .ok()?;
+    Some(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Cadence of the daemon's orphan reap sweep.
+pub const ORPHAN_SWEEP_SECS: Duration = Duration::from_secs(300);
+
+/// The daemon tick's whole orphan-reap arm: throttled to [`ORPHAN_SWEEP_SECS`],
+/// one-in-flight behind `in_flight`, run off the accept loop on the blocking
+/// pool. Kills confirmed orphans past the age guard and emits one event per
+/// kill. The daemon's own `waitpid` sweep only ever sees its own children; a
+/// wedged deps/ test binary at ppid 1 holding zombie corpses is invisible to
+/// it, and this arm is what reaches that shape.
+pub fn maybe_sweep(last_sweep: &mut Instant, in_flight: &Arc<AtomicBool>, events: PathBuf) {
+    if last_sweep.elapsed() < ORPHAN_SWEEP_SECS || in_flight.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    *last_sweep = Instant::now();
+    let flag = Arc::clone(in_flight);
+    tokio::task::spawn_blocking(move || {
+        let _gate = crate::daemon::SweepGate(flag);
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let min_elapsed = min_elapsed_secs(&cwd);
+        let home = crate::paths::AgentsHome::from_env();
+        let journal = crate::loop_runtime::Journal::new_raw(
+            home.events_jsonl(),
+            crate::daemon::global_events_path(&home),
+        );
+        let emitter = EventEmitter::new(events, "daemon");
+        let registry_pids = production_registry_pids();
+        let env_lease_of = |pid: u32| crate::process_owner::owner_lease_for_pid(pid);
+        match read_ps() {
+            Some(ps) => {
+                let rows = reap_snapshot(
+                    &ps,
+                    true,
+                    min_elapsed,
+                    &env_lease_of,
+                    registry_pids.as_ref(),
+                );
+                emit_reap_events(&rows, &emitter);
+                crate::tick_ledger::emit_tick(
+                    &journal,
+                    "orphan_reap",
+                    crate::tick_ledger::SCHED_DAEMON,
+                    rows.len() as u64,
+                    None,
+                    Some(&format!(
+                        "process table read; {} confirmed orphan(s) reaped",
+                        rows.len()
+                    )),
+                    ORPHAN_SWEEP_SECS.as_secs(),
+                );
+            }
+            None => crate::tick_ledger::emit_tick(
+                &journal,
+                "orphan_reap",
+                crate::tick_ledger::SCHED_DAEMON,
+                0,
+                Some("process_table_unreadable"),
+                Some("ps process table read failed"),
+                ORPHAN_SWEEP_SECS.as_secs(),
+            ),
+        }
+    });
+}
+
+/// One event per reap row: the recording contract. A kill the sweep made is
+/// always in events.jsonl with its reason, whichever arm made it.
+pub(crate) fn emit_reap_events(rows: &[ReapRow], emitter: &EventEmitter) {
+    for row in rows {
+        let event = match row.kind {
+            Some("leased_process") => "orphan_leased_process_reaped",
+            _ if row.owner_session.is_some() => "orphan_owner_server_reaped",
+            _ => "orphan_test_binary_reaped",
+        };
+        let _ = emitter.emit(event, row);
+    }
+}
+
+/// Pids of this process's children nothing will ever wait: the hosts,
+/// keepers and detached pass leaders a spawn released on purpose. The drain
+/// reaps only these, by pid. An arm's owned child (a judge reader, a ps
+/// probe) never lands here, so a 5s tick can never steal its exit status:
+/// the waitpid(-1) sweep this replaced did exactly that, and the owner's
+/// `try_wait` failed with ECHILD ("No child processes (os error 10)").
+fn detached_children() -> &'static Mutex<BTreeSet<u32>> {
+    static SET: OnceLock<Mutex<BTreeSet<u32>>> = OnceLock::new();
+    SET.get_or_init(|| Mutex::new(BTreeSet::new()))
+}
+
+/// Record a child pid released unwarned, for the daemon drain to reap when it
+/// exits. Registering a child that already exited is fine: a zombie stays
+/// waitable by pid until reaped.
+pub fn release_child(pid: u32) {
+    detached_children()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .insert(pid);
+}
+
+/// The daemon tick's reap: per-pid `waitpid(WNOHANG)` over the released
+/// registry, dropping each entry once its child is reaped or is no longer
+/// ours. A released child still running keeps its entry for the next tick.
+pub fn reap_daemon_children() {
+    let mut set = detached_children()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    set.retain(|pid| {
+        let mut status: libc::c_int = 0;
+        // SAFETY: per-pid waitpid with WNOHANG answers without blocking and
+        // reaps only this one child; it cannot take another child's status.
+        let rc = unsafe { libc::waitpid(*pid as libc::pid_t, &mut status, libc::WNOHANG) };
+        if rc < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+            // Interrupted before an answer: keep watching, decide next tick.
+            return true;
+        }
+        rc == 0
+    });
+}
+
+/// The daemon sweep's one pass: detect, confirm, guard, kill, and return one
+/// serializable row per reaped pid for the caller to emit.
+pub fn reap_sweep_once(apply: bool, min_elapsed: u64) -> Vec<ReapRow> {
+    let Some(ps) = read_ps() else {
+        return Vec::new();
+    };
+    let registry_pids = production_registry_pids();
+    let env_lease_of = |pid: u32| crate::process_owner::owner_lease_for_pid(pid);
+    reap_snapshot(
+        &ps,
+        apply,
+        min_elapsed,
+        &env_lease_of,
+        registry_pids.as_ref(),
+    )
+}
+
+/// Registry pids from the store, `None` on a read failure: the lease sweep
+/// fails closed like every other retirement gate (an unreadable store never
+/// retires), because an empty exclusion set would expose tracked keepers
+/// carrying stale inherited leases to the kill.
+fn production_registry_pids() -> Option<std::collections::BTreeSet<u32>> {
+    let home = crate::paths::AgentsHome::from_env();
+    crate::state::load_registry(&home.registry_json())
+        .ok()
+        .map(|registry| {
+            registry
+                .entries
+                .iter()
+                .filter_map(|entry| entry.pid)
+                .collect()
+        })
+}
+
+fn reap_snapshot(
+    ps: &str,
+    apply: bool,
+    min_elapsed: u64,
+    env_lease_of: impl Fn(u32) -> crate::process_owner::OwnerRead,
+    registry_pids: Option<&std::collections::BTreeSet<u32>>,
+) -> Vec<ReapRow> {
+    let mut rows: Vec<ReapRow> = reap_rows(&ps, apply, min_elapsed)
+        .into_iter()
+        .filter(|row| row.reaped)
+        .collect();
+    rows.extend(
+        reap_owner_server_rows(ps, apply)
+            .into_iter()
+            .filter(|row| row.reaped),
+    );
+    rows.extend(
+        leased_process_rows_with(ps, apply, &env_lease_of, registry_pids)
+            .into_iter()
+            .filter(|row| row.reaped),
+    );
+    rows
+}
+
+/// The lease sweep's injectable process reads, so tests drive the whole flow
+/// without planting real tagged processes.
+struct LeaseSweepSeams<'a> {
+    lease_of: &'a dyn Fn(u32) -> crate::process_owner::OwnerRead,
+    owner_alive: &'a dyn Fn(u32, u64) -> bool,
+    carrier_birth: &'a dyn Fn(u32) -> Option<u64>,
+    registry_pids: &'a std::collections::BTreeSet<u32>,
+    /// Kill one carrier; the slice names the held Claude daemon tree, whose
+    /// members a group kill must never reach.
+    kill: &'a dyn Fn(u32, &[u32]) -> bool,
+}
+
+/// Parse one `ps` row into (pid, ppid, elapsed, command) for the lease sweep:
+/// the same shape the fixed detectors read, no argv filter.
+fn leased_row_fields(line: &str) -> Option<(u32, u32, u64, String)> {
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    if fields.len() < 7 {
+        return None;
+    }
+    let (Ok(pid), Ok(ppid)) = (fields[0].parse::<u32>(), fields[1].parse::<u32>()) else {
+        return None;
+    };
+    let elapsed_seconds = elapsed_seconds(fields[3])?;
+    Some((pid, ppid, elapsed_seconds, fields[6..].join(" ")))
+}
+
+/// Find lease-carrying processes in the same machine snapshot as the fixed
+/// sweeps, any shape, any parent. Kill authority is a dead lease owner
+/// (identity mismatch, the owner-server sweep's existing rule) at any ppid; a
+/// live lease owner keeps the carrier even at ppid 1, because that is the
+/// intentionally-detached set: pane keepers and the processes a spawn released
+/// on purpose. A partial or unreadable lease is a hold, never kill authority.
+/// Registry pids are excluded: their machinery owns them.
+fn leased_process_rows(ps_output: &str, apply: bool, seams: &LeaseSweepSeams<'_>) -> Vec<ReapRow> {
+    let mut rows = Vec::new();
+    let self_pid = std::process::id();
+    let snapshot: Vec<(u32, u32, u64, String)> = ps_output
+        .lines()
+        .skip(1)
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("PID "))
+        .filter_map(leased_row_fields)
+        .collect();
+    let tree: std::collections::HashMap<u32, (u32, &str)> = snapshot
+        .iter()
+        .map(|(pid, ppid, _, command)| (*pid, (*ppid, command.as_str())))
+        .collect();
+    let daemon_tree: Vec<u32> = snapshot
+        .iter()
+        .map(|(pid, ..)| *pid)
+        .filter(|pid| in_claude_daemon_tree(*pid, &tree))
+        .collect();
+    for (pid, _ppid, elapsed, command) in snapshot.iter().cloned() {
+        if pid == self_pid || seams.registry_pids.contains(&pid) {
+            continue;
+        }
+        match (seams.lease_of)(pid) {
+            crate::process_owner::OwnerRead::Owner(lease) => {
+                if (seams.owner_alive)(lease.pid, lease.birth) {
+                    continue;
+                }
+                if daemon_tree.contains(&pid) {
+                    rows.push(leased_row(
+                        pid,
+                        elapsed,
+                        command,
+                        Some(lease.session),
+                        false,
+                        "held: claude daemon process tree",
+                    ));
+                    continue;
+                }
+                let owner_start = crate::daemon::process_start_time(lease.pid);
+                if owner_start.is_none() && pid_exists(lease.pid) {
+                    rows.push(leased_row(
+                        pid,
+                        elapsed,
+                        command,
+                        Some(lease.session),
+                        false,
+                        "held: owner identity unreadable",
+                    ));
+                    continue;
+                }
+                if !apply {
+                    rows.push(leased_row(
+                        pid,
+                        elapsed,
+                        command,
+                        Some(lease.session),
+                        false,
+                        "dry-run: lease owner dead; pass --apply to kill",
+                    ));
+                    continue;
+                }
+                // Re-verify the carrier's identity before the kill, the
+                // owner-server sweep's rule: the snapshot row must still be
+                // the process whose env was read.
+                if (seams.carrier_birth)(pid).is_none() {
+                    rows.push(leased_row(
+                        pid,
+                        elapsed,
+                        command,
+                        Some(lease.session),
+                        false,
+                        "held: carrier identity unreadable",
+                    ));
+                    continue;
+                }
+                // A tagged worker leads its own process group, so the kill
+                // takes its descendants with it; a legacy carrier that shares
+                // a group gets a pid kill only.
+                let killed = (seams.kill)(pid, &daemon_tree);
+                rows.push(leased_row(
+                    pid,
+                    elapsed,
+                    command,
+                    Some(lease.session),
+                    killed,
+                    if killed {
+                        "SIGKILL sent"
+                    } else {
+                        "kill failed"
+                    },
+                ));
+            }
+            crate::process_owner::OwnerRead::Unknown => {
+                rows.push(leased_row(
+                    pid,
+                    elapsed,
+                    command,
+                    None,
+                    false,
+                    "held: owner lease unreadable, incomplete, or identity-mismatched",
+                ));
+            }
+            crate::process_owner::OwnerRead::Ownerless => {}
+        }
+    }
+    rows
+}
+
+/// True when the pid, or an ancestor in the same snapshot, is a Claude daemon
+/// or one of its pty hosts or spares. The on-demand daemon inherits the env of
+/// whichever claude started it, so its lease names an owner that soon exits.
+/// The daemon is shared machine state, not that owner's child: a kill drops
+/// every bg session on the machine.
+fn in_claude_daemon_tree(pid: u32, tree: &std::collections::HashMap<u32, (u32, &str)>) -> bool {
+    let mut current = pid;
+    for _ in 0..64 {
+        let Some((ppid, command)) = tree.get(&current) else {
+            return false;
+        };
+        if is_claude_daemon_command(command) {
+            return true;
+        }
+        if *ppid <= 1 || *ppid == current {
+            return false;
+        }
+        current = *ppid;
+    }
+    false
+}
+
+fn is_claude_daemon_command(command: &str) -> bool {
+    let mut argv = command.split_whitespace();
+    let Some(program) = argv.next() else {
+        return false;
+    };
+    let is_claude =
+        program.rsplit('/').next() == Some("claude") || program.contains("/claude/versions/");
+    if !is_claude {
+        return false;
+    }
+    let rest: Vec<&str> = argv.collect();
+    rest.windows(2).any(|pair| pair == ["daemon", "run"])
+        || rest
+            .iter()
+            .any(|arg| matches!(*arg, "--bg-pty-host" | "--bg-spare"))
+}
+
+/// SIGKILL the tagged carrier: its own process group when it leads one (the
+/// tagged-worker shape), the pid alone otherwise. A group kill must never be
+/// attempted on a carrier that merely SHARES a group.
+fn kill_carrier(pid: u32, daemon_tree: &[u32]) -> bool {
+    // SAFETY: getpgid answers the carrier's group without signalling.
+    let pgid = unsafe { libc::getpgid(pid as libc::pid_t) };
+    // A daemon started on demand without setsid stays in its starter's group.
+    // SAFETY: getpgid answers each held pid's group without signalling.
+    let shares_daemon = daemon_tree
+        .iter()
+        .any(|held| unsafe { libc::getpgid(*held as libc::pid_t) } == pgid);
+    if pgid > 0 && pgid == pid as libc::pid_t && !shares_daemon {
+        // SAFETY: SIGKILL to the group the confirmed carrier leads.
+        unsafe { libc::killpg(pgid, libc::SIGKILL) == 0 }
+    } else {
+        // SAFETY: SIGKILL to the one pid the confirmed carrier named.
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) == 0 }
+    }
+}
+
+/// The lease sweep with production seams for the manual command: env leases
+/// per pid, owner and carrier liveness via process start times, registry pids
+/// from the store.
+fn leased_process_rows_with(
+    ps: &str,
+    apply: bool,
+    env_lease_of: &impl Fn(u32) -> crate::process_owner::OwnerRead,
+    registry_pids: Option<&std::collections::BTreeSet<u32>>,
+) -> Vec<ReapRow> {
+    // Fail closed: an unreadable registry means the tracked-worker exclusion
+    // cannot be proven, so this pass sweeps nothing.
+    let Some(registry_pids) = registry_pids else {
+        return Vec::new();
+    };
+    let seams = LeaseSweepSeams {
+        lease_of: env_lease_of,
+        owner_alive: &|pid, birth| crate::test_run::owner_alive(pid, birth),
+        carrier_birth: &|pid| crate::daemon::process_start_time(pid),
+        registry_pids,
+        kill: &|pid, daemon_tree| kill_carrier(pid, daemon_tree),
+    };
+    leased_process_rows(ps, apply, &seams)
+}
+
+fn owner_server_rows(ps_output: &str) -> Vec<(u32, u64, String, PathBuf)> {
+    let mut candidates = Vec::new();
+    for line in ps_output.lines().skip(1) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 7 {
+            continue;
+        }
+        let (Ok(pid), Ok(ppid)) = (fields[0].parse::<u32>(), fields[1].parse::<u32>()) else {
+            continue;
+        };
+        if ppid != 1 {
+            continue;
+        }
+        let Some(elapsed_seconds) = elapsed_seconds(fields[3]) else {
+            continue;
+        };
+        let command = fields[6..].join(" ");
+        let Some(socket) = crate::process_owner::mux_server_socket(&command) else {
+            continue;
+        };
+        candidates.push((pid, elapsed_seconds, command, PathBuf::from(socket)));
+    }
+    candidates
+}
+
+/// Find owner-tagged detached mux servers in the same machine snapshot as the
+/// cargo orphan sweep. Ownerless fleet servers are excluded. A missing or
+/// partial lease is visible as a hold, never as kill authority.
+fn reap_owner_server_rows(ps_output: &str, apply: bool) -> Vec<ReapRow> {
+    let mut rows = Vec::new();
+    for (pid, elapsed, command, socket) in owner_server_rows(ps_output) {
+        if elapsed <= OWNER_SERVER_MIN_AGE_SECS {
+            continue;
+        }
+        let server_birth = crate::daemon::process_start_time(pid);
+        let lease = match crate::process_owner::owner_lease_for_server(pid, &socket) {
+            crate::process_owner::OwnerRead::Owner(lease) => lease,
+            crate::process_owner::OwnerRead::Ownerless => continue,
+            crate::process_owner::OwnerRead::Unknown => {
+                rows.push(owner_reap_row(
+                    pid,
+                    elapsed,
+                    command,
+                    None,
+                    false,
+                    "held: owner lease unreadable, incomplete, or identity-mismatched",
+                ));
+                continue;
+            }
+        };
+        let owner_start = crate::daemon::process_start_time(lease.pid);
+        let owner_is_alive = owner_start == Some(lease.birth);
+        if owner_is_alive {
+            continue;
+        }
+        if owner_start.is_none() && pid_exists(lease.pid) {
+            rows.push(owner_reap_row(
+                pid,
+                elapsed,
+                command,
+                Some(lease.session),
+                false,
+                "held: owner identity unreadable",
+            ));
+            continue;
+        }
+        let Some(server_birth) = server_birth else {
+            rows.push(owner_reap_row(
+                pid,
+                elapsed,
+                command,
+                Some(lease.session),
+                false,
+                "held: server identity unreadable",
+            ));
+            continue;
+        };
+        if !apply {
+            rows.push(owner_reap_row(
+                pid,
+                elapsed,
+                command,
+                Some(lease.session),
+                false,
+                "dry-run: owner dead; pass --apply to kill",
+            ));
+            continue;
+        }
+        if crate::daemon::process_start_time(pid) != Some(server_birth)
+            || process_parent(pid) != Some(1)
+        {
+            rows.push(owner_reap_row(
+                pid,
+                elapsed,
+                command,
+                Some(lease.session),
+                false,
+                "held: server changed during reap check",
+            ));
+            continue;
+        }
+        let killed = unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) } == 0;
+        rows.push(owner_reap_row(
+            pid,
+            elapsed,
+            command,
+            Some(lease.session),
+            killed,
+            if killed {
+                "SIGKILL sent"
+            } else {
+                "kill failed"
+            },
+        ));
+    }
+    rows
+}
+
+fn owner_reap_row(
+    pid: u32,
+    elapsed_seconds: u64,
+    command: String,
+    owner_session: Option<String>,
+    reaped: bool,
+    reason: &str,
+) -> ReapRow {
+    ReapRow {
+        pid,
+        elapsed_seconds,
+        zombies: 0,
+        command,
+        owner_session,
+        kind: None,
+        reaped,
+        reason: reason.to_string(),
+    }
+}
+
+/// A lease-sweep row: stamped with its kind so the event and render legs can
+/// name the killed shape instead of calling every tagged carrier a mux server.
+fn leased_row(
+    pid: u32,
+    elapsed_seconds: u64,
+    command: String,
+    owner_session: Option<String>,
+    reaped: bool,
+    reason: &str,
+) -> ReapRow {
+    let mut row = owner_reap_row(pid, elapsed_seconds, command, owner_session, reaped, reason);
+    row.kind = Some("leased_process");
+    row
+}
+
+fn pid_exists(pid: u32) -> bool {
+    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+fn process_parent(pid: u32) -> Option<u32> {
+    let output = std::process::Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "ppid="])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
+}
+
+/// Binary-direct command: `fno-agents orphan-reap [--apply] [--json]`. Dry-run by
+/// default; prints one line per confirmed orphan and its disposition.
+pub fn run_orphan_reap(args: &[String]) -> i32 {
+    let apply = args.iter().any(|a| a == "--apply");
+    let json = crate::json_output::requested(args);
+    let min_elapsed =
+        min_elapsed_secs(&std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf()));
+    let Some(ps) = read_ps() else {
+        eprintln!("fno-agents orphan-reap: ps unavailable");
+        return 4;
+    };
+    let test_rows = reap_rows(&ps, apply, min_elapsed);
+    let owner_rows = reap_owner_server_rows(&ps, apply);
+    let registry_pids = production_registry_pids();
+    let env_lease_of = |pid: u32| crate::process_owner::owner_lease_for_pid(pid);
+    let leased_rows = leased_process_rows_with(&ps, apply, &env_lease_of, registry_pids.as_ref());
+    let mut rows = test_rows.clone();
+    rows.extend(owner_rows.iter().cloned());
+    rows.extend(leased_rows.iter().cloned());
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "orphan_test_binaries": test_rows,
+                "orphan_mux_servers": owner_rows,
+                "orphan_leased_processes": leased_rows,
+                "exit_code": 0
+            })
+        );
+        return 0;
+    }
+    if rows.is_empty() {
+        println!("no confirmed orphan processes");
+    }
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    for row in &rows {
+        if row.kind == Some("leased_process") {
+            let _ = writeln!(
+                out,
+                "lease-tagged process: pid {}, owner session {}, elapsed {}:{:02}:{:02}: {}",
+                row.pid,
+                row.owner_session.as_deref().unwrap_or("unknown"),
+                row.elapsed_seconds / 3600,
+                (row.elapsed_seconds % 3600) / 60,
+                row.elapsed_seconds % 60,
+                row.command
+            );
+        } else if row.owner_session.is_some()
+            || crate::process_owner::mux_server_socket(&row.command).is_some()
+        {
+            let _ = writeln!(
+                out,
+                "owner-tagged mux server: pid {}, owner session {}, elapsed {}:{:02}:{:02}: {}",
+                row.pid,
+                row.owner_session.as_deref().unwrap_or("unknown"),
+                row.elapsed_seconds / 3600,
+                (row.elapsed_seconds % 3600) / 60,
+                row.elapsed_seconds % 60,
+                row.command
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "orphaned test binary: pid {}, elapsed {}:{:02}:{:02}, zombies {}: {}",
+                row.pid,
+                row.elapsed_seconds / 3600,
+                (row.elapsed_seconds % 3600) / 60,
+                row.elapsed_seconds % 60,
+                row.zombies,
+                row.command
+            );
+        }
+        let _ = writeln!(out, "  {}", row.reason);
+    }
+    0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot(orphan_ppid: u32) -> String {
+        snapshot_with(
+            orphan_ppid,
+            "/w/preflight/crates/fno/target/debug/deps/fno-aa7282e99eecb046 portal",
+        )
+    }
+
+    fn snapshot_with(orphan_ppid: u32, command: &str) -> String {
+        let mut rows = vec![
+            "PID PPID S ELAPSED %CPU RSS COMMAND".to_string(),
+            format!("59929 {orphan_ppid} S 03:07:00 0.0 4096 {command}"),
+        ];
+        for i in 0..227 {
+            rows.push(format!("{} 59929 Z 00:00:10 0.0 0 <defunct>", 70000 + i));
+        }
+        rows.push("900 1 Ss 01:00:00 0.1 1024 fno-agents-daemon --serve".to_string());
+        rows.join("\n")
+    }
+
+    /// A deps binary inside a real CACHEDIR.TAG-tagged target dir, so the
+    /// confirmer accepts it.
+    fn confirmed_snapshot() -> String {
+        let dir = temp_dir("reap");
+        let deps = dir.join("crates/x/target/debug/deps");
+        std::fs::create_dir_all(&deps).unwrap();
+        std::fs::write(dir.join("crates/x/target/CACHEDIR.TAG"), "Signature: x").unwrap();
+        let bin = deps.join("probe-0123456789abcdef").display().to_string();
+        snapshot_with(1, &bin)
+    }
+
+    #[test]
+    fn names_a_parentless_deps_binary_and_counts_its_zombies() {
+        let found = detect(&snapshot(1));
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].pid, 59929);
+        assert_eq!(found[0].zombies, 227);
+        assert_eq!(found[0].elapsed_seconds, 3 * 3600 + 7 * 60);
+    }
+
+    #[test]
+    fn holds_below_the_zombie_bar_when_parented() {
+        let mut rows = vec![
+            "PID PPID S ELAPSED %CPU RSS COMMAND".to_string(),
+            "59929 4321 S 03:07:00 0.0 4096 /w/crates/fno/target/debug/deps/fno-aa7282e99eecb046"
+                .to_string(),
+        ];
+        for i in 0..(ORPHAN_MIN_ZOMBIES - 1) {
+            rows.push(format!("{} 59929 Z 00:00:10 0.0 0 <defunct>", 70000 + i));
+        }
+        assert!(detect(&rows.join("\n")).is_empty());
+    }
+
+    #[test]
+    fn parses_etime_forms() {
+        assert_eq!(elapsed_seconds("03:07"), Some(187));
+        assert_eq!(elapsed_seconds("01:00:00"), Some(3600));
+        assert_eq!(
+            elapsed_seconds("2-03:07:00"),
+            Some(2 * 86400 + 3 * 3600 + 420)
+        );
+        assert_eq!(elapsed_seconds("nope"), None);
+        let lease = crate::process_owner::lease_from_environment(
+            b"FNO_OWNER_PID=42\0FNO_OWNER_BIRTH=9001\0FNO_OWNER_SESSION=session-a\0",
+        )
+        .unwrap();
+        assert_eq!(lease.pid, 42);
+        assert_eq!(lease.birth, 9001);
+        assert_eq!(lease.session, "session-a");
+        assert!(crate::process_owner::lease_from_environment(b"FNO_OWNER_PID=42\0").is_none());
+        let sidecar = serde_json::json!({
+            "server_pid": 501,
+            "server_birth": 8001,
+            "owner_pid": 42,
+            "owner_birth": 9001,
+            "owner_session": "session-a",
+        });
+        let lease = crate::process_owner::lease_from_sidecar(
+            &serde_json::to_vec(&sidecar).unwrap(),
+            501,
+            8001,
+        )
+        .unwrap();
+        assert_eq!(lease.session, "session-a");
+        assert!(crate::process_owner::lease_from_sidecar(
+            &serde_json::to_vec(&sidecar).unwrap(),
+            502,
+            8001,
+        )
+        .is_none());
+        assert_eq!(
+            crate::process_owner::mux_server_socket("/usr/bin/fno --server /tmp/repro.sock"),
+            Some("/tmp/repro.sock".to_string())
+        );
+        assert_eq!(
+            crate::process_owner::mux_server_socket(
+                "/usr/bin/fno --server /tmp/repro dir/socket.sock"
+            ),
+            Some("/tmp/repro dir/socket.sock".to_string())
+        );
+        assert_eq!(
+            crate::process_owner::mux_server_socket("/usr/bin/fno agents status"),
+            None
+        );
+        let servers = owner_server_rows(
+            "PID PPID S ELAPSED %CPU RSS COMMAND\n\
+             501 1 S 00:11:00 2.0 4096 /usr/bin/fno --server /tmp/repro.sock\n\
+             502 20 S 00:11:00 2.0 4096 /usr/bin/fno --server /tmp/live.sock",
+        );
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].0, 501);
+    }
+
+    #[test]
+    fn confirmation_demands_a_cachedir_tag() {
+        let dir = temp_dir("confirm");
+        let deps = dir.join("crates/x/target/debug/deps");
+        std::fs::create_dir_all(&deps).unwrap();
+        let mk = || OrphanedTestBinary {
+            pid: 1,
+            command: format!("{} 300", deps.join("probe-0123456789abcdef").display()),
+            zombies: 0,
+            elapsed_seconds: 3600,
+        };
+        assert!(
+            !confirmed(&mk()),
+            "no tag yet: shape alone must not confirm"
+        );
+        std::fs::write(dir.join("crates/x/target/CACHEDIR.TAG"), "Signature: x").unwrap();
+        assert!(confirmed(&mk()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reap_holds_below_the_guard_and_reports_dry_run() {
+        let ps = confirmed_snapshot();
+        let rows = reap_rows(&ps, false, 36_000);
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].reaped, "{}", rows[0].reason);
+        assert!(rows[0].reason.contains("guard"), "{}", rows[0].reason);
+        let dry = reap_rows(&ps, false, 0);
+        assert!(dry[0].reason.contains("dry-run"));
+    }
+
+    /// The incident this module's drain fix encodes: a released child reaps,
+    /// and an owned child that exited unwarned keeps its exit status through a
+    /// drain tick. The waitpid(-1) sweep stole it and the owner's try_wait
+    /// failed with ECHILD.
+    #[test]
+    fn the_drain_reaps_only_released_children_and_never_steals_an_owned_status() {
+        let spawn_exit = |code: u8| {
+            std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(format!("exit {code}"))
+                .spawn()
+                .unwrap()
+        };
+        // An owned child that has already exited, unreaped: exactly the shape
+        // the drain used to steal from.
+        let mut owned = spawn_exit(7);
+        while owned.try_wait().unwrap().is_none() {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // A released child, exited the same way.
+        let released = spawn_exit(0);
+        let released_pid = released.id();
+        drop(released);
+        release_child(released_pid);
+        // Drain until the registry empties (first pass may precede its exit).
+        for _ in 0..100 {
+            reap_daemon_children();
+            if detached_children().lock().unwrap().is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            detached_children().lock().unwrap().is_empty(),
+            "the released child never reaped"
+        );
+        // The released zombie is gone: a direct waitpid answers ECHILD.
+        let mut status: libc::c_int = 0;
+        let rc = unsafe { libc::waitpid(released_pid as libc::pid_t, &mut status, libc::WNOHANG) };
+        assert_eq!(rc, -1, "the released child must already be reaped");
+        // The owned child's status survived the drain ticks.
+        let status = owned
+            .try_wait()
+            .unwrap()
+            .expect("an owned child's status is never stolen");
+        assert_eq!(status.code(), Some(7));
+    }
+
+    /// A unique per-test tempdir so parallel tests never share a fixture.
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("fno-orphan-reap-{}-{tag}", std::process::id()))
+    }
+
+    /// The full lease sweep over fake seams: one kill, three skips, one hold.
+    #[test]
+    fn the_lease_sweep_kills_dead_owner_carriers_and_holds_the_rest() {
+        let ps = [
+            "PID PPID S ELAPSED %CPU RSS COMMAND",
+            "601 1 S 20:00:00 0.0 4096 /tmp/rig/bin/footnote",
+            "602 1 S 20:00:00 0.0 4096 codex app-server",
+            "603 1 S 20:00:00 0.0 4096 some-cli --flag",
+            "604 1 S 00:01:00 0.0 4096 pane-shell",
+            "605 1 S 00:01:00 0.0 4096 pane-shell",
+        ]
+        .join("\n");
+        let lease_of = |pid: u32| match pid {
+            601 => crate::process_owner::OwnerRead::Owner(crate::process_owner::OwnerLease {
+                pid: 500,
+                birth: 1,
+                session: "dead-owner-a".into(),
+            }),
+            602 => crate::process_owner::OwnerRead::Owner(crate::process_owner::OwnerLease {
+                pid: 900,
+                birth: 7,
+                session: "live-owner-b".into(),
+            }),
+            604 => crate::process_owner::OwnerRead::Unknown,
+            _ => crate::process_owner::OwnerRead::Ownerless,
+        };
+        let registry: BTreeSet<u32> = BTreeSet::from([603]);
+        let killed = std::cell::RefCell::new(Vec::new());
+        let seams = LeaseSweepSeams {
+            lease_of: &lease_of,
+            owner_alive: &|pid, birth| pid == 900 && birth == 7,
+            carrier_birth: &|_| Some(1),
+            registry_pids: &registry,
+            kill: &|pid, _| {
+                killed.borrow_mut().push(pid);
+                true
+            },
+        };
+        let rows = leased_process_rows(&ps, true, &seams);
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert_eq!(rows[0].pid, 601);
+        assert!(rows[0].reaped, "{}", rows[0].reason);
+        assert_eq!(rows[0].reason, "SIGKILL sent");
+        assert_eq!(rows[0].owner_session.as_deref(), Some("dead-owner-a"));
+        assert_eq!(rows[1].pid, 604);
+        assert!(!rows[1].reaped, "{}", rows[1].reason);
+        assert_eq!(
+            rows[1].reason,
+            "held: owner lease unreadable, incomplete, or identity-mismatched"
+        );
+        assert_eq!(*killed.borrow(), vec![601]);
+        let dry = leased_process_rows(&ps, false, &seams);
+        assert_eq!(dry.len(), 2, "{dry:?}");
+        assert_eq!(dry[0].pid, 601);
+        assert!(!dry[0].reaped, "{}", dry[0].reason);
+        assert_eq!(
+            dry[0].reason,
+            "dry-run: lease owner dead; pass --apply to kill"
+        );
+        assert_eq!(dry[1].pid, 604);
+        assert!(!dry[1].reaped, "{}", dry[1].reason);
+    }
+
+    /// An on-demand Claude daemon inherits the lease of the claude that started
+    /// it. When that owner dies, the daemon and every worker under it carry a
+    /// dead lease, yet killing them drops every bg session. The sweep holds the
+    /// whole daemon tree, even a pty host orphaned to ppid 1.
+    #[test]
+    fn the_lease_sweep_holds_the_claude_daemon_tree() {
+        let ps = [
+            "PID PPID S ELAPSED %CPU RSS COMMAND",
+            "700 1 S 20:00 0.0 4096 /Users/u/.local/bin/claude daemon run",
+            "701 700 S 20:00 0.0 4096 claude bg-pty-host --bg-pty-host /tmp/cc-daemon-501/x/a.pty.sock 200 50 -- /Users/u/.local/share/claude/versions/2.1.321 --bg-spare",
+            "702 701 S 20:00 0.0 4096 /Users/u/.local/share/claude/versions/2.1.321 --resume /x.jsonl",
+            "703 1 S 20:00 0.0 4096 claude bg-pty-host --bg-pty-host /tmp/cc-daemon-501/x/b.pty.sock 200 50",
+            "704 703 S 20:00 0.0 4096 claude bg-spare --bg-spare /tmp/cc-daemon-501/x/b.claim.sock",
+            "705 1 S 20:00 0.0 4096 /tmp/rig/bin/footnote daemon run",
+        ]
+        .join("\n");
+        let dead = |_: u32| {
+            crate::process_owner::OwnerRead::Owner(crate::process_owner::OwnerLease {
+                pid: 500,
+                birth: 1,
+                session: "dead-owner".into(),
+            })
+        };
+        let registry = BTreeSet::new();
+        let killed = std::cell::RefCell::new(Vec::new());
+        let seams = LeaseSweepSeams {
+            lease_of: &dead,
+            owner_alive: &|_, _| false,
+            carrier_birth: &|_| Some(1),
+            registry_pids: &registry,
+            kill: &|pid, _| {
+                killed.borrow_mut().push(pid);
+                true
+            },
+        };
+        let rows = leased_process_rows(&ps, true, &seams);
+        assert_eq!(*killed.borrow(), vec![705], "{rows:?}");
+        let held: Vec<u32> = rows
+            .iter()
+            .filter(|row| row.reason == "held: claude daemon process tree")
+            .map(|row| row.pid)
+            .collect();
+        assert_eq!(held, vec![700, 701, 702, 703, 704], "{rows:?}");
+    }
+}

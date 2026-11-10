@@ -1,0 +1,584 @@
+//! Decision records and their node join rows, owned by the graph store.
+//! Schema 4: an event's time is its row's creation time, so the schema-3
+//! `ts` column is `created_at` now (user ruling 2026-09-23). The flattened
+//! rows keep `ts`, the event envelope key every reader parses.
+
+use super::schema_v4::{iso, norm_sql, stamps, touch, updated, NOW};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use serde_json::Value;
+use std::path::Path;
+
+pub(crate) const DECISION_EVENT: &str = "operator_decision";
+const RETRACTION_EVENT: &str = "decision_retracted";
+
+pub fn ddl() -> String {
+    format!(
+        "CREATE TABLE IF NOT EXISTS decisions (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id TEXT NOT NULL UNIQUE,
+  event_type TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT ({NOW}),
+  source TEXT,
+  data TEXT NOT NULL{},
+  {}
+);
+CREATE INDEX IF NOT EXISTS decisions_event_id ON decisions(event_id);
+CREATE TABLE IF NOT EXISTS node_decisions (
+  node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+  event_id TEXT NOT NULL REFERENCES decisions(event_id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL{},
+  PRIMARY KEY (node_id, event_id)
+);
+CREATE INDEX IF NOT EXISTS node_decisions_order ON node_decisions(node_id, seq);",
+        updated("decisions"),
+        iso("decisions", "created_at"),
+        stamps("node_decisions"),
+    )
+}
+
+pub fn triggers() -> String {
+    format!("{}{}", touch("decisions"), touch("node_decisions"))
+}
+
+pub fn ensure_table(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute_batch(&ddl())
+        .map_err(|error| error.to_string())
+}
+
+/// Schema-4 migration copy from `decisions_v3` (and `node_decisions_v3`
+/// when the store has one): seq, and so journal order, is kept, and the
+/// AUTOINCREMENT high-water mark carries over.
+pub(crate) fn copy_from_v3(connection: &Connection, with_joins: bool) -> Result<(), String> {
+    let mut sql = format!(
+        "INSERT INTO decisions (seq, event_id, event_type, created_at, source, data, updated_at)
+         SELECT seq, event_id, event_type, ts, source, data, COALESCE({}, {NOW})
+         FROM decisions_v3;
+         UPDATE sqlite_sequence
+         SET seq = MAX(seq, COALESCE((SELECT seq FROM sqlite_sequence
+                                      WHERE name = 'decisions_v3'), 0))
+         WHERE name = 'decisions';",
+        norm_sql("ts"),
+    );
+    if with_joins {
+        let stamp = format!("COALESCE({}, {NOW})", norm_sql("d.ts"));
+        sql.push_str(&format!(
+            "INSERT INTO node_decisions (node_id, event_id, seq, created_at, updated_at)
+             SELECT j.node_id, j.event_id, j.seq, {stamp}, {stamp}
+             FROM node_decisions_v3 j LEFT JOIN decisions_v3 d ON d.event_id = j.event_id;"
+        ));
+    }
+    connection
+        .execute_batch(&sql)
+        .map_err(|error| format!("schema v4 decisions copy: {error}"))
+}
+
+/// Import the durable machine-wide decision journal once, then validate every
+/// decision reference already present on a node. The journal is the event
+/// source; a node reference without its event is a hard error, not an empty
+/// decision list.
+pub fn import_if_needed(connection: &mut Connection, graph: &Path) -> Result<(), String> {
+    if super::meta(connection, "decisions_imported")?.is_some() {
+        return Ok(());
+    }
+
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    let journal = graph.with_file_name("decisions.jsonl");
+    if journal.exists() {
+        let text = std::fs::read_to_string(&journal).map_err(|error| {
+            format!(
+                "decisions import: cannot read {}: {error}",
+                journal.display()
+            )
+        })?;
+        for (line_number, line) in text.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            // A torn append is dead weight, not an incident: refusing open()
+            // over it would brick every store read (decisions_imported never
+            // stamps) and hide the good rows behind one bad line. Skip it
+            // loudly; the Python legacy scan still counts it as damaged and
+            // names `fno backlog decide-reindex` as the recovery.
+            let event: Value = match serde_json::from_str(line) {
+                Ok(event) => event,
+                Err(error) => {
+                    eprintln!(
+                        "warning: decisions import: {} line {} did not parse ({}); it is NOT folded",
+                        journal.display(),
+                        line_number + 1,
+                        error
+                    );
+                    continue;
+                }
+            };
+            insert_event(&transaction, &event)
+                .map_err(|error| format!("decisions import: line {}: {error}", line_number + 1))?;
+        }
+    }
+
+    let orphan: Option<(String, String)> = transaction
+        .query_row(
+            "SELECT nd.node_id, nd.event_id
+             FROM node_decisions nd
+             LEFT JOIN decisions d ON d.event_id = nd.event_id
+             WHERE d.event_id IS NULL
+             ORDER BY nd.node_id, nd.event_id
+             LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|error| format!("decisions import: cannot validate node references: {error}"))?;
+    if let Some((node_id, event_id)) = orphan {
+        return Err(format!(
+            "decisions import: node {node_id} references missing decision {event_id}"
+        ));
+    }
+
+    super::stamp_meta(&transaction, "decisions_imported", "1")?;
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+/// Record one event on a connection that is already owned by a caller.
+/// Primarily used by in-process Rust consumers and tests.
+pub fn record(connection: &Connection, event: &Value) -> Result<(), String> {
+    let event_id = insert_event(connection, event)?;
+    attach_subject(connection, event, &event_id)
+}
+
+/// Rename one node id across the decision surfaces: the join rows and the
+/// free-text subjects that name the node exactly. The subject is not a
+/// column; it rides the data JSON under $.subject (see attach_subject), so
+/// the rewrite goes through json_set. The update --to rename calls this
+/// under the
+/// store lock.
+pub fn rename_node_references(
+    connection: &Connection,
+    old: &str,
+    new: &str,
+) -> Result<usize, String> {
+    let joins = connection
+        .execute(
+            "UPDATE node_decisions SET node_id=?1 WHERE node_id=?2",
+            params![new, old],
+        )
+        .map_err(|error| error.to_string())?;
+    let subjects = connection
+        .execute(
+            "UPDATE decisions
+             SET data = json_set(data, '$.subject', ?1)
+             WHERE json_type(data, '$.subject') = 'text'
+               AND json_extract(data, '$.subject') = ?2",
+            params![new, old],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(joins + subjects)
+}
+
+pub fn retract(connection: &Connection, event: &Value) -> Result<(), String> {
+    record(connection, event)
+}
+
+/// Record an event and its subject join under one immediate transaction. The
+/// API mutation counter moves only after the event and join have landed.
+pub fn record_connected(
+    connection: &mut Connection,
+    event: &Value,
+    _mutation: &str,
+) -> Result<(), String> {
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    let event_id = insert_event(&transaction, event)?;
+    attach_subject(&transaction, event, &event_id)?;
+    super::stamp_version(&transaction, &format!("decision:{event_id}"))?;
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+/// Return flattened event rows in journal order and a count of malformed rows.
+pub fn read_rows(connection: &Connection) -> Result<(Vec<Value>, usize), String> {
+    let mut statement = connection
+        .prepare("SELECT event_type, created_at, data FROM decisions ORDER BY seq")
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|error| error.to_string())?;
+    let mut output = Vec::new();
+    let mut damaged = 0;
+    for row in rows {
+        let (event_type, ts, data_raw) = row.map_err(|error| error.to_string())?;
+        let Ok(data) = serde_json::from_str::<Value>(&data_raw) else {
+            damaged += 1;
+            continue;
+        };
+        let Some(mut flattened) = data.as_object().cloned() else {
+            damaged += 1;
+            continue;
+        };
+        flattened.insert("ts".to_string(), Value::String(ts));
+        flattened.insert("_event_type".to_string(), Value::String(event_type));
+        output.push(Value::Object(flattened));
+    }
+    Ok((output, damaged))
+}
+
+pub fn node_decisions(connection: &Connection, node_id: &str) -> Result<Vec<Value>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT d.event_type, d.created_at, d.data
+             FROM node_decisions nd
+             JOIN decisions d ON d.event_id = nd.event_id
+             WHERE nd.node_id = ?1
+             ORDER BY nd.seq, d.seq",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map(params![node_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|error| error.to_string())?;
+    flatten_rows(rows)
+}
+
+/// The newest unretracted ruling that answers a question: its time, source
+/// and data. A ruling names the question the way the answering board showed
+/// it, so a copy id (`q-<hex>@host`) and its bare origin id are one question
+/// and both forms find the row. A fixed id stays exact: two machines can ask
+/// the same named lane, and those are different questions.
+pub fn live_answer(
+    connection: &Connection,
+    question_id: &str,
+) -> Result<Option<(String, Option<String>, String)>, String> {
+    let canonical = crate::numbers::canonical(question_id).to_string();
+    let (question_match, forms): (&str, [String; 3]) =
+        if crate::numbers::is_question_hash(&canonical) {
+            let like = format!("{canonical}@%");
+            (
+                "(json_extract(d.data, '$.question_id') = ?2
+               OR json_extract(d.data, '$.question_id') = ?3
+               OR json_extract(d.data, '$.question_id') LIKE ?4)",
+                [question_id.to_string(), canonical, like],
+            )
+        } else {
+            (
+                "json_extract(d.data, '$.question_id') = ?2",
+                [question_id.to_string(), String::new(), String::new()],
+            )
+        };
+    let sql = format!(
+        "SELECT d.created_at, d.source, d.data
+         FROM decisions d
+         WHERE d.event_type = ?1
+           AND {question_match}
+           AND NOT EXISTS (
+               SELECT 1 FROM decisions r
+               WHERE r.event_type = ?5
+                 AND json_extract(r.data, '$.target_decision_id') =
+                     json_extract(d.data, '$.decision_id')
+           )
+         ORDER BY d.seq DESC LIMIT 1"
+    );
+    connection
+        .query_row(
+            &sql,
+            params![
+                DECISION_EVENT,
+                forms[0],
+                forms[1],
+                forms[2],
+                RETRACTION_EVENT
+            ],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(|error| error.to_string())
+}
+
+fn flatten_rows<I>(rows: I) -> Result<Vec<Value>, String>
+where
+    I: Iterator<Item = Result<(String, String, String), rusqlite::Error>>,
+{
+    let mut output = Vec::new();
+    for row in rows {
+        let (event_type, ts, data_raw) = row.map_err(|error| error.to_string())?;
+        let data: Value = serde_json::from_str(&data_raw).map_err(|error| error.to_string())?;
+        let Some(mut flattened) = data.as_object().cloned() else {
+            return Err("decision data is not an object".to_string());
+        };
+        flattened.insert("ts".to_string(), Value::String(ts));
+        flattened.insert("_event_type".to_string(), Value::String(event_type));
+        output.push(Value::Object(flattened));
+    }
+    Ok(output)
+}
+
+/// pub(crate) so sibling modules' tests seed rows through here: the
+/// decisions-table SQL never leaves this module (ruling 4).
+pub(crate) fn insert_event(connection: &Connection, event: &Value) -> Result<String, String> {
+    let event_type = event
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "event has no type".to_string())?;
+    if event_type != DECISION_EVENT && event_type != RETRACTION_EVENT {
+        return Err(format!("unsupported event type {event_type:?}"));
+    }
+    let data = event
+        .get("data")
+        .filter(|value| value.is_object())
+        .ok_or_else(|| "event data is not an object".to_string())?;
+    let event_id = match event_type {
+        DECISION_EVENT => data
+            .get("decision_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| "operator_decision has no decision_id".to_string())?,
+        RETRACTION_EVENT => data
+            .get("retraction_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| "decision_retracted has no retraction_id".to_string())?,
+        _ => unreachable!(),
+    };
+    // An event with no ts takes the row's own write time. DO NOTHING names
+    // the event_id conflict alone: OR IGNORE would also skip a row its
+    // timestamp CHECK refuses, a silent loss.
+    let ts = event
+        .get("ts")
+        .and_then(Value::as_str)
+        .filter(|ts| !ts.is_empty());
+    let source = event.get("source").and_then(Value::as_str);
+    let data_json = serde_json::to_string(data).map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            &format!(
+                "INSERT INTO decisions (event_id, event_type, created_at, source, data)
+                 VALUES (?1, ?2, COALESCE(?3, {NOW}), ?4, ?5)
+                 ON CONFLICT(event_id) DO NOTHING"
+            ),
+            params![event_id, event_type, ts, source, data_json],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(event_id.to_string())
+}
+
+fn attach_subject(connection: &Connection, event: &Value, event_id: &str) -> Result<(), String> {
+    let Some(subject) = event
+        .get("data")
+        .and_then(|data| data.get("subject"))
+        .and_then(Value::as_str)
+    else {
+        return Ok(());
+    };
+    // Exact id first, then the resolver's next tiers (slug, then the
+    // casefolded id): the deleted Python projection attached a ruling to the
+    // node its subject RESOLVED to, so `fno backlog decide closed-one ...`
+    // lands on the node view the same way an exact id does. Exact-only
+    // would print a node receipt the node view does not carry.
+    let resolved: Option<String> = connection
+        .query_row(
+            "SELECT id FROM nodes WHERE id = ?1",
+            params![subject],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?
+        .or_else(|| {
+            connection
+                .query_row(
+                    "SELECT id FROM nodes WHERE slug = ?1",
+                    params![subject],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .ok()
+                .flatten()
+        })
+        .or_else(|| {
+            connection
+                .query_row(
+                    "SELECT id FROM nodes WHERE lower(id) = ?1",
+                    params![subject.to_lowercase()],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .ok()
+                .flatten()
+        })
+        .or_else(|| {
+            connection
+                .query_row(
+                    "SELECT id FROM nodes WHERE lower(slug) = ?1",
+                    params![subject.to_lowercase()],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .ok()
+                .flatten()
+        });
+    if let Some(node_id) = resolved {
+        attach_node(connection, &node_id, event_id)?;
+    }
+    Ok(())
+}
+
+fn attach_node(connection: &Connection, node_id: &str, event_id: &str) -> Result<(), String> {
+    let next_seq: i64 = connection
+        .query_row(
+            "SELECT COALESCE(MAX(seq), -1) + 1 FROM node_decisions WHERE node_id = ?1",
+            params![node_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "INSERT INTO node_decisions (node_id, event_id, seq) VALUES (?1, ?2, ?3)
+             ON CONFLICT(node_id, event_id) DO NOTHING",
+            params![node_id, event_id, next_seq],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn event(id: &str) -> Value {
+        serde_json::json!({
+            "ts": "2026-09-16T00:00:01Z",
+            "type": DECISION_EVENT,
+            "source": "target",
+            "data": {
+                "decision_id": id,
+                "decision": "store decisions in graph.db",
+                "subject": "x-node",
+            },
+        })
+    }
+
+    #[test]
+    fn decisions_import_rejects_an_orphan_node_reference() {
+        let temp = TempDir::new().unwrap();
+        let graph = temp.path().join("graph.json");
+        let mut connection = crate::backlog::open(&graph).unwrap();
+        connection
+            .execute(
+                "DELETE FROM graph_meta WHERE key = 'decisions_imported'",
+                [],
+            )
+            .unwrap();
+        let node = crate::backlog::model::Node::from_json(&serde_json::json!({
+            "id": "x-node",
+            "slug": "node",
+            "title": "Node",
+            "type": "feature",
+            "status": "ready",
+            "priority": "p2"
+        }))
+        .unwrap();
+        crate::backlog::nodes::save(&connection, &node).unwrap();
+        connection
+            .execute_batch("PRAGMA foreign_keys = OFF;")
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO node_decisions (node_id, event_id, seq)
+                 VALUES ('x-node', 'd-missing', 0)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute_batch("PRAGMA foreign_keys = ON;")
+            .unwrap();
+        std::fs::write(
+            temp.path().join("decisions.jsonl"),
+            serde_json::to_string(&event("d-present")).unwrap() + "\n",
+        )
+        .unwrap();
+
+        let error = import_if_needed(&mut connection, &graph).unwrap_err();
+
+        assert!(error.contains("x-node"));
+        assert!(error.contains("d-missing"));
+        assert!(crate::backlog::meta(&connection, "decisions_imported")
+            .unwrap()
+            .is_none());
+    }
+
+    fn answered(id: &str, question_id: &str) -> Value {
+        serde_json::json!({
+            "ts": "2026-11-08T01:38:44Z",
+            "type": DECISION_EVENT,
+            "source": "target",
+            "data": {
+                "decision_id": id,
+                "decision": "Approve the paint as shown.",
+                "question_id": question_id,
+            },
+        })
+    }
+
+    fn decision_id_of(found: (String, Option<String>, String)) -> String {
+        serde_json::from_str::<Value>(&found.2)
+            .unwrap()
+            .get("decision_id")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn live_answer_reads_one_ruling_across_bare_and_copy_ids() {
+        let temp = TempDir::new().unwrap();
+        let connection = crate::backlog::open(&temp.path().join("graph.json")).unwrap();
+        // The answering board showed the copy id, so the ruling carries it;
+        // the origin reads by the bare id the question was asked with.
+        record(&connection, &answered("d-copy1", "q-70b0e591@mac2")).unwrap();
+        let bare = live_answer(&connection, "q-70b0e591")
+            .unwrap()
+            .expect("the bare id finds the copy's ruling");
+        assert_eq!(decision_id_of(bare), "d-copy1");
+        // The reverse: the ruling carries the bare id and a copy holder reads.
+        record(&connection, &answered("d-bare1", "q-8ac1d002")).unwrap();
+        let copy = live_answer(&connection, "q-8ac1d002@mac2")
+            .unwrap()
+            .expect("the copy id finds the bare ruling");
+        assert_eq!(decision_id_of(copy), "d-bare1");
+        // A different question never joins.
+        assert!(live_answer(&connection, "q-0e591000").unwrap().is_none());
+    }
+
+    #[test]
+    fn live_answer_keeps_same_named_fixed_id_lanes_apart() {
+        let temp = TempDir::new().unwrap();
+        let connection = crate::backlog::open(&temp.path().join("graph.json")).unwrap();
+        // Two machines may ask the same named lane; the suffix keeps them
+        // different questions, so the bare form joins neither.
+        record(
+            &connection,
+            &answered("d-fixed", "provider-cap:paint@hosta"),
+        )
+        .unwrap();
+        assert!(live_answer(&connection, "provider-cap:paint")
+            .unwrap()
+            .is_none());
+        let exact = live_answer(&connection, "provider-cap:paint@hosta")
+            .unwrap()
+            .expect("the exact fixed id reads its own ruling");
+        assert_eq!(decision_id_of(exact), "d-fixed");
+    }
+}

@@ -1,0 +1,2029 @@
+//! The spawn-defaults composition, ported from Python
+//! `fno.agents.spawn_defaults.inject_spawn_defaults` (766 lines). Rust owns
+//! the rung order, the argv assembly and the refusal texts; the Python seam
+//! keeps the call site and becomes a transport
+//! (`compose_spawn_argv`). Split in two: [`gather`] reads the world into
+//! [`Inputs`]; [`compose`] is pure, so the characterization goldens
+//! (`tests/fixtures/spawn_compose/`) feed it parsed TOML and never touch the
+//! environment. Reached as payload kind `compose` on the spawn-overlay command.
+
+use serde_json::{json, Map, Value};
+use std::path::Path;
+
+const ROLE_COMMANDS: [&str; 3] = ["lead", "term", "fno-me"];
+/// Keep the old spelling on the canonical profile key for one release.
+const COMMAND_ALIASES: [(&str, &str); 1] = [("do", "execute")];
+/// A lane is a COMPLETE coordinate: route/model stop at the lane.
+const LANE_EXCLUSIVE: [&str; 2] = ["route", "model"];
+/// The one built-in answer for an unattended worker's permission mode.
+
+/// The pure compose's world: everything `gather` read, so the goldens can
+/// hand it over pre-parsed.
+pub struct Inputs {
+    pub argv: Vec<String>,
+    /// `agents.defaults` (empty table when unset).
+    pub defaults: toml::Value,
+    /// `agents.profiles` (empty table when unset).
+    pub profiles: toml::Value,
+    /// `dispatch.commands` registry (empty table when unset).
+    pub dispatch_commands: toml::Value,
+    /// The shipped footnote command roster.
+    pub roster: Vec<String>,
+    pub node_command: Option<String>,
+    pub env_node: Option<String>,
+    /// The resolved ambient harness (Python's `resolve_dispatch_harness`
+    /// builtin default is claude).
+    pub ambient_harness: String,
+    pub apply_permission_builtin: bool,
+    pub scan: Value,
+    pub facts: Value,
+    /// The resolved node id (flag/env/seed) and its graph row.
+    pub node: Option<String>,
+    pub node_row: Option<Value>,
+    /// Print the routing provenance line (`applied axis=value (source) ...`).
+    /// Default false: a spawn prints what the user acts on; the provenance
+    /// rides `--verbose`.
+    pub verbose: bool,
+}
+
+/// Production read side: config subtrees, the node and its row, the ambient
+/// harness. The parity tests never call this.
+pub fn gather(ask: &Value, cwd: &Path) -> Inputs {
+    let cfg = |keys: &[&str]| {
+        crate::agents_config::config_value_deep(cwd, keys)
+            .unwrap_or_else(|| toml::Value::Table(toml::map::Map::new()))
+    };
+    let scan = ask.get("scan").cloned().unwrap_or_else(|| json!({}));
+    let env_node = ask
+        .get("env_node")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let flag_node = scan
+        .get("flag_node")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|v| !v.is_empty());
+    let argv: Vec<String> = ask
+        .get("argv")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .map(|v| v.as_str().unwrap_or_default().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    let node = resolve_node_id(&argv, &scan, flag_node, env_node.clone());
+    let node_row = node
+        .as_ref()
+        .and_then(|id| graph_row_for(id))
+        .filter(|row| row.is_object());
+    Inputs {
+        ambient_harness: crate::claims::resolve_harness_from(|key| {
+            std::env::var(key).ok().filter(|v| !v.trim().is_empty())
+        })
+        .unwrap_or_else(|| "claude".to_string()),
+        apply_permission_builtin: ask
+            .get("permission_builtin")
+            .map(|v| !v.is_null())
+            .unwrap_or(true),
+        argv,
+        defaults: cfg(&["agents", "defaults"]),
+        // The registered-command table. The leg this ports read a
+        // dispatch key no config model defines, so it never fired.
+        dispatch_commands: crate::agents_config::config_value_deep(
+            cwd,
+            &["dispatch", "command_registry"],
+        )
+        .unwrap_or_else(|| toml::Value::Table(toml::map::Map::new())),
+        env_node,
+        facts: ask.get("facts").cloned().unwrap_or_else(|| json!({})),
+        node,
+        node_row,
+        node_command: ask
+            .get("node_command")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        profiles: cfg(&["agents", "profiles"]),
+        roster: crate::provider::footnote_commands().into_iter().collect(),
+        scan,
+        verbose: ask.get("verbose").and_then(Value::as_bool).unwrap_or(false),
+    }
+}
+
+/// The node id the old seam resolved: `--node` wins, then the env carrier,
+/// then the seed slot's payload-named node (the `spawn-axes` `spawn_node`
+/// ask, now in-process).
+fn resolve_node_id(
+    argv: &[String],
+    scan: &Value,
+    flag_node: Option<String>,
+    env_node: Option<String>,
+) -> Option<String> {
+    if let Some(flag) = flag_node {
+        return Some(flag);
+    }
+    // No flag: the ask resolves seed-first, then the env carrier.
+    let ask = json!({
+        "argv": argv,
+        "seed_index": scan.get("seed_index"),
+        "seed_form": scan.get("seed_form"),
+        "flag_node": Value::Null,
+        "env_node": env_node,
+    });
+    let answer = crate::node_seed::resolve_node(&ask);
+    answer
+        .get("node")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|v| !v.is_empty())
+}
+
+/// The grid row Python's `_grid_node` read: the node's entry in the graph
+/// store, advisory only.
+pub(crate) fn graph_row_for(node_id: &str) -> Option<Value> {
+    let rows = crate::graph_store::read_rows_where(
+        &crate::graph_get::default_graph_path(),
+        &crate::backlog::RowQuery {
+            filter: crate::backlog::api::NodeFilter {
+                id_in: Some(vec![node_id.to_string()]),
+                ..Default::default()
+            },
+            with_blockers: true,
+            ..Default::default()
+        },
+    )
+    .ok()?;
+    crate::graph_get::find_entry(&rows, node_id).cloned()
+}
+
+/// The first command-shaped token anywhere in the seed, sigil and namespace
+/// stripped.
+fn command_token(seed: Option<&str>) -> Option<String> {
+    let seed = seed?;
+    for tok in seed.split_whitespace() {
+        if let Some((command, _)) = crate::provider::parse_command_token(tok) {
+            return Some(command.to_string());
+        }
+    }
+    None
+}
+
+/// Whether the seed's command token carried the `fno:` namespace - the one
+/// marker that PROVES the seed names a footnote stage (Python
+/// `_carries_fno_namespace`).
+fn carries_namespace(seed: Option<&str>, tok: &str) -> bool {
+    let Some(seed) = seed else {
+        return false;
+    };
+    seed.split_whitespace()
+        .any(|t| matches!(crate::provider::parse_command_token(t), Some((v, true)) if v == tok))
+}
+
+fn known_command_keys(inputs: &Inputs) -> (Vec<String>, bool) {
+    let mut known: Vec<String> = inputs
+        .profiles
+        .as_table()
+        .map(|t| t.keys().cloned().collect())
+        .unwrap_or_default();
+    let roster_ok = !inputs.roster.is_empty();
+    known.extend(inputs.roster.iter().cloned());
+    if let Some(registry) = inputs.dispatch_commands.as_table() {
+        for key in registry.keys() {
+            let canon = crate::backlog::fields::canonical_command_key(key);
+            let canon = canon.trim_start_matches('/').to_string();
+            if !canon.is_empty() && !known.iter().any(|k| k == &canon) {
+                known.push(canon);
+            }
+        }
+    }
+    (known, roster_ok)
+}
+
+/// The seed's profile key: a resolvable command token
+/// names its canonical profile; a lead command or no token names `role`; an
+/// unknown `fno:`-namespaced token refuses (None).
+fn profile_key(seed: Option<&str>, known: Option<&[String]>) -> Option<String> {
+    let Some(tok) = command_token(seed) else {
+        return Some("role".to_string());
+    };
+    let key = COMMAND_ALIASES
+        .iter()
+        .find(|(old, _)| *old == tok)
+        .map(|(_, new)| new.to_string())
+        .unwrap_or_else(|| tok.clone());
+    if ROLE_COMMANDS.contains(&key.as_str()) {
+        return Some("role".to_string());
+    }
+    match known {
+        None => Some(key),
+        Some(known) => {
+            if known.iter().any(|k| k == &tok) || known.iter().any(|k| k == &key) {
+                return Some(key);
+            }
+            if carries_namespace(seed, &tok) {
+                return None;
+            }
+            Some("role".to_string())
+        }
+    }
+}
+
+/// The scan projection Python computed once, before the slot resolver: a
+/// lane named on the command line, an occupied model axis, a `--yolo`
+/// spelling of the permission knob.
+pub(crate) struct Axes {
+    pub has_harness: bool,
+    pub explicit_harness: Option<String>,
+    pub has_model: bool,
+    pub explicit_vendor: Option<String>,
+    pub explicit_vendor_present: bool,
+    pub explicit_route: bool,
+    pub route_value: Option<String>,
+    pub model_value: Option<String>,
+    pub explicit_substrate: Option<String>,
+    pub permission_value: Option<String>,
+    pub flag_node: Option<String>,
+    pub seed: Option<String>,
+    pub account_flag_present: bool,
+    pub tab_flag_present: bool,
+    pub name: Option<String>,
+    pub positional_present: bool,
+}
+
+fn scan_of(scan: &Value) -> Axes {
+    let s = |key: &str| -> Option<String> {
+        scan.get(key)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .filter(|v| !v.is_empty())
+    };
+    let b = |key: &str| scan.get(key).and_then(Value::as_bool).unwrap_or(false);
+    Axes {
+        has_harness: b("has_harness"),
+        explicit_harness: s("explicit_harness"),
+        has_model: b("has_model"),
+        explicit_vendor_present: scan
+            .get("explicit_vendor")
+            .and_then(Value::as_str)
+            .is_some(),
+        explicit_vendor: s("explicit_vendor"),
+        explicit_route: b("explicit_route"),
+        route_value: s("route_value"),
+        model_value: s("model_value"),
+        explicit_substrate: s("explicit_substrate"),
+        permission_value: s("permission_value"),
+        flag_node: s("flag_node"),
+        seed: s("seed"),
+        account_flag_present: b("account_flag_present"),
+        tab_flag_present: b("tab_flag_present"),
+        name: s("name"),
+        positional_present: b("positional_present"),
+    }
+}
+
+fn profile_table<'a>(inputs: &'a Inputs, command: &str) -> Option<(&'a toml::Table, String)> {
+    let profiles = inputs.profiles.as_table()?;
+    let direct = profiles.get(command);
+    if let Some(t) = direct.and_then(toml::Value::as_table) {
+        return Some((t, command.to_string()));
+    }
+    // The legacy alias: the canonical command keeps the old spelling's row.
+    let legacy = COMMAND_ALIASES
+        .iter()
+        .find(|(_, new)| *new == command)
+        .map(|(old, _)| old.to_string());
+    let old = legacy?;
+    let table = profiles.get(&old)?.as_table()?;
+    Some((table, old))
+}
+
+fn cfg_str(table: Option<&toml::Table>, key: &str) -> String {
+    table
+        .and_then(|t| t.get(key))
+        .and_then(toml::Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+/// One field's effective value + source rung: lane > profile > defaults,
+/// harness-blind (the two harness rungs live in the overlay answer).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Field(pub String, pub Option<String>);
+
+fn field_read(
+    lane: Option<&Value>,
+    lane_index: Option<usize>,
+    profile: Option<&toml::Table>,
+    profile_command: &str,
+    defaults: &toml::Table,
+    name: &str,
+) -> Field {
+    if let (Some(lane), Some(index)) = (lane, lane_index) {
+        let value = lane_value(lane, name);
+        if !value.is_empty() {
+            return Field(
+                value,
+                Some(format!("agents.profiles.{profile_command}.lanes[{index}]")),
+            );
+        }
+        if LANE_EXCLUSIVE.contains(&name) {
+            return Field(String::new(), None);
+        }
+    }
+    let pv = cfg_str(profile, name);
+    if !pv.is_empty() {
+        return Field(pv, Some(format!("agents.profiles.{profile_command}")));
+    }
+    let dv = cfg_str(Some(defaults), name);
+    if !dv.is_empty() {
+        return Field(dv, Some("agents.defaults".to_string()));
+    }
+    Field(String::new(), None)
+}
+
+fn lane_value(lane: &Value, name: &str) -> String {
+    lane.get(name)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+/// The compose's answer, exactly what the transport applies.
+#[derive(Debug, Clone)]
+pub struct Answer {
+    pub argv: Vec<String>,
+    pub stderr: Vec<String>,
+    pub exit: i32,
+    pub stdout: Option<Value>,
+    pub events: Vec<Value>,
+    pub injected: bool,
+    /// The take-over reason the compose consumed from the argv, carried in
+    /// the answer to the in-process seam - never the environment, which a
+    /// child inherits and any process can set.
+    pub take_over: String,
+    /// The billing gate needs `facts.role_resolves` and the ask carried no
+    /// answer: nothing applied, nothing journaled; the transport resolves
+    /// the role once and asks again.
+    pub role_gate_needed: bool,
+}
+
+impl Answer {
+    pub fn to_value(&self) -> Value {
+        json!({
+            "argv": self.argv,
+            "stderr": self.stderr,
+            "exit": self.exit,
+            "stdout": self.stdout.clone().unwrap_or(Value::Null),
+            "events": self.events,
+            "injected": self.injected,
+            "take_over": self.take_over,
+            "role_gate_needed": self.role_gate_needed,
+        })
+    }
+}
+
+/// Output collector shared by the stages, in the seam's own order.
+#[derive(Default)]
+struct Seam {
+    stderr: Vec<String>,
+    applied: Vec<Value>,
+    suppressed: Vec<Value>,
+    inject: Vec<String>,
+    bundle: Vec<String>,
+    /// A pick's model with no route: it rides the harness argv behind the
+    /// `--` fence, after any lane bundle.
+    harness_model: Option<String>,
+    events: Vec<Value>,
+    exit: Option<i32>,
+    stdout: Option<Value>,
+    argv: Option<Vec<String>>,
+    injected: bool,
+    role_gate_needed: bool,
+    take_over: String,
+}
+
+impl Seam {
+    /// A refusal. The trailing "refusing; no worker launched" line is the
+    /// caller's vocabulary (only some Python refusals printed it), never a
+    /// fixture of this function.
+    fn refuse(&mut self, line: String) {
+        self.stderr.push(line);
+        self.exit = Some(2);
+    }
+
+    fn note(&mut self, line: String) {
+        self.stderr.push(line);
+    }
+}
+
+/// The stage context: Python's locals a stage reads, one struct so the
+/// stages stay pure over the same world the goldens pinned.
+struct Stage<'a> {
+    inputs: &'a Inputs,
+    scan: Axes,
+    command: String,
+    profile_command: String,
+    profile: Option<&'a toml::Table>,
+    defaults: toml::Table,
+    lane: Option<Value>,
+    lane_index: Option<usize>,
+    slot_candidate: Option<Value>,
+    slot_chain: Vec<String>,
+    fingerprint: String,
+    grid_account_injected: bool,
+    node_id_present: bool,
+    overlay_answer: Option<Value>,
+    fields: Option<Fields>,
+}
+
+impl<'a> Stage<'a> {
+    fn argv_tail(&self) -> Vec<String> {
+        self.inputs.argv.iter().skip(1).cloned().collect()
+    }
+
+    /// The tail the spawn-token scanners read: pre-fence tokens only.
+    fn spawn_token_tail(&self) -> Vec<String> {
+        let tail = self.argv_tail();
+        match tail.iter().position(|t| t == "--argv" || t == "--") {
+            Some(cut) => tail[..cut].to_vec(),
+            None => tail,
+        }
+    }
+
+    fn fields(&self) -> &Fields {
+        self.fields
+            .as_ref()
+            .expect("fields were read before this stage")
+    }
+}
+
+/// The pure composition: the ported body of the old Python seam, in the
+/// order Python ran it.
+pub fn compose(inputs: &Inputs) -> Answer {
+    let scan = scan_of(&inputs.scan);
+    let mut seam = Seam {
+        argv: Some(inputs.argv.clone()),
+        ..Default::default()
+    };
+    compose_body(inputs, scan, &mut seam);
+    // Python printed one stderr line per visual line; a refusal composed
+    // with embedded newlines lands as separate entries.
+    let stderr = seam
+        .stderr
+        .iter()
+        .flat_map(|line| line.split('\n').map(str::to_string))
+        .collect();
+    Answer {
+        // A refused spawn never hands the caller an argv: Python's seam
+        // raised SystemExit inside, so the transport kept the argv it was
+        // given. The answer carries the input argv unchanged on any
+        // nonzero exit, injected or not.
+        argv: if seam.exit.unwrap_or(0) != 0 {
+            inputs.argv.clone()
+        } else {
+            seam.argv.take().unwrap_or_default()
+        },
+        stderr,
+        exit: seam.exit.unwrap_or(0),
+        stdout: seam.stdout.take(),
+        events: seam.events,
+        injected: seam.injected,
+        take_over: std::mem::take(&mut seam.take_over),
+        role_gate_needed: seam.role_gate_needed,
+    }
+}
+
+fn compose_body(inputs: &Inputs, scan: Axes, seam: &mut Seam) {
+    // Python's passthrough gates: a non-spawn head, or -h/--help before the
+    // --argv boundary, returns unchanged and journals nothing.
+    let help_rides = inputs
+        .argv
+        .iter()
+        .skip(1)
+        .take_while(|a| a.as_str() != "--argv")
+        .any(|a| a == "-h" || a == "--help");
+    if inputs.argv.first().map(String::as_str) != Some("spawn") || help_rides {
+        return;
+    }
+    // The take-over reason travels inside the answer, in process. A value
+    // in the environment is a forgery or a stale leak: nothing sets it, so
+    // any spawn under one refuses.
+    if std::env::var_os("FNO_SPAWN_TAKE_OVER").is_some() {
+        seam.refuse(
+            "spawn: FNO_SPAWN_TAKE_OVER is set in this process's environment. The \
+             take-over reason travels inside the compose answer, never the \
+             environment; a child must never inherit it. Clear it and re-run."
+                .to_string(),
+        );
+        return;
+    }
+    // The take-over front door: the ask is only legal shaped as
+    // `spawn --promote <scope> --take-over "<why>"`. Refusing here keeps
+    // the shape check in Rust. On the legal shape the flag is CONSUMED
+    // here and its reason rides the answer to the in-process seam, so the
+    // Python flag surface stays at net zero (lead ruling 2026-10-16):
+    // typer never declares --take-over.
+    if argv_has_take_over(&inputs.argv) {
+        if !argv_has_team(&inputs.argv) || argv_has_hand_off(&inputs.argv) {
+            seam.refuse(
+                "--take-over moves a sub-team to the new colleague and needs --promote <scope>; \
+                 it cannot be combined with --hand-off."
+                    .to_string(),
+            );
+            return;
+        }
+        if let Some(argv) = seam.argv.as_mut() {
+            let mut reason = String::new();
+            loop {
+                let cut = argv
+                    .iter()
+                    .position(|t| t.as_str() == "--argv" || t.as_str() == "--")
+                    .unwrap_or(argv.len());
+                match argv[1..cut]
+                    .iter()
+                    .position(|t| t == "--take-over" || t.starts_with("--take-over="))
+                {
+                    Some(at) => {
+                        let i = at + 1;
+                        if argv[i].starts_with("--take-over=") {
+                            reason = argv[i]["--take-over=".len()..].to_string();
+                            argv.remove(i);
+                        } else {
+                            // A separate value must sit inside the fence: with
+                            // --take-over last, the next token is the --argv
+                            // fence or a payload word, and neither is a reason.
+                            // A flag-shaped token is never a reason either:
+                            // eating one would silently rewrite the ask.
+                            if i + 1 < cut && !argv[i + 1].starts_with('-') {
+                                reason = argv[i + 1].clone();
+                                argv.remove(i);
+                                argv.remove(i);
+                            } else {
+                                argv.remove(i);
+                            }
+                        }
+                    }
+                    None => break,
+                }
+            }
+            seam.take_over = reason.trim().to_string();
+        }
+        if seam.take_over.is_empty() {
+            // The flag without a usable value must not degrade to a plain
+            // promote: the settle's own refusal would never see the ask,
+            // and the colleague would launch unjournaled.
+            seam.refuse(
+                "--take-over needs a reason: --take-over \"why the \
+                 paused lead is unreachable\""
+                    .to_string(),
+            );
+            return;
+        }
+    }
+    let (command, profile_command, profile) = match resolve_profile(inputs, &scan) {
+        Ok(found) => found,
+        Err(lines) => {
+            for line in lines {
+                seam.refuse(line);
+            }
+            return;
+        }
+    };
+    let defaults = inputs.defaults.as_table().cloned().unwrap_or_default();
+    let node_id_present =
+        scan.flag_node.is_some() || inputs.env_node.is_some() || inputs.node.is_some();
+    let mut stage = Stage {
+        inputs,
+        scan,
+        command,
+        profile_command,
+        profile: profile.as_ref(),
+        defaults,
+        lane: None,
+        lane_index: None,
+        slot_candidate: None,
+        slot_chain: Vec::new(),
+        fingerprint: String::new(),
+        grid_account_injected: false,
+        node_id_present,
+        overlay_answer: None,
+        fields: None,
+    };
+    walk_stage(&mut stage, seam);
+    if seam.exit.is_some() {
+        return;
+    }
+    let mut stage = {
+        let fields = read_fields(&stage);
+        stage.fields = Some(fields);
+        stage
+    };
+    {
+        let fields = stage.fields();
+        if early_return(&stage, fields, seam) {
+            return;
+        }
+    }
+    harness_inject(&stage, seam);
+    grid_inject(&mut stage, seam);
+    lane_model_pin(&stage, seam);
+    billing_axes(&mut stage, seam);
+    overlay_stage(&mut stage, seam);
+    if seam.exit.is_some() {
+        return;
+    }
+    pane_bundle_stage(&mut stage, seam);
+    assemble(&mut stage, seam);
+}
+
+/// Profile-key resolution: the seed's command names the profile; an unknown
+/// `fno:`-namespaced token refuses with the two lines Python printed.
+fn resolve_profile(
+    inputs: &Inputs,
+    scan: &Axes,
+) -> Result<(String, String, Option<toml::Table>), Vec<String>> {
+    let (known, roster_ok) = known_command_keys(inputs);
+    let mut profile_seed = scan.seed.clone();
+    if profile_seed.is_none() {
+        if let Some(node_command) = &inputs.node_command {
+            profile_seed = Some(format!("/{node_command}"));
+        }
+    }
+    let known_ref = if roster_ok {
+        Some(known.as_slice())
+    } else {
+        None
+    };
+    let command = profile_key(profile_seed.as_deref(), known_ref).ok_or_else(|| {
+        let tok = command_token(scan.seed.as_deref()).unwrap_or_default();
+        vec![
+            format!(
+                "fno agents spawn: seed {} names command-shaped token {} but no \
+                 shipped footnote command or configured profile answers it",
+                crate::spawn_axes::repr(scan.seed.as_deref().unwrap_or("")),
+                crate::spawn_axes::repr(&tok)
+            ),
+            "fno agents spawn: refusing; no worker launched".to_string(),
+        ]
+    })?;
+    let (profile, profile_command) = match profile_table(inputs, &command) {
+        Some((table, name)) => (Some(table.clone()), name),
+        None => (None, command.clone()),
+    };
+    Ok((command, profile_command, profile))
+}
+
+/// Where a scalar field's value would come from with no lane in play.
+fn scalar_rung(
+    profile: Option<&toml::Table>,
+    profile_command: &str,
+    defaults: &toml::Table,
+    name: &str,
+) -> Option<String> {
+    if !cfg_str(profile, name).is_empty() {
+        return Some(format!("agents.profiles.{profile_command}"));
+    }
+    if !cfg_str(Some(defaults), name).is_empty() {
+        return Some("agents.defaults".to_string());
+    }
+    None
+}
+
+fn above_defaults(rung: &Option<String>) -> bool {
+    rung.as_deref()
+        .map(|r| r != "agents.defaults")
+        .unwrap_or(false)
+}
+
+/// The slot walk, in process: fill the walk's payload, run the resolver,
+/// print the chain notes, and apply the terminal rules (refusal exit 2,
+/// exhausted queue exit 78 with the payload on stdout, receipts).
+fn walk_stage(stage: &mut Stage, seam: &mut Seam) {
+    let scan = &stage.scan;
+    let lanes_present = stage.profile.is_some_and(|p| {
+        p.get("lanes").and_then(toml::Value::as_array).is_some()
+            || p.get("by_difficulty")
+                .and_then(toml::Value::as_table)
+                .is_some_and(|t| !t.is_empty())
+    });
+    let model_rung = scalar_rung(
+        stage.profile,
+        &stage.profile_command,
+        &stage.defaults,
+        "model",
+    );
+    let route_rung = scalar_rung(
+        stage.profile,
+        &stage.profile_command,
+        &stage.defaults,
+        "route",
+    );
+    let model_occupied = scan.has_model
+        || scan.explicit_vendor_present
+        || scan.explicit_route
+        || above_defaults(&model_rung)
+        || above_defaults(&route_rung);
+    // Python's arm: the walk consults when lanes are configured, the model
+    // axis is free, or strict routing is on. An occupied axis over a
+    // lane-less profile stands down loudly: one grid receipt, no walk.
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let enforced = crate::route_gather::policy_for(&cwd)["enforce_inventory"]
+        .as_bool()
+        .unwrap_or(false);
+    if !(lanes_present || !model_occupied || enforced) {
+        if stage.node_id_present {
+            seam.applied
+                .push(json!(["grid", "grid=model-axis-occupied", "routing"]));
+        }
+        return;
+    }
+    let mut grid_node_entry: Option<Value> = None;
+    if !model_occupied || enforced {
+        grid_node_entry = stage.inputs.node_row.clone();
+    }
+    // No lanes, no node to grid on, nothing strict: the walk has no
+    // question to answer.
+    if !(lanes_present || grid_node_entry.is_some() || enforced) {
+        return;
+    }
+    let grid_role = if stage.command == "blueprint" || stage.command == "think" {
+        Some("planning".to_string())
+    } else {
+        None
+    };
+    let constrain = scan
+        .explicit_harness
+        .clone()
+        .or_else(|| Some(cfg_str(stage.profile, "provider")))
+        .filter(|v| !v.trim().is_empty());
+    let ask = json!({
+        "rung_base": format!("agents.profiles.{}", stage.profile_command),
+        "lanes_raw": lanes_payload(stage.profile),
+        "profile": crate::route_gather::profile_fields_for(stage.profile),
+        "node": grid_node_entry,
+        "substrate": scan.explicit_substrate,
+        "permission_mode": scan.permission_value,
+        "constrain_harness": constrain,
+        "explicit_lane": scan.has_harness || scan.explicit_route || scan.explicit_vendor_present,
+        "gate_bypassed": false,
+        "role": grid_role,
+        "protected_role": stage.inputs.facts.get("role_protected"),
+        "model_occupied": model_occupied,
+        "work_command": stage.command,
+        "explicit_model_value": if scan.has_model { scan.model_value.clone() } else { None },
+        "explicit_route_value": if scan.explicit_route { scan.route_value.clone() } else { None },
+        "explicit_vendor_value": if scan.explicit_vendor_present {
+            scan.explicit_vendor.clone()
+        } else {
+            None
+        },
+        "capacity_refresh": true,
+    });
+    let filled = crate::route_gather::fill(&ask, &cwd);
+    let out = crate::route_slot::resolve_slot_payload(&filled);
+    crate::route_slot::journal_routing_refusal(&filled, &out);
+    apply_walk_answer(stage, seam, &out);
+}
+
+/// The walk answer's receipts and terminals: chain notes print and bill, the
+/// refusal terminal rules, the exhausted queue rides stdout with exit 78,
+/// and a lane pick feeds `field()` from here on.
+fn apply_walk_answer(stage: &mut Stage, seam: &mut Seam, out: &Value) {
+    let chain: Vec<String> = out
+        .get("chain")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .map(|v| v.as_str().unwrap_or_default().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    for line in &chain {
+        if line.starts_with("slot skip")
+            || line.starts_with("slot note")
+            || line.starts_with("slot demote")
+        {
+            seam.note(format!("fno agents spawn: {line}"));
+            seam.suppressed.push(json!(["slot", "", "", line]));
+        }
+    }
+    if let Some(refusal) = out.get("refusal_terminal").filter(|r| !r.is_null()) {
+        let text = refusal.get("text").and_then(Value::as_str).unwrap_or("");
+        if !text.is_empty() {
+            seam.refuse(format!(
+                "fno agents spawn: {text}\nfno agents spawn: refusing; no \
+                 worker launched"
+            ));
+            return;
+        }
+    }
+    if let Some(exhausted) = out.get("exhausted_payload").filter(|e| !e.is_null()) {
+        seam.stdout = Some(exhausted.clone());
+        seam.exit = Some(78);
+        return;
+    }
+    stage.fingerprint = out
+        .get("fingerprint")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let candidate = out.get("candidate").filter(|c| !c.is_null());
+    let terminal = chain.last().cloned().unwrap_or_default();
+    if let Some(candidate) = candidate {
+        if let Some(rung) = candidate.get("lane_rung").and_then(Value::as_str) {
+            let lane_name = candidate.get("lane").and_then(Value::as_str).unwrap_or("");
+            stage.lane = candidate.get("lane_fields").cloned();
+            stage.lane_index = candidate
+                .get("lane_index")
+                .and_then(Value::as_u64)
+                .map(|i| i as usize);
+            seam.applied
+                .push(json!(["slot", format!("{rung} {lane_name}"), "routing",]));
+            stage.slot_candidate = Some(candidate.clone());
+            return;
+        }
+    }
+    // A slot=-terminal receipts under the slot arm (the pin override); any
+    // other non-empty terminal receipts under the grid arm - the no-lanes
+    // grid vocabulary (grid=no-inventory-declared, ...) needs no candidate
+    // behind it.
+    if terminal.starts_with("slot=") {
+        seam.applied.push(json!([
+            "slot",
+            terminal.trim_start_matches("slot="),
+            "routing"
+        ]));
+    } else if !terminal.is_empty() {
+        seam.applied.push(json!(["grid", terminal, "routing"]));
+    }
+    stage.slot_candidate = candidate.cloned();
+}
+
+/// The profile's lanes as the payload carries them (padded vocabulary dump).
+fn lanes_payload(profile: Option<&toml::Table>) -> Value {
+    let Some(lanes) = profile
+        .and_then(|p| p.get("lanes"))
+        .and_then(toml::Value::as_array)
+    else {
+        return Value::Null;
+    };
+    Value::Array(
+        lanes
+            .iter()
+            .map(crate::route_gather::lane_entry_for)
+            .collect(),
+    )
+}
+
+/// The field() reads: lane > profile > defaults, one per config field.
+pub(crate) struct Fields {
+    pub route: Field,
+    pub account: Field,
+    pub pane_group: Field,
+}
+
+fn read_fields(stage: &Stage) -> Fields {
+    let view = (stage.lane.as_ref(), stage.lane_index, stage.profile);
+    let f = |name: &str| {
+        field_read(
+            view.0,
+            view.1,
+            view.2,
+            &stage.profile_command,
+            &stage.defaults,
+            name,
+        )
+    };
+    Fields {
+        route: f("route"),
+        account: f("account"),
+        pane_group: f("pane_group"),
+    }
+}
+
+/// Whether the argv names a team (`--promote`) before the `--argv` boundary
+/// or a bare `--` fence (fenced tokens are prompt text) - the same boundary
+/// rule Python's `_has_permission_mode` applies.
+pub(crate) fn argv_has_team(argv: &[String]) -> bool {
+    argv.iter()
+        .skip(1)
+        .take_while(|t| t.as_str() != "--argv" && t.as_str() != "--")
+        .any(|t| t == "--promote" || t.starts_with("--promote="))
+}
+
+/// Whether the argv carries `--take-over` (or `--take-over=...`) before the
+/// `--argv` boundary or a `--` fence.
+fn argv_has_take_over(argv: &[String]) -> bool {
+    argv.iter()
+        .skip(1)
+        .take_while(|t| t.as_str() != "--argv" && t.as_str() != "--")
+        .any(|t| t == "--take-over" || t.starts_with("--take-over="))
+}
+
+/// Whether the argv carries `--hand-off` before the boundary. The retired
+/// `--succeed` spelling dies at the tombstone, before compose runs.
+fn argv_has_hand_off(argv: &[String]) -> bool {
+    argv.iter()
+        .skip(1)
+        .take_while(|t| t.as_str() != "--argv" && t.as_str() != "--")
+        .any(|t| t == "--hand-off" || t.starts_with("--hand-off="))
+}
+
+/// An overlay table (or lane args) can carry the ONLY value this spawn
+/// injects, so an empty harness-blind read must not end composition early.
+fn overlays_present(stage: &Stage) -> bool {
+    let table_has = |t: &toml::Table| {
+        t.get("harness")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|h| !h.is_empty())
+    };
+    if table_has(&stage.defaults) {
+        return true;
+    }
+    if stage.profile.is_some_and(table_has) {
+        return true;
+    }
+    stage
+        .lane
+        .as_ref()
+        .and_then(|lane| lane.get("args"))
+        .and_then(Value::as_array)
+        .is_some_and(|a| !a.is_empty())
+}
+
+/// The early return: no config field resolved, no grid candidate, no
+/// receipts, no overlays - any `--model` here was typed, so only the vendor
+/// check and the journal run.
+fn early_return(stage: &Stage, fields: &Fields, seam: &mut Seam) -> bool {
+    let any_field = !fields.route.0.is_empty()
+        || !fields.account.0.is_empty()
+        || !fields.pane_group.0.is_empty();
+    let grid_candidate = grid_candidate(stage).is_some();
+    if any_field || grid_candidate || !seam.applied.is_empty() || overlays_present(stage) {
+        return false;
+    }
+    journal(stage, seam, "");
+    true
+}
+
+/// A grid-branch candidate (no lane_rung) is an atomic harness/model/effort
+/// TRIPLE; a lane candidate feeds field() instead.
+fn grid_candidate(stage: &Stage) -> Option<Value> {
+    let candidate = stage.slot_candidate.as_ref()?;
+    if candidate.get("lane_rung").is_some() {
+        return None;
+    }
+    Some(candidate.clone())
+}
+
+/// The harness the walk's pick names. An inline lane carries it as `provider`
+/// in its fields, not on a row.
+fn picked_harness(stage: &Stage) -> Option<String> {
+    let candidate = stage.slot_candidate.as_ref()?;
+    [
+        candidate.get("harness"),
+        candidate.get("lane_fields").and_then(|f| f.get("provider")),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(Value::as_str)
+    .find(|h| !h.trim().is_empty())
+    .map(str::to_string)
+}
+
+/// The resolved-target harness: the explicit spelling, else the walk's pick,
+/// else the ambient inference (builtin claude).
+fn resolved_harness(stage: &Stage) -> Option<String> {
+    stage
+        .scan
+        .explicit_harness
+        .clone()
+        .filter(|h| !h.trim().is_empty())
+        .or_else(|| picked_harness(stage))
+        .or_else(|| Some(stage.inputs.ambient_harness.clone()))
+}
+
+/// A pick is atomic: the worker launches on the harness the pick names. The
+/// seam infers the ambient harness for a bare argv, so only a pick that
+/// differs from it needs the flag.
+fn harness_inject(stage: &Stage, seam: &mut Seam) {
+    if stage.scan.has_harness {
+        return;
+    }
+    let Some(harness) = picked_harness(stage) else {
+        return;
+    };
+    if harness == stage.inputs.ambient_harness {
+        return;
+    }
+    seam.inject
+        .extend(["--harness".to_string(), harness.clone()]);
+    seam.applied.push(json!(["harness", harness, "routing"]));
+}
+
+fn fields_of<'a>(stage: &'a Stage<'a>) -> &'a Fields {
+    stage.fields()
+}
+
+/// The grid triple's injections: the pin's model is already on the argv, so
+/// only the harness injects; effort joins when its axis was free; the route
+/// rides beside the model; the account is claude-only at the CLI.
+fn grid_inject(stage: &mut Stage, seam: &mut Seam) {
+    let Some(candidate) = grid_candidate(stage) else {
+        return;
+    };
+    let s = |key: &str| {
+        candidate
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    let pin_row = s("pin_row");
+    let src = if pin_row.is_empty() {
+        "difficulty-grid".to_string()
+    } else {
+        format!("routing.models.{pin_row}")
+    };
+    let harness = s("harness");
+    let model = s("model");
+    let mut applied_any = false;
+    let route = s("route");
+    if !route.is_empty() && !stage.scan.explicit_route {
+        seam.inject.extend(["--route".to_string(), route.clone()]);
+        seam.applied.push(json!(["route", route, src]));
+        applied_any = true;
+    }
+    let account = s("account");
+    if !account.is_empty() && !stage.scan.account_flag_present {
+        if harness == "claude" {
+            seam.inject
+                .extend(["--account".to_string(), account.clone()]);
+            seam.applied.push(json!(["account", account, src]));
+            stage.grid_account_injected = true;
+            applied_any = true;
+        } else {
+            seam.note(format!(
+                "fno agents spawn: account skipped (claude-only, grid harness {}); {} ignored",
+                crate::spawn_axes::repr(&harness),
+                crate::spawn_axes::repr(&account),
+            ));
+        }
+    }
+    // The spawn's --model flag is retired, the harness's is not: a pick
+    // whose route did not apply puts its model on the harness argv, or the
+    // harness launches its own default whatever the band picked.
+    if route.is_empty() && !stage.scan.explicit_route {
+        applied_any |= pin_harness_model(stage, seam, &harness, &model, &src);
+    }
+    // The receipt names a pick that applied, and always an operator pin row.
+    if applied_any || !pin_row.is_empty() {
+        seam.applied
+            .push(json!(["grid", format!("{harness}/{model}"), src]));
+    }
+}
+
+/// Pin `model` on the harness argv when the pick is for the harness this
+/// spawn launches. A model for another harness never rides: its flag value
+/// would mean nothing to this CLI.
+fn pin_harness_model(
+    stage: &Stage,
+    seam: &mut Seam,
+    harness: &str,
+    model: &str,
+    src: &str,
+) -> bool {
+    if model.is_empty() || stage.scan.has_model {
+        return false;
+    }
+    let launched = resolved_harness(stage).unwrap_or_default();
+    if !harness.is_empty() && harness != launched {
+        seam.note(format!(
+            "fno agents spawn: model skipped (pick is for harness {}, spawn launches {}); {} ignored",
+            crate::spawn_axes::repr(harness),
+            crate::spawn_axes::repr(&launched),
+            crate::spawn_axes::repr(model),
+        ));
+        return false;
+    }
+    seam.harness_model = Some(model.to_string());
+    seam.applied.push(json!(["model", model, src]));
+    true
+}
+
+/// A lane pick (`agents.profiles.<command>.lanes`) with a model and no route
+/// pins that model the same way a grid pick does.
+fn lane_model_pin(stage: &Stage, seam: &mut Seam) {
+    let Some(candidate) = stage.slot_candidate.as_ref() else {
+        return;
+    };
+    if candidate.get("lane_rung").is_none()
+        || stage.scan.explicit_route
+        || !stage.fields().route.0.is_empty()
+    {
+        return;
+    }
+    // An inline lane carries its harness as `provider` in its fields, not
+    // on a row; read both so a codex lane's model never pins onto claude.
+    let s = |key: &str, field: &str| {
+        [
+            candidate.get(key),
+            candidate.get("lane_fields").and_then(|f| f.get(field)),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .find(|v| !v.is_empty())
+        .unwrap_or("")
+        .to_string()
+    };
+    let src = format!("lane {}", s("lane", "lane"));
+    pin_harness_model(
+        stage,
+        seam,
+        &s("harness", "provider"),
+        &s("model", "model"),
+        &src,
+    );
+}
+
+/// The billing axes (route/account/model, ruling 4) through the one Rust
+/// owner, in process; the model-target pre-read runs here first.
+fn billing_axes(stage: &mut Stage, seam: &mut Seam) {
+    // Python's prov here is resolved_harness(): the grid's seeded pick, the
+    // config field rung, then ambient - the cached chain, never the ambient
+    // default directly. Resolved before `fields` borrows the stage immutably.
+    let prov = resolved_harness(stage).unwrap_or_default();
+    let fields = stage.fields();
+    if fields.route.0.is_empty() && fields.account.0.is_empty() {
+        return;
+    }
+    let ask = json!({
+        "route": {"value": fields.route.0.clone(), "rung": fields.route.1.clone().unwrap_or_default()},
+        "account": {"value": fields.account.0.clone(), "rung": fields.account.1.clone().unwrap_or_default()},
+        "explicit_route": stage.scan.explicit_route,
+        "grid_candidate_present": grid_candidate(stage).is_some(),
+        "slot_chain": stage.slot_chain,
+        "grid_account_injected": stage.grid_account_injected,
+        "account_flag_present": stage.scan.account_flag_present,
+        "prov": if !stage.fields().account.0.is_empty() {
+            json!(prov)
+        } else {
+            json!("")
+        },
+    });
+    let answer = crate::spawn_axes::decide(&ask);
+    for line in answer
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        seam.note(line.as_str().unwrap_or_default().to_string());
+    }
+    for pair in answer
+        .get("inject")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(pair) = pair.as_array() {
+            for token in pair {
+                seam.inject
+                    .push(token.as_str().unwrap_or_default().to_string());
+            }
+        }
+    }
+    if let Some(applied) = answer.get("applied").and_then(Value::as_array) {
+        seam.applied.extend(applied.iter().cloned());
+    }
+    if let Some(suppressed) = answer.get("suppressed").and_then(Value::as_array) {
+        seam.suppressed.extend(suppressed.iter().cloned());
+    }
+}
+
+/// The pane group and the harness bundle: the command's placement judgment,
+/// then the axes answer that lands the bundle behind the `--` fence at the
+/// argv TAIL (a boundary the caller already typed displaces it).
+fn pane_bundle_stage(stage: &mut Stage, seam: &mut Seam) {
+    let pane_group = fields_of(stage).pane_group.clone();
+    let bundle = stage
+        .overlay_answer
+        .as_ref()
+        .and_then(|a| a.get("bundle"))
+        .cloned()
+        .filter(|b| b.is_object());
+    if pane_group.0.is_empty() && bundle.is_none() {
+        return;
+    }
+    let pg_rung = format!(
+        "{}.pane_group",
+        fields_of(stage).pane_group.1.clone().unwrap_or_default()
+    );
+    let mut pg_answer: Option<Value> = None;
+    let mut pg_unavailable = String::new();
+    if !pane_group.0.is_empty() && !stage.scan.tab_flag_present {
+        let ask = json!({
+            "kind": "pane-group",
+            "group": pane_group.0,
+            "rung": pg_rung,
+            "eff_substrate": "pane",
+            "argv_tail": stage.spawn_token_tail(),
+        });
+        match crate::spawn_overlay::resolve(ask) {
+            Ok(answer) => pg_answer = Some(answer),
+            Err(exc) => pg_unavailable = exc,
+        }
+    }
+    let ask = json!({
+        "pane_group": {"value": pane_group.0, "rung": fields_of(stage).pane_group.1.clone().unwrap_or_default()},
+        "tab_flag_present": stage.scan.tab_flag_present,
+        "pane_group_pg_rung": pg_rung,
+        "pane_group_unavailable": pg_unavailable,
+        "pane_group_answer": pg_answer,
+        "bundle": bundle,
+        "positional_present": stage.scan.positional_present,
+    });
+    let answer = crate::spawn_axes::decide(&ask);
+    apply_axes_answer(seam, &answer);
+    for pair in answer
+        .get("bundle_inject")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(pair) = pair.as_array() {
+            for token in pair {
+                seam.bundle
+                    .push(token.as_str().unwrap_or_default().to_string());
+            }
+        }
+    }
+}
+
+/// The axes answer's mechanical application, shared by all three calls.
+fn apply_axes_answer(seam: &mut Seam, answer: &Value) {
+    for line in answer
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        seam.note(line.as_str().unwrap_or_default().to_string());
+    }
+    for pair in answer
+        .get("inject")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(pair) = pair.as_array() {
+            for token in pair {
+                seam.inject
+                    .push(token.as_str().unwrap_or_default().to_string());
+            }
+        }
+    }
+    if let Some(applied) = answer.get("applied").and_then(Value::as_array) {
+        seam.applied.extend(applied.iter().cloned());
+    }
+    if let Some(suppressed) = answer.get("suppressed").and_then(Value::as_array) {
+        seam.suppressed.extend(suppressed.iter().cloned());
+    }
+}
+
+/// Assembly: the applied line, the head inject, the bundle tail, the vendor
+/// check over the FINAL argv, and the journal row.
+fn assemble(stage: &mut Stage, seam: &mut Seam) {
+    if !seam.applied.is_empty() && stage.inputs.verbose {
+        let parts: Vec<String> = seam
+            .applied
+            .iter()
+            .filter_map(|entry| {
+                let entry = entry.as_array()?;
+                let axis = entry.first()?.as_str()?;
+                let value = entry.get(1)?.as_str()?;
+                let source = entry.get(2)?.as_str()?;
+                Some(format!("{axis}={value} ({source})"))
+            })
+            .collect();
+        seam.note(format!("fno agents spawn: applied {}", parts.join(", ")));
+    }
+    let mut argv = seam.argv.clone().unwrap_or_default();
+    if !seam.inject.is_empty() {
+        let mut next = vec![argv.first().cloned().unwrap_or_else(|| "spawn".to_string())];
+        next.extend(seam.inject.iter().cloned());
+        next.extend(argv.into_iter().skip(1));
+        argv = next;
+        seam.injected = true;
+    }
+    if let Some(model) = seam.harness_model.take() {
+        fence_model(&argv, &mut seam.bundle, model, &mut seam.stderr);
+    }
+    if !seam.bundle.is_empty() {
+        // typer fills MESSAGE first, so a spawn with no prompt keeps the
+        // slot with an explicit empty, or the first fenced token becomes it.
+        if !stage.scan.positional_present && seam.bundle.first().is_some_and(|t| t == "--") {
+            argv.push(String::new());
+        }
+        argv.extend(seam.bundle.iter().cloned());
+        seam.injected = true;
+    }
+    seam.argv = Some(argv);
+    journal(stage, seam, &stage.fingerprint);
+}
+
+/// Add `--model <model>` to the harness tokens. The typed passthrough wins:
+/// a fenced `--model`/`-m` keeps the operator's value. An `--argv` payload is
+/// a whole harness command, so nothing joins it.
+fn fence_model(argv: &[String], bundle: &mut Vec<String>, model: String, stderr: &mut Vec<String>) {
+    if argv.iter().any(|t| t == "--argv") {
+        stderr.push(format!(
+            "fno agents spawn: model skipped (argv already carries an --argv payload); {model} ignored"
+        ));
+        return;
+    }
+    let typed = argv.iter().position(|t| t == "--").map(|i| &argv[i + 1..]);
+    let typed_model = typed.is_some_and(|tail| {
+        tail.iter()
+            .any(|t| t == "--model" || t == "-m" || t.starts_with("--model="))
+    });
+    if typed_model {
+        return;
+    }
+    if typed.is_none() && bundle.is_empty() {
+        bundle.push("--".to_string());
+    }
+    bundle.extend(["--model".to_string(), model]);
+}
+
+/// The spawn_defaults_applied receipt, through the journal op (the WRITE
+/// belongs to the command; the caller passes the resolved path). Never fails
+/// the spawn.
+fn journal(stage: &Stage, seam: &Seam, fingerprint: &str) {
+    let path = match non_empty_env("FNO_EVENTS_PATH") {
+        Some(path) => std::path::PathBuf::from(path),
+        None => match crate::agents_config::state_dir(std::path::Path::new(".")) {
+            Some(dir) => dir.join("events.jsonl"),
+            None => return,
+        },
+    };
+    // The retired axes (provider/model/effort/substrate/permission) left
+    // the receipt: the lane owns those choices and no flag can carry them.
+    let axes = [
+        ("route", stage.fields().route.clone()),
+        ("account", stage.fields().account.clone()),
+        ("pane_group", stage.fields().pane_group.clone()),
+    ];
+    let mut resolved = Map::new();
+    for (axis, field) in axes {
+        resolved.insert(axis.to_string(), json!({"value": field.0, "rung": field.1}));
+    }
+    let ask = json!({
+        "op": "journal",
+        "path": path,
+        "event": {
+            "name": stage.scan.name,
+            "verb": stage.profile_command,
+            // A preview, not the text: the receipt's readers key on name and
+            // fingerprint, and one full seed once made a 500 KB row.
+            "seed": stage.scan.seed.as_deref().map(|s| s.chars().take(200).collect::<String>()),
+            "fingerprint": fingerprint,
+            "resolved": resolved,
+            "applied": seam.applied
+                .iter()
+                .map(|e| e.as_array().cloned().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            "suppressed": seam.suppressed
+                .iter()
+                .map(|e| e.as_array().cloned().unwrap_or_default())
+                .collect::<Vec<_>>(),
+        },
+    });
+    let _ = crate::route_slot::run_route_slot_journal(&ask);
+}
+
+fn non_empty_env(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|v| !v.trim().is_empty())
+}
+
+/// One spawn-defaults block as the overlay command's JSON view (Python
+/// `_overlay_payload`): the typed dump carries every scalar plus the harness
+/// table.
+fn overlay_payload(table: &toml::Table) -> Value {
+    let mut out = Map::new();
+    for key in [
+        "provider",
+        "model",
+        "effort",
+        "substrate",
+        "permission_mode",
+        "route",
+        "account",
+        "pane_group",
+    ] {
+        out.insert(key.to_string(), json!(cfg_str(Some(table), key)));
+    }
+    if let Some(harness) = table.get("harness").and_then(toml::Value::as_table) {
+        let mut blocks = Map::new();
+        for (name, block) in harness {
+            if let Some(b) = block.as_table() {
+                let mut view = Map::new();
+                // Python sent harness blocks verbatim (`dict(block)`), so
+                // only PRESENT keys ride: an empty placeholder here would
+                // read as a declared lane field and the overlay guard
+                // refuses its own synthetic key.
+                for key in [
+                    "provider",
+                    "model",
+                    "effort",
+                    "substrate",
+                    "permission_mode",
+                    "route",
+                    "account",
+                    "pane_group",
+                ] {
+                    let value = cfg_str(Some(b), key);
+                    if !value.is_empty() {
+                        view.insert(key.to_string(), json!(value));
+                    }
+                }
+                if let Some(args) = b.get("args").and_then(toml::Value::as_array) {
+                    view.insert(
+                        "args".to_string(),
+                        Value::Array(
+                            args.iter()
+                                .map(|a| json!(a.as_str().unwrap_or_default()))
+                                .collect(),
+                        ),
+                    );
+                }
+                blocks.insert(name.clone(), Value::Object(view));
+            }
+        }
+        out.insert("harness".to_string(), Value::Object(blocks));
+    }
+    Value::Object(out)
+}
+
+/// The harness-keyed rungs: one round trip answers effort/substrate/
+/// permission plus the ONE bundle and refuses a bad overlay. Gated on an
+/// overlay table (or lane args) being present, so an overlay-free spawn
+/// never runs it and the harness-blind field() reads answer exactly.
+fn overlay_stage(stage: &mut Stage, seam: &mut Seam) {
+    if !overlays_present(stage) {
+        return;
+    }
+    let lane_args = stage
+        .lane
+        .as_ref()
+        .and_then(|lane| lane.get("args"))
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .map(|v| v.as_str().unwrap_or_default().to_string())
+                .collect::<Vec<_>>()
+        })
+        .filter(|a: &Vec<String>| !a.is_empty());
+    let harness = resolved_harness(stage).unwrap_or_default();
+    let ask = json!({
+        "kind": "overlay",
+        "verb": stage.profile_command,
+        "harness": harness,
+        "defaults": overlay_payload(&stage.defaults),
+        "profile": stage.profile.map(overlay_payload),
+        "lane": lane_args.as_ref().map(|args| json!({ "args": args })),
+        "lane_index": stage.lane_index,
+        "argv_tail": stage.argv_tail(),
+    });
+    match crate::spawn_overlay::resolve(ask) {
+        Ok(answer) => {
+            if let Some(refusal) = answer.get("refusal").and_then(Value::as_str) {
+                if !refusal.is_empty() {
+                    seam.refuse(refusal.to_string());
+                    return;
+                }
+            }
+            stage.overlay_answer = Some(answer);
+        }
+        Err(exc) => {
+            seam.note(format!(
+                "fno agents spawn: harness-keyed defaults skipped ({exc})"
+            ));
+        }
+    }
+}
+
+/// Fill a lane's launch template with the spawn's values - the one renderer
+/// behind `spawn --print` and the exec path. A hole token takes its value;
+/// an optional hole whose value is empty drops itself and the flag before
+/// it, so a lane with no route, model or effort still renders a legal argv.
+/// The payload positional is the one hole that may begin with a dash, so the
+/// fill fences it with `--` exactly when the value needs it: claude's parser
+/// would otherwise read a leading-flag seed as its own flag.
+pub fn fill_launch(
+    template: &crate::harness_capabilities::LaunchTemplate,
+    values: &std::collections::BTreeMap<String, String>,
+) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::new();
+    for token in &template.argv {
+        let Some(hole) = token
+            .strip_prefix('{')
+            .and_then(|rest| rest.strip_suffix('}'))
+        else {
+            out.push(token.clone());
+            continue;
+        };
+        let value = values.get(hole).map(String::as_str).unwrap_or("");
+        if value.is_empty() {
+            if !template.optional.iter().any(|name| name == hole) {
+                return Err(format!(
+                    "no value for hole {{{hole}}}; supply it or declare it optional"
+                ));
+            }
+            if out.last().is_some_and(|flag| flag.starts_with('-')) {
+                out.pop();
+            }
+            continue;
+        }
+        if hole == "payload" && value.starts_with('-') {
+            out.push("--".to_string());
+        }
+        out.push(value.to_string());
+    }
+    Ok(out)
+}
+
+/// Resolve one lane's launch template: a routing row's own `launch` list
+/// (with its optional sibling) over the harness's packaged default, with the
+/// default's optional set filtered to the holes the override still carries.
+/// Refuses a harness with neither - absence is the declared
+/// not-yet-templated state, never another harness's line. The row pieces
+/// arrive as raw JSON from the ask; non-string tokens refuse.
+pub fn resolve_template(
+    harness: &str,
+    row_launch: Option<&Value>,
+    row_optional: Option<&Value>,
+) -> Result<crate::harness_capabilities::LaunchTemplate, String> {
+    let parse_list = |value: &Value, what: &str| -> Result<Vec<String>, String> {
+        let items = value.as_array().ok_or(format!(
+            "spawn-overlay: {what} must be an argv list of strings"
+        ))?;
+        items
+            .iter()
+            .map(|item| {
+                item.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| format!("spawn-overlay: {what} must be an argv list of strings"))
+            })
+            .collect()
+    };
+    let default_launch = crate::harness_capabilities::HarnessContract::packaged()
+        .map_err(|error| error.to_string())?
+        .capabilities(harness)
+        .map_err(|error| error.to_string())?
+        .launch
+        .clone();
+    let (argv, optional) = match (row_launch, default_launch) {
+        (Some(raw), default) => {
+            let argv = parse_list(raw, "launch")?;
+            let optional = match row_optional {
+                Some(extra) => parse_list(extra, "launch_optional")?,
+                None => match default {
+                    Some(template) => template
+                        .optional
+                        .into_iter()
+                        .filter(|hole| argv.iter().any(|token| token == &format!("{{{hole}}}")))
+                        .collect(),
+                    None => Vec::new(),
+                },
+            };
+            (argv, optional)
+        }
+        (None, Some(default)) => (default.argv, default.optional),
+        (None, None) => {
+            return Err(format!(
+                "harness {harness} declares no native launch template"
+            ))
+        }
+    };
+    let template = crate::harness_capabilities::LaunchTemplate { argv, optional };
+    template
+        .validate(harness)
+        .map_err(|error| error.to_string())?;
+    Ok(template)
+}
+
+/// The ask's hole values: every closed-vocabulary hole present in the
+/// payload, empty when absent. The payload key IS the hole name, so the
+/// ask's `payload` field fills the `{payload}` hole unchanged.
+pub fn fill_values(payload: &Value) -> std::collections::BTreeMap<String, String> {
+    let mut values = std::collections::BTreeMap::new();
+    for hole in crate::harness_capabilities::LAUNCH_HOLES {
+        let value = payload.get(hole).and_then(Value::as_str).unwrap_or("");
+        values.insert(hole.to_string(), value.to_string());
+    }
+    values
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A pick's model rides behind the fence: it opens a fence when none
+    /// exists, joins a lane bundle, yields to a typed `--model`, and refuses
+    /// to join an `--argv` payload with a named line instead of dropping.
+    #[test]
+    fn a_pick_model_rides_the_harness_argv() {
+        fn argv(t: &[&str]) -> Vec<String> {
+            t.iter().map(|s| s.to_string()).collect()
+        }
+        fn pin(a: &[String], mut bundle: Vec<String>) -> (Vec<String>, Vec<String>) {
+            let mut stderr = Vec::new();
+            fence_model(a, &mut bundle, "claude-haiku-5-5".into(), &mut stderr);
+            (bundle, stderr)
+        }
+        let seed = argv(&["spawn", "--name", "w", "/fno:target x-1"]);
+        assert_eq!(
+            pin(&seed, vec![]).0,
+            argv(&["--", "--model", "claude-haiku-5-5"])
+        );
+        let lane = argv(&["--", "--verbose"]);
+        assert_eq!(
+            pin(&seed, lane).0,
+            argv(&["--", "--verbose", "--model", "claude-haiku-5-5"])
+        );
+        let typed = argv(&["spawn", "go", "--", "-m", "sonnet"]);
+        assert!(pin(&typed, vec![]).0.is_empty(), "the typed model wins");
+        let fenced = argv(&["spawn", "go", "--", "--verbose"]);
+        assert_eq!(
+            pin(&fenced, vec![]).0,
+            argv(&["--model", "claude-haiku-5-5"])
+        );
+        let (bundle, stderr) = pin(&argv(&["spawn", "--argv", "claude"]), vec![]);
+        assert!(bundle.is_empty());
+        assert!(stderr[0].contains("model skipped"), "{stderr:?}");
+    }
+
+    type Saved = Vec<(&'static str, Option<std::ffi::OsString>)>;
+
+    /// The per-process fake world the CLAIMS root pins to, for the whole
+    /// run. The claims pin is SET-FOREVER and the dir is never deleted:
+    /// restoring it reopens live-$HOME claims reads (28 CI failures), and
+    /// a deleted dir starves later readers of a readable-empty world (6).
+    /// The STATE pins are NOT set-forever: a persisting empty state world
+    /// shadows the tests that pin their own (5 CI failures), so those
+    /// snapshot-restore like the config path.
+    fn fake_root() -> &'static std::path::Path {
+        static ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+        let root = ROOT.get_or_init(|| {
+            let dir = std::env::temp_dir().join(format!("fno-fake-world-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&dir);
+            dir
+        });
+        root.as_path()
+    }
+
+    fn hermetic() -> (
+        std::sync::MutexGuard<'static, ()>,
+        &'static std::path::Path,
+        Saved,
+    ) {
+        let guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let root = fake_root();
+        // Snapshot the config and state pins for restore; only the claims
+        // root is set-forever (see fake_root). FNO_TEST_HERMETIC is never
+        // touched, so CI's declared ambient ("0") survives the process.
+        let saved: Saved = vec![
+            ("FNO_CONFIG", std::env::var_os("FNO_CONFIG")),
+            ("FNO_STATE_DIR", std::env::var_os("FNO_STATE_DIR")),
+            ("FNO_AGENTS_HOME", std::env::var_os("FNO_AGENTS_HOME")),
+        ];
+        // The consult arm reads the declared rows, the policy and the lanes
+        // from DISK (the gather's own read); pin an empty config or the
+        // test process's ambient config answers the walk.
+        std::fs::write(root.join("config.toml"), "").unwrap();
+        std::env::set_var("FNO_CONFIG", root.join("config.toml"));
+        std::env::set_var("FNO_CLAIMS_ROOT", root);
+        std::env::set_var("FNO_STATE_DIR", root.join("state"));
+        std::env::set_var("FNO_AGENTS_HOME", root.join("agents-home"));
+        (guard, root, saved)
+    }
+
+    fn clear_hermetic(_root: &std::path::Path, saved: Saved) {
+        for (key, value) in saved {
+            match value {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
+
+    /// AC7-ERR: the take-over front door refuses `--take-over` without
+    /// `--promote` or combined with `--hand-off`/`--succeed` (exit 2, the
+    /// front-door line), and lets the legal shape compose through.
+    #[test]
+    fn the_take_over_front_door_refuses_the_illegal_shapes() {
+        let (guard, root, saved) = hermetic();
+        let make_inputs = |tokens: &[&str]| -> Inputs {
+            Inputs {
+                argv: std::iter::once("spawn".to_string())
+                    .chain(tokens.iter().map(|t| t.to_string()))
+                    .collect(),
+                defaults: toml::Value::Table(toml::map::Map::new()),
+                profiles: toml::Value::Table(toml::map::Map::new()),
+                dispatch_commands: toml::Value::Table(toml::map::Map::new()),
+                roster: vec!["target".to_string()],
+                node_command: None,
+                env_node: None,
+                ambient_harness: "claude".to_string(),
+                apply_permission_builtin: true,
+                scan: serde_json::json!({
+                    "has_harness": false, "explicit_harness": null,
+                    "has_model": false, "has_effort": false,
+                    "explicit_route": false, "role": null,
+                    "has_permission": false, "seed": null,
+                    "name": "Maya", "positional_present": false
+                }),
+                facts: serde_json::json!({"role_resolves": null}),
+                node: None,
+                node_row: None,
+                verbose: false,
+            }
+        };
+        let front_door_line =
+            "--take-over moves a sub-team to the new colleague and needs --promote <scope>;";
+        let refused = compose(&make_inputs(&["--take-over", "why", "--name", "Maya"]));
+        assert_eq!(refused.exit, 2, "{:?}", refused.stderr);
+        assert!(
+            refused
+                .stderr
+                .iter()
+                .any(|line| line.contains(front_door_line)),
+            "{:?}",
+            refused.stderr
+        );
+        let refused = compose(&make_inputs(&[
+            "--promote",
+            "x-aaaa",
+            "--take-over",
+            "why",
+            "--hand-off",
+            "--name",
+            "Maya",
+        ]));
+        assert_eq!(refused.exit, 2, "{:?}", refused.stderr);
+        assert!(
+            refused
+                .stderr
+                .iter()
+                .any(|line| line.contains(front_door_line)),
+            "{:?}",
+            refused.stderr
+        );
+        let ok = compose(&make_inputs(&[
+            "--promote",
+            "x-aaaa",
+            "--take-over",
+            "why",
+            "--name",
+            "Maya",
+        ]));
+        assert_ne!(ok.exit, 2, "{:?}", ok.stderr);
+        assert!(
+            !ok.stderr.iter().any(|line| line.contains(front_door_line)),
+            "{:?}",
+            ok.stderr
+        );
+        // The flag is carried here: the answer argv drops it and the
+        // reason rides the answer to the in-process seam.
+        assert!(!ok.argv.iter().any(|t| t == "--take-over"), "{:?}", ok.argv);
+        assert_eq!(ok.take_over, "why");
+        // With the flag last before the fence, the ask refuses: the answer
+        // carries the input argv untouched (the fence and the payload were
+        // never eaten) and the door names the missing reason instead of
+        // silently degrading to a plain promote.
+        let fenced = compose(&make_inputs(&[
+            "--promote",
+            "x-aaaa",
+            "--take-over",
+            "--",
+            "review the ledger",
+        ]));
+        assert_eq!(fenced.exit, 2, "{:?}", fenced.stderr);
+        assert!(
+            fenced.argv.iter().any(|t| t == "--"),
+            "fence rewritten: {:?}",
+            fenced.argv
+        );
+        assert!(
+            fenced.argv.iter().any(|t| t == "review the ledger"),
+            "payload rewritten: {:?}",
+            fenced.argv
+        );
+        assert!(
+            fenced
+                .stderr
+                .iter()
+                .any(|line| line.contains("needs a reason")),
+            "{:?}",
+            fenced.stderr
+        );
+        // A flag-shaped token after --take-over is never the reason: the ask
+        // refuses instead of eating --name and launching nameless.
+        let eaten = compose(&make_inputs(&[
+            "--promote",
+            "x-aaaa",
+            "--take-over",
+            "--name",
+            "Maya",
+        ]));
+        assert_eq!(eaten.exit, 2, "{:?}", eaten.stderr);
+        assert!(
+            eaten.argv.iter().any(|t| t == "--name") && eaten.argv.iter().any(|t| t == "Maya"),
+            "name eaten: {:?}",
+            eaten.argv
+        );
+        // Held to the end: every compose above reads the process env, which
+        // the sibling test rewrites the moment the lock frees.
+        drop(guard);
+        clear_hermetic(&root, saved);
+    }
+
+    /// A bare spawn from a claude lead picks a codex lane whose row names a
+    /// codex account. The worker launches on codex, and the account stays off
+    /// the claude-only --account overlay, which refuses a codex record.
+    #[test]
+    fn a_codex_lane_launches_codex_and_keeps_its_account_off_the_overlay() {
+        let (guard, root, saved) = hermetic();
+        std::fs::write(
+            root.join("config.toml"),
+            "[agents.profiles.blueprint]\nlanes = [\"codex-sol\"]\n\n\
+             [[routing.models]]\nname = \"codex-sol\"\nharness = \"codex\"\n\
+             model = \"sol-x\"\naccount = \"codex-main\"\nband = \"high\"\n",
+        )
+        .unwrap();
+        let inputs = Inputs {
+            argv: ["spawn", "--name", "w", "/fno:blueprint x-1"]
+                .map(str::to_string)
+                .to_vec(),
+            defaults: toml::Value::Table(toml::map::Map::new()),
+            profiles: "blueprint = { lanes = [\"codex-sol\"] }".parse().unwrap(),
+            dispatch_commands: toml::Value::Table(toml::map::Map::new()),
+            roster: vec!["blueprint".to_string()],
+            node_command: None,
+            env_node: None,
+            ambient_harness: "claude".to_string(),
+            apply_permission_builtin: true,
+            scan: serde_json::json!({
+                "has_harness": false, "explicit_harness": null,
+                "has_model": false, "has_effort": false,
+                "explicit_route": false, "role": null,
+                "has_permission": false, "seed": "/fno:blueprint x-1",
+                "name": "w", "positional_present": true
+            }),
+            facts: serde_json::json!({"role_resolves": null}),
+            node: None,
+            node_row: None,
+            verbose: false,
+        };
+        let answer = compose(&inputs);
+        drop(guard);
+        clear_hermetic(&root, saved);
+        assert_eq!(answer.exit, 0, "{:?}", answer.stderr);
+        let at = answer.argv.iter().position(|t| t == "--harness");
+        assert_eq!(
+            at.and_then(|i| answer.argv.get(i + 1)).map(String::as_str),
+            Some("codex"),
+            "{:?} {:?}",
+            answer.argv,
+            answer.stderr
+        );
+        assert!(
+            !answer.argv.iter().any(|t| t == "--account"),
+            "{:?}",
+            answer.argv
+        );
+        assert!(
+            answer.argv.iter().any(|t| t == "sol-x"),
+            "{:?}",
+            answer.argv
+        );
+    }
+
+    /// A typed --model reaches the scan behind the fence. Whatever vendor the
+    /// profile's first lane bills, the pin stands and no lane leaks in.
+    #[test]
+    fn a_fenced_typed_model_beats_a_routed_lane_of_any_vendor() {
+        let (guard, root, saved) = hermetic();
+        std::fs::write(
+            root.join("config.toml"),
+            "[agents.profiles.blueprint]\nlanes = [\"acme-lane\"]\n\n\
+             [[routing.models]]\nname = \"acme-lane\"\nharness = \"claude\"\n\
+             model = \"acme-1\"\nroute = \"acme/acme-1\"\nband = \"high\"\n",
+        )
+        .unwrap();
+        let argv: Vec<String> = [
+            "spawn",
+            "--name",
+            "w",
+            "--harness",
+            "claude",
+            "/fno:blueprint x-1",
+            "--",
+            "--model",
+            "opus",
+        ]
+        .map(str::to_string)
+        .to_vec();
+        let inputs = Inputs {
+            scan: crate::spawn_admission::scan_projection(&argv[1..]),
+            argv,
+            defaults: toml::Value::Table(toml::map::Map::new()),
+            profiles: "blueprint = { lanes = [\"acme-lane\"] }".parse().unwrap(),
+            dispatch_commands: toml::Value::Table(toml::map::Map::new()),
+            roster: vec!["blueprint".to_string()],
+            node_command: None,
+            env_node: None,
+            ambient_harness: "claude".to_string(),
+            apply_permission_builtin: true,
+            facts: serde_json::json!({"role_resolves": null}),
+            node: None,
+            node_row: None,
+            verbose: true,
+        };
+        let answer = compose(&inputs);
+        drop(guard);
+        clear_hermetic(&root, saved);
+        assert_eq!(answer.exit, 0, "{:?}", answer.stderr);
+        assert!(
+            !answer.argv.iter().any(|t| t == "--route"),
+            "{:?}",
+            answer.argv
+        );
+        assert!(
+            !answer.argv.iter().any(|t| t.contains("acme")),
+            "{:?}",
+            answer.argv
+        );
+        assert!(
+            !answer.stderr.iter().any(|l| l.contains("acme")),
+            "{:?}",
+            answer.stderr
+        );
+        let at = answer.argv.iter().position(|t| t == "--model").unwrap();
+        assert_eq!(answer.argv[at + 1], "opus");
+    }
+
+    /// A take-over reason in the environment is a forgery or a stale
+    /// leak: nothing sets it, so any spawn under one refuses.
+    #[test]
+    fn an_inherited_take_over_var_refuses_the_spawn() {
+        let (guard, root, saved) = hermetic();
+        std::env::set_var("FNO_SPAWN_TAKE_OVER", "forged");
+        let inputs = Inputs {
+            argv: vec![
+                "spawn".to_string(),
+                "--name".to_string(),
+                "w".to_string(),
+                "work".to_string(),
+            ],
+            defaults: toml::Value::Table(toml::map::Map::new()),
+            profiles: toml::Value::Table(toml::map::Map::new()),
+            dispatch_commands: toml::Value::Table(toml::map::Map::new()),
+            roster: vec!["target".to_string()],
+            node_command: None,
+            env_node: None,
+            ambient_harness: "claude".to_string(),
+            apply_permission_builtin: true,
+            scan: serde_json::json!({
+                "has_harness": false, "explicit_harness": null,
+                "has_model": false, "has_effort": false,
+                "explicit_route": false, "role": null,
+                "has_permission": false, "seed": null,
+                "name": "w", "positional_present": true
+            }),
+            facts: serde_json::json!({"role_resolves": null}),
+            node: None,
+            node_row: None,
+            verbose: false,
+        };
+        let answer = compose(&inputs);
+        std::env::remove_var("FNO_SPAWN_TAKE_OVER");
+        drop(guard);
+        clear_hermetic(&root, saved);
+        assert_eq!(answer.exit, 2, "{:?}", answer.stderr);
+        assert!(
+            answer
+                .stderr
+                .iter()
+                .any(|line| line.contains("FNO_SPAWN_TAKE_OVER is set")),
+            "{:?}",
+            answer.stderr
+        );
+    }
+}

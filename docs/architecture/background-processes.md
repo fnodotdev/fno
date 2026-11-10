@@ -1,0 +1,106 @@
+# Background processes: which fno process or arm is which
+
+## Is this page for you?
+
+You see a process in `ps`, a `sh.fno.*` label in `launchctl list`, or an arm row in `fno agents session status`. You need to know what it is, who starts it, and how to stop it. The `via=` column of `fno agents session status` names the scheduler that owns each row. This page says what each scheduler is.
+
+Not for: which program removed a session and in what order (see [reaping-faq.md](../reaping-faq.md)). And not for: why the stop hook allowed or refused a stop (see [control-plane-loop.md](control-plane-loop.md)).
+
+## Five kinds of thing
+
+A **launchd agent** is macOS's scheduler firing a command on an interval, a calendar time, or at load. It is either a one-shot tick or a `KeepAlive` server. macOS tracks it by label, and killing the tick pid mid-phase never stops the next fire.
+
+A **daemon** is the one lazy-started `fno-agents-daemon` supervisor. Launchd never touches it: a client starts it on first need, and it exits after an idle window.
+
+A **keeper** is a small process that outlives a different parent: the pty keeper outlives the mux server, and the store keeper outlives the daemon. Neither is launchd-managed and neither is a daemon.
+
+An **arm** is a named unit of scheduled work that writes one `control_plane_tick` row per run. It is never a process, and one launchd agent carries several arms. The `pr_watch_merge` confusion comes from exactly this: it is an arm, a phase inside a launchd agent's tick, and not a process at all.
+
+A **hook** runs inside the stopping agent's own process tree, only at Stop. It is not a background process at all.
+
+Beyond the five kinds, two other long-lived fno processes exist: the mux server and the MCP sidecar. Both are listed under Long-running processes below.
+
+## What is pr_watch_merge?
+
+It is the merge phase of the `sh.fno.pr-watcher` tick: `crates/fno-agents/src/gate/pr_watch/tick.rs`, function `run`, calls `run_phase("merge", Some("pr_watch_merge"), 1, 0, phase_merge)`. Launchd fires the tick every 600 seconds, and the same invocation also drives the other launchd arms in the table below.
+
+Read it with `fno agents session status` (the `via=launchd:sh.fno.pr-watcher` column says which scheduler owns the row) and `fno do pr watch status`. See [pr-watch-merge-phase.md](pr-watch-merge-phase.md) for why the merge phase fails and what each failure means.
+
+## Launchd agents
+
+The gated table: every `sh.fno.*` label an installer in this repo writes. Columns: label, installed by, runs, cadence, arms it hosts, health read, safe stop.
+
+| label | installed by | runs | cadence | arms it hosts | health read | safe stop |
+|---|---|---|---|---|---|---|
+| `sh.fno.pr-watcher` | `fno do pr watch install` (`crates/fno-agents/src/gate/pr_watch/install.rs`, the HOME-derived label in `crates/fno-agents/src/spawn/launchd_labels.rs`) | `fno-agents do pr watch tick` (the installing binary's own path) | `StartInterval` 600 s | every arm stamped `launchd:sh.fno.pr-watcher` | `fno do pr watch status`, `fno agents session status`, `~/.fno/logs/pr-watcher.out.log` | `fno do pr watch uninstall`; rebind to a new binary with `fno do pr watch refresh` |
+| `sh.fno.groom` | `fno backlog groom --install-agent` (`crates/fno-agents/src/backlog/groom.rs`, `install_agent`) | `fno backlog groom` | daily at `--hour` (default 2) | none: it writes no `control_plane_tick` row | `launchctl list sh.fno.groom.<home-suffix>` last exit, `fno doctor`, `~/.fno/logs/groom.out.log` | `launchctl bootout gui/$(id -u)/sh.fno.groom.<home-suffix>` (no uninstall command exists) |
+
+The `<home-suffix>` is the first 8 hex characters of sha256 over your HOME path (`crates/fno-agents/src/spawn/launchd_labels.rs`). Two fno HOMEs on one macOS account derive different labels, so neither install replaces the other's launchd job; the plist file name keeps no suffix because each HOME has its own `~/Library/LaunchAgents` directory. Installers also retire the pre-suffix label (`sh.fno.pr-watcher`, `sh.fno.groom`) when its registered plist points at this HOME.
+
+Below the table: other `sh.fno.*` labels can appear in `launchctl list` that footnote does not install. Today those are `sh.fno.autocontinue`, `sh.fno.board-server` and `sh.fno.sync-backlog`, an operator's own agents, and `fno agents loop control table` lists every label it folds, including them. The `auto_continue` arm's 1800 s heartbeat needs some scheduler that runs `fno backlog advance` with `FNO_CONTROL_PLANE_SCHEDULER` set (`cli/src/fno/control_plane.py`, `scheduler_from_env`). Without one the arm reads `session`.
+
+## Long-running processes
+
+Not gated by the doc-binding test: these are read from `ps`, not from source. Columns: process as `ps` shows it, started by, lifetime and exit, owns, health read, safe stop.
+
+| process as `ps` shows it | started by | lifetime and exit | owns | health read | safe stop |
+|---|---|---|---|---|---|
+| `fno-agents-daemon --home <dir>` | `ensure_daemon` in `crates/fno-agents/src/client.rs`, on the first client call | exits after 1800 s idle unless an active-backlog project is live; binary resolves from `FNO_AGENTS_DAEMON_BIN` or a sibling of the client | the roster, the registry, and every daemon-scheduled arm | `fno agents session status` (`daemon: serving pid=...`) | `fno agents session restart` (graceful; `--force` is break-glass) |
+| `fno --server <sock>` (the mux server) | `spawn_server` in `crates/fno/src/client.rs`, detached with setsid, on the first `fno` or `fno mux` attach | lives until killed | plain panes and the views over keeper panes | `fno mux pane keeper list` | `fno agents session restart --mux` is destructive: it ends plain panes and shells |
+| `fno-agents-worker --keeper` (alias `--pane`, the pty keeper) | spawned per pane or thread | lives as long as the hosted child | the child's pty master | `fno mux pane keeper list` | never killed by hand while the child lives; see [pane-keeper.md](pane-keeper.md) |
+| `fno-agents-worker --store-keeper --sock <graph>.store.sock` (the store keeper) | spawned by the graph store client when nothing listens on the socket | exits after 600 s idle; `FNO_STORE_KEEPER_IDLE_SECS` overrides, `0` disables | one graph file behind the socket | `lsof <graph>.store.sock` | ends by idle exit, or `fno agents session restart` cycles a stale build and the next read respawns it |
+| the MCP sidecar (`crates/fno-agents/src/runtime/mcp/sidecar.rs`, entered as `fno-agents-worker --mcp-exec sidecar`) | lazy-started by the sidecar client on first channel use | idle-exits when no connection, no registered channel and no pending poke outlasts the idle window (default 1800 s) | MCP tool dispatch for its session | see [fno-agents-mcp-channel.md](fno-agents-mcp-channel.md) | ends by idle exit |
+| `hooks/target-stop-hook.sh` | the harness, on every Stop | one invocation per stop | the `fno-agents loop-check` decision | `fno agents session status`, arm `stop_hook` | nothing to stop: it is not a background process |
+
+## Two keepers, one word
+
+The pty keeper and the store keeper share a binary (`fno-agents-worker`), a frame shape, and one rule: the keeper keeps, the server views. Nothing else. The other two worker lanes are not keepers. `--stream` streams a child's output. `--store-exec` serves one request and exits, so a client leaves no resident process behind.
+
+## Arms
+
+The gated table: one row per arm the readout can show. The scheduler cell is the exact stamp `KNOWN_ARMS` and the tick rows carry (`crates/fno-agents/src/eval/tick_ledger.rs`). Columns: arm, scheduler, hosted by, what it does, default interval.
+
+| arm | scheduler | hosted by | what it does | default interval |
+|---|---|---|---|---|
+| `lead_wake` | `daemon` | `fno-agents-daemon` | wakes a lead one minute past its check-in beat and tells the rung up | 300 s |
+| `worker_wake` | `daemon` | `fno-agents-daemon` | nudges ended Codex turns or resumes proven-dead sessions on unfinished work, preserving intentional waits | 60 s |
+| `lead_wake` | `launchd:sh.fno.pr-watcher` | the pr-watch tick | the python-served pre-rename spelling of `lead_wake` | 900 s |
+| `watchdog` | `launchd:sh.fno.pr-watcher` | the pr-watch tick | the fleet watchdog classifier over lanes | 600 s |
+| `pr_watch_sweep` | `launchd:sh.fno.pr-watcher` | the pr-watch tick | scans open-PR backlog nodes and fires `/fno:ship pr check` | 600 s |
+| `pr_watch_merge` | `launchd:sh.fno.pr-watcher` | the pr-watch tick | the merge phase: fires the merge queue for ready PRs | 600 s |
+| `active_backlog` | `daemon` | `fno-agents-daemon` | the daemon's mission drain | 300 s |
+| `auto_continue` | `session` | backlog advance + the 1800 s heartbeat | reconciles web-merged PRs and dispatches the next node; upstream `pr_watch_merge` | 1800 s |
+| `notify_watch` | `launchd:sh.fno.pr-watcher` | the pr-watch tick | the state-change signals arm | 300 s |
+| `stop_hook` | `hook:target-stop-hook` | the target stop hook | one row per stop-hook fire | event-driven |
+| `reap` | `daemon` | `fno-agents-daemon` | reaps rows, processes, claims and worktrees of merged PRs | 60 s |
+| `orphan_reap` | `daemon` | `fno-agents-daemon` | reaps confirmed orphaned test binaries, mux servers, and any lease-carrying process whose owner process died | 300 s |
+| `retire` | `daemon` | `fno-agents-daemon` | retires finished work | 300 s |
+| `machine_watch` | `daemon` | `fno-agents-daemon` | watches sustained machine footprint | 300 s |
+| `claude_restart_watch` | `daemon` | `fno-agents-daemon` | revives claude thread workers whose job identity a Claude daemon restart moved, through boot revival's revive door | 120 s |
+| `arm_watch` | `daemon` | `fno-agents-daemon` | pages the operator when arms stay broken past the threshold | 300 s |
+| `lead_settle` | `daemon` | `fno-agents-daemon` | mails the owning lead when a covered PR settles green or its node closes | 300 s |
+| `provider_cap` | `daemon` | `fno-agents-daemon` | provider cap accounting | 120 s |
+| `slot_cutover` | `daemon` | `fno-agents-daemon` | switches to a globally declared managed Claude account when the proven account is low or exhausted | 120 s |
+| `slot_login_health` | `daemon` | `fno-agents-daemon` | health-checks every shared-slot managed Claude login and raises one operator notice when one dies | 120 s |
+| `merge_close` | `daemon` | `fno-agents-daemon` | merge-close sweeps | 900 s |
+| `board_render` | `daemon` | `fno-agents-daemon` | renders graph.md plus every configured board target once per moved store version, the render-views command bounded at 300 s | 300 s |
+| `team_ledger` | `daemon` | `fno-agents-daemon` | renders rundown.html | 300 s |
+| `lead_eval` | `daemon` | `fno-agents-daemon` | writes missing eval parts for ended Claude leads | 600 s |
+| `question_judge` | `daemon` | `fno-agents-daemon` | reads a batch of open questions against the record with a one-shot reader and writes shadow verdicts when `questions.judge.enabled` is on | 3600 s |
+| `attention` | `daemon` | `fno-agents-daemon` | selects attention rows into the status payload | 30 s |
+| `notice_route` | `daemon` | `fno-agents-daemon` | routes reconcile warnings to the owning lead and folds repeated failures into one node | 300 s |
+| `otlp_export` | `daemon` | `fno-agents-daemon` | exports the tick ledger's control-plane rows to the configured OTLP endpoint when `telemetry.otlp.enabled` is on | 300 s |
+| `eval_events` | `daemon` | `fno-agents-daemon` | sends each eval attempt to PostHog as an event when `telemetry.eval_events.enabled` is on | 300 s |
+| `pane_loop` | `daemon` | `fno-agents-daemon` | types each due armed loop prompt into its session's pane, skipping a pane the manifest reads working or blocked | 30 s |
+| `heal` | `launchd:sh.fno.pr-watcher` | the pr-watch tick | the PR auto-heal drive, gated on `auto_heal.enabled` | 600 s |
+| `evals` | `daemon` | `fno-agents-daemon` | checks the evals gate and launches due regression-bank work outside the pr-watch tick | 60 s |
+| `stranded` | `launchd:sh.fno.pr-watcher` | the pr-watch tick | the stranded-session sweep | one tick in three |
+| `recovery` | `launchd:sh.fno.pr-watcher` | the pr-watch tick | the recovery sweep | one tick in three |
+
+Under the table, four notes. First, `stranded` and `recovery` have no `KNOWN_ARMS` row, so the readout shows them only after they tick and never reads them `UNOBSERVED`. Second, `stranded`, `recovery` and `watchdog` run one tick in three on staggered slots of the 600 s tick. Their effective cadence is one run per 1800 s. Third, the daemon runs work that writes no arm row: the worktree sweep, the merge reaper, orphan sweeps, the terminal-stop sweep, and liveness. [reaping-faq.md](../reaping-faq.md) holds that list. The evals-arm checks each minute for due launches; the separate evals-gate settle grades finished runs on its one-minute sweep. Fourth, [loops.md](../loops.md) is generated from this same arm list and carries each loop's arming key and live state. When a row reads red, run `fno agents loop control table`.
+
+The sweep's per-PR rich read is bounded: one row no more often than every two intervals, default 20 minutes. The cheap listing leg already answered that row's state. The least-recently-read order spreads the pool across the window. A fleet budget hold above 10 s pauses the read pass outright. A refused read ends the pass early and never marks the row stale.
+
+## Stopping things safely
+
+A launchd agent is stopped by its uninstall command or `launchctl bootout`, never by killing the tick pid mid-phase. The next fire is already scheduled. The daemon is restarted, never killed, because workers survive a graceful restart. A keeper is never killed by hand while its child lives. A pty keeper kill ends the session. A store keeper ends by idle exit or `fno agents session restart`.

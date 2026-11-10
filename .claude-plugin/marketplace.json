@@ -1,0 +1,47 @@
+{
+  "name": "fno",
+  "owner": {
+    "name": "Jason Noah Choi",
+    "url": "https://github.com/fnodotdev/fno"
+  },
+  "metadata": {
+    "description": "Set the targets. Your agents do the rest. Say F[no] to mostly done.",
+    "version": "0.4.5"
+  },
+  "plugins": [
+    {
+      "name": "fno",
+      "source": {
+        "source": "github",
+        "repo": "fnodotdev/fno",
+        "ref": "stable"
+      },
+      "description": "Set the targets. Your agents do the rest. Say F[no] to mostly done.",
+      "category": "workflow",
+      "tags": ["workflow", "tdd", "planning", "code-review", "autonomous", "target"]
+    },
+    {
+      "name": "fno-nightly",
+      "source": {
+        "source": "github",
+        "repo": "fnodotdev/fno",
+        "ref": "plugin-nightly"
+      },
+      "description": "Footnote nightly: yesterday's green main, rolling and replaceable.",
+      "category": "workflow",
+      "tags": ["workflow", "nightly", "tdd", "planning", "autonomous", "target"]
+    },
+    {
+      "name": "buddy",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/fnodotdev/fno.git",
+        "path": "plugins/buddy",
+        "ref": "main"
+      },
+      "description": "Bring back buddy: a terminal companion beside your status line. /buddy or /bbb.",
+      "category": "fun",
+      "tags": ["buddy", "companion", "statusline", "mod"]
+    }
+  ]
+}

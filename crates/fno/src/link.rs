@@ -1,0 +1,1474 @@
+//! URL detection and open-safety for clickable links in mux panes.
+//!
+//! Two sources feed the same model. An app can declare a link explicitly with
+//! OSC 8, which `alacritty_terminal` already parses into `Cell::hyperlink()`;
+//! everything else is plain text, which is the common case (a printed PR URL
+//! from `gh`, a session link from a coding agent). [`find_urls`] covers the
+//! second. Detection is pure and unit-tested; the grid walk lives in
+//! [`crate::vt::Pane::link_at`], and the impure openers live here
+//! ([`open_url`] for a local attach, [`open_url_for_session`] for either) so
+//! the scheme allowlist and the calls that act on it cannot drift apart.
+
+use std::path::{Path, PathBuf};
+
+use crate::digest_overlay::ObsidianCfg;
+
+/// Schemes we will hand to the platform opener. Deliberately just these two.
+///
+/// This is a trust boundary, not a nicety: an OSC 8 URI is arbitrary bytes
+/// chosen by whatever is running in the pane, and `open(1)` on macOS will
+/// happily launch an application, mount a URL handler, or reveal a `file://`
+/// path. A pane rendering hostile output must not be able to turn a click into
+/// anything but a web navigation, so the allowlist is checked on both sides of
+/// the wire (server before send, client before exec).
+const OPENABLE_SCHEMES: [&str; 2] = ["http://", "https://"];
+
+/// Characters that may appear inside a URL. RFC 3986's unreserved + reserved
+/// sets plus `%`; everything else (whitespace, controls, `<>"{}|\^` and the
+/// backtick) terminates the match. Quotes and angle brackets are excluded on
+/// purpose - they are how prose and markup wrap a URL, never part of one.
+fn is_url_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || "-._~:/?#[]@!$&'()*+,;=%".contains(c)
+}
+
+/// Trailing characters trimmed off a detected URL. A URL at the end of a
+/// sentence ("opened https://example.com/pr/700.") is the normal case, and
+/// `is_url_char` accepts all of these mid-URL, so the scan has to give them
+/// back at the tail. `)` is handled separately - see [`trim_tail`].
+const TRAILING_PUNCT: [char; 8] = ['.', ',', ';', ':', '!', '?', '\'', '"'];
+
+/// The URL's length in CHARS after trailing punctuation is given back.
+///
+/// Closing brackets are only trimmed when unbalanced, so a Wikipedia-style
+/// `https://en.wikipedia.org/wiki/Foo_(bar)` keeps its `)` while a
+/// parenthesised `(see https://example.com/x)` does not eat the closer.
+fn trim_tail(chars: &[char]) -> usize {
+    let mut end = chars.len();
+    while end > 0 {
+        let c = chars[end - 1];
+        if TRAILING_PUNCT.contains(&c) {
+            end -= 1;
+            continue;
+        }
+        if matches!(c, ')' | ']' | '}') {
+            let open = match c {
+                ')' => '(',
+                ']' => '[',
+                _ => '{',
+            };
+            let opens = chars[..end].iter().filter(|&&x| x == open).count();
+            let closes = chars[..end].iter().filter(|&&x| x == c).count();
+            if closes > opens {
+                end -= 1;
+                continue;
+            }
+        }
+        break;
+    }
+    end
+}
+
+/// Every plain-text URL in `text`, as half-open CHAR index ranges.
+///
+/// Char indices rather than byte indices because the caller maps each range
+/// back to a grid cell, and cells are chars. Ranges never overlap and are
+/// returned in order.
+pub fn find_urls(text: &str) -> Vec<(usize, usize)> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let Some(scheme_len) = scheme_at(&chars, i) else {
+            i += 1;
+            continue;
+        };
+        let mut end = i + scheme_len;
+        while end < chars.len() && is_url_char(chars[end]) {
+            end += 1;
+        }
+        // Require at least one host character after the scheme, so a bare
+        // "https://" in prose is not offered as a link.
+        let end = i + trim_tail(&chars[i..end]);
+        if end > i + scheme_len {
+            out.push((i, end));
+            i = end;
+        } else {
+            i += scheme_len;
+        }
+    }
+    out
+}
+
+/// The length of an openable scheme starting at `i`, if one starts there.
+/// Case-insensitive: `HTTPS://` is a URL a terminal can legitimately print.
+fn scheme_at(chars: &[char], i: usize) -> Option<usize> {
+    OPENABLE_SCHEMES.iter().find_map(|scheme| {
+        let n = scheme.chars().count();
+        let matches = chars.len() >= i + n
+            && chars[i..i + n]
+                .iter()
+                .zip(scheme.chars())
+                .all(|(c, s)| c.to_ascii_lowercase() == s);
+        matches.then_some(n)
+    })
+}
+
+/// The longest URL we will act on. Also bounds the soft-wrap walk in
+/// [`crate::vt::Pane::link_at`]: a walk that stops short of this while the line
+/// is still wrapping has only a PREFIX, and a prefix of a URL is a different
+/// URL, so the two limits have to agree.
+pub const MAX_URL_LEN: usize = 4096;
+
+/// Whether `url` may be handed to the platform opener.
+///
+/// Rejects anything outside [`OPENABLE_SCHEMES`], anything carrying whitespace
+/// or a control character (an argv element with a newline is how a "URL"
+/// becomes two arguments to something downstream), and anything absurdly long.
+pub fn is_openable(url: &str) -> bool {
+    if url.len() > MAX_URL_LEN {
+        return false;
+    }
+    let lower = url.to_ascii_lowercase();
+    if !OPENABLE_SCHEMES.iter().any(|s| lower.starts_with(s)) {
+        return false;
+    }
+    if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return false;
+    }
+    // A scheme with no host is not navigable and is the shape a truncated or
+    // synthesised URI takes.
+    OPENABLE_SCHEMES
+        .iter()
+        .any(|s| lower.starts_with(s) && url.len() > s.len())
+}
+
+/// A URL shortened for a one-line notice, so a 4000-character link cannot
+/// scroll the status line off the screen.
+pub fn for_notice(url: &str) -> String {
+    const MAX: usize = 60;
+    if url.chars().count() <= MAX {
+        return url.to_string();
+    }
+    let head: String = url.chars().take(MAX - 1).collect();
+    format!("{head}…")
+}
+
+/// The pseudo scheme a tapped `@sender` header token resolves to. Never
+/// openable: the client intercepts it before [`open_url`], and [`is_openable`]
+/// rejects it, so it can never reach the platform opener.
+pub const SENDER_SCHEME: &str = "fno-sender:";
+
+/// The pseudo scheme for a tapped `fmail-` message id. Like the sender
+/// pseudo URI, it is intercepted by the mux client and never reaches an OS
+/// opener.
+pub const MESSAGE_SCHEME: &str = "fno-message:";
+
+/// The pseudo scheme for a clicked `@handle` token. Intercepted by the mux
+/// client like [`SENDER_SCHEME`] and [`MESSAGE_SCHEME`]: it opens the
+/// Messages tab filtered to the handle, never a platform opener.
+pub const HANDLE_SCHEME: &str = "fno-handle:";
+
+/// The pseudo scheme for a clicked bare file path (`crates/fno/src/link.rs:42`
+/// printed in a pane). The URI carries the CANONICAL absolute path plus an
+/// optional `:<line>` tail. It is intercepted by the mux client - open the
+/// file today, hand it to the file viewer when that lands - and
+/// [`OPENABLE_SCHEMES`] stays at two, so it can never reach the platform
+/// opener through the pane-sourced door.
+pub const FILE_SCHEME: &str = "fno-file:";
+
+/// Parse an exact [`FILE_SCHEME`] URI into its canonical path and optional
+/// line. Strict, because it is the trust gate on pane-sourced bytes: the path
+/// must be absolute and free of whitespace or control characters, or the URI
+/// resolves nothing.
+pub fn file_uri_parts(uri: &str) -> Option<(PathBuf, Option<u32>)> {
+    let rest = uri.strip_prefix(FILE_SCHEME)?;
+    let (path, line) = match rest.rfind(':') {
+        Some(pos) => match rest[pos + 1..].parse::<u32>() {
+            Ok(n) => (&rest[..pos], Some(n)),
+            Err(_) => (rest, None),
+        },
+        None => (rest, None),
+    };
+    if !Path::new(path).is_absolute()
+        || path.is_empty()
+        || path.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return None;
+    }
+    Some((PathBuf::from(path), line))
+}
+
+/// True when `s` is a well-formed [`FILE_SCHEME`] URI.
+pub fn is_file_uri(s: &str) -> bool {
+    file_uri_parts(s).is_some()
+}
+
+/// Characters that may appear inside a bare-path candidate: everything but
+/// whitespace, controls, and the punctuation that prose and shells wrap paths
+/// in. `:` is admitted so `path:line` scans as one run; the line is split
+/// back off before the candidate is resolved. Permissiveness is safe here
+/// because a candidate only linkifies if it EXISTS on disk - a prose token
+/// dies at the stat, not at the scan.
+fn is_path_char(c: char) -> bool {
+    !c.is_whitespace() && !c.is_control() && !"<>()[]{}\"'`,;!?&|*".contains(c)
+}
+
+/// One detected path: its half-open CHAR range in the line plus the
+/// [`FILE_SCHEME`] URI it resolves to (canonical path, optional `:<line>`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathLink {
+    pub start: usize,
+    pub end: usize,
+    pub uri: String,
+}
+
+/// Every bare path in `text` that exists, resolved against the pane's cwd.
+/// The impure twin of [`find_urls`]: each candidate is a filesystem probe,
+/// which is the whole point - ambiguity is settled by existence, not by more
+/// syntax. Only tokens containing a separator (`/`, or a `~/` prefix)
+/// qualify, so ordinary prose words never reach the stat.
+pub fn find_paths(text: &str, cwd: &Path) -> Vec<PathLink> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    find_paths_with(text, cwd, home.as_deref(), |p| {
+        std::fs::canonicalize(p).ok()
+    })
+}
+
+/// [`find_paths`] with the filesystem and HOME injected, mirroring the
+/// `open_url_with` seam: detection is assertable without touching the real
+/// tree, and the one real-filesystem test pins the probe's contract
+/// (canonicalize = existence + symlink resolution in one call).
+pub fn find_paths_with(
+    text: &str,
+    cwd: &Path,
+    home: Option<&Path>,
+    probe: impl Fn(&Path) -> Option<PathBuf>,
+) -> Vec<PathLink> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        // A candidate starts at a path char that is not continuing a run.
+        if !is_path_char(chars[i]) || i > 0 && is_path_char(chars[i - 1]) {
+            i += 1;
+            continue;
+        }
+        let mut end = i + 1;
+        while end < chars.len() && is_path_char(chars[end]) {
+            end += 1;
+        }
+        let trimmed = i + trim_tail(&chars[i..end]);
+        let raw: String = chars[i..trimmed].iter().collect();
+        let start = i;
+        i = end;
+        match resolve_path_candidate(&raw, cwd, home, &probe) {
+            Some((path, line)) => out.push(PathLink {
+                start,
+                end: trimmed,
+                uri: file_uri(&path, line),
+            }),
+            None => continue,
+        }
+    }
+    out
+}
+
+/// Resolve one trimmed candidate to a canonical path plus optional line.
+/// `None` when it is prose: no separator, a `~user/` form, or a probe miss.
+fn resolve_path_candidate(
+    raw: &str,
+    cwd: &Path,
+    home: Option<&Path>,
+    probe: &impl Fn(&Path) -> Option<PathBuf>,
+) -> Option<(PathBuf, Option<u32>)> {
+    // `path:line`: the valuable half of the feature. The tail after the LAST
+    // colon must be all digits to count, so `a/b:c` stays a path.
+    let (path_str, line) = match raw.rfind(':') {
+        Some(pos) => match raw[pos + 1..].parse::<u32>() {
+            Ok(n) => (&raw[..pos], Some(n)),
+            Err(_) => (raw, None),
+        },
+        None => (raw, None),
+    };
+    // The crate's one tilde-expansion helper, shared with the obsidian vault
+    // root. Only `~/rest` expands; a bare `~` is prompt text more often than
+    // a path, and `~user/` passes through to die at the probe. With no HOME
+    // the helper passes it through and the probe rejects the literal.
+    let expanded = if path_str.starts_with("~/") {
+        PathBuf::from(crate::connections_view::expand_tilde(
+            path_str,
+            home.map(Path::as_os_str),
+        ))
+    } else if Path::new(path_str).is_absolute() {
+        PathBuf::from(path_str)
+    } else {
+        if !path_str.contains('/') {
+            return None;
+        }
+        cwd.join(path_str)
+    };
+    // `./` and `../` need no lexical normalizing: the probe resolves them,
+    // and the URI carries the canonical answer.
+    let canonical = probe(&expanded)?;
+    Some((canonical, line))
+}
+
+/// Build a [`FILE_SCHEME`] URI for a canonical path and optional line.
+pub fn file_uri(path: &Path, line: Option<u32>) -> String {
+    let mut uri = format!("{FILE_SCHEME}{}", path.display());
+    if let Some(line) = line {
+        uri.push_str(&format!(":{line}"));
+    }
+    uri
+}
+
+/// True when `s` is exactly the sender pseudo URI for a `@handle`: scheme
+/// plus a handle-shaped name, nothing else. The handle names the sender row
+/// to open; the `fmail-` id travels on the message URI instead.
+pub fn is_sender_uri(s: &str) -> bool {
+    s.strip_prefix(SENDER_SCHEME).is_some_and(is_handle_name)
+}
+
+/// The name grammar every `@handle`-shaped URI payload follows: a short run
+/// of letters, digits, `_` and `-`, led by a letter or digit. Shared by the
+/// handle and sender validators so neither can smuggle a path or whitespace
+/// into a later opener. A header token the grammar rejects (a retired
+/// `a/b` name, say) spans no sender URI.
+pub fn is_handle_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// The message id carried by an exact `fno-message:` pseudo URI.
+pub fn message_id_from_uri(s: &str) -> Option<&str> {
+    let id = s.strip_prefix(MESSAGE_SCHEME)?;
+    let hex = id.strip_prefix("fmail-")?;
+    (hex.len() == 12 && hex.bytes().all(|b| b.is_ascii_hexdigit())).then_some(id)
+}
+
+pub fn is_message_uri(s: &str) -> bool {
+    message_id_from_uri(s).is_some()
+}
+
+/// The bare handle carried by an exact `fno-handle:` pseudo URI.
+pub fn handle_from_uri(s: &str) -> Option<&str> {
+    let name = s.strip_prefix(HANDLE_SCHEME)?;
+    is_handle_name(name).then_some(name)
+}
+
+pub fn is_handle_uri(s: &str) -> bool {
+    handle_from_uri(s).is_some()
+}
+
+/// True for the pseudo URIs the mux client intercepts (message, sender,
+/// handle). These are the URIs a click claims even from a pane whose app
+/// negotiated mouse reporting: the tokens mean what fno says, so the mux
+/// answers them itself and forwards nothing.
+pub fn is_fno_uri(s: &str) -> bool {
+    is_message_uri(s) || is_sender_uri(s) || is_handle_uri(s)
+}
+
+/// The `@name` span of a delivered-mail header line in pane text, as a
+/// half-open CHAR range plus the bare handle and the `fmail-<12 hex>` id.
+///
+/// The header the mail transport types into the pane reads
+/// `` `@name · fmail-<12hex> · summary` `` — a harness prompt prefix and the
+/// wrapping backticks may sit around it, so the scan anchors on the id token
+/// and tolerates whatever precedes the `@`. A spaced name, a non-hex or
+/// over-long id, or a missing summary resolves nothing, and a legacy `msg-`
+/// id resolves no span: there is no sender session to find. The handle
+/// excludes the leading `@`, so it is the URI payload that opens the
+/// handle's session.
+pub fn find_mail_sender(text: &str) -> Option<(usize, usize, String, String)> {
+    let chars: Vec<char> = text.chars().collect();
+    let hex12 = |cs: &[char]| cs.len() == 12 && cs.iter().all(|c| c.is_ascii_hexdigit());
+    for i in 0..chars.len() {
+        if !chars[i..].starts_with(&['f', 'm', 'a', 'i', 'l', '-']) {
+            continue;
+        }
+        let hex_start = i + "fmail-".len();
+        let id_end = hex_start + 12;
+        if !hex12(chars.get(hex_start..id_end)?) {
+            continue;
+        }
+        // A hex digit right after the id means a longer token, not this id.
+        if chars.get(id_end).is_some_and(|c| c.is_ascii_hexdigit()) {
+            continue;
+        }
+        // Left: exactly ` · ` between the id and the sender token.
+        if i < 3 || chars[i - 3..i] != [' ', '·', ' '] {
+            continue;
+        }
+        let name_end = i - 3;
+        // Right: exactly ` · ` then a non-empty summary.
+        if chars.get(id_end..id_end + 3) != Some(&[' ', '·', ' '][..]) {
+            continue;
+        }
+        if chars.get(id_end + 3).is_none_or(|c| c.is_whitespace()) {
+            continue;
+        }
+        // The sender token: the non-space run ending at the separator. The
+        // header's own `@` is the RIGHTMOST one in that run, so prompt text
+        // like `user@host` and the wrapping backtick stay outside the range.
+        let mut run_start = name_end;
+        while run_start > 0 && !chars[run_start - 1].is_whitespace() {
+            run_start -= 1;
+        }
+        let Some(at) = chars[run_start..name_end].iter().rposition(|c| *c == '@') else {
+            continue;
+        };
+        let name_start = run_start + at;
+        if name_start + 1 >= name_end {
+            continue;
+        }
+        let handle: String = chars[name_start + 1..name_end].iter().collect();
+        let id: String = chars[hex_start..id_end].iter().collect();
+        return Some((name_start, name_end, handle, format!("fmail-{id}")));
+    }
+    None
+}
+
+/// The fmail id span in a well-formed delivered-mail header. Reuse the
+/// sender parser as the header validator so a coincidental id in body text
+/// does not become a message link.
+pub fn find_mail_message(text: &str) -> Option<(usize, usize, String)> {
+    let (_, sender_end, _, id) = find_mail_sender(text)?;
+    let byte_start = text.char_indices().nth(sender_end)?.0;
+    let id_byte = byte_start + text[byte_start..].find(&id)?;
+    let start = text[..id_byte].chars().count();
+    Some((start, start + id.chars().count(), id))
+}
+
+/// The BARE `fmail-<12 hex>` token span in pane text, as a half-open CHAR
+/// range plus the full id. Where [`find_mail_message`] needs the delivered
+/// header around the id, this is the id wherever it prints - a transcript
+/// quote, a log line - because the token means what fno says. Word-bounded:
+/// a longer hex run and an `fmail-`-prefixed name never match. `skip` is the
+/// CHAR index to scan from, so a caller can walk a line's later occurrences.
+pub fn find_fmail_token(text: &str, skip: usize) -> Option<(usize, usize, String)> {
+    let chars: Vec<char> = text.chars().collect();
+    let hex12 = |cs: &[char]| cs.len() == 12 && cs.iter().all(|c| c.is_ascii_hexdigit());
+    for i in skip..chars.len() {
+        if !chars[i..].starts_with(&['f', 'm', 'a', 'i', 'l', '-']) {
+            continue;
+        }
+        // Word-start: the token cannot begin inside `xfmail-...`.
+        if i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '-') {
+            continue;
+        }
+        let hex_start = i + "fmail-".len();
+        let id_end = hex_start + 12;
+        if !hex12(chars.get(hex_start..id_end)?) {
+            continue;
+        }
+        // Any word character right after the id means a longer token, not
+        // this id: `fmail-0123456789abg` names no mail this parse may pick.
+        if chars
+            .get(id_end)
+            .is_some_and(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+        {
+            continue;
+        }
+        let id: String = chars[hex_start..id_end].iter().collect();
+        return Some((i, id_end, format!("fmail-{id}")));
+    }
+    None
+}
+
+/// The `@handle` token span in pane text, as a half-open CHAR range plus the
+/// bare handle (no `@`). The char before `@` must not continue a word, so an
+/// email address (`user@host`) never matches; a trailing `-` reads as
+/// punctuation, not the name. `skip` is the CHAR index to scan from, so a
+/// caller can walk a line's later occurrences.
+pub fn find_handle_token(text: &str, skip: usize) -> Option<(usize, usize, String)> {
+    let chars: Vec<char> = text.chars().collect();
+    let is_name = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+    for i in skip..chars.len() {
+        if chars[i] != '@' {
+            continue;
+        }
+        if i > 0 && is_name(chars[i - 1]) {
+            continue;
+        }
+        let raw: String = chars[i + 1..]
+            .iter()
+            .copied()
+            .take_while(|c| is_name(*c))
+            .collect();
+        // The name proper starts with a letter or digit and is at least two
+        // characters: `@-x`, `@_` and a lone `@a` are punctuation or a
+        // fragment, not handles (and `@a` sits inside malformed mail
+        // headers, which resolve nothing). A trailing `-` is punctuation too.
+        if !raw.starts_with(|c: char| c.is_ascii_alphanumeric()) || raw.len() < 2 || raw.len() > 64
+        {
+            continue;
+        }
+        let name = raw.trim_end_matches('-');
+        return Some((i, i + 1 + name.chars().count(), name.to_string()));
+    }
+    None
+}
+
+/// Hand `url` to the platform opener, blocking until it exits. `Err` carries
+/// one human line for the status notice.
+///
+/// Re-checks [`is_openable`] even though the server filtered before sending:
+/// this is the call that actually launches something, and a check at the point
+/// of action is the one that cannot be bypassed by a future caller. The URL is
+/// passed as a single argv element, never through a shell, and `is_openable`
+/// having required an `http(s)://` prefix is also what stops it being read as
+/// an option by the opener.
+pub fn open_url(url: &str) -> Result<(), String> {
+    open_url_with(spawn_opener, url)
+}
+
+/// The opener name for this platform. Named separately so the test that
+/// asserts the argv can name the same binary the real path would use.
+fn opener_bin() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    }
+}
+
+/// [`open_url`] with the exec injected, mirroring `clipboard::deliver_with`:
+/// the refusal is testable without a process, and the ACCEPT path is testable
+/// without launching a browser on whatever machine runs the suite. The seam
+/// exists so the argv - the part that actually matters for safety - is asserted
+/// rather than assumed.
+fn open_url_with<S>(spawn: S, url: &str) -> Result<(), String>
+where
+    S: FnOnce(&str, &str) -> Result<std::process::ExitStatus, std::io::Error>,
+{
+    if !is_openable(url) {
+        return Err(format!("refused to open {}", for_notice(url)));
+    }
+    run_opener(spawn, url)
+}
+
+/// Run the platform opener on `target` and map its outcome to the shared
+/// `Result`. Used by the web-URL opener, the fno-URI opener, and the plain-file
+/// opener so the spawn discipline (one argv element, stdio detached so a chatty
+/// opener cannot scribble over the alternate screen) lives in one place. The
+/// TRUST GATE that decides whether to reach this stays in each caller:
+/// [`open_url_with`] checks [`is_openable`]; [`open_fno_uri_with`] checks the
+/// `obsidian://` prefix. A gate missing from one path is the first pitfalls
+/// entry, so the gate is never folded in here.
+fn run_opener<S>(spawn: S, target: &str) -> Result<(), String>
+where
+    S: FnOnce(&str, &str) -> Result<std::process::ExitStatus, std::io::Error>,
+{
+    let opener = opener_bin();
+    match spawn(opener, target) {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => Err(format!("{opener} exited {}", s.code().unwrap_or(-1))),
+        Err(e) => Err(format!("{opener}: {e}")),
+    }
+}
+
+/// The real exec. One argv element for the URL, no shell, stdio detached so a
+/// chatty `xdg-open` cannot scribble over the client's alternate screen.
+fn spawn_opener(opener: &str, url: &str) -> Result<std::process::ExitStatus, std::io::Error> {
+    use std::process::Stdio;
+    let mut command = crate::process_admission::std_command(opener);
+    command
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    crate::process_admission::std_status(&mut command)
+}
+
+// ── attach-aware open ───────────────────────────────────────────────────────
+//
+// The opener execs in the client's own process, and over an ssh attach that
+// process runs on the mux host: `open(1)` opened the browser on a screen the
+// user cannot see (reproduced on both paths 2026-10-12 - local `open` exit 0
+// with the tab on this Mac; the same exec under `ssh localhost` put the tab on
+// the host the same way). The remote arm therefore hands the URL to the
+// terminal the user IS looking at, as an OSC 52 clipboard set: the terminal
+// emulator on the user's device stores it, and the paste opens in THEIR
+// browser. OSC 8 was considered and rejected: a hyperlink only annotates
+// visible text, and the client paints the alternate screen, so the span would
+// either scribble on the TUI or be zero cells wide and unclickable. OSC 52 is
+// silent, and this codebase already ships it over attach (the copy fallback).
+
+/// Whether this process's stdout reaches a terminal on another machine: the
+/// attach came through ssh, so a child opener would act on the host. Same key
+/// set as the theme file picker, which refuses the osascript dialog for the
+/// identical reason.
+pub fn is_remote_session() -> bool {
+    is_remote_session_with(|k| std::env::var_os(k))
+}
+
+fn is_remote_session_with(env: impl Fn(&str) -> Option<std::ffi::OsString>) -> bool {
+    ["SSH_CONNECTION", "SSH_TTY"]
+        .iter()
+        .any(|k| env(k).is_some())
+}
+
+/// What a session-aware open did, for the status notice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenOutcome {
+    /// The platform opener exec'd (local attach only).
+    Opened,
+    /// The URL was copied to the attached terminal's clipboard (OSC 52);
+    /// the paste opens it in the user's own browser.
+    CopiedToTerminal,
+}
+
+impl OpenOutcome {
+    /// The status-line sentence for this outcome. Both arms name what
+    /// actually happened: a click that says "opened" when the browser came up
+    /// on another machine reads as a broken button.
+    pub fn notice(self, url: &str) -> String {
+        match self {
+            OpenOutcome::Opened => format!("opened {}", for_notice(url)),
+            OpenOutcome::CopiedToTerminal => {
+                format!("copied {} - paste to open", for_notice(url))
+            }
+        }
+    }
+}
+
+/// The bytes handed to the attached terminal for `url`: an OSC 52 clipboard
+/// set, the same payload the copy fallback emits. Infallible because the only
+/// caller passes an [`is_openable`] URL, capped at [`MAX_URL_LEN`] (4096) -
+/// 13x under the ~55 KB where `osc52_payload` would truncate.
+pub fn terminal_offer_payload(url: &str) -> Vec<u8> {
+    crate::clipboard::osc52_payload(url).0
+}
+
+/// The terminal write behind the remote arm: raw bytes on stdout, flushed.
+/// OSC is consumed by the terminal emulator, never rendered over the TUI -
+/// the same channel the clipboard fallback writes through.
+fn emit_to_terminal(bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    out.write_all(bytes)?;
+    out.flush()
+}
+
+/// Open `url` on the machine the user is on: [`open_url`] for a local
+/// attach, the OSC 52 handoff for an ssh attach. The allowlist gate runs
+/// before the branch, so a refused URL reaches neither the opener nor the
+/// terminal.
+pub fn open_url_for_session(url: &str) -> Result<OpenOutcome, String> {
+    open_url_for_session_with(spawn_opener, emit_to_terminal, is_remote_session(), url)
+}
+
+fn open_url_for_session_with<S, E>(
+    spawn: S,
+    emit: E,
+    remote: bool,
+    url: &str,
+) -> Result<OpenOutcome, String>
+where
+    S: FnOnce(&str, &str) -> Result<std::process::ExitStatus, std::io::Error>,
+    E: FnOnce(&[u8]) -> std::io::Result<()>,
+{
+    if !is_openable(url) {
+        return Err(format!("refused to open {}", for_notice(url)));
+    }
+    open_for_session(spawn, emit, remote, url)
+}
+
+// ── open plan (LD3) ─────────────────────────────────────────────────────────
+//
+// An open-plan menu item reaches Obsidian without widening what pane output can
+// trigger. obsidian:// is NOT added to OPENABLE_SCHEMES (above): that allowlist
+// guards bytes a pane chose, and admitting obsidian:// there would hand the
+// scheme to hostile pane output as well as to this menu item. The URI is
+// fno-constructed and gets its own opener, never falling back to open_url.
+
+/// An open-plan target resolved from a node's `plan_path` and the obsidian
+/// config. The type holds LD3's three rules so no call site can get them wrong:
+/// no plan -> [`PlanUnavailable::NoPlan`] (greyed); obsidian off ->
+/// [`PlanUnavailable::ObsidianOff`] (absent, no vault synthesised); a path
+/// outside the vault -> [`PlanLink::PlainFile`] (open as a file, labelled so).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanLink {
+    /// An `obsidian://open?vault=<name>&file=<encoded vault-relative path>` URI
+    /// fno constructed. Opened by [`open_fno_uri`], never via [`open_url`].
+    Obsidian { uri: String },
+    /// The plan lives outside the configured vault. Opened as a plain file.
+    PlainFile(PathBuf),
+    /// The item does not apply.
+    Unavailable(PlanUnavailable),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanUnavailable {
+    /// The node has no `plan_path`. Greyed with "no plan" as the reason.
+    NoPlan,
+    /// `obsidian.enabled` is false, or it is true with no vault configured.
+    /// Absent (never greyed); no vault name is synthesised.
+    ObsidianOff,
+}
+
+/// Resolve an open-plan target. Pure: reads no files. The vault root is resolved
+/// the same way `paths.py:: vault_root` resolves it (bare name -> `~/<name>`;
+/// absolute or `~`-prefixed honored as-is), and the URI carries the BASENAME of
+/// that root, so a bare `myvault` and an absolute `/Users/x/myvault` produce the
+/// same URI (a test pins this).
+pub fn plan_link(plan_path: Option<&Path>, cfg: &ObsidianCfg) -> PlanLink {
+    // Obsidian-off is checked FIRST: LD7 says config-off is absent because
+    // nothing in this menu can unlock it, which outranks "no plan" (state
+    // that CAN change) when both are true. Reversing this order would grey
+    // the item with "no plan" on an obsidian-off node, misleading the
+    // operator into thinking a plan alone would enable it.
+    if !cfg.enabled {
+        return PlanLink::Unavailable(PlanUnavailable::ObsidianOff);
+    }
+    let Some(plan) = plan_path else {
+        return PlanLink::Unavailable(PlanUnavailable::NoPlan);
+    };
+    let Some(vault_cfg) = cfg.vault.as_deref().filter(|v| !v.is_empty()) else {
+        // enabled with no vault: the Python schema refuses this, but the Rust
+        // reader is permissive. Unavailable rather than synthesise a name.
+        return PlanLink::Unavailable(PlanUnavailable::ObsidianOff);
+    };
+    // Obsidian opens a note, never a folder: a plan directory gets no link.
+    let note = plan
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("md"));
+    match note
+        .then(|| vault_file_uri(plan, vault_cfg).or_else(|| linked_vault_uri(plan, vault_cfg)))
+        .flatten()
+    {
+        Some(uri) => PlanLink::Obsidian { uri },
+        None => PlanLink::PlainFile(plan.to_path_buf()),
+    }
+}
+
+/// The vault's top-level directories a checkout links in by name.
+const VAULT_TOPLEVEL_DIRS: &[&str] = &["internal/"];
+
+/// A plan path the graph recorded outside the vault root: vault-relative
+/// (`internal/...`), or under a checkout's linked vault dir
+/// (`/wt/<tree>/internal/...`). Plans only: a pane's file keeps the strict
+/// under-the-root rule, since any repo may hold an `internal/` of its own.
+fn linked_vault_uri(plan: &Path, vault_cfg: &str) -> Option<String> {
+    let p = plan.to_string_lossy().replace('\\', "/");
+    let rel = if plan.is_relative() {
+        VAULT_TOPLEVEL_DIRS
+            .iter()
+            .any(|d| p.starts_with(d))
+            .then(|| p.clone())?
+    } else {
+        let at = VAULT_TOPLEVEL_DIRS
+            .iter()
+            .filter_map(|d| p.rfind(&format!("/{d}")))
+            .max()?;
+        p[at + 1..].to_string()
+    };
+    let root = resolve_vault_root(vault_cfg);
+    let name = root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(vault_cfg);
+    Some(obsidian_open_uri(name, &rel))
+}
+
+/// The `obsidian://open` URI for `path` when it sits under the vault root that
+/// `vault_cfg` resolves to, else `None`. The one vault-relative step, shared by
+/// [`plan_link`] and the file open router.
+pub(crate) fn vault_file_uri(path: &Path, vault_cfg: &str) -> Option<String> {
+    let root = resolve_vault_root(vault_cfg);
+    let vault_name = root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(vault_cfg);
+    let rel = path.strip_prefix(&root).ok()?;
+    let rel_str = rel.to_string_lossy().replace('\\', "/");
+    Some(obsidian_open_uri(vault_name, &rel_str))
+}
+
+/// Resolve the obsidian vault root from its config value, mirroring
+/// `paths.py:: vault_root`. Takes `home` so a test can fix HOME without touching
+/// the process environment.
+fn resolve_vault_root_with(vault: &str, home: Option<&Path>) -> PathBuf {
+    // `~/rest` and bare `~` share the crate's one tilde-expansion helper
+    // rather than a third re-implementation (bootstrap.rs's is deliberately
+    // isolated - a recovery path with no other-module dependencies).
+    if vault == "~" || vault.starts_with("~/") {
+        return PathBuf::from(crate::connections_view::expand_tilde(
+            vault,
+            home.map(Path::as_os_str),
+        ));
+    }
+    let p = Path::new(vault);
+    if p.is_absolute() {
+        return p.to_path_buf();
+    }
+    // bare name -> ~/<name>
+    match home {
+        Some(h) => h.join(vault),
+        None => PathBuf::from(vault),
+    }
+}
+
+fn resolve_vault_root(vault: &str) -> PathBuf {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    resolve_vault_root_with(vault, home.as_deref())
+}
+
+/// Build `obsidian://open?vault=<name>&file=<encoded rel>`. The vault-relative
+/// path is percent-encoded as an RFC 3986 query component (unreserved chars and
+/// `/` preserved; space, `&`, `#` encoded so they cannot split or truncate the
+/// URI).
+fn obsidian_open_uri(vault: &str, rel_path: &str) -> String {
+    format!(
+        "obsidian://open?vault={}&file={}",
+        percent_encode_query(vault),
+        percent_encode_query(rel_path)
+    )
+}
+
+/// Percent-encode for an RFC 3986 query component: preserve unreserved chars
+/// (`A-Za-z0-9-._~`) and the `/` path separator; encode everything else. Kept
+/// local so the URI builder and its round-trip test cannot drift.
+pub(crate) fn percent_encode_query(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for &byte in s.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{:02X}", byte));
+        }
+    }
+    out
+}
+
+/// Open an fno-constructed `obsidian://` URI with the platform opener. This is
+/// deliberately SEPARATE from [`open_url`]: it acts only on URIs fno built, so
+/// it does NOT gate on [`is_openable`] (which would refuse the non-web scheme);
+/// instead it refuses anything not carrying the `obsidian://` prefix. It never
+/// falls back to [`open_url`]: the separation is what keeps pane-sourced output
+/// from ever reaching this path.
+///
+/// Over an ssh attach the opener would act on the mux host, so the URI goes to
+/// the attached terminal's clipboard instead ([`OpenOutcome::CopiedToTerminal`]).
+pub fn open_fno_uri(uri: &str) -> Result<OpenOutcome, String> {
+    open_fno_uri_with(spawn_opener, emit_to_terminal, is_remote_session(), uri)
+}
+fn open_fno_uri_with<S, E>(
+    spawn: S,
+    emit: E,
+    remote: bool,
+    uri: &str,
+) -> Result<OpenOutcome, String>
+where
+    S: FnOnce(&str, &str) -> Result<std::process::ExitStatus, std::io::Error>,
+    E: FnOnce(&[u8]) -> std::io::Result<()>,
+{
+    if !uri.starts_with("obsidian://") {
+        return Err(format!("refused to open {}", for_notice(uri)));
+    }
+    open_for_session(spawn, emit, remote, uri)
+}
+
+/// The shared remote/local branch: an ssh attach offers `target` to the
+/// terminal's clipboard, a local attach runs the platform opener.
+fn open_for_session<S, E>(
+    spawn: S,
+    emit: E,
+    remote: bool,
+    target: &str,
+) -> Result<OpenOutcome, String>
+where
+    S: FnOnce(&str, &str) -> Result<std::process::ExitStatus, std::io::Error>,
+    E: FnOnce(&[u8]) -> std::io::Result<()>,
+{
+    if remote {
+        emit(&terminal_offer_payload(target)).map_err(|e| format!("terminal copy: {e}"))?;
+        return Ok(OpenOutcome::CopiedToTerminal);
+    }
+    run_opener(spawn, target)?;
+    Ok(OpenOutcome::Opened)
+}
+
+/// Open an fno-resolved plain path with the platform opener. Callers are the
+/// graph's plan paths and, since path linkification, the client's
+/// [`FILE_SCHEME`] router: the pane-sourced URI is gated there by
+/// [`file_uri_parts`] (absolute, no whitespace) and by the server's
+/// `is_file_uri` send gate before it ever reaches this call. No scheme gate
+/// applies to the path itself; the spawn discipline is shared via
+/// [`run_opener`].
+///
+/// Over an ssh attach the path is copied to the terminal's clipboard, as for
+/// [`open_fno_uri`].
+pub fn open_fno_path(path: &Path) -> Result<OpenOutcome, String> {
+    open_fno_path_with(spawn_opener, emit_to_terminal, is_remote_session(), path)
+}
+fn open_fno_path_with<P, E>(
+    spawn: P,
+    emit: E,
+    remote: bool,
+    path: &Path,
+) -> Result<OpenOutcome, String>
+where
+    P: FnOnce(&str, &str) -> Result<std::process::ExitStatus, std::io::Error>,
+    E: FnOnce(&[u8]) -> std::io::Result<()>,
+{
+    open_for_session(spawn, emit, remote, &path.to_string_lossy())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn urls(text: &str) -> Vec<String> {
+        let chars: Vec<char> = text.chars().collect();
+        find_urls(text)
+            .into_iter()
+            .map(|(a, b)| chars[a..b].iter().collect())
+            .collect()
+    }
+
+    #[test]
+    fn finds_a_bare_url() {
+        assert_eq!(
+            urls("see https://github.com/fnodotdev/fno/pull/700 now"),
+            ["https://github.com/fnodotdev/fno/pull/700"]
+        );
+    }
+    #[test]
+    fn finds_several_and_reports_char_ranges() {
+        let text = "a https://x.test b http://y.test c";
+        assert_eq!(urls(text), ["https://x.test", "http://y.test"]);
+        let ranges = find_urls(text);
+        assert_eq!(ranges[0], (2, 16));
+        assert_eq!(&text[2..16], "https://x.test");
+    }
+
+    #[test]
+    fn char_ranges_are_char_indices_not_byte_indices() {
+        // A multi-byte prefix makes the two disagree; the grid walk indexes
+        // cells, so char indices are the contract.
+        let text = "→ https://example.com";
+        let (start, end) = find_urls(text)[0];
+        assert_eq!(start, 2, "one arrow char + one space");
+        let chars: Vec<char> = text.chars().collect();
+        assert_eq!(
+            chars[start..end].iter().collect::<String>(),
+            "https://example.com"
+        );
+    }
+    #[test]
+    fn fno_token_spans_and_their_uris_stay_intercepted() {
+        // The plain body-text form the delivered-header parsers reject.
+        let (start, end, id) =
+            find_fmail_token("quote: fmail-0123456789ab done", 0).expect("parses");
+        assert_eq!((start, end), (7, 25));
+        assert_eq!(id, "fmail-0123456789ab");
+        // Word bounds: a longer hex run and a prefixed token never match.
+        for bad in [
+            "fmail-0123456789abc",
+            "xfmail-0123456789ab",
+            "fmail-0123456789ab-cd",
+            "fmail-0123456789",
+            "fmail-0123456789abg",
+        ] {
+            assert!(find_fmail_token(bad, 0).is_none(), "{bad} resolves nothing");
+        }
+        // A second occurrence on one line answers from the skip offset.
+        let line = "fmail-0123456789ab and fmail-fedcba987654";
+        let (start, end, _id) = find_fmail_token(line, 0).expect("first");
+        assert_eq!((start, end), (0, 18));
+        let (start, end, id) = find_fmail_token(line, end).expect("second");
+        assert_eq!(id, "fmail-fedcba987654");
+        assert_eq!(
+            line.chars().collect::<Vec<_>>()[start..end]
+                .iter()
+                .collect::<String>(),
+            id
+        );
+        let (start, end, name) = find_handle_token("ping @nemo about it", 0).expect("parses");
+        assert_eq!((start, end), (5, 10));
+        assert_eq!(name, "nemo");
+        // A trailing dash reads as punctuation; the span stops before it.
+        assert_eq!(
+            find_handle_token("cc @nemo- later", 0),
+            Some((3, 8, "nemo".into()))
+        );
+        let two = "@aa and @bb";
+        let (_start, end, name) = find_handle_token(two, 0).expect("first");
+        assert_eq!(name, "aa");
+        assert_eq!(find_handle_token(two, end), Some((8, 11, "bb".into())));
+        // The char before @ continues a word: emails and mid-word @s never match.
+        for bad in ["user@example.com", "see bob@host", "@", "@-x", "@a"] {
+            assert!(
+                find_handle_token(bad, 0).is_none(),
+                "{bad} resolves nothing"
+            );
+        }
+        // The handle URI parses, and neither pseudo scheme is ever openable:
+        // the platform opener can never receive either.
+        assert_eq!(handle_from_uri("fno-handle:nemo"), Some("nemo"));
+        for bad in ["fno-handle:", "fno-handle:-x", "fno-handle:with space"] {
+            assert!(!is_handle_uri(bad), "{bad} resolves nothing");
+        }
+        assert!(!is_openable("fno-handle:nemo"));
+        assert!(is_fno_uri("fno-message:fmail-0123456789ab"));
+        assert!(is_fno_uri("fno-sender:fmail-0123456789ab"));
+        assert!(is_fno_uri("fno-handle:nemo"));
+        assert!(!is_fno_uri("https://example.com"));
+        assert!(!is_fno_uri("fno-file:/tmp/a.md"));
+    }
+    #[test]
+    fn non_web_schemes_are_never_detected() {
+        for text in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "ftp://example.com",
+            "mailto:a@b.test",
+        ] {
+            assert!(urls(text).is_empty(), "{text} must not linkify");
+        }
+    }
+
+    #[test]
+    fn is_openable_rejects_everything_outside_the_allowlist() {
+        assert!(is_openable("https://example.com"));
+        assert!(is_openable("http://example.com/a?b=c#d"));
+        assert!(is_openable("HTTPS://EXAMPLE.COM"));
+
+        // The OSC 8 attack surface: a pane chooses these bytes.
+        assert!(!is_openable("file:///etc/passwd"));
+        assert!(!is_openable("javascript:alert(1)"));
+        assert!(!is_openable("x-man-page://ls"));
+        assert!(!is_openable(""));
+        assert!(!is_openable("https://"), "scheme with no host");
+        assert!(!is_openable("https://a.test/x\ny"), "embedded newline");
+        assert!(!is_openable("https://a.test/ x"), "embedded space");
+        assert!(!is_openable(&format!(
+            "https://a.test/{}",
+            "x".repeat(5000)
+        )));
+    }
+
+    /// An exit status without launching anything: `true`/`false` are the two
+    /// smallest real processes on every platform this runs on.
+    fn status(ok: bool) -> std::process::ExitStatus {
+        std::process::Command::new(if ok { "true" } else { "false" })
+            .status()
+            .unwrap()
+    }
+
+    #[test]
+    fn open_url_passes_the_url_as_one_argv_element_to_the_platform_opener() {
+        // The safety-relevant assertion: the URL reaches the opener whole, as a
+        // single argument, with no shell in between. Injected rather than
+        // exec'd for real so the suite never opens a browser.
+        let seen = std::cell::RefCell::new(None);
+        let out = open_url_with(
+            |opener, url| {
+                *seen.borrow_mut() = Some((opener.to_string(), url.to_string()));
+                Ok(status(true))
+            },
+            "https://example.com/a b".replace(' ', "%20").as_str(),
+        );
+        assert!(out.is_ok(), "{out:?}");
+        let (opener, url) = seen.into_inner().expect("opener was invoked");
+        assert_eq!(opener, opener_bin());
+        assert_eq!(url, "https://example.com/a%20b", "URL passed whole");
+    }
+
+    #[test]
+    fn open_url_never_spawns_for_a_refused_url() {
+        let mut spawned = false;
+        let out = open_url_with(
+            |_, _| {
+                spawned = true;
+                Ok(status(true))
+            },
+            "file:///etc/passwd",
+        );
+        assert!(out.is_err());
+        assert!(!spawned, "a refused URL must not reach the opener at all");
+    }
+    #[test]
+    fn remote_session_gate_reads_only_the_ssh_keys() {
+        // Neither key: local attach, the opener is allowed.
+        assert!(!is_remote_session_with(|_| None));
+        // Either key alone names a remote attach.
+        assert!(is_remote_session_with(
+            |k| (k == "SSH_CONNECTION").then(|| std::ffi::OsString::from("::1 50555 ::1 22"))
+        ));
+        assert!(is_remote_session_with(
+            |k| (k == "SSH_TTY").then(|| std::ffi::OsString::from("/dev/ttys004"))
+        ));
+        // Any other env never trips the gate.
+        assert!(!is_remote_session_with(
+            |k| (k == "TERM_PROGRAM").then(|| std::ffi::OsString::from("Apple_Terminal"))
+        ));
+    }
+
+    #[test]
+    fn terminal_offer_is_the_clipboard_set_for_the_url() {
+        // The offer IS the copy fallback's payload, byte for byte: one
+        // builder, so the two cannot drift.
+        let url = "https://example.com/pr/700";
+        assert_eq!(
+            terminal_offer_payload(url),
+            crate::clipboard::osc52_payload(url).0
+        );
+        // Test decode: the body after `]52;c;` is base64 of the whole URL.
+        let payload = terminal_offer_payload(url);
+        let body = std::str::from_utf8(&payload).expect("osc52 payload is ascii-safe");
+        let b64 = body
+            .trim_start_matches("\x1b]52;c;")
+            .trim_end_matches('\x07');
+        assert_eq!(b64, "aHR0cHM6Ly9leGFtcGxlLmNvbS9wci83MDA=");
+    }
+
+    #[test]
+    fn session_open_routes_by_attach_not_by_url() {
+        // Local: the opener execs, nothing is written to the terminal.
+        let mut spawned = false;
+        let mut emitted: Vec<u8> = Vec::new();
+        let out = open_url_for_session_with(
+            |_, _| {
+                spawned = true;
+                Ok(status(true))
+            },
+            |b| {
+                emitted.extend_from_slice(b);
+                Ok(())
+            },
+            false,
+            "https://example.com",
+        );
+        assert_eq!(out, Ok(OpenOutcome::Opened));
+        assert!(spawned, "local open must exec the opener");
+        assert!(emitted.is_empty(), "local open must not touch the terminal");
+
+        // Remote: the URL is offered to the terminal, the opener never runs.
+        let mut spawned = false;
+        let mut emitted: Vec<u8> = Vec::new();
+        let out = open_url_for_session_with(
+            |_, _| {
+                spawned = true;
+                Ok(status(true))
+            },
+            |b| {
+                emitted.extend_from_slice(b);
+                Ok(())
+            },
+            true,
+            "https://example.com",
+        );
+        assert_eq!(out, Ok(OpenOutcome::CopiedToTerminal));
+        assert!(!spawned, "a remote open must not exec the opener");
+        assert!(
+            emitted.starts_with(b"\x1b]52;c;"),
+            "remote open offers the URL over OSC 52"
+        );
+
+        // A failed terminal write is a visible failure, not silence.
+        let out = open_url_for_session_with(
+            |_, _| Ok(status(true)),
+            |_| Err(std::io::Error::other("blocked")),
+            true,
+            "https://example.com",
+        );
+        assert!(out.unwrap_err().contains("terminal copy"));
+
+        // The allowlist gate outranks the branch: a refused URL reaches
+        // neither the opener nor the terminal on either attach.
+        for remote in [false, true] {
+            let mut spawned = false;
+            let mut emitted = false;
+            let out = open_url_for_session_with(
+                |_, _| {
+                    spawned = true;
+                    Ok(status(true))
+                },
+                |_| {
+                    emitted = true;
+                    Ok(())
+                },
+                remote,
+                "file:///etc/passwd",
+            );
+            assert!(out.is_err());
+            assert!(
+                !spawned && !emitted,
+                "a refused URL acts on no path (remote={remote})"
+            );
+        }
+    }
+
+    // ── open plan (LD3) ──
+
+    fn cfg(enabled: bool, vault: Option<&str>) -> ObsidianCfg {
+        ObsidianCfg {
+            enabled,
+            vault: vault.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn openable_schemes_stays_at_exactly_two_and_excludes_obsidian() {
+        // The security boundary: the pane-sourced allowlist is http(s) only.
+        // obsidian:// lives behind a separate opener, never here.
+        assert_eq!(OPENABLE_SCHEMES.len(), 2);
+        assert!(
+            !OPENABLE_SCHEMES.iter().any(|s| s.contains("obsidian")),
+            "obsidian:// must never enter OPENABLE_SCHEMES"
+        );
+        assert!(is_openable("https://example.com"));
+        assert!(!is_openable("obsidian://open?vault=v&file=f"));
+    }
+    #[test]
+    fn obsidian_uri_percent_encodes_space_amp_hash_and_round_trips() {
+        let uri = obsidian_open_uri("my vault", "a & b#c.md");
+        assert!(uri.contains("vault=my%20vault"), "{uri}");
+        let file = uri.split("file=").nth(1).expect("file= present");
+        assert_eq!(
+            file, "a%20%26%20b%23c.md",
+            "space/&# encoded in the file value: {uri}"
+        );
+        // No raw space anywhere (it is never legitimate); the dangerous chars
+        // must not appear raw in the FILE value. The whole URI legitimately
+        // carries `&` as the vault/file separator, so that is checked on `file`.
+        assert!(!uri.contains(' '), "no raw space anywhere: {uri}");
+        assert!(!file.contains('&'), "no raw amp in file: {file}");
+        assert!(!file.contains('#'), "no raw hash in file: {file}");
+        // Round-trip: decoding the file component recovers the original path.
+        assert_eq!(pct_decode(file), "a & b#c.md");
+    }
+
+    #[test]
+    fn plan_link_rules_no_plan_and_obsidian_off() {
+        // No plan_path -> greyed "no plan".
+        assert_eq!(
+            plan_link(None, &cfg(true, Some("v"))),
+            PlanLink::Unavailable(PlanUnavailable::NoPlan)
+        );
+        // obsidian disabled -> absent, no vault synthesised.
+        let plan = Path::new("/v/x.md");
+        assert_eq!(
+            plan_link(Some(plan), &cfg(false, Some("v"))),
+            PlanLink::Unavailable(PlanUnavailable::ObsidianOff)
+        );
+        // enabled but no vault configured -> absent (no name invented).
+        assert_eq!(
+            plan_link(Some(plan), &cfg(true, None)),
+            PlanLink::Unavailable(PlanUnavailable::ObsidianOff)
+        );
+        // Both true at once: obsidian off outranks no-plan (LD7). Greying
+        // "no plan" here would wrongly imply a plan alone would unlock it.
+        assert_eq!(
+            plan_link(None, &cfg(false, Some("v"))),
+            PlanLink::Unavailable(PlanUnavailable::ObsidianOff)
+        );
+    }
+
+    #[test]
+    fn plan_link_in_vault_obsidian_outside_plain_file() {
+        // Absolute vault: resolve_vault_root honors it as-is, so this is
+        // independent of $HOME.
+        let inside = PathBuf::from("/opt/myvault/plans/x.md");
+        let outside = PathBuf::from("/elsewhere/y.md");
+        let link = plan_link(Some(&inside), &cfg(true, Some("/opt/myvault")));
+        match link {
+            PlanLink::Obsidian { uri } => {
+                assert!(uri.contains("vault=myvault"), "{uri}");
+                // `/` is preserved (Obsidian accepts it in the file param); only
+                // space, &, # are encoded.
+                assert!(uri.contains("file=plans/x.md"), "{uri}");
+            }
+            other => panic!("inside vault -> Obsidian, got {other:?}"),
+        }
+        let link = plan_link(Some(&outside), &cfg(true, Some("/opt/myvault")));
+        assert!(
+            matches!(link, PlanLink::PlainFile(_)),
+            "outside vault -> PlainFile, got {link:?}"
+        );
+        // The graph's other plan shapes name the same vault file: relative to
+        // the vault, and under a checkout's linked vault dir. Both encode.
+        let want = PlanLink::Obsidian {
+            uri: "obsidian://open?vault=myvault&file=internal/fno/plans/my%20plan.md".into(),
+        };
+        for shape in [
+            "internal/fno/plans/my plan.md",
+            "/wt/footnote/some-tree/internal/fno/plans/my plan.md",
+        ] {
+            assert_eq!(
+                plan_link(Some(Path::new(shape)), &cfg(true, Some("/opt/myvault"))),
+                want,
+                "{shape}"
+            );
+        }
+        // A plan folder, inside the vault or under a linked dir, is no note.
+        for shape in [
+            "notes/x.md",
+            "/opt/myvault/internal/fno/plans/waves",
+            "internal/fno/plans/waves/",
+        ] {
+            assert!(
+                matches!(
+                    plan_link(Some(Path::new(shape)), &cfg(true, Some("/opt/myvault"))),
+                    PlanLink::PlainFile(_)
+                ),
+                "{shape}"
+            );
+        }
+    }
+
+    #[test]
+    fn open_fno_uri_refuses_non_obsidian_schemes() {
+        // A non-obsidian URI never reaches the opener (no fall-through to the
+        // pane-sourced open_url path either).
+        let mut spawned = false;
+        let out = open_fno_uri_with(
+            |_, _| {
+                spawned = true;
+                Ok(status(true))
+            },
+            |_| Ok(()),
+            false,
+            "https://example.com",
+        );
+        assert!(out.is_err());
+        assert!(!spawned, "a non-obsidian URI must not reach the opener");
+        // obsidian:// (fno-constructed) reaches the opener.
+        let out = open_fno_uri_with(
+            |_, _| Ok(status(true)),
+            |_| Ok(()),
+            false,
+            "obsidian://open?vault=v&file=f",
+        );
+        assert_eq!(out, Ok(OpenOutcome::Opened));
+    }
+    /// Minimal percent-decode for the round-trip assertion (ASCII test paths).
+    fn pct_decode(s: &str) -> String {
+        let bytes = s.as_bytes();
+        let mut out = String::with_capacity(s.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'%' && i + 2 < bytes.len() {
+                if let Ok(byte) = u8::from_str_radix(
+                    std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("GG"),
+                    16,
+                ) {
+                    out.push(byte as char);
+                    i += 3;
+                    continue;
+                }
+            }
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+        out
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    /// A candidate resolves iff a listed ABSOLUTE path equals the probe's
+    /// input, normalized like canonicalize (no symlinks here).
+    fn fake_probe(entries: &[&str]) -> impl Fn(&Path) -> Option<PathBuf> {
+        let owned: Vec<String> = entries.iter().map(|s| s.to_string()).collect();
+        move |p: &Path| {
+            let lossy = p.to_string_lossy().to_string();
+            let mut parts: Vec<&str> = Vec::new();
+            for seg in lossy.split('/') {
+                match seg {
+                    "" | "." => {}
+                    ".." => {
+                        parts.pop();
+                    }
+                    other => parts.push(other),
+                }
+            }
+            let s = format!("/{}", parts.join("/"));
+            owned
+                .iter()
+                .find(|e| e.as_str() == s)
+                .map(|e| PathBuf::from(e))
+        }
+    }
+
+    fn hits(text: &str, cwd: &Path, probe: &impl Fn(&Path) -> Option<PathBuf>) -> Vec<String> {
+        find_paths_with(text, cwd, Some(Path::new("/Users/jn")), probe)
+            .into_iter()
+            .map(|l| l.uri)
+            .collect()
+    }
+
+    /// One table over the detection seam. Each row is an independent
+    /// contract: cwd resolution with the line tail kept, prose rejection
+    /// (no separator, probe miss), the ./ join with its comma given back,
+    /// tilde against HOME, absolute pass-through, and the punct tail.
+    #[test]
+    fn path_detection_table() {
+        let probe = fake_probe(&[
+            "/w/crates/fno/src/link.rs",
+            "/w/README.md",
+            "/Users/jn/code/AGENTS.md",
+            "/w/a/b.md",
+        ]);
+        let cases: Vec<(&str, &str, Option<&str>)> = vec![
+            (
+                "see crates/fno/src/link.rs:42 there",
+                "/w",
+                Some("fno-file:/w/crates/fno/src/link.rs:42"),
+            ),
+            ("see foo.md and bar", "/w", None),
+            ("see docs/missing.md here", "/w", None),
+            (
+                "read ./README.md, then go",
+                "/w",
+                Some("fno-file:/w/README.md"),
+            ),
+            (
+                "check ~/code/AGENTS.md out",
+                "/w",
+                Some("fno-file:/Users/jn/code/AGENTS.md"),
+            ),
+            ("at /w/README.md end", "/w", Some("fno-file:/w/README.md")),
+            ("open a/b.md:7, please", "/w", Some("fno-file:/w/a/b.md:7")),
+        ];
+        for (text, cwd, want) in cases {
+            assert_eq!(
+                hits(text, Path::new(cwd), &probe),
+                want.map(|s| vec![s.to_string()]).unwrap_or_default(),
+                "{text}"
+            );
+        }
+        // The URI gate is the pane-sourced trust boundary: absolute, no
+        // whitespace. The parser round trips path + line, including a literal
+        // colon-path whose digit tail is not the line.
+        for (uri, ok) in [
+            ("fno-file:/abs/ok.md", true),
+            ("fno-file:/abs/ok.md:7", true),
+            ("fno-file:relative.md", false),
+            ("fno-file:/has space.md", false),
+            ("fno-file:", false),
+            ("https://example.com", false),
+        ] {
+            assert_eq!(is_file_uri(uri), ok, "{uri}");
+        }
+        let (p, l) = file_uri_parts("fno-file:/w/a.md:42").expect("parses");
+        assert_eq!(p, PathBuf::from("/w/a.md"));
+        assert_eq!(l, Some(42));
+        assert_eq!(
+            file_uri_parts("fno-file:/w/a.md"),
+            Some((PathBuf::from("/w/a.md"), None))
+        );
+        assert_eq!(
+            file_uri_parts("fno-file:/w/a.md:9:9"),
+            Some((PathBuf::from("/w/a.md:9"), Some(9)))
+        );
+    }
+}

@@ -1,0 +1,1219 @@
+//! Detection manifest engine (E6.2).
+//!
+//! E6.1 ([`crate::osc`], [`crate::screen`]) gave the read loop OSC title/progress
+//! as detection regions on a [`ScreenView`]. This module is the engine that turns
+//! a declarative TOML rule file into a state verdict over that view, so an agent's
+//! readiness rules live in a `*.toml` (authored in E6.3) instead of hardcoded Rust
+//! ([`crate::readiness`]).
+//!
+//! A manifest is a priority-ordered list of [`ManifestRule`]s. Each rule names a
+//! text [`Region`] of the screen and a recursive boolean [`Gate`] over that
+//! region's text, plus an optional context region/gate for surrounding evidence
+//! that should not expand the answer fingerprint window. [`Manifest::evaluate`]
+//! returns the highest-priority matching rule's `state` (and its
+//! `skip_state_update` flag) - so a "yes" buried in scrollback never out-votes a
+//! live-region rule that out-prioritizes it.
+//!
+//! Scope: E6.2 built the parser + region vocabulary + gate evaluator + priority
+//! arbiter; E6.3 added the bundled `claude.toml`/`codex.toml`/`gemini.toml` rule
+//! files and the [`load_manifest`] resolution chain (bundled + local override).
+//! Still NOT wired into the runtime: the daemon state badge consumes
+//! [`Manifest::evaluate`] only once E2 lands live claude panes to tune against.
+//! Remote/cached/version-gated resolution is a logged fast-follow
+//! (`min_engine_version` is parsed now so a later remote manifest can gate, but
+//! is otherwise unused).
+//!
+//! ponytail: a rule's regexes recompile on each `evaluate` (regions are tiny,
+//! evaluate runs at human-perception cadence on readiness polls); cache compiled
+//! `Regex`es per rule if a profiler ever flags it. The `prompt_box_body` region
+//! and `skip_state_update`/priority semantics are tuned against the reference design,
+//! not yet against a live claude TUI (E6.3's job).
+
+use crate::readiness::ScreenView;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use std::path::Path;
+use std::sync::LazyLock;
+
+/// The rule-bordered composer's top-rule shape, compiled once.
+static COMPOSER_TOP_RULE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^─{3,}( \S.* ─)?$").expect("static regex"));
+
+/// Max nesting depth for a [`Gate`] tree. A pathological manifest (deeply nested
+/// `all`/`any`/`not`) is refused while building the [`Gate`] so `evaluate`'s
+/// recursion is bounded. 16 is far past any real rule (the reference's deepest is ~3).
+///
+/// Note: this caps OUR tree-walk, not `toml::from_str`, which builds the nested
+/// `toml::Value` first. For locally-authored (trusted) manifests that is fine;
+/// when remote/cached resolution lands (the logged fast-follow) the input must be
+/// nesting-bounded BEFORE `toml::from_str`. Tracked as a carveout.
+const MAX_GATE_DEPTH: usize = 16;
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum ManifestError {
+    #[error("manifest is not valid TOML: {0}")]
+    Toml(String),
+    #[error("manifest io error for {path}: {detail}")]
+    Io { path: String, detail: String },
+    #[error("rule {rule}: missing or wrong-typed field '{field}'")]
+    Field { rule: String, field: String },
+    #[error("rule {rule}: unknown region selector '{region}'")]
+    UnknownRegion { rule: String, region: String },
+    #[error("rule {rule}: bad regex '{pattern}': {detail}")]
+    BadRegex {
+        rule: String,
+        pattern: String,
+        detail: String,
+    },
+    #[error("rule {rule}: gate nested deeper than {max}", max = MAX_GATE_DEPTH)]
+    GateTooDeep { rule: String },
+    #[error(
+        "rule {rule}: gate table must have exactly one of contains/regex/line_regex/all/any/not"
+    )]
+    BadGate { rule: String },
+}
+
+/// A text region of the screen a rule's gate is matched against. `osc_title` /
+/// `osc_progress` read the OSC-captured strings (which survive scrollback/wrap/
+/// resize); the rest read the grid text. The v1 set is the design's recommended
+/// minimum; `after_last_horizontal_rule` / `after_last_prompt_marker` are
+/// deferred until a rule needs them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Region {
+    /// The whole visible screen (scrollback already trimmed by the snapshot).
+    WholeRecent,
+    /// The last `N` non-empty lines, joined by `\n`. Where a CLI draws its
+    /// composer + status bar; scopes a match away from scrollback.
+    BottomNonEmptyLines(usize),
+    /// The body of the last box-drawn input box (claude's composer). Empty when
+    /// no box is on screen.
+    PromptBoxBody,
+    /// The latest OSC window title (OSC 0/2). Empty when none captured.
+    OscTitle,
+    /// The latest OSC 9;4 progress payload. Empty when none captured.
+    OscProgress,
+}
+
+impl Region {
+    /// Parse a region selector string. `rule` only seasons the error.
+    fn parse(s: &str, rule: &str) -> Result<Region, ManifestError> {
+        if let Some(arg) = s
+            .strip_prefix("bottom_non_empty_lines(")
+            .and_then(|r| r.strip_suffix(')'))
+        {
+            let n = arg
+                .trim()
+                .parse::<usize>()
+                .map_err(|_| ManifestError::Field {
+                    rule: rule.to_string(),
+                    field: "region (bottom_non_empty_lines arg)".to_string(),
+                })?;
+            if n == 0 {
+                // bottom(0) is an empty region: a degenerate rule that never
+                // fires. Reject it rather than silently never-match (fail closed).
+                return Err(ManifestError::Field {
+                    rule: rule.to_string(),
+                    field: "region (bottom_non_empty_lines arg must be > 0)".to_string(),
+                });
+            }
+            return Ok(Region::BottomNonEmptyLines(n));
+        }
+        match s {
+            "whole_recent" => Ok(Region::WholeRecent),
+            "prompt_box_body" => Ok(Region::PromptBoxBody),
+            "osc_title" => Ok(Region::OscTitle),
+            "osc_progress" => Ok(Region::OscProgress),
+            _ => Err(ManifestError::UnknownRegion {
+                rule: rule.to_string(),
+                region: s.to_string(),
+            }),
+        }
+    }
+
+    /// Extract this region's text from a screen view. An absent OSC region is the
+    /// empty string, so a `contains`/`regex` over it never matches (correct: no
+    /// title means no spinner) while `not(...)` over it reads as "vacuously true".
+    fn extract(&self, screen: &ScreenView) -> String {
+        match self {
+            Region::WholeRecent => screen.visible_text.to_string(),
+            Region::BottomNonEmptyLines(n) => {
+                let nonblank: Vec<&str> = screen
+                    .visible_text
+                    .lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .collect();
+                let start = nonblank.len().saturating_sub(*n);
+                nonblank[start..].join("\n")
+            }
+            Region::PromptBoxBody => prompt_box_body(screen.visible_text),
+            Region::OscTitle => screen.osc_title.unwrap_or("").to_string(),
+            Region::OscProgress => screen.osc_progress.unwrap_or("").to_string(),
+        }
+    }
+}
+
+/// Pull the body out of the last input composer on screen. claude draws two
+/// shapes (pinned 2026-09-11 against claude 2.1.268): the `╭─╮ / │ … │ / ╰─╯`
+/// box, and a rule-bordered composer - a top rule carrying the session name
+/// (`─── <session> ─`), the `❯ ` prompt line, then a plain `─` bottom rule with
+/// status lines below it. The box wins when present; otherwise the last
+/// rule-bordered pair is taken. Returns "" when neither shape is present.
+///
+/// ponytail: a single-heuristic finder, tuned to claude's glyphs; it does not
+/// handle nested boxes or ASCII `+--+` frames, and it just takes the bottommost
+/// pair of either shape, so stale scrollback copies can still be extracted (the
+/// `live_prompt_box` rule's `❯` gate is what keeps prose bodies from matching).
+fn prompt_box_body(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    if let Some(bottom) = lines.iter().rposition(|l| l.contains('╰')) {
+        if let Some(top) = lines[..bottom].iter().rposition(|l| l.contains('╭')) {
+            return lines[top + 1..bottom]
+                .iter()
+                .map(|l| l.trim().trim_matches('│').trim().to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+    }
+    // Rule-bordered composer. The bottom is the last line that is ONLY `─`
+    // (>= 20 of them, so a prose separator reads as neither edge); the top is
+    // the nearest `─── [name] ─` rule above it.
+    let plain_rule = |l: &str| l.trim().chars().count() >= 20 && l.trim().chars().all(|c| c == '─');
+    let Some(bottom) = lines.iter().rposition(|l| plain_rule(l)) else {
+        return String::new();
+    };
+    let Some(top) = lines[..bottom]
+        .iter()
+        .rposition(|l| COMPOSER_TOP_RULE.is_match(l.trim()))
+    else {
+        return String::new();
+    };
+    lines[top + 1..bottom]
+        .iter()
+        .map(|l| l.trim().to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A recursive boolean predicate over a region's text. Leaf predicates test the
+/// region string; `all`/`any`/`not` compose them. Regexes are compiled at parse,
+/// so a constructed `Gate` is always valid.
+#[derive(Debug, Clone)]
+pub enum Gate {
+    /// Region contains this substring.
+    Contains(String),
+    /// Region matches this regex anywhere (use `^`/`$` to anchor).
+    Regex(Regex),
+    /// Any single line of the region matches this regex.
+    LineRegex(Regex),
+    /// Every sub-gate matches.
+    All(Vec<Gate>),
+    /// At least one sub-gate matches.
+    Any(Vec<Gate>),
+    /// The sub-gate does not match.
+    Not(Box<Gate>),
+}
+
+impl Gate {
+    /// Build a gate from a TOML value. The value must be a table with exactly one
+    /// recognized key. `depth` guards against pathological nesting.
+    fn parse(v: &toml::Value, rule: &str, depth: usize) -> Result<Gate, ManifestError> {
+        if depth > MAX_GATE_DEPTH {
+            return Err(ManifestError::GateTooDeep {
+                rule: rule.to_string(),
+            });
+        }
+        let table = v.as_table().ok_or_else(|| ManifestError::BadGate {
+            rule: rule.to_string(),
+        })?;
+        if table.len() != 1 {
+            return Err(ManifestError::BadGate {
+                rule: rule.to_string(),
+            });
+        }
+        let (key, val) = table.iter().next().expect("len checked == 1");
+        let compile = |p: &str| {
+            Regex::new(p).map_err(|e| ManifestError::BadRegex {
+                rule: rule.to_string(),
+                pattern: p.to_string(),
+                detail: e.to_string(),
+            })
+        };
+        let as_str = || {
+            val.as_str().ok_or_else(|| ManifestError::Field {
+                rule: rule.to_string(),
+                field: format!("gate.{key}"),
+            })
+        };
+        // An empty leaf pattern is fail-open the same way `all = []` is:
+        // `"".contains("")` and `Regex::new("")` both match every region, pinning
+        // the rule's state on every poll. Reject empty leaves at parse.
+        let leaf_str = || {
+            let s = as_str()?;
+            if s.is_empty() {
+                return Err(ManifestError::Field {
+                    rule: rule.to_string(),
+                    field: format!("gate.{key} (must be non-empty)"),
+                });
+            }
+            Ok(s)
+        };
+        let as_array = || {
+            val.as_array().ok_or_else(|| ManifestError::Field {
+                rule: rule.to_string(),
+                field: format!("gate.{key}"),
+            })
+        };
+        match key.as_str() {
+            "contains" => Ok(Gate::Contains(leaf_str()?.to_string())),
+            "regex" => Ok(Gate::Regex(compile(leaf_str()?)?)),
+            "line_regex" => Ok(Gate::LineRegex(compile(leaf_str()?)?)),
+            "all" => Ok(Gate::All(Self::parse_children(as_array()?, rule, depth)?)),
+            "any" => Ok(Gate::Any(Self::parse_children(as_array()?, rule, depth)?)),
+            "not" => Ok(Gate::Not(Box::new(Gate::parse(val, rule, depth + 1)?))),
+            _ => Err(ManifestError::BadGate {
+                rule: rule.to_string(),
+            }),
+        }
+    }
+
+    fn parse_children(
+        arr: &[toml::Value],
+        rule: &str,
+        depth: usize,
+    ) -> Result<Vec<Gate>, ManifestError> {
+        // An empty `all`/`any` is fail-open: `all([])` matches every screen
+        // (vacuous truth), so a high-priority rule with `all = []` would pin its
+        // state on every poll. Reject it at parse rather than mis-fire silently.
+        if arr.is_empty() {
+            return Err(ManifestError::BadGate {
+                rule: rule.to_string(),
+            });
+        }
+        arr.iter()
+            .map(|child| Gate::parse(child, rule, depth + 1))
+            .collect()
+    }
+
+    /// Evaluate against a region's text.
+    fn matches(&self, text: &str) -> bool {
+        match self {
+            Gate::Contains(s) => text.contains(s.as_str()),
+            Gate::Regex(re) => re.is_match(text),
+            Gate::LineRegex(re) => text.lines().any(|l| re.is_match(l)),
+            Gate::All(gs) => gs.iter().all(|g| g.matches(text)),
+            Gate::Any(gs) => gs.iter().any(|g| g.matches(text)),
+            Gate::Not(g) => !g.matches(text),
+        }
+    }
+}
+
+/// How a chosen option's captured index becomes PTY bytes. The entire v1
+/// vocabulary (Locked 4): numbered permission prompts, no arrow-navigation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SendMapping {
+    /// Send the captured `idx` as one ASCII byte.
+    Digit,
+    /// Send the captured `idx` then CR.
+    DigitEnter,
+}
+
+/// The optional `[rule.answer]` grammar on a `blocked` rule: how to enumerate a
+/// numbered prompt's options and how a picked option becomes a keystroke. Its
+/// presence is what makes a blocked prompt *answerable* (its absence means
+/// blocked-but-not-answerable, which the queue shows as focus-only).
+#[derive(Debug, Clone)]
+struct AnswerGrammar {
+    /// One option per line the regex matches; must name `idx` + `label` captures.
+    option: Regex,
+    send: SendMapping,
+}
+
+/// One selectable option of an answerable prompt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnswerOption {
+    /// The captured menu index the operator presses, e.g. "1".
+    pub idx: String,
+    /// The display label (untruncated; the client truncates for width).
+    pub label: String,
+    /// The exact PTY bytes to inject for this pick, pinned by the manifest's
+    /// `send` mapping over `idx` - NEVER a runtime guess (Locked 2).
+    pub keystroke: Vec<u8>,
+}
+
+/// A blocked prompt the operator can answer from the queue without focusing the
+/// pane. Produced by [`ManifestRule::extract_answer`] and carried on the badge
+/// to the sideline; the mux server re-verifies `fingerprint` against its live
+/// grid before injecting a chosen option's `keystroke` (Locked 3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnswerablePrompt {
+    /// The lines above the first option, display-only.
+    pub prompt: String,
+    pub options: Vec<AnswerOption>,
+    /// blake3 of the region text the human reads - the server's freshness key.
+    pub fingerprint: [u8; 32],
+    /// The N of `bottom_non_empty_lines(N)`, so the server re-reads the same
+    /// region window to re-hash.
+    pub region_lines: usize,
+}
+
+impl AnswerGrammar {
+    /// Parse a `[rule.answer]` table. Fails loud (like every manifest field): an
+    /// answer grammar is meaningful ONLY on a `state = "blocked"` rule whose
+    /// region is a `bottom_non_empty_lines(N)` window (so the server can re-read
+    /// the same lines to re-hash). Either mismatch is a config bug, never ignored.
+    fn parse(
+        v: &toml::Value,
+        rule: &str,
+        state: &str,
+        region: &Region,
+    ) -> Result<AnswerGrammar, ManifestError> {
+        if state != "blocked" {
+            return Err(ManifestError::Field {
+                rule: rule.to_string(),
+                field: "answer (only allowed on a state = \"blocked\" rule)".to_string(),
+            });
+        }
+        if !matches!(region, Region::BottomNonEmptyLines(_)) {
+            return Err(ManifestError::Field {
+                rule: rule.to_string(),
+                field: "answer (region must be bottom_non_empty_lines(N))".to_string(),
+            });
+        }
+        let table = v.as_table().ok_or_else(|| ManifestError::Field {
+            rule: rule.to_string(),
+            field: "answer (must be a table)".to_string(),
+        })?;
+        const ALLOWED: &[&str] = &["option", "send"];
+        if let Some(unknown) = table.keys().find(|k| !ALLOWED.contains(&k.as_str())) {
+            return Err(ManifestError::Field {
+                rule: rule.to_string(),
+                field: format!("answer unknown key '{unknown}'"),
+            });
+        }
+        let option_pat = table
+            .get("option")
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| ManifestError::Field {
+                rule: rule.to_string(),
+                field: "answer.option".to_string(),
+            })?;
+        let option = Regex::new(option_pat).map_err(|e| ManifestError::BadRegex {
+            rule: rule.to_string(),
+            pattern: option_pat.to_string(),
+            detail: e.to_string(),
+        })?;
+        // extract_answer reads the captures by name, so both must exist - a
+        // missing `idx`/`label` group is a parse-time config error, not a
+        // runtime None that would silently make every blocked prompt focus-only.
+        let names: Vec<&str> = option.capture_names().flatten().collect();
+        for need in ["idx", "label"] {
+            if !names.contains(&need) {
+                return Err(ManifestError::Field {
+                    rule: rule.to_string(),
+                    field: format!("answer.option (missing named capture '{need}')"),
+                });
+            }
+        }
+        let send = match table.get("send").and_then(|x| x.as_str()) {
+            Some("digit") => SendMapping::Digit,
+            Some("digit_enter") => SendMapping::DigitEnter,
+            _ => {
+                return Err(ManifestError::Field {
+                    rule: rule.to_string(),
+                    field: "answer.send (must be \"digit\" or \"digit_enter\")".to_string(),
+                })
+            }
+        };
+        Ok(AnswerGrammar { option, send })
+    }
+}
+
+/// One detection rule: when `gate` matches `region` and the optional contextual
+/// gate also matches, the agent is in `state`. `priority` arbitrates between
+/// simultaneously-matching rules (highest wins). `skip_state_update` marks a
+/// rule whose match means "hold the current state, don't update it" - e.g.
+/// claude's ctrl+o transcript pager, which must not flip a working agent to idle.
+/// `answer` makes a `blocked` prompt answerable from the queue.
+#[derive(Debug, Clone)]
+pub struct ManifestRule {
+    pub id: String,
+    pub state: String,
+    pub priority: i32,
+    pub region: Region,
+    pub skip_state_update: bool,
+    pub gate: Gate,
+    context: Option<(Region, Gate)>,
+    answer: Option<AnswerGrammar>,
+}
+
+impl ManifestRule {
+    /// Match the rule's live answer region plus any wider contextual guard.
+    /// The returned text is always the primary region: answer extraction and
+    /// fingerprinting stay scoped to the small menu window even when detection
+    /// needs context elsewhere on the visible screen.
+    fn matched_region_text(&self, screen: &ScreenView) -> Option<String> {
+        let text = self.region.extract(screen);
+        if !self.gate.matches(&text) {
+            return None;
+        }
+        if let Some((region, gate)) = &self.context {
+            let context = region.extract(screen);
+            if !gate.matches(&context) {
+                return None;
+            }
+        }
+        Some(text)
+    }
+
+    /// Enumerate this rule's answerable options from `region_text`, fail-closed.
+    /// Returns `None` (blocked-but-not-answerable) unless the rule carries an
+    /// `[answer]` grammar AND the region yields a clean numbered menu: >=1
+    /// option, non-empty labels, and single-digit indices forming a contiguous
+    /// `1..N` run. A lowest index != 1 means the menu top scrolled past the
+    /// region window (truncated) and is not answerable (AC3-EDGE). Strictly
+    /// additive to detection: any miss leaves the blocked badge untouched.
+    pub fn extract_answer(&self, region_text: &str) -> Option<AnswerablePrompt> {
+        let grammar = self.answer.as_ref()?;
+        // Parse enforces a bottom-N region on any answer grammar; be defensive.
+        let Region::BottomNonEmptyLines(n) = self.region else {
+            return None;
+        };
+        let mut options: Vec<AnswerOption> = Vec::new();
+        let mut first_option_line: Option<usize> = None;
+        for (i, line) in region_text.lines().enumerate() {
+            let Some(caps) = grammar.option.captures(line) else {
+                continue;
+            };
+            let idx = caps.name("idx")?.as_str().to_string();
+            let label = caps.name("label")?.as_str().trim().to_string();
+            // One ASCII digit only (send maps one digit to one byte); a 2-digit
+            // or non-digit index, or an empty label, is not answerable in v1.
+            if idx.len() != 1 || !idx.as_bytes()[0].is_ascii_digit() || label.is_empty() {
+                return None;
+            }
+            if first_option_line.is_none() {
+                first_option_line = Some(i);
+            }
+            let mut keystroke = vec![idx.as_bytes()[0]];
+            if matches!(grammar.send, SendMapping::DigitEnter) {
+                keystroke.push(b'\r');
+            }
+            options.push(AnswerOption {
+                idx,
+                label,
+                keystroke,
+            });
+        }
+        if options.is_empty() {
+            return None;
+        }
+        // The indices must be exactly {1, 2, ..., N}: unique, contiguous, and
+        // starting at 1. This one check rejects duplicates (AC3-ERR), gaps, and
+        // a truncated menu whose first captured option is `2.`/`3.` (AC3-EDGE).
+        let mut idxs: Vec<u8> = options.iter().map(|o| o.idx.as_bytes()[0] - b'0').collect();
+        idxs.sort_unstable();
+        let expected: Vec<u8> = (1..=options.len() as u8).collect();
+        if idxs != expected {
+            return None;
+        }
+        let first = first_option_line.unwrap_or(0);
+        let prompt = region_text
+            .lines()
+            .take(first)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let fingerprint = *blake3::hash(region_text.as_bytes()).as_bytes();
+        Some(AnswerablePrompt {
+            prompt,
+            options,
+            fingerprint,
+            region_lines: n,
+        })
+    }
+}
+
+impl ManifestRule {
+    fn parse(v: &toml::Value) -> Result<ManifestRule, ManifestError> {
+        // id is read first so every later error can name the rule.
+        let id = v
+            .get("id")
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| ManifestError::Field {
+                rule: "<unnamed>".to_string(),
+                field: "id".to_string(),
+            })?
+            .to_string();
+        if id.trim().is_empty() {
+            // The id seasons every error and rides in the Verdict; an empty one
+            // makes both useless. Require it non-blank.
+            return Err(ManifestError::Field {
+                rule: "<unnamed>".to_string(),
+                field: "id (must be non-empty)".to_string(),
+            });
+        }
+        let str_field = |f: &str| {
+            v.get(f)
+                .and_then(|x| x.as_str())
+                .ok_or_else(|| ManifestError::Field {
+                    rule: id.clone(),
+                    field: f.to_string(),
+                })
+        };
+        let state = str_field("state")?.to_string();
+        let priority_i64 = v
+            .get("priority")
+            .and_then(|x| x.as_integer())
+            .ok_or_else(|| ManifestError::Field {
+                rule: id.clone(),
+                field: "priority".to_string(),
+            })?;
+        // TOML integers are i64; `as i32` would silently wrap a too-big priority
+        // and corrupt arbitration. Reject out-of-range rather than truncate.
+        let priority = i32::try_from(priority_i64).map_err(|_| ManifestError::Field {
+            rule: id.clone(),
+            field: "priority (out of i32 range)".to_string(),
+        })?;
+        let region = Region::parse(str_field("region")?, &id)?;
+        // Present-but-wrong-type (e.g. `skip_state_update = "true"`) must error,
+        // not silently read as false and swallow an authoring typo.
+        let skip_state_update = match v.get("skip_state_update") {
+            None => false,
+            Some(x) => x.as_bool().ok_or_else(|| ManifestError::Field {
+                rule: id.clone(),
+                field: "skip_state_update (must be a boolean)".to_string(),
+            })?,
+        };
+        let gate_val = v.get("gate").ok_or_else(|| ManifestError::Field {
+            rule: id.clone(),
+            field: "gate".to_string(),
+        })?;
+        let gate = Gate::parse(gate_val, &id, 0)?;
+        let context = match (v.get("context_region"), v.get("context_gate")) {
+            (None, None) => None,
+            (Some(region), Some(gate)) => {
+                let region = region.as_str().ok_or_else(|| ManifestError::Field {
+                    rule: id.clone(),
+                    field: "context_region".to_string(),
+                })?;
+                Some((Region::parse(region, &id)?, Gate::parse(gate, &id, 0)?))
+            }
+            _ => {
+                return Err(ManifestError::Field {
+                    rule: id.clone(),
+                    field: "context_region and context_gate (must be provided together)"
+                        .to_string(),
+                })
+            }
+        };
+        // Optional `[rule.answer]`: parsed here so its blocked-only /
+        // bottom-N-region constraints fail loud alongside every other field.
+        let answer = match v.get("answer") {
+            None => None,
+            Some(a) => Some(AnswerGrammar::parse(a, &id, &state, &region)?),
+        };
+        // Reject unknown keys: a typo like `skip_state_updates = true` would
+        // otherwise parse fine and silently drop the real flag, changing
+        // arbitration. Fail closed instead (matches the gate's one-key rule).
+        if let Some(table) = v.as_table() {
+            const ALLOWED: &[&str] = &[
+                "id",
+                "state",
+                "priority",
+                "region",
+                "skip_state_update",
+                "gate",
+                "context_region",
+                "context_gate",
+                "answer",
+            ];
+            if let Some(unknown) = table.keys().find(|k| !ALLOWED.contains(&k.as_str())) {
+                return Err(ManifestError::Field {
+                    rule: id.clone(),
+                    field: format!("unknown key '{unknown}'"),
+                });
+            }
+        }
+        Ok(ManifestRule {
+            id,
+            state,
+            priority,
+            region,
+            skip_state_update,
+            gate,
+            context,
+            answer,
+        })
+    }
+}
+
+/// The verdict of evaluating a manifest against a screen: the matching rule's
+/// id, the state it asserts, and whether the caller should hold the current
+/// state instead of applying `state`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Verdict<'a> {
+    pub rule_id: &'a str,
+    pub state: &'a str,
+    pub skip_state_update: bool,
+}
+
+/// A parsed agent detection manifest: an engine-version floor plus the rules,
+/// pre-sorted highest-priority-first so [`evaluate`](Manifest::evaluate) is a
+/// linear scan that returns on the first match.
+#[derive(Debug, Clone)]
+pub struct Manifest {
+    /// Minimum engine version a (future remote) manifest may demand. Parsed and
+    /// stored now though unused in v1 (design: "Engine-version field now even if
+    /// unused, so a later remote manifest can gate"). Defaults to 0.
+    pub min_engine_version: u32,
+    /// Rules sorted by `priority` descending; ties keep TOML order (stable sort).
+    /// Private so the sort invariant `evaluate` relies on can only be established
+    /// by [`parse`](Manifest::parse); read via [`rules`](Manifest::rules).
+    rules: Vec<ManifestRule>,
+}
+
+impl Manifest {
+    /// Parse a manifest TOML. Fails closed: a bad regex, unknown region, or
+    /// over-deep gate is a parse error naming the offending rule, never a
+    /// silently-dropped rule.
+    pub fn parse(s: &str) -> Result<Manifest, ManifestError> {
+        let root: toml::Value =
+            toml::from_str(s).map_err(|e| ManifestError::Toml(e.to_string()))?;
+        // Reject unknown root keys (typo like `min_engine_versions`). A later
+        // format bump is gated by `min_engine_version`, not by tolerating
+        // unknown keys, so fail closed in v1.
+        if let Some(table) = root.as_table() {
+            if let Some(unknown) = table
+                .keys()
+                .find(|k| !matches!(k.as_str(), "min_engine_version" | "rule"))
+            {
+                return Err(ManifestError::Field {
+                    rule: "<root>".to_string(),
+                    field: format!("unknown key '{unknown}'"),
+                });
+            }
+        }
+        // Absent -> 0. Present-but-wrong-type or negative is a malformed manifest,
+        // not a silent default-to-0 (fail closed, matching the per-rule fields).
+        let min_engine_version = match root.get("min_engine_version") {
+            None => 0,
+            Some(v) => v
+                .as_integer()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| ManifestError::Field {
+                    rule: "<root>".to_string(),
+                    field: "min_engine_version (must be a non-negative integer)".to_string(),
+                })?,
+        };
+        let mut rules = match root.get("rule") {
+            Some(v) => v
+                .as_array()
+                .ok_or_else(|| ManifestError::Field {
+                    rule: "<root>".to_string(),
+                    field: "rule (must be an array of tables)".to_string(),
+                })?
+                .iter()
+                .map(ManifestRule::parse)
+                .collect::<Result<Vec<_>, _>>()?,
+            None => Vec::new(),
+        };
+        // Highest priority first; stable so equal-priority rules keep file order.
+        rules.sort_by(|a, b| b.priority.cmp(&a.priority));
+        Ok(Manifest {
+            min_engine_version,
+            rules,
+        })
+    }
+
+    /// The parsed rules, highest-priority-first. Read-only: the sort invariant is
+    /// owned by [`parse`](Manifest::parse).
+    pub fn rules(&self) -> &[ManifestRule] {
+        &self.rules
+    }
+
+    /// Return the highest-priority rule whose gate matches the screen, or `None`
+    /// when no rule matches (the caller decides what an undetected state means -
+    /// the engine never guesses).
+    pub fn evaluate(&self, screen: &ScreenView) -> Option<Verdict<'_>> {
+        self.rules.iter().find_map(|rule| {
+            rule.matched_region_text(screen).map(|_| Verdict {
+                rule_id: &rule.id,
+                state: &rule.state,
+                skip_state_update: rule.skip_state_update,
+            })
+        })
+    }
+
+    /// Like [`evaluate`](Self::evaluate) but also returns the winning rule's
+    /// [`AnswerablePrompt`] when it carries an `[answer]` grammar and the region
+    /// yields a clean menu (`None` otherwise - blocked-but-not-answerable). The
+    /// scrape sweep uses this so the answer payload rides the same badge; the
+    /// cheap `evaluate` stays for callers that only need the state.
+    pub fn evaluate_answerable(
+        &self,
+        screen: &ScreenView,
+    ) -> Option<(Verdict<'_>, Option<AnswerablePrompt>)> {
+        self.rules.iter().find_map(|rule| {
+            let text = rule.matched_region_text(screen)?;
+            let answerable = rule.extract_answer(&text);
+            Some((
+                Verdict {
+                    rule_id: &rule.id,
+                    state: &rule.state,
+                    skip_state_update: rule.skip_state_update,
+                },
+                answerable,
+            ))
+        })
+    }
+}
+
+/// The detection manifest compiled into the binary for a known agent (E6.3).
+/// Returns `None` for an unknown agent - the caller fails loud rather than
+/// guessing a manifest (mirrors `readiness.rs`'s Open Question #9: no
+/// fail-open default).
+pub fn bundled_manifest(agent: &str) -> Option<&'static str> {
+    match agent {
+        "claude" => Some(include_str!("../manifests/claude.toml")),
+        "codex" => Some(include_str!("../manifests/codex.toml")),
+        "gemini" => Some(include_str!("../manifests/gemini.toml")),
+        // agy + opencode, both hosted.
+        "agy" => Some(include_str!("../manifests/agy.toml")),
+        "opencode" => Some(include_str!("../manifests/opencode.toml")),
+        // full-roster roster. All staged/inert - none has a provider
+        // host yet (no build_pane_argv arm), so each is bundled-but-dormant like
+        // opencode. Adapted from the reference manifests per manifests/ADAPTING.md.
+        // "copilot" resolves github-copilot.toml, mirroring the reference's own mapping.
+        // antigravity is intentionally absent: the reference antigravity manifest is the
+        // agy harness (id "agy"), already covered by agy.toml above.
+        "amp" => Some(include_str!("../manifests/amp.toml")),
+        "cline" => Some(include_str!("../manifests/cline.toml")),
+        // "cursor" is the dormant Cursor-IDE roster manifest; the
+        // cursor-agent CLI harness below is a distinct identity with its own
+        // pinned markers. Neither entry subsumes the other.
+        "cursor" => Some(include_str!("../manifests/cursor.toml")),
+        "cursor-agent" => Some(include_str!("../manifests/cursor-agent.toml")),
+        "devin" => Some(include_str!("../manifests/devin.toml")),
+        "droid" => Some(include_str!("../manifests/droid.toml")),
+        "copilot" => Some(include_str!("../manifests/github-copilot.toml")),
+        "grok" => Some(include_str!("../manifests/grok.toml")),
+        "hermes" => Some(include_str!("../manifests/hermes.toml")),
+        "kilo" => Some(include_str!("../manifests/kilo.toml")),
+        "kimi" => Some(include_str!("../manifests/kimi.toml")),
+        "kiro" => Some(include_str!("../manifests/kiro.toml")),
+        "pi" => Some(include_str!("../manifests/pi.toml")),
+        "qodercli" => Some(include_str!("../manifests/qodercli.toml")),
+        // zcode: pane-less (the headless lane is the measured one), so the
+        // manifest is deliberately rule-free; see manifests/zcode.toml.
+        "zcode" => Some(include_str!("../manifests/zcode.toml")),
+        // footnote: no pane lane, so no rules; see manifests/footnote.toml.
+        "footnote" => Some(include_str!("../manifests/footnote.toml")),
+        // muse: MSP and exec lanes only, so no rules; see manifests/muse.toml.
+        "muse" => Some(include_str!("../manifests/muse.toml")),
+        _ => None,
+    }
+}
+
+/// Resolve and parse an agent's manifest. v1 resolution chain (design: bundled +
+/// local override; remote/cached deferred): a readable `<agent>.toml` in
+/// `override_dir` wins over the bundled copy, so an operator can hand-author a
+/// rule file without a rebuild.
+///
+/// Returns `None` when no manifest exists for `agent` (unknown agent, no
+/// override) - the caller decides what "no manifest" means and never guesses.
+/// `Some(Err(..))` is a present-but-malformed manifest (the override or bundled
+/// TOML failed to parse), surfaced verbatim so a bad hand edit fails loud
+/// instead of silently falling back.
+pub fn load_manifest(
+    agent: &str,
+    override_dir: Option<&Path>,
+) -> Option<Result<Manifest, ManifestError>> {
+    if let Some(dir) = override_dir {
+        let path = dir.join(format!("{agent}.toml"));
+        // A PRESENT override file is honoured as the operator's intent and fails
+        // loud: a parse-bad TOML surfaces ManifestError::Toml, and a present file
+        // that won't read (invalid UTF-8, permission-denied, lookup error)
+        // surfaces ManifestError::Io. ONLY a genuinely absent override (a
+        // NotFound read error) falls through to bundled. We match on the read
+        // error kind rather than pre-checking is_file(), because is_file()
+        // collapses every metadata error (permission, symlink loop) to false and
+        // would silently fall back to bundled on a real error (codex peer P2).
+        match std::fs::read_to_string(&path) {
+            Ok(text) => return Some(Manifest::parse(&text)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Some(Err(ManifestError::Io {
+                    path: path.display().to_string(),
+                    detail: e.to_string(),
+                }))
+            }
+        }
+    }
+    bundled_manifest(agent).map(Manifest::parse)
+}
+
+pub fn evaluate_screen_json(agent: &str, text: &str) -> Result<serde_json::Value, String> {
+    evaluate_screen_json_with_osc(agent, text, None, None)
+}
+
+pub fn evaluate_screen_json_with_osc(
+    agent: &str,
+    text: &str,
+    osc_title: Option<&str>,
+    osc_progress: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let manifest = load_manifest(agent, None)
+        .ok_or_else(|| format!("unknown harness {agent:?}: no bundled readiness manifest"))?
+        .map_err(|error| error.to_string())?;
+    let screen = ScreenView {
+        visible_text: text,
+        cursor_row: 0,
+        cursor_col: 0,
+        osc_title,
+        osc_progress,
+    };
+    Ok(match manifest.evaluate_answerable(&screen) {
+        Some((verdict, answerable)) => serde_json::json!({
+            "matched": true,
+            "rule_id": verdict.rule_id,
+            "state": verdict.state,
+            "skip_state_update": verdict.skip_state_update,
+            "answerable": answerable,
+        }),
+        None => serde_json::json!({"matched": false}),
+    })
+}
+
+pub fn run_manifest_eval(rest: &[String]) -> i32 {
+    use std::io::Read;
+
+    let mut harness = None;
+    let mut osc_title = None;
+    let mut osc_progress = None;
+    let mut it = rest.iter();
+    while let Some(flag) = it.next() {
+        match flag.as_str() {
+            "--harness" | "-H" => harness = it.next().map(String::as_str),
+            "--osc-title" => osc_title = it.next().map(String::as_str),
+            "--osc-progress" => osc_progress = it.next().map(String::as_str),
+            other => {
+                eprintln!("manifest-eval: unknown flag {other}");
+                return 2;
+            }
+        }
+    }
+    let Some(harness) = harness else {
+        eprintln!("manifest-eval: --harness is required");
+        return 2;
+    };
+    let mut screen = String::new();
+    if let Err(error) = std::io::stdin().read_to_string(&mut screen) {
+        eprintln!("manifest-eval: read stdin: {error}");
+        return 1;
+    }
+    match evaluate_screen_json_with_osc(harness, &screen, osc_title, osc_progress) {
+        Ok(value) => {
+            println!("{value}");
+            0
+        }
+        Err(error) => {
+            eprintln!("manifest-eval: {error}");
+            1
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The footnote manifest reads the fnh TUI's own draw strings: the ask
+    /// band blocks, the busy line reads working, and an idle status line
+    /// matches nothing (AC7-ERR of the pane plan). A missed `blocked` types
+    /// over a live y/n ask; a false one only refuses the send.
+    #[test]
+    fn footnote_screen_rules_read_the_tui_ask_band_and_busy_line() {
+        let ask = evaluate_screen_json(
+            "footnote",
+            "transcript scroll\n allow Bash ls?  [y] yes  [n] no",
+        )
+        .unwrap();
+        assert_eq!(ask["state"], "blocked");
+        assert_eq!(ask["rule_id"], "permission_ask");
+        let busy =
+            evaluate_screen_json("footnote", "model reply\nChurning… 12s  (esc to interrupt)")
+                .unwrap();
+        assert_eq!(busy["state"], "working");
+        assert_eq!(busy["rule_id"], "working_status");
+        let idle = evaluate_screen_json(
+            "footnote",
+            "Churned for 4s · done 3:04 PM · 1.2k in · 300 out",
+        )
+        .unwrap();
+        assert_eq!(idle["matched"], false);
+    }
+
+    fn view(text: &str) -> ScreenView<'_> {
+        ScreenView {
+            visible_text: text,
+            cursor_row: 0,
+            cursor_col: 0,
+            osc_title: None,
+            osc_progress: None,
+        }
+    }
+
+    #[test]
+    fn parses_fields_and_sorts_by_priority_desc() {
+        let m = Manifest::parse(
+            r#"
+            min_engine_version = 2
+            [[rule]]
+            id = "low"
+            state = "idle"
+            priority = 10
+            region = "whole_recent"
+            gate = { contains = "x" }
+            [[rule]]
+            id = "high"
+            state = "working"
+            priority = 100
+            region = "whole_recent"
+            gate = { contains = "y" }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(m.min_engine_version, 2);
+        assert_eq!(m.rules().len(), 2);
+        assert_eq!(m.rules()[0].id, "high", "highest priority sorts first");
+        assert_eq!(m.rules()[1].id, "low");
+    }
+
+    // AC-E6-5: highest-priority match wins. A "yes" in scrollback must NOT fake a
+    // permission prompt because the live-region rule out-prioritizes it.
+    #[test]
+    fn highest_priority_match_wins_over_scrollback() {
+        let m = Manifest::parse(
+            r#"
+            [[rule]]
+            id = "scrollback_yes"
+            state = "blocked"
+            priority = 100
+            region = "whole_recent"
+            gate = { contains = "yes" }
+            [[rule]]
+            id = "live_prompt"
+            state = "idle"
+            priority = 900
+            region = "bottom_non_empty_lines(1)"
+            gate = { line_regex = "^\\s*❯" }
+            "#,
+        )
+        .unwrap();
+        // "yes" is up in scrollback; the live composer shows the idle prompt.
+        let screen = "I said yes earlier\nlots of reply text\n  ❯ ";
+        let v = m.evaluate(&view(screen)).unwrap();
+        assert_eq!(v.state, "idle", "live-region rule beats scrollback match");
+        assert_eq!(v.rule_id, "live_prompt");
+    }
+
+    #[test]
+    fn gate_all_any_not_compose() {
+        let m = Manifest::parse(
+            r#"
+            [[rule]]
+            id = "blocked_form"
+            state = "blocked"
+            priority = 980
+            region = "whole_recent"
+            gate = { all = [ { contains = "enter to select" }, { contains = "esc to cancel" }, { not = { contains = "esc to interrupt" } } ] }
+            "#,
+        )
+        .unwrap();
+        // all three sub-gates satisfied
+        assert!(m
+            .evaluate(&view("press enter to select, esc to cancel"))
+            .is_some());
+        // missing "esc to cancel" -> all() fails
+        assert!(m.evaluate(&view("enter to select something")).is_none());
+        // the not() clause: an interrupt hint present -> blocked rule must NOT fire
+        assert!(m
+            .evaluate(&view("enter to select, esc to cancel, esc to interrupt"))
+            .is_none());
+    }
+
+    #[test]
+    fn empty_composite_gate_is_rejected_not_fail_open() {
+        // `all = []` is vacuously true and would pin its state on every screen.
+        // Both empty `all` and empty `any` must be parse errors.
+        for body in ["all = []", "any = []"] {
+            let err = Manifest::parse(&format!(
+                "[[rule]]\nid = \"r\"\nstate = \"x\"\npriority = 1\nregion = \"whole_recent\"\ngate = {{ {body} }}\n"
+            ))
+            .unwrap_err();
+            assert!(
+                matches!(err, ManifestError::BadGate { rule } if rule == "r"),
+                "{body} should be rejected"
+            );
+        }
+    }
+
+    // ---- E6.3: bundled rule files (claude/codex/gemini) ----
+
+    fn bundled(agent: &str) -> Manifest {
+        Manifest::parse(bundled_manifest(agent).expect("bundled manifest exists"))
+            .expect("bundled manifest parses")
+    }
+
+    #[test]
+    fn bundled_manifests_all_parse() {
+        // Every bundled agent must parse, carry rules, and evaluate against a
+        // synthetic view without panicking (AC-happy). This is the
+        // parse-coverage guard the domain pitfall calls for: a leftover reference-
+        // only key (unknown region/field/root key) fails loud here, NAMING the
+        // file (AC-error) rather than silently shipping a dead manifest.
+        // added agy + opencode; grew the roster to full-roster parity.
+        let synthetic = view("some scrollback\nesc to interrupt\n\u{276f} ");
+        for agent in [
+            "claude",
+            "codex",
+            "gemini",
+            "agy",
+            "opencode", // pre-change
+            "amp",
+            "cline",
+            "cursor",
+            "devin",
+            "droid",
+            "copilot",
+            "grok",
+            "hermes",
+            "kilo",
+            "kimi",
+            "kiro",
+            "pi",
+            "qodercli",     //
+            "cursor-agent", // the pinned CLI harness manifest
+        ] {
+            let src = bundled_manifest(agent).unwrap_or_else(|| panic!("{agent} is bundled"));
+            let m = Manifest::parse(src)
+                .unwrap_or_else(|e| panic!("{agent}.toml failed to parse: {e:?}"));
+            assert!(!m.rules().is_empty(), "{agent}.toml has rules");
+            // Must not panic (regexes compiled at parse; this exercises evaluate).
+            let _ = m.evaluate(&synthetic);
+        }
+        // A genuinely-unhosted harness still resolves to None (the fail-loud
+        // guard, mirrors readiness OQ#9: no fail-open default). goose is a real
+        // coding CLI we deliberately do not bundle a manifest for.
+        assert!(bundled_manifest("goose").is_none(), "unknown agent -> None");
+    }
+
+    // A live permission prompt outranks an idle composer box drawn beneath it:
+    // badging `idle` while a prompt is up would be a false-ready (forbidden).
+    #[test]
+    fn ac_e6_5_claude_permission_prompt_outranks_idle_box() {
+        let m = bundled("claude");
+        // A permission prompt with the composer box still rendered below it.
+        let screen = "do you want to proceed?\n\
+                      1. Yes\n\
+                      2. No\n\
+                      \u{256d}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{256e}\n\
+                      \u{2502} \u{276f} type \u{2502}\n\
+                      \u{2570}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{256f}";
+        let v = m.evaluate(&view(screen)).expect("a rule matches");
+        assert_eq!(
+            v.state, "blocked",
+            "permission prompt must beat the idle box"
+        );
+        assert_eq!(v.rule_id, "permission_prompt");
+    }
+
+    // AC2-ERR: an adaptation that leaves a unknown source key in the TOML
+    // fails loud at parse (our fail-closed parser) - the bad port never ships.
+
+    // ----: answer grammar + fail-closed extractor ----
+
+    fn blocked_answer_manifest() -> Manifest {
+        Manifest::parse(
+            r#"
+            [[rule]]
+            id = "perm"
+            state = "blocked"
+            priority = 900
+            region = "bottom_non_empty_lines(8)"
+            gate = { contains = "proceed?" }
+            [rule.answer]
+            option = '^\s*\x{276f}?\s*(?P<idx>[0-9])\.\s+(?P<label>.+?)\s*$'
+            send = "digit"
+            "#,
+        )
+        .unwrap()
+    }
+
+    // AC3-HP: a clean numbered menu yields one option per line with pinned digit
+    // keystrokes, a display-only prompt, region_lines, and a blake3 fingerprint
+    // over the exact region text the server will re-read.
+    #[test]
+    fn xc929_extract_answer_clean_numbered_menu() {
+        let m = blocked_answer_manifest();
+        // No blank lines, so the bottom_non_empty_lines(8) region == the screen.
+        let screen = "Do you want to proceed?\n  ❯ 1. Yes\n  2. No";
+        let (v, ans) = m.evaluate_answerable(&view(screen)).unwrap();
+        assert_eq!(v.state, "blocked");
+        let ans = ans.expect("a clean numbered menu is answerable");
+        assert_eq!(ans.options.len(), 2);
+        assert_eq!(ans.options[0].idx, "1");
+        assert_eq!(ans.options[0].label, "Yes");
+        assert_eq!(ans.options[0].keystroke, b"1");
+        assert_eq!(ans.options[1].idx, "2");
+        assert_eq!(ans.options[1].label, "No");
+        assert_eq!(ans.options[1].keystroke, b"2");
+        assert_eq!(ans.region_lines, 8);
+        assert_eq!(ans.prompt, "Do you want to proceed?");
+        // Fingerprint is blake3 over the region join (the server re-hashes this).
+        assert_eq!(ans.fingerprint, *blake3::hash(screen.as_bytes()).as_bytes());
+    }
+
+    // (codex review P2): a model reply that PRINTS "Do you trust …" plus a
+    // plain numbered list while idle must NOT become answerable - only a live menu
+    // draws the "›" selector before a digit. The gate's required marker is what
+    // stops the response list from injecting "1"/"2" into the idle composer.
+    #[test]
+    fn x5103_codex_model_printed_list_is_not_a_false_trust_prompt() {
+        let m = bundled("codex");
+        let screen = "The permission flow. Do you trust the folder? Options:\n\
+            1. Yes, it loads config\n  2. No, sandboxed\n\u{203a} ";
+        let (v, ans) = m.evaluate_answerable(&view(screen)).unwrap();
+        assert_ne!(
+            v.rule_id, "trust_prompt",
+            "a printed list without the › selector must not fire trust_prompt"
+        );
+        assert!(ans.is_none(), "no live menu -> not answerable");
+    }
+
+    // A model reply that PRINTS the footer phrase over a plain numbered list
+    // must not fire: the gate also requires the `option N/M` header or the
+    // `tab to add notes` hint, which only a live dialog draws.
+    #[test]
+    fn xd27e_codex_question_prompt_prose_footer_is_not_a_dialog() {
+        let m = bundled("codex");
+        let screen = "Plan draft:\n\
+            \u{203a} 1. Ship the parser\n\
+              2. Ship the renderer\n\
+            When the form is complete press enter to submit answer";
+        // No rule matching at all is the expected outcome; any rule that
+        // does match must not be question_prompt or carry an answer.
+        if let Some((v, ans)) = m.evaluate_answerable(&view(screen)) {
+            assert_ne!(
+                v.rule_id, "question_prompt",
+                "a printed footer phrase without the option markers must not fire"
+            );
+            assert!(ans.is_none(), "no live dialog -> not answerable");
+        }
+    }
+
+    #[test]
+    fn manifest_eval_unknown_harness_fails_loud() {
+        let err = evaluate_screen_json("unknown", "❯ ").unwrap_err();
+        assert!(err.contains("unknown"));
+    }
+}

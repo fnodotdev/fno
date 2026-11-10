@@ -1,0 +1,1152 @@
+//! The reply ladder: did an answered attention item reach its asker?
+//!
+//! The mux records one durable `attention_answer` row and returns; this
+//! ladder is the delivery half. One beat step per item, a pure
+//! [`step`] decision over stored per-item state, and every effect (the
+//! clear, the resume, the team mail) behind an injected runner, so tests
+//! stage the world. Rungs: the clear's mail leg, a resume of an idle asker
+//! confirmed by content in its transcript, a wrapped mail to the team over
+//! the asker's node, and `none` when no team covers it.
+
+use crate::attention::AttentionItem;
+use serde_json::Value;
+use std::collections::HashMap;
+use std::path::Path;
+
+/// How long the ladder waits for the resume to show up in the asker's
+/// transcript before it escalates to the team.
+pub const CONFIRM_WINDOW_S: u64 = 300;
+
+/// The bound for one resume, mail or team mail shellout.
+const RUN_TIMEOUT_S: u64 = 30;
+
+/// Per-item ladder state, one JSON file beside the settle state.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct ReplyState {
+    pub item_id: String,
+    pub answer: String,
+    #[serde(default)]
+    pub sink: String,
+    /// How many times the clear failed here.
+    #[serde(default)]
+    pub clear_retries: u32,
+    /// The clear ran (or needed no clear: a note, or an item closed
+    /// elsewhere).
+    #[serde(default)]
+    pub cleared: bool,
+    /// The clear's posture line (the last stderr line it printed).
+    #[serde(default)]
+    pub receipt: String,
+    /// The note path's one explicit answer mail went out.
+    #[serde(default)]
+    pub note_mail_sent: bool,
+    /// When the resume ran, and the transcript byte offset saved before it.
+    #[serde(default)]
+    pub resumed_at: Option<u64>,
+    #[serde(default)]
+    pub offset: Option<u64>,
+    /// The resume's exit code, when it ran.
+    #[serde(default)]
+    pub resume_exit: Option<i32>,
+    #[serde(default)]
+    pub rung: String,
+    #[serde(default)]
+    pub outcome: String,
+    #[serde(default)]
+    pub evidence: String,
+    #[serde(default)]
+    pub holder: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub updated_at: u64,
+    /// The user handed the question to the agents: the team over the
+    /// asker's node decides it, so the ladder mails the team, never the asker.
+    #[serde(default)]
+    pub delegate: bool,
+}
+
+impl ReplyState {
+    /// A terminal state stops the ladder: one delivery row per item.
+    fn terminal(&self) -> bool {
+        !self.outcome.is_empty()
+    }
+}
+
+/// One delivery outcome the ladder commits: the `attention_delivery` row.
+pub struct Delivery {
+    pub rung: &'static str,
+    pub outcome: &'static str,
+    pub evidence: String,
+    pub holder: Option<String>,
+    pub session_id: Option<String>,
+}
+
+/// The next thing the ladder wants. Every effect stays with the caller.
+pub enum Step {
+    /// Terminal: commit the row.
+    Deliver(Delivery),
+    /// Resume the asker with the answer.
+    Resume,
+    /// A note item has no clear, so the mail rung is this ladder's own send.
+    MailNote,
+    /// Escalate: resolve the team over the asker's node, mail it wrapped.
+    TeamNeeded,
+    /// No team covered the node: undelivered.
+    Fail { evidence: String },
+    /// Nothing to do this beat.
+    Idle,
+}
+
+/// The facts one step decides over. Everything derived from the world this
+/// beat: the asker's session facts, whether the transcript check confirmed
+/// the answer landed, and whether the clear's mail leg already delivered.
+pub struct Facts<'a> {
+    pub mail_landed: bool,
+    pub is_note: bool,
+    pub session: Option<(&'a str, &'a str)>,
+    pub confirmed: bool,
+    pub now: u64,
+    /// The asker holds the team over its own node (delegate states only).
+    pub asker_is_team: bool,
+}
+
+/// The pure decision. Total over all inputs; never shells out.
+pub fn step(state: &ReplyState, facts: &Facts) -> Step {
+    // A delegated question goes to the team: the clear's mail already told
+    // the asker, so only an asker that IS the team is done at the mail rung.
+    if state.delegate && !(facts.mail_landed && facts.asker_is_team) {
+        return Step::TeamNeeded;
+    }
+    if facts.mail_landed {
+        return Step::Deliver(Delivery {
+            rung: "mail",
+            outcome: "landed",
+            evidence: state.receipt.clone(),
+            holder: None,
+            session_id: facts.session.map(|(sid, _)| sid.to_string()),
+        });
+    }
+    if facts.is_note && !state.note_mail_sent {
+        return Step::MailNote;
+    }
+    if state.resumed_at.is_none() {
+        return match facts.session {
+            Some((sid, _)) if !sid.is_empty() => Step::Resume,
+            _ => Step::TeamNeeded,
+        };
+    }
+    // Resume phase.
+    if state.resume_exit != Some(0) {
+        return Step::TeamNeeded;
+    }
+    if facts.confirmed {
+        return Step::Deliver(Delivery {
+            rung: "resume",
+            outcome: "confirmed",
+            evidence: format!("found {} in the asker's transcript", state.item_id),
+            holder: None,
+            session_id: facts.session.map(|(sid, _)| sid.to_string()),
+        });
+    }
+    if state
+        .resumed_at
+        .is_some_and(|at| facts.now.saturating_sub(at) > CONFIRM_WINDOW_S)
+    {
+        return Step::TeamNeeded;
+    }
+    Step::Idle
+}
+
+/// The arm's mux pass: every unsuperseded `attention_answer` row, whatever
+/// its sink, drives one ladder. The clear runs while the item is still open;
+/// the ladder advances across beats from the persisted state. Returns the
+/// acted count and the detail lines the tick row carries.
+pub fn tick_answers(
+    items: &[AttentionItem],
+    cwd: &Path,
+    state_dir: &Path,
+    deadline: std::time::Instant,
+    io: &mut dyn crate::attention_arm::SinkIo,
+    runner: &dyn Fn(&[String]) -> (i32, String, String),
+) -> (u64, Vec<String>) {
+    let now = now_secs();
+    let (answers, delivered) = match fold_answer_rows(items) {
+        Ok(rows) => rows,
+        Err(e) => return (0, vec![format!("ladder source unreadable: {e}")]),
+    };
+    // A delivery row is the ladder's durable terminal marker: answers that
+    // already carry one never re-enter the ladder, and their terminal states
+    // are pruned so replies.json stays bounded.
+    let mut states: HashMap<String, ReplyState> = load_states(state_dir);
+    states.retain(|id, _| !delivered.contains(id));
+    let mut acted: u64 = 0;
+    let mut detail: Vec<String> = Vec::new();
+    for (item_id, sink, answer, delegate) in &answers {
+        if delivered.contains(item_id) {
+            // The terminal delivery row exists; a re-walk appends a fresh
+            // delivery row every beat (the live store held 5,343 rows for
+            // one question, measured 2026-09-28).
+            continue;
+        }
+        if std::time::Instant::now() >= deadline {
+            detail.push(format!("ladder: budget spent, {} deferred", answers.len()));
+            break;
+        }
+        let state = states.entry(item_id.clone()).or_insert_with(|| ReplyState {
+            item_id: item_id.clone(),
+            answer: answer.clone(),
+            sink: sink.clone(),
+            delegate: *delegate,
+            ..Default::default()
+        });
+        if state.terminal() {
+            continue;
+        }
+        // A copy's answer was recorded on this machine, but the asking
+        // machine delivers it: the ladder never runs, and the `carried`
+        // delivery row keeps the walk bounded: a clear here could only
+        // refuse, because the copy already holds this first answer.
+        if items.iter().any(|i| i.id == *item_id && i.host.is_some()) {
+            state.cleared = true;
+            state.rung = "carried".into();
+            state.outcome = "carried".into();
+            state.evidence = "answer on a copy; the asking machine delivers it".into();
+            acted += 1;
+            emit_delivery(state);
+            continue;
+        }
+        // The clear phase: while the door can still close, the arm owns the
+        // clear (same retry cap as the file lane). `answered` still needs it:
+        // the answer row recorded, and the clear is what closes the question.
+        // A closed item, a withdrawn one or a note needs no clear - the ladder
+        // starts from the answer row.
+        if !state.cleared {
+            let item = items.iter().find(|i| i.id == *item_id);
+            let open = item.is_some_and(|i| matches!(i.state.as_str(), "open" | "answered"));
+            if open && !item_id.starts_with("note-") {
+                match io.clear(item_id, answer) {
+                    Ok(posture) => {
+                        state.cleared = true;
+                        // The door's own words for an already-closed question say
+                        // "nothing written", so the posture alone carries no
+                        // delivery fact, and an endpoint send can fail after its
+                        // own close and leave no copy anywhere. The clear never
+                        // calls landed itself: the receipt records and the beat
+                        // falls through to the ladder phase, whose mail_landed
+                        // fact reads a reached posture, whose rung door re-reads
+                        // the delivery row right before any send, and whose
+                        // resume leg delivers what no lane did.
+                        state.receipt = posture;
+                        acted += 1;
+                    }
+                    Err(e) => {
+                        state.clear_retries += 1;
+                        detail.push(format!("ladder {item_id}: clear failed: {e}"));
+                        if state.clear_retries >= crate::attention_arm::CLEAR_RETRY_CAP {
+                            state.rung = "none".into();
+                            state.outcome = "failed".into();
+                            state.evidence = format!("the clear kept failing: {e}");
+                            emit_delivery(state);
+                        }
+                    }
+                }
+            } else if item_id.starts_with("note-") {
+                // A note: no door closes it, so the note mail rung follows.
+                state.cleared = true;
+            } else {
+                // Closed by another lane (the endpoint, a terminal, or the
+                // file lane): the delivery row decides whether that lane also
+                // delivered, not the close itself.
+                state.cleared = true;
+                if delivered_row_exists(item_id) {
+                    state.rung = "mail".into();
+                    state.outcome = "landed".into();
+                    state.evidence =
+                        "question closed by another lane; its clear mailed the asker".into();
+                    acted += 1;
+                    emit_delivery(state);
+                    continue;
+                }
+                acted += 1;
+                // Deferred: skip this beat's ladder phase so the resume
+                // cannot race a delivery row still in flight.
+                continue;
+            }
+        }
+        // A terminal set in the clear phase (cap spent, closed elsewhere) is
+        // done: never fall through to the ladder and wake anyone.
+        if state.terminal() {
+            continue;
+        }
+        // The endpoint's own mail can land between this beat's fold and the
+        // rung: the fold is seconds stale, so the rung door re-reads the
+        // journal before any send. A resume typed in that gap is the second
+        // copy the one-copy rule refuses.
+        if delivered_row_exists(item_id) {
+            state.rung = "mail".into();
+            state.outcome = "landed".into();
+            state.evidence = "the answer endpoint's own mail already delivered".into();
+            acted += 1;
+            emit_delivery(state);
+            continue;
+        }
+        // The ladder phase: effects through the injected runner, one delivery
+        // row per item.
+        let step = step_of(state, items, now, cwd);
+        match step {
+            Step::Idle => {}
+            Step::Fail { evidence } => {
+                state.rung = "none".into();
+                state.outcome = "failed".into();
+                state.evidence = evidence;
+                acted += 1;
+                emit_delivery(state);
+            }
+            Step::Deliver(d) => {
+                state.rung = d.rung.into();
+                state.outcome = d.outcome.into();
+                state.evidence = d.evidence.clone();
+                state.holder = d.holder.clone();
+                state.session_id = d.session_id.clone();
+                acted += 1;
+                emit_delivery(state);
+            }
+            Step::Resume => {
+                let item = items.iter().find(|i| i.id == *item_id);
+                if let Some(item) = item {
+                    run_resume(state, item, now, runner);
+                }
+            }
+            Step::MailNote => {
+                let asker = items
+                    .iter()
+                    .find(|i| i.id == *item_id)
+                    .and_then(|i| i.asker.as_ref().map(|a| a.handle.clone()));
+                mail_note(state, asker, runner);
+            }
+            Step::TeamNeeded => {
+                let item = items.iter().find(|i| i.id == *item_id);
+                match item.and_then(|i| team_holder(i, cwd).map(|h| (i, h))) {
+                    Some((item, holder)) => {
+                        let message = if state.delegate {
+                            delegate_message(state, item)
+                        } else {
+                            resume_message(state)
+                        };
+                        mail_team(state, &holder, message, runner);
+                    }
+                    None => {
+                        state.rung = "none".into();
+                        state.outcome = "failed".into();
+                        state.evidence = format!(
+                            "no live team over {item_id} and the mail did not confirm landing"
+                        );
+                        emit_delivery(state);
+                    }
+                }
+            }
+        }
+    }
+    save_states(state_dir, &states);
+    (acted, detail)
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Build the facts one step decides over: the asker's session, the clear's
+/// mail verdict, and (resume phase) the transcript confirm. `confirmed` is
+/// only computed in the resume phase - a transcript scan per beat per item
+/// is the one cost the ladder refuses to pay before it must.
+fn step_of(state: &ReplyState, items: &[AttentionItem], now: u64, cwd: &Path) -> Step {
+    let item = items.iter().find(|i| i.id == state.item_id);
+    let session: Option<(String, String)> = item.and_then(|i| {
+        i.asker.as_ref().and_then(|a| {
+            a.session_id
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(|sid| (sid.to_string(), a.harness.clone().unwrap_or_default()))
+        })
+    });
+    let confirmed = if state.resumed_at.is_some() && state.resume_exit == Some(0) {
+        session.as_ref().is_some_and(|(sid, harness)| {
+            transcript_confirm(sid, harness, state.item_id.as_str(), state.offset)
+        })
+    } else {
+        // No session facts (or a failed resume) to confirm against: not
+        // confirmed this beat.
+        false
+    };
+    let asker_is_team = state.delegate
+        && item.is_some_and(|i| {
+            let asker = i.asker.as_ref();
+            team_holder(i, cwd).is_some_and(|h| {
+                asker.is_some_and(|a| a.handle == h || a.session_id.as_deref() == Some(&h))
+            })
+        });
+    let facts = Facts {
+        mail_landed: fno_mail::state::receipt_reached(&state.receipt),
+        is_note: state.item_id.starts_with("note-"),
+        session: session.as_ref().map(|(s, h)| (s.as_str(), h.as_str())),
+        confirmed,
+        now,
+        asker_is_team,
+    };
+    step(state, &facts)
+}
+
+/// The resume effect: run the door once, save the offset and the exit code.
+/// The asker facts come from this beat's projection item; the session id is
+/// remembered in state so a later beat can confirm the transcript.
+fn run_resume(
+    state: &mut ReplyState,
+    item: &AttentionItem,
+    now: u64,
+    runner: &dyn Fn(&[String]) -> (i32, String, String),
+) {
+    let Some(sid) = item
+        .asker
+        .as_ref()
+        .and_then(|a| a.session_id.clone())
+        .filter(|s| !s.is_empty())
+    else {
+        return;
+    };
+    state.session_id = Some(sid.clone());
+    let harness = item
+        .asker
+        .as_ref()
+        .and_then(|a| a.harness.clone())
+        .unwrap_or_default();
+    let argv = vec![
+        "fno".into(),
+        "agents".into(),
+        "resume".into(),
+        sid.clone(),
+        "--message".into(),
+        resume_message(state),
+        "--from-name".into(),
+        "fno/questions".into(),
+    ];
+    // The offset is the PRE-resume transcript length: `fno agents resume`
+    // delivers synchronously, so a marker injected before this runner returns
+    // must sit after the offset the confirm scan reads from, not before it.
+    let pre_len =
+        crate::context_run::session_transcript(&sid, &harness).map(|p| transcript_len(&p));
+    let (code, _stdout, _stderr) = runner(&argv);
+    state.offset = pre_len;
+    state.resumed_at = Some(now);
+    state.resume_exit = Some(code);
+}
+
+/// The resume message: the answer plus the question id, so the asker can
+/// dedupe a double delivery and the ladder can confirm the landing.
+fn resume_message(state: &ReplyState) -> String {
+    format!(
+        "Answer to your question {}: {}. If you already have this answer, ignore this copy.",
+        crate::numbers::display(&state.item_id),
+        state.answer
+    )
+}
+
+/// The team's mail for a delegated question: decide a reversible call and
+/// record it, or ask the user again with the same options, naming the old id
+/// (the original closed when the delegation recorded).
+fn delegate_message(state: &ReplyState, item: &AttentionItem) -> String {
+    let asker = item.asker.as_ref().map_or("?", |a| a.handle.as_str());
+    let node = item
+        .node
+        .as_deref()
+        .filter(|n| !n.is_empty() && *n != "none")
+        .or_else(|| item.blocks.first().map(String::as_str))
+        .unwrap_or("<node>");
+    format!(
+        "The user handed question {id} ({title}), asked by {asker}, to you. Reversible: {rev}. \
+         Decide it yourself and record it with fno backlog decide {node} if it is reversible \
+         (yes or costly); if you judge it irreversible after all, ask the user again with \
+         fno inbox outstanding ask --question-file, carrying the same options and naming {id} \
+         in the question.",
+        id = state.item_id,
+        title = item.title,
+        rev = item.reversible.as_deref().unwrap_or("not recorded"),
+    )
+}
+
+/// The note path's one explicit answer mail (a note has no clear, so no mail
+/// leg runs for it). Sent once; the receipt judged like any other mail rung.
+fn mail_note(
+    state: &mut ReplyState,
+    asker: Option<String>,
+    runner: &dyn Fn(&[String]) -> (i32, String, String),
+) {
+    let Some(asker) = asker else {
+        return;
+    };
+    let argv = vec![
+        "fno".into(),
+        "agents".into(),
+        "mail".into(),
+        "send".into(),
+        asker.clone(),
+        resume_message(state),
+        "--from-name".into(),
+        "fno/questions".into(),
+        "--style-exception".into(),
+        "attention delivery: quoted answer text, not authored prose".into(),
+    ];
+    let (code, stdout, _stderr) = runner(&argv);
+    state.note_mail_sent = true;
+    if crate::mail_inject::mail_send_accepted(code, &stdout) {
+        state.rung = "mail".into();
+        state.outcome = "landed".into();
+        state.evidence = crate::mail_inject::mail_send_receipt(&stdout).to_string();
+        state.session_id = Some(asker);
+        emit_delivery(state);
+    }
+}
+
+/// The team effect: one wrapped mail to the team holder over the asker's
+/// node; the row records `team/sent` on exit 0, `none/failed` otherwise.
+fn mail_team(
+    state: &mut ReplyState,
+    holder: &str,
+    message: String,
+    runner: &dyn Fn(&[String]) -> (i32, String, String),
+) {
+    let argv = vec![
+        "fno".into(),
+        "agents".into(),
+        "mail".into(),
+        "send".into(),
+        holder.to_string(),
+        message,
+        "--from-name".into(),
+        "fno/questions".into(),
+        "--style-exception".into(),
+        "attention delivery: quoted answer text, not authored prose".into(),
+    ];
+    let (code, _stdout, _stderr) = runner(&argv);
+    state.session_id = state.session_id.clone().or(None);
+    if code == 0 {
+        state.rung = "team".into();
+        state.outcome = "sent".into();
+        state.evidence = format!("mailed the team holder {holder}");
+        state.holder = Some(holder.to_string());
+    } else {
+        state.rung = "none".into();
+        state.outcome = "failed".into();
+        state.evidence = format!("the team mail to {holder} failed");
+    }
+    emit_delivery(state);
+}
+
+/// The team resolver: the owner ladder's NodeLead rung over the node (or
+/// its first block). One resolver, shared with the notice router and the
+/// help router; the private node-to-lead read it replaces is deleted.
+pub(crate) fn team_holder(item: &AttentionItem, cwd: &Path) -> Option<String> {
+    // A literal `none` node is the projection's "no node"; fall through to
+    // the blocks, which still name what the answer unblocks.
+    let node = item
+        .node
+        .as_deref()
+        .filter(|n| !n.is_empty() && *n != "none")
+        .or_else(|| item.blocks.first().map(String::as_str));
+    let world = crate::owner_ladder::world(&crate::paths::AgentsHome::from_env(), cwd).ok()?;
+    let owner = crate::owner_ladder::resolve(
+        &crate::owner_ladder::Ask {
+            node,
+            from_session: None,
+            start: crate::owner_ladder::Rung::NodeLead,
+        },
+        &world,
+    );
+    owner.holder
+}
+
+/// Whether the question id shows up in the asker's transcript after the byte
+/// offset the resume saved: the content-confirm the mail lane lacks.
+fn transcript_confirm(sid: &str, harness: &str, marker: &str, offset: Option<u64>) -> bool {
+    let Some(path) = crate::context_run::session_transcript(sid, harness) else {
+        return false;
+    };
+    crate::mail_inject::confirm_content_after(&path, marker, offset.unwrap_or(0)).unwrap_or(false)
+}
+
+/// The transcript's byte length, read once: the resume's before-offset.
+fn transcript_len(path: &Path) -> u64 {
+    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
+/// Fold the unsuperseded `attention_answer` rows: id -> (sink, answer text,
+/// delegate). The answer text maps the row's option onto the item's option
+/// text when the projection has the item; words and done stand alone.
+fn fold_answer_rows(
+    items: &[AttentionItem],
+) -> Result<
+    (
+        Vec<(String, String, String, bool)>,
+        std::collections::HashSet<String>,
+    ),
+    String,
+> {
+    let home = crate::paths::AgentsHome::from_env();
+    let path = crate::provider_cap::questions_path(&home);
+    let mut out: Vec<(String, String, String, bool)> = Vec::new();
+    let mut delivered: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut won: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let raw = crate::event_store::journal_text_checked(
+        &path,
+        &crate::event_store::EventQuery::of_types(&[]),
+    )?;
+    for line in crate::event_store::activity_text(&raw).lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        match v.get("type").and_then(Value::as_str) {
+            Some("attention_answer") => {}
+            Some("attention_delivery") => {
+                let Some(did) = v
+                    .get("data")
+                    .and_then(|d| d.get("item_id"))
+                    .and_then(Value::as_str)
+                else {
+                    continue;
+                };
+                delivered.insert(did.to_string());
+                continue;
+            }
+            _ => continue,
+        }
+        let data = v.get("data").cloned().unwrap_or(Value::Null);
+        let Some(id) = data.get("item_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let superseded = data.get("superseded").and_then(Value::as_bool) == Some(true);
+        if superseded || won.contains(id) {
+            continue;
+        }
+        won.insert(id.to_string());
+        let sink = data
+            .get("sink")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let field = |k: &str| {
+            data.get(k)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        };
+        let text = match (
+            data.get("option").and_then(Value::as_u64),
+            field("words"),
+            data.get("done").and_then(Value::as_bool),
+        ) {
+            (Some(n), _, _) => items
+                .iter()
+                .find(|i| i.id == id)
+                .and_then(|i| i.options.iter().find(|o| o.n as u64 == n))
+                .map(|o| o.text.clone())
+                .unwrap_or_else(|| format!("option {n}")),
+            (_, w, _) if !w.is_empty() => w,
+            (_, _, Some(true)) => "done".to_string(),
+            _ => String::new(),
+        };
+        let delegate = data.get("delegate").and_then(Value::as_bool) == Some(true);
+        out.push((id.to_string(), sink, text, delegate));
+    }
+    Ok((out, delivered))
+}
+
+/// Load the ladder states from `replies.json` beside the settle state.
+fn load_states(state_dir: &Path) -> HashMap<String, ReplyState> {
+    let path = state_dir.join("replies.json");
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// Save the ladder states atomically (tmp + rename).
+fn save_states(state_dir: &Path, states: &HashMap<String, ReplyState>) {
+    let path = state_dir.join("replies.json");
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let tmp = path.with_extension("json.tmp");
+    if serde_json::to_string(states)
+        .map(|s| std::fs::write(&tmp, s))
+        .unwrap_or(Err(std::io::Error::other("serialize")))
+        .is_ok()
+    {
+        let _ = std::fs::rename(&tmp, &path);
+    }
+}
+
+/// Commit one terminal ladder: the `attention_delivery` row in
+/// `questions.jsonl`, beside the answer row it delivers. A failed append
+/// clears the terminal marker: the row IS the terminal marker, so a write
+/// that did not land leaves the item non-terminal and the next beat retries
+/// the write instead of skipping a terminal state forever.
+fn emit_delivery(state: &mut ReplyState) {
+    let answered_at = chrono::Utc::now().to_rfc3339();
+    let home = crate::paths::AgentsHome::from_env();
+    let path = crate::provider_cap::questions_path(&home);
+    let mut fields = serde_json::Map::new();
+    fields.insert(
+        "item_id".into(),
+        serde_json::Value::from(state.item_id.clone()),
+    );
+    fields.insert("rung".into(), serde_json::Value::from(state.rung.clone()));
+    fields.insert(
+        "outcome".into(),
+        serde_json::Value::from(state.outcome.clone()),
+    );
+    fields.insert(
+        "evidence".into(),
+        serde_json::Value::from(state.evidence.clone()),
+    );
+    fields.insert("session_id".into(), state.session_id.clone().into());
+    fields.insert("holder".into(), state.holder.clone().into());
+    fields.insert("at".into(), serde_json::Value::from(answered_at));
+    // The row is the terminal marker: a commit that fails clears the
+    // outcome, so the next beat retries the write instead of skipping a
+    // terminal state forever.
+    if crate::events::EventEmitter::new(&path, "daemon")
+        .emit_fields("attention_delivery", fields)
+        .is_err()
+    {
+        state.outcome.clear();
+    }
+}
+
+/// The answer endpoint's accepted send, recorded as the ladder's terminal
+/// delivery row: the answer is on its way exactly once through that send,
+/// so the ladder never adds its resume copy on top.
+pub(crate) fn mark_endpoint_delivery(item_id: &str, evidence: &str, session_id: Option<&str>) {
+    let mut fields = endpoint_delivery_fields(item_id, evidence, session_id);
+    fields.insert(
+        "at".into(),
+        serde_json::Value::from(chrono::Utc::now().to_rfc3339()),
+    );
+    let home = crate::paths::AgentsHome::from_env();
+    let path = crate::provider_cap::questions_path(&home);
+    let _ =
+        crate::events::EventEmitter::new(&path, "daemon").emit_fields("attention_delivery", fields);
+}
+
+/// The fields of the endpoint's delivery row, minus the timestamp.
+fn endpoint_delivery_fields(
+    item_id: &str,
+    evidence: &str,
+    session_id: Option<&str>,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut fields = serde_json::Map::new();
+    fields.insert("item_id".into(), serde_json::Value::from(item_id));
+    fields.insert("rung".into(), serde_json::Value::from("mail"));
+    fields.insert("outcome".into(), serde_json::Value::from("landed"));
+    fields.insert("evidence".into(), serde_json::Value::from(evidence));
+    fields.insert("session_id".into(), session_id.map(str::to_string).into());
+    fields.insert("holder".into(), Option::<String>::None.into());
+    fields
+}
+
+/// Whether the journal holds an `attention_delivery` row for `item_id`.
+/// The tick's fold happens once at the top; the endpoint's row can land
+/// seconds later, so the rung door re-reads before it sends.
+fn delivered_row_exists(item_id: &str) -> bool {
+    let home = crate::paths::AgentsHome::from_env();
+    let path = crate::provider_cap::questions_path(&home);
+    let Ok(raw) = crate::event_store::journal_text_checked(
+        &path,
+        &crate::event_store::EventQuery::of_types(&[]),
+    ) else {
+        return false;
+    };
+    crate::event_store::activity_text(&raw).lines().any(|line| {
+        serde_json::from_str::<Value>(line).is_ok_and(|v| {
+            v.get("type").and_then(Value::as_str) == Some("attention_delivery")
+                && v.get("data")
+                    .and_then(|d| d.get("item_id"))
+                    .and_then(Value::as_str)
+                    == Some(item_id)
+        })
+    })
+}
+
+/// The bounded `fno` shellout the effects run through: stdin closed, 30 s
+/// bound, the (code, stdout, stderr) triple the ladder reads.
+pub fn real_runner_pub(argv: &[String]) -> (i32, String, String) {
+    let mut cmd = crate::loop_dispatch::fno_cmd(&argv[0]);
+    cmd.args(&argv[1..]).stdin(std::process::Stdio::null());
+    match crate::bounded_cmd::output_with_timeout_result(cmd, RUN_TIMEOUT_S) {
+        Ok(out) => (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).to_string(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        ),
+        Err(e) => (-1, String::new(), e.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::attention::AttentionItem;
+    use std::path::PathBuf;
+
+    /// Four staged worlds, driven through tick_answers with a fake SinkIo.
+    struct FakeIo {
+        posture: String,
+        clears: usize,
+    }
+
+    impl crate::attention_arm::SinkIo for FakeIo {
+        fn read(&mut self, _p: &Path) -> std::io::Result<String> {
+            Ok(String::new())
+        }
+        fn write_atomic(&mut self, _p: &Path, _c: &str) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn create_new(&mut self, _p: &Path, _c: &str) -> std::io::Result<bool> {
+            Ok(false)
+        }
+        fn rename(&mut self, _a: &Path, _b: &Path) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn list_md(&mut self, _d: &Path) -> Vec<PathBuf> {
+            vec![]
+        }
+        fn path_exists(&mut self, _p: &Path) -> bool {
+            false
+        }
+        fn route(&mut self, _i: &AttentionItem) -> Result<crate::attention_route::Routing, String> {
+            Ok(Default::default())
+        }
+        fn record(
+            &mut self,
+            _i: &AttentionItem,
+            _s: &str,
+            _a: &crate::attention_file::FileAnswer,
+        ) -> Result<String, String> {
+            Ok(String::new())
+        }
+        fn clear(&mut self, _id: &str, _answer: &str) -> Result<String, String> {
+            self.clears += 1;
+            Ok(self.posture.clone())
+        }
+        fn remove(&mut self, _p: &Path) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn notify(&mut self, _t: &str, _b: &str) {}
+    }
+
+    fn ready_item(id: &str, harness: Option<&str>, sid: Option<&str>) -> AttentionItem {
+        let item = AttentionItem {
+            host: None,
+            recovery_batch: None,
+            id: id.into(),
+            kind: "question".into(),
+            title: "Which?".into(),
+            body: None,
+            project: String::new(),
+            priority: "high".into(),
+            created_at: String::new(),
+            deadline: None,
+            on_silence: None,
+            class: None,
+            blocks: vec!["x-1".into()],
+            subject: None,
+            asker: Some(crate::attention::Asker {
+                handle: "w1".into(),
+                session_id: sid.map(String::from),
+                harness: harness.map(String::from),
+                rank: None,
+                live: None,
+                reach: None,
+                person: None,
+            }),
+            node: Some("x-1".into()),
+            blocked_because: None,
+            options_rationale: None,
+            recommendation: None,
+            options: vec![],
+            unknowns: None,
+            reversible: None,
+            cost_if_wrong: None,
+            meanwhile: None,
+            ready: true,
+            missing: vec![],
+            state: "open".into(),
+            settled: false,
+            images: vec![],
+            ..Default::default()
+        };
+        item
+    }
+
+    /// Append one answer row to the declared questions.jsonl.
+    fn record_answer(item_id: &str) {
+        crate::attention_arm::append_answer_row(
+            &crate::paths::AgentsHome::from_env(),
+            item_id,
+            "mux",
+            &crate::attention_file::FileAnswer::Option(1),
+            "sink",
+            "needs_door",
+            "mux",
+        )
+        .unwrap();
+    }
+
+    /// The declared root's questions.jsonl, read back.
+    fn journal() -> String {
+        let home = crate::paths::AgentsHome::from_env();
+        crate::event_store::journal_text(&crate::provider_cap::questions_path(&home), &[])
+    }
+
+    #[test]
+    fn ac2_edge_a_delivered_answer_never_reenters_the_ladder() {
+        let _root = crate::paths::DeclaredRoot::declare("reply_delivered_skip");
+        let items = vec![ready_item("q-done", None, Some("s1"))];
+        record_answer("q-history");
+        let mut io = FakeIo {
+            posture: "outstanding: q-done answered; mail to w1: accepted-new-turn".into(),
+            clears: 0,
+        };
+        let state_dir = tempfile::tempdir().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let runner = &|_argv: &[String]| (0, String::new(), String::new());
+        let questions = crate::provider_cap::questions_path(&crate::paths::AgentsHome::from_env());
+        crate::event_store::sync(&questions).unwrap();
+        let path = crate::event_store::store_path(&questions);
+        let db = rusqlite::Connection::open(path).unwrap();
+        db.execute_batch("CREATE TABLE recovery_history(event_id TEXT PRIMARY KEY, batch TEXT NOT NULL); INSERT INTO recovery_history SELECT event_id, 'copy-batch' FROM events WHERE type='attention_answer';").unwrap();
+        drop(db);
+        let (historical, _) = tick_answers(
+            &items,
+            Path::new("."),
+            state_dir.path(),
+            deadline,
+            &mut io,
+            runner,
+        );
+        assert_eq!(historical, 0, "recovered answers start no delivery ladder");
+        assert_eq!(io.clears, 0, "historical rows never clear a question");
+        record_answer("q-done");
+        let (acted1, _d1) = tick_answers(
+            &items,
+            Path::new("."),
+            state_dir.path(),
+            deadline,
+            &mut io,
+            runner,
+        );
+        assert_eq!(
+            acted1,
+            2,
+            "clear + delivery: {acted1} journal={}",
+            journal()
+        );
+        let (acted2, _d2) = tick_answers(
+            &items,
+            Path::new("."),
+            state_dir.path(),
+            deadline,
+            &mut io,
+            runner,
+        );
+        assert_eq!(
+            acted2,
+            0,
+            "the delivered answer never re-enters: {}",
+            journal()
+        );
+        assert_eq!(io.clears, 1, "no second clear");
+    }
+
+    #[test]
+    fn a_clear_that_wrote_nothing_resumes_once_never_lands() {
+        // The door's already-closed posture says "nothing written": the clear
+        // never calls that landed, and the same beat's ladder resumes the
+        // asker - exactly one wake, and no rung=mail row at any point. The
+        // resume-then-confirm arc itself is ac2's contract.
+        let _root = crate::paths::DeclaredRoot::declare("reply_already_closed_once");
+        let items = vec![ready_item("q-once", None, Some("s1"))];
+        record_answer("q-once");
+        let mut io = FakeIo {
+            posture: String::new(),
+            clears: 0,
+        };
+        let state_dir = tempfile::tempdir().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let resumes = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let count = resumes.clone();
+        // The resume argv is ["fno", "agents", "resume", <sid>, ...]: the
+        // word "resume" sits at index 2.
+        let runner = move |argv: &[String]| {
+            if argv.get(2).map(String::as_str) == Some("resume") {
+                count.set(count.get() + 1);
+            }
+            (0, String::new(), String::new())
+        };
+        let questions = crate::provider_cap::questions_path(&crate::paths::AgentsHome::from_env());
+        crate::event_store::sync(&questions).unwrap();
+        let (acted1, _d1) = tick_answers(
+            &items,
+            Path::new("."),
+            state_dir.path(),
+            deadline,
+            &mut io,
+            &runner,
+        );
+        assert_eq!(io.clears, 1);
+        assert_eq!(
+            acted1, 1,
+            "the clear acted; the resume is pending: {acted1}"
+        );
+        assert_eq!(resumes.get(), 1, "the empty posture never reads landed");
+        assert!(
+            !journal().contains("\"rung\":\"mail\""),
+            "no landed row may ride an empty posture: {}",
+            journal()
+        );
+        let states = load_states(state_dir.path());
+        let state = states.get("q-once").expect("pending state kept");
+        assert_eq!(state.outcome, "", "not terminal while nothing delivered");
+    }
+
+    #[test]
+    fn an_endpoint_delivery_row_never_reenters_the_ladder() {
+        // The answer endpoint's accepted send writes the terminal row
+        // itself: the ladder never clears, resumes or mails on top of it.
+        let _root = crate::paths::DeclaredRoot::declare("reply_endpoint_row_skip");
+        let items = vec![ready_item("q-row", None, Some("s1"))];
+        record_answer("q-row");
+        mark_endpoint_delivery(
+            "q-row",
+            "the answer endpoint's own send accepted (typed (pane 3))",
+            Some("s1"),
+        );
+        let questions = crate::provider_cap::questions_path(&crate::paths::AgentsHome::from_env());
+        crate::event_store::sync(&questions).unwrap();
+        assert!(delivered_row_exists("q-row"));
+        assert!(!delivered_row_exists("q-absent"));
+        let mut io = FakeIo {
+            posture: String::new(),
+            clears: 0,
+        };
+        let state_dir = tempfile::tempdir().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let resumes = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let count = resumes.clone();
+        // The resume argv is ["fno", "agents", "resume", <sid>, ...]: the
+        // word "resume" sits at index 2, so the counter actually guards the
+        // rung.
+        let runner = move |argv: &[String]| {
+            if argv.get(2).map(String::as_str) == Some("resume") {
+                count.set(count.get() + 1);
+            }
+            (0, String::new(), String::new())
+        };
+        let (acted, _detail) = tick_answers(
+            &items,
+            Path::new("."),
+            state_dir.path(),
+            deadline,
+            &mut io,
+            &runner,
+        );
+        assert_eq!(acted, 0, "the endpoint's row is terminal: {acted}");
+        assert_eq!(
+            io.clears, 0,
+            "the endpoint closed the door; no ladder clear"
+        );
+        assert_eq!(resumes.get(), 0, "no resume may ride on a delivered answer");
+    }
+
+    #[test]
+    fn ac2_edge_a_durable_receipt_resumes_and_confirms_by_transcript() {
+        let _root = crate::paths::DeclaredRoot::declare("reply_edge_resumes_");
+        let base = std::env::temp_dir().join(format!("reply-transcripts-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let sid = "01234567-89ab-cdef-0123-456789abcdef";
+        let proj = base.join("proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(
+            proj.join(format!("{sid}.jsonl")),
+            "{\"text\":\"unrelated turn before the resume\"}\n",
+        )
+        .unwrap();
+        std::env::set_var(crate::claude_drive::PROJECTS_DIR_ENV, &base);
+        let items = vec![ready_item("q-edge", Some("claude"), Some(sid))];
+        record_answer("q-edge");
+        let mut io = FakeIo {
+            posture: "outstanding: q-edge answered; mail to w1: queued (durable)".into(),
+            clears: 0,
+        };
+        let resumed = std::sync::atomic::AtomicUsize::new(0);
+        let resumed_ref = &resumed;
+        let staged = move |argv: &[String]| -> (i32, String, String) {
+            if argv.get(2).map(String::as_str) == Some("resume") {
+                resumed_ref.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                assert_eq!(
+                    &argv[argv.len() - 2..],
+                    &["--from-name".to_string(), "fno/questions".to_string()],
+                    "{argv:?}"
+                );
+            }
+            (0, String::new(), String::new())
+        };
+        let _ = &staged;
+        let state_dir = tempfile::tempdir().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let (acted1, _d1) = tick_answers(
+            &items,
+            Path::new("."),
+            state_dir.path(),
+            deadline,
+            &mut io,
+            &staged,
+        );
+        assert_eq!(
+            resumed.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "one resume"
+        );
+        assert_eq!(acted1, 1, "the clear acted; the resume is pending");
+        // The second beat: the resumed session lands its turn, appending the
+        // answer (with the question id) after the offset the resume saved.
+        {
+            use std::io::Write as _;
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(proj.join(format!("{sid}.jsonl")))
+                .unwrap();
+            f.write_all(b"{\"text\":\"Answer to your question q-edge: yes\"}\n")
+                .unwrap();
+        }
+        let (acted2, _d2) = tick_answers(
+            &items,
+            Path::new("."),
+            state_dir.path(),
+            deadline,
+            &mut io,
+            &staged,
+        );
+        assert_eq!(
+            resumed.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "no second resume"
+        );
+        assert_eq!(acted2, 1, "the confirm lands the delivery row");
+        let j = journal();
+        assert!(j.contains("\"rung\":\"resume\""), "{j}");
+        assert!(j.contains("\"outcome\":\"confirmed\""), "{j}");
+    }
+}

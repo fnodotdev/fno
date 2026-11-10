@@ -1,0 +1,1242 @@
+//! Multi-client e2e (task 3.6): the Phase 3 brief's clamp, per-client-view,
+//! session, and mux-command ACs scripted through the socket seam (fake wire
+//! clients with distinct viewports against the real headless server binary)
+//! plus plain subprocess runs of the real binary for the mux commands.
+
+mod common;
+
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use common::{spawn_server, Absorbed, ClientHarness, FakeClient};
+use fno::proto::{
+    read_msg_sync, write_msg_sync, ClientMsg, Command, ControlCommand, ServerMsg, BUILD_VERSION,
+    PROTO_VERSION,
+};
+use fno::tree::Dir;
+
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new(name: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("fno-mc-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Scratch(dir)
+    }
+    fn sock(&self) -> PathBuf {
+        self.0.join("main.sock")
+    }
+    fn dir(&self, name: &str) -> PathBuf {
+        let d = self.0.join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn sh_server(scratch: &Scratch) -> common::ServerProc {
+    spawn_server(&scratch.sock(), &[("SHELL", "/bin/sh")])
+}
+
+/// The pre-`latest` behaviour: the tab takes the smallest viewer's size.
+fn sh_server_smallest(scratch: &Scratch) -> common::ServerProc {
+    spawn_server(
+        &scratch.sock(),
+        &[("SHELL", "/bin/sh"), ("FNO_MUX_WINDOW_SIZE", "smallest")],
+    )
+}
+
+/// Run the real `fno` binary with `FNO_MUX_DIR` pointed at this scratch (no
+/// TTY - the mux commands are plain subprocess surfaces). FNO_AGENTS_HOME rides
+/// along so a store-touching command (workspace prune) writes the SAME isolated
+/// store the server uses instead of tripping the build-tree guard against
+/// the developer's real ~/.fno.
+fn fno_cmd(scratch: &Scratch, args: &[&str]) -> std::process::Output {
+    std::process::Command::new(env!("CARGO_BIN_EXE_fno"))
+        .args(args)
+        .env("FNO_MUX_DIR", &scratch.0)
+        .env("FNO_AGENTS_HOME", &scratch.0.join("iso-agents"))
+        .output()
+        .unwrap()
+}
+
+// -- AC1: two clients, same tab, different sizes ----------------------------
+
+#[test]
+fn multiclient_clamp_letterbox_area_and_regrow_on_abrupt_death() {
+    let scratch = Scratch::new("clamp");
+    let _server = sh_server_smallest(&scratch);
+    let cwd = scratch.dir("w");
+
+    let mut a = FakeClient::attach(&scratch.sock(), 40, 120, cwd.to_str().unwrap());
+    let pane = a
+        .wait_layout(10, "first layout", |l| l.panes.len() == 1)
+        .focus;
+    a.wait_layout(10, "solo area", |l| l.area == (40, 120));
+
+    // B joins the same squad (same cwd) at 20x80: the shared tab clamps to
+    // the smallest client (AC1-HP) for BOTH clients.
+    let mut b = FakeClient::attach(&scratch.sock(), 20, 80, cwd.to_str().unwrap());
+    let la = a.wait_layout(10, "a clamped", |l| l.area == (20, 80));
+    let lb = b.wait_layout(10, "b clamped", |l| l.area == (20, 80));
+    assert_eq!(la.panes, lb.panes, "co-viewers see identical rects");
+    // The single pane fills the clamped area exactly.
+    let rect = la.panes[0].1;
+    assert_eq!((rect.rows, rect.cols), (20, 80));
+
+    // Kernel-winsize proof + identical frames: both clients converge on the
+    // same 18x78 grid content (the pane frame insets the pty).
+    a.input(b"echo sz=$(stty size)#\r");
+    a.wait_pane_text(15, pane, |t| t.contains("sz=18 78#"));
+    b.wait_pane_text(15, pane, |t| t.contains("sz=18 78#"));
+    let fa = a.frames.get(&pane).unwrap();
+    assert_eq!(
+        (fa.rows, fa.cols),
+        (18, 78),
+        "frame is the clamped grid, frame-inset"
+    );
+
+    // AC1-ERR: the constraining client dies WITHOUT Detach (socket dropped
+    // abruptly). The Gone path recomputes the clamp: the tab regrows to the
+    // survivor's size within one layout-change cycle.
+    drop(b);
+    a.wait_layout(10, "regrown", |l| l.area == (40, 120));
+    a.input(b"echo sz2=$(stty size)#\r");
+    a.wait_pane_text(15, pane, |t| t.contains("sz2=38 118#"));
+}
+
+#[test]
+fn multiclient_clamp_below_min_pane_size_recovers_exactly() {
+    // AC1-EDGE: a 3-pane tab joined by a client whose viewport cannot fit
+    // the tree at min pane size - no panic, no overlap, exact recovery when
+    // the tiny client leaves.
+    let scratch = Scratch::new("tiny");
+    let _server = sh_server_smallest(&scratch);
+    let cwd = scratch.dir("w");
+
+    let mut a = FakeClient::attach(&scratch.sock(), 24, 80, cwd.to_str().unwrap());
+    a.wait_layout(10, "first layout", |l| l.panes.len() == 1);
+    a.cmd(Command::SplitDir(Dir::Right));
+    a.wait_layout(10, "2 panes", |l| l.panes.len() == 2);
+    a.cmd(Command::SplitDir(Dir::Down));
+    let before = a.wait_layout(10, "3 panes", |l| l.panes.len() == 3);
+
+    let mut b = FakeClient::attach(&scratch.sock(), 3, 12, cwd.to_str().unwrap());
+    let lb = b.wait_layout(10, "tiny clamp", |l| l.area == (3, 12));
+    // Degenerate but sane: no rect exceeds the area, no overlap panic
+    // server-side (rects may saturate to zero size - the honest answer).
+    for (_, r) in &lb.panes {
+        assert!(
+            r.y + r.rows <= 3 && r.x + r.cols <= 12,
+            "rect out of area: {r:?}"
+        );
+    }
+
+    // The tiny client leaves cleanly: the layout recovers EXACTLY (same
+    // rects, same focus - ratios were never mutated by the clamp) and the
+    // server stayed interactive through the squeeze.
+    b.detach();
+    drop(b);
+    let after = a.wait_layout(10, "recovered", |l| l.area == (24, 80));
+    assert_eq!(
+        after.panes, before.panes,
+        "exact recovery after the squeeze"
+    );
+    assert_eq!(after.focus, before.focus);
+    a.input(b"echo alive#\r");
+    a.wait_pane_text(15, after.focus, |t| t.contains("alive#"));
+}
+
+/// (x-a600) A coviewer clamp resize must ask the child to repaint, and
+/// prefix+R must re-ask on demand. The child is a WINCH-trapping painter:
+/// every signal repaints a full screen (TOPMARK, filler rows, an INPUTBOX
+/// marker on the CURRENT last row, and a visible paint counter) - the
+/// incremental-renderer stand-in the operator's garbled screenshot reported.
+/// The assertions are the node's verify markers: the smaller viewer must
+/// still see the input box, and no viewer may hold a duplicated row.
+#[test]
+fn multiclient_coviewed_tui_repaints_and_redraw_binding_nudges() {
+    let scratch = Scratch::new("repaint");
+    let _server = sh_server_smallest(&scratch);
+    let cwd = scratch.dir("w");
+
+    let mut a = FakeClient::attach(&scratch.sock(), 40, 120, cwd.to_str().unwrap());
+    let pane = a
+        .wait_layout(10, "first layout", |l| l.panes.len() == 1)
+        .focus;
+    a.wait_prompt(pane);
+
+    // The painter reads `stty size` on every signal, so INPUTBOX lands on
+    // the pane's REAL last row each time - the "input box follows the live
+    // size" behavior the screenshot lost.
+    std::fs::write(
+        cwd.join("winchpaint.sh"),
+        "#!/bin/sh\n\
+n=0\n\
+paint() {\n\
+  n=$((n+1))\n\
+  set -- $(stty size)\n\
+  rows=$1\n\
+  printf '\\033[2J\\033[H'\n\
+  echo TOPMARK\n\
+  i=2\n\
+  while [ $i -lt $rows ]; do echo filler$i; i=$((i+1)); done\n\
+  printf '\\033[%s;1H' \"$rows\"\n\
+  printf 'INPUTBOX n=%s' \"$n\"\n\
+}\n\
+trap 'paint' WINCH\n\
+paint\n\
+while :; do sleep 0.2; done\n",
+    )
+    .unwrap();
+    a.input(b"sh ./winchpaint.sh\r");
+    let count = |t: &str| -> i32 {
+        t.split("INPUTBOX n=")
+            .nth(1)
+            .and_then(|rest| rest.split(['\r', '\n', ' ']).next())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(-1)
+    };
+    // Wait for the FIRST paint, not the literal "n=1": the script's init
+    // paint can coalesce with an early nudge before the client ever observes
+    // an intermediate frame, so n can already read 2 the first time this
+    // client sees any INPUTBOX at all (CI job 117926446680, 2026-10-19: text
+    // showed "INPUTBOX n=2" with no "n=1" frame ever seen, a real flake, not
+    // a loaded-runner timeout).
+    a.wait_pane_text(15, pane, |t| count(t) >= 1);
+    let initial = count(&a.pane_text(pane));
+
+    // A smaller coviewer clamps the pane 40x120 -> 20x80. The resize ioctl
+    // signals once and the nudge jiggles twice more; a shell may coalesce
+    // back-to-back signals, so the floor is >= 2 repaints past the initial.
+    let mut b = FakeClient::attach(&scratch.sock(), 20, 80, cwd.to_str().unwrap());
+    a.wait_layout(10, "a clamped", |l| l.area == (20, 80));
+    b.wait_layout(10, "b clamped", |l| l.area == (20, 80));
+
+    let settled = a.wait_pane_text(15, pane, |t| count(t) >= initial + 2);
+    assert_eq!(
+        settled.matches("TOPMARK").count(),
+        1,
+        "no duplicated row from a stale-width remnant"
+    );
+    assert_eq!(
+        settled.matches("INPUTBOX").count(),
+        1,
+        "the input box renders exactly once"
+    );
+    let frame = a.frames.get(&pane).expect("clamped frame");
+    // The frame ring insets the pty: the grid is the clamped grid minus the
+    // 2-row, 2-col border.
+    assert_eq!(
+        (frame.rows, frame.cols),
+        (18, 78),
+        "frame is the clamped grid minus its border ring"
+    );
+    // The node's first marker: the SMALLER viewer's own grid carries the
+    // input box, on its last row.
+    b.wait_pane_text(15, pane, |t| t.contains("INPUTBOX"));
+    let btext = b.pane_text(pane);
+    assert!(
+        btext
+            .trim_end()
+            .lines()
+            .next_back()
+            .unwrap_or("")
+            .contains("INPUTBOX"),
+        "smaller viewer's last row is the input box: {:?}",
+        btext.lines().last()
+    );
+
+    // The recovery gesture: prefix+R (RedrawPane on the focused pane) must
+    // nudge the child again (two more winsize writes; coalescing floors this
+    // at one further repaint) and re-seed both viewers.
+    let before = count(&a.pane_text(pane));
+    a.cmd(Command::RedrawPane { pane: None });
+    a.wait_pane_text(15, pane, |t| count(t) > before.max(0));
+    a.wait(10, "repaint notice", |c| {
+        Some(c.notices.iter().any(|n| n.contains("repaint requested")))
+    });
+    b.wait_pane_text(15, pane, |t| count(t) > before.max(0));
+}
+
+/// Deliver bytes to one pane through a control connection, the way the mail
+/// pane lane does (`fno mux pane send --stdin --raw`): a `Control` first
+/// message never registers a client, so it can neither resize nor count as
+/// activity.
+fn control_pane_send(sock: &Path, pane: u64, bytes: &[u8]) {
+    let mut stream = common::connect_with_retry(sock);
+    write_msg_sync(
+        &mut stream,
+        &ClientMsg::Control {
+            proto: PROTO_VERSION,
+            build: BUILD_VERSION.to_string(),
+            command: ControlCommand::PaneSend {
+                pane,
+                bytes: bytes.to_vec(),
+                guarded: false,
+                expected_identity: None,
+                hold_pass: false,
+            },
+        },
+    )
+    .unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    match read_msg_sync::<_, ServerMsg>(&mut stream) {
+        Ok(ServerMsg::Ok) => {}
+        other => panic!("pane send failed: {other:?}"),
+    }
+}
+
+/// (x-27c7) One mail delivery - a bracketed paste, then a separate Enter -
+/// must resize no pane and change no client's area, with two clients of
+/// different sizes attached. Both panes run the WINCH-counting painter, so
+/// a stray winsize write on the receiver or its tab neighbour moves a count.
+#[test]
+fn multiclient_mail_delivery_resizes_no_pane() {
+    let scratch = Scratch::new("mailresize");
+    let _server = sh_server(&scratch);
+    let cwd = scratch.dir("w");
+    std::fs::write(
+        cwd.join("winchpaint.sh"),
+        "#!/bin/sh\n\
+tag=$1\n\
+n=0\n\
+paint() {\n\
+  n=$((n+1))\n\
+  printf '%s' \"$n\" > \"cnt.$tag\"\n\
+}\n\
+trap 'paint' WINCH\n\
+paint\n\
+while :; do sleep 0.2; done\n",
+    )
+    .unwrap();
+
+    let mut a = FakeClient::attach(&scratch.sock(), 40, 120, cwd.to_str().unwrap());
+    a.wait_layout(10, "first layout", |l| l.panes.len() == 1);
+    let mut b = FakeClient::attach(&scratch.sock(), 30, 100, cwd.to_str().unwrap());
+    b.wait_layout(10, "b attached", |l| l.area == (30, 100));
+    a.cmd(Command::SplitDir(Dir::Right));
+    let split = a.wait_layout(10, "2 panes", |l| l.panes.len() == 2);
+    let (receiver, neighbour) = (split.panes[0].0, split.panes[1].0);
+    // Each painter counts its WINCHes in a file: the pasted body scrolls the
+    // screen, so a count painted on screen would not survive the delivery.
+    for (pane, tag) in [(receiver, "r"), (neighbour, "n")] {
+        let cmd = format!("sh ./winchpaint.sh {tag}\r");
+        control_pane_send(&scratch.sock(), pane, cmd.as_bytes());
+    }
+    let count = |tag: &str| -> i32 {
+        std::fs::read_to_string(cwd.join(format!("cnt.{tag}")))
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(-1)
+    };
+    let started = std::time::Instant::now();
+    while count("r") < 1 || count("n") < 1 {
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "painters never ran"
+        );
+        a.pump(Duration::from_millis(200));
+    }
+    // Let the split's own nudges drain before the baseline: the delivery is
+    // the only event inside the measured window.
+    a.pump(Duration::from_millis(2500));
+    let settled = a.wait_layout(10, "settled", |l| l.panes.len() == 2);
+    // Client b compares against the same settled layout, so it must hold
+    // the split before the delivery, not catch up on it afterwards.
+    b.wait_layout(10, "b settled", |l| l.panes == settled.panes);
+    let baseline = [count("r"), count("n")];
+
+    let mut paste = b"\x1b[200~".to_vec();
+    for line in 0..60 {
+        paste.extend_from_slice(
+            format!("line {line:02} of a long mail body {}\n", "x".repeat(40)).as_bytes(),
+        );
+    }
+    paste.extend_from_slice(b"\x1b[201~");
+    control_pane_send(&scratch.sock(), receiver, &paste);
+    control_pane_send(&scratch.sock(), receiver, b"\r");
+    // Past NUDGE_DELAY (300 ms) plus the 1 s nudge tick.
+    a.pump(Duration::from_millis(2500));
+    b.pump(Duration::from_millis(100));
+
+    for ((pane, tag), before) in [(receiver, "r"), (neighbour, "n")]
+        .into_iter()
+        .zip(baseline)
+    {
+        assert_eq!(
+            count(tag),
+            before,
+            "mail delivery sent a SIGWINCH to pane {pane}"
+        );
+    }
+    for (who, c) in [("a", &a), ("b", &b)] {
+        assert_eq!(
+            c.layout.as_ref().map(|l| (l.area, l.panes.clone())),
+            Some((settled.area, settled.panes.clone())),
+            "mail delivery changed client {who}'s layout"
+        );
+    }
+}
+
+/// The default `latest` policy: the tab takes the size of the client that
+/// last attached, typed or resized, so a big window is not letterboxed by a
+/// small one it is not using.
+#[test]
+fn multiclient_window_size_latest_follows_the_active_client() {
+    let scratch = Scratch::new("latest");
+    let _server = sh_server(&scratch);
+    let cwd = scratch.dir("w");
+
+    let mut a = FakeClient::attach(&scratch.sock(), 40, 120, cwd.to_str().unwrap());
+    let pane = a
+        .wait_layout(10, "first layout", |l| l.panes.len() == 1)
+        .focus;
+    a.wait_prompt(pane);
+    // B attached last, so B owns the size.
+    let mut b = FakeClient::attach(&scratch.sock(), 20, 80, cwd.to_str().unwrap());
+    a.wait_layout(10, "a follows b", |l| l.area == (20, 80));
+    b.wait_layout(10, "b owns the size", |l| l.area == (20, 80));
+
+    // A types: the tab follows A, and the shell's kernel winsize with it.
+    a.input(b"echo sz=$(stty size)#\r");
+    a.wait_layout(10, "a owns the size", |l| l.area == (40, 120));
+    b.wait_layout(10, "b follows a", |l| l.area == (40, 120));
+    a.wait_pane_text(15, pane, |t| t.contains("sz=38 118#"));
+
+    // B resizes its window: B is the latest client again.
+    b.resize(22, 90);
+    a.wait_layout(10, "a follows b's resize", |l| l.area == (22, 90));
+    b.wait_layout(10, "b owns its resized size", |l| l.area == (22, 90));
+    b.input(b"echo sz2=$(stty size)#\r");
+    b.wait_pane_text(15, pane, |t| t.contains("sz2=20 88#"));
+}
+
+// -- AC2: two clients, different views --------------------------------------
+
+#[test]
+fn multiclient_independent_views_frames_for_viewers_only_and_reanchor() {
+    let scratch = Scratch::new("views");
+    let _server = sh_server(&scratch);
+    let cwd = scratch.dir("w");
+
+    let mut a = FakeClient::attach(&scratch.sock(), 24, 80, cwd.to_str().unwrap());
+    let pane_a = a
+        .wait_layout(10, "first layout", |l| l.panes.len() == 1)
+        .focus;
+    a.wait_prompt(pane_a);
+    let mut b = FakeClient::attach(&scratch.sock(), 24, 80, cwd.to_str().unwrap());
+    b.wait_layout(10, "b attached", |l| !l.panes.is_empty());
+
+    // B opens tab 2: only B switches (AC2-HP); A stays on tab 1 and sees the
+    // catalog grow without moving.
+    b.cmd(Command::NewTab);
+    let lb = b.wait_layout(10, "b on tab 2", |l| {
+        l.squads.first().map(|s| (s.tabs.len(), s.active_tab)) == Some((2, 1))
+    });
+    let pane_b = lb.focus;
+    b.wait_prompt(pane_b);
+    assert_ne!(pane_b, pane_a);
+    let la = a.wait_layout(10, "a sees 2 tabs", |l| {
+        l.squads.first().map(|s| s.tabs.len()) == Some(2)
+    });
+    assert_eq!(la.squads[0].active_tab, 0, "a's view did not move");
+    assert_eq!(la.focus, pane_a, "a's focus stays on its own tab");
+
+    // Concurrent typing routes each client's input to ITS viewed tab's
+    // focused pane (AC2-HP input half).
+    a.input(b"echo tab-one-in#\r");
+    b.input(b"echo tab-two-in#\r");
+    a.wait_pane_text(15, pane_a, |t| t.contains("tab-one-in#"));
+    b.wait_pane_text(15, pane_b, |t| t.contains("tab-two-in#"));
+
+    // AC2-FR: a ticker floods B's tab; A (not viewing it) gets ZERO frames
+    // for that pane while B streams.
+    b.input(b"while true; do echo tick; sleep 0.2; done\r");
+    b.wait_pane_text(10, pane_b, |t| t.contains("tick"));
+    a.reset_counts();
+    a.pump(Duration::from_millis(1200));
+    assert_eq!(
+        a.frame_counts.get(&pane_b).copied().unwrap_or(0),
+        0,
+        "frames must reach viewers only"
+    );
+
+    // Switching A onto the fed-but-unviewed tab yields an immediate frame.
+    let tab2_id = la.squads[0].tabs[1].id;
+    a.cmd(Command::SelectTab(tab2_id));
+    a.wait(10, "immediate frame on switch", |c| {
+        c.frames.contains_key(&pane_b).then_some(())
+    });
+    // AC2-UI: no stale-view frames after the new Layout - every frame that
+    // followed the switch's Layout belongs to the NEW view's pane set.
+    a.pump(Duration::from_millis(600)); // ticker keeps producing on pane_b
+    let last_layout = a
+        .order
+        .iter()
+        .rposition(|e| *e == Absorbed::Layout)
+        .expect("SelectTab produced a Layout");
+    let tail_frames: Vec<u64> = a.order[last_layout..]
+        .iter()
+        .filter_map(|e| match e {
+            Absorbed::Frame(pid) => Some(*pid),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !tail_frames.is_empty() && tail_frames.iter().all(|pid| *pid == pane_b),
+        "frames after the new Layout must be the new view's panes only; got {tail_frames:?}"
+    );
+
+    // AC2-ERR: B's viewed pane holds a negotiated mode (bracketed paste; mouse
+    // modes are no longer synced in Phase 5, so paste is the probe that DOES
+    // sync). A closes the shared tab 2. Both re-anchor to tab 1; B's reliable
+    // stream must read ModeSync (mode reset) -> Layout -> frames, in that order,
+    // and B's next keystroke lands in the re-anchored tab's focused pane.
+    b.input(b"\x03");
+    b.wait_prompt(pane_b);
+    b.input(b"printf '\\033[?2004h'; cat\r");
+    b.wait(10, "modes negotiated", |c| {
+        c.modesyncs
+            .iter()
+            .any(|m| String::from_utf8_lossy(m).contains("?2004h"))
+            .then_some(())
+    });
+    let start = {
+        b.pump(Duration::from_millis(200));
+        b.order.len()
+    };
+    a.cmd(Command::CloseTab); // a also views tab 2 by now
+    let lb = b.wait_layout(10, "b re-anchored", |l| {
+        l.squads.first().map(|s| s.tabs.len()) == Some(1) && l.focus == pane_a
+    });
+    assert_eq!(lb.squads[0].active_tab, 0);
+    let tail = &b.order[start..];
+    let sync_at = tail.iter().position(|e| *e == Absorbed::ModeSync);
+    let layout_at = tail.iter().position(|e| *e == Absorbed::Layout);
+    let frame_at = tail.iter().position(|e| matches!(e, Absorbed::Frame(_)));
+    let (sync_at, layout_at) = (
+        sync_at.expect("re-anchor away from moded pane must ModeSync"),
+        layout_at.expect("re-anchor must send Layout"),
+    );
+    assert!(
+        sync_at < layout_at,
+        "ModeSync must precede Layout on re-anchor; got {tail:?}"
+    );
+    if let Some(frame_at) = frame_at {
+        assert!(
+            layout_at < frame_at,
+            "frames follow the Layout; got {tail:?}"
+        );
+    }
+    b.input(b"echo landed#\r");
+    b.wait_pane_text(15, pane_a, |t| t.contains("landed#"));
+}
+
+#[test]
+fn multiclient_resize_storm_while_coviewing_settles_on_final_clamp() {
+    // AC1-FR: one client storms resizes while another co-views. The final
+    // geometry (and only meaningful geometry) is the final clamp: both
+    // clients' Layout.area and the pane's kernel winsize converge on it.
+    // (The strict SIGWINCH count bound is covered structurally by the
+    // no-op-tail rule in push_layout plus per-client channel coalescing.)
+    let scratch = Scratch::new("storm");
+    let _server = sh_server_smallest(&scratch);
+    let cwd = scratch.dir("w");
+
+    let mut a = FakeClient::attach(&scratch.sock(), 40, 120, cwd.to_str().unwrap());
+    let pane = a
+        .wait_layout(10, "first layout", |l| l.panes.len() == 1)
+        .focus;
+    let mut b = FakeClient::attach(&scratch.sock(), 24, 80, cwd.to_str().unwrap());
+    b.wait_layout(10, "clamped", |l| l.area == (24, 80));
+
+    for i in 0..30u16 {
+        b.resize(20 + (i % 5), 60 + i);
+    }
+    b.resize(22, 70);
+    a.wait_layout(10, "a settles on final clamp", |l| l.area == (22, 70));
+    b.wait_layout(10, "b settles on final clamp", |l| l.area == (22, 70));
+    a.input(b"echo sz=$(stty size)#\r");
+    a.wait_pane_text(15, pane, |t| t.contains("sz=20 68#"));
+}
+
+#[test]
+fn multiclient_server_outlives_client_crash_mid_command() {
+    // AC6-FR: a client dies between sending a Command and reading its
+    // Layout. The mutation stands, geometry recomputes for the survivor,
+    // and the remaining client sees consistent, interactive state.
+    let scratch = Scratch::new("midcmd");
+    let _server = sh_server(&scratch);
+    let cwd = scratch.dir("w");
+
+    let mut a = FakeClient::attach(&scratch.sock(), 40, 120, cwd.to_str().unwrap());
+    a.wait_layout(10, "first layout", |l| l.panes.len() == 1);
+    let mut b = FakeClient::attach(&scratch.sock(), 24, 80, cwd.to_str().unwrap());
+    b.wait_layout(10, "b attached", |l| !l.panes.is_empty());
+
+    b.cmd(Command::SplitDir(Dir::Right));
+    drop(b); // gone before reading the Layout the split produces
+
+    let l = a.wait_layout(30, "split stands + regrown", |l| {
+        l.panes.len() == 2 && l.area == (40, 120)
+    });
+    a.input(b"echo consistent#\r");
+    a.wait_pane_text(15, l.focus, |t| t.contains("consistent#"));
+
+    // The skew branch of the same family: a frame the server cannot
+    // decode (the SplitH a v95 client sends) costs a refusal notice,
+    // never the session; the stream stays on its frame boundary, so
+    // the same socket still carries a split this build speaks.
+    a.send_raw_frame(br#"{"Command":"SplitH"}"#);
+    a.wait(10, "refusal notice", |c| {
+        c.notices
+            .iter()
+            .any(|n| n.contains("unusable message refused"))
+            .then(|| ())
+    });
+    a.cmd(Command::SplitDir(Dir::Right));
+    a.wait_layout(10, "split stands after the refusal", |l| l.panes.len() == 3);
+}
+
+// -- AC3: named sessions -----------------------------------------------------
+
+#[test]
+fn multiclient_named_session_sets_fno_session_in_panes() {
+    // AC3-HP's pane-env half through the real server: a server on work.sock
+    // derives its session name and every pane carries FNO_SESSION=work.
+    let scratch = Scratch::new("named");
+    let _server = spawn_server(&scratch.0.join("work.sock"), &[("SHELL", "/bin/sh")]);
+    let cwd = scratch.dir("w");
+    let mut c = FakeClient::attach(&scratch.0.join("work.sock"), 24, 80, cwd.to_str().unwrap());
+    let pane = c
+        .wait_layout(10, "first layout", |l| l.panes.len() == 1)
+        .focus;
+    // Types straight after attach with no round-trips to settle the shell, so
+    // gate the first input on shell readiness (dash drops the startup CR).
+    c.wait_prompt(pane);
+    c.input(b"echo S=$FNO_SESSION#\r");
+    c.wait_pane_text(15, pane, |t| t.contains("S=work#"));
+}
+
+// -- AC4: mux ls / kill-server ------------------------------------------------
+
+/// Leave a stale socket behind: bind a listener, then drop it (the file
+/// survives, nothing listens) - byte-identical to a SIGKILLed server.
+fn plant_stale_socket(path: &Path) {
+    let l = std::os::unix::net::UnixListener::bind(path).unwrap();
+    drop(l);
+    assert!(path.exists(), "stale socket must remain for the test");
+}
+
+#[test]
+fn multiclient_mux_ls_reports_live_counts_and_heals_a_corpse() {
+    let scratch = Scratch::new("ls");
+    let _server = sh_server(&scratch); // session "main"
+    let cwd = scratch.dir("w");
+    let mut c = FakeClient::attach(&scratch.sock(), 24, 80, cwd.to_str().unwrap());
+    c.wait_layout(10, "attached", |l| l.panes.len() == 1);
+    plant_stale_socket(&scratch.0.join("dead.sock"));
+    // AC4-ERR: something accepts connections but never answers Query (an
+    // older build): listed as alive-unqueryable, never breaking the listing.
+    let _silent = std::os::unix::net::UnixListener::bind(scratch.0.join("odd.sock")).unwrap();
+
+    // The attach road reserves the pane id and grafts it into the layout on
+    // the loop, but the pane enters the server's map only when the off-loop
+    // spawn lands back as ready. Under load that landing can lose to this
+    // read, so re-run the read-only ls until the row settles.
+    let needle = "main: 1 clients, 1 workspaces, 1 panes";
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let stdout = loop {
+        let out = fno_cmd(&scratch, &["mux", "ls"]);
+        assert!(out.status.success(), "ls exits 0: {out:?}");
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        if stdout.contains(needle) || std::time::Instant::now() > deadline {
+            break stdout;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    };
+    assert!(
+        stdout.contains(needle),
+        "live row with counts; got: {stdout}"
+    );
+    // A refused socket with no pid sidecar is a proven corpse: ls heals it
+    // away instead of listing it, and the files go with it.
+    assert!(
+        !stdout.contains("dead:"),
+        "corpse row healed; got: {stdout}"
+    );
+    assert!(
+        !scratch.0.join("dead.sock").exists(),
+        "ls removes a proven-dead session's socket"
+    );
+    let journal = scratch.0.join("iso-agents").join("events.jsonl");
+    let healed = fno::event_store::journal_text(&journal, &["mux_session_healed"]);
+    // The silent-empty failure mode names nothing, so the panic carries the checked read's own Err and what the store directory actually holds.
+    let checked = fno::event_store::journal_text_checked(
+        &journal,
+        &fno::event_store::EventQuery::of_types(&["mux_session_healed"]),
+    );
+    let listing: Vec<String> = std::fs::read_dir(journal.parent().expect("journal has a parent"))
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    // The store's dead-letter names the commit error a finally-lost row died
+    // of; unreadable reads as a placeholder so the assert never masks itself.
+    let lost = std::fs::read_to_string(
+        journal
+            .parent()
+            .expect("journal has a parent")
+            .join("events.db.lost.jsonl"),
+    )
+    .unwrap_or_else(|e| format!("unreadable: {e}"));
+    assert!(
+        healed.contains("mux_session_healed") && healed.contains("dead.sock"),
+        "the heal journals one row naming the session; got: {healed:?}; \
+         checked: {checked:?}; store dir: {listing:?}; lost: {lost:?}"
+    );
+    assert!(
+        stdout.contains("odd: alive (unqueryable"),
+        "unanswering server degrades per-row (AC4-ERR); got: {stdout}"
+    );
+    assert!(
+        scratch.0.join("odd.sock").exists(),
+        "a socket that accepts is never removed"
+    );
+    // The probed live session is unharmed: the client still works.
+    let pane = c.focus();
+    c.input(b"echo still-alive#\r");
+    c.wait_pane_text(15, pane, |t| t.contains("still-alive#"));
+}
+
+#[test]
+fn multiclient_kill_server_live_stale_and_missing() {
+    let scratch = Scratch::new("kill");
+    let mut server = sh_server(&scratch); // session "main"
+    let cwd = scratch.dir("w");
+    let mut c = FakeClient::attach(&scratch.sock(), 24, 80, cwd.to_str().unwrap());
+    let pane = c.wait_layout(10, "attached", |l| l.panes.len() == 1).focus;
+    // Learn the pane child's PID so AC4-FR (children do not outlive the
+    // kill) is observable from outside. Skip the echoed command line (where
+    // `$$` is still literal); take the first occurrence that parses.
+    fn extract_pid(t: &str) -> Option<i32> {
+        t.split("pid=")
+            .skip(1)
+            .find_map(|s| s.split('#').next().and_then(|v| v.trim().parse().ok()))
+    }
+    // Gate the first input on shell readiness: this test types straight after
+    // attach (no clamp round-trips like the sizing tests to let the shell
+    // settle), so on dash the startup CR is lost and the echo never runs.
+    c.wait_prompt(pane);
+    c.input(b"echo pid=$$#\r");
+    let child_pid: i32 = c.wait(15, "pane pid", |c| extract_pid(&c.pane_text(pane)));
+
+    // Live kill, unkept pane: the measure-first refusal names the pane and
+    // exits non-zero; `--end-unkept` is the deliberate override that then
+    // kills the server AND the pane child (AC4-UI/FR under the new
+    // contract; keeper-hosted survival is the matrix's proof).
+    let out = fno_cmd(&scratch, &["mux", "kill-server", "main"]);
+    assert!(
+        !out.status.success(),
+        "an unkept pane refuses the kill: {out:?}"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("unkept pane"),
+        "the refusal names the unkept pane: {out:?}"
+    );
+    let out = fno_cmd(&scratch, &["mux", "kill-server", "main", "--end-unkept"]);
+    assert!(out.status.success(), "end-unkept kill exits 0: {out:?}");
+    // Bounded wait for the kill to land: the Bye(killed) frame OR the socket
+    // closing, whichever wins the race (the two are unordered). Capped well
+    // under the job timeout; a timeout fails with a named reason + state dump.
+    c.wait_killed(10, |c| c.byes.iter().any(|r| r.contains("killed")));
+    assert!(!scratch.sock().exists(), "socket must be unlinked");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if server.0.try_wait().unwrap().is_some() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "server must exit after kill-server"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        // kill(pid, 0) errors with ESRCH once the child is fully gone.
+        if unsafe { libc::kill(child_pid, 0) } != 0 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "pane child {child_pid} must not outlive kill-server (AC4-FR)"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // Stale kill: unlinked with a message, exit 0 (AC4-EDGE).
+    plant_stale_socket(&scratch.0.join("work.sock"));
+    let out = fno_cmd(&scratch, &["mux", "kill-server", "work"]);
+    assert!(out.status.success(), "stale kill exits 0: {out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("stale"),
+        "stale unlink says so: {out:?}"
+    );
+    assert!(!scratch.0.join("work.sock").exists());
+
+    // Missing: "no server", exit 1.
+    let out = fno_cmd(&scratch, &["mux", "kill-server", "nowhere"]);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "missing socket exits 1: {out:?}"
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("no server"));
+}
+
+// -- AC3-UI: nested guard through the real client-under-PTY -------------------
+
+#[test]
+fn multiclient_nested_same_session_attach_refused_pre_raw_mode() {
+    // Simulate "bare fno inside a pane of session main": FNO_SESSION=main in
+    // the client's environment. The refusal must name the session and both
+    // remedies, exit non-zero, and never enter raw mode / the alt screen.
+    let scratch = common::Scratch::new("mc-nested");
+    let mut h = common::ClientHarness::spawn_with(&scratch, &[("FNO_SESSION", "main")]);
+    let status = h.wait_exit(15);
+    assert!(
+        !status.success(),
+        "nested attach must refuse, got {status:?}"
+    );
+    h.wait_screen(5, |screen| screen.contains("main"));
+    let out = h.raw_output();
+    assert!(out.contains("main"), "refusal names the session: {out}");
+    assert!(
+        out.contains("--server") && out.contains("unset FNO_SERVER FNO_SESSION"),
+        "refusal names both remedies: {out}"
+    );
+    assert!(
+        !out.contains("\x1b[?1049h"),
+        "the terminal must never enter the alternate screen on a refusal"
+    );
+}
+
+// -- x-6928: concurrent strict spawns serialize; only one fits ---------------
+
+#[test]
+fn concurrent_strict_spawn_only_one_commits() {
+    // AC3-FR: two exact down-splits at the same origin pane, with geometry for
+    // only one, are serialized by the core loop. Exactly one commits beside the
+    // anchor; the other refuses (no new-tab fallback, no orphan pane, no extra
+    // tab). A 5-row viewport admits one MIN_ROWS split but not a second.
+    use common::connect_with_retry;
+    use fno::proto::{
+        read_msg_sync, write_msg_sync, ClientMsg, ControlCommand, PanePlacement, PaneTarget,
+        PlacementFallback, ServerMsg, BUILD_VERSION, PROTO_VERSION,
+    };
+    use fno::tree::Dir;
+
+    let scratch = Scratch::new("concurrent-strict");
+    let _server = sh_server(&scratch);
+    let cwd = scratch.dir("w");
+    let mut c = FakeClient::attach(&scratch.sock(), 5, 80, cwd.to_str().unwrap());
+    let layout = c.wait_layout(10, "first layout", |l| l.panes.len() == 1);
+    let pane1 = layout.focus;
+    let tabs_before: usize = c
+        .layout
+        .as_ref()
+        .unwrap()
+        .squads
+        .iter()
+        .map(|s| s.tabs.len())
+        .sum();
+
+    let req = ClientMsg::Control {
+        proto: PROTO_VERSION,
+        build: BUILD_VERSION.into(),
+        command: ControlCommand::PaneRun {
+            cwd: cwd.to_string_lossy().into_owned(),
+            argv: vec!["/bin/sh".into(), "-c".into(), "sleep 30".into()],
+            cols: None,
+            rows: None,
+            claim: false,
+            placement: PanePlacement {
+                view: false,
+                from: None,
+                portal_new: false,
+                portal: None,
+                tab: None,
+                at: Some(pane1),
+                target: PaneTarget::CurrentRoute,
+                split: Some(Dir::Down),
+                here: false,
+                fallback: PlacementFallback::Refuse,
+                max_panes: None,
+                thread_pane: false,
+                fit: false,
+            },
+            worker: None,
+            fno_id: None,
+        },
+    };
+    // Queue both before reading either: the server serializes them in arrival
+    // order, so the first splits pane1 (fits) and the second finds pane1 now too
+    // short and refuses.
+    let mut s1 = connect_with_retry(&scratch.sock());
+    s1.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    write_msg_sync(&mut s1, &req).unwrap();
+    let mut s2 = connect_with_retry(&scratch.sock());
+    s2.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    write_msg_sync(&mut s2, &req).unwrap();
+    let r1 = read_msg_sync(&mut s1).unwrap();
+    let r2 = read_msg_sync(&mut s2).unwrap();
+
+    let ok = matches!(r1, ServerMsg::PaneSpawned { .. }) as usize
+        + matches!(r2, ServerMsg::PaneSpawned { .. }) as usize;
+    assert_eq!(
+        ok, 1,
+        "exactly one strict spawn commits (got {r1:?}, {r2:?})"
+    );
+    let refuse_msg = match (&r1, &r2) {
+        (ServerMsg::Err { msg, .. }, _) | (_, ServerMsg::Err { msg, .. }) => msg.clone(),
+        _ => String::new(),
+    };
+    assert!(
+        refuse_msg.contains("cannot fit"),
+        "the losing spawn refuses on min-size, not a fallback: {refuse_msg}"
+    );
+
+    let layout = c.wait_layout(10, "settled to two panes", |l| l.panes.len() == 2);
+    let tabs_after: usize = layout.squads.iter().map(|s| s.tabs.len()).sum();
+    assert_eq!(tabs_after, tabs_before, "no new tab minted by the refusal");
+}
+
+// -- x-6928: concurrent grafts serialize; only one fits ----------------------
+
+#[test]
+fn concurrent_graft_one_commits_one_refuses() {
+    // AC4-EDGE-CONCURRENT-GRAFT: two identical grafts at the same anchor, on a
+    // 5-row viewport that admits one V[anchor,shell] split but not a second
+    // nested one. The core loop serializes them: one commits, the other refuses
+    // on min-size (no partial tree, no orphan shell).
+    use common::connect_with_retry;
+    use fno::proto::{
+        read_msg_sync, write_msg_sync, AnchoredLayoutSpec, ClientMsg, ControlCommand, GraftOutcome,
+        LayoutBinding, LayoutSlot, LayoutTreeChild, LayoutTreeSpec, PaneTarget, ServerMsg,
+        BUILD_VERSION, PROTO_VERSION,
+    };
+    use fno::tree::Axis;
+
+    fn spec() -> AnchoredLayoutSpec {
+        AnchoredLayoutSpec {
+            version: 1,
+            tree: LayoutTreeSpec::Split {
+                axis: Axis::Vertical,
+                children: vec![
+                    LayoutTreeChild {
+                        weight: 0.5,
+                        tree: LayoutTreeSpec::Slot("anchor".into()),
+                    },
+                    LayoutTreeChild {
+                        weight: 0.5,
+                        tree: LayoutTreeSpec::Slot("fresh".into()),
+                    },
+                ],
+            },
+            slots: vec![
+                LayoutSlot {
+                    name: "anchor".into(),
+                    binding: LayoutBinding::Anchor,
+                    cwd: None,
+                    portal: None,
+                    pane_id: None,
+                },
+                LayoutSlot {
+                    name: "fresh".into(),
+                    binding: LayoutBinding::Shell,
+                    cwd: None,
+                    portal: None,
+                    pane_id: None,
+                },
+            ],
+        }
+    }
+
+    let scratch = Scratch::new("concurrent-graft");
+    let _server = sh_server(&scratch);
+    let cwd = scratch.dir("w");
+    let mut c = FakeClient::attach(&scratch.sock(), 5, 80, cwd.to_str().unwrap());
+    let pane1 = c
+        .wait_layout(10, "first layout", |l| l.panes.len() == 1)
+        .focus;
+
+    let req = ClientMsg::Control {
+        proto: PROTO_VERSION,
+        build: BUILD_VERSION.into(),
+        command: ControlCommand::LayoutGraft {
+            squad: PaneTarget::CurrentRoute,
+            anchor: pane1,
+            spec: spec(),
+            focus: false,
+        },
+    };
+    // Queue both before reading: the server serializes them in arrival order.
+    let mut s1 = connect_with_retry(&scratch.sock());
+    s1.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    write_msg_sync(&mut s1, &req).unwrap();
+    let mut s2 = connect_with_retry(&scratch.sock());
+    s2.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    write_msg_sync(&mut s2, &req).unwrap();
+    let r1 = read_msg_sync(&mut s1).unwrap();
+    let r2 = read_msg_sync(&mut s2).unwrap();
+
+    let committed = (matches!(r1, ServerMsg::LayoutGrafted { .. }) as usize)
+        + (matches!(r2, ServerMsg::LayoutGrafted { .. }) as usize);
+    assert_eq!(
+        committed, 1,
+        "exactly one graft commits (got {r1:?}, {r2:?})"
+    );
+    let committed_results = match (&r1, &r2) {
+        (ServerMsg::LayoutGrafted { results, .. }, _)
+        | (_, ServerMsg::LayoutGrafted { results, .. }) => results,
+        _ => unreachable!("exactly one graft committed"),
+    };
+    // The committed graft names an Anchor slot and a fresh Shell slot.
+    assert!(committed_results
+        .iter()
+        .any(|r| r.outcome == GraftOutcome::Anchor));
+    assert!(committed_results
+        .iter()
+        .any(|r| r.outcome == GraftOutcome::Shell));
+    let err_is_fit = matches!(
+        (&r1, &r2),
+        (ServerMsg::Err { msg, .. }, _) | (_, ServerMsg::Err { msg, .. })
+            if msg.contains("cannot fit")
+    );
+    assert!(
+        err_is_fit,
+        "the losing graft refuses on min-size: {r1:?} / {r2:?}"
+    );
+
+    let layout = c.wait_layout(10, "settled to two panes", |l| l.panes.len() == 2);
+    // No orphan shell from the refused graft: exactly the anchor + one shell.
+    assert_eq!(layout.panes.len(), 2);
+}
+
+// -- x-78c1: a close issued from OUTSIDE an attached client (the workspace
+//    prune's one-shot control connection) must still converge every OTHER
+//    attached client. The operator's prune closed 19 tabs; a spectator's tab
+//    bar kept painting the pre-prune catalog. These are the node's markers:
+//    the NON-issuing client's rendered/catalog tab count changes. ----------
+
+/// Tab count of the client's active squad in the last absorbed Layout.
+fn active_tabs(l: &common::LayoutSnap) -> Option<usize> {
+    l.squads
+        .iter()
+        .find(|s| s.id == l.active_squad)
+        .map(|s| s.tabs.len())
+}
+
+#[test]
+fn tab_close_over_a_one_shot_connection_converges_the_other_clients_catalog() {
+    let scratch = Scratch::new("close-catalog");
+    let _server = sh_server(&scratch);
+    let cwd = scratch.dir("w");
+
+    let mut a = FakeClient::attach(&scratch.sock(), 24, 80, cwd.to_str().unwrap());
+    a.wait_layout(10, "first layout", |l| l.panes.len() == 1);
+    a.cmd(Command::NewTab);
+    a.cmd(Command::NewTab);
+    a.wait_layout(10, "three tabs", |l| active_tabs(l) == Some(3));
+
+    // B joins the same squad and settles on the three-tab catalog.
+    let mut b = FakeClient::attach(&scratch.sock(), 24, 80, cwd.to_str().unwrap());
+    b.wait_layout(10, "b joins", |l| active_tabs(l) == Some(3));
+
+    // The prune's transport: a one-shot control connection with no attached
+    // viewer closes the MIDDLE tab, so every later ordinal renumbers.
+    let out = fno_cmd(
+        &scratch,
+        &["mux", "tab", "close", "--squad", "id:1", "--tab", "2"],
+    );
+    assert!(
+        out.status.success(),
+        "one-shot close failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The marker: B, which issued nothing, sees the catalog shrink.
+    b.wait_layout(10, "b renumbers to two tabs", |l| active_tabs(l) == Some(2));
+    a.wait_layout(10, "a renumbers to two tabs", |l| active_tabs(l) == Some(2));
+
+    // Positive control: the server itself reads two tabs (a clean zero would
+    // also read as convergence, so name what the wire actually carried).
+    let ls = fno_cmd(&scratch, &["mux", "tab", "ls", "--squad", "id:1", "--json"]);
+    assert!(ls.status.success());
+    let stdout = String::from_utf8_lossy(&ls.stdout);
+    assert_eq!(
+        stdout.matches("\"tab_id\"").count(),
+        2,
+        "server holds two tabs: {stdout}"
+    );
+}
+
+#[test]
+fn squad_removal_over_a_one_shot_connection_converges_the_other_client() {
+    let scratch = Scratch::new("close-squad");
+    let _server = sh_server(&scratch);
+    let cwd1 = scratch.dir("w1");
+    let cwd2 = scratch.dir("w2");
+
+    let mut a = FakeClient::attach(&scratch.sock(), 24, 80, cwd1.to_str().unwrap());
+    a.wait_layout(10, "a squad", |l| l.squads.len() == 1);
+    // A second workspace: B's attach (different cwd) mints squad 2.
+    let mut b = FakeClient::attach(&scratch.sock(), 24, 80, cwd2.to_str().unwrap());
+    a.wait_layout(10, "two squads", |l| l.squads.len() == 2);
+
+    // Squad removal: closing a workspace's LAST tab removes the squad.
+    let out = fno_cmd(
+        &scratch,
+        &["mux", "tab", "close", "--squad", "id:2", "--tab", "1"],
+    );
+    assert!(
+        out.status.success(),
+        "one-shot last-tab close failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The marker: A (which issued nothing) sees squad 2 leave the catalog.
+    a.wait_layout(10, "a sees one squad", |l| l.squads.len() == 1);
+    // B, whose VIEW was the removed tab, re-anchors to the survivor.
+    b.wait_layout(10, "b re-anchors to squad 1", |l| l.active_squad == 1);
+}
+
+#[test]
+fn tab_close_renumbers_the_strip_on_the_client_that_did_not_issue_it() {
+    // The real-client form of the marker: the RENDERED tab strip on a client
+    // that typed nothing. The operator's screenshot after his own prune is
+    // the counter-example this test exists to refute.
+    let scratch = common::Scratch::new("close-strip");
+    let mut a = ClientHarness::spawn(&scratch);
+    a.wait_screen(15, |s| !s.trim().is_empty());
+    a.wait_input_ready(10);
+    a.type_bytes(b"\x02c"); // prefix+c: second tab
+    a.type_bytes(b"\x02c"); // third tab
+    let mut b = ClientHarness::spawn(&scratch);
+    b.wait_screen(15, |s| !s.trim().is_empty());
+
+    let strip = |s: &str| s.lines().next().unwrap_or("").to_string();
+    // The padded active tab reads `[ ? 3 ]` (one cell of padding inside each
+    // bracket), so the ordinal markers carry the trailing space.
+    let a_row = a.wait_screen(15, |s| strip(s).contains(" 3 ]"));
+    assert!(
+        a_row.contains(" 3 ]"),
+        "a shows three tabs before the close; strip: {a_row:?}"
+    );
+    b.wait_screen(15, |s| strip(s).contains(" 3 ]"));
+
+    let out = scratch
+        .command()
+        .args(["mux", "tab", "close", "--squad", "id:1", "--tab", "2"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "one-shot close failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The marker: the client that issued nothing repaints the strip with the
+    // closed tab's ordinal gone (every later tab renumbers down).
+    let b_row = b.wait_screen(15, |s| !strip(s).contains(" 3 ]"));
+    assert!(
+        b_row.contains(" 2 ]"),
+        "the renumbered strip still names ordinal 2: {b_row:?}"
+    );
+    a.wait_screen(15, |s| !strip(s).contains(" 3 ]"));
+}
+
+#[test]
+fn workspace_prune_converges_the_spectating_clients_catalog() {
+    // The operator's surface verbatim: `fno mux workspace prune` closes the
+    // surplus pristine tabs, and the clients that never typed anything must
+    // repaint the renumbered bar. The incident: 19 closes, and the
+    // spectator's bar kept painting the pre-prune count.
+    let scratch = Scratch::new("prune-spectator");
+    // bash, so spawned shells integrate OSC 133 and read pristine once they
+    // draw a prompt - the prune's default fold only closes pristine tabs.
+    let _server = spawn_server(&scratch.sock(), &[("SHELL", "/bin/bash")]);
+    let cwd = scratch.dir("w");
+
+    let mut a = FakeClient::attach(&scratch.sock(), 24, 80, cwd.to_str().unwrap());
+    a.wait_layout(10, "first layout", |l| l.panes.len() == 1);
+    a.cmd(Command::NewTab);
+    a.cmd(Command::NewTab);
+    a.wait_layout(10, "three tabs", |l| active_tabs(l) == Some(3));
+
+    // Every SURPLUS pane must have drawn a prompt (pristine) before the
+    // prune, or the fold honestly keeps it and the marker proves nothing.
+    // Poll the SAME instrument the fold reads (pane ls's pristine flag); the
+    // active tab's pane is exempt: the last-in-squad guard keeps it whatever
+    // it reads.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let out = fno_cmd(&scratch, &["mux", "pane", "ls", "--json"]);
+        assert!(out.status.success(), "pane ls failed");
+        let pristine = String::from_utf8_lossy(&out.stdout)
+            .matches("\"pristine_idle_shell\":true")
+            .count();
+        if pristine >= 2 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "surplus panes never read pristine; pane ls: {}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+
+    // B joins as the spectator and settles on the three-tab catalog.
+    let mut b = FakeClient::attach(&scratch.sock(), 24, 80, cwd.to_str().unwrap());
+    b.wait_layout(10, "b joins", |l| active_tabs(l) == Some(3));
+
+    let out = fno_cmd(&scratch, &["mux", "workspace", "prune", "--json"]);
+    assert!(
+        out.status.success(),
+        "prune failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let receipt = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        receipt.contains("\"tabs_closed\":2"),
+        "the fold closed the two surplus tabs: {receipt}"
+    );
+
+    // The markers: BOTH spectators renumber to the one surviving tab.
+    b.wait_layout(10, "b renumbers to one tab", |l| active_tabs(l) == Some(1));
+    a.wait_layout(10, "a renumbers to one tab", |l| active_tabs(l) == Some(1));
+
+    // Positive control: the server itself reads one tab, one pane.
+    let ls = fno_cmd(&scratch, &["mux", "tab", "ls", "--squad", "id:1", "--json"]);
+    assert!(ls.status.success());
+    let stdout = String::from_utf8_lossy(&ls.stdout);
+    assert_eq!(
+        stdout.matches("\"tab_id\"").count(),
+        1,
+        "server holds one tab: {stdout}"
+    );
+}

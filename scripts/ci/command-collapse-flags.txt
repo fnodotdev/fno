@@ -1,0 +1,3 @@
+# Hidden options on argument-dispatched actions, one per line.
+resume receipt validate !--session
+resume receipt write !--session

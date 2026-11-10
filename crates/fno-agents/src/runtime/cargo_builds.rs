@@ -1,0 +1,326 @@
+//! `fno-agents test-run builds`, which `fno doctor builds` runs: every cargo
+//! job the admission doors know, in one table. A row names the cargo pid, its
+//! state (running or waiting), its kind (check, build or test, from the cargo
+//! argv), its lane, how long it has run or waited, and the checkout with the
+//! node and session from that checkout's target manifest. It reads the
+//! admission claims, the waiter markers and the lane dirs. It adds no event
+//! stream of its own.
+
+use std::collections::BTreeMap;
+use std::path::Path;
+
+/// The lane dirs beside the build door's lockfile, best first, with the name
+/// the readout prints.
+const BUILD_LANES: [(&str, &str); 5] = [
+    ("priority", "priority"),
+    ("repair", "repair"),
+    ("prepush", "prepush"),
+    ("queue", "normal"),
+    ("full", "full"),
+];
+
+pub(crate) struct Job {
+    cargo_pid: u32,
+    pub(crate) worktree: String,
+    slots: Vec<String>,
+    since_ms: i64,
+    pub(crate) waiting: Option<String>,
+    pub(crate) marker_pid: Option<i32>,
+}
+
+/// One live waiter marker with the lane it waits in, its checkout, and the
+/// pid the marker stamps (the admitting process, which is the pid the queue
+/// ticket carries). `cargo_builds` ignores `marker_pid`; the build-mark arm
+/// reads the lane position with it.
+pub(crate) struct CargoWait {
+    pub marker_pid: i32,
+    pub wait: crate::test_run::BuildWait,
+    pub lane: String,
+    pub worktree: String,
+}
+
+/// Every cargo job the admission doors know right now, pid-ordered: the
+/// live claims over the build and run slots, folded with the live waiter
+/// markers. The doctor view and the build-mark arm both consume this, so
+/// the door read has one owner.
+pub(crate) fn collect_jobs(cwd: &Path) -> Vec<Job> {
+    let mut keys: Vec<String> = crate::test_run::BUILD_SLOT_KEYS
+        .iter()
+        .map(|k| k.to_string())
+        .collect();
+    keys.extend(crate::test_run::cargo_slot_keys(cwd));
+
+    let mut jobs = BTreeMap::<u32, Job>::new();
+    for key in &keys {
+        let (state, rec) = crate::claims::status(key, None);
+        if !matches!(
+            state,
+            crate::claims::ClaimState::Live | crate::claims::ClaimState::Suspect
+        ) {
+            continue;
+        }
+        let Some(rec) = rec else { continue };
+        let Some((worktree, cargo_pid)) = parse_holder(&rec.holder) else {
+            continue;
+        };
+        let job = jobs.entry(cargo_pid).or_insert_with(|| Job {
+            cargo_pid,
+            worktree,
+            slots: Vec::new(),
+            since_ms: rec.acquired_at,
+            waiting: None,
+            marker_pid: None,
+        });
+        job.slots.push(key.clone());
+        job.since_ms = job.since_ms.min(rec.acquired_at);
+    }
+    for wait in waiters() {
+        let job = jobs.entry(wait.wait.cargo_pid).or_insert_with(|| Job {
+            cargo_pid: wait.wait.cargo_pid,
+            worktree: String::new(),
+            slots: Vec::new(),
+            since_ms: wait.wait.since_ms,
+            waiting: None,
+            marker_pid: Some(wait.marker_pid),
+        });
+        job.since_ms = wait.wait.since_ms;
+        job.waiting = Some(wait.lane);
+        if job.worktree.is_empty() {
+            job.worktree = wait.worktree;
+        }
+    }
+    jobs.into_values().collect()
+}
+
+pub(crate) fn run(args: &[String]) -> i32 {
+    let mut json = false;
+    for arg in args {
+        match arg.as_str() {
+            a if crate::json_output::is_flag(a) => json = true,
+            "-h" | "--help" => {
+                println!("usage: fno doctor builds [--json|-J]");
+                return 0;
+            }
+            other => {
+                eprintln!("fno doctor builds: unrecognized argument: {other}. usage: fno doctor builds [--json|-J]");
+                return 2;
+            }
+        }
+    }
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let now = crate::claims::now_ms();
+    let (cap, share, ceiling) = crate::test_run::build_slot_reading();
+    let jobs = collect_jobs(&cwd);
+
+    let commands: std::collections::HashMap<u32, String> = crate::census::process_table()
+        .0
+        .into_iter()
+        .map(|row| (row.pid, row.command))
+        .collect();
+    let queued: Vec<(&str, usize)> =
+        crate::claims::claim_path(crate::test_run::BUILD_SLOT_KEYS[0], None)
+            .map(|lock| {
+                BUILD_LANES
+                    .iter()
+                    .map(|(dir, name)| {
+                        (
+                            *name,
+                            crate::claim_queue::depth(&crate::claim_queue::lane_dir_for(
+                                &lock, dir,
+                            )),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+    let rows: Vec<serde_json::Value> = jobs
+        .iter()
+        .map(|job| {
+            let (node, session) = manifest_ids(&job.worktree);
+            let state = if job.waiting.is_some() {
+                "waiting"
+            } else {
+                "running"
+            };
+            let kind = commands
+                .get(&job.cargo_pid)
+                .map_or("gone", |command| cargo_kind(command));
+            serde_json::json!({
+                "cargo_pid": job.cargo_pid,
+                "state": state,
+                "kind": kind,
+                "lane": job.waiting,
+                "slots": job.slots,
+                "secs": ((now - job.since_ms) / 1000).max(0),
+                "worktree": job.worktree,
+                "node": node,
+                "session": session,
+            })
+        })
+        .collect();
+
+    if json {
+        let lanes: BTreeMap<String, usize> = queued
+            .iter()
+            .map(|(name, n)| ((*name).to_string(), *n))
+            .collect();
+        let out = serde_json::json!({
+            "fleet_cpu_share": share,
+            "max_fleet_cpu_share": ceiling,
+            "compile_slots": cap,
+            "queued": lanes,
+            "jobs": rows,
+        });
+        println!("{out}");
+        return 0;
+    }
+    println!(
+        "compile slots for agents: {cap} at fleet CPU share {} (3 to {:.0}%, 2 to {:.0}%, 1 to {:.0}%, user only above)",
+        share.map_or("unreadable".to_string(), |s| format!("{:.0}%", s * 100.0)),
+        ceiling * 50.0,
+        ceiling * 100.0,
+        ceiling * 150.0
+    );
+    if !queued.is_empty() {
+        let lanes = queued
+            .iter()
+            .map(|(name, n)| format!("{name} {n}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("queued at the build door: {lanes}");
+    }
+    if rows.is_empty() {
+        println!("no cargo job holds or waits at the admission doors");
+        return 0;
+    }
+    println!(
+        "{:<8} {:<8} {:<7} {:<8} {:>7}  {:<10} {:<10} CHECKOUT",
+        "PID", "STATE", "KIND", "LANE", "TIME", "NODE", "SESSION"
+    );
+    for row in &rows {
+        let text = |field: &str| row[field].as_str().unwrap_or("-").to_string();
+        let session = text("session");
+        println!(
+            "{:<8} {:<8} {:<7} {:<8} {:>7}  {:<10} {:<10} {}",
+            row["cargo_pid"].as_u64().unwrap_or(0),
+            text("state"),
+            text("kind"),
+            text("lane"),
+            duration(row["secs"].as_i64().unwrap_or(0)),
+            text("node"),
+            session.get(..8).unwrap_or(session.as_str()),
+            text("worktree"),
+        );
+    }
+    0
+}
+
+/// `cargo:<worktree>:<pid>`, the holder string both cargo doors write.
+fn parse_holder(holder: &str) -> Option<(String, u32)> {
+    let (prefix, pid) = holder.rsplit_once(':')?;
+    let worktree = prefix.strip_prefix("cargo:")?;
+    Some((worktree.to_string(), pid.parse().ok()?))
+}
+
+/// The live waiter markers, each with the lane it waits in, its checkout,
+/// and the pid the marker stamps.
+fn waiters() -> Vec<CargoWait> {
+    let Some(dir) = crate::claims::build_waiters_dir() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        let Ok(raw) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        let Some(worktree) = value["worktree"].as_str() else {
+            continue;
+        };
+        if let Some(wait) = crate::test_run::live_waiter(&dir, Path::new(worktree)) {
+            let lane = value["lane"].as_str().unwrap_or("normal").to_string();
+            out.push(CargoWait {
+                marker_pid: value.get("pid").and_then(|v| v.as_i64()).unwrap_or(0) as i32,
+                wait,
+                lane,
+                worktree: worktree.to_string(),
+            });
+        }
+    }
+    out
+}
+
+/// The node and session a checkout's target manifest names, if it has one.
+pub(crate) fn manifest_ids(worktree: &str) -> (Option<String>, Option<String>) {
+    if worktree.is_empty() {
+        return (None, None);
+    }
+    let Some(space) = crate::paths::worktree_space_dir_opt(Path::new(worktree)) else {
+        return (None, None);
+    };
+    let Ok(manifest) = std::fs::read_to_string(space.join("target-state.md")) else {
+        return (None, None);
+    };
+    let field = |name: &str| {
+        let prefix = format!("{name}:");
+        manifest.lines().find_map(|line| {
+            line.trim()
+                .strip_prefix(&prefix)
+                .map(|v| v.trim().trim_matches(|c| c == '"' || c == '\'').to_string())
+                .filter(|v| !v.is_empty() && v != "null")
+        })
+    };
+    (
+        field("graph_node_id"),
+        field("harness_session_id").or_else(|| field("session_id")),
+    )
+}
+
+/// Check, build or test, from the cargo argv: the first word after the
+/// program that is not a `+toolchain` pin or a flag.
+fn cargo_kind(command: &str) -> &'static str {
+    let sub = command
+        .split_whitespace()
+        .skip(1)
+        .find(|w| !w.starts_with('+') && !w.starts_with('-'));
+    match sub {
+        Some("test" | "t" | "nextest" | "bench") => "test",
+        Some("check" | "c" | "clippy") => "check",
+        Some(_) => "build",
+        None => "unknown",
+    }
+}
+
+fn duration(secs: i64) -> String {
+    if secs >= 3600 {
+        format!("{}h{:02}m", secs / 3600, (secs % 3600) / 60)
+    } else if secs >= 60 {
+        format!("{}m{:02}s", secs / 60, secs % 60)
+    } else {
+        format!("{secs}s")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_view_reads_holder_kind_and_duration() {
+        assert_eq!(
+            parse_holder("cargo:/w/feature:4242"),
+            Some(("/w/feature".to_string(), 4242))
+        );
+        assert_eq!(parse_holder("worktree:/w"), None);
+        assert_eq!(cargo_kind("/opt/cargo +1.94.1 test -p fno-agents"), "test");
+        assert_eq!(cargo_kind("cargo check --workspace"), "check");
+        assert_eq!(cargo_kind("cargo build --release"), "build");
+        assert_eq!(cargo_kind("cargo"), "unknown");
+        assert_eq!(duration(4), "4s");
+        assert_eq!(duration(250), "4m10s");
+        assert_eq!(duration(3725), "1h02m");
+    }
+}

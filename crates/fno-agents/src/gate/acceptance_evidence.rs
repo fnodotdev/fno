@@ -1,0 +1,1553 @@
+//! Acceptance evidence: the outcome-probe substrate, and the bindings that
+//! connect a plan's compiled acceptance criteria to it.
+//!
+//! ONE runner (`run_probe`), ONE parser (`parse_probes_for`), ONE command
+//! (`probe-run`) serve both gates: `done_probes` (session termination, via
+//! `evaluate_done_probes`) and `close_probes` (node closure, shelled by the
+//! close commands). The `acceptance_evidence` frontmatter binds a compiled AC id
+//! to a probe index, so a criterion's satisfaction is MEASURED by a fresh run
+//! with its own positive marker, never witnessed.
+//!
+//! Terminal scoping: a binding names its list, and each terminal validates and
+//! evaluates only its own scope. `done_probes` evidence stops a session;
+//! `close_probes` evidence closes a node. A session may stop with close
+//! evidence still pending; node closure holds until its own probes pass.
+//! Compiling the criteria themselves stays in `fno.plan.criteria` (Python) -
+//! this module validates structure and evaluates outcomes, never prose.
+
+use serde_json::Value;
+use std::ffi::OsStr;
+use std::io::Read;
+use std::path::Path;
+
+use crate::bounded_spawn::{kill_process_group, killpg};
+
+// ── done_probes ──────────────────────────────────────────────────────
+//
+// A plan may declare `done_probes` in its frontmatter: runnable commands whose
+// success is the operational evidence that the shipped thing actually RUNS.
+// DonePRGreen measures artifacts (PR + CI + review), which operational silence
+// cannot falsify - grooming shipped three times without ever running. Probes are
+// the enforcement arm: the gate refuses done until the declared observation
+// holds, forcing the session to perform the last mile before claiming done.
+
+/// Wall-clock ceiling per probe. The bound is native (spawn, poll `try_wait`,
+/// kill): the plugin must run on hosts where `timeout(1)` and `gtimeout` are
+/// absent, so no bound may depend on either binary existing.
+pub(crate) const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// A probe list is a gate, not a test suite.
+const PROBE_CAP: usize = 3;
+
+/// Probe stderr is quoted back in the block reason so the agent knows which
+/// last-mile action to perform; cap it so the reason stays readable.
+const PROBE_STDERR_CAP: usize = 500;
+
+/// Probe stdout is the run's positive marker and travels on the probe row;
+/// cap it so one row cannot blow the event's data-size budget. The cap keeps
+/// the END of the output (a verdict line is a tail), and the row's truncation
+/// marker names what was cut.
+const PROBE_OUTPUT_CAP: usize = 2000;
+
+enum ProbeOutcome {
+    /// Exit 0 AND captured stdout: the run produced its own positive marker.
+    /// Output is the evidence; exit status alone proves a shell ran.
+    Pass { stdout: String },
+    /// Exit 0 with nothing on stdout: no marker, so no verdict on the change.
+    /// A silent probe is exactly the vacuous pass (`test -f residue`) the
+    /// probe contract records as a trap; SKIP holds the gate without claiming
+    /// the probe failed.
+    Skip,
+    Fail {
+        code: Option<i32>,
+        stderr: String,
+        stdout: String,
+    },
+    /// The RUNNER could not answer. Distinct from FAIL on purpose - the
+    /// probe never executed, so its subject is untested, not failing. `kind`
+    /// keeps the three causes distinguishable in the event map: a real
+    /// timeout renders as the legacy `timeout` token, spawn and wait
+    /// failures render as `blocked:<kind>` instead of being absorbed into it.
+    Blocked { kind: &'static str, why: String },
+}
+
+impl ProbeOutcome {
+    /// Event rendering: `pass` | `fail:<code>` | `timeout` | `blocked:<kind>`
+    /// | `skip`. The legacy vocabulary the scoreboard folds join on;
+    /// `verdict` is the four-state contract prove-it reads.
+    fn render(&self) -> String {
+        match self {
+            ProbeOutcome::Pass { .. } => "pass".to_string(),
+            ProbeOutcome::Fail { code: Some(c), .. } => format!("fail:{c}"),
+            ProbeOutcome::Fail { code: None, .. } => "fail:signal".to_string(),
+            ProbeOutcome::Skip => "skip".to_string(),
+            ProbeOutcome::Blocked {
+                kind: "timeout", ..
+            } => "timeout".to_string(),
+            ProbeOutcome::Blocked { kind, .. } => format!("blocked:{kind}"),
+        }
+    }
+
+    /// PASS satisfies, FAIL blocks, SKIP and BLOCKED carry NO verdict (the
+    /// UNANSWERED shape: they hold the gate without naming a failure).
+    fn verdict(&self) -> &'static str {
+        match self {
+            ProbeOutcome::Pass { .. } => "PASS",
+            ProbeOutcome::Skip => "SKIP",
+            ProbeOutcome::Fail { .. } => "FAIL",
+            ProbeOutcome::Blocked { .. } => "BLOCKED",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum ProbeGate {
+    /// No declaration: zero subprocesses, gate behavior byte-identical to before.
+    Absent,
+    Pass(Value),
+    Fail {
+        reason: String,
+        results: Value,
+    },
+}
+
+/// Unwrap a YAML scalar to the string a YAML parser would produce.
+///
+/// Decoding escapes is not cosmetic: the recommended block form routinely
+/// carries an inner quote (`- "test -n \"$(cmd)\""`). Leaving the backslashes in
+/// would hand `sh -c` literal `\"` characters - a DIFFERENT command than the
+/// plan declared, whose result the gate would then trust - and would also key
+/// the event by a string the PyYAML-side grader never matches.
+fn unquote_scalar(s: &str) -> String {
+    let s = s.trim();
+    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
+        let inner = &s[1..s.len() - 1];
+        let mut out = String::with_capacity(inner.len());
+        let mut chars = inner.chars();
+        while let Some(c) = chars.next() {
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('r') => out.push('\r'),
+                Some('0') => out.push('\0'),
+                // `\"`, `\\`, `\/` and anything else: keep the escaped char.
+                Some(other) => out.push(other),
+                None => out.push('\\'),
+            }
+        }
+        return out;
+    }
+    if s.len() >= 2 && s.starts_with('\'') && s.ends_with('\'') {
+        // YAML single-quoted scalars escape only the quote, by doubling it.
+        return s[1..s.len() - 1].replace("''", "'");
+    }
+    s.to_string()
+}
+
+/// Split a YAML inline list body. Quoted segments win over comma-splitting
+/// because probe commands routinely contain commas (`--jq '.a,.b'`); only an
+/// unquoted body falls back to a naive split.
+fn split_inline_list(body: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut chars = body.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '"' || c == '\'' {
+            let mut item = String::new();
+            let mut escaped = false;
+            for c2 in chars.by_ref() {
+                if escaped {
+                    item.push(c2);
+                    escaped = false;
+                } else if c2 == '\\' {
+                    escaped = true;
+                } else if c2 == c {
+                    break;
+                } else {
+                    item.push(c2);
+                }
+            }
+            out.push(item);
+        }
+    }
+    if out.is_empty() {
+        out = body
+            .split(',')
+            .map(unquote_scalar)
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+    out
+}
+
+/// What a plan doc's frontmatter says about `done_probes`.
+#[derive(Debug, PartialEq)]
+enum ProbeDecl {
+    /// No `done_probes` key, or explicitly `[]` - both mean "no gate".
+    None,
+    Probes(Vec<String>),
+    /// The key is present but no probes could be recovered from it. This is
+    /// NEVER treated as "no probes": a declaration this parser cannot read is
+    /// the vacuous-pass shape the whole feature exists to prevent, so it fails
+    /// closed and asks a human to look.
+    Unparseable,
+}
+
+/// Read `done_probes` from a plan doc's frontmatter. Accepts the block form
+/// (`done_probes:\n  - "cmd"`) and the single-line inline form
+/// (`done_probes: ["cmd"]`); anything else declared is `Unparseable`.
+fn parse_done_probes(content: &str) -> ProbeDecl {
+    parse_probes_for(content, "done_probes")
+}
+
+/// Key-parameterized probe-list parser. `done_probes` (loop-check's
+/// session-termination gate) and `close_probes` (the close commands' node-closure
+/// gate) share one parser so the two gates cannot drift on what counts as a
+/// declared probe list. Anything else declared under `key` is `Unparseable`.
+fn parse_probes_for(content: &str, key: &str) -> ProbeDecl {
+    let content = content.trim_start();
+    if !content.starts_with("---") {
+        return ProbeDecl::None;
+    }
+    let after_first = &content[3..];
+    let Some(end) = after_first.find("\n---") else {
+        return ProbeDecl::None;
+    };
+
+    let key_prefix = format!("{key}:");
+    let mut out = Vec::new();
+    let mut declared = false;
+    let mut in_block = false;
+    for line in after_first[..end].lines() {
+        let trimmed = line.trim();
+        if !in_block {
+            let Some(rest) = trimmed.strip_prefix(&key_prefix) else {
+                continue;
+            };
+            declared = true;
+            let rest = rest.trim();
+            if rest == "[]" {
+                return ProbeDecl::None;
+            }
+            if let Some(inner) = rest.strip_prefix('[') {
+                // strip_suffix, not trim_end_matches: the latter eats EVERY
+                // trailing ']' (mangling a command that ends in one) and would
+                // silently accept an unterminated list.
+                let Some(inner) = inner.strip_suffix(']') else {
+                    return ProbeDecl::Unparseable;
+                };
+                let items = split_inline_list(inner);
+                // An empty result means a multi-line inline list (items live on
+                // following lines) - unrecoverable here, so refuse rather than
+                // report the declaration as absent.
+                return if items.is_empty() {
+                    ProbeDecl::Unparseable
+                } else {
+                    ProbeDecl::Probes(items)
+                };
+            }
+            // A plain scalar (`close_probes: cmd`) is ONE probe. The plan
+            // schema advertises `str | list`, so refusing the scalar here made
+            // a documented-legal declaration an unevaluable gate (a hard
+            // refusal at the close commands). A YAML block scalar (`|` / `>`) puts
+            // the value on the following lines and is still unreadable here.
+            if !rest.is_empty() {
+                if rest.starts_with('|') || rest.starts_with('>') {
+                    return ProbeDecl::Unparseable;
+                }
+                let item = unquote_scalar(rest);
+                return if item.is_empty() {
+                    ProbeDecl::Unparseable
+                } else {
+                    ProbeDecl::Probes(vec![item])
+                };
+            }
+            in_block = true;
+            continue;
+        }
+        // Inside the block: a comment is not the end of it (treating one as a
+        // terminator would silently drop every probe below it).
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some(item) = trimmed.strip_prefix("- ") else {
+            break; // the next frontmatter key ends the block
+        };
+        let item = unquote_scalar(item);
+        if !item.is_empty() {
+            out.push(item);
+        }
+    }
+
+    match (declared, out.is_empty()) {
+        (false, _) => ProbeDecl::None,
+        (true, true) => ProbeDecl::Unparseable,
+        (true, false) => ProbeDecl::Probes(out),
+    }
+}
+
+/// Keep at most the LAST `cap` bytes, without splitting a UTF-8 character.
+///
+/// The tail, not the head: a failing command's real error is almost always its
+/// last line, so keeping the prefix would routinely drop the one diagnostic the
+/// block reason exists to surface. Char-boundary aware because `String::drain`
+/// and `truncate` panic mid-character, and probe stderr regularly carries
+/// arrows, box-drawing, and accented words.
+fn keep_last_on_char_boundary(s: &mut String, cap: usize) -> Option<usize> {
+    if s.len() <= cap {
+        return None;
+    }
+    let total = s.len();
+    let start = s.len() - cap;
+    let cut = (start..=s.len())
+        .find(|i| s.is_char_boundary(*i))
+        .unwrap_or(s.len());
+    s.drain(..cut);
+    Some(total)
+}
+
+/// Run one probe under a native timeout.
+///
+/// Two things here are load-bearing rather than defensive. stderr is drained by
+/// a reader thread because reading a piped stderr only after exit deadlocks any
+/// probe that writes past the pipe buffer. And the child leads its own process
+/// group, which is killed on EVERY exit path - not just the timeout.
+///
+/// The group kill has to cover normal exit too, because `sh` is not the only
+/// process holding the stderr write end. A pipeline (`... | grep -q x`) forks,
+/// and a probe that backgrounds anything (`sleep 3600 &`, or any command that
+/// daemonizes) lets `sh` exit IMMEDIATELY while the descendant keeps the pipe
+/// open. `try_wait` then reports success and leaves the timeout loop, so the
+/// timer is never consulted again and the drain join blocks for the
+/// descendant's whole lifetime - wedging the stop hook well past the 60s the
+/// gate promises. Killing the group closes the pipe and bounds the join.
+fn run_probe(cmd: &str, cwd: &Path, timeout: std::time::Duration) -> ProbeOutcome {
+    // The pipefail preamble closes the `| tail -5` trap at the runner: a
+    // pipeline whose real command fails can no longer read as pass through
+    // the truncating tail's exit 0. Bash-only: on Linux /bin/sh is commonly
+    // dash, and dash treats an illegal option on the special builtin `set`
+    // as an ABORT with status 2 regardless of the `2>/dev/null` redirect (a
+    // special builtin's own errors are not an ordinary command failure a
+    // redirect can swallow), so the preamble would kill every probe before
+    // its command ran. A no-bash host falls back to plain sh with NO
+    // preamble, losing only the pipeline-trap closure, not the probe.
+    let bash_wrapped = format!("set -o pipefail 2>/dev/null; {cmd}");
+    // Through `spawn_bounded` for the same reason `run_bounded` goes through
+    // it: a done_probe is the strongest rung loop-check has, and a fork that
+    // answers EAGAIN under load would otherwise return Blocked and hold the
+    // gate on a probe that was never run. NotFound still returns on attempt
+    // one, so the sh fallback below fires as promptly as it did before.
+    let spawned = {
+        let build = |shell: &str, script: &str| {
+            crate::bounded_spawn::spawn_bounded(OsStr::new(shell), &["-c", script], cwd)
+        };
+        match build("bash", &bash_wrapped) {
+            Ok(child) => Ok(child),
+            Err(std::io::ErrorKind::NotFound) => build("sh", cmd),
+            Err(kind) => Err(kind),
+        }
+    };
+
+    let mut child = match spawned {
+        Ok(c) => c,
+        Err(kind) => {
+            return ProbeOutcome::Blocked {
+                kind: "spawn",
+                why: format!("probe spawn failed: {kind:?}"),
+            }
+        }
+    };
+
+    // Capture the pgid before any wait() could reap the leader.
+    let pgid = child.id() as i32;
+
+    let mut out_pipe = child.stdout.take();
+    let out_drain = std::thread::spawn(move || {
+        let mut buf = String::new();
+        if let Some(ref mut p) = out_pipe {
+            let _ = p.read_to_string(&mut buf);
+        }
+        buf
+    });
+    let mut err_pipe = child.stderr.take();
+    let err_drain = std::thread::spawn(move || {
+        let mut buf = String::new();
+        if let Some(ref mut p) = err_pipe {
+            let _ = p.read_to_string(&mut buf);
+        }
+        buf
+    });
+
+    let start = std::time::Instant::now();
+    let outcome = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                // Exit 0 alone is not a PASS: the run must also have produced
+                // its own output, the positive marker. A silent success is
+                // SKIP - held, never counted.
+                break if status.success() {
+                    ProbeOutcome::Pass {
+                        stdout: String::new(),
+                    }
+                } else {
+                    ProbeOutcome::Fail {
+                        code: status.code(),
+                        stderr: String::new(),
+                        stdout: String::new(),
+                    }
+                };
+            }
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    kill_process_group(&mut child);
+                    break ProbeOutcome::Blocked {
+                        kind: "timeout",
+                        why: format!("timed out after {}s (killed)", timeout.as_secs()),
+                    };
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(e) => {
+                kill_process_group(&mut child);
+                break ProbeOutcome::Blocked {
+                    kind: "wait",
+                    why: format!("probe wait failed: {e}"),
+                };
+            }
+        }
+    };
+
+    // Reap any descendant still holding a pipe's write end, so the drains see
+    // EOF. Without this a backgrounding probe blocks the join indefinitely even
+    // though the shell itself exited cleanly.
+    killpg(pgid);
+
+    // On a runner failure the output tail is worthless (the reason names the
+    // block) and joining risks the very hang we just escaped if anything
+    // outlived the group kill. Drop the handles instead: the threads end when
+    // the pipes close.
+    if matches!(outcome, ProbeOutcome::Blocked { .. }) {
+        return outcome;
+    }
+
+    let mut stdout = out_drain.join().unwrap_or_default();
+    let stdout_total = keep_last_on_char_boundary(&mut stdout, PROBE_OUTPUT_CAP);
+    if let Some(total) = stdout_total {
+        // The truncation marker travels IN the captured text: a reader of the
+        // row must be able to tell cut evidence from naturally short output,
+        // which the cap's docstring promises.
+        stdout.insert_str(
+            0,
+            &format!("[fno probe: truncated, last {PROBE_OUTPUT_CAP} of {total} bytes] "),
+        );
+    }
+    let mut stderr = err_drain.join().unwrap_or_default();
+    let _stderr_total = keep_last_on_char_boundary(&mut stderr, PROBE_STDERR_CAP);
+    match outcome {
+        ProbeOutcome::Pass { .. } if stdout.trim().is_empty() => ProbeOutcome::Skip,
+        ProbeOutcome::Pass { .. } => ProbeOutcome::Pass { stdout },
+        ProbeOutcome::Fail { code, .. } => ProbeOutcome::Fail {
+            code,
+            stderr,
+            stdout,
+        },
+        other => other,
+    }
+}
+/// Event payload for a refusal where probes were DECLARED but none ran (plan
+/// unreadable, unparseable, over cap). It must be a non-empty object: recording
+/// a bare null would make the refusal invisible to `prior_fires_declared_probes`,
+/// so a plan that tripped the cap and then went missing would silently degrade
+/// to "no gate" - the exact fail-open this records history to prevent. The key
+/// is underscore-prefixed so it cannot collide with a probe command string.
+fn undeterminable_marker(cause: &str) -> Value {
+    serde_json::json!({ "_undeterminable": cause })
+}
+
+/// True when the plan's frontmatter reads `domain: code`, the same test
+/// validate-plan.sh applies before it refuses a probe-less plan.
+fn plan_is_code_domain(content: &str) -> bool {
+    let mut lines = content.lines();
+    if lines.next().map(str::trim) != Some("---") {
+        return false;
+    }
+    lines
+        .take_while(|l| l.trim() != "---")
+        .filter_map(|l| l.trim().strip_prefix("domain:"))
+        .any(|v| v.trim().trim_matches(|c| c == '"' || c == '\'') == "code")
+}
+
+/// True when any prior loop_check fire for this session recorded probe results.
+/// Used to fail closed on an unreadable plan only when probes are known to have
+/// existed - a probe-less session with a stale plan_path keeps today's behavior.
+fn prior_fires_declared_probes(events_path: &Path, session_id: &str) -> bool {
+    let content = crate::event_store::journal_text(events_path, &["loop_check"]);
+    content.lines().any(|line| {
+        let Ok(val) = serde_json::from_str::<Value>(line) else {
+            return false;
+        };
+        val.get("type").and_then(|v| v.as_str()) == Some("loop_check")
+            && val.pointer("/data/session_id").and_then(|v| v.as_str()) == Some(session_id)
+            && val
+                .pointer("/data/done_probes")
+                .and_then(|v| v.as_object())
+                .is_some_and(|m| !m.is_empty())
+    })
+}
+
+/// Resolve the PLAN source to its probe list and acceptance-evidence
+/// declaration, or the gate that must block.
+///
+/// Split out from `evaluate_done_probes` so the project source can be resolved
+/// independently: a plan that declares nothing (or whose doc is missing on a
+/// probe-less session) must still let the project's own probes run, which a
+/// single early-return-Absent path cannot express.
+fn plan_declared_probes(
+    plan_path: Option<&str>,
+    cwd: &Path,
+    events_path: &Path,
+    session_id: &str,
+) -> Result<(Vec<String>, EvidenceDecl), ProbeGate> {
+    // Resolve a relative plan_path against the session's cwd, not the process
+    // cwd: plan_path is repo-relative in practice, and reading nothing here
+    // would degrade to Absent - a silent gate bypass.
+    let plan = plan_path.and_then(|p| {
+        // A plan_path may carry a `#wave-1`-style fragment; the Python plan
+        // readers strip it, and reading the literal name would fail, which on
+        // the first fire (no probe history) degrades to Absent - a silent
+        // bypass of a gate the plan actually declared.
+        let p = Path::new(p.split('#').next().unwrap_or(p));
+        let abs = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            cwd.join(p)
+        };
+        std::fs::read_to_string(abs).ok()
+    });
+    let Some(plan) = plan else {
+        // Fail closed only when probes were observed before; otherwise a stale
+        // plan_path on a probe-less session must not start refusing done.
+        if prior_fires_declared_probes(events_path, session_id) {
+            return Err(ProbeGate::Fail {
+                reason: format!(
+                    "done_probes undeterminable: plan {} is unreadable but a prior fire declared probes; restore the plan doc",
+                    plan_path.unwrap_or("(unset)")
+                ),
+                results: undeterminable_marker("plan-unreadable"),
+            });
+        }
+        return Ok((Vec::new(), EvidenceDecl::None));
+    };
+
+    let decl = match parse_acceptance_evidence(&plan) {
+        EvidenceDecl::Unparseable => {
+            return Err(ProbeGate::Fail {
+                reason: "acceptance_evidence undeterminable: the plan declares the field but it could not be parsed (use `required:` plus a `bindings:` map of AC id to `done_probes[n]`/`close_probes[n]`)".to_string(),
+                results: undeterminable_marker("unparseable-acceptance-evidence"),
+            })
+        }
+        other => other,
+    };
+    let probes = match parse_done_probes(&plan) {
+        // A code plan with no probe would let DonePRGreen fire on activity
+        // alone; validate-plan refuses it too, this is the runtime backstop.
+        ProbeDecl::None if plan_is_code_domain(&plan) => {
+            return Err(ProbeGate::Fail {
+                reason: format!(
+                    "done_probes missing: code plan {} declares none, so nothing checks the goal; add a probe (a docs or research plan sets domain: docs|research)",
+                    plan_path.unwrap_or("(unset)")
+                ),
+                results: undeterminable_marker("code-plan-without-probes"),
+            })
+        }
+        ProbeDecl::None => return Ok((Vec::new(), decl)),
+        ProbeDecl::Unparseable => {
+            return Err(ProbeGate::Fail {
+                reason: format!(
+                    "done_probes undeterminable: plan {} declares the field but no probe could be read from it (use a block list, or a single-line inline list)",
+                    plan_path.unwrap_or("(unset)")
+                ),
+                results: undeterminable_marker("unparseable-declaration"),
+            })
+        }
+        ProbeDecl::Probes(p) => p,
+    };
+    if probes.len() > PROBE_CAP {
+        return Err(ProbeGate::Fail {
+            reason: format!(
+                "plan declares {} done_probes; the cap is {PROBE_CAP} per source (a probe list is a gate, not a test suite)",
+                probes.len()
+            ),
+            results: undeterminable_marker("over-cap"),
+        });
+    }
+    Ok((probes, decl))
+}
+
+/// Evaluate the probe conjunct across BOTH sources. Called ONLY once every
+/// other DonePRGreen conjunct already holds, so probes run at most once per
+/// would-be-done fire.
+///
+/// `config_probes` is the repo-wide `done_probes` off config.toml. Both lists
+/// run and both must pass: a plan can ADD guardrails and can never silence the
+/// project's, including via an explicit `done_probes: []`. A repo-wide guard a
+/// plan doc can switch off is a guard on one of two paths, which is decorative.
+pub(crate) fn evaluate_done_probes(
+    plan_path: Option<&str>,
+    config_probes: Option<&Result<Vec<String>, String>>,
+    cwd: &Path,
+    events_path: &Path,
+    session_id: &str,
+    timeout: std::time::Duration,
+) -> ProbeGate {
+    // The project source resolves first: a declaration this parser cannot read
+    // must block before anything runs, in the same vocabulary the plan side
+    // uses. A config key that degrades to no-gate is a guardrail that
+    // disappears when you typo it.
+    let project = match config_probes {
+        None => Vec::new(),
+        Some(Err(why)) => {
+            return ProbeGate::Fail {
+                reason: format!(
+                    "done_probes undeterminable: config.toml declares `done_probes` but {why}"
+                ),
+                results: undeterminable_marker("unparseable-config-declaration"),
+            }
+        }
+        Some(Ok(p)) => p.clone(),
+    };
+    // PROBE_CAP applies PER SOURCE, not to the union. The cap encodes
+    // per-declaration discipline ("a gate, not a test suite"); one shared
+    // budget would instead make two independent authors compete for one number
+    // and let a project's policy eat a plan's operational probes.
+    if project.len() > PROBE_CAP {
+        return ProbeGate::Fail {
+            reason: format!(
+                "config.toml declares {} done_probes; the cap is {PROBE_CAP} per source (a probe list is a gate, not a test suite)",
+                project.len()
+            ),
+            results: undeterminable_marker("over-cap"),
+        };
+    }
+
+    let (plan_probes, decl) = match plan_declared_probes(plan_path, cwd, events_path, session_id) {
+        Ok((p, d)) => (p, d),
+        Err(gate) => return gate,
+    };
+
+    // Bindings and requiredness: the session terminal evaluates ONLY the
+    // done_probes scope (a close_probes binding is Pending here - session
+    // evidence may pass while close evidence is still owed), and it validates
+    // only its own indices. The close terminal validates its own in
+    // `decide_probe_run`.
+    let (required, bindings) = match &decl {
+        EvidenceDecl::None => (false, &[][..]),
+        EvidenceDecl::Unparseable => unreachable!("plan_declared_probes refuses it"),
+        EvidenceDecl::Evidence { required, bindings } => {
+            // Only THIS terminal's bindings are validated here, against this
+            // terminal's list: a close_probes index says nothing about the
+            // done_probes list length, and vice versa.
+            let own: Vec<AcceptanceBinding> = bindings
+                .iter()
+                .filter(|b| b.key == "done_probes")
+                .cloned()
+                .collect();
+            if let Err(why) = validate_bindings(&own, plan_probes.len()) {
+                return ProbeGate::Fail {
+                    reason: why,
+                    results: undeterminable_marker("invalid-acceptance-evidence"),
+                };
+            }
+            (*required, bindings.as_slice())
+        }
+    };
+
+    if project.is_empty() && plan_probes.is_empty() {
+        // A required plan cannot pass on unarmed evidence: declaring `required`
+        // with no done_probes binding means the session terminal has no rung to
+        // stand on, so close-scope-only bindings do not arm this terminal.
+        // Finalize refuses the declaration too; this is the runtime backstop.
+        if required && !bindings.iter().any(|b| b.key == "done_probes") {
+            return ProbeGate::Fail {
+                reason: "acceptance_evidence: the plan asserts runnable acceptance evidence is required, but no done_probes probe is bound to a criterion (unarmed)"
+                    .to_string(),
+                results: undeterminable_marker("unarmed-required"),
+            };
+        }
+        return ProbeGate::Absent;
+    }
+
+    let mut results = serde_json::Map::new();
+    let mut failures = Vec::new();
+    let mut plan_outcomes: Vec<(String, String)> = Vec::new();
+    for (source, cmd) in project
+        .iter()
+        .map(|c| ("project", c))
+        .chain(plan_probes.iter().map(|c| ("plan", c)))
+    {
+        let outcome = run_probe(cmd, cwd, timeout);
+        // Keyed by the BARE command: cli/src/fno/scoreboard/fold.py joins this
+        // map back to the plan's frontmatter by exact command string, so the
+        // source label belongs in the failure reason - which is what the
+        // operator reads to know which file to edit - and never in the key.
+        results.insert(cmd.clone(), Value::String(outcome.render()));
+        if source == "plan" {
+            plan_outcomes.push((cmd.clone(), outcome.render()));
+        }
+        match &outcome {
+            ProbeOutcome::Pass { .. } => {}
+            ProbeOutcome::Skip => failures.push(format!(
+                "{source} probe `{cmd}` exited 0 with no output - SKIP, not a pass (a probe must emit its own positive marker)"
+            )),
+            ProbeOutcome::Blocked { why, .. } => {
+                failures.push(format!("{source} probe `{cmd}` BLOCKED: {why}"))
+            }
+            ProbeOutcome::Fail { code, stderr, .. } => {
+                let code = code.map(|c| c.to_string()).unwrap_or("signal".to_string());
+                let tail = if stderr.trim().is_empty() {
+                    String::new()
+                } else {
+                    format!(": {}", stderr.trim())
+                };
+                failures.push(format!("{source} probe `{cmd}` exited {code}{tail}"));
+            }
+        }
+    }
+
+    // Criterion-level coverage: which bound criterion each probe answered.
+    // The rows travel IN the results map under an underscore key, which the
+    // scoreboard fold never joins on (it looks up exact probe commands), so
+    // the map keeps its cmd->render shape and the record rides along.
+    let coverage = acceptance_coverage(&bindings, "done_probes", &plan_outcomes);
+    if !coverage.is_empty() {
+        results.insert(
+            "_acceptance_coverage".to_string(),
+            Value::Array(coverage.clone()),
+        );
+        for row in &coverage {
+            if row["status"] != "satisfied" {
+                failures.push(format!(
+                    "criterion {} bound to {} is not satisfied ({})",
+                    row["ac"].as_str().unwrap_or("?"),
+                    row["probe"].as_str().unwrap_or("?"),
+                    row["status"].as_str().unwrap_or("?"),
+                ));
+            }
+        }
+    }
+    if required && !coverage.iter().any(|r| r["status"] == "satisfied") {
+        failures.push(
+            "acceptance_evidence: the plan asserts runnable acceptance evidence is required, but no done_probes probe satisfied a bound criterion"
+                .to_string(),
+        );
+    }
+
+    let results = Value::Object(results);
+    if failures.is_empty() {
+        ProbeGate::Pass(results)
+    } else {
+        ProbeGate::Fail {
+            reason: format!(
+                "done_probes failed - the shipped thing has no evidence of running: {}",
+                failures.join("; ")
+            ),
+            results,
+        }
+    }
+}
+
+// ── acceptance evidence bindings ────────────────────────────
+//
+// `acceptance_evidence` frontmatter: a compiled AC id wired to one probe by
+// index, so the loop gates report criterion-level coverage instead of leaving
+// acceptance as prose a reader is trusted to have honored.
+
+/// One binding: a compiled acceptance criterion wired to one probe by index.
+/// The terminal is the list the probe lives in; a binding's index is validated
+/// against that list at the terminal that evaluates it, never across both.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct AcceptanceBinding {
+    pub(crate) ac: String,
+    pub(crate) key: &'static str,
+    pub(crate) index: usize,
+}
+
+/// What a plan doc's frontmatter says about `acceptance_evidence`.
+#[derive(Debug, PartialEq)]
+pub(crate) enum EvidenceDecl {
+    /// No key: legacy plan, unarmed by absence, byte-identical behavior.
+    None,
+    Evidence {
+        required: bool,
+        bindings: Vec<AcceptanceBinding>,
+    },
+    /// The key is present but no declaration could be read from it. NEVER
+    /// treated as `None`: a declaration this parser cannot read is the
+    /// vacuous-pass shape, so it fails closed like an unparseable probe list.
+    Unparseable,
+}
+
+/// Probe-reference grammar: `<list>[<index>]` against `done_probes` or
+/// `close_probes`. Anything else refuses; prose is never executed.
+fn parse_probe_ref(s: &str) -> Option<(&'static str, usize)> {
+    let (key, idx) = s.split_once('[')?;
+    let idx = idx.strip_suffix(']')?;
+    let key = match key {
+        "done_probes" => "done_probes",
+        "close_probes" => "close_probes",
+        _ => return None,
+    };
+    idx.parse::<usize>().ok().map(|n| (key, n))
+}
+
+/// Read `acceptance_evidence` from a plan doc's frontmatter. Accepted shape:
+///
+/// ```yaml
+/// acceptance_evidence:
+///   required: true
+///   bindings:
+///     AC1-HP: done_probes[0]
+///     AC2-HP: close_probes[0]
+/// ```
+///
+/// `acceptance_evidence: {}` (or `[]`) is an explicit unarmed declaration.
+/// An unknown sub-key, a malformed reference, or a duplicated criterion is
+/// `Unparseable`, never a guess.
+pub(crate) fn parse_acceptance_evidence(content: &str) -> EvidenceDecl {
+    let content = content.trim_start();
+    if !content.starts_with("---") {
+        return EvidenceDecl::None;
+    }
+    let after_first = &content[3..];
+    let Some(end) = after_first.find("\n---") else {
+        return EvidenceDecl::None;
+    };
+
+    let mut required: Option<bool> = None;
+    let mut bindings: Vec<AcceptanceBinding> = Vec::new();
+    let mut declared = false;
+    let mut in_bindings = false;
+    for line in after_first[..end].lines() {
+        let trimmed = line.trim();
+        if !declared {
+            let Some(rest) = trimmed.strip_prefix("acceptance_evidence:") else {
+                continue;
+            };
+            declared = true;
+            match rest.trim() {
+                "" => {}
+                "{}" | "[]" => {
+                    return EvidenceDecl::Evidence {
+                        required: false,
+                        bindings: vec![],
+                    }
+                }
+                _ => return EvidenceDecl::Unparseable,
+            }
+            continue;
+        }
+        // Inside the block: a zero-indent non-empty line is the next
+        // frontmatter key and ends the declaration.
+        if !trimmed.is_empty() && !line.starts_with(' ') && !line.starts_with('\t') {
+            break;
+        }
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        // YAML comment semantics: ` #` (whitespace then hash) starts a
+        // comment, so the template's inline annotations parse exactly as a
+        // YAML reader would read them. A `#` glued to the scalar stays part
+        // of it.
+        let content = match trimmed.find(" #") {
+            Some(i) => trimmed[..i].trim_end(),
+            None => trimmed,
+        };
+        // The two sub-keys are matched BEFORE the bindings-entry branch so
+        // their order inside the mapping is free, exactly as a YAML parser
+        // would read them. Neither prefix can be an AC binding: a binding
+        // entry's key is the criterion id, never `required` or `bindings`.
+        if let Some(rest) = content.strip_prefix("required:") {
+            if required.is_some() {
+                return EvidenceDecl::Unparseable;
+            }
+            match rest.trim() {
+                "true" => required = Some(true),
+                "false" => required = Some(false),
+                _ => return EvidenceDecl::Unparseable,
+            }
+            continue;
+        }
+        if let Some(rest) = content.strip_prefix("bindings:") {
+            match rest.trim() {
+                "" => in_bindings = true,
+                "{}" | "[]" => {}
+                _ => return EvidenceDecl::Unparseable,
+            }
+            continue;
+        }
+        if in_bindings {
+            let Some((ac, probe_ref)) = content.split_once(':') else {
+                return EvidenceDecl::Unparseable;
+            };
+            let ac = ac.trim();
+            let Some((key, index)) = parse_probe_ref(probe_ref.trim()) else {
+                return EvidenceDecl::Unparseable;
+            };
+            if ac.is_empty() || bindings.iter().any(|b| b.ac == ac) {
+                return EvidenceDecl::Unparseable;
+            }
+            bindings.push(AcceptanceBinding {
+                ac: ac.to_string(),
+                key,
+                index,
+            });
+            continue;
+        }
+        return EvidenceDecl::Unparseable;
+    }
+
+    if !declared {
+        return EvidenceDecl::None;
+    }
+    EvidenceDecl::Evidence {
+        required: required.unwrap_or(false),
+        bindings,
+    }
+}
+
+/// Structural validation against the plan's own probe list for ONE terminal:
+/// a bound index must exist (the "missing probe" refusal), and one criterion
+/// must not claim both terminals. AC ids are checked against the compiled
+/// criteria at finalize (`fno.plan.execution_validation`), which owns the one
+/// compiler; this check is the runtime backstop for structure only.
+pub(crate) fn validate_bindings(
+    bindings: &[AcceptanceBinding],
+    own_count: usize,
+) -> Result<(), String> {
+    let mut seen: Vec<&str> = Vec::new();
+    for b in bindings {
+        if b.index >= own_count {
+            return Err(format!(
+                "acceptance_evidence binds {} to {}[{}], but {} declares {own_count} probe(s): the bound probe is missing",
+                b.ac, b.key, b.index, b.key
+            ));
+        }
+        if seen.contains(&b.ac.as_str()) {
+            return Err(format!(
+                "acceptance_evidence binds {} more than once: one criterion, one terminal",
+                b.ac
+            ));
+        }
+        seen.push(&b.ac);
+    }
+    Ok(())
+}
+
+/// Coverage rows for ONE terminal's bindings, given that terminal's outcomes
+/// as (cmd, render) in declared order. `pass` is the only satisfied verdict;
+/// a FAIL names the criterion; SKIP/BLOCKED stay Unknown (the run answered
+/// nothing); a binding on the OTHER list is Pending here - session evidence
+/// may pass while close evidence is still owed.
+pub(crate) fn acceptance_coverage(
+    bindings: &[AcceptanceBinding],
+    key: &str,
+    outcomes: &[(String, String)],
+) -> Vec<Value> {
+    bindings
+        .iter()
+        .filter(|b| b.key == key)
+        .filter_map(|b| {
+            let (cmd, render) = outcomes.get(b.index)?;
+            let status = if render == "pass" {
+                "satisfied"
+            } else if render.starts_with("fail") {
+                "failed"
+            } else if render == "skip" || render == "timeout" || render.starts_with("blocked") {
+                "unknown"
+            } else {
+                return None;
+            };
+            Some(serde_json::json!({
+                "ac": b.ac,
+                "probe": format!("{}[{}]", b.key, b.index),
+                "cmd": cmd,
+                "status": status,
+                "terminal": if key == "done_probes" { "session" } else { "close" },
+            }))
+        })
+        .collect()
+}
+
+/// `fno-agents probe-run --plan <path> --key <name> --cwd <root> --json`.
+///
+/// Evaluates one named probe list (`done_probes` or `close_probes`) from a plan
+/// doc and exits 0 when every probe passes. The close commands shell out to this
+/// for `close_probes`, mirroring how `active_backlog` shells out to
+/// `fno backlog done`: the node-closure gate and the session-termination gate
+/// share ONE runner. The process-group kill, the pipe-buffer drain, and
+/// 127-as-failure all live in `run_probe` and are NOT reimplemented here.
+///
+/// Exit contract: 0 = every probe passed (or none declared under `key`);
+/// 1 = at least one probe failed; 2 = undeterminable (plan unreadable,
+/// declaration unparseable, over cap). stdout is always one JSON object.
+pub fn run_probe_run(args: &[String]) -> i32 {
+    if args.first().map(String::as_str) == Some("main-ci") {
+        return crate::main_ci_proof::run(&args[1..]);
+    }
+    if args.first().map(String::as_str) == Some("recheck") {
+        return crate::symptom_recheck::run(&args[1..]);
+    }
+    let (code, json) = decide_probe_run(args);
+    println!("{json}");
+    code
+}
+
+pub(crate) fn decide_probe_run(args: &[String]) -> (i32, String) {
+    let mut plan: Option<String> = None;
+    let mut key = String::from("done_probes");
+    let mut cwd: Option<String> = None;
+    let mut want_json = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--plan" => {
+                i += 1;
+                if i < args.len() {
+                    plan = Some(args[i].clone());
+                }
+            }
+            "--key" => {
+                i += 1;
+                if i < args.len() {
+                    key = args[i].clone();
+                }
+            }
+            "--cwd" => {
+                i += 1;
+                if i < args.len() {
+                    cwd = Some(args[i].clone());
+                }
+            }
+            "--json" | "-J" => want_json = true,
+            _ => {}
+        }
+        i += 1;
+    }
+    // JSON is always emitted; the flag is accepted so callers stay explicit.
+    let _ = want_json;
+
+    let Some(plan_raw) = plan else {
+        return probe_run_payload(2, &key, false, vec![], "--plan is required", Vec::new());
+    };
+    // A plan_path may carry a `#wave-1` fragment; reading the literal name
+    // would fail, degrading an asserted gate to absent.
+    let plan_clean = plan_raw.split('#').next().unwrap_or(&plan_raw);
+    let plan_path = std::path::Path::new(plan_clean);
+    let abs = if plan_path.is_absolute() {
+        plan_path.to_path_buf()
+    } else {
+        std::path::Path::new(cwd.as_deref().unwrap_or(".")).join(plan_path)
+    };
+    let content = match std::fs::read_to_string(&abs) {
+        Ok(c) => c,
+        Err(e) => {
+            return probe_run_payload(
+                2,
+                &key,
+                false,
+                vec![],
+                &format!("plan {plan_clean} unreadable: {e}"),
+                Vec::new(),
+            )
+        }
+    };
+
+    let probes = match parse_probes_for(&content, &key) {
+        ProbeDecl::None => {
+            // A required plan with no done_probes list is unarmed at the
+            // session terminal and must not read as a pass. The close
+            // terminal is NOT gated on requiredness: required evidence is a
+            // session-terminal assertion, and a close list the plan never
+            // declared must close exactly as it does without a declaration.
+            if key == "done_probes" {
+                if let EvidenceDecl::Evidence { required: true, .. } =
+                    parse_acceptance_evidence(&content)
+                {
+                    return probe_run_payload(
+                        1,
+                        &key,
+                        false,
+                        vec![],
+                        "acceptance_evidence: the plan asserts runnable acceptance evidence is required, but no probe under this key is bound to a criterion (unarmed)",
+                        Vec::new(),
+                    );
+                }
+            }
+            return probe_run_payload(0, &key, false, vec![], "no probes declared", Vec::new());
+        }
+        ProbeDecl::Unparseable => {
+            return probe_run_payload(
+                2,
+                &key,
+                true,
+                vec![],
+                &format!("`{key}` declared but no probe could be read from it"),
+                Vec::new(),
+            )
+        }
+        ProbeDecl::Probes(p) => p,
+    };
+    if probes.len() > PROBE_CAP {
+        return probe_run_payload(
+            2,
+            &key,
+            true,
+            vec![],
+            &format!("{} probes declared; cap is {PROBE_CAP}", probes.len()),
+            Vec::new(),
+        );
+    }
+
+    // The terminal validates only its own scope: a binding's index is checked
+    // against the list this terminal evaluates. The other terminal validates
+    // its own when it runs.
+    let decl = match parse_acceptance_evidence(&content) {
+        EvidenceDecl::Unparseable => {
+            return probe_run_payload(
+                2,
+                &key,
+                true,
+                vec![],
+                "acceptance_evidence declared but it could not be parsed (use `required:` plus a `bindings:` map of AC id to `done_probes[n]`/`close_probes[n]`)",
+                Vec::new(),
+            )
+        }
+        EvidenceDecl::None => None,
+        EvidenceDecl::Evidence { required, bindings } => {
+            // Same per-terminal rule as the session gate: this terminal's
+            // bindings against this terminal's list only.
+            let own: Vec<AcceptanceBinding> = bindings
+                .iter()
+                .filter(|b| b.key == key)
+                .cloned()
+                .collect();
+            if let Err(why) = validate_bindings(&own, probes.len()) {
+                return probe_run_payload(2, &key, true, vec![], &why, Vec::new());
+            }
+            Some((required, own))
+        }
+    };
+    let (required, bindings) = match &decl {
+        Some((required, bindings)) => (*required, bindings.as_slice()),
+        None => (false, &[][..]),
+    };
+
+    let work_dir = std::path::Path::new(cwd.as_deref().unwrap_or("."));
+    let mut results: Vec<Value> = Vec::new();
+    let mut outcomes: Vec<(String, String)> = Vec::new();
+    let mut failed_reason: Option<String> = None;
+    for cmd in &probes {
+        // A probe may carry its claim as a trailing ` # <claim>` comment; the
+        // claim travels on the row so a reader sees what the run answered,
+        // not just what it ran. Bare commands keep today's shape.
+        let claim = cmd.find(" # ").map(|idx| cmd[idx + 3..].trim().to_string());
+        let outcome = run_probe(cmd, work_dir, PROBE_TIMEOUT);
+        outcomes.push((cmd.clone(), outcome.render()));
+        // One source for the row's verdict vocabulary, borrowed before the
+        // consuming match moves the outcome's fields.
+        let verdict = outcome.verdict();
+        let entry = match outcome {
+            ProbeOutcome::Pass { stdout } => serde_json::json!({
+                "cmd": cmd,
+                "verdict": verdict,
+                "claim": claim,
+                "stdout": stdout,
+            }),
+            ProbeOutcome::Skip => {
+                if failed_reason.is_none() {
+                    failed_reason = Some(format!(
+                        "`{cmd}` exited 0 with no output - SKIP, not a pass"
+                    ));
+                }
+                serde_json::json!({
+                    "cmd": cmd,
+                    "verdict": verdict,
+                    "claim": claim,
+                    "stdout": "",
+                })
+            }
+            ProbeOutcome::Blocked { why, .. } => {
+                if failed_reason.is_none() {
+                    failed_reason = Some(format!("`{cmd}` BLOCKED: {why}"));
+                }
+                serde_json::json!({
+                    "cmd": cmd,
+                    "verdict": verdict,
+                    "claim": claim,
+                    "why": why,
+                })
+            }
+            ProbeOutcome::Fail {
+                code,
+                stderr,
+                stdout,
+            } => {
+                let c = code
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "signal".to_string());
+                if failed_reason.is_none() {
+                    failed_reason = Some(format!("`{cmd}` exited {c}"));
+                }
+                serde_json::json!({
+                    "cmd": cmd,
+                    "verdict": verdict,
+                    "claim": claim,
+                    "code": code,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                })
+            }
+        };
+        results.push(entry);
+    }
+
+    // Criterion-level coverage for this terminal's bindings, and the
+    // required-unarmed refusal: a required plan whose armed criteria all
+    // answered nothing cannot read as a pass.
+    let coverage = acceptance_coverage(bindings, &key, &outcomes);
+    for row in &coverage {
+        if row["status"] != "satisfied" {
+            let probe_detail = failed_reason.take();
+            failed_reason = Some(format!(
+                "criterion {} bound to {} is not satisfied ({}): {}",
+                row["ac"].as_str().unwrap_or("?"),
+                row["probe"].as_str().unwrap_or("?"),
+                row["status"].as_str().unwrap_or("?"),
+                probe_detail.unwrap_or_else(|| "the probe did not pass".to_string()),
+            ));
+            break;
+        }
+    }
+    // Requiredness gates the SESSION terminal only: an unbound close entry
+    // must still let the node close (required evidence was enforced when the
+    // session stopped; the close gate governs whatever the plan bound to it).
+    if required && key == "done_probes" && !coverage.iter().any(|r| r["status"] == "satisfied") {
+        if failed_reason.is_none() {
+            failed_reason = Some(
+                "acceptance_evidence: the plan asserts runnable acceptance evidence is required, but no probe under this key satisfied a bound criterion"
+                    .to_string(),
+            );
+        }
+    }
+
+    let (code, reason) = match failed_reason {
+        Some(r) => (1, r),
+        None => (0, "every probe passed".to_string()),
+    };
+    probe_run_payload(code, &key, true, results, &reason, coverage)
+}
+
+fn probe_run_payload(
+    code: i32,
+    key: &str,
+    declared: bool,
+    results: Vec<Value>,
+    reason: &str,
+    coverage: Vec<Value>,
+) -> (i32, String) {
+    let payload = serde_json::json!({
+        "key": key,
+        "declared": declared,
+        "passed": code == 0,
+        "results": results,
+        "acceptance_coverage": coverage,
+        "reason": reason,
+    });
+    (
+        code,
+        serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string()),
+    )
+}
+#[cfg(test)]
+mod done_probe_tests {
+    use super::*;
+    use std::time::Duration;
+    // Config-root parsing and the gh-quota classifier stayed with the session
+    // side in loopcheck; these tests cover them through the same facade.
+    use crate::loopcheck::{coverage_adapter, is_graphql_read};
+
+    fn fm(body: &str) -> String {
+        format!("---\ntitle: t\n{body}\n---\n\n# doc\n")
+    }
+
+    fn probes_of(doc: &str) -> Vec<String> {
+        match parse_done_probes(doc) {
+            ProbeDecl::Probes(p) => p,
+            other => panic!("expected probes, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_block_list() {
+        let doc = fm("done_probes:\n  - \"fno agents mail list --since 24h | grep -q groom\"\n  - 'echo ok'\nstatus: ready");
+        assert_eq!(
+            probes_of(&doc),
+            vec![
+                "fno agents mail list --since 24h | grep -q groom".to_string(),
+                "echo ok".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_inline_list_keeping_commas_inside_commands() {
+        let doc = fm(r#"done_probes: ["gh api x --jq '.a,.b'", "echo ok"]"#);
+        assert_eq!(
+            probes_of(&doc),
+            vec!["gh api x --jq '.a,.b'".to_string(), "echo ok".to_string()],
+            "a comma inside a quoted command must not split it into two probes"
+        );
+    }
+
+    #[test]
+    fn absent_field_and_explicit_empty_list_are_both_no_gate() {
+        assert_eq!(parse_done_probes(&fm("done_probes: []")), ProbeDecl::None);
+        assert_eq!(parse_done_probes(&fm("status: ready")), ProbeDecl::None);
+        assert_eq!(parse_done_probes("no frontmatter here"), ProbeDecl::None);
+    }
+
+    #[test]
+    fn a_declaration_this_parser_cannot_read_is_never_no_gate() {
+        // The vacuous-pass shape: the field is there, so the plan MEANT to gate.
+        // Reporting None here would silently drop the gate entirely.
+        let multiline_inline = fm("done_probes: [\n  \"echo a\",\n  \"echo b\"\n]");
+        assert_eq!(parse_done_probes(&multiline_inline), ProbeDecl::Unparseable);
+        assert_eq!(
+            parse_done_probes(&fm("done_probes:\nstatus: ready")),
+            ProbeDecl::Unparseable,
+            "a declared-but-empty block must refuse, not pass"
+        );
+    }
+
+    #[test]
+    fn probe_run_pipefail_closes_the_tail_trap() {
+        // `failing | tail -5` reads exit 0 through the tail's status; the
+        // pipefail preamble must surface the real failure.
+        let tmp = tempfile::tempdir().unwrap();
+        let outcome = run_probe(
+            "echo buried | grep -q nothing && echo found; exit 3 | tail -1",
+            tmp.path(),
+            Duration::from_secs(10),
+        );
+        assert_eq!(
+            outcome.verdict(),
+            "FAIL",
+            "the trap must read FAIL, not PASS"
+        );
+    }
+
+    /// `probe-run` exit contract: 0 passes, 1 fails a probe, 2 is undeterminable
+    /// (unparseable / unreadable). stdout is always JSON.
+    #[test]
+    fn probe_run_exit_contract() {
+        let tmp = tempfile::tempdir().unwrap();
+        let passing = tmp.path().join("pass.md");
+        std::fs::write(&passing, fm("close_probes:\n  - \"echo probe-passed\"")).unwrap();
+        let failing = tmp.path().join("fail.md");
+        std::fs::write(&failing, fm("close_probes:\n  - \"exit 7\"")).unwrap();
+        let bad = tmp.path().join("bad.md");
+        std::fs::write(&bad, fm("close_probes: [unterminated")).unwrap();
+
+        let (code, json) = decide_probe_run(&[
+            "--plan".into(),
+            passing.to_string_lossy().into(),
+            "--key".into(),
+            "close_probes".into(),
+            "--cwd".into(),
+            tmp.path().to_string_lossy().into(),
+            "--json".into(),
+        ]);
+        assert_eq!(code, 0);
+        assert_eq!(
+            serde_json::from_str::<Value>(&json).unwrap()["passed"],
+            true
+        );
+
+        let (code, json) = decide_probe_run(&[
+            "--plan".into(),
+            failing.to_string_lossy().into(),
+            "--key".into(),
+            "close_probes".into(),
+            "--cwd".into(),
+            tmp.path().to_string_lossy().into(),
+        ]);
+        assert_eq!(code, 1);
+        let body = serde_json::from_str::<Value>(&json).unwrap();
+        assert_eq!(body["passed"], false);
+        assert!(body["reason"].as_str().unwrap().contains("exited 7"));
+
+        // Unparseable declaration: undeterminable, fail closed.
+        let (code, _) = decide_probe_run(&[
+            "--plan".into(),
+            bad.to_string_lossy().into(),
+            "--key".into(),
+            "close_probes".into(),
+        ]);
+        assert_eq!(code, 2);
+
+        // Unreadable plan: undeterminable, fail closed.
+        let (code, _) = decide_probe_run(&[
+            "--plan".into(),
+            tmp.path().join("nope.md").to_string_lossy().into(),
+            "--key".into(),
+            "close_probes".into(),
+        ]);
+        assert_eq!(code, 2);
+    }
+
+    #[test]
+    fn hanging_probe_is_killed_within_the_timeout_budget() {
+        let tmp = tempfile::tempdir().unwrap();
+        let start = std::time::Instant::now();
+        let outcome = run_probe("sleep 30", tmp.path(), Duration::from_millis(200));
+        assert_eq!(outcome.render(), "timeout");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "run_probe must return on its own timeout, not wait out the child"
+        );
+    }
+
+    #[test]
+    fn a_code_plan_without_probes_holds_done_and_a_docs_plan_does_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let events = tmp.path().join("events.jsonl");
+        let plan = tmp.path().join("plan.md");
+        let eval = |p: &Path| {
+            evaluate_done_probes(
+                p.to_str(),
+                None,
+                tmp.path(),
+                &events,
+                "s1",
+                Duration::from_secs(10),
+            )
+        };
+        std::fs::write(&plan, fm("domain: code\nstatus: ready")).unwrap();
+        match eval(&plan) {
+            ProbeGate::Fail { reason, .. } => assert!(reason.contains("done_probes missing")),
+            other => panic!("code plan without probes must hold done, got {other:?}"),
+        }
+        std::fs::write(&plan, fm("domain: docs\nstatus: ready")).unwrap();
+        assert!(matches!(eval(&plan), ProbeGate::Absent));
+    }
+
+    // AC3-INV (a plan declaring `done_probes: []` cannot silence the project's
+    // gate) is covered end to end by
+    // done_probes_ac3_inv_a_plan_cannot_silence_the_project_gate in
+    // tests/loop_check.rs, which drives the real settings merge rather than a
+    // hand-built probe list. A unit-level twin would assert strictly less.
+
+    #[test]
+    fn quota_promised_done_check_uses_the_fixed_coverage_adapter() {
+        assert_eq!(coverage_adapter("fno-gh-loopcheck"), "fno-gh-coverage");
+        assert_eq!(
+            coverage_adapter("/tmp/bin/fno-gh-loopcheck"),
+            "/tmp/bin/fno-gh-coverage"
+        );
+        assert_eq!(coverage_adapter("/tmp/fake-gh"), "/tmp/fake-gh");
+    }
+
+    #[test]
+    fn quota_rest_failures_do_not_claim_graphql_exhaustion() {
+        assert!(is_graphql_read("pr_reviews"));
+        assert!(is_graphql_read("pr_reviews_parse"));
+        assert!(!is_graphql_read("pr_info_rest"));
+        assert!(!is_graphql_read("pr_status_rest"));
+        assert!(!is_graphql_read("pr_status_rest_parse"));
+    }
+}
+
+#[cfg(test)]
+mod acceptance_evidence_tests {
+    // bindings parse fail-closed, validate structurally, and evaluate
+    // to criterion-level coverage in the probe-run payload and the session
+    // gate's event map.
+    use super::*;
+    use std::time::Duration;
+
+    fn fm(body: &str) -> String {
+        format!("---\ntitle: t\n{body}\n---\n\n# doc\n")
+    }
+
+    fn decl_of(doc: &str) -> EvidenceDecl {
+        parse_acceptance_evidence(doc)
+    }
+
+    #[test]
+    fn a_binding_block_parses_to_bound_criteria() {
+        let doc = fm(
+            "acceptance_evidence:\n  required: true\n  bindings:\n    AC1-HP: done_probes[0]\n    AC2-HP: close_probes[0]",
+        );
+        match decl_of(&doc) {
+            EvidenceDecl::Evidence { required, bindings } => {
+                assert!(required);
+                assert_eq!(bindings.len(), 2);
+                assert_eq!(bindings[0].ac, "AC1-HP");
+                assert_eq!(bindings[0].key, "done_probes");
+                assert_eq!(bindings[0].index, 0);
+                assert_eq!(bindings[1].key, "close_probes");
+                assert_eq!(bindings[1].index, 0);
+            }
+            other => panic!("expected Evidence, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn session_gate_refuses_a_required_plan_with_no_done_binding() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plan = tmp.path().join("plan.md");
+        std::fs::write(&plan, fm("acceptance_evidence:\n  required: true")).unwrap();
+        let events = tmp.path().join("events.jsonl");
+        match evaluate_done_probes(
+            plan.to_str(),
+            None,
+            tmp.path(),
+            &events,
+            "s1",
+            Duration::from_secs(10),
+        ) {
+            ProbeGate::Fail { reason, .. } => assert!(reason.contains("unarmed"), "{reason}"),
+            other => panic!("unarmed required must refuse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn session_gate_passes_with_coverage_when_a_bound_probe_satisfies() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plan = tmp.path().join("plan.md");
+        std::fs::write(
+            &plan,
+            fm("done_probes:\n  - \"echo runs-marker\"\nacceptance_evidence:\n  required: true\n  bindings:\n    AC1-HP: done_probes[0]"),
+        )
+        .unwrap();
+        let events = tmp.path().join("events.jsonl");
+        match evaluate_done_probes(
+            plan.to_str(),
+            None,
+            tmp.path(),
+            &events,
+            "s1",
+            Duration::from_secs(10),
+        ) {
+            ProbeGate::Pass(results) => {
+                let rows = results["_acceptance_coverage"].as_array().unwrap();
+                assert_eq!(rows[0]["status"], "satisfied");
+                assert_eq!(rows[0]["ac"], "AC1-HP");
+            }
+            other => panic!("a satisfied required binding must pass, got {other:?}"),
+        }
+    }
+}

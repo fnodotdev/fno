@@ -1,0 +1,583 @@
+//! Typed argv for the migrated `fno-agents` commands.
+//!
+//! One derive declaration per flag: for the commands it owns, this module IS the
+//! flag registry, and its help strings are the only copy. Parsers run through
+//! `try_parse_from`, so the caller keeps process ownership (clap never exits
+//! inside library code) and maps failures through [`refusal_line`] into the
+//! Footnote contract: one command-qualified line on stderr, exit 2.
+
+use std::path::PathBuf;
+
+use clap::{Args, Parser, Subcommand};
+
+/// The shared machine-output group (contracts build on this): one
+/// declaration of `--json`/`-J`, flattened into every command that emits it.
+#[derive(Args, Debug)]
+pub struct JsonOnly {
+    /// Emit machine-readable JSON on stdout instead of human text
+    #[arg(short = 'J', long)]
+    pub json: bool,
+}
+
+/// `fno-agents restart`: swap a (possibly stale) daemon for the current
+/// binary. `--json` is the machine surface the Python adapter invokes with
+/// text summaries stay on stdout, one JSON object replaces them.
+#[derive(Parser, Debug)]
+#[command(name = "fno-agents restart", no_binary_name = true)]
+pub struct RestartArgs {
+    /// Break-glass: SIGKILL the lockfile holder before any probe; plain restart drains gracefully
+    #[arg(long)]
+    pub force: bool,
+    /// Also restart live mux servers: --stale-idle (pane-less stale-wire ones) by default, every live one with --mux
+    #[arg(long)]
+    pub mux: bool,
+    /// Chain-only: swap only when the running daemon measures drifted; quiet exit 0 on fresh, down, or unknown
+    #[arg(long)]
+    pub if_drifted: bool,
+    /// Internal: run ONLY the stale-store-keeper cycle and print the keepers summary; never restarts the daemon or mux servers. The post-mux pass `fno agents restart --mux` drives after each kill.
+    #[arg(long)]
+    pub keepers_only: bool,
+    #[command(flatten)]
+    pub json: JsonOnly,
+}
+
+/// `fno-agents scratch`: evals-loop scratch surgery over the jobs journal.
+#[derive(Parser, Debug)]
+#[command(name = "fno-agents scratch", no_binary_name = true)]
+pub struct ScratchArgs {
+    #[command(subcommand)]
+    pub cmd: ScratchCmd,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ScratchCmd {
+    /// Rank stale scratch work and execute (or dry-run) the node moves
+    Sweep(SweepArgs),
+    /// Render the ranked human table from the journal (read-only)
+    Report(ReportArgs),
+}
+
+/// Sweep options. An absent option keeps its configuration/default value; a
+/// PRESENT option with a missing or malformed value is a refusal, never a
+/// silent default.
+#[derive(Args, Debug)]
+pub struct SweepArgs {
+    /// Sweep window in days (overrides the evals config block)
+    #[arg(long, value_name = "N")]
+    pub since_days: Option<i64>,
+    /// Minimum divergence score a finding needs to surface (overrides the evals config block)
+    #[arg(long, value_name = "N")]
+    pub threshold: Option<usize>,
+    /// Jobs directory to sweep (default: the state root's jobs dir)
+    #[arg(long, value_name = "PATH")]
+    pub jobs_dir: Option<PathBuf>,
+    /// Print the planned node moves without executing them
+    #[arg(long)]
+    pub dry_run: bool,
+    #[command(flatten)]
+    pub json: JsonOnly,
+}
+
+/// Report options (read-only; narrower than sweep on purpose).
+#[derive(Args, Debug)]
+pub struct ReportArgs {
+    /// Ranking window in days
+    #[arg(long, value_name = "N")]
+    pub since_days: Option<i64>,
+    #[command(flatten)]
+    pub json: JsonOnly,
+}
+
+/// `fno-agents review-summary`: the reviewed-at display line's inputs.
+/// Branch and head are required for the display line; the caller turns a
+/// parse failure into the command's deliberate silence (print nothing, exit 0),
+/// never into a claim. `--evidence` replaces them: observer items on stdin,
+/// their review evidence as JSON on stdout.
+#[derive(Parser, Debug)]
+#[command(name = "fno-agents review-summary", no_binary_name = true)]
+pub struct ReviewSummaryArgs {
+    /// Path to the .fno/events.jsonl ledger to read
+    #[arg(long, value_name = "PATH")]
+    pub events: Option<PathBuf>,
+    /// Branch name the attestation must match
+    #[arg(long, value_name = "BRANCH", required_unless_present = "evidence")]
+    pub branch: Option<String>,
+    /// Head sha (prefix ok, min 7) the attestation must be pinned to
+    #[arg(long, value_name = "SHA", required_unless_present = "evidence")]
+    pub head: Option<String>,
+    /// Read observer items as JSON on stdin and print their review evidence as JSON
+    #[arg(long)]
+    pub evidence: bool,
+    /// The invocation flags as one JSON array of strings; --declared-round reads them
+    #[arg(long, value_name = "JSON", requires = "declared_round")]
+    pub flags: Option<String>,
+    /// Machine read: with --flags, print {"declared_round": N} when the
+    /// invocation carried --verify-fixes, naming the round the verify
+    /// verifies; print nothing for any other flag set
+    #[arg(long, requires = "flags")]
+    pub declared_round: bool,
+}
+
+/// The spawn head's axis flags, parsed once and consumed by both the client's
+/// spawn dispatch and the spawn-overlay inspection command: route,
+/// provider, harness, model, effort, account, substrate. Tokens before the
+/// provider argv fence that are not axis flags belong to the rest of the
+/// spawn grammar and are ignored here; tokens after the fence are opaque
+/// provider payload and never parsed.
+#[derive(Parser, Debug, Default, PartialEq, Eq)]
+#[command(
+    name = "fno-agents spawn axes",
+    no_binary_name = true,
+    disable_help_flag = true,
+    disable_version_flag = true
+)]
+pub struct SpawnAxes {
+    /// Vendor/model route (vendor/model)
+    #[arg(long)]
+    pub route: Option<String>,
+    /// Per-spawn account selection
+    #[arg(long)]
+    pub account: Option<String>,
+    /// CLI binary axis: which harness launches
+    #[arg(short = 'H', long)]
+    pub harness: Option<String>,
+    /// The retired axis fields stay declared because the spawn-overlay command's
+    /// inspection shape names them; `scan` refuses the spellings and never
+    /// fills them, so every live read answers None.
+    #[arg(short = 'P', long)]
+    pub provider: Option<String>,
+    #[arg(short = 'm', long)]
+    pub model: Option<String>,
+    #[arg(long)]
+    pub effort: Option<String>,
+    #[arg(long)]
+    pub substrate: Option<String>,
+}
+
+impl SpawnAxes {
+    /// The axis flag spellings this schema owns, short aliases included.
+    /// Every other token is not an axis: the spawn grammar's own arms or the
+    /// passthrough forwarding answers it, and scan ignores it.
+    pub const AXIS_FLAGS: &'static [&'static str] = &[
+        "--route",
+        "--account",
+        "--harness",
+        "-H",
+        "--substrate",
+        "--as",
+    ];
+
+    /// The live lane vocabulary both `--as` and `--substrate` select from.
+    pub const LANE_VALUES: &'static [&'static str] = &["pane", "thread", "headless", "cloud"];
+
+    /// Parse the axis flags out of a spawn argv, stopping at the provider
+    /// argv fence (`--argv` or bare `--`). Non-axis tokens belong to the rest
+    /// of the spawn grammar or the harness-argv law and are ignored here, but
+    /// the axes themselves are strict: a valueless live axis flag is an error
+    /// in the voice the old cursor parser used, and a repeated live axis flag
+    /// is refused so the client and the overlay can never read different
+    /// values from the same argv.
+    pub fn scan(toks: &[String]) -> Result<(SpawnAxes, usize), String> {
+        let fence = toks.iter().position(|t| t == "--argv" || t == "--");
+        let head_len = fence.unwrap_or(toks.len());
+        let head = &toks[..head_len];
+        // Collect only the live axis flag/value pairs, so the strict clap
+        // parse never sees the non-axis flags the rest of the grammar owns.
+        let mut pairs: Vec<String> = Vec::new();
+        let mut i = 0;
+        while i < head.len() {
+            let tok = head[i].as_str();
+            // Equals-form is a live spelling of the value axes (`--account=x`);
+            // split it here so the strict clap parse sees flag and value.
+            let (long, inline) = match tok.split_once('=') {
+                Some((f, v)) if f.starts_with("--") && Self::AXIS_FLAGS.contains(&f) => {
+                    (f, Some(v.to_string()))
+                }
+                _ => (tok, None),
+            };
+            if Self::AXIS_FLAGS.contains(&long) {
+                if matches!(long, "--route" | "--account" | "--harness" | "-H") {
+                    match inline {
+                        Some(v) => {
+                            pairs.push(long.to_string());
+                            pairs.push(v);
+                            i += 1;
+                        }
+                        None => {
+                            if i + 1 >= head.len() || Self::looks_like_flag(&head[i + 1]) {
+                                return Err(format!("{long} needs a value"));
+                            }
+                            pairs.push(long.to_string());
+                            pairs.push(head[i + 1].clone());
+                            i += 2;
+                        }
+                    }
+                } else {
+                    // The lanes both spellings select from: `--as` is the
+                    // public axis, `--substrate` its live alias, and the
+                    // vocabulary is the same four lanes for each. The Python
+                    // seam's harness scan (`_RUST_PANE_HARNESSES`) only execs
+                    // here for the harnesses a pane arm owns, so the binary
+                    // door stays as wide as the Python door it replaced.
+                    debug_assert!(long == "--as" || long == "--substrate");
+                    let value = inline.or_else(|| head.get(i + 1).cloned());
+                    let valid =
+                        matches!(value.as_deref(), Some(v) if Self::LANE_VALUES.contains(&v));
+                    if !valid {
+                        let got = value.unwrap_or_default();
+                        return Err(format!(
+                            "{long} must be one of: pane, thread, headless, cloud (got {got})"
+                        ));
+                    }
+                    let value = value.unwrap();
+                    pairs.push("--substrate".to_string());
+                    pairs.push(value);
+                    i += if tok.contains('=') { 1 } else { 2 };
+                }
+            } else {
+                i += 1;
+            }
+        }
+        let cmd = <Self as clap::CommandFactory>::command();
+        let matches = cmd
+            .try_get_matches_from(pairs)
+            .map_err(|e| refusal_line("fno-agents spawn", &e))?;
+        let axes = SpawnAxes {
+            route: matches.get_one::<String>("route").cloned(),
+            account: matches.get_one::<String>("account").cloned(),
+            harness: matches.get_one::<String>("harness").cloned(),
+            // provider/model/effort stay unfilled: their spellings are not
+            // axes here (the client's tombstone and the passthrough law own
+            // them), so every live read answers None.
+            provider: None,
+            model: None,
+            effort: None,
+            substrate: matches.get_one::<String>("substrate").cloned(),
+        };
+        Ok((axes, head_len))
+    }
+
+    fn looks_like_flag(tok: &str) -> bool {
+        tok.starts_with('-') && tok != "-"
+    }
+
+    /// Drop the axis flag/value pairs from `toks`, keeping the fence and the
+    /// provider payload byte-exact. `scan` must have accepted the same argv
+    /// first: every surviving axis flag is paired with its value.
+    pub fn strip_axes(toks: &[String], fence: usize) -> Vec<String> {
+        let mut out = Vec::with_capacity(toks.len());
+        let mut i = 0;
+        while i < toks.len() {
+            if i >= fence {
+                out.extend_from_slice(&toks[i..]);
+                break;
+            }
+            if Self::AXIS_FLAGS.contains(&toks[i].as_str()) {
+                i += 2; // flag plus value; scan refused a missing value already
+                continue;
+            }
+            if matches!(toks[i].split_once('='), Some((f, _)) if f.starts_with("--") && Self::AXIS_FLAGS.contains(&f))
+            {
+                i += 1; // the equals form carries its own value
+                continue;
+            }
+            out.push(toks[i].clone());
+            i += 1;
+        }
+        out
+    }
+}
+
+/// Fold a token-leading U+2014 (em dash) or U+2013 (en dash) into `--`, the
+/// shape iOS smart punctuation turns a typed `--` into. Only the FLAG region
+/// folds: once a token is the `--` fence or `--argv`, the rest is provider
+/// payload and stays byte-exact. A leading run of long dashes folds to one
+/// `--` prefix, so a phone-typed `--model=x` arrives as a flag.
+pub fn fold_phone_dashes(toks: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(toks.len());
+    for tok in toks {
+        let dash_run = tok
+            .chars()
+            .take_while(|c| *c == '\u{2014}' || *c == '\u{2013}')
+            .count();
+        let folded = if dash_run > 0 {
+            format!("--{}", tok.chars().skip(dash_run).collect::<String>())
+        } else {
+            tok.clone()
+        };
+        let is_fence = folded == "--" || folded == "--argv";
+        out.push(folded);
+        if is_fence {
+            out.extend(toks.iter().skip(out.len()).cloned());
+            break;
+        }
+    }
+    out
+}
+
+/// One command-qualified refusal line for a parse failure. The caller prints
+/// it to stderr and exits 2; clap's own multi-line usage block never reaches
+/// the operator.
+pub fn refusal_line(cmd: &str, err: &clap::Error) -> String {
+    let rendered = err.render().to_string();
+    let first = rendered
+        .lines()
+        .next()
+        .unwrap_or("invalid arguments")
+        .trim()
+        .trim_start_matches("error: ")
+        .trim();
+    format!("{cmd}: {first}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// AC1-REGISTRY: every canonical long flag on `path`'s command carries a
+    /// nonblank help string, and the command's long names are unique. A
+    /// failure names the command path and the offending flag.
+    fn assert_flag_registry(cmd: &clap::Command, path: &str) {
+        let mut seen = std::collections::BTreeSet::new();
+        for arg in cmd.get_arguments() {
+            if let Some(long) = arg.get_long() {
+                assert!(
+                    seen.insert(long.to_string()),
+                    "{path} declares --{long} twice"
+                );
+                if arg.is_hide_set() {
+                    continue; // hidden compatibility spellings own no help copy
+                }
+                let help = arg.get_help().map(|h| h.to_string()).unwrap_or_default();
+                assert!(
+                    !help.trim().is_empty(),
+                    "{path} --{long}: empty help; the registry help is the only copy"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn registry_flags_have_help_and_no_duplicates() {
+        assert_flag_registry(&RestartArgs::command(), "fno-agents restart");
+        assert_flag_registry(&ScratchArgs::command(), "fno-agents scratch");
+        assert_flag_registry(&ReviewSummaryArgs::command(), "fno-agents review-summary");
+        for sub in ScratchArgs::command().get_subcommands() {
+            assert_flag_registry(sub, &format!("fno-agents scratch {}", sub.get_name()));
+        }
+    }
+
+    #[test]
+    fn restart_parses_the_python_adapter_invocation() {
+        // this exact argv (post-command) is what `fno agents restart` passes
+        // on; the dispatch strips the command before the parser runs.
+        let a = RestartArgs::try_parse_from(["--json"]).expect("--json parses");
+        assert!(a.json.json);
+        assert!(!a.force);
+        let a = RestartArgs::try_parse_from(["--force"]).expect("--force parses");
+        assert!(a.force);
+        assert!(!a.json.json);
+        let a = RestartArgs::try_parse_from(["--if-drifted"]).expect("--if-drifted parses");
+        assert!(a.if_drifted);
+        assert!(!a.force);
+        let a = RestartArgs::try_parse_from(["--keepers-only"]).expect("--keepers-only parses");
+        assert!(a.keepers_only);
+        assert!(!a.mux, "the keeper-only leg implies no mux leg");
+        let a = RestartArgs::try_parse_from(["-J"]).expect("-J is the json alias");
+        assert!(a.json.json);
+    }
+
+    #[test]
+    fn scratch_malformed_numeric_is_a_refusal_not_a_default() {
+        let err = ScratchArgs::try_parse_from(["sweep", "--threshold", "abc"])
+            .expect_err("malformed numeric refuses");
+        let line = refusal_line("fno-agents scratch sweep", &err);
+        assert!(
+            line.starts_with("fno-agents scratch sweep: "),
+            "one command-qualified line: {line}"
+        );
+        assert!(line.contains("--threshold"), "names the flag: {line}");
+        let err = ScratchArgs::try_parse_from(["sweep", "--since-days"])
+            .expect_err("missing value refuses");
+        assert!(refusal_line("fno-agents scratch sweep", &err).contains("--since-days"));
+    }
+
+    #[test]
+    fn review_summary_requires_all_three() {
+        let a = ReviewSummaryArgs::try_parse_from([
+            "--events=e.jsonl",
+            "--branch",
+            "feature/x",
+            "--head",
+            "abc1234",
+        ])
+        .expect("all three parse, equals form included");
+        assert_eq!(a.events, Some(PathBuf::from("e.jsonl")));
+        assert_eq!(a.branch.as_deref(), Some("feature/x"));
+        assert_eq!(a.head.as_deref(), Some("abc1234"));
+        assert!(!a.evidence);
+        for partial in [
+            vec![],
+            vec!["--events", "e.jsonl"],
+            vec!["--events", "e.jsonl", "--branch", "b"],
+        ] {
+            let argv: Vec<&str> = partial;
+            assert!(
+                ReviewSummaryArgs::try_parse_from(argv).is_err(),
+                "a partial triplet is a parse failure (the caller stays silent)"
+            );
+        }
+        // The declared-round mode is paired: either half alone is a parse
+        // failure, so a mode with no input flags can never stamp silently.
+        let paired = ReviewSummaryArgs::try_parse_from([
+            "--declared-round",
+            "--flags",
+            r#"["--verify-fixes"]"#,
+            "--branch",
+            "b",
+            "--head",
+            "abc1234",
+        ])
+        .expect("the paired mode parses");
+        assert!(paired.declared_round);
+        assert_eq!(paired.flags.as_deref(), Some(r#"["--verify-fixes"]"#));
+        assert!(ReviewSummaryArgs::try_parse_from(["--declared-round"]).is_err());
+        assert!(ReviewSummaryArgs::try_parse_from([
+            "--flags",
+            r#"["--verify-fixes"]"#,
+            "--branch",
+            "b",
+            "--head",
+            "abc1234"
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn review_summary_evidence_replaces_branch_and_head() {
+        let a = ReviewSummaryArgs::try_parse_from(["--evidence"]).expect("evidence alone parses");
+        assert!(a.evidence);
+        assert_eq!(a.branch, None);
+        assert_eq!(a.head, None);
+        let both =
+            ReviewSummaryArgs::try_parse_from(["--evidence", "--branch", "b", "--head", "h"])
+                .expect("evidence tolerates the display flags");
+        assert!(both.evidence && both.branch.is_some() && both.head.is_some());
+        // A bare call still refuses: neither the display triplet nor evidence.
+        assert!(ReviewSummaryArgs::try_parse_from(["--events", "e.jsonl"]).is_err());
+    }
+
+    #[test]
+    fn duplicate_scalar_flag_refuses() {
+        let err = RestartArgs::try_parse_from(["--force", "--force"])
+            .expect_err("duplicate scalar refuses");
+        assert!(refusal_line("fno-agents restart", &err).contains("--force"));
+    }
+
+    #[test]
+    fn spawn_axes_parse_the_live_spellings() {
+        let toks: Vec<String> = ["--route", "zai/glm", "--account=makers", "-H", "codex"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (axes, fence) = SpawnAxes::scan(&toks).expect("live axes parse");
+        assert_eq!(axes.route.as_deref(), Some("zai/glm"));
+        assert_eq!(axes.account.as_deref(), Some("makers"));
+        assert_eq!(axes.harness.as_deref(), Some("codex"));
+        assert_eq!(fence, toks.len());
+    }
+
+    #[test]
+    fn spawn_resume_rides_the_passthrough_law() {
+        // --resume in every spelling survives scan, so the harness argv it
+        // joins decides whether it carries (claude --bg --resume is a real
+        // form; the codex thread lane refuses by name). The fence still
+        // keeps a post-argv -r provider payload opaque.
+        for form in [vec!["--resume", "6501096a"], vec!["--resume=6501096a"]] {
+            let toks: Vec<String> = form.iter().map(|s| s.to_string()).collect();
+            let (axes, fence) = SpawnAxes::scan(&toks).expect("a resume-bearing spawn rides");
+            assert_eq!(axes.route, None);
+            let kept = SpawnAxes::strip_axes(&toks, fence);
+            assert_eq!(kept, toks, "the resume tokens survive the strip");
+        }
+        let fenced: Vec<String> = ["--argv", "--", "claude", "-r", "x"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(
+            SpawnAxes::scan(&fenced).is_ok(),
+            "a post-fence -r stays provider argv"
+        );
+    }
+
+    #[test]
+    fn spawn_axes_fence_keeps_provider_payload_opaque() {
+        let toks: Vec<String> = [
+            "--account",
+            "makers",
+            "--harness=claude",
+            "--argv",
+            "--",
+            "claude",
+            "--model",
+            "sonnet",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let (axes, fence) = SpawnAxes::scan(&toks).expect("fenced argv parses");
+        assert_eq!(axes.account.as_deref(), Some("makers"));
+        assert_eq!(axes.harness.as_deref(), Some("claude"));
+        assert_eq!(fence, 3);
+        // strip_axes keeps the fence and the payload byte-exact.
+        let stripped = SpawnAxes::strip_axes(&toks, fence);
+        assert_eq!(
+            stripped,
+            ["--argv", "--", "claude", "--model", "sonnet"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn spawn_axes_missing_value_refuses() {
+        for bad in [
+            vec!["--account"],
+            vec!["--account", "--force"],
+            vec!["--route", "--argv", "--", "claude"],
+        ] {
+            let toks: Vec<String> = bad.iter().map(|s| s.to_string()).collect();
+            let err = SpawnAxes::scan(&toks).expect_err("missing value refuses");
+            assert!(err.ends_with("needs a value"), "{err}");
+        }
+    }
+
+    #[test]
+    fn phone_long_dashes_fold_into_flags_until_the_fence() {
+        let fold = |items: &[&str]| -> Vec<String> {
+            fold_phone_dashes(&items.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+        };
+        // A phone-typed flag (iOS turns -- into one em dash) folds to --.
+        assert_eq!(
+            fold(&["\u{2014}model=glm", "w", "msg"]),
+            ["--model=glm", "w", "msg"]
+        );
+        // An en dash run folds the same way.
+        assert_eq!(fold(&["\u{2013}\u{2013}resume=abc"]), ["--resume=abc"]);
+        // The fence itself typed as one long dash folds, then the payload
+        // stays byte-exact: no token after it folds.
+        assert_eq!(
+            fold(&["w", "\u{2014}", "echo", "\u{2014}model=x"]),
+            ["w", "--", "echo", "\u{2014}model=x"]
+        );
+        // --argv stops the fold the same way.
+        assert_eq!(
+            fold(&["--argv", "claude", "\u{2014}model"]),
+            ["--argv", "claude", "\u{2014}model"]
+        );
+        // Plain argv passes through untouched.
+        assert_eq!(fold(&["w", "msg"]), ["w", "msg"]);
+    }
+}

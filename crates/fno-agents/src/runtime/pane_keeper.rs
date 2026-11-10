@@ -1,0 +1,1176 @@
+//! The pane keeper: a per-worker process that owns a hosted child's pty
+//! master and outlives the mux server. A pane is its lane A (`--pane`, the
+//! mux server's spelling); a pane-less lane-B thread is this same keeper
+//! launched `--keeper` with no pane behind it.
+//!
+//! A pane child spawned directly by the mux server carries the pty slave as
+//! its controlling terminal while the SERVER holds the master. When the
+//! server exits, its master fds close and the kernel SIGHUPs the child's
+//! foreground process group - a terminal hangup, not a kill. This module is
+//! the un-retirement of the lane the deleted daemon worker.rs named as its
+//! own undo ("supervisor fd-keeper"): the keeper `setsid()`s out of the
+//! server's process group, opens the pty pair itself, spawns the provider
+//! argv on the slave, and serves the mux server over a single-client unix
+//! socket. The server becomes a viewer of panes; the keeper keeps. A mux
+//! restart re-adopts the SAME child through the socket instead of spawning
+//! a replacement.
+//!
+//! Shape (deliberately tiny and single-client, like the deleted lane):
+//! no tokio. Two blocking threads (pty reader, socket accept) plus the main
+//! thread waiting on the child. The pty master never crosses a thread
+//! boundary: master reads live on the pty-reader thread's cloned reader,
+//! writes and resizes take the master through its `Mutex` on the socket
+//! thread.
+//!
+//! Frame protocol (mirrored by the client in `crates/fno/src/pty.rs`; the
+//! two sides ship from this repo but a server restart after an upgrade can
+//! meet an older keeper, so [`PROTOCOL_VERSION`] rides the Identify reply
+//! and a mismatch is a loud refusal, never garbage bytes):
+//! `u8 tag | u32 LE payload length | payload`.
+//! Client -> keeper: `Input(bytes)`, `Resize(rows u16, cols u16)`, `Kill`,
+//! `Identify`. Keeper -> client: `IdentifyReply(json)`, `Output(bytes)`,
+//! `Exited(i32 LE)`.
+
+use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+use std::collections::VecDeque;
+use std::io::{Read, Write};
+use std::os::unix::net::UnixListener;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+
+/// The keeper frame protocol version. Bump on any frame-shape change; a
+/// client reading a NEWER version than it speaks refuses the keeper.
+pub const PROTOCOL_VERSION: u32 = 2;
+
+/// Bounded recent-output retention when `--ring-bytes` is not given. A
+/// re-adopting server replays this, so it bounds how much of the detached
+/// window a pane loses; 1 MiB is a generous scrollback sliver at 80x24.
+pub const DEFAULT_RING_BYTES: usize = 1024 * 1024;
+
+// Frame tags. Mirrored by the client side in crates/fno/src/pty.rs.
+pub(crate) const TAG_INPUT: u8 = 1;
+pub(crate) const TAG_RESIZE: u8 = 2;
+pub(crate) const TAG_KILL: u8 = 3;
+pub(crate) const TAG_IDENTIFY: u8 = 4;
+pub(crate) const TAG_IDENTIFY_REPLY: u8 = 5;
+pub(crate) const TAG_OUTPUT: u8 = 6;
+pub(crate) const TAG_EXITED: u8 = 7;
+/// Sent AFTER `master.resize()` applies, carrying the same dims the Resize
+/// frame requested. The client applies its own VT resize only on receipt of
+/// this frame (never eagerly when it sends Resize) - it round-trips through
+/// the same `client` write lock as every Output frame, so it lands in the
+/// client's ordered per-pane stream after any output already queued to send
+/// and before any output the child produces once the resize is visible to
+/// it. Without this, a client that flips its local VT size the instant it
+/// ISSUES a resize races trailing pre-resize output still in flight over the
+/// socket, feeding it into the wrong-size grid (byte-exact reattach bug).
+pub(crate) const TAG_RESIZE_ACK: u8 = 8;
+
+/// One keeper-protocol frame.
+#[derive(Debug, PartialEq)]
+pub enum Frame {
+    Input(Vec<u8>),
+    Resize(u16, u16),
+    Kill,
+    Identify,
+    IdentifyReply(Vec<u8>),
+    Output(Vec<u8>),
+    Exited(i32),
+    ResizeAck(u16, u16),
+}
+
+/// Encode one frame: tag byte + u32 LE length + payload.
+pub fn encode(frame: &Frame) -> Vec<u8> {
+    let mut owned: Vec<u8> = Vec::new();
+    let (tag, payload): (u8, &[u8]) = match frame {
+        Frame::Input(bytes) => (TAG_INPUT, bytes),
+        Frame::Resize(rows, cols) => {
+            owned.extend_from_slice(&rows.to_le_bytes());
+            owned.extend_from_slice(&cols.to_le_bytes());
+            (TAG_RESIZE, &owned)
+        }
+        Frame::Kill => (TAG_KILL, &[]),
+        Frame::Identify => (TAG_IDENTIFY, &[]),
+        Frame::IdentifyReply(json) => (TAG_IDENTIFY_REPLY, json),
+        Frame::Output(bytes) => (TAG_OUTPUT, bytes),
+        Frame::Exited(code) => {
+            owned.extend_from_slice(&code.to_le_bytes());
+            (TAG_EXITED, &owned)
+        }
+        Frame::ResizeAck(rows, cols) => {
+            owned.extend_from_slice(&rows.to_le_bytes());
+            owned.extend_from_slice(&cols.to_le_bytes());
+            (TAG_RESIZE_ACK, &owned)
+        }
+    };
+    let mut out = Vec::with_capacity(5 + payload.len());
+    out.push(tag);
+    out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    out.extend_from_slice(payload);
+    out
+}
+
+/// How much of `buf` a complete frame needs, and the decode result.
+#[derive(Debug)]
+pub enum Decode {
+    /// A whole frame, and how many bytes it consumed.
+    Frame(Frame, usize),
+    /// The buffer holds a valid prefix; read more.
+    NeedMore,
+    /// The buffer holds a whole frame this protocol does not carry.
+    Violation(String),
+}
+
+/// Decode the first frame in `buf`.
+pub fn decode(buf: &[u8]) -> Decode {
+    if buf.len() < 5 {
+        return Decode::NeedMore;
+    }
+    let tag = buf[0];
+    let len = u32::from_le_bytes([buf[1], buf[2], buf[3], buf[4]]) as usize;
+    if buf.len() < 5 + len {
+        return Decode::NeedMore;
+    }
+    let payload = &buf[5..5 + len];
+    let frame = match tag {
+        TAG_INPUT => Frame::Input(payload.to_vec()),
+        TAG_RESIZE if payload.len() == 4 => Frame::Resize(
+            u16::from_le_bytes([payload[0], payload[1]]),
+            u16::from_le_bytes([payload[2], payload[3]]),
+        ),
+        TAG_KILL => Frame::Kill,
+        TAG_IDENTIFY => Frame::Identify,
+        TAG_IDENTIFY_REPLY => Frame::IdentifyReply(payload.to_vec()),
+        TAG_OUTPUT => Frame::Output(payload.to_vec()),
+        TAG_EXITED if payload.len() == 4 => Frame::Exited(i32::from_le_bytes([
+            payload[0], payload[1], payload[2], payload[3],
+        ])),
+        TAG_RESIZE_ACK if payload.len() == 4 => Frame::ResizeAck(
+            u16::from_le_bytes([payload[0], payload[1]]),
+            u16::from_le_bytes([payload[2], payload[3]]),
+        ),
+        _ => {
+            return Decode::Violation(format!(
+                "frame tag {tag} with {len} payload byte(s) is not a keeper frame"
+            ))
+        }
+    };
+    Decode::Frame(frame, 5 + len)
+}
+
+/// The pty reader's retention: bounded recent output plus a count of the
+/// bytes a re-adopting server will NOT see (stated at replay, never silent).
+struct Ring {
+    bytes: VecDeque<u8>,
+    cap: usize,
+    dropped: u64,
+}
+
+impl Ring {
+    fn new(cap: usize) -> Self {
+        Self {
+            bytes: VecDeque::with_capacity(cap.min(64 * 1024)),
+            cap: cap.max(1),
+            dropped: 0,
+        }
+    }
+
+    fn push(&mut self, chunk: &[u8]) {
+        if chunk.len() >= self.cap {
+            // One chunk bigger than the whole ring: keep its tail.
+            let keep_from = chunk.len() - self.cap;
+            let mut dropped_stream: Vec<u8> = std::mem::take(&mut self.bytes).into();
+            self.dropped += dropped_stream.len() as u64 + keep_from as u64;
+            dropped_stream.extend_from_slice(&chunk[..keep_from]);
+            let kept = &chunk[keep_from..];
+            let extra = split_escape_tail(&dropped_stream, kept).min(kept.len());
+            self.dropped += extra as u64;
+            self.bytes.extend(&kept[extra..]);
+            return;
+        }
+        let overflow = (self.bytes.len() + chunk.len()).saturating_sub(self.cap);
+        if overflow == 0 {
+            self.bytes.extend(chunk);
+            return;
+        }
+        // The cut can land inside an escape sequence whose ESC went out with
+        // the dropped prefix; extend the drop through the sequence so a
+        // replay never opens mid-sequence (the raw `[54;3H` bug). The scan
+        // spans the chunk too, since its head may complete the sequence.
+        let dropped: Vec<u8> = self.bytes.iter().take(overflow).copied().collect();
+        let ring_kept = self.bytes.len() - overflow;
+        let mut scan = self
+            .bytes
+            .iter()
+            .skip(overflow)
+            .copied()
+            .collect::<Vec<u8>>();
+        scan.extend_from_slice(chunk);
+        let n = split_escape_tail(&dropped, &scan).min(scan.len());
+        let ring_extra = n.min(ring_kept);
+        let chunk_trim = (n - ring_extra).min(chunk.len());
+        self.dropped += (overflow + ring_extra + chunk_trim) as u64;
+        for _ in 0..overflow + ring_extra {
+            self.bytes.pop_front();
+        }
+        self.bytes.extend(&chunk[chunk_trim..]);
+    }
+
+    fn snapshot(&self) -> Vec<u8> {
+        self.bytes.iter().copied().collect()
+    }
+}
+
+/// Leading bytes of `kept` that still belong to an escape sequence whose
+/// start the cut removed: the extra drop so a replay never opens
+/// mid-sequence. Only the sequence the LAST ESC in `dropped` opened can
+/// straddle the cut: anything earlier is closed or was aborted by that
+/// ESC. Forms: CSI (`ESC [` + params/intermediates + one final byte),
+/// OSC (`ESC ]` ... BEL or `ESC \`), intermediates (`ESC ( B`), and the
+/// plain two-byte form (`ESC 7`). A C0 control inside a CSI executes and
+/// the sequence continues, so it does not end the scan. An unterminated
+/// OSC drops the whole kept head: a replayed open OSC would swallow the
+/// replay into its string. ponytail: DCS/APC/PM (`ESC P`, `ESC ^`, `ESC _`)
+/// are not tracked; a cut inside one still replays its tail.
+fn split_escape_tail(dropped: &[u8], kept: &[u8]) -> usize {
+    let Some(i) = dropped.iter().rposition(|&b| b == 0x1b) else {
+        return 0; // no ESC in the dropped prefix: kept opens on a boundary
+    };
+    let tail = &dropped[i + 1..];
+    let total_tail = tail.len();
+    // at(p): the virtual stream (tail ++ kept), indexed from the ESC's end.
+    let at = |p: usize| -> Option<u8> {
+        if p < total_tail {
+            Some(tail[p])
+        } else {
+            kept.get(p - total_tail).copied()
+        }
+    };
+    // The sequence closed inside dropped: nothing of kept belongs to it.
+    let end = |p: usize| -> usize {
+        if p < total_tail {
+            0
+        } else {
+            p - total_tail + 1
+        }
+    };
+    let Some(intro) = at(0) else {
+        // A bare trailing ESC: its final byte is kept[0] when final-shaped.
+        return match kept.first() {
+            Some(&b) if (0x30..=0x7e).contains(&b) => 1,
+            _ => 0,
+        };
+    };
+    match intro {
+        b'[' => {
+            // CSI: params/intermediates (0x20-0x3f) then one final byte.
+            let mut p = 1;
+            while let Some(b) = at(p) {
+                match b {
+                    0x1b => return 0, // a new ESC aborts the open CSI
+                    0x20..=0x3f => p += 1,
+                    0x40..=0x7e => return end(p),
+                    _ => p += 1, // C0 executes, CSI continues
+                }
+            }
+            kept.len()
+        }
+        b']' => {
+            // OSC: until BEL, or ESC-backslash; another ESC aborts.
+            let mut p = 1;
+            while let Some(b) = at(p) {
+                match b {
+                    0x07 => return end(p),
+                    0x1b => {
+                        return match at(p + 1) {
+                            Some(b'\\') => end(p + 1),
+                            Some(_) => 0,
+                            None => kept.len(),
+                        }
+                    }
+                    _ => p += 1,
+                }
+            }
+            kept.len()
+        }
+        b if (0x20..=0x2f).contains(&b) => {
+            // Intermediates then one final byte (`ESC ( B` shape). The final
+            // check runs before the increment so end() gets the final byte's
+            // own index.
+            let mut p = 0;
+            while let Some(b) = at(p) {
+                if b == 0x1b {
+                    return 0;
+                }
+                if (0x30..=0x7e).contains(&b) {
+                    return end(p);
+                }
+                p += 1;
+            }
+            kept.len()
+        }
+        // Two-byte form (`ESC 7`): the intro IS the final byte. It sits in
+        // dropped when total_tail >= 1 (closed, drop nothing); the
+        // total_tail == 0 case is the bare-trailing-ESC arm's kept[0].
+        b if (0x30..=0x7e).contains(&b) => end(0),
+        _ => 0, // DEL/control intro: not a sequence this scanner tracks
+    }
+}
+
+/// Parsed `--pane` lane argv.
+pub struct KeeperConfig {
+    pub sock: PathBuf,
+    pub session: String,
+    pub pane_key: String,
+    pub cwd: PathBuf,
+    pub rows: u16,
+    pub cols: u16,
+    pub ring_bytes: usize,
+    pub argv: Vec<String>,
+}
+
+/// Parse the `--keeper` lane argv (`--pane` is the alias the mux server's
+/// call sites spell it by; a lane-B thread spawn writes `--keeper`). The
+/// shape: `--keeper --sock <path> --session <name> --pane-key <id>
+/// --cwd <dir> [--rows N] [--cols N] [--ring-bytes N] -- <provider argv...>`.
+pub fn parse_pane_args(args: &[String]) -> Result<KeeperConfig, String> {
+    let mut sock: Option<String> = None;
+    let mut session: Option<String> = None;
+    let mut pane_key: Option<String> = None;
+    let mut cwd = std::env::temp_dir();
+    let mut rows = 24u16;
+    let mut cols = 80u16;
+    let mut ring_bytes = DEFAULT_RING_BYTES;
+    let mut argv: Vec<String> = Vec::new();
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--keeper" | "--pane" => {}
+            "--sock" => sock = Some(it.next().ok_or("--sock needs a value")?.clone()),
+            "--session" => session = Some(it.next().ok_or("--session needs a value")?.clone()),
+            "--pane-key" => pane_key = Some(it.next().ok_or("--pane-key needs a value")?.clone()),
+            "--cwd" => cwd = PathBuf::from(it.next().ok_or("--cwd needs a value")?),
+            "--rows" => {
+                rows = it
+                    .next()
+                    .ok_or("--rows needs a value")?
+                    .parse()
+                    .map_err(|_| "--rows needs a number")?;
+            }
+            "--cols" => {
+                cols = it
+                    .next()
+                    .ok_or("--cols needs a value")?
+                    .parse()
+                    .map_err(|_| "--cols needs a number")?;
+            }
+            "--ring-bytes" => {
+                ring_bytes = it
+                    .next()
+                    .ok_or("--ring-bytes needs a value")?
+                    .parse()
+                    .map_err(|_| "--ring-bytes needs a number")?;
+            }
+            "--" => {
+                argv.extend(it.cloned());
+                break;
+            }
+            other => return Err(format!("unknown arg: {other}")),
+        }
+    }
+    if argv.is_empty() {
+        return Err("missing provider argv after `--`".into());
+    }
+    Ok(KeeperConfig {
+        sock: PathBuf::from(sock.ok_or("missing --sock")?),
+        session: session.ok_or("missing --session")?,
+        pane_key: pane_key.ok_or("missing --pane-key")?,
+        cwd,
+        rows,
+        cols,
+        ring_bytes: ring_bytes.max(1024),
+        argv,
+    })
+}
+
+/// The shared keeper state the threads touch.
+struct Keeper {
+    ring: Mutex<Ring>,
+    /// The SUBSCRIBER: the one client the pty's output streams to and the
+    /// one whose Input/Resize/Kill frames drive the child. The first live
+    /// client takes it (the mux server, at spawn or adoption); a later
+    /// client (the `keeper list` probe) is served Identify but never steals
+    /// the stream. `gen` is that client's accept generation.
+    client: Mutex<Option<(u64, std::os::unix::net::UnixStream)>>,
+    /// Bumped per accept so a departing old client cannot clear a newer
+    /// subscriber's slot.
+    client_gen: AtomicU64,
+    /// The IdentifyReply body (version, both pids, argv, cwd, age), encoded
+    /// per Identify so the answer can carry whether THIS connection holds
+    /// the subscriber seat - a re-adopting server that loses the seat race
+    /// must know it is a probe, or it wires a pane that never receives
+    /// output and never gets input honored.
+    identify: OnceLock<serde_json::Value>,
+    /// The build this keeper launched from: drift is merged into the
+    /// Identify reply at answer time, so a binary rewritten after start
+    /// reads drifted in the census while the pane keeps running.
+    startup_fp: Option<crate::drift::ExeFingerprint>,
+    /// The child's pid: the Kill frame's target and the Identify reply's
+    /// answer. The keeper owns the master; the CHILD is the process every
+    /// fleet count and later kill must aim at.
+    child_pid: AtomicU32,
+    master: Mutex<Box<dyn MasterPty + Send>>,
+    /// The pty input writer, taken ONCE at startup and reused for every
+    /// Input frame. portable-pty's `take_writer` is take-once by contract:
+    /// its writer sends EOT (a literal Ctrl-D) when dropped, so a
+    /// write-and-drop per frame would end the child's stdin after the first
+    /// keystroke, and a second `take_writer` refuses outright.
+    input: Mutex<Option<Box<dyn Write + Send>>>,
+}
+
+impl Keeper {
+    /// Send one frame to the subscriber, if any. The lock-held write
+    /// serializes the pty-reader thread and any subscriber-side reply.
+    fn send(&self, frame: &Frame) {
+        let encoded = encode(frame);
+        self.send_raw(&encoded);
+    }
+
+    fn send_raw(&self, encoded: &[u8]) {
+        let mut guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((_, stream)) = guard.as_mut() {
+            let _ = stream.write_all(encoded);
+            let _ = stream.flush();
+        }
+    }
+}
+
+/// The harness session id out of the provider argv, when the argv carries
+/// one. A lane-B harness's rendered create form rides the id fno minted
+/// BEFORE launch (`pi --session-id <id>`), so this is a read of state the
+/// keeper already holds, not a second field to keep in sync. `None` when
+/// the argv names no id - never a guess.
+/// A full UUID: 36 chars with dashes at 8, 13, 18 and 23. The shape check is
+/// the point: a bare `--resume` opens a picker and a truncated handle
+/// addresses nothing, and neither may ever be read as an identity.
+pub(crate) fn session_id_from_argv(argv: &[String]) -> Option<String> {
+    let mut it = argv.iter();
+    while let Some(arg) = it.next() {
+        if arg == "--session-id" {
+            return it
+                .next()
+                .map(String::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+        }
+        if let Some(value) = arg.strip_prefix("--session-id=") {
+            return (!value.is_empty()).then(|| value.to_string());
+        }
+        // cursor-agent's create form (callee-minted-read-back): the chat id
+        // rides `--resume <uuid>`. The UUID-shape filter keeps a bare
+        // `--resume` (an interactive picker) and a truncated handle answering
+        // None, never a guess.
+        if arg == "--resume" {
+            return it
+                .next()
+                .map(String::as_str)
+                .filter(|s| fno_mail::session::is_uuid_shape(s))
+                .map(str::to_string);
+        }
+        // agy's RESUME form, the callee-minted-read-back shape: the
+        // conversation id rides `--conversation <uuid>`. Same shape filter,
+        // and for the same reason - agy resumes by EXACT id, so a truncated
+        // one opens a different conversation rather than failing. The create
+        // form names no session: the row binds at the session report.
+        if arg == "--conversation" {
+            return it
+                .next()
+                .map(String::as_str)
+                .filter(|s| fno_mail::session::is_uuid_shape(s))
+                .map(str::to_string);
+        }
+        if let Some(value) = arg.strip_prefix("--conversation=") {
+            return fno_mail::session::is_uuid_shape(value).then(|| value.to_string());
+        }
+    }
+    None
+}
+
+/// The pane child's base env: stated colors (a pane host IS a terminal), the
+/// session and pane identity a hosted agent names itself by, and NO owner
+/// lease. The keeper is a long-lived child of whoever started it (often a
+/// mux server booted in a terminal session), and the pane child inherits the
+/// keeper's whole base env, so the builder clears what the shell must not
+/// pass on: terminal-host keys that would misroute hooks, and the FNO_OWNER_*
+/// lease that would name a dead ancestor as the pane's kill authority (the
+/// shell's children inherit it too: a `claude --bg` from the pane then died
+/// with the keeper, hosted sessions and all).
+fn apply_pane_child_env(cmd: &mut CommandBuilder, session: &str, pane_key: &str) {
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
+    cmd.env_remove("NO_COLOR");
+    // REX_* names that launching session: a pane carrying it reads the Rex
+    // SessionStart hook's line and opens blocks in the user's session.
+    for key in crate::claims::TERMINAL_HOST_ENV_KEYS {
+        cmd.env_remove(key);
+    }
+    cmd.env("FNO_SERVER", session);
+    cmd.env("FNO_SESSION", session);
+    cmd.env("FNO_PANE", pane_key);
+    let epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    cmd.env("FNO_PANE_EPOCH", epoch.to_string());
+    for key in crate::process_owner::OWNER_LEASE_KEYS {
+        cmd.env_remove(key);
+    }
+}
+
+/// Run the keeper lane to completion. Only returns on a startup failure
+/// (the caller prints and exits nonzero); a normal lifecycle ends inside
+/// with `std::process::exit` after the child exits.
+pub fn run(cfg: KeeperConfig) -> Result<(), String> {
+    // Step 1: our own session, so a group-kill aimed at the mux server's
+    // process group never reaches us. The SIGHUP ignore in the binary's
+    // main() covers the hangup path; setsid covers the group-kill path.
+    // SAFETY: setsid is a single syscall with no preconditions beyond
+    // single-threadedness, and this runs before any thread exists.
+    unsafe {
+        libc::setsid();
+    }
+
+    // Block SIGTERM before any thread exists: every later thread inherits
+    // the block, and the sigwait thread below becomes the only place the
+    // signal is received. Done whether or not the spawner (the mux server)
+    // already blocked it, so the outcome never depends on who spawned us.
+    // The hosted child does NOT inherit this: portable-pty resets the mask
+    // in its pre_exec.
+    let mut term_set: libc::sigset_t = unsafe { std::mem::zeroed() };
+    unsafe {
+        libc::sigemptyset(&mut term_set);
+        libc::sigaddset(&mut term_set, libc::SIGTERM);
+        libc::pthread_sigmask(libc::SIG_BLOCK, &term_set, std::ptr::null_mut());
+    }
+
+    // The socket must not already be served by a live keeper: connecting
+    // succeeds only then. Connect-before-bind makes a double-keeper a loud
+    // refusal instead of a silently stolen socket.
+    if std::os::unix::net::UnixStream::connect(&cfg.sock).is_ok() {
+        return Err(format!(
+            "keeper socket {} already has a live listener behind it",
+            cfg.sock.display()
+        ));
+    }
+    // A file at the path with nobody behind it is a dead keeper's leftover:
+    // unlink and rebind.
+    let _ = std::fs::remove_file(&cfg.sock);
+    if let Some(parent) = cfg.sock.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+    }
+    let listener = UnixListener::bind(&cfg.sock)
+        .map_err(|e| format!("cannot bind keeper socket {}: {e}", cfg.sock.display()))?;
+
+    // Step 2: the pty pair. The keeper is now the master holder.
+    let size = PtySize {
+        rows: cfg.rows.max(1),
+        cols: cfg.cols.max(1),
+        pixel_width: 0,
+        pixel_height: 0,
+    };
+    let pair = native_pty_system()
+        .openpty(size)
+        .map_err(|e| format!("openpty: {e}"))?;
+    let reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|e| format!("pty reader: {e}"))?;
+
+    // Step 3: the provider argv on the slave. Env mirrors the mux's
+    // base_command: stated colors (a pane host IS a terminal), the session
+    // and pane identity a hosted agent names itself by.
+    let mut cmd = CommandBuilder::new(&cfg.argv[0]);
+    for a in &cfg.argv[1..] {
+        cmd.arg(a);
+    }
+    apply_pane_child_env(&mut cmd, &cfg.session, &cfg.pane_key);
+    if cfg.cwd.is_dir() {
+        cmd.cwd(&cfg.cwd);
+    }
+    let mut child = pair
+        .slave
+        .spawn_command(cmd)
+        .map_err(|e| format!("spawn {}: {e}", cfg.argv[0]))?;
+    drop(pair.slave);
+    // Take the single writer NOW: portable-pty allows exactly one
+    // `take_writer` per master, and the Input arm reuses it for the pane's
+    // whole life.
+    let input = pair
+        .master
+        .take_writer()
+        .map_err(|e| format!("pty writer: {e}"))?;
+    let child_pid = child.process_id().unwrap_or(0);
+    let started_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let keeper = Arc::new(Keeper {
+        ring: Mutex::new(Ring::new(cfg.ring_bytes)),
+        client: Mutex::new(None),
+        client_gen: AtomicU64::new(0),
+        identify: OnceLock::new(),
+        startup_fp: crate::drift::ExeFingerprint::current(),
+        child_pid: AtomicU32::new(child_pid),
+        master: Mutex::new(pair.master),
+        input: Mutex::new(Some(input)),
+    });
+    let identify = serde_json::json!({
+        "v": PROTOCOL_VERSION,
+        "keeper_pid": std::process::id(),
+        "child_pid": child_pid,
+        "argv": cfg.argv,
+        "cwd": cfg.cwd.to_string_lossy(),
+        "rows": cfg.rows,
+        "cols": cfg.cols,
+        "started_at": started_at,
+        "session_id": session_id_from_argv(&cfg.argv),
+    });
+    let _ = keeper.identify.set(identify);
+
+    // A test-owned pane (spawned under `fno-agents test-run`, argv carries
+    // FNO_TEST_OWNER_PID/BIRTH) never survives its test run: without a
+    // Drop on the pty type, a wedged/killed test that never sends Kill
+    // leaks this whole pane (five confirmed orphans were traced to
+    // `run_pane_with_worker` at crates/fno/src/server.rs:20282). A
+    // production pane (no such env) is unaffected - this thread never
+    // spawns for one.
+    if let Some((owner_pid, owner_birth)) = crate::test_run::declared_owner_from_env() {
+        crate::test_run::spawn_owner_watchdog(
+            owner_pid,
+            owner_birth,
+            "fno-keeper-test-owner",
+            move || {
+                // SAFETY: same kill(pid, SIGKILL) the explicit Frame::Kill path
+                // already sends to this same child.
+                unsafe { libc::kill(child_pid as libc::pid_t, libc::SIGKILL) };
+                eprintln!(
+                "fno-agents-worker: test_keeper_reaped child_pid={child_pid} owner_pid={owner_pid} owner_birth={owner_birth}"
+            );
+            },
+        );
+    }
+
+    // The pty-reader thread: master -> ring + Output frames. Blocking reads
+    // live here and only here; EOF/EIO means the child is gone.
+    let pty_keeper = Arc::clone(&keeper);
+    std::thread::Builder::new()
+        .name("fno-keeper-pty".into())
+        .spawn(move || {
+            let mut reader = reader;
+            let mut buf = [0u8; 8192];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let chunk = buf[..n].to_vec();
+                        pty_keeper
+                            .ring
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .push(&chunk);
+                        pty_keeper.send(&Frame::Output(chunk));
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                }
+            }
+        })
+        .map_err(|e| {
+            end_child(child_pid);
+            let _ = std::fs::remove_file(&cfg.sock);
+            format!("pty reader thread: {e}")
+        })?;
+
+    // The accept loop: every connection is served on its own thread, so a
+    // `keeper list` probe is answered even while the server holds the
+    // subscriber seat. On a subscriber's disconnect the keeper keeps
+    // running (AC1-HP); the next subscriber is the server that re-adopts.
+    {
+        let keeper = Arc::clone(&keeper);
+        std::thread::Builder::new()
+            .name("fno-keeper-sock".into())
+            .spawn(move || {
+                for stream in listener.incoming() {
+                    let Ok(stream) = stream else { break };
+                    let gen = keeper.client_gen.fetch_add(1, Ordering::SeqCst) + 1;
+                    // First come, first seated - claimed HERE, in the accept
+                    // loop. Accept order is FIFO; the per-connection threads'
+                    // start order is the scheduler's. Claiming inside the
+                    // thread let two connections accepted back to back race
+                    // for the empty seat, and a probe winning that race took
+                    // the subscriber seat from the real subscriber (the mux
+                    // server at spawn or re-adoption), then cleared it on
+                    // exit - the keeper read an empty seat for the pane's
+                    // whole life and ended itself at the idle bound.
+                    let mut slot = keeper.client.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut is_subscriber = slot.is_none();
+                    if is_subscriber {
+                        match stream.try_clone() {
+                            Ok(clone) => *slot = Some((gen, clone)),
+                            // No descriptor to write to, no seat: serve as a
+                            // probe instead of losing the accept loop.
+                            Err(_) => is_subscriber = false,
+                        }
+                    }
+                    drop(slot);
+                    let keeper = Arc::clone(&keeper);
+                    std::thread::Builder::new()
+                        .name("fno-keeper-cli".into())
+                        .spawn(move || {
+                            serve_client(&keeper, stream, gen, is_subscriber);
+                        })
+                        .expect("spawn keeper client thread");
+                }
+            })
+            .map_err(|e| {
+                end_child(child_pid);
+                let _ = std::fs::remove_file(&cfg.sock);
+                format!("accept thread: {e}")
+            })?;
+    }
+
+    // The sigwait thread: SIGTERM is blocked on every thread, so delivery
+    // happens only here. end_child ends the child; the main thread's wait
+    // below then runs the normal Exited, unlink and exit path.
+    {
+        let set = term_set;
+        std::thread::Builder::new()
+            .name("fno-keeper-term".into())
+            .spawn(move || {
+                let mut sig: libc::c_int = 0;
+                loop {
+                    // SAFETY: sigwait over a set naming SIGTERM only.
+                    if unsafe { libc::sigwait(&set, &mut sig) } == 0 {
+                        break;
+                    }
+                }
+                end_child(child_pid);
+            })
+            .map_err(|e| {
+                end_child(child_pid);
+                let _ = std::fs::remove_file(&cfg.sock);
+                format!("term thread: {e}")
+            })?;
+    }
+
+    // The orphan thread. Why the DIRECTORY and not the socket path: a
+    // hand-off renames the socket file out of mux/panes and the keeper must
+    // keep running, while nothing in fno ever removes the panes/ dir - a
+    // gone dir means the whole state root went, so no server can ever reach
+    // us again. Two consecutive gone polls with no subscriber seated end the
+    // child. The second road needs no gone dir: an empty subscriber seat is
+    // the no-server signal, and a seat empty past the idle bound (default
+    // 1 h) means the re-adoption this keeper waits for stopped coming -
+    // the throwaway-mux orphan, where a scratch mux's helpers kill the
+    // server and leave the panes dir standing (142 keepers measured waiting
+    // like that on one machine). Re-adoption is a seconds-scale event, so
+    // an hour of empty seat is unambiguous.
+    {
+        let keeper = Arc::clone(&keeper);
+        let sock = cfg.sock.clone();
+        std::thread::Builder::new()
+            .name("fno-keeper-orphan".into())
+            .spawn(move || {
+                let poll = orphan_poll();
+                let idle = orphan_idle_bound();
+                let dir = sock.parent().map(|p| p.to_path_buf());
+                let mut gone_streak = 0u32;
+                let mut last_seated = std::time::Instant::now();
+                // eprintln! panics on a write error, which would end this
+                // watcher and leave the keeper running: the server that held
+                // our stderr pipe is dead. writeln! to stderr and ignore the
+                // result.
+                let finish = |reason: &str| {
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "fno-agents-worker: keeper_orphaned sock={} reason={reason} child_pid={child_pid}",
+                        sock.display()
+                    );
+                    if child_pid == 0 {
+                        // No child exit will ever wake the main thread;
+                        // exit directly.
+                        std::process::exit(1);
+                    }
+                    end_child(child_pid);
+                };
+                loop {
+                    std::thread::sleep(poll);
+                    let gone = match dir.as_deref().map(std::fs::symlink_metadata) {
+                        Some(Ok(_)) => false,
+                        // Only NotFound counts as gone; a permission or
+                        // other error is never a death reading.
+                        Some(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => true,
+                        _ => false,
+                    };
+                    let seated = keeper
+                        .client
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .is_some();
+                    if seated {
+                        last_seated = std::time::Instant::now();
+                    } else if last_seated.elapsed() >= idle {
+                        finish("idle_no_subscriber");
+                        return;
+                    }
+                    if gone && !seated {
+                        gone_streak += 1;
+                    } else {
+                        gone_streak = 0;
+                    }
+                    if gone_streak >= 2 {
+                        finish("socket_dir_gone");
+                        return;
+                    }
+                }
+            })
+            .map_err(|e| {
+                end_child(child_pid);
+                let _ = std::fs::remove_file(&cfg.sock);
+                format!("orphan thread: {e}")
+            })?;
+    }
+
+    // The main thread waits on the child (AC5-ERR): on exit, the exit frame,
+    // unlink, exit. No client is required - a child that dies while nobody
+    // watches still cleans its socket.
+    let status = child.wait().map_err(|e| format!("wait: {e}"))?;
+    // portable_pty's ExitStatus carries the raw code; a signal death reads
+    // as a nonzero code on unix. The frame is informational - the pane's own
+    // exit path is the authoritative fact.
+    let code = status.exit_code() as i32;
+    keeper.send(&Frame::Exited(code));
+    let _ = std::fs::remove_file(&cfg.sock);
+    std::process::exit(code);
+}
+
+/// End the hosted child: SIGTERM, a 5 s grace, then SIGKILL. Shared by the
+/// Kill frame and the keeper's two self-exit paths (the sigwait thread and
+/// the socket-dir-gone thread). SIGTERM first because a killed-mid-write
+/// claude leaves an orphaned .claude.json.tmp in the config dir; the
+/// endpoint is unchanged for a worker that ignores SIGTERM. Every call
+/// site already runs off the main thread, so the grace never stalls the
+/// frame loop or the waiter.
+fn end_child(pid: u32) {
+    if pid == 0 {
+        return;
+    }
+    // SAFETY: kill with a valid pid and SIGTERM, then SIGKILL after the
+    // confirmed grace.
+    unsafe {
+        libc::kill(pid as libc::pid_t, libc::SIGTERM);
+    }
+    for _ in 0..50 {
+        if !crate::claude_config_tmp::pid_alive(pid) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    if crate::claude_config_tmp::pid_alive(pid) {
+        unsafe {
+            libc::kill(pid as libc::pid_t, libc::SIGKILL);
+        }
+    }
+}
+
+/// The orphan thread's poll interval: `FNO_KEEPER_ORPHAN_POLL_MS`, a
+/// positive integer of milliseconds; default 30,000. An unset or bad value
+/// means the default.
+fn orphan_poll() -> std::time::Duration {
+    let ms = std::env::var("FNO_KEEPER_ORPHAN_POLL_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+        .unwrap_or(30_000);
+    std::time::Duration::from_millis(ms)
+}
+
+/// The orphan thread's idle bound: `FNO_KEEPER_ORPHAN_MAX_IDLE_MS`, a
+/// positive integer of milliseconds; default 3,600,000 (1 h). While the
+/// subscriber seat sits empty past it, no server is coming back and the
+/// keeper ends itself and its child. An unset or bad value means the
+/// default.
+fn orphan_idle_bound() -> std::time::Duration {
+    let ms = std::env::var("FNO_KEEPER_ORPHAN_MAX_IDLE_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+        .unwrap_or(3_600_000);
+    std::time::Duration::from_millis(ms)
+}
+
+/// Serve one accepted connection to completion, then drop it. Only the
+/// subscriber drives the child; every connection may Identify.
+fn serve_client(
+    keeper: &Keeper,
+    mut stream: std::os::unix::net::UnixStream,
+    gen: u64,
+    is_subscriber: bool,
+) {
+    let mut buf: Vec<u8> = Vec::with_capacity(8192);
+    let mut read_buf = [0u8; 8192];
+    loop {
+        // Drain whole frames already buffered before blocking on the socket.
+        loop {
+            match decode(&buf) {
+                Decode::NeedMore => break,
+                Decode::Violation(reason) => {
+                    eprintln!("fno-agents-worker: keeper client: {reason}; dropping it");
+                    return;
+                }
+                Decode::Frame(frame, used) => {
+                    buf.drain(..used);
+                    // Only the subscriber drives the child; a probe's
+                    // driving frames are ignored, never honored.
+                    if !is_subscriber
+                        && matches!(frame, Frame::Input(_) | Frame::Resize(_, _) | Frame::Kill)
+                    {
+                        continue;
+                    }
+                    match frame {
+                        Frame::Input(bytes) => {
+                            // A full kernel input buffer blocks here, which
+                            // backpressures the client - bounded, never a
+                            // queue that grows.
+                            let mut writer = keeper.input.lock().unwrap_or_else(|e| e.into_inner());
+                            if let Some(writer) = writer.as_mut() {
+                                let _ = writer.write_all(&bytes);
+                                let _ = writer.flush();
+                            }
+                        }
+                        Frame::Resize(rows, cols) => {
+                            {
+                                let master =
+                                    keeper.master.lock().unwrap_or_else(|e| e.into_inner());
+                                let _ = master.resize(PtySize {
+                                    rows: rows.max(1),
+                                    cols: cols.max(1),
+                                    pixel_width: 0,
+                                    pixel_height: 0,
+                                });
+                            }
+                            // Tell the client the resize took effect, so it
+                            // can apply its own VT resize at this point in
+                            // the ordered stream rather than the instant it
+                            // sent Resize (see TAG_RESIZE_ACK).
+                            keeper.send(&Frame::ResizeAck(rows, cols));
+                        }
+                        Frame::Kill => {
+                            // A deliberate close kills the CHILD (the keeper
+                            // itself dies right after it, through the main
+                            // thread's wait). The pid is the real process:
+                            // the child handle stays owned by the waiter.
+                            let pid = keeper.child_pid.load(Ordering::SeqCst);
+                            if pid > 0 {
+                                std::thread::spawn(move || end_child(pid));
+                            }
+                        }
+                        Frame::Identify => {
+                            // The reply goes to the ASKING connection. For
+                            // the subscriber that write must serialize with
+                            // the pty reader's Output writes (shared slot
+                            // lock); a probe's stream has a single writer.
+                            let mut reply_on = |encoded: &[u8]| {
+                                if is_subscriber {
+                                    keeper.send_raw(encoded);
+                                } else {
+                                    let _ = stream.write_all(encoded);
+                                    let _ = stream.flush();
+                                }
+                            };
+                            if let Some(value) = keeper.identify.get() {
+                                let mut value = value.clone();
+                                value["subscriber"] = serde_json::json!(is_subscriber);
+                                // Build + drift merged at reply time (
+                                // change 3): live re-stat, not a startup
+                                // snapshot, so a rewritten binary reads
+                                // drifted in the next census while the
+                                // keeper and its child stay alive.
+                                if let (Some(obj), Some(fp)) =
+                                    (value.as_object_mut(), keeper.startup_fp.as_ref())
+                                {
+                                    obj.insert(
+                                        "build".to_string(),
+                                        serde_json::json!({
+                                            "path": fp.path.display().to_string(),
+                                            "mtime_nanos": fp.mtime_nanos,
+                                            "size": fp.size,
+                                        }),
+                                    );
+                                    obj.insert(
+                                        "drift".to_string(),
+                                        serde_json::json!(crate::drift::drift_label(
+                                            &crate::drift::self_drift(fp)
+                                        )),
+                                    );
+                                }
+                                reply_on(&encode(&Frame::IdentifyReply(
+                                    value.to_string().into_bytes(),
+                                )));
+                            }
+                            // Replay the retained window (AC3-HP), with the
+                            // drop stated rather than silent.
+                            let (snapshot, dropped) = {
+                                let mut ring =
+                                    keeper.ring.lock().unwrap_or_else(|e| e.into_inner());
+                                (ring.snapshot(), std::mem::take(&mut ring.dropped))
+                            };
+                            if dropped > 0 {
+                                reply_on(&encode(&Frame::Output(
+                                    format!(
+                                        "\r\n[keeper: {dropped} byte(s) of earlier output \
+                                             fell off the ring]\r\n"
+                                    )
+                                    .into_bytes(),
+                                )));
+                            }
+                            if !snapshot.is_empty() {
+                                reply_on(&encode(&Frame::Output(snapshot)));
+                            }
+                        }
+                        // Frames only the keeper sends arriving from a
+                        // client are the peer talking to itself; ignore.
+                        _ => {}
+                    }
+                }
+            }
+        }
+        match stream.read(&mut read_buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => buf.extend_from_slice(&read_buf[..n]),
+        }
+    }
+    // Only clear OUR seat: a newer subscriber may already hold it.
+    if is_subscriber {
+        let mut client = keeper.client.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((seated_gen, _)) = client.as_ref() {
+            if *seated_gen == gen {
+                *client = None;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frames_roundtrip_through_encode_decode() {
+        for frame in [
+            Frame::Input(b"keystroke".to_vec()),
+            Frame::Resize(40, 120),
+            Frame::Kill,
+            Frame::Identify,
+            Frame::IdentifyReply(br#"{"v":1}"#.to_vec()),
+            Frame::Output(vec![0u8, 1, 2, 255]),
+            Frame::Exited(-1),
+            Frame::ResizeAck(40, 120),
+        ] {
+            let encoded = encode(&frame);
+            match decode(&encoded) {
+                Decode::Frame(decoded, used) => {
+                    assert_eq!(used, encoded.len(), "one frame consumes exactly its bytes");
+                    let matches = match (&frame, &decoded) {
+                        (Frame::Input(a), Frame::Input(b)) => a == b,
+                        (Frame::Resize(ar, ac), Frame::Resize(br, bc)) => ar == br && ac == bc,
+                        (Frame::Kill, Frame::Kill) => true,
+                        (Frame::Identify, Frame::Identify) => true,
+                        (Frame::IdentifyReply(a), Frame::IdentifyReply(b)) => a == b,
+                        (Frame::Output(a), Frame::Output(b)) => a == b,
+                        (Frame::Exited(a), Frame::Exited(b)) => a == b,
+                        (Frame::ResizeAck(ar, ac), Frame::ResizeAck(br, bc)) => {
+                            ar == br && ac == bc
+                        }
+                        _ => false,
+                    };
+                    assert!(matches, "{frame:?} must round-trip, got {decoded:?}");
+                }
+                other => panic!("a whole frame must decode, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_tags_are_violations_not_silent_drops() {
+        let mut garbage = encode(&Frame::Kill);
+        garbage[0] = 99;
+        match decode(&garbage) {
+            Decode::Violation(_) => {}
+            other => panic!("tag 99 must read as a violation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_pane_child_never_carries_the_terminal_host_keys() {
+        // portable-pty seeds the builder from the process env, and
+        // env_remove deletes from that same map, so this is a real unset:
+        // the pane child execs without the key even when the keeper
+        // inherited it.
+        let mut cmd = CommandBuilder::new("sh");
+        for key in crate::claims::TERMINAL_HOST_ENV_KEYS {
+            cmd.env(key, "user-session");
+        }
+        apply_pane_child_env(&mut cmd, "session-a", "pane-1");
+        for key in crate::claims::TERMINAL_HOST_ENV_KEYS {
+            assert!(
+                cmd.get_env(key).is_none(),
+                "{key} must not reach a pane child"
+            );
+        }
+    }
+
+    #[test]
+    fn the_pane_child_never_carries_an_owner_lease() {
+        // The keeper itself may run in a shell carrying a stale lease; the
+        // builder seeds from that env, so apply_pane_child_env must clear
+        // it. A pane child with a lease names the keeper as kill authority,
+        // and its children inherit the lease: the daemon-kill incident.
+        let mut cmd = CommandBuilder::new("sh");
+        for key in crate::process_owner::OWNER_LEASE_KEYS {
+            cmd.env(key, "dead-keeper");
+        }
+        apply_pane_child_env(&mut cmd, "session-a", "pane-1");
+        for key in crate::process_owner::OWNER_LEASE_KEYS {
+            assert!(
+                cmd.get_env(key).is_none(),
+                "{key} must not reach a pane child"
+            );
+        }
+        assert_eq!(
+            cmd.get_env("FNO_SESSION").map(|v| v.to_str()),
+            Some(Some("session-a"))
+        );
+    }
+
+    #[test]
+    fn ring_keeps_only_the_cap_and_counts_the_rest() {
+        let mut ring = Ring::new(10);
+        ring.push(b"0123456789");
+        assert_eq!(ring.snapshot(), b"0123456789");
+        assert_eq!(ring.dropped, 0, "nothing fell off yet");
+        ring.push(b"abc");
+        assert_eq!(ring.snapshot(), b"3456789abc");
+        assert_eq!(ring.dropped, 3, "three bytes stated as dropped, not silent");
+        // One chunk bigger than the whole ring keeps its tail.
+        ring.push(b"WXYZ0123456789");
+        assert_eq!(ring.snapshot(), b"0123456789");
+        assert_eq!(
+            ring.dropped, 17,
+            "3 old + 4 overflow + 10 displaced, all counted"
+        );
+    }
+}

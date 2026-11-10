@@ -1,0 +1,229 @@
+//! The route preview reads the capacity the spawn gate reads.
+//! AC1-AC3: the states leg arms the walk's one refresh and its lane rows read
+//! the map the walk judged. AC6-AC7: an all-unknown walk-out refuses as
+//! unknown, not exhausted. Helpers come from route_slot's own `tests` module.
+
+use super::tests::{
+    chain_of, fresh_codex_row, now_epoch, payload, slot_env_payload, stale_codex_row, state_json,
+    write_refresh_stub, CapacityEnv,
+};
+use super::*;
+use serde_json::json;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+
+struct LaneStatePins {
+    prior: Vec<(&'static str, Option<OsString>)>,
+    agents_home: PathBuf,
+}
+
+impl LaneStatePins {
+    fn at(root: &Path) -> Self {
+        let fno_home = root.join("fno-home");
+        let agents_home = root.join("agents");
+        let claims_root = root.join("claims");
+        for dir in [&fno_home, &agents_home, &claims_root] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let vars = [
+            ("FNO_HOME", fno_home),
+            ("FNO_AGENTS_HOME", agents_home.clone()),
+            ("FNO_CLAIMS_ROOT", claims_root),
+            ("FNO_EVENTS_PATH", root.join("events.jsonl")),
+        ];
+        let prior = vars
+            .iter()
+            .map(|(name, _)| (*name, std::env::var_os(name)))
+            .collect();
+        for (name, value) in &vars {
+            std::env::set_var(name, value);
+        }
+        Self { prior, agents_home }
+    }
+
+    fn registry_path(&self) -> PathBuf {
+        self.agents_home.join("registry.json")
+    }
+}
+
+impl Drop for LaneStatePins {
+    fn drop(&mut self) {
+        for (name, value) in &self.prior {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+}
+
+fn pin_vendor_state(env: &CapacityEnv, registry: &str) -> LaneStatePins {
+    let pins = LaneStatePins::at(env.dir.path());
+    std::fs::write(
+        env.dir.path().join("config.toml"),
+        "[agents.provider_limits.zai]\nlanes = 2\n",
+    )
+    .unwrap();
+    crate::registry_store::seed_raw(&pins.registry_path(), registry);
+    pins
+}
+
+fn without_vendor_maps(mut payload: serde_json::Value) -> serde_json::Value {
+    let object = payload.as_object_mut().unwrap();
+    for key in ["vendor_caps", "vendor_counts", "vendor_count_errors"] {
+        object.remove(key);
+    }
+    payload
+}
+
+fn two_live_zai_rows() -> String {
+    let pid = std::process::id();
+    let pid_start_time = crate::daemon::process_start_time(pid).expect("current process start");
+    let entries = (0..2)
+        .map(|index| {
+            json!({
+                "name": format!("zai-{index}"),
+                "provider": "zai",
+                "cwd": "/tmp",
+                "status": "live",
+                "created_at": "2026-09-27T00:00:00Z",
+                "pid": pid,
+                "pid_start_time": pid_start_time,
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
+        "entries": entries,
+    })
+    .to_string()
+}
+
+/// AC1-HP: the readout's walk refreshes a stale lane itself, and both the
+/// lane row and `would_take` read the map the walk judged: `codex-luna` ok,
+/// the pick the gate would make, without a manual refresh first.
+#[test]
+fn states_walk_refreshes_a_stale_lane_and_rows_read_the_judged_map() {
+    let env = CapacityEnv::new(&state_json(Some(&stale_codex_row())));
+    let marker = env.dir.path().join("marker");
+    let _stub = write_refresh_stub(&fresh_codex_row(), &marker);
+    let out = resolve_slot_payload(&slot_env_payload(json!({
+        "mode": "states",
+    })));
+    let row = out["lane_states"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["name"] == "codex-luna")
+        .expect("the codex lane row");
+    assert_eq!(row["state"], "ok", "lane_states: {:?}", out["lane_states"]);
+    assert_eq!(
+        out["would_take"],
+        "agents.profiles.target.lanes[0] codex-luna"
+    );
+    assert_eq!(out["routing"], "armed");
+    assert!(marker.exists(), "the readout never ran the refresh stub");
+}
+
+/// AC2-ERR: a refresh that fails fails OPEN: the readout judges the stale
+/// map, the codex lane stays unknown, and the fresh claude fallback answers.
+#[test]
+fn states_walk_survives_a_failing_refresh_and_judges_the_stale_map() {
+    let _env = CapacityEnv::new(&state_json(Some(&stale_codex_row())));
+    let _stub = crate::route_capacity::RefreshStub::install(|| None);
+    let out = resolve_slot_payload(&slot_env_payload(json!({
+        "mode": "states",
+    })));
+    let row = out["lane_states"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["name"] == "codex-luna")
+        .expect("the codex lane row");
+    assert_eq!(
+        row["state"], "unknown",
+        "lane_states: {:?}",
+        out["lane_states"]
+    );
+    assert_eq!(
+        out["would_take"],
+        "agents.profiles.target.lanes[1] sonnet-x"
+    );
+    assert_eq!(out["routing"], "armed");
+}
+
+/// AC6-HP: every lane skipped ONLY on unknown capacity refuses as UNKNOWN:
+/// the terminal is `slot=unknown refuse`, the reason kind is
+/// `capacity-unknown`, and the composed text names the cause and the fix.
+#[test]
+fn all_lanes_unknown_refuses_as_unknown_not_exhausted() {
+    let out = resolve_slot_payload(&payload(json!({
+        "lanes_raw": ["flash-x"],
+        "profile": {"on_exhausted": "refuse", "on_unknown": "skip"},
+        "capacity": {"claude": {"state": "unknown", "window": "stale",
+                                "accounts": {"zai-main": "unknown"},
+                                "sources": {"zai-main": "stale"},
+                                "observed_at": {"zai-main": now_epoch() - 15.0 * 3600.0},
+                                "evidence": {}, "resets": {}}},
+    })));
+    assert_eq!(
+        chain_of(&out).last().map(String::as_str),
+        Some("slot=unknown refuse"),
+        "chain: {:?}",
+        chain_of(&out)
+    );
+    assert_eq!(out["verdict"], "capacity-held");
+    assert_eq!(out["reason_kind"], "capacity-unknown");
+    assert_eq!(out["refusal_terminal"]["class"], "unknown-refuse");
+    let text = out["refusal_terminal"]["text"].as_str().unwrap();
+    assert!(
+        text.contains(
+            "every configured lane reads capacity unknown (on_unknown=skip); none is exhausted"
+        ),
+        "terminal: {text}"
+    );
+    assert!(
+        text.contains("oldest evidence 15h old (source=stale)"),
+        "terminal: {text}"
+    );
+    assert!(
+        text.contains("fno config accounts usage --refresh"),
+        "terminal: {text}"
+    );
+}
+
+#[test]
+fn gathered_full_vendor_lane_is_skipped_using_its_count() {
+    let env = CapacityEnv::new(&state_json(None));
+    let pins = pin_vendor_state(&env, &two_live_zai_rows());
+    let input = without_vendor_maps(payload(json!({"lanes_raw": ["flash-x", "sonnet-x"]})));
+
+    let out = resolve_slot_payload(&input);
+    assert_eq!(out["status"], "pick");
+    assert_eq!(out["candidate"]["lane"], "sonnet-x");
+    assert!(
+        chain_of(&out)
+            .iter()
+            .any(|line| line.contains("provider zai at 2 of 2")),
+        "chain: {:?}",
+        chain_of(&out)
+    );
+    drop(pins);
+}
+
+/// AC6-ERR: an unreadable registry is a lane-count error and fails closed.
+#[test]
+fn unreadable_registry_refuses_a_gathered_capped_lane() {
+    let env = CapacityEnv::new(&state_json(None));
+    let pins = pin_vendor_state(&env, "not json");
+    let input = without_vendor_maps(payload(json!({"lanes_raw": ["flash-x"]})));
+
+    let out = resolve_slot_payload(&input);
+    assert!(out["candidate"].is_null());
+    assert!(chain_of(&out).iter().any(|line| {
+        line.starts_with(
+            "slot=provider-count-unavailable agents.profiles.target.lanes[0] zai: fno registry unreadable:"
+        )
+    }), "chain: {:?}", chain_of(&out));
+    drop(pins);
+}

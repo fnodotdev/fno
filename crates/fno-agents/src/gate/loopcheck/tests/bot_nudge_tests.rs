@@ -1,0 +1,74 @@
+use super::*;
+
+#[test]
+fn nudge_post_is_suppressed_by_the_escape_hatch() {
+    // The test suite must never comment on a real PR. With the guard set,
+    // post_nudge_comment returns false without spawning gh (a bogus bin here
+    // would otherwise error, not silently succeed).
+    std::env::set_var("FNO_LOOPCHECK_NO_COMMENT", "1");
+    let posted = post_nudge_comment(
+        "/nonexistent/gh",
+        std::path::Path::new("/tmp"),
+        618,
+        "@codex review",
+    );
+    std::env::remove_var("FNO_LOOPCHECK_NO_COMMENT");
+    assert!(!posted);
+}
+
+#[test]
+fn unresponsive_bot_drives_the_giveup_message() {
+    // AC13: the NoProgress message names the bot, the nudge count, and the
+    // elapsed time instead of a bare fingerprint streak.
+    let pr = bot_review_pr(
+        "chatgpt-codex-connector",
+        vec![bn(
+            "chatgpt-codex-connector",
+            NudgeClass::Unresponsive,
+            3,
+            20,
+            47,
+        )],
+    );
+    let n = unresponsive_bot(&pr).expect("an unresponsive bot");
+    let msg = nudge_giveup_message(n);
+    assert!(msg.contains("chatgpt-codex-connector"), "{msg}");
+    assert!(msg.contains("3 nudges over 47m"), "{msg}");
+    assert!(msg.contains("config.review.optional_apps"), "{msg}");
+}
+
+#[test]
+fn resolved_nudge_configs_default_nudges_codex_only() {
+    let cfgs = resolved_nudge_configs(&Settings::default());
+    let codex = cfgs
+        .iter()
+        .find(|c| c.login == "chatgpt-codex-connector")
+        .expect("codex nudgeable by default");
+    assert_eq!(codex.review_handle, "@codex review");
+    assert_eq!(codex.wait_minutes, 15);
+    assert_eq!(codex.ceiling, 3);
+    // gemini ships with an empty review_handle -> not nudgeable.
+    assert!(cfgs.iter().all(|c| c.login != "gemini-code-assist"));
+}
+
+#[test]
+fn nudge_malformed_override_degrades_to_non_nudgeable() {
+    // AC8: a scalar, a list, and a non-integer wait_minutes each drop the
+    // login to non-nudgeable without panicking.
+    for body in [
+        "[review.nudge]\n\"chatgpt-codex-connector\" = \"scalar\"\n",
+        "[review.nudge]\n\"chatgpt-codex-connector\" = [1, 2]\n",
+        "[review.nudge]\n\"chatgpt-codex-connector\" = { wait_minutes = \"soon\" }\n",
+        // An absurd wait_minutes would overflow chrono::Duration::minutes and
+        // panic the stop gate; it must degrade to non-nudgeable, not panic.
+        "[review.nudge]\n\"chatgpt-codex-connector\" = { wait_minutes = 9999999999999999 }\n",
+    ] {
+        let s = parse_settings(body);
+        let cfgs = resolved_nudge_configs(&s);
+        assert!(
+            cfgs.iter()
+                .all(|c| !logins_correspond(&c.login, "chatgpt-codex-connector")),
+            "malformed override must be non-nudgeable: {body}"
+        );
+    }
+}

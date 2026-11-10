@@ -1,0 +1,861 @@
+#!/usr/bin/env bash
+# test_emit_attestation.sh
+#
+# Unit tests for skills/review/scripts/emit-attestation.sh, focused on the
+# `branch` field (x-e601): the events journal is shared across every worktree
+# of a repo by design, so `branch` is what scopes an attestation to the PR it
+# reviewed. Verifies the stored payload (via a stubbed event sink, never the
+# receipt - the two are what drift apart when a field is added on one side)
+# and the receipt line's branch field.
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+EMITTER="$REPO_ROOT/skills/review/scripts/emit-attestation.sh"
+
+[[ -f "$EMITTER" ]] || { echo "FAIL: emitter not found at $EMITTER" >&2; exit 1; }
+
+PASS=0
+FAIL=0
+pass() { echo "  PASS: $*"; PASS=$((PASS + 1)); }
+fail() { echo "  FAIL: $*"; FAIL=$((FAIL + 1)); }
+
+TMP="$(mktemp -d -t emit-attestation-XXXXXX)"
+trap 'rm -rf "$TMP"' EXIT
+
+# Stub the event sink and CAPTURE ITS ARGV: the assertion must read what was
+# actually handed to `doctor event emit`, not what the receipt claims.
+# Discriminates on the command, like tests/hooks/test_code_review_attest.sh's stub:
+# the emitter shells `fno` for more than the event sink now (it clears the
+# review hold once a verdict exists for the head), and a stub that captured
+# EVERY call overwrote the payload under assertion with the last unrelated one.
+printf '#!/usr/bin/env bash\nif [[ "$1" == "doctor" && "$2" == "event" && "$3" == "emit" ]]; then printf "%%s\\n" "$@" > "%s/last-emit.txt"; fi\nexit 0\n' \
+  "$TMP" > "$TMP/fno-stub"
+chmod +x "$TMP/fno-stub"
+
+# A scratch repo: the emitter refuses to run outside git (it head-pins). The
+# fixture carries a REAL code diff (base commit A on origin/main, feature
+# commit B on the branch) because the emitter measures the diff under review
+# and refuses a zero-line one - an empty-commit fixture would trip that
+# refusal on every emit below.
+REPO="$TMP/repo"
+git init -q -b feature/x-e601 "$REPO"
+git -C "$REPO" config user.email t@t.t
+git -C "$REPO" config user.name t
+echo one > "$REPO/a.txt"
+git -C "$REPO" add a.txt
+git -C "$REPO" commit -qm "base"
+BASE_SHA="$(git -C "$REPO" rev-parse HEAD)"
+git -C "$REPO" update-ref refs/remotes/origin/main "$BASE_SHA"
+echo two >> "$REPO/a.txt"
+echo body > "$REPO/b.txt"
+git -C "$REPO" add a.txt b.txt
+git -C "$REPO" commit -qm "feature"
+HEAD_SHA="$(git -C "$REPO" rev-parse HEAD)"
+
+emit() { # runs the emitter inside the scratch repo; prints nothing
+  (cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+    FNO="$TMP/fno-stub" bash "$EMITTER" code-review pass) >/dev/null 2>&1
+}
+
+stored() { # echoes one field of the last emitted payload: stored <jq-path>
+  [[ -f "$TMP/last-emit.txt" ]] || { echo "<no-emit>"; return; }
+  # argv is: doctor event emit -t <kind> -s <source> -d <json>; the payload is -d's value.
+  tail -1 "$TMP/last-emit.txt" | jq -r "$1 // \"<missing>\""
+}
+
+# 0. The sender sidecar is keyed by the harness session, not the target run.
+# The two manifest fields are deliberately different so the old lookup cannot
+# pass by reading the target-run name.
+mkdir -p "$REPO/.fno" "$TMP/fno-home/review-invocations"
+cat > "$REPO/.fno/target-state.md" <<'STATE'
+session_id: target-run
+harness_session_id: harness-run
+harness: claude
+STATE
+printf '%s\n' '{"invocation_id":"ri-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","target_session_id":"harness-run"}' \
+  > "$TMP/fno-home/review-invocations/harness-run.json"
+rm -f "$TMP/last-emit.txt"
+(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-stub" FNO_HOME="$TMP/fno-home" bash "$EMITTER" code-review pass) >/dev/null 2>&1
+got="$(stored '.invocation_id')"
+[[ "$got" == "ri-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]] \
+  && pass "emitter adopts sidecar by harness_session_id" \
+  || fail "sidecar key: want sender id, got '$got'"
+
+# A missing bridge is a visible state, not a locally minted id.
+rm -f "$TMP/fno-home/review-invocations/harness-run.json" "$TMP/last-emit.txt"
+(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-stub" FNO_HOME="$TMP/fno-home" bash "$EMITTER" code-review pass) >/dev/null 2>&1
+got="$(stored '.invocation_id')"
+[[ "$got" == "UNJOINED" ]] \
+  && pass "missing sidecar emits UNJOINED" \
+  || fail "missing sidecar marker: want UNJOINED, got '$got'"
+
+# 1. On a branch: the payload records the branch, and the receipt names it.
+rm -f "$TMP/last-emit.txt"
+RECEIPT="$(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-stub" bash "$EMITTER" code-review pass 2>&1 >/dev/null)"; RECEIPT_RC=$?
+[[ $RECEIPT_RC -eq 0 ]] || fail "emitter exited $RECEIPT_RC on a branch"
+got="$(stored '.branch')"
+[[ "$got" == "feature/x-e601" ]] && pass "payload records branch=feature/x-e601" \
+  || fail "payload branch: want feature/x-e601, got '$got'"
+case "$RECEIPT" in
+  *"branch=feature/x-e601"*) pass "receipt names the branch" ;;
+  *) fail "receipt lacks branch=feature/x-e601: $RECEIPT" ;;
+esac
+case "$RECEIPT" in
+  *"run=target-run run_harness=claude attester="*) pass "receipt names run identity and attester" ;;
+  *) fail "receipt lacks run identity and attester: $RECEIPT" ;;
+esac
+if grep -q '[[:space:]]harness=' <<<"$RECEIPT"; then
+  fail "receipt carries a bare harness= token: $RECEIPT"
+else
+  pass "receipt has no bare harness= token"
+fi
+case "$RECEIPT" in
+  *"review_level=self"*) pass "receipt names review_level=self on an inline round" ;;
+  *) fail "receipt lacks review_level=self: $RECEIPT" ;;
+esac
+
+# The receipt level word follows the context stamps: fresh for a fresh-context
+# round, peer for a cross-model peer verdict. A regression to a constant word,
+# or a reorder back onto the invocation's own level variable, reads here.
+RECEIPT="$(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-stub" bash "$EMITTER" code-review pass fresh fork 2>&1 >/dev/null)"; RECEIPT_RC=$?
+[[ $RECEIPT_RC -eq 0 ]] || fail "fresh emit exited $RECEIPT_RC"
+case "$RECEIPT" in
+  *"review_level=fresh"*) pass "receipt names review_level=fresh on a fresh round" ;;
+  *) fail "receipt lacks review_level=fresh: $RECEIPT" ;;
+esac
+RECEIPT="$(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-stub" bash "$EMITTER" peer pass 2>&1 >/dev/null)"; RECEIPT_RC=$?
+[[ $RECEIPT_RC -eq 0 ]] || fail "peer emit exited $RECEIPT_RC"
+case "$RECEIPT" in
+  *"review_level=peer"*) pass "receipt names review_level=peer on a peer round" ;;
+  *) fail "receipt lacks review_level=peer: $RECEIPT" ;;
+esac
+
+# The refusal mode journals one refused review_invocation row (so a silent
+# fresh reviewer reads as attempted-and-refused, never as never-attempted),
+# emits no attestation, and exits 1. No set +e/-e pair here: the script runs
+# without errexit on purpose, and flipping it on kills the refusing captures
+# in the cases below before their assertions run.
+rm -f "$TMP/last-emit.txt"
+REFUSE_OUT="$(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-stub" bash "$EMITTER" --refuse fresh_reviewer_silent 2>&1 >/dev/null)"
+REFUSE_RC=$?
+[[ $REFUSE_RC -ne 0 ]] && pass "refusal mode exits nonzero" \
+  || fail "refusal mode exited 0"
+[[ "$(stored '.stage')" == "refused" ]] && pass "refusal row carries stage=refused" \
+  || fail "refusal row stage: want refused, got '$(stored '.stage')'"
+[[ "$(stored '.reason')" == "fresh_reviewer_silent" ]] && pass "refusal row carries the reason" \
+  || fail "refusal row reason: got '$(stored '.reason')'"
+grep -q "review_attestation emitted" <<<"$REFUSE_OUT" \
+  && fail "refusal mode emitted an attestation: $REFUSE_OUT" \
+  || pass "refusal mode emits no attestation"
+rm -f "$REPO/.fno/target-state.md"
+
+# 2. Detached HEAD: the literal "HEAD" names no branch, and an empty branch
+#    field is byte-identical to the pre-branch-field backlog - a live emit
+#    would mint a fresh legacy member that no later carry can scope. So the
+#    emitter refuses: nonzero exit, no event, and the reason names the shape.
+git -C "$REPO" checkout -q --detach
+rm -f "$TMP/last-emit.txt"
+RECEIPT="$(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-stub" bash "$EMITTER" code-review pass 2>&1 >/dev/null)"
+RECEIPT_RC=$?
+[[ $RECEIPT_RC -ne 0 ]] && pass "detached HEAD refuses to emit" \
+  || fail "detached HEAD emitted anyway (exit $RECEIPT_RC)"
+[[ ! -f "$TMP/last-emit.txt" ]] && pass "detached HEAD writes no event" \
+  || fail "detached HEAD wrote an event: $(stored '.branch')"
+case "$RECEIPT" in
+  *"detached HEAD names no PR branch"*) pass "refusal names the shape" ;;
+  *) fail "refusal lacks the reason: $RECEIPT" ;;
+esac
+
+# 3. The pre-existing contract is intact: head_sha pins the repo HEAD and the
+#    reviewer/verdict round-trip. A new field must not cost an old one.
+git -C "$REPO" checkout -q feature/x-e601
+rm -f "$TMP/last-emit.txt"
+emit
+got="$(stored '.head_sha')"
+[[ "$got" == "$HEAD_SHA" ]] && pass "payload head_sha pins the repo HEAD" \
+  || fail "payload head_sha: want ${HEAD_SHA:0:8}, got '${got:0:8}'"
+got="$(stored '.reviewer')"
+[[ "$got" == "code-review" ]] && pass "payload reviewer round-trips" \
+  || fail "payload reviewer: want code-review, got '$got'"
+got="$(stored '.verdict')"
+[[ "$got" == "pass" ]] && pass "payload verdict round-trips" \
+  || fail "payload verdict: want pass, got '$got'"
+
+# 4. A reviewer worktree branch (git refuses two worktrees on one branch)
+#    tracking the PR branch upstream: the payload records the UPSTREAM short
+#    name - what GitHub reports as headRefName - not the local worktree name.
+#    The local name would never equal the PR's branch, so the post-rebase
+#    carry would die on the branch arm over a pass that belongs here.
+git -C "$REPO" remote add origin "$TMP/origin.git"
+git -C "$REPO" update-ref refs/remotes/origin/feature/x-e601 "$HEAD_SHA"
+git -C "$REPO" checkout -q -b wt/r-1
+git -C "$REPO" branch --set-upstream-to=origin/feature/x-e601 wt/r-1 >/dev/null 2>&1
+rm -f "$TMP/last-emit.txt"
+emit
+got="$(stored '.branch')"
+[[ "$got" == "feature/x-e601" ]] \
+  && pass "worktree branch records its upstream PR branch" \
+  || fail "worktree branch: want feature/x-e601 (upstream), got '$got'"
+
+# 5. An author worktree pre-push: the branch tracks origin/main (fno creates
+#    worktrees off main and `push -u` only fires at PR create), so the
+#    upstream names the BASE. The LOCAL name is the PR branch and must win,
+#    or every pre-push emit mis-scopes to main and loses the carry.
+git -C "$REPO" checkout -q feature/x-e601
+git -C "$REPO" update-ref refs/remotes/origin/main "$BASE_SHA"
+git -C "$REPO" branch --set-upstream-to=origin/main feature/x-e601 >/dev/null 2>&1
+rm -f "$TMP/last-emit.txt"
+emit
+got="$(stored '.branch')"
+[[ "$got" == "feature/x-e601" ]] \
+  && pass "a main-tracking branch keeps its local PR-branch name" \
+  || fail "main-tracking branch: want feature/x-e601 (local), got '$got'"
+
+# 6. A develop-based repo (round 3, PR 917): origin/HEAD names develop, and
+#    the author branch tracks the BASE origin/develop pre-push. A literal
+#    `main` comparison recorded branch=develop here - scoping the author's
+#    feature-branch attestation to a base branch no PR ever carries. The base
+#    must resolve through refs/remotes/origin/HEAD, and the local name wins.
+git -C "$REPO" update-ref refs/remotes/origin/develop "$BASE_SHA"
+git -C "$REPO" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/develop
+git -C "$REPO" branch --set-upstream-to=origin/develop feature/x-e601 >/dev/null 2>&1
+rm -f "$TMP/last-emit.txt"
+emit
+got="$(stored '.branch')"
+[[ "$got" == "feature/x-e601" ]] \
+  && pass "a develop-tracking branch on a develop-based repo keeps its local name" \
+  || fail "develop-tracking branch: want feature/x-e601 (local), got '$got'"
+
+# 7. Same develop-based repo, reviewer shape: the upstream names the PR branch
+#    (develop is now the base), so the upstream short name must still win -
+#    the base resolution must not swallow the reviewer lane it exists for.
+git -C "$REPO" checkout -q -b wt/r-2
+git -C "$REPO" branch --set-upstream-to=origin/feature/x-e601 wt/r-2 >/dev/null 2>&1
+rm -f "$TMP/last-emit.txt"
+emit
+got="$(stored '.branch')"
+[[ "$got" == "feature/x-e601" ]] \
+  && pass "develop-based repo still records a reviewer upstream PR branch" \
+  || fail "develop-based reviewer worktree: want feature/x-e601 (upstream), got '$got'"
+
+# 8. The shape cases 6 and 7 do NOT cover: an author worktree tracking a
+#    branch that is NOT origin/HEAD. origin/HEAD names main, the worktree was
+#    created off origin/develop, and the author has committed. The base-name
+#    test alone passes here (develop != main) and recorded branch=develop -
+#    the round-3 bug relocated, losing the branch arm for the real PR and
+#    leaking scope into any PR whose headRefName is literally develop. The
+#    commits-ahead count is what separates an author worktree from a reviewer
+#    one, so the LOCAL name must win.
+git -C "$REPO" checkout -q feature/x-e601
+git -C "$REPO" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+git -C "$REPO" branch --set-upstream-to=origin/develop feature/x-e601 >/dev/null 2>&1
+git -C "$REPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "author work"
+rm -f "$TMP/last-emit.txt"
+emit
+got="$(stored '.branch')"
+[[ "$got" == "feature/x-e601" ]] \
+  && pass "an author worktree tracking a non-default branch keeps its local name" \
+  || fail "non-default-tracking author worktree: want feature/x-e601 (local), got '$got'"
+
+# 9. The same repo, reviewer shape, with the PR branch now AHEAD of where the
+#    reviewer worktree was cut. The reviewer still carries no commits of its
+#    own, so the upstream must still win - the commits-ahead conjunct must not
+#    swallow the lane it was added beside.
+git -C "$REPO" update-ref refs/remotes/origin/feature/x-e601 "$(git -C "$REPO" rev-parse HEAD)"
+git -C "$REPO" checkout -q -b wt/r-3 origin/feature/x-e601
+git -C "$REPO" branch --set-upstream-to=origin/feature/x-e601 wt/r-3 >/dev/null 2>&1
+rm -f "$TMP/last-emit.txt"
+emit
+got="$(stored '.branch')"
+[[ "$got" == "feature/x-e601" ]] \
+  && pass "a reviewer worktree with no commits of its own still records the PR branch" \
+  || fail "reviewer worktree: want feature/x-e601 (upstream), got '$got'"
+
+# 10. The review hold is released HERE, at the positive completion marker, so
+#     the release and the proof of completion are one event. A release wired to
+#     a separate "the tool returned" signal can fire while the review is still
+#     writing fixes, which is the defect the hold exists to prevent.
+ALL_CALLS="$TMP/all-calls.txt"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\nexit 0\n' \
+  "$ALL_CALLS" > "$TMP/fno-all-stub"
+chmod +x "$TMP/fno-all-stub"
+: > "$ALL_CALLS"
+(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-all-stub" bash "$EMITTER" code-review pass) >/dev/null 2>&1
+grep -q "do pr review-hold release --branch feature/x-e601" "$ALL_CALLS" \
+  && pass "a landed verdict releases the review hold" \
+  || fail "no review-hold release after the attestation: $(cat "$ALL_CALLS")"
+
+# No --holder. The hook names the HARNESS session; this script's session_id is
+# grepped from target-state.md and falls back to "unknown". release_claim
+# no-ops SILENTLY on a mismatch, so a holder-matched release wedged the lane
+# for the full TTL under a receipt that said "released".
+grep -q -- "--holder" "$ALL_CALLS" \
+  && fail "the release passed a holder it cannot reconstruct" \
+  || pass "the release names no holder"
+
+# 12. A hold-created invocation id is copied onto both the reviewer observation
+# and the completion attestation. This is the lifecycle join, not a receipt
+# inferred from either command's stdout.
+LINKED="$TMP/linked"
+LINKED_REVIEW="$TMP/linked-review.json"
+LINKED_ATTEST="$TMP/linked-attest.json"
+cat > "$TMP/fno-linked-stub" <<STUB
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "do" && "\${2:-}" == "pr" && "\${3:-}" == "review-hold" && "\${4:-}" == "metadata" ]]; then
+  printf '%s\n' '{"metadata":{"invocation_id":"ri-linked-positive","verb":"/code-review","args_raw":"medium --comment","level":"medium","level_source":"explicit","flags":["--comment"]}}'
+  exit 0
+fi
+if [[ "\${1:-}" == "doctor" && "\${2:-}" == "event" && "\${3:-}" == "emit" ]]; then
+  type=""; data=""
+  while [[ \$# -gt 0 ]]; do
+    case "\$1" in
+      -t) type="\$2"; shift 2 ;;
+      -d) data="\$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [[ "\$type" == "review_invocation" ]]; then
+    printf '%s\n' "\$data" > "$LINKED_REVIEW"
+  elif [[ "\$type" == "review_attestation" ]]; then
+    printf '%s\n' "\$data" > "$LINKED_ATTEST"
+  fi
+fi
+exit 0
+STUB
+chmod +x "$TMP/fno-linked-stub"
+rm -f "$LINKED_REVIEW" "$LINKED_ATTEST"
+mkdir -p "$TMP/fno-home/review-invocations/ri-linked-positive.subagents"
+touch "$TMP/fno-home/review-invocations/ri-linked-positive.subagents/subagent-1"
+(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-linked-stub" FNO_HOME="$TMP/fno-home" \
+  bash "$EMITTER" code-review pass shared inline report_findings) >/dev/null 2>&1
+if [[ -s "$LINKED_REVIEW" && -s "$LINKED_ATTEST" ]]; then
+  pass "lifecycle join emits reviewer and attestation markers"
+else
+  fail "lifecycle join did not emit both records"
+fi
+if jq -e '.invocation_id == "ri-linked-positive" and .execution_context == "inline" and .output_contract == "report_findings" and .subagent_count == 1' "$LINKED_REVIEW" >/dev/null 2>&1; then
+  pass "reviewer observation carries id, trigger contract, and depth"
+else
+  fail "reviewer observation lost lifecycle fields: $(cat "$LINKED_REVIEW" 2>/dev/null)"
+fi
+if jq -e '.invocation_id == "ri-linked-positive" and .reviewer == "code-review"' "$LINKED_ATTEST" >/dev/null 2>&1; then
+  pass "review_attestation carries the invocation id"
+else
+  fail "review_attestation lost invocation id: $(cat "$LINKED_ATTEST" 2>/dev/null)"
+fi
+
+# 12b. A bare run (the hold carries no level, no --verify-fixes) still records
+# the level the lane sized and the round the counter assigns, so the posted
+# summary never reads level=unset round=unscoped.
+BARE_ATTEST="$TMP/bare-attest.json"
+cat > "$TMP/fno-bare-stub" <<STUB
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "do" && "\${2:-}" == "pr" && "\${3:-}" == "review-hold" && "\${4:-}" == "round" && "\${5:-}" == "--fresh" ]]; then
+  echo 2; exit 0
+fi
+if [[ "\${1:-}" == "do" && "\${2:-}" == "review" && "\${3:-}" == "resolve-level" ]]; then
+  echo '{"level": "medium", "level_source": "diff-sized"}'; exit 0
+fi
+if [[ "\${1:-}" == "doctor" && "\${2:-}" == "event" && "\${3:-}" == "emit" ]]; then
+  type=""; data=""
+  while [[ \$# -gt 0 ]]; do
+    case "\$1" in
+      -t) type="\$2"; shift 2 ;;
+      -d) data="\$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  [[ "\$type" == "review_attestation" ]] && printf '%s\n' "\$data" > "$BARE_ATTEST"
+fi
+exit 0
+STUB
+chmod +x "$TMP/fno-bare-stub"
+rm -f "$BARE_ATTEST"
+(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-bare-stub" bash "$EMITTER" code-review pass) >/dev/null 2>&1
+if jq -e '.level == "medium" and .review_round == 2' "$BARE_ATTEST" >/dev/null 2>&1; then
+  pass "a bare run records the sized level and the assigned round"
+else
+  fail "bare run attestation lacks level or round: $(cat "$BARE_ATTEST" 2>/dev/null)"
+fi
+
+# 11. The payload records the diff under review: base (merge-base), head, and
+#     a line count greater than 0. This is the positive control for the
+#     refusal below - a refusal alone cannot separate "zero lines measured"
+#     from "the emitter never ran".
+git -C "$REPO" checkout -q feature/x-e601
+rm -f "$TMP/last-emit.txt"
+emit
+LIVE_SHA="$(git -C "$REPO" rev-parse HEAD)"
+got="$(stored '.reviewed_base_sha')"
+[[ "$got" == "$BASE_SHA" ]] && pass "payload records reviewed_base_sha" \
+  || fail "reviewed_base_sha: want ${BASE_SHA:0:8}, got '${got:0:8}'"
+got="$(stored '.reviewed_head_sha')"
+[[ "$got" == "$LIVE_SHA" ]] && pass "payload records reviewed_head_sha" \
+  || fail "reviewed_head_sha: want ${LIVE_SHA:0:8}, got '${got:0:8}'"
+got="$(stored '.reviewed_line_count')"
+[[ "$got" =~ ^[0-9]+$ && "$got" -gt 0 ]] && pass "payload records a positive reviewed_line_count ($got)" \
+  || fail "reviewed_line_count: want a positive integer, got '$got'"
+got="$(stored '.reviewed_file_count')"
+[[ "$got" =~ ^[0-9]+$ && "$got" -gt 0 ]] && pass "payload records the changed-file count ($got)" \
+  || fail "reviewed_file_count: want a positive integer, got '$got'"
+
+# 12. An EMPTY diff refuses: a checkout sitting AT the base (HEAD equals the
+#     merge-base, no changed files) has read nothing, and a clean review of
+#     nothing must not become a pass. The refusal names base and head, writes
+#     NO attestation, and journals ONE refused review_invocation row - the
+#     durable terminal of the attempt, so a coverage reader can tell
+#     "attempted, nothing to read" from "never attempted" (the measured
+#     2026-08-30 shape where open PRs sat uncovered behind reviews that
+#     reported clean over empty diffs). Lines never decide this - case 12b.
+git -C "$REPO" checkout -q -b zero/at-base origin/main
+rm -f "$TMP/last-emit.txt"
+RECEIPT="$(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-stub" bash "$EMITTER" code-review pass 2>&1 >/dev/null)"
+RECEIPT_RC=$?
+[[ $RECEIPT_RC -ne 0 ]] && pass "empty diff refuses to emit" \
+  || fail "empty diff emitted anyway (exit $RECEIPT_RC)"
+if [[ -f "$TMP/last-emit.txt" ]] \
+  && grep -q "review_invocation" "$TMP/last-emit.txt" \
+  && ! grep -q "review_attestation" "$TMP/last-emit.txt"; then
+  pass "empty diff writes the refused terminal row, no attestation"
+else
+  fail "empty diff wrote neither or the wrong terminal: $(cat "$TMP/last-emit.txt" 2>/dev/null)"
+fi
+stored '.stage' | grep -qx "refused" && pass "terminal row is stage=refused" \
+  || fail "terminal stage: want refused, got '$(stored '.stage')'"
+stored '.reason' | grep -qx "empty_diff" && pass "terminal row names reason=empty_diff" \
+  || fail "terminal reason: want empty_diff, got '$(stored '.reason')'"
+[[ "$(stored '.reviewed_file_count')" == "0" ]] && pass "terminal row records files=0" \
+  || fail "terminal files: want 0, got '$(stored '.reviewed_file_count')'"
+stored_command="$(stored '.verb')"  # verb-wording: allow (review_invocation wire key)
+[[ "$stored_command" == "/code-review" ]] && pass "terminal row names the command" \
+  || fail "terminal command: got '$stored_command'"
+[[ -n "$(stored '.invocation_id')" && "$(stored '.invocation_id')" != "<missing>" ]] \
+  && pass "terminal row carries an invocation_id" \
+  || fail "terminal row lost invocation_id"
+case "$RECEIPT" in
+  *"the diff under review is empty (no changed files"*)
+    pass "refusal names the empty shape" ;;
+  *) fail "refusal lacks the reason: $RECEIPT" ;;
+esac
+case "$RECEIPT" in
+  *"$BASE_SHA"*|*"${BASE_SHA:0:8}"*)
+    pass "refusal names the base sha" ;;
+  *) fail "refusal lacks the base sha: $RECEIPT" ;;
+esac
+
+# 12c. A FAILED event writer must not be reported as a journaled row: the
+#      receipt claims the terminal only on the writer's own success, so an
+#      operator told "a refused row was emitted" can trust that it exists
+#      (the inline P2: an unconditional receipt over a suppressed emit
+#      failure made the attempt indistinguishable from an unrecorded one).
+cat > "$TMP/fno-emit-dead" <<'DEADSTUB'
+#!/usr/bin/env bash
+if [[ "$1" == "doctor" && "$2" == "event" && "$3" == "emit" ]]; then
+  exit 3
+fi
+exit 0
+DEADSTUB
+chmod +x "$TMP/fno-emit-dead"
+rm -f "$TMP/last-emit.txt"
+RECEIPT="$(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-emit-dead" bash "$EMITTER" code-review pass 2>&1 >/dev/null)"
+RECEIPT_RC=$?
+[[ $RECEIPT_RC -ne 0 ]] && pass "empty diff still refuses with a dead writer" \
+  || fail "dead writer let the emit through (exit $RECEIPT_RC)"
+[[ ! -f "$TMP/last-emit.txt" ]] && pass "dead writer journals nothing" \
+  || fail "dead writer journaled anyway"
+case "$RECEIPT" in
+  *"could NOT be journaled"*)
+    pass "dead writer is reported as unrecorded, never as emitted" ;;
+  *"row was emitted"*)
+    fail "receipt claims a row the dead writer never wrote: $RECEIPT" ;;
+  *) fail "receipt unclear about the failed journal: $RECEIPT" ;;
+esac
+
+# 12d. The fix-verification carve-out: base == head (the raise row
+#      and the fix commit share one head) with a scoped --verify-fixes hold
+#      and a raise AT this head is an in-place verification - the disposition
+#      rides the classified pass and the emit proceeds, because the merge
+#      gate reads the fixed disposition terminal at the disposing round's own
+#      head. The witness is the WORD `raised` on stdout, never the exit code:
+#      a pre-raise-at-head binary ignores the flag, prints a round number,
+#      and exits 0, so an exit-code check would fail open on staleness.
+VERIFY_ATTEST="$TMP/verify-attest.json"
+VERIFY_INVOCATION="$TMP/verify-invocation.json"
+cat > "$TMP/fno-verify-stub" <<STUB
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "do" && "\${2:-}" == "pr" && "\${3:-}" == "review-hold" && "\${4:-}" == "metadata" ]]; then
+  printf '%s\n' '{"metadata":{"invocation_id":"ri-verify-inplace","verb":"/code-review","level":"medium","level_source":"explicit","flags":["--verify-fixes"]}}'
+  exit 0
+fi
+if [[ "\${1:-}" == "do" && "\${2:-}" == "pr" && "\${3:-}" == "review-hold" && "\${4:-}" == "round" ]]; then
+  for arg in "\$@"; do
+    if [[ "\$arg" == "--raise-at-head" ]]; then echo raised; exit 0; fi
+  done
+  echo 2; exit 0
+fi
+if [[ "\${1:-}" == "doctor" && "\${2:-}" == "event" && "\${3:-}" == "emit" ]]; then
+  type=""; data=""
+  while [[ \$# -gt 0 ]]; do
+    case "\$1" in
+      -t) type="\$2"; shift 2 ;;
+      -d) data="\$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [[ "\$type" == "review_invocation" ]]; then
+    printf '%s\n' "\$data" > "$VERIFY_INVOCATION"
+  elif [[ "\$type" == "review_attestation" ]]; then
+    printf '%s\n' "\$data" > "$VERIFY_ATTEST"
+  fi
+fi
+exit 0
+STUB
+chmod +x "$TMP/fno-verify-stub"
+rm -f "$VERIFY_ATTEST" "$VERIFY_INVOCATION"
+VERIFY_RC=0
+(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-verify-stub" bash "$EMITTER" code-review pass) >/dev/null 2>&1 || VERIFY_RC=$?
+[[ $VERIFY_RC -eq 0 ]] && pass "in-place fix-verification emits on an empty diff" \
+  || fail "carve-out did not fire (exit $VERIFY_RC)"
+[[ -s "$VERIFY_ATTEST" ]] && pass "carve-out writes the attestation" \
+  || fail "carve-out wrote no attestation"
+[[ -s "$VERIFY_INVOCATION" ]] && pass "carve-out writes the started invocation row" \
+  || fail "carve-out wrote no invocation row"
+if [[ -s "$VERIFY_INVOCATION" ]] \
+  && jq -e '.flags | index("--verify-fixes")' "$VERIFY_INVOCATION" >/dev/null 2>&1; then
+  pass "started row carries --verify-fixes (the gate's witness join)"
+else
+  fail "started row lost the verify flag: $(cat "$VERIFY_INVOCATION" 2>/dev/null)"
+fi
+if [[ -s "$VERIFY_ATTEST" ]] \
+  && jq -e '.verdict == "pass" and .reviewed_file_count == 0' "$VERIFY_ATTEST" >/dev/null 2>&1; then
+  pass "attestation reads pass over an honestly empty range"
+else
+  fail "attestation verdict or range wrong: $(cat "$VERIFY_ATTEST" 2>/dev/null)"
+fi
+
+# 12e. The carve-out is a witness, not a default: --verify-fixes flags with
+#      NO raise witness still refuse (the old-binary staleness shape), and a
+#      raise witness without --verify-fixes flags refuses too - a plain run
+#      over an empty diff is a review of nothing, carve-out or not.
+for case_word in raised silent; do
+  cat > "$TMP/fno-verify-neg-stub" <<STUB
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "do" && "\${2:-}" == "pr" && "\${3:-}" == "review-hold" && "\${4:-}" == "metadata" ]]; then
+  if [[ "\$CASE_FLAGS" == "plain" ]]; then
+    printf '%s\n' '{"metadata":{"invocation_id":"ri-noverify","verb":"/code-review","flags":["--comment"]}}'
+  else
+    printf '%s\n' '{"metadata":{"invocation_id":"ri-verify-unwitnessed","verb":"/code-review","flags":["--verify-fixes"]}}'
+  fi
+  exit 0
+fi
+if [[ "\${1:-}" == "do" && "\${2:-}" == "pr" && "\${3:-}" == "review-hold" && "\${4:-}" == "round" ]]; then
+  for arg in "\$@"; do
+    if [[ "\$arg" == "--raise-at-head" && "\$CASE_WORD" == "raised" ]]; then echo raised; exit 0; fi
+  done
+  exit 0
+fi
+if [[ "\${1:-}" == "doctor" && "\${2:-}" == "event" && "\${3:-}" == "emit" ]]; then
+  printf '%s\n' "\$@" >> "$TMP/neg-emit.log"
+fi
+exit 0
+STUB
+  chmod +x "$TMP/fno-verify-neg-stub"
+  if [[ "$case_word" == "raised" ]]; then
+    export CASE_WORD=raised CASE_FLAGS=plain
+    want="a raise witness without --verify-fixes flags refuses"
+  else
+    export CASE_WORD=silent CASE_FLAGS=verify
+    want="--verify-fixes flags without a raise witness refuse (staleness fail-closed)"
+  fi
+  : > "$TMP/neg-emit.log"
+  NEG_RC=0
+  (cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL -u CASE_WORD -u CASE_FLAGS \
+    CASE_WORD="$CASE_WORD" CASE_FLAGS="$CASE_FLAGS" \
+    FNO="$TMP/fno-verify-neg-stub" bash "$EMITTER" code-review pass) >/dev/null 2>&1 || NEG_RC=$?
+  if [[ $NEG_RC -ne 0 ]] && grep -q "review_invocation" "$TMP/neg-emit.log" \
+    && ! grep -q "review_attestation" "$TMP/neg-emit.log"; then
+    pass "$want"
+  else
+    fail "$want (exit $NEG_RC)"
+  fi
+  unset CASE_WORD CASE_FLAGS
+done
+
+# 12b. A binary-only diff is a real review: numstat prints "-" for binary
+#      files, so the LINE count is an honest 0 while a file genuinely changed.
+#      The emit must attest with lines=0 files=1 - a lines-only refusal would
+#      close the sanctioned producer path for every images/fonts PR.
+git -C "$REPO" checkout -q -b binary/only origin/main
+printf 'PNG\x00\x89binary-bytes-no-text\x00' > "$REPO/asset.bin"
+git -C "$REPO" add asset.bin
+git -C "$REPO" commit -qm "binary asset"
+rm -f "$TMP/last-emit.txt"
+emit_rc=0
+(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-stub" bash "$EMITTER" code-review pass) >/dev/null 2>&1 || emit_rc=$?
+[[ $emit_rc -eq 0 ]] && pass "binary-only diff attests" \
+  || fail "binary-only diff refused (the producer path closed)"
+[[ -f "$TMP/last-emit.txt" ]] && pass "binary-only diff writes the event" \
+  || fail "binary-only diff wrote no event"
+if [[ -f "$TMP/last-emit.txt" ]]; then
+  got_lines="$(stored '.reviewed_line_count')"
+  got_files="$(stored '.reviewed_file_count')"
+  [[ "$got_lines" == "0" ]] && pass "binary-only records lines=0 honestly" \
+    || fail "binary-only lines: want 0, got '$got_lines'"
+  [[ "$got_files" == "1" ]] && pass "binary-only records files=1" \
+    || fail "binary-only files: want 1, got '$got_files'"
+fi
+
+# 13. An unmeasurable diff also refuses: with no origin/<base> and no local
+#     <base> to merge against, the event cannot say what was read, and an
+#     attestation that cannot name its diff must not be minted.
+git -C "$REPO" checkout -q feature/x-e601
+git -C "$REPO" update-ref -d refs/remotes/origin/main
+rm -f "$TMP/last-emit.txt"
+RECEIPT="$(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-stub" bash "$EMITTER" code-review pass 2>&1 >/dev/null)"
+RECEIPT_RC=$?
+[[ $RECEIPT_RC -ne 0 ]] && pass "unresolvable base refuses to emit" \
+  || fail "unresolvable base emitted anyway (exit $RECEIPT_RC)"
+if [[ -f "$TMP/last-emit.txt" ]] \
+  && grep -q "review_invocation" "$TMP/last-emit.txt" \
+  && ! grep -q "review_attestation" "$TMP/last-emit.txt"; then
+  pass "unresolvable base writes the refused terminal, no attestation"
+else
+  fail "unresolvable base wrote neither or the wrong terminal: $(cat "$TMP/last-emit.txt" 2>/dev/null)"
+fi
+stored '.reason' | grep -qx "unresolvable_base" \
+  && pass "unresolvable-base terminal names reason=unresolvable_base" \
+  || fail "terminal reason: want unresolvable_base, got '$(stored '.reason')'"
+
+# 14-16. --findings-file (AC2-HP / AC2-ERR / AC2-EDGE). The classify leg runs
+# the REAL classifier - now the native record door - so these cases exercise
+# producer-true classification through the emitter's transport: the merge
+# into the event payload, the refusals, and the no-file byte shape.
+git -C "$REPO" update-ref refs/remotes/origin/main "$BASE_SHA"
+git -C "$REPO" checkout -q feature/x-e601
+
+CLASSIFY_BIN=""
+for candidate in \
+  "$REPO_ROOT/crates/fno-agents/target/release/fno-agents" \
+  "$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"; do
+  if [[ -x "$candidate" ]]; then CLASSIFY_BIN="$candidate"; break; fi
+done
+if [[ -z "$CLASSIFY_BIN" ]]; then
+  echo "SKIP: no built fno-agents binary for the native classifier read" >&2
+  echo "  tried crates/fno-agents/target/{release,debug}/fno-agents." >&2
+  exit 77
+fi
+# The helper script reads the binary path in its own process, deep under the
+# emitter's child chain; a shell variable stops at the first exec boundary.
+export CLASSIFY_BIN
+cat > "$TMP/classify-real.sh" <<'CREAL'
+#!/usr/bin/env bash
+f="$1"
+"$CLASSIFY_BIN" review-level findings record --findings-file "$f"
+CREAL
+chmod +x "$TMP/classify-real.sh"
+
+cat > "$TMP/fno-full" <<'FSTUB'
+#!/usr/bin/env bash
+stub_dir="$(cd "$(dirname "$0")" && pwd)"
+if [[ "$1" == "doctor" && "$2" == "event" && "$3" == "emit" ]]; then
+  printf '%s\n' "$@" > "$stub_dir/last-emit.txt"
+  exit 0
+fi
+if [[ "$1" == "do" && "$2" == "review" && "$3" == "classify" ]]; then
+  f=""; shift 3
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --findings-file) f="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  record="$(bash "$stub_dir/classify-real.sh" "$f")" || exit $?
+  echo "$record"
+  exit 0
+fi
+exit 0
+FSTUB
+chmod +x "$TMP/fno-full"
+
+emit_ff() { # like emit(), through the dual stub; $1 = extra args string
+  (cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+    FNO="$TMP/fno-full" bash "$EMITTER" code-review pass shared $1) >/dev/null 2>&1
+}
+
+echo "== --findings-file (AC2-HP) =="
+F14="$TMP/findings-hp.json"
+cat > "$F14" <<'J'
+[
+  {"category": "correctness", "file": "a.py", "line": 3, "summary": "off-by-one", "failure_scenario": "wrong total"},
+  {"category": "typo", "file": "b.py", "line": 4, "summary": "teh", "failure_scenario": "reader stumble"},
+  {"category": "nit", "file": "c.py", "line": 5, "summary": "name", "failure_scenario": "none"}
+]
+J
+rm -f "$TMP/last-emit.txt"
+emit_ff "--findings-file $F14"
+[[ -f "$TMP/last-emit.txt" ]] && pass "findings file emits" \
+  || fail "findings file emitted nothing"
+got="$(stored '.findings_blocking')"
+[[ "$got" == "1" ]] && pass "payload carries findings_blocking=1" \
+  || fail "findings_blocking: want 1, got '$got'"
+got="$(stored '.findings_nonblocking')"
+[[ "$got" == "2" ]] && pass "payload carries findings_nonblocking=2" \
+  || fail "findings_nonblocking: want 2, got '$got'"
+got="$(stored '.findings | length')"
+[[ "$got" == "3" ]] && pass "payload carries three finding primitives" \
+  || fail "findings length: want 3, got '$got'"
+got="$(stored '.findings[0].finding_key')"
+[[ "$got" == "a.py:3:correctness" ]] && pass "primitive carries finding_key" \
+  || fail "finding_key: want a.py:3:correctness, got '$got'"
+got="$(stored '.reviewed_base_sha')"
+[[ "$got" == "$BASE_SHA" ]] && pass "reviewed_base_sha unchanged by the record" \
+  || fail "reviewed_base_sha changed: '$got'"
+got="$(stored '.branch')"
+[[ "$got" == "feature/x-e601" ]] && pass "branch unchanged by the record" \
+  || fail "branch changed: '$got'"
+got="$(stored '.reviewer_context')"
+[[ "$got" == "shared" ]] && pass "reviewer_context unchanged by the record" \
+  || fail "reviewer_context changed: '$got'"
+got="$(stored '.verdict')"
+[[ "$got" == "fail" ]] && pass "measured verdict fail on one blocking finding (typed pass ignored)" \
+  || fail "measured verdict: want fail, got '$got'"
+got="$(stored '.execution_context')"
+[[ "$got" == "inline" ]] && pass "row carries execution_context=inline" \
+  || fail "execution_context: want inline, got '$got'"
+got="$(stored '.output_contract')"
+[[ "$got" == "json_block" ]] && pass "row carries output_contract=json_block" \
+  || fail "output_contract: want json_block, got '$got'"
+
+echo "== --findings-file refusals (AC2-ERR) =="
+for case in missing invalid notarray; do
+  case "$case" in
+    missing) F15="$TMP/findings-missing.json" ;;
+    invalid) F15="$TMP/findings-invalid.json"; printf 'not json {' > "$F15" ;;
+    notarray) F15="$TMP/findings-notarray.json"; printf '{"oops": true}' > "$F15" ;;
+  esac
+  rm -f "$TMP/last-emit.txt"
+  emit_rc=0
+  (cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+    FNO="$TMP/fno-full" bash "$EMITTER" code-review pass shared --findings-file "$F15") >/dev/null 2>"$TMP/err.txt" || emit_rc=$?
+  [[ $emit_rc -ne 0 ]] && pass "$case findings file refuses (exit $emit_rc)" \
+    || fail "$case findings file emitted anyway"
+  [[ ! -f "$TMP/last-emit.txt" ]] && pass "$case findings file writes no event" \
+    || fail "$case findings file wrote an event"
+  grep -q "$F15" "$TMP/err.txt" && pass "$case refusal names the file" \
+    || fail "$case refusal lacks the file name: $(cat "$TMP/err.txt")"
+done
+
+echo "== prose_unparseable forces fail (AC2-ERR) =="
+F17="$TMP/findings-clean.json"
+cat > "$F17" <<'J'
+[{"category": "typo", "file": "t.py", "line": 1, "summary": "teh", "failure_scenario": "reader stumble"}]
+J
+rm -f "$TMP/last-emit.txt"
+emit_ff "inline prose_unparseable --findings-file $F17"
+[[ -f "$TMP/last-emit.txt" ]] && pass "prose_unparseable run emits" \
+  || fail "prose_unparseable run emitted nothing"
+got="$(stored '.verdict')"
+[[ "$got" == "fail" ]] && pass "prose_unparseable with zero blocking rides fail" \
+  || fail "prose_unparseable verdict: want fail, got '$got'"
+got="$(stored '.output_contract')"
+[[ "$got" == "prose_unparseable" ]] && pass "row carries the prose_unparseable contract" \
+  || fail "output_contract: want prose_unparseable, got '$got'"
+
+echo "== no --findings-file stays byte-identical (AC2-EDGE) =="
+rm -f "$TMP/last-emit.txt"
+emit_ff ""
+[[ -f "$TMP/last-emit.txt" ]] && pass "no-file path still emits" \
+  || fail "no-file path stopped emitting"
+for key in findings_blocking findings_nonblocking findings review_round dispositions; do
+  got="$(stored ".$key")"
+  [[ "$got" == "<missing>" ]] && pass "no-file payload omits $key" \
+    || fail "no-file payload carries $key='$got'"
+done
+got="$(stored '.execution_context')"
+[[ "$got" == "inline" ]] && pass "no-file row carries execution_context=inline" \
+  || fail "no-file execution_context: want inline, got '$got'"
+got="$(stored '.output_contract')"
+[[ "$got" == "json_block" ]] && pass "no-file row carries output_contract=json_block" \
+  || fail "no-file output_contract: want json_block, got '$got'"
+
+echo "== default-branch shapes + delegated-path branch parity (x-a8a1) =="
+git -C "$REPO" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+git -C "$REPO" update-ref refs/remotes/origin/main "$BASE_SHA"
+git -C "$REPO" update-ref refs/remotes/origin/feature/x-e601 "$HEAD_SHA"
+
+# 15. The canonical checkout sitting ON the default branch AT the base: the
+#     empty-diff refusal fires, and because branch == base there, it names the
+#     default-branch shape - lost for the real PR, in scope for any PR whose
+#     headRefName is the base - and points at the PR's worktree. The refused
+#     terminal row still journals (reason=empty_diff): an attempt that read
+#     nothing is recorded, not hidden.
+git -C "$REPO" checkout -q -B main "$BASE_SHA"
+rm -f "$TMP/last-emit.txt"
+RECEIPT="$(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-stub" bash "$EMITTER" code-review pass 2>&1 >/dev/null)"
+RECEIPT_RC=$?
+[[ $RECEIPT_RC -ne 0 ]] && pass "default-branch checkout at the base refuses" \
+  || fail "default-branch at-base emitted anyway (exit $RECEIPT_RC)"
+stored '.reason' 2>/dev/null | grep -qx "empty_diff" \
+  && pass "refusal journals the empty-diff terminal" \
+  || fail "terminal reason: want empty_diff, got '$(stored '.reason')'"
+if grep -q "repo default branch" <<<"$RECEIPT" && grep -q "Run" <<<"$RECEIPT" \
+    && grep -q "from the PR's worktree" <<<"$RECEIPT"; then
+  pass "refusal names the default-branch shape and the worktree remedy"
+else
+  fail "refusal lacks the default-branch phrasing: $RECEIPT"
+fi
+
+# 15b. Work committed directly ON the default branch attests honestly: the
+#      actor producer (hooks, review lanes in in-place sessions) runs on
+#      main-based repos, and the row's branch=main is then the TRUE scope.
+#      The refusal stays out of this shape.
+echo mainline >> "$REPO/a.txt"
+git -C "$REPO" add a.txt
+git -C "$REPO" -c user.email=t@t -c user.name=t commit -q -m "main work"
+rm -f "$TMP/last-emit.txt"
+emit_rc=0
+(cd "$REPO" && env -u ANTHROPIC_MODEL -u ANTHROPIC_BASE_URL \
+  FNO="$TMP/fno-stub" bash "$EMITTER" code-review pass) >/dev/null 2>&1 || emit_rc=$?
+[[ $emit_rc -eq 0 ]] && pass "work directly on the default branch attests" \
+  || fail "main-based work refused (exit $emit_rc); the actor producer path closed"
+got="$(stored '.branch')"
+[[ "$got" == "main" ]] && pass "main-based work records branch=main (its true scope)" \
+  || fail "main-based branch: want main, got '$got'"
+
+# 16. The classified path (--findings-file) records the SAME branch the typed
+#     path resolves: the emitter rewrites the branch once, before the one
+#     emit, so a reviewer worktree's LOCAL checkout name never reaches the
+#     row. Same worktree, same head, one flag apart used to produce two
+#     different branches (x-a8a1, node note 2).
+git -C "$REPO" checkout -q -B wt/r-4 origin/feature/x-e601
+git -C "$REPO" branch --set-upstream-to=origin/feature/x-e601 wt/r-4 >/dev/null 2>&1
+rm -f "$TMP/last-emit.txt"
+emit_ff "--findings-file $F14"
+[[ -f "$TMP/last-emit.txt" ]] && pass "classified emit from a reviewer-worktree branch lands" \
+  || fail "classified emit wrote nothing"
+got="$(stored '.branch')"
+[[ "$got" == "feature/x-e601" ]] \
+  && pass "classified path records the rewritten PR branch, not the local name" \
+  || fail "classified branch: want feature/x-e601, got '$got'"
+
+echo ""
+echo "emit-attestation: $PASS passed, $FAIL failed"
+[[ $FAIL -eq 0 ]]

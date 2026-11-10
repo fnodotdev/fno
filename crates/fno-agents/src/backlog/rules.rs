@@ -1,0 +1,954 @@
+//! The rule schema: one `[[rule]]` row format for every rule fno checks
+//! (`docs/architecture/event-rules.md`, "The rule schema"). A rule declares
+//! its own trigger (`[rule.when]`) and its action, so it reaches an agent at
+//! the decision point it governs and nowhere else. The Stop table
+//! (`event_rules.toml`) parses through here; so does the law corpus file the
+//! `rules-check` mode reads.
+//!
+//! The tier is derived, never written: a rule with only structural fields is
+//! tier 0 (an index lookup, cheap enough for every tool call), `retrieval`
+//! makes it tier 1 (ranked text), `classifier` makes it tier 2 (a model
+//! call). Only tier 0 may block at a tool call, because only tier 0 answers
+//! inside the hook budget every time.
+//!
+//! fno-agents owns this module; build.rs copies it into the `fno` crate so
+//! the fnh harness links the same schema, match and decide in process. The
+//! store-side answers (`check_answer`, `measure_answer`) live in
+//! `rules_check`.
+
+use serde::Deserialize;
+use std::collections::{BTreeSet, HashMap};
+
+const ACTIONS: &[&str] = &["inform", "warn", "require-ack", "block"];
+/// The strengths a law may carry; the same four words as the actions.
+pub const STRENGTHS: &[&str] = ACTIONS;
+/// The four hook classes: `block` is sync and may deny, `wait` is sync and
+/// adds context, `next-turn` is async and lands at the next turn boundary,
+/// `rewake` is async and wakes or steers the session.
+const CLASSES: &[&str] = &["block", "wait", "next-turn", "rewake"];
+/// How an `inform` reaches its reader: hook context, a notify to the user,
+/// or a journal emit. The Stop table's `notify` and `emit` rows are
+/// `inform` rows with a channel, not two more severities.
+const DELIVERS: &[&str] = &["context", "notify", "emit"];
+const FAMILIES: &[&str] = &["hold", "freeze", "naming", "other"];
+const EVENTS: &[&str] = &[
+    "prompt",
+    "skill",
+    "pre-tool",
+    "post-tool",
+    "plan-start",
+    "turn-end",
+    "stop",
+];
+const LANES: &[&str] = &["law-door", "decide-door", "rule-file"];
+/// The disposition kinds a law row can carry: `grant` (a head-pinned grant),
+/// `retire`, `superseded-pair`, and `native` (a family the door's own probes
+/// already read, so decide() never reads the same row a second time).
+pub const DISPOSITION_KINDS: &[&str] = &["grant", "retire", "superseded-pair", "native"];
+
+#[derive(Debug, Clone, Default, Deserialize, serde::Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct When {
+    pub events: Vec<String>,
+    pub paths: Vec<String>,
+    pub tools: Vec<String>,
+    pub commands: Vec<String>,
+    pub skills: Vec<String>,
+    pub nodes: Vec<String>,
+    pub projects: Vec<String>,
+    pub phases: Vec<String>,
+    pub harnesses: Vec<String>,
+    pub models: Vec<String>,
+    pub machines: Vec<String>,
+    /// Door subjects such as `merge-freeze:*` or `pr-hold:*`.
+    pub subjects: Vec<String>,
+    /// Named predicates the Stop engine evaluates (`event_rules.rs`).
+    pub predicates: Vec<String>,
+    pub retrieval: Option<String>,
+    pub classifier: Option<String>,
+}
+
+impl When {
+    fn structural(&self) -> bool {
+        [
+            &self.events,
+            &self.paths,
+            &self.tools,
+            &self.commands,
+            &self.skills,
+            &self.nodes,
+            &self.projects,
+            &self.phases,
+            &self.harnesses,
+            &self.models,
+            &self.machines,
+            &self.subjects,
+            &self.predicates,
+        ]
+        .iter()
+        .any(|v| !v.is_empty())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Authority {
+    pub by: String,
+    pub at: String,
+    pub lane: String,
+}
+
+fn yes() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Rule {
+    pub id: String,
+    /// The decision id this rule carries, when it came from a law.
+    #[serde(default)]
+    pub law: Option<String>,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub what: String,
+    #[serde(default)]
+    pub why: String,
+    #[serde(default)]
+    pub instead: String,
+    pub action: String,
+    #[serde(default)]
+    pub class: Option<String>,
+    #[serde(default)]
+    pub deliver: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub expires: Option<String>,
+    #[serde(default)]
+    pub family: Option<String>,
+    #[serde(default)]
+    pub authority: Option<Authority>,
+    #[serde(default = "yes")]
+    pub default: bool,
+    #[serde(default)]
+    pub when: When,
+}
+
+impl Rule {
+    pub fn tier(&self) -> u8 {
+        if self.when.classifier.is_some() {
+            2
+        } else if self.when.retrieval.is_some() {
+            1
+        } else {
+            0
+        }
+    }
+
+    /// The declared class, else `block` for a denying action and `wait`
+    /// for the rest.
+    pub fn class(&self) -> &str {
+        match (&self.class, self.action.as_str()) {
+            (Some(c), _) => c,
+            (None, "block" | "require-ack") => "block",
+            (None, _) => "wait",
+        }
+    }
+
+    pub fn deliver(&self) -> &str {
+        self.deliver.as_deref().unwrap_or("context")
+    }
+
+    /// Every reason this row is not a legal rule; empty means valid.
+    pub fn problems(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut bad = |m: String| out.push(format!("{}: {m}", self.id));
+        if self.id.trim().is_empty() {
+            bad("a rule has no id".into());
+        }
+        if !ACTIONS.contains(&self.action.as_str()) {
+            bad(format!("unknown action {:?}", self.action));
+        }
+        let class = self.class();
+        if !CLASSES.contains(&class) {
+            bad(format!("unknown class {class:?}"));
+        }
+        if !DELIVERS.contains(&self.deliver()) {
+            bad(format!("unknown deliver {:?}", self.deliver()));
+        }
+        if self.deliver() != "context" && self.action != "inform" {
+            bad(format!("deliver {} needs action inform", self.deliver()));
+        }
+        let denies = matches!(self.action.as_str(), "block" | "require-ack");
+        if denies != (class == "block") {
+            bad(format!(
+                "action {} does not fit class {class}: only block and require-ack run in class block",
+                self.action
+            ));
+        }
+        if matches!(class, "next-turn" | "rewake")
+            && !matches!(self.action.as_str(), "inform" | "warn")
+        {
+            bad(format!("class {class} carries only inform or warn"));
+        }
+        if !self.when.structural() && self.tier() == 0 {
+            bad("no trigger: [rule.when] sets no field".into());
+        }
+        let door_only =
+            !self.when.events.is_empty() && self.when.events.iter().all(|e| e.starts_with("door:"));
+        if denies && self.tier() != 0 && !(self.tier() == 2 && door_only) {
+            bad(format!(
+                "a {} rule needs a tier-0 trigger (tier {} may deny only at a door:* event)",
+                self.action,
+                self.tier()
+            ));
+        }
+        for e in &self.when.events {
+            if !event_known(e) {
+                bad(format!("unknown event {e:?}"));
+            }
+        }
+        if let Some(scope) = &self.scope {
+            if !scope_known(scope) {
+                bad(format!("unknown scope {scope:?}"));
+            }
+        }
+        if let Some(expires) = &self.expires {
+            if !expires_known(expires) {
+                bad(format!(
+                    "expires {expires:?} is not never, YYYY-MM-DD or \"until <node> closes\""
+                ));
+            }
+        }
+        if let Some(family) = &self.family {
+            if !FAMILIES.contains(&family.as_str()) {
+                bad(format!("unknown family {family:?}"));
+            }
+        }
+        if let Some(a) = &self.authority {
+            if !LANES.contains(&a.lane.as_str()) {
+                bad(format!("unknown authority lane {:?}", a.lane));
+            }
+        }
+        out
+    }
+}
+
+/// A hook event, a `door:<name>`, a `decision_span:<kind>`, or a
+/// `journal:<type>` the Stop engine reads from the events journal.
+fn event_known(e: &str) -> bool {
+    let named = |prefix: &str| e.strip_prefix(prefix).is_some_and(|rest| !rest.is_empty());
+    EVENTS.contains(&e) || named("door:") || named("decision_span:") || named("journal:")
+}
+
+fn scope_known(s: &str) -> bool {
+    s == "fleet"
+        || ["team:", "project:", "node:", "session:"]
+            .iter()
+            .any(|p| s.strip_prefix(p).is_some_and(|rest| !rest.is_empty()))
+}
+
+fn expires_known(s: &str) -> bool {
+    let date = s.len() == 10
+        && s.bytes().enumerate().all(|(i, b)| {
+            if i == 4 || i == 7 {
+                b == b'-'
+            } else {
+                b.is_ascii_digit()
+            }
+        });
+    let until = s
+        .strip_prefix("until ")
+        .and_then(|rest| rest.strip_suffix(" closes"))
+        .is_some_and(|node| !node.trim().is_empty());
+    s == "never" || date || until
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Disposition {
+    pub law: String,
+    pub kind: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RuleFile {
+    pub rule: Vec<Rule>,
+    pub disposition: Vec<Disposition>,
+}
+
+pub fn parse_file(text: &str) -> Result<RuleFile, String> {
+    toml::from_str(text).map_err(|e| e.to_string())
+}
+
+/// Parse and validate a rule table; the first problem refuses the table.
+pub fn parse_table(text: &str) -> Result<Vec<Rule>, String> {
+    let file = parse_file(text)?;
+    if file.rule.is_empty() {
+        return Err("no [[rule]] rows".into());
+    }
+    let mut seen = BTreeSet::new();
+    for rule in &file.rule {
+        if let Some(p) = rule.problems().into_iter().next() {
+            return Err(p);
+        }
+        if !seen.insert(rule.id.as_str()) {
+            return Err(format!("{}: duplicate id", rule.id));
+        }
+    }
+    Ok(file.rule)
+}
+
+/// One decision point as the tier-0 match sees it. The caller fills it from
+/// the hook payload and its own environment.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Event {
+    pub kind: String,
+    pub tool: Option<String>,
+    pub paths: Vec<String>,
+    pub command: Option<String>,
+    pub skill: Option<String>,
+    pub node: Option<String>,
+    pub project: Option<String>,
+    pub phase: Option<String>,
+    pub harness: Option<String>,
+    pub model: Option<String>,
+    pub machine: Option<String>,
+    pub subjects: Vec<String>,
+    /// The prompt or skill-args text, for a tier-1 ranked match.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// Rule ids the caller already acknowledged, for a `require-ack` rule.
+    #[serde(default)]
+    pub acks: Vec<String>,
+    /// The session the event came from, for a `session:` scope.
+    #[serde(default)]
+    pub session: Option<String>,
+}
+
+/// The tier-0 match: every structural field the rule sets must hold for the
+/// event, each as a glob where `*` crosses `/`. Predicates are the Stop
+/// engine's to evaluate and are not read here.
+pub fn matches(rule: &Rule, ev: &Event) -> bool {
+    clauses(rule, ev).iter().all(|c| c.held)
+}
+
+/// One filter a rule sets, read against the event: the field, whether it
+/// held, and the event value that satisfied it or the one that did not.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Clause {
+    pub field: &'static str,
+    pub held: bool,
+    pub patterns: Vec<String>,
+    /// The event value the clause matched on, or the value it was offered.
+    pub saw: Option<String>,
+}
+
+/// Every filter `rule.when` sets, in `matches` order. `matches` is the
+/// conjunction of these, so `explain` can never disagree with the match.
+fn clauses(rule: &Rule, ev: &Event) -> Vec<Clause> {
+    let w = &rule.when;
+    let mut out = Vec::new();
+    if !w.events.is_empty() {
+        out.push(Clause {
+            field: "events",
+            held: w.events.contains(&ev.kind),
+            patterns: w.events.clone(),
+            saw: Some(ev.kind.clone()),
+        });
+    }
+    let mut many = |field: &'static str, pats: &[String], vals: &[String]| {
+        if pats.is_empty() {
+            return;
+        }
+        let hit = vals
+            .iter()
+            .find(|v| pats.iter().any(|p| crate::glob::fnmatch(v, p)));
+        out.push(Clause {
+            field,
+            held: hit.is_some(),
+            patterns: pats.to_vec(),
+            saw: hit.or(vals.first()).cloned(),
+        });
+    };
+    many("paths", &w.paths, &ev.paths);
+    many("subjects", &w.subjects, &ev.subjects);
+    let one = |field: &'static str, pats: &[String], val: &Option<String>| {
+        (!pats.is_empty()).then(|| Clause {
+            field,
+            held: val
+                .as_deref()
+                .is_some_and(|v| pats.iter().any(|p| crate::glob::fnmatch(v, p))),
+            patterns: pats.to_vec(),
+            saw: val.clone(),
+        })
+    };
+    out.extend(
+        [
+            one("tools", &w.tools, &ev.tool),
+            one("commands", &w.commands, &ev.command),
+            one("skills", &w.skills, &ev.skill),
+            one("nodes", &w.nodes, &ev.node),
+            one("projects", &w.projects, &ev.project),
+            one("phases", &w.phases, &ev.phase),
+            one("harnesses", &w.harnesses, &ev.harness),
+            one("models", &w.models, &ev.model),
+            one("machines", &w.machines, &ev.machine),
+        ]
+        .into_iter()
+        .flatten(),
+    );
+    out
+}
+
+/// Lowercase, split on anything outside `[a-z0-9]`, then drop digit-only
+/// tokens, 4-8 character hex tokens that contain a digit (node ids like
+/// `14c8`, `cf6a`), and the stop set. A hex word with no digit (`added`,
+/// `face`) survives.
+pub fn tokens(s: &str) -> BTreeSet<String> {
+    const STOP: [&str; 19] = [
+        "pr", "x", "ab", "q", "d", "a", "an", "the", "of", "to", "and", "or", "for", "on", "in",
+        "is", "it", "no", "not",
+    ];
+    s.to_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .filter(|t| !t.bytes().all(|b| b.is_ascii_digit()))
+        .filter(|t| {
+            let hex_with_digit = (4..=8).contains(&t.len())
+                && t.bytes().all(|b| b.is_ascii_hexdigit())
+                && t.bytes().any(|b| b.is_ascii_digit());
+            !hex_with_digit
+        })
+        .filter(|t| !STOP.contains(t))
+        .map(str::to_owned)
+        .collect()
+}
+
+fn terms(text: &str) -> Vec<String> {
+    text.split_whitespace().flat_map(tokens).collect()
+}
+
+/// Okapi BM25 (k1 = 1.2, b = 0.75) over `(id, text)` documents. Returns the
+/// top `k` ids with a positive score, best first, ties by id.
+pub fn bm25_rank(docs: &[(String, String)], query: &str, k: usize) -> Vec<(String, f64)> {
+    const K1: f64 = 1.2;
+    const B: f64 = 0.75;
+    let bags: Vec<HashMap<String, usize>> = docs
+        .iter()
+        .map(|(_, text)| {
+            let mut bag = HashMap::new();
+            for t in terms(text) {
+                *bag.entry(t).or_insert(0) += 1;
+            }
+            bag
+        })
+        .collect();
+    let lens: Vec<f64> = bags
+        .iter()
+        .map(|b| b.values().sum::<usize>() as f64)
+        .collect();
+    let n = docs.len() as f64;
+    let avg = (lens.iter().sum::<f64>() / n.max(1.0)).max(1.0);
+    let idf: Vec<(String, f64)> = tokens(query)
+        .into_iter()
+        .map(|q| {
+            let df = bags.iter().filter(|b| b.contains_key(&q)).count() as f64;
+            let idf = ((n - df + 0.5) / (df + 0.5) + 1.0).ln();
+            (q, idf)
+        })
+        .collect();
+    let mut scored: Vec<(String, f64)> = docs
+        .iter()
+        .zip(bags.iter().zip(&lens))
+        .map(|((id, _), (bag, len))| {
+            let score = idf
+                .iter()
+                .filter_map(|(q, idf)| {
+                    let tf = *bag.get(q)? as f64;
+                    Some(idf * tf * (K1 + 1.0) / (tf + K1 * (1.0 - B + B * len / avg)))
+                })
+                .sum::<f64>();
+            (id.clone(), score)
+        })
+        .filter(|(_, s)| *s > 0.0)
+        .collect();
+    scored.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    scored.truncate(k);
+    scored
+}
+
+/// The lowest BM25 score a tier-1 rule needs to fire. Measured against 72
+/// labeled cases over the live corpus (36 fire, 36 unrelated prompts, the
+/// rule-engine wiring plan, 2026-10-29): 2.0 answered recall@3 0.667 with
+/// zero false fires on the unrelated prompts, where an embedding scorer
+/// answered 0.75 recall with a 0.333 false-fire rate.
+pub const TIER1_FLOOR: f64 = 2.0;
+/// A tier-1 match fires for the best three ranks at most.
+const TIER1_TOP: usize = 3;
+
+/// One rule that matched an event, with the action decide() applied.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Fire {
+    pub rule: String,
+    pub law: Option<String>,
+    pub action: String,
+    pub class: String,
+    pub deliver: String,
+    pub tier: u8,
+    pub text: String,
+    pub why: String,
+    pub instead: String,
+}
+
+/// What decide() answers for one event. `verdict` is the strongest fire:
+/// block over warn over inject over allow.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Decision {
+    pub verdict: &'static str,
+    /// Every fire, ordered block, warn, inform, then rule id.
+    pub fires: Vec<Fire>,
+    /// One `<rule id>: <why>` line per block or warn fire.
+    pub reasons: Vec<String>,
+    /// Tier-2 rule ids whose events matched; never decided here.
+    pub unevaluated: Vec<String>,
+}
+
+fn scope_fits(scope: Option<&str>, ev: &Event) -> bool {
+    let Some(scope) = scope else { return true };
+    let is = |want: &Option<String>, rest: &str| want.as_deref() == Some(rest);
+    if let Some(p) = scope.strip_prefix("project:") {
+        // An event with no resolved project fails open: a missing law is
+        // worse than one that does not apply.
+        ev.project.is_none() || is(&ev.project, p)
+    } else if let Some(n) = scope.strip_prefix("node:") {
+        is(&ev.node, n)
+    } else if let Some(s) = scope.strip_prefix("session:") {
+        is(&ev.session, s)
+    } else {
+        // fleet, and team: (no event carries a team), reach every event.
+        true
+    }
+}
+
+fn expired(expires: Option<&str>, now: chrono::NaiveDate) -> bool {
+    expires
+        .and_then(|e| chrono::NaiveDate::parse_from_str(e, "%Y-%m-%d").ok())
+        .is_some_and(|d| d < now)
+}
+
+/// Days before an `expires` date that a fire starts saying it is ending.
+const HEADS_UP_DAYS: i64 = 1;
+
+/// The line a fire carries in its last days: when the rule retires and the
+/// one command that renews it. Empty for a rule with no date, or one far off.
+fn heads_up(rule: &Rule, now: chrono::NaiveDate) -> String {
+    let Some(end) = rule
+        .expires
+        .as_deref()
+        .and_then(|e| chrono::NaiveDate::parse_from_str(e, "%Y-%m-%d").ok())
+    else {
+        return String::new();
+    };
+    if (end - now).num_days() > HEADS_UP_DAYS {
+        return String::new();
+    }
+    let renew = match &rule.law {
+        Some(law) => format!("fno inbox law renew {law} --until <date>"),
+        None => "move its expires date".to_string(),
+    };
+    format!(" (ends {end}; renew: {renew})")
+}
+
+fn rank(action: &str) -> u8 {
+    match action {
+        "block" => 0,
+        "warn" => 1,
+        _ => 2,
+    }
+}
+
+/// Decide one event against a rule set. Pure: no I/O, so the hooks, the
+/// doors and the fnh harness all reach the same answer.
+///
+/// Tier 0 runs the structural match. Tier 1 runs only at `prompt` and
+/// `skill` events, ranked by BM25 over `ev.text`, and never blocks. Tier 2
+/// is listed in `unevaluated`. A `require-ack` rule blocks until `ev.acks`
+/// names it. A `notify` or `emit` fire never raises the verdict: its caller
+/// delivers it.
+pub fn decide(rules: &[Rule], ev: &Event, now: chrono::NaiveDate) -> Decision {
+    let live: Vec<&Rule> = rules
+        .iter()
+        .filter(|r| r.when.predicates.is_empty())
+        .filter(|r| scope_fits(r.scope.as_deref(), ev) && !expired(r.expires.as_deref(), now))
+        .collect();
+    let mut hits: Vec<&Rule> = Vec::new();
+    let mut unevaluated = Vec::new();
+    for r in &live {
+        match r.tier() {
+            0 if matches(r, ev) => hits.push(*r),
+            2 if matches(r, ev) => unevaluated.push(r.id.clone()),
+            _ => {}
+        }
+    }
+    if matches!(ev.kind.as_str(), "prompt" | "skill") {
+        let query = ev.text.as_deref().or(ev.skill.as_deref()).unwrap_or("");
+        let tier1: Vec<&Rule> = live
+            .iter()
+            .copied()
+            .filter(|r| r.tier() == 1 && matches(r, ev))
+            .collect();
+        let docs: Vec<(String, String)> = tier1
+            .iter()
+            .map(|r| (r.id.clone(), r.when.retrieval.clone().unwrap_or_default()))
+            .collect();
+        for (id, score) in bm25_rank(&docs, query, TIER1_TOP) {
+            if score >= TIER1_FLOOR {
+                hits.extend(tier1.iter().copied().find(|r| r.id == id));
+            }
+        }
+    }
+    let mut fires: Vec<Fire> = hits
+        .into_iter()
+        .map(|r| {
+            let mut action = r.action.clone();
+            if r.tier() > 0 && matches!(action.as_str(), "block" | "require-ack") {
+                action = "warn".into();
+            }
+            if action == "require-ack" {
+                action = if ev.acks.contains(&r.id) {
+                    "inform"
+                } else {
+                    "block"
+                }
+                .into();
+            }
+            let text = [&r.text, &r.what]
+                .into_iter()
+                .find(|t| !t.is_empty())
+                .cloned()
+                .or_else(|| r.when.retrieval.clone())
+                .unwrap_or_default();
+            let text = format!("{text}{}", heads_up(r, now));
+            Fire {
+                rule: r.id.clone(),
+                law: r.law.clone(),
+                class: r.class().to_string(),
+                deliver: r.deliver().to_string(),
+                tier: r.tier(),
+                why: if r.why.is_empty() {
+                    text.clone()
+                } else {
+                    r.why.clone()
+                },
+                instead: r.instead.clone(),
+                text,
+                action,
+            }
+        })
+        .collect();
+    fires.sort_by(|a, b| {
+        rank(&a.action)
+            .cmp(&rank(&b.action))
+            .then_with(|| a.rule.cmp(&b.rule))
+    });
+    fires.dedup_by(|a, b| a.rule == b.rule);
+    let verdict = match fires.first() {
+        Some(f) if f.action == "block" => "block",
+        Some(f) if f.action == "warn" => "warn",
+        _ if fires.iter().any(|f| f.deliver == "context") => "inject",
+        _ => "allow",
+    };
+    // A block verdict carries only the refusals; the rest wait for a retry.
+    if verdict == "block" {
+        fires.retain(|f| f.action == "block");
+    }
+    let reasons = fires
+        .iter()
+        .filter(|f| rank(&f.action) < 2)
+        .map(|f| format!("{}: {}", f.rule, f.why))
+        .collect();
+    Decision {
+        verdict,
+        fires,
+        reasons,
+        unevaluated,
+    }
+}
+
+/// One rule read against an event: whether it applies and why. `status` is
+/// `applies`, `out-of-scope`, `expired`, `stop-engine`, `unmatched`,
+/// `retrieval` (tier 1, read only at a prompt or skill event) or
+/// `unevaluated` (tier 2, a match that no one decides here).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Explained {
+    pub rule: String,
+    pub law: Option<String>,
+    pub action: String,
+    pub tier: u8,
+    pub status: &'static str,
+    pub clauses: Vec<Clause>,
+}
+
+/// Read every rule against one event and say why each applies or not. Uses
+/// the same `scope_fits`, `expired` and `clauses` as `decide`, so a tier-0
+/// `applies` row is exactly a rule `decide` fires.
+pub fn explain(rules: &[Rule], ev: &Event, now: chrono::NaiveDate) -> Vec<Explained> {
+    rules
+        .iter()
+        .map(|r| {
+            let clauses = clauses(r, ev);
+            let held = clauses.iter().all(|c| c.held);
+            let status = if !r.when.predicates.is_empty() {
+                "stop-engine"
+            } else if !scope_fits(r.scope.as_deref(), ev) {
+                "out-of-scope"
+            } else if expired(r.expires.as_deref(), now) {
+                "expired"
+            } else if !held {
+                "unmatched"
+            } else {
+                match r.tier() {
+                    0 => "applies",
+                    1 => "retrieval",
+                    _ => "unevaluated",
+                }
+            };
+            Explained {
+                rule: r.id.clone(),
+                law: r.law.clone(),
+                action: r.action.clone(),
+                tier: r.tier(),
+                status,
+                clauses,
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rule(toml_row: &str) -> Rule {
+        parse_file(&format!("[[rule]]\n{toml_row}"))
+            .unwrap()
+            .rule
+            .remove(0)
+    }
+
+    #[test]
+    fn a_rule_in_its_last_day_says_when_it_ends_and_how_to_renew() {
+        let day = |d| chrono::NaiveDate::from_ymd_opt(2026, 11, d).unwrap();
+        let r = rule("id = \"law-x\"\nlaw = \"d-1\"\ntext = \"tiers\"\naction = \"inform\"\nexpires = \"2026-11-04\"\n[rule.when]\nevents = [\"prompt\"]\n");
+        let ev = Event {
+            kind: "prompt".into(),
+            ..Default::default()
+        };
+        let near = decide(std::slice::from_ref(&r), &ev, day(3));
+        assert!(
+            near.fires[0]
+                .text
+                .contains("ends 2026-11-04; renew: fno inbox law renew d-1 --until <date>"),
+            "{}",
+            near.fires[0].text
+        );
+        let far = decide(std::slice::from_ref(&r), &ev, day(1));
+        assert_eq!(far.fires[0].text, "tiers");
+    }
+
+    #[test]
+    fn a_denying_rule_needs_a_tier0_trigger_and_a_block_class() {
+        let r =
+            rule("id = \"r1\"\naction = \"block\"\n[rule.when]\nretrieval = \"python edits\"\n");
+        let problems = r.problems();
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.starts_with("r1: ") && p.contains("tier-0 trigger")),
+            "{problems:?}"
+        );
+        let r = rule("id = \"r2\"\naction = \"block\"\nclass = \"next-turn\"\n[rule.when]\ntools = [\"Edit\"]\n");
+        assert!(r
+            .problems()
+            .iter()
+            .any(|p| p.contains("does not fit class")));
+        // A tier-2 rule may deny at a door, where the call is off the hot path.
+        let r = rule("id = \"r3\"\naction = \"block\"\n[rule.when]\nevents = [\"door:merge\"]\nclassifier = \"does the PR break a freeze?\"\n");
+        assert!(r.problems().is_empty(), "{:?}", r.problems());
+        let r = rule("id = \"r4\"\naction = \"warn\"\nexpires = \"until x closes\"\nscope = \"project:fno\"\n[rule.when]\npaths = [\"a\"]\n");
+        assert!(r.problems().is_empty(), "{:?}", r.problems());
+        let r = rule("id = \"r5\"\naction = \"warn\"\nexpires = \"soon\"\n");
+        assert_eq!(
+            r.problems().len(),
+            2,
+            "bad expires and no trigger: {:?}",
+            r.problems()
+        );
+    }
+
+    #[test]
+    fn tier0_match_reads_every_set_field_as_a_glob() {
+        let r = rule("id = \"py\"\naction = \"block\"\n[rule.when]\nevents = [\"pre-tool\"]\ntools = [\"Edit\", \"Write\"]\npaths = [\"cli/src/fno/*.py\"]\n");
+        let mut ev = Event {
+            kind: "pre-tool".into(),
+            tool: Some("Edit".into()),
+            paths: vec!["cli/src/fno/backlog/law.py".into()],
+            ..Event::default()
+        };
+        assert!(matches(&r, &ev));
+        ev.paths = vec!["crates/fno-agents/src/backlog/rules.rs".into()];
+        assert!(!matches(&r, &ev), "a Rust path is outside the glob");
+        ev.paths = vec!["cli/src/fno/law.py".into()];
+        ev.tool = Some("Read".into());
+        assert!(!matches(&r, &ev), "a Read is not an Edit");
+        ev.tool = None;
+        assert!(!matches(&r, &ev), "a set field needs a value");
+    }
+
+    fn day() -> chrono::NaiveDate {
+        chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap()
+    }
+
+    #[test]
+    fn decide_answers_the_strongest_fire_and_names_it() {
+        let rules = vec![
+            rule("id = \"tag-freeze\"\naction = \"block\"\nwhy = \"release is frozen\"\n[rule.when]\nevents = [\"pre-tool\"]\ncommands = [\"git tag v*\"]\n"),
+            rule("id = \"bp\"\naction = \"inform\"\n[rule.when]\nskills = [\"fno:blueprint\"]\n"),
+            rule("id = \"old\"\naction = \"block\"\nexpires = \"2026-01-01\"\n[rule.when]\ncommands = [\"git tag*\"]\n"),
+        ];
+        let mut ev = Event {
+            kind: "pre-tool".into(),
+            tool: Some("Bash".into()),
+            command: Some("git tag v0.5.0".into()),
+            ..Event::default()
+        };
+        let scoped = rule("id = \"fnh-only\"\naction = \"warn\"\nscope = \"project:fnh\"\n[rule.when]\ncommands = [\"git tag*\"]\n");
+        assert_eq!(
+            decide(std::slice::from_ref(&scoped), &ev, day()).verdict,
+            "warn",
+            "an unresolved project fails open"
+        );
+        ev.project = Some("fno".into());
+        assert_eq!(decide(&[scoped], &ev, day()).verdict, "allow");
+        let d = decide(&rules, &ev, day());
+        assert_eq!(d.verdict, "block");
+        let ids: Vec<&str> = d.fires.iter().map(|f| f.rule.as_str()).collect();
+        assert_eq!(ids, ["tag-freeze"], "an expired rule never fires");
+        assert_eq!(d.reasons, ["tag-freeze: release is frozen"]);
+        let skill = Event {
+            kind: "skill".into(),
+            skill: Some("fno:blueprint".into()),
+            ..Event::default()
+        };
+        assert_eq!(decide(&rules, &skill, day()).verdict, "inject");
+        let ack = rule(
+            "id = \"ack\"\naction = \"require-ack\"\n[rule.when]\nevents = [\"plan-start\"]\n",
+        );
+        let mut ev = Event {
+            kind: "plan-start".into(),
+            ..Event::default()
+        };
+        assert_eq!(
+            decide(std::slice::from_ref(&ack), &ev, day()).verdict,
+            "block"
+        );
+        ev.acks = vec!["ack".into()];
+        assert_eq!(decide(&[ack], &ev, day()).verdict, "inject");
+    }
+
+    #[test]
+    fn explain_agrees_with_decide_and_names_the_failed_filter() {
+        let rules = vec![
+            rule("id = \"hit\"\naction = \"warn\"\n[rule.when]\ntools = [\"Edit\"]\npaths = [\"cli/src/*.py\"]\n"),
+            rule("id = \"miss\"\naction = \"warn\"\n[rule.when]\ntools = [\"Bash\"]\n"),
+            rule("id = \"old\"\naction = \"warn\"\nexpires = \"2026-01-01\"\n[rule.when]\ntools = [\"Edit\"]\n"),
+            rule("id = \"elsewhere\"\naction = \"warn\"\nscope = \"node:x-1\"\n[rule.when]\ntools = [\"Edit\"]\n"),
+        ];
+        let ev = Event {
+            kind: "pre-tool".into(),
+            tool: Some("Edit".into()),
+            paths: vec!["cli/src/law.py".into()],
+            ..Event::default()
+        };
+        let why = explain(&rules, &ev, day());
+        let got: Vec<(&str, &str)> = why.iter().map(|e| (e.rule.as_str(), e.status)).collect();
+        assert_eq!(
+            got,
+            [
+                ("hit", "applies"),
+                ("miss", "unmatched"),
+                ("old", "expired"),
+                ("elsewhere", "out-of-scope")
+            ]
+        );
+        let fired: Vec<String> = decide(&rules, &ev, day())
+            .fires
+            .into_iter()
+            .map(|f| f.rule)
+            .collect();
+        assert_eq!(fired, ["hit"], "applies is exactly what decide fires");
+        let failed = why[1].clauses.iter().find(|c| !c.held).unwrap();
+        assert_eq!(
+            (failed.field, failed.saw.as_deref()),
+            ("tools", Some("Edit"))
+        );
+        let paths = why[0].clauses.iter().find(|c| c.field == "paths").unwrap();
+        assert_eq!(paths.saw.as_deref(), Some("cli/src/law.py"));
+    }
+
+    #[test]
+    fn a_ranked_match_never_refuses_a_tool() {
+        // problems() refuses this row; decide() must still hold if one slips by.
+        let mut r = rule("id = \"t1\"\naction = \"inform\"\n[rule.when]\nevents = [\"prompt\"]\nretrieval = \"release tag freeze version bump\"\n");
+        r.action = "block".into();
+        let ev = Event {
+            kind: "prompt".into(),
+            text: Some("cut the release tag for the version bump".into()),
+            ..Event::default()
+        };
+        let mut rules = vec![r];
+        for (i, text) in [
+            "graph store writes",
+            "mail send raw",
+            "spawn model tier",
+            "worktree prune",
+        ]
+        .iter()
+        .enumerate()
+        {
+            rules.push(rule(&format!("id = \"other{i}\"\naction = \"inform\"\n[rule.when]\nevents = [\"prompt\"]\nretrieval = \"{text}\"\n")));
+        }
+        let d = decide(&rules, &ev, day());
+        assert_eq!(d.verdict, "warn", "{d:?}");
+        assert_eq!(d.fires.len(), 1, "unrelated rules stay under the floor");
+        assert_eq!(d.fires[0].action, "warn");
+        assert_eq!(d.fires[0].tier, 1);
+    }
+
+    #[test]
+    fn bm25_ranks_the_rare_term_first() {
+        let docs = vec![
+            (
+                "a".to_owned(),
+                "merge the pull request when review passes".to_owned(),
+            ),
+            (
+                "b".to_owned(),
+                "merge freeze holds every release merge".to_owned(),
+            ),
+            (
+                "c".to_owned(),
+                "review the pull request before merge".to_owned(),
+            ),
+        ];
+        let ranked = bm25_rank(&docs, "may I merge during the freeze", 3);
+        assert_eq!(ranked[0].0, "b", "{ranked:?}");
+        assert!(bm25_rank(&docs, "unrelated words", 3).is_empty());
+    }
+}

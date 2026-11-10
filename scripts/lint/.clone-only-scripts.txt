@@ -1,0 +1,56 @@
+# CLONE_ONLY_SCRIPTS - the allowlist for `fno doctor lint shellout-drift` (US4).
+#
+# Every repo-root script that a `cli/src/fno/` command still shells out to MUST be
+# listed here, and each entry's command MUST degrade on a bare `pip install fno`
+# (exit non-zero with a non-empty actionable message, never a 127, a panic, or
+# a silent exit). The guard PROVES the degrade by invoking the command in a
+# no-script environment - so adding a line here without a real degrade path
+# fails CI (AC4-EDGE), and removing the elimination of a shell-out (or adding a
+# new one) without listing it here fails CI (AC4-ERR).
+#
+# This allowlist is the single source of truth for "what is intentionally
+# clone-only." The correct way to REMOVE an entry is to fold its logic into
+# Rust / internalize it into the package (delete the shell-out), not to relax
+# the guard.
+#
+# Format, one per line:
+#   <repo-relative script path> :: <fno command + args used to prove it degrades>
+# Blank lines and lines starting with # are ignored. The command args are passed
+# verbatim to the `fno` CLI in a no-script env (FNO_REPO_ROOT -> empty dir,
+# CLAUDE_PLUGIN_ROOT unset, cwd outside any repo).
+#
+# Scope note: the guard scans for shell-outs whose script path is rooted at the
+# SHARED resolvers `resolve_repo_root()` / `resolve_plugin_script()` (the idiom
+# every plugin-script call site uses). A command that roots a shell-out via a
+# private `git rev-parse` helper instead is invisible to the guard; the correct
+# fix is to re-root it on the shared resolver and add a degrade branch + an
+# allowlist entry below, not to leave it
+# private and unlisted.
+
+
+# The bundle shell-outs (scripts/generate-skill-bundles.sh,
+# scripts/lint/check-skill-bundles-fresh.sh,
+# scripts/lint/check-skill-reach.sh) dropped from this list in
+# the PR that deleted the Python bundle CLI: the guard scans cli/src/fno,
+# and the caller there is gone (the native `fno doctor bundle` resolves the
+# same scripts from the Rust side, outside this guard's scope). INTERNALIZED
+# for the Python tree the same way the pr-*.sh entries below were.
+
+
+
+# fno do pr {merge,verify,rebase} - INTERNALIZED. The four pr-*.sh
+# were ported to in-package Python (fno/pr/_merge.py, _verify.py, _rebase.py)
+# shelling to gh/git, so these commands run from a bare pip install with no
+# repo-root script. No allowlist entry remains; the drift guard now passes
+# without flagging the pr paths.
+
+# fno doctor lint stale-skill-refs - the stale-skill-reference audit gate; operates on
+# the repo's skills/ source tree (re-homed from `fno consolidation audit`).
+
+# The six lint-family entries (flock-pattern x2, stale-skill-refs,
+# retired-commands, preamble-budget, internal-refs) and the plan-fidelity
+# entry dropped in the PR that deleted the Python lint legs and folded the
+# fidelity body guard native: the guard scans cli/src/fno for repo-root
+# shell-outs, and every caller there is gone. The checks now run behind
+# `fno doctor lint <check>` (native front door) and the body guard runs the
+# oos script from crates/fno-agents, both outside this guard's scan scope.

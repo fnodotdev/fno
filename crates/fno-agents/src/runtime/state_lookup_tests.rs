@@ -1,0 +1,127 @@
+//! Lookup-law tests: the registry's primary key is the
+//! `(harness, harness_session_id)` pair; a label - its own
+//! name or a prior `aliases` entry - resolves, but an AMBIGUOUS label (two
+//! rows answer it) resolves to nothing rather than to the first match.
+
+use super::*;
+
+/// One row, minimal, with the identity axes the lookups key on.
+fn entry(name: &str, harness: &str, sid: Option<&str>) -> RegistryEntry {
+    RegistryEntry {
+        name: name.into(),
+        aliases: Vec::new(),
+        short_id: String::new(),
+        legacy_provider: String::new(),
+        provider: None,
+        model: None,
+        model_basis: None,
+        effort: None,
+        cwd: "/tmp/x".into(),
+        project_root: String::new(),
+        session_id: None,
+        claude_session_uuid: None,
+        harness: Some(harness.into()),
+        harness_session_id: sid.map(str::to_string),
+        predecessor_session_ids: Vec::new(),
+        forked_from_session_id: None,
+        launch_account: None,
+        related_session_id: None,
+        transcript_path: None,
+        start_source: None,
+        node: None,
+        node_reason: None,
+        pending_session_row: None,
+        requested_model: None,
+        requested_provider: None,
+        requested_effort: None,
+        harness_args: Vec::new(),
+        route_provider_id: None,
+        model_name: None,
+        account_record_id: None,
+        messaging_socket_path: None,
+        codex_session_id: None,
+        gemini_session_id: None,
+        mcp_channel_id: None,
+        host_mode: None,
+        cc_session_id: None,
+        status: AgentStatus::Live,
+        last_message_at: None,
+        created_at: "2026-09-04T00:00:00Z".into(),
+        pid: None,
+        pid_start_time: None,
+        keeper_child_pid: None,
+        substrate: None,
+        log_path: None,
+        last_reconciled_at: None,
+        inside_leg: None,
+        exited_at: None,
+        stop: None,
+        mux: None,
+        screen_state: None,
+        role_level: None,
+        role_scope: None,
+        role_grantor: None,
+        route_settings_path: None,
+        fno_id: None,
+        delivery_policy: None,
+        sandbox_posture: None,
+        resolved_sandbox: None,
+        granted_writable_roots: Vec::new(),
+        requested_permission_mode: None,
+        turn_policy_source: None,
+        git_grant: None,
+        origin: None,
+        spawn_trigger: None,
+        liveness: None,
+        liveness_measured_at: None,
+        harness_title: None,
+        launch_account_source: None,
+        spawned_by_session: None,
+        spawned_by_harness: None,
+        spawned_by_cwd: None,
+        lineage_kind: None,
+        lineage_reason: None,
+        adopted_by_session: None,
+        legacy_claude_short_id: None,
+        spawn_id: None,
+        spawn_provenance: None,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn keyed_write_hits_only_the_resolved_row_ac1_hp() {
+    // AC1-HP: two rows share a label; a writer that resolved ONE by session
+    // id and writes under the lock changes only that row.
+    let sid_a = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    let sid_b = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    let mut reg = Registry::default();
+    reg.entries = vec![
+        entry("dup", "claude", Some(sid_a)),
+        entry("dup", "claude", Some(sid_b)),
+    ];
+    let key = ("claude".to_string(), Some(sid_b.to_string()));
+    if let Some(e) = find_keyed_mut(&mut reg, &key, "dup") {
+        e.last_message_at = Some("hit".into());
+    }
+    assert!(
+        reg.find_by_session("claude", sid_a)
+            .unwrap()
+            .last_message_at
+            .is_none(),
+        "row a untouched"
+    );
+    assert_eq!(
+        reg.find_by_session("claude", sid_b)
+            .unwrap()
+            .last_message_at
+            .as_deref(),
+        Some("hit"),
+        "row b carries the write"
+    );
+    // And the ambiguous label resolves to nothing: find refuses rather than
+    // handing the writer whichever row iterates first.
+    assert!(reg.find("dup").is_none(), "ambiguous label refuses");
+    assert!(reg.find_mut("dup").is_none());
+    assert_eq!(reg.label_matches_count("dup"), 2, "both rows answer it");
+}

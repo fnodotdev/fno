@@ -1,0 +1,725 @@
+<!doctype html>
+<!--
+  fno mux read-only web attach. Served inline by `fno mux serve --web`
+  via include_str! - no CDN, no external resource of any kind, so the strict CSP
+  below (default-src 'none') can hold and the page works offline / airgapped.
+
+  Renders one pane at a time. Cells arrive already structured (char + fg/bg +
+  style flags) in each ServerMsg::Frame, so we paint them straight to a <pre> of
+  styled <span> runs - no ANSI reconstruction, no xterm.js. Read-only: the page
+  never sends a byte upstream; pane selection only changes which cached frame we
+  draw locally.
+  Share mode (`fno mux serve --share`, window.FNO_SHARE) sends one knock to
+  the share bridge, which never writes to the mux socket, and posts coach and
+  steer notes the driver reads first.
+
+  NOT SCROLLBACK. A Frame is a composite of the CURRENT VISIBLE GRID
+  and the bridge caches only the latest one per pane, so no history reaches this
+  page. What it does instead is RETAIN: it diffs consecutive frames, keeps the
+  rows that scrolled off the top, and paints them above the live grid. That is
+  strictly weaker than scrollback and the UI says so. Its ceiling:
+    - it starts empty; history begins when you select the pane, never before
+    - it is per-selected-pane; switching panes clears it
+    - ONLY a whole-screen scroll is detectable. A pane with a fixed header, or
+      one driving its own scrolling region, retains nothing at all
+    - a burst larger than one screenful between two painted frames is lost, and
+      the page paints at most one frame per pane per display frame
+    - any full-screen repaint (alternate screen, clear, resize) breaks continuity
+  The last three are made VISIBLE rather than hidden: a frame we cannot prove
+  continuity across retains nothing, and the next rows that ARE retained get a
+  break rule above them. Never silent concatenation, and never a guess.
+
+  Real history is a PROTOCOL change, and the shape matters. A history REQUEST is
+  unreachable from here: web.rs:381 calls `writer.forget()` on the socket write
+  half, and that call IS Locked Decision 5 (read-only is structural), so nothing
+  in this process can ask the server for anything. Reaching history through the
+  existing scroll is worse than unreachable - `Frame.scroll_offset` is SHARED
+  state broadcast to every viewer, so a browser-driven scroll would move the TUI
+  user's viewport.
+
+  The open path is a PUSH, not a pull, and it costs read-only nothing: the server
+  already knows an observer from a driver (`server.rs`, `rows == 0 && cols == 0`)
+  and the vt layer already reads history (`Pane::read_tail`), so it can volunteer
+  a pane's history to a passive client unprompted. The browser still asks for
+  nothing and `writer.forget()` stays exactly where it is. That is filed; this
+  page keeps retention until it lands.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- No maximum-scale / user-scalable: that pair disables pinch-zoom on iOS, and a
+     pane grid is as wide as its TERMINAL (183 columns in the reported specimen),
+     so zooming is the operator's only way in on a phone. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; connect-src 'self' ws: wss:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<title>fno mux (read-only)</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #0b0e14; color: #c5cdd9;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  body { display: flex; flex-direction: column; }
+  #bar { flex: 0 0 auto; padding: 6px 10px; font-size: 13px; display: flex;
+    align-items: center; gap: 10px; border-bottom: 1px solid #1c2230; }
+  #bar.connecting { background: #1a2030; color: #8a93a6; }
+  #bar.live { background: #0b0e14; }
+  #bar.disconnected { background: #4a3a12; color: #f0c674; }
+  #bar.ended { background: #4a1616; color: #f08a8a; }
+  #bar.authfailed { background: #4a1616; color: #f08a8a; }
+  #status { font-weight: 600; }
+  /* Shared nav injected at serve time (see web.rs nav_fragment) */
+  /* Pushed to the far edge, and a 30px box so a thumb can hit it. */
+  #fitbtn { margin-left: auto; font: inherit; font-size: 12px; cursor: pointer;
+    background: #141a26; color: #9aa4b6; border: 1px solid #232b3a;
+    border-radius: 5px; padding: 4px 10px; min-width: 46px; min-height: 30px; }
+  #picker { flex: 0 0 auto; display: flex; gap: 6px; overflow-x: auto;
+    padding: 6px 10px; border-bottom: 1px solid #1c2230; white-space: nowrap; }
+  #picker button { font: inherit; font-size: 12px; cursor: pointer;
+    background: #141a26; color: #9aa4b6; border: 1px solid #232b3a;
+    border-radius: 5px; padding: 3px 9px; }
+  #picker button.active { background: #24406b; color: #fff; border-color: #3763ac; }
+  #picker button .dot { display: inline-block; width: 7px; height: 7px;
+    border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+  .b-working { background: #6cc04a; } .b-blocked { background: #f0c674; }
+  .b-done { background: #4a90d9; } .b-idle { background: #4a5568; }
+  #screen { flex: 1 1 auto; overflow: auto; }
+  pre#term { margin: 0; padding: 8px 10px; font-size: 13px; line-height: 1.15;
+    white-space: pre; }
+  /* The retained region is dimmed so the live grid stays the thing you read,
+     and so nobody mistakes browser-kept lines for terminal scrollback. */
+  .kept { opacity: .72; }
+  .kept-note, .kept-break { color: #6f7a8f; font-style: italic; }
+  /* The note is fixed-width prose inside `white-space: pre`, so on any pane
+     narrower than the note it, not the grid, set the page width and brought the
+     horizontal scrollbar fit-to-width exists to remove. */
+  .kept-note { white-space: pre-wrap; }
+  .cur { outline: 1px solid #c5cdd9; }
+  #overlay { position: fixed; inset: 0; display: none; align-items: center;
+    justify-content: center; background: rgba(11,14,20,.85); font-size: 15px;
+    text-align: center; padding: 24px; }
+  #overlay.show { display: flex; }
+  /* Share mode (`fno mux serve --share`): the driver admits each viewer. */
+  nav.share-nav { padding: 6px 10px; font-size: 13px; border-bottom: 1px solid #1c2230; }
+  .fno-nav .share-tag { color: #f0c674; }
+  .share-banner { padding: 6px 10px; background: #1a2030; color: #f0c674; font-size: 13px; }
+  .share-boxes { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 10px;
+    border-bottom: 1px solid #1c2230; font-size: 13px; }
+  /* A class display rule outranks the hidden attribute, so restate it. */
+  .share-boxes[hidden] { display: none; }
+  .share-boxes input { flex: 1 1 14em; font: inherit; background: #141a26; color: #c5cdd9;
+    border: 1px solid #232b3a; border-radius: 5px; padding: 4px 8px; }
+  .share-boxes button { font: inherit; cursor: pointer; background: #24406b; color: #fff;
+    border: 1px solid #3763ac; border-radius: 5px; padding: 4px 10px; }
+  #share-note { color: #8a93a6; align-self: center; }
+  .share-history { color: #8a93a6; }
+</style>
+</head>
+<body>
+<!--fno-nav-->
+  <div id="bar" class="connecting"><span id="status">connecting…</span><span id="sub"></span><button id="fitbtn" type="button" title="fit the grid to the screen width, or show it at full size">fit</button></div>
+  <div id="picker"></div>
+  <div id="screen"><pre id="term"><span id="keptnote" class="kept-note"></span><span id="kept" class="kept"></span><span id="live"></span></pre></div>
+  <div id="overlay"></div>
+<script>
+"use strict";
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const bar = $("bar"), statusEl = $("status"), subEl = $("sub"),
+        picker = $("picker"), term = $("term"), overlay = $("overlay"),
+        screenEl = $("screen"), fitBtn = $("fitbtn"), keptEl = $("kept"),
+        keptNoteEl = $("keptnote"), liveEl = $("live");
+
+  // ---- state ----
+  const frames = new Map();   // pane_id -> latest Frame (insertion order = LRU)
+  const MAX_PANES = 128;      // LRU cap; mirrors the bridge snapshot bound
+  let squads = [];            // from Layout
+  let agents = [];            // from Layout
+  let current = null;         // selected pane_id
+  let upstreamUp = true;
+  // Retention, NOT scrollback: rows evicted off the top of the live
+  // grid, kept by this browser for the SELECTED pane only. The file header says
+  // why the protocol cannot answer this and what the ceiling is.
+  // The retained rows live in their OWN element, appended to and trimmed in
+  // place. Rebuilding them into the live grid's innerHTML each frame reparsed
+  // the whole region per frame - megabytes of HTML at the cap, on the phone this
+  // feature exists for. Only the live grid is rewritten per frame now.
+  const MAX_KEPT_ROWS = 1000; // hard cap; the oldest row is dropped past it
+  let keptFor = null;         // the pane the retained region belongs to
+  let prevRows = null;        // last drawn rows, for the overlap diff
+  let gapPending = false;     // a frame we could not prove continuity across
+  const KEPT_NOTE = "recent output kept by this browser since you opened this pane, not terminal scrollback";
+  const BREAK_RULE = "─".repeat(8) + " break in output " + "─".repeat(8);
+
+  // ---- xterm 256-color palette -> css ----
+  const base16 = ["#000000","#cd0000","#00cd00","#cdcd00","#0000ee","#cd00cd",
+    "#00cdcd","#e5e5e5","#7f7f7f","#ff0000","#00ff00","#ffff00","#5c5cff",
+    "#ff00ff","#00ffff","#ffffff"];
+  const cube = [0,95,135,175,215,255];
+  function idxColor(n) {
+    if (n < 16) return base16[n];
+    if (n < 232) { n -= 16; return `rgb(${cube[(n/36|0)%6]},${cube[(n/6|0)%6]},${cube[n%6]})`; }
+    const v = 8 + (n - 232) * 10; return `rgb(${v},${v},${v})`;
+  }
+  function css(color, isFg) {
+    if (color === "Default" || color == null) return isFg ? "#c5cdd9" : "#0b0e14";
+    if (color.Indexed != null) return idxColor(color.Indexed);
+    if (color.Rgb) {
+      // Pane data arrives from any local process writing to the mux, so every
+      // component is coerced and clamped to 0..255: a style value carries
+      // digits and commas, nothing injectable.
+      const comp = (v) => {
+        v = Number(v);
+        return Number.isFinite(v) ? Math.min(255, Math.max(0, Math.trunc(v))) : 0;
+      };
+      return `rgb(${comp(color.Rgb[0])},${comp(color.Rgb[1])},${comp(color.Rgb[2])})`;
+    }
+    return isFg ? "#c5cdd9" : "#0b0e14";
+  }
+
+  // flags (mirror proto::cell_flags)
+  const BOLD=1, ITALIC=2, UNDERLINE=4, INVERSE=8, DIM=16, WIDE_SPACER=32, SELECTED=64;
+
+  function cellStyle(cell) {
+    let fg = css(cell.fg, true), bg = css(cell.bg, false);
+    const f = cell.flags | 0;
+    if (f & (INVERSE | SELECTED)) { const t = fg; fg = bg; bg = t; }
+    const props = [["color", fg], ["background", bg]];
+    if (f & BOLD) props.push(["fontWeight", "bold"]);
+    if (f & DIM) props.push(["opacity", ".6"]);
+    if (f & ITALIC) props.push(["fontStyle", "italic"]);
+    if (f & UNDERLINE) props.push(["textDecoration", "underline"]);
+    return props;
+  }
+  // Two cells share a run only if they render identically.
+  const sameStyle = (a, b) =>
+    a.flags === b.flags &&
+    JSON.stringify(a.fg) === JSON.stringify(b.fg) &&
+    JSON.stringify(a.bg) === JSON.stringify(b.bg);
+
+  // One grid row as styled <span> runs. Returns { key, paint }: `key` is the
+  // equality signature the scroll-proofing compares (equal keys, equal
+  // rendered row), `paint()` builds a fresh fragment (spans plus the trailing
+  // newline text node pre layout needs) so one row can paint into both the
+  // retained pane and the live pane without sharing nodes. Rows are built as
+  // DOM, never as HTML strings: cell text and colors come from pane data any
+  // local process can influence, so nothing untrusted is handed to innerHTML.
+  function renderRow(fr, r, showCur) {
+    const runs = [];
+    let run = "", runProps = null, runFlags = null;
+    const flush = () => {
+      if (run) {
+        runs.push({ props: runProps, text: run });
+        run = "";
+      }
+    };
+    for (let cx = 0; cx < fr.cols; cx++) {
+      const cell = fr.cells[r * fr.cols + cx];
+      if ((cell.flags | 0) & WIDE_SPACER) continue; // right half of a wide glyph
+      if (showCur && r === fr.cursor_row && cx === fr.cursor_col) {
+        flush(); runFlags = null;
+        runs.push({ props: cellStyle(cell), text: cell.c, cur: true });
+        continue;
+      }
+      if (runFlags === null || !sameStyle(cell, runFlags)) {
+        flush(); runFlags = cell; runProps = cellStyle(cell);
+      }
+      run += cell.c;
+    }
+    flush();
+    const key = JSON.stringify(runs);
+    const paint = () => {
+      const frag = document.createDocumentFragment();
+      // One wrapper span per row: the kept pane's cap counts child elements,
+      // so a row must be exactly one element or the trim would orphan runs.
+      const rowEl = document.createElement("span");
+      for (const run of runs) {
+        const span = document.createElement("span");
+        if (run.cur) span.className = "cur";
+        for (const [prop, value] of run.props) span.style[prop] = value;
+        span.textContent = run.text;
+        rowEl.append(span);
+      }
+      rowEl.append(document.createTextNode("\n"));
+      frag.append(rowEl);
+      return frag;
+    };
+    return { key, paint };
+  }
+
+  // The deepest fixed bottom region we will look past. An agent pane keeps an
+  // input box or a status footer on its last rows, and it is the DOMINANT case
+  // here - a claude or codex pane is the thing an operator opens this page to
+  // watch. Requiring the whole grid to shift made retention permanently inert on
+  // every one of them, silently, which is worse than not shipping it.
+  const MAX_FIXED_TAIL = 6;
+
+  // The smallest k where prev[k..body) equals next[0..body-k), or -1 if the
+  // region is not related by a scroll at all. k === 0 means it did not move.
+  function scrollWithin(prev, next, body) {
+    for (let k = 0; k < body; k++) {
+      let ok = true;
+      for (let i = k; i < body; i++) if (prev[i] !== next[i - k]) { ok = false; break; }
+      if (ok) return k;
+    }
+    return -1;
+  }
+
+  // How many rows scrolled off the top between two frames, or -1 when that is
+  // not provable. k === 0 means nothing moved, so a redraw of an unchanged frame
+  // retains nothing - that idempotence is load-bearing, because a Layout redraw
+  // calls draw() with the same frame.
+  //
+  // -1 must NOT be read as "the whole screen scrolled off". An earlier version
+  // returned n there and evicted the entire previous screen. A terminal changes
+  // rows in place constantly - a spinner tick, a status line, a progress bar, a
+  // prompt appearing on an unfilled screen - and none of that is a scroll. Every
+  // such frame dumped a duplicate of the visible screen into the retained
+  // region, filling the cap in about twenty frames with copies of what was
+  // already on screen and trimming the real output off the top.
+  //
+  // The whole grid is tried first, because it is the plain case and the only one
+  // that can honestly answer 0. Then successively shallower bodies, so a pane
+  // whose last rows are pinned still has its body read. The SHALLOWEST fixed
+  // tail that explains the frame wins, which keeps the answer conservative.
+  //
+  // Row strings are compared, not cells, because draw() already built them.
+  // ponytail: O(MAX_FIXED_TAIL * n^2) row-string compares worst case, n = rows.
+  // At a phone's ~50 rows that is ~17k short-string compares on a frame nothing
+  // explains; the common frames exit at the first or second body. A suffix
+  // automaton is the upgrade if it ever shows up in a profile.
+  function evictedRowCount(prev, next) {
+    const n = next.length;
+    if (!prev || prev.length !== n) return -1; // no previous frame, or resized
+    const maxTail = Math.min(MAX_FIXED_TAIL, n - 1);
+    const prevKeys = prev.map((row) => row.key);
+    const nextKeys = next.map((row) => row.key);
+    for (let f = 0; f <= maxTail; f++) {
+      const k = scrollWithin(prevKeys, nextKeys, n - f);
+      if (k >= 0) return k;
+    }
+    return -1;
+  }
+
+  // ---- fit to width, CLIENT SIDE ONLY ----
+  // A pane is as wide as its TERMINAL - 183 columns in the reported specimen -
+  // and a phone shows roughly 45 of them at 13px. The fix shrinks the TYPE here
+  // and never touches the terminal. It cannot do otherwise and must not try:
+  // the bridge attaches as a passive observer (rows: 0, cols: 0) precisely so it
+  // is excluded from the smallest-client clamp and never shrinks a PTY, and it
+  // drops the socket write half besides. A page that asked the server to narrow
+  // the pane would collapse it for every native viewer at the same time.
+  const BASE_FONT_PX = 13;  // the 1:1 size, and the ceiling when fitting
+  const MIN_FONT_PX = 2;    // past this there is nothing left for zoom to rescue
+  let fitToWidth = true;
+  let advanceRatio = 0;     // character advance width per 1px of font-size
+  let lastFitKey = "";
+
+  // Measured, not assumed: the ratio is a property of whichever font in the
+  // stack the device actually resolved, and guessing 0.6 puts a 183-column grid
+  // off the edge on any face that differs.
+  function measureAdvance() {
+    const probe = document.createElement("span");
+    probe.style.cssText =
+      "position:absolute;visibility:hidden;white-space:pre;font-size:100px;";
+    probe.textContent = "0".repeat(100);
+    term.appendChild(probe);
+    const w = probe.getBoundingClientRect().width;
+    probe.remove();
+    return w > 0 ? w / 100 / 100 : 0.6; // fallback: the usual monospace ratio
+  }
+
+  function applyFit(cols) {
+    // clientWidth excludes the scrollbar, which the retained region can summon.
+    const key = `${cols}x${screenEl.clientWidth}x${fitToWidth ? 1 : 0}`;
+    if (key === lastFitKey) return; // a per-frame layout read is not free
+    lastFitKey = key;
+    let px = BASE_FONT_PX;
+    if (fitToWidth && cols > 0) {
+      if (!advanceRatio) advanceRatio = measureAdvance();
+      const st = getComputedStyle(term);
+      const pad = (parseFloat(st.paddingLeft) || 0) + (parseFloat(st.paddingRight) || 0);
+      const avail = screenEl.clientWidth - pad;
+      const want = Math.floor((avail / cols / advanceRatio) * 10) / 10;
+      px = Math.min(BASE_FONT_PX, Math.max(MIN_FONT_PX, want));
+    }
+    term.style.fontSize = px + "px";
+  }
+
+  function refit() {
+    const fr = current != null ? frames.get(current) : null;
+    lastFitKey = ""; // the container may have changed under an unchanged frame
+    // Changing the type size changes scrollHeight several-fold while scrollTop
+    // stays put, so a pane pinned to its tail silently stops following: tapping
+    // the toggle, or just rotating the phone, unpinned it until the operator
+    // scrolled back down by hand.
+    const pinned = screenEl.scrollHeight - screenEl.scrollTop - screenEl.clientHeight < 24;
+    applyFit(fr ? fr.cols : 0);
+    if (pinned) screenEl.scrollTop = screenEl.scrollHeight;
+  }
+
+  fitBtn.onclick = () => {
+    fitToWidth = !fitToWidth;
+    fitBtn.textContent = fitToWidth ? "fit" : "1:1";
+    refit();
+    if (fitToWidth) screenEl.scrollLeft = 0;
+  };
+  addEventListener("resize", refit);
+  addEventListener("orientationchange", refit);
+
+  // One row per element, so the cap can drop the oldest without rebuilding the
+  // rest. Each kept row is painted fresh from its runs, so retention and the
+  // live pane never share nodes.
+  function pushKept(row) {
+    keptEl.append(row.paint());
+    while (keptEl.childElementCount > MAX_KEPT_ROWS) keptEl.firstElementChild.remove();
+  }
+
+  // The break rule as a row object, painted fresh on each push.
+  function breakRow() {
+    const paint = () => {
+      const frag = document.createDocumentFragment();
+      const span = document.createElement("span");
+      span.className = "kept-break";
+      span.textContent = BREAK_RULE;
+      frag.append(span, document.createTextNode("\n"));
+      return frag;
+    };
+    return { paint };
+  }
+
+  function resetKept() {
+    keptEl.textContent = "";
+    keptNoteEl.textContent = "";
+    prevRows = null;
+    gapPending = false;
+  }
+
+  function draw() {
+    const fr = current != null ? frames.get(current) : null;
+    // Retention belongs to one pane. Every path that changes `current` - the
+    // picker, LRU eviction, an exited agent, the first paint - lands here, so
+    // resetting on the mismatch covers them all without touching each one.
+    if (keptFor !== current) { resetKept(); keptFor = current; }
+    if (!fr) { liveEl.textContent = current == null ? "" : "…"; return; }
+    // Defensive re-guard: never draw a geometry-inconsistent grid (AC5-FR twin).
+    if (fr.cells.length !== fr.rows * fr.cols) return;
+
+    // Read the pin BEFORE anything mutates the DOM. Appending evicted rows grows
+    // scrollHeight while scrollTop stays put, so a pin measured afterwards reads
+    // the gap it just created as "the operator scrolled up" - and a burst of
+    // several rows loses the tail for good, on exactly the busy pane this is for.
+    const pinned = screenEl.scrollHeight - screenEl.scrollTop - screenEl.clientHeight < 24;
+
+    const rows = [];
+    for (let r = 0; r < fr.rows; r++) rows.push(renderRow(fr, r, false));
+
+    const evicted = evictedRowCount(prevRows, rows);
+    if (prevRows) {
+      if (evicted < 0) {
+        // Continuity is not provable across this frame. Retain nothing - most of
+        // the previous screen is usually still visible below.
+        //
+        // Only claim a GAP when the old top row has left the screen entirely.
+        // Marking every unprovable frame put a "break in output" rule above
+        // output that was perfectly contiguous: a shell printing into a screen
+        // it has not filled yet produces unprovable frames, then starts
+        // scrolling, and the rule landed on top of the very first lines. A rule
+        // that fires where nothing was lost teaches the operator to ignore it,
+        // which costs more than the rule was ever worth.
+        if (!rows.some((row) => row.key === prevRows[0].key)) gapPending = true;
+      } else if (evicted > 0) {
+        if (gapPending) {
+          pushKept(breakRow());
+          gapPending = false;
+        }
+        for (let i = 0; i < evicted; i++) pushKept(prevRows[i]);
+        if (!keptNoteEl.textContent) keptNoteEl.textContent = KEPT_NOTE + "\n";
+      }
+    }
+    prevRows = rows;
+
+    // The live copy differs from the retained one by the cursor alone.
+    const live = rows.slice();
+    if (fr.cursor_visible && fr.cursor_row < fr.rows) {
+      live[fr.cursor_row] = renderRow(fr, fr.cursor_row, true);
+    }
+
+    applyFit(fr.cols); // before the write: the type size decides scrollHeight
+    liveEl.replaceChildren(...live.map((row) => row.paint()));
+    // Follow the tail unless the operator had scrolled up to read something.
+    if (pinned) screenEl.scrollTop = screenEl.scrollHeight;
+  }
+
+  function badgeClass(a) {
+    if (a.exited) return "b-idle";
+    if (a.badge === "Working") return "b-working";
+    if (a.badge === "Blocked") return "b-blocked";
+    if (a.badge === "Done") return "b-done";
+    return "b-idle";
+  }
+
+  function renderPicker() {
+    // One button per pane we have a frame for, labelled by its agent row when
+    // one exists, else "pane N". Selection is local (never sent upstream).
+    const byPane = new Map();
+    for (const a of agents) if (a.pane_id != null) byPane.set(a.pane_id, a);
+    const ids = [...new Set([...frames.keys(), ...byPane.keys()])].sort((x, y) => x - y);
+    if (current == null && ids.length) {
+      // A pending pane-link want outranks the first-known id: the Layout that
+      // reaches here BEFORE any frame would otherwise steal the paint from
+      // the wanted pane (renderPicker runs on Layout too, not just frames).
+      if (wanted != null && frames.has(wanted)) { current = wanted; wanted = null; }
+      else if (wanted == null) current = ids[0];
+    }
+    picker.replaceChildren();
+    if (!ids.length) {
+      const span = document.createElement("span");
+      span.textContent = "no panes"; span.style.color = "#5c6577"; span.style.fontSize = "12px";
+      picker.appendChild(span); return;
+    }
+    for (const id of ids) {
+      const a = byPane.get(id);
+      const btn = document.createElement("button");
+      if (id === current) btn.className = "active";
+      const label = a ? a.name : `pane ${id}`;
+      if (a) {
+        const dot = document.createElement("span");
+        dot.className = `dot ${badgeClass(a)}`;
+        btn.append(dot);
+      }
+      btn.append(document.createTextNode(label));
+      btn.onclick = () => { current = id; renderPicker(); draw(); };
+      picker.appendChild(btn);
+    }
+  }
+
+  // ---- connection banner state machine ----
+  function setBar(state, text, sub) {
+    bar.className = state; statusEl.textContent = text; subEl.textContent = sub || "";
+  }
+  function showOverlay(text) { overlay.textContent = text; overlay.classList.add("show"); }
+
+  // ---- message handling ----
+  function onMsg(obj) {
+    if (obj._bridge) {
+      // Bridge-injected upstream status (not a ServerMsg).
+      if (obj._bridge.state === "disconnected") {
+        upstreamUp = false;
+        setBar("disconnected", "reconnecting…", "showing last frame");
+      } else if (obj._bridge.state === "connected") {
+        upstreamUp = true; setBar("live", "live");
+      }
+      return;
+    }
+    if (obj.Frame) {
+      const { pane_id, frame } = obj.Frame;
+      if (frame.cells.length !== frame.rows * frame.cols) return; // drop malformed
+      let dirtyPicker = !frames.has(pane_id);
+      frames.delete(pane_id); frames.set(pane_id, frame); // LRU touch: move to newest
+      if (frames.size > MAX_PANES) {
+        const oldest = frames.keys().next().value; // least-recently-updated
+        frames.delete(oldest);
+        if (oldest === current) current = null;
+        dirtyPicker = true;
+      }
+      if (upstreamUp) setBar("live", "live");
+      if (wanted != null && wantedSince > 0 && Date.now() - wantedSince > 3000) wanted = null;
+      if (current == null) {
+        // A pasted pane link pins the first paint. Keep waiting for THAT
+        // pane's frame - a different pane landing first must not steal the
+        // paint (codex P1). Only with no want does the first frame win.
+        if (wanted != null && frames.has(wanted)) { current = wanted; wanted = null; dirtyPicker = true; }
+        else if (wanted == null) { current = pane_id; dirtyPicker = true; }
+      }
+      if (dirtyPicker) renderPicker();
+      if (pane_id === current) draw();
+      return;
+    }
+    if (obj.Layout) {
+      squads = obj.Layout.squads || [];
+      agents = obj.Layout.agents || [];
+      // An exited agent row is the one pane-death signal on the wire: drop its
+      // cached frame so a dead agent stops rendering as a live grid and leaves
+      // the picker (a plain non-agent pane's death is invisible without a proto
+      // signal, so it ages out via the LRU cap instead).
+      for (const a of agents) {
+        if (a.exited && a.pane_id != null) {
+          frames.delete(a.pane_id);
+          if (a.pane_id === current) current = null;
+          // A wanted pane that died before painting: stop waiting for it so
+          // the page falls back to the first frame to land.
+          if (a.pane_id === wanted) wanted = null;
+        }
+      }
+      renderPicker();
+      draw();
+      return;
+    }
+    if (obj._share) { onShare(obj._share); return; }
+    if (obj.Bye) { setBar("ended", "session ended", obj.Bye.reason || ""); showOverlay("session ended\n" + (obj.Bye.reason || "")); return; }
+    // Notice / ModeSync / control replies: irrelevant to a read-only viewer.
+  }
+
+  // ---- share mode ----
+  // The share secret rides the URL fragment, so it never enters an HTTP
+  // request line or a proxy log. It is read once and removed from the
+  // address bar. The socket knocks with it and a display name; the driver
+  // admits the viewer, and only then do frames arrive.
+  const SHARE = window.FNO_SHARE === true;
+  let shareKey = "", shareName = "", viewerToken = "";
+  if (SHARE) {
+    shareKey = new URLSearchParams(location.hash.slice(1)).get("k") || "";
+    history.replaceState(null, "", location.pathname + location.search);
+  }
+  function shareNote(text) { const n = $("share-note"); if (n) n.textContent = text; }
+  function onShare(m) {
+    if (m.state === "waiting") { $("share-wait").hidden = false; setBar("connecting", "waiting", "the driver admits each viewer"); }
+    if (m.state === "admitted") {
+      viewerToken = m.viewer || "";
+      $("share-wait").hidden = true;
+      $("share-boxes").hidden = false;
+      $("share-steer-row").hidden = !m.steer;
+    }
+    if (m.history != null) {
+      let el = $("share-history");
+      if (!el) {
+        el = document.createElement("span");
+        el.id = "share-history"; el.className = "share-history";
+        term.insertBefore(el, term.firstChild);
+      }
+      el.textContent = m.history ? "earlier output (plain text, masked)\n" + m.history + "\n" : "";
+    }
+    if (m.history_error) shareNote("no earlier output: " + m.history_error);
+    if (typeof m.steer === "number") shareNote(`steer s${m.steer}: ${m.state}` + (m.verdict ? ` (${m.verdict})` : ""));
+  }
+  async function sharePost(path, input, done) {
+    const text = input.value.trim();
+    if (!text) return;
+    try {
+      const r = await fetch(path, { method: "POST",
+        headers: { "Authorization": "Bearer " + viewerToken, "Content-Type": "application/json" },
+        body: JSON.stringify({ text }) });
+      const body = await r.json().catch(() => ({}));
+      if (r.ok) { input.value = ""; shareNote(done(body)); } else { shareNote(body.error || `refused (${r.status})`); }
+    } catch (_) { shareNote("not sent: connection lost"); }
+  }
+  if (SHARE) {
+    const coach = () => sharePost("coach", $("share-coach"), () => "note shown to the driver");
+    const steer = () => sharePost("steer", $("share-steer"), (b) => `steer s${b.pending} waits for the driver`);
+    $("share-coach-send").onclick = coach;
+    $("share-steer-send").onclick = steer;
+    // Enter sends the box it was typed in; the form itself never submits.
+    $("share-boxes").onsubmit = (e) => { e.preventDefault(); };
+    $("share-coach").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); coach(); } };
+    $("share-steer").onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); steer(); } };
+  }
+
+  // ---- websocket ----
+  const token = new URLSearchParams(location.search).get("t") || "";
+  // A pasted per-pane link names its pane : pin the first paint to it
+  // instead of whichever frame lands first, then clear the want so the operator
+  // can still switch panes by hand afterwards. A want that never paints
+  // (renumbered or dead pane) is dropped after 3s so the page still opens.
+  let wanted = new URLSearchParams(location.search).get("pane");
+  let wantedSince = 0;
+  if (wanted != null) { wanted = parseInt(wanted, 10); if (Number.isNaN(wanted)) wanted = null; if (wanted != null) wantedSince = Date.now(); }
+  // A wire frame costs a parse and a full grid write. Under load that is more
+  // than one display frame, so messages queue in the browser and the screen
+  // falls seconds behind while every stale frame still gets painted.
+  //
+  // Idle, a frame goes through at once, so a keystroke's echo does not wait for
+  // an animation frame. Inside the window that opens, each pane keeps only its
+  // newest unparsed frame. A dropped frame is safe because each one is a whole
+  // grid. Any other message flushes first: a Layout that reaps a pane must not
+  // run ahead of an older frame, which would bring the dead pane back.
+  //
+  // The window closes only after QUIET_TICKS empty animation frames. The browser
+  // hands over one message per task, so a saturated page sees an empty animation
+  // frame between any two messages, and closing on the first one paints every
+  // frame again with nothing dropped.
+  //
+  // A hidden tab gets no animation frames, so the cap bounds what it holds.
+  const FRAME_HEAD = /^\{"Frame":\{"pane_id":(\d+),/;
+  const QUIET_TICKS = 3;
+  function framePacer(deliver, schedule, maxPanes) {
+    const pending = new Map(); // pane_id -> newest raw frame (oldest update first)
+    let open = false;
+    let quiet = 0;
+    function flush() {
+      const burst = [...pending.values()];
+      pending.clear();
+      burst.forEach(deliver);
+    }
+    function tick() {
+      if (!pending.size && ++quiet >= QUIET_TICKS) { open = false; return; }
+      schedule(tick); // first, so a throw in deliver cannot stop the page painting
+      if (pending.size) { quiet = 0; flush(); }
+    }
+    return (raw) => {
+      const head = FRAME_HEAD.exec(raw);
+      if (!head) { flush(); deliver(raw); return; }
+      if (!open) { open = true; quiet = 0; schedule(tick); deliver(raw); return; }
+      pending.delete(head[1]);
+      pending.set(head[1], raw);
+      if (pending.size >= maxPanes) flush();
+    };
+  }
+  const onWire = framePacer((raw) => {
+    let msg;
+    try { msg = JSON.parse(raw); }
+    catch (e) { setBar("disconnected", "stale", "a frame did not parse: " + e.message + "; showing last frame"); return; }
+    onMsg(msg);
+  }, (fn) => requestAnimationFrame(fn), MAX_PANES);
+  function connect() {
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const base = document.querySelector("nav.fno-nav").dataset.base;
+    const url = SHARE
+      ? `${proto}://${location.host}${base}ws`
+      : `${proto}://${location.host}${base}ws?t=${encodeURIComponent(token)}`;
+    const ws = new WebSocket(url);
+    ws.onopen = () => {
+      setBar("connecting", "connecting…", "waiting for first frame");
+      if (SHARE) ws.send(JSON.stringify({ knock: { k: shareKey, name: shareName } }));
+    };
+    ws.onmessage = (ev) => onWire(ev.data);
+    ws.onclose = (ev) => {
+      if (SHARE && (ev.code === 1008 || ev.code === 1001)) {
+        // A refusal (wrong link, declined, too many waiting) or the end of the
+        // share: say why and do not knock again.
+        $("share-wait").hidden = true; $("share-boxes").hidden = true;
+        setBar("ended", ev.code === 1001 ? "share ended" : "not admitted", ev.reason || "");
+        showOverlay(ev.reason || "the share is closed");
+        return;
+      }
+      if (SHARE) {
+        // A dropped socket loses its admission: the reconnect knocks again,
+        // and the driver admits it anew with a fresh viewer token.
+        viewerToken = ""; $("share-boxes").hidden = true;
+      }
+      // 1008 = policy violation: our token check refused the upgrade. A normal
+      // socket close (server/bridge gone) just retries.
+      if (ev.code === 1008 || ev.code === 4401) {
+        setBar("authfailed", "invalid token", "");
+        showOverlay("invalid or missing token");
+        return; // do not retry a bad token
+      }
+      setBar("disconnected", "reconnecting…", "connection lost");
+      setTimeout(connect, 1500);
+    };
+    ws.onerror = () => ws.close();
+  }
+  if (!SHARE) {
+    connect();
+  } else if (!shareKey) {
+    setBar("authfailed", "incomplete link", "");
+    showOverlay("this link is incomplete: ask the driver for the whole join link");
+  } else {
+    shareName = (prompt("Your name, so the driver knows who is asking to watch:") || "").trim();
+    if (!shareName) { setBar("authfailed", "no name", ""); showOverlay("a display name is needed to ask the driver; reload to try again"); }
+    else { $("share-who").textContent = "watching as " + shareName; connect(); }
+  }
+})();
+</script>
+</body>
+</html>

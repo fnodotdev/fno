@@ -1,0 +1,592 @@
+name: rust-ci
+
+# W7 moved: the heavy `cargo test + schema parity` job lives in cli-ci.yml
+# now, gated behind every smoke-pytest shard. This workflow keeps coverage that
+# is not a duplicate heavy suite: formatting, the warnings ratchet, the PR
+# stress trials, and dependency audit.
+
+# PR re-pushes share a group keyed by head_ref and cancel their own running
+# run. Main pushes key by sha, unlike cli-ci.yml: this workflow costs about 5
+# runner minutes, so every merge keeps its own settled run and `fno do ci
+# status` can read a per-commit merge_check. cli-ci.yml costs over 200 runner
+# minutes and keeps coalescing. The nightly schedule run gets its own group so
+# a nightly never makes a main push queue behind it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.event_name == 'push' && github.sha || github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+on:
+  schedule:
+    - cron: '41 8 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - crates/**
+      - schemas/**
+      - crates/fno-agents/src/runtime/event_store/schema.yaml
+      - scripts/ci/preflight.sh
+      - scripts/ci/clippy-check.sh
+      - tests/ci/clippy-baseline.txt
+      - tests/ci/test_clippy_check.sh
+      - scripts/tests/stress-rust-e2e-concurrency.sh
+      - tests/no-python-qualification.sh
+      - .github/workflows/rust-ci.yml
+
+permissions:
+  contents: read
+
+jobs:
+  fmt:
+    name: cargo fmt --check (pinned)
+    if: github.event_name == 'pull_request'
+    # Pinned-toolchain rustfmt gate (ab-abff720d). The crate had package-wide
+    # rustfmt drift with no gate to catch it, so plain `cargo fmt` polluted
+    # every contributor's diff. The version is PINNED (not @stable) so a future
+    # stable rustfmt that changes formatting cannot fail this gate on untouched
+    # code -- the committed format and the gate's format move together only
+    # when this pin is bumped deliberately. Keep RUSTFMT_TOOLCHAIN in lockstep
+    # with the version used for the next package-wide sweep.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      # The toolchain whose rustfmt produced the committed formatting. Bump
+      # this and re-run `cargo +<ver> fmt` over the crate together, never apart.
+      RUSTFMT_TOOLCHAIN: "1.94.1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install pinned rustfmt toolchain
+        # rustup ships on ubuntu-latest runners. Pin the exact toolchain via
+        # rustup (not a floating dtolnay @stable) so the gate is deterministic.
+        run: |
+          rustup toolchain install "$RUSTFMT_TOOLCHAIN" --component rustfmt --profile minimal --no-self-update
+          rustup run "$RUSTFMT_TOOLCHAIN" rustfmt --version
+
+      - name: cargo fmt --check (fno-agents)
+        working-directory: crates/fno-agents
+        run: cargo "+$RUSTFMT_TOOLCHAIN" fmt --all --check
+
+      - name: cargo fmt --check (fno)
+        working-directory: crates/fno
+        run: cargo "+$RUSTFMT_TOOLCHAIN" fmt --all --check
+
+      - name: cargo fmt --check (fno-mail)
+        working-directory: crates/fno-mail
+        run: cargo "+$RUSTFMT_TOOLCHAIN" fmt --all --check
+
+  warnings:
+    name: cargo check --all-targets (deny warnings)
+    # The ratchet the node asked for: rustc warnings fail CI, so the count can
+    # never climb back. A dedicated job, not RUSTFLAGS on the `test` job - a
+    # flag change re-fingerprints every dependency, and sharing that job's
+    # cache key would rebuild its whole dep tree on every run. `cargo check`
+    # here (no codegen, no test execution), so the failure means exactly one
+    # thing: a warning.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry + build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/build
+            crates/fno-agents/target
+            crates/fno/target
+            crates/fno-mail/target
+          # Key prefix deliberately OUTSIDE the `test` job's `cargo-` restore
+          # prefix (same rule the `stressonly` key records below): the test job
+          # builds check-only artifacts that the big job must never restore.
+          # It still WARMS from the big cache via its own restore-keys - the
+          # asymmetry is the point.
+          key: ${{ runner.os }}-warncheck-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock', 'crates/fno-mail/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-warncheck-
+            ${{ runner.os }}-cargo-
+
+      - name: cargo check --all-targets (fno-agents)
+        working-directory: crates/fno-agents
+        run: cargo check --all-targets --locked
+
+      - name: cargo check --all-targets (fno)
+        working-directory: crates/fno
+        run: cargo check --all-targets --locked
+
+      # fnh links fno with default-features = false. A module that needs a
+      # `full` dependency and sits outside the gate breaks that build only.
+      - name: cargo check --no-default-features (fno contract build)
+        working-directory: crates/fno
+        run: cargo check --no-default-features --locked
+
+      - name: cargo check --all-targets (fno-mail)
+        working-directory: crates/fno-mail
+        run: cargo check --all-targets --locked
+
+  clippy:
+    name: cargo clippy (correctness deny + ratchet lints)
+    # The regression audit asked for clippy coverage that would have caught
+    # the shipped lookahead-regex and raw-slice regressions:
+    # clippy::correctness denied, plus clippy::invalid_regex,
+    # clippy::indexing_slicing and clippy::disallowed_methods (bare
+    # Command::output, configured in each crate's clippy.toml) held by the
+    # tests/ci/clippy-baseline.txt ratchet. A hit is keyed by its line's
+    # text, so editing a flagged line fails even though the hit itself is
+    # baselined - deny-on-changed-lines with no merge-base diff. All four
+    # lints run as WARN through clippy, because a deny-level lint stops the
+    # compile and hides every later diagnostic; the baseline verdict is what
+    # denies. The toolchain is PINNED to the one that wrote the baseline: a
+    # newer clippy can flag untouched lines, which would red as new hits.
+    # Bump the pin and re-run `clippy-check.sh --write-baseline` together,
+    # never apart (same contract as the fmt job's RUSTFMT_TOOLCHAIN).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CLIPPY_TOOLCHAIN: "1.99.1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install pinned clippy toolchain
+        run: |
+          rustup toolchain install "$CLIPPY_TOOLCHAIN" --component clippy --profile minimal --no-self-update
+          rustup default "$CLIPPY_TOOLCHAIN"
+          cargo clippy --version
+
+      - name: Cache Cargo registry + build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/build
+            crates/fno-agents/target
+            crates/fno/target
+            crates/fno-mail/target
+          # Key prefix deliberately OUTSIDE the `warnings` job's warncheck-
+          # and the `test` job's cargo- save prefixes (the asymmetry those
+          # comments record): clippy fingerprints differ from check, so the
+          # big jobs must never restore this cache. It still WARMS from the
+          # big cache via restore-keys.
+          key: ${{ runner.os }}-clippycheck-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock', 'crates/fno-mail/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-clippycheck-
+            ${{ runner.os }}-cargo-
+
+      - name: clippy gate selftest
+        # A gate nobody has watched fail is not known to work; the positive
+        # control exercises the parser and the baseline verdict without a
+        # cargo build.
+        run: bash tests/ci/test_clippy_check.sh
+
+      - name: clippy gate (fno-agents)
+        run: bash scripts/ci/clippy-check.sh crates/fno-agents
+
+      - name: clippy gate (fno)
+        run: bash scripts/ci/clippy-check.sh crates/fno
+
+      - name: clippy gate (fno-mail)
+        run: bash scripts/ci/clippy-check.sh crates/fno-mail
+
+  bell-shots:
+    name: bell panel snapshot shots
+    # The user reviews the resize and mark work through three PNGs before
+    # merge, and the build freeze rules out shooting them on a workstation,
+    # so the PR's own CI renders them: build the client once, drive
+    # scripts/ops/mux-demo-snapshot.sh for the three bell views, upload the
+    # PNGs as run artifacts. A shot that fails to render reds here, so the
+    # gap is visible in the log rather than a silent empty picture.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry + build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/build
+            crates/fno-agents/target
+            crates/fno/target
+          key: ${{ runner.os }}-bellshots-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bellshots-
+            ${{ runner.os }}-cargo-
+
+      - name: Find Chrome for the png raster
+        run: echo "FNO_CHROME=$(command -v google-chrome || command -v chromium || command -v chromium-browser)" >> "$GITHUB_ENV"
+
+      - name: Shoot only when the bell surface changed
+        # A job-level paths gate needs a third-party action; this REST read
+        # keeps the fleet's other Rust PRs out of the build-and-seed cost
+        # while a bell, snapshot or demo-script change still shoots.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')"
+          case "$files" in
+            *src/client.rs*|*client/sideline.rs*|*client/card_line.rs*|*client/bell.rs*|*client/backlog_panes.rs*|*client/messages_view.rs*|*client/snapshot.rs*|*client/keys_modal.rs*|*modal_select.rs*|*client/feed_detail.rs*|*client/questions.rs*|*client/pane_paint.rs*|*client/terminal_cursor.rs*|*client/org_*|*client/pr_review.rs*|*client/file_viewer.rs*|*client/node_detail.rs*|*pr_diff.rs*|*fleet_beacon.rs*|*server/window_size.rs*|*mux-demo-snapshot.sh*)
+              echo "shoot=1" >> "$GITHUB_ENV"
+              echo "the bell surface changed: shooting"
+              ;;
+            *)
+              echo "shoot=" >> "$GITHUB_ENV"
+              echo "the bell surface is untouched: no shots this run"
+              ;;
+          esac
+
+      - name: Build the fno client and agents binaries
+        if: env.shoot == '1'
+        working-directory: crates/fno
+        run: |
+          cargo build --locked
+          cargo build --locked --manifest-path ../fno-agents/Cargo.toml
+
+      - name: Flag file collisions with other open PRs
+        # The bell-shots build is gated on the bell surface, so this step
+        # builds the binary itself when the step above skipped it; the job's
+        # cargo cache makes that incremental. A fork PR's token is
+        # read-only, so the summary and one notice per colliding PR are the
+        # whole delivery (no comment), and the action notes and exits 0 on
+        # an unread answer. continue-on-error keeps a refused or slow read
+        # from reding the job.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: crates/fno-agents
+        run: |
+          if [ ! -x target/debug/fno-agents ]; then
+            cargo build --locked
+          fi
+          target/debug/fno-agents backlog collisions prs --pr "${{ github.event.pull_request.number }}" --json > "$RUNNER_TEMP/collisions.json"
+          count="$(jq '.collisions | length' "$RUNNER_TEMP/collisions.json")"
+          if [ "$count" -gt 0 ]; then
+            echo "### File collisions with other open PRs" >> "$GITHUB_STEP_SUMMARY"
+            jq -r '.collisions[] | "- #\(.pr): \(.shared | join(", "))"' "$RUNNER_TEMP/collisions.json" >> "$GITHUB_STEP_SUMMARY"
+            jq -r '.collisions[] | "::notice title=File collision with PR #\(.pr)::\(.shared | join(", "))"' "$RUNNER_TEMP/collisions.json"
+          else
+            echo "no open PR shares a changed file with this PR" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Shoot the bell and Messages views
+        if: env.shoot == '1'
+        env:
+          FNO_BIN: ${{ github.workspace }}/crates/fno/target/debug/fno
+          # The demo root seeds claims, and the client routes those commands to
+          # the fno-agents binary; a runner builds neither by default.
+          FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
+        run: |
+          # The gathers resolve fno-agents through FNO_AGENTS_BIN, which the
+          # demo script points at its fleet shim; PATH backs any bare call.
+          export PATH="$PWD/crates/fno-agents/target/debug:$PATH"
+          mkdir -p shots
+          for view in bell bell-wide bell-full messages-tree messages-chats messages-thread messages-system messages-archive backlog-list backlog-kanban review-diff review-panel review-panel-drag navigator-pr navigator-model navigator-menu feed-detail question-detail org-table org-recent org-overview org-graph org-health org-seat org-feed org-system needs-input needs-input-pulse-on needs-input-pulse-off org-remote org-peek org-spawn org-keys decisions bell-audit bell-decisions bell-audit-tab keys keys-tags; do
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/${view}.png" --format png --view "$view" --size 200x56 --fit
+          done
+          # The selection paints with the theme's sel surface: shoot it light too.
+          for view in bell-wide feed-detail question-detail review-diff review-panel decisions bell-audit bell-decisions bell-audit-tab needs-input needs-input-pulse-on needs-input-pulse-off keys keys-tags; do
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/${view}-light.png" --format png --view "$view" --theme light --size 200x56 --fit
+          done
+          # The review's gutter narrows below 80 columns: shoot it at the edge.
+          bash scripts/ops/mux-demo-snapshot.sh --out shots/review-diff-80x24.png --format png --view review-diff --size 80x24 --fit
+          # The whole mux with no view open: the card sideline at two widths.
+          for size in 200x56 120x40; do
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/sideline-${size}.png" --format png --size "$size" --fit
+          done
+          bash scripts/ops/mux-demo-snapshot.sh --out shots/sideline-200x56-light.png --format png --theme light --size 200x56 --fit
+          # Pin order: two pinned leads with workers and one unpinned lead,
+          # under two sorts, dark and light.
+          for sort in status:ascending age:descending; do
+            for theme in dark light; do
+              bash scripts/ops/mux-demo-snapshot.sh --out "shots/sideline-pins-${sort%%:*}-${theme}.png" --format png --theme "$theme" --size 200x56 --fit --flat-pins --sort "$sort"
+            done
+          done
+          # Cards flat is the default above. Rows nest under their lead, the
+          # toggle turns nesting on for cards, and its menu row.
+          for theme in dark light; do
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/sideline-rows-nested-${theme}.png" --format png --theme "$theme" --size 200x56 --fit --flat-pins --layout list
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/sideline-cards-nested-${theme}.png" --format png --theme "$theme" --size 200x56 --fit --flat-pins --lead-nesting
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/sideline-menu-lead-toggle-${theme}.png" --format png --theme "$theme" --size 200x56 --fit --flat-pins --view sideline-menu
+          done
+          # The other-machines layer: the second machine's rows by workspace
+          # and by status, where a remote row pins first and a blocked one bands
+          # under Needs input. The band sits below this machine's, so the
+          # frame is taller than the rest.
+          for group in workspace status; do
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/machines-${group}.png" --format png --view machines --group "$group" --remote-pane --size 200x72 --fit
+            bash scripts/ops/mux-demo-snapshot.sh --out "shots/machines-${group}-light.png" --format png --view machines --group "$group" --remote-pane --theme light --size 200x72 --fit
+          done
+          # Two windows on one tab: the active big window fills, the same
+          # window under the smallest policy letterboxes, and a small
+          # observer crops a tab the big peer sized.
+          bash scripts/ops/mux-demo-snapshot.sh --window-size latest --peer 120x40 --out shots/two-client-latest-big.png --format png --size 200x56
+          bash scripts/ops/mux-demo-snapshot.sh --window-size smallest --peer 120x40 --out shots/two-client-smallest-big.png --format png --size 200x56
+          bash scripts/ops/mux-demo-snapshot.sh --window-size latest --peer 200x56 --no-fit --out shots/two-client-latest-small.png --format png --size 120x40
+
+      - name: Upload the shots
+        if: env.shoot == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bell-panel-shots
+          path: shots/*.png
+          if-no-files-found: error
+
+  release-version-math:
+    name: release version math (sync-version + release-version)
+    # The nightly stamps a .devN version through these scripts; a PEP 440
+    # spelling reaching a Cargo.toml kills every release build. This table
+    # test is the gate that keeps the conversion honest.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run the release version table test
+        run: bash tests/ci/test_release_version.sh
+
+      - name: Run the release notes drafter table test
+        run: bash tests/ci/test_draft_release_notes.sh
+
+  no-python:
+    name: no Python on the user path (strace)
+    # The product ships no Python. Everyday commands run under strace, and
+    # any exec of python or uv anywhere in the process tree fails the job.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry + build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/build
+            crates/fno-agents/target
+            crates/fno/target
+          key: ${{ runner.os }}-nopython-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-nopython-
+            ${{ runner.os }}-cargo-
+
+      - name: Install strace
+        # Bounded: apt-get update can hang on the hosted runner.
+        timeout-minutes: 5
+        run: |
+          sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt || true
+          sudo apt-get update && sudo apt-get install -y strace
+
+      - name: Build fno and fno-agents
+        # The classic target layout, so the script's default paths resolve.
+        run: |
+          CARGO_BUILD_BUILD_DIR="$PWD/crates/fno/target" cargo build --manifest-path crates/fno/Cargo.toml --bin fno
+          CARGO_BUILD_BUILD_DIR="$PWD/crates/fno-agents/target" cargo build --manifest-path crates/fno-agents/Cargo.toml --bin fno-agents
+
+      - name: Qualify
+        run: bash tests/no-python-qualification.sh
+
+  stress:
+    name: rust e2e concurrency stress (20 trials)
+    # Nightly and manual dispatch only. The 20 trials ran 32 minutes on PR
+    # 2712 and alone set that PR's wall clock, so they no longer ride the PR
+    # path: a determinism claim checked every night is the same claim, and PR
+    # CI stops paying for it.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # The determinism claim this workflow's --test-threads=1 steps make is a
+    # claim about REPEATED runs, so something has to repeat them. That used to
+    # ride the cli-ci smoke shard, where the 20-trial default cost 756s of a
+    # 1800s cap and killed the shard at 30 minutes, and then the PR path,
+    # where the trials set the PR wall clock. The denominator belongs here:
+    # nightly, with workflow_dispatch for an on-demand run beside the other
+    # jobs rather than serially inside someone else's budget.
+    #
+    # The cap is SET from measurement, not raised to absorb slack. Two
+    # components: the trials, measured 2026-08-25 at a flat 35.9s each, so 20
+    # of them are about 12 minutes; and a cold build of the three test
+    # binaries, which the cargo test + schema parity job in cli-ci.yml shows
+    # costs the larger half of its own 20-minute run. That is roughly 24
+    # minutes on a cold cache, and 35
+    # leaves room for a slow runner without leaving room for the suite to grow
+    # unnoticed. If this job approaches the cap, cut trials or split the
+    # binaries across two jobs; do not raise it.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    # REPORTS, does not gate. The step publishes its trial count to the run
+    # summary and always exits 0; graduate by making it assert failures=0, and
+    # only once the comparison below says something. `continue-on-error` stays
+    # as a second belt against a step that dies before its own reporting runs.
+    #
+    # WHAT THIS HARNESS HAS AND HAS NOT SHOWN, measured 2026-08-25 on this
+    # runner. Read this before citing a trial count as evidence of anything.
+    #
+    # Baseline, origin/main plus this harness and nothing else, 20 trials: ZERO
+    # real test failures. Branch, 40 trials across two runs: two. One
+    # `persistence`, one daemon_e2e `registry_list_refuses_over_a_broken_
+    # registered_lane`, both genuine non-zero exits rather than a missing
+    # marker. Two events against twenty trials of baseline separates nothing -
+    # a zero in twenty is consistent with rates well above five percent - so
+    # the honest reading is that this harness has NOT demonstrated the
+    # serialization reduced flakiness. It has not shown the reverse either.
+    #
+    # The reason it cannot, yet: this harness runs three binaries in parallel
+    # with `--test-threads=1` inside each, and the failures that motivated the
+    # work came from `cargo test --all-targets`, which is far more parallel
+    # than that. So the profile reproduced here is not the profile that broke.
+    # Closing the question means reproducing THAT one.
+    #
+    # One thing it did settle cleanly. Its `daemons_left` counter reads
+    # 2, 4, 6 ... 40 across the baseline's twenty trials, exactly two leaked
+    # daemons per trial, and 0 on every trial of the branch. That reproduces
+    # the ~40 orphans the original killed job cleaned up, and it is what the
+    # reap fix closed.
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry + build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/build
+            crates/fno-agents/target
+            crates/fno/target
+          # A key of its OWN, and one that is NOT a prefix match for the shared
+          # one. This job builds three test binaries where the `test` job builds
+          # forty-six, and it finishes about seven minutes earlier, so a shared
+          # key means this small tree wins the save race and the big job
+          # restores a cache missing most of its artifacts. The first attempt at
+          # this comment claimed a dedicated key fixed that while still naming
+          # it `<os>-cargo-stress-...`, which the `test` job's own
+          # `restore-keys: <os>-cargo-` matches as a prefix - the same failure,
+          # one indirection later. `stressonly` sorts outside that prefix.
+          #
+          # The asymmetry is deliberate: this job still warms from the big
+          # cache, and the big job can no longer restore this one.
+          key: ${{ runner.os }}-stressonly-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-stressonly-
+            ${{ runner.os }}-cargo-
+
+      - name: Stress the process-backed e2e binaries
+        # The exit code is not enough on its own. The script stands down with a
+        # zero exit on a dirty tree (it cannot pin a sha), which is right where
+        # it is auto-discovered by the local smoke suite and wrong here, where a
+        # silent stand-down would publish a green job that ran no trials. So the
+        # gate is the POSITIVE summary line, naming the trial count this job
+        # exists to run. It reads STRESS_TRIALS, and 20 is already its default;
+        # naming it here is what makes the contract greppable.
+        # The deterministic lifecycle waits run once in the regular crate
+        # integration jobs; this repeated sample excludes those two waits.
+        env:
+          STRESS_TRIALS: "20"
+          STRESS_SKIP_SLOW: "1"
+        run: |
+          cargo clean -p fno-agents --manifest-path crates/fno-agents/Cargo.toml
+          cargo clean -p fno --manifest-path crates/fno/Cargo.toml
+          # No pipeline and no `pipefail`. Both were here, under the runner's
+          # default `bash -e`, which made a failing harness fatal at the pipe:
+          # the `rc=` capture and the whole summary block below never ran, so
+          # this job published ZERO evidence on exactly the runs it exists to
+          # report - and `continue-on-error` rendered that silence as a green
+          # check. A redirect plus `|| rc=$?` keeps the exit code exact and
+          # keeps `-e` out of it.
+          rc=0
+          bash scripts/tests/stress-rust-e2e-concurrency.sh > stress.log 2>&1 || rc=$?
+          cat stress.log
+          # This job REPORTS. Its only output is the run summary, and it exits 0
+          # whatever happened, because every non-zero path here is
+          # infrastructure noise rather than a verdict: the harness exits 2 when
+          # a cargo build fails, exits 0 with no summary on a dirty tree, and
+          # exits 1 on a failed trial - which is the number being published, not
+          # a reason to red a PR. An earlier version failed on a missing summary
+          # and turned all three into a red merge-readiness signal.
+          #
+          # What replaces that guard is an explicit NOT-MEASURED line. A reader
+          # who sees nothing learns nothing; a reader who sees "not measured"
+          # knows the difference between that and a clean twenty trials.
+          summary="$(grep '^stress_summary ' stress.log || true)"
+          if [ -n "$summary" ]; then
+            echo "$summary" >> "$GITHUB_STEP_SUMMARY"
+            grep '^stress_trial .*=fail' stress.log >> "$GITHUB_STEP_SUMMARY" || true
+          else
+            # `|| true`: no marker line is the ordinary case here, and a
+            # failing substitution would abort the step under `-e` at the one
+            # point whose whole job is to report that nothing was measured.
+            reason="$(grep -E '^stress_(skipped|setup)=' stress.log | tail -1 || true)"
+            echo "stress_not_measured exit=$rc ${reason:-reason=unknown}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          cat "$GITHUB_STEP_SUMMARY"
+
+  audit:
+    name: cargo audit (RUSTSEC advisories)
+    # Scans Cargo.lock against the RustSec advisory DB. Vulnerabilities fail
+    # the job; informational findings (unmaintained, yanked) warn but stay
+    # green. Known expected warning: `serial` 0.4.0 (RUSTSEC-2017-0008) via
+    # portable-pty 0.8 -- clears when the dep-refresh node ab-e784d8ff bumps
+    # portable-pty to 0.9 (which swaps serial for the maintained serial2).
+    # The fno-agents leg carries one --ignore, named beside its invocation
+    # below. The nightly schedule added above runs audit too, so advisories
+    # on untouched deps surface daily instead of waiting for the next
+    # crates/** push. Runs locally as `cargo audit` from crates/fno-agents
+    # (cargo install cargo-audit).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install cargo-audit (prebuilt)
+        # Prebuilt binary install; compiling cargo-audit from source costs
+        # ~5 min of CI per run.
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: cargo audit (fno-agents)
+        working-directory: crates/fno-agents
+        # RUSTSEC-2023-0071 (Marvin Attack, rsa 0.9): rsa is a dev-dependency
+        # for github_app test key generation only. No release binary links it
+        # and the test path never decrypts attacker-chosen ciphertext, so the
+        # side channel has no oracle here. No fixed upgrade exists; drop the
+        # ignore when rsa 0.10 ships.
+        run: cargo audit --ignore RUSTSEC-2023-0071
+
+      - name: cargo audit (fno)
+        working-directory: crates/fno
+        run: cargo audit

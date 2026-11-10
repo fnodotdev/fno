@@ -1,0 +1,559 @@
+//! Tests for the native `fno doctor update` command. Unit-shaped: pure parsing,
+//! marker IO, guard parsing, and verdict-row folding. Anything that shells to
+//! cargo/uv belongs to the manual verify pass on a scratch CARGO_INSTALL_ROOT.
+
+use serde_json::Value;
+use std::path::PathBuf;
+
+use crate::doctor_update::*;
+
+fn os(args: &[&str]) -> Vec<std::ffi::OsString> {
+    args.iter().map(std::ffi::OsString::from).collect()
+}
+
+#[test]
+fn classify_claims_doctor_update_and_root_update() {
+    assert_eq!(
+        classify(&os(&["doctor", "update", "--check"])),
+        Some(os(&["--check"]))
+    );
+    assert_eq!(classify(&os(&["update", "-N"])), Some(os(&["-N"])));
+    assert_eq!(classify(&os(&["update"])), Some(os(&[])));
+    // Every other `doctor` subcommand still forwards to Python.
+    assert_eq!(classify(&os(&["doctor", "bundle"])), None);
+    assert_eq!(classify(&os(&["doctor"])), None);
+    assert_eq!(classify(&os(&["version"])), None);
+}
+
+#[test]
+fn only_no_source_without_a_marker_is_a_release_install() {
+    let pin =
+        |eligibility: &str| serde_json::json!({"decision": "refuse", "eligibility": eligibility});
+    assert!(is_release_install(&pin("no_source"), None));
+    assert!(!is_release_install(&pin("no_source"), Some("abc123")));
+    assert!(!is_release_install(&pin("invalid_override"), None));
+}
+
+#[test]
+fn receipt_channel_wins_only_over_the_cwd_derived_pin() {
+    use crate::release_install::InstallChannel;
+    let wheel = InstallChannel::Wheel {
+        tool_root: PathBuf::from("/tools/fno"),
+    };
+    // The 2026-11-06 shape: a release install whose pin resolved the checkout
+    // the shell sits in takes the release path, never a source reinstall of
+    // that checkout.
+    assert!(receipt_channel_wins(&wheel, Some("checkout")));
+    assert!(receipt_channel_wins(
+        &InstallChannel::Binary,
+        Some("checkout")
+    ));
+    // Deliberate input and a source-channel exe keep the source path.
+    for origin in ["explicit", "env", "cache", "candidate"] {
+        assert!(!receipt_channel_wins(&wheel, Some(origin)), "{origin}");
+    }
+    assert!(!receipt_channel_wins(&wheel, None));
+    assert!(!receipt_channel_wins(
+        &InstallChannel::Other,
+        Some("checkout")
+    ));
+}
+
+#[test]
+fn parse_args_reads_every_flag() {
+    let f = parse_args(&os(&[
+        "--source",
+        "/tmp/src",
+        "--dry-run",
+        "--force",
+        "--rust",
+    ]))
+    .expect("parses");
+    assert_eq!(f.source, Some(PathBuf::from("/tmp/src")));
+    assert!(f.dry_run && f.force && f.rust && !f.no_rust && !f.check);
+
+    let f = parse_args(&os(&["-N", "-F", "--no-rust", "--check", "--published"])).expect("parses");
+    assert!(f.dry_run && f.force && f.no_rust && f.check && f.published);
+    assert_eq!(f.published_rev, None);
+
+    // A rev after --published pins that build; a flag after it does not.
+    let f = parse_args(&os(&["--published", "a3670af2", "-N"])).expect("parses");
+    assert_eq!(f.published_rev.as_deref(), Some("a3670af2"));
+    assert!(f.published && f.dry_run);
+    let f = parse_args(&os(&["--published", "-N"])).expect("parses");
+    assert!(f.published && f.dry_run && f.published_rev.is_none());
+
+    assert!(parse_args(&os(&["--bogus"])).is_err());
+    assert!(parse_args(&os(&["--source"])).is_err());
+}
+
+#[test]
+fn guard_reads_target_state_frontmatter() {
+    let _g = crate::model_catalog::state_env_lock();
+    let tmp = std::env::temp_dir().join(format!("fno-du-guard-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join(".fno")).unwrap();
+    std::env::set_var("FNO_REPO_ROOT", &tmp);
+
+    std::fs::write(
+        tmp.join(".fno").join("target-state.md"),
+        "---\nstatus: IN_PROGRESS\n---\nbody\n",
+    )
+    .unwrap();
+    assert!(target_in_progress());
+
+    std::fs::write(
+        tmp.join(".fno").join("target-state.md"),
+        "---\nstatus: COMPLETE\n---\nbody\n",
+    )
+    .unwrap();
+    assert!(!target_in_progress());
+
+    // No file: the gate is open.
+    std::fs::remove_file(tmp.join(".fno").join("target-state.md")).unwrap();
+    assert!(!target_in_progress());
+
+    // Unreadable hides an active loop: fail safe as IN_PROGRESS.
+    std::fs::write(
+        tmp.join(".fno").join("target-state.md"),
+        "---\nstatus: IN_PROGRESS\n---\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            tmp.join(".fno").join("target-state.md"),
+            std::fs::Permissions::from_mode(0o000),
+        )
+        .unwrap();
+        assert!(target_in_progress());
+        std::fs::set_permissions(
+            tmp.join(".fno").join("target-state.md"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+    }
+
+    std::env::remove_var("FNO_REPO_ROOT");
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn marker_write_read_round_trip_is_atomic_and_trimmed() {
+    let tmp = std::env::temp_dir().join(format!("fno-du-marker-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let path = tmp.join("nested").join("installed-rev");
+    write_marker(&path, "abc12345").unwrap();
+    assert_eq!(read_marker(&path).as_deref(), Some("abc12345"));
+    // A missing marker reads None, never an empty string.
+    assert_eq!(read_marker(&tmp.join("absent")), None);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn file_eq_compares_bytes_not_metadata() {
+    let tmp = std::env::temp_dir().join(format!("fno-du-fileeq-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    let a = tmp.join("a");
+    let b = tmp.join("b");
+    std::fs::write(&a, b"same bytes").unwrap();
+    std::fs::write(&b, b"same bytes").unwrap();
+    assert!(file_eq(&a, &b));
+    std::fs::write(&b, b"other bytes").unwrap();
+    assert!(!file_eq(&a, &b));
+    assert!(!file_eq(&a, &tmp.join("missing")));
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn component_lines_extract_only_non_fresh_rows() {
+    let report: Value = serde_json::json!({
+        "converged": false,
+        "components": [
+            {"component": "fno-agents", "status": "fresh", "line": "fresh line"},
+            {"component": "fno-agents-daemon", "status": "stale", "line": "daemon is stale"},
+            {"component": "fno", "status": "updated", "line": "updated line"},
+            {"component": "fno-agents-worker", "status": "absent", "line": "worker absent"}
+        ]
+    });
+    let lines = component_lines(Some(&report), "fno doctor update");
+    assert_eq!(
+        lines,
+        vec![
+            "fno doctor update: daemon is stale",
+            "fno doctor update: worker absent"
+        ]
+    );
+    // A None report carries no rows: the call site names the path instead.
+    assert!(component_lines(None, "fno doctor update").is_empty());
+}
+const REV_A: &str = "2e55d52aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const REV_B: &str = "19bbc27bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const REV_C: &str = "ffc2af6ccccccccccccccccccccccccccccccccccc";
+#[test]
+fn mixed_component_line_fires_only_when_two_builds_disagree() {
+    let mixed: Value = serde_json::json!({
+        "components": [
+            {"component": "fno-agents", "observed_rev": REV_A},
+            {"component": "fno", "observed_rev": REV_B}
+        ]
+    });
+    let line = mixed_component_line(Some(&mixed)).expect("a mix is provable");
+    assert!(
+        line.contains(&format!("fno-agents at {}", &REV_A[..12])),
+        "{line}"
+    );
+    assert!(
+        line.contains(&format!("vs fno at {}", &REV_B[..12])),
+        "{line}"
+    );
+    // Same build everywhere, a single self-report, and a dark verdict: no flag.
+    let same: Value = serde_json::json!({
+        "components": [
+            {"component": "fno-agents", "observed_rev": REV_A},
+            {"component": "fno", "observed_rev": REV_A},
+            {"component": "fno-agents-daemon", "observed_rev": null}
+        ]
+    });
+    assert_eq!(mixed_component_line(Some(&same)), None);
+    let single: Value = serde_json::json!({
+        "components": [{"component": "fno", "observed_rev": REV_A}]
+    });
+    assert_eq!(mixed_component_line(Some(&single)), None);
+    assert_eq!(mixed_component_line(None), None);
+}
+
+#[test]
+fn revisions_summary_names_every_compared_rev_with_its_label() {
+    let revs = vec![
+        ("fno-agents".to_string(), REV_A.to_string()),
+        ("fno".to_string(), REV_B.to_string()),
+    ];
+    let line = revisions_summary(&revs, Some(REV_C)).expect("both labels present");
+    assert!(
+        line.contains(&format!(
+            "build revs: fno-agents {}, fno {}",
+            &REV_A[..12],
+            &REV_B[..12]
+        )),
+        "{line}"
+    );
+    assert!(
+        line.contains(&format!("crates/ pin {}", &REV_C[..12])),
+        "{line}"
+    );
+    // A pin with no answering component still names the pin; a dark machine
+    // names nothing.
+    assert_eq!(
+        revisions_summary(&[], Some(REV_C)).as_deref(),
+        Some(format!("crates/ pin {}", &REV_C[..12])).as_deref()
+    );
+    assert_eq!(revisions_summary(&[], None), None);
+}
+#[test]
+fn guidance_release_branch_names_the_upgrade_command() {
+    let _lock = crate::model_catalog::state_env_lock();
+    let tmp = std::env::temp_dir().join(format!("fno-du-rel-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    std::env::set_var("FNO_STATE_DIR", &tmp);
+    let before = std::env::var_os("FNO_AGENTS_BIN");
+    std::env::set_var("FNO_AGENTS_BIN", "/usr/bin/false");
+    let payload = update_readiness(None);
+    let guidance = payload
+        .get("guidance")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    std::env::remove_var("FNO_STATE_DIR");
+    match before {
+        Some(v) => std::env::set_var("FNO_AGENTS_BIN", v),
+        None => std::env::remove_var("FNO_AGENTS_BIN"),
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        guidance.contains("refreshes with `fno update`"),
+        "guidance: {guidance}"
+    );
+    assert!(!guidance.contains("treated as a wire bump"));
+}
+
+#[test]
+fn the_check_payload_names_its_compared_revisions() {
+    let _lock = crate::model_catalog::state_env_lock();
+    let tmp = std::env::temp_dir().join(format!("fno-du-revs-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    std::env::set_var("FNO_STATE_DIR", &tmp);
+    let before = std::env::var_os("FNO_AGENTS_BIN");
+    std::env::set_var("FNO_AGENTS_BIN", "/usr/bin/false");
+    let payload = update_readiness(None);
+    std::env::remove_var("FNO_STATE_DIR");
+    match before {
+        Some(v) => std::env::set_var("FNO_AGENTS_BIN", v),
+        None => std::env::remove_var("FNO_AGENTS_BIN"),
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+    let revisions = payload
+        .get("revisions")
+        .expect("the named revisions block rides every payload");
+    for key in [
+        "observed",
+        "installed_rev",
+        "rust_subtree_rev",
+        "source_rev",
+        "mixed",
+        "mixed_detail",
+        "summary",
+    ] {
+        assert!(revisions.get(key).is_some(), "{key} is named");
+    }
+    // A dark verdict never reads as a clean bill: `mixed` is null when the
+    // component verdict could not answer at all, a bool otherwise.
+    let mixed = revisions.get("mixed").unwrap();
+    assert!(mixed.is_boolean() || mixed.is_null(), "{mixed}");
+}
+
+#[test]
+fn stale_sessions_fold_flags_only_live_stale_rows() {
+    let rows: Vec<Value> = serde_json::from_str::<Vec<Value>>(
+        r#"[
+            {"session": "old", "state": "live", "stale": true},
+            {"session": "cur", "state": "live", "stale": false},
+            {"session": "pre", "state": "live", "stale": true, "wire_version": null},
+            {"session": "dead", "state": "stale", "stale": true}
+        ]"#,
+    )
+    .unwrap();
+    // Only LIVE + stale rows; a current-wire live server and a dead socket
+    // are excluded (the ported test_mux_staleness contract).
+    assert_eq!(stale_sessions_from_rows(&rows), vec!["old", "pre"]);
+    assert!(stale_sessions_from_rows(&[]).is_empty());
+}
+
+#[test]
+fn run_refuses_during_an_in_progress_target() {
+    let _lock = crate::model_catalog::state_env_lock();
+    let tmp = std::env::temp_dir().join(format!("fno-du-run-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join(".fno")).unwrap();
+    std::fs::write(
+        tmp.join(".fno").join("target-state.md"),
+        "---\nstatus: IN_PROGRESS\n---\nbody\n",
+    )
+    .unwrap();
+    std::env::set_var("FNO_REPO_ROOT", &tmp);
+    // The guard fires before any source-pin subprocess: no --force, exit 1.
+    let code = run(&os(&["--no-rust"]));
+    std::env::remove_var("FNO_REPO_ROOT");
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert_eq!(code, 1);
+}
+
+fn git_ok(dir: &std::path::Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+#[test]
+fn source_sync_fast_forwards_or_refuses_naming_the_gap() {
+    let tmp = tempfile::tempdir().unwrap();
+    let remote = tmp.path().join("r.git");
+    let (canonical, peer) = (tmp.path().join("c"), tmp.path().join("p"));
+    let path = |p: &PathBuf| p.to_string_lossy().into_owned();
+    git_ok(
+        tmp.path(),
+        &["init", "-q", "--bare", "-b", "trunk", &path(&remote)],
+    );
+    git_ok(tmp.path(), &["clone", "-q", &path(&remote), &path(&peer)]);
+    git_ok(&peer, &["commit", "-q", "--allow-empty", "-m", "base"]);
+    git_ok(&peer, &["push", "-q", "origin", "HEAD:trunk"]);
+    git_ok(
+        tmp.path(),
+        &["clone", "-q", &path(&remote), &path(&canonical)],
+    );
+    for n in 0..3 {
+        git_ok(
+            &peer,
+            &["commit", "-q", "--allow-empty", "-m", &format!("ahead {n}")],
+        );
+    }
+    git_ok(&peer, &["push", "-q", "origin", "HEAD:trunk"]);
+
+    sync_source_checkout(&canonical, false).expect("a clean behind checkout fast-forwards");
+    assert_eq!(
+        git_ok(&canonical, &["rev-parse", "HEAD"]),
+        git_ok(&peer, &["rev-parse", "HEAD"])
+    );
+
+    git_ok(
+        &canonical,
+        &["commit", "-q", "--allow-empty", "-m", "local"],
+    );
+    git_ok(
+        &peer,
+        &["commit", "-q", "--allow-empty", "-m", "ahead again"],
+    );
+    git_ok(&peer, &["push", "-q", "origin", "HEAD:trunk"]);
+    let refusal =
+        sync_source_checkout(&canonical, false).expect_err("diverged cannot fast-forward");
+    assert!(
+        refusal.contains("is 1 commit(s) behind origin/trunk"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn a_second_update_joins_only_an_update_holder() {
+    assert_eq!(update_holder_pid("fno-update-pid4242"), Some(4242));
+    assert_eq!(update_holder_pid("target-session:abc"), None);
+    assert_eq!(update_holder_pid("fno-update-pidX"), None);
+    // The claim lives exactly as long as the update process: its own pid,
+    // stamped holder-process, never the session that launched it.
+    let args = update_claim_acquire_args(4242);
+    let flag = |name: &str| {
+        let i = args.iter().position(|a| a == name).expect(name);
+        args[i + 1].clone()
+    };
+    assert_eq!(update_holder_pid(&flag("--holder")), Some(4242));
+    assert_eq!(flag("--pid"), "4242");
+    assert_eq!(flag("--pid-provenance"), "holder-process");
+}
+#[test]
+fn published_is_older_answers_by_ancestry_and_refuses_the_unknown() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("r");
+    let path = repo.to_string_lossy().into_owned();
+    git_ok(tmp.path(), &["init", "-q", "-b", "main", &path]);
+    git_ok(&repo, &["commit", "-q", "--allow-empty", "-m", "old"]);
+    let older = git_ok(&repo, &["rev-parse", "HEAD"]);
+    git_ok(&repo, &["commit", "-q", "--allow-empty", "-m", "new"]);
+    let newer = git_ok(&repo, &["rev-parse", "HEAD"]);
+    // Installing `older` over `newer` moves the bins backwards; installing
+    // `newer` over `older` moves them forward; a rev git cannot resolve (a
+    // foreign or garbage sha) refuses to answer, so the caller refuses to
+    // guess.
+    assert_eq!(published_is_older(&repo, &older, &newer), Some(true));
+    assert_eq!(published_is_older(&repo, &newer, &older), Some(false));
+    assert_eq!(published_is_older(&repo, "deadbeef", &newer), None);
+}
+#[test]
+fn missing_inventory_bins_names_absent_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    let names = vec![
+        "fno-agents".to_string(),
+        "fno-gh-proxy".to_string(),
+        "fno-gh-coverage".to_string(),
+    ];
+    std::fs::write(tmp.path().join("fno-agents"), b"b").unwrap();
+    std::fs::write(tmp.path().join("fno-gh-proxy"), b"b").unwrap();
+    assert_eq!(
+        missing_inventory_bins(&names, tmp.path()),
+        vec!["fno-gh-coverage".to_string()]
+    );
+}
+#[test]
+fn the_check_readback_skips_a_corrupt_row_after_the_install() {
+    let _g = crate::model_catalog::state_env_lock();
+    let tmp = std::env::temp_dir().join(format!("fno-du-corrupt-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    let prior = std::env::var_os("FNO_STATE_DIR");
+    std::env::set_var("FNO_STATE_DIR", &tmp);
+    let installed = serde_json::json!({
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "type": "fno_update_installed",
+        "source": "python",
+        "data": {"version": "0.4.0", "new_rev": "0123456789ab"},
+    });
+    // A legacy journal imports the install row, then a corrupt line and a
+    // typeless row land after it. The rejected and empty-type rows those
+    // become must stay out of the strict typed window: the newest stray row
+    // must never read as the update outcome.
+    let legacy = format!(
+        "{}\nnot json at all\n{{\"note\":\"no type or kind\"}}\n",
+        installed
+    );
+    std::fs::write(tmp.join("events.jsonl"), legacy).unwrap();
+    crate::event_store::import_all(&tmp.join("events.jsonl")).expect("legacy import");
+    let found = last_update_event().expect("the install row answers past the strays");
+    assert_eq!(found["type"], "fno_update_installed");
+    assert_eq!(found["data"]["version"], "0.4.0");
+    match prior {
+        Some(v) => std::env::set_var("FNO_STATE_DIR", v),
+        None => std::env::remove_var("FNO_STATE_DIR"),
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn last_green_is_the_newest_rev_carrying_the_published_crates_rev() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("r");
+    git_ok(
+        tmp.path(),
+        &["init", "-q", "-b", "main", &repo.to_string_lossy()],
+    );
+    std::fs::create_dir_all(repo.join("crates")).unwrap();
+    let mut revs = Vec::new();
+    // Crates change, python-only, crates change, python-only.
+    for (n, file) in ["crates/a", "cli", "crates/a", "cli"].iter().enumerate() {
+        std::fs::write(repo.join(file), n.to_string()).unwrap();
+        git_ok(&repo, &["add", "-A"]);
+        git_ok(&repo, &["commit", "-q", "-m", &format!("c{n}")]);
+        revs.push(git_ok(&repo, &["rev-parse", "HEAD"]));
+    }
+    // CI published only the older crates rev: the python-only rev after it
+    // shares those bins and is the newest that does.
+    assert_eq!(last_green_rev(&repo, &revs[0]).unwrap(), revs[1]);
+    // The tip's own crates rev published: the tip is the last green.
+    assert_eq!(last_green_rev(&repo, &revs[2]).unwrap(), revs[3]);
+    // A published rev off this line is named, never guessed.
+    let err = last_green_rev(&repo, "0123456789abcdef").unwrap_err();
+    assert!(err.contains("0123456789ab"), "{err}");
+}
+
+#[test]
+fn sync_member_refreshes_differing_real_files_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = tmp.path().join("src");
+    std::fs::create_dir(&src).unwrap();
+    std::fs::write(src.join("bin"), b"fresh").unwrap();
+
+    // A differing real file syncs.
+    let dir = tmp.path().join("host");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join("bin"), b"stale").unwrap();
+    assert!(sync_member(&src.join("bin"), &dir.join("bin"), true));
+    // An identical real file does not.
+    std::fs::write(dir.join("same"), b"fresh").unwrap();
+    assert!(!sync_member(&src.join("bin"), &dir.join("same"), true));
+    // A symlink member never syncs: its target dir owns the real bytes.
+    std::fs::write(tmp.path().join("real"), b"stale").unwrap();
+    std::os::unix::fs::symlink(tmp.path().join("real"), dir.join("link")).unwrap();
+    assert!(!sync_member(&src.join("bin"), &dir.join("link"), true));
+    // A triad member the hosting dir lacks is filled; a front door the dir
+    // never had is never seeded.
+    assert!(sync_member(&src.join("bin"), &dir.join("absent"), true));
+    assert!(!sync_member(&src.join("bin"), &dir.join("absent"), false));
+}

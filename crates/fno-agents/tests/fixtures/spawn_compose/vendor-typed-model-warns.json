@@ -1,0 +1,95 @@
+{
+  "apply_permission_builtin": true,
+  "argv": [
+    "spawn",
+    "--name",
+    "w29",
+    "-H",
+    "claude",
+    "-m",
+    "glm-5.3",
+    "/fno:target x-27"
+  ],
+  "config_toml": "[agents.defaults]\neffort = \"low\"\n",
+  "env_node": null,
+  "expect": {
+    "argv": [
+      "spawn",
+      "--name",
+      "w29",
+      "-H",
+      "claude",
+      "-m",
+      "glm-5.3",
+      "/fno:target x-27"
+    ],
+    "exit": 0,
+    "journal": {
+      "data": {
+        "name": "w29",
+        "verb": "target",
+        "seed": "/fno:target x-27",
+        "fingerprint": "",
+        "resolved": {
+          "route": {
+            "value": "",
+            "rung": null
+          },
+          "account": {
+            "value": "",
+            "rung": null
+          },
+          "pane_group": {
+            "value": "",
+            "rung": null
+          }
+        },
+        "applied": [],
+        "suppressed": []
+      },
+      "type": "spawn_defaults_applied",
+      "source": "agents"
+    },
+    "stderr": [],
+    "stdout": null
+  },
+  "facts": {
+    "role_protected": null,
+    "role_resolves": false
+  },
+  "node": null,
+  "node_row": null,
+  "node_command": null,
+  "scan": {
+    "account_flag_present": false,
+    "explicit_harness": "claude",
+    "explicit_route": false,
+    "explicit_substrate": null,
+    "explicit_vendor": null,
+    "flag_node": null,
+    "has_effort": false,
+    "has_harness": true,
+    "has_model": true,
+    "has_permission": false,
+    "model_value": "glm-5.3",
+    "name": "w29",
+    "permission_value": null,
+    "positional_present": true,
+    "role": null,
+    "route_value": null,
+    "seed": "/fno:target x-27",
+    "seed_form": "positional",
+    "seed_index": 7,
+    "spawn_tokens": [
+      "--name",
+      "w29",
+      "-H",
+      "claude",
+      "-m",
+      "glm-5.3",
+      "/fno:target x-27"
+    ],
+    "tab_flag_present": false
+  },
+  "verbose": true
+}

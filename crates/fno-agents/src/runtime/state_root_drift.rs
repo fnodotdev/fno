@@ -1,0 +1,265 @@
+//! The state-root drift reading: top-level entries of the fno state root that
+//! `docs/state-root-inventory.md` does not name. The doc is the wire contract:
+//! the Python gate (`fno.graph._state_root_inventory`) parses it for the CLI
+//! test, and this module parses it for the daemon's daily reclaim lane and the
+//! lead check-in. Keep the two parsers dialect-identical (the mail-hold
+//! shape: one contract, two legs).
+
+use std::path::{Path, PathBuf};
+
+/// Where the inventory doc lives for THIS machine: an explicit override
+/// (tests, custom installs), then the new plugin stage and its legacy path.
+/// Each stage is a filtered checkout (docs/ is git-tracked), so both a repo
+/// cwd and the daemon's anchor resolve the same contract through it; no cwd
+/// walk makes the reading independent of the caller's directory.
+pub fn doc_path(state_root: &Path) -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("FNO_STATE_ROOT_INVENTORY_DOC") {
+        let p = PathBuf::from(p);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    let mut new_stage = crate::state_layout::place_dir(state_root, "plugin-stage")
+        .unwrap_or_else(|| state_root.join("plugin-stage"));
+    new_stage.push("fno");
+    let mut legacy_stage = state_root.join("plugin-stage");
+    legacy_stage.push("fno");
+    [new_stage, legacy_stage]
+        .into_iter()
+        .map(|stage| stage.join("docs/state-root-inventory.md"))
+        .find(|path| path.is_file())
+}
+
+/// One pattern that can name a top-level entry, extracted from a row's Entry
+/// cell. Dialect-identical to `top_level_patterns` in
+/// `cli/src/fno/graph/_state_root_inventory.py`: a bare name matches itself;
+/// a subfolder row documents its first segment; `<ts>` becomes `*`; an
+/// extension span (`.lock`) covers only the named bases it sits beside. A
+/// pattern reduced to `*` is dropped: it would whitelist the whole root.
+pub fn top_level_patterns(doc: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in doc.lines() {
+        if !line.trim_start().starts_with('|') {
+            continue;
+        }
+        let cells: Vec<&str> = line.split('|').collect();
+        if cells.len() < 2 {
+            continue;
+        }
+        let spans: Vec<String> = backtick_spans(cells[1])
+            .into_iter()
+            .map(|t| placeholder_star(t.trim()))
+            .filter(|s| !s.is_empty())
+            .collect();
+        let slashed = spans.iter().any(|s| s.contains('/'));
+        let bases: Vec<&str> = spans
+            .iter()
+            .map(String::as_str)
+            .filter(|s| !s.contains('/') && !s.contains('*') && !s.starts_with('.'))
+            .collect();
+        for span in &spans {
+            if span.contains('/') {
+                let first = span.split('/').next().unwrap_or(span);
+                add(&mut out, first);
+            } else if !slashed {
+                add(&mut out, span);
+                if span.starts_with('.') && span.len() > 1 && !span.contains('*') {
+                    for base in &bases {
+                        let combined = format!("{base}{span}");
+                        add(&mut out, &combined);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn add(out: &mut Vec<String>, pattern: &str) {
+    if pattern.is_empty() || pattern == "*" || pattern == "." || pattern == ".." {
+        return;
+    }
+    if !out.iter().any(|p| p == pattern) {
+        out.push(pattern.to_string());
+    }
+}
+
+/// Backtick-delimited spans of one table cell.
+fn backtick_spans(cell: &str) -> Vec<String> {
+    cell.split('`')
+        .enumerate()
+        .filter(|(i, _)| i % 2 == 1)
+        .map(|(_, t)| t.to_string())
+        .collect()
+}
+
+/// `<anything>` becomes `*` (the doc's placeholder convention).
+fn placeholder_star(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '<' {
+            let mut inner = String::new();
+            let mut closed = false;
+            for next in chars.by_ref() {
+                if next == '>' {
+                    closed = true;
+                    break;
+                }
+                inner.push(next);
+            }
+            if closed {
+                out.push('*');
+            } else {
+                // Unterminated '<': keep it literally, like the Python
+                // regex, which would never match here.
+                out.push('<');
+                out.push_str(&inner);
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// `*` is the only wildcard a doc pattern can carry.
+fn glob_match(pattern: &str, name: &str) -> bool {
+    let parts: Vec<&str> = pattern.split('*').collect();
+    if parts.len() == 1 {
+        return pattern == name;
+    }
+    let Some(mut rest) = name.strip_prefix(parts[0]) else {
+        return false;
+    };
+    let last = parts[parts.len() - 1];
+    for mid in &parts[1..parts.len() - 1] {
+        let Some(at) = rest.find(mid) else {
+            return false;
+        };
+        rest = &rest[at + mid.len()..];
+    }
+    rest.ends_with(last)
+}
+
+pub struct DriftReport {
+    pub count: usize,
+    /// The undocumented names, sorted.
+    pub entries: Vec<String>,
+    pub doc: PathBuf,
+}
+
+/// The live reading. A failure is a REFUSAL, never a silent zero: an
+/// unreadable doc or root makes the caller print a failed reading.
+pub fn drift_report(state_root: &Path) -> Result<DriftReport, String> {
+    let doc = doc_path(state_root).ok_or_else(|| {
+        format!(
+            "inventory doc unreadable: neither FNO_STATE_ROOT_INVENTORY_DOC nor {} is a file; run `fno doctor update` to restage the plugin",
+            crate::state_layout::place_dir(state_root, "plugin-stage")
+                .unwrap_or_else(|| state_root.join("plugin-stage"))
+                .join("fno/docs/state-root-inventory.md")
+                .display()
+        )
+    })?;
+    let text = std::fs::read_to_string(&doc).map_err(|e| format!("read {}: {e}", doc.display()))?;
+    let patterns = top_level_patterns(&text);
+    let names: Vec<String> = std::fs::read_dir(state_root)
+        .map_err(|e| format!("read {}: {e}", state_root.display()))?
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    let mut entries: Vec<String> = names
+        .into_iter()
+        .filter(|n| !patterns.iter().any(|p| glob_match(p, n)))
+        .collect();
+    entries.sort();
+    Ok(DriftReport {
+        count: entries.len(),
+        entries,
+        doc,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DOC: &str = r#"
+# inventory
+
+| Entry | Writer | Lifetime |
+|---|---|---|
+| `graph.db`, `graph.db-wal` | store | durable |
+| `config.toml`, `.lock` | loader | permanent |
+| `agents/reap-receipts/<harness>-<session>.json` | receipt writer | 7 days |
+| `agents/retired-leads/<session>.json` | retired-lead marker | until resume or a new role grant |
+| `latches/.context-nudge-*` | hook | 2 days |
+| `backups/` | rotation | prunes itself |
+| `board.py` | operator | permanent |
+
+## prose mentioning `not-a-table-row` stays out
+"#;
+
+    #[test]
+    fn undocumented_names_what_no_pattern_covers() {
+        let dir = std::env::temp_dir().join(format!("fno-drift-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("graph.db"), "").unwrap();
+        std::fs::write(dir.join("stray.out"), "").unwrap();
+        let pats = top_level_patterns(DOC);
+        let missing = undocumented_of(&dir, &pats);
+        assert_eq!(missing, vec!["stray.out".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn undocumented_of(dir: &Path, pats: &[String]) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.retain(|n| !pats.iter().any(|p| glob_match(p, n)));
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_failed_doc_read_is_a_refusal_not_a_zero() {
+        let file = std::env::temp_dir().join(format!("fno-drift-file-{}", std::process::id()));
+        let _ = std::fs::remove_file(&file);
+        std::fs::write(&file, b"x").unwrap();
+        // A root under a regular FILE is unreadable: read_dir refuses, so the
+        // reading is a refusal, never a silent zero.
+        let root = file.join("root");
+        let report = drift_report(&root);
+        let _ = std::fs::remove_file(&file);
+        assert!(report.is_err());
+    }
+
+    #[test]
+    fn inventory_doc_reads_new_stage_before_legacy_stage() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let previous = std::env::var_os("FNO_STATE_ROOT_INVENTORY_DOC");
+        std::env::remove_var("FNO_STATE_ROOT_INVENTORY_DOC");
+        let root = std::env::temp_dir().join(format!("fno-drift-stage-{}", std::process::id()));
+        let new = crate::state_layout::place_dir(&root, "plugin-stage").unwrap();
+        let new_doc = new.join("fno/docs/state-root-inventory.md");
+        let old_doc = root.join("plugin-stage/fno/docs/state-root-inventory.md");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(new_doc.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(old_doc.parent().unwrap()).unwrap();
+        std::fs::write(&new_doc, "new").unwrap();
+        std::fs::write(&old_doc, "old").unwrap();
+        assert_eq!(doc_path(&root).as_deref(), Some(new_doc.as_path()));
+        std::fs::remove_dir_all(&new).unwrap();
+        assert_eq!(doc_path(&root).as_deref(), Some(old_doc.as_path()));
+        match previous {
+            Some(value) => std::env::set_var("FNO_STATE_ROOT_INVENTORY_DOC", value),
+            None => std::env::remove_var("FNO_STATE_ROOT_INVENTORY_DOC"),
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}

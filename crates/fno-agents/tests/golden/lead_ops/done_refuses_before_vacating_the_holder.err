@@ -1,0 +1,1 @@
+lead: cannot verify the caller's role: no session identity resolved and stdin is not a terminal, so this call is not read as an attended human, and expiring a role requires a holder. If you are the user, open a terminal outside any harness session and rerun.

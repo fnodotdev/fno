@@ -1,0 +1,37 @@
+# Generated copies. An Edit or Write to a path here is refused by hooks/write-gate.sh.
+# Columns (tab-separated): path-glob, canonical source, regenerate command. Globs are bash [[ == ]] patterns on the repo-relative path.
+# Skill-bundle copies are not listed here: skill-bundles.yaml owns them.
+crates/fno/src/harness_capabilities.toml	crates/fno-agents/src/harness_capabilities.toml	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/src/event_store.rs	crates/fno-agents/src/runtime/event_store.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/src/event_store/observation.rs	crates/fno-agents/src/runtime/event_store/observation.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/src/event_store/validate.rs	crates/fno-agents/src/runtime/event_store/validate.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/src/event_store/runs.rs	crates/fno-agents/src/runtime/event_store/runs.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno-agents/src/runtime/event_store/events_schema.json	crates/fno-agents/src/runtime/event_store/schema.yaml	FNO_SYNC_EVENTS_SCHEMA=1 cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/src/notify_dispatch.rs	crates/fno-agents/src/runtime/notify_dispatch.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/src/event_store/events_schema.json	crates/fno-agents/src/runtime/event_store/events_schema.json	FNO_SYNC_EVENTS_SCHEMA=1 cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/src/live_store_fence.rs	crates/fno-agents/src/backlog/live_store_fence.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/src/chokepoint.rs	crates/fno-agents/src/gate/chokepoint.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/src/store_conn.rs	crates/fno-agents/src/backlog/store_conn.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/src/provider_key.rs	crates/fno-agents/src/spawn/provider_key.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/src/effect_map.rs	crates/fno-agents/src/gate/effect_map.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/src/repo_identity.rs	crates/fno-agents/src/runtime/repo_identity.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/src/footnote_transcript.rs	crates/fno-agents/src/runtime/footnote_transcript.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno-agents/src/events_limits.toml	crates/fno-agents/src/runtime/event_store/schema.yaml	cargo build --manifest-path crates/fno-agents/Cargo.toml
+docs/harnesses/capability-matrix.md	crates/fno-agents/src/harness_capabilities.toml	crates/fno-agents/target/debug/fno-agents harness-matrix --write
+docs/harnesses/command-matrix.md	crates/fno-agents/src/harness_capabilities.toml and skills/*/SKILL.md frontmatter	crates/fno-agents/target/debug/fno-agents harness-matrix --write
+skills/agent/references/launch-*.md	docs/harnesses/launch/launch-*.md and docs/harnesses/help/*.txt	crates/fno-agents/target/debug/fno-agents harness-matrix --write
+.codex/agents/*.toml	agents/*.md	python3 scripts/sync-codex-agents.py
+docs/configuration-guide.md	crates/fno/config_schema.json	fno config schema --markdown --write
+docs/config.example.toml	crates/fno/config_schema.json	fno config schema --toml --write
+crates/fno/config.example.toml	crates/fno/config_schema.json	fno config schema --toml --write
+*Cargo.lock	the sibling Cargo.toml	cargo build in that crate
+docs/loops.md	crates/fno-agents/src/eval/tick_ledger.rs KNOWN_ARMS	cargo run --manifest-path crates/fno-agents/Cargo.toml --bin fno-agents -- loops table --markdown > docs/loops.md
+crates/fno/src/otel_read.rs	crates/fno-agents/src/eval/otel_read.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/src/registry_read.rs	crates/fno-agents/src/runtime/registry_read.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/src/rules.rs	crates/fno-agents/src/backlog/rules.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/src/glob.rs	crates/fno-agents/src/glob.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
+docs/reference/otel-schema.md	crates/fno-agents/src/otel_schema.sql	python3 scripts/docs/generate-otel-schema.py
+crates/fno/src/role_migration.rs	crates/fno-agents/src/spawn/role_migration.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml
+docs/architecture/help-routing.md	crates/fno-agents/src/help_router.rs	cargo test -p fno-agents help_router -- --ignored bless_help_routing
+crates/fno/src/model_reach.toml	crates/fno-agents/src/model_reach.toml	cargo build --manifest-path crates/fno-agents/Cargo.toml
+crates/fno/tests/golden/config_schema/*.stdout	crates/fno/config_schema.json	bash scripts/ci/regen-config-schema-goldens.sh

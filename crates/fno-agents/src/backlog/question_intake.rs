@@ -1,0 +1,1853 @@
+//! The Rust question intake behind `fno inbox outstanding ask`.
+//!
+//! Transport-only `question-intake` arm: one JSON request on stdin (what the
+//! Python shim resolved: text, flags, identity, live law rows, storage root),
+//! one JSON answer on stdout, and the exit code carries the verdict. It
+//! registers no client command - the shrink law (d-fe66560a) allows no new
+//! action - and callers reach it through `command_call`, like the patch door.
+//!
+//! Owns: the law refusal (`law_match`), the context parse
+//! (`escalation::parse` with the question-file sections), the node-pointer
+//! rule (one line plus a node pointer, law d-59af3235), the dedup on
+//! subject plus node, the 2000-character cut, the id mint, the dual write
+//! (project journal fatal, index best-effort) and the render-position
+//! receipt. The exit CODE lives in the answer (the transport always exits 0
+//! once the request parsed, the question-intake shape); refusal MESSAGES stay
+//! in the shim, which owns the user's name.
+
+use crate::decision_trace::{actor_kind_in, emit_span_to, new_span_id, Trace};
+use crate::paths::AgentsHome;
+use crate::provider_cap::questions_path;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Map, Value};
+use std::collections::HashSet;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+
+/// `cli/src/fno/events/__init__.py: QUESTION_CAP`.
+pub const QUESTION_CAP: usize = 2000;
+
+/// The filled question file the template arm prints: the gate's own shape,
+/// sourced from the file that enforces it so neither can drift.
+pub const QUESTION_TEMPLATE: &str = "\
+---
+recommend: 1
+class: <public-surface, gate-override, irreversible, money-security, outside-reach, taste or law-change>
+deadline: <RFC 3339 time, such as 2026-11-01T09:00:00Z>
+on_silence: <take-recommended or wait>
+---
+
+<the question, one line>
+
+## Options
+1. <first choice>.
+    What happens next: <what starts the moment this is chosen>
+2. <second choice>.
+    What happens next: <what starts the moment this is chosen>
+
+## Blocked because
+<what stays stuck until this is answered>
+
+## Why these options
+<the reading that produced exactly these options>
+
+## Downside
+<the cost of the option you recommend>
+
+## Recommendation
+Option 1, <the reason in one line>.
+
+## Not thought through
+<the part you did not check>
+
+## Tried
+<what you did to answer it yourself>
+
+## Evidence
+<what you read or ran, with the command or file>
+
+## Reversible
+costly
+
+## Cost if wrong
+<what breaks if the recommendation is wrong>
+
+## Meanwhile
+<what keeps moving while the question waits>
+";
+
+#[derive(Deserialize)]
+pub struct IntakeRequest {
+    pub question: String,
+    /// `--template`: print the filled question file, record nothing.
+    #[serde(default)]
+    pub template: bool,
+    #[serde(default)]
+    pub ask: Option<String>,
+    #[serde(default)]
+    pub options: Vec<String>,
+    #[serde(default)]
+    pub blocks: Vec<String>,
+    #[serde(default)]
+    pub node: Option<String>,
+    #[serde(default)]
+    pub subject: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub asker: Option<String>,
+    #[serde(default)]
+    pub laws: Vec<crate::law_match::LawRow>,
+    /// The ladder rung the asker placed the row on (`question_ladder::place`);
+    /// absent is the user rung.
+    #[serde(default)]
+    pub rung: Option<Value>,
+    pub storage_root: PathBuf,
+    /// The machine index, resolved by the Python side (`paths.questions_jsonl()`)
+    /// so the caller's sandbox stays the single path authority. Falls back to
+    /// `questions_path(home)` when absent.
+    #[serde(default)]
+    pub index_path: Option<PathBuf>,
+    /// The project journal (`paths.project_log("events.jsonl")`), same
+    /// authority rule as `index_path`. Falls back to the legacy
+    /// `<storage_root>/.fno/events.jsonl`.
+    #[serde(default)]
+    pub journal_path: Option<PathBuf>,
+    /// The user's stated name, interpolated into the law-refusal line.
+    #[serde(default)]
+    pub display_name: Option<String>,
+    /// `fno inbox outstanding`'s render cap, for the does-not-render line.
+    #[serde(default)]
+    pub render_cap: Option<usize>,
+    /// `append`: the machine-writer door (the lead wake, the branch hook).
+    /// `event` is a caller-built `operator_question` envelope; it is
+    /// validated and written to both sinks, and no ask gate runs. The wake
+    /// and hook lanes ask questions the ask gate would refuse (machine
+    /// markers, option lists with no node pointer), and their rows were
+    /// always raw appends.
+    #[serde(default)]
+    pub op: Option<String>,
+    #[serde(default)]
+    pub event: Option<Value>,
+    /// `--image`: screenshots the page embeds under `## Screens`. Each is
+    /// copied into `screens_dir` before anything is recorded.
+    #[serde(default)]
+    pub images: Vec<PathBuf>,
+    /// Where the copies land: `<questions dir>/screens`, so the vault holds
+    /// them next to the page. Required when `images` is not empty.
+    #[serde(default)]
+    pub screens_dir: Option<PathBuf>,
+}
+
+#[derive(Serialize)]
+pub struct IntakeAnswer {
+    pub exit_code: i32,
+    /// The stderr lines, in print order: the shim echoes them verbatim.
+    pub lines: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qid: Option<String>,
+    /// True only on a template answer; the shim reads it to refuse a binary
+    /// that predates the template arm.
+    #[serde(default)]
+    pub template: bool,
+    /// `law` | `node_pointer` | `context` | `config` | `decide_yourself` | `dedup` | `write` | `index`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_id: Option<String>,
+    pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<usize>,
+    /// The rung the recorded row carries; the asker wakes its holder.
+    #[serde(skip)]
+    pub rung: Option<Value>,
+}
+
+impl IntakeAnswer {
+    fn exit(code: i32) -> Self {
+        IntakeAnswer {
+            exit_code: code,
+            lines: Vec::new(),
+            qid: None,
+            template: false,
+            refusal: None,
+            open_id: None,
+            truncated: false,
+            position: None,
+            total: None,
+            rung: None,
+        }
+    }
+}
+
+/// The binary transport: request on stdin, answer on stdout. Exits 0
+/// whenever an answer was computed; the verdict rides `exit_code` in it.
+pub fn run_question_intake() -> i32 {
+    let mut input = String::new();
+    if std::io::stdin().read_to_string(&mut input).is_err() {
+        eprintln!("fno-agents question-intake: could not read stdin");
+        return 2;
+    }
+    let req: IntakeRequest = match serde_json::from_str(&input) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("fno-agents question-intake: bad request: {e}");
+            return 2;
+        }
+    };
+    let home = AgentsHome::from_env();
+    let answer = run_intake(&req, &home);
+    match serde_json::to_string(&answer) {
+        Ok(s) => println!("{s}"),
+        Err(e) => {
+            eprintln!("fno-agents question-intake: could not serialize answer: {e}");
+            return 1;
+        }
+    }
+    0
+}
+
+fn str_field<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
+    v.get("data")
+        .and_then(|d| d.get(key))
+        .or_else(|| v.get(key))
+        .and_then(Value::as_str)
+}
+
+/// One open question seen in the index, for dedup and the receipt.
+#[derive(Debug)]
+struct OpenRow {
+    id: String,
+    ts: String,
+    blocks: usize,
+    subject: Option<String>,
+    node: Option<String>,
+}
+
+/// Latest ask per id minus closes, folded from the machine index. A
+/// malformed line is skipped; the receipt is advisory and dedup is best
+/// effort against the rows that do parse.
+pub fn question_rows(index: &Path) -> (Map<String, Value>, HashSet<String>) {
+    // Store rows first: Python commits closes to questions.db without
+    // touching the raw journal, so a raw read marks closed questions open.
+    let raw =
+        crate::event_store::journal_text(index, &["operator_question", "operator_question_closed"]);
+    let mut asked: Map<String, Value> = Map::new();
+    let mut closed = HashSet::new();
+    for line in raw.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let qid = match str_field(&v, "question_id") {
+            Some(q) => q.to_string(),
+            None => continue,
+        };
+        match v.get("type").and_then(Value::as_str) {
+            Some("operator_question") => {
+                asked.insert(qid, v);
+            }
+            Some("operator_question_closed") => {
+                closed.insert(qid);
+            }
+            _ => {}
+        }
+    }
+    (asked, closed)
+}
+
+fn open_rows(index: &Path) -> Vec<OpenRow> {
+    let (asked, closed) = question_rows(index);
+    let mut out: Vec<OpenRow> = asked
+        .into_iter()
+        .filter(|(id, _)| !closed.contains(id))
+        .map(|(id, v)| OpenRow {
+            blocks: v
+                .get("data")
+                .and_then(|d| d.get("blocks"))
+                .or_else(|| v.get("blocks"))
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0),
+            ts: v
+                .get("ts")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            subject: str_field(&v, "subject").map(str::to_string),
+            node: str_field(&v, "node").map(str::to_string),
+            id,
+        })
+        .collect();
+    // Newest first, then more blocks, then id (mirrors read_open_questions
+    // with a zero liveness budget: one lane, no probes).
+    out.sort_by(|a, b| {
+        b.ts.cmp(&a.ts)
+            .then_with(|| b.blocks.cmp(&a.blocks))
+            .then_with(|| b.id.cmp(&a.id))
+    });
+    out
+}
+
+/// True when the text carries any question-file section (so the title line
+/// becomes the question), per the template in docs/architecture/
+/// attention-items.md.
+fn is_question_file(text: &str) -> bool {
+    const SECTIONS: [&str; 9] = [
+        "## Options",
+        "## Recommendation",
+        "## Blocked because",
+        "## Why these options",
+        "## Downside",
+        "## Not thought through",
+        "## Reversible",
+        "## Cost if wrong",
+        "## Meanwhile",
+    ];
+    SECTIONS.iter().any(|s| text.contains(s))
+}
+
+/// The exact word the Reversible section must hold: one of the three,
+/// nothing else. Extra text under the heading reads as missing.
+fn is_reversible_word(word: &str) -> bool {
+    matches!(word, "yes" | "costly" | "no")
+}
+
+/// A question that would clear a visual-approval hold: the gate's own
+/// subject (`visual approval PR <n> at <head>`), or a title that names a PR
+/// and the visual hold, the shape a lead writes by hand.
+fn asks_visual_approval(subject: Option<&str>, title: &str) -> bool {
+    if subject.is_some_and(|s| s.trim().to_ascii_lowercase().starts_with("visual approval")) {
+        return true;
+    }
+    let t = title.to_ascii_lowercase();
+    let visual = ["visual hold", "visual approval", "visual-approval"]
+        .iter()
+        .any(|w| t.contains(w));
+    visual && names_a_pr(&t)
+}
+
+/// A word-start `pr`, an optional `#`/space run, then a digit.
+fn names_a_pr(lower: &str) -> bool {
+    lower.match_indices("pr").any(|(i, _)| {
+        let start = i == 0 || !lower.as_bytes()[i - 1].is_ascii_alphanumeric();
+        let rest = lower[i + 2..].trim_start_matches(['#', ' ']);
+        start && rest.starts_with(|c: char| c.is_ascii_digit())
+    })
+}
+
+/// An image the viewer and Obsidian both show: a png, jpg, gif or webp
+/// extension, and a regular file whose first bytes carry that format's
+/// signature. A renamed text file would satisfy the screens refusal and
+/// still show nothing.
+fn is_image_file(path: &Path) -> bool {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    if !matches!(
+        ext.as_deref(),
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp")
+    ) || !path.is_file()
+    {
+        return false;
+    }
+    let mut head = [0u8; 12];
+    let n = std::fs::File::open(path)
+        .and_then(|mut f| f.read(&mut head))
+        .unwrap_or(0);
+    let head = &head[..n];
+    head.starts_with(b"\x89PNG\r\n\x1a\n")
+        || head.starts_with(b"\xff\xd8\xff")
+        || head.starts_with(b"GIF8")
+        || (head.starts_with(b"RIFF") && head.get(8..12) == Some(b"WEBP"))
+}
+
+/// A png `fno mux serve --snapshot` stamped: its frame painted an image with
+/// no image protocol, so it shows the half-block path and never the kitty
+/// one. The stamp is a `tEXt` chunk, `fno-snapshot` / `no-image-protocol`.
+fn snapshot_without_image_protocol(path: &Path) -> bool {
+    let Ok(png) = std::fs::read(path) else {
+        return false;
+    };
+    let mut at = 8;
+    while let Some(head) = png.get(at..at + 8) {
+        let len = u32::from_be_bytes([head[0], head[1], head[2], head[3]]) as usize;
+        let Some(data) = png.get(at + 8..at + 8 + len) else {
+            return false;
+        };
+        match &head[4..8] {
+            b"tEXt" if data == b"fno-snapshot\0no-image-protocol" => return true,
+            b"IDAT" | b"IEND" => return false,
+            _ => at += 12 + len,
+        }
+    }
+    false
+}
+
+/// Copy each screenshot to `<dir>/<qid>-<n>-<name>`, so the vault holds it
+/// next to the page and Obsidian's `![[name]]` resolves it by its unique
+/// name. Returns the copies' absolute paths.
+fn copy_screens(images: &[PathBuf], dir: Option<&Path>, qid: &str) -> Result<Vec<String>, String> {
+    let dir = dir.ok_or("no screens directory was resolved")?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let mut out = Vec::new();
+    for (i, src) in images.iter().enumerate() {
+        let name = src
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let dest = dir.join(format!("{qid}-{}-{name}", i + 1));
+        std::fs::copy(src, &dest).map_err(|e| format!("{}: {e}", src.display()))?;
+        let abs = std::fs::canonicalize(&dest).unwrap_or(dest);
+        out.push(abs.to_string_lossy().into_owned());
+    }
+    Ok(out)
+}
+
+fn title_of(text: &str, parsed_title: &str) -> String {
+    if !parsed_title.trim().is_empty() {
+        return parsed_title.trim().to_string();
+    }
+    let mut lines = text.lines().map(str::trim).peekable();
+    if lines.peek() == Some(&"---") {
+        // Skip a leading frontmatter block; the title is the first prose line.
+        lines.next();
+        for line in lines.by_ref() {
+            if line == "---" {
+                break;
+            }
+        }
+    }
+    lines
+        .find(|l| !l.is_empty() && !l.starts_with("---"))
+        .unwrap_or("")
+        .to_string()
+}
+
+/// `q-` + 8 hex from the OS entropy pool; a time+pid hash when it cannot be
+/// read, so a mint never fails the ask.
+fn mint_id() -> String {
+    let mut bytes = [0u8; 4];
+    let ok = std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut bytes))
+        .is_ok();
+    if !ok {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let mix = nanos as u64 ^ ((std::process::id() as u64) << 32);
+        bytes.copy_from_slice(&mix.to_le_bytes()[..4]);
+    }
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    format!("q-{hex}")
+}
+
+/// True when the question carries retract intent and names one of `ids`.
+/// The id citation is what keeps the exemption narrow - "revoke the
+/// credentials" alone never qualifies - and mirrors the nearby tier's own
+/// remedy ("name every id above and ask again").
+fn cites_retraction(question: &str, ids: &[String]) -> bool {
+    let lower = question.to_lowercase();
+    let intent = ["retract", "repeal", "rescind", "revoke", "overturn"]
+        .iter()
+        .any(|w| lower.contains(w));
+    intent && ids.iter().any(|id| lower.contains(&id.to_lowercase()))
+}
+
+/// True when the question's closing action is the retraction of a live law
+/// whose retraction only the operator may record. The lane verdict is the
+/// retract gate's own rule (`_decision_lane`), consumed as data.
+fn targets_operator_retraction(question: &str, laws: &[crate::law_match::LawRow]) -> bool {
+    laws.iter().any(|l| {
+        l.retraction_needs_operator()
+            && cites_retraction(question, std::slice::from_ref(&l.decision_id))
+    })
+}
+
+/// The machine-writer append door: validate one caller-built
+/// `operator_question` envelope, then the dual write - project journal
+/// fatal, machine index reported. The id must ride the envelope: a writer
+/// that cannot name its row has a bug, and minting here would hide it.
+fn run_append(req: &IntakeRequest) -> IntakeAnswer {
+    let mut answer = IntakeAnswer::exit(0);
+    let Some(event) = req.event.as_ref().filter(|e| e.is_object()) else {
+        answer.lines.push(
+            "outstanding: failed to record question: the append door needs an event envelope"
+                .to_string(),
+        );
+        answer.refusal = Some("write".to_string());
+        answer.exit_code = 2;
+        return answer;
+    };
+    let Some(qid) = event
+        .get("data")
+        .and_then(|d| d.get("question_id"))
+        .and_then(Value::as_str)
+        .filter(|v| !v.is_empty())
+    else {
+        answer.lines.push(
+            "outstanding: failed to record question: question event has no question_id".to_string(),
+        );
+        answer.refusal = Some("write".to_string());
+        answer.exit_code = 2;
+        return answer;
+    };
+    let qid = qid.to_string();
+    // Stamp once, before the serialize: the journal line and the index row
+    // must stay identical.
+    let mut event = event.clone();
+    if let Some(data) = event.get_mut("data").and_then(Value::as_object_mut) {
+        crate::identity::stamp_person(data);
+    }
+    let event = &event;
+    let journal_path = req
+        .journal_path
+        .clone()
+        .unwrap_or_else(|| req.storage_root.join(".fno").join("events.jsonl"));
+    let index = req
+        .index_path
+        .clone()
+        .unwrap_or_else(|| questions_path(&AgentsHome::from_env()));
+    if let Err((journaled, e)) = append_question_event(event, &journal_path, &index) {
+        answer.lines.push(e);
+        answer.exit_code = 1;
+        if journaled {
+            answer.qid = Some(qid);
+        } else {
+            answer.refusal = Some("write".to_string());
+        }
+        return answer;
+    }
+    answer.qid = Some(qid);
+    answer
+}
+
+/// Who asked, for the card: the handle and session the row already carries,
+/// plus the registry name and harness and this machine's host name. The
+/// handle fills from the registry row when the ask carried none, and with
+/// neither the key is omitted: a written null once blanked every question
+/// page on the reading machine (needs_overlay parses origin.handle).
+fn origin_of(req: &IntakeRequest, home: &AgentsHome) -> Option<Value> {
+    let session = req.session_id.as_deref().filter(|s| !s.is_empty())?;
+    let rows = crate::state::load_registry(&home.registry_json())
+        .map(|r| r.entries)
+        .unwrap_or_default();
+    let row = crate::lead_state::find_by_session(&rows, session, None);
+    let name = row.map(|r| r.name.clone());
+    let handle = req
+        .asker
+        .as_deref()
+        .filter(|h| !h.is_empty())
+        .map(str::to_string)
+        .or_else(|| name.clone().filter(|n| !n.is_empty()));
+    let mut origin = Map::new();
+    if let Some(handle) = handle {
+        origin.insert("handle".into(), json!(handle));
+    }
+    origin.insert("session_id".into(), json!(session));
+    origin.insert("name".into(), json!(name));
+    origin.insert("harness".into(), json!(row.and_then(|r| r.harness.clone())));
+    origin.insert("host".into(), json!(crate::claims::hostname()));
+    Some(Value::Object(origin))
+}
+
+/// The dual write of one `operator_question` envelope: the project journal
+/// (durable, fatal) then the recall index. `Err` carries whether the journal
+/// half landed, and the line naming the failure.
+pub(crate) fn append_question_event(
+    event: &Value,
+    journal_path: &Path,
+    index: &Path,
+) -> Result<(), (bool, String)> {
+    let line = serde_json::to_string(event).map_err(|e| {
+        (
+            false,
+            format!(
+                "outstanding: failed to record question: could not serialize the envelope: {e}"
+            ),
+        )
+    })?;
+    crate::event_store::append_envelope(journal_path, &line, None).map_err(|e| {
+        (
+            false,
+            format!("outstanding: failed to append question to project journal: {e}"),
+        )
+    })?;
+    crate::provider_cap::append_questions_row(index, event).map_err(|e| {
+        (
+            true,
+            format!(
+                "outstanding: recorded the question in the project journal, but the recall \
+index write failed: {e}. Run `fno inbox outstanding reindex`."
+            ),
+        )
+    })
+}
+
+pub fn run_intake(req: &IntakeRequest, home: &AgentsHome) -> IntakeAnswer {
+    if req.op.as_deref() == Some("append") {
+        return run_append(req);
+    }
+    if req.template {
+        let mut answer = IntakeAnswer::exit(0);
+        answer.lines = vec![QUESTION_TEMPLATE.to_string()];
+        answer.template = true;
+        return answer;
+    }
+    // The user's name for the refusal line, and the render cap for the
+    // receipt; both absent read as the plain shapes.
+    let who = req.display_name.as_deref().unwrap_or("the user");
+    let render_cap = req.render_cap.unwrap_or(10);
+
+    let truncated = req.question.chars().count() > QUESTION_CAP;
+    let mut answer = IntakeAnswer::exit(0);
+    if truncated {
+        answer.truncated = true;
+        answer.lines.push(format!(
+            "outstanding: recorded truncated: the question is {} characters, the event stores {QUESTION_CAP}.",
+            req.question.chars().count()
+        ));
+    }
+
+    // The law refusal first: a live law on this subject means the question
+    // is never recorded (fail-closed, d-0fa92eb9) - unless the question's
+    // closing action is the retraction of a superuser law. A session
+    // retracts a chat_attested law itself, but a superuser law refuses every
+    // session retraction, so "act on the law; do not ask" has no agent-side
+    // remedy there and the user is the only door. The closing action may ride the pin line (`--ask`), so it
+    // scans with the question, not after it.
+    let closing_text = match req.ask.as_deref() {
+        Some(ask) if !ask.trim().is_empty() => format!("{}\n{}", req.question, ask),
+        _ => req.question.clone(),
+    };
+    let retraction_ask = targets_operator_retraction(&closing_text, &req.laws);
+    // A retraction ask names its own target: exactly one cited live
+    // operator-retraction law stamps the machine subject, so the board
+    // answer performs the retraction in the same step. A question citing
+    // several laws names no single target and gets no stamp.
+    let retraction_stamp: Option<String> = if retraction_ask {
+        let cited: Vec<&crate::law_match::LawRow> = req
+            .laws
+            .iter()
+            .filter(|l| {
+                l.retraction_needs_operator()
+                    && cites_retraction(&closing_text, std::slice::from_ref(&l.decision_id))
+            })
+            .collect();
+        (cited.len() == 1).then(|| format!("law-retract:{}", cited[0].decision_id.to_lowercase()))
+    } else {
+        None
+    };
+    let law_verdict = crate::law_match::ask_answer(&crate::law_match::AskRequest {
+        question: req.question.clone(),
+        subject: req.subject.clone(),
+        laws: req.laws.clone(),
+    });
+    if !law_verdict.exact.is_empty() && !retraction_ask {
+        for hit in &law_verdict.exact {
+            let mut line = format!(
+                "outstanding: refused: live law already rules on '{}' ({}). Read it: \
+fno inbox decisions {} --lane law --state live. Act on the law; do not ask {who}.",
+                hit.subject,
+                hit.ids.join(", "),
+                hit.subject
+            );
+            if req.subject.is_none() {
+                line += " If the question is about another subject, name it with --subject.";
+            }
+            line += " If the question asks to retract this law: a chat-attested law \
+retracts from your session with `fno inbox law retract <id> --reason <why> --quote \"<the user's words>\"`; \
+for a superuser law, name its id in the question and ask again.";
+            answer.lines.push(line);
+        }
+        answer.refusal = Some("law".to_string());
+        answer.exit_code = 2;
+        return answer;
+    }
+    // A nearby subject is a notice, never a refusal (the 2026-11-07
+    // guard-purge ruling): one shared token between subjects matched loose
+    // words to unrelated laws and refused real asks that day.
+    if let Some(notice) = law_verdict.nearby_notice {
+        answer.lines.push(notice);
+    }
+
+    let parsed = crate::escalation::parse(&req.question);
+    for name in &parsed.unknown_sections {
+        answer.lines.push(format!(
+            "outstanding: warning: section '## {name}' is not one the page renders, so the user will not see it. \
+Move its text into a known section, or link a vault page from 'Why these options'."
+        ));
+    }
+    // A mistyped class would land as an unroutable hop, so it refuses the
+    // way the reversible field does: exit 2, the six values named, nothing
+    // written.
+    let asked_class = parsed.class.trim();
+    if !asked_class.is_empty() && !crate::decision_trace::DECISION_CLASSES.contains(&asked_class) {
+        // Quote the class: line as read; the recurring wrong value is
+        // 'decision', and a bare "unknown class" sent askers hunting
+        // for a list instead of fixing the one word.
+        let read_line = req
+            .question
+            .lines()
+            .find(|l| l.split_once(':').is_some_and(|(k, _)| k.trim() == "class"))
+            .unwrap_or("class:");
+        answer.lines.push(format!(
+            "outstanding: refused: read '{read_line}'. class must be one of these \
+words: {}. 'decision' is not a class.",
+            crate::decision_trace::DECISION_CLASSES.join(", ")
+        ));
+        answer.refusal = Some("class".to_string());
+        answer.exit_code = 2;
+        return answer;
+    }
+    let from_file = is_question_file(&req.question);
+    // File options carry a per-option next; flag options stay bare strings.
+    let file_options = !parsed.options.is_empty();
+    let has_options = file_options || !req.options.is_empty();
+
+    // Node-pointer rule: a question with choices names its node.
+    let node = req.node.as_deref().map(str::trim).filter(|n| !n.is_empty());
+    if has_options && node.is_none() {
+        answer.lines.push(
+            "outstanding: refused: a question with options names its node (--node). \
+The ask line stays one line plus the pointer (law d-59af3235); a question \
+file carries the context sections and is not a violation, so pass the file \
+with --question-file and --node together."
+                .to_string(),
+        );
+        answer.refusal = Some("node_pointer".to_string());
+        answer.exit_code = 2;
+        return answer;
+    }
+
+    // The context refusal (user design 2026-09-22): the page writer cannot
+    // invent context, so a question carries what, why, two options and a
+    // recommendation with its reason. One action with no choice is a pin
+    // and passes.
+    let is_pin = !has_options && req.ask.as_deref().is_some_and(|a| !a.trim().is_empty());
+    if !is_pin {
+        let mut missing: Vec<&str> = Vec::new();
+        if title_of(&req.question, &parsed.title).trim().is_empty() {
+            missing.push("what");
+        }
+        if parsed.blocked_because.trim().is_empty() {
+            missing.push("why");
+        }
+        if parsed.options.len() < 2 && req.options.len() < 2 {
+            missing.push("two options");
+        }
+        let recommendation_ok = parsed
+            .recommend
+            .is_some_and(|r| (1..=parsed.options.len()).contains(&r))
+            && !parsed.recommendation.trim().is_empty();
+        if !recommendation_ok {
+            missing.push("a recommendation");
+        }
+        // The readiness mirror: the mux renders only ready items
+        // (attention::problems), so every section it reads is required here.
+        // A question admitted half-checked lands exit 0 and the user never
+        // sees it, which is the failure this door exists to prevent.
+        if parsed.options_rationale.trim().is_empty() {
+            missing.push("## Why these options");
+        }
+        if file_options {
+            if parsed.options.iter().any(|o| o.next.trim().is_empty()) {
+                missing.push("What happens next under every option");
+            }
+        } else if has_options {
+            missing.push("a question file (flag options carry no What happens next)");
+        }
+        if parsed.unknowns.trim().is_empty() {
+            missing.push("## Not thought through");
+        }
+        if !is_reversible_word(parsed.reversible.trim()) {
+            missing.push("## Reversible (yes, costly, or no)");
+        }
+        if parsed.reversible.trim() == "costly" && parsed.cost_if_wrong.trim().is_empty() {
+            missing.push("## Cost if wrong");
+        }
+        if parsed.meanwhile.trim().is_empty() {
+            missing.push("## Meanwhile");
+        }
+        if !missing.is_empty() {
+            answer.lines.push(format!(
+                "outstanding: refused: a question needs {}. Write a question file \
+(docs/architecture/attention-items.md, \"Asking with context\") and pass \
+--question-file. One action with no choice is a pin: pass --ask \"<the action>\".",
+                missing.join(", ")
+            ));
+            // The quote lines: where a value was present to read, name it
+            // and the shape wanted, so one pass fixes the file.
+            let reversible_read = parsed.reversible.trim();
+            if !reversible_read.is_empty() && !is_reversible_word(reversible_read) {
+                answer.lines.push(format!(
+                    "outstanding: the Reversible section reads '{reversible_read}'; \
+it must hold exactly one word: yes, costly, or no. Any extra text under the \
+heading reads as missing."
+                ));
+            }
+            for (i, o) in parsed.options.iter().enumerate() {
+                if o.next.trim().is_empty() {
+                    answer.lines.push(format!(
+                        "outstanding: option {} '{}' carries no 'What happens next:' \
+line; each option needs an indented 'What happens next: <the action this \
+choice starts>'.",
+                        i + 1,
+                        o.text
+                    ));
+                }
+            }
+            answer.refusal = Some("context".to_string());
+            answer.exit_code = 2;
+            return answer;
+        }
+        // The asker-must-decide refusal (user ruling 2026-09-22): a class
+        // in questions.rules.allow, or a reversible question, is one the
+        // asker or its lead settles itself; it reaches the user only when
+        // why_user names exactly one class in questions.rules.deny. A
+        // question whose closing action is an operator-only retraction is
+        // not the asker's to settle, whatever the file says.
+        let cwd = req.cwd.as_deref().map(PathBuf::from).unwrap_or_default();
+        let rules = match crate::question_ladder::rules_for(&cwd) {
+            Ok(r) => r,
+            Err(e) => {
+                answer.lines.push(format!("outstanding: refused: {e}."));
+                answer.refusal = Some("config".to_string());
+                answer.exit_code = 2;
+                return answer;
+            }
+        };
+        let class = parsed.class.trim();
+        let user_only = crate::question_ladder::class_word(&parsed.why_user)
+            .is_some_and(|c| rules.user_only(c));
+        let reversible = parsed.reversible.trim().eq_ignore_ascii_case("yes");
+        if (rules.asker_decides(class) || (reversible && !user_only)) && !retraction_ask {
+            let decide = match node {
+                Some(n) => format!("fno backlog decide {n} \"<ruling>\""),
+                None => "fno backlog decide <node> \"<ruling>\"".to_string(),
+            };
+            answer.lines.push(format!(
+                "outstanding: refused: this question is yours to rule. Decide door \
+first: {decide} (--authority agent) - record the ruling, then continue. \
+The user answers only a class in questions.rules.deny ({}): name exactly one \
+with why_user: <class> in the question file.",
+                rules.deny.join(", ")
+            ));
+            answer.refusal = Some("decide_yourself".to_string());
+            answer.exit_code = 2;
+            return answer;
+        }
+    }
+
+    // The screens refusal: the user cannot judge paint they cannot see, so
+    // a question that clears a visual-approval hold carries its shots.
+    if let Some(bad) = req.images.iter().find(|p| !is_image_file(p)) {
+        answer.lines.push(format!(
+            "outstanding: refused: --image {} is not a readable png, jpg, gif or webp file.",
+            bad.display()
+        ));
+        answer.refusal = Some("image".to_string());
+        answer.exit_code = 2;
+        return answer;
+    }
+    let visual = asks_visual_approval(
+        req.subject.as_deref(),
+        &title_of(&req.question, &parsed.title),
+    );
+    if visual
+        && !req.images.is_empty()
+        && req
+            .images
+            .iter()
+            .all(|p| snapshot_without_image_protocol(p))
+    {
+        answer.lines.push(
+            "outstanding: refused: every shot is an fno mux snapshot of an image view. The \
+snapshot has no image protocol, so it shows half-blocks and never the kitty image. Add a \
+capture from a real terminal (Ghostty, kitty or WezTerm) with --image."
+                .to_string(),
+        );
+        answer.refusal = Some("screens_protocol".to_string());
+        answer.exit_code = 2;
+        return answer;
+    }
+    if req.images.is_empty() && visual {
+        answer.lines.push(
+            "outstanding: refused: a visual-approval question carries the screens the user \
+judges. Pass each screenshot with --image <path>; the page embeds them under ## Screens."
+                .to_string(),
+        );
+        answer.refusal = Some("screens".to_string());
+        answer.exit_code = 2;
+        return answer;
+    }
+
+    // Dedup: an open question on the same subject and node already waits.
+    let subject: Option<String> = retraction_stamp.clone().or_else(|| {
+        req.subject
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    });
+    let index = req
+        .index_path
+        .clone()
+        .unwrap_or_else(|| questions_path(home));
+    // One read serves the dedup and the supersede after the write: the
+    // open rows a re-ask closes are the ones this read saw.
+    let open = open_rows(&index);
+    if let (Some(s), Some(n)) = (subject.as_deref(), node) {
+        let dup = open.iter().find(|row| {
+            row.subject.as_deref().map(str::trim) == Some(s) && row.node.as_deref() == Some(n)
+        });
+        if let Some(row) = dup {
+            answer.lines.push(format!(
+                "outstanding: refused: an open question on subject '{s}' and node '{n}' \
+already waits ({}). Answer it or clear it; do not ask twice.",
+                row.id
+            ));
+            answer.refusal = Some("dedup".to_string());
+            answer.open_id = Some(row.id.clone());
+            answer.exit_code = 2;
+            return answer;
+        }
+    }
+
+    let stored_question: String = if from_file {
+        title_of(&req.question, &parsed.title)
+    } else if truncated {
+        req.question.chars().take(QUESTION_CAP).collect()
+    } else {
+        req.question.clone()
+    };
+
+    // The escalate route: an `answers_ask:` pointer turns the intake into the
+    // lead's route span, so the question links the hop it answers. Same
+    // journal as the question row.
+    let journal_path = req
+        .journal_path
+        .clone()
+        .unwrap_or_else(|| req.storage_root.join(".fno").join("events.jsonl"));
+    let mut route_span_id: Option<String> = None;
+    let mut pending_route: Option<(Trace, Map<String, Value>)> = None;
+    if let Some(ask_ref) = parsed
+        .answers_ask
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        // A span id parents verbatim; any other reference names the ask's
+        // bus message, whose endpoints re-derive the ask span. An
+        // unresolvable pointer still routes: the lead's escalation is the
+        // fact, only parentless.
+        let ask_span = crate::decision_trace::resolve_ask_span(&journal_path, ask_ref);
+        if ask_span.is_none() {
+            eprintln!(
+                "outstanding: answers_ask '{ask_ref}' names no ask span; the route records unparented"
+            );
+        }
+        let trace = Trace {
+            trace_id: node.unwrap_or("none").to_string(),
+            span_id: new_span_id(),
+            parent_span_id: ask_span,
+            actor_session: req.session_id.clone(),
+            actor_kind: actor_kind_in(home, req.session_id.as_deref(), "question"),
+            comms: "question",
+            recipient_session: None,
+            recipient_kind: None,
+        };
+        let mut attrs = Map::new();
+        attrs.insert("route".to_string(), json!("escalate"));
+        if !asked_class.is_empty() {
+            attrs.insert("class".to_string(), json!(asked_class));
+        }
+        if let Some(rec) = parsed.recommend {
+            attrs.insert("recommendation".to_string(), json!(rec.to_string()));
+        }
+        pending_route = Some((trace, attrs));
+    }
+    // The route lands BEFORE the question row: the trace query reads in ts
+    // order, and a parent must not postdate its child. A failed route emit
+    // leaves the question parentless rather than dangling; a failed question
+    // write below leaves the route orphaned, reported on stderr.
+    let mut route_recorded = false;
+    if let Some((trace, attrs)) = pending_route.take() {
+        match emit_span_to(&journal_path, "route", &trace, &attrs) {
+            Ok(()) => {
+                route_span_id = Some(trace.span_id.clone());
+                route_recorded = true;
+            }
+            Err(e) => eprintln!("outstanding: route span skipped: {e}"),
+        }
+    }
+
+    let mut data = Map::new();
+    let qid = mint_id();
+    data.insert("question_id".into(), json!(&qid));
+    data.insert("question".into(), json!(stored_question));
+    for (key, value) in [
+        ("session_id", &req.session_id),
+        ("cwd", &req.cwd),
+        ("asker", &req.asker),
+        ("ask", &req.ask),
+    ] {
+        if let Some(v) = value.as_deref().filter(|v| !v.is_empty()) {
+            data.insert(key.into(), json!(v));
+        }
+    }
+    crate::identity::stamp_person(&mut data);
+    if let Some(n) = node {
+        data.insert("node".into(), json!(n));
+    }
+    // A rung row that lacks the card fields would read not-ready once its
+    // lease ran out and never reach the board, so it skips the ladder.
+    if let Some(rung) = &req.rung {
+        let missing: Vec<&str> = [
+            ("class", &parsed.class),
+            ("deadline", &parsed.deadline),
+            ("on_silence", &parsed.on_silence),
+            ("## Tried", &parsed.tried),
+        ]
+        .into_iter()
+        .filter(|(_, v)| v.trim().is_empty())
+        .map(|(k, _)| k)
+        .collect();
+        if missing.is_empty() {
+            data.insert("rung".into(), rung.clone());
+            answer.rung = Some(rung.clone());
+        } else {
+            answer.lines.push(format!(
+                "outstanding: this question goes to the user's board, not to your lead: \
+                 the ladder needs {}. Add them to the question file to ask your lead first.",
+                missing.join(", ")
+            ));
+        }
+    }
+    if !parsed.class.trim().is_empty() {
+        data.insert("class".into(), json!(parsed.class.trim()));
+    }
+    if let Some(origin) = origin_of(req, home) {
+        data.insert("origin".into(), origin);
+    }
+    if !req.blocks.is_empty() {
+        data.insert("blocks".into(), json!(req.blocks));
+    }
+    if !req.images.is_empty() {
+        match copy_screens(&req.images, req.screens_dir.as_deref(), &qid) {
+            Ok(copies) => {
+                data.insert("images".into(), json!(copies));
+            }
+            Err(e) => {
+                answer.lines.push(format!(
+                    "outstanding: failed to record question: the screens could not be copied: {e}"
+                ));
+                answer.refusal = Some("write".to_string());
+                answer.exit_code = 1;
+                return answer;
+            }
+        }
+    }
+    if has_options {
+        if file_options {
+            let options: Vec<Value> = parsed
+                .options
+                .iter()
+                .enumerate()
+                .map(|(i, o)| {
+                    let mut m = Map::new();
+                    m.insert("n".into(), json!(i + 1));
+                    m.insert("text".into(), json!(o.text));
+                    if !o.next.is_empty() {
+                        m.insert("next".into(), json!(o.next));
+                    }
+                    Value::Object(m)
+                })
+                .collect();
+            data.insert("options".into(), Value::Array(options));
+        } else {
+            data.insert("options".into(), json!(req.options));
+        }
+    }
+    if let Some(subject) = &subject {
+        data.insert("subject".into(), json!(subject));
+    }
+    let why_user = parsed.why_user.trim();
+    if !why_user.is_empty() {
+        // The sweep reads this to spare a user-only question from its node's
+        // closing.
+        data.insert("why_user".into(), json!(why_user));
+    }
+    // The probe the daemon reads to close the question with observed
+    // evidence: the explicit `probe:` key wins, else derivation scans the
+    // question and subject sentences (never option or context text), and a
+    // non-mechanical ask records `none` so the receipt can name the key.
+    let probe_word = match parsed.probe.trim() {
+        "" => crate::question_probe::derive(&Value::Object(data.clone()))
+            .map(|p| format!("{}:{}", p.kind.as_str(), p.target))
+            .unwrap_or_else(|| "none".to_string()),
+        word => word.to_string(),
+    };
+    data.insert("probe".into(), json!(probe_word.clone()));
+
+    // The structured context: every non-empty field the projection reads.
+    let mut context = Map::new();
+    for (key, value) in [
+        ("blocked_because", &parsed.blocked_because),
+        ("options_rationale", &parsed.options_rationale),
+        ("unknowns", &parsed.unknowns),
+        ("reversible", &parsed.reversible),
+        ("cost_if_wrong", &parsed.cost_if_wrong),
+        ("meanwhile", &parsed.meanwhile),
+        ("tried", &parsed.tried),
+        ("evidence", &parsed.evidence),
+        ("deadline", &parsed.deadline),
+        ("on_silence", &parsed.on_silence),
+    ] {
+        if !value.trim().is_empty() {
+            context.insert(key.into(), json!(value.trim()));
+        }
+    }
+    if let Some(rec) = parsed.recommend {
+        if rec >= 1 && rec <= parsed.options.len() {
+            let mut recommendation = Map::new();
+            recommendation.insert("option".into(), json!(rec));
+            recommendation.insert("why".into(), json!(parsed.recommendation.trim()));
+            if !parsed.downside.trim().is_empty() {
+                recommendation.insert("downside".into(), json!(parsed.downside.trim()));
+            }
+            context.insert("recommendation".into(), Value::Object(recommendation));
+        }
+    }
+    if !context.is_empty() {
+        data.insert("context".into(), Value::Object(context));
+    }
+
+    // One envelope, two sinks: the journal and the recall index must carry
+    // the identical line, so the ts is stamped once. The journal is the
+    // durable half and its failure is fatal. The journal path travels in
+    // the request (the Python sandbox stays the single path authority, as
+    // with index_path); the legacy .fno path is the fallback.
+    // The question span: the question row IS the span (span_id = question_id),
+    // parented at the route span an answers_ask pointer produced. The
+    // recipient follows the row's destination: a lead-rung card asks its rung
+    // holder, a board card asks the user.
+    let holder = data
+        .get("rung")
+        .and_then(|r| r.get("holder_session"))
+        .and_then(Value::as_str)
+        .filter(|h| !h.is_empty())
+        .map(str::to_string);
+    let (recipient_session, recipient_kind) = match &holder {
+        Some(h) => (Some(h.clone()), Some("lead")),
+        None => (None, Some("user")),
+    };
+    data.insert(
+        "trace".into(),
+        serde_json::to_value(&Trace {
+            trace_id: node.unwrap_or("none").to_string(),
+            span_id: qid.clone(),
+            parent_span_id: route_span_id,
+            actor_session: req.session_id.clone(),
+            actor_kind: actor_kind_in(home, req.session_id.as_deref(), "question"),
+            comms: "question",
+            recipient_session,
+            recipient_kind,
+        })
+        .unwrap_or(Value::Null),
+    );
+    let event = json!({
+        "ts": crate::events::now_rfc3339(),
+        "type": "operator_question",
+        "source": "target",
+        "data": Value::Object(data),
+    });
+    let line = match serde_json::to_string(&event) {
+        Ok(l) => l,
+        Err(e) => {
+            answer.lines.push(format!(
+                "outstanding: failed to record question: could not serialize the envelope: {e}"
+            ));
+            answer.refusal = Some("write".to_string());
+            answer.exit_code = 1;
+            return answer;
+        }
+    };
+    if let Err(e) = crate::event_store::append_envelope(&journal_path, &line, None) {
+        if route_recorded {
+            eprintln!("outstanding: the route span landed alone; the question row did not");
+        }
+        answer.lines.push(format!(
+            "outstanding: failed to record question: failed to append question to project journal: {e}"
+        ));
+        answer.refusal = Some("write".to_string());
+        answer.exit_code = 1;
+        return answer;
+    }
+
+    // Machine-wide recall index: best-effort, reported.
+    let index_error = crate::provider_cap::append_questions_row(&index, &event).err();
+    if let Some(e) = index_error {
+        answer.lines.push(format!(
+            "outstanding: recorded {qid} in the project journal, but the recall index \
+write failed: {e}. Run `fno inbox outstanding reindex`; do not retry ask, which \
+would mint a second id for the same question."
+        ));
+        answer.qid = Some(qid);
+        answer.exit_code = 1;
+        return answer;
+    }
+
+    // The receipt's short number, minted in step with the filing so the
+    // asker leaves with it. Advisory: any failure keeps the hash in the
+    // wording, and the daemon beat mints the same key as a no-op.
+    let graph = crate::backlog::database_path(&crate::graph_get::default_graph_path());
+    let _ = crate::numbers::mint_now(&graph, &qid);
+    let shown = crate::numbers::display(&qid);
+    answer.lines.push(format!(
+        "outstanding: recorded {shown}. The user answers it on the question board, \
+and the answer closes it. To withdraw it yourself: fno inbox outstanding clear {shown}"
+    ));
+    // The probe line: the asker leaves knowing whether a machine will
+    // close this ask, and what key to add when none derived.
+    if probe_word == "none" {
+        answer.lines.push(
+            "probe: none - not machine-checkable; add probe: <kind>:<target> to the question file"
+                .to_string(),
+        );
+    } else {
+        answer.lines.push(format!(
+            "probe: {} (closes when it reads done)",
+            probe_word.replacen(':', " ", 1)
+        ));
+    }
+    if let Some(stamp) = &retraction_stamp {
+        answer.lines.push(format!(
+            "outstanding: retraction target {stamp} stamped; the board answer performs the retraction as the operator"
+        ));
+    }
+
+    // A re-ask at a new head closes the older head's open question on the
+    // same node, whoever asked: the older head can no longer be approved
+    // or refused, so one open question per head family stays. Best-effort;
+    // a close that fails here waits for the hourly sweep.
+    if let (Some(s), Some(n)) = (subject.as_deref(), node) {
+        if let Some((new_family, new_head)) = crate::question_sweep::head_scoped(s) {
+            let olds: Vec<(&str, &str)> = open
+                .iter()
+                .filter_map(|row| {
+                    if row.node.as_deref() != Some(n) {
+                        return None;
+                    }
+                    let (family, old_head) =
+                        crate::question_sweep::head_scoped(row.subject.as_deref()?.trim())?;
+                    (family == new_family && !crate::question_sweep::same_head(old_head, new_head))
+                        .then_some((row.id.as_str(), old_head))
+                })
+                .collect();
+            if !olds.is_empty() {
+                let pairs: Vec<(String, String)> = olds
+                    .iter()
+                    .map(|(id, _)| {
+                        (
+                            id.to_string(),
+                            format!("superseded: {qid} re-asks at head {new_head}"),
+                        )
+                    })
+                    .collect();
+                let now = crate::claims::now_ms() / 1000;
+                let (closed, errors) =
+                    crate::question_sweep::close_questions(&index, &pairs, now, "question-intake");
+                for (id, old_head) in &olds {
+                    if closed.iter().any(|c| c == id) {
+                        answer.lines.push(format!(
+                            "outstanding: superseded {id} (same subject at older head \
+{old_head}); one question stays open on this subject."
+                        ));
+                    } else {
+                        let error = errors
+                            .iter()
+                            .find(|e| e.contains(id))
+                            .map(String::as_str)
+                            .unwrap_or("index write failed");
+                        answer.lines.push(format!(
+                            "outstanding: {id} could not be superseded ({error}); the next \
+sweep closes it."
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    let (position, total) = receipt_position(&index, &qid);
+    let total = total.unwrap_or(0);
+    answer.position = position;
+    answer.total = Some(total);
+    match position {
+        None => answer.lines.push(
+            "outstanding: recorded, but its render position could not be read; \
+run fno inbox outstanding to check."
+                .to_string(),
+        ),
+        Some(p) if p <= render_cap => {
+            answer.lines.push(format!(
+                "outstanding: {shown} renders at position {p} of {total}."
+            ));
+        }
+        Some(p) => answer.lines.push(format!(
+            "outstanding: {shown} does NOT render: position {p} of {total}, and \
+fno inbox outstanding prints {render_cap}. Nothing will show it to the operator; \
+raise it another way or answer it yourself."
+        )),
+    }
+    answer.qid = Some(qid);
+    answer
+}
+
+/// Where the new id lands in the render: (position 1-based, total). None
+/// means the read failed and the receipt says so instead of guessing.
+fn receipt_position(index: &Path, qid: &str) -> (Option<usize>, Option<usize>) {
+    let rows = open_rows(index);
+    let total = rows.len();
+    let position = rows.iter().position(|r| r.id == qid).map(|i| i + 1);
+    match position {
+        Some(p) => (Some(p), Some(total)),
+        None => (None, Some(total)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::law_match::LawRow;
+
+    fn tmp_home(tag: &str) -> AgentsHome {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "fno-agents-qintake-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // Mirror the prod shape (<home>/.fno/agents): questions_path reads
+        // root.parent(), and a home rooted at p itself would land the index
+        // in the shared temp dir.
+        let home = AgentsHome::at(&p.join(".fno").join("agents"));
+        home.ensure_root().unwrap();
+        home
+    }
+
+    fn tmp_root(tag: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "fno-agents-qintake-root-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    fn req(question: &str, root: &Path) -> IntakeRequest {
+        IntakeRequest {
+            question: question.to_string(),
+            template: false,
+            ask: None,
+            options: vec![],
+            blocks: vec![],
+            node: None,
+            subject: None,
+            session_id: Some("s1".to_string()),
+            cwd: Some("/repo/fno".to_string()),
+            asker: Some("worker-1".to_string()),
+            laws: vec![],
+            rung: None,
+            storage_root: root.to_path_buf(),
+            index_path: None,
+            journal_path: None,
+            display_name: None,
+            render_cap: None,
+            op: None,
+            event: None,
+            images: Vec::new(),
+            screens_dir: None,
+        }
+    }
+
+    fn journal_text(root: &Path) -> String {
+        // Writes commit to the store beside the journal; the raw file is
+        // never appended, so tests read committed rows.
+        crate::events::committed_journal_text(&root.join(".fno/events.jsonl"))
+    }
+
+    const QUESTION_FILE: &str = "\
+---
+recommend: 1
+---
+
+Is a net-zero Python repair legal with no grant?
+
+## Options
+1. Yes, net zero or less needs no grant.
+    What happens next: unblocks four fixes today
+2. Stay strict.
+    What happens next: every Python fix waits on a grant
+
+## Blocked because
+the reconcile fix and the merge_close fix are both Python edits
+
+## Why these options
+the three readings leads have acted on
+
+## Downside
+a repair can hide a feature
+
+## Recommendation
+Option 1, the narrowest door: every later fix needs it.
+
+## Not thought through
+whether a net-zero move between files counts
+
+## Reversible
+costly
+
+## Cost if wrong
+the push allowance drops to 0
+
+## Meanwhile
+stops
+";
+
+    #[test]
+    fn ac7_hp_question_file_records_context_and_object_options() {
+        let home = tmp_home("hp");
+        let root = tmp_root("hp");
+        let mut r = req(QUESTION_FILE, &root);
+        r.node = Some("x-aaaa".to_string());
+        let answer = run_intake(&r, &home);
+        assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
+        let qid = answer.qid.clone().unwrap();
+        assert!(qid.starts_with("q-"));
+        assert_eq!(qid.len(), 10);
+
+        let row: Value = journal_text(&root)
+            .lines()
+            .last()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .unwrap();
+        let data = row.get("data").unwrap();
+        assert_eq!(
+            data.get("question").and_then(Value::as_str),
+            Some("Is a net-zero Python repair legal with no grant?")
+        );
+        let options = data.get("options").and_then(Value::as_array).unwrap();
+        assert_eq!(options.len(), 2);
+        assert_eq!(
+            options[0].get("next").and_then(Value::as_str),
+            Some("unblocks four fixes today")
+        );
+        let ctx = data.get("context").unwrap();
+        for key in [
+            "blocked_because",
+            "options_rationale",
+            "recommendation",
+            "unknowns",
+            "reversible",
+            "cost_if_wrong",
+            "meanwhile",
+        ] {
+            assert!(ctx.get(key).is_some(), "context missing {key}");
+        }
+        assert_eq!(
+            ctx.get("recommendation")
+                .and_then(|r| r.get("option"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        // The index row landed too, with the same person stamp.
+        let index =
+            crate::event_store::journal_text(&questions_path(&home), &["operator_question"]);
+        assert!(index.contains(&qid));
+        let person = data.get("person").and_then(Value::as_str).unwrap();
+        assert!(
+            index.contains(&format!("\"person\":{}", json!(person))),
+            "{index}"
+        );
+        assert_eq!(answer.position, Some(1));
+        assert_eq!(answer.total, Some(1));
+    }
+
+    #[test]
+    fn a_question_missing_a_readiness_section_is_refused_and_named() {
+        // The gate mirrors the mux's readiness read: each stripped section
+        // is named in the refusal, nothing is recorded, no variant exits 0.
+        let cases: [(&str, &str, &str, &str); 6] = [
+            (
+                "unknowns",
+                "## Not thought through\nwhether a net-zero move between files counts\n",
+                "",
+                "## Not thought through",
+            ),
+            ("meanwhile", "## Meanwhile\nstops\n", "", "## Meanwhile"),
+            (
+                "why-these",
+                "## Why these options\nthe three readings leads have acted on\n",
+                "",
+                "## Why these options",
+            ),
+            (
+                "option-next",
+                "    What happens next: unblocks four fixes today\n",
+                "",
+                "What happens next under every option",
+            ),
+            (
+                "cost",
+                "## Cost if wrong\nthe push allowance drops to 0\n",
+                "",
+                "## Cost if wrong",
+            ),
+            (
+                "bad-reversible",
+                "## Reversible\ncostly",
+                "## Reversible\nmaybe",
+                "## Reversible (yes, costly, or no)",
+            ),
+        ];
+        for (tag, needle, hole, want) in cases {
+            let home = tmp_home(tag);
+            let root = tmp_root(tag);
+            let question = QUESTION_FILE.replace(needle, hole);
+            let mut r = req(&question, &root);
+            r.node = Some("x-aaaa".to_string());
+            let answer = run_intake(&r, &home);
+            assert_eq!(answer.exit_code, 2, "{tag}: lines: {:?}", answer.lines);
+            assert_eq!(answer.refusal.as_deref(), Some("context"), "{tag}");
+            assert!(
+                answer.lines.iter().any(|l| l.contains(want)),
+                "{tag}: the refusal must name {want}: {:?}",
+                answer.lines
+            );
+            assert!(journal_text(&root).is_empty(), "{tag}: nothing recorded");
+        }
+    }
+
+    fn junk_law() -> crate::law_match::LawRow {
+        crate::law_match::LawRow {
+            decision_id: "d-junk0001".to_string(),
+            subject: Some("junk-law".to_string()),
+            decision: Some("a placeholder ruling".to_string()),
+            ts: Some("2026-08-29T19:20:10Z".to_string()),
+            lane: Some("law".to_string()),
+            authority_source: Some("operator".to_string()),
+        }
+    }
+
+    #[test]
+    fn a_single_law_retraction_ask_stamps_the_machine_subject() {
+        // Exactly one cited live operator-retraction law stamps
+        // law-retract:<id> on the recorded question, so the board answer
+        // performs the retraction in the same step. Two cited laws name no
+        // single target: no stamp, the caller's subject stands.
+        let home = tmp_home("retract-stamp");
+        let root = tmp_root("retract-stamp");
+        let question = QUESTION_FILE
+            .replace("## Reversible\ncostly", "## Reversible\nyes")
+            .replace(
+                "Is a net-zero Python repair legal with no grant?",
+                "Retract d-junk0001: the junk law ruling on junk-law?",
+            );
+        let mut r = req(&question, &root);
+        r.subject = Some("junk-law".to_string());
+        r.node = Some("x-aaaa".to_string());
+        r.laws = vec![junk_law()];
+        let answer = run_intake(&r, &home);
+        assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
+        let row = journal_text(&root);
+        assert!(
+            row.contains("\"law-retract:d-junk0001\""),
+            "stamped subject: {row}"
+        );
+        assert!(
+            answer
+                .lines
+                .iter()
+                .any(|l| l.contains("retraction target law-retract:d-junk0001")),
+            "{:?}",
+            answer.lines
+        );
+
+        let mut second = junk_law();
+        second.decision_id = "d-junk0002".to_string();
+        let home = tmp_home("retract-stamp-2");
+        let root = tmp_root("retract-stamp-2");
+        // The text cites both ids: two cited laws name no single target.
+        let two_question = QUESTION_FILE
+            .replace("## Reversible\ncostly", "## Reversible\nyes")
+            .replace(
+                "Is a net-zero Python repair legal with no grant?",
+                "Retract d-junk0001 and d-junk0002: the junk laws ruling on junk-law?",
+            );
+        let mut r = req(&two_question, &root);
+        r.subject = Some("junk-law".to_string());
+        r.node = Some("x-aaaa".to_string());
+        r.laws = vec![junk_law(), second];
+        let answer = run_intake(&r, &home);
+        assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
+        let row = journal_text(&root);
+        assert!(
+            !row.contains("law-retract"),
+            "no stamp on a two-law ask: {row}"
+        );
+        assert!(
+            row.contains("\"junk-law\""),
+            "the caller's subject stands: {row}"
+        );
+    }
+
+    #[test]
+    fn ac9_edge_second_ask_on_same_subject_and_node_names_the_open_id() {
+        let home = tmp_home("dedup");
+        let root = tmp_root("dedup");
+        let mut first = req("first", &root);
+        first.subject = Some("subject-s".to_string());
+        first.node = Some("x-aaaa".to_string());
+        first.ask = Some("finish the lane".to_string());
+        assert_eq!(run_intake(&first, &home).exit_code, 0);
+
+        let mut second = req("second", &root);
+        second.subject = Some("subject-s".to_string());
+        second.node = Some("x-aaaa".to_string());
+        second.ask = Some("finish the lane".to_string());
+        let answer = run_intake(&second, &home);
+        assert_eq!(answer.exit_code, 2);
+        assert_eq!(answer.refusal.as_deref(), Some("dedup"));
+        assert!(answer
+            .open_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("q-")));
+        // Nothing new recorded.
+        assert_eq!(journal_text(&root).lines().count(), 1);
+    }
+
+    #[test]
+    fn law_refusal_records_nothing() {
+        let home = tmp_home("law");
+        let root = tmp_root("law");
+        let mut r = req("test subject again?", &root);
+        r.laws = vec![LawRow {
+            decision_id: "d-test0001".to_string(),
+            subject: Some("test-subject".to_string()),
+            decision: Some("stay strict".to_string()),
+            ts: Some("2026-09-01T00:00:00Z".to_string()),
+            lane: Some("law".to_string()),
+            authority_source: None,
+        }];
+        let answer = run_intake(&r, &home);
+        assert_eq!(answer.exit_code, 2);
+        assert_eq!(answer.refusal.as_deref(), Some("law"));
+        assert!(
+            answer.lines.iter().any(|l| l.contains("d-test0001")),
+            "the refusal names the law id: {:?}",
+            answer.lines
+        );
+        assert!(journal_text(&root).is_empty());
+    }
+
+    #[test]
+    fn the_ask_receipt_names_the_short_number() {
+        // The env lock + pinned home keep the receipt's number mint inside
+        // this test's temp store, never the machine's graph.db.
+        let _env = crate::law_match::scope_tests::DoorEnv::new();
+        let root = tmp_root("ask-number");
+        let index = root.join("questions.jsonl");
+        let journal = root.join("journal").join("events.jsonl");
+        let mut r = req("which lane?", &root);
+        r.subject = Some("subject-n".to_string());
+        r.node = Some("x-aaaa".to_string());
+        r.ask = Some("finish the lane".to_string());
+        r.index_path = Some(index.clone());
+        r.journal_path = Some(journal.clone());
+        let answer = run_intake(&r, &tmp_home("ask-number"));
+        assert_eq!(answer.exit_code, 0, "{:?}", answer.lines);
+        let qid = answer.qid.clone().unwrap_or_default();
+        // The receipt names the minted number: the hex never reaches the asker.
+        let recorded = answer
+            .lines
+            .iter()
+            .find(|l| l.contains("recorded"))
+            .expect("receipt line");
+        let number = recorded
+            .split("recorded ")
+            .nth(1)
+            .and_then(|rest| rest.split('.').next())
+            .expect("recorded token");
+        // Decisions and questions share one record and one D sequence; a
+        // legacy Q row keeps its number. The contract is a short number,
+        // never the hash.
+        assert!(
+            !number.is_empty()
+                && number.chars().next() == Some('D')
+                && number[1..].bytes().all(|b| b.is_ascii_digit()),
+            "the receipt names the number: {recorded}"
+        );
+        assert!(
+            answer.lines.iter().all(|l| !l.contains(&qid)),
+            "the ask receipt leaked the hash: {:?}",
+            answer.lines
+        );
+    }
+
+    #[test]
+    fn the_ask_receipt_carries_the_explicit_probe() {
+        // The explicit `probe:` key wins: the fence is parsed from the ask
+        // text, the row carries it, and the receipt names the probe.
+        let _env = crate::law_match::scope_tests::DoorEnv::new();
+        let root = tmp_root("ask-probe-tag");
+        let index = root.join("questions.jsonl");
+        let journal = root.join("journal").join("events.jsonl");
+        let mut r = req(
+            "---\nprobe: tag:v0.4.8\n---\nApprove the release tag?",
+            &root,
+        );
+        r.subject = Some("subject-n".to_string());
+        r.node = Some("x-aaaa".to_string());
+        r.ask = Some("finish the lane".to_string());
+        r.index_path = Some(index.clone());
+        r.journal_path = Some(journal.clone());
+        let answer = run_intake(&r, &tmp_home("ask-probe-tag"));
+        assert_eq!(
+            answer.exit_code, 0,
+            "exit {}: {:?}",
+            answer.exit_code, answer.lines
+        );
+        assert!(
+            answer
+                .lines
+                .iter()
+                .any(|l| l.contains("probe: tag v0.4.8 (closes when it reads done)")),
+            "{:?}",
+            answer.lines
+        );
+        // The index rows commit to the store beside the path; the raw file
+        // is never appended, so the read goes through the journal fold.
+        let raw = crate::event_store::journal_text(&index, &["operator_question"]);
+        assert!(raw.contains("\"probe\":\"tag:v0.4.8\""), "{raw}");
+    }
+
+    #[test]
+    fn an_ask_with_no_mechanical_probe_records_none() {
+        // No explicit key and no run URL or tailnet host in the ask: the
+        // row records `none` and the receipt names the key to add.
+        let _env = crate::law_match::scope_tests::DoorEnv::new();
+        let root = tmp_root("ask-probe-none");
+        let index = root.join("questions.jsonl");
+        let journal = root.join("journal").join("events.jsonl");
+        let mut r = req("which lane?", &root);
+        r.subject = Some("subject-n".to_string());
+        r.node = Some("x-aaaa".to_string());
+        r.ask = Some("finish the lane".to_string());
+        r.index_path = Some(index.clone());
+        r.journal_path = Some(journal.clone());
+        let answer = run_intake(&r, &tmp_home("ask-probe-none"));
+        assert_eq!(
+            answer.exit_code, 0,
+            "exit {}: {:?}",
+            answer.exit_code, answer.lines
+        );
+        assert!(
+            answer.lines.iter().any(|l| l.contains("probe: none")
+                && l.contains("not machine-checkable")
+                && l.contains("probe: <kind>:<target>")),
+            "receipt lines: {:?}",
+            answer.lines
+        );
+        let raw = crate::event_store::journal_text(&index, &["operator_question"]);
+        assert!(raw.contains("\"probe\":\"none\""), "index row: {raw}");
+    }
+
+    #[test]
+    fn the_append_door_writes_the_envelope_to_both_sinks() {
+        let root = tmp_root("append-ok");
+        let index = root.join("questions.jsonl");
+        let journal = root.join("journal").join("events.jsonl");
+        let event = json!({
+            "ts": "2026-10-24T12:00:00Z",
+            "type": "operator_question",
+            "source": "daemon",
+            "data": {"question_id": "q-ap1", "question": "wake?", "ask": "answer inherit or clean", "person": "caller"}
+        });
+        let req = IntakeRequest {
+            op: Some("append".to_string()),
+            event: Some(event),
+            journal_path: Some(journal.clone()),
+            index_path: Some(index.clone()),
+            storage_root: root.clone(),
+            ..req("", &root)
+        };
+        let answer = run_intake(&req, &tmp_home("append-ok"));
+        assert_eq!(answer.exit_code, 0, "{:?}", answer.lines);
+        assert_eq!(answer.qid.as_deref(), Some("q-ap1"));
+        let row = crate::events::committed_journal_text(&journal)
+            .lines()
+            .last()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .unwrap();
+        assert_eq!(
+            row.pointer("/data/question_id").and_then(Value::as_str),
+            Some("q-ap1")
+        );
+        assert_eq!(
+            row.pointer("/source").and_then(Value::as_str),
+            Some("daemon")
+        );
+        // The stamp keeps the caller's person, in both sinks.
+        assert_eq!(row.pointer("/data/person"), Some(&json!("caller")));
+        let indexed = crate::events::committed_journal_text(&index);
+        assert!(indexed.contains("\"q-ap1\""), "{indexed}");
+        assert!(indexed.contains("\"person\":\"caller\""), "{indexed}");
+    }
+
+    #[test]
+    fn a_failed_journal_append_is_fatal_and_reported() {
+        let root = tmp_root("append-jfail");
+        let event = json!({
+            "ts": "2026-10-24T12:00:00Z",
+            "type": "operator_question",
+            "source": "daemon",
+            "data": {"question_id": "q-ap2", "question": "wake?"}
+        });
+        // A journal parked under a plain FILE cannot take the append: both
+        // the store and the journal need that parent to be a directory.
+        std::fs::write(root.join("no-such-dir"), b"not a directory").unwrap();
+        let req = IntakeRequest {
+            op: Some("append".to_string()),
+            event: Some(event),
+            journal_path: Some(root.join("no-such-dir").join("events.jsonl")),
+            index_path: Some(root.join("questions.jsonl")),
+            storage_root: root.clone(),
+            ..req("", &root)
+        };
+        let answer = run_intake(&req, &tmp_home("append-jfail"));
+        assert_eq!(answer.exit_code, 1);
+        assert!(
+            answer.lines[0].contains("failed to append question to project journal"),
+            "{:?}",
+            answer.lines
+        );
+    }
+}

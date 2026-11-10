@@ -1,0 +1,114 @@
+{
+  "apply_permission_builtin": true,
+  "argv": [
+    "spawn",
+    "--name",
+    "w5",
+    "/fno:target x-3"
+  ],
+  "config_toml": "[agents.profiles.target]\nlanes = [{provider = \"codex\", model = \"luna-x\", effort = \"medium\"}]\n",
+  "env_node": null,
+  "expect": {
+    "argv": [
+      "spawn",
+      "--harness",
+      "codex",
+      "--name",
+      "w5",
+      "/fno:target x-3",
+      "--",
+      "--model",
+      "luna-x"
+    ],
+    "exit": 0,
+    "journal": {
+      "data": {
+        "name": "w5",
+        "verb": "target",
+        "seed": "/fno:target x-3",
+        "fingerprint": "2484e131c583",
+        "resolved": {
+          "route": {
+            "value": "",
+            "rung": null
+          },
+          "account": {
+            "value": "",
+            "rung": null
+          },
+          "pane_group": {
+            "value": "",
+            "rung": null
+          }
+        },
+        "applied": [
+          [
+            "slot",
+            "agents.profiles.target.lanes[0] agents.profiles.target.lanes[0]",
+            "routing"
+          ],
+          [
+            "harness",
+            "codex",
+            "routing"
+          ],
+          [
+            "model",
+            "luna-x",
+            "lane agents.profiles.target.lanes[0]"
+          ]
+        ],
+        "suppressed": [
+          [
+            "slot",
+            "",
+            "",
+            "slot note agents.profiles.target.lanes[0] uncapped (no vendor declared)"
+          ]
+        ]
+      },
+      "type": "spawn_defaults_applied",
+      "source": "agents"
+    },
+    "stderr": [
+      "fno agents spawn: slot note agents.profiles.target.lanes[0] uncapped (no vendor declared)",
+      "fno agents spawn: applied slot=agents.profiles.target.lanes[0] agents.profiles.target.lanes[0] (routing), harness=codex (routing), model=luna-x (lane agents.profiles.target.lanes[0])"
+    ],
+    "stdout": null
+  },
+  "facts": {
+    "role_protected": null,
+    "role_resolves": false
+  },
+  "node": null,
+  "node_row": null,
+  "node_command": null,
+  "scan": {
+    "account_flag_present": false,
+    "explicit_harness": null,
+    "explicit_route": false,
+    "explicit_substrate": null,
+    "explicit_vendor": null,
+    "flag_node": null,
+    "has_effort": false,
+    "has_harness": false,
+    "has_model": false,
+    "has_permission": false,
+    "model_value": null,
+    "name": "w5",
+    "permission_value": null,
+    "positional_present": true,
+    "role": null,
+    "route_value": null,
+    "seed": "/fno:target x-3",
+    "seed_form": "positional",
+    "seed_index": 3,
+    "spawn_tokens": [
+      "--name",
+      "w5",
+      "/fno:target x-3"
+    ],
+    "tab_flag_present": false
+  },
+  "verbose": true
+}

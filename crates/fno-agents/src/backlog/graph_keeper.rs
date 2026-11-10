@@ -1,0 +1,3969 @@
+//! The store keeper: a per-graph process that OWNS a graph file and serves
+//! every consumer over a unix socket, modeled on `pane_keeper.rs` ("the
+//! keeper keeps, the server views", docs/architecture/pane-keeper.md). The
+//! daemon is a subscriber exactly as the mux server is for panes; a daemon
+//! restart does not take the store with it, and the next connection to
+//! arrive re-adopts the seat.
+//!
+//! Frame protocol (the pane keeper's shape: `u8 tag | u32 LE length |
+//! payload`, with the protocol version riding the Identify reply):
+//! Client -> keeper: `Request(json)`, `Shutdown`, `Identify`.
+//! Keeper -> client: `Response(json)`, `IdentifyReply(json)`.
+//!
+//! Requests are one-shot JSON: `{"id": n, "method": ..., "params": {...}}`.
+//! Methods: `read`, `read_strict`, `begin`, `commit`, `commit_rows`, `op`, `write_status`, `read_archive`.
+//! Responses: `{"id": n, "ok": true, "result": ...}` or
+//! `{"id": n, "ok": false, "error": {"kind": ..., "message": ...}}`.
+//!
+//! Unlike the pane keeper's single subscriber, every connection is served
+//! concurrently: reads share the state gate (`RwLock` read guards), writes
+//! exclude on it (`write` guards) and on the bounded flock. A store RPC must
+//! never starve a concurrent client or a SIGTERM (the `gc_sweep` lesson,
+//!): each request runs on its own thread, and the accepting loop never
+//! blocks on request work.
+//!
+//! Reapability is a release condition (the 2026-09-01 seven-unreaped-keepers
+//! measurement): this lane declares itself the way watchdog/keeper.rs discovers
+//! keepers, through `--sock`/`--session` on its own argv plus the
+//! `--store-keeper` lane flag, and its socket lives beside the graph file it
+//! owns, so both the process-table walk and the socket-dir walk find it.
+
+use crate::backlog::row_facts::RowFacts;
+use crate::graph_store::{self, FieldUpdate, MutateInput, StoreError};
+use crate::identity::{harness_of_session_id, shape_known_harness};
+
+mod seat_lock;
+
+mod splice;
+
+use seat_lock::{release_seat, take_seat};
+use splice::splice_reply;
+
+use serde_json::{json, Map, Value};
+use std::io::{Read, Write};
+use std::os::unix::fs::MetadataExt;
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
+
+/// The store keeper frame protocol version. Bump on any frame-shape change.
+pub const PROTOCOL_VERSION: u32 = 1;
+
+use crate::backlog::Backend;
+
+// Frame tags. Client -> keeper then keeper -> client.
+pub(crate) const TAG_REQUEST: u8 = 1;
+pub(crate) const TAG_SHUTDOWN: u8 = 2;
+pub(crate) const TAG_IDENTIFY: u8 = 3;
+pub(crate) const TAG_RESPONSE: u8 = 4;
+pub(crate) const TAG_IDENTIFY_REPLY: u8 = 5;
+
+/// One request/response frame exchange bound. Sized for a large operator
+/// graph's SQLite rows, not the daemon protocol's cap.
+pub(crate) const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
+
+/// Parsed `--store-keeper` lane argv:
+/// `--store-keeper --sock <path> --graph <path> [--session <id>]
+/// [--canonical] [--lock-timeout-secs N]`.
+pub struct KeeperConfig {
+    pub sock: PathBuf,
+    pub graph: PathBuf,
+    pub session: String,
+    /// True when `--graph` IS the configured canonical graph: gates the
+    /// closure-release hook and canonical-board effects.
+    pub canonical: bool,
+    pub lock_timeout: Duration,
+    /// Project journal receiving bounded write-gate aggregates.
+    pub events: Option<PathBuf>,
+    /// Idle self-exit bound. A keeper is long-lived by design in production,
+    /// but its spawner can vanish without a Shutdown frame - a crashed CLI,
+    /// a killed pytest worker above all - and one orphan per fixture graph
+    /// compounded into thousands of live workers on one machine (measured
+    /// 2026-09-03: 6,955 keepers after one day of pytest runs, load 117).
+    /// With this set, a keeper with zero client threads and no accepted
+    /// connection for this long exits and unlinks its socket; the next
+    /// client re-spawns it. Default: ten minutes. `FNO_STORE_KEEPER_IDLE_SECS`
+    /// overrides it; that variable set to 0 disables idle exit entirely.
+    pub idle_limit: Option<Duration>,
+}
+
+/// The default idle bound for a keeper whose spawner set no override.
+pub const DEFAULT_IDLE_LIMIT: Option<Duration> = Some(Duration::from_secs(600));
+
+pub fn parse_store_keeper_args(args: &[String]) -> Result<KeeperConfig, String> {
+    let mut sock: Option<String> = None;
+    let mut graph: Option<String> = None;
+    let mut session = String::new();
+    let mut canonical = false;
+    let mut lock_timeout = graph_store::DEFAULT_LOCK_TIMEOUT;
+    let mut events = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--store-keeper" => {}
+            "--sock" => sock = Some(it.next().ok_or("--sock needs a value")?.clone()),
+            "--graph" => graph = Some(it.next().ok_or("--graph needs a value")?.clone()),
+            "--session" => session = it.next().ok_or("--session needs a value")?.clone(),
+            "--canonical" => canonical = true,
+            "--lock-timeout-secs" => {
+                let v: u64 = it
+                    .next()
+                    .ok_or("--lock-timeout-secs needs a value")?
+                    .parse()
+                    .map_err(|_| "--lock-timeout-secs needs a number")?;
+                lock_timeout = Duration::from_secs(v);
+            }
+            "--events" => events = Some(PathBuf::from(it.next().ok_or("--events needs a value")?)),
+            other => return Err(format!("unknown arg: {other}")),
+        }
+    }
+    let idle_limit = match std::env::var("FNO_STORE_KEEPER_IDLE_SECS") {
+        Ok(v) if v.trim() == "0" => None,
+        Ok(v) => v
+            .trim()
+            .parse::<u64>()
+            .ok()
+            .filter(|secs| *secs > 0)
+            .map(Duration::from_secs),
+        // No override: the default bound. A keeper the spawner abandoned
+        // still dies, on a clock long enough that an operator's back-to-back
+        // commands keep one keeper alive across the session.
+        Err(_) => DEFAULT_IDLE_LIMIT,
+    };
+    Ok(KeeperConfig {
+        sock: PathBuf::from(sock.ok_or("missing --sock")?),
+        graph: PathBuf::from(graph.ok_or("missing --graph")?),
+        session,
+        canonical,
+        lock_timeout,
+        events,
+        idle_limit,
+    })
+}
+
+fn encode(tag: u8, payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(5 + payload.len());
+    out.push(tag);
+    out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    out.extend_from_slice(payload);
+    out
+}
+
+enum Incoming {
+    Request(Vec<u8>),
+    Shutdown,
+    Identify,
+    HungUp,
+    Violation(String),
+}
+
+fn decode_frame(buf: &[u8]) -> (Option<Incoming>, usize) {
+    if buf.len() < 5 {
+        return (None, 0);
+    }
+    let tag = buf[0];
+    let len = u32::from_le_bytes([buf[1], buf[2], buf[3], buf[4]]) as usize;
+    if len > MAX_FRAME_BYTES {
+        return (
+            Some(Incoming::Violation(format!(
+                "frame of {len} bytes exceeds the cap"
+            ))),
+            buf.len(),
+        );
+    }
+    if buf.len() < 5 + len {
+        return (None, 0);
+    }
+    let payload = buf[5..5 + len].to_vec();
+    let frame = match tag {
+        TAG_REQUEST => Incoming::Request(payload),
+        TAG_SHUTDOWN => Incoming::Shutdown,
+        TAG_IDENTIFY => Incoming::Identify,
+        other => {
+            return (
+                Some(Incoming::Violation(format!(
+                    "frame tag {other} with {len} payload byte(s) is not a store frame"
+                ))),
+                5 + len,
+            )
+        }
+    };
+    (Some(frame), 5 + len)
+}
+
+fn read_one_frame(stream: &mut UnixStream) -> Incoming {
+    let mut buf: Vec<u8> = Vec::with_capacity(8192);
+    let mut chunk = [0u8; 8192];
+    loop {
+        let (frame, used) = decode_frame(&buf);
+        if let Some(frame) = frame {
+            let _ = used;
+            return frame;
+        }
+        match stream.read(&mut chunk) {
+            Ok(0) | Err(_) => return Incoming::HungUp,
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+        }
+    }
+}
+
+/// SQLite version stamps identify cached rows.
+#[derive(Clone, PartialEq)]
+enum CacheKey {
+    Db(String),
+}
+
+/// One cached graph snapshot: the key its rows were validated against, the
+/// version token (begin's tx token), the parsed entries shared with every
+/// concurrent reader via one `Arc`, and the lazily serialized views the
+/// reply paths splice instead of re-copying the tree.
+pub(crate) struct CachedGraph {
+    key: CacheKey,
+    version: String,
+    entries: Arc<Vec<Value>>,
+    /// serde_json::to_vec(&*entries), filled once per version.
+    entries_json: std::sync::OnceLock<Arc<Vec<u8>>>,
+    /// The api rows view: shares the entries Arc (a second Value tree
+    /// measured 1191 MB idle), filled once per version.
+    api_rows: std::sync::OnceLock<Arc<Vec<Value>>>,
+}
+
+const WRITE_LEDGER_CAPACITY: usize = 64;
+const WRITE_LEDGER_TTL: Duration = Duration::from_secs(600);
+
+enum WriteLedgerState {
+    InFlight,
+    Done(Value),
+}
+
+pub(crate) struct WriteLedgerEntry {
+    request_id: String,
+    recorded_at: std::time::Instant,
+    state: WriteLedgerState,
+}
+
+/// The keeper's shared state. Writes exclude here; reads hold shared guards,
+/// so concurrent reads overlap and every read still waits out an in-flight
+/// publish rather than observing one.
+pub(crate) struct StoreState {
+    pub(crate) graph: PathBuf,
+    pub(crate) canonical: bool,
+    pub(crate) lock_timeout: Duration,
+    /// Readers share, writers exclude: read guards for handlers that only
+    /// read the owned graph, write guards for the ones that publish.
+    pub(crate) gate: RwLock<()>,
+    /// One read guard per in-flight REQUEST, held from handle_request through
+    /// the reply write. Shutdown ladders on the write guard, so it cannot cut
+    /// a request that is mid-publish or mid-reply (the old ladder
+    /// dropped its guard before exit and a later request died mid-frame with
+    /// its client reading a hangup for a write that answered ok).
+    pub(crate) inflight: RwLock<()>,
+    /// The parsed graph, validated by cache key on every hit. Seeded by the
+    /// write path (commit/op) rather than invalidated, so a mutating fleet
+    /// still hits. Never held for a corrupt/malformed/empty graph.
+    pub(crate) cache: RwLock<Option<Arc<CachedGraph>>>,
+    /// The single-flight fill: one cache miss parses (or exports) while the
+    /// rest re-check and hit, so a burst of concurrent cold readers costs
+    /// one copy, not one copy per reader.
+    pub(crate) fill: Mutex<()>,
+    /// Every cache-miss parse is one real file open (or db export); the
+    /// counter is the cache's honest receipt (AC4's positive marker, and
+    /// the PR's before/after evidence).
+    pub(crate) file_opens: AtomicU64,
+    pub(crate) write_ledger: Mutex<std::collections::VecDeque<WriteLedgerEntry>>,
+    pub(crate) gate_metrics: Mutex<GateMetrics>,
+    /// The instant of the last successful publish. The render trigger reads
+    /// it to debounce: the pass runs once the store has been quiet for the
+    /// settle window, never per write.
+    pub(crate) last_write: Mutex<Option<std::time::Instant>>,
+    /// True while the render trigger's subprocess runs, so overlapping 1 s
+    /// ticks never stack two passes.
+    pub(crate) render_in_flight: std::sync::atomic::AtomicBool,
+    /// Consecutive render failures: drives the retry backoff, reset on the
+    /// first success, so a keeper whose view pass can never run stops paying
+    /// one spawn plus one durable event per second.
+    pub(crate) render_failures: std::sync::atomic::AtomicU32,
+    /// The instant the trigger last RAN a pass (success or failure): the
+    /// backoff measures quiet time against this, not the tick clock.
+    pub(crate) last_render_attempt: Mutex<Option<std::time::Instant>>,
+    pub(crate) events: Option<PathBuf>,
+    /// The (dev, ino) of the socket path at bind time: the seat's proof.
+    /// Unlinks are guarded by it, and an idle keeper whose path was rebound
+    /// stands down (AC2-ERR).
+    pub(crate) sock_ino: Option<(u64, u64)>,
+    /// The build this keeper process launched from: drift is computed fresh
+    /// at every Identify, and the WouldBlock arm self-retires when the
+    /// binary under the keeper is rewritten while it idles.
+    pub(crate) startup_fp: Option<crate::drift::ExeFingerprint>,
+}
+
+impl StoreState {
+    fn backend(&self) -> Backend {
+        Backend::Sqlite
+    }
+}
+
+const GATE_WINDOW: Duration = Duration::from_secs(300);
+const WAIT_BOUNDS_MS: [u64; 12] = [
+    1,
+    5,
+    10,
+    25,
+    50,
+    100,
+    250,
+    500,
+    1_000,
+    2_500,
+    5_000,
+    u64::MAX,
+];
+
+pub(crate) struct GateMetrics {
+    started: std::time::Instant,
+    started_epoch_ms: u128,
+    counts: [u64; WAIT_BOUNDS_MS.len()],
+    mutations: u64,
+    bytes_written: u64,
+    retries: u64,
+}
+
+impl GateMetrics {
+    pub(crate) fn new() -> Self {
+        Self {
+            started: std::time::Instant::now(),
+            started_epoch_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|value| value.as_millis())
+                .unwrap_or(0),
+            counts: [0; WAIT_BOUNDS_MS.len()],
+            mutations: 0,
+            bytes_written: 0,
+            retries: 0,
+        }
+    }
+}
+
+fn record_gate(state: &StoreState, wait: Duration, bytes_written: u64, attempt: u64) {
+    if bytes_written > 0 {
+        // A real publish landed: the render trigger's settle clock starts here.
+        let mut last = state
+            .last_write
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *last = Some(std::time::Instant::now());
+    }
+    let mut metrics = state
+        .gate_metrics
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let wait_ms = wait.as_millis().min(u64::MAX as u128) as u64;
+    let bucket = WAIT_BOUNDS_MS
+        .iter()
+        .position(|bound| wait_ms <= *bound)
+        .unwrap_or(WAIT_BOUNDS_MS.len() - 1);
+    metrics.counts[bucket] += 1;
+    metrics.mutations += 1;
+    metrics.bytes_written = metrics.bytes_written.saturating_add(bytes_written);
+    metrics.retries = metrics.retries.saturating_add(u64::from(attempt > 1));
+}
+
+fn flush_gate_metrics(state: &StoreState) {
+    let Some(path) = &state.events else { return };
+    let mut metrics = state
+        .gate_metrics
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let elapsed = metrics.started.elapsed();
+    let replacement = GateMetrics::new();
+    let finished_epoch_ms = replacement.started_epoch_ms;
+    let completed = std::mem::replace(&mut *metrics, replacement);
+    drop(metrics);
+    let bounds: Vec<Value> = WAIT_BOUNDS_MS
+        .iter()
+        .map(|bound| {
+            if *bound == u64::MAX {
+                Value::String("inf".into())
+            } else {
+                json!(bound)
+            }
+        })
+        .collect();
+    let emitter = crate::events::EventEmitter::new(path, "daemon");
+    let _ = emitter.emit(
+        "graph_write_gate",
+        &json!({
+            "keeper_pid": std::process::id(),
+            "window_started_ms": completed.started_epoch_ms,
+            "window_finished_ms": finished_epoch_ms,
+            "completed_window_seconds": elapsed.as_secs_f64(),
+            "wait_ms_bounds": bounds,
+            "wait_ms_counts": completed.counts,
+            "mutation_count": completed.mutations,
+            "bytes_written": completed.bytes_written,
+            "retry_count": completed.retries,
+        }),
+    );
+}
+
+/// Exit code for a keeper that found its seat owned: the Python spawner
+/// (`store.py:_client_for`) reads this number and keeps polling the
+/// incumbent instead of failing the spawn.
+pub const EXIT_SEAT_OWNED: i32 = 3;
+
+// How long the store must stay quiet after a write burst before the view
+// pass runs: a burst of writes renders once, not once per write. The const
+// moved to board_render_arm with the pass; the backoff doubles from here.
+use crate::board_render_arm::RENDER_SETTLE;
+
+/// Whether the canonical view pass is owed right now: the store's version
+/// moved since the last render AND the write burst has settled. `None`
+/// last-write reads as settled (a keeper born after writes still owes the
+/// catch-up render). The settle is a parameter so tests skip the wait.
+fn render_due(state: &StoreState, current: &str, rendered: Option<&str>, settle: Duration) -> bool {
+    if rendered == Some(current) {
+        return false;
+    }
+    let last = state
+        .last_write
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    match last {
+        Some(t) => t.elapsed() >= settle,
+        None => true,
+    }
+}
+
+/// One tick of the render trigger: when a pass is owed and none runs, run
+/// the canonical view pass (the same `fno backlog render-views` a CLI write
+/// used to run in-call), stamp `rendered_version` on success, and journal
+/// `graph_render_failed` on failure. Never touches the write gate: a slow or
+/// failing render delays nothing, and the next settled tick retries.
+fn trigger_render(state: &StoreState) {
+    trigger_render_with(state, crate::board_render_arm::run_render_pass);
+}
+
+use crate::board_render_arm::render_backoff;
+
+/// The injectable body of [`trigger_render`]: tests pass their own pass
+/// runner instead of the subprocess.
+fn trigger_render_with(state: &StoreState, run: impl FnOnce() -> Result<(), (i32, String)>) {
+    use std::sync::atomic::Ordering;
+    let Ok(current) = crate::backlog::version(&state.graph) else {
+        return; // no counter yet: nothing was ever written, nothing to render
+    };
+    let rendered = crate::backlog::rendered_version(&state.graph)
+        .ok()
+        .flatten();
+    if !render_due(state, &current, rendered.as_deref(), RENDER_SETTLE) {
+        return;
+    }
+    // Backoff gate: after failures, wait out the doubled quiet window since
+    // the last attempt before paying for another one. A fresh write still
+    // renders at the settle floor: the backoff only delays RETRIES of a pass
+    // that already failed at this version.
+    let failures = state.render_failures.load(Ordering::SeqCst);
+    if failures > 0 {
+        if let Some(last) = state
+            .last_render_attempt
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+        {
+            if last.elapsed() < render_backoff(failures) {
+                return;
+            }
+        }
+    }
+    if state
+        .render_in_flight
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+    {
+        let mut last = state
+            .last_render_attempt
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *last = Some(std::time::Instant::now());
+    }
+    let outcome = run();
+    match &outcome {
+        Ok(()) => {
+            if let Err(error) = crate::backlog::set_rendered_version(&state.graph, &current) {
+                state.render_failures.fetch_add(1, Ordering::SeqCst);
+                if let Some(events) = &state.events {
+                    let emitter = crate::events::EventEmitter::new(events, "daemon");
+                    let _ = emitter.emit(
+                        "graph_render_failed",
+                        &json!({
+                            "version": current,
+                            "exit": -1,
+                            "stderr_tail": format!("rendered_version stamp failed: {error}"),
+                        }),
+                    );
+                }
+            } else {
+                state.render_failures.store(0, Ordering::SeqCst);
+            }
+        }
+        Err((exit, stderr_tail)) => {
+            state.render_failures.fetch_add(1, Ordering::SeqCst);
+            if let Some(events) = &state.events {
+                let emitter = crate::events::EventEmitter::new(events, "daemon");
+                let _ = emitter.emit(
+                    "graph_render_failed",
+                    &json!({
+                        "version": current,
+                        "exit": exit,
+                        "stderr_tail": stderr_tail,
+                    }),
+                );
+            }
+        }
+    }
+    state.render_in_flight.store(false, Ordering::SeqCst);
+}
+
+/// How often an idle keeper re-checks that the socket path still names the
+/// inode it bound.
+const SEAT_CHECK_EVERY: Duration = Duration::from_secs(1);
+
+/// One Identify with a short reply bound: true only when something behind
+/// the path answers. An answering incumbent predates the seat lock (it was
+/// built before this change); a refusal or silence is a dead leftover the
+/// caller may clear.
+fn a_live_keeper_answers(sock: &Path, bound: Duration) -> bool {
+    let Ok(mut stream) = UnixStream::connect(sock) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(bound));
+    let _ = stream.set_write_timeout(Some(bound));
+    if stream.write_all(&encode(TAG_IDENTIFY, b"")).is_err() {
+        return false;
+    }
+    let mut header = [0u8; 5];
+    if stream.read_exact(&mut header).is_err() {
+        return false;
+    }
+    let len = u32::from_le_bytes([header[1], header[2], header[3], header[4]]) as usize;
+    let mut payload = vec![0u8; len.min(1 << 20)];
+    stream.read_exact(&mut payload).is_ok()
+}
+
+/// True while the socket path still names the inode THIS keeper bound. A
+/// keeper never unlinks a socket it does not own, and an idle keeper whose
+/// path was rebound stands down instead of serving a phantom.
+fn seat_still_ours(sock: &Path, sock_ino: Option<(u64, u64)>) -> bool {
+    match sock_ino {
+        None => true,
+        Some(mine) => match std::fs::metadata(sock) {
+            Ok(md) => (md.dev(), md.ino()) == mine,
+            Err(_) => false,
+        },
+    }
+}
+
+/// Run the store keeper to completion. Returns only on a startup failure;
+/// a Shutdown frame ends the process from inside.
+pub fn run(cfg: KeeperConfig) -> Result<(), String> {
+    // SAFETY: setsid before any thread exists; a group-kill aimed at a
+    // spawning process's group must not take the store with it.
+    unsafe {
+        libc::setsid();
+    }
+    // Seat flock BEFORE touching the socket: the loser exits 3 and the
+    // Python spawner keeps polling the incumbent rather than respawning.
+    // `_seat` is a named binding, the daemon's bind_supervisor_socket
+    // shape: the File holds the flock, so an `if take_seat(..).is_none()`
+    // temporary drops at the end of the condition and the lock guards
+    // nothing.
+    let Some(_seat) = take_seat(&cfg.sock) else {
+        eprintln!(
+            "store keeper: {} is owned by a live keeper (lock held); exiting",
+            cfg.sock.display()
+        );
+        std::process::exit(EXIT_SEAT_OWNED);
+    };
+    // A keeper built before the seat lock can still own the path. With the
+    // flock held, one short-bound Identify decides: an answerer is a live
+    // incumbent, a refusal or silence is a dead leftover.
+    if cfg.sock.exists() && a_live_keeper_answers(&cfg.sock, Duration::from_millis(750)) {
+        eprintln!(
+            "store keeper: {} is owned by a live keeper (Identify answered); exiting",
+            cfg.sock.display()
+        );
+        std::process::exit(EXIT_SEAT_OWNED);
+    }
+    // Connect-before-bind: a live listener IS the seat, whatever its build
+    // (a loaded incumbent can answer Identify too slowly for the probe above
+    // and still own the path), so the loser exits EXIT_SEAT_OWNED and the
+    // Python spawner keeps polling the incumbent instead of failing.
+    if UnixStream::connect(&cfg.sock).is_ok() {
+        eprintln!(
+            "store keeper: {} is owned by a live keeper (connect before bind); exiting",
+            cfg.sock.display()
+        );
+        std::process::exit(EXIT_SEAT_OWNED);
+    }
+    let _ = std::fs::remove_file(&cfg.sock);
+    if let Some(parent) = cfg.sock.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+    }
+    // Open the store before the seat serves: first contact takes the
+    // creation lock, and a request paying it flattens a busy lock into an
+    // unreadable answer instead of lock_timeout.
+    if let Err(error) = crate::backlog::version(&cfg.graph) {
+        eprintln!("store keeper: store not opened at startup: {error}");
+    }
+    let listener = match UnixListener::bind(&cfg.sock) {
+        Ok(l) => l,
+        // A listener appeared between the probe and the bind: the seat filled.
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            eprintln!(
+                "store keeper: {} is owned by a live keeper (bind in use); exiting",
+                cfg.sock.display()
+            );
+            std::process::exit(EXIT_SEAT_OWNED);
+        }
+        Err(e) => return Err(format!("cannot bind {}: {e}", cfg.sock.display())),
+    };
+    let sock_ino = std::fs::metadata(&cfg.sock)
+        .ok()
+        .map(|md| (md.dev(), md.ino()));
+    let startup_fp = crate::drift::ExeFingerprint::current();
+
+    let state = Arc::new(crate::store_exec::fresh_store_state(
+        cfg.graph.clone(),
+        cfg.canonical,
+        cfg.lock_timeout,
+        cfg.events.clone(),
+        sock_ino,
+        startup_fp,
+    ));
+    let started_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let identify = json!({
+        "v": PROTOCOL_VERSION,
+        "keeper_pid": std::process::id(),
+        "graph": cfg.graph.display().to_string(),
+        "session": cfg.session,
+        "started_at": started_at,
+        // The live backend is stamped onto every Identify reply in
+        // serve_client, not frozen here.
+    })
+    .to_string()
+    .into_bytes();
+
+    let shutdown = Arc::new(AtomicU64::new(0));
+    if state.canonical || state.events.is_some() {
+        let metrics_state = Arc::clone(&state);
+        let metrics_shutdown = Arc::clone(&shutdown);
+        let _ = std::thread::Builder::new()
+            .name("fno-store-metrics".into())
+            .spawn(move || {
+                // The parity sampler state: the last db version a
+                // sample covered, so an unmoved window samples nothing.
+                loop {
+                    std::thread::sleep(GATE_WINDOW);
+                    if metrics_shutdown.load(Ordering::SeqCst) == 1 {
+                        break;
+                    }
+                    flush_gate_metrics(&metrics_state);
+                }
+            });
+    }
+    // Render derived human facing views; reads and writes use graph.db.
+    if state.canonical {
+        // The ONE render path (task 8.3): a 1 s tick checks whether the
+        // store moved since the last render and the last write settled, and
+        // runs the canonical view pass once per burst. Canonical keepers
+        // only: test and temp stores never render (the historical
+        // non-canonical arm rendered a sibling graph.html, which no consumer
+        // of test graphs ever read).
+        let render_state = Arc::clone(&state);
+        let render_shutdown = Arc::clone(&shutdown);
+        let _ = std::thread::Builder::new()
+            .name("fno-store-render".into())
+            .spawn(move || loop {
+                std::thread::sleep(Duration::from_secs(1));
+                if render_shutdown.load(Ordering::SeqCst) == 1 {
+                    break;
+                }
+                trigger_render(&render_state);
+            });
+    }
+    let active_clients = Arc::new(AtomicU64::new(0));
+    let mut last_activity = std::time::Instant::now();
+    let mut last_seat_check = std::time::Instant::now();
+    let mut last_drift_check = std::time::Instant::now();
+    // change 3: the drift tick period. 30s default, env-overridable
+    // for tests, next to its idle-exit sibling's override.
+    let drift_check_every = std::env::var("FNO_STORE_KEEPER_DRIFT_CHECK_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(30));
+    // A test-owned fixture store (argv carries FNO_TEST_OWNER_PID/BIRTH) is
+    // bound to that test run's lifetime, not the longer-lived idle bound
+    // above: a wedged test that never sends Shutdown must not leak this
+    // store past its own run. The watchdog sets the SAME `shutdown` flag an
+    // explicit Shutdown frame does, so the accept loop below needs no
+    // separate owner-liveness check of its own.
+    if let Some((owner_pid, owner_birth)) = crate::test_run::declared_owner_from_env() {
+        let shutdown = Arc::clone(&shutdown);
+        crate::test_run::spawn_owner_watchdog(
+            owner_pid,
+            owner_birth,
+            "fno-store-test-owner",
+            move || {
+                eprintln!(
+                "fno-agents-worker: test_keeper_reaped graph_keeper owner_pid={owner_pid} owner_birth={owner_birth}"
+            );
+                shutdown.store(1, Ordering::SeqCst);
+            },
+        );
+    }
+    listener
+        .set_nonblocking(true)
+        .map_err(|e| format!("cannot poll {}: {e}", cfg.sock.display()))?;
+    loop {
+        if shutdown.load(Ordering::SeqCst) == 1 {
+            break;
+        }
+        match listener.accept() {
+            Ok((stream, _addr)) => {
+                last_activity = std::time::Instant::now();
+                // BSD accept() hands the listener's O_NONBLOCK to the accepted
+                // socket, and serve_client does blocking reads: an inherited
+                // non-blocking stream reads WouldBlock and hangs up before
+                // the client's first frame lands. Restore blocking mode.
+                if stream.set_nonblocking(false).is_err() {
+                    continue;
+                }
+                let state = Arc::clone(&state);
+                let identify = identify.clone();
+                let shutdown = Arc::clone(&shutdown);
+                let active_clients = Arc::clone(&active_clients);
+                active_clients.fetch_add(1, Ordering::SeqCst);
+                // One thread per connection: a slow store call never starves
+                // the accept loop, and a client connecting while the daemon
+                // gets SIGTERM is served rather than queued behind it.
+                let spawned = std::thread::Builder::new()
+                    .name("fno-store-cli".into())
+                    .spawn({
+                        let active_clients = Arc::clone(&active_clients);
+                        move || {
+                            serve_client(state, stream, identify, shutdown);
+                            active_clients.fetch_sub(1, Ordering::SeqCst);
+                        }
+                    });
+                if spawned.is_err() {
+                    active_clients.fetch_sub(1, Ordering::SeqCst);
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                // Seat check while idle: once a second, an idle keeper
+                // confirms the path still names the inode it bound. Lost
+                // seat -> stand down WITHOUT unlinking (the post-loop unlink
+                // is inode-guarded, so the rebinding keeper's socket stays).
+                if active_clients.load(Ordering::SeqCst) == 0
+                    && last_seat_check.elapsed() >= SEAT_CHECK_EVERY
+                {
+                    last_seat_check = std::time::Instant::now();
+                    if !seat_still_ours(&cfg.sock, sock_ino) {
+                        // The same verdict the pre-bind ladder spells 3, so
+                        // spell 3 here too: falling through reports a robbed
+                        // seat as success (the racer-0 exit-0 in the CI race).
+                        // The path is not ours; skip the inode-guarded
+                        // unlink below the loop as well.
+                        eprintln!(
+                            "store keeper: {} is owned by a live keeper (inode moved); exiting",
+                            cfg.sock.display()
+                        );
+                        std::process::exit(EXIT_SEAT_OWNED);
+                    }
+                }
+                // Drift self-retire (change 3): a keeper idling on a
+                // binary that a rebuild replaced is a stale server no
+                // restart reaches. Every drift tick with no client,
+                // re-stat the own executable; Drifted -> break so the
+                // inode-guarded unlink runs and the next caller respawns
+                // on the installed binary.
+                if active_clients.load(Ordering::SeqCst) == 0
+                    && last_drift_check.elapsed() >= drift_check_every
+                {
+                    last_drift_check = std::time::Instant::now();
+                    if let Some(fp) = &state.startup_fp {
+                        if matches!(
+                            crate::drift::self_drift(fp),
+                            crate::drift::DriftState::Drifted { .. }
+                        ) {
+                            break;
+                        }
+                    }
+                }
+                if let Some(limit) = cfg.idle_limit {
+                    if active_clients.load(Ordering::SeqCst) == 0
+                        && last_activity.elapsed() >= limit
+                    {
+                        break;
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            // A peer resetting between connect and accept surfaces here
+            // (Linux ECONNABORTED); one dropped probe must not retire a
+            // keeper that owns the seat. Interrupted accept retries too.
+            Err(e)
+                if e.kind() == std::io::ErrorKind::ConnectionAborted
+                    || e.kind() == std::io::ErrorKind::Interrupted => {}
+            // Anything past WouldBlock/Aborted/Interrupted is a listener
+            // that can no longer accept: a broken keeper must not report
+            // success (worker.rs prints the Err and exits 2).
+            Err(e) => return Err(format!("accept failed on {}: {e}", cfg.sock.display())),
+        }
+    }
+    // Unlink only what we still own: after a seat loss the path names the
+    // rebinding keeper's socket, and removing it would kill THEIR listener.
+    if seat_still_ours(&cfg.sock, sock_ino) {
+        let _ = std::fs::remove_file(&cfg.sock);
+        release_seat(&cfg.sock);
+    }
+    Ok(())
+}
+
+/// The gate-held read outcome: `Cached` carries the stored snapshot (its
+/// serialized views are available), `Fresh` carries values read past the
+/// cache because this instant is not one to pin (no identity, a file that
+/// moved mid-read, an empty list). Both describe ONE gate-held window.
+enum GraphRead {
+    Cached(Arc<CachedGraph>),
+    Fresh(Arc<Vec<Value>>, String),
+}
+
+fn sqlite_unreadable(state: &StoreState, error: String) -> StoreError {
+    StoreError::Unreadable(
+        crate::backlog::database_path(&state.graph)
+            .display()
+            .to_string(),
+        error,
+    )
+}
+
+/// The store cache. The gate is held by the caller;
+/// the fill lock makes a miss single-flight, so a burst of concurrent cold
+/// readers costs one parse, not one parse per reader (the measured json-arm
+/// miss storm: 12 concurrent cold misses left 3055 MB RSS idle).
+///
+/// Cache hit: key-validated. Miss: one filler reads rows while the
+/// rest re-check under the fill lock and hit.
+///
+/// `graph_meta.version` is read before and after loading. Only an unchanged
+/// version and a non-empty row list are stored. Every node write stamps the version inside its transaction, so a
+/// version-equal hit is the same rows. The PRE version is the one returned
+/// with the entries: a foreign writer landing mid-read pairs stale entries
+/// with a version they do not match, which degrades to a begin conflict
+/// exactly as the version-before-entries order always has.
+/// The read path every owned-graph read serves through. CALLER MUST HOLD
+/// `state.gate` in at least read mode: the entries and the tx digest this
+/// returns describe ONE gate-held window, so an intervening keeper-side
+/// commit can never pair a fresh version with stale entries (that pairing is
+/// what makes the tx conflict instead of silently clobbering).
+///
+/// Cache hit: identity-validated, the paired digest comes free. Miss: the
+/// digest is computed BEFORE the parse (the pre-cache order), so even the
+/// uncached remainder keeps the property that any interleave degrades to a
+/// commit conflict. Filled only by a clean, non-empty parse whose file did
+/// not move between the two stats, and the stored version digests exactly
+/// the bytes parsed.
+fn read_graph_gated(state: &StoreState, _strict: bool) -> Result<GraphRead, StoreError> {
+    // SQLite is the only store: every read answers graph.db. The seed json
+    // folds on first open (import_if_needed), so an unnamed fresh db serves
+    // from birth and the json mirror is a debounced export, never a source.
+    {
+        let pre = crate::backlog::version(&state.graph)
+            .map_err(|error| sqlite_unreadable(state, error.to_string()))?;
+        if let Some(hit) = cached_hit(state, &CacheKey::Db(pre.clone())) {
+            return Ok(GraphRead::Cached(hit));
+        }
+        let _fill = state.fill.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(hit) = cached_hit(state, &CacheKey::Db(pre.clone())) {
+            return Ok(GraphRead::Cached(hit));
+        }
+        state.file_opens.fetch_add(1, Ordering::SeqCst);
+        let mut entries = crate::backlog::read_entries(&state.graph)
+            .map_err(|error| sqlite_unreadable(state, error.to_string()))?;
+        // The defaulted view the api rows consumers receive before this cache
+        // existed (graph_store::read_rows runs the same pass), and the
+        // computed children summaries are exactly the part a raw
+        // read_entries row lacks.
+        graph_store::apply_defaults(&mut entries, false);
+        let entries = Arc::new(entries);
+        let post = crate::backlog::version(&state.graph)
+            .map_err(|error| sqlite_unreadable(state, error.to_string()))?;
+        if post == pre && !entries.is_empty() {
+            let graph = Arc::new(CachedGraph {
+                key: CacheKey::Db(pre.clone()),
+                version: pre.clone(),
+                entries: Arc::clone(&entries),
+                entries_json: std::sync::OnceLock::new(),
+                api_rows: std::sync::OnceLock::new(),
+            });
+            *state.cache.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(&graph));
+            return Ok(GraphRead::Cached(graph));
+        }
+        Ok(GraphRead::Fresh(entries, pre))
+    }
+}
+
+/// The key-validated hit, if the cache holds one for this key right now.
+fn cached_hit(state: &StoreState, key: &CacheKey) -> Option<Arc<CachedGraph>> {
+    let cache = state.cache.read().unwrap_or_else(|e| e.into_inner());
+    let cached = cache.as_ref()?;
+    if &cached.key == key {
+        return Some(Arc::clone(cached));
+    }
+    None
+}
+
+/// The entries + version pair every handler consumes, either arm of
+/// read_graph_gated flattened.
+fn cached_entries_gated(
+    state: &StoreState,
+    strict: bool,
+) -> Result<(Arc<Vec<Value>>, String), StoreError> {
+    Ok(match read_graph_gated(state, strict)? {
+        GraphRead::Cached(graph) => (Arc::clone(&graph.entries), graph.version.clone()),
+        GraphRead::Fresh(entries, version) => (entries, version),
+    })
+}
+
+/// The owned-graph entries without the digest, for readers that do not run a
+/// transaction: the gate is taken here so every caller shares the same
+/// window discipline.
+pub(crate) fn cached_entries(
+    state: &StoreState,
+    keep_malformed: bool,
+    strict: bool,
+) -> Result<Arc<Vec<Value>>, StoreError> {
+    if keep_malformed {
+        // load_graph's discovery caller: rare, and its junk-keeping parse is
+        // not the list the write path publishes. Serve fresh; cache nothing.
+        // Still gate-held: a read mid-publish waits out the publish, exactly
+        // as every other read does. The only read source is the store.
+        let _gate = state.gate.read().unwrap_or_else(|e| e.into_inner());
+        return read_state(state, true, true).map(Arc::new);
+    }
+    let _gate = state.gate.read().unwrap_or_else(|e| e.into_inner());
+    Ok(cached_entries_gated(state, strict)?.0)
+}
+
+/// Begin's consistent pair: entries and the digest from one gate-held
+/// window, so a retrying writer's snapshot is provably the file the digest
+/// names.
+fn cached_snapshot(state: &StoreState) -> Result<(String, Arc<Vec<Value>>), StoreError> {
+    let _gate = state.gate.read().unwrap_or_else(|e| e.into_inner());
+    let (entries, version) = cached_entries_gated(state, false)?;
+    Ok((version, entries))
+}
+
+/// A publish drops the read cache; the next SQLite read fills it again.
+/// The publish is also the wake nudge: the drain daemon watches the
+/// sentinel's mtime, and a backlog mutation touches it to wake the drain
+/// loop sooner than the poll floor (a latency optimization - the poll floor
+/// is the correctness guarantee). Best-effort, never wedges the mutation.
+fn refresh_cache_after_publish(state: &StoreState, _outcome: &graph_store::MutateOutcome) {
+    *state.cache.write().unwrap_or_else(|e| e.into_inner()) = None;
+    let path = crate::active_backlog::nudge_sentinel_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::File::options()
+        .append(true)
+        .create(true)
+        .open(&path)
+        .and_then(|f| f.set_modified(std::time::SystemTime::now()))
+        .ok();
+}
+
+fn serve_client(
+    state: Arc<StoreState>,
+    mut stream: UnixStream,
+    identify: Vec<u8>,
+    shutdown: Arc<AtomicU64>,
+) {
+    loop {
+        match read_one_frame(&mut stream) {
+            Incoming::HungUp => return,
+            Incoming::Violation(msg) => {
+                // The message names the violation for whoever runs the keeper
+                // in the foreground; a detached keeper's stderr is its
+                // spawner's problem, and the client sees a plain hangup.
+                eprintln!("store keeper: protocol violation: {msg}");
+                return;
+            }
+            Incoming::Identify => {
+                // Build + drift computed LIVE at each Identify: a binary
+                // rewritten after this keeper started reads drifted in the
+                // next census, not one restart behind. New JSON keys are
+                // not a frame-shape change (PROTOCOL_VERSION stays 1).
+                let mut id: Value = serde_json::from_slice(&identify).unwrap_or(json!({}));
+                if let Some(obj) = id.as_object_mut() {
+                    // The backend the store names at answer time: a keeper
+                    // reports a flip another process made, even one made
+                    // after this keeper started (AC4-HP, AC5-EDGE).
+                    obj.insert("store_backend".to_string(), json!(state.backend().name()));
+                }
+                if let (Some(obj), Some(fp)) = (id.as_object_mut(), &state.startup_fp) {
+                    obj.insert(
+                        "build".to_string(),
+                        json!({
+                            "path": fp.path.display().to_string(),
+                            "mtime_nanos": fp.mtime_nanos,
+                            "size": fp.size,
+                        }),
+                    );
+                    obj.insert(
+                        "drift".to_string(),
+                        json!(crate::drift::drift_label(&crate::drift::self_drift(fp))),
+                    );
+                }
+                let _ = stream.write_all(&encode(TAG_IDENTIFY_REPLY, id.to_string().as_bytes()));
+                let _ = stream.flush();
+            }
+            Incoming::Shutdown => {
+                // Explicit shutdown: acknowledge, unlink, exit. A daemon
+                // restart never sends this frame, which is exactly the
+                // survived-hangup vs survived-close line; an explicit
+                // shutdown ends the process here, so in-flight writers on
+                // other threads are bounded by the atomic-replace publish.
+                // Wait out in-flight REQUESTS first: a bounded try_write
+                // ladder on the inflight lock;
+                // when it cannot land within lock_timeout, answer busy and
+                // KEEP SERVING instead of exiting mid-write. Once held, the
+                // guard stays held until exit: no request is mid-publish or
+                // mid-reply, and a request arriving later blocks until the
+                // process dies under it.
+                let deadline = std::time::Instant::now() + state.lock_timeout;
+                let mut inflight_guard: Option<std::sync::RwLockWriteGuard<'_, ()>> = None;
+                while std::time::Instant::now() < deadline {
+                    if let Ok(g) = state.inflight.try_write() {
+                        inflight_guard = Some(g);
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                let Some(inflight_guard) = inflight_guard else {
+                    let _ = stream.write_all(&encode(
+                        TAG_RESPONSE,
+                        json!({"id": 0, "ok": false, "error": {"kind": "busy",
+                              "message": "a mutation is in flight"}})
+                        .to_string()
+                        .as_bytes(),
+                    ));
+                    let _ = stream.flush();
+                    return;
+                };
+                // Held to exit: never dropped before process::exit(0). Once
+                // the write guard is ours, no request is mid-publish or
+                // mid-reply, and a request arriving later blocks on
+                // inflight.read() until the process dies under it.
+                let _ = &inflight_guard;
+                let _ = stream.write_all(&encode(
+                    TAG_RESPONSE,
+                    json!({"id": 0, "ok": true, "result": "shutdown"})
+                        .to_string()
+                        .as_bytes(),
+                ));
+                let _ = stream.flush();
+                shutdown.store(1, Ordering::SeqCst);
+                let sock = store_socket_for(&state.graph);
+                if seat_still_ours(&sock, state.sock_ino) {
+                    let _ = std::fs::remove_file(&sock);
+                    release_seat(&sock);
+                }
+                std::process::exit(0);
+            }
+            Incoming::Request(payload) => {
+                // Hold an inflight guard from handling through the
+                // reply write. Shutdown ladders on this lock, so a request
+                // that is mid-publish or mid-reply cannot be cut by an
+                // exiting keeper.
+                let _inflight = state.inflight.read().unwrap_or_else(|e| e.into_inner());
+                // The splice fast path: read and begin stream the cache's
+                // serialized bytes with no reply-tree copy. Everything else,
+                // and any splice refusal, keeps today's handle_request path.
+                if let Some(spliced) = splice_reply(&state, &payload) {
+                    if spliced.write_to(&mut stream).is_ok() {
+                        continue;
+                    }
+                    return;
+                }
+                let reply = handle_request(&state, &payload);
+                let body = serde_json::to_vec(&reply).unwrap_or_else(|_| {
+                    json!({"id": 0, "ok": false,
+                           "error": {"kind": "internal", "message": "reply serialization failed"}})
+                    .to_string()
+                    .into_bytes()
+                });
+                if stream.write_all(&encode(TAG_RESPONSE, &body)).is_err()
+                    || stream.flush().is_err()
+                {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn err_reply(id: u64, kind: &str, message: String) -> Value {
+    json!({"id": id, "ok": false, "error": {"kind": kind, "message": message}})
+}
+
+fn store_err_kind(err: &StoreError) -> &'static str {
+    match err {
+        StoreError::Corrupt(_) => "corrupt",
+        StoreError::Unreadable(_, _) => "unreadable",
+        StoreError::MalformedRoot(_) => "malformed_root",
+        StoreError::LockTimeout(..) => "lock_timeout",
+        StoreError::Conflict => "conflict",
+        StoreError::EmptyFieldUpdate(_) => "empty_field_update",
+        StoreError::Invalid(_) => "invalid",
+        StoreError::ClaimsUnavailable(_) => "claims_unavailable",
+        StoreError::Db(_) => "sqlite",
+        StoreError::Io(_) => "io",
+    }
+}
+
+pub(crate) fn handle_request(state: &StoreState, payload: &[u8]) -> Value {
+    let req: Value = match serde_json::from_slice(payload) {
+        Ok(v) => v,
+        Err(e) => return err_reply(0, "malformed_frame", format!("request is not JSON: {e}")),
+    };
+    let id = req.get("id").and_then(Value::as_u64).unwrap_or(0);
+    let method = req.get("method").and_then(Value::as_str).unwrap_or("");
+    let params = req.get("params").cloned().unwrap_or(Value::Null);
+    let request_id = if is_write_method(method) {
+        params
+            .get("request_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    } else {
+        None
+    };
+    if let Some(request_id) = request_id.as_deref() {
+        record_write_started(state, request_id);
+    }
+    if method == "commit_rows" {
+        let reply = handle_commit_rows_reply(id, state, &params);
+        if let Some(request_id) = request_id.as_deref() {
+            record_write_done(state, request_id, &reply);
+        }
+        return reply;
+    }
+    let result = match method {
+        "read" => handle_read(state, &params),
+        "read_strict" => handle_read(state, &params),
+        "read_ids" => handle_read_ids(state, &params),
+        "plan_refs" => handle_plan_refs(state),
+        "begin" => handle_begin(state),
+        "commit" => handle_commit(state, &params),
+        "write_status" => handle_write_status(state, &params),
+        "export_status" => handle_export_status(state),
+        "keeper_scan" => crate::store_exec::handle_keeper_scan(state),
+        "op" => handle_op(state, &params),
+        "api" => handle_api(state, &params),
+        "read_archive" => handle_read_archive(state, &params),
+        "read_file" => handle_read_file(state),
+        "defaults" => handle_pure(&params, |mut entries, p| {
+            graph_store::apply_defaults(
+                &mut entries,
+                p.get("keep_malformed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            );
+            entries
+        }),
+        "recompute" => handle_pure(&params, |mut entries, p| {
+            let plan_rungs = plan_rung_map(p);
+            graph_store::recompute_statuses_with_plan_rungs(&mut entries, plan_rungs.as_ref());
+            entries
+        }),
+        // The dispatch admission decision (backlog_ready::select), served so
+        // the Python callers are clients and no second selection leg exists.
+        // With `entries` in the params the command filters that list (the
+        // external-tracker backend's joined candidates); without, it reads
+        // the graph this keeper owns.
+        "ready" => handle_ready(state, &params),
+        // The assembled rule set for the caller's cwd, served so a resident
+        // harness decides in process and no second assembly leg exists.
+        "rules" => handle_rules(state, &params),
+        // The plan-doc writer (codec + projection + stamp), served so the
+        // Python callers are clients and no second writer leg exists.
+        "plan_docs" => crate::plan_doc::keeper::handle_plan_docs(state, &params),
+        // The read-time readiness overlay (statuses.compute_readiness), for
+        // the client's pre-render pass: the write path's recompute does not
+        // derive `blocked` -- it is a read overlay -- so a mutation that
+        // newly blocks a sibling must overlay before rendering graph.md.
+        "overlay" => handle_pure(&params, |mut entries, _p| {
+            graph_store::apply_readiness_overlay(&mut entries);
+            entries
+        }),
+        // The blocked_by edge settlement (the full-sweep mutator's write-side
+        // twin of the overlay chase): client-shipped rows in, rewritten rows
+        // plus one receipt per settled edge out. No file I/O, no publish -
+        // the caller persists under the graph lock.
+        "settle_edges" => handle_settle_edges(&params),
+        "normalize_plan_path" => {
+            let normalized = graph_store::normalize_plan_path(opt_str(&params, "path"));
+            Ok(json!({ "path": normalized }))
+        }
+        // The canonical key order, for the ordering tests and one caller that
+        // documents the on-disk shape: one source of truth (the ported
+        // store's constant), never a re-typed copy.
+        "canonical_field_order" => Ok(json!({ "fields": graph_store::CANONICAL_FIELD_ORDER })),
+        // The one delivery classifier (scoreboard.rs): graph nodes + ledger
+        // rows in, a per-node delivery classification out.
+        "scoreboard_classify" => crate::scoreboard::classify(&params).map_err(StoreError::Invalid),
+        // The ported by-provider fold (scoreboard_provider.rs): client-shipped
+        // entries + rows in, the view plus its rendered text out.
+        "scoreboard_by_provider" => {
+            crate::scoreboard_provider::view(&params).map_err(StoreError::Invalid)
+        }
+        // The plan-fidelity join (scoreboard::plan_join): the gate ships its
+        // pre-filtered rows + entries, the one fold answers both readers.
+        "scoreboard_plan_fidelity" => {
+            crate::scoreboard::plan_join::plan_fidelity_op(&params).map_err(StoreError::Invalid)
+        }
+        // The escalation-vs-stayed fold (scoreboard_escalation.rs): client-
+        // shipped entries + rows + delegated events in, view + text out.
+        "scoreboard_escalation" => {
+            crate::scoreboard_escalation::view(&params).map_err(StoreError::Invalid)
+        }
+        // The lifecycle command decision (backlog_ready::serve_effective_command):
+        // one answer per shipped row; a refusal rides its own row. The old
+        // method name stays served so a client of an older build still reads.
+        "effective_command" | "effective_verb" => {
+            crate::backlog_ready::serve_effective_command(&params).map_err(StoreError::Invalid)
+        }
+        // One named op applied over client-shipped rows, no file I/O and no
+        // publish: `set_related`, `plan_path_owner_conflict`, and friends
+        // run INSIDE a client mutator on an in-hand snapshot, where a full
+        // locked cycle would be a write the caller never asked for.
+        "pure_op" => handle_pure_op(&params),
+        other => Err(StoreError::Invalid(format!(
+            "unknown store method {other:?}"
+        ))),
+    };
+    let reply = match result {
+        Ok(v) => json!({"id": id, "ok": true, "result": v}),
+        Err(e) => err_reply(id, store_err_kind(&e), e.to_string()),
+    };
+    if let Some(request_id) = request_id.as_deref() {
+        record_write_done(state, request_id, &reply);
+    }
+    reply
+}
+
+pub(crate) fn is_write_method(method: &str) -> bool {
+    matches!(method, "commit" | "commit_rows" | "op" | "api")
+}
+
+pub(crate) fn api_is_read_op(op: &str) -> bool {
+    matches!(
+        op,
+        "node" | "nodes" | "rows" | "comments" | "version" | "search"
+    )
+}
+
+fn prune_write_ledger(
+    ledger: &mut std::collections::VecDeque<WriteLedgerEntry>,
+    now: std::time::Instant,
+) {
+    ledger.retain(|entry| now.duration_since(entry.recorded_at) <= WRITE_LEDGER_TTL);
+}
+
+fn record_write_started(state: &StoreState, request_id: &str) {
+    let now = std::time::Instant::now();
+    let mut ledger = state
+        .write_ledger
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    prune_write_ledger(&mut ledger, now);
+    ledger.retain(|entry| entry.request_id != request_id);
+    ledger.push_back(WriteLedgerEntry {
+        request_id: request_id.to_owned(),
+        recorded_at: now,
+        state: WriteLedgerState::InFlight,
+    });
+    while ledger.len() > WRITE_LEDGER_CAPACITY {
+        ledger.pop_front();
+    }
+}
+
+fn elide_write_entries(reply: &Value) -> Value {
+    let mut reply = reply.clone();
+    let Some(result) = reply.get_mut("result").and_then(Value::as_object_mut) else {
+        return reply;
+    };
+    if result.get("entries").map(Value::is_array).unwrap_or(false) {
+        result.insert("entries".to_owned(), Value::Null);
+        result.insert("entries_elided".to_owned(), Value::Bool(true));
+    }
+    if let Some(outcome) = result.get_mut("outcome").and_then(Value::as_object_mut) {
+        if outcome.get("entries").map(Value::is_array).unwrap_or(false) {
+            outcome.insert("entries".to_owned(), Value::Null);
+            outcome.insert("entries_elided".to_owned(), Value::Bool(true));
+        }
+    }
+    reply
+}
+
+fn record_write_done(state: &StoreState, request_id: &str, reply: &Value) {
+    let now = std::time::Instant::now();
+    let mut ledger = state
+        .write_ledger
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    prune_write_ledger(&mut ledger, now);
+    if let Some(entry) = ledger
+        .iter_mut()
+        .find(|entry| entry.request_id == request_id)
+    {
+        entry.recorded_at = now;
+        entry.state = WriteLedgerState::Done(elide_write_entries(reply));
+    }
+}
+
+fn handle_write_status(state: &StoreState, params: &Value) -> Result<Value, StoreError> {
+    let request_id = params
+        .get("request_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| StoreError::Invalid("write_status needs request_id".into()))?;
+    let now = std::time::Instant::now();
+    let mut ledger = state
+        .write_ledger
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    prune_write_ledger(&mut ledger, now);
+    let Some(entry) = ledger.iter().find(|entry| entry.request_id == request_id) else {
+        return Ok(json!({"state": "unknown"}));
+    };
+    Ok(match &entry.state {
+        WriteLedgerState::InFlight => json!({"state": "in_flight"}),
+        WriteLedgerState::Done(reply) => json!({"state": "done", "reply": reply}),
+    })
+}
+
+/// The dispatch admission decision over client-shipped rows or the graph
+/// this keeper owns: `backlog_ready::select` in, survivors + drops out.
+/// Params: `project`, `all`, `roadmap_id`, `parent`, `mission`,
+/// `include_ideas`, `include_deferred`, `repo_root`, `entries` (optional -
+/// the external-backend path), `claimed` (optional - live claim ids; when
+/// absent the keeper resolves them from the claims store itself),
+/// `board` (optional - the whole-graph order and column facts, no admission).
+fn handle_ready(state: &StoreState, params: &Value) -> Result<Value, StoreError> {
+    use crate::backlog_ready::{date_filter_from_params, select, NoSuchParent, ReadyOpts};
+    use std::collections::BTreeSet;
+
+    let opt_str_owned = |k: &str| -> Option<String> {
+        params
+            .get(k)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    let repo_root = opt_str_owned("repo_root");
+    let opts = ReadyOpts {
+        project: opt_str_owned("project"),
+        all: params.get("all").and_then(Value::as_bool).unwrap_or(false),
+        roadmap_id: opt_str_owned("roadmap_id"),
+        parent: opt_str_owned("parent"),
+        mission: opt_str_owned("mission"),
+        include_ideas: params
+            .get("include_ideas")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        include_deferred: params
+            .get("include_deferred")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        repo_root: repo_root.clone(),
+        claimed: match params.get("claimed") {
+            Some(Value::Array(ids)) => ids
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<BTreeSet<String>>(),
+            // Unknown claim state must refuse, not read as "nothing is
+            // claimed": the Python leg this command replaced failed closed
+            // (`live_claimed_node_ids(strict=True)`).
+            _ => crate::claims::list_strict(Some("node:"), None, false)
+                .map_err(|e| {
+                    StoreError::ClaimsUnavailable(format!(
+                        "live claim state is unavailable; ready selection refused: {e}"
+                    ))
+                })?
+                .iter()
+                .filter_map(|rec| rec.key.strip_prefix("node:").map(str::to_string))
+                .collect(),
+        },
+        // Explicit param first (a client that resolved policy), then the
+        // config beside the graph, then the fail-open default in select().
+        staleness_days: params
+            .get("staleness_days")
+            .and_then(Value::as_i64)
+            .or_else(|| {
+                crate::backlog_ready::configured_staleness_days(
+                    &state.graph.parent().unwrap_or(Path::new("")),
+                )
+            }),
+        now_ms: params
+            .get("now_ms")
+            .and_then(Value::as_i64)
+            .unwrap_or_else(|| crate::claims::now_ms()),
+        // The held fold: one read of the question journals beside the graph,
+        // resolved once per call so the admission decision cannot pick a node
+        // an open operator question blocks. repo_root anchors the cwd when
+        // the client passed it; the keeper's own cwd otherwise.
+        held: crate::needs::held_map(
+            state.graph.parent().unwrap_or(Path::new("")),
+            Path::new(repo_root.as_deref().unwrap_or(".")),
+        ),
+    };
+    // Borrowed in both arms: a deep clone of the owned graph per ready call
+    // would re-spend most of the cache just saved.
+    let cached;
+    let entries: &[Value] = match params.get("entries").and_then(Value::as_array) {
+        Some(a) => a,
+        None => {
+            cached = cached_entries(state, false, false)?;
+            &cached
+        }
+    };
+    // The board mode: every entry in selection order plus the column
+    // facts, on the same fail-closed claim read as selection itself. The
+    // date filter below narrows the selection reply, not the whole-graph
+    // facts: the board's contract is every entry, no admission.
+    if matches!(params.get("board").and_then(Value::as_bool), Some(true)) {
+        let f = crate::backlog_ready::board_facts(entries, &opts.claimed, opts.now_ms);
+        let reply = json!({"ids": f.ids, "underway": f.underway, "effective_priority": f.effective_priority});
+        return Ok(reply);
+    }
+    let window = date_filter_from_params(params, opts.now_ms).map_err(StoreError::Invalid)?;
+    match select(entries, &opts) {
+        Ok(mut reply) => {
+            window.apply(&mut reply.rows);
+            Ok(json!({
+                "rows": reply.rows,
+                "drops": reply
+                    .drops
+                    .iter()
+                    .map(|d| json!({"id": d.id, "filter": d.filter, "reason": d.reason}))
+                    .collect::<Vec<_>>(),
+            }))
+        }
+        Err(NoSuchParent(parent)) => Err(StoreError::Invalid(format!("no such node '{parent}'"))),
+    }
+}
+
+/// The assembled rule set (`rules_source::rule_set_in`) against the graph
+/// this keeper owns, for the caller's `cwd`. A resident harness asks once
+/// per prompt, caches by `version`, and decides in process, so no second
+/// assembly leg exists. An unreadable store answers `unreadable` and the
+/// client fails open.
+fn handle_rules(state: &StoreState, params: &Value) -> Result<Value, StoreError> {
+    let cwd = match params.get("cwd").and_then(Value::as_str) {
+        Some(c) if !c.is_empty() => std::path::PathBuf::from(c),
+        _ => return Err(StoreError::Invalid("rules needs the caller's cwd".into())),
+    };
+    let set = crate::rules_source::rule_set_in(&state.graph, &cwd)
+        .map_err(|reason| StoreError::Unreadable(state.graph.display().to_string(), reason))?;
+    // The caller stamps the event's project from this, so scope
+    // `project:` rules judge the same project the doors see.
+    let project =
+        crate::law_match::resolve_project(Some(&cwd), &crate::law_match::settings_sources()).ok();
+    Ok(json!({
+        "rules": set.rules,
+        "unread": set.unread,
+        "version": set.version,
+        "project": project,
+    }))
+}
+
+/// The one status read only the display surfaces carry: a live WORK claim
+/// reads its idea/ready node as in_progress while it holds; a
+/// blueprint-session claim leases the planning window only and never moves
+/// the word. Reply-only, over a private copy: the cached rows and every
+/// write snapshot (begin, the rank board lanes, wire_rows) keep the stored
+/// status.
+fn overlay_work_claim_statuses(entries: &mut [Value]) {
+    let Ok(claims) = crate::backlog::nodes::node_claims_by_id() else {
+        return;
+    };
+    for entry in entries.iter_mut() {
+        let Some(id) = entry.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(claim) = claims.get(id) else {
+            continue;
+        };
+        if !claim.work {
+            continue;
+        }
+        if let Some(obj) = entry.as_object_mut() {
+            // The holder projects with the status: the cached rows were read
+            // at a graph version the claim store has since moved past, and
+            // the stored lock fields are the retired mirror.
+            let mut stamp = |key: &str, value: &Option<String>| {
+                obj.insert(
+                    key.to_string(),
+                    value.clone().map(Value::String).unwrap_or(Value::Null),
+                );
+            };
+            stamp("locked_by", &claim.locked_by);
+            stamp("locked_by_harness", &claim.harness);
+            stamp("locked_by_harness_session", &claim.harness_session);
+            stamp("locked_at", &claim.locked_at);
+            stamp("session_id", &claim.locked_by);
+            if obj
+                .get("status")
+                .and_then(Value::as_str)
+                .is_some_and(|status| matches!(status, "idea" | "ready"))
+            {
+                obj.insert("status".to_string(), Value::String("in_progress".into()));
+            }
+        }
+    }
+}
+
+fn row_query(params: &Value) -> Result<crate::backlog::RowQuery, StoreError> {
+    Ok(crate::backlog::RowQuery {
+        filter: params
+            .get("filter")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| StoreError::Invalid(format!("bad filter: {error}")))?
+            .unwrap_or_default(),
+        fields: params
+            .get("fields")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| StoreError::Invalid(format!("bad fields: {error}")))?,
+        include_archived: params
+            .get("include_archived")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        with_blockers: true,
+    })
+}
+
+fn query_entries(
+    state: &StoreState,
+    query: &crate::backlog::RowQuery,
+    keep_malformed: bool,
+) -> Result<Vec<Value>, StoreError> {
+    graph_store::read_rows_where_strict(&state.graph, query)
+        .map(|mut rows| {
+            if !keep_malformed {
+                rows.retain(Value::is_object);
+            }
+            rows
+        })
+        .map_err(|error| {
+            StoreError::Unreadable(
+                crate::backlog::database_path(&state.graph)
+                    .display()
+                    .to_string(),
+                error.to_string(),
+            )
+        })
+}
+
+fn project_fields(rows: &mut [Value], fields: Option<&[String]>) {
+    if let Some(fields) = fields {
+        for row in rows {
+            if let Some(object) = row.as_object_mut() {
+                object.retain(|key, _| fields.contains(key));
+            }
+        }
+    }
+}
+
+fn reading_fields(query: &mut crate::backlog::RowQuery) {
+    if let Some(fields) = &mut query.fields {
+        if fields.iter().any(|field| field == "_reading") {
+            fields.extend(
+                ["details", "current_state", "plan_path", "progress_notes"].map(str::to_owned),
+            );
+        }
+    }
+}
+
+fn handle_read(state: &StoreState, params: &Value) -> Result<Value, StoreError> {
+    let strict = params
+        .get("strict")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let keep_malformed = params
+        .get("keep_malformed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let mut query = row_query(params)?;
+    let fields = query.fields.clone();
+    reading_fields(&mut query);
+    let mut entries =
+        if params.get("filter").is_some() || fields.is_some() || !query.include_archived {
+            let _gate = state.gate.read().unwrap_or_else(|error| error.into_inner());
+            query_entries(state, &query, keep_malformed)?
+        } else {
+            (*cached_entries(state, keep_malformed, strict)?).clone()
+        };
+    overlay_work_claim_statuses(&mut entries);
+    crate::node_reading::attach_reading(&mut entries);
+    project_fields(&mut entries, fields.as_deref());
+    Ok(json!({ "entries": entries }))
+}
+
+/// Exact id-then-slug rows in argument order; hidden readiness support stays internal.
+fn handle_read_ids(state: &StoreState, params: &Value) -> Result<Value, StoreError> {
+    let tokens: Vec<String> = match params.get("ids").and_then(Value::as_array) {
+        Some(a) => {
+            a.iter()
+                .map(|token| {
+                    token.as_str().map(str::to_owned).ok_or_else(|| {
+                        StoreError::Invalid("read_ids ids must contain strings".into())
+                    })
+                })
+                .collect::<Result<_, _>>()?
+        }
+        None => return Err(StoreError::Invalid("read_ids needs ids".into())),
+    };
+    if tokens.is_empty() {
+        return Err(StoreError::Invalid(
+            "read_ids needs a non-empty ids list".into(),
+        ));
+    }
+    let _gate = state.gate.read().unwrap_or_else(|error| error.into_inner());
+    let query = crate::backlog::RowQuery {
+        filter: crate::backlog::api::NodeFilter {
+            id_in: Some(tokens.clone()),
+            ..Default::default()
+        },
+        with_blockers: true,
+        ..Default::default()
+    };
+    let entries = query_entries(state, &query, false)?;
+    let mut out = Vec::with_capacity(tokens.len());
+    let mut missing = Vec::new();
+    for token in &tokens {
+        match crate::graph_get::find_entry(&entries, token) {
+            Some(entry) => {
+                out.push(entry.clone());
+            }
+            None => missing.push(token.clone()),
+        }
+    }
+    overlay_work_claim_statuses(&mut out);
+    crate::node_reading::attach_reading(&mut out);
+    Ok(json!({"entries": out, "missing": missing}))
+}
+
+/// The id/plan_path/cwd inputs for the client-side plan-rung table.
+fn handle_plan_refs(state: &StoreState) -> Result<Value, StoreError> {
+    let _gate = state.gate.read().unwrap_or_else(|error| error.into_inner());
+    let entries = query_entries(
+        state,
+        &crate::backlog::RowQuery {
+            fields: Some(["id", "plan_path", "cwd"].map(str::to_owned).to_vec()),
+            ..Default::default()
+        },
+        false,
+    )?;
+    let refs: Vec<Value> = entries
+        .iter()
+        .filter(|e| e.is_object())
+        .map(|e| {
+            json!({
+                "id": e.get("id"),
+                "plan_path": e.get("plan_path"),
+                "cwd": e.get("cwd"),
+            })
+        })
+        .collect();
+    Ok(json!({ "entries": refs }))
+}
+
+fn read_state(
+    state: &StoreState,
+    _keep_malformed: bool,
+    _backup_on_corrupt: bool,
+) -> Result<Vec<Value>, StoreError> {
+    // SQLite is the only store; the parse-option knobs named the json read.
+    crate::backlog::read_entries(&state.graph).map_err(|error| {
+        StoreError::Unreadable(
+            crate::backlog::database_path(&state.graph)
+                .display()
+                .to_string(),
+            error.to_string(),
+        )
+    })
+}
+
+fn state_version(state: &StoreState) -> Result<String, StoreError> {
+    crate::backlog::version(&state.graph).map_err(|error| {
+        StoreError::Unreadable(
+            crate::backlog::database_path(&state.graph)
+                .display()
+                .to_string(),
+            error.to_string(),
+        )
+    })
+}
+
+/// Pure transforms over client-shipped rows: the migration seam and the
+/// status cascade, for callers holding entries in memory (scoreboard fold,
+/// drift checks). No file I/O, no publish.
+fn handle_pure(
+    params: &Value,
+    f: impl FnOnce(Vec<Value>, &Value) -> Vec<Value>,
+) -> Result<Value, StoreError> {
+    let entries: Vec<Value> = params
+        .get("entries")
+        .and_then(Value::as_array)
+        .ok_or_else(|| StoreError::Invalid("pure methods need entries".into()))?
+        .clone();
+    let out = f(entries, params);
+    Ok(json!({ "entries": out }))
+}
+
+/// The blocked_by edge settlement over client-shipped rows: rewritten rows,
+/// one receipt per settled edge, and the per-node change map
+/// (graph_store::settle_blocked_by_edges).
+fn handle_settle_edges(params: &Value) -> Result<Value, StoreError> {
+    let entries: Vec<Value> = params
+        .get("entries")
+        .and_then(Value::as_array)
+        .ok_or_else(|| StoreError::Invalid("settle_edges needs entries".into()))?
+        .clone();
+    let (entries, receipts, changes) = graph_store::settle_blocked_by_edges(entries);
+    Ok(json!({
+        "entries": entries,
+        "receipts": receipts,
+        "blocked_by": changes,
+    }))
+}
+
+/// The raw file bytes + their digest (the version token): load_graph parses
+/// the bytes, and the keeper's serialized publish guarantees the reads never
+/// observe a half-written file.
+fn handle_read_file(state: &StoreState) -> Result<Value, StoreError> {
+    let _gate = state.gate.read().unwrap_or_else(|e| e.into_inner());
+    let bytes = graph_store::serialize_graph_file(&read_state(state, true, false)?).into_bytes();
+    Ok(json!({
+        "bytes_b64": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes),
+        "sha256": state_version(state)?,
+    }))
+}
+
+fn handle_begin(state: &StoreState) -> Result<Value, StoreError> {
+    // Row versions first, then one gate-held window for entries and digest
+    // both (cached_snapshot). A writer landing between the two reads leaves
+    // the versions older than the entries: a spurious conflict at worst,
+    // never a lost update, the same rule as the pre-read version.
+    let versions = begin_versions(state)?;
+    let (version, entries) = cached_snapshot(state)?;
+    let mut reply = json!({
+        "version": version,
+        "entries": entries,
+    });
+    if let Some(versions) = versions {
+        reply["base_digests"] = json!(versions);
+    }
+    Ok(reply)
+}
+
+/// Begin's per-row version map (`nodes.version`), which commit_rows gets
+/// back under the historical key `base_digests`. None on the json rollback
+/// backend, which has no row versions. A store with no graph.db yet is
+/// sqlite from birth: this read folds the seed, so it is not json.
+pub(crate) fn begin_versions(
+    state: &StoreState,
+) -> Result<Option<std::collections::BTreeMap<String, i64>>, StoreError> {
+    crate::backlog::row_versions(&state.graph, None)
+        .map(Some)
+        .map_err(StoreError::Db)
+}
+
+fn handle_export_status(state: &StoreState) -> Result<Value, StoreError> {
+    let version = crate::backlog::export_status(&state.graph).map_err(StoreError::Db)?;
+    Ok(json!({"version": version}))
+}
+
+fn handle_commit(state: &StoreState, params: &Value) -> Result<Value, StoreError> {
+    let version = params
+        .get("version")
+        .and_then(Value::as_str)
+        .ok_or_else(|| StoreError::Invalid("commit needs a version".into()))?;
+    let entries: Vec<Value> = params
+        .get("entries")
+        .and_then(Value::as_array)
+        .ok_or_else(|| StoreError::Invalid("commit needs entries".into()))?
+        .clone();
+    let waiting = std::time::Instant::now();
+    let gate = state.gate.write().unwrap_or_else(|e| e.into_inner());
+    let waited = waiting.elapsed();
+    let outcome = graph_store::locked_mutate(
+        &state.graph,
+        MutateInput {
+            entries,
+            canonical_path: state.canonical.then(|| state.graph.clone()),
+            base_version: version.to_string(),
+            plan_rungs: plan_rung_map(params),
+        },
+        state.lock_timeout,
+    );
+    let mut gate_bytes = 0;
+    if let Ok(value) = &outcome {
+        refresh_cache_after_publish(state, value);
+        gate_bytes = outcome_gate_bytes(value);
+    }
+    drop(gate);
+    record_gate(
+        state,
+        waited,
+        gate_bytes,
+        params.get("attempt").and_then(Value::as_u64).unwrap_or(1),
+    );
+    let outcome = outcome?;
+    Ok(outcome_json(&outcome))
+}
+
+#[derive(Debug)]
+enum CommitRowsError {
+    Store(StoreError),
+    Conflict(Vec<String>),
+}
+
+impl From<StoreError> for CommitRowsError {
+    fn from(error: StoreError) -> Self {
+        Self::Store(error)
+    }
+}
+
+fn handle_commit_rows_reply(id: u64, state: &StoreState, params: &Value) -> Value {
+    match handle_commit_rows(state, params) {
+        Ok(result) => json!({"id": id, "ok": true, "result": result}),
+        Err(CommitRowsError::Conflict(ids)) => err_reply(
+            id,
+            "conflict",
+            format!(
+                "graph conflict on {}; nothing was written - confirm with `fno backlog get <id>`, then retry",
+                ids.join(", ")
+            ),
+        ),
+        Err(CommitRowsError::Store(error)) => {
+            err_reply(id, store_err_kind(&error), error.to_string())
+        }
+    }
+}
+
+fn handle_commit_rows(state: &StoreState, params: &Value) -> Result<Value, CommitRowsError> {
+    let base_version = params
+        .get("base_version")
+        .and_then(Value::as_str)
+        .ok_or_else(|| StoreError::Invalid("commit_rows needs base_version".into()))?;
+    let changed_values = params
+        .get("changed")
+        .and_then(Value::as_array)
+        .ok_or_else(|| StoreError::Invalid("commit_rows needs changed rows".into()))?;
+    let mut changed = Vec::with_capacity(changed_values.len());
+    let mut touched = std::collections::BTreeSet::new();
+    for row in changed_values {
+        let id = RowFacts::id_of(row)
+            .ok_or_else(|| StoreError::Invalid("commit_rows changed row needs an id".into()))?
+            .to_string();
+        if !touched.insert(id.clone()) {
+            return Err(StoreError::Invalid(format!(
+                "commit_rows changed id {id:?} appears twice"
+            ))
+            .into());
+        }
+        changed.push((id, row.clone()));
+    }
+    let removed: std::collections::BTreeSet<String> = params
+        .get("removed")
+        .and_then(Value::as_array)
+        .ok_or_else(|| StoreError::Invalid("commit_rows needs removed ids".into()))?
+        .iter()
+        .map(|id| {
+            id.as_str().map(str::to_string).ok_or_else(|| {
+                StoreError::Invalid("commit_rows removed id must be a string".into())
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    if let Some(id) = removed.iter().find(|id| touched.contains(*id)) {
+        return Err(StoreError::Invalid(format!(
+            "commit_rows id {id:?} is both changed and removed"
+        ))
+        .into());
+    }
+    touched.extend(removed.iter().cloned());
+
+    let waiting = std::time::Instant::now();
+    let gate = state
+        .gate
+        .write()
+        .unwrap_or_else(|error| error.into_inner());
+    let waited = waiting.elapsed();
+    let current_version = state_version(state)?;
+    let current = read_state(state, false, true)?;
+    // A touched row conflicts when its stored version moved since begin.
+    // Absent on both sides is a node new since begin; present now and
+    // absent from the map is one another writer created. A client that
+    // sends no map falls back to the whole-graph version.
+    // The publish below still fences on current_version against writers
+    // outside this keeper.
+    let expected = params.get("base_digests").and_then(Value::as_object);
+    let conflicts: Vec<String> = match expected {
+        Some(expected) if state.backend() == Backend::Sqlite => {
+            let ids: Vec<&str> = touched.iter().map(String::as_str).collect();
+            let stored =
+                crate::backlog::row_versions(&state.graph, Some(&ids)).map_err(StoreError::Db)?;
+            touched
+                .iter()
+                .filter(|id| stored.get(*id).copied() != expected.get(*id).and_then(Value::as_i64))
+                .cloned()
+                .collect()
+        }
+        _ if current_version == base_version => Vec::new(),
+        _ => touched.iter().cloned().collect(),
+    };
+    if !conflicts.is_empty() {
+        drop(gate);
+        record_gate(
+            state,
+            waited,
+            0,
+            params.get("attempt").and_then(Value::as_u64).unwrap_or(1),
+        );
+        return Err(CommitRowsError::Conflict(conflicts));
+    }
+
+    let changed_by_id: std::collections::BTreeMap<String, Value> =
+        changed.iter().cloned().collect();
+    let mut replaced = std::collections::BTreeSet::new();
+    let mut merged = Vec::with_capacity(current.len() + changed.len());
+    for row in current {
+        let Some(id) = RowFacts::id_of(&row).map(str::to_string) else {
+            merged.push(row);
+            continue;
+        };
+        if removed.contains(&id) {
+            continue;
+        }
+        if let Some(replacement) = changed_by_id.get(&id) {
+            merged.push(replacement.clone());
+            replaced.insert(id);
+        } else {
+            merged.push(row);
+        }
+    }
+    for (id, row) in changed {
+        if !replaced.contains(&id) && !removed.contains(&id) {
+            merged.push(row);
+        }
+    }
+
+    let outcome = graph_store::locked_mutate(
+        &state.graph,
+        MutateInput {
+            entries: merged,
+            canonical_path: state.canonical.then(|| state.graph.clone()),
+            base_version: current_version,
+            plan_rungs: plan_rung_map(params),
+        },
+        state.lock_timeout,
+    );
+    let mut gate_bytes = 0;
+    if let Ok(value) = &outcome {
+        refresh_cache_after_publish(state, value);
+        gate_bytes = outcome_gate_bytes(value);
+    }
+    drop(gate);
+    record_gate(
+        state,
+        waited,
+        gate_bytes,
+        params.get("attempt").and_then(Value::as_u64).unwrap_or(1),
+    );
+    let outcome = outcome?;
+    Ok(outcome_json(&outcome))
+}
+
+/// The gate metric's bytes for one publish: the serialized graph plus the
+/// backup it wrote.
+fn outcome_gate_bytes(outcome: &graph_store::MutateOutcome) -> u64 {
+    let graph = graph_store::serialize_graph_file(&outcome.entries).len() as u64;
+    let backup = outcome
+        .backup
+        .as_ref()
+        .and_then(|path| std::fs::metadata(path).ok())
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    graph.saturating_add(backup)
+}
+
+/// The client-supplied node id -> plan rung map (see
+/// `graph_store::supplied_plan_rung`): repo law keeps plan-document reading
+/// on the Python side, so the map crosses as data. Absent key = the caller
+/// is not re-deriving from plans, and stored statuses stay.
+fn plan_rung_map(params: &Value) -> Option<std::collections::BTreeMap<String, String>> {
+    let obj = params.get("plan_rungs")?.as_object()?;
+    Some(
+        obj.iter()
+            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+            .collect(),
+    )
+}
+
+fn outcome_json(outcome: &graph_store::MutateOutcome) -> Value {
+    json!({
+        "entries": outcome.entries,
+        "dropped": outcome.dropped,
+        "backup": outcome.backup,
+        "shadow_warning": outcome.shadow_warning,
+        "closure_releases": outcome
+            .closure_releases
+            .iter()
+            .map(|(id, rung)| json!({"id": id, "rung": rung}))
+            .collect::<Vec<_>>(),
+        "is_canonical": outcome.is_canonical,
+    })
+}
+
+fn handle_read_archive(_state: &StoreState, params: &Value) -> Result<Value, StoreError> {
+    let archive = params
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| StoreError::Invalid("read_archive needs a path".into()))?;
+    // Deliberately no state gate: the archive is a foreign path from the
+    // request params, never the owned graph, so taking the gate here would
+    // block owned-graph writers on an unrelated file. Do not re-add the lock.
+    let rows = match graph_store::read_archive_raw(std::path::Path::new(archive)) {
+        Ok(graph_store::RawRead::Entries(mut entries)) => {
+            graph_store::apply_defaults(&mut entries, false);
+            entries
+        }
+        _ => Vec::new(),
+    };
+    Ok(json!({
+        "serialized": graph_store::serialize_graph_file(&rows),
+        "entries": rows,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Typed operations
+// ---------------------------------------------------------------------------
+
+fn find_exact<'a>(entries: &'a [Value], node_id: &str) -> Option<usize> {
+    entries
+        .iter()
+        .position(|e| RowFacts::id_of(e) == Some(node_id))
+}
+
+/// Apply one typed operation to a defaulted entry list. Each op mirrors the
+/// corresponding store.py helper; the keeper wraps it in the same locked
+/// mutate cycle the commit path uses.
+fn apply_op(entries: &mut Vec<Value>, name: &str, p: &Value) -> Result<Value, StoreError> {
+    apply_op_impl(entries, name, p)
+}
+
+fn apply_op_impl(entries: &mut Vec<Value>, name: &str, p: &Value) -> Result<Value, StoreError> {
+    match name {
+        "update_fields" => {
+            let node_id = param_str(p, "node_id")?;
+            let fields = p
+                .get("fields")
+                .and_then(Value::as_object)
+                .ok_or_else(|| StoreError::Invalid("update_fields needs fields".into()))?;
+            let idx = find_exact(entries, node_id)
+                .ok_or_else(|| StoreError::Invalid(format!("no node resolves to '{node_id}'")))?;
+            let mut applied = 0usize;
+            for (field, spec) in fields {
+                let update = FieldUpdate::from_value(field, spec)?;
+                if matches!(update, FieldUpdate::Keep) {
+                    continue;
+                }
+                let obj = entries[idx].as_object_mut().unwrap();
+                graph_store::apply_field_update(obj, field, &update);
+                applied += 1;
+            }
+            Ok(json!({"applied": applied}))
+        }
+        "append_progress_note" => {
+            let node_id = param_str(p, "node_id")?;
+            let note = p.get("note").cloned().unwrap_or(Value::Null);
+            let mut found = false;
+            let mut plan_path = Value::Null;
+            if let Some(idx) = find_exact(entries, node_id) {
+                let obj = entries[idx].as_object_mut().unwrap();
+                let notes = obj
+                    .entry("progress_notes".to_string())
+                    .or_insert_with(|| Value::Array(vec![]));
+                if !notes.is_array() {
+                    *notes = Value::Array(vec![]);
+                }
+                notes.as_array_mut().unwrap().push(note.clone());
+                plan_path = obj.get("plan_path").cloned().unwrap_or(Value::Null);
+                found = true;
+            }
+            Ok(json!({"found": found, "plan_path": plan_path}))
+        }
+        "append_encounter" => {
+            let node_id = param_str(p, "node_id")?;
+            let record = p
+                .get("record")
+                .cloned()
+                .ok_or_else(|| StoreError::Invalid("append_encounter needs a record".into()))?;
+            Ok(crate::backlog::encounters::append_refusing_duplicate(
+                entries, node_id, record,
+            ))
+        }
+        "append_wave_note" => {
+            let node_id = param_str(p, "node_id")?;
+            let note = p
+                .get("note")
+                .cloned()
+                .ok_or_else(|| StoreError::Invalid("append_wave_note needs a note".into()))?;
+            let Some(idx) = find_exact(entries, node_id) else {
+                return Ok(json!({"found": false,
+                    "error": format!("no node resolves to '{node_id}'")}));
+            };
+            let obj = entries[idx].as_object_mut().unwrap();
+            let terminal = obj
+                .get("completed_at")
+                .map(|v| !v.is_null())
+                .unwrap_or(false)
+                || matches!(
+                    obj.get("status").and_then(Value::as_str),
+                    Some("done") | Some("superseded")
+                );
+            if terminal {
+                return Ok(json!({"found": false,
+                    "error": format!("wave target '{node_id}' is terminal")}));
+            }
+            let notes = obj
+                .entry("progress_notes".to_string())
+                .or_insert_with(|| Value::Array(vec![]));
+            if !notes.is_array() {
+                *notes = Value::Array(vec![]);
+            }
+            notes.as_array_mut().unwrap().push(note);
+            Ok(json!({"found": true, "error": Value::Null}))
+        }
+        "session_append" => {
+            let node_id = param_str(p, "node_id")?;
+            let phase = param_str(p, "phase")?;
+            let harness = param_str(p, "harness")?;
+            let session_id = param_str(p, "session_id")?;
+            let effort = opt_str(p, "effort");
+            let started_at = opt_str(p, "started_at");
+            let ended_at = opt_str(p, "ended_at");
+            let observed = p.get("observed").cloned();
+            let merge_grant = p.get("merge_grant").filter(|v| !v.is_null());
+            let row = session_row(
+                phase,
+                harness,
+                session_id,
+                effort,
+                started_at,
+                ended_at,
+                observed,
+                merge_grant,
+            )?;
+            let (found, added) = session_append(entries, node_id, row)?;
+            Ok(json!({"found": found, "added": added}))
+        }
+        "session_remove_open" => {
+            let node_id = param_str(p, "node_id")?;
+            let phase = param_str(p, "phase")?;
+            let harness = param_str(p, "harness")?;
+            let session_id = param_str(p, "session_id")?;
+            let started_at = param_str(p, "started_at")?;
+            let (found, removed) =
+                session_remove_open(entries, node_id, phase, harness, session_id, started_at)?;
+            Ok(json!({"found": found, "removed": removed}))
+        }
+        "session_reap_open" => {
+            let node_id = opt_str(p, "node_id");
+            let phase = param_str(p, "phase")?;
+            let harness = param_str(p, "harness")?;
+            let session_id = param_str(p, "session_id")?;
+            let ended_at = opt_str(p, "ended_at");
+            let report = session_reap_open(entries, node_id, phase, harness, session_id, ended_at)?;
+            Ok(report)
+        }
+        "set_related" => {
+            let node_id = param_str(p, "node_id")?;
+            let desired: Vec<String> = p
+                .get("desired")
+                .and_then(Value::as_array)
+                .ok_or_else(|| StoreError::Invalid("set_related needs desired".into()))?
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect();
+            set_related(entries, node_id, &desired)?;
+            Ok(json!({"ok": true}))
+        }
+        "defer" => {
+            let node_id = param_str(p, "node_id")?;
+            let reason = param_str(p, "reason")?;
+            let kind = opt_str(p, "kind")
+                .map(str::to_string)
+                .or_else(|| classify_deferred_reason(reason).map(str::to_string));
+            // The shared defer leg: the blank-reason refusal and the
+            // kind vocabulary live in the patch planner, so the mux op and
+            // the CLI door cannot disagree.
+            crate::backlog::patch::defer_facts(entries, node_id, reason, kind.as_deref())?;
+            Ok(json!({"deferred": true}))
+        }
+        "end_mission" => {
+            let node_id = param_str(p, "node_id")?;
+            let idx = find_exact(entries, node_id)
+                .ok_or_else(|| StoreError::Invalid(format!("no node resolves to '{node_id}'")))?;
+            entries[idx]
+                .as_object_mut()
+                .unwrap()
+                .shift_remove("mission_active");
+            Ok(json!({"mission_active": false}))
+        }
+        "find_for_pr" => {
+            let pr_number = p
+                .get("pr_number")
+                .and_then(Value::as_i64)
+                .ok_or_else(|| StoreError::Invalid("find_for_pr needs pr_number".into()))?;
+            let repo = opt_str(p, "repo");
+            let ids: Vec<String> = entries
+                .iter()
+                .filter(|e| e.is_object())
+                .filter(|e| node_carries_pr(e, pr_number as i64, repo))
+                .filter_map(|e| RowFacts::id_of(e).map(str::to_string))
+                .collect();
+            Ok(json!({"ids": ids}))
+        }
+        "plan_path_owner_conflict" => {
+            let node_id = opt_str(p, "node_id");
+            let plan_path = opt_str(p, "plan_path");
+            Ok(json!({
+                "owner": graph_store::plan_path_owner_conflict(entries, node_id, plan_path),
+            }))
+        }
+        other => Err(StoreError::Invalid(format!("unknown op {other:?}"))),
+    }
+}
+
+/// One named op applied over client-shipped rows, no file I/O and no
+/// publish: `set_related`, `plan_path_owner_conflict`, and friends run
+/// INSIDE a client mutator on an in-hand snapshot, where a full locked
+/// cycle would be a write the caller never asked for.
+fn handle_pure_op(params: &Value) -> Result<Value, StoreError> {
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| StoreError::Invalid("pure_op needs a name".into()))?;
+    let p = params.get("params").cloned().unwrap_or(Value::Null);
+    let mut entries: Vec<Value> = params
+        .get("entries")
+        .and_then(Value::as_array)
+        .ok_or_else(|| StoreError::Invalid("pure_op needs entries".into()))?
+        .clone();
+    let op_result = match name {
+        "canonicalize" => {
+            graph_store::canonicalize_entries(&mut entries);
+            json!({"ok": true})
+        }
+        other => apply_op(&mut entries, other, &p)?,
+    };
+    Ok(json!({ "entries": entries, "op": op_result }))
+}
+
+fn param_str<'a>(p: &'a Value, key: &str) -> Result<&'a str, StoreError> {
+    p.get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| StoreError::Invalid(format!("{key} must be a string")))
+}
+
+fn opt_str<'a>(p: &'a Value, key: &str) -> Option<&'a str> {
+    p.get(key).and_then(Value::as_str)
+}
+
+fn classify_deferred_reason(reason: &str) -> Option<&'static str> {
+    crate::backlog::patch::classify_deferred_reason(reason)
+}
+
+pub(crate) fn node_carries_pr(node: &Value, pr_number: i64, repo: Option<&str>) -> bool {
+    let primary = node.get("pr_number").and_then(Value::as_i64) == Some(pr_number);
+    let urls: Vec<String> = {
+        let mut v = Vec::new();
+        if let Some(u) = node.get("pr_url").and_then(Value::as_str) {
+            v.push(u.to_string());
+        }
+        if let Some(extras) = node.get("additional_prs").and_then(Value::as_array) {
+            for e in extras {
+                if let Some(u) = e.get("url").and_then(Value::as_str) {
+                    v.push(u.to_string());
+                }
+            }
+        }
+        v
+    };
+    let carries = primary
+        || node
+            .get("additional_prs")
+            .and_then(Value::as_array)
+            .map(|extras| {
+                extras
+                    .iter()
+                    .any(|e| e.get("number").and_then(Value::as_i64) == Some(pr_number))
+            })
+            .unwrap_or(false);
+    if !carries {
+        return false;
+    }
+    match repo {
+        None => {
+            primary
+                || node
+                    .get("additional_prs")
+                    .and_then(Value::as_array)
+                    .map(|extras| {
+                        extras
+                            .iter()
+                            .any(|e| e.get("number").and_then(Value::as_i64) == Some(pr_number))
+                    })
+                    .unwrap_or(false)
+        }
+        Some(want) => {
+            let want = want.to_lowercase();
+            urls.iter().any(|url| {
+                let clean = url.split('?').next().unwrap_or(url);
+                let clean = clean.split('#').next().unwrap_or(clean);
+                let clean = clean.trim_end_matches('/');
+                let Some((head, tail)) = clean.rsplit_once("/pull/") else {
+                    return false;
+                };
+                tail.parse::<i64>()
+                    .map(|n| n == pr_number && head.to_lowercase().ends_with(&format!("/{want}")))
+                    .unwrap_or(false)
+            })
+        }
+    }
+}
+
+/// Build one session row, validating identity/timestamps under the same
+/// contract as store.append_session_record.
+pub(crate) fn session_row(
+    phase: &str,
+    harness: &str,
+    session_id: &str,
+    effort: Option<&str>,
+    started_at: Option<&str>,
+    ended_at: Option<&str>,
+    observed: Option<Value>,
+    merge_grant: Option<&Value>,
+) -> Result<Value, StoreError> {
+    const SESSION_PHASES: &[&str] = &["think", "blueprint", "execute", "review", "ship"];
+    const STR_MAX: usize = 200;
+    if !SESSION_PHASES.contains(&phase) {
+        return Err(StoreError::Invalid(format!(
+            "invalid phase {phase:?}; expected one of {SESSION_PHASES:?}"
+        )));
+    }
+    let harness = harness.trim();
+    let session_id = session_id.trim();
+    for (label, value) in [("harness", harness), ("session_id", session_id)] {
+        if value.is_empty() {
+            return Err(StoreError::Invalid(format!(
+                "{label} must be a non-empty string"
+            )));
+        }
+        if value.len() > STR_MAX {
+            return Err(StoreError::Invalid(format!(
+                "{label} exceeds {STR_MAX} chars"
+            )));
+        }
+    }
+    // An id whose shape names one of the shape-known harnesses refuses a
+    // stamp naming another: the wrong-harness stamp is how phantom twin rows
+    // get minted (a codex v7 id under `harness: claude` reads as a second,
+    // distinct session to every keyed resolver).
+    if let Some(shape) = harness_of_session_id(session_id) {
+        if harness != shape && shape_known_harness(harness) {
+            return Err(StoreError::Invalid(format!(
+                "session_id {session_id} is a {shape} id; refusing harness {harness}"
+            )));
+        }
+    }
+    let effort = match effort {
+        Some(e) => {
+            let e = e.trim();
+            if e.is_empty() {
+                return Err(StoreError::Invalid(
+                    "effort must be a non-empty string when provided".into(),
+                ));
+            }
+            if e.len() > STR_MAX {
+                return Err(StoreError::Invalid(format!(
+                    "effort exceeds {STR_MAX} chars"
+                )));
+            }
+            Some(e.to_string())
+        }
+        None => None,
+    };
+    let stamp = |label: &str, v: &str| -> Result<String, StoreError> {
+        let parsed = chrono::DateTime::parse_from_rfc3339(&v.trim().replace('Z', "+00:00"))
+            .map_err(|_| {
+                StoreError::Invalid(format!("{label} must be an ISO-8601 timestamp, got {v:?}"))
+            })?;
+        if parsed.offset().local_minus_utc() != 0 {
+            return Err(StoreError::Invalid(format!(
+                "{label} must be a UTC timestamp (offset +00:00 / Z), got {v:?}"
+            )));
+        }
+        Ok(parsed.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+    };
+    let started_at = started_at.map(|s| stamp("started_at", s)).transpose()?;
+    let ended_at = ended_at.map(|s| stamp("ended_at", s)).transpose()?;
+    // The spawner-resolved merge posture on a do row. The client validates the
+    // shape for its ValueError contract; the keeper re-validates before the
+    // row can carry it, so no raw caller can store a guessed grant.
+    let grant = match merge_grant {
+        None => None,
+        Some(g) => {
+            const GRANT_KEYS: &[&str] = &["approved", "source", "recorded_by", "recorded_at"];
+            let obj = g.as_object().ok_or_else(|| {
+                StoreError::Invalid("merge_grant must be a mapping when provided".into())
+            })?;
+            let unknown: Vec<String> = obj
+                .keys()
+                .filter(|k| !GRANT_KEYS.contains(&k.as_str()))
+                .cloned()
+                .collect();
+            if !unknown.is_empty() {
+                return Err(StoreError::Invalid(format!(
+                    "merge_grant carries unknown keys: {unknown:?}"
+                )));
+            }
+            let approved = obj
+                .get("approved")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| {
+                    StoreError::Invalid("merge_grant.approved must be a boolean".into())
+                })?;
+            let text = |key: &str| -> Result<String, StoreError> {
+                let v = obj.get(key).and_then(Value::as_str).unwrap_or("").trim();
+                if v.is_empty() {
+                    return Err(StoreError::Invalid(format!(
+                        "merge_grant.{key} must be a non-empty string"
+                    )));
+                }
+                if v.len() > STR_MAX {
+                    return Err(StoreError::Invalid(format!(
+                        "merge_grant.{key} exceeds {STR_MAX} chars"
+                    )));
+                }
+                Ok(v.to_string())
+            };
+            let source = text("source")?;
+            let recorded_by = text("recorded_by")?;
+            let raw_at = obj.get("recorded_at").and_then(Value::as_str).unwrap_or("");
+            if raw_at.trim().is_empty() {
+                return Err(StoreError::Invalid(
+                    "merge_grant.recorded_at must be a non-empty string".into(),
+                ));
+            }
+            let recorded_at = stamp("merge_grant.recorded_at", raw_at)?;
+            let mut grant = Map::new();
+            grant.insert("approved".into(), Value::Bool(approved));
+            grant.insert("source".into(), Value::String(source));
+            grant.insert("recorded_by".into(), Value::String(recorded_by));
+            grant.insert("recorded_at".into(), Value::String(recorded_at));
+            Some(Value::Object(grant))
+        }
+    };
+    let mut row = Map::new();
+    row.insert("phase".into(), Value::String(phase.to_string()));
+    row.insert("harness".into(), Value::String(harness.to_string()));
+    row.insert("session_id".into(), Value::String(session_id.to_string()));
+    if let Some(e) = effort {
+        row.insert("effort".into(), Value::String(e));
+    }
+    if let Some(s) = started_at {
+        row.insert("started_at".into(), Value::String(s));
+    }
+    if let Some(e) = ended_at {
+        row.insert("ended_at".into(), Value::String(e));
+    }
+    // Written unconditionally, including the unknown kinds: an ABSENT key
+    // means the writer never looked; a present one is what the writer saw.
+    row.insert("observed_model".into(), observed.unwrap_or(Value::Null));
+    if let Some(g) = grant {
+        row.insert("merge_grant".into(), g);
+    }
+    Ok(Value::Object(row))
+}
+
+/// The append half of store.append_session_record: idempotent on
+/// (session_id, phase); a duplicate fills only timestamps it left open, and
+/// observed_model is the one field the LATEST stamp owns. The harness is not
+/// part of the key: one session on one phase is one row, whatever harness
+/// spelling a writer carried (the shape check above already refuses a
+/// provably wrong one).
+pub(crate) fn session_append(
+    entries: &mut Vec<Value>,
+    node_id: &str,
+    row: Value,
+) -> Result<(bool, bool), StoreError> {
+    let Some(idx) = find_exact(entries, node_id) else {
+        return Ok((false, false));
+    };
+    let phase = row
+        .get("phase")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let session_id = row
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let obj = entries[idx].as_object_mut().unwrap();
+    let sessions = obj
+        .entry("sessions".to_string())
+        .or_insert_with(|| Value::Array(vec![]));
+    if !sessions.is_array() {
+        *sessions = Value::Array(vec![]);
+    }
+    let rows = sessions.as_array_mut().unwrap();
+    let prior = rows.iter_mut().find(|r| {
+        r.get("phase").and_then(Value::as_str) == Some(phase.as_str())
+            && r.get("session_id").and_then(Value::as_str) == Some(session_id.as_str())
+    });
+    if let Some(prior) = prior {
+        fill_prior_row(prior, &row);
+        return Ok((true, false));
+    }
+    rows.push(row);
+    Ok((true, true))
+}
+
+/// The fill-if-absent write one matched row takes from a re-stamp: the four
+/// keys fill only when absent (merge_grant is among them so a re-stamp cannot
+/// rewrite a recorded refusal into a grant in place), and observed_model
+/// merges. Shared by `session_append` and `session_fill_open` so the two
+/// cannot drift.
+fn fill_prior_row(prior: &mut Value, row: &Value) {
+    for key in ["ended_at", "started_at", "effort", "merge_grant"] {
+        if let Some(v) = row.get(key) {
+            if !v.is_null() && !prior.as_object().unwrap().contains_key(key) {
+                prior
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(key.to_string(), v.clone());
+            }
+        }
+    }
+    let merged = merge_observed_model(prior.get("observed_model"), row.get("observed_model"));
+    if let Some(merged) = merged {
+        prior
+            .as_object_mut()
+            .unwrap()
+            .insert("observed_model".to_string(), merged);
+    }
+}
+
+/// Fill an EXISTING matching row and never append: the release-time stamp
+/// names a window the acquire stamp opened, so a release whose node carries
+/// no matching row records nothing rather than inventing a closed one (a
+/// blueprint or rolled-back claim released after a failure must not gain an
+/// execute completion it never earned). Returns (node found, row filled).
+pub(crate) fn session_fill_open(
+    entries: &mut Vec<Value>,
+    node_id: &str,
+    row: Value,
+) -> Result<(bool, bool), StoreError> {
+    let Some(idx) = find_exact(entries, node_id) else {
+        return Ok((false, false));
+    };
+    let phase = row
+        .get("phase")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let session_id = row
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let obj = entries[idx].as_object_mut().unwrap();
+    let Some(rows) = obj.get_mut("sessions").and_then(Value::as_array_mut) else {
+        return Ok((true, false));
+    };
+    let prior = rows.iter_mut().find(|r| {
+        r.get("phase").and_then(Value::as_str) == Some(phase.as_str())
+            && r.get("session_id").and_then(Value::as_str) == Some(session_id.as_str())
+    });
+    match prior {
+        Some(prior) => {
+            fill_prior_row(prior, &row);
+            Ok((true, true))
+        }
+        None => Ok((true, false)),
+    }
+}
+
+/// The value a re-stamp should write to observed_model, or None to keep
+/// (store._merge_observed_model): a later real observation wins; a recorded
+/// disagreement stays observed-multiple; an unknown never displaces a
+/// recording but upgrades an absent/unknown prior.
+fn merge_observed_model(prior: Option<&Value>, fresh: Option<&Value>) -> Option<Value> {
+    let Some(fresh) = fresh else {
+        return None;
+    };
+    if fresh.is_null() {
+        return None;
+    }
+    let Some(prior) = prior else {
+        return Some(fresh.clone());
+    };
+    if prior.is_null() {
+        return Some(fresh.clone());
+    }
+    let fresh_kind = fresh.get("kind").and_then(Value::as_str).unwrap_or("");
+    if fresh_kind != "observed" {
+        return None;
+    }
+    let prior_kind = prior.get("kind").and_then(Value::as_str).unwrap_or("");
+    if prior_kind != "observed" && prior_kind != "observed-multiple" {
+        return Some(fresh.clone());
+    }
+    let mut seen: Vec<Value> = prior
+        .get("prior_models")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let prior_model = prior.get("model").cloned().unwrap_or(Value::Null);
+    let fresh_model = fresh.get("model").cloned().unwrap_or(Value::Null);
+    let mut out = fresh.as_object().cloned().unwrap_or_default();
+    if prior_model == fresh_model {
+        out.insert("kind".into(), Value::String(prior_kind.to_string()));
+        if !seen.is_empty() {
+            out.insert("prior_models".into(), Value::Array(seen));
+        } else {
+            out.shift_remove("prior_models");
+        }
+        return Some(Value::Object(out));
+    }
+    if !prior_model.is_null() && !seen.contains(&prior_model) {
+        seen.push(prior_model);
+    }
+    out.insert("kind".into(), Value::String("observed-multiple".into()));
+    out.insert("prior_models".into(), Value::Array(seen));
+    Some(Value::Object(out))
+}
+
+/// store.remove_open_session_record: the one compensating write against the
+/// append-only sessions list, gated on all four preconditions.
+pub(crate) fn session_remove_open(
+    entries: &mut Vec<Value>,
+    node_id: &str,
+    phase: &str,
+    harness: &str,
+    session_id: &str,
+    started_at: &str,
+) -> Result<(bool, bool), StoreError> {
+    let Some(idx) = find_exact(entries, node_id) else {
+        return Ok((false, false));
+    };
+    let started_norm = stamp_utc(started_at)?;
+    let obj = entries[idx].as_object_mut().unwrap();
+    let rows = obj
+        .get("sessions")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let keep: Vec<Value> = rows
+        .iter()
+        .filter(|r| {
+            !((r.get("phase").and_then(Value::as_str) == Some(phase)
+                && r.get("harness").and_then(Value::as_str) == Some(harness)
+                && r.get("session_id").and_then(Value::as_str) == Some(session_id))
+                && !r
+                    .as_object()
+                    .map(|o| o.contains_key("ended_at"))
+                    .unwrap_or(false)
+                && r.get("started_at").and_then(Value::as_str) == Some(started_norm.as_str()))
+        })
+        .cloned()
+        .collect();
+    let removed = keep.len() != rows.len();
+    if removed {
+        obj.insert("sessions".to_string(), Value::Array(keep));
+    }
+    Ok((true, removed))
+}
+
+fn stamp_utc(v: &str) -> Result<String, StoreError> {
+    let parsed =
+        chrono::DateTime::parse_from_rfc3339(&v.trim().replace('Z', "+00:00")).map_err(|_| {
+            StoreError::Invalid(format!(
+                "started_at must be an ISO-8601 timestamp, got {v:?}"
+            ))
+        })?;
+    if parsed.offset().local_minus_utc() != 0 {
+        return Err(StoreError::Invalid(format!(
+            "started_at must be a UTC timestamp (offset +00:00 / Z), got {v:?}"
+        )));
+    }
+    Ok(parsed.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+}
+
+/// store.reap_open_session_record: close open rows with positive death
+/// evidence. Every phase, `do` included, FILLS ended_at and keeps the row:
+/// a filled row is not open, so it un-wedges node status exactly as a
+/// removal did, and the session provenance survives. `all` applies the fill
+/// to every open row carrying the identity.
+///
+/// With a node id the op answers about that one entry exactly as before.
+/// Without one (the death-cascade form), it walks every entry and applies
+/// the same semantics to each open row carrying the identity, so one call
+/// settles a session that worked several nodes. `found` means "the named
+/// node exists" on the exact form and "at least one node matched" on the
+/// identity form; `node_ids` names every node the write touched.
+/// The settlement facts one node's row answers, shared by the in-write roll
+/// and the command's read-back so the two can never drift: higher-precedence
+/// fields (a done, superseded, deferred or PR-bearing row keeps its own
+/// status), then a live execute row or a lock keeps `in_progress`, and
+/// everything else falls back to `idea`.
+pub(crate) fn reap_settlement_state(entry: &Value) -> (bool, bool, usize) {
+    let higher = ["completed_at", "superseded_by", "deferred_at", "pr_number"]
+        .iter()
+        .any(|f| entry.get(*f).map(|v| !v.is_null()).unwrap_or(false))
+        || entry.get("persisted_status").and_then(Value::as_str) == Some("blocked")
+        || entry.get("status").and_then(Value::as_str) == Some("blocked");
+    let locked = entry
+        .get("locked_by")
+        .map(|v| !v.is_null())
+        .unwrap_or(false);
+    let remaining = entry
+        .get("sessions")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter(|r| crate::graph_store::is_open_phase_row(r, "execute"))
+                .count()
+        })
+        .unwrap_or(0);
+    (higher, locked || remaining > 0, remaining)
+}
+
+/// Roll one settled row's node off `in_progress` when nothing holds it open.
+fn roll_settled_status(entries: &mut [Value], idx: usize) {
+    let (higher, expected_in_progress, _remaining) = reap_settlement_state(&entries[idx]);
+    if higher {
+        return;
+    }
+    let status = if expected_in_progress {
+        "in_progress"
+    } else {
+        "idea"
+    };
+    entries[idx]
+        .as_object_mut()
+        .expect("row is an object")
+        .insert("status".into(), Value::String(status.into()));
+}
+
+pub(crate) fn session_reap_open(
+    entries: &mut Vec<Value>,
+    node_id: Option<&str>,
+    phase: &str,
+    harness: &str,
+    session_id: &str,
+    ended_at: Option<&str>,
+) -> Result<Value, StoreError> {
+    const SESSION_PHASES: &[&str] = &["think", "blueprint", "execute", "review", "ship"];
+    if phase != "all" && !SESSION_PHASES.contains(&phase) {
+        return Err(StoreError::Invalid(format!(
+            "invalid phase {phase:?}; expected 'all' or one of {SESSION_PHASES:?}"
+        )));
+    }
+    let close_phases: Vec<&str> = if phase == "all" {
+        SESSION_PHASES.to_vec()
+    } else {
+        vec![phase]
+    };
+    if harness.trim().is_empty() || session_id.trim().is_empty() {
+        return Err(StoreError::Invalid(
+            "identity must be non-empty strings".into(),
+        ));
+    }
+    let ended = match ended_at {
+        Some(v) => stamp_utc(v)?,
+        None => chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+    };
+    // The crate's one openness predicate (graph_store::is_open_phase_row,
+    // mirroring the Python authority) applied to one entry's rows; both
+    // forms share it so they cannot drift.
+    let reap_rows = |rows: &mut Vec<Value>| -> bool {
+        let mut row_closed = false;
+        for cp in &close_phases {
+            for r in rows.iter_mut() {
+                if graph_store::is_open_phase_row(r, cp)
+                    && r.get("harness").and_then(Value::as_str) == Some(harness)
+                    && r.get("session_id").and_then(Value::as_str) == Some(session_id)
+                {
+                    r.as_object_mut()
+                        .unwrap()
+                        .entry("ended_at".to_string())
+                        .or_insert_with(|| Value::String(ended.clone()));
+                    row_closed = true;
+                }
+            }
+        }
+        row_closed
+    };
+    match node_id {
+        Some(node_id) => {
+            let Some(idx) = find_exact(entries, node_id) else {
+                return Ok(json!({
+                    "found": false, "settled": false, "row_removed": false, "row_closed": false,
+                    "status_before": null, "status_after": null, "remaining_open_do": 0,
+                    "node_ids": [],
+                }));
+            };
+            let status_before = entries[idx]
+                .get("status")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let obj = entries[idx].as_object_mut().unwrap();
+            let mut rows = obj
+                .get("sessions")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let row_closed = reap_rows(&mut rows);
+            if row_closed {
+                obj.insert("sessions".to_string(), Value::Array(rows));
+                // The settle rolls the node off in_progress when nothing
+                // holds it open any more, so every caller of the op (the
+                // command and the store's python senders alike) settles the
+                // same way.
+                roll_settled_status(entries, idx);
+            }
+            Ok(json!({
+                "found": true,
+                "settled": true,
+                "row_removed": false,
+                "row_closed": row_closed,
+                "status_before": status_before,
+                "status_after": Value::Null,
+                "remaining_open_do": Value::Null,
+                "node_ids": [node_id],
+            }))
+        }
+        None => {
+            let mut node_ids: Vec<String> = Vec::new();
+            let mut row_closed = false;
+            for idx in 0..entries.len() {
+                if !entries[idx]
+                    .get("sessions")
+                    .and_then(Value::as_array)
+                    .is_some_and(|a| !a.is_empty())
+                {
+                    continue;
+                }
+                let node = entries
+                    .get(idx)
+                    .and_then(RowFacts::id_of)
+                    .map(str::to_string);
+                let obj = entries[idx].as_object_mut().unwrap();
+                let mut rows = obj
+                    .get("sessions")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let closed = reap_rows(&mut rows);
+                if closed {
+                    if let Some(node) = node {
+                        node_ids.push(node);
+                    }
+                    obj.insert("sessions".to_string(), Value::Array(rows));
+                    roll_settled_status(entries, idx);
+                }
+                row_closed |= closed;
+            }
+            Ok(json!({
+                "found": !node_ids.is_empty(),
+                "settled": true,
+                "row_removed": false,
+                "row_closed": row_closed,
+                "status_before": Value::Null,
+                "status_after": Value::Null,
+                "remaining_open_do": Value::Null,
+                "node_ids": node_ids,
+            }))
+        }
+    }
+}
+
+/// store.set_related + _mirror_related: symmetric edges stored on both
+/// endpoints; a missing peer in `added` is a programming error and fails
+/// loudly rather than writing a dangling half-edge.
+pub(crate) fn set_related(
+    entries: &mut [Value],
+    node_id: &str,
+    desired: &[String],
+) -> Result<(), StoreError> {
+    let idx = find_exact(entries, node_id)
+        .ok_or_else(|| StoreError::Invalid(format!("no node resolves to '{node_id}'")))?;
+    let before: std::collections::HashSet<String> = entries[idx]
+        .get("related")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let after: std::collections::HashSet<String> = desired.iter().cloned().collect();
+    let mut sorted: Vec<&String> = after.iter().collect();
+    sorted.sort();
+    entries[idx].as_object_mut().unwrap().insert(
+        "related".to_string(),
+        Value::Array(
+            sorted
+                .into_iter()
+                .map(|s| Value::String(s.clone()))
+                .collect(),
+        ),
+    );
+    for peer_id in after.difference(&before) {
+        let Some(pidx) = find_exact(entries, peer_id) else {
+            return Err(StoreError::Invalid(format!(
+                "related peer '{peer_id}' is absent from the graph; refusing a dangling half-edge"
+            )));
+        };
+        let obj = entries[pidx].as_object_mut().unwrap();
+        let mut rel: std::collections::BTreeSet<String> = obj
+            .get("related")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        rel.insert(node_id.to_string());
+        obj.insert(
+            "related".to_string(),
+            Value::Array(rel.into_iter().map(Value::String).collect()),
+        );
+    }
+    for peer_id in before.difference(&after) {
+        let Some(pidx) = find_exact(entries, peer_id) else {
+            continue; // the edge is already gone on that side
+        };
+        let obj = entries[pidx].as_object_mut().unwrap();
+        let rel: std::collections::BTreeSet<String> = obj
+            .get("related")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let without: std::collections::BTreeSet<String> = rel
+            .difference(&std::iter::once(node_id.to_string()).collect())
+            .cloned()
+            .collect();
+        obj.insert(
+            "related".to_string(),
+            Value::Array(without.into_iter().map(Value::String).collect()),
+        );
+    }
+    Ok(())
+}
+
+/// Run one typed op through the full locked cycle: snapshot, apply, publish.
+/// The gate's write guard excludes this against every other keeper-side
+/// cycle, and
+/// the base-version check still guards against a FOREIGN writer (an old
+/// Python leg, a hand edit) that touched the file after the read.
+///
+/// A caller that computed its op input from an earlier snapshot (rank_top
+/// reads peer ranks with `begin`, then writes) passes `base_version` with
+/// that snapshot's digest: the keeper refuses with `conflict` when the file
+/// moved between the caller's read and this cycle, so the computation is
+/// provably fresh instead of hopefully fresh. The caller retries.
+fn handle_op(state: &StoreState, params: &Value) -> Result<Value, StoreError> {
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| StoreError::Invalid("op needs a name".into()))?;
+    let p = params.get("params").cloned().unwrap_or(Value::Null);
+    let client_base = params.get("base_version").and_then(Value::as_str);
+    let _gate = state.gate.write().unwrap_or_else(|e| e.into_inner());
+    // A foreign writer that publishes between this op's
+    // gated read and the flock check surfaces as Conflict; retry the
+    // read-apply-publish cycle while the gate is held, so the op lands
+    // instead of replying kind conflict (the measured session-close
+    // traceback). The client-supplied base stays terminal: the CALLER's
+    // snapshot is what it names, retrying cannot refresh it.
+    for attempt in 0..5u8 {
+        let base = state_version(state)?;
+        if let Some(expected) = client_base {
+            if base != expected {
+                return Err(StoreError::Conflict);
+            }
+        }
+        let mut entries = read_state(state, false, true)?;
+        let op_result = apply_op(&mut entries, name, &p)?;
+        let outcome = match graph_store::locked_mutate(
+            &state.graph,
+            MutateInput {
+                entries,
+                canonical_path: state.canonical.then(|| state.graph.clone()),
+                base_version: base,
+                // The Python client sends the begin snapshot's map with every op
+                // (a session op that opens or closes a do row re-derives
+                // in_progress like any full write); a caller that sends none
+                // keeps stored statuses.
+                plan_rungs: plan_rung_map(&p),
+            },
+            state.lock_timeout,
+        ) {
+            Ok(outcome) => outcome,
+            // Conflict only: a LockTimeout is a wedged or genuinely busy
+            // lock, and retrying it inside one op would multiply the caller's
+            // deadline (the wedged-writer test bounds it at 12s).
+            Err(StoreError::Conflict) if attempt + 1 < 5 => {
+                std::thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+            Err(err) => return Err(err),
+        };
+        refresh_cache_after_publish(state, &outcome);
+        return Ok(json!({
+            "op": op_result,
+            "outcome": outcome_json(&outcome),
+        }));
+    }
+    unreachable!("every loop arm returns")
+}
+
+/// Typed queries share the read gate; mutations take the write gate.
+fn handle_api(state: &StoreState, params: &Value) -> Result<Value, StoreError> {
+    let op = params
+        .get("op")
+        .and_then(Value::as_str)
+        .ok_or_else(|| StoreError::Invalid("api needs an op".into()))?;
+    let store = crate::backlog::api::Store::new(&state.graph);
+    if matches!(op, "node" | "nodes" | "rows") {
+        let _gate = state.gate.read().unwrap_or_else(|e| e.into_inner());
+        let mut query = row_query(params)?;
+        if op == "node" {
+            query.filter.id_in = Some(vec![param_str(params, "id")?.into()]);
+        }
+        if op == "nodes" {
+            query.include_archived = params
+                .get("include_archived")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+        }
+        if op != "rows"
+            || params.get("filter").is_some()
+            || query.fields.is_some()
+            || !query.include_archived
+        {
+            if let Some(fields) = &mut query.fields {
+                fields.extend(
+                    [
+                        "id",
+                        "status",
+                        "slug",
+                        "title",
+                        "type",
+                        "priority",
+                        "project",
+                        "parent",
+                        "archived_at",
+                        "created_at",
+                        "locked_by",
+                        "locked_by_harness",
+                        "locked_by_harness_session",
+                        "locked_at",
+                    ]
+                    .map(str::to_owned),
+                );
+                if query.filter.label.is_some() {
+                    fields.push("tags".into());
+                }
+                if query.filter.session_id.is_some() {
+                    fields.push("sessions".into());
+                }
+            }
+            reading_fields(&mut query);
+            let ordinals = (op != "rows")
+                .then(|| crate::backlog::row_ordinals(&state.graph))
+                .transpose()
+                .map_err(StoreError::Db)?;
+            return api_read_op(
+                &store,
+                op,
+                params,
+                &query_entries(state, &query, false)?,
+                ordinals.as_ref(),
+            );
+        }
+        let rows: Arc<Vec<Value>> = match read_graph_gated(state, false)? {
+            GraphRead::Cached(graph) => graph
+                .api_rows
+                .get_or_init(|| Arc::clone(&graph.entries))
+                .clone(),
+            GraphRead::Fresh(entries, _) => entries,
+        };
+        return api_read_op(&store, op, params, &rows, None);
+    }
+    if api_is_read_op(op) {
+        let _gate = state.gate.read().unwrap_or_else(|e| e.into_inner());
+        return api_op(&store, op, params);
+    }
+    let _gate = state.gate.write().unwrap_or_else(|e| e.into_inner());
+    api_op(&store, op, params)
+}
+
+fn api_read_op(
+    store: &crate::backlog::api::Store,
+    op: &str,
+    params: &Value,
+    rows: &[Value],
+    ordinals: Option<&std::collections::HashMap<String, i64>>,
+) -> Result<Value, StoreError> {
+    use crate::backlog::api;
+    let fields = row_query(params)?.fields;
+    // The rows op serves full rows (fields unset), so every full-row reader -
+    // the board model's gather, `fno backlog list` - reads the number stamped
+    // the same way as the `_reading` attach: one map per request, stamped
+    // before the projection. The node/nodes ops attach only when the
+    // projection asks (`_number` in `fields`), so an unlisted field never
+    // widens a caller's reply.
+    let wants_number = op == "rows"
+        || fields
+            .as_ref()
+            .is_some_and(|fs| fs.iter().any(|f| f == "_number"));
+    let numbers = if wants_number {
+        crate::numbers::labels_at(&store.graph)
+    } else {
+        Default::default()
+    };
+    let project = |mut rows: Vec<Value>| {
+        if fields
+            .as_ref()
+            .is_some_and(|fields| fields.iter().any(|field| field == "_reading"))
+        {
+            crate::node_reading::attach_reading(&mut rows);
+        }
+        if wants_number {
+            crate::numbers::attach_numbers(&mut rows, &numbers);
+        }
+        project_fields(&mut rows, fields.as_deref());
+        rows
+    };
+    let no_ordinals = std::collections::HashMap::new();
+    let ordinals = ordinals.unwrap_or(&no_ordinals);
+    match op {
+        "node" => {
+            let id = param_str(params, "id")?;
+            let found = api::node_in_with_ordinals(rows, id, ordinals);
+            Ok(json!({
+                "node": found.and_then(|node| project(vec![node.to_json()]).pop()),
+                "version": api::version(store)?,
+            }))
+        }
+        "nodes" => {
+            let filter: api::NodeFilter = params
+                .get("filter")
+                .cloned()
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|e| StoreError::Invalid(format!("bad filter: {e}").into()))?
+                .unwrap_or_default();
+            let page: api::Page = serde_json::from_value(params.clone())
+                .map_err(|e| StoreError::Invalid(format!("bad page: {e}").into()))?;
+            let connection = api::nodes_in_with_ordinals(rows, &filter, &page, ordinals);
+            Ok(json!({
+                "nodes": project(connection.nodes.iter().map(|node| node.to_json()).collect()),
+                "page_info": serde_json::to_value(&connection.page_info).unwrap_or(Value::Null),
+                "version": api::version(store)?,
+            }))
+        }
+        "rows" => {
+            let mut served = rows.to_vec();
+            crate::node_reading::attach_reading(&mut served);
+            Ok(json!({
+                "rows": project(served),
+                "version": api::version(store)?,
+            }))
+        }
+        _ => unreachable!("handle_api routes node/nodes/rows here"),
+    }
+}
+
+/// The reads that never touch the cache (comments walk a node's own rows;
+/// version is the mutation counter): today's api_op path.
+fn api_op(
+    store: &crate::backlog::api::Store,
+    op: &str,
+    params: &Value,
+) -> Result<Value, StoreError> {
+    use crate::backlog::api;
+    match op {
+        "comments" => {
+            let id = param_str(params, "id")?;
+            let page: api::Page = serde_json::from_value(params.clone())
+                .map_err(|e| StoreError::Invalid(format!("bad page: {e}").into()))?;
+            let connection = api::comments(store, id, &page)?;
+            Ok(json!({
+                "nodes": connection
+                    .nodes
+                    .iter()
+                    .map(crate::backlog::model::comment_to_json)
+                    .collect::<Vec<_>>(),
+                "page_info": serde_json::to_value(&connection.page_info).unwrap_or(Value::Null),
+                "version": api::version(store)?,
+            }))
+        }
+        "version" => Ok(json!({ "version": api::version(store)? })),
+        "search" => {
+            let q = param_str(params, "q")?;
+            Ok(json!({
+                "rows": api::search(store, q, params.get("limit").and_then(Value::as_i64))?,
+                "version": api::version(store)?,
+            }))
+        }
+        _ => api_mutation(store, op, params),
+    }
+}
+
+fn api_mutation(
+    store: &crate::backlog::api::Store,
+    op: &str,
+    params: &Value,
+) -> Result<Value, StoreError> {
+    use crate::backlog::api;
+    let id = params.get("id").and_then(Value::as_str);
+    match op {
+        "node_create" => {
+            let input: api::NodeCreateInput = input_of(params, "input")?;
+            let payload = api::node_create(store, input)?;
+            Ok(json!({
+                "success": payload.success,
+                "node": payload.node.map(|n| n.to_json()),
+                "version": payload.version,
+            }))
+        }
+        "node_update" => {
+            let input: api::NodeUpdateInput = input_of(params, "input")?;
+            let payload = api::node_update(store, id.unwrap_or_default(), input)?;
+            Ok(json!({
+                "success": payload.success,
+                "node": payload.node.map(|n| n.to_json()),
+                "version": payload.version,
+            }))
+        }
+        "decision_record" => {
+            let event: Value = input_of(params, "event")?;
+            let payload = api::decision_record(store, event)?;
+            Ok(json!({
+                "success": payload.success,
+                "event": payload.node,
+                "version": payload.version,
+            }))
+        }
+        "decision_retract" => {
+            let event: Value = input_of(params, "event")?;
+            let payload = api::decision_retract(store, event)?;
+            Ok(json!({
+                "success": payload.success,
+                "event": payload.node,
+                "version": payload.version,
+            }))
+        }
+        "decisions" => {
+            let node = params.get("node").and_then(Value::as_str);
+            let decision_id = params.get("decision_id").and_then(Value::as_str);
+            let rows = api::decisions(store, node, decision_id)?;
+            Ok(json!({ "rows": rows }))
+        }
+        "node_batch_update" => {
+            let ids: Vec<String> = input_of(params, "ids")?;
+            let input: api::NodeUpdateInput = input_of(params, "input")?;
+            let payload = api::node_batch_update(store, &ids, input)?;
+            Ok(json!({
+                "success": payload.success,
+                "node": payload
+                    .node
+                    .map(|list| list.iter().map(|n| n.to_json()).collect::<Vec<_>>()),
+                "version": payload.version,
+            }))
+        }
+        "node_archive" => {
+            let payload = api::node_archive(store, id.unwrap_or_default())?;
+            Ok(json!({
+                "success": payload.success,
+                "node": payload.node.map(|n| n.to_json()),
+                "version": payload.version,
+            }))
+        }
+        "node_unarchive" => {
+            let payload = api::node_unarchive(store, id.unwrap_or_default())?;
+            Ok(json!({
+                "success": payload.success,
+                "node": payload.node.map(|n| n.to_json()),
+                "version": payload.version,
+            }))
+        }
+        "node_delete" => {
+            let payload = api::node_delete(store, id.unwrap_or_default())?;
+            Ok(json!({
+                "success": payload.success,
+                "node": payload.node.map(|n| n.to_json()),
+                "version": payload.version,
+            }))
+        }
+        "relation_create" | "relation_delete" => {
+            let related = param_str(params, "related")?;
+            let t: api::RelationType = match params.get("type") {
+                Some(v) => serde_json::from_value(v.clone())
+                    .map_err(|e| StoreError::Invalid(format!("bad type: {e}").into()))?,
+                None => api::RelationType::Related,
+            };
+            let payload = if op == "relation_create" {
+                api::relation_create(store, id.unwrap_or_default(), related, t)?
+            } else {
+                api::relation_delete(store, id.unwrap_or_default(), related, t)?
+            };
+            Ok(json!({
+                "success": payload.success,
+                "node": payload.node.map(|n| n.to_json()),
+                "version": payload.version,
+            }))
+        }
+        "label_add" | "label_remove" => {
+            let name = param_str(params, "name")?;
+            let payload = if op == "label_add" {
+                api::label_add(store, id.unwrap_or_default(), name)?
+            } else {
+                api::label_remove(store, id.unwrap_or_default(), name)?
+            };
+            Ok(json!({
+                "success": payload.success,
+                "node": payload.node.map(|n| n.to_json()),
+                "version": payload.version,
+            }))
+        }
+        "comment_create" => {
+            let input: api::CommentCreateInput = input_of(params, "input")?;
+            let payload = api::comment_create(store, id.unwrap_or_default(), input)?;
+            Ok(json!({
+                "success": payload.success,
+                "node": payload.node.map(|n| n.to_json()),
+                "version": payload.version,
+            }))
+        }
+        "finding_create" => {
+            let input: api::FindingInput = input_of(params, "input")?;
+            let receipt = api::finding_create(store, id.unwrap_or_default(), input)?;
+            Ok(json!({
+                "finding_id": receipt.finding_id,
+                "node_id": receipt.node_id,
+                "version": receipt.version,
+            }))
+        }
+        "finding_resolve" => {
+            let session = params.get("session").and_then(Value::as_str);
+            let receipt = api::finding_resolve(store, id.unwrap_or_default(), session)?;
+            Ok(json!({
+                "finding_id": receipt.finding_id,
+                "status": receipt.status,
+                "resolved_at": receipt.resolved_at,
+                "version": receipt.version,
+            }))
+        }
+        "findings_list" => {
+            let open_only = params
+                .get("open_only")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let list = api::findings(store, id.as_deref(), open_only)?;
+            Ok(json!({
+                "findings": list
+                    .iter()
+                    .map(crate::backlog::model::finding_to_json)
+                    .collect::<Vec<_>>(),
+            }))
+        }
+        "pull_request_attach" => {
+            let input: api::PullRequestInput = input_of(params, "input")?;
+            let payload = api::pull_request_attach(store, id.unwrap_or_default(), input)?;
+            Ok(json!({
+                "success": payload.success,
+                "node": payload.node.map(|n| n.to_json()),
+                "version": payload.version,
+            }))
+        }
+        "session_append" => {
+            let row: api::SessionRecord = input_of(params, "row")?;
+            let payload = api::session_append(store, id.unwrap_or_default(), row)?;
+            Ok(json!({
+                "success": payload.success,
+                "node": payload.node.map(|n| n.to_json()),
+                "version": payload.version,
+            }))
+        }
+        "session_end" => {
+            let session_id = param_str(params, "session_id")?;
+            let ended_by = param_str(params, "ended_by")?;
+            let phase = params.get("phase").and_then(Value::as_str);
+            let harness = params.get("harness").and_then(Value::as_str);
+            let ended_at = params.get("ended_at").and_then(Value::as_str);
+            let payload = api::session_end(
+                store,
+                id.unwrap_or_default(),
+                session_id,
+                ended_by,
+                phase,
+                harness,
+                ended_at,
+            )?;
+            Ok(json!({
+                "success": payload.success,
+                "node": payload.node.map(|n| n.to_json()),
+                "version": payload.version,
+            }))
+        }
+        "encounter_create" => {
+            let input: api::EncounterInput = input_of(params, "input")?;
+            let payload = api::encounter_create(store, id.unwrap_or_default(), input)?;
+            Ok(json!({
+                "success": payload.success,
+                "node": payload.node.map(|n| n.to_json()),
+                "version": payload.version,
+            }))
+        }
+        "dispatch_set" => {
+            let d: Option<api::Dispatch> = match params.get("dispatch") {
+                Some(v) if !v.is_null() => Some(
+                    serde_json::from_value(v.clone())
+                        .map_err(|e| StoreError::Invalid(format!("bad dispatch: {e}").into()))?,
+                ),
+                _ => None,
+            };
+            let payload = api::dispatch_set(store, id.unwrap_or_default(), d)?;
+            Ok(json!({
+                "success": payload.success,
+                "node": payload.node.map(|n| n.to_json()),
+                "version": payload.version,
+            }))
+        }
+        other => Err(StoreError::Invalid(
+            format!("unknown api op {other:?}").into(),
+        )),
+    }
+}
+
+fn input_of<T: serde::de::DeserializeOwned>(params: &Value, key: &str) -> Result<T, StoreError> {
+    serde_json::from_value(
+        params
+            .get(key)
+            .cloned()
+            .ok_or_else(|| StoreError::Invalid(format!("api op needs {key}").into()))?,
+    )
+    .map_err(|e| StoreError::Invalid(format!("bad {key}: {e}").into()))
+}
+/// The socket path for a graph file: a sibling `<graph>.store.sock`, so the
+/// operator's state root. When the sibling would overrun the unix-socket
+/// address limit (macOS binds 104 sun_path bytes, directory included), the
+/// socket moves to a uid-keyed root under the platform temp dir, named by
+/// the graph path's hash; mirrors the Python client's `store_socket_for`,
+/// which is the path authority (it passes --sock).
+pub fn store_socket_for(graph: &std::path::Path) -> PathBuf {
+    const SOCK_PATH_LIMIT: usize = 96;
+    let dir = graph.parent().unwrap_or(std::path::Path::new("."));
+    let name = graph
+        .file_name()
+        .map(|n| format!("{}.store.sock", n.to_string_lossy()))
+        .unwrap_or_else(|| "graph.store.sock".to_string());
+    let sibling = dir.join(&name);
+    if sibling.to_string_lossy().len() <= SOCK_PATH_LIMIT {
+        return sibling;
+    }
+    use sha2::Digest as _;
+    // Hash the ABSOLUTE spelling the Python client resolves: an existing
+    // path canonicalizes (symlinks followed); a missing one keeps its
+    // symlinked directory prefix and joins the tail lexically, matching
+    // Python's non-strict resolve(). A spelling divergence would make this
+    // keeper bind a socket no client finds.
+    let absolute = match graph.canonicalize() {
+        Ok(p) => p,
+        Err(_) => {
+            let abs = if graph.is_absolute() {
+                graph.to_path_buf()
+            } else {
+                std::env::current_dir().unwrap_or_default().join(graph)
+            };
+            let resolved = abs
+                .parent()
+                .and_then(|parent| parent.canonicalize().ok())
+                .and_then(|resolved_parent| abs.file_name().map(|name| resolved_parent.join(name)));
+            resolved.unwrap_or(abs)
+        }
+    };
+    let mut h = sha2::Sha256::new();
+    h.update(absolute.to_string_lossy().as_bytes());
+    let digest: String = h
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join("");
+    // SAFETY: getuid reads a per-process kernel value; it cannot fail or
+    // race, and this thread is not mid-syscall elsewhere.
+    let uid = unsafe { libc::getuid() };
+    let root = std::env::temp_dir().join(format!("fno-store-{uid}"));
+    root.join(format!("{}.sock", &digest[..16]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn row_commit_state(graph: PathBuf) -> StoreState {
+        crate::store_exec::fresh_store_state(graph, false, Duration::from_secs(2), None, None, None)
+    }
+
+    fn seed_rows(graph: &std::path::Path, entries: &str) {
+        let doc: Value = serde_json::from_str(entries).unwrap();
+        graph_store::seed_rows(graph, doc["entries"].as_array().unwrap()).unwrap();
+    }
+
+    /// begin's row versions ride back under `base_digests`. A fixture that
+    /// fell to the json leg has no map and fails here, not on the fallback.
+    fn row_commit_params(begin: &Value, row: Value) -> Value {
+        assert!(begin["base_digests"].is_object(), "{begin}");
+        json!({
+            "base_version": begin["version"],
+            "base_digests": begin["base_digests"],
+            "changed": [row],
+            "removed": [],
+            "plan_rungs": {},
+        })
+    }
+
+    /// The seed row has no status, so it rides the raw carry until the
+    /// first commit moves it into nodes. The move must not restart the
+    /// row's version at the value the second writer's begin saw.
+    #[test]
+    fn commit_rows_same_row_conflicts_and_names_the_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let graph = dir.path().join("graph.json");
+        seed_rows(&graph, r#"{"entries":[{"id":"x-left","title":"left"}]}"#);
+        let state = row_commit_state(graph);
+        let begin = handle_begin(&state).unwrap();
+        let mut first = begin["entries"][0].clone();
+        first["title"] = json!("first");
+        let mut second = begin["entries"][0].clone();
+        second["title"] = json!("second");
+
+        handle_commit_rows(&state, &row_commit_params(&begin, first)).unwrap();
+        match handle_commit_rows(&state, &row_commit_params(&begin, second)) {
+            Err(CommitRowsError::Conflict(ids)) => assert_eq!(ids, vec!["x-left"]),
+            _ => panic!("same-row commit must conflict"),
+        }
+    }
+
+    fn read_state(graph: &std::path::Path) -> StoreState {
+        crate::store_exec::fresh_store_state(
+            graph.to_path_buf(),
+            false,
+            Duration::from_secs(2),
+            None,
+            None,
+            None,
+        )
+    }
+
+    #[test]
+    fn a_read_waits_out_an_in_flight_commit_and_never_sees_half_of_one() {
+        // AC2: while a write guard is held (a commit's publish window), a
+        // read blocks; when the guard drops, the read completes against the
+        // published file. Asserted on the positive marker (the read finishing
+        // only after release), never on a timeout absence.
+        let dir = tempfile::tempdir().unwrap();
+        let graph = dir.path().join("graph.json");
+        seed_rows(
+            &graph,
+            "{\"entries\": [{\"id\": \"x-1\", \"title\": \"before\"}]}",
+        );
+        let state = Arc::new(read_state(&graph));
+        let gate = Arc::clone(&state);
+        let writer = std::thread::spawn(move || {
+            let _w = gate.gate.write().unwrap_or_else(|e| e.into_inner());
+            std::thread::sleep(Duration::from_millis(150));
+            seed_rows(
+                &gate.graph,
+                "{\"entries\": [{\"id\": \"x-1\", \"title\": \"after\"}]}",
+            );
+        });
+        std::thread::sleep(Duration::from_millis(30));
+        let reader_state = Arc::clone(&state);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let reply = handle_read(&reader_state, &json!({})).unwrap();
+            let _ = tx.send(reply);
+        });
+        // Positive marker: the read cannot finish while the writer holds the
+        // gate (writer is at ~30ms of its 150ms hold here).
+        assert!(
+            rx.recv_timeout(Duration::from_millis(60)).is_err(),
+            "a read must not complete while a commit's write guard is held"
+        );
+        let _ = writer.join();
+        let reply = rx.recv().unwrap();
+        let body = reply.to_string();
+        assert!(
+            body.contains("after"),
+            "the read must observe the published write: {body}"
+        );
+    }
+
+    #[test]
+    fn read_ids_returns_overlaid_rows_in_order_and_reports_missing() {
+        // AC9-HP / AC10-EDGE / AC11-EDGE: one row for one id (the reply body
+        // is a row, not the graph), the readiness overlay applied server-side,
+        // argument order preserved, unmatched tokens reported not guessed,
+        // and a mixed-case slug resolving like the batch matcher's field_eq.
+        let dir = tempfile::tempdir().unwrap();
+        let graph = dir.path().join("graph.json");
+        let body = serde_json::to_string(&json!({
+            "entries": [
+                {"id": "x-hit", "slug": "first-node", "title": "hit",
+                 "status": "ready", "blocked_by": ["x-gate"]},
+                {"id": "x-gate", "slug": "second-node", "title": "gate",
+                 "status": "in_progress"},
+                {"id": "x-late", "slug": "third-node", "title": "late",
+                 "status": "ready"},
+            ]
+        }))
+        .unwrap();
+        seed_rows(&graph, &body);
+        let state = read_state(&graph);
+        let reply = handle_read_ids(
+            &state,
+            &json!({"ids": ["x-late", "second-node", "X-HIT", "x-nope"]}),
+        )
+        .unwrap();
+        let entries = reply["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 3, "three matched tokens, one row each");
+        assert_eq!(entries[0]["id"], json!("x-late"));
+        assert_eq!(entries[1]["id"], json!("x-gate"));
+        assert_eq!(entries[2]["id"], json!("x-hit"));
+        // The overlay: x-hit is blocked by x-gate's non-terminal status.
+        assert_eq!(entries[2]["status"], json!("blocked"));
+        assert!(entries[2]["blocked_reason"].is_string());
+        let missing: Vec<String> = reply["missing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect();
+        assert_eq!(missing, vec!["x-nope".to_string()]);
+        let _ = handle_read_ids(&state, &json!({"ids": ["x-hit"]})).unwrap();
+        assert_eq!(
+            state.file_opens.load(Ordering::SeqCst),
+            0,
+            "read_ids must not fill the whole cache"
+        );
+    }
+
+    /// A store-backed fixture seeded in graph.db.
+    fn sqlite_state(entries: Value) -> (tempfile::TempDir, StoreState) {
+        let dir = tempfile::tempdir().unwrap();
+        let graph = dir.path().join("graph.json");
+        graph_store::seed_rows(&graph, entries["entries"].as_array().unwrap()).unwrap();
+        let state = read_state(&graph);
+        (dir, state)
+    }
+
+    #[test]
+    fn a_sqlite_write_drops_the_cache_and_the_next_read_refills() {
+        // AC2-HP: a warm cache, a keeper-side write, then a read: the write
+        // drops the cache, the read refills once (file_opens 2) and shows
+        // the new content.
+        let (_dir, state) = sqlite_state(json!({
+            "entries": [{"id": "x-a", "slug": "node-a", "title": "before", "status": "ready"}]
+        }));
+        let _ = handle_read(&state, &json!({})).unwrap();
+        assert_eq!(state.file_opens.load(Ordering::SeqCst), 1);
+        handle_op(
+            &state,
+            &json!({
+                "name": "update_fields",
+                "params": {"node_id": "x-a", "fields": {"title": "written"}},
+            }),
+        )
+        .unwrap();
+        let after = handle_read(&state, &json!({})).unwrap();
+        assert_eq!(
+            state.file_opens.load(Ordering::SeqCst),
+            2,
+            "the sqlite publish drops the cache; the read refills once"
+        );
+        assert!(
+            after.to_string().contains("written"),
+            "the read must show the write: {after}"
+        );
+    }
+
+    #[test]
+    fn an_unversioned_sqlite_graph_answers_unreadable_as_today() {
+        // AC7-ERR: a store whose db names sqlite but holds no version errors
+        // kind unreadable, and the splice refuses so the reply keeps its
+        // exact shape.
+        let (_dir, state) = sqlite_state(json!({
+            "entries": [{"id": "x-a", "slug": "node-a", "title": "a", "status": "ready"}]
+        }));
+        // The store resolves through the layout now; open the same file the
+        // keeper read_state seeded, not the legacy root spelling.
+        let db = rusqlite::Connection::open(crate::backlog::database_path(&state.graph)).unwrap();
+        db.execute("DELETE FROM graph_meta WHERE key = 'version'", [])
+            .unwrap();
+        drop(db);
+        for params in [
+            json!({}),
+            json!({"fields":["id"]}),
+            json!({"filter":{"state_type":"open"}}),
+        ] {
+            let payload =
+                serde_json::to_vec(&json!({"id":3,"method":"read_strict","params":params}))
+                    .unwrap();
+            assert!(
+                splice_reply(&state, &payload).is_none(),
+                "an erroring read must not splice"
+            );
+            let reply = handle_request(&state, &payload);
+            assert_eq!(reply["ok"], json!(false));
+            assert_eq!(reply["error"]["kind"], json!("unreadable"));
+        }
+    }
+
+    fn rules_envelope(ts: &str, data: Value) -> String {
+        json!({"ts": ts, "type": "operator_decision", "source": "backlog", "data": data})
+            .to_string()
+    }
+
+    #[test]
+    fn a_rules_ask_answers_the_assembled_set_for_the_caller_cwd() {
+        let lock = crate::claims::test_env_lock();
+        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let td = tempfile::TempDir::new().unwrap();
+        let prev = std::env::var_os("FNO_HOME");
+        std::env::set_var("FNO_HOME", td.path().join("fno-home"));
+        // The journal derives from the served graph, so it sits beside it.
+        let (_dir, state) = sqlite_state(json!({
+            "entries": [{"id": "x-a", "slug": "node-a", "title": "a", "status": "ready"}]
+        }));
+        let jsonl = state
+            .graph
+            .parent()
+            .map(|p| p.join("decisions.jsonl"))
+            .expect("the served graph has a parent");
+        std::fs::create_dir_all(jsonl.parent().unwrap()).unwrap();
+        let mut text = rules_envelope(
+            "2026-10-24T00:00:00Z",
+            json!({
+                "decision_id": "d-aaaa1111",
+                "subject": "graph writes",
+                "decision": "write the graph through fno backlog only",
+                "authority_source": "operator",
+                "scope": "project:fno",
+            }),
+        );
+        text.push('\n');
+        text.push_str(
+            &json!({
+                "ts": "2026-10-24T02:00:00Z",
+                "type": "law_trigger",
+                "source": "backlog",
+                "data": {
+                    "decision_id": "d-aaaa1111",
+                    "trigger_kind": "rule",
+                    "rule_toml": "id = \"law-triggered\"\nlaw = \"d-aaaa1111\"\ntext = \"graph writes\"\naction = \"warn\"\nscope = \"project:fno\"\n[rule.when]\nevents = [\"pre-tool\"]\ntools = [\"Bash\"]\ncommands = [\"cargo build*\"]",
+                },
+            })
+            .to_string(),
+        );
+        text.push('\n');
+        std::fs::write(&jsonl, text).unwrap();
+        let payload = serde_json::to_vec(&json!({
+            "id": 10, "method": "rules", "params": {"cwd": "/"}
+        }))
+        .unwrap();
+        let reply = handle_request(&state, &payload);
+        match prev {
+            Some(v) => std::env::set_var("FNO_HOME", v),
+            None => std::env::remove_var("FNO_HOME"),
+        }
+        assert_eq!(reply["ok"], json!(true));
+        let rules = reply["result"]["rules"].as_array().expect("rules array");
+        assert!(
+            rules.iter().any(|r| r["id"] == json!("law-triggered")),
+            "the imported trigger rule ships: {}",
+            reply["result"]
+        );
+        assert!(
+            !reply["result"]["version"].as_str().unwrap_or("").is_empty(),
+            "the version rides the reply"
+        );
+    }
+}
+/// Live pids advertising a store keeper whose graph tree (file AND parent
+/// dir) is gone: the sweep's candidate scan, factored out so a test can
+/// census the SAME probe before the sweep acts. The parent-dir conjunct
+/// keeps the scan off a live test - a keeper spawned against a graph file
+/// not written yet has an existing parent; every measured orphan lost its
+/// whole tree at once.
+pub fn orphaned_keeper_pids() -> Vec<i32> {
+    let me = std::process::id() as i32;
+    let Ok(out) = std::process::Command::new("ps")
+        .args(["-eo", "pid=,command="])
+        .output()
+    else {
+        return Vec::new();
+    };
+    let mut pids: Vec<i32> = Vec::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let line = line.trim();
+        let mut parts = line.splitn(2, char::is_whitespace);
+        let pid = match parts.next().map(|p| p.parse::<i32>()) {
+            Some(Ok(p)) => p,
+            _ => continue,
+        };
+        let cmd = parts.next().unwrap_or("");
+        if pid == me || !cmd.contains("--store-keeper") || !cmd.contains("--graph") {
+            continue;
+        }
+        let toks: Vec<&str> = cmd.split_whitespace().collect();
+        let Some(pos) = toks.iter().position(|t| *t == "--graph") else {
+            continue;
+        };
+        let Some(graph) = toks.get(pos + 1) else {
+            continue;
+        };
+        let graph_path = Path::new(graph);
+        if graph_path.exists() || graph_path.parent().is_some_and(|p| p.exists()) {
+            continue;
+        }
+        pids.push(pid);
+    }
+    pids
+}
+
+/// True when `pid` is a live, non-zombie process. `kill(pid, 0)` cannot be
+/// the probe: a zombie answers it, so a keeper that died on TERM under a
+/// live parent reads as a survivor. An unreadable table reads alive.
+fn keeper_alive(pid: i32) -> bool {
+    let Ok(out) = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+    else {
+        return true;
+    };
+    let stat = String::from_utf8_lossy(&out.stdout);
+    let stat = stat.trim();
+    if stat.is_empty() {
+        return false;
+    }
+    !stat.starts_with('Z')
+}
+
+/// SIGTERM every live store keeper whose --graph tree is gone, wait
+/// `timeout_secs`, SIGKILL the rest, and return the pids that refused to
+/// die. Covers the populations the spawn ledger is blind to: keepers a CLI
+/// subprocess spawned, and keepers that outlived a session with no reaper
+/// wired (measured 2026-09-04: 8-10 live keepers against deleted pytest
+/// graph paths). The kill decision is the graph path's existence, never
+/// the command line - canonical and leaked keepers share an argv. Every
+/// probe and kill is guarded: an unreadable process table degrades to a
+/// no-op, never an error. Ported from graph/store.py: the only
+/// production caller there was the dying test_cmd's smoke runner, and the
+/// sweep now rides the keeper's own module so conftest can door-call it.
+pub fn sweep_orphaned(timeout_secs: f64) -> Vec<i32> {
+    let candidates = orphaned_keeper_pids();
+    for pid in &candidates {
+        unsafe {
+            libc::kill(*pid, libc::SIGTERM);
+        }
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs_f64(timeout_secs);
+    let mut pending: Vec<i32> = candidates
+        .iter()
+        .copied()
+        .filter(|p| keeper_alive(*p))
+        .collect();
+    while !pending.is_empty() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+        pending.retain(|p| keeper_alive(*p));
+    }
+    for pid in &pending {
+        unsafe {
+            libc::kill(*pid, libc::SIGKILL);
+        }
+    }
+    let mut survivors: Vec<i32> = pending.into_iter().filter(|p| keeper_alive(*p)).collect();
+    survivors.sort();
+    survivors.dedup();
+    survivors
+}
+
+/// The `keeper-sweep` door's body: SIGTERM/SIGKILL every store keeper whose
+/// --graph tree is gone, printing the survivor count. One optional argv
+/// element overrides the wait seconds (default 15).
+pub fn run_keeper_sweep(args: &[String]) -> i32 {
+    let secs = args
+        .first()
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(15.0);
+    let survivors = sweep_orphaned(secs);
+    println!("{}", survivors.len());
+    0
+}

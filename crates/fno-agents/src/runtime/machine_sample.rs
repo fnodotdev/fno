@@ -1,0 +1,1028 @@
+//! A single, portable snapshot of machine load and process pressure.
+//!
+//! The machine-watch arm owns the verdict, while this module owns the raw
+//! sample and its journal readout.  Pure parsers live here so Linux and macOS
+//! can share the same tests.
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Map, Value};
+use std::io::{self, Write};
+use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+pub const MACHINE_SNAPSHOT_NAME: &str = "machine-process-snapshot.txt";
+const MACHINE_SNAPSHOT_ACTIVE_NAME: &str = "machine-process-snapshot.active";
+const MAX_MACHINE_SNAPSHOT_BYTES: usize = 1024 * 1024;
+const ABSOLUTE_PROCESS_SNAPSHOT_THRESHOLD: usize = 2_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostTicks {
+    pub busy: u64,
+    pub system: u64,
+    pub idle: u64,
+}
+
+/// Return `(busy_fraction, system_fraction)` between two monotonic samples.
+pub fn busy_between(previous: HostTicks, current: HostTicks) -> Option<(f64, f64)> {
+    let busy = current.busy.checked_sub(previous.busy)?;
+    let system = current.system.checked_sub(previous.system)?;
+    let idle = current.idle.checked_sub(previous.idle)?;
+    let total = busy.checked_add(idle)?;
+    (total > 0).then(|| (busy as f64 / total as f64, system as f64 / total as f64))
+}
+
+/// Parse the first aggregate CPU row from Linux `/proc/stat`.
+pub fn parse_proc_stat_cpu(text: &str) -> Option<HostTicks> {
+    let row = text.lines().find(|line| line.starts_with("cpu "))?;
+    let values: Vec<u64> = row
+        .split_whitespace()
+        .skip(1)
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .ok()?;
+    if values.len() < 5 {
+        return None;
+    }
+    let user = values[0];
+    let nice = values[1];
+    let system = values[2];
+    let idle = values[3];
+    let iowait = values.get(4).copied().unwrap_or(0);
+    let irq = values.get(5).copied().unwrap_or(0);
+    let softirq = values.get(6).copied().unwrap_or(0);
+    let steal = values.get(7).copied().unwrap_or(0);
+    Some(HostTicks {
+        busy: user + nice + system + irq + softirq + steal,
+        system: system + irq + softirq,
+        idle: idle + iowait,
+    })
+}
+
+/// Map `HOST_CPU_LOAD_INFO` ticks, ordered USER, SYSTEM, IDLE, NICE
+/// (`mach/machine.h` `CPU_STATE_*`), onto busy, system and idle.
+pub fn mach_ticks(cpu_ticks: [u32; 4]) -> HostTicks {
+    let [user, system, idle, nice] = cpu_ticks.map(u64::from);
+    HostTicks {
+        busy: user + system + nice,
+        system,
+        idle,
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn host_ticks() -> Option<HostTicks> {
+    parse_proc_stat_cpu(&std::fs::read_to_string("/proc/stat").ok()?)
+}
+
+#[cfg(target_os = "macos")]
+pub fn host_ticks() -> Option<HostTicks> {
+    // host_statistics(HOST_CPU_LOAD_INFO) is the source used by Activity
+    // Monitor and includes user, nice, system and idle ticks.
+    #[repr(C)]
+    struct CpuLoadInfo {
+        cpu_ticks: [u32; 4],
+    }
+    extern "C" {
+        fn mach_host_self() -> u32;
+        fn host_statistics(host: u32, flavor: i32, info: *mut i32, count: *mut u32) -> i32;
+    }
+    let mut info = CpuLoadInfo { cpu_ticks: [0; 4] };
+    let mut count = 4;
+    let status = unsafe {
+        host_statistics(
+            mach_host_self(),
+            3,
+            info.cpu_ticks.as_mut_ptr().cast(),
+            &mut count,
+        )
+    };
+    (status == 0).then(|| mach_ticks(info.cpu_ticks))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn host_ticks() -> Option<HostTicks> {
+    None
+}
+
+/// Free space on the filesystem holding `path`, in GiB, as an unprivileged
+/// process may use it (`f_bavail`). `None` when the probe cannot answer.
+pub fn disk_free_gb(path: &Path) -> Option<f64> {
+    use std::os::unix::ffi::OsStrExt;
+    let cpath = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut buf: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(cpath.as_ptr(), &mut buf) } != 0 {
+        return None;
+    }
+    let bytes = (buf.f_bavail as f64) * (buf.f_frsize as f64);
+    Some(bytes / 1024.0 / 1024.0 / 1024.0)
+}
+
+pub fn load_average() -> Option<(f64, f64, f64)> {
+    let mut values = [0.0_f64; 3];
+    let count = unsafe { libc::getloadavg(values.as_mut_ptr(), 3) };
+    (count == 3).then_some((values[0], values[1], values[2]))
+}
+
+/// `(compressor occupied, compressor stored, RAM used)` in GiB. RAM used is
+/// macmon's own sum (active + inactive + wired + speculative + compressor,
+/// less purgeable and file-backed pages), so the meter quotes the number
+/// macmon and Activity Monitor show.
+pub fn parse_vm_stat_memory(text: &str) -> Option<(f64, f64, f64)> {
+    let page_size = text
+        .lines()
+        .next()?
+        .split("page size of")
+        .nth(1)?
+        .split_whitespace()
+        .next()?
+        .parse::<u64>()
+        .ok()?;
+    let mut occupied = None;
+    let mut stored = None;
+    let mut used: i64 = 0;
+    for line in text.lines().skip(1) {
+        let (label, value) = line.split_once(':')?;
+        let pages = value.trim().trim_end_matches('.').parse::<u64>().ok()?;
+        match label.trim() {
+            "Pages occupied by compressor" => occupied = Some(pages),
+            "Pages stored in compressor" => stored = Some(pages),
+            _ => {}
+        }
+        match label.trim() {
+            "Pages active"
+            | "Pages inactive"
+            | "Pages wired down"
+            | "Pages speculative"
+            | "Pages occupied by compressor" => used += pages as i64,
+            "Pages purgeable" | "File-backed pages" => used -= pages as i64,
+            _ => {}
+        }
+    }
+    let scale = page_size as f64 / 1024.0 / 1024.0 / 1024.0;
+    Some((
+        occupied? as f64 * scale,
+        stored? as f64 * scale,
+        used.max(0) as f64 * scale,
+    ))
+}
+
+pub fn parse_swapusage_mb(text: &str) -> Option<(f64, f64)> {
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    let number = |token: &str| {
+        token
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect::<String>()
+            .parse::<f64>()
+            .ok()
+    };
+    let mut total = None;
+    let mut used = None;
+    for i in 0..tokens.len().saturating_sub(2) {
+        match tokens[i] {
+            "total" => total = number(tokens[i + 2]),
+            "used" => used = number(tokens[i + 2]),
+            _ => {}
+        }
+    }
+    let (total, used) = (total?, used?);
+    (total > 0.0).then_some((total, used))
+}
+
+pub fn parse_meminfo_memory(text: &str) -> Option<(f64, f64, Option<f64>)> {
+    let kb = |name: &str| {
+        text.lines()
+            .find_map(|line| line.strip_prefix(name))
+            .and_then(|rest| rest.trim_start_matches(':').split_whitespace().next())
+            .and_then(|value| value.parse::<f64>().ok())
+    };
+    let total = kb("SwapTotal")? / 1024.0 / 1024.0;
+    let free = kb("SwapFree")? / 1024.0 / 1024.0;
+    let zswapped = kb("Zswapped").map(|value| value / 1024.0 / 1024.0);
+    Some((total - free, total, zswapped))
+}
+
+/// Linux pressure stall information folded onto the macOS kernel scale
+/// (1 normal, 2 warning, 4 critical). `full avg60` is the share of the last
+/// minute in which every task stalled on memory, `some` the share in which
+/// at least one did.
+pub fn parse_psi_memory_level(text: &str) -> Option<u64> {
+    let avg60 = |kind: &str| {
+        text.lines()
+            .find(|line| line.starts_with(kind))?
+            .split_whitespace()
+            .find_map(|field| field.strip_prefix("avg60="))?
+            .parse::<f64>()
+            .ok()
+    };
+    let full = avg60("full")?;
+    Some(if full >= PSI_STALL_PERCENT {
+        4
+    } else if avg60("some").is_some_and(|some| some >= PSI_STALL_PERCENT) {
+        2
+    } else {
+        1
+    })
+}
+
+const PSI_STALL_PERCENT: f64 = 10.0;
+
+fn now_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_default()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MachineSample {
+    pub sample_id: Option<String>,
+    pub load_1m: Option<f64>,
+    pub load_5m: Option<f64>,
+    pub load_15m: Option<f64>,
+    pub cores: Option<f64>,
+    pub busy_fraction: Option<f64>,
+    pub sys_fraction: Option<f64>,
+    pub busy_window_s: Option<f64>,
+    pub runnable: Option<u64>,
+    pub processes: Option<u64>,
+    pub zombies: Option<u64>,
+    pub cargo_processes: Option<u64>,
+    pub test_processes: Option<u64>,
+    pub compressor_gb: Option<f64>,
+    pub compressed_gb: Option<f64>,
+    #[serde(default)]
+    pub ram_used_gb: Option<f64>,
+    pub swap_used_gb: Option<f64>,
+    pub swap_total_gb: Option<f64>,
+    pub total_mem_gb: Option<f64>,
+    pub memory_pressure_level: Option<u64>,
+    /// Free GiB on the root filesystem; the runaway brake reads it.
+    #[serde(default)]
+    pub disk_free_gb: Option<f64>,
+    pub live_rows: Option<u64>,
+    pub leads: Option<u64>,
+    pub workers: Option<u64>,
+    pub verdict: Option<String>,
+    pub busy_band: Option<f64>,
+    pub load_band_per_core: Option<f64>,
+    pub runaway_load_band_per_core: Option<f64>,
+    pub runaway_load_hold_seconds: Option<u64>,
+    pub hot_escalation_seconds: Option<u64>,
+    pub took_ms: Option<u64>,
+    pub sessions: Option<Value>,
+    pub unresolved: Option<Value>,
+    pub top_rss: Option<Value>,
+    pub top_names: Option<Value>,
+    pub top_parents: Option<Value>,
+    pub sessions_error: Option<String>,
+    pub mux_issues: Option<Value>,
+    /// The `memory_groups` reading, so each tick records the daemon's peak.
+    #[serde(default)]
+    pub memory: Option<Value>,
+    #[serde(skip)]
+    pub(crate) procs: Vec<crate::census::ProcRow>,
+    #[serde(skip)]
+    pub(crate) top_cpu: Vec<crate::census::ProcRow>,
+    #[serde(skip)]
+    pub(crate) throttle_minutes: u64,
+}
+
+pub fn read(
+    home: &crate::paths::AgentsHome,
+    previous: Option<HostTicks>,
+) -> (MachineSample, Option<HostTicks>) {
+    let started = std::time::Instant::now();
+    let (procs, _) = crate::census::process_table_ps();
+    let current = host_ticks();
+    let (busy_fraction, sys_fraction) = previous
+        .zip(current)
+        .and_then(|(old, new)| busy_between(old, new))
+        .map_or((None, None), |(busy, system)| (Some(busy), Some(system)));
+    let (load_1m, load_5m, load_15m) = load_average()
+        .map(|(a, b, c)| (Some(a), Some(b), Some(c)))
+        .unwrap_or((None, None, None));
+    let mux_issues = mux_server_issues(&procs);
+    let mut sample = MachineSample {
+        sample_id: Some(sample_id()),
+        load_1m,
+        load_5m,
+        load_15m,
+        cores: std::thread::available_parallelism()
+            .ok()
+            .map(|n| n.get() as f64),
+        busy_fraction,
+        sys_fraction,
+        busy_window_s: previous.zip(current).map(|_| 300.0),
+        runnable: Some(procs.iter().filter(|row| row.state == 'R').count() as u64),
+        processes: Some(procs.len() as u64),
+        zombies: Some(procs.iter().filter(|row| row.state == 'Z').count() as u64),
+        cargo_processes: Some(
+            procs
+                .iter()
+                .filter(|row| {
+                    crate::test_run::is_cargo_row(row) || crate::test_run::is_compile(row)
+                })
+                .count() as u64,
+        ),
+        test_processes: Some(
+            procs
+                .iter()
+                .filter(|row| {
+                    crate::orphan_reap::is_deps_test_binary(&row.command)
+                        || row
+                            .command
+                            .split_whitespace()
+                            .any(|part| part.rsplit('/').next() == Some("pytest"))
+                })
+                .count() as u64,
+        ),
+        compressor_gb: None,
+        compressed_gb: None,
+        ram_used_gb: None,
+        swap_used_gb: None,
+        swap_total_gb: None,
+        total_mem_gb: None,
+        memory_pressure_level: None,
+        disk_free_gb: disk_free_gb(Path::new("/")),
+        live_rows: None,
+        leads: None,
+        workers: None,
+        verdict: None,
+        busy_band: None,
+        load_band_per_core: None,
+        runaway_load_band_per_core: None,
+        runaway_load_hold_seconds: None,
+        hot_escalation_seconds: None,
+        took_ms: None,
+        sessions: None,
+        unresolved: None,
+        top_rss: None,
+        top_names: None,
+        top_parents: None,
+        sessions_error: None,
+        mux_issues: Some(mux_issues),
+        memory: None,
+        procs,
+        top_cpu: Vec::new(),
+        throttle_minutes: 60,
+    };
+    sample.top_cpu = sample.procs.clone();
+    sample.top_cpu.sort_by(|a, b| {
+        b.cpu_pct
+            .partial_cmp(&a.cpu_pct)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    sample.top_cpu.truncate(3);
+    sample.top_names = Some(top_name_rows(&sample.procs));
+    sample.top_parents = Some(top_parent_rows(&sample.procs));
+    let mut warnings = Vec::new();
+    let live = crate::spawn_gate::live_rows(&home.registry_json(), &mut warnings);
+    sample.live_rows = Some(live.len() as u64);
+    sample.leads = Some(live.iter().filter(|row| row.role_level.is_some()).count() as u64);
+    let worker_rows: Vec<&crate::state::RegistryEntry> =
+        live.iter().filter(|row| row.role_level.is_none()).collect();
+    sample.workers = Some(working_count(&worker_rows, &|row| {
+        session_age_s(&live, row)
+    }));
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(out) = std::process::Command::new("vm_stat").output() {
+            if let Some((occupied, stored, used)) =
+                parse_vm_stat_memory(&String::from_utf8_lossy(&out.stdout))
+            {
+                sample.compressor_gb = Some(occupied);
+                sample.compressed_gb = Some(stored);
+                sample.ram_used_gb = Some(used);
+            }
+        }
+        if let Ok(out) = std::process::Command::new("sysctl")
+            .args(["-n", "vm.swapusage"])
+            .output()
+        {
+            if let Some((total, used)) =
+                crate::spawn_gate::parse_swapusage_mb(&String::from_utf8_lossy(&out.stdout))
+            {
+                sample.swap_total_gb = Some(total / 1024.0);
+                sample.swap_used_gb = Some(used / 1024.0);
+            }
+        }
+        if let Ok(out) = std::process::Command::new("sysctl")
+            .args(["-n", "hw.memsize"])
+            .output()
+        {
+            if let Ok(bytes) = String::from_utf8_lossy(&out.stdout).trim().parse::<f64>() {
+                sample.total_mem_gb = Some(bytes / 1024.0 / 1024.0 / 1024.0);
+            }
+        }
+        if let Ok(out) = std::process::Command::new("sysctl")
+            .args(["-n", "kern.memorystatus_vm_pressure_level"])
+            .output()
+        {
+            if let Ok(level) = String::from_utf8_lossy(&out.stdout).trim().parse::<u64>() {
+                sample.memory_pressure_level = Some(level);
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    if let Ok(text) = std::fs::read_to_string("/proc/meminfo") {
+        if let Some((used, total, compressed)) = parse_meminfo_memory(&text) {
+            sample.swap_used_gb = Some(used);
+            sample.swap_total_gb = Some(total);
+            sample.compressed_gb = compressed;
+        }
+        if let Some(kb) = text
+            .lines()
+            .find_map(|line| line.strip_prefix("MemTotal:"))
+            .and_then(|rest| rest.trim_start_matches(':').split_whitespace().next())
+            .and_then(|value| value.parse::<f64>().ok())
+        {
+            sample.total_mem_gb = Some(kb / 1024.0 / 1024.0);
+        }
+    }
+    #[cfg(target_os = "linux")]
+    if let Ok(text) = std::fs::read_to_string("/proc/pressure/memory") {
+        sample.memory_pressure_level = parse_psi_memory_level(&text);
+    }
+    sample.took_ms = Some(started.elapsed().as_millis() as u64);
+    (sample, current)
+}
+
+fn mux_server_issues(procs: &[crate::census::ProcRow]) -> Value {
+    let mut sockets = std::collections::BTreeMap::<String, Vec<&crate::census::ProcRow>>::new();
+    let mut owner_sessions = std::collections::HashMap::<u32, Option<String>>::new();
+    let mut issues = Vec::new();
+    for row in procs {
+        let Some(socket) = crate::process_owner::mux_server_socket(&row.command) else {
+            continue;
+        };
+        sockets.entry(socket.clone()).or_default().push(row);
+        let owner = crate::process_owner::owner_lease_for_server(row.pid, Path::new(&socket));
+        owner_sessions.insert(
+            row.pid,
+            match &owner {
+                crate::process_owner::OwnerRead::Owner(lease) => Some(lease.session.clone()),
+                _ => None,
+            },
+        );
+        match owner {
+            crate::process_owner::OwnerRead::Owner(lease) => {
+                match crate::process_owner::owner_status(&lease) {
+                    crate::process_owner::OwnerStatus::Dead => issues.push(json!({
+                        "kind": "dead_owner",
+                        "socket": socket,
+                        "pid": row.pid,
+                        "owner_session": lease.session,
+                        "command": row.command,
+                    })),
+                    crate::process_owner::OwnerStatus::Unknown => issues.push(json!({
+                        "kind": "owner_unknown",
+                        "socket": socket,
+                        "pid": row.pid,
+                        "owner_session": lease.session,
+                        "command": row.command,
+                    })),
+                    crate::process_owner::OwnerStatus::Alive => {}
+                }
+            }
+            crate::process_owner::OwnerRead::Unknown => issues.push(json!({
+                "kind": "owner_unknown",
+                "socket": socket,
+                "pid": row.pid,
+                "command": row.command,
+            })),
+            crate::process_owner::OwnerRead::Ownerless => {}
+        }
+    }
+    for (socket, servers) in sockets.into_iter().filter(|(_, servers)| servers.len() > 1) {
+        issues.push(json!({
+            "kind": "duplicate_socket_servers",
+            "socket": socket,
+            "servers": servers.iter().map(|row| json!({
+                "pid": row.pid,
+                "owner_session": owner_sessions.get(&row.pid).cloned().flatten(),
+                "command": row.command,
+            })).collect::<Vec<_>>(),
+        }));
+    }
+    Value::Array(issues)
+}
+
+impl MachineSample {
+    pub fn to_data(&self, verdict: &str, busy_band: f64, load_band: f64) -> Value {
+        let mut data = serde_json::to_value(self).unwrap_or_else(|_| json!({}));
+        let object = data
+            .as_object_mut()
+            .expect("MachineSample serializes to object");
+        object.insert("verdict".into(), json!(verdict));
+        object.insert("busy_band".into(), json!(busy_band));
+        object.insert("load_band_per_core".into(), json!(load_band));
+        data
+    }
+}
+
+/// How far back the cheap tail read reaches before falling back to the full
+/// journal: machine_sample rows land once per daemon tick (300s), so the
+/// window holds the newest row unless other events outgrow 8MB between two
+/// ticks. The full-read fallback is correct but slow; the window only has
+/// to be generous, never exact.
+const NEWEST_TAIL_BYTES: u64 = 8 * 1024 * 1024;
+
+pub fn newest(journal: &Path) -> Option<(String, Value)> {
+    if let Some(text) = newest_tail_text(journal) {
+        if let Some(row) = newest_row(&text) {
+            return Some(row);
+        }
+    }
+    newest_row(&std::fs::read_to_string(journal).ok()?)
+}
+
+fn newest_row(text: &str) -> Option<(String, Value)> {
+    text.lines().rev().find_map(|line| {
+        let event: Value = serde_json::from_str(line).ok()?;
+        (event.get("type")?.as_str()? == "machine_sample").then(|| {
+            let mut data = event.get("data").cloned().unwrap_or(Value::Null);
+            if let Some(object) = data.as_object_mut() {
+                if let Some(ts) = event.get("ts").and_then(Value::as_str) {
+                    object.insert("_ts".into(), json!(ts));
+                }
+            }
+            let id = data
+                .get("sample_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            (id, data)
+        })
+    })
+}
+
+fn newest_tail_text(journal: &Path) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let len = std::fs::metadata(journal).ok()?.len();
+    if len <= NEWEST_TAIL_BYTES {
+        return None;
+    }
+    let mut file = std::fs::File::open(journal).ok()?;
+    file.seek(SeekFrom::Start(len - NEWEST_TAIL_BYTES)).ok()?;
+    let mut text = String::new();
+    file.read_to_string(&mut text).ok()?;
+    match text.find('\n') {
+        Some(pos) => Some(text[pos + 1..].to_string()),
+        None => None,
+    }
+}
+
+fn display(value: Option<&Value>, digits: usize) -> String {
+    match value {
+        Some(Value::Number(number)) => number
+            .as_f64()
+            .map(|n| format!("{n:.digits$}"))
+            .unwrap_or_else(|| "unmeasured".into()),
+        _ => "unmeasured".into(),
+    }
+}
+
+fn percent(value: Option<&Value>) -> String {
+    match value.and_then(Value::as_f64) {
+        Some(number) => format!("{:.0}", number * 100.0),
+        None => "unmeasured".into(),
+    }
+}
+
+pub fn footer_line(row: &(String, Value), now: DateTime<Utc>) -> String {
+    let (id, data) = row;
+    let ts = data
+        .get("_ts")
+        .and_then(Value::as_str)
+        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+        .map(|value| value.with_timezone(&Utc));
+    let age = ts
+        .map(|at| now.signed_duration_since(at).num_seconds().max(0))
+        .or_else(|| data.get("age_s").and_then(Value::as_i64))
+        .unwrap_or(0);
+    let _ = id;
+    let mut line = format!(
+        "{}% busy ({}% sys) of {} cores against band {}% -> {} · load_15m {} ({} per core, band {}) · {} runnable of {} processes · {} zombies · compressor {} GB · swap {} of {} GB · sampled {}s ago",
+        percent(data.get("busy_fraction")),
+        percent(data.get("sys_fraction")),
+        display(data.get("cores"), 0),
+        percent(data.get("busy_band")),
+        data.get("verdict").and_then(Value::as_str).unwrap_or("unreadable"),
+        display(data.get("load_15m"), 1),
+        display(data.get("load_15m"), 1),
+        display(data.get("load_band_per_core"), 0),
+        data.get("runnable").and_then(Value::as_u64).map(|n| n.to_string()).unwrap_or_else(|| "unmeasured".into()),
+        data.get("processes").and_then(Value::as_u64).map(|n| n.to_string()).unwrap_or_else(|| "unmeasured".into()),
+        data.get("zombies").and_then(Value::as_u64).map(|n| n.to_string()).unwrap_or_else(|| "unmeasured".into()),
+        display(data.get("compressor_gb"), 1),
+        display(data.get("swap_used_gb"), 1),
+        display(data.get("swap_total_gb"), 1),
+        age
+    );
+    let budget = crate::machine_load::budget(
+        data.get("cores").and_then(Value::as_f64),
+        data.get("total_mem_gb").and_then(Value::as_f64),
+        data.get("sessions"),
+    );
+    line.push_str(&format!(
+        " · budget max_live {} ({} leads + {} workers; {})",
+        budget.max_live, budget.leads, budget.workers, budget.basis
+    ));
+    line
+}
+
+pub fn no_row_footer() -> String {
+    let cores = std::thread::available_parallelism()
+        .ok()
+        .map(|n| n.get() as f64);
+    #[cfg(target_os = "macos")]
+    let mem = std::process::Command::new("sysctl")
+        .args(["-n", "hw.memsize"])
+        .output()
+        .ok()
+        .and_then(|out| {
+            String::from_utf8_lossy(&out.stdout)
+                .trim()
+                .parse::<f64>()
+                .ok()
+        })
+        .map(|bytes| bytes / 1024.0 / 1024.0 / 1024.0);
+    #[cfg(target_os = "linux")]
+    let mem = std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|text| {
+            text.lines()
+                .find_map(|line| line.strip_prefix("MemTotal:"))
+                .and_then(|rest| rest.trim_start_matches(':').split_whitespace().next())
+                .and_then(|value| value.parse::<f64>().ok())
+        })
+        .map(|kb| kb / 1024.0 / 1024.0);
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let mem: Option<f64> = None;
+    let budget = crate::machine_load::budget(cores, mem, None);
+    format!(
+        "no machine_sample row yet; the daemon's machine_watch arm writes one every 300s · budget max_live {} ({} leads + {} workers; {})",
+        budget.max_live, budget.leads, budget.workers, budget.basis
+    )
+}
+
+pub fn stamp_refusal(
+    mut refusal: crate::spawn_gate::Refusal,
+    journal: &Path,
+    now: DateTime<Utc>,
+) -> crate::spawn_gate::Refusal {
+    let mut sample = Map::new();
+    let load_1m_now = load_average().map(|(one, _, _)| one);
+    if let Some((id, data)) = newest(journal) {
+        sample.insert("id".into(), json!(id));
+        let age_s = data
+            .get("_ts")
+            .and_then(Value::as_str)
+            .and_then(|raw| DateTime::parse_from_rfc3339(raw).ok())
+            .map(|value| value.with_timezone(&Utc))
+            .map(|ts| now.signed_duration_since(ts).num_seconds().max(0) as u64)
+            .unwrap_or(0);
+        sample.insert("age_s".into(), json!(age_s));
+        for key in [
+            "verdict",
+            "busy_fraction",
+            "load_15m",
+            "compressor_gb",
+            "swap_used_gb",
+        ] {
+            sample.insert(key.into(), data.get(key).cloned().unwrap_or(Value::Null));
+        }
+    } else {
+        sample.insert("id".into(), Value::Null);
+        sample.insert("reason".into(), json!("no machine_sample row yet"));
+    }
+    sample.insert(
+        "load_1m_now".into(),
+        load_1m_now.map_or(Value::Null, |v| json!(v)),
+    );
+    refusal.event.insert("sample".into(), Value::Object(sample));
+    refusal
+}
+
+pub fn sample_id() -> String {
+    format!("ms-{}-{}", now_ms(), std::process::id())
+}
+
+/// Top process groups by executable basename: the fold that names a runaway.
+/// `ppid` is the most common parent inside the group, so one fork loop reads
+/// as one line in the sample and in a page body.
+pub fn top_name_rows(procs: &[crate::census::ProcRow]) -> Value {
+    let mut groups: std::collections::HashMap<String, (u64, std::collections::HashMap<u32, u64>)> =
+        Default::default();
+    for row in procs {
+        let name = row
+            .command
+            .split_whitespace()
+            .next()
+            .and_then(|token| token.rsplit('/').next())
+            .unwrap_or_default();
+        if name.is_empty() {
+            continue;
+        }
+        let entry = groups.entry(name.to_string()).or_default();
+        entry.0 += 1;
+        *entry.1.entry(row.ppid).or_default() += 1;
+    }
+    let mut rows: Vec<(String, u64, u32)> = groups
+        .into_iter()
+        .map(|(name, (count, parents))| {
+            let ppid = parents
+                .into_iter()
+                .max_by_key(|(pid, n)| (*n, std::cmp::Reverse(*pid)))
+                .map(|(pid, _)| pid)
+                .unwrap_or_default();
+            (name, count, ppid)
+        })
+        .collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    rows.truncate(10);
+    json!(rows
+        .into_iter()
+        .map(|(name, count, ppid)| json!({"name": name, "count": count, "ppid": ppid}))
+        .collect::<Vec<_>>())
+}
+
+/// Top process parents by child count, with the parent's command when it was
+/// present in the same process-table read.
+pub fn top_parent_rows(procs: &[crate::census::ProcRow]) -> Value {
+    let commands: std::collections::HashMap<u32, &str> = procs
+        .iter()
+        .map(|row| (row.pid, row.command.as_str()))
+        .collect();
+    let mut counts = std::collections::HashMap::<u32, u64>::new();
+    for row in procs {
+        *counts.entry(row.ppid).or_default() += 1;
+    }
+    let mut rows: Vec<(u32, u64)> = counts.into_iter().collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    rows.truncate(10);
+    json!(rows
+        .into_iter()
+        .map(|(pid, children)| json!({
+            "pid": pid,
+            "children": children,
+            "command": commands.get(&pid).copied().unwrap_or("unavailable"),
+        }))
+        .collect::<Vec<_>>())
+}
+
+pub(crate) fn maybe_capture_process_snapshot(
+    home: &crate::paths::AgentsHome,
+    processes: usize,
+    baseline: Option<u64>,
+    capture: impl FnOnce() -> io::Result<Vec<u8>>,
+) -> io::Result<bool> {
+    let dynamic_threshold = baseline
+        .filter(|value| *value > 0)
+        .map(|value| value.saturating_mul(2));
+    let over_threshold = processes >= ABSOLUTE_PROCESS_SNAPSHOT_THRESHOLD
+        || dynamic_threshold.is_some_and(|threshold| processes as u64 >= threshold);
+    home.ensure_root()?;
+    let active = home.root().join(MACHINE_SNAPSHOT_ACTIVE_NAME);
+    if active.exists() {
+        if over_threshold || baseline.is_none() {
+            return Ok(false);
+        }
+        match std::fs::remove_file(&active) {
+            Ok(()) => return Ok(false),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    if !over_threshold {
+        return Ok(false);
+    }
+
+    let raw = capture()?;
+    let mut contents = format!(
+        "captured_at: {}\nprocesses: {processes}\nthreshold: {}\n\n",
+        chrono::Utc::now().to_rfc3339(),
+        dynamic_threshold.map_or_else(
+            || ABSOLUTE_PROCESS_SNAPSHOT_THRESHOLD.to_string(),
+            |threshold| format!(
+                "{ABSOLUTE_PROCESS_SNAPSHOT_THRESHOLD} or 2x baseline ({threshold})"
+            ),
+        )
+    )
+    .into_bytes();
+    let remaining = MAX_MACHINE_SNAPSHOT_BYTES.saturating_sub(contents.len());
+    contents.extend_from_slice(&raw[..raw.len().min(remaining)]);
+
+    let snapshot = home.root().join(MACHINE_SNAPSHOT_NAME);
+    let temporary = snapshot.with_extension(format!("txt.{}.{}.tmp", std::process::id(), now_ms()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temporary)?;
+    let write_result = file.write_all(&contents).and_then(|()| file.sync_all());
+    drop(file);
+    if let Err(error) = write_result {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    if let Err(error) = std::fs::rename(&temporary, &snapshot) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error);
+    }
+    std::fs::write(active, chrono::Utc::now().to_rfc3339())?;
+    Ok(true)
+}
+
+/// A session counts as working when its transcript moved inside this window,
+/// the same ten minutes the mux census reads (`org_overlay::working_max_s`).
+const WORKING_WINDOW_S: i64 = 600;
+
+/// Seconds since a session's transcript last moved, for any harness: the
+/// served truth the mux rows carry as `last_activity_age_s`, so the bar, the
+/// glance and the census read one answer.
+fn session_age_s(
+    rows: &[crate::state::RegistryEntry],
+    row: &crate::state::RegistryEntry,
+) -> Option<i64> {
+    let handle = row
+        .harness_session_id
+        .as_deref()
+        .unwrap_or(row.name.as_str());
+    let now_s = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_secs_f64();
+    let stores = crate::session_truth::Stores::ambient();
+    let payload = crate::session_truth::resolve_payload(
+        Some(rows),
+        handle,
+        now_s,
+        &stores,
+        crate::session_truth::cursor::global(),
+    );
+    payload.get("last_activity_age_s")?.as_i64()
+}
+
+/// Working rows, each session once: transcript written inside the window.
+/// A session with no readable transcript is not counted.
+pub(crate) fn working_count(
+    rows: &[&crate::state::RegistryEntry],
+    age: &dyn Fn(&crate::state::RegistryEntry) -> Option<i64>,
+) -> u64 {
+    let mut seen = std::collections::HashSet::new();
+    let working = |row: &&&crate::state::RegistryEntry| {
+        let key = row
+            .harness_session_id
+            .as_deref()
+            .unwrap_or(row.name.as_str());
+        seen.insert(key.to_string()) && age(row).is_some_and(|secs| secs < WORKING_WINDOW_S)
+    };
+    rows.iter().filter(working).count() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn busy_between_rejects_counter_regression_and_zero_window() {
+        let a = HostTicks {
+            busy: 3,
+            system: 1,
+            idle: 7,
+        };
+        assert!(busy_between(
+            a,
+            HostTicks {
+                busy: 2,
+                system: 1,
+                idle: 8
+            }
+        )
+        .is_none());
+        assert!(busy_between(a, a).is_none());
+    }
+
+    #[test]
+    fn process_pressure_snapshot_is_bounded_once_per_episode_and_names_top_parents() {
+        let row =
+            |pid: u32, ppid: u32, command: &str| crate::census::test_proc_row(pid, ppid, command);
+        let procs = vec![
+            row(1, 100, "git status"),
+            row(2, 100, "git diff"),
+            row(3, 200, "git log"),
+            row(4, 100, "ssh host"),
+            row(5, 1, "/usr/bin/rustc main.rs"),
+            row(6, 1, ""),
+        ];
+        let binding = top_name_rows(&procs);
+        let rows = binding.as_array().unwrap();
+        assert_eq!(rows[0]["name"], "git");
+        assert_eq!(rows[0]["count"], 3);
+        assert_eq!(rows[0]["ppid"], 100, "largest parent sub-group wins");
+        assert_eq!(rows[1]["name"], "rustc", "count ties sort by name");
+        assert_eq!(rows[2]["name"], "ssh");
+        assert_eq!(rows.len(), 3, "an empty command names no group");
+
+        let pressure_procs: Vec<_> = std::iter::once(row(1, 0, "/sbin/launchd"))
+            .chain(
+                (2..=ABSOLUTE_PROCESS_SNAPSHOT_THRESHOLD as u32).map(|pid| row(pid, 1, "worker")),
+            )
+            .collect();
+        let parents = top_parent_rows(&pressure_procs);
+        assert_eq!(parents[0]["pid"], 1);
+        assert_eq!(parents[0]["children"], 1999);
+        assert_eq!(parents[0]["command"], "/sbin/launchd");
+
+        let dir = tempfile::tempdir().unwrap();
+        let home = crate::paths::AgentsHome::at(dir.path());
+        let mut captured = 0;
+        let snapshot = maybe_capture_process_snapshot(&home, pressure_procs.len(), None, || {
+            captured += 1;
+            let mut ps_output = b"PID PPID RSS ELAPSED COMMAND\n".to_vec();
+            ps_output.extend(vec![b'x'; MAX_MACHINE_SNAPSHOT_BYTES * 2]);
+            Ok(ps_output)
+        })
+        .unwrap();
+        assert!(snapshot);
+        assert_eq!(captured, 1);
+        assert!(
+            !maybe_capture_process_snapshot(&home, pressure_procs.len(), None, || {
+                captured += 1;
+                Ok(Vec::new())
+            })
+            .unwrap()
+        );
+        assert_eq!(captured, 1, "one snapshot per pressure episode");
+        let contents = std::fs::read(dir.path().join(MACHINE_SNAPSHOT_NAME)).unwrap();
+        assert!(contents.starts_with(b"captured_at: "));
+        let ps_header = b"PID PPID RSS ELAPSED COMMAND";
+        assert!(contents
+            .windows(ps_header.len())
+            .any(|window| window == ps_header));
+        assert!(contents.len() <= MAX_MACHINE_SNAPSHOT_BYTES);
+        assert!(dir.path().join(MACHINE_SNAPSHOT_ACTIVE_NAME).exists());
+        assert!(!maybe_capture_process_snapshot(&home, 199, Some(100), || {
+            captured += 1;
+            Ok(Vec::new())
+        })
+        .unwrap());
+        assert!(dir.path().join(MACHINE_SNAPSHOT_NAME).exists());
+        assert!(!dir.path().join(MACHINE_SNAPSHOT_ACTIVE_NAME).exists());
+        assert!(maybe_capture_process_snapshot(&home, 201, Some(100), || {
+            captured += 1;
+            Ok(b"baseline threshold crossed\n".to_vec())
+        })
+        .unwrap());
+        assert_eq!(
+            captured, 2,
+            "a later pressure episode gets one new snapshot"
+        );
+        // The no-row footer carries the band clause - asserted beside the
+        // sampling contracts it describes.
+        expect_band_clause_in_footer();
+    }
+
+    /// The no-row footer names the band: the parseable `budget max_live`
+    /// clause, the band floor, and the band default suffix.
+    fn expect_band_clause_in_footer() {
+        let line = no_row_footer();
+        assert!(line.starts_with("no machine_sample row yet"));
+        let i = line.find("budget max_live ").unwrap();
+        let rest = &line[i + "budget max_live ".len()..];
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let max_live: u32 = digits.parse().unwrap();
+        assert!(max_live >= 1, "the band floor is 1, got {max_live}");
+        assert!(line.ends_with("band default)"));
+    }
+
+    #[test]
+    fn working_counts_each_session_once_inside_the_window() {
+        let row = |harness: &str, session: &str| crate::state::RegistryEntry {
+            name: session.into(),
+            harness: Some(harness.into()),
+            harness_session_id: Some(session.into()),
+            ..Default::default()
+        };
+        let rows = [
+            row("claude", "fresh"),
+            row("claude", "fresh"),
+            row("claude", "quiet"),
+            row("codex", "c-fresh"),
+            row("opencode", "o-none"),
+        ];
+        let refs: Vec<_> = rows.iter().collect();
+        let age = |row: &crate::state::RegistryEntry| match row.name.as_str() {
+            "fresh" | "c-fresh" => Some(30),
+            "quiet" => Some(WORKING_WINDOW_S),
+            _ => None,
+        };
+        assert_eq!(working_count(&refs, &age), 2);
+    }
+}

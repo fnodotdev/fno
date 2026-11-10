@@ -1,0 +1,660 @@
+//! Per-session activity counters read straight off the transcript raw text:
+//! tokens, edited lines, tool errors by class, aborted turns, touched file
+//! extensions, and the assistant-timestamp stream. The fold stays the only
+//! source of numbers; these parsers never read a transcript twice.
+
+use crate::provenance::turn_ts_epoch;
+use serde_json::Value;
+use std::borrow::Cow;
+use std::collections::{BTreeMap, HashSet};
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Tokens {
+    pub(crate) input: u64,
+    pub(crate) output: u64,
+    pub(crate) cache_read: u64,
+    pub(crate) cache_write: u64,
+}
+
+impl Tokens {
+    /// The window delta between a cumulative total and the base read at the
+    /// window's first row; saturating so a total reset reads as zero.
+    pub(crate) fn since(self, base: Tokens) -> Tokens {
+        Tokens {
+            input: self.input.saturating_sub(base.input),
+            output: self.output.saturating_sub(base.output),
+            cache_read: self.cache_read.saturating_sub(base.cache_read),
+            cache_write: self.cache_write.saturating_sub(base.cache_write),
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub(crate) struct Activity {
+    pub(crate) tokens: Tokens,
+    pub(crate) lines_added: u64,
+    pub(crate) lines_removed: u64,
+    pub(crate) tool_errors: BTreeMap<&'static str, u64>,
+    pub(crate) aborted_turns: u64,
+    pub(crate) extensions: BTreeMap<String, u64>,
+    pub(crate) assistant_ts: Vec<f64>,
+    /// Majority model across fresh assistant rows (claude message.model,
+    /// codex turn_context payload.model); None when the source names no
+    /// model anywhere.
+    pub(crate) model: Option<String>,
+}
+
+/// The error class of an `is_error` tool result, from its leading text.
+/// Classes come from the 2026-09-21 sample of 3,313 real errors; `other` is
+/// reported, so a new dominant shape surfaces as a large `other` bucket.
+/// `permission_denied` is the auto-mode classifier's verdict: 24 of them sat
+/// in `other` over 60 transcripts (2026-10-25).
+pub(crate) fn error_class(text: &str) -> &'static str {
+    let t = text.trim_start();
+    if t.starts_with("Exit code") {
+        "command_failed"
+    } else if t.starts_with("Permission for this action was denied")
+        || t.contains("denied by the Claude Code auto mode classifier")
+    {
+        "permission_denied"
+    } else if t.contains("doesn't want to proceed") {
+        "user_rejected"
+    } else if t.contains("hook error")
+        || t.starts_with("[fno ")
+        || t.starts_with("lead-delegation-guard:")
+    {
+        "hook_blocked"
+    } else if t.starts_with("<tool_use_error>") {
+        "tool_use_error"
+    } else {
+        "other"
+    }
+}
+
+/// Lines added and removed between two edit strings: the shared leading and
+/// trailing lines are trimmed, and what remains is the change. Exact for one
+/// contiguous hunk, which is what an Edit call sends.
+fn changed_lines(old: &str, new: &str) -> (u64, u64) {
+    let mut o: Vec<&str> = old.lines().collect();
+    let mut n: Vec<&str> = new.lines().collect();
+    while !o.is_empty() && !n.is_empty() && o.last() == n.last() {
+        o.pop();
+        n.pop();
+    }
+    let mut shared = 0usize;
+    while shared < o.len() && shared < n.len() && o[shared] == n[shared] {
+        shared += 1;
+    }
+    ((n.len() - shared) as u64, (o.len() - shared) as u64)
+}
+
+/// A countable language key: a non-empty ASCII-alphanumeric extension with
+/// at least one letter. `Path::extension` alone admits code fragments and
+/// version digits from tool arguments that are not paths (`md\``, `html~`,
+/// `0`, whole function bodies).
+fn extension_of(path: &str) -> Option<String> {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())?;
+    let plausible = !ext.is_empty()
+        && ext.bytes().all(|b| b.is_ascii_alphanumeric())
+        && ext.bytes().any(|b| b.is_ascii_alphabetic());
+    plausible.then_some(ext)
+}
+
+/// A `file_path` a model sent is not always a path: fragments of code and
+/// prose carry dots too, and everything after the last dot became a
+/// languages key (`fn facet_keys(view: &mut view, bytes: &[u8]) {` was one
+/// such key in the 2026-09-28 fold). A key must look like an extension:
+/// 1 to 12 characters of `[a-z0-9]`.
+/// A `file_path` a model sent is not always a path: fragments of code and
+/// prose carry dots too, and everything after the last dot became a
+/// languages key (`fn facet_keys(view: &mut view, bytes: &[u8]) {` was one
+/// such key in the 2026-09-28 fold). A key must look like an extension:
+/// 1 to 12 characters of `[a-z0-9]`.
+fn note_extension(extensions: &mut BTreeMap<String, u64>, path: &str) {
+    if let Some(ext) = extension_of(path) {
+        let shaped = !ext.is_empty()
+            && ext.len() <= 12
+            && ext
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
+        if shaped {
+            *extensions.entry(ext).or_insert(0) += 1;
+        }
+    }
+}
+
+/// The assistant API message id of one transcript row, when the row repeats
+/// an assistant message: the token-dedupe key shared by the fold and the
+/// rollup's cross-run window.
+pub(crate) fn assistant_message_id(row: &Value) -> Option<&str> {
+    let is_assistant = row.get("type").and_then(|v| v.as_str()) == Some("assistant")
+        || row
+            .get("message")
+            .and_then(|m| m.get("role"))
+            .and_then(|v| v.as_str())
+            == Some("assistant");
+    if !is_assistant {
+        return None;
+    }
+    row.get("message")
+        .and_then(|m| m.get("id"))
+        .and_then(|v| v.as_str())
+}
+
+/// The zai route's fabricated assistant id: `msg_` followed by an 8-digit
+/// date stamp. Real Anthropic ids continue `msg_01` with mixed letters, so
+/// an all-digit run names a route-written id, and with it a `message.model`
+/// label the route did not verify.
+pub(crate) fn zai_route_id(id: &str) -> bool {
+    match id.strip_prefix("msg_") {
+        Some(rest) => {
+            let b = rest.as_bytes();
+            b.len() >= 8 && b[..8].iter().all(|c| c.is_ascii_digit())
+        }
+        None => false,
+    }
+}
+
+pub(crate) fn block_text(content: &Value) -> String {
+    match content {
+        Value::String(s) => s.clone(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+            .collect::<Vec<_>>()
+            .join(" "),
+        _ => String::new(),
+    }
+}
+
+pub(crate) fn content_blocks(row: &Value) -> &[Value] {
+    row.get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_array())
+        .map(|a| a.as_slice())
+        .unwrap_or(&[])
+}
+
+/// Activity counters for one claude transcript (`*.jsonl` row shape).
+pub(crate) fn claude_activity(raw: &str) -> Activity {
+    let mut fold = ActivityFold::default();
+    for line in raw.lines() {
+        let Ok(row) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        fold.row(&row);
+    }
+    fold.finish()
+}
+
+#[derive(Default)]
+pub(crate) struct ActivityFold {
+    act: Activity,
+    seen_ids: HashSet<String>,
+    /// Whether this pass saw a codex token_count row: presence, not
+    /// magnitude, decides whether a cumulative total replaces the stored
+    /// one (a real row can legitimately carry zero).
+    tokens_seen: bool,
+    /// One vote per fresh assistant row's model id; the mode wins at
+    /// finish(), so a mid-session slot cutover cannot mislabel the row.
+    model_votes: BTreeMap<String, u64>,
+}
+
+impl ActivityFold {
+    /// Pre-seed the dedupe set with ids seen on an earlier pass over the
+    /// same transcript, so a message repeated across an offset boundary
+    /// still counts once.
+    pub(crate) fn seed_seen(&mut self, ids: impl IntoIterator<Item = String>) {
+        self.seen_ids.extend(ids);
+    }
+
+    /// The most recent assistant timestamp this fold has seen, in row
+    /// order: the running anchor a rollup's response gaps hang off.
+    pub(crate) fn last_assistant_ts(&self) -> Option<f64> {
+        self.act.assistant_ts.last().copied()
+    }
+
+    /// Whether a codex token_count row arrived in this pass.
+    pub(crate) fn saw_tokens(&self) -> bool {
+        self.tokens_seen
+    }
+
+    /// The model votes so far: the rollup persists them, since each pass
+    /// only sees its own rows and the entry needs the whole-transcript mode.
+    pub(crate) fn model_votes(&self) -> &BTreeMap<String, u64> {
+        &self.model_votes
+    }
+}
+
+/// The mode of the model votes: highest count, ties resolve to the
+/// lexicographically smallest id for determinism.
+pub(crate) fn mode_model(votes: &BTreeMap<String, u64>) -> Option<String> {
+    votes
+        .iter()
+        .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
+        .map(|(m, _)| m.clone())
+}
+
+/// A claude `api-request-blob` row: a copy of request content the transcript
+/// already holds as user and assistant rows. Folding it counts the same
+/// tool calls and results twice.
+pub(crate) fn is_request_echo(row: &Value) -> bool {
+    row.get("type").and_then(Value::as_str) == Some("api-request-blob")
+}
+
+impl ActivityFold {
+    pub(crate) fn row(&mut self, row: &Value) {
+        if is_request_echo(row) {
+            return;
+        }
+        if row.get("payload").is_some_and(|p| p.is_object()) {
+            self.codex_row(row);
+            return;
+        }
+        let is_assistant = row.get("type").and_then(|v| v.as_str()) == Some("assistant")
+            || row
+                .get("message")
+                .and_then(|m| m.get("role"))
+                .and_then(|v| v.as_str())
+                == Some("assistant");
+        if is_assistant {
+            if let Some(ts) = turn_ts_epoch(&row) {
+                self.act.assistant_ts.push(ts);
+            }
+            // Transcripts repeat one API message across several rows; a
+            // token sum that skips the dedupe overcounts about 2x (measured
+            // 2026-09-21). A row with no id counts once by itself.
+            let id = assistant_message_id(row);
+            let fresh = match id {
+                Some(id) => self.seen_ids.insert(id.to_string()),
+                None => true,
+            };
+            if fresh {
+                // A zai route fabricates assistant ids as `msg_` + an
+                // 8-digit date stamp; on such rows the transcript's model
+                // label can name a claude model the route never served
+                // (measured 2026-11-01: 2,269+ zai rows labeled claude-*).
+                // The contradiction also asks for no requestId: a real
+                // Anthropic row always carries one, so its vote survives
+                // even on the unlikely all-digit id shape.
+                if let Some(m) = row
+                    .get("message")
+                    .and_then(|m| m.get("model"))
+                    .and_then(|v| v.as_str())
+                    .filter(|m| {
+                        let Some(aid) = id else {
+                            return true;
+                        };
+                        if !zai_route_id(aid) {
+                            return true;
+                        }
+                        let request_unstamped = row
+                            .get("requestId")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .is_empty();
+                        !(request_unstamped && m.starts_with("claude"))
+                    })
+                {
+                    *self.model_votes.entry(m.to_string()).or_insert(0) += 1;
+                }
+                if let Some(usage) = row
+                    .get("message")
+                    .and_then(|m| m.get("usage"))
+                    .filter(|u| u.is_object())
+                {
+                    let f = |k: &str| usage.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+                    self.act.tokens.input += f("input_tokens");
+                    self.act.tokens.output += f("output_tokens");
+                    self.act.tokens.cache_read += f("cache_read_input_tokens");
+                    self.act.tokens.cache_write += f("cache_creation_input_tokens");
+                }
+            }
+        }
+        for block in content_blocks(&row) {
+            match block.get("type").and_then(|t| t.as_str()) {
+                Some("tool_use") => {
+                    let name = block.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                    let input = block.get("input").cloned().unwrap_or(Value::Null);
+                    let field = |k: &str| {
+                        input
+                            .get(k)
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string()
+                    };
+                    match name {
+                        "Edit" => {
+                            let (added, removed) =
+                                changed_lines(&field("old_string"), &field("new_string"));
+                            self.act.lines_added += added;
+                            self.act.lines_removed += removed;
+                            note_extension(&mut self.act.extensions, &field("file_path"));
+                        }
+                        "MultiEdit" => {
+                            if let Some(edits) = input.get("edits").and_then(|e| e.as_array()) {
+                                for edit in edits {
+                                    let s = |k: &str| {
+                                        edit.get(k)
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("")
+                                            .to_string()
+                                    };
+                                    let (added, removed) =
+                                        changed_lines(&s("old_string"), &s("new_string"));
+                                    self.act.lines_added += added;
+                                    self.act.lines_removed += removed;
+                                }
+                            }
+                            note_extension(&mut self.act.extensions, &field("file_path"));
+                        }
+                        "Write" => {
+                            self.act.lines_added += field("content").lines().count() as u64;
+                            note_extension(&mut self.act.extensions, &field("file_path"));
+                        }
+                        "NotebookEdit" => {
+                            let path = if field("file_path").is_empty() {
+                                field("notebook_path")
+                            } else {
+                                field("file_path")
+                            };
+                            note_extension(&mut self.act.extensions, &path);
+                        }
+                        _ => {}
+                    }
+                }
+                Some("tool_result") => {
+                    if block.get("is_error").and_then(|v| v.as_bool()) == Some(true) {
+                        let text =
+                            block_text(&block.get("content").cloned().unwrap_or(Value::Null));
+                        *self.act.tool_errors.entry(error_class(&text)).or_insert(0) += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    pub(crate) fn finish(mut self) -> Activity {
+        self.act
+            .assistant_ts
+            .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        self.act.model = mode_model(&self.model_votes);
+        self.act
+    }
+
+    /// The codex arm: a rollout row (`{type, payload}`). The body is
+    /// `codex_activity`'s loop moved beside the claude body, with the output
+    /// text and error shape it was missing.
+    fn codex_row(&mut self, row: &Value) {
+        let act = &mut self.act;
+        let row_type = row.get("type").and_then(|v| v.as_str());
+        let Some(payload) = row.get("payload").filter(|p| p.is_object()) else {
+            return;
+        };
+        let ptype = payload.get("type").and_then(|v| v.as_str());
+        match (row_type, ptype) {
+            (Some("turn_context"), _) => {
+                if let Some(m) = payload.get("model").and_then(|v| v.as_str()) {
+                    *self.model_votes.entry(m.to_string()).or_insert(0) += 1;
+                }
+            }
+            (Some("event_msg"), Some("token_count")) => {
+                if let Some(total) = codex_token_total(row) {
+                    act.tokens = total;
+                    self.tokens_seen = true;
+                }
+            }
+            (Some("event_msg"), Some("turn_aborted")) => act.aborted_turns += 1,
+            (Some("response_item"), Some("message"))
+                if payload.get("role").and_then(|v| v.as_str()) == Some("assistant") =>
+            {
+                if let Some(ts) = turn_ts_epoch(row) {
+                    act.assistant_ts.push(ts);
+                }
+            }
+            (Some("response_item"), Some("function_call"))
+            | (Some("response_item"), Some("custom_tool_call")) => {
+                let input = codex_call_input(payload);
+                if input.contains("*** Begin Patch") {
+                    patch_activity(&input, act);
+                }
+            }
+            (Some("response_item"), Some("custom_tool_call_output"))
+            | (Some("response_item"), Some("function_call_output")) => {
+                if codex_output_is_error(&codex_output_text(payload)) {
+                    *act.tool_errors.entry("command_failed").or_insert(0) += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Lines added and removed plus one extension count per file, out of a codex
+/// `*** Begin Patch` block. `***` header lines and `@@` hunks count nothing.
+fn patch_activity(input: &str, act: &mut Activity) {
+    let mut in_patch = false;
+    for line in input.lines() {
+        if line.trim_start().starts_with("*** Begin Patch") {
+            in_patch = true;
+            continue;
+        }
+        if !in_patch {
+            continue;
+        }
+        if line.trim_start().starts_with("*** End Patch") {
+            break;
+        }
+        let trimmed = line.trim_start();
+        if let Some(path) = trimmed
+            .strip_prefix("*** Add File:")
+            .or_else(|| trimmed.strip_prefix("*** Update File:"))
+        {
+            note_extension(&mut act.extensions, path.trim());
+            continue;
+        }
+        if trimmed.starts_with("***") || trimmed.starts_with("@@") {
+            continue;
+        }
+        if line.starts_with('+') {
+            act.lines_added += 1;
+        } else if line.starts_with('-') {
+            act.lines_removed += 1;
+        }
+    }
+}
+
+fn codex_call_input(payload: &Value) -> String {
+    payload
+        .get("input")
+        .or_else(|| payload.get("arguments"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// The tool output text of a codex output row: the string form, or the list's
+/// `text` parts joined with "" (1,465 of 1,471 Kestrel II outputs are the
+/// list shape; measured 2026-09-30).
+pub(crate) fn codex_output_text(payload: &Value) -> Cow<'_, str> {
+    match payload.get("output") {
+        Some(Value::String(s)) => Cow::Borrowed(s),
+        Some(Value::Array(parts)) => Cow::Owned(
+            parts
+                .iter()
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join(""),
+        ),
+        _ => Cow::Borrowed(""),
+    }
+}
+
+/// One failed command: the leading text codex writes for a failed or
+/// terminated script, or an inner result with a non-zero exit code. The
+/// escaped-quote form matches output text embedded in a JSON string.
+pub(crate) fn codex_output_is_error(text: &str) -> bool {
+    let t = text.trim_start();
+    if t.starts_with("Script failed") || t.starts_with("Script terminated") {
+        return true;
+    }
+    static EXIT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = EXIT.get_or_init(|| {
+        regex::Regex::new(r#"\\?"exit_code\\?":\s*(-?\d+)"#).expect("valid pattern")
+    });
+    re.captures_iter(text).any(|c| c[1].parse::<i64>() != Ok(0))
+}
+
+/// The cumulative token total of a codex `token_count` row, `None` for any
+/// other row and when `info` is null (a null never wins).
+pub(crate) fn codex_token_total(row: &Value) -> Option<Tokens> {
+    if row.get("type").and_then(|v| v.as_str()) != Some("event_msg") {
+        return None;
+    }
+    let payload = row.get("payload")?;
+    if payload.get("type").and_then(|v| v.as_str()) != Some("token_count") {
+        return None;
+    }
+    let usage = payload
+        .get("info")
+        .filter(|i| !i.is_null())
+        .and_then(|i| i.get("total_token_usage"))
+        .filter(|u| u.is_object())?;
+    let f = |k: &str| usage.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+    Some(Tokens {
+        input: f("input_tokens"),
+        output: f("output_tokens"),
+        cache_read: f("cached_input_tokens"),
+        cache_write: f("cache_write_input_tokens"),
+    })
+}
+
+/// Activity counters for one codex rollout (`payload` row shape).
+pub(crate) fn codex_activity(raw: &str) -> Activity {
+    let mut fold = ActivityFold::default();
+    for line in raw.lines() {
+        let Ok(row) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        fold.row(&row);
+    }
+    fold.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn claude_lines(rows: &[Value]) -> String {
+        rows.iter()
+            .map(|r| r.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn one_message_id_over_three_rows_counts_once() {
+        // AC1-HP: 3 rows share one message.id, each carrying 10 in / 5 out.
+        let msg = json!({"role": "assistant", "id": "msg_1",
+                         "usage": {"input_tokens": 10, "output_tokens": 5}});
+        let raw = claude_lines(&[
+            json!({"type": "assistant", "timestamp": "2026-09-16T12:00:00.000Z", "message": msg}),
+            json!({"type": "assistant", "timestamp": "2026-09-16T12:00:01.000Z", "message": msg}),
+            json!({"type": "assistant", "timestamp": "2026-09-16T12:00:02.000Z", "message": msg}),
+        ]);
+        let act = claude_activity(&raw);
+        assert_eq!(act.tokens.input, 10);
+        assert_eq!(act.tokens.output, 5);
+    }
+
+    #[test]
+    fn a_zai_routed_row_never_votes_a_claude_label() {
+        // The route fabricates `msg_` + 8-digit ids; a claude label on one
+        // is unverified (measured 2026-11-01) and must not label the
+        // session. A glm label on the same id is route-consistent and
+        // votes; a real `msg_01` id votes whatever it carries.
+        let row = |id: &str, model: &str| {
+            json!({"type": "assistant",
+                   "message": {"role": "assistant", "id": id, "model": model}})
+        };
+        let raw = claude_lines(&[row("msg_011ABCDEF", "claude-opus-5-5")]);
+        assert_eq!(
+            claude_activity(&raw).model.as_deref(),
+            Some("claude-opus-5-5")
+        );
+        let raw = claude_lines(&[row("msg_20261101120000", "claude-opus-5-5")]);
+        assert_eq!(claude_activity(&raw).model, None);
+        let raw = claude_lines(&[row("msg_20261101120000", "glm-5.3-flash")]);
+        assert_eq!(
+            claude_activity(&raw).model.as_deref(),
+            Some("glm-5.3-flash")
+        );
+        // Fewer than 8 digits is not the signature yet.
+        let raw = claude_lines(&[row("msg_2026", "claude-opus-5-5")]);
+        assert_eq!(
+            claude_activity(&raw).model.as_deref(),
+            Some("claude-opus-5-5")
+        );
+        assert!(zai_route_id("msg_20261101120000"));
+        assert!(!zai_route_id("msg_2026110"));
+        assert!(!zai_route_id("msg_011ABCDEF"));
+        // A request-stamped row is ambiguous evidence, not a contradiction:
+        // the vote survives rather than dropping a real id's label.
+        let stamped = json!({"type": "assistant", "requestId": "req_1",
+                            "message": {"role": "assistant", "id": "msg_20261101120000",
+                                        "model": "claude-opus-5-5"}});
+        let raw = claude_lines(&[stamped]);
+        assert_eq!(
+            claude_activity(&raw).model.as_deref(),
+            Some("claude-opus-5-5")
+        );
+    }
+
+    #[test]
+    fn the_codex_parsers_read_tokens_patch_and_errors() {
+        // AC4-HP: two cumulative token events, a patch, an exec failure,
+        // one aborted turn.
+        let patch = "shell: cat <<'EOF'\n*** Begin Patch\n*** Update File: x.py\n@@\n+a\n+b\n-c\n*** End Patch\nEOF";
+        let raw = claude_lines(&[
+            json!({"type": "event_msg", "timestamp": "2026-09-16T13:00:00.000Z",
+                   "payload": {"type": "token_count",
+                               "info": {"total_token_usage": {"input_tokens": 100,
+                                        "output_tokens": 50, "cached_input_tokens": 10}}}}),
+            json!({"type": "event_msg", "timestamp": "2026-09-16T13:01:00.000Z",
+                   "payload": {"type": "token_count",
+                               "info": {"total_token_usage": {"input_tokens": 200,
+                                        "output_tokens": 90, "cached_input_tokens": 20,
+                                        "cache_write_input_tokens": 5}}}}),
+            json!({"type": "response_item", "payload": {"type": "custom_tool_call",
+                    "input": patch}}),
+            json!({"type": "response_item", "payload": {"type": "function_call",
+                    "arguments": "{\"command\":\"ls\"}"}}),
+            json!({"type": "response_item", "payload": {"type": "custom_tool_call_output",
+                    "output": "Script failed: exit 1"}}),
+            json!({"type": "event_msg", "payload": {"type": "turn_aborted"}}),
+            json!({"type": "response_item", "timestamp": "2026-09-16T13:02:00.000Z",
+                   "payload": {"type": "message", "role": "assistant", "content": [{"type": "text", "text": "done"}]}}),
+        ]);
+        let act = codex_activity(&raw);
+        assert_eq!(
+            act.tokens,
+            Tokens {
+                input: 200,
+                output: 90,
+                cache_read: 20,
+                cache_write: 5
+            }
+        );
+        assert_eq!(act.lines_added, 2);
+        assert_eq!(act.lines_removed, 1);
+        assert_eq!(act.extensions.get("py"), Some(&1));
+        assert_eq!(act.tool_errors.get("command_failed"), Some(&1));
+        assert_eq!(act.aborted_turns, 1);
+        assert_eq!(act.assistant_ts.len(), 1);
+    }
+}

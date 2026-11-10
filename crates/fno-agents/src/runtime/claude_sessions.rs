@@ -1,0 +1,394 @@
+//! The claude sessions store, read as indexes: the socket index the
+//! liveness ladder's socket rung pays one walk for, and the single-scan
+//! liveness reads built on it.
+
+use crate::claude_ask::ClaudeHome;
+use crate::client_commands::{row_liveness_with_indexed, RowLiveness};
+use crate::truth_probe::family1_truth_state;
+use serde_json::Value;
+
+/// Silence on every rung is `Unknown`. The ladder NEVER returns `Dead`: only
+/// a positive death proof may, and absence never is one. A missing or
+/// unreadable transcript falls through the third rung and lands `Unknown`.
+///
+/// Resume keeps its own inline copy of rungs 1 and 3 because it must also
+/// read the truth VALUE (`done`/`stalled` route the relaunch arm, which the
+/// verdict type has no room for); its behavior is pinned identical by tests,
+/// except that the ladder's rung 3 is silent on an exit-proven row.
+pub fn row_liveness(entry: &crate::state::RegistryEntry, claude_home: &ClaudeHome) -> RowLiveness {
+    let sockets = sessions_socket_index(claude_home);
+    row_liveness_indexed(entry, &sockets)
+}
+
+/// One scan of claude's session records: `jobId -> messagingSocketPath` for
+/// every live-shaped bg session file, first-sorted-wins (the same pick
+/// `locate_session` makes). The socket rung's cost is this walk, so a sweep
+/// probing N rows pays it once, not N times.
+pub fn sessions_socket_index(
+    claude_home: &ClaudeHome,
+) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for path in claude_home.session_records() {
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(v) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        if v.get("kind").and_then(Value::as_str) != Some("bg") {
+            continue;
+        }
+        let (Some(job), Some(sock)) = (
+            v.get("jobId").and_then(Value::as_str),
+            v.get("messagingSocketPath").and_then(Value::as_str),
+        ) else {
+            continue;
+        };
+        if job.is_empty() || sock.is_empty() || out.contains_key(job) {
+            continue;
+        }
+        out.insert(job.to_string(), sock.to_string());
+    }
+    out
+}
+
+/// [`row_liveness`] against a prebuilt [`sessions_socket_index`] - the form
+/// a sweep uses, so N probed rows cost one dir scan. The truth read is the
+/// production one.
+pub(crate) fn row_liveness_indexed(
+    entry: &crate::state::RegistryEntry,
+    sockets: &std::collections::HashMap<String, String>,
+) -> RowLiveness {
+    row_liveness_with_indexed(entry, sockets, None, family1_truth_state)
+}
+
+/// Which live claude process holds `session_id`, read from claude's own
+/// per-process records (one `<pid>.json` per running process under each
+/// root's sessions dir, removed on clean exit). `create_ms` answers the
+/// pid's epoch create time, so a record's
+/// `procStart` proves the incarnation: a pid whose create time disagrees
+/// with the record is a recycle, and a pid with no create time is a crash
+/// leftover. Both are skipped, never named as the holder.
+pub(crate) fn session_record_holder(
+    dirs: &[std::path::PathBuf],
+    session_id: &str,
+    create_ms: &dyn Fn(u32) -> Option<i64>,
+) -> crate::pane_stop::SessionHolder {
+    use crate::pane_stop::SessionHolder;
+    if session_id.is_empty() {
+        return SessionHolder::Unmeasured("row carries no claude session id".into());
+    }
+    let short = session_id.chars().take(8).collect::<String>();
+    let mut verified: Vec<u32> = Vec::new();
+    let mut verified_interactive: Option<u32> = None;
+    let mut verified_bg: Option<(String, u32)> = None;
+    let mut unverified: Option<(u32, String)> = None;
+    let mut dirs_read = 0usize;
+    let mut first_dir = String::new();
+    for dir in dirs {
+        if first_dir.is_empty() {
+            first_dir = dir.display().to_string();
+        }
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        dirs_read += 1;
+        let mut paths: Vec<std::path::PathBuf> = rd.flatten().map(|e| e.path()).collect();
+        paths.sort();
+        for path in paths {
+            // The dir holds these records plus session transcripts
+            // (measured 2026-09-21: 12,851 .md files beside 22 records).
+            // Skip everything else before reading.
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(raw) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(v) = serde_json::from_str::<Value>(&raw) else {
+                continue;
+            };
+            if v.get("sessionId").and_then(Value::as_str) != Some(session_id) {
+                continue;
+            }
+            let Some(pid_val) = v.get("pid").and_then(Value::as_u64) else {
+                continue;
+            };
+            if pid_val == 0 || pid_val == 1 || pid_val > i32::MAX as u64 {
+                continue;
+            }
+            let pid = pid_val as u32;
+            let Some(ms) = create_ms(pid) else {
+                continue; // the process is gone: a crash leftover
+            };
+            let Some(raw_start) = v.get("procStart").and_then(Value::as_str) else {
+                unverified.get_or_insert((pid, "(missing)".into()));
+                continue;
+            };
+            // claude space-pads single-digit days ("Sep  1"); collapse the
+            // runs so one format parses both shapes.
+            let collapsed = raw_start.split_whitespace().collect::<Vec<_>>().join(" ");
+            match chrono::NaiveDateTime::parse_from_str(&collapsed, "%a %b %d %H:%M:%S %Y") {
+                Ok(start) => {
+                    let record_s = start.and_utc().timestamp();
+                    if (ms / 1000 - record_s).abs() <= 1 {
+                        if !verified.contains(&pid) {
+                            verified.push(pid);
+                        }
+                        if v.get("kind").and_then(Value::as_str) == Some("interactive") {
+                            verified_interactive.get_or_insert(pid);
+                        } else if verified_bg.is_none() {
+                            let job = v
+                                .get("jobId")
+                                .and_then(Value::as_str)
+                                .unwrap_or("?")
+                                .to_string();
+                            verified_bg = Some((job, pid));
+                        }
+                    }
+                    // else: the pid slot changed hands since the record -
+                    // a recycled pid is never the holder.
+                }
+                Err(_) => {
+                    unverified.get_or_insert((pid, raw_start.to_string()));
+                }
+            }
+        }
+    }
+    if verified.len() >= 2 {
+        let names = verified
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return SessionHolder::Held {
+            pid: None,
+            proven: true,
+            why: format!("pids {names} both hold claude session {short}"),
+        };
+    }
+    if let Some(pid) = verified_interactive {
+        return SessionHolder::Held {
+            pid: Some(pid),
+            proven: true,
+            why: format!(
+                "pid {pid} holds claude session {short} (interactive record, start time matches)"
+            ),
+        };
+    }
+    if let Some((job, pid)) = verified_bg {
+        return SessionHolder::Held {
+            pid: None,
+            proven: true,
+            why: format!(
+                "claude bg job {job} (pid {pid}) holds session {short}; a bg job stops through claude, not a signal"
+            ),
+        };
+    }
+    if let Some((pid, raw_start)) = unverified {
+        return SessionHolder::Unmeasured(format!(
+            "pid {pid} records session {short} but its procStart {raw_start:?} does not parse; \
+             refusing to name an unverified holder"
+        ));
+    }
+    if dirs_read == 0 {
+        return SessionHolder::Unmeasured(format!("claude sessions dir unreadable: {first_dir}"));
+    }
+    SessionHolder::NotHeld(format!(
+        "no live claude process records session {short} ({dirs_read} record dir{} read)",
+        if dirs_read == 1 { "" } else { "s" }
+    ))
+}
+
+/// The `reentry-plan holder <session-id>...` action body: one holder read
+/// per id over the ambient record dirs, one JSON object on stdout keyed by
+/// session id. Exit 0 whenever it printed; the caller reads `held`, never
+/// the exit code.
+pub fn run_holder_action(session_ids: &[String]) -> i32 {
+    let dirs = ClaudeHome::from_env().sessions_dirs();
+    let mut out = serde_json::Map::new();
+    for sid in session_ids {
+        let answer = session_record_holder(&dirs, sid, &|pid| {
+            crate::claims::process_create_time_ms(pid as i32)
+        });
+        out.insert(sid.clone(), holder_json(&answer));
+    }
+    println!("{}", Value::Object(out));
+    0
+}
+
+/// The wire shape one holder read prints: `held` maps Held|NotHeld|Unmeasured
+/// to true|false|null, `proven` rides only a verified match, and `pid` is
+/// named when the read knows one. Pure so tests pin it without a filesystem.
+fn holder_json(holder: &crate::pane_stop::SessionHolder) -> Value {
+    let (held, proven, pid, why) = match holder {
+        crate::pane_stop::SessionHolder::Held { pid, proven, why } => (
+            Value::from(true),
+            Value::from(*proven),
+            pid.map(|p| Value::from(p)).unwrap_or(Value::Null),
+            Value::from(why.as_str()),
+        ),
+        crate::pane_stop::SessionHolder::NotHeld(why) => (
+            Value::from(false),
+            Value::from(false),
+            Value::Null,
+            Value::from(why.as_str()),
+        ),
+        crate::pane_stop::SessionHolder::Unmeasured(why) => (
+            Value::Null,
+            Value::from(false),
+            Value::Null,
+            Value::from(why.as_str()),
+        ),
+    };
+    serde_json::json!({"held": held, "proven": proven, "pid": pid, "why": why})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pane_stop::SessionHolder;
+    use crate::state::RegistryEntry;
+    use crate::AgentStatus;
+
+    fn claude_row(status: AgentStatus) -> RegistryEntry {
+        RegistryEntry {
+            name: "row".into(),
+            legacy_provider: "claude".into(),
+            status,
+            claude_session_uuid: Some("3228ccad-c078-4b53-a8c9-7199b831eae4".into()),
+            ..Default::default()
+        }
+    }
+
+    fn ladder(entry: &RegistryEntry) -> RowLiveness {
+        let no_sockets = std::collections::HashMap::new();
+        row_liveness_with_indexed(entry, &no_sockets, None, |_| Some("working".into()))
+    }
+
+    // Measured 2026-09-14: 7 of 23 stored-exited rows served alive because a
+    // transcript tail still read `working` long after the worker stopped.
+    #[test]
+    fn a_working_transcript_does_not_outrank_a_recorded_exit() {
+        assert_eq!(
+            ladder(&claude_row(AgentStatus::Exited)),
+            RowLiveness::Unknown
+        );
+        let mut stamped = claude_row(AgentStatus::Orphaned);
+        stamped.exited_at = Some("2026-08-01T00:00:02Z".into());
+        assert_eq!(ladder(&stamped), RowLiveness::Unknown);
+    }
+
+    // The comeback rung: a transcript written past the exit stamp
+    // un-ratchets a false reconcile exit, while a transcript that stayed
+    // quiet after the stamp (a real stop) keeps the ladder silent.
+    #[test]
+    fn a_transcript_written_past_the_exit_stamp_answers_alive() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("t.jsonl");
+        std::fs::write(&path, b"{}").unwrap();
+        let exited_s: i64 = 1_767_225_600; // 2026-01-01T00:00:00Z
+        let set_mtime =
+            |secs: i64| {
+                let f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+                f.set_times(std::fs::FileTimes::new().set_modified(
+                    std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs as u64),
+                ))
+                .unwrap();
+            };
+        let row = |mtime_s: i64| {
+            let mut e = claude_row(AgentStatus::Exited);
+            e.exited_at = Some("2026-01-01T00:00:00Z".into());
+            e.transcript_path = Some(path.display().to_string());
+            set_mtime(mtime_s);
+            e
+        };
+        // A write inside the comeback margin: a deliberate stop's own
+        // teardown lands here, so silence holds.
+        assert_eq!(ladder(&row(exited_s + 10)), RowLiveness::Unknown);
+        // A write past the margin: the session is still going.
+        assert_eq!(ladder(&row(exited_s + 125)), RowLiveness::Alive);
+    }
+
+    // ──: session records name the live holder ────────────────────
+
+    const T0: &str = "Mon Sep 21 16:27:44 2026"; // epoch 1_790_008_064
+    const T0_MS: i64 = 1_790_008_064_000;
+
+    fn record_json(pid: u32, session: &str, proc_start: &str, kind: &str) -> String {
+        format!(
+            r#"{{"pid":{pid},"sessionId":"{session}","procStart":"{proc_start}","kind":"{kind}"}}"#
+        )
+    }
+
+    fn stage(dir: &std::path::Path, name: &str, body: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join(name), body).unwrap();
+    }
+
+    const SID: &str = "aaaaaaaa-1111-2222-3333-444444444444";
+
+    /// AC11-ERR: a gone pid, a recycled pid (procStart an hour off), an
+    /// unparseable procStart on a live pid, and an unreadable dir each
+    /// answer their own shape.
+    #[test]
+    fn x1530_ac11_gone_recycled_unparseable_and_unreadable_each_answer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sessions = tmp.path().join("sessions");
+        stage(
+            &sessions,
+            "101.json",
+            &record_json(101, SID, T0, "interactive"),
+        );
+        stage(
+            &sessions,
+            "102.json",
+            &record_json(102, SID, T0, "interactive"),
+        );
+        stage(
+            &sessions,
+            "103.json",
+            &record_json(103, SID, "not a date", "interactive"),
+        );
+        let dirs = vec![sessions.clone()];
+        let probe = |pid: u32| match pid {
+            101 => None,                    // gone: crash leftover
+            102 => Some(T0_MS + 3_600_000), // recycled: an hour off
+            103 => Some(T0_MS),             // live, procStart unparseable
+            _ => None,
+        };
+        let answer = session_record_holder(&dirs, SID, &probe);
+        assert!(
+            matches!(
+                &answer,
+                SessionHolder::Unmeasured(text)
+                    if text.contains("pid 103") && text.contains("not a date")
+            ),
+            "{answer:?}"
+        );
+
+        // And with the unparseable record removed, the dir holds only a
+        // gone pid and a recycled pid: NotHeld, with the dir counted.
+        std::fs::remove_file(sessions.join("103.json")).unwrap();
+        let answer = session_record_holder(&dirs, SID, &probe);
+        match answer {
+            SessionHolder::NotHeld(why) => assert!(why.contains("(1 record dir read)"), "{why}"),
+            other => panic!("expected NotHeld, got {other:?}"),
+        }
+    }
+
+    /// holder_json: NotHeld and Unmeasured never read held true - Unmeasured
+    /// prints held null, and neither is a cancellation.
+    #[test]
+    fn holder_json_never_reads_unmeasured_or_not_held_as_held() {
+        let not_held = holder_json(&SessionHolder::NotHeld("no record".into()));
+        assert_eq!(not_held["held"], serde_json::json!(false));
+        assert_eq!(not_held["proven"], serde_json::json!(false));
+        assert!(not_held["pid"].is_null());
+
+        let unmeasured = holder_json(&SessionHolder::Unmeasured("procStart bad".into()));
+        assert_eq!(unmeasured["held"], serde_json::json!(null));
+        assert_eq!(unmeasured["proven"], serde_json::json!(false));
+        assert!(unmeasured["pid"].is_null());
+    }
+}

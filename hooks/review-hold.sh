@@ -1,0 +1,250 @@
+#!/usr/bin/env bash
+# fno hook: PreToolUse - hold the active review slot
+# Register (and clear) the hold that says a review of this branch is RUNNING.
+#
+# Merge readiness models a review as a RECORDED VERDICT: `review_coverage`
+# answers what verdicts EXIST for a head, and a review still writing its fixes
+# has produced none yet. So a PR reads green, settled and `ready: true` while a
+# review of that exact head is mid-flight - three PRs on 2026-08-22, one of
+# them with five counted findings under repair. A merge taken in that window
+# ships the pre-review code and discards the fixes.
+#
+# THIS is the registration site that matters. All three specimens were reviews
+# the worker self-invoked through the Skill tool, which is not footnote code and
+# therefore cannot register a hold on its own. The hook can.
+#
+# Contract: NEVER blocks on infrastructure. This runs on PreToolUse, and a
+# review that refuses to start because a lockfile write failed is strictly
+# worse than a review that runs unheld - the worktree layer of the guard
+# covers exactly that case. Every infra failure path exits 0 with no
+# permission decision. The ONE exception is policy, not infra: a review
+# invocation at a spent two-round cap is denied with the gate's refusal text
+# (see the cap gate at the acquire call below).
+#
+# ACQUIRE ONLY, deliberately. A PostToolUse release was wired here and removed:
+# for an INLINE skill the Skill tool returns the SKILL.md body and the review
+# runs AFTERWARDS, so the release fired within milliseconds and the hold covered
+# nothing. That is precisely the dispatched-but-not-yet-edited window layer 2
+# cannot see, and the window PR 1072 was merge-ready in - the guard would have
+# been decorative for its own specimen.
+#
+# The release therefore lives at the two markers that mean the review is REALLY
+# done: `skills/review/scripts/emit-attestation.sh` (a verdict now exists for
+# this head) and the TTL. The TTL is a lease the review did not attest inside,
+# not proof that the reviewer died: the holder's session can keep running long
+# after the review it was running is over. A review that found findings holds
+# the lane until a clean re-review attests, which is the intended behavior: the
+# findings are unfixed.
+#
+# Usage: review-hold.sh acquire   (hook JSON on stdin)
+set -uo pipefail
+
+# Survive a caller env with no usable PATH (see worktree-write-protect.sh).
+PATH="${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+
+action="${1:-}"
+[[ "$action" == "acquire" ]] || exit 0
+# FNO overrides the binary, matching emit-attestation.sh: tests point it at a
+# stub so an assertion reads a file the test owns.
+FNO_BIN="${FNO:-fno}"
+command -v jq >/dev/null 2>&1 || exit 0
+command -v "$FNO_BIN" >/dev/null 2>&1 || exit 0
+
+input="$(cat 2>/dev/null || true)"
+[[ -n "$input" ]] || exit 0
+
+tool="$(printf '%s' "$input" | jq -r '.tool_name // empty' 2>/dev/null || true)"
+[[ "$tool" == "Skill" ]] || exit 0
+
+# The skill name arrives under different keys across harness versions; read the
+# ones that exist and normalize away a leading slash and a plugin prefix, so
+# `/fno:review`, `fno:review` and `review` are one name.
+skill_name="$(printf '%s' "$input" \
+  | jq -r '.tool_input.skill // .tool_input.name // .tool_input.command // empty' \
+  2>/dev/null || true)"
+[[ -n "$skill_name" ]] || exit 0
+# The Skill tool carries ARGUMENTS in their own field, so a name read alone
+# loses them. Reading only the name recorded `level=unset, level_source=fallback,
+# flags=[]` for every agent-invoked review, which is every autonomous one - the
+# terminal path was fine because a typed slash command carries its args inside
+# the command string. Rejoin them into the one string the parser expects.
+skill_args="$(printf '%s' "$input" \
+  | jq -r '.tool_input.args // .tool_input.arguments // empty' \
+  2>/dev/null || true)"
+skill_raw="$skill_name${skill_args:+ $skill_args}"
+# Drop the ARGS before the namespace. `##*:` is greedy, so one colon anywhere in
+# the args - a PR URL is the ordinary case - eats the command with it, the case
+# below matches nothing, and the hold this hook exists to take never registers.
+skill="${skill_raw#/}"
+skill="${skill%% *}"
+skill="${skill##*:}"
+
+# The harness-native review commands (claude, codex, opencode) plus footnote's own
+# review skill. Named explicitly rather than pattern-matched: a substring rule
+# on "review" would fire on `code-review-attest`, `pr-review-fixes` and any
+# future skill that merely mentions one, and a hold nobody meant to take is a
+# merge nobody can complete.
+case "$skill" in
+  code-review|review|review-changes|sigma-review) ;;
+  *) exit 0 ;;
+esac
+
+cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
+[[ -n "$cwd" && -d "$cwd" ]] || cwd="$PWD"
+
+# The parse and the join ride fno-agents directly: FNO is the test-stub
+# surface for the commands this hook DRIVES (acquire, event emit), not for its
+# own plumbing. A refused or absent door reads as no parse.
+# shellcheck source=lib/agents-bin.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/agents-bin.sh" 2>/dev/null || true
+AGENTS="$(declare -F fno_agents_bin >/dev/null && fno_agents_bin "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)")"
+parsed=""
+if [[ -n "$AGENTS" ]] && parse_out="$("$AGENTS" review-level invocations parse --raw "$skill_raw" 2>/dev/null)"; then
+  parsed="$(printf '%s' "$parse_out" | jq -c 'select(. != null)' 2>/dev/null || true)"
+fi
+args_raw="$(printf '%s' "$parsed" | jq -r '.args_raw // empty' 2>/dev/null || true)"
+level="$(printf '%s' "$parsed" | jq -r '.level // "unset"' 2>/dev/null || echo unset)"
+level_source="$(printf '%s' "$parsed" | jq -r '.level_source // "fallback"' 2>/dev/null || echo fallback)"
+flags="$(printf '%s' "$parsed" | jq -c '.flags // []' 2>/dev/null || echo '[]')"
+[[ -n "$level" ]] || level="unset"
+[[ -n "$level_source" ]] || level_source="fallback"
+[[ -n "$flags" ]] || flags='[]'
+if [[ -z "$parsed" ]]; then
+  # Degraded mode: the parse door is unreachable (stale or missing binary),
+  # so the telemetry dies with it. The round law's verify-fixes carveout
+  # must not: a cap refusal that eats the flag would defund the one
+  # review-shaped act the cap still funds. Scan the raw args for the three
+  # accepted spellings and fund the verify; nothing else is inferred here.
+  em="$(printf '—')"
+  case " $skill_raw " in
+    *" --verify-fixes "*|*" verify-fixes "*|*" ${em}verify-fixes "*)
+      flags='["--verify-fixes"]' ;;
+  esac
+fi
+pr_number="$(printf '%s' "$parsed" | jq -r '.pr_number // empty' 2>/dev/null || true)"
+target="$(printf '%s' "$parsed" | jq -r '.target // empty' 2>/dev/null || true)"
+
+# the hold keys the review's NAMED target, never the branch this
+# checkout happens to stand on - the observed wedge held PR 1709's branch for
+# a review of PR 1713 and left 1713 unprotected. A PR number resolves to
+# nothing here: the acquire command reads the PR's head ref from GitHub, so a PR
+# review from a checkout on main still holds its PR. A branch target is
+# verified against local then origin refs. Only an invocation with no target
+# reads the cwd.
+branch=""
+head=""
+if [[ -z "$pr_number" ]]; then
+  if [[ -n "$target" ]]; then
+    target_head="$(git -C "$cwd" rev-parse --verify --quiet "refs/heads/$target" 2>/dev/null || true)"
+    [[ -n "$target_head" ]] || target_head="$(git -C "$cwd" rev-parse --verify --quiet "refs/remotes/origin/$target" 2>/dev/null || true)"
+    if [[ -n "$target_head" ]]; then
+      branch="$target"
+      head="$target_head"
+    fi
+  fi
+  if [[ -z "$branch" ]]; then
+    branch="$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    [[ -n "$branch" && "$branch" != "HEAD" ]] || exit 0
+    head="$(git -C "$cwd" rev-parse HEAD 2>/dev/null || true)"
+  fi
+  # A review of the protected branch is not a PR review, and a hold there would
+  # key on a branch no PR ever merges.
+  case "$branch" in
+    main|master|develop|dev) exit 0 ;;
+  esac
+fi
+
+# The session is the holder: a second review command fired inside the same session
+# on the same branch re-takes its OWN hold rather than colliding with a
+# stranger's, and the release below clears the one it took.
+session="$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null || true)"
+holder="review-session:${session:-unknown}"
+
+# The native door is best-effort because this hook must never block the
+# review. The shell fallback still creates a join id when an older installed
+# front door answers something other than an id (its invocations leaf ran the
+# settle sweep, or the door refused) - the ri- guard reads only an id, never
+# a receipt.
+# Adopt the sender's pending id when one exists (the mail-path join: the
+# sent row and this started row then carry ONE id), and only mint-plus-write
+# a fresh sidecar on a miss, so a second review never re-adopts the first
+# one's consumed id.
+invocation_id=""
+if [[ -n "$AGENTS" ]]; then
+  invocation_id="$("$AGENTS" review-level invocations join --session "$session" 2>/dev/null)" || invocation_id=""
+fi
+case "$invocation_id" in
+  ri-*) ;;
+  *) invocation_id="ri-$(date -u +%s 2>/dev/null || echo 0)-$$" ;;
+esac
+# The attest sidecar answers from the state layout table via the `dir`
+# door; on a door refusal (no binary, or an fno-agents predating the door)
+# the legacy spelling answers, the path every pre-door binary wrote.
+model_sidecar="$("${AGENTS:-fno-agents}" state path dir attest --file "${session}.json" 2>/dev/null || true)"
+[[ -n "$model_sidecar" ]] || model_sidecar="${FNO_HOME:-$HOME/.fno}/attest/${session}.json" # state-root: legacy fallback
+model_family="$(jq -r '.model_family // .model // empty' "$model_sidecar" 2>/dev/null || true)"
+data="$(jq -cn \
+  --arg invocation_id "$invocation_id" \
+  --arg stage started \
+  --arg cmd "/$skill" \
+  --arg args_raw "$args_raw" \
+  --arg level "$level" \
+  --arg level_source "$level_source" \
+  --argjson flags "$flags" \
+  --arg transport skill_tool \
+  --arg initiator self \
+  --arg target_session_id "$session" \
+  --arg head_sha "$head" \
+  --arg branch "$branch" \
+  --arg model_family "$model_family" \
+  '{invocation_id:$invocation_id,stage:$stage,verb:$cmd, # verb-wording: allow (review_invocation wire key)
+     args_raw:$args_raw,level:$level,level_source:$level_source,flags:$flags,transport:$transport,initiator:$initiator,target_session_id:$target_session_id,head_sha:$head_sha,branch:$branch}
+   | if $head_sha == "" then del(.head_sha) else . end
+   | if $branch == "" then del(.branch) else . end
+   | if $model_family == "" then . else .model_family=$model_family end' \
+  2>/dev/null || true)"
+if [[ -n "$data" ]]; then
+  # The resolver owns the default; --events is only for the hermeticity pin.
+  # A checkout-path fallback here wrote review_invocation rows to a retired
+  # file while loopcheck and settle read the space journal.
+  emit_events_args=()
+  if [[ -n "${FNO_EVENTS_PATH:-}" ]]; then
+    emit_events_args=(--events "$FNO_EVENTS_PATH")
+  fi
+  "$FNO_BIN" doctor event emit -t review_invocation -s daemon -d "$data" \
+    ${emit_events_args[@]+"${emit_events_args[@]}"} >/dev/null 2>&1 || true
+fi
+
+# The cap gate. Contract amendment, narrow and deliberate: the never-block
+# rule above covers INFRA failure - a lockfile write that fails must not stop
+# a review. The two-round cap is different: it is policy with a saturated,
+# visible counter behind it, and warning reproduces today's behavior exactly,
+# since the counter was already visible and already ignored. So the ONE
+# refusal `acquire` answers with - a fixed stdout prefix naming the spent
+# budget and the law's remedy - becomes a denial decision here. Every other
+# outcome still exits 0 with nothing said.
+if [[ -n "$pr_number" ]]; then
+  # The PR's head ref and head resolve inside the command, from GitHub. No
+  # resolution here, no guessed --branch: an unresolvable PR takes no hold.
+  cap_out="$("$FNO_BIN" do pr review-hold acquire "$pr_number" \
+    --holder "$holder" --verb "/$skill" \
+    --invocation-id "$invocation_id" \
+    --args-raw "$args_raw" --level "$level" --level-source "$level_source" \
+    --flags-json "$flags" \
+    --repo "$cwd" 2>/dev/null || true)"
+else
+  cap_out="$("$FNO_BIN" do pr review-hold acquire \
+    --branch "$branch" --head "$head" --holder "$holder" --verb "/$skill" \
+    --invocation-id "$invocation_id" \
+    --args-raw "$args_raw" --level "$level" --level-source "$level_source" \
+    --flags-json "$flags" \
+    --repo "$cwd" 2>/dev/null || true)"
+fi
+reason="$(printf '%s\n' "$cap_out" | sed -n 's/^review-invocation-refused: //p' | head -1)"
+if [[ -n "$reason" ]]; then
+  jq -n --arg reason "$reason" \
+    '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $reason}}' \
+    2>/dev/null || true
+fi
+exit 0

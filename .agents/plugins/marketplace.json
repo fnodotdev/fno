@@ -1,0 +1,21 @@
+{
+  "name": "fno",
+  "interface": {
+    "displayName": "Footnote Release"
+  },
+  "plugins": [
+    {
+      "name": "fno",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/fnodotdev/fno.git",
+        "ref": "stable"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

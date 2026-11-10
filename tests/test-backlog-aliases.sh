@@ -1,0 +1,228 @@
+#!/usr/bin/env bash
+# test-backlog-aliases.sh - verify backlog sub-app stability.
+#
+# Covers ab-67de1b86 Phase 05 Task 5.2 scenarios:
+#   1. fno backlog --help succeeds and lists add/get/find/triage
+#   2. fno --help lists backlog (the graph top-level alias was removed)
+#   3. fno backlog intake <plan> creates a node
+#   4. fno backlog adopt <plan> creates a node + warns on stderr
+#   5. fno backlog done <id> marks the node complete
+#   6. fno backlog done <id> second time is a safe no-op
+#
+# This script pins HOME, the state root, repo root and tracker backend below.
+# It uses the checkout's Python surface even when an unrelated installed `fno`
+# binary is on PATH, so direct runs exercise the same hermetic command shape.
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+TMP=$(mktemp -d -t backlog-aliases.XXXXXX)
+trap 'rm -rf "$TMP"' EXIT
+
+# Pin the graph store into the temp dir by redirecting HOME so
+# Path.home() / .fno resolves under $TMP. The real user graph
+# at ~/.fno/graph.json is never touched.
+export HOME="$TMP/home"
+unset FNO_CONFIG FNO_STATE_DIR FNO_SPACES_DIR FNO_CLAIMS_ROOT FNO_EVENTS_PATH FNO_TRACKER_BACKEND PYTHONPATH
+mkdir -p "$HOME/.fno"
+GRAPH_JSON="$HOME/.fno/graph.json"
+
+# HOME alone isolates only ONE of the two stores `backlog done` reads. The
+# close guard also reads the project's carve-out ledger, resolved from the
+# NODE's recorded cwd via `git worktree list` - so intaking from inside this
+# checkout pointed it at the canonical worktree, where it counted the
+# developer's own deferred carve-outs and refused a node the test had just
+# minted. Green on a clean CI runner, red on any machine with carve-outs
+# outstanding.
+#
+# Run from a directory that is not a git worktree, so the node records a
+# hermetic cwd and the resolver falls back to FNO_REPO_ROOT (its test hook)
+# instead of climbing to the real checkout. Both are needed: the cd alone
+# leaves the fallback pointing at whatever ambient root it can find.
+export FNO_REPO_ROOT="$TMP/repo"
+export FNO_TRACKER_BACKEND=graph
+mkdir -p "$FNO_REPO_ROOT/.fno"
+cd "$TMP" || exit 1
+printf '{"entries": []}\n' | python3 "$REPO_ROOT/tests/py/fixtures/graph_seed.py" "$GRAPH_JSON"
+
+PASS=0
+FAIL=0
+pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
+fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
+
+# Resolve the `fno` command: prefer the checkout build (the TREE's surface,
+# which the menu assertions below pin), fall back to an installed binary. An
+# installed fno can lag the tree by whole command generations, and a menu test
+# against it would pin a surface this checkout no longer ships.
+resolve_fno() {
+    if [[ -x "$REPO_ROOT/crates/fno/target/debug/fno" ]]; then
+        echo "$REPO_ROOT/crates/fno/target/debug/fno"
+        return
+    fi
+    echo "fno"
+}
+
+ABI=$(resolve_fno)
+
+run_fno() {
+    # shellcheck disable=SC2086
+    $ABI "$@"
+}
+
+echo "Using fno: $ABI"
+echo "Graph: $GRAPH_JSON"
+echo
+
+# Typer renders command rows as `│ <command>  <help text>  │` inside a box.
+# Match a command row by requiring the command is at the start of the text cell
+# (after any whitespace / box drawing), followed by either whitespace or
+# end-of-cell.
+command_in_help() {
+    local command="$1" help="$2"
+    # Strip ANSI first: rich colorizes the top-level menu on a TTY, and an
+    # escape like \033[1;36m contains letters, so the [^A-Za-z]* prefix cannot
+    # span it. Without this the test passes only where colour happens to be off.
+    help=$(sed -E $'s/\033\\[[0-9;]*m//g' <<<"$help")
+    grep -E "^[^A-Za-z]*${command}([[:space:]]|$)" <<<"$help" >/dev/null
+}
+
+# --- Scenario 1: fno backlog --help lists advertised commands ------------------
+# The native menu lists groups; intake, done and next stay invocable as
+# compatibility spellings, so probe the advertised groups instead.
+out=$(run_fno backlog --help 2>&1)
+for command in add get find triage; do
+    if command_in_help "$command" "$out"; then
+        pass "backlog --help lists '$command'"
+    else
+        fail "backlog --help missing command '$command'"
+    fi
+done
+
+# --- Scenario 2: fno --help shows backlog, no graph alias ------------------
+# The `graph` top-level alias was removed as a true duplicate of `backlog`.
+top_out=$(run_fno --help 2>&1)
+if command_in_help "backlog" "$top_out"; then
+    pass "top-level help shows 'backlog'"
+else
+    fail "top-level help missing 'backlog'"
+fi
+if command_in_help "graph" "$top_out"; then
+    fail "top-level help lists removed 'graph' alias"
+else
+    pass "top-level help has no 'graph' alias"
+fi
+
+# --- Scenario 3: backlog intake adopts a plan -------------------------------
+plan_a="$TMP/plan-a.md"
+cat > "$plan_a" <<EOF
+---
+title: Intake Test Plan
+created: 2026-05-05
+---
+# Body
+
+## Files to Modify
+
+| File | Action |
+|---|---|
+| cli/src/fno/example.py | modify |
+EOF
+
+# The receipt reads `intake <id> -> backlog: "<title>"`. It said "adopted <id>"
+# before the adopt->intake rename, and this assertion outlived the command.
+intake_out=$(run_fno backlog intake "$plan_a" 2>&1)
+if [[ "$intake_out" == *"intake ab-"* ]]; then
+    pass "intake creates a node"
+else
+    fail "intake did not report a minted node: $intake_out"
+fi
+
+# --- Scenario 4: backlog adopt is gone (alias removed) ----------------------
+plan_b="$TMP/plan-b.md"
+cat > "$plan_b" <<EOF
+---
+title: Adopt Alias Test Plan
+---
+# Body
+EOF
+
+adopt_rc=0
+adopt_combined=$(run_fno backlog adopt "$plan_b" 2>&1) || adopt_rc=$?
+
+if [[ "$adopt_rc" -ne 0 ]]; then
+    pass "adopt alias is gone (non-zero exit)"
+else
+    fail "adopt alias still accepted (rc=0): $adopt_combined"
+fi
+
+if [[ "$adopt_combined" != *"deprecated"* ]]; then
+    pass "no stale deprecation warning on adopt"
+else
+    fail "adopt is still forwarding through the deprecated alias: $adopt_combined"
+fi
+
+# --- Scenario 5: backlog done marks node complete ---------------------------
+# The id comes from the intake receipt. The store owns the rows, and an
+# installed `fno` is no Python interpreter to read them with.
+node_id=$(printf '%s\n' "$intake_out" | sed -n 's/.*intake \(ab-[0-9a-z]*\).*/\1/p' | head -1)
+
+if [[ -z "$node_id" ]]; then
+    fail "no node ID available for done test"
+else
+    # The close-evidence guard refuses a bare `done` on a node carrying no
+    # record of why, and the typer surface retired `update --completion-note`
+    # (the leaf the guard's own remedy names). Stamp the note through the
+    # native binary: FNO_AGENTS_BIN, the checkout build, then PATH.
+    native_fno=""
+    for cand in "${FNO_AGENTS_BIN:-}" "$REPO_ROOT/crates/fno-agents/target/debug/fno-agents" "$(command -v fno-agents 2>/dev/null || true)"; do
+        if [[ -n "$cand" && -x "$cand" ]]; then native_fno="$cand"; break; fi
+    done
+    if [[ -z "$native_fno" ]]; then
+        fail "no fno-agents binary: cannot stamp the completion record done requires"
+    fi
+    stamp_rc=0
+    "$native_fno" backlog update "$node_id" "completion_note+=smoke alias fixture" > /dev/null 2>&1 || stamp_rc=$?
+    if [[ "$stamp_rc" -ne 0 ]]; then
+        fail "native update could not stamp the completion record (rc=$stamp_rc)"
+    fi
+    # The close is native now: the wheel spelling tombstones, so the done
+    # scenarios drive the same binary the stamp rode (the deployed `fno` IS
+    # this binary; the wheel's refusal names it).
+    done_out=$("$native_fno" backlog done "$node_id" 2>&1)
+    if [[ "$done_out" == *"Marked $node_id done"* ]]; then
+        pass "done marks node complete"
+    else
+        fail "done did not report completion: $done_out"
+    fi
+
+    # Verify completed_at landed on the store row. A failure carries the get
+    # output: the render is the thing under test, and a red log that cannot
+    # show it costs a whole CI cycle to diagnose.
+    get_out=$(run_fno backlog get "$node_id" 2>&1)
+    if printf '%s' "$get_out" | grep -q '"completed_at": "'; then
+        pass "done sets completed_at timestamp"
+    else
+        fail "done did not set completed_at on the node: $get_out"
+    fi
+fi
+
+# --- Scenario 6: done is idempotent on re-run -------------------------------
+if [[ -n "$node_id" ]]; then
+    done_again=$("$native_fno" backlog done "$node_id" 2>&1)
+    rc=$?
+    if [[ $rc -eq 0 ]]; then
+        pass "done rerun exits 0 (idempotent)"
+    else
+        fail "done rerun exit code $rc (expected 0)"
+    fi
+    if [[ "$done_again" == *"already done"* ]]; then
+        pass "done rerun notes already-done"
+    else
+        fail "done rerun missing already-done message: $done_again"
+    fi
+fi
+
+echo
+echo "Results: $PASS passed, $FAIL failed"
+[[ $FAIL -eq 0 ]] || exit 1
