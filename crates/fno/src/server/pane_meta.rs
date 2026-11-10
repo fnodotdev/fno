@@ -45,7 +45,9 @@ pub(crate) fn pane_label(
 }
 
 /// The pure `PaneMeta` builder: the label chain plus the frame's bottom-edge
-/// facts. A missing fact takes `None` and the client drops the field.
+/// facts. A missing fact takes `None` and the client drops the field. `cwd`
+/// is the spawn cwd the label falls back to; `live_cwd` is the shell's own
+/// directory the frame shows, and an empty one is a missing fact.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn pane_meta(
     id: u64,
@@ -55,6 +57,8 @@ pub(crate) fn pane_meta(
     cmd: Option<&str>,
     branch: Option<&str>,
     ctx: Option<&str>,
+    host: Option<&str>,
+    live_cwd: Option<&str>,
 ) -> PaneMeta {
     PaneMeta {
         id,
@@ -62,7 +66,19 @@ pub(crate) fn pane_meta(
         node: node.map(str::to_string),
         branch: branch.map(str::to_string),
         ctx: ctx.map(str::to_string),
+        host: host.map(str::to_string),
+        cwd: live_cwd.filter(|c| !c.is_empty()).map(str::to_string),
     }
+}
+
+/// The frame's machine name: the first DNS label of the host, so a macOS
+/// `name.local` reads `name`. Every pane's pty runs on the server's own
+/// machine (a remote row's `name@host` is a registry label, not where the
+/// pty lives), so one read serves the whole tab. `None` when the host is
+/// unreadable.
+pub(crate) fn frame_host(raw: &str) -> Option<String> {
+    let short = sanitize_tab_name(raw.split('.').next().unwrap_or(""));
+    (!short.is_empty()).then_some(short)
 }
 
 /// A tab's display label, from spawn-time facts only - no I/O, no
@@ -185,6 +201,8 @@ pub(crate) fn tab_meta(
     // rename rewrites the row, never the pane's spawn-captured env), so it
     // leads the derived chain ahead of `FNO_AGENT_SELF`.
     let focus_entry = panes.get(&t.focus);
+    // The paint name (`FNO_DEMO_HOST` in a demo shot), never the live host.
+    let host = frame_host(&crate::agents_view::demo_hostname());
     let focus_reg = pane_registry_name(
         agents,
         session_name,
@@ -218,6 +236,9 @@ pub(crate) fn tab_meta(
                 let ctx = pane_ctx(agents, session_name, ctx_by_session, *pid, pane_pid);
                 let reg = pane_registry_name(agents, session_name, *pid, pane_pid);
                 let name = reg.as_deref().or_else(|| e.and_then(|e| e.name.as_deref()));
+                // Every tab is born at the squad root, so only the shell's
+                // live directory tells two panes apart (pane_cwd.rs).
+                let live_cwd = e.map(|e| crate::pane_cwd::live_or_spawn(pane_pid, &e.cwd));
                 pane_meta(
                     *pid,
                     name,
@@ -227,6 +248,8 @@ pub(crate) fn tab_meta(
                     e.and_then(|e| branch_by_cwd.get(&e.cwd))
                         .map(String::as_str),
                     ctx.as_deref(),
+                    host.as_deref(),
+                    live_cwd.as_deref(),
                 )
             })
             .collect(),
@@ -270,12 +293,27 @@ mod tests {
             Some("claude"),
             Some("main"),
             Some("49%"),
+            Some("mbp"),
+            Some("/home/u/proj/crates"),
         );
         assert_eq!(m.id, 3);
         assert_eq!(m.label, "claude");
         assert_eq!(m.node.as_deref(), Some("node7"));
         assert_eq!(m.branch.as_deref(), Some("main"));
         assert_eq!(m.ctx.as_deref(), Some("49%"));
+        assert_eq!(m.host.as_deref(), Some("mbp"));
+        // The frame shows the live directory; the label keeps the spawn one.
+        assert_eq!(m.cwd.as_deref(), Some("/home/u/proj/crates"));
+        // A reaped pane's empty cwd is no fact at all.
+        let gone = pane_meta(4, None, None, "", None, None, None, None, Some(""));
+        assert_eq!((gone.cwd, gone.host), (None, None));
+    }
+
+    #[test]
+    fn frame_host_keeps_the_first_label() {
+        assert_eq!(frame_host("bb-mbp.local").as_deref(), Some("bb-mbp"));
+        assert_eq!(frame_host("devbox").as_deref(), Some("devbox"));
+        assert_eq!(frame_host(""), None);
     }
     // A rename rewrites the registry row; the pane's FNO_AGENT_SELF
     // env is frozen at spawn. The chrome reads the row (live row first);

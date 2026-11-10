@@ -71,6 +71,10 @@ pub enum Part {
     Branch,
     /// The context-used string on the bottom edge.
     Ctx,
+    /// The machine name on the bottom edge.
+    Host,
+    /// The working directory on the bottom edge.
+    Cwd,
     /// The watcher count (`◉ 2`) leading the top-right span.
     Observers,
 }
@@ -86,6 +90,10 @@ pub struct EdgeFields<'a> {
     pub node: Option<&'a str>,
     pub branch: Option<&'a str>,
     pub ctx: Option<&'a str>,
+    /// The machine the pty runs on.
+    pub host: Option<&'a str>,
+    /// The working directory, already `~`-abbreviated by the caller.
+    pub cwd: Option<&'a str>,
     /// How many observers watch this pane. Shown on every drop step, because
     /// the driver must always be able to see that someone is watching.
     pub observers: usize,
@@ -155,14 +163,14 @@ fn top_right(f: &EdgeFields, step: usize) -> Vec<(char, Part)> {
     row
 }
 
-/// The bottom-left node span: ` node7 · main `. Step 2 drops the branch.
+/// The bottom-left node span: ` node7 · main `. Step 4 drops the branch.
 fn bottom_left(f: &EdgeFields, step: usize) -> Vec<(char, Part)> {
     let Some(node) = f.node else {
         return Vec::new();
     };
     let mut row = vec![(' ', Part::Border)];
     seg(&mut row, node, Part::Node);
-    if step < 2 {
+    if step < 4 {
         if let Some(b) = f.branch {
             seg(&mut row, &format!(" · {b} "), Part::Branch);
         }
@@ -171,10 +179,27 @@ fn bottom_left(f: &EdgeFields, step: usize) -> Vec<(char, Part)> {
     row
 }
 
-/// The bottom-right ctx span: ` ctx 49% `, then one fill cell before the
-/// corner (the mock's `─╯`). Step 1 of the drop ladder drops it whole.
+/// The bottom-right spans: the location ` mbp:~/code/footnote ` and the ctx
+/// ` ctx 49% `, each followed by one fill cell (the mock's `─╯`). Step 1 of
+/// the drop ladder drops the ctx whole, step 2 the host, step 3 the cwd.
 fn bottom_right(f: &EdgeFields, step: usize) -> Vec<(char, Part)> {
     let mut row = Vec::new();
+    let host = f.host.filter(|_| step < 2);
+    let cwd = f.cwd.filter(|_| step < 3);
+    if host.is_some() || cwd.is_some() {
+        row.push((' ', Part::Border));
+        if let Some(h) = host {
+            seg(&mut row, h, Part::Host);
+            if cwd.is_some() {
+                row.push((':', Part::Border));
+            }
+        }
+        if let Some(c) = cwd {
+            seg(&mut row, c, Part::Cwd);
+        }
+        row.push((' ', Part::Border));
+        row.push(('─', Part::Border));
+    }
     if step < 1 {
         if let Some(c) = f.ctx {
             seg(&mut row, &format!(" ctx {c} "), Part::Ctx);
@@ -205,9 +230,9 @@ fn tab(name: &str) -> Vec<(char, Part)> {
 ///
 /// Drop order (operator's): the top edge walks 0 (everything), 3 (drop the
 /// model), 4 (drop the word; the glyph stays), 5 (ellipsize the name); the
-/// bottom edge walks 0, 1 (drop ctx), 2 (drop the branch), 5 (ellipsize the
-/// node). Each edge stops at the first step that fits; a narrow top edge
-/// never costs the bottom edge its ctx.
+/// bottom edge walks 0, 1 (drop ctx), 2 (drop the host), 3 (drop the cwd),
+/// 4 (drop the branch), 5 (ellipsize the node). Each edge stops at the first
+/// step that fits; a narrow top edge never costs the bottom edge its ctx.
 pub fn edges(f: &EdgeFields, r: Rect, grip: bool) -> Edges {
     let w = r.cols as usize;
     let inner = w - 2; // between the corners
@@ -283,14 +308,14 @@ pub fn edges(f: &EdgeFields, r: Rect, grip: bool) -> Edges {
     };
 
     // -- bottom edge ----------------------------------------------------
-    // No grip on the bottom edge: left span, fill, right span. The ladder
-    // drops whole spans: step 1 the ctx span, step 2 the branch; whatever
-    // survives is ellipsized to the room left (fit_row).
+    // No grip on the bottom edge: left span, fill, right spans. The ladder
+    // drops whole spans: step 1 the ctx, 2 the host, 3 the cwd, 4 the
+    // branch; whatever survives is ellipsized to the room left (fit_row).
     let mut bottom_step = 0;
     let mut left = bottom_left(f, 0);
     let mut ctx = bottom_right(f, 0);
     let mut found = false;
-    for step in [0usize, 1, 2] {
+    for step in [0usize, 1, 2, 3, 4] {
         let cand = bottom_left(f, step);
         let cctx = bottom_right(f, step);
         // `1` before the left span (the mock's `╰─`).
@@ -305,8 +330,8 @@ pub fn edges(f: &EdgeFields, r: Rect, grip: bool) -> Edges {
     if !found {
         // Even the bare node span cannot sit on its own: name the deepest
         // drop and let fit_row cut it to whatever room is left.
-        bottom_step = 2;
-        left = bottom_left(f, 2);
+        bottom_step = 4;
+        left = bottom_left(f, 4);
         ctx = Vec::new();
     }
     let node_max = inner.saturating_sub(1 + cols_of(&ctx)).max(1);
@@ -356,7 +381,17 @@ mod tests {
             node: Some("node7"),
             branch: Some("main"),
             ctx: Some("49%"),
+            host: None,
+            cwd: None,
             observers: 0,
+        }
+    }
+
+    fn located<'a>() -> EdgeFields<'a> {
+        EdgeFields {
+            host: Some("mbp"),
+            cwd: Some("~/code/footnote"),
+            ..full()
         }
     }
 
@@ -448,6 +483,8 @@ mod tests {
             node: None,
             branch: None,
             ctx: None,
+            host: None,
+            cwd: None,
             observers: 0,
         };
         let e = edges(&bare, rect(40, 12), false);
@@ -455,6 +492,65 @@ mod tests {
         assert!(top.starts_with("╭─ zsh ─") && top.ends_with('╮'), "{top}");
         assert_eq!(cols_of(&e.top), 40);
         assert_eq!(s(&e.bottom), format!("╰{}╯", "─".repeat(38)));
+    }
+
+    // AC1-HP: a wide frame shows the machine and the working directory.
+    #[test]
+    fn a_wide_frame_shows_host_and_cwd() {
+        let e = edges(&located(), rect(100, 12), false);
+        let bottom = s(&e.bottom);
+        assert!(
+            bottom.ends_with(" mbp:~/code/footnote ─ ctx 49% ─╯"),
+            "{bottom}"
+        );
+        assert!(bottom.starts_with("╰─ node7 · main "), "{bottom}");
+        assert_eq!(cols_of(&e.bottom), 100);
+        assert_eq!(e.bottom_step, 0);
+
+        // A plain shell has no node, and still says where it runs.
+        let shell = EdgeFields {
+            name: "zsh",
+            status: None,
+            model: None,
+            node: None,
+            branch: None,
+            ctx: None,
+            observers: 0,
+            ..located()
+        };
+        let bottom = s(&edges(&shell, rect(40, 12), false).bottom);
+        assert!(bottom.ends_with(" mbp:~/code/footnote ─╯"), "{bottom}");
+    }
+
+    // AC1-EDGE: after the ctx, the host and then the cwd drop, both before
+    // the branch and the node.
+    #[test]
+    fn host_then_cwd_drop_before_branch_and_node() {
+        // node (15) + location (22) + 1 lead = 38 > 36 inner: the host goes.
+        let e = edges(&located(), rect(38, 12), false);
+        assert_eq!(e.bottom_step, 2, "{:?}", s(&e.bottom));
+        let b = s(&e.bottom);
+        assert!(!b.contains("49%") && !b.contains("mbp"), "{b}");
+        assert!(
+            b.contains("~/code/footnote") && b.contains("node7 · main"),
+            "{b}"
+        );
+
+        let e = edges(&located(), rect(30, 12), false);
+        assert_eq!(e.bottom_step, 3, "{:?}", s(&e.bottom));
+        let b = s(&e.bottom);
+        assert!(!b.contains("~/code"), "{b}");
+        assert!(b.contains("node7 · main"), "{b}");
+
+        // A long branch cannot sit beside the node at 20: the branch goes last.
+        let long = EdgeFields {
+            branch: Some("feature/frame-loc"),
+            ..located()
+        };
+        let e = edges(&long, rect(20, 12), false);
+        assert_eq!(e.bottom_step, 4, "{:?}", s(&e.bottom));
+        assert!(s(&e.bottom).contains("node7"), "{:?}", s(&e.bottom));
+        assert_eq!(cols_of(&e.bottom), 20);
     }
 
     // The driver must always see that someone is watching.
