@@ -233,6 +233,8 @@ enum Role {
     AgentsClient(Vec<OsString>),
     /// `fno agents transcript ...`: the native session-bundle transfer.
     AgentsTranscript(Vec<OsString>),
+    /// `fno agents session move ...`: carry a live session to another machine.
+    AgentsSessionMove(Vec<OsString>),
     /// `fno whoami scoreboard ...`: the telemetry views, native via the
     /// binary-direct `fno-agents scoreboard` door.
     WhoamiScoreboard(Vec<OsString>),
@@ -682,6 +684,12 @@ fn run_link(args: fno::mux_link::LinkArgs) -> i32 {
 /// same spelling as a shim that execs here, so both fronts answer once.
 fn classify_agents_transcript(args: &[OsString]) -> Option<Vec<OsString>> {
     classify_agents_command(args, "transcript")
+}
+
+/// `fno agents session move <name> --to <host>` arrives here as `agents move`
+/// (the front's rewrite of the session row): the native orchestrator.
+fn classify_agents_session_move(args: &[OsString]) -> Option<Vec<OsString>> {
+    classify_agents_command(args, "move")
 }
 
 /// `fno agents org refresh-canon` arrives here as `agents lead
@@ -1461,6 +1469,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = classify_agents_transcript(args) {
         return Role::AgentsTranscript(rest);
     }
+    if let Some(rest) = classify_agents_session_move(args) {
+        return Role::AgentsSessionMove(rest);
+    }
     if let Some(rest) = classify_whoami_scoreboard(args) {
         return Role::WhoamiScoreboard(rest);
     }
@@ -2147,6 +2158,7 @@ fn main() {
             std::process::exit(fno::lead_refresh_canon::run(&rest))
         }
         Role::AgentsTranscript(rest) => std::process::exit(fno::transcript_transfer::run(&rest)),
+        Role::AgentsSessionMove(rest) => std::process::exit(fno::session_move::run(&rest)),
         Role::WhoamiScoreboard(rest) => std::process::exit(run_scoreboard_door(&rest)),
         Role::ScoreboardAlias(rest) => {
             eprintln!("fno scoreboard is now fno whoami scoreboard");

@@ -156,7 +156,7 @@ fn print_code(code: &Code) {
 /// scan over the transcript roots answers for claude and codex alike. The
 /// relative path is the answer's suffix under its store root, so the
 /// receiving machine rebuilds the same location.
-fn locate(sid: &str) -> Result<(PathBuf, &'static str, PathBuf), String> {
+pub(crate) fn locate(sid: &str) -> Result<(PathBuf, &'static str, PathBuf), String> {
     let found = transcript_tail::find_transcripts(std::slice::from_ref(&sid));
     let Some(path) = found.get(sid) else {
         return Err(format!(
@@ -468,7 +468,7 @@ fn place_bundle(meta: &BundleMeta, transcript: &[u8], origin: Option<SessionOrig
         );
     } else {
         println!(
-            "next: check out that branch here, then claude --resume {} (same harness) or a handoff for a different one",
+            "next: check out that branch here, then claude --resume {} (same harness) or a handoff for a different one; to move a live session over ssh instead, run fno agents session move <name> --to <host>",
             meta.session_id
         );
     }
