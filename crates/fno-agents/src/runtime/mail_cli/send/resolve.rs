@@ -314,6 +314,105 @@ pub(super) fn reachable_from_harness_stores(_token: &str) -> (Vec<ReachableSessi
     (Vec::new(), true)
 }
 
+fn daemon_list_rows() -> (Vec<crate::claude_roster::ClaudeAgentRow>, bool) {
+    if let Some(path) = std::env::var_os("FNO_DAEMON_AGENTS_JSON").filter(|v| !v.is_empty()) {
+        return match std::fs::read(&path)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+            .and_then(|doc| parse_agents_value(&doc))
+        {
+            Some(rows) => (rows, true),
+            None => (Vec::new(), false),
+        };
+    }
+    if std::env::var("FNO_TEST_HERMETIC").ok().as_deref() == Some("1") {
+        return (Vec::new(), true);
+    }
+    match crate::claude_roster::read_all_agents_union() {
+        crate::claude_roster::ClaudeAgentsSnapshot::Known { rows, .. } => (rows, true),
+        crate::claude_roster::ClaudeAgentsSnapshot::Unknown { rows, .. } => (rows, true),
+    }
+}
+
+fn parse_agents_value(doc: &Value) -> Vec<ClaudeAgentRow> {
+    let rows = match doc {
+        Value::Array(rows) => rows.clone(),
+        Value::Object(o) => match o.get("agents") {
+            Some(Value::Array(rows)) => rows.clone(),
+            _ => return Vec::new(),
+        },
+        _ => return Vec::new(),
+    };
+    rows.iter()
+        .filter_map(|r| r.as_object())
+        .filter(|o| o.get("kind").and_then(Value::as_str) != Some("interactive"))
+        .filter_map(|o| {
+            let short_id = ["short_id", "id"]
+                .into_iter()
+                .find_map(|k| o.get(k).and_then(Value::as_str))
+                .filter(|v| !v.is_empty())?
+                .to_string();
+            let session_id = ["session_id", "sessionId"]
+                .into_iter()
+                .find_map(|k| o.get(k).and_then(Value::as_str))
+                .filter(|v| !v.is_empty())
+                .map(String::from);
+            let name = ["name", "title"]
+                .into_iter()
+                .find_map(|k| o.get(k).and_then(Value::as_str))
+                .filter(|v| !v.is_empty())
+                .map(String::from);
+            let cwd = ["cwd"]
+                .into_iter()
+                .find_map(|k| o.get(k).and_then(Value::as_str))
+                .filter(|v| !v.is_empty())
+                .map(String::from);
+            let state = o.get("state").and_then(Value::as_str);
+            Some(build_agent_row(&short_id, session_id, name, cwd, state))
+        })
+        .collect()
+}
+
+fn build_agent_row(
+    short_id: &str,
+    session_id: Option<String>,
+    name: Option<String>,
+    cwd: Option<String>,
+    state: Option<&str>,
+) -> ClaudeAgentRow {
+    let mut row = ClaudeAgentRow::new(short_id, state);
+    row.session_id = session_id;
+    row.name = name;
+    row.cwd = cwd;
+    row
+}
+
+pub(crate) fn daemon_hits_from_rows(token: &str, rows: &[ClaudeAgentRow]) -> Vec<ReachableSession> {
+    rows.iter()
+        .filter_map(|row| {
+            let name = row.name.as_deref()?;
+            if name != token && !name.eq_ignore_ascii_case(token) {
+                return None;
+            }
+            let sid = row.session_id.as_deref()?;
+            Some(ReachableSession {
+                session_id: sid.to_string(),
+                source: "daemon",
+                agent: "claude".to_string(),
+                cwd: row.cwd.clone(),
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn reachable_from_daemon_list(token: &str) -> (Vec<ReachableSession>, bool) {
+    let (rows, read_ok) = daemon_list_rows();
+    if !read_ok {
+        return (Vec::new(), false);
+    }
+    (daemon_hits_from_rows(token, &rows), true)
+}
+
 /// Python `resolve_reachable`: the union with the same merge, ambiguity and
 /// degradation rules.
 /// `pub(crate)`: the reply leaf's ladder resolves through it.
@@ -332,10 +431,11 @@ pub(crate) fn resolve_reachable(token: &str) -> ReachResult {
         Err(()) => degraded.push("registry"),
     }
     type Source = fn(&str) -> (Vec<ReachableSession>, bool);
-    let sources: [(&'static str, Source); 5] = [
+    let sources: [(&'static str, Source); 6] = [
         ("transcript", reachable_from_transcripts),
         ("harness-store", reachable_from_harness_stores),
         ("registry", reachable_from_registry),
+        ("daemon", reachable_from_daemon_list),
         ("roster", reachable_from_roster),
         ("graph", reachable_from_graph),
     ];
@@ -508,6 +608,108 @@ pub(crate) fn unavailable_token_exit(name: &str, failed: &[String], candidates: 
     2
 }
 
+pub(crate) fn spelling_near(name: &str, token: &str) -> bool {
+    let (name, token) = (name.to_lowercase(), token.to_lowercase());
+    if name.starts_with(&token) || token.starts_with(&name) {
+        return true;
+    }
+    if name.len() < 3 || token.len() < 3 {
+        return name == token;
+    }
+    name.as_bytes()
+        .windows(3)
+        .any(|w| token.as_bytes().windows(3).any(|t| t == w))
+}
+
+/// The near rows over daemon rows: name spelling-neighbors, short id first.
+pub(crate) fn near_from_daemon_rows(
+    token: &str,
+    rows: &[crate::claude_roster::ClaudeAgentRow],
+) -> Vec<(ShortForm, String)> {
+    rows.iter()
+        .filter_map(|row| {
+            let name = row.name.as_deref()?;
+            if !spelling_near(name, token) {
+                return None;
+            }
+            Some((ShortForm(row.short_id.clone()), name.to_string()))
+        })
+        .collect()
+}
+
+/// The near rows over registry rows: harness_title (or name) spelling
+/// neighbors, short id keyed.
+pub(crate) fn near_from_registry_rows(token: &str, rows: &[Value]) -> Vec<(ShortForm, String)> {
+    rows.iter()
+        .filter_map(|row| {
+            let sid = opt_str_field(row, "short_id")?;
+            let title =
+                opt_str_field(row, "harness_title").or_else(|| opt_str_field(row, "name"))?;
+            if !spelling_near(title, token) {
+                return None;
+            }
+            Some((ShortForm(sid.to_string()), title.to_string()))
+        })
+        .collect()
+}
+
+/// The live sessions whose names or titles share a spelling with the token:
+/// the daemon rows first, then registry rows, dedup by short id, at most 5.
+pub(crate) fn near_sessions(token: &str) -> Vec<(ShortForm, String)> {
+    let mut out: Vec<(ShortForm, String)> = Vec::new();
+    let (rows, read_ok) = daemon_list_rows();
+    if read_ok {
+        out.extend(near_from_daemon_rows(token, &rows));
+    }
+    let registry = AgentsHome::shared_registry_json();
+    if let Ok(entries) = crate::client_commands::load_registry_entries(&registry) {
+        out.extend(near_from_registry_rows(token, &entries));
+    }
+    // Dedup by short id, daemon rows first.
+    let mut seen: std::collections::HashSet<String> = Default::default();
+    out.retain(|(sid, _)| seen.insert(sid.as_str().to_string()));
+    out.truncate(5);
+    out
+}
+
+/// The refusal's candidate strings: `<short id> (<name>)`.
+pub(crate) fn format_near(near: &[(ShortForm, String)]) -> Vec<String> {
+    near.iter()
+        .map(|(sid, name)| format!("{} ({})", sid.as_str(), name))
+        .collect()
+}
+
+/// The Directory impl the send path calls: the six resolution sources, one
+/// merge, and the near rows on a clean miss. The daemon rows reach the impl
+/// through the same staged-file door the leg reads.
+pub(crate) struct MailDirectory;
+
+impl fno_mail::directory::Directory for MailDirectory {
+    fn resolve(&self, token: &str) -> Resolution {
+        let reach = resolve_reachable(token);
+        let mut hits: Vec<SessionId> = Vec::new();
+        if let Some(hit) = &reach.hit {
+            if let Ok(sid) = SessionId::parse(&hit.session_id) {
+                hits.push(sid);
+            }
+        }
+        for candidate in &reach.ambiguous {
+            if let Ok(sid) = SessionId::parse(candidate) {
+                hits.push(sid);
+            }
+        }
+        let resolution = Resolution::from_hits(hits);
+        match resolution {
+            // A clean miss fills the near rows; every other outcome returns
+            // as resolved or ambiguous.
+            Resolution::None { .. } => Resolution::None {
+                near: near_sessions(token),
+            },
+            other => other,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The name lane and the dispatch engine
 // ---------------------------------------------------------------------------
@@ -606,4 +808,92 @@ pub(super) enum TokenFailure {
 
 pub(super) fn is_job_token(token: &str) -> bool {
     token.starts_with("node:") || token.starts_with("pr:")
+}
+
+#[cfg(test)]
+mod mail_addr_tests {
+    use super::*;
+    use crate::claude_roster::ClaudeAgentRow;
+
+    fn daemon_row(name: &str, sid: &str) -> ClaudeAgentRow {
+        let mut row = ClaudeAgentRow::new("6bf63c59", None);
+        row.name = Some(name.to_string());
+        row.session_id = Some(sid.to_string());
+        row
+    }
+
+    fn other_row(name: &str, sid: &str) -> ClaudeAgentRow {
+        let mut row = ClaudeAgentRow::new("0aa11bb2", None);
+        row.name = Some(name.to_string());
+        row.session_id = Some(sid.to_string());
+        row
+    }
+
+    /// A daemon row named t-decisions-read-as with session 6bf63c59-... and
+    /// a registry row named 6bf63c59 with no aliases: the send resolves to
+    /// the daemon row's session (AC1-HP).
+    #[test]
+    fn mail_addr_name_resolves_through_daemon_list() {
+        let rows = vec![daemon_row(
+            "t-decisions-read-as",
+            "6bf63c59-753c-4e01-9d5d-000000000001",
+        )];
+        let hits = daemon_hits_from_rows("t-decisions-read-as", &rows);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].session_id, "6bf63c59-753c-4e01-9d5d-000000000001");
+        assert_eq!(hits[0].source, "daemon");
+        let hits = daemon_hits_from_rows("T-DECISIONS-READ-AS", &rows);
+        assert_eq!(hits.len(), 1, "case-folded match");
+    }
+
+    /// A token no store answers: the refusal names each near session as
+    /// `<short id> (<name>)` (AC2-ERR).
+    #[test]
+    fn mail_addr_unknown_refusal_names_short_ids() {
+        let rows = vec![daemon_row(
+            "t-decisions-read-as",
+            "6bf63c59-753c-4e01-9d5d-000000000001",
+        )];
+        let near = near_from_daemon_rows("t-decis", &rows);
+        assert_eq!(near.len(), 1);
+        let formatted = format_near(&near);
+        assert_eq!(
+            formatted,
+            vec!["6bf63c59 (t-decisions-read-as)".to_string()]
+        );
+        let line = unreachable_token_line("t-decis", &formatted);
+        assert!(
+            line.contains("Closest live sessions: 6bf63c59 (t-decisions-read-as)."),
+            "{line}"
+        );
+        let bare = near_from_daemon_rows("zzz", &rows);
+        assert!(bare.is_empty(), "{bare:?}");
+        // Registry rows fill near too, titled by harness_title.
+        let registry_row = serde_json::json!({
+            "short_id": "9aa11bb2",
+            "name": "t-alpha-1",
+            "harness_title": "t-alpha-1",
+            "harness_session_id": "9aa11bb2-1111-2222-3333-444455556666"
+        });
+        let near = near_from_registry_rows("t-alp", &[registry_row]);
+        assert_eq!(near.len(), 1);
+        assert_eq!(near[0].0.as_str(), "9aa11bb2");
+    }
+
+    /// Two daemon rows sharing one name resolve Ambiguous (AC3-ERR).
+    #[test]
+    fn mail_addr_daemon_name_two_rows_is_ambiguous() {
+        let rows = vec![
+            daemon_row("twin", "a1b2c3d4-1111-2222-3333-444455556666"),
+            other_row("twin", "a1b2c3d4-9999-8888-7777-666655554444"),
+        ];
+        let hits = daemon_hits_from_rows("twin", &rows);
+        assert_eq!(hits.len(), 2);
+        let resolution = Resolution::from_hits(
+            hits.iter()
+                .filter_map(|h| SessionId::parse(&h.session_id).ok())
+                .collect(),
+        );
+        assert!(matches!(resolution, Resolution::Ambiguous(_)));
+    }
 }
