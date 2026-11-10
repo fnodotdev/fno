@@ -454,9 +454,9 @@ pub(super) fn draw_detail(
             "notes \u{b7} Enter saves \u{b7} Esc cancels"
         }
     } else if d.item().options.is_empty() {
-        "Enter answer \u{b7} j/k scroll \u{b7} n notes \u{b7} w watch \u{b7} Esc close"
+        "Enter answer \u{b7} j/k scroll \u{b7} n notes \u{b7} w open \u{b7} Esc close"
     } else {
-        "1-9 option \u{b7} 0 none \u{b7} a agents decide \u{b7} j/k select \u{b7} Enter sends \u{b7} n notes \u{b7} w watch \u{b7} ^d/^u scroll \u{b7} x archive \u{b7} X archive all \u{b7} Esc close"
+        "1-9 option \u{b7} 0 none \u{b7} a agents decide \u{b7} j/k select \u{b7} Enter sends \u{b7} n notes \u{b7} w open \u{b7} ^d/^u scroll \u{b7} x archive \u{b7} X archive all \u{b7} Esc close"
     };
     if hint_h > 0 {
         let wrapped = super::backlog_board::backlog_panes::hint_rows(hint, cols);
@@ -1118,37 +1118,26 @@ pub(super) async fn detail_keys(
                 let saved = d.notes.take().unwrap_or_default();
                 d.free = Some(saved);
             }
-            // `w` watches the asker: focus its live pane through the same
-            // agent_hit path the feed modal uses (feed_detail.rs), else the
-            // notice names the miss. A send failure aborts the key batch.
-            b'w' => {
-                let row = d
-                    .item()
-                    .origin
-                    .as_ref()
-                    .and_then(|o| o.session_id.clone())
-                    .and_then(|sid| {
-                        view.layout
-                            .agents
-                            .iter()
-                            .find(|a| a.harness_session_id.as_deref() == Some(sid.as_str()))
-                            .cloned()
-                    });
-                match row {
-                    Some(a) => match agent_hit(&a, view.layout.active_squad) {
-                        ChromeHit::Cmds(cmds) => {
-                            for cmd in cmds {
-                                write_msg(sock_w, &ClientMsg::Command(cmd))
-                                    .await
-                                    .map_err(|e| format!("command send failed: {e}"))?;
-                            }
+            // `w` opens the asker through the shared open-session action
+            // the feed modal uses: a live pane focuses, a dead row resumes,
+            // a session the registry lacks names its adopt line. A send
+            // failure aborts the key batch.
+            b'w' => match asker_session(d.item(), &view.layout.agents) {
+                Some(sid) => match crate::backlog_model::open_session(&view.layout.agents, &sid) {
+                    crate::backlog_model::OpenSession::Cmds(cmds) => {
+                        for cmd in cmds {
+                            write_msg(sock_w, &ClientMsg::Command(cmd))
+                                .await
+                                .map_err(|e| format!("command send failed: {e}"))?;
                         }
-                        ChromeHit::Notice(msg) => d.notice = Some(msg),
-                        _ => d.notice = Some("session not on this bridge".into()),
-                    },
-                    None => d.notice = Some("session not on this bridge".into()),
-                }
-            }
+                    }
+                    crate::backlog_model::OpenSession::Shell(line) => {
+                        d.notice = Some(format!("open with: {line}"))
+                    }
+                    crate::backlog_model::OpenSession::Dim(why) => d.notice = Some(why),
+                },
+                None => d.notice = Some("this question names no asking session".into()),
+            },
             b'\r' | b'\n' => match submit(d) {
                 Submit::Queued((id, pick)) => {
                     if !view.question_acting {
@@ -1191,6 +1180,39 @@ pub(super) fn mouse(view: &mut View, rep: crate::mouse::MouseReport) {
     let k = usize::from(rep.col - r.col) * slots.len() / usize::from(r.w);
     d.screen = slots.get(k).copied();
     d.expanded = d.screen.is_some();
+}
+
+/// The harness session `w` opens for a question's asker. An ask records the
+/// asker's fno id when its manifest holds one, which no row's harness id
+/// equals, so a question asked on this machine also joins by registry name.
+/// A copy from another machine joins by id only: two machines name rows
+/// alike.
+pub(super) fn asker_session(
+    item: &crate::needs_overlay::QuestionItem,
+    agents: &[AgentRow],
+) -> Option<String> {
+    let origin = item.origin.as_ref()?;
+    let sid = origin.session_id.as_deref().filter(|s| !s.is_empty());
+    if let Some(sid) = sid {
+        if agents
+            .iter()
+            .any(|a| a.harness_session_id.as_deref() == Some(sid))
+        {
+            return Some(sid.to_string());
+        }
+    }
+    // A live row wins a name shared with an exited one; an exited row
+    // still joins, so a dead asker takes its own resume door.
+    let by_name = origin
+        .name
+        .as_deref()
+        .filter(|_| item.host.is_none())
+        .and_then(|n| {
+            let named = || agents.iter().filter(move |a| a.name == n);
+            named().find(|a| !a.exited).or_else(|| named().next())
+        })
+        .and_then(|a| a.harness_session_id.clone());
+    by_name.or_else(|| sid.map(str::to_string))
 }
 
 /// Move the highlighted option one step through the option list with none
