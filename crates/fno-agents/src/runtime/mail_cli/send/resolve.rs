@@ -333,6 +333,10 @@ fn daemon_list_rows() -> (Vec<crate::claude_roster::ClaudeAgentRow>, bool) {
     }
     match crate::claude_roster::read_all_agents_union() {
         crate::claude_roster::ClaudeAgentsSnapshot::Known { rows, .. } => (rows, true),
+        // Rows from a partial union are still evidence. An empty Unknown
+        // read stays a clean miss, not a degraded one: a host with no claude
+        // binary reads Unknown every time, and degrading there would turn
+        // every unknown name on a codex-only box into "unreadable stores".
         crate::claude_roster::ClaudeAgentsSnapshot::Unknown { rows, .. } => (rows, true),
     }
 }
@@ -555,7 +559,10 @@ pub(super) fn unreachable_token_line(name: &str, candidates: &[String]) -> Strin
     let hint = if candidates.is_empty() {
         String::new()
     } else {
-        format!(" Closest live sessions: {}.", candidates.join(", "))
+        format!(
+            " Send to a session id. Closest live sessions: {}.",
+            candidates.join(", ")
+        )
     };
     format!(
         "unknown agent or live-session handle: {}.{hint}",
@@ -567,31 +574,6 @@ pub(super) fn unreachable_token_line(name: &str, candidates: &[String]) -> Strin
 pub(crate) fn unreachable_token_exit(name: &str, candidates: &[String], code: i32) -> i32 {
     eprintln!("{}", unreachable_token_line(name, candidates));
     code
-}
-
-#[cfg(test)]
-mod token_exit_tests {
-    use super::*;
-
-    /// The unknown-handle refusal names the closest live handles when the
-    /// resolver found any, and stays bare when it found none.
-    #[test]
-    fn the_unknown_handle_refusal_names_closest_live_sessions_when_any_exist() {
-        let line = unreachable_token_line(
-            "nope",
-            &["fno-think001".to_string(), "fno-tgt00001".to_string()],
-        );
-        assert!(
-            line.contains("Closest live sessions: fno-think001"),
-            "{line}"
-        );
-        assert!(
-            line.contains("unknown agent or live-session handle"),
-            "{line}"
-        );
-        let bare = unreachable_token_line("nope", &[]);
-        assert!(!bare.contains("Closest live sessions"), "{bare}");
-    }
 }
 
 /// `pub(crate)`: the reply leaf mirrors the send leaf's refusal exits.
@@ -871,6 +853,8 @@ mod mail_addr_tests {
         );
         let bare = near_from_daemon_rows("zzz", &rows);
         assert!(bare.is_empty(), "{bare:?}");
+        let bare_line = unreachable_token_line("zzz", &format_near(&bare));
+        assert!(!bare_line.contains("Closest live sessions"), "{bare_line}");
         // Registry rows fill near too, titled by harness_title.
         let registry_row = serde_json::json!({
             "short_id": "9aa11bb2",
