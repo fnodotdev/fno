@@ -533,6 +533,41 @@ fn a_traceback_refusal_names_its_cause_line() {
     assert_eq!(reason.text, "ModuleNotFoundError: No module named 'fno.pr'");
 }
 
+/// Serves one fixed `gh api rate_limit` payload; every other call refuses.
+struct RateLimitProbe(&'static str);
+
+impl GhProbe for RateLimitProbe {
+    fn run_gh(&self, _cwd: &Path, args: &[String]) -> Result<(bool, String, String), String> {
+        if args.join(" ").contains("rate_limit") {
+            return Ok((true, self.0.to_string(), String::new()));
+        }
+        Ok((
+            false,
+            String::new(),
+            "gh: API rate limit exceeded (HTTP 403)".into(),
+        ))
+    }
+}
+
+/// The 2026-11-09 iMac refusal: a keyless `gh` reads GitHub's anonymous
+/// 60-request bucket. It must classify as a local auth fault with no
+/// rate-limit class, so no caller writes the shared fleet hold.
+#[test]
+fn a_keyless_refusal_is_an_auth_fault_not_a_fleet_hold() {
+    let _env = crate::claims::test_env_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let state = tempfile::tempdir().unwrap();
+    std::env::set_var("FNO_STATE_DIR", state.path());
+    let probe =
+        RateLimitProbe(r#"{"resources":{"core":{"limit":60,"remaining":59,"reset":1794300000}}}"#);
+    let stderr = "gh: API rate limit exceeded for 203.0.113.7. (HTTP 403)";
+    let reason = crate::pr_status::rest_reason(&probe, Path::new("/tmp"), stderr);
+    std::env::remove_var("FNO_STATE_DIR");
+    assert_eq!(reason.rate_limit_class, "", "no class, so no hold");
+    assert!(reason.text.contains("no token here"), "{}", reason.text);
+}
+
 /// The stranded tier fact rides a cancelled-only payload: the field carries
 /// the rerun remedy and one stderr note names it. A null fact adds neither,
 /// so the golden replay stays byte-identical.

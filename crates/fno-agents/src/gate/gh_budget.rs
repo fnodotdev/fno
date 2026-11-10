@@ -1113,6 +1113,34 @@ pub(crate) fn core_from_rate_limit(payload: &Value) -> Option<(i64, i64)> {
     Some((remaining, reset))
 }
 
+/// GitHub's core limit for an unauthenticated request. An authenticated
+/// token reads 5000 (or more), so a core limit of exactly 60 means the
+/// caller sent no token.
+pub(crate) const ANONYMOUS_CORE_LIMIT: i64 = 60;
+
+/// True when a `rate_limit` payload is the anonymous bucket (no token here).
+pub(crate) fn is_anonymous_core(payload: &Value) -> bool {
+    payload
+        .pointer("/resources/core/limit")
+        .and_then(Value::as_i64)
+        == Some(ANONYMOUS_CORE_LIMIT)
+}
+
+/// Whether this machine's `gh` is anonymous, read from the exempt
+/// `rate_limit` endpoint. An unreadable answer is not anonymous: it keeps
+/// the existing refusal handling.
+pub(crate) fn local_gh_anonymous() -> bool {
+    let out = std::process::Command::new("gh")
+        .args(["api", "rate_limit"])
+        .output();
+    match out {
+        Ok(o) if o.status.success() => serde_json::from_slice::<Value>(&o.stdout)
+            .map(|v| is_anonymous_core(&v))
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
 /// One core reading lands in the ledger from an exempt `rate_limit` answer:
 /// the probe the GraphQL broker runs before every discretionary call, the
 /// spend report, and the failure classifiers all fetch this payload, and
@@ -1125,6 +1153,11 @@ pub(crate) fn record_core_from_rate_limit(payload: &Value) {
     let Some((remaining, reset)) = core_from_rate_limit(payload) else {
         return;
     };
+    // An anonymous reading is this machine's keyless bucket, not the
+    // account's: it must not stamp the shared core bucket.
+    if is_anonymous_core(payload) {
+        return;
+    }
     if !core_recording_armed() {
         return;
     }
@@ -1864,6 +1897,13 @@ mod tests {
         });
         assert_eq!(core_from_rate_limit(&payload), Some((0, reset_s)));
         assert_eq!(core_from_rate_limit(&json!({"resources": {}})), None);
+
+        // Limit 60 is GitHub's keyless bucket; a token reads 5000.
+        let anonymous =
+            json!({"resources": {"core": {"limit": 60, "remaining": 59, "reset": reset_s}}});
+        assert!(is_anonymous_core(&anonymous), "limit 60 means no token");
+        assert!(!is_anonymous_core(&payload), "limit 5000 is authed");
+        assert!(!is_anonymous_core(&json!({"resources": {}})));
 
         // The full entry under the real ledger: disarmed (the unit-test
         // default) it writes nothing anywhere; armed over a staged state

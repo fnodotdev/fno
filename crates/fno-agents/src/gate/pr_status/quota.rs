@@ -423,6 +423,20 @@ pub(crate) fn record_refusal(stderr: &str) {
     if !stderr.contains("HTTP 403") && !stderr.contains("HTTP 429") {
         return;
     }
+    record_refusal_as(stderr, crate::gh_budget::local_gh_anonymous());
+}
+
+/// The writer with the anonymity verdict supplied. An anonymous machine
+/// (no token, so GitHub's 60-request bucket) refuses for a local reason
+/// only: the refusal names this machine's keychain, not the account, so it
+/// writes no shared hold.
+pub(crate) fn record_refusal_as(stderr: &str, anonymous: bool) {
+    if !stderr.contains("HTTP 403") && !stderr.contains("HTTP 429") {
+        return;
+    }
+    if anonymous {
+        return;
+    }
     let low = stderr.to_lowercase();
     let mut kind = if low.contains("secondary rate limit") {
         "secondary"
@@ -817,11 +831,38 @@ mod tests {
         };
 
         stage(4706, now - crate::gh_budget::CORE_READING_FRESH_MS - 60_000);
-        record_refusal(stderr);
+        record_refusal_as(stderr, false);
         assert_eq!(kind(), "core", "a stale positive never downgrades");
 
         stage(4706, now - 1_000);
-        record_refusal(stderr);
+        record_refusal_as(stderr, false);
         assert_eq!(kind(), "secondary", "a fresh positive downgrades");
+    }
+
+    /// A machine with no token reads GitHub's anonymous 60-request bucket.
+    /// Its refusal is a local auth fault: it must never open the shared
+    /// fleet hold that stands every other machine down.
+    #[test]
+    fn an_anonymous_refusal_writes_no_shared_hold() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let _state = EnvGuard::set("FNO_STATE_DIR", tmp.path().as_os_str());
+        let stderr = "gh: API rate limit exceeded for 203.0.113.7. (HTTP 403)";
+        let now = crate::gh_budget::now_ms();
+
+        record_refusal_as(stderr, true);
+        let held = crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now);
+        assert_eq!(held.backoff_remaining_s, 0, "anonymous writes no hold");
+
+        // Positive control: the same refusal from a token-holding machine
+        // does open the hold, so the test fails if the gate is removed.
+        record_refusal_as(stderr, false);
+        let held = crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now);
+        assert!(
+            held.backoff_remaining_s > 0,
+            "authed refusal opens the hold"
+        );
     }
 }
