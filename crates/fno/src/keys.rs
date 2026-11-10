@@ -551,6 +551,13 @@ pub enum Event {
     /// mode (text filter, Tab state pane focus, Ctrl-n/p cursor, Enter goto); the
     /// chord only opens it (like SearchOpen).
     OpenNav,
+    /// Jump to the next pane whose derived state is Blocked, an agent
+    /// waiting on the operator (prefix+Z, the one chord byte no key set or
+    /// preset claims). No overlay opens and nothing is typed into the pane:
+    /// the client walks its navigator catalog (nav_rows), focuses the
+    /// waiting pane after the one you are at, and wraps; pressed repeatedly
+    /// it cycles the waiting set.
+    FocusNextBlocked,
     /// Open or close the notifications bell panel (prefix+q).
     ToggleBell,
     /// Open the Messages tab (prefix+M) from anywhere: the mail overlay
@@ -1332,6 +1339,13 @@ pub(crate) fn default_bindings() -> Vec<KeyBinding> {
             OpenNav,
             Navigation,
             "find: goto workspace/tab/pane/agent",
+        ),
+        b(
+            b'Z',
+            "next-waiting",
+            FocusNextBlocked,
+            Navigation,
+            "jump to the next agent waiting on you",
         ),
         // global
         b(
@@ -2245,6 +2259,24 @@ mod tests {
             ]
         );
         assert_eq!(scan_all(&[b"\x02g"]), vec![Event::DispatchNext]);
+        // prefix+Z jumps to the next agent waiting on the operator; the
+        // `Z` never leaks, and the focus/resize letter families stay put.
+        assert_eq!(
+            scan_all(&[b"a\x02Zb"]),
+            vec![
+                Event::Forward(b"a".to_vec()),
+                Event::FocusNextBlocked,
+                Event::Forward(b"b".to_vec()),
+            ]
+        );
+        assert_eq!(
+            scan_all(&[b"\x02j"]),
+            vec![Event::Cmd(Command::FocusDir(Dir::Down))]
+        );
+        assert_eq!(
+            scan_all(&[b"\x02J"]),
+            vec![Event::Cmd(Command::ResizeDir(Dir::Down))]
+        );
     }
 
     #[test]
@@ -2387,14 +2419,17 @@ mod tests {
 
         // A user row on the same action wins; a user row on a preset key
         // takes that key and the preset row steps aside without a warning.
+        // The same-action specimen sits on `-`: a byte the default table
+        // does not claim (the resolver refuses a proposal onto a claimed
+        // byte), and no preset moves anything onto.
         let user = vec![
-            ("detach".to_string(), "Z".to_string()),
+            ("detach".to_string(), "-".to_string()),
             ("search".to_string(), "u".to_string()),
         ];
         let (rows, _) = with_preset(Some("zellij"), user);
         let (map, warn) = resolve_keymap(None, &rows);
         assert!(warn.iter().all(|w| !w.0.contains("preset")), "{warn:?}");
-        assert_eq!(key(&map, "detach"), Some(b'Z'));
+        assert_eq!(key(&map, "detach"), Some(b'-'));
         assert_eq!(key(&map, "search"), Some(b'u'));
         assert_eq!(key(&map, "rerun-block"), None, "preset row yielded");
 

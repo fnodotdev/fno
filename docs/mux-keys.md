@@ -5,6 +5,7 @@ These keys open the mux tools beside your sessions. The in-app `prefix+?` modal 
 | Key | Action id | Event | What opens |
 |---|---|---|---|
 | `prefix+f` | `find` | OpenNav | The navigator: a global goto picker over every workspace, tab, pane, agent, work-queue card and, with the machine layer on, every session on another machine. Text-filter by label, pane id, node id, title-slug, workspace or host. |
+| `prefix+Z` | `next-waiting` | FocusNextBlocked | Jump to the next agent waiting on you: focus the next pane whose state is blocked. Press it again to cycle through the waiting set. |
 | `prefix+w` | `selector` | OpenSelector | The sideline row selector: cursor over the sideline's own rows. |
 | `prefix+b` | `toggle-sideline` | TogglePanel | Sideline panel visibility. |
 | `prefix+q` | `notifications-bell` | ToggleBell | Questions and fleet announcements in the notifications panel. |
