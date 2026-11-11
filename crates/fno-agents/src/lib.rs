@@ -157,7 +157,7 @@ pub use runtime::{
     mail_carrier, mail_cli, mail_control_drain, mail_envelope, mail_header, mail_hold, mail_inject,
     mail_notify_self, mail_paths, mail_receipt, mail_remote, mail_teach, mail_threads, manifest,
     manifest_lookup, mcp, native_adopt, notice_route, notify_dispatch, nudge, observer,
-    opencode_serve, opencode_transcript, operator_notice, operator_turns, operator_witness,
+    opencode_serve, opencode_transcript, opencode_turn, operator_notice, operator_turns, operator_witness,
     org_board, org_fold, org_remote, org_rivals, orphan_reap, orphans, osc, page_relief,
     pane_claim, pane_identity, pane_keeper, pane_loop, pane_rebind, pane_relaunch, pane_stop, peek,
     pending_session_row, pi_transcript, process_owner, process_probe, project, provenance,
@@ -180,7 +180,8 @@ pub(crate) use runtime::{
     adopt_carry, adopt_identity, agents_event, attended, cargo_builds, cargo_orphans,
     claude_restart_watch, fnod, footprint_cache, keeper_revival, lead_checkin_beat_budget,
     ledger_register, ledger_workers, prompt_wait, reap_evidence, resume_reroute, resume_route,
-    retired_lead, served_liveness, session_receipt, thread_dialog,
+    retired_lead, served_liveness, session_receipt, thread_dialog, thread_permission,
+    opencode_permission,
 };
 use runtime::{agent_lock, boot_revival, codex_thread_entry, repo_identity, state_layout_merge};
 pub use spawn::{

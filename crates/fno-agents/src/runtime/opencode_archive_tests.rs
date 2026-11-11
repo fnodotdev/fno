@@ -204,21 +204,7 @@ fn an_id_of_another_harnesss_shape_never_reaches_the_serve() {
 /// version bound is a claim about a vendor binary, and only a live run can
 /// renew it. Ignored by default because it needs a serve:
 
-/// Percent-encode a directory path for the `?directory=` query value: every
-/// byte outside the RFC 3986 unreserved set plus `/` becomes `%XX`, so `&`
-/// cannot split the param and a stray `%` cannot decode into another byte.
-fn encode_query_path(path: &str) -> String {
-    let mut out = String::with_capacity(path.len());
-    for byte in path.bytes() {
-        let keep = byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/');
-        if keep {
-            out.push(byte as char);
-        } else {
-            out.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    out
-}
+use crate::opencode_permission::encode_query_path;
 
 ///
 /// ```text
