@@ -377,6 +377,12 @@ impl Root {
     fn on_down(&mut self, ev: &MouseDownEvent, window: &mut Window, _cx: &mut Context<Self>) {
         window.focus(&self.focus);
         let (x, y) = self.local(ev.position);
+        // A drag whose release never reached the window is closed first, so
+        // the server never keeps a half-made selection.
+        if let Some((pane, rect)) = self.drag.take() {
+            let end = mouse::clamped(x, y, self.cell(), pane, rect);
+            self.mouse(end, MouseKind::Release(proto::MouseButton::Left), false);
+        }
         if let Some(hit) = mouse::hit(x, y, self.cell(), &self.layout.panes) {
             let rect = self
                 .layout

@@ -92,8 +92,7 @@ pub fn rows(layout: &Layout, board: &Board, now_secs: u64) -> Vec<Row> {
     };
     out.push(Row::Header("Questions"));
     out.extend(failed(board.questions_error()));
-    let mut questions: Vec<_> = board.questions().iter().collect();
-    questions.sort_by(|a, b| b.item.created_at.cmp(&a.item.created_at));
+    let questions = board.questions_newest_first();
     if questions.is_empty() && board.questions_error().is_none() {
         out.push(Row::Empty("nothing waits on you"));
     }

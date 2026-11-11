@@ -105,7 +105,7 @@ fn feed(root: &Root, cx: &mut Context<Root>) -> Div {
     if let Some(e) = root.board.questions_error() {
         out = out.child(error_line(e, root));
     }
-    let questions = root.board.questions();
+    let questions = root.board.questions_newest_first();
     if questions.is_empty() && root.board.questions_error().is_none() {
         out = out.child(
             div()

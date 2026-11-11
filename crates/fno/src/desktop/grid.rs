@@ -285,7 +285,8 @@ fn paint_scroll_badge(
     // Half a cell of padding on each side, so the text never touches the
     // pane's border.
     let width = cw * (text.chars().count() as f32 + 1.0);
-    let x = origin.x + cw * frame.cols as f32 - width;
+    // A pane narrower than the badge starts it at the pane's own edge.
+    let x = (origin.x + cw * frame.cols as f32 - width).max(origin.x);
     let at = point(x, origin.y);
     window.paint_quad(fill(
         Bounds::new(at, size(width, m.cell.height)),

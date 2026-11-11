@@ -152,6 +152,13 @@ impl Board {
         &self.questions
     }
 
+    /// The same questions newest first, the order the desktop views show.
+    pub(crate) fn questions_newest_first(&self) -> Vec<&OpenQuestion> {
+        let mut out: Vec<&OpenQuestion> = self.questions.iter().collect();
+        out.sort_by(|a, b| b.item.created_at.cmp(&a.item.created_at));
+        out
+    }
+
     /// Why the newest question read failed, or that none has run.
     pub(crate) fn questions_error(&self) -> Option<&str> {
         match (&self.questions_error, self.questions_read) {
