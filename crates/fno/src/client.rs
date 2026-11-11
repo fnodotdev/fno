@@ -713,6 +713,7 @@ pub(crate) struct View {
     agent_group: AgentGroup,
     machine_tree: machine_tree::MachineTree,
     remote_hosts: remote_hosts::RemoteHosts,
+    extensions: extensions::Extensions,
     /// The card's `node · PR` header row switch (prefix+Y), persisted.
     show_card_head: bool,
     /// Nest workers under their lead in the card layout (prefix+t),
@@ -1708,6 +1709,7 @@ pub(crate) enum AuxAction {
     /// names, so this carries one of them.
     ApplyTheme(String),
     RemoteHost(remote_hosts::Act),
+    Extension(extensions::Act),
     ThemeImportOpen,
     ThemeImportSave,
     ThemeImportCancel,
@@ -1735,6 +1737,7 @@ mod sideline_rows;
 use sideline_rows::{row_is_inert, ChromeHit, DisplayRow};
 mod config_set;
 mod experimental;
+mod extensions;
 mod lane_entry;
 mod node_detail;
 mod share_flow;
@@ -1775,6 +1778,7 @@ pub(crate) mod input_field;
 mod input_folds;
 mod mail_input;
 mod overlay_keys;
+use overlay_keys::aux_execute_selected;
 mod reply_dock;
 mod terminal_cursor;
 // The overlay key state machines live in the module; the re-import keeps
@@ -1846,6 +1850,7 @@ impl View {
             agent_group,
             machine_tree: machine_tree::MachineTree::load(),
             remote_hosts: remote_hosts::RemoteHosts::load(),
+            extensions: Default::default(),
             show_card_head,
             group_by_lead,
             manual_order,
@@ -8437,6 +8442,7 @@ async fn execute_aux_action(
         | AuxAction::ToggleSidelineLayout
         | AuxAction::ApplyTheme(_)
         | AuxAction::RemoteHost(_)
+        | AuxAction::Extension(_)
         | AuxAction::ThemeImportOpen
         | AuxAction::ThemeImportSave
         | AuxAction::ThemeImportCancel
@@ -8448,24 +8454,6 @@ async fn execute_aux_action(
         | AuxAction::LaneColorSet(..) => settings_modal::run_action(view, action, sock_w).await?,
     }
     Ok(DispatchFlow::Continue)
-}
-
-/// Run the aux popup's selected row (Enter/click), propagating a detach.
-async fn aux_execute_selected(
-    view: &mut View,
-    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
-) -> Result<DispatchFlow, String> {
-    let picked = view
-        .aux
-        .as_ref()
-        .and_then(|m| m.actions.get(m.popup.sel).cloned());
-    match picked {
-        Some(a) => execute_aux_action(view, a, sock_w).await,
-        None => {
-            let _ = raw_out(b"\x07");
-            Ok(DispatchFlow::Continue)
-        }
-    }
 }
 
 /// Aux-popup keys (US4/US5): arrows select (scrolling to keep the selection

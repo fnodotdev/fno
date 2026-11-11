@@ -34,6 +34,8 @@ on:
       - schemas/**
       # The cargo tests read the shipped Claude Code theme files.
       - themes/**
+      # The cargo tests verify the first-party fno-panels pack.
+      - plugins/fno-panels**
       # The cargo tests read every grader command in the eval bank.
       - evals/bank**
       # The cargo tests prove each golden's grader on these labelled cases.
