@@ -317,7 +317,7 @@ row_claude_marketplace() {
   # The plugin install clones the marketplace repo through git; a fresh
   # machine has no SSH keys, so rewrite the remote to HTTPS for this row.
   git config --global url."https://github.com/".insteadOf "git@github.com:"
-  run_capture claude plugin marketplace add fnodotdev/fno#stable
+  run_capture claude plugin marketplace add fnodotdev/fno
   if [ "$RC" -ne 0 ]; then
     miss "marketplace-add" "rc=$RC: $(printf '%s' "$OUT" | tail -1)"
     return 0
@@ -326,10 +326,6 @@ row_claude_marketplace() {
   run_capture claude plugin install fno@fno
   if [ "$RC" -eq 0 ]; then
     pass "install" "plugin installed"
-  elif run_capture claude plugin install fno@footnote && [ "$RC" -eq 0 ]; then
-    # The stable branch serves the marketplace under its old name until the
-    # next stable promotion carries the rename to fno.
-    pass "install" "plugin installed as fno@footnote (stable predates the fno rename)"
   else
     miss "install" "rc=$RC: $(printf '%s' "$OUT" | tail -1)"
   fi
