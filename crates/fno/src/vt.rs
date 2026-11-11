@@ -1245,15 +1245,12 @@ impl Pane {
         }
         // The row must still exist in the live window: a shrunken pane puts
         // a stamped row past the bottom, and even a text-less anchor must
-        // refuse rather than index out of range.
-        if self.row_text(abs_row).is_none() {
+        // refuse rather than index out of range. The one read feeds both
+        // the existence check and the identity check.
+        let Some(actual) = self.row_text(abs_row) else {
             return false;
-        }
-        let needle = anchor_needle(text);
-        if let Some(expected) = needle {
-            let Some(actual) = self.row_text(abs_row) else {
-                return false;
-            };
+        };
+        if let Some(expected) = anchor_needle(text) {
             if !anchor_needle(&actual).is_some_and(|a| a.contains(&expected)) {
                 return false; // redrawn: the row no longer holds the prompt
             }
