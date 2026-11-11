@@ -45,7 +45,7 @@ STUB
 # emit-envelope`, and a CI runner has no fno installed and no checkout build,
 # so the real binary silently loses the miss row this test asserts on. The
 # stub stores into the events file the same way the read stub reads it.
-cat > "$TMP/bin/fno" <<'STUB'
+cat > "$TMP/bin/fno" <<'FSTUB'
 #!/usr/bin/env bash
 path=""
 prev=""
@@ -58,7 +58,7 @@ case "$*" in
   *"event rows"*)    cat "$path" 2>/dev/null; exit 0 ;;
 esac
 exit 0
-STUB
+FSTUB
 # A jq that answers like a missing binary: the hook must still read the id.
 printf '#!/usr/bin/env bash\nexit 127\n' > "$TMP/nojq/jq"
 chmod +x "$TMP/bin/fno-agents" "$TMP/bin/fno" "$TMP/nojq/jq"
@@ -72,7 +72,10 @@ fresh() {
 }
 
 run_hook() {  # $1 extra PATH prefix
-    PATH="$1:$TMP/bin:$PATH" FNO_STATE_DIR="$TMP/state" FNO_STUB_LOG="$LOG" EVENTS_FILE="$EVENTS" bash "$HOOK" \
+    # FNO_BIN pins events.sh's writer to the stub: the real store commits
+    # rows into a SQLite sibling of --events, never the jsonl, so a runner
+    # with a checkout build would bypass the stub and the read would miss.
+    PATH="$1:$TMP/bin:$PATH" FNO_BIN="$TMP/bin/fno" FNO_STATE_DIR="$TMP/state" FNO_STUB_LOG="$LOG" EVENTS_FILE="$EVENTS" bash "$HOOK" \
         <<<"{\"session_id\":\"$SID\",\"tool_name\":\"Bash\",\"tool_input\":{}}"
 }
 
