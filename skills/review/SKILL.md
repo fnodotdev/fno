@@ -182,7 +182,7 @@ The research-verify panel is **advisory**: the green/red verdict on a research b
 Because it gives up "different model" entirely, it must be an **explicit** action - never inferred, never auto-emitted by any pipeline. State plainly what you are certifying (the current HEAD + the diff under review), then emit:
 
 ```bash
-bash "${SKILL_DIR}/scripts/emit-attestation.sh" declare
+bash skills/review/scripts/emit-attestation.sh declare
 ```
 
 The event is pinned to the current HEAD; if a new commit lands afterward, the declaration no longer counts and must be re-run. loop-check reads the event as gate evidence but never runs a reviewer or emits an attestation itself.

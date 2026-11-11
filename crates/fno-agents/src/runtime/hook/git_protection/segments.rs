@@ -3,7 +3,7 @@
 //! quoted argument. Lines split outside quotes first, heredoc bodies are
 //! content, and `$( ... )` bodies are re-segmented.
 
-use super::super::bg_process_guard::{shlex_lex, Lex};
+use super::super::bg_process_guard::{shlex_lex, starts_a_comment, Lex};
 use regex::Regex;
 use std::sync::OnceLock;
 
@@ -141,7 +141,7 @@ pub(super) fn find_heredoc_opener(line: &str) -> Option<(String, bool)> {
             i += 2;
             continue;
         }
-        if ch == '#' && (i == 0 || !(chars[i - 1].is_alphanumeric() || chars[i - 1] == '_')) {
+        if ch == '#' && starts_a_comment(i.checked_sub(1).and_then(|p| chars.get(p)).copied()) {
             break;
         }
         if ch == '<' && i + 1 < n && chars[i + 1] == '<' {
@@ -188,7 +188,8 @@ fn heredoc_ends(line: &str, delim: &str, dash: bool) -> bool {
 
 /// Split on newlines outside quotes. A newline inside a quote is one
 /// argument (a commit body, a mail text); inside a heredoc body quoting does
-/// not apply, so an apostrophe in prose cannot swallow the terminator.
+/// not apply, so an apostrophe in prose cannot swallow the terminator. A
+/// comment is quote-inert to its newline, matching the lexer's comment drop.
 pub(super) fn split_lines_outside_quotes(command: &str) -> Vec<String> {
     let chars: Vec<char> = command.chars().collect();
     let n = chars.len();
@@ -239,6 +240,23 @@ pub(super) fn split_lines_outside_quotes(command: &str) -> Vec<String> {
             i += 2;
             continue;
         }
+        if ch == '#' && starts_a_comment(i.checked_sub(1).and_then(|p| chars.get(p)).copied()) {
+            // A comment runs to the newline and quotes inside it are
+            // inert. The lexer drops the text, so tracking its quotes here
+            // would desync the split from the parse: an apostrophe in a
+            // trailing comment once swallowed the following lines and
+            // failed every parse of the script carrying it.
+            buf.push(ch);
+            i += 1;
+            while let Some(&c) = chars.get(i) {
+                if c == '\n' {
+                    break;
+                }
+                buf.push(c);
+                i += 1;
+            }
+            continue;
+        }
         if ch == '\n' {
             let line = std::mem::take(&mut buf);
             heredoc = find_heredoc_opener(&line);
@@ -255,7 +273,8 @@ pub(super) fn split_lines_outside_quotes(command: &str) -> Vec<String> {
 
 /// The body of each `$( ... )` the shell executes on `line`, double quotes
 /// included. Single quotes expand nothing, and backticks are left alone:
-/// markdown code spans in prose use them.
+/// markdown code spans in prose use them. A comment executes nothing, and
+/// an escaped char opens no substitution.
 fn substitution_bodies(line: &str) -> Vec<String> {
     let chars: Vec<char> = line.chars().collect();
     let n = chars.len();
@@ -274,6 +293,19 @@ fn substitution_bodies(line: &str) -> Vec<String> {
         if quote == Some('"') && ch == '\\' && i + 1 < n {
             i += 2;
             continue;
+        }
+        if quote.is_none() {
+            if ch == '\\' && i + 1 < n && chars.get(i + 1).copied() != Some('\n') {
+                // An escaped char is word text: `\#` is no comment, and
+                // `\$(` opens no substitution.
+                i += 2;
+                continue;
+            }
+            if ch == '#' && starts_a_comment(i.checked_sub(1).and_then(|p| chars.get(p)).copied()) {
+                // A comment executes nothing, so its `$(...)` text is not
+                // command position.
+                break;
+            }
         }
         if ch == '$' && i + 1 < n && chars[i + 1] == '(' {
             let mut depth = 1i32;
@@ -854,5 +886,50 @@ mod tests {
         );
         assert_eq!(heredoc_bodies("cat <<'EOF'\nonly line"), ["only line"]);
         assert!(heredoc_bodies("echo hi").is_empty());
+    }
+
+    #[test]
+    fn an_apostrophe_in_a_trailing_comment_does_not_swallow_lines() {
+        // Comments are inert to the split and to the substitution walk: an
+        // apostrophe inside one must not corrupt the line split, and a
+        // `$(...)` named in a comment is not command position. The lexer
+        // drops the text, so quote state inside a comment must not leak
+        // past the newline either: `# don't` once opened a phantom single
+        // quote, the split merged the following lines into it, and any
+        // script with such a comment failed to parse.
+        let lines = split_lines_outside_quotes("echo hi # don't panic\ngit status\n");
+        assert_eq!(lines, ["echo hi # don't panic", "git status", ""]);
+        assert_eq!(
+            segs("echo hi # see $(git push origin main) docs"),
+            ["echo hi"]
+        );
+    }
+
+    #[test]
+    fn an_escaped_hash_is_no_comment_and_its_substitution_still_gates() {
+        // `\#` is an escaped word char, not a comment: the substitution
+        // after it executes in bash and must stay in command position.
+        assert!(
+            segs(r"\# $(git push origin main)")
+                .iter()
+                .any(|s| s == "git push origin main"),
+            "the escaped hash must not eat the substitution body"
+        );
+    }
+
+    #[test]
+    fn a_midword_hash_is_word_text_across_the_walkers() {
+        // bash comments start at a word-start `#`. Mid-word text is one
+        // word, `$#` is an expansion whose `;` still separates the next
+        // command, and a heredoc after it opens like any other.
+        assert_eq!(segs("echo a#b"), ["echo a#b"]);
+        assert_eq!(
+            segs("echo $#; git push origin main"),
+            ["echo $#", "git push origin main"]
+        );
+        assert_eq!(
+            segs("$# x <<EOF\ngit push origin main\nEOF"),
+            ["$# x << EOF"]
+        );
     }
 }

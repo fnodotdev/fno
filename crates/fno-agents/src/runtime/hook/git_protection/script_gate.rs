@@ -392,6 +392,62 @@ mod tests {
     }
 
     #[test]
+    fn a_push_after_an_apostrophe_comment_is_still_refused() {
+        // The comment's apostrophe must not corrupt the split into hiding
+        // the push: the parse now completes, and the push segment is gated
+        // like a typed one.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("notes.sh"),
+            "#!/bin/bash\necho hi # don't panic\ngit push origin main\n",
+        )
+        .unwrap();
+        let fake = feature(dir.path());
+        let c = ctx(dir.path(), &fake);
+        let refusal = judge_with(&bash("bash notes.sh"), &c).unwrap();
+        assert!(
+            refusal.contains("BLOCKED: Direct push to protected branch"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_push_after_a_dollar_hash_separator_is_still_refused() {
+        // `$#` is an expansion, not a comment: the `;` after it separates,
+        // and the next command gates like a typed one. A mid-word `#` that
+        // commented the rest of the line once hid this push from the gate.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("dh.sh"), "echo $#; git push origin main\n").unwrap();
+        let fake = feature(dir.path());
+        let c = ctx(dir.path(), &fake);
+        let refusal = judge_with(&bash("bash dh.sh"), &c).unwrap();
+        assert!(
+            refusal.contains("BLOCKED: Direct push to protected branch"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn the_lane_emit_script_the_review_skill_runs_is_gateable() {
+        // skills/review/scripts/emit-attestation.sh is the review lane's one
+        // attestation producer. Its comments carry apostrophes, which once
+        // corrupted the line split, failed the parse, and threw every lane
+        // onto the typed fallback. The real script must pass the door: the
+        // parse completes, and it hides no push.
+        let src = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../skills/review/scripts/emit-attestation.sh");
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::copy(&src, dir.path().join("emit.sh")).unwrap();
+        let fake = feature(dir.path());
+        let c = ctx(dir.path(), &fake);
+        assert_eq!(
+            judge_with(&bash("bash emit.sh --help"), &c),
+            None,
+            "the review lane's emit script must pass the script door"
+        );
+    }
+
+    #[test]
     fn a_cat_heredoc_body_stays_content() {
         let dir = tempfile::tempdir().unwrap();
         let fake = feature(dir.path());
