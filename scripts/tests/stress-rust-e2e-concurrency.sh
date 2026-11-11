@@ -61,6 +61,12 @@ cd "$repo_root" || exit 2
 # the main disk; the smoke shards pin the same way for their journey builds.
 export CARGO_BUILD_BUILD_DIR="$repo_root/target"
 
+# The stress tail builds on whatever the shard's earlier steps left on the
+# root disk. A 2026-11-10 shard died in this build's rlib archive step at
+# ENOSPC, and a dead runner's df never uploads, so name the free space before
+# the first build starts: the next death gets a number, not a guess.
+echo "stress_setup=disk avail_mb=$(df -m / | awk 'NR==2{print $4}')"
+
 # A dirty tree cannot be pinned to a sha, so the trials would measure something
 # nobody can name. That is a reason to stand down, NOT a reason to go red: this
 # file is auto-discovered by `fno doctor test smoke` (the scripts/tests/*.sh
