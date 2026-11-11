@@ -546,11 +546,10 @@ pub enum SpawnNodeCwd {
 /// The launch dir for a spawn whose payload names a node, and whether the
 /// caller must be refused instead. The node comes from [`resolve_node`]
 /// (explicit flag, then the seed's first-line scan), the project checkout
-/// from the node's graph row resolved through the work map (the configured
-/// root wins when the row's project has a live one - a stored cwd predates
-/// config changes, and the 2026-11-11 cutover left open rows pointing at a
-/// retired checkout), and refuse-vs-dispatch from the two repo roots: a caller inside ANOTHER git
-/// repo is refused naming both paths (the 2026-09-27 incident dispatched a
+/// from the node's graph row resolved through the work map via
+/// `checkout_of`, and refuse-vs-dispatch from the two repo roots: a caller
+/// inside ANOTHER git repo is refused naming both paths (the 2026-09-27
+/// incident dispatched a
 /// node's worker into the caller's private config repo, whose "canonical" is
 /// the caller-repo-relative default), while a caller in the node's own repo -
 /// any worktree - or outside git entirely dispatches from the node's project

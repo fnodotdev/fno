@@ -333,11 +333,8 @@ pub(crate) fn expand_home(path: &str) -> PathBuf {
 }
 
 /// The configured checkout whose repo identity matches `caller_repo`, over
-/// one work map: the config names the project's checkout, so a node stores
-/// it rather than whatever clone the filer stood in. None when the caller
-/// has no repo identity or no entry's repo matches. `repo_of` is injected
-/// so the core stays pure; the production wrapper shells git once per
-/// work-map entry.
+/// one work map. None when the caller has no repo identity or no entry's
+/// repo matches. `repo_of` is injected so the core stays pure.
 fn configured_checkout_for_in(
     caller_repo: Option<PathBuf>,
     pairs: &[(String, String)],
@@ -1210,10 +1207,8 @@ pub(crate) fn create_node(
                     joined.to_string_lossy().into_owned()
                 }
                 // The default arm stamps the CONFIGURED checkout: the
-                // caller's canonical repo root names the project through the
-                // work map, and the node stores the work map's path, not
-                // whatever clone the filer stood in (the 2026-11-11 cutover
-                // stamped 1777 open rows with a retired checkout).
+                // caller's repo identity names the project through the work
+                // map, not whatever clone the filer stood in.
                 (None, None) => {
                     let caller_root = repo_root(&cwd_root);
                     match configured_checkout_for(&caller_root) {

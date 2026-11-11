@@ -187,11 +187,10 @@ pub fn project_root(project: &str) -> Option<String> {
 }
 
 /// The configured checkout for `project` when it exists on disk, else None.
-/// The dispatch-side resolution: a node row's stored cwd predates config
-/// changes, so a spawn or dispatch prefers the live work map over the row
-/// (the 2026-11-11 cutover left 1777 open rows pointing at a retired
-/// checkout). A path that no longer exists answers None so callers keep the
-/// stored cwd instead of failing at launch.
+/// Dispatch prefers the live work map over a node row's stored cwd: a
+/// stored cwd predates config changes (the 2026-11-11 cutover left open
+/// rows pointing at a retired checkout). A path off disk answers None so
+/// callers keep the stored cwd instead of failing at launch.
 pub fn live_project_root(project: &str) -> Option<PathBuf> {
     project_root(project)
         .map(PathBuf::from)
@@ -199,10 +198,9 @@ pub fn live_project_root(project: &str) -> Option<PathBuf> {
 }
 
 /// The checkout a dispatch resolves for a node row: the live configured root
-/// of the row's project first (a stored cwd predates config changes), then
-/// the served row's `_resolved_cwd` annotation, then the stored `cwd`. The
-/// three field keys live at this one boundary (R1: one site for the string
-/// keys; a typed row struct replaces the whole site).
+/// of the row's project first, then the served row's `_resolved_cwd`
+/// annotation, then the stored `cwd`. The field keys live at this one
+/// boundary (R1: a typed row struct replaces the whole site).
 pub fn node_row_checkout(row: &Value) -> Option<String> {
     if let Some(root) = row
         .get("project")
