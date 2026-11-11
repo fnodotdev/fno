@@ -502,14 +502,24 @@ the message directly after the target; none was found"
             // written no row; a door that cannot run reads clean. The
             // refusal text rides the door's JSON receipt, so it names the
             // broken rules whatever any door build prints where.
-            if let Some(report) = crate::mail_arm::style_door_report(&payload) {
+            if let Some(refusal) = crate::mail_arm::style_door_report(&payload) {
                 // One write: report plus refusal read as a single message
                 // no capture can split, and a report without a trailing
-                // newline still separates the two lines.
+                // newline still separates the two lines. The final line
+                // itself names the broken rules and the way out: a sender
+                // piping the tail sees only it, so it must carry the fix,
+                // not just the verdict.
+                let rules = if refusal.summary.is_empty() {
+                    "the report above names the rules".to_string()
+                } else {
+                    refusal.summary
+                };
                 eprintln!(
                     "{}\nfno agents mail send: the receiver's style door refuses \
-this body; nothing was sent",
-                    report.trim_end()
+this body ({}); nothing was sent; check: fno doctor lint style --surface \
+mail --stdin",
+                    refusal.report.trim_end(),
+                    rules
                 );
                 return 1;
             }
@@ -1446,6 +1456,33 @@ mod tests {
             serde_json::json!({"exception": "operator asked", "violations": []}).to_string();
         assert!(crate::mail_arm::receipt_refusal_report(excepted.as_bytes()).is_none());
         assert!(crate::mail_arm::receipt_refusal_report(b"not json").is_none());
+        // The refusal's final line carries a compact rule index built from
+        // the receipt's violations[]: one entry per rule in first-seen
+        // order, the words the details quote joined per rule, so a sender
+        // piping the tail still reads what to fix and how to preview a
+        // body. The excepted and unparseable receipts stay None here too.
+        let summary_receipt = serde_json::json!({
+            "exception": null,
+            "violations": [
+                {"rule": 3, "sentence_index": 1, "sentence": "we would retry it.",
+                 "detail": "sentence 1 uses the modal \"would\". State it plainly."},
+                {"rule": 5, "sentence_index": 2, "sentence": "when it fails we stop.",
+                 "detail": "sentence 2 carries \"when\" after the command."},
+                {"rule": 3, "sentence_index": 3, "sentence": "we might lose it.",
+                 "detail": "sentence 3 uses the modal \"might\". State it plainly."}
+            ]
+        })
+        .to_string();
+        let summary = crate::mail_arm::receipt_refusal_summary(summary_receipt.as_bytes())
+            .expect("a receipt naming violations carries a summary");
+        assert_eq!(
+            summary, "rule 3 modal: would, might; rule 5 condition: when",
+            "the final line names each broken rule once, with its quoted words"
+        );
+        assert!(
+            crate::mail_arm::receipt_refusal_summary(excepted.as_bytes()).is_none(),
+            "an excepted receipt carries no summary"
+        );
         // The pull arm's exit reading: 0 delivers, and so does the Python
         // receipts' NOT LANDED exit (a durable demotion - the durable copy
         // is written, so a retry would duplicate it; the constant's comment

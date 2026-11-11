@@ -599,7 +599,7 @@ fn run_scoped(text: &str, only: Option<&BTreeSet<usize>>) -> Vec<Violation> {
     violations
 }
 
-fn rule_names(rule: &u32) -> &'static str {
+pub(crate) fn rule_names(rule: &u32) -> &'static str {
     match rule {
         1 => "length",
         2 => "semicolon",
@@ -626,7 +626,7 @@ fn excerpt(v: &Violation) -> String {
     words.join(" ")
 }
 
-fn quote_extract(detail: &str) -> Option<String> {
+pub(crate) fn quote_extract(detail: &str) -> Option<String> {
     let start = detail.find('"')?;
     let rest = &detail[start + 1..];
     let end = rest.find('"')?;
