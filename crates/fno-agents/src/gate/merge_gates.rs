@@ -793,9 +793,10 @@ fn comment_only_on<P: GateReads>(probes: &P, cwd: &Path, pr: u64, touched: &[&st
     })
 }
 
-/// Visual evidence for this head. Missing looks warn; an explicit user
-/// decline holds only its named head. Paint paths select optional evidence,
-/// never erase an already recorded user decline.
+/// Visual evidence for this head. A paint PR with no recorded look at this
+/// head holds the merge; an explicit user decline holds only its named head.
+/// Paint paths select the evidence, never erase an already recorded user
+/// decline. An unprovable carry or an unreadable read warns and never holds.
 pub(crate) fn visual_approval_blocker<P: GateReads>(
     probes: &P,
     cwd: &Path,
@@ -920,13 +921,13 @@ pub(crate) fn visual_approval_verdict<P: GateReads>(
             .collect::<Vec<_>>()
             .join("; ");
         format!(
-            "PR {pr} touches the paint surface ({}); the look approval at {} does not carry: paint moved since ({hunks}); ask the user again at {head}; this is warning evidence and does not hold CI or merging",
+            "PR {pr} touches the paint surface ({}); the look approval at {} does not carry: paint moved since ({hunks}); the merge holds until a look at {head} is approved (file the ask with `fno inbox outstanding ask`, naming this PR and head); CI is not held",
             touched.join(", "),
             ask.approved.get(..8).unwrap_or(&ask.approved),
         )
     } else {
         format!(
-            "PR {pr} touches the paint surface ({}), with no recorded look at {head}; this is warning evidence and does not hold CI or merging",
+            "PR {pr} touches the paint surface ({}), with no recorded look at {head}; the merge holds until a look at this head is approved (file the ask with `fno inbox outstanding ask`, naming this PR and head); CI is not held",
             touched.join(", ")
         )
     };

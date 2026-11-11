@@ -38,13 +38,13 @@ On a red, live PR the optional `history:` slot reports a cancelled or timed-out 
 
 `ready` and `ready_blockers` come from the authorized-merge preview receipt. The status command displays that receipt as `merge_decision`. The effect path stops at its first retained blocker. Preview collects each blocker it can evaluate.
 
-Authority and code blockers include `dispatch_hold`, `pr_hold`, `merge_freeze`, `visual_declined`, `ci_red`, `github_blocked`, `head_not_covered`, `head_moved`, `stacked_base`, `red_merge_result` and `stub_manifest_unreconciled`. A missing review, a running review, a review-posture mismatch, a missing look, or pending or unreadable CI contributes warnings instead. The CI verdict and exit code continue to report the CI read itself.
+Authority and code blockers include `dispatch_hold`, `pr_hold`, `merge_freeze`, `visual_declined`, `visual_approval`, `ci_red`, `github_blocked`, `head_not_covered`, `head_moved`, `stacked_base`, `red_merge_result` and `stub_manifest_unreconciled`. A missing review, a running review, a review-posture mismatch, or pending or unreadable CI contributes warnings instead. The CI verdict and exit code continue to report the CI read itself.
 
 The receipt's `warnings` list also carries eval status, docs, plan fidelity, overlap, recovered flakes and optional findings. Allowed and blocked receipts retain evaluated warning evidence. No setting is required to enable the demotions.
 
 `ci_base_stale` and `merge_slot_held` retain the configured fresh-base posture on green CI. Preview never takes or releases a merge slot. A terminal PR reports `pr_terminal`. There is no remaining merge to authorize.
 
-`merge.visual_paint_paths` selects visual evidence. Missing screenshots, missing critiques and unreadable changed-file lists warn. The reader no longer files an automatic approval question. A legacy user answer declining a specific head remains the authority blocker `visual_declined` at that head. A later head carries the earlier decline as evidence. Review and explicit user holds remain separate controls.
+`merge.visual_paint_paths` selects the render surface a look covers. A paint PR with no recorded look at its head holds the merge as the authority blocker `visual_approval`, naming the look-record command. Missing screenshots, missing critiques and unreadable changed-file lists warn. The reader no longer files an automatic approval question. A legacy user answer declining a specific head remains the authority blocker `visual_declined` at that head. A later head carries the earlier decline as evidence. Review and explicit user holds remain separate controls.
 
 The daemon restores only CI run IDs recorded as successful historical `look_hold_cancel` actions. It creates no new look cancellations. See [look evidence and recovery](pr-heal.md#the-look-hold).
 

@@ -1116,7 +1116,7 @@ fn decide_with_warnings<P: Probes>(
     }
     if let Some(blocker) =
         crate::merge_gates::visual_approval_blocker(probes, cwd, facts.number, &head)
-            .filter(|b| b.code == "visual_declined")
+            .filter(|b| b.code == "visual_declined" || b.code == "visual_approval")
     {
         return Err(Outcome::Held {
             reason: blocker.detail,
@@ -1502,8 +1502,13 @@ fn process_warnings<P: Probes>(
     if let Some(warning) = carry_warning {
         warnings.push(warning);
     }
+    // Both authority holds bind a head: a decline names the head it refuses,
+    // and a paint PR with no recorded look at this head holds until a look
+    // lands there. The unknown file-list read stays warning evidence.
     let (visual_warning, visual_hold) = match visual {
-        Some(blocker) if blocker.code == "visual_declined" => (None, Some(blocker)),
+        Some(blocker) if blocker.code == "visual_declined" || blocker.code == "visual_approval" => {
+            (None, Some(blocker))
+        }
         other => (other, None),
     };
     for evidence in [

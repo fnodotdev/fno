@@ -2690,6 +2690,32 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
         "{}",
         held.detail
     );
+    // The verdict hold reaches the merge outcome: no look record anywhere,
+    // so the merge holds and names the way out.
+    {
+        fake.facts = Some(PrFacts {
+            head_sha: head.clone(),
+            ..open_facts()
+        });
+        let req = Request {
+            cwd: tmp.clone(),
+            covered_head: Some(head.clone()),
+            ..request(Effect::Merge)
+        };
+        let outcome = run(&fake, &req);
+        assert_eq!(outcome.word(), "held", "{outcome:?}");
+        assert!(
+            outcome.detail().contains("no recorded look"),
+            "{}",
+            outcome.detail()
+        );
+        assert!(
+            outcome.detail().contains("fno inbox outstanding ask"),
+            "{}",
+            outcome.detail()
+        );
+        fake.facts = None;
+    }
     // An OPEN page naming the PR never clears the hold.
     let qdir = crate::escalation::questions_dir(&tmp);
     std::fs::create_dir_all(&qdir).unwrap();
@@ -2732,12 +2758,15 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
         ..open_facts()
     });
     req.covered_head = Some(next_head);
+    // The declined look was withdrawn with the page; no look names the new
+    // head, so the merge holds instead of riding a warning.
     let outcome = run(&fake, &req);
-    assert_eq!(outcome.word(), "merged", "{outcome:?}");
-    assert!(outcome
-        .warnings()
-        .iter()
-        .any(|warning| warning.code == "visual_approval"));
+    assert_eq!(outcome.word(), "held", "{outcome:?}");
+    assert!(
+        outcome.detail().contains("no recorded look"),
+        "{}",
+        outcome.detail()
+    );
     fake.facts = None;
     std::fs::write(
         &page,
@@ -3039,7 +3068,7 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
     assert!(!clears(&fake, &pushed));
     std::fs::remove_file(qdir.join("q-board7.md")).unwrap();
     fake.decisions_stdout = None;
-    let held = crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).expect("warning");
+    let held = crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).expect("held");
     assert!(held.detail.contains("no recorded look"), "{}", held.detail);
     // A split: the node holds PR 6 and lists PR 7 in additional_prs. PR 7
     // binds to it, so the approval recorded on that node clears PR 7. A row

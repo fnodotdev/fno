@@ -7436,7 +7436,7 @@
    "wizard": "advanced",
    "question": "",
    "default_source": "",
-   "doc": "Paint paths used for optional look evidence. Explicit head-scoped user declines retain authority."
+   "doc": "Render-surface paths whose PRs hold the merge until a look at their head is approved. Explicit head-scoped user declines retain authority."
   },
   {
    "path": "merge.visual_shot_workflows",
