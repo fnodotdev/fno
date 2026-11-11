@@ -136,17 +136,13 @@ fn basic_auth(user: &str, password: &str) -> String {
     let input = format!("{user}:{password}");
     let bytes = input.as_bytes();
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    let byte = |chunk: &[u8], i: usize| u32::from(chunk.get(i).copied().unwrap_or(0));
     for chunk in bytes.chunks(3) {
-        let b = [
-            chunk[0],
-            *chunk.get(1).unwrap_or(&0),
-            *chunk.get(2).unwrap_or(&0),
-        ];
-        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | (b[2] as u32);
-        out.push(TABLE[(n >> 18) as usize & 63] as char);
-        out.push(TABLE[(n >> 12) as usize & 63] as char);
-        out.push(TABLE[(n >> 6) as usize & 63] as char);
-        out.push(TABLE[n as usize & 63] as char);
+        let n = (byte(chunk, 0) << 16) | (byte(chunk, 1) << 8) | byte(chunk, 2);
+        for shift in [18, 12, 6, 0] {
+            let sextet = ((n >> shift) & 63) as usize;
+            out.push(char::from(TABLE.get(sextet).copied().unwrap_or(b'=')));
+        }
     }
     let pad = (3 - bytes.len() % 3) % 3;
     let len = out.len() - pad;
@@ -335,22 +331,27 @@ pub(crate) fn serve_seat(row: &RegistryAgent) -> ServeSeat {
             format!("the opencode binary's version {tui_version:?} reads no major"),
         );
     };
+    let tui_bin = primary.0.clone();
     if tui_major != serve_major {
         let candidates = tui_candidates(primary);
         return ServeSeat::Skew(notice_text(&serve_version, &candidates));
     }
-    #[cfg_attr(not(test), allow(unused_mut))]
     let mut argv = form.render(tui_major, &state.base_url, sid);
+    // Exec the binary whose version the gate just read, never the form's
+    // literal program token: FNO_OPENCODE_BIN may name another build.
+    if let Some(first) = argv.first_mut() {
+        *first = tui_bin;
+    }
     let env = vec![(form.password_env.clone(), state.token.clone())];
     #[cfg(test)]
     {
-        capture_serve_env(&env);
-        capture_serve_argv(&argv);
         if let Some(bin) = BIN_OVERRIDE.with(|p| p.borrow().clone()) {
             if let Some(first) = argv.first_mut() {
                 *first = bin;
             }
         }
+        capture_serve_env(&env);
+        capture_serve_argv(&argv);
     }
     ServeSeat::Attach { argv, env }
 }
