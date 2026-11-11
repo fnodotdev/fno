@@ -2430,9 +2430,11 @@ mod tests {
             )
             .expect("the binder checks in under its own name");
             let after = read(&store).unwrap();
-            assert_eq!(
-                after.teams.get("fno").map(|rec| rec.name.as_str()),
-                Some("Atticus"),
+            assert!(
+                after
+                    .teams
+                    .iter()
+                    .any(|(scope, rec)| scope == "fno" && rec.name == "Atticus"),
                 "{:?}",
                 after.teams
             );

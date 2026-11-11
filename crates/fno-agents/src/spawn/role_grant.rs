@@ -341,6 +341,7 @@ pub fn promote(home: &AgentsHome, handle: &str, scopes: &[String]) -> Result<Val
 
     let mut receipt = Map::new();
     let mut vacated_owner = (String::new(), String::new());
+    let mut succession_vacated: Option<String> = None;
     let rows_after = crate::state::update_registry(&home.registry_json(), |reg| {
         if let Some(c) = &caller {
             let live = locked(&mut reg.entries, c).map(|r| r.clone());
@@ -458,6 +459,7 @@ pub fn promote(home: &AgentsHome, handle: &str, scopes: &[String]) -> Result<Val
                 row.role_scope = None;
                 row.role_grantor = None;
                 receipt.insert("succession_vacated".into(), c.name.clone().into());
+                succession_vacated = Some(c.name.clone());
             }
         }
         receipt.insert("promoted".into(), target.name.clone().into());
@@ -473,7 +475,7 @@ pub fn promote(home: &AgentsHome, handle: &str, scopes: &[String]) -> Result<Val
     if let Some(session) = resolved_target.harness_session_id.as_deref() {
         crate::retired_lead::clear(home, session);
     }
-    if let Some(vacated_name) = receipt.get("succession_vacated").and_then(Value::as_str) {
+    if let Some(vacated_name) = &succession_vacated {
         let events = crate::events::EventEmitter::new(home.events_jsonl(), "agents");
         let _ = events.emit(
             "agent_role_vacated",
@@ -972,7 +974,10 @@ mod tests {
         let receipt = promote(&home, "lucia", &["x-own".to_string()])
             .expect("the holder hands its own scope over");
         assert_eq!(
-            receipt["succession_vacated"].as_str(),
+            receipt
+                .iter()
+                .find(|(k, _)| k == "succession_vacated")
+                .and_then(|(_, v)| v.as_str()),
             Some("valentina"),
             "{receipt}"
         );

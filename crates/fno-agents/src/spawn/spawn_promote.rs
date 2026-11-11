@@ -1064,8 +1064,9 @@ mod tests {
                 "projects": projects, "entries": Vec::<serde_json::Value>::new(),
             }))
             .expect("the grant check answers")
-            .get("refusal")
-            .and_then(Value::as_str)
+            .as_object()
+            .and_then(|answer| answer.iter().find(|(k, _)| k == "refusal"))
+            .and_then(|(_, v)| v.as_str())
             .map(str::to_string)
         };
         assert!(
@@ -1088,8 +1089,9 @@ mod tests {
             "projects": projects, "entries": Vec::<serde_json::Value>::new(),
         }))
         .expect("the grant check answers")
-        .get("refusal")
-        .and_then(Value::as_str)
+        .as_object()
+        .and_then(|answer| answer.iter().find(|(k, _)| k == "refusal"))
+        .and_then(|(_, v)| v.as_str())
         .map(str::to_string);
         assert!(lower.is_none(), "an L0 grants a lower scope: {lower:?}");
     }
