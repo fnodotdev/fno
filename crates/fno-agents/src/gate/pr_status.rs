@@ -1520,11 +1520,20 @@ pub(crate) fn status_ci(payload: &Value) -> (i32, String, String) {
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let cwd = Path::new(cwd_str);
-    let Some(slug) = cache::git_slug(cwd) else {
+    // The payload's repo (the adapter parsed it off `--repo`) outranks the
+    // ambient origin: a caller that pinned the repository must never be
+    // answered from the checkout's own same-number PR.
+    let Some(slug) = payload
+        .get("repo")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| cache::git_slug(cwd))
+    else {
         return (
             1,
             String::new(),
-            "status-ci: cannot resolve the repo slug from cwd\n".into(),
+            "status-ci: cannot resolve the repo slug\n".into(),
         );
     };
     let probe = cache::CountingProbe {

@@ -69,11 +69,18 @@ fn manifest_node_selector_reads_the_primary_pr_and_fails_open() {
         manifest_node_pr_selector(&cwd, Some("x-sel")).as_deref(),
         Some("930")
     );
+    // The target carries the chosen row's url-derived owner/repo: a node
+    // whose PR lives in another repo reads THAT repo, never the ambient
+    // origin's same-number PR. A row without a url (or with a non-GitHub
+    // one) answers None and keeps the ambient origin.
+    let (selector, repo) = pr_read::manifest_node_pr_target(&cwd, Some("x-sel")).unwrap();
+    assert_eq!(selector, "930");
+    assert_eq!(repo.as_deref(), Some("o/r"));
+    assert_eq!(pr_read::manifest_node_pr_target(&cwd, Some("x-bare")), None);
     assert_eq!(manifest_node_pr_selector(&cwd, Some("x-bare")), None);
     // An unknown node and a missing manifest node both fail open.
     assert_eq!(manifest_node_pr_selector(&cwd, Some("x-absent")), None);
     assert_eq!(manifest_node_pr_selector(&cwd, None), None);
-    std::env::remove_var("FNO_STATE_DIR");
 
     // A node whose attached rows disagree: a merged-stamped primary with a
     // later attached row picks the later PR, and an all-terminal node picks
@@ -224,4 +231,96 @@ fn live_fixes_pr_picks_the_newest_open_or_merged_closure() {
         pr_read::pick_live_fixes_pr(&serde_json::json!({}), "x-aaaa", 900),
         None
     );
+}
+
+/// The gate pins every PR read to the node PR row's own repo: a node whose
+/// pr_url names repo B, read from a checkout whose origin is repo A, asks
+/// for repo B on the terminal read and the checks read - never the ambient
+/// origin's same-number PR (the 2026-11-11 cutover shape that blocked the
+/// promise against an old merged PR 21).
+#[test]
+fn the_gate_pins_every_pr_read_to_the_node_pr_url_repo() {
+    let _guard = crate::claims::test_env_lock();
+    let dir = tempfile::tempdir().unwrap();
+    let calls = dir.path().join("calls");
+    let oid = "a".repeat(40);
+    let script = format!(
+        r#"#!/bin/sh
+printf '%s\n' "$@" >> "$RECORD_CALLS"
+case "$*" in
+  *pr*view*)
+    echo '{{"state":"OPEN","number":7,"headRefName":"feature","headRefOid":"{oid}","mergeable":"MERGEABLE","mergeStateStatus":"clean","baseRefName":"main","author":{{"login":"jj"}},"url":"https://github.com/b/r/pull/7"}}'
+    exit 0 ;;
+  *pr*checks*)
+    echo '[]'
+    exit 0 ;;
+esac
+echo 'unexpected gh call' >&2
+exit 1
+"#
+    );
+    let gh = crate::write_exec_stub(dir.path(), "gh-pin", &script);
+    std::env::set_var("RECORD_CALLS", &calls);
+    let events = dir.path().join("events.jsonl");
+    let global = dir.path().join("global.jsonl");
+    std::fs::write(&events, "").unwrap();
+    std::fs::write(&global, "").unwrap();
+    let head = "b".repeat(40);
+    let info = pr_read::read_pr_info(
+        gh.to_str().unwrap(),
+        "git",
+        dir.path(),
+        false,
+        true, // no_external: the review reads stay out; the pin is the point
+        &[],
+        &[],
+        false,
+        &[],
+        &[],
+        &[],
+        &head,
+        &events,
+        &global,
+        "a/r",
+        None,
+        Some("7"),
+        None,
+        true,
+        2,
+        100,
+        None,
+        &[],
+        Some("b/r"),
+    )
+    .unwrap_or_else(|_| panic!("the pinned read answers"));
+    std::env::remove_var("RECORD_CALLS");
+    assert_eq!(info.number, 7);
+    let recorded = std::fs::read_to_string(&calls).unwrap();
+    let mut pr_view_pinned = false;
+    let mut checks_pinned = false;
+    for row in recorded.lines() {
+        if row.contains("pr view") {
+            assert!(
+                row.contains("--repo b/r"),
+                "the terminal read pins the node repo: {row}"
+            );
+            pr_view_pinned = true;
+        }
+        if row.contains("pr checks") {
+            assert!(
+                row.contains("--repo b/r"),
+                "the checks read pins the node repo: {row}"
+            );
+            checks_pinned = true;
+        }
+        assert!(
+            !row.contains("--repo a/r"),
+            "the ambient origin never pins a read: {row}"
+        );
+    }
+    assert!(
+        pr_view_pinned,
+        "the terminal read ran with the pin: {recorded}"
+    );
+    assert!(checks_pinned, "the checks read ran: {recorded}");
 }

@@ -226,9 +226,13 @@ fn status_read(payload: &Value) -> (i32, String, String) {
         .and_then(Value::as_bool)
         .unwrap_or(false);
     // The command's readers act on `ready` and the local gates, so it composes
-    // here and never serves a peer's row.
+    // here and never serves a peer's row. The session node's PR repo pins the
+    // read: a node whose pr_url names another repo must not be answered from
+    // the ambient origin's same-number PR.
+    let session_repo =
+        crate::gate::loopcheck::pr_read::session_node_pr_target(Path::new(cwd_str)).1;
     let (mut code, mut out, mut stderr_lines, calls) =
-        cached_status_via(cwd_str, pr, refresh, None, false);
+        cached_status_in(cwd_str, pr, refresh, None, false, session_repo.as_deref());
     // The pinned read: `--expect-head SHA` (or `HEAD`, the checkout's own
     // sha, read free from git) refuses any answer about another head
     // (exit 6) instead of settling the question against whatever commit the
@@ -305,22 +309,30 @@ pub(crate) fn cached_status(
     refresh: bool,
     head_read: Option<&Value>,
 ) -> (i32, Value, Vec<String>, usize) {
-    cached_status_via(cwd_str, pr, refresh, head_read, true)
+    cached_status_in(cwd_str, pr, refresh, head_read, true, None)
 }
 
-/// `cached_status` with the shared-row follow switched by `follow`. Only the
-/// callers that read the verdict and the settled flag follow a peer poller.
-fn cached_status_via(
+/// [`cached_status`] with the slug pinned and the shared-row follow switched
+/// by `follow`. Only the callers that read the verdict and the settled flag
+/// follow a peer poller. The slug pin (`repo`, the session node's PR repo)
+/// outranks the ambient origin, so a node whose pr_url names another repo
+/// reads - and cache-keys - THAT repo's PR.
+pub(crate) fn cached_status_in(
     cwd_str: &str,
     pr: u64,
     refresh: bool,
     head_read: Option<&Value>,
     follow: bool,
+    repo: Option<&str>,
 ) -> (i32, Value, Vec<String>, usize) {
     let cwd = Path::new(cwd_str);
     // The slug resolves once here; the reader never runs git. No repo
     // context: serve uncached rather than key every caller onto one row.
-    let slug = git_slug(cwd);
+    // A pinned repo (the session node's pr_url) outranks the ambient origin.
+    let slug = repo
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| git_slug(cwd));
     let (Some(slug), true) = (slug, pr > 0) else {
         let probe = fresh_probe();
         let (code, out, lines) = super::status_payload(&probe, cwd, pr, None, "", None, None);
@@ -686,7 +698,17 @@ fn fresh_serve(
 /// read refuses (the caller then guards with an empty sha and rides the
 /// degraded serve until the read recovers).
 pub(crate) fn head_read(cwd: &Path, pr: u64) -> (Option<Value>, usize) {
-    let Some(slug) = git_slug(cwd) else {
+    head_read_in(cwd, pr, None)
+}
+
+/// [`head_read`] with the slug pinned: the session node's PR repo outranks
+/// the ambient origin.
+pub(crate) fn head_read_in(cwd: &Path, pr: u64, repo: Option<&str>) -> (Option<Value>, usize) {
+    let Some(slug) = repo
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| git_slug(cwd))
+    else {
         return (None, 0);
     };
     let probe = fresh_probe();
@@ -698,13 +720,17 @@ pub(crate) fn head_read(cwd: &Path, pr: u64) -> (Option<Value>, usize) {
 /// inside the TTL and only when minted for `require_head`, so the head
 /// guard that protects the status command serves the wait too - fed a sha the
 /// caller read from local git at no cost instead of from GitHub. None sends
-/// the caller down the network path.
+/// the caller down the network path. `repo` pins the row key the same way.
 pub(crate) fn fresh_tick(
     cwd: &Path,
     pr: u64,
     require_head: Option<&str>,
+    repo: Option<&str>,
 ) -> Option<(i32, Value, Vec<String>)> {
-    let slug = git_slug(cwd)?;
+    let slug = repo
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| git_slug(cwd))?;
     let dir = cache_dir(cwd)?;
     let slug_key = slug.replace('/', "--");
     let answer = fresh_serve(
