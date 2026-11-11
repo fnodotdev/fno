@@ -180,6 +180,16 @@ pub enum ClientMsg {
     /// (v121) A passive client takes the link role: it drives the one pane
     /// the hello names. Ignored from a non-passive client.
     Link(crate::proto::link::LinkHello),
+    /// (v127) A pre-Attach first message, versioned like `Control`: stream
+    /// one session's chat events from `from_seq` on. The server answers
+    /// [`ServerMsg::ChatEvents`] batches until the client closes. Never
+    /// registers a client and never reaches the core loop.
+    ChatTail {
+        proto: u32,
+        build: String,
+        session: crate::proto::chat_event::SessionKey,
+        from_seq: u64,
+    },
 }
 
 /// Server -> client.
@@ -547,5 +557,10 @@ pub enum ServerMsg {
     /// back (osascript). A wedged reliable channel counts as undelivered.
     NoticeSent {
         clients: u32,
+    },
+    /// (v127) One batch of a [`ClientMsg::ChatTail`] stream, in `seq` order.
+    ChatEvents {
+        session: crate::proto::chat_event::SessionKey,
+        events: Vec<crate::proto::chat_event::ChatEvent>,
     },
 }

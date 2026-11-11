@@ -157,7 +157,9 @@ pub(super) async fn read_preamble<R: tokio::io::AsyncRead + Unpin>(
                 // preamble; the client shows notices only post-attach, so
                 // ignore rather than desync.
                 | ServerMsg::DesktopNotice { .. }
-                | ServerMsg::NoticeSent { .. },
+                | ServerMsg::NoticeSent { .. }
+                // (v127) chat batches ride their own ChatTail connection.
+                | ServerMsg::ChatEvents { .. },
             ) => {}
             // A launch update cannot precede attach; ignore a misaddressed
             // one rather than failing the handshake.

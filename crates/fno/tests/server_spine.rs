@@ -269,7 +269,8 @@ fn wait_for_raw_frame(
             // client's tty (asserted by the notify unit tests), the receipt
             // answers the one-shot notify connection.
             | Ok(ServerMsg::DesktopNotice { .. })
-            | Ok(ServerMsg::NoticeSent { .. }) => {}
+            | Ok(ServerMsg::NoticeSent { .. })
+            | Ok(ServerMsg::ChatEvents { .. }) => {}
             Ok(ServerMsg::Bye { reason }) => panic!("unexpected Bye: {reason}"),
             Err(fno::proto::ProtoError::Io(e))
                 if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {}
