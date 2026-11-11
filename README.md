@@ -68,7 +68,7 @@ Among rulings, only a hold or a freeze stops a merge. Every other ruling reaches
 
 ## Requirements
 
-macOS (Apple Silicon or Intel), Linux (x86_64 / arm64), or Windows via WSL2. Python 3.11+ or uv, `jq`, and `gh` (authenticated).
+macOS (Apple Silicon or Intel), Linux (x86_64 / arm64), or Windows via WSL2. `git`, `jq`, and `gh` (authenticated). fno itself needs no Python.
 
 ## License
 
