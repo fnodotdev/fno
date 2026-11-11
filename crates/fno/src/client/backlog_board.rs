@@ -1151,12 +1151,20 @@ fn push_wide_cells(
         0
     };
     let mut cols: Vec<(usize, usize, Vec<TLine>)> = Vec::new();
-    for (si, (ci, cell)) in shown.iter().enumerate() {
-        let cw = if si == b.col { focus_w } else { other_w };
+    // The cursor names a `layout.columns` entry, not a lane's filtered
+    // cell index: compare by name, as `cursor_cell` does.
+    let cursor: Option<&str> = b.layout.columns.get(b.col).map(|s| s.as_str());
+    for (ci, cell) in shown.iter() {
+        let focused = cursor == Some(cell.column.as_str());
+        let cw = if focused { focus_w } else { other_w };
         let mut col: Vec<TLine> = vec![TLine::of(&[
             TSeg {
-                text: cell.column.to_string(),
-                role: TextStyle::Title,
+                text: format!(" {} ", cell.column.as_str()),
+                role: if focused {
+                    TextStyle::Tab
+                } else {
+                    TextStyle::Title
+                },
             },
             TSeg {
                 text: format!(" {}", cell_total(cell)),
@@ -1231,10 +1239,15 @@ fn push_stacked_cells(
             continue;
         };
         let header_at = lines.len();
+        let focused = si == b.col;
         lines.push(TLine::of(&[
             TSeg {
-                text: cell.column.to_string(),
-                role: TextStyle::Title,
+                text: format!(" {} ", cell.column.as_str()),
+                role: if focused {
+                    TextStyle::Tab
+                } else {
+                    TextStyle::Title
+                },
             },
             TSeg {
                 text: format!("  {}", cell_total(cell)),

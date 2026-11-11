@@ -113,7 +113,7 @@ fn board_render_rows() {
     let stacked = lines
         .iter()
         .filter(|l| {
-            l.starts_with("In Progress  ") || l.starts_with("Now  ") || l.starts_with("Next  ")
+            l.starts_with(" In Progress ") || l.starts_with(" Now ") || l.starts_with(" Next ")
         })
         .count();
     assert!(stacked >= 3, "expected stacked headers, got {lines:?}");
@@ -685,8 +685,8 @@ fn board_cells_rows() {
     let head_col = head_line.find("In Progress").expect("head text") + 1;
     let head = cell_at(&frame, head_row, head_col, cols);
     assert!(
-        head.flags & crate::proto::cell_flags::BOLD != 0,
-        "header bold at row {head_row}: {text}"
+        head.flags & crate::proto::cell_flags::INVERSE != 0,
+        "focused header inverts at row {head_row}: {text}"
     );
     // The stats line (contains `·`) reads dim.
     let meta_row = text
@@ -722,16 +722,26 @@ fn board_cells_rows() {
     let title_col = line.find("First card").expect("title on its row");
     let title_cell = cell_at(&frame, id_row, title_col, cols);
     assert_eq!(title_cell.fg, crate::proto::Color::Default, "title plain");
-    // Nothing in the frame is inverse.
+    // Nothing in the frame is inverse except the focused column's header
+    // label.
+    let mut inverse = 0;
     for r in 0..24usize {
         for c in 0..cols {
             let cell = cell_at(&frame, r, c, cols);
-            assert!(
-                cell.flags & crate::proto::cell_flags::INVERSE == 0,
-                "INVERSE at {r},{c}: {text}"
-            );
+            if cell.flags & crate::proto::cell_flags::INVERSE != 0 {
+                inverse += 1;
+                assert!(
+                    r == head_row,
+                    "inverse only on the focused header row: {text}"
+                );
+            }
         }
     }
+    assert_eq!(
+        inverse,
+        " In Progress ".len(),
+        "only the focused header label inverts: {text}"
+    );
 
     let mut view = sideline_backlog_view();
     view.board_full = true;
@@ -1189,4 +1199,128 @@ fn w_opens_the_hq_page_only_where_the_browser_can_reach_it() {
         .contains("loopback of mac2; restart it with --bind 0.0.0.0"));
     let wide = hq_url(bridge("http://127.0.0.1:7681", false), true, "mac2");
     assert_eq!(wide.unwrap(), "http://mac2:7681/hq?t=tok");
+}
+
+/// AC1-HP/AC2-EDGE/AC3-EDGE: the focused kanban column header paints the
+/// inverted tab cell (the Messages strips' active look), and the focus is
+/// picked by column name - the lane's filtered cell index never decides
+/// where it lands.
+#[test]
+fn kanban_focused_column_header() {
+    let inp = || {
+        let mut i = backlog_model::Inputs::default();
+        i.backend = "graph".into();
+        i.order = vec!["x-2".into()];
+        i.rows = crate::node_row::rows_from_values(vec![json!({
+            "id": "x-2", "status": "in_progress", "priority": "p2",
+            "title": "mux card", "project": "fno"
+        })]);
+        i.flow = json!({"available": false, "reason": "fixture"});
+        i
+    };
+    let tab_cell = |line: &crate::text_style::TLine, label: &str| -> bool {
+        let Some(at) = line.text.find(label) else {
+            return false;
+        };
+        line.roles.get(at..at + label.len()).is_some_and(|roles| {
+            roles
+                .iter()
+                .all(|r| matches!(r, crate::text_style::TextStyle::Tab))
+        })
+    };
+    fn tabbed<'a>(lines: &'a [TLine]) -> Vec<&'a TLine> {
+        lines
+            .iter()
+            .filter(|l| {
+                l.roles
+                    .iter()
+                    .any(|r| matches!(r, crate::text_style::TextStyle::Tab))
+            })
+            .collect()
+    }
+
+    // AC1: the cursor rests on the empty second column; exactly its
+    // header label wears the tab cell.
+    let mut b = board_with(inp());
+    b.col = 1;
+    let (lines, _) = render(&b, 120);
+    let header = tabbed(&lines);
+    assert_eq!(header.len(), 1, "exactly one line inverts: {lines:?}");
+    let header = header.first().expect("one inverting line");
+    assert!(
+        tab_cell(header, " Now "),
+        "the empty focused column's label wears the tab cell: {}",
+        header.text
+    );
+    for other in [" In Progress ", " Next ", " Later ", " Triage ", " Done "] {
+        assert!(
+            !tab_cell(header, other),
+            "{other} must stay Title: {}",
+            header.text
+        );
+    }
+
+    // AC2: `l` moves the tab cell to the next column; every header keeps
+    // its padded label, focused or not, so no header text reflows.
+    let mut view = key_view(board_with(inp()));
+    let (before, _) = render(view.backlog_board.as_ref().unwrap(), 120);
+    move_col(&mut view, true);
+    let b = view.backlog_board.as_ref().unwrap();
+    assert_eq!(b.col, 1);
+    let (after, _) = render(b, 120);
+    let hb = tabbed(&before);
+    let ha = tabbed(&after);
+    assert_eq!(hb.len(), 1, "exactly one line inverts before: {before:?}");
+    assert_eq!(ha.len(), 1, "exactly one line inverts after: {after:?}");
+    let (hb, ha) = (
+        hb.first().expect("one inverting line before"),
+        ha.first().expect("one inverting line after"),
+    );
+    assert!(
+        tab_cell(hb, " In Progress ") && !tab_cell(hb, " Now "),
+        "the tab cell starts on the cursor column: {}",
+        hb.text
+    );
+    assert!(
+        tab_cell(ha, " Now ") && !tab_cell(ha, " In Progress "),
+        "`l` moves the tab cell to the next column: {}",
+        ha.text
+    );
+    for label in [
+        " In Progress ",
+        " Now ",
+        " Next ",
+        " Later ",
+        " Triage ",
+        " Done ",
+    ] {
+        assert!(
+            hb.text.contains(label) && ha.text.contains(label),
+            "{label} keeps its padded label when focus moves: {} / {}",
+            hb.text,
+            ha.text
+        );
+    }
+
+    // AC3: a lane missing a shown column left of the cursor names the
+    // focus by column, never by the lane's filtered index.
+    let mut b = board_with(inp());
+    b.body
+        .as_mut()
+        .unwrap()
+        .lanes
+        .first_mut()
+        .expect("fixture builds one lane")
+        .cells
+        .retain(|c| c.column != crate::node_row::KanbanColumn::InProgress);
+    b.col = 1; // names "Now"; the lane's second shown cell is "Next"
+    let (lines, _) = render(&b, 120);
+    let header = tabbed(&lines);
+    assert_eq!(header.len(), 1, "exactly one line inverts: {lines:?}");
+    let header = header.first().expect("one inverting line");
+    assert!(
+        tab_cell(header, " Now ") && !tab_cell(header, " Next "),
+        "focus lands on the column b.layout.columns[b.col] names: {}",
+        header.text
+    );
 }
