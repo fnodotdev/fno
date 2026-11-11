@@ -30,6 +30,10 @@ fn subagents_dir(transcript: &Path) -> PathBuf {
     transcript.with_extension("").join("subagents")
 }
 
+/// Session-fact rows that still carry a `message` object: the raw request
+/// body Claude logs beside the chat, not a chat turn.
+const FACT_ROWS_WITH_MESSAGE: &[&str] = &["api-request-blob"];
+
 #[derive(Deserialize)]
 struct Head {
     #[serde(rename = "type", default)]
@@ -423,7 +427,7 @@ impl RowMapper for ClaudeMapper {
             ("user", Some(row)) => self.user(row, at, &mut out),
             ("assistant", Some(row)) => out.extend(self.assistant(row, at, more)?),
             ("system", _) => {}
-            (_, _) if head.message.is_none() => {}
+            (kind, _) if head.message.is_none() || FACT_ROWS_WITH_MESSAGE.contains(&kind) => {}
             (kind, _) => out.push(Mapped::new(
                 at,
                 ChatBody::Unknown {

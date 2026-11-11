@@ -98,12 +98,16 @@ impl SessionReader {
         };
         let source = match key.harness.as_str() {
             "claude" | "codex" => {
-                let found =
-                    crate::transcript_tail::find_transcripts_in(&roots.transcripts, &[&key.session_id]);
+                let found = crate::transcript_tail::find_transcripts_in(
+                    &roots.transcripts,
+                    &[&key.session_id],
+                );
                 let path = found.get(&key.session_id).cloned().ok_or_else(not_found)?;
                 let path = match (&key.subagent, key.harness.as_str()) {
                     (None, _) => path,
-                    (Some(agent), "claude") => claude::subagent_path(&path, agent).ok_or_else(not_found)?,
+                    (Some(agent), "claude") => {
+                        claude::subagent_path(&path, agent).ok_or_else(not_found)?
+                    }
                     (Some(_), _) => return Err(not_found()),
                 };
                 let mapper: Box<dyn RowMapper> = if key.harness == "claude" {
@@ -184,7 +188,12 @@ fn poll_lines(
     let mut out = Vec::new();
     let mut start = 0;
     while start < complete.len() {
-        let end = start + complete[start..].iter().position(|b| *b == b'\n').unwrap_or(0) + 1;
+        let end = start
+            + complete[start..]
+                .iter()
+                .position(|b| *b == b'\n')
+                .unwrap_or(0)
+            + 1;
         let line = String::from_utf8_lossy(&complete[start..end - 1]);
         let line = line.trim_end_matches('\r');
         if !line.trim().is_empty() {
@@ -204,7 +213,9 @@ fn poll_lines(
 
 /// An ISO 8601 timestamp as epoch milliseconds.
 pub(crate) fn iso_ms(text: Option<&str>) -> Option<i64> {
-    chrono::DateTime::parse_from_rfc3339(text?).ok().map(|t| t.timestamp_millis())
+    chrono::DateTime::parse_from_rfc3339(text?)
+        .ok()
+        .map(|t| t.timestamp_millis())
 }
 
 /// Harness-injected user text: a tag-led block (`<system-reminder>`, hook
@@ -221,7 +232,11 @@ pub struct ChatTail {
 }
 
 /// Open `session`'s stream on the server at `socket`, from `from_seq` on.
-pub fn tail_sync(socket: &Path, session: SessionKey, from_seq: u64) -> Result<ChatTail, ChatReadError> {
+pub fn tail_sync(
+    socket: &Path,
+    session: SessionKey,
+    from_seq: u64,
+) -> Result<ChatTail, ChatReadError> {
     let mut stream = std::os::unix::net::UnixStream::connect(socket)?;
     write_msg_sync(
         &mut stream,
@@ -232,7 +247,10 @@ pub fn tail_sync(socket: &Path, session: SessionKey, from_seq: u64) -> Result<Ch
             from_seq,
         },
     )?;
-    Ok(ChatTail { stream, done: false })
+    Ok(ChatTail {
+        stream,
+        done: false,
+    })
 }
 
 impl Iterator for ChatTail {
@@ -284,7 +302,9 @@ mod tests {
         let whole = rows.join("\n") + "\n";
         std::fs::write(&path, &whole).unwrap();
         let mapper = || Box::new(claude::ClaudeMapper::new(&path)) as Box<dyn RowMapper>;
-        let replay = SessionReader::lines(path.clone(), mapper(), 0).poll().unwrap();
+        let replay = SessionReader::lines(path.clone(), mapper(), 0)
+            .poll()
+            .unwrap();
 
         let live_path = dir.path().join("live.jsonl");
         std::fs::write(&live_path, "").unwrap();
@@ -293,20 +313,33 @@ mod tests {
         let cut_b = whole.rfind("{\"type\":\"user\"").unwrap() + 5;
         let mut got = Vec::new();
         for chunk in [&whole[..cut_a], &whole[cut_a..cut_b], &whole[cut_b..]] {
-            let mut f = std::fs::OpenOptions::new().append(true).open(&live_path).unwrap();
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&live_path)
+                .unwrap();
             f.write_all(chunk.as_bytes()).unwrap();
             got.extend(live.poll().unwrap());
         }
-        let pairs = |events: &[ChatEvent]| events.iter().map(|e| (e.seq, e.body.clone())).collect::<Vec<_>>();
+        let pairs = |events: &[ChatEvent]| {
+            events
+                .iter()
+                .map(|e| (e.seq, e.body.clone()))
+                .collect::<Vec<_>>()
+        };
         assert_eq!(pairs(&got), pairs(&replay));
         assert!(replay.iter().enumerate().all(|(i, e)| e.seq == i as u64));
         assert_eq!(replay.len(), 6, "{replay:#?}");
         assert!(matches!(
             &replay[0].body,
-            ChatBody::UserMessage { origin: UserOrigin::Typed, .. }
+            ChatBody::UserMessage {
+                origin: UserOrigin::Typed,
+                ..
+            }
         ));
 
-        let resumed = SessionReader::lines(path.clone(), mapper(), 3).poll().unwrap();
+        let resumed = SessionReader::lines(path.clone(), mapper(), 3)
+            .poll()
+            .unwrap();
         assert_eq!(pairs(&resumed), pairs(&replay[3..]));
     }
 }
