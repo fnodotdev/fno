@@ -28,9 +28,11 @@ fn client_e2e_first_run_boots_command_center_and_types_into_the_pane() {
     h.wait_screen(15, |s| screen_has_line(s, "pane-typing-works"));
     let seed = std::fs::read_to_string(scratch.0.join("iso-agents").join("mux-view.json"))
         .expect("the first-run boot writes the seen marker");
-    assert!(
-        seed.contains("\"org_board_seen\":true"),
-        "the marker landed in the store: {seed}"
+    let seed: serde_json::Value = serde_json::from_str(&seed).expect("the store stays valid JSON");
+    assert_eq!(
+        seed["experimental"]["org_board_seen"],
+        serde_json::json!(true),
+        "the marker landed in the store"
     );
 }
 
