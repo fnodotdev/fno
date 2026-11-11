@@ -246,7 +246,7 @@ jobs:
         run: |
           files="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')"
           case "$files" in
-            *src/client.rs*|*client/sideline.rs*|*client/card_line.rs*|*client/bell.rs*|*client/backlog_panes.rs*|*client/messages_view.rs*|*client/snapshot.rs*|*client/keys_modal.rs*|*modal_select.rs*|*client/feed_detail.rs*|*client/questions.rs*|*client/pane_paint.rs*|*client/terminal_cursor.rs*|*client/org_*|*client/pr_review.rs*|*client/file_viewer.rs*|*client/node_detail.rs*|*pr_diff.rs*|*fleet_beacon.rs*|*server/window_size.rs*|*mux-demo-snapshot.sh*)
+            *src/client.rs*|*client/sideline.rs*|*client/card_line.rs*|*client/bell.rs*|*client/backlog_panes.rs*|*client/messages_view.rs*|*client/snapshot.rs*|*client/extensions.rs*|*client/settings_modal.rs*|*client/keys_modal.rs*|*modal_select.rs*|*client/feed_detail.rs*|*client/questions.rs*|*client/pane_paint.rs*|*client/terminal_cursor.rs*|*client/org_*|*client/pr_review.rs*|*client/file_viewer.rs*|*client/node_detail.rs*|*pr_diff.rs*|*fleet_beacon.rs*|*server/window_size.rs*|*mux-demo-snapshot.sh*)
               echo "shoot=1" >> "$GITHUB_ENV"
               echo "the bell surface changed: shooting"
               ;;
@@ -336,6 +336,16 @@ jobs:
           for group in workspace status; do
             bash scripts/ops/mux-demo-snapshot.sh --out "shots/machines-${group}.png" --format png --view machines --group "$group" --remote-pane --size 200x72 --fit
             bash scripts/ops/mux-demo-snapshot.sh --out "shots/machines-${group}-light.png" --format png --view machines --group "$group" --remote-pane --theme light --size 200x72 --fit
+          done
+          # Settings > Extensions: the tab, the gallery under it, the second
+          # press on a code mod, and the consent card of each install kind.
+          for theme in dark light; do
+            for view in extensions extensions-gallery extensions-confirm; do
+              bash scripts/ops/mux-demo-snapshot.sh --out "shots/${view}-${theme}.png" --format png --view "$view" --theme "$theme" --size 200x56 --fit
+            done
+            for kind in data code; do
+              bash scripts/ops/mux-demo-snapshot.sh --out "shots/install-card-${kind}-${theme}.png" --format png --install-card "$kind" --theme "$theme" --size 200x56 --fit
+            done
           done
           # Two windows on one tab: the active big window fills, the same
           # window under the smallest policy letterboxes, and a small
