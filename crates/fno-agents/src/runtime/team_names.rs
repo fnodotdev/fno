@@ -926,7 +926,17 @@ pub fn name_team(
             // A slug-named record (a dispatch label mirrored in from the
             // row) was never person-named: the naming ceremony stays open.
         }
-        check_duplicate_name(store_path, store, &names, &live, &used, &canon, name)?;
+        check_duplicate_name(
+            store_path,
+            &registry_path,
+            live.get(&canon).and_then(|c| c.holder_session.as_deref()),
+            store,
+            &names,
+            &live,
+            &used,
+            &canon,
+            name,
+        )?;
         let holder_session = live.get(&canon).and_then(|c| c.holder_session.clone());
         store.teams.insert(
             canon.clone(),
@@ -1004,6 +1014,8 @@ pub fn name_team(
 
 fn check_duplicate_name(
     store_path: &Path,
+    registry_path: &Path,
+    binder: Option<&str>,
     store: &Store,
     names: &BTreeMap<String, String>,
     live: &BTreeMap<String, crate::territory::Team>,
@@ -1036,11 +1048,20 @@ fn check_duplicate_name(
         .map(|rec| rec.name.to_ascii_lowercase())
         .unwrap_or_default();
     if own.as_str() != lowered && used.contains(&lowered) {
-        return Err(format!(
-            "the name {} is retired: {}, and names are never reused. Pick (or draw) a fresh name",
-            display(name, 1),
-            used_by(store_path, name)
-        ));
+        let binder_reclaims = binder
+            .map(|session| {
+                session_own_names(store_path, registry_path, session)
+                    .map(|own_names| own_names.contains(&lowered))
+            })
+            .transpose()?
+            .unwrap_or(false);
+        if !binder_reclaims {
+            return Err(format!(
+                "the name {} is retired: {}, and names are never reused. Pick (or draw) a fresh name",
+                display(name, 1),
+                used_by(store_path, name)
+            ));
+        }
     }
     Ok(())
 }
@@ -1092,12 +1113,32 @@ pub fn rename_team(
         let from = display(&record.name, record.generation);
         let to = display(new_name, 1);
         let names = live_names_in(&prior, &live);
-        check_duplicate_name(store_path, &prior, &names, &live, &used, &canon, new_name)?;
+        check_duplicate_name(
+            store_path,
+            &registry_path,
+            Some(session),
+            &prior,
+            &names,
+            &live,
+            &used,
+            &canon,
+            new_name,
+        )?;
         return Ok(Some((from, to)));
     }
     let result = update(store_path, |store| {
         let names = live_names_in(store, &live);
-        check_duplicate_name(store_path, store, &names, &live, &used, &canon, new_name)?;
+        check_duplicate_name(
+            store_path,
+            &registry_path,
+            Some(session),
+            store,
+            &names,
+            &live,
+            &used,
+            &canon,
+            new_name,
+        )?;
         let current = store
             .teams
             .get(&canon)
@@ -2022,6 +2063,15 @@ pub fn apply_team_naming(
             name.is_some() || rescope_from.is_some(),
         )?;
     }
+    // The level-0/2 theme-required refusal runs BEFORE the name action: a
+    // refused check-in never leaves a freshly drawn name bound (the node's
+    // incident: `--name redraw` bound the drawn name, then this refusal
+    // fired). Same refusal text, earlier position.
+    if matches!(level, Some(0) | Some(2)) && theme_for(&store_path, scope).is_none() {
+        return Err(
+            "every lead names its theme once per scope; check in with --theme <theme>".into(),
+        );
+    }
     match (name, rescope_from) {
         (Some(_), Some(_)) => Err("use one of --name or --keep-name-from, not both".into()),
         (Some(n), None) => name_team(&store_path, &registry_path, scope, n).map(|_| ()),
@@ -2033,11 +2083,6 @@ pub fn apply_team_naming(
     }
     if !ensure_named_team(&store_path, &registry_path, scope)? {
         return Err("every live team needs a name; check in with --name redraw and the machine draws a fresh one".into());
-    }
-    if matches!(level, Some(0) | Some(2)) && theme_for(&store_path, scope).is_none() {
-        return Err(
-            "every lead names its theme once per scope; check in with --theme <theme>".into(),
-        );
     }
     Ok(())
 }
@@ -2295,6 +2340,65 @@ mod tests {
                 stored_title(&store, "x-dddd,x-eeee,x-ffff").as_deref(),
                 Some("Lead of native backlog")
             );
+        }
+
+        fn a_refused_checkin_binds_nothing() {
+            // The node's incident: an L0 check-in with --name redraw and no
+            // theme refused, but only AFTER the draw had bound a fresh team
+            // name, against apply_team_naming's own documented contract. The
+            // refusal must land before any name action commits: the store
+            // stays team-less and the ledger grows no row.
+            let tmp = tempfile::TempDir::new().unwrap();
+            write_registry(tmp.path(), json!([team_row("lead-a", "fno", 0, "sess-a")]));
+            let store = store_path(tmp.path());
+            let registry = registry_path(tmp.path());
+            let err = apply_team_naming(
+                &store,
+                &registry,
+                Some("redraw"),
+                None,
+                None,
+                Some(0),
+                "fno",
+            )
+            .unwrap_err();
+            assert!(err.contains("names its theme"), "{err}");
+            let after = read(&store).unwrap();
+            assert!(
+                after.teams.is_empty(),
+                "a refused check-in bound {:?}",
+                after.teams
+            );
+            let used = history_names(&store).unwrap();
+            assert!(used.is_empty(), "a refused check-in wrote {used:?}");
+        }
+
+        fn binder_reclaims_own_name_through_the_rename_door() {
+            // The binder session's own earlier name is its own, not a reuse
+            // (the exemption name_team already applies). A different holder
+            // renaming its team onto that name still refuses.
+            let tmp = tempfile::TempDir::new().unwrap();
+            write_registry(
+                tmp.path(),
+                json!([
+                    team_row("valentina", "x-aaaa", 0, "sess-v"),
+                    team_row("wren", "x-bbbb", 2, "sess-w"),
+                ]),
+            );
+            let store = store_path(tmp.path());
+            let registry = registry_path(tmp.path());
+            name_team(&store, &registry, "x-aaaa", "valentina").unwrap();
+            name_team(&store, &registry, "x-bbbb", "wren").unwrap();
+            history_append(
+                &store,
+                &NameHistoryEntry::here("esther", "x-aaaa", Some("sess-v".into()), "bound"),
+            )
+            .unwrap();
+            let renamed = rename_team(&store, &registry, "sess-v", "esther", true).unwrap();
+            let (from, to) = renamed.expect("the binder reclaims its own name");
+            assert_eq!(to, "Esther", "{from} -> {to}");
+            let refused = rename_team(&store, &registry, "sess-w", "esther", true).unwrap_err();
+            assert!(refused.contains("never reused"), "{refused}");
         }
 
         fn a_beat_without_a_theme_refuses_and_names_the_flag() {
@@ -2789,5 +2893,7 @@ mod tests {
         a_redraw_on_a_named_team_refuses_without_burning_a_draw();
         a_refused_theme_leaves_no_freshly_bound_name();
         the_record_mirrors_the_label_and_the_ceremony_stays_reachable();
+        a_refused_checkin_binds_nothing();
+        binder_reclaims_own_name_through_the_rename_door();
     }
 }
