@@ -382,10 +382,18 @@ pub(super) fn read_pr_head_oid(
     gh_bin: &str,
     cwd: &Path,
     selector: &str,
+    repo: Option<&str>,
 ) -> Result<Option<(String, Value)>, GhReadError> {
     // The same terminal purpose as read_pr_info's own read: the payload this
     // returns fills PrInfo, so it takes the floored bound.
-    let Some(pr_json) = read_pr_view(gh_bin, cwd, Some(selector), stopgate_pr_meta_timeout())?
+    let Some(pr_json) = read_pr_view_fields(
+        gh_bin,
+        cwd,
+        Some(selector),
+        PR_VIEW_FIELDS_GRAPHQL,
+        repo,
+        stopgate_pr_meta_timeout(),
+    )?
     else {
         return Ok(None);
     };

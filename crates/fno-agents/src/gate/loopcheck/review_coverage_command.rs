@@ -222,6 +222,9 @@ pub(super) fn decide_review_coverage(args: &[String]) -> (i32, String) {
         global_settings_path.as_deref(),
         author_harness_override.as_deref(),
     );
+    // The session node's PR repo (when the manifest binds one): every PR read
+    // below pins to it, never the ambient origin's same-number PR.
+    let session_pr_repo = pr_read::session_node_pr_target(&cwd).1;
 
     // Authorship: --session-id, else the manifest's harness_session_id
     // (authorship::resolve_manifest_author). The historical carry-forward
@@ -252,54 +255,56 @@ pub(super) fn decide_review_coverage(args: &[String]) -> (i32, String) {
     let mut prefetched_pr_json: Option<Value> = None;
     let (head_sha, head_explicit) = match (head, pr.as_deref()) {
         (Some(explicit), _) => (explicit, true),
-        (None, Some(selector)) => match read_pr_head_oid(&gh_bin, &cwd, selector) {
-            Ok(Some((resolved, pr_json))) => {
-                prefetched_pr_json = Some(pr_json);
-                (resolved, true)
-            }
-            Ok(None) => return (3, no_pr_payload()),
-            Err(read_err) => {
-                // A killed timeout reports its own shape before the unknown-row
-                // machinery: no quota diagnosis for a child that never answered.
-                if read_err.kind == ReadErrorKind::TimedOut {
-                    let mut out = serde_json::json!({
-                        "error": read_err.render(),
-                        "outcome": read_err.outcome(),
-                        "emitted": false,
-                    });
-                    insert_quota_diagnostic(&mut out, &None);
+        (None, Some(selector)) => {
+            match read_pr_head_oid(&gh_bin, &cwd, selector, session_pr_repo.as_deref()) {
+                Ok(Some((resolved, pr_json))) => {
+                    prefetched_pr_json = Some(pr_json);
+                    (resolved, true)
+                }
+                Ok(None) => return (3, no_pr_payload()),
+                Err(read_err) => {
+                    // A killed timeout reports its own shape before the unknown-row
+                    // machinery: no quota diagnosis for a child that never answered.
+                    if read_err.kind == ReadErrorKind::TimedOut {
+                        let mut out = serde_json::json!({
+                            "error": read_err.render(),
+                            "outcome": read_err.outcome(),
+                            "emitted": false,
+                        });
+                        insert_quota_diagnostic(&mut out, &None);
+                        return (4, out.to_string());
+                    }
+                    let read = read_err.read.clone();
+                    let tail = read_err.stderr_tail.clone();
+                    let pr_num: i64 = pr.as_deref().and_then(|p| p.parse().ok()).unwrap_or(0);
+                    let data = coverage_event_data(
+                        pr_num,
+                        &CoverageReport {
+                            fail_at_head: false,
+                            github_approval_satisfies: false,
+                            coverage: Coverage::Unknown,
+                            verdicts: Vec::new(),
+                        },
+                        "",
+                        &inputs.repo_slug,
+                        author_session.as_deref(),
+                    );
+                    emit_to_both(
+                        &inputs.project_events,
+                        &inputs.global_events,
+                        "review_coverage",
+                        data.clone(),
+                    );
+                    let (secondary, quota) = exit4_quota(&gh_bin, &cwd, &read, &tail);
+                    let mut out = data;
+                    insert_quota_diagnostic(&mut out, &quota);
+                    if secondary {
+                        out["reason"] = serde_json::json!(secondary_limit_reason());
+                    }
                     return (4, out.to_string());
                 }
-                let read = read_err.read.clone();
-                let tail = read_err.stderr_tail.clone();
-                let pr_num: i64 = pr.as_deref().and_then(|p| p.parse().ok()).unwrap_or(0);
-                let data = coverage_event_data(
-                    pr_num,
-                    &CoverageReport {
-                        fail_at_head: false,
-                        github_approval_satisfies: false,
-                        coverage: Coverage::Unknown,
-                        verdicts: Vec::new(),
-                    },
-                    "",
-                    &inputs.repo_slug,
-                    author_session.as_deref(),
-                );
-                emit_to_both(
-                    &inputs.project_events,
-                    &inputs.global_events,
-                    "review_coverage",
-                    data.clone(),
-                );
-                let (secondary, quota) = exit4_quota(&gh_bin, &cwd, &read, &tail);
-                let mut out = data;
-                insert_quota_diagnostic(&mut out, &quota);
-                if secondary {
-                    out["reason"] = serde_json::json!(secondary_limit_reason());
-                }
-                return (4, out.to_string());
             }
-        },
+        }
         (None, None) => (git_head_sha(&git_bin, &cwd), false),
     };
 
@@ -355,6 +360,10 @@ pub(super) fn decide_review_coverage(args: &[String]) -> (i32, String) {
             &inputs.settings,
             inputs.author_harness.as_deref(),
         ),
+        // The session node's PR repo, when the manifest binds one: the
+        // coverage read answers the node's own PR, never the ambient
+        // origin's same-number PR.
+        session_pr_repo.as_deref(),
     ) {
         Ok(pr_info) => {
             if pr_info.number == 0 {
@@ -373,7 +382,9 @@ pub(super) fn decide_review_coverage(args: &[String]) -> (i32, String) {
                     &gh_bin,
                     &fno_bin,
                     &cwd,
-                    &inputs.repo_slug,
+                    session_pr_repo
+                        .as_deref()
+                        .unwrap_or(inputs.repo_slug.as_str()),
                     pr_info.number,
                     &pr_info.head_oid,
                     &head_sha,
@@ -488,7 +499,9 @@ pub(super) fn decide_review_coverage(args: &[String]) -> (i32, String) {
                         &gh_bin,
                         &fno_bin,
                         &cwd,
-                        &inputs.repo_slug,
+                        session_pr_repo
+                            .as_deref()
+                            .unwrap_or(inputs.repo_slug.as_str()),
                         pr_num,
                         &head_sha,
                         &head_sha,

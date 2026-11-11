@@ -176,7 +176,7 @@ pub(crate) mod intent;
 mod local_attestation;
 pub(crate) mod plan_fidelity;
 mod posture;
-mod pr_read;
+pub(crate) mod pr_read;
 mod review_coverage_command;
 mod review_findings;
 pub(crate) mod review_inputs;
@@ -1629,8 +1629,12 @@ pub(crate) fn decide_with_payload(
         };
         // The manifest node's own PR pins the terminal read (merged, deleted
         // and detached heads stay readable); an absent node or PR keeps the
-        // branch-resolved read exactly as before.
-        let node_pr_selector = pr_read::manifest_node_pr_selector(&cwd, node_id.as_deref());
+        // branch-resolved read exactly as before. The chosen row's url also
+        // pins the repo every PR read answers against.
+        let (node_pr_selector, node_pr_repo) =
+            pr_read::manifest_node_pr_target(&cwd, node_id.as_deref())
+                .map(|(selector, repo)| (Some(selector), repo))
+                .unwrap_or((None, None));
         let done_result = run_done(
             &done_gh_bin,
             git_bin,
@@ -1657,6 +1661,7 @@ pub(crate) fn decide_with_payload(
             Some(&resolve_posture_config(&settings)),
             &resolved_local_peer_reviewers_for_author(&settings, author_harness.as_deref()),
             node_pr_selector.as_deref(),
+            node_pr_repo.as_deref(),
             node_id.as_deref(),
         );
 
@@ -2838,12 +2843,20 @@ fn run_done(
     carry_interdiff_lines: usize,
     posture: Option<&PostureConfig>,
     peer_reviewers: &[String],
-    // The PR selector the manifest's node resolves (`manifest_node_pr_selector`):
+    // The PR selector the manifest's node resolves (`manifest_node_pr_target`):
     // pins the terminal read to the session's own PR so a merged, deleted or
     // detached head cannot turn the read into a branch-resolution failure.
     pr_selector: Option<&str>,
+    // The node PR row url's owner/repo: every PR read below pins the repo to
+    // it instead of the ambient origin (a cutover checkout whose origin names
+    // a different repo than the node's stored PR must read the node's repo).
+    node_pr_repo: Option<&str>,
     node_id: Option<&str>,
 ) -> Result<PrInfo, GhReadError> {
+    // The ambient slug stays the journal-scoping key (local evidence is
+    // stamped under the checkout's own repo) and the fallback whenever the
+    // node row carries no url.
+    let pr_repo = node_pr_repo.filter(|s| !s.is_empty()).unwrap_or(repo_slug);
     let read = |selector: Option<&str>| {
         read_pr_info(
             gh_bin,
@@ -2869,14 +2882,15 @@ fn run_done(
             carry_interdiff_lines,
             posture,
             peer_reviewers,
+            node_pr_repo,
         )
     };
     let mut info = read(pr_selector)?;
     // A closed PR whose node shipped through a replacement: read the live
     // one instead, so the write-once manifest never pins done() to it.
     if matches!(info.state, PrState::Closed) {
-        if let Some(live) = node_id
-            .and_then(|node| pr_read::live_fixes_pr(gh_bin, cwd, repo_slug, node, info.number))
+        if let Some(live) =
+            node_id.and_then(|node| pr_read::live_fixes_pr(gh_bin, cwd, pr_repo, node, info.number))
         {
             info = read(Some(live.as_str()))?;
         }
@@ -2893,7 +2907,7 @@ fn run_done(
             gh_bin,
             &loopcheck_fno_bin(),
             cwd,
-            repo_slug,
+            pr_repo,
             info.number,
             &info.head_oid,
             head_sha,
