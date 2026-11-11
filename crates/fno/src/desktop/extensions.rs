@@ -838,32 +838,29 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
         // gpui paints no loading element for the first 200 ms, so the box
         // holds the preview's space itself: the recipe never jumps up.
         out = out.child(
-            div()
-                .w_full()
-                .max_w(px(PREVIEW_MAX))
-                .min_h(px(PREVIEW_RESERVE))
-                .child(
-                    img(PathBuf::from(&c.preview))
-                        .w_full()
-                        .object_fit(ObjectFit::Contain)
-                        .with_loading(move || {
-                            div()
-                                .w_full()
-                                .h(px(PREVIEW_RESERVE))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .text_color(rgb(muted))
-                                .child("Loading preview...")
-                                .into_any_element()
-                        })
-                        .with_fallback(move || {
-                            div()
-                                .text_color(rgb(error))
-                                .child(format!("Cannot draw {path}"))
-                                .into_any_element()
-                        }),
-                ),
+            div().min_h(px(PREVIEW_RESERVE)).child(
+                img(PathBuf::from(&c.preview))
+                    .w_full()
+                    .max_w(px(PREVIEW_MAX))
+                    .object_fit(ObjectFit::Contain)
+                    .with_loading(move || {
+                        div()
+                            .w_full()
+                            .h(px(PREVIEW_RESERVE))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_color(rgb(muted))
+                            .child("Loading preview...")
+                            .into_any_element()
+                    })
+                    .with_fallback(move || {
+                        div()
+                            .text_color(rgb(error))
+                            .child(format!("Cannot draw {path}"))
+                            .into_any_element()
+                    }),
+            ),
         );
     }
     if !c.recipe.is_empty() {
