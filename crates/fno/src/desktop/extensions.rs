@@ -43,7 +43,7 @@ pub(super) enum Ask {
 pub(super) enum Reply {
     Installed(Result<Rows, ReadFailed>),
     Gallery(Result<Vec<Published>, ReadFailed>),
-    Recipe(String, Result<String, String>),
+    Recipe(String, Result<String, ReadFailed>),
     Switched(String, bool, Result<(), ReadFailed>),
 }
 
@@ -61,7 +61,8 @@ pub(super) fn start() -> std::io::Result<(Sender<Ask>, UnboundedReceiver<Reply>)
                     }
                     Ask::Gallery => Reply::Gallery(feed::read_gallery()),
                     Ask::Recipe(path) => {
-                        let text = std::fs::read_to_string(&path).map_err(|e| e.to_string());
+                        let text =
+                            std::fs::read_to_string(&path).map_err(|e| ReadFailed(e.to_string()));
                         Reply::Recipe(path, text)
                     }
                     Ask::Switch(target, on) => {
@@ -119,7 +120,7 @@ pub(super) struct Page {
     reading: bool,
     gallery: Gallery,
     selected: Option<String>,
-    recipe: Option<(String, Result<String, String>)>,
+    recipe: Option<(String, Result<String, ReadFailed>)>,
     confirm: Option<String>,
     url: Option<String>,
     asks: Option<Sender<Ask>>,
@@ -236,13 +237,10 @@ impl Page {
         Some((target(pack, c), lines))
     }
 
-    /// The URL to install, or the reason there is none.
-    fn url_to_install(&self) -> Result<String, String> {
-        let url = self.url.as_deref().unwrap_or_default().trim().to_string();
-        if url.is_empty() || url.starts_with('-') {
-            return Err("type a git URL".into());
-        }
-        Ok(url)
+    /// The URL to install: none when the field is empty or starts with `-`.
+    fn url_to_install(&self) -> Option<String> {
+        let url = self.url.as_deref().unwrap_or_default().trim();
+        (!url.is_empty() && !url.starts_with('-')).then(|| url.to_string())
     }
 
     /// A key while the URL field is open. Text keys never leave this page.
@@ -299,7 +297,7 @@ pub(super) fn act(root: &mut Root, act: Act, cx: &mut Context<Root>) {
             page.url = Some(url.to_string());
         }
         Act::Submit => match page.url_to_install() {
-            Ok(url) => {
+            Some(url) => {
                 page.url = None;
                 let notice = feed::in_pane(
                     &["install", &url],
@@ -308,7 +306,7 @@ pub(super) fn act(root: &mut Root, act: Act, cx: &mut Context<Root>) {
                 );
                 return in_terminal(root, notice, cx);
             }
-            Err(why) => root.say(why, cx),
+            None => root.say("type a git URL".into(), cx),
         },
     }
     cx.notify();
@@ -809,18 +807,18 @@ mod tests {
     #[test]
     fn the_url_field_types_edits_and_refuses_an_empty_or_dashed_value() {
         let (mut page, _rx) = page();
-        assert!(page.url_to_install().is_err());
+        assert!(page.url_to_install().is_none());
         page.url = Some(String::new());
         assert_eq!(page.edit("a", Some("--x")), Edit::Typed);
         assert!(
-            page.url_to_install().is_err(),
+            page.url_to_install().is_none(),
             "a value starting with - installs nothing"
         );
         page.edit("backspace", None);
         page.edit("backspace", None);
         page.edit("backspace", None);
         page.edit("h", Some("https://github.com/o/r"));
-        assert_eq!(page.url_to_install().unwrap(), "https://github.com/o/r");
+        assert_eq!(page.url_to_install().as_deref(), Some("https://github.com/o/r"));
         assert_eq!(page.edit("enter", None), Edit::Submit);
         assert_eq!(page.edit("escape", None), Edit::Close);
     }
