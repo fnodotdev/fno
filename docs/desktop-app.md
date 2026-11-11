@@ -6,6 +6,8 @@
 
 The app is macOS only and is built from source. It is not part of `cargo install fno`.
 
+The build compiles Metal shaders, so it needs Xcode and its Metal toolchain. If the build stops on `missing Metal Toolchain`, install it once with `xcodebuild -downloadComponent MetalToolchain`.
+
 ```bash
 cargo build --release --manifest-path crates/fno/Cargo.toml --features desktop --bin fno-desktop
 T="$(cargo metadata --format-version 1 --no-deps --manifest-path crates/fno/Cargo.toml | jq -r .target_directory)/release/fno-desktop"
