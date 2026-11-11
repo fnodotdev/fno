@@ -47,7 +47,22 @@ A cancelled CI run produced no result. `fno do pr status` reads it as pending, n
 - A spawn payload that names a different command than the node derives: the named command runs, with a notice.
 - `--route anthropic/<model>`: the native lane runs with that model.
 - `pr create` docs line and sibling PR: the PR opens, and a notice names the doc rule or the sibling. The merge gate still reads the `Docs:` line.
-- State-root, Claude config dir and config.toml writes: the write lands, and the note names the right place or command.
+- State-root, Claude config dir and config.toml writes: the write lands, and the note names the right place or command. An fd dup (`2>&1`) and the body of a quoted heredoc are not writes.
+- Recursive `grep -r` beside a Cargo cache: the search runs. The note names `rg` and the Grep tool.
+
+## How a PreToolUse refusal reads
+
+Claude shows a hook deny as its own permission denial. So every fno PreToolUse refusal names fno and gives a way out. It reads in three parts:
+
+```
+[fno <guard>] <why it stopped>
+Way out: <the safe form of the same intent>
+Override: <how the person runs it anyway>
+```
+
+The contract table in `crates/fno-agents/src/runtime/hook/refusal.rs` holds the two last lines for each guard. A guard with no row fails the render test.
+
+fno owns no permission layer, so the harness decides how a stop lands. On a Claude session that a person attends, a stop returns `ask`. The harness prompt is then the person's key to run the call once. Everywhere else the same text returns `deny`. Codex parses `ask` but runs the call anyway. An unattended worker (`CLAUDE_CODE_SESSION_ATTENDED=0` or `FNO_AGENT_SELF` set) has nobody to answer a prompt, and the agy and pi guard host has none to show. A call that got `ask` and then ran writes a `guard_decision` row with decision `override`. A guard with many overrides is in the way.
 
 ## Adding a guard
 
