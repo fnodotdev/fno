@@ -181,6 +181,11 @@ pub const SCREENS: [Screen; 18] = [
         stops: [true, true, true],
     },
     Screen {
+        id: "usage-report",
+        when: When::Always,
+        stops: [true, true, true],
+    },
+    Screen {
         id: "messaging",
         when: When::Always,
         stops: [false, true, true],
@@ -469,6 +474,7 @@ pub fn step(state: &mut State, pr: &mut dyn Prompter, pb: &mut dyn Probes) -> Ne
         "interview" => screen_interview(state, pr, stops),
         "services" => screen_services(state, pr, stops),
         "claude-auto-mode" => screen_claude_auto_mode(state, pr),
+        "usage-report" => screen_usage_report(state, pr),
         "messaging" => screen_messaging(state, pr, stops),
         "projects" => screen_projects(state, pr, stops),
         "join" => screen_join(state, pr, stops),
@@ -1233,6 +1239,30 @@ fn screen_claude_auto_mode(state: &mut State, pr: &mut dyn Prompter) -> Outcome 
     }
 }
 
+/// The opt-in daily usage report. Every preset answers no; a yes here only
+/// names `fno doctor telemetry on` as the next step, which shows the report
+/// and asks at the terminal before anything is recorded.
+fn screen_usage_report(state: &mut State, pr: &mut dyn Prompter) -> Outcome {
+    match confirm_flow(
+        state,
+        pr,
+        "usage-report",
+        "Send fno a daily usage report? Counts and identifiers only; you see the exact report before you say yes.",
+        false,
+    ) {
+        Flow::Answered(true) => {
+            state.answers.insert("usage-report", Answer::Yes);
+            Outcome::Forward
+        }
+        Flow::Answered(false) => {
+            state.answers.insert("usage-report", Answer::No);
+            Outcome::Forward
+        }
+        Flow::Back => Outcome::Back,
+        Flow::Cancel => Outcome::Cancel,
+    }
+}
+
 /// Chat channels for open questions. Every preset ticks none: a channel
 /// needs a token only the person can make, so the aggressive pass skips it
 /// and the setup at apply asks for each pick's details.
@@ -1460,6 +1490,17 @@ pub fn pending(state: &State) -> Vec<Proposal> {
             value: "Footnote State Writes + Footnote Role Grants".into(),
             scope: "global",
             reason: "the person's explicit approval to add Footnote's Auto Mode rules".into(),
+            source: "wizard",
+        });
+    }
+    if let Some(Answer::Yes) = state.answers.get("usage-report") {
+        rows.push(Proposal {
+            id: "usage-report",
+            key: String::new(),
+            value: "fno doctor telemetry on".into(),
+            scope: "global",
+            reason: "the person's yes; the terminal door shows the report and asks once more"
+                .into(),
             source: "wizard",
         });
     }

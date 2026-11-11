@@ -197,7 +197,7 @@ fn skipped(state: &State) -> Vec<&'static str> {
 
 #[test]
 fn screen_order_and_skips_follow_the_presets() {
-    // Balanced with every default accepted: fifteen screens run in
+    // Balanced with every default accepted: sixteen screens run in
     // order, three skip, and the proposal set is the balanced one.
     let mut state = State::new(None, fresh_detect(), false);
     let mut pr = Script::auto();
@@ -218,6 +218,7 @@ fn screen_order_and_skips_follow_the_presets() {
             "interview",
             "services",
             "claude-auto-mode",
+            "usage-report",
             "messaging",
             "projects",
             "review",
@@ -283,10 +284,12 @@ fn screen_order_and_skips_follow_the_presets() {
         que: VecDeque::new(),
     };
     assert_eq!(drive(&mut state, &mut pr, &mut pb), Next::Done);
-    assert_eq!(pr.asks(), 1, "only the settings consent is always asked");
+    assert_eq!(pr.asks(), 2, "only the two consents are always asked");
     assert_eq!(pr.confirms("claude-auto-mode"), vec![false]);
+    assert_eq!(pr.confirms("usage-report"), vec![false]);
     let rows = pending(&state);
     assert!(rows.iter().all(|r| r.id != "claude-auto-mode"));
+    assert!(rows.iter().all(|r| r.id != "usage-report"));
     assert!(rows.iter().any(|r| r.key == "auto_merge.enabled"));
     assert!(rows.iter().any(|r| r.key == "auto_merge.grant"));
     for id in ["pr-watcher", "auto-heal", "groom-agent"] {
@@ -353,11 +356,17 @@ fn empty_interview_answers_propose_nothing() {
 }
 
 #[test]
-fn auto_mode_settings_need_a_yes_answer_under_every_preset() {
+fn consent_screens_need_a_yes_answer_under_every_preset() {
+    for id in ["claude-auto-mode", "usage-report"] {
+        consent_needs_a_yes(id);
+    }
+}
+
+fn consent_needs_a_yes(id: &'static str) {
     let index = SCREENS
         .iter()
-        .position(|screen| screen.id == "claude-auto-mode")
-        .expect("Claude Auto Mode consent screen");
+        .position(|screen| screen.id == id)
+        .expect("consent screen");
     assert_eq!(SCREENS[index].stops, [true, true, true]);
 
     let mut declined = State::new(Some(Preset::Aggressive), fresh_detect(), false);
@@ -367,10 +376,8 @@ fn auto_mode_settings_need_a_yes_answer_under_every_preset() {
         que: VecDeque::new(),
     };
     assert_eq!(step(&mut declined, &mut pr, &mut pb), Next::Forward);
-    assert_eq!(pr.confirms("claude-auto-mode"), vec![false]);
-    assert!(pending(&declined)
-        .iter()
-        .all(|row| row.id != "claude-auto-mode"));
+    assert_eq!(pr.confirms(id), vec![false]);
+    assert!(pending(&declined).iter().all(|row| row.id != id));
 
     let mut accepted = State::new(Some(Preset::Aggressive), fresh_detect(), false);
     accepted.index = index;
@@ -379,10 +386,8 @@ fn auto_mode_settings_need_a_yes_answer_under_every_preset() {
         que: VecDeque::new(),
     };
     assert_eq!(step(&mut accepted, &mut pr, &mut pb), Next::Forward);
-    assert_eq!(pr.confirms("claude-auto-mode"), vec![false]);
-    assert!(pending(&accepted)
-        .iter()
-        .any(|row| row.id == "claude-auto-mode"));
+    assert_eq!(pr.confirms(id), vec![false]);
+    assert!(pending(&accepted).iter().any(|row| row.id == id));
 }
 
 #[test]

@@ -1349,6 +1349,15 @@ fn step_permission_rules(rep: &mut Report) {
     );
 }
 
+/// The wizard's yes to the usage report records nothing: consent is only
+/// ever written by the terminal door, after it prints the exact report.
+fn step_usage_report(rep: &mut Report) {
+    let message = "usage-report: run `fno doctor telemetry on` to see the exact report and answer at the terminal".to_string();
+    rep.rows
+        .push(row("needs_human", "usage_report_consent", message.clone()));
+    rep.needs_human.push(message);
+}
+
 fn step_claude_auto_mode(rep: &mut Report) {
     let path = crate::cli_hooks::user_claude_settings_path();
     let result = crate::cli_hooks::install_claude_auto_mode_allow(&path);
@@ -2222,6 +2231,7 @@ pub(crate) fn apply_wizard_pending(
             "web-bridge-agent" => step_web_bridge_agent(exe, &mut rep, &mut loaded),
             "projects" => step_projects(exe, root, &mut rep),
             "messaging" => step_messaging(exe, true, Some(&[p.value.as_str()]), &mut rep),
+            "usage-report" => step_usage_report(&mut rep),
             "claude-auto-mode" => step_claude_auto_mode(&mut rep),
             _ => rep.skipped.push(format!("{}: no runner", p.id)),
         }
