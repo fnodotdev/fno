@@ -1634,10 +1634,26 @@ fn row_text(row: &Value) -> String {
 /// `superuser in chat` contains `user in chat`, so one casefold covers both
 /// spellings the leads already record.
 fn row_is_chat_attested(row: &Value) -> bool {
+    rationale_lower(row).contains("user in chat")
+}
+
+/// The row's rationale, casefolded; empty when absent.
+fn rationale_lower(row: &Value) -> String {
     row.get("rationale")
         .and_then(Value::as_str)
-        .is_some_and(|r| r.to_lowercase().contains("user in chat"))
+        .unwrap_or_default()
+        .to_lowercase()
 }
+
+/// The rationale attests the user tapped Approve on a Visual Log page. The
+/// lead's reader writes this row only for a tap whose head still matches the
+/// PR and whose viewer is one of the user's accounts.
+fn row_is_tap_attested(row: &Value) -> bool {
+    rationale_lower(row).contains(VISUAL_LOG_TAP)
+}
+
+/// The rationale phrase a Visual Log tap row carries.
+const VISUAL_LOG_TAP: &str = "user tapped approve on the visual log";
 
 /// The rationale attests the paint diff is identifier-only: the edits
 /// rename or rebind code names and every rendered string stays
@@ -1648,12 +1664,8 @@ fn row_is_chat_attested(row: &Value) -> bool {
 /// head-scoped like the chat attestation, so only the lead whose territory
 /// covers the node can mint it and a push voids it.
 fn row_attests_identifier_only(row: &Value) -> bool {
-    row.get("rationale")
-        .and_then(Value::as_str)
-        .is_some_and(|r| {
-            let r = r.to_lowercase();
-            r.contains("identifiers only") || r.contains("identifier-only")
-        })
+    let r = rationale_lower(row);
+    r.contains("identifiers only") || r.contains("identifier-only")
 }
 
 /// The rationale cites one of these question ids as a whole token. The
@@ -1835,6 +1847,7 @@ fn role_approval_texts<P: GateReads>(probes: &P, cwd: &Path, pr: u64, node: &str
         if row.get("authority_source").and_then(Value::as_str) == Some("role")
             && live
             && (row_is_chat_attested(row)
+                || row_is_tap_attested(row)
                 || row_cites_any(row, &approved)
                 || row_attests_identifier_only(row))
         {

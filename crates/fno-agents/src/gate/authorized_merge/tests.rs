@@ -2831,6 +2831,19 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         .into_bytes(),
     );
     assert!(!clears(&fake, &head));
+    // The reader's row for an Approve tap on the Visual Log clears at its head.
+    fake.decisions_stdout = Some(
+        row(
+            "visual approval PR 7 at <head>: approved",
+            "User tapped Approve on the Visual Log (viewer u_test)",
+            "role",
+            "unscoped",
+        )
+        .replace("<head>", &head)
+        .into_bytes(),
+    );
+    assert!(clears(&fake, &head));
+    assert!(!clears(&fake, &pushed));
     // The row's authority is not role: held.
     fake.decisions_stdout = Some(
         row(

@@ -182,6 +182,7 @@ A titled lead answers the open questions in its scope, and escalates only what t
 - **Escalate the deny classes only.** The default `questions.rules.deny` holds five classes. They are `irreversible`, `money-security`, `outside-reach`, `taste` and `law-change`. A lead rules the `ask` classes itself: `public-surface` and `gate-override`. Everything else, decide and log. The escalation is one note in the escalations directory, at `fno-agents state path escalations`. It has five sections. They are what is being decided, why it matters now, the options, the recommendation, and what happens on silence. State a deadline. No bare ids.
 - **Silence has a default.** Past the deadline the check-in names the default: take the recommended option and record it with `fno inbox decide`, or wait when the call is irreversible.
 - **When the superuser answers in chat, record it.** `fno inbox law set` for a law change, else `fno inbox decide <node> "<answer>" --authority role --rationale "superuser in chat: <their words>"`, and set the note's `status`. A harness with a push notification tool also sends one that names the note.
+- **Read Visual Log taps every 2 minutes.** The user approves a look with a tap on the Visual Log page. Arm the reader and record each tap: [references/visual-log-taps.md](references/visual-log-taps.md).
 
 A titled lead is not the superuser: the `operator` authority is refused on an agent session, and law stays superuser tier. The lead's channels:
 

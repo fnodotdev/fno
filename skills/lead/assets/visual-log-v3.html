@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>__TITLE__</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600&display=swap">
+<style>
+:root { --bg:#f3f4f1; --surface:#fff; --fg:#1c201c; --muted:#5d665e; --line:#d6dbd4; --accent:#2f7d55; --warn:#b5651d; --bad:#a83232; --term:#141414;
+  --sans:"IBM Plex Sans",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace; color-scheme:light; }
+@media (prefers-color-scheme: dark) { :root { --bg:#111412; --surface:#1a1e1b; --fg:#e4e8e3; --muted:#9aa39b; --line:#2d332e; --accent:#5fbf8a; --warn:#e09a52; --bad:#e07070; --term:#0b0b0b; color-scheme:dark; } }
+body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.55 var(--sans); }
+.wrap { max-width:1100px; margin:0 auto; display:grid; gap:32px;
+  padding:28px max(16px, env(safe-area-inset-right,0px)) 56px max(16px, env(safe-area-inset-left,0px)); }
+header { display:grid; gap:6px; }
+.eyebrow { font:12px var(--mono); letter-spacing:.06em; text-transform:uppercase; color:var(--muted); }
+h1 { margin:0; font-size:clamp(24px,4vw,34px); line-height:1.15; font-weight:600; }
+h2 { margin:0; font-size:21px; font-weight:600; }
+.lede, .empty { margin:0; color:var(--muted); max-width:65ch; }
+nav.toc { display:flex; flex-wrap:wrap; gap:8px; }
+nav.toc a { font:600 13px var(--mono); color:var(--fg); text-decoration:none; border:1px solid var(--line); border-radius:999px; padding:4px 12px; background:var(--surface); }
+article.pr { display:grid; gap:16px; padding-top:24px; border-top:1px solid var(--line); scroll-margin-top:12px; }
+.meta { display:flex; flex-wrap:wrap; gap:8px; font:13px var(--mono); color:var(--muted); }
+p.note { margin:0; max-width:70ch; }
+.views { display:grid; gap:14px; }
+figure { margin:0; display:grid; gap:4px; }
+.frame { background:var(--term); border:1px solid var(--line); border-radius:10px; padding:6px; }
+.frame img, .frame video { display:block; width:100%; height:auto; border-radius:6px; }
+figcaption { font:600 12px var(--mono); color:var(--muted); }
+.sbs { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+@media (max-width:640px) { .sbs { grid-template-columns:1fr; } }
+.tap { display:grid; gap:8px; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+.tap .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.tap button { font:600 14px var(--sans); padding:8px 16px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--fg); cursor:pointer; min-height:40px; }
+.tap button.on[data-v="approve"] { background:var(--accent); border-color:var(--accent); color:var(--bg); }
+.tap button.on[data-v="change"] { background:var(--warn); border-color:var(--warn); color:var(--bg); }
+.tap button:disabled { opacity:.5; cursor:default; }
+.tap button:focus-visible, .tap textarea:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.tap textarea { font:14px var(--sans); width:100%; box-sizing:border-box; min-height:72px; padding:8px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--fg); }
+.state { font:13px var(--mono); color:var(--muted); }
+.state.recorded { color:var(--accent); }
+.state.waiting { color:var(--warn); }
+.state.stale, .state.refused { color:var(--bad); }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="eyebrow">__EYEBROW__</div>
+  <h1>__TITLE__</h1>
+  <p class="lede">Newest PR first. Each entry shows real screenshots at one head. Tap Approve, or tap Change and say what to change. The lead's reader checks every 2 minutes, records your answer, and the line under the buttons turns from Waiting to Recorded.</p>
+  <nav class="toc" id="toc"></nav>
+</header>
+<main id="log"></main>
+</div>
+<script>
+/* Entries, newest first. pr, repo (owner/name), node, head (full sha), title, note, views: [{title, src, alt} or {title, pair: [[label, src], [label, src]]}]. */
+const LOG = [
+];
+/* LOG-END */
+
+const $ = (t, a = {}, text) => { const n = document.createElement(t); for (const k in a) n.setAttribute(k, a[k]); if (text != null) n.textContent = text; return n; };
+const shot = (src, alt) => { const f = $("div", { class: "frame" }); f.append(/\.mp4$/.test(src) ? $("video", { src, "aria-label": alt, controls: "", playsinline: "" }) : $("img", { src, alt: alt || "", loading: "lazy" })); return f; };
+const keyOf = e => e.pr + "-" + String(e.head).slice(0, 12);
+const fmt = t => { try { return new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); } catch (_) { return t; } };
+const toc = document.getElementById("toc"), log = document.getElementById("log");
+const boxes = [];
+
+if (!LOG.length) log.append($("p", { class: "empty" }, "No PR is waiting for a look."));
+LOG.forEach(e => {
+  const id = "pr-" + e.pr + "-" + e.node;
+  const a = $("article", { class: "pr", id });
+  a.append($("h2", {}, "PR " + e.pr + " · " + e.node + " · " + e.title));
+  a.append($("div", { class: "meta" }, (e.repo || "") + " · head " + String(e.head).slice(0, 10) + (e.date ? " · " + e.date : "")));
+  if (e.note) a.append($("p", { class: "note" }, e.note));
+  const tap = $("div", { class: "tap" });
+  const row = $("div", { class: "row" });
+  const ap = $("button", { type: "button", "data-v": "approve" }, "Approve");
+  const ch = $("button", { type: "button", "data-v": "change" }, "Change");
+  row.append(ap, ch);
+  const notes = $("div", { class: "row", hidden: "" });
+  const ta = $("textarea", { placeholder: "What should change?", "aria-label": "What should change" });
+  const send = $("button", { type: "button" }, "Send change");
+  notes.append(ta, send);
+  const st = $("div", { class: "state", role: "status" }, "Loading…");
+  tap.append(row, notes, st);
+  a.append(tap);
+  const views = $("div", { class: "views" });
+  (e.views || []).forEach(v => {
+    const f = $("figure");
+    if (v.pair) { const g = $("div", { class: "sbs" }); v.pair.forEach(([l, src]) => { const x = $("figure"); x.append(shot(src, v.title + " " + l), $("figcaption", {}, l)); g.append(x); }); f.append(g); }
+    else f.append(shot(v.src, v.alt || v.title));
+    f.append($("figcaption", {}, v.title));
+    views.append(f);
+  });
+  a.append(views);
+  log.append(a);
+  const t = $("a", { href: "#" + id }, "PR " + e.pr);
+  toc.append(t);
+  const b = { e, key: keyOf(e), ap, ch, notes, ta, send, st, toc: t };
+  [ap, ch, send].forEach(x => x.disabled = true);
+  ap.onclick = () => write(b, "approve", "");
+  ch.onclick = () => { notes.hidden = false; ch.classList.add("on"); ap.classList.remove("on"); ta.focus(); };
+  send.onclick = () => { const n = ta.value.trim(); if (!n) { st.textContent = "Type what to change, then Send change."; return; } write(b, "change", n); };
+  boxes.push(b);
+});
+
+let db = null, me = null, mine = {}, acks = {};
+function paint(b) {
+  const tap = mine[b.key], ack = acks[b.key];
+  b.ap.classList.toggle("on", !!tap && tap.verdict === "approve");
+  b.ch.classList.toggle("on", !!tap && tap.verdict === "change");
+  if (tap && tap.verdict === "change") { b.notes.hidden = false; if (document.activeElement !== b.ta) b.ta.value = tap.note || ""; }
+  let cls = "", text = "No answer yet.";
+  if (tap) {
+    const what = tap.verdict === "approve" ? "Approve" : "Change";
+    if (ack && Date.parse(ack.at) >= Date.parse(tap.at)) {
+      cls = ack.state;
+      text = ack.state === "recorded" ? "Recorded " + fmt(ack.at) + ": " + what + " at head " + String(b.e.head).slice(0, 10) + "."
+        : ack.state === "stale" ? "Stale: " + (ack.detail || "the PR moved past this head") + ". Not recorded."
+        : "Not recorded: " + (ack.detail || "the reader refused this tap") + ".";
+    } else { cls = "waiting"; text = "Waiting: " + what + " sent " + fmt(tap.at) + ". The reader checks every 2 minutes."; }
+  }
+  b.st.className = "state " + cls; b.st.textContent = text;
+}
+async function write(b, verdict, note) {
+  if (!db || !me) return;
+  [b.ap, b.ch, b.send].forEach(x => x.disabled = true);
+  b.st.textContent = "Saving…";
+  const row = { pr: b.e.pr, repo: b.e.repo || "", node: b.e.node, head: b.e.head, verdict, note, at: new Date().toISOString() };
+  try { await db.doc("taps/" + me).set({ rows: Object.assign({}, mine, { [b.key]: row }) }); mine[b.key] = row; paint(b); }
+  catch (err) { b.st.className = "state refused"; b.st.textContent = "Not saved: " + (err && err.message || err) + ". Say it in chat instead."; }
+  [b.ap, b.ch, b.send].forEach(x => x.disabled = false);
+}
+const off = msg => boxes.forEach(b => { b.st.className = "state"; b.st.textContent = msg; });
+const timer = setTimeout(() => off("Saving is off in this view. Say it in chat instead."), 10000);
+(async () => {
+  let d = null, u = null;
+  try { d = await claude.use("db"); u = await claude.use("user"); } catch (_) {}
+  if (!d || !u) { clearTimeout(timer); off("Saving is off in this view. Say it in chat instead."); return; }
+  db = d;
+  try { me = await u.id(); } catch (_) {}
+  if (!me) { clearTimeout(timer); off("Sign in to answer."); return; }
+  const ready = () => { clearTimeout(timer); boxes.forEach(b => { [b.ap, b.ch, b.send].forEach(x => x.disabled = false); paint(b); }); };
+  db.doc("taps/" + me).onSnapshot(s => { const v = s && (typeof s.data === "function" ? s.data() : s.data); mine = (v && v.rows) || {}; ready(); }, () => ready());
+  db.doc("acks/" + me).onSnapshot(s => { const v = s && (typeof s.data === "function" ? s.data() : s.data); acks = (v && v.rows) || {}; ready(); }, () => ready());
+})();
+</script>
+</body>
+</html>
