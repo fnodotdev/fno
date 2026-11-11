@@ -1,8 +1,8 @@
 # Changelog
 
-Notable changes to fno, newest first. Each release also has a page on [GitHub releases](https://github.com/fnodotdev/fno/releases). Run `fno --version` to check your installed version. Run `fno update` to upgrade.
+Notable changes to fno, newest first. From 0.4.8 on, each release also has a page on [GitHub releases](https://github.com/fnodotdev/fno/releases). Run `fno --version` to check your installed version. Run `fno update` to upgrade.
 
-Releases before 0.4.8 were built in a private repository. Their entries here summarize the release notes from that time. Pull request numbers before 0.4.8 point at that repository, so this file leaves them out.
+Releases before 0.4.8 were built in a private repository. Their entries here summarize the release notes from that time. The pull request numbers in the notes up to 0.4.8 point at that repository, so this file leaves them out.
 
 ## [0.4.8] - 2026-11-11
 
