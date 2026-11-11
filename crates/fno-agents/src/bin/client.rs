@@ -2861,7 +2861,7 @@ fn maybe_run_spawn(
                 from_name,
                 &cwd,
                 model,
-                None,
+                route.as_ref().and_then(|r| r.effort.as_deref()),
                 params.get("node").and_then(|v| v.as_str()),
             ))
         }
