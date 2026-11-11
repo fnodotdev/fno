@@ -14,6 +14,8 @@
 //! Everything contract-specific lives here, so the lane code above reads one
 //! typed shape and never branches on a JSON layout.
 
+use serde::Deserialize;
+
 use crate::opencode_install::OpencodeContract;
 
 /// Why one serve exchange could not be judged.
@@ -102,13 +104,56 @@ pub(super) fn healthy_version(
     if status != 200 {
         return None;
     }
-    let value: serde_json::Value = serde_json::from_str(body).ok()?;
-    let version = value.get("version").and_then(|v| v.as_str());
+    let health: HealthBody = serde_json::from_str(body).ok()?;
     match contract {
-        OpencodeContract::V1 => (value.get("healthy") == Some(&serde_json::Value::Bool(true)))
-            .then(|| version.unwrap_or_default().to_string()),
-        OpencodeContract::V2 => version.map(str::to_string),
+        OpencodeContract::V1 => health.healthy.then(|| health.version.unwrap_or_default()),
+        OpencodeContract::V2 => health.version,
     }
+}
+
+#[derive(Deserialize)]
+struct HealthBody {
+    #[serde(default)]
+    healthy: bool,
+    #[serde(default)]
+    version: Option<String>,
+}
+
+/// The 2.x `{data: ...}` envelope.
+#[derive(Deserialize)]
+struct Envelope<T> {
+    data: T,
+}
+
+/// The session fields the lane reads, from either contract.
+#[derive(Deserialize, Default)]
+struct SessionView {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    time: Option<SessionTime>,
+    #[serde(default)]
+    model: Option<ModelView>,
+}
+
+#[derive(Deserialize, Default)]
+struct SessionTime {
+    #[serde(default)]
+    archived: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize, Default)]
+struct ModelView {
+    #[serde(rename = "providerID", default)]
+    provider_id: Option<String>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    variant: Option<String>,
+}
+
+fn session_view(session: &serde_json::Value) -> SessionView {
+    SessionView::deserialize(session).unwrap_or_default()
 }
 
 pub(super) fn session_path(contract: OpencodeContract, session_id: &str) -> String {
@@ -132,24 +177,26 @@ pub(super) fn session_from_body(
     contract: OpencodeContract,
     body: &str,
 ) -> Result<serde_json::Value, ServeError> {
-    let value: serde_json::Value =
-        serde_json::from_str(body).map_err(|e| ServeError::Parse(e.to_string()))?;
+    let parse = |e: serde_json::Error| ServeError::Parse(e.to_string());
     match contract {
-        OpencodeContract::V1 => Ok(value),
-        OpencodeContract::V2 => value
-            .get("data")
-            .cloned()
-            .ok_or(ServeError::Shape("session body has no data envelope")),
+        OpencodeContract::V1 => serde_json::from_str(body).map_err(parse),
+        OpencodeContract::V2 => serde_json::from_str::<Envelope<serde_json::Value>>(body)
+            .map(|envelope| envelope.data)
+            .map_err(parse),
     }
+}
+
+/// The session's own id, when it carries one.
+pub(super) fn session_id(session: &serde_json::Value) -> Option<String> {
+    session_view(session).id
 }
 
 /// True when the session object carries a non-null `time.archived` (both
 /// contracts keep the stamp there).
 pub(super) fn is_archived(session: &serde_json::Value) -> bool {
-    session
-        .get("time")
-        .and_then(|time| time.get("archived"))
-        .is_some_and(|value| !value.is_null())
+    session_view(session)
+        .time
+        .is_some_and(|time| time.archived.is_some())
 }
 
 pub(super) fn archive_body(contract: OpencodeContract, now_ms: u64) -> serde_json::Value {
@@ -159,80 +206,117 @@ pub(super) fn archive_body(contract: OpencodeContract, now_ms: u64) -> serde_jso
     }
 }
 
-/// Parse a message readback into oldest-first [`ServeMessage`]s.
+/// Parse a message readback into oldest-first [`ServeMessage`]s. A row that
+/// does not read as a message is skipped, never fatal: one odd row must not
+/// hide the turn.
 pub(super) fn messages_from_body(
     contract: OpencodeContract,
     body: &str,
 ) -> Result<Vec<ServeMessage>, ServeError> {
-    let value: serde_json::Value =
-        serde_json::from_str(body).map_err(|e| ServeError::Parse(e.to_string()))?;
+    let parse = |e: serde_json::Error| ServeError::Parse(e.to_string());
     match contract {
         OpencodeContract::V1 => {
-            let rows = value
-                .as_array()
-                .ok_or(ServeError::Shape("1.x message readback is not an array"))?;
+            let rows: Vec<serde_json::Value> = serde_json::from_str(body).map_err(parse)?;
             Ok(rows.iter().filter_map(v1_message).collect())
         }
         OpencodeContract::V2 => {
-            let rows = value
-                .get("data")
-                .and_then(|data| data.as_array())
-                .ok_or(ServeError::Shape("2.x message readback has no data array"))?;
+            let page: Envelope<Vec<serde_json::Value>> =
+                serde_json::from_str(body).map_err(parse)?;
             // The route answers newest first; the lane reads oldest first.
-            Ok(rows.iter().rev().filter_map(v2_message).collect())
+            Ok(page.data.iter().rev().filter_map(v2_message).collect())
         }
     }
 }
 
-fn first_text(parts: Option<&serde_json::Value>) -> Option<String> {
-    parts?
-        .as_array()?
+#[derive(Deserialize)]
+struct TextPart {
+    #[serde(rename = "type", default)]
+    kind: String,
+    #[serde(default)]
+    text: Option<String>,
+}
+
+fn first_text(parts: &[serde_json::Value]) -> Option<String> {
+    parts
         .iter()
-        .filter(|part| part.get("type").and_then(|kind| kind.as_str()) == Some("text"))
-        .find_map(|part| part.get("text").and_then(|text| text.as_str()))
-        .map(str::to_string)
+        .filter_map(|part| TextPart::deserialize(part).ok())
+        .filter(|part| part.kind == "text")
+        .find_map(|part| part.text)
+}
+
+#[derive(Deserialize)]
+struct V1Row {
+    info: V1Info,
+    #[serde(default)]
+    parts: Vec<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct V1Info {
+    id: String,
+    #[serde(default)]
+    role: String,
+    #[serde(rename = "modelID", default)]
+    model_id: Option<String>,
 }
 
 fn v1_message(row: &serde_json::Value) -> Option<ServeMessage> {
-    let info = row.get("info")?;
+    let row = V1Row::deserialize(row).ok()?;
     Some(ServeMessage {
-        id: info.get("id")?.as_str()?.to_string(),
-        role: info
-            .get("role")
-            .and_then(|r| r.as_str())
-            .unwrap_or_default()
-            .to_string(),
-        text: first_text(row.get("parts")),
-        model: info
-            .get("modelID")
-            .and_then(|m| m.as_str())
-            .map(str::to_string),
+        id: row.info.id,
+        role: row.info.role,
+        text: first_text(&row.parts),
+        model: row.info.model_id,
         complete: true,
     })
 }
 
+#[derive(Deserialize)]
+struct V2Row {
+    id: String,
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    text: Option<serde_json::Value>,
+    #[serde(default)]
+    content: Vec<serde_json::Value>,
+    #[serde(default)]
+    model: Option<ModelView>,
+    #[serde(default)]
+    time: Option<V2Time>,
+}
+
+#[derive(Deserialize)]
+struct V2Time {
+    #[serde(default)]
+    completed: Option<serde_json::Value>,
+}
+
 fn v2_message(row: &serde_json::Value) -> Option<ServeMessage> {
-    let role = row.get("type")?.as_str()?.to_string();
-    let text = match role.as_str() {
-        "assistant" => first_text(row.get("content")),
-        _ => row.get("text").and_then(|t| t.as_str()).map(str::to_string),
+    let row = V2Row::deserialize(row).ok()?;
+    let assistant = row.kind == "assistant";
+    let text = if assistant {
+        first_text(&row.content)
+    } else {
+        row.text
+            .as_ref()
+            .and_then(|t| t.as_str())
+            .map(str::to_string)
     };
-    let complete = role != "assistant"
-        || row
-            .get("time")
-            .and_then(|time| time.get("completed"))
-            .is_some_and(|value| !value.is_null());
     Some(ServeMessage {
-        id: row.get("id")?.as_str()?.to_string(),
-        role,
+        complete: !assistant || row.time.is_some_and(|time| time.completed.is_some()),
+        id: row.id,
+        role: row.kind,
         text,
-        model: row
-            .get("model")
-            .and_then(|m| m.get("id"))
-            .and_then(|m| m.as_str())
-            .map(str::to_string),
-        complete,
+        model: row.model.and_then(|m| m.id),
     })
+}
+
+fn split_model(model: &str) -> Result<(&str, &str), ServeError> {
+    model
+        .split_once('/')
+        .filter(|(p, m)| !p.is_empty() && !m.is_empty())
+        .ok_or_else(|| ServeError::Model(model.to_string()))
 }
 
 /// The 2.x `Model.Ref` for a `provider/model` id: `{providerID, id,
@@ -242,10 +326,7 @@ pub(super) fn model_ref(
     model: &str,
     variant: Option<&str>,
 ) -> Result<serde_json::Value, ServeError> {
-    let (provider, id) = model
-        .split_once('/')
-        .filter(|(p, m)| !p.is_empty() && !m.is_empty())
-        .ok_or_else(|| ServeError::Model(model.to_string()))?;
+    let (provider, id) = split_model(model)?;
     Ok(match variant.filter(|v| !v.is_empty()) {
         Some(variant) => serde_json::json!({"providerID": provider, "id": id, "variant": variant}),
         None => serde_json::json!({"providerID": provider, "id": id}),
@@ -269,9 +350,9 @@ pub(super) fn create_body(
 /// The 2.x request that starts one turn. A slash seed (`/fno:target x`) rides
 /// the native command route with its arguments as `text`; prose rides
 /// `/prompt`. 2.x `run` dropped `--command`, so this route is the only one that
-/// expands a command template server-side.
-/// Only a real command token routes there: a path-led line (`/tmp/x is
-/// broken`) is prose, or the serve would answer CommandNotFound.
+/// expands a command template server-side. Only a real command token routes
+/// there: a path-led line (`/tmp/x is broken`) is prose, or the serve would
+/// answer CommandNotFound.
 pub(super) fn turn_request(session_id: &str, message: &str) -> (String, serde_json::Value) {
     if let Some(rest) = message.strip_prefix('/') {
         let (name, args) = rest.split_once(' ').unwrap_or((rest, ""));
@@ -296,15 +377,14 @@ pub(super) fn model_switch(
     session: &serde_json::Value,
     model: &str,
 ) -> Result<Option<serde_json::Value>, ServeError> {
-    let current = session.get("model");
-    let variant = current
-        .and_then(|m| m.get("variant"))
-        .and_then(|v| v.as_str());
-    let wanted = model_ref(model, variant)?;
-    let same = current.is_some_and(|m| {
-        m.get("providerID") == wanted.get("providerID") && m.get("id") == wanted.get("id")
-    });
-    Ok((!same).then(|| serde_json::json!({"model": wanted})))
+    let current = session_view(session).model.unwrap_or_default();
+    let (provider, id) = split_model(model)?;
+    if current.provider_id.as_deref() == Some(provider) && current.id.as_deref() == Some(id) {
+        return Ok(None);
+    }
+    Ok(Some(
+        serde_json::json!({"model": model_ref(model, current.variant.as_deref())?}),
+    ))
 }
 
 #[cfg(test)]

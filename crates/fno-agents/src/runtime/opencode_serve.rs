@@ -938,12 +938,9 @@ fn launch_over_http(
         return Err(http_refusal("POST /api/session", status, &text));
     }
     let session = api::session_from_body(OpencodeContract::V2, &text)?;
-    let session_id = session
-        .get("id")
-        .and_then(|id| id.as_str())
+    let session_id = api::session_id(&session)
         .filter(|id| crate::provider::is_opencode_session_id(id))
-        .ok_or(ServeError::Shape("POST /api/session minted no ses_ id"))?
-        .to_string();
+        .ok_or(ServeError::Shape("POST /api/session minted no ses_ id"))?;
     send_turn_v2(serve, &session_id, prompt)?;
     Ok(session_id)
 }
@@ -1047,7 +1044,7 @@ fn serve_session_reachable_in(
         ));
     }
     let session = api::session_from_body(serve.contract, &body)?;
-    if session.get("id").and_then(|value| value.as_str()) == Some(session_id) {
+    if api::session_id(&session).as_deref() == Some(session_id) {
         Ok(true)
     } else {
         Err(format!("session readback id does not match {session_id}"))
