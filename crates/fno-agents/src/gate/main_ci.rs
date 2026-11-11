@@ -827,13 +827,15 @@ mod tests {
             "2026-09-30T10:00:00Z",
         )];
         let token = token_at("head", &at_sha, &on_main);
+        // The floor is the newest settled run, here the green sibling at the
+        // head itself (10:31), not the older sha's green (10:00).
         assert_eq!(
             token,
             serde_json::json!({
                 "verdict": "pending",
                 "last_settled": {
-                    "verdict": "green", "workflow": "guards", "sha": "prev",
-                    "created_at": "2026-09-30T10:31:00Z", "age": "2h old",
+                    "verdict": "green", "workflow": "guards", "sha": "head",
+                    "created_at": "2026-09-30T10:31:00Z", "age": "1h old",
                 },
             })
         );
