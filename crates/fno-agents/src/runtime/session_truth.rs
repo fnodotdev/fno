@@ -1638,9 +1638,13 @@ fn opencode_summary<C: CursorAccess>(
 fn opencode_version(db: &Path, session_id: &str) -> Option<i64> {
     let conn = crate::graph_store::open_read_only_wal_safe(db)?;
     conn.busy_timeout(std::time::Duration::from_secs(2)).ok()?;
+    let table = match super::opencode_transcript::store_family(&conn) {
+        Some(true) => "session_part",
+        _ => "part",
+    };
     let (newest, count): (Option<i64>, i64) = conn
         .query_row(
-            "SELECT MAX(time_updated), COUNT(*) FROM part WHERE session_id = ?1",
+            &format!("SELECT MAX(time_updated), COUNT(*) FROM {table} WHERE session_id = ?1"),
             [session_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )

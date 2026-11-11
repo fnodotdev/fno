@@ -671,10 +671,11 @@ fn follow_records(
     }
 }
 
-/// Follow one opencode session: the 2.x serve's SSE stream when a
-/// 2.x-capable serve resolves (it answers `/api/event`, the same gate the
-/// archive op rides), else poll the session's store. Returns false when
-/// neither leg can start, so the caller prints the tail-only notice.
+/// Follow one opencode session over the 2.x serve's SSE stream, resolved
+/// through the same gate the archive op rides (a healthy serve reporting a
+/// 2.x version). Returns false when no such serve resolves, so the caller
+/// prints the tail-only notice; a store has no tailable file to fall back
+/// to.
 fn follow_opencode_events(session: &TruthSession, json_out: bool, out: &mut impl Write) -> bool {
     if let Some(serve) =
         crate::opencode_serve::archive_capable_serve(&crate::paths::AgentsHome::from_env())
@@ -776,15 +777,35 @@ fn open_sse_stream(
         }
     }
     let mut stream = stream?;
+    // HTTP/1.0 + Connection: close: an SSE stream that never completes
+    // cannot arrive chunked-framed, which a raw line reader cannot parse.
     let request = format!(
-        "GET /api/event HTTP/1.1\r\nHost: {authority}\r\nAuthorization: Bearer {}\r\nAccept: text/event-stream\r\n\r\n",
+        "GET /api/event HTTP/1.0\r\nHost: {authority}\r\nAuthorization: Bearer {}\r\nAccept: text/event-stream\r\nConnection: close\r\n\r\n",
         serve.token
     );
     if std::io::Write::write_all(&mut stream, request.as_bytes()).is_err() {
         return None;
     }
     let _ = stream.set_read_timeout(Some(Duration::from_secs(15)));
-    Some(std::io::BufReader::new(stream))
+    let mut reader = std::io::BufReader::new(stream);
+    // The status line answers before any frame does; a non-200 stream
+    // would drip an error body into the reconnect loop.
+    let mut status = String::new();
+    if reader.read_line(&mut status).ok()? == 0 {
+        return None;
+    }
+    if !status.contains(" 200") {
+        return None;
+    }
+    let mut header = String::new();
+    loop {
+        let n = reader.read_line(&mut header).ok()?;
+        if n == 0 || header.trim().is_empty() {
+            break;
+        }
+        header.clear();
+    }
+    Some(reader)
 }
 
 /// `--all`: the tail (and `--grep`) over every registry session with a

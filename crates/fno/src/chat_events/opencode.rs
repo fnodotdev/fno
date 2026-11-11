@@ -498,31 +498,13 @@ fn store_error(path: &Path, error: impl std::fmt::Display) -> ChatReadError {
     ChatReadError::Store(format!("{}: {error}", path.display()))
 }
 
-/// Which store family a connection holds. 2.x keeps the 1.x tables out of
-/// new writes but a migrated store can carry both, so the probe runs per
-/// connection and the session lookup falls through per session: `session_v2`
-/// first, then `session`.
+/// Which store family a connection reads. The session's own probe decides:
+/// `session_v2` first, then the 1.x `session` table, so a migrated store
+/// carrying both families serves a session from whichever holds it.
 #[derive(Clone, Copy, PartialEq)]
 enum StoreFamily {
     V1,
     V2,
-}
-
-fn store_family(conn: &Connection) -> StoreFamily {
-    let v2: Option<String> = conn
-        .query_row(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_v2'",
-            [],
-            |r| r.get(0),
-        )
-        .optional()
-        .ok()
-        .flatten();
-    if v2.is_some() {
-        StoreFamily::V2
-    } else {
-        StoreFamily::V1
-    }
 }
 
 /// One stream row: a message (`part` columns all `None`) or a part.
@@ -870,24 +852,29 @@ impl StoreTail {
                     continue;
                 }
             };
-            let family = store_family(&conn);
-            let found = match family {
-                StoreFamily::V2 => conn
-                    .query_row(
-                        "SELECT 1 FROM session_v2 WHERE id = ?1",
-                        params![session_id],
-                        |_| Ok(()),
-                    )
-                    .optional()
-                    .map_err(|e| store_error(path, e))?,
-                StoreFamily::V1 => conn
+            // The session names its own family: `session_v2` first, then the
+            // 1.x `session` table, so a migrated store carrying both serves
+            // a session from whichever family actually holds it.
+            let in_v2 = conn
+                .query_row(
+                    "SELECT 1 FROM session_v2 WHERE id = ?1",
+                    params![session_id],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(|e| store_error(path, e))?;
+            let (found, family) = if in_v2.is_some() {
+                (in_v2, StoreFamily::V2)
+            } else {
+                let in_v1 = conn
                     .query_row(
                         "SELECT 1 FROM session WHERE id = ?1",
                         params![session_id],
                         |_| Ok(()),
                     )
                     .optional()
-                    .map_err(|e| store_error(path, e))?,
+                    .map_err(|e| store_error(path, e))?;
+                (in_v1, StoreFamily::V1)
             };
             if found.is_some() {
                 return Ok(Self {

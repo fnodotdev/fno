@@ -719,6 +719,7 @@ mod tests {
             ],
         )
         .unwrap();
+        db
     }
 
     #[test]
