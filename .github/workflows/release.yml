@@ -607,14 +607,23 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin "$DEFAULT_BRANCH"
-          git checkout -b "$branch" "origin/${DEFAULT_BRANCH}"
+          if git fetch origin "$branch" 2>/dev/null; then
+            # A previous run left the branch; continue it (plain commits
+            # only) so a re-run adopts the pin instead of wedging on create.
+            git checkout -B "$branch" "origin/$branch"
+          else
+            git checkout -b "$branch" "origin/${DEFAULT_BRANCH}"
+          fi
           bash scripts/release/move-plugin-pin.sh "$TAG" "$SHA"
           git add .claude-plugin/marketplace.json .agents/plugins/marketplace.json .claude-plugin/plugin.json .codex-plugin/plugin.json
-          git commit -m "chore(release): pin the plugin catalogs to ${TAG}"
+          git diff --cached --quiet || git commit -m "chore(release): pin the plugin catalogs to ${TAG}"
           git push origin "$branch"
-          pr=$(gh pr create --head "$branch" \
-            --title "chore(release): pin the plugin catalogs to ${TAG}" \
-            --body "Moves the fno entry in both catalogs to ${TAG} (${SHA}) and bumps the plugin manifests to ${VERSION}.")
+          pr=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -z "$pr" ]; then
+            pr=$(gh pr create --head "$branch" \
+              --title "chore(release): pin the plugin catalogs to ${TAG}" \
+              --body "Moves the fno entry in both catalogs to ${TAG} (${SHA}) and bumps the plugin manifests to ${VERSION}.")
+          fi
           head=$(git rev-parse HEAD)
           git merge-base --is-ancestor "origin/${DEFAULT_BRANCH}" HEAD
           gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${head}" \
