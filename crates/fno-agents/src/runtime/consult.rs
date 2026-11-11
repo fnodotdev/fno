@@ -265,7 +265,7 @@ fn ask(deps: &Deps, harness: &str, session: &str, ask: &Ask) -> i32 {
         .replace("{DIGEST_PATH}", &digest_path.display().to_string());
     // ── chunk: spawn ──
     let model = config_str(&deps.cwd, "model", DEFAULT_MODEL);
-    let argv = consult_spawn_argv(prompt, &deps.cwd.display().to_string(), &model);
+    let argv = consult_spawn_argv(&prompt, &deps.cwd.display().to_string(), &model);
     let spawned = (deps.spawner)(&argv, SPAWN_TIMEOUT_SECS + 60);
     drop(digest_file);
     let _ = std::fs::remove_file(&digest_path);

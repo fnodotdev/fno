@@ -70,19 +70,23 @@ fn spawn_argv(prompt: &str, cwd: &Path, timeout_secs: u64, model: &str) -> Vec<S
     // The prompt rides before the fence: the positional boundary refuses a
     // spawn-owned flag after the prompt (law d-3244).
     argv.push(prompt.to_string());
-    argv.extend([
-        "--",
-        "--model",
-        model,
-        "--setting-sources",
-        "",
-        "--strict-mcp-config",
-        "--tools",
-        "Read",
-        "--disable-slash-commands",
-        "--no-chrome",
-        "--no-session-persistence",
-    ]);
+    argv.extend(
+        [
+            "--",
+            "--model",
+            model,
+            "--setting-sources",
+            "",
+            "--strict-mcp-config",
+            "--tools",
+            "Read",
+            "--disable-slash-commands",
+            "--no-chrome",
+            "--no-session-persistence",
+        ]
+        .into_iter()
+        .map(String::from),
+    );
     argv
 }
 

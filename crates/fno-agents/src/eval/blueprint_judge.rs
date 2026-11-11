@@ -438,19 +438,23 @@ pub(crate) fn reader_argv(
     .collect();
     argv.extend(extra_owned.iter().cloned());
     argv.push(prompt.to_string());
-    argv.extend([
-        "--",
-        "--model",
-        model,
-        "--setting-sources",
-        "",
-        "--strict-mcp-config",
-        "--tools",
-        "",
-        "--disable-slash-commands",
-        "--no-chrome",
-        "--no-session-persistence",
-    ]);
+    argv.extend(
+        [
+            "--",
+            "--model",
+            model,
+            "--setting-sources",
+            "",
+            "--strict-mcp-config",
+            "--tools",
+            "",
+            "--disable-slash-commands",
+            "--no-chrome",
+            "--no-session-persistence",
+        ]
+        .into_iter()
+        .map(String::from),
+    );
     argv
 }
 

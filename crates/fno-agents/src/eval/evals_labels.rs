@@ -394,21 +394,25 @@ fn labels_spawn_argv(name: &str, prompt: &str, cwd_display: &str) -> Vec<String>
     .map(|s| s.to_string())
     .collect();
     argv.push(prompt.to_string());
-    argv.extend([
-        "--",
-        "--model",
-        MODEL,
-        "--setting-sources",
-        "",
-        "--strict-mcp-config",
-        "--tools",
-        "Read,Grep,Glob",
-        "--allowedTools",
-        "Read,Grep,Glob",
-        "--disable-slash-commands",
-        "--no-chrome",
-        "--no-session-persistence",
-    ]);
+    argv.extend(
+        [
+            "--",
+            "--model",
+            MODEL,
+            "--setting-sources",
+            "",
+            "--strict-mcp-config",
+            "--tools",
+            "Read,Grep,Glob",
+            "--allowedTools",
+            "Read,Grep,Glob",
+            "--disable-slash-commands",
+            "--no-chrome",
+            "--no-session-persistence",
+        ]
+        .into_iter()
+        .map(String::from),
+    );
     argv
 }
 
