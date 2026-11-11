@@ -686,7 +686,7 @@ fn the_held_mail_badge_reads_queued_on_the_list_row() {
                 "mail_held":2,"mail_held_since":{since}}}"#
     );
     let mut view = two_pane_view();
-    view.sideline_width = 90;
+    view.sideline_width = 200;
     view.layout.agents = vec![serde_json::from_str(&row_json).unwrap()];
     let text = frame_text(&view.compose());
     let line = text.lines().find(|line| line.contains("mailer")).unwrap();
