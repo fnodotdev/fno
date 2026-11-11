@@ -8,7 +8,7 @@ The mux serves one agent session's conversation as typed chat events. A chat cli
 
 - `SessionKey { harness, session_id, subagent }` names one stream. A subagent is its own stream, so two files never mix in one sequence.
 - `ChatEvent { seq, at_ms, source, body }`. `seq` starts at 0 for each stream and has no gaps. `source` is the byte offset of the line, or the store row id.
-- `ChatBody` is tagged by `kind`: `user_message`, `text_started`, `text_delta`, `text_ended`, `thinking_started`, `thinking_delta`, `thinking_ended`, `tool_called`, `tool_finished`, `question_asked`, `question_answered`, `subagent_started`, `compacted`, `turn_started`, `turn_ended`, `unknown`.
+- `ChatBody` is tagged by `kind`. The kinds: `user_message`, `text_started`, `text_delta`, `text_ended`, `thinking_started`, `thinking_delta`, `thinking_ended`, `tool_called`, `tool_finished`, `question_asked`, `question_answered`, `subagent_started`, `compacted`, `turn_started`, `turn_ended`, `unknown`.
 
 Text and thinking use the started, delta, ended split from opencode's event schema. A replay emits one delta with the full text.
 
@@ -23,7 +23,7 @@ Wire v127 adds two messages.
 - `ClientMsg::ChatTail { proto, build, session, from_seq }` is a first message, versioned like `Control`. It is not sent after `Attach`. A live attached connection that sends it is closed as a protocol violation.
 - `ServerMsg::ChatEvents { session, events }` is one batch in `seq` order. A batch holds at most 256 events and about 8 MiB.
 
-The server answers a version skew with `Bye`. It answers an unsupported harness or a missing transcript with one `Err` (`BAD_REQUEST`) that names it, then closes. The stream task polls in `spawn_blocking` every 250 ms while idle and ends when the client goes away. The core loop never sees it.
+The server answers a version skew with `Bye`. It answers an unsupported harness or a missing transcript with one `Err` (`BAD_REQUEST`) that names it, then closes. The stream task polls in `spawn_blocking`. While idle, it polls every 250 ms. After the client goes away, the task ends. The core loop never sees it.
 
 A client without tokio uses `chat_events::tail_sync(socket, session, from_seq)`. It returns an iterator of batches.
 
@@ -33,8 +33,8 @@ A client without tokio uses `chat_events::tail_sync(socket, session, from_seq)`.
 
 Two rules keep a live tail and a replay equal:
 
-- **Line hold (JSONL).** A partial last line waits for its newline. A Claude `Agent` call whose subagent `.meta.json` is not written yet waits too, but only while it is the last complete line. A `compact_boundary` waits for the next row, which can carry the summary.
-- **Watermark (opencode).** opencode rewrites a part row while it streams. The reader emits parts in store order and stops at the first part that is not final. A text or reasoning part is final when it has `time.end` or has no `time` at all (a user part). A pending or running tool emits its call once and holds until it completes or fails.
+- **Line hold (JSONL).** A partial last line waits for its newline. A Claude `Agent` call also waits for its subagent `.meta.json`. It waits only while it is the last complete line. A `compact_boundary` waits for the next row, which can carry the summary.
+- **Watermark (opencode).** opencode rewrites a part row while it streams. The reader emits parts in store order and stops at the first part that is not final. A text or reasoning part with `time.end` is final. A part with no `time` at all (a user part) is final too. A pending or running tool emits its call once and holds until it completes or fails.
 
 One race is left. A Claude subagent meta file that lands after a later row of the parent places `subagent_started` differently in a live tail and in a replay.
 
@@ -56,7 +56,11 @@ An image smaller than or equal to 512 KiB decoded (`CHAT_IMAGE_INLINE_MAX`) ride
 | compaction | `system` `compact_boundary`, summary from the next `isCompactSummary` row | `compacted` item | `compaction` part |
 | turn | none | `event_msg` `task_started`, `task_complete`, `turn_aborted` | `step-start`, `step-finish` parts |
 
-Rows that emit nothing are session facts, not chat: Claude rows with no `message` object (`attachment`, `api-request`, `custom-title`, ...) and `api-request-blob`; Codex `session_meta`, `turn_context`, `world_state`, `token_count`, and every `event_msg/item_completed`, which repeats a `response_item`; opencode `agent`, `snapshot`, `patch` and `retry` parts.
+Some rows emit nothing, because they are session facts, not chat:
+
+- Claude rows with no `message` object (`attachment`, `api-request`, `custom-title`, ...), and `api-request-blob`.
+- Codex `session_meta`, `turn_context`, `world_state`, `token_count`, and every `event_msg/item_completed`. Each `item_completed` repeats a `response_item`.
+- opencode `agent`, `snapshot`, `patch` and `retry` parts.
 
 Claude writes one assistant content block per row, so Claude needs no streamed-versus-complete de-dup. Codex does repeat items, so the Codex reader takes content from `response_item` only.
 
