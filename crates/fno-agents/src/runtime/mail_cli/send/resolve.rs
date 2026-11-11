@@ -722,9 +722,11 @@ mod mail_addr_tests {
             "6bf63c59-753c-4e01-9d5d-000000000001",
         )];
         let hits = daemon_hits_from_rows("t-decisions-read-as", &rows);
-        assert_eq!(hits.len(), 1, "{hits:?}");
-        assert_eq!(hits[0].session_id, "6bf63c59-753c-4e01-9d5d-000000000001");
-        assert_eq!(hits[0].source, "daemon");
+        let [hit] = hits.as_slice() else {
+            panic!("one daemon hit expected: {hits:?}");
+        };
+        assert_eq!(hit.session_id, "6bf63c59-753c-4e01-9d5d-000000000001");
+        assert_eq!(hit.source, "daemon");
         let hits = daemon_hits_from_rows("T-DECISIONS-READ-AS", &rows);
         assert_eq!(hits.len(), 1, "case-folded match");
     }
@@ -761,7 +763,9 @@ mod mail_addr_tests {
             "harness_session_id": "9aa11bb2-1111-2222-3333-444455556666"
         });
         let near = near_from_registry_rows("t-alp", &[registry_row]);
-        assert_eq!(near.len(), 1);
-        assert_eq!(near[0].0.as_str(), "9aa11bb2");
+        let [(short, _)] = near.as_slice() else {
+            panic!("one registry near row expected: {near:?}");
+        };
+        assert_eq!(short.as_str(), "9aa11bb2");
     }
 }

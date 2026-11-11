@@ -245,8 +245,10 @@ fn row_self() -> serde_json::Value {
 /// A spelling neighbor of the unknown token: the refusal names its short id.
 fn row_near() -> serde_json::Value {
     let mut v = row("ghost-writer", "claude", Some(OTHER_SID));
-    v["short_id"] = serde_json::json!("b2c3d4e5");
-    v["harness_title"] = serde_json::json!("ghost-writer");
+    if let Some(o) = v.as_object_mut() {
+        o.insert("short_id".into(), serde_json::json!("b2c3d4e5"));
+        o.insert("harness_title".into(), serde_json::json!("ghost-writer"));
+    }
     v
 }
 
