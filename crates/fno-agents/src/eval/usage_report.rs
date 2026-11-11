@@ -704,7 +704,8 @@ mod tests {
             .pointer("/batch/0/properties")
             .and_then(Value::as_object)
             .expect("one event with properties");
-        let keys: Vec<&String> = props.keys().collect();
+        let mut keys: Vec<&String> = props.keys().collect();
+        keys.sort();
         assert_eq!(
             keys,
             [
