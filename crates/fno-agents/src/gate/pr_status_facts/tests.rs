@@ -220,8 +220,8 @@ fn block_rows() {
 
 /// The receipt's `ready` must read the head's own CI verdict, not GitHub's
 /// merge state alone: `unstable` means pending or failing NON-required
-/// checks, and PR 4775 read ready:true on it while cli-ci attempt 2 was in
-/// flight (x-e98b, merged 2026-11-10, main went red).
+/// checks, and a PR read ready:true on it while its cli-ci rerun was in
+/// flight (merged 2026-11-10, main went red).
 #[test]
 fn ci_verdict_fact_blocks_ready_on_red_and_pending() {
     let probes = FakeGh {

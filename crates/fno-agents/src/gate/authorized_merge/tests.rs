@@ -998,7 +998,7 @@ fn slot_holder_error_fails_open_to_the_stale_hold_without_taking_a_slot() {
 }
 
 /// A stale-base green retests (one update-branch), then waits out the new
-/// head's own CI: since x-e98b the pending read on the retested head holds,
+/// head's own CI: under the 2026-11-10 pending-hold law the pending read on the retested head holds,
 /// so the settle after the retest is the CI settle, not the merge itself.
 #[test]
 fn a_green_pr_whose_ci_predates_main_retests_then_waits_out_the_pending_new_head() {
@@ -1042,7 +1042,7 @@ fn a_green_pr_whose_ci_predates_main_retests_then_waits_out_the_pending_new_head
     assert_eq!(outcome.word(), "merged", "{outcome:?}");
 }
 
-/// x-e98b (2026-11-10): PR 4775 merged while cli-ci attempt 2 was still in
+/// A 2026-11-10 incident merged a PR while its cli-ci rerun was still in
 /// flight. The pending verdict fell through `require_checks_pass` with only
 /// an advisory warning, and main went red on the merged head. The newest
 /// attempt's settled green is the merge precondition; pending is a hold.

@@ -166,8 +166,9 @@ fn main_ci_token_from_pages<'a>(
                 // sha answers an older failure regardless of trigger: the
                 // schedule variant runs the push job set plus the
                 // trigger-gated extras, so its pass proves the push set
-                // (x-e98b reverse case: the 17:06 schedule pass never
-                // answered the 16:51 push failure and main held red). The
+                // (the 2026-11-10 reverse case: a schedule pass that was
+                // 15 minutes newer than the push failure it answered still
+                // read main red). The
                 // inverse stays closed: a non-push red never replaces a
                 // push pass, and a non-push cancel is no verdict, so it
                 // never answers a failure either.
@@ -826,7 +827,7 @@ mod tests {
         );
     }
 
-    /// The filed reverse case (x-e98b, PR 4780, 2026-11-10): cli-ci's push
+    /// The filed reverse case (2026-11-10): cli-ci's push
     /// run at main's head failed at 16:51 and its schedule run at the same
     /// sha passed at 17:06. The supersede pass refused a non-push
     /// completion over a push failure, so main read red off the older run

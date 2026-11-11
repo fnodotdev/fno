@@ -1066,10 +1066,10 @@ fn decide_with_warnings<P: Probes>(
                     },
                 })
             }
-            // x-e98b (2026-11-10): a pending read fell through with only an
-            // advisory warning, so PR 4775 merged while cli-ci attempt 2 was
-            // still running and main went red. The newest attempt's settled
-            // green is the precondition; pending is a hold. Arm keeps its
+            // The 2026-11-10 incident: a pending read fell through with only
+            // an advisory warning, a PR merged while its cli-ci rerun was
+            // still in flight, and main went red. The newest attempt's
+            // settled green is the precondition; pending is a hold. Arm keeps its
             // fall-through: it hands the PR to GitHub's own queue. Unknown
             // keeps it too: a PR with no check-run CI at all (docs-only)
             // would otherwise lose its merge door.

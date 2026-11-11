@@ -383,8 +383,8 @@ pub(crate) fn merge_blocker<P: GhProbe>(probes: &P, payload: &Value) -> Value {
     // the PR mergeable there. The gate's own CI read decides readiness: an
     // attempt in flight holds ready until it settles, and a settled failure
     // is a red the merge door refuses under require_checks_pass. Without
-    // this, PR 4775 read ready:true while cli-ci attempt 2 was in flight and
-    // merged red main (x-e98b, 2026-11-10). Absent (legacy callers, no
+    // this, a PR read ready:true while its cli-ci rerun was still in flight
+    // and merged red main (2026-11-10). Absent (legacy callers, no
     // checks configured) the fact adds nothing.
     match payload.get("ci_verdict").and_then(Value::as_str) {
         Some("red") => blockers.push("ci_red_at_head".to_string()),
