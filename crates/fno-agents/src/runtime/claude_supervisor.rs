@@ -403,18 +403,43 @@ fn wait_for_supervisor(config_dir: Option<&Path>) -> bool {
 /// its route keys (`strip_route_carriers`, called by each site) in case it
 /// wins a birth race after the probe; identity keys stay on the client.
 ///
-/// Every failure degrades to silence and lets the client run: a guard that
-/// refused here would break a working lane over a condition the client cannot
-/// fix from inside itself. Test-owned temp config dirs are refused before the
+/// What the birth guard decided about the claude supervisor this client
+/// would otherwise lazily birth.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BirthVerdict {
+    /// A supervisor serves the dir, or the birth was started and went
+    /// healthy. The client execs.
+    Proceed,
+    /// No supervisor serves the dir and this process may not birth one: the
+    /// string names the session type and the cure, and the guard has already
+    /// printed it. The caller must not exec `claude` and reports exit 13.
+    Refuse(String),
+    /// Today's silent passes kept as-is: hermetic test runs, temp-dir config
+    /// dirs, and birth attempts that failed to start or go healthy. Each
+    /// printed its own line; the client exec proceeds.
+    Degrade,
+}
+
+/// The exit code a refused supervisor birth reports: the spawn path's
+/// roster-fault code (`bin/client.rs`), so a caller routing on exit classes
+/// sees one number.
+pub const BIRTH_REFUSED_EXIT: i32 = 13;
+
+/// Every failure except the birth-context refusal degrades to silence and
+/// lets the client run: those conditions are ones the client cannot fix from
+/// inside itself. The refusal is the one binding arm, because exec'ing
+/// `claude` anyway is exactly the birth the refusal forbids - the client
+/// would lazily birth a supervisor whose hosted sessions lose DNS, gh and
+/// the keychain. Test-owned temp config dirs are refused before the
 /// probe because no process owns the detached supervisor after the test exits.
-pub fn guard_birth<'a, I>(overlay: I)
+pub fn guard_birth<'a, I>(overlay: I) -> BirthVerdict
 where
     I: IntoIterator<Item = (&'a str, &'a str)>,
 {
     let config_dir = overlay_config_dir(overlay);
     let config_dir = config_dir.as_deref();
     if cfg!(test) {
-        return;
+        return BirthVerdict::Proceed;
     }
     let addressed_dir = addressed_config_dir(config_dir);
     let hermetic = std::env::var("FNO_TEST_HERMETIC").ok().as_deref() == Some("1");
@@ -441,21 +466,21 @@ where
                 "fno: no claude supervisor born for {dir}: it lies under the temp dir and {binary} is not a test fixture, so nothing would own it"
             );
         }
-        return;
+        return BirthVerdict::Degrade;
     }
     if supervisor_running(config_dir) {
-        return;
+        return BirthVerdict::Proceed;
     }
     if let Some(reason) = crate::launchd_labels::supervisor_birth_refusal() {
         eprintln!("fno: no claude supervisor born: {reason}");
-        return;
+        return BirthVerdict::Refuse(reason);
     }
     let held = held_poison_keys();
     if !spawn_detached_supervisor(config_dir) {
-        return;
+        return BirthVerdict::Degrade;
     }
     if !wait_for_supervisor(config_dir) {
-        return;
+        return BirthVerdict::Degrade;
     }
     if !held.is_empty() {
         eprintln!(
@@ -466,11 +491,12 @@ where
             held.join(", ")
         );
     }
+    BirthVerdict::Proceed
 }
 
 /// `guard_birth` for the common site whose env is a reentry plan's map.
-pub fn guard_birth_for_plan(env: &std::collections::BTreeMap<String, String>) {
-    guard_birth(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+pub fn guard_birth_for_plan(env: &std::collections::BTreeMap<String, String>) -> BirthVerdict {
+    guard_birth(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
 }
 
 /// The seed provenance group, by name. The Rust side never imports the Python
@@ -515,7 +541,9 @@ pub fn run_birth_exec(args: &[String]) -> i32 {
         eprintln!("fno-agents claude-birth-exec: expected -- <claude argv...>");
         return 2;
     }
-    guard_birth(std::iter::empty::<(&str, &str)>());
+    if let BirthVerdict::Refuse(_) = guard_birth(std::iter::empty::<(&str, &str)>()) {
+        return BIRTH_REFUSED_EXIT;
+    }
     use std::os::unix::process::CommandExt;
     let mut cmd = client_command(&args[1..]);
     strip_route_carriers(&mut cmd);

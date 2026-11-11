@@ -186,7 +186,9 @@ pub fn is_non_aqua_manager(manager_name: &str) -> bool {
 /// Two cases: inside an fno launchd job, and in any session that is not the
 /// user's Aqua GUI session (a pane keeper reached over ssh, for one).
 pub fn supervisor_birth_refusal() -> Option<String> {
-    const CURE: &str = "Start it from a GUI session with `claude daemon start`.";
+    const CURE: &str = "From a GUI terminal, run `claude daemon stop --any`, \
+         then start any `claude --bg` command; the restart recipe is the \
+         `claude supervisor bootstrap` entry in docs/fleet-faq.md.";
     if inside_fno_launchd_job() {
         return Some(format!(
             "this process runs inside an fno launchd job, and a supervisor born \
@@ -201,7 +203,8 @@ pub fn supervisor_birth_refusal() -> Option<String> {
     is_non_aqua_manager(&manager).then(|| {
         format!(
             "this process runs in the launchd {manager} session, not Aqua, and a \
-             supervisor born here has no DNS or keychain. {CURE}"
+             supervisor born here can lose DNS, gh, ps and the keychain for its \
+             whole life and for every session it hosts. {CURE}"
         )
     })
 }

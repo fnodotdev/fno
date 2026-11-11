@@ -2277,9 +2277,12 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
     // supervisor too.
     if matches!(&route, ResumeRoute::ClientResume) {
         crate::claude_supervisor::strip_route_carriers(&mut exec_command);
-        match &reentry_plan {
+        let verdict = match &reentry_plan {
             Some(plan) => crate::claude_supervisor::guard_birth_for_plan(&plan.env),
             None => crate::claude_supervisor::guard_birth([]),
+        };
+        if let crate::claude_supervisor::BirthVerdict::Refuse(_) = verdict {
+            return crate::claude_supervisor::BIRTH_REFUSED_EXIT;
         }
     }
     // the restored route's env rides the in-terminal exec.
@@ -2464,7 +2467,11 @@ pub fn run_recover(rest: &[String], home: &AgentsHome) -> i32 {
     }
     // recover execs a claude client, so it can birth the supervisor too.
     crate::claude_supervisor::strip_route_carriers(&mut exec_command);
-    crate::claude_supervisor::guard_birth_for_plan(&plan.env);
+    if let crate::claude_supervisor::BirthVerdict::Refuse(_) =
+        crate::claude_supervisor::guard_birth_for_plan(&plan.env)
+    {
+        return crate::claude_supervisor::BIRTH_REFUSED_EXIT;
+    }
     let err = exec_command.exec();
     // exec only returns on failure.
     eprintln!("fno agents recover: failed to exec {}: {err}", plan.argv[0]);

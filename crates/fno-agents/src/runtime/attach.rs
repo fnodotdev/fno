@@ -718,7 +718,11 @@ pub fn run_attach(rest: &[String], home: &AgentsHome) -> i32 {
     // one is up first. The client drops its route keys in case it wins a
     // birth race anyway.
     crate::claude_supervisor::strip_route_carriers(&mut command);
-    crate::claude_supervisor::guard_birth_for_plan(&plan.env);
+    if let crate::claude_supervisor::BirthVerdict::Refuse(_) =
+        crate::claude_supervisor::guard_birth_for_plan(&plan.env)
+    {
+        return crate::claude_supervisor::BIRTH_REFUSED_EXIT;
+    }
 
     // Inherit stdio so the claude TUI takes over; mirror its exit code.
     match command.status() {

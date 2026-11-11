@@ -636,7 +636,11 @@ where
     // one is up first. The client drops only its route keys, so the
     // identity stamp above stays the only carrier of the fno name.
     crate::claude_supervisor::strip_route_carriers(&mut command);
-    crate::claude_supervisor::guard_birth_for_plan(&plan.env);
+    if let crate::claude_supervisor::BirthVerdict::Refuse(_) =
+        crate::claude_supervisor::guard_birth_for_plan(&plan.env)
+    {
+        return crate::claude_supervisor::BIRTH_REFUSED_EXIT;
+    }
     if bg_resume {
         let out = match command.output() {
             Ok(o) => o,
@@ -882,11 +886,15 @@ fn relaunch_command(plan: &crate::reentry::ReentryPlan) -> std::process::Command
 
 fn with_supervisor_guard_then_relaunch<T>(
     plan: &crate::reentry::ReentryPlan,
-    guard: impl FnOnce(&crate::reentry::ReentryPlan),
+    guard: impl FnOnce(&crate::reentry::ReentryPlan) -> crate::claude_supervisor::BirthVerdict,
     relaunch: impl FnOnce() -> T,
-) -> T {
-    guard(plan);
-    relaunch()
+) -> Result<T, (i32, String)> {
+    match guard(plan) {
+        crate::claude_supervisor::BirthVerdict::Refuse(reason) => {
+            Err((crate::claude_supervisor::BIRTH_REFUSED_EXIT, reason))
+        }
+        _ => Ok(relaunch()),
+    }
 }
 
 /// True when a reentry mechanism returns to the shell, so a delivery can
@@ -990,6 +998,9 @@ fn revive_parked_claude_session(
     ) {
         Ok(status) => status,
         Err(e) => {
+            if e.0 == crate::claude_supervisor::BIRTH_REFUSED_EXIT {
+                return Err(e);
+            }
             eprintln!("fno agents resume: failed to plan argv run: {e}");
             return Err((16, "launch-failed".to_string()));
         }
