@@ -220,7 +220,7 @@ impl View {
 }
 
 /// Whether the open aux popup is the settings modal (the one with tabs).
-fn is_settings(view: &View) -> bool {
+pub(super) fn is_settings(view: &View) -> bool {
     view.aux
         .as_ref()
         .is_some_and(|m| !m.popup.chrome.tabs.is_empty())

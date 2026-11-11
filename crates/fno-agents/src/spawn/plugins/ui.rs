@@ -186,3 +186,21 @@ pub(crate) fn field<T: serde::de::DeserializeOwned>(
         .map(|value| serde_json::from_value(value.clone()))
         .transpose()
 }
+
+/// An argv as one line a person can paste into a shell: plain words stay
+/// bare, anything else goes in single quotes.
+pub fn shell_words(argv: &[String]) -> String {
+    argv.iter()
+        .map(|a| {
+            let plain = !a.is_empty()
+                && a.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "-_./=:@,+".contains(c));
+            if plain {
+                a.clone()
+            } else {
+                format!("'{}'", a.replace('\'', r"'\''"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}

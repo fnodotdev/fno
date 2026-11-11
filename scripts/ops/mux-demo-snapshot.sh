@@ -5,6 +5,7 @@
 #       [--window-size smallest|latest|largest] [--peer 120x40] [--no-fit]
 #       [--hold] [--group <axis>] [--remote-pane] [--web [--web-port <port>]]
 #       [--hold] [--group <axis>] [--remote-pane] [--flat-pins] [--sort <col:dir>] [--layout list] [--lead-nesting] [--holds]
+#       [--install-card data|code]
 #
 # Builds a throwaway server in a temp state root: its own config, graph,
 # agent registry, view prefs and socket dir. It seeds invented backlog nodes,
@@ -69,6 +70,9 @@ FNO_DEMO_HOLDS=""
 FNO_DEMO_SORT=""
 FNO_DEMO_LAYOUT=""
 FNO_DEMO_LEAD_NESTING=""
+# --install-card data|code runs a real `fno config plugins install` of a
+# throwaway local pack in the first pane, so the shot shows its consent card.
+INSTALL_CARD=""
 for a in "$@"; do
   if [ "$PREV" = "--out" ]; then
     mkdir -p -- "$(dirname -- "$a")"
@@ -83,7 +87,9 @@ for a in "$@"; do
     FNO_DEMO_SORT="$a"
   elif [ "$PREV" = "--layout" ]; then
     FNO_DEMO_LAYOUT="$a"
-  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--web-port" ] || [ "$a" = "--sort" ] || [ "$a" = "--layout" ]; then
+  elif [ "$PREV" = "--install-card" ]; then
+    INSTALL_CARD="$a"
+  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--web-port" ] || [ "$a" = "--sort" ] || [ "$a" = "--layout" ] || [ "$a" = "--install-card" ]; then
     :
   elif [ "$a" = "--lead-nesting" ]; then
     FNO_DEMO_LEAD_NESTING=1
@@ -526,7 +532,46 @@ W=(--workspace checkout)
 # is the session's name@host address. With --remote-pane it spawns first, so
 # the shot's focus lands on the seat and the chosen band lands on the remote
 # row the seat folds into.
-if [ -n "$REMOTE_PANE" ]; then
+if [ -n "$INSTALL_CARD" ]; then
+  PACK="$ROOT/packsrc/demo-$INSTALL_CARD"
+  PANELS="$(cd "$(dirname "$0")/../../plugins/fno-panels/mods" && pwd -P)"
+  mkdir -p "$PACK/mods/one"
+  cp "$PANELS/review-ledger/preview.png" "$PACK/mods/one/preview.png"
+  printf '# Recipe\n\nOpen it from Settings, Extensions.\n' > "$PACK/mods/one/RECIPE.md"
+  if [ "$INSTALL_CARD" = code ]; then
+    RENDER='    run: [sh, -c, "while :; do date; sleep 1; done"]'
+    TITLE="Clock"
+  else
+    RENDER='    feed:
+      argv: [fno, backlog, list, --json]
+      columns:
+        - {key: /id, title: id}
+        - {key: /title, title: title}'
+    TITLE="Open work"
+  fi
+  cat > "$PACK/plugin.yaml" <<YAML
+id: demo-$INSTALL_CARD
+version: 0.1.0
+footnote_compat:
+  minimum: "0.3.0"
+mods:
+  - id: one
+    title: $TITLE
+    summary: A demo mod for the consent card shot.
+    preview: mods/one/preview.png
+    recipe: mods/one/RECIPE.md
+$RENDER
+YAML
+  git -C "$PACK" init --quiet
+  git -C "$PACK" add -A
+  git -C "$PACK" -c user.name=demo -c user.email=demo@example.invalid -c commit.gpgsign=false \
+    commit --quiet -m "demo pack"
+  run --cwd "$ROOT/code/checkout" -- \
+    sh -c "'$FNO' config plugins install 'file://$PACK'; while :; do sleep 1; done"
+  run --cwd "$ROOT/code/checkout" --tab 1 --at "${PANES[0]}" --split right -- \
+    sh -c "$(show codex)"
+  RUN_AT="${PANES[1]}"
+elif [ -n "$REMOTE_PANE" ]; then
   run --cwd "$ROOT/code/checkout" -- \
     env FNO_AGENT_SELF=kestrel@mac2 sh -c "$(show remote)"
   run --cwd "$ROOT/code/checkout" --tab 1 --at "${PANES[0]}" --split right -- \
@@ -543,7 +588,7 @@ run --cwd "$ROOT/code/checkout" -- sh -c "$(show pi)"
 run --cwd "$ROOT/code/checkout" -- sh -c "$(show docs)"
 # The registry seed skips the seat pane: its row count shifts by one.
 SEED_OFF=0
-if [ -n "$REMOTE_PANE" ]; then
+if [ -n "$REMOTE_PANE" ] || [ -n "$INSTALL_CARD" ]; then
   SEED_OFF=1
 fi
 "$FNO" mux tab rename --server "$SERVER" "${W[@]}" --tab 1 --name agents >/dev/null

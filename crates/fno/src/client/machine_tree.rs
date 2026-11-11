@@ -164,6 +164,7 @@ pub(super) fn set_on(view: &mut View, on: bool) {
 /// The off-loop read, single-flight, only while the toggle is on.
 pub(super) fn maybe_kick(view: &mut View, tx: &OrgTx) {
     super::remote_hosts::kick(view, tx);
+    super::extensions::kick(view, tx);
     let tree = &mut view.machine_tree;
     let due = tree.last_read.is_none_or(|at| at.elapsed() >= READ_EVERY);
     if !tree.on || tree.inflight || !due {

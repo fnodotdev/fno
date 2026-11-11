@@ -86,8 +86,10 @@ impl Card {
         ];
         for m in &self.manifest.mods {
             let what = match m.render() {
-                Some(Render::Run(argv)) => format!("RUNS CODE: {}", argv.join(" ")),
-                Some(Render::Feed(feed)) => format!("reads: {}", feed.argv.join(" ")),
+                Some(Render::Run(argv)) => format!("RUNS CODE: {}", super::ui::shell_words(argv)),
+                Some(Render::Feed(feed)) => {
+                    format!("reads: {}", super::ui::shell_words(&feed.argv))
+                }
                 Some(Render::Native(view)) => format!("native view: {view}"),
                 None => "no render path".to_string(),
             };
@@ -357,9 +359,12 @@ fn approval(card: &Card) -> Result<Option<String>, InstallError> {
     Err(InstallError::AwaitingConsent { request_digest })
 }
 
-fn attended_yes() -> bool {
+fn attended_yes(runs_code: bool) -> bool {
     if !crate::backlog::law_match::attended_terminal() {
         return false;
+    }
+    if runs_code {
+        eprintln!("this pack runs code on your machine. Its command mods stay off until you switch each one on.");
     }
     eprint!("install this pack? [y/N] ");
     let mut answer = String::new();
@@ -401,7 +406,8 @@ pub fn run(json: bool, root: &Path, url: &str) -> i32 {
         }
         if crate::backlog::law_match::attended_terminal() {
             let user = std::env::var("USER").unwrap_or_else(|_| "operator".into());
-            return Ok(attended_yes().then(|| format!("attended-terminal:{user}")));
+            let runs_code = card.manifest.mods.iter().any(|m| m.runs_code());
+            return Ok(attended_yes(runs_code).then(|| format!("attended-terminal:{user}")));
         }
         approval(card)
     });

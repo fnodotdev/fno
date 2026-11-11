@@ -230,17 +230,22 @@ async fn lane_custom_entry_enter_refuses_an_invalid_color_without_saving() {
 /// without one, and a failed read as one notice row with no mod rows.
 #[test]
 fn extensions_tab_lists_switches_and_names_a_failed_read() {
-    use crate::client::extensions::{parse_installed, Act, ReadFailed};
+    use crate::client::extensions::{act, parse_installed, Act, ReadFailed};
     let listing = br#"{"packs": [{"pack_id": "p", "mods": [
         {"id": "on", "title": "On", "enabled": true, "kind": "feed", "preview": "/x.png"},
-        {"id": "off", "title": "Off", "enabled": false, "kind": "run", "runs_code": true},
+        {"id": "off", "title": "Off", "enabled": false, "kind": "run", "runs_code": true,
+         "run": ["sh", "-c", "echo hi"]},
         {"id": "board", "title": "Board", "enabled": true, "kind": "native"}]}]}"#;
     let mut v = two_pane_view();
     v.extensions.installed = Some(parse_installed(Ok(listing.to_vec())));
     let (rows, actions) = v.settings_rows_for(SettingsTab::Extensions);
     let text = format!("{rows:?}");
     assert!(text.contains("☑") && text.contains("☐"), "{text}");
-    assert!(text.contains("Board · p/board · built in"), "{text}");
+    assert!(
+        text.contains("Board · p/board") && text.contains("Built in"),
+        "{text}"
+    );
+    assert!(text.contains("Runs code"), "{text}");
     let switches: Vec<_> = actions
         .iter()
         .filter_map(|a| match a {
@@ -249,6 +254,14 @@ fn extensions_tab_lists_switches_and_names_a_failed_read() {
         })
         .collect();
     assert_eq!(switches, [("p/on", false), ("p/off", true)]);
+
+    // Turning on a mod that runs code asks again and shows the argv.
+    act(&mut v, Act::Switch("p/off".into(), true));
+    let (rows, actions) = v.settings_rows_for(SettingsTab::Extensions);
+    let text = format!("{rows:?}");
+    assert!(text.contains("Runs code: sh -c 'echo hi'"), "{text}");
+    assert!(actions.contains(&AuxAction::Extension(Act::Confirm("p/off".into()))));
+    v.extensions.confirm = None;
 
     v.extensions.installed = Some(parse_installed(Err(ReadFailed(
         "`fno config plugins ls --json` exited 1".into(),

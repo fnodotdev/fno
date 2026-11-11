@@ -550,6 +550,7 @@ fn ui_rows(pack: &super::registry::InstalledPack) -> serde_json::Map<String, Val
                         "kind": kind,
                         "native": m.native,
                         "runs_code": m.runs_code(),
+                        "run": m.run,
                         "enabled": pack.enabled(&m.id, m.runs_code()),
                     })
                 })

@@ -25,6 +25,8 @@ pub(crate) enum OrgMsg {
     Machines(Result<serde_json::Value, String>),
     /// One configured remote host's ssh probe landed.
     HostProbe(String, super::remote_hosts::HostState),
+    /// A settings Extensions read landed off the loop.
+    Extensions(super::extensions::Landed),
 }
 
 pub(crate) fn apply(view: &mut View, gen: u64, msg: OrgMsg) {
@@ -33,6 +35,7 @@ pub(crate) fn apply(view: &mut View, gen: u64, msg: OrgMsg) {
         OrgMsg::Action(done) => apply_action(view, gen, done),
         OrgMsg::Machines(read) => super::machine_tree::apply(view, read),
         OrgMsg::HostProbe(name, state) => super::remote_hosts::apply(view, name, state),
+        OrgMsg::Extensions(landed) => super::extensions::apply(view, landed),
     }
 }
 

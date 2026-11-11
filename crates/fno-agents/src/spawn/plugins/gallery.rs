@@ -13,6 +13,9 @@ use std::process::Command;
 /// The topics an author tags a repo with, one per component kind.
 pub const TOPICS: [&str; 3] = ["fno-mod", "fno-layout", "fno-pack"];
 
+/// Repos fno has reviewed. Empty today: no published pack carries the mark.
+const REVIEWED: [&str; 0] = [];
+
 /// One topic search; past it the read fails rather than hangs.
 const GH_SECONDS: u64 = 60;
 
@@ -135,7 +138,7 @@ pub fn run(as_json: bool) -> i32 {
                     "pushed_at": r.pushed_at,
                     "topic": r.topic,
                     "install": r.install,
-                    "reviewed": false,
+                    "reviewed": REVIEWED.contains(&r.name.as_str()),
                 })
             })
             .collect();
@@ -147,10 +150,12 @@ pub fn run(as_json: bool) -> i32 {
         return 0;
     }
     for r in &rows {
-        println!(
-            "{}  {} stars  {}  (not reviewed by fno)",
-            r.name, r.stars, r.topic
-        );
+        let mark = if REVIEWED.contains(&r.name.as_str()) {
+            "reviewed by fno"
+        } else {
+            "not reviewed by fno"
+        };
+        println!("{}  {} stars  {}  ({mark})", r.name, r.stars, r.topic);
         if !r.description.is_empty() {
             println!("  {}", r.description);
         }
