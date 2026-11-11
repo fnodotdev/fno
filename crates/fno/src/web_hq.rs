@@ -10,23 +10,38 @@ use crate::backlog_model::Inputs;
 use crate::client::org_seats::{self, Fleet};
 use crate::digest_overlay::ObsidianCfg;
 use crate::link::{plan_link, PlanLink};
-use crate::needs_overlay::QuestionsFold;
+use crate::needs_overlay::{QuestionItem, QuestionsFold};
 
 pub(crate) const REFRESH_AFTER: Duration = Duration::from_secs(60);
 
 #[derive(Default)]
 pub(crate) struct HqCache {
-    state: tokio::sync::Mutex<Cached>,
+    state: tokio::sync::Mutex<Board>,
     /// The first read: every request before it waits on the same one.
     pub(crate) first: tokio::sync::OnceCell<()>,
 }
 
+/// One open question as the board shows it: the fold's item plus the live
+/// pane the asker runs in, when one joins.
+#[derive(Debug, Clone)]
+pub(crate) struct OpenQuestion {
+    pub(crate) item: QuestionItem,
+    pub(crate) watch_pane: Option<u64>,
+    node_origin: Option<crate::backlog_model::OriginSession>,
+}
+
+/// The command center board: the fleet fold, the open questions and the open
+/// PRs. The bridge's `/hq/model.json` and the desktop app both build it here,
+/// so the two never show different seats or questions.
 #[derive(Default)]
-struct Cached {
+pub(crate) struct Board {
     /// The fold, its machines as JSON, and when it was read.
     good: Option<(Fleet, Value, Instant)>,
     failure: Option<(String, Instant)>,
-    questions: Option<Result<Vec<Value>, String>>,
+    /// The last good question read. A failed read keeps it and sets the error.
+    questions: Vec<OpenQuestion>,
+    questions_error: Option<String>,
+    questions_read: bool,
     prs: Vec<Value>,
     /// The last backlog read failed; `prs` is the last good list.
     prs_error: Option<String>,
@@ -45,9 +60,6 @@ impl HqCache {
         true
     }
 
-    /// Store one refresh. A failed fleet read keeps the last good fold. The
-    /// local roster joins the asker's session to a pane, so the page can deep
-    /// link the question card to the live session.
     pub(crate) async fn record(
         &self,
         fleet: Result<Value, String>,
@@ -56,93 +68,104 @@ impl HqCache {
         measured_at: u64,
         agents: &[crate::proto::AgentRow],
     ) {
-        let now = Instant::now();
         let mut st = self.state.lock().await;
-        match fleet {
-            Ok(map) => {
-                let fleet = org_seats::fold(&map, backlog, &[], measured_at);
-                let cwd = std::env::current_dir().unwrap_or_default();
-                let machines = machines_json(&fleet, &ObsidianCfg::read(&cwd));
-                st.good = Some((fleet, machines, now));
-                st.failure = None;
-            }
-            Err(reason) => st.failure = Some((reason, now)),
-        }
-        st.questions = Some(questions.map(|fold| {
-            fold.items
-                .iter()
-                .filter(|q| q.state == "open" && !q.settled)
-                .map(|q| {
-                    let watch_pane = q
-                        .origin
-                        .as_ref()
-                        .and_then(|o| o.session_id.as_deref())
-                        .and_then(|sid| {
-                            agents
-                                .iter()
-                                .filter(|a| !a.exited)
-                                .find(|a| a.harness_session_id.as_deref() == Some(sid))
-                                .and_then(|a| a.pane_id)
-                        });
-                    let node_origin = q
-                        .node
-                        .as_deref()
-                        .and_then(|n| crate::backlog_model::origin_session_for(backlog, n));
-                    json!({
-                        "id": q.id,
-                        "number": q.number,
-                        "kind": q.kind,
-                        "title": q.title,
-                        "node": q.node,
-                        "host": q.host,
-                        "created_at": q.created_at,
-                        "priority": q.priority,
-                        "class": q.class,
-                        "tried": q.tried,
-                        "evidence": q.evidence,
-                        "on_silence": q.on_silence,
-                        "deadline": q.deadline,
-                        "options": q.options.iter().map(|o| json!({"n": o.n, "text": o.text})).collect::<Vec<_>>(),
-                        "recommendation": q.recommendation.as_ref().map(|r| json!({"option": r.option, "why": r.why})),
-                        "origin": q.origin,
-                        "rung": q.rung,
-                        "via": q.via,
-                        "node_title": q.node_title,
-                        "node_stage": q.node_stage,
-                        "watch_pane": watch_pane,
-                        "node_origin": node_origin,
-                    })
-                })
-                .collect()
-        }));
-        match &backlog.rows_error {
-            Some(reason) => st.prs_error = Some(reason.clone()),
-            None => (st.prs, st.prs_error) = (open_prs(backlog), None),
-        }
-        st.read_at = Some(now);
+        st.record(fleet, questions, backlog, measured_at, agents);
     }
 
     /// The node of a question the page already shows, from the last read. `None`
     /// means the question is not in the cache; `Some(None)` means it has no node.
     pub(crate) async fn question_node(&self, id: &str) -> Option<Option<String>> {
         let st = self.state.lock().await;
-        let items = st.questions.as_ref()?.as_ref().ok()?;
-        let q = items
-            .iter()
-            .find(|q| q.get("id").and_then(Value::as_str) == Some(id))?;
-        Some(q.get("node").and_then(Value::as_str).map(str::to_string))
+        if st.questions_error().is_some() {
+            return None;
+        }
+        let q = st.questions.iter().find(|q| q.item.id == id)?;
+        Some(q.item.node.clone())
     }
 
     pub(crate) async fn model(&self) -> Value {
-        let st = self.state.lock().await;
-        let mut waiting = json!({ "prs": st.prs, "prs_error": st.prs_error });
-        match &st.questions {
-            Some(Ok(items)) => waiting["questions"] = json!(items),
-            Some(Err(reason)) => waiting["questions_error"] = json!(reason),
-            None => waiting["questions_error"] = json!("not read yet"),
+        self.state.lock().await.model()
+    }
+}
+
+impl Board {
+    /// Store one refresh. A failed fleet read keeps the last good fold, and a
+    /// failed question read keeps the last good questions. The local roster
+    /// joins the asker's session to a pane, so a question card can link to
+    /// the live session.
+    pub(crate) fn record(
+        &mut self,
+        fleet: Result<Value, String>,
+        questions: Result<QuestionsFold, String>,
+        backlog: &Inputs,
+        measured_at: u64,
+        agents: &[crate::proto::AgentRow],
+    ) {
+        let now = Instant::now();
+        match fleet {
+            Ok(map) => {
+                let fleet = org_seats::fold(&map, backlog, &[], measured_at);
+                let cwd = std::env::current_dir().unwrap_or_default();
+                let machines = machines_json(&fleet, &ObsidianCfg::read(&cwd));
+                self.good = Some((fleet, machines, now));
+                self.failure = None;
+            }
+            Err(reason) => self.failure = Some((reason, now)),
         }
-        let fleet = st.good.as_ref().map(|(f, _, _)| f);
-        let fleet_error = match (&st.failure, &st.good) {
+        self.questions_read = true;
+        match questions {
+            Ok(fold) => {
+                self.questions = open_questions(fold, backlog, agents);
+                self.questions_error = None;
+            }
+            Err(reason) => self.questions_error = Some(reason),
+        }
+        match &backlog.rows_error {
+            Some(reason) => self.prs_error = Some(reason.clone()),
+            None => (self.prs, self.prs_error) = (open_prs(backlog), None),
+        }
+        self.read_at = Some(now);
+    }
+
+    /// The last good fleet fold, if any read has succeeded.
+    pub(crate) fn fleet(&self) -> Option<&Fleet> {
+        self.good.as_ref().map(|(f, _, _)| f)
+    }
+
+    /// Why the newest fleet read failed, or that none has run.
+    pub(crate) fn fleet_error(&self) -> Option<&str> {
+        match (&self.failure, &self.good) {
+            (Some((reason, _)), _) => Some(reason),
+            (None, None) => Some("fleet not read yet"),
+            (None, Some(_)) => None,
+        }
+    }
+
+    /// The last good open questions, in fold order.
+    pub(crate) fn questions(&self) -> &[OpenQuestion] {
+        &self.questions
+    }
+
+    /// Why the newest question read failed, or that none has run.
+    pub(crate) fn questions_error(&self) -> Option<&str> {
+        match (&self.questions_error, self.questions_read) {
+            (Some(reason), _) => Some(reason),
+            (None, false) => Some("not read yet"),
+            (None, true) => None,
+        }
+    }
+
+    pub(crate) fn model(&self) -> Value {
+        let mut waiting = json!({ "prs": self.prs, "prs_error": self.prs_error });
+        match self.questions_error() {
+            Some(reason) => waiting["questions_error"] = json!(reason),
+            None => {
+                let items: Vec<Value> = self.questions.iter().map(question_json).collect();
+                waiting["questions"] = json!(items);
+            }
+        }
+        let fleet = self.fleet();
+        let fleet_error = match (&self.failure, &self.good) {
             (Some((reason, at)), _) => {
                 json!({"reason": reason, "failed_age_s": at.elapsed().as_secs()})
             }
@@ -152,14 +175,77 @@ impl HqCache {
         json!({
             "schema": 1,
             "measured_at": fleet.map(|f| f.measured_at),
-            "age_s": st.good.as_ref().map(|(_, _, at)| at.elapsed().as_secs()),
+            "age_s": self.good.as_ref().map(|(_, _, at)| at.elapsed().as_secs()),
             "notice": fleet.and_then(|f| f.notice.clone()),
             "seat_error": fleet.and_then(|f| f.seat_error.clone()),
             "fleet_error": fleet_error,
-            "machines": st.good.as_ref().map_or_else(|| json!([]), |(_, m, _)| m.clone()),
+            "machines": self.good.as_ref().map_or_else(|| json!([]), |(_, m, _)| m.clone()),
             "waiting": waiting,
         })
     }
+}
+
+/// The fold's open, unsettled questions, each joined to the live pane its
+/// asker runs in.
+fn open_questions(
+    fold: QuestionsFold,
+    backlog: &Inputs,
+    agents: &[crate::proto::AgentRow],
+) -> Vec<OpenQuestion> {
+    fold.items
+        .into_iter()
+        .filter(|q| q.state == "open" && !q.settled)
+        .map(|item| {
+            let watch_pane = item
+                .origin
+                .as_ref()
+                .and_then(|o| o.session_id.as_deref())
+                .and_then(|sid| {
+                    agents
+                        .iter()
+                        .filter(|a| !a.exited)
+                        .find(|a| a.harness_session_id.as_deref() == Some(sid))
+                        .and_then(|a| a.pane_id)
+                });
+            let node_origin = item
+                .node
+                .as_deref()
+                .and_then(|n| crate::backlog_model::origin_session_for(backlog, n));
+            OpenQuestion {
+                item,
+                watch_pane,
+                node_origin,
+            }
+        })
+        .collect()
+}
+
+fn question_json(open: &OpenQuestion) -> Value {
+    let q = &open.item;
+    json!({
+        "id": q.id,
+        "number": q.number,
+        "kind": q.kind,
+        "title": q.title,
+        "node": q.node,
+        "host": q.host,
+        "created_at": q.created_at,
+        "priority": q.priority,
+        "class": q.class,
+        "tried": q.tried,
+        "evidence": q.evidence,
+        "on_silence": q.on_silence,
+        "deadline": q.deadline,
+        "options": q.options.iter().map(|o| json!({"n": o.n, "text": o.text})).collect::<Vec<_>>(),
+        "recommendation": q.recommendation.as_ref().map(|r| json!({"option": r.option, "why": r.why})),
+        "origin": q.origin,
+        "rung": q.rung,
+        "via": q.via,
+        "node_title": q.node_title,
+        "node_stage": q.node_stage,
+        "watch_pane": open.watch_pane,
+        "node_origin": open.node_origin,
+    })
 }
 
 /// The machines with each seat's plan link, so the page builds none. With obsidian on, a plan in the vault gets its
@@ -220,7 +306,6 @@ fn open_prs(backlog: &Inputs) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::needs_overlay::QuestionItem;
 
     fn two_machines() -> Value {
         json!({"machines": [
