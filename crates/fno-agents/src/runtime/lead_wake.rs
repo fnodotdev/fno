@@ -718,21 +718,22 @@ mod tests {
         ]);
         let plans = plan_wakes(&teams, &beats, &BTreeMap::new(), 55 * 60, now);
         assert_eq!(plans.len(), 1, "only the missed lead itself is planned");
-        let plan = &plans[0];
+        let plan = plans.first().expect("one plan for the missed lead");
         assert_eq!(plan.lead.holder, "vellum");
         assert!(!plan.operator, "one lapse never tells the operator");
-        let crown = vec![
-            team("crown", 0, "esther", "s-crown"),
+        let top_rung = vec![
+            team("root", 0, "esther", "s-root"),
             team("fno", 1, "vellum", "s-head"),
         ];
         let beats = BTreeMap::from([
-            ("crown".to_string(), Some(now - 4000)),
+            ("root".to_string(), Some(now - 4000)),
             ("fno".to_string(), Some(now - 600)),
         ]);
-        let plans = plan_wakes(&crown, &beats, &BTreeMap::new(), 55 * 60, now);
+        let plans = plan_wakes(&top_rung, &beats, &BTreeMap::new(), 55 * 60, now);
         assert_eq!(plans.len(), 1, "an L0 miss plans the L0 alone");
-        assert_eq!(plans[0].lead.holder, "esther");
-        assert!(!plans[0].operator, "one lapse never tells the operator");
+        let plan = plans.first().expect("one plan for the L0 miss");
+        assert_eq!(plan.lead.holder, "esther");
+        assert!(!plan.operator, "one lapse never tells the operator");
         plan_wakes_fold_contract();
     }
 
@@ -747,7 +748,10 @@ mod tests {
         // First lapse: no receipt yet, the lead is woken alone.
         let plans = plan_wakes(&teams, &beats, &BTreeMap::new(), beat, now);
         assert_eq!(plans.len(), 1);
-        assert!(!plans[0].operator);
+        assert!(
+            !plans.first().expect("the first lapse plans").operator,
+            "a first lapse never rides the operator lane"
+        );
         // Woken once, still inside the second beat's grace: suppressed.
         let wakes = BTreeMap::from([("x-aaa".to_string(), last + 400)]);
         let plans = plan_wakes(&teams, &beats, &wakes, beat, last + 4000);
@@ -765,7 +769,7 @@ mod tests {
             "the second missed beat in a row re-arms the plan"
         );
         assert!(
-            plans[0].operator,
+            plans.first().expect("the second lapse plans").operator,
             "the operator lane rides the second lapse"
         );
         // The escalation's own receipt holds every later pass.
@@ -800,7 +804,10 @@ mod tests {
             1,
             "a receipt older than the beat never suppresses the new lapse"
         );
-        assert!(!plans[0].operator);
+        assert!(
+            !plans.first().expect("the new lapse plans").operator,
+            "the operator lane never carries over from the previous lapse"
+        );
         // A fresh check-in moved the beat past the receipt: not yet overdue.
         let beats = BTreeMap::from([("x-aaa".to_string(), Some(now - 200))]);
         let plans = plan_wakes(&teams, &beats, &wakes, 3300, now);
