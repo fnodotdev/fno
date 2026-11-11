@@ -58,6 +58,7 @@ use sweep_scope::{begin_sweep_apply, build_sweep_modal, run_sweep_command, Sweep
 
 // Pickers, the launch moment and the snapshot action live in their own
 // modules: client.rs is shrink-only under the file-budget gate.
+mod anchor_jump;
 pub(crate) mod attach_handshake;
 mod health;
 mod keys_reload;
@@ -6950,50 +6951,10 @@ async fn attach_and_run(
                     }
                 }
                 Ok(ServerMsg::AnchorJumped { pane_id, jumped }) => {
-                    // The exchange picker's jump verdict. The pending jump
-                    // (session id, pane, ts) filters the reply to the pane
-                    // it named; anything else is dropped. A miss never
-                    // jumps: the notice says why and the session transcript
-                    // (the peek overlay) opens instead - the transcript is
-                    // the anchor that never goes stale.
-                    let pending = view
-                        .messages_board
-                        .as_ref()
-                        .and_then(|b| b.pending_jump.as_ref())
-                        .map(|(sid, pane, _)| (sid.clone(), *pane));
-                    if let Some((sid, _pane)) = pending.filter(|(_, p)| *p == pane_id) {
-                        if let Some(b) = view.messages_board.as_mut() {
-                            b.pending_jump = None;
-                        }
-                        if !jumped {
-                            let idx = view
-                                .display_rows()
-                                .iter()
-                                .position(|r| matches!(
-                                    r,
-                                    DisplayRow::Agent(a)
-                                        if a.harness_session_id.as_deref() == Some(sid.as_str())
-                                ));
-                            if let Some(idx) = idx {
-                                let name = view.layout.agents
-                                    .iter()
-                                    .find(|a| {
-                                        a.harness_session_id.as_deref() == Some(sid.as_str())
-                                    })
-                                    .map(|a| a.name.clone())
-                                    .unwrap_or_else(|| sid.get(..8).unwrap_or(&sid).to_string());
-                                view.open_peek(idx, name);
-                                view.set_notice(
-                                    "the pane no longer holds that turn - opened the session transcript"
-                                        .to_string(),
-                                );
-                            } else {
-                                view.set_notice(
-                                    "the pane no longer holds that turn - open the session from the sideline to read the reply"
-                                        .to_string(),
-                                );
-                            }
-                        }
+                    // Filtering, the transcript-peek fallback and
+                    // the notices live in client/anchor_jump.rs;
+                    // this arm draws when the reply matched a jump.
+                    if anchor_jump::reply(&mut view, pane_id, jumped) {
                         if let Err(e) = compositor.draw(&view.compose()) {
                             break Err(format!("draw: {e}"));
                         }
