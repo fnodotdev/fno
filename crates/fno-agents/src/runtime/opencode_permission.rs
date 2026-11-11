@@ -457,7 +457,8 @@ pub(crate) mod tests {
         let seen = fake.seen.lock().unwrap();
         assert_eq!(seen.len(), 1, "one reply, no retry: {seen:?}");
         assert!(!seen[0].1.contains("always"));
-        let journal = std::fs::read_to_string(&events).unwrap();
+        let journal =
+            crate::event_store::journal_text(&events, &["thread_permission_reply_failed"]);
         assert!(
             journal.contains("thread_permission_reply_failed") && journal.contains("404"),
             "{journal}"
@@ -473,12 +474,15 @@ pub(crate) mod tests {
 
     #[test]
     fn a_user_ask_rule_is_read_from_the_merged_map_last_match_wins() {
-        let rules = json!({"bash": {"*": "allow", "touch *": "ask"}, "edit": "ask", "*": "allow"});
+        let rules = json!({"bash": {"*": "allow", "touch *": "ask"}, "edit": "ask"});
         let r = |s: &str| vec![s.to_string()];
         assert!(user_rule_asks(&rules, "bash", &r("touch /tmp/x")));
         assert!(!user_rule_asks(&rules, "bash", &r("ls")));
-        // The trailing `*: allow` is the last match for edit, so it wins.
-        assert!(!user_rule_asks(&rules, "edit", &r("a.rs")));
+        assert!(user_rule_asks(&rules, "edit", &r("a.rs")));
+        // A later `*` rule matches every permission, so it wins over both.
+        let trailing = json!({"bash": {"touch *": "ask"}, "edit": "ask", "*": "allow"});
+        assert!(!user_rule_asks(&trailing, "bash", &r("touch /tmp/x")));
+        assert!(!user_rule_asks(&trailing, "edit", &r("a.rs")));
         assert!(!user_rule_asks(
             &json!({}),
             "external_directory",

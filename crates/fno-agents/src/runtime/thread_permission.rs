@@ -233,8 +233,7 @@ mod tests {
     }
 
     fn rows(events: &Path) -> Vec<Value> {
-        std::fs::read_to_string(events)
-            .unwrap_or_default()
+        crate::event_store::journal_text(events, &["thread_permission_answered"])
             .lines()
             .filter_map(|l| serde_json::from_str(l).ok())
             .collect()
