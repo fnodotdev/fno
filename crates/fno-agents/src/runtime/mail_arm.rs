@@ -553,6 +553,9 @@ pub(crate) fn style_door_report(payload: &str) -> Option<DoorRefusal> {
 /// when the receipt reads clean (no violations, or an exception), is
 /// unparseable, or is empty - a door that cannot run reads clean, exactly
 /// as the pull side does.
+/// Test-facing entry point: production reads the report through
+/// `style_door_report`, so this wrapper builds only under test.
+#[cfg(test)]
 pub(crate) fn receipt_refusal_report(stdout: &[u8]) -> Option<String> {
     let receipt = parse_style_door_receipt(stdout)?;
     if !receipt_refuses(&receipt) {
@@ -564,6 +567,9 @@ pub(crate) fn receipt_refusal_report(stdout: &[u8]) -> Option<String> {
 /// The compact rule index for the refusal's final line, from the same door
 /// stdout the report reads: "rule 3 modal: would; rule 5 condition: when".
 /// `None` under the same clean/unparseable rule as the report.
+/// Test-facing entry point: production reads the summary through
+/// `style_door_report`, so this wrapper builds only under test.
+#[cfg(test)]
 pub(crate) fn receipt_refusal_summary(stdout: &[u8]) -> Option<String> {
     let receipt = parse_style_door_receipt(stdout)?;
     if !receipt_refuses(&receipt) {
