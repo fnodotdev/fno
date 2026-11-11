@@ -875,15 +875,18 @@ fn escalation_text(node: &str, sid: &str, reason: &str, attempts: u32) -> String
 }
 
 /// One evidence phrase per counter at or past its non-zero threshold.
-fn escalation_trips(counters: &Counters, t: &Thresholds) -> Vec<String> {
+fn escalation_trips(counters: &Counters, t: &Thresholds) -> Vec<(&'static str, String)> {
     let mut trips = Vec::new();
     if t.red_rounds > 0 {
         if let Some(names) = &counters.red {
             if names.len() as u32 >= t.red_rounds {
-                trips.push(format!(
-                    "{} red at the PR head (threshold {})",
-                    names.join(", "),
-                    t.red_rounds
+                trips.push((
+                    "red-at-pr-head",
+                    format!(
+                        "{} red at the PR head (threshold {})",
+                        names.join(", "),
+                        t.red_rounds
+                    ),
                 ));
             }
         }
@@ -891,9 +894,12 @@ fn escalation_trips(counters: &Counters, t: &Thresholds) -> Vec<String> {
     if t.conflict_merges > 0 {
         if let Some(n) = counters.conflict_merges {
             if n >= t.conflict_merges {
-                trips.push(format!(
-                    "{n} merges of the base needed a resolution (threshold {})",
-                    t.conflict_merges
+                trips.push((
+                    "conflict-merges",
+                    format!(
+                        "{n} merges of the base needed a resolution (threshold {})",
+                        t.conflict_merges
+                    ),
                 ));
             }
         }
@@ -901,9 +907,12 @@ fn escalation_trips(counters: &Counters, t: &Thresholds) -> Vec<String> {
     if t.diff_lines > 0 {
         if let Some(n) = counters.diff_lines {
             if n >= t.diff_lines {
-                trips.push(format!(
-                    "{n} changed lines against the base (threshold {})",
-                    t.diff_lines
+                trips.push((
+                    "diff-lines",
+                    format!(
+                        "{n} changed lines against the base (threshold {})",
+                        t.diff_lines
+                    ),
                 ));
             }
         }
@@ -911,16 +920,22 @@ fn escalation_trips(counters: &Counters, t: &Thresholds) -> Vec<String> {
     if t.hours > 0 {
         if let Some(h) = counters.hours {
             if h >= t.hours {
-                trips.push(format!("{h}h on this worker (threshold {}h)", t.hours));
+                trips.push((
+                    "worker-hours",
+                    format!("{h}h on this worker (threshold {}h)", t.hours),
+                ));
             }
         }
     }
     if t.slot_wait_minutes > 0 {
         if let Some(m) = counters.slot_wait_min {
             if m >= t.slot_wait_minutes {
-                trips.push(format!(
-                    "{m}m waiting at the cargo build door (threshold {}m)",
-                    t.slot_wait_minutes
+                trips.push((
+                    "slot-wait",
+                    format!(
+                        "{m}m waiting at the cargo build door (threshold {}m)",
+                        t.slot_wait_minutes
+                    ),
                 ));
             }
         }
@@ -1192,7 +1207,10 @@ pub(crate) fn resolve_worker_cwd(
 /// after. The sweep never touches it. Files: `burn-watch/noted/<sid>.json`.
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
 struct Noted {
-    escalation: bool,
+    /// The escalation CAUSES already sent for this worker, one send per
+    /// cause: a repeat of the same cause stays silent, a new cause notifies.
+    #[serde(default)]
+    escalation: Vec<String>,
     first_edit: bool,
 }
 
@@ -1396,46 +1414,56 @@ fn run_pass(
             }
             Decision::Hold => skip = Some("holding".into()),
         }
-        // The capability note rides its own flag, copied from prev because
-        // decide rebuilds the state and a stand-down must not clear it.
+        // The capability note rides per-cause once markers: a cause sends
+        // once per worker, and a NEW cause still notifies. The counters are
+        // sampled every pass for that check; the markers survive the scope
+        // sweep, and the state flag stays a cheap "any sent" summary.
+        let mut noted = load_noted(home, sid);
         next.escalation_noted = prev.as_ref().map(|p| p.escalation_noted).unwrap_or(false)
-            || load_noted(home, sid).escalation;
-        if !next.escalation_noted {
-            let counters = sample_counters(
-                cwd,
-                facts.get(node).unwrap_or(&NodeFacts::default()),
-                scoped.started_at,
+            || !noted.escalation.is_empty();
+        let counters = sample_counters(
+            cwd,
+            facts.get(node).unwrap_or(&NodeFacts::default()),
+            scoped.started_at,
+            runner,
+            now_epoch,
+        );
+        let tripped_pairs = escalation_trips(&counters, thresholds);
+        let tripped: Vec<String> = tripped_pairs.iter().map(|(_, p)| p.clone()).collect();
+        let new_causes: Vec<&str> = tripped_pairs
+            .iter()
+            .map(|(s, _)| *s)
+            .filter(|s| !noted.escalation.iter().any(|c| c == *s))
+            .collect();
+        if !new_causes.is_empty() {
+            let harness = entry.harness.as_deref().unwrap_or("unknown");
+            let model = scoped
+                .observed_model
+                .as_deref()
+                .or(entry.model.as_deref())
+                .or(entry.requested_model.as_deref())
+                .unwrap_or("unknown");
+            let text = escalation_note_text(node, sid, harness, model, &counters, &tripped);
+            let owner = node_owner(config_cwd, &home.registry_json(), &rows, &mut owners, node);
+            note_owner(
+                home,
                 runner,
-                now_epoch,
+                owner,
+                &text,
+                cwd,
+                node,
+                &format!("capability escalation for {node}"),
+                "skills/target/scripts/handoff.sh",
             );
-            let tripped = escalation_trips(&counters, thresholds);
-            if !tripped.is_empty() {
-                let harness = entry.harness.as_deref().unwrap_or("unknown");
-                let model = scoped
-                    .observed_model
-                    .as_deref()
-                    .or(entry.model.as_deref())
-                    .or(entry.requested_model.as_deref())
-                    .unwrap_or("unknown");
-                let text = escalation_note_text(node, sid, harness, model, &counters, &tripped);
-                let owner = node_owner(config_cwd, &home.registry_json(), &rows, &mut owners, node);
-                note_owner(
-                    home,
-                    runner,
-                    owner,
-                    &text,
-                    cwd,
-                    node,
-                    &format!("capability escalation for {node}"),
-                    "skills/target/scripts/handoff.sh",
-                );
-                next.escalation_noted = true;
-                notes += 1;
-            }
+            noted
+                .escalation
+                .extend(new_causes.iter().map(|s| s.to_string()));
+            next.escalation_noted = true;
+            notes += 1;
         }
-        // The first-edit note rides its own flag for the same reason.
-        next.first_edit_noted = prev.as_ref().map(|p| p.first_edit_noted).unwrap_or(false)
-            || load_noted(home, sid).first_edit;
+        // The first-edit note rides its own marker flag for the same reason.
+        next.first_edit_noted =
+            prev.as_ref().map(|p| p.first_edit_noted).unwrap_or(false) || noted.first_edit;
         if !next.first_edit_noted {
             let harness = entry.harness.as_deref().unwrap_or("unknown");
             if let Some(text) = first_edit_overdue(
@@ -1468,7 +1496,7 @@ fn run_pass(
             home,
             sid,
             &Noted {
-                escalation: next.escalation_noted,
+                escalation: noted.escalation,
                 first_edit: next.first_edit_noted,
             },
         );
@@ -2257,14 +2285,17 @@ mod tests {
         };
         let trips = escalation_trips(&trip, &t);
         assert_eq!(trips.len(), 1, "{trips:?}");
+        assert_eq!(trips.first().map(|(s, _)| *s), Some("red-at-pr-head"));
         assert!(
             trips
                 .first()
-                .is_some_and(|t| t.contains("cli-ci, guards, main-binaries")),
+                .is_some_and(|(_, p)| p.contains("cli-ci, guards, main-binaries")),
             "{trips:?}"
         );
         assert!(
-            trips.first().is_some_and(|t| t.contains("threshold 3")),
+            trips
+                .first()
+                .is_some_and(|(_, p)| p.contains("threshold 3")),
             "{trips:?}"
         );
         let clean = Counters {
@@ -2292,14 +2323,14 @@ mod tests {
             &home,
             "aabb",
             &Noted {
-                escalation: true,
+                escalation: vec!["red-at-pr-head".to_string()],
                 first_edit: false,
             },
         );
         assert_eq!(
             load_noted(&home, "aabb"),
             Noted {
-                escalation: true,
+                escalation: vec!["red-at-pr-head".to_string()],
                 first_edit: false
             }
         );
