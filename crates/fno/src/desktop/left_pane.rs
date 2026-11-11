@@ -202,7 +202,7 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
         .border_color(rgb(p.border));
     let rows = rows(&root.layout, &root.board, now_secs, root.agents_open);
     for (i, row) in rows.into_iter().enumerate() {
-        let hover = p.row_fill;
+        let hover = p.hover;
         pane = pane.child(match row {
             Row::Header(title) => div()
                 .id(i)
@@ -260,6 +260,9 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
                 let mut item = div()
                     .id(i)
                     .mx_1()
+                    // A definite width, so the label's ellipsis box measures
+                    // the row and not its own text.
+                    .w(px(WIDTH - 9.0))
                     .pl(px(6.0))
                     .pr_2()
                     .py_1()

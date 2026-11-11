@@ -37,11 +37,13 @@ pub struct Palette {
     pub panel: u32,
     /// A row that needs the user.
     pub warn: u32,
-    /// The fill of an active or hovered row: a step off `panel`, so every
-    /// label on it keeps its contrast.
+    /// The fill of a hovered row: the lightest step off `panel`.
+    pub hover: u32,
+    /// The fill of the selected row: a step above `hover`, so two rows never
+    /// read as selected.
     pub row_fill: u32,
-    /// The fill under a press: a step above `row_fill`, derived from `panel`
-    /// for the same reason.
+    /// The fill under a press: a step above `row_fill`. Every label color is
+    /// held at 4.5:1 on this, the strongest fill, so it holds on the rest.
     pub pressed: u32,
     ansi: [u32; 16],
 }
@@ -151,6 +153,14 @@ impl Palette {
                 .find(|c| contrast(*c, bg) >= 4.5)
                 .unwrap_or(ansi[4]),
         };
+        let (hover, row_fill, pressed) = (
+            mix(panel, fg, 0.03),
+            mix(panel, fg, 0.06),
+            mix(panel, fg, 0.10),
+        );
+        // A fill only lowers a label's contrast, and `pressed` lowers it
+        // most: lift each label to 4.5:1 there when the theme's own falls short.
+        let on_fills = |c: u32| mix_to_contrast(c, fg, pressed, 4.5);
         Palette {
             fg,
             bg,
@@ -158,14 +168,15 @@ impl Palette {
             border: sel,
             // Dim, but a focus ring reads 3:1 on the ground.
             focus: mix_to_contrast(mix(sel, fg, 0.3), fg, bg, 3.0),
-            ok: rgb_or(t.ok, 0x9cc49c),
-            recommend,
-            error: rgb_or(t.error, 0xe1a6a3),
-            muted: rgb_or(t.dim, 0x8a8a8a),
+            ok: on_fills(rgb_or(t.ok, 0x9cc49c)),
+            recommend: on_fills(recommend),
+            error: on_fills(rgb_or(t.error, 0xe1a6a3)),
+            muted: on_fills(rgb_or(t.dim, 0x8a8a8a)),
             panel,
-            warn: rgb_or(t.needs_you, 0xe5c07b),
-            row_fill: mix(panel, fg, 0.06),
-            pressed: mix(panel, fg, 0.11),
+            warn: on_fills(rgb_or(t.needs_you, 0xe5c07b)),
+            hover,
+            row_fill,
+            pressed,
             ansi,
         }
     }
@@ -298,7 +309,12 @@ mod tests {
             );
             let c = contrast(p.focus, p.bg);
             assert!(c >= 3.0, "{name}: focus {:06x} is {c:.2}:1", p.focus);
-            for (fill, what) in [(p.row_fill, "row_fill"), (p.pressed, "pressed")] {
+            for (fill, what) in [
+                (p.panel, "panel"),
+                (p.hover, "hover"),
+                (p.row_fill, "row_fill"),
+                (p.pressed, "pressed"),
+            ] {
                 for (label, text) in [
                     (p.fg, "fg"),
                     (p.muted, "muted"),

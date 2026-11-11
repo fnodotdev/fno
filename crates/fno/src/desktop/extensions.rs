@@ -26,6 +26,8 @@ use crate::text_style::TextStyle;
 
 const MAX_URL: usize = 512;
 const URL_HINT: &str = "https://github.com/owner/repo";
+/// The height held for a preview that is still decoding: 16:9 at the widest.
+const PREVIEW_RESERVE: f32 = 270.0;
 /// The widest the preview draws, in logical pixels.
 const PREVIEW_MAX: f32 = 480.0;
 
@@ -497,7 +499,7 @@ fn button(
         .border_color(rgb(p.border))
         .text_color(rgb(p.fg))
         .cursor_pointer()
-        .hover(move |s| s.bg(rgb(p.row_fill)))
+        .hover(move |s| s.bg(rgb(p.hover)))
         .active(move |s| s.bg(rgb(p.pressed)))
         .on_click(cx.listener(move |root, _, _, cx| act(root, on.clone(), cx)))
         .child(label)
@@ -557,7 +559,7 @@ fn row(i: usize, pack: &str, c: &Component, root: &Root, cx: &mut Context<Root>)
                 .text_color(rgb(color))
                 .when(!pending, |d| {
                     d.cursor_pointer()
-                        .hover(move |s| s.bg(rgb(p.row_fill)))
+                        .hover(move |s| s.bg(rgb(p.hover)))
                         .active(move |s| s.bg(rgb(p.pressed)))
                 })
                 .on_click(
@@ -577,7 +579,7 @@ fn row(i: usize, pack: &str, c: &Component, root: &Root, cx: &mut Context<Root>)
         .rounded_md()
         .when(chosen, |d| d.bg(rgb(p.row_fill)))
         .cursor_pointer()
-        .hover(move |s| s.bg(rgb(p.row_fill)))
+        .hover(move |s| s.bg(rgb(p.hover)))
         .active(move |s| s.bg(rgb(p.pressed)))
         .on_click(cx.listener(move |root, _, _, cx| act(root, Act::Select(t.clone()), cx)))
         .child(div().font_weight(FontWeight::BOLD).child(c.title.clone()))
@@ -731,7 +733,7 @@ fn list(root: &Root, cx: &mut Context<Root>) -> Div {
                         .py_1()
                         .rounded_md()
                         .cursor_pointer()
-                        .hover(move |s| s.bg(rgb(p.row_fill)))
+                        .hover(move |s| s.bg(rgb(p.hover)))
                         .active(move |s| s.bg(rgb(p.pressed)))
                         .on_click(cx.listener(move |root, _, _, cx| {
                             act(root, Act::Pick(install.clone()), cx)
@@ -839,7 +841,14 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
                 .max_w(px(PREVIEW_MAX))
                 .object_fit(ObjectFit::Contain)
                 .with_loading(move || {
+                    // Holds the preview's space while it decodes, so the
+                    // recipe below never jumps up.
                     div()
+                        .w_full()
+                        .h(px(PREVIEW_RESERVE))
+                        .flex()
+                        .items_center()
+                        .justify_center()
                         .text_color(rgb(muted))
                         .child("Loading preview...")
                         .into_any_element()
