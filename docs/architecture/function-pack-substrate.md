@@ -29,8 +29,15 @@ crates/fno-agents/src/spawn/plugins/verify.rs     pure two-axis verification
 crates/fno-agents/src/spawn/plugins/registry.rs   installed packs, digests, activation receipts
 crates/fno-agents/src/spawn/plugins/activate.rs   projection into the plugin role layer
 crates/fno-agents/src/spawn/plugins/cli.rs        the `fno config plugins` administrative surface
+crates/fno-agents/src/spawn/plugins/ui.rs         mod and layout declarations
+crates/fno-agents/src/spawn/plugins/install.rs    URL install behind the consent boundary
+crates/fno-agents/src/spawn/plugins/gallery.rs    published packs from GitHub topics
+crates/fno-agents/src/spawn/plugins/open.rs       show one mod: a feed table or a checked command
 plugins/growth-studio/                      the first pack (content, not code)
+plugins/fno-panels/                         the first-party panels as mods
 ```
+
+Mods and layouts, the UI components, have their own page: [mods-and-layouts](mods-and-layouts.md).
 
 `manifest.rs` and `verify.rs` are pure over their inputs. `registry.rs` and `activate.rs` are the only modules that touch the filesystem outside a read. The `fno` front door claims `fno config plugins` and the moved `fno plugins` spelling, and execs `fno-agents spawn-overlay plugins`.
 

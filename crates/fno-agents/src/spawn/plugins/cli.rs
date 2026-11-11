@@ -608,17 +608,37 @@ fn toggle(ctx: &Ctx, target: &str, on: bool) -> i32 {
         ));
         return 2;
     };
-    let ids: Vec<String> = match load_manifest(Path::new(&pack.manifest_path)) {
-        Ok(manifest) => manifest
-            .mods
-            .iter()
-            .map(|m| m.id.clone())
-            .chain(manifest.layouts.iter().map(|l| l.id.clone()))
-            .collect(),
-        Err(_) => return ctx.error(&format!("manifest for {pack_id} no longer readable")),
-    };
+    // A native mod is a view the mux paints itself: built in, never off.
+    let (ids, native): (Vec<String>, Vec<String>) =
+        match load_manifest(Path::new(&pack.manifest_path)) {
+            Ok(manifest) => (
+                manifest
+                    .mods
+                    .iter()
+                    .map(|m| m.id.clone())
+                    .chain(manifest.layouts.iter().map(|l| l.id.clone()))
+                    .collect(),
+                manifest
+                    .mods
+                    .iter()
+                    .filter(|m| m.native.is_some())
+                    .map(|m| m.id.clone())
+                    .collect(),
+            ),
+            Err(_) => return ctx.error(&format!("manifest for {pack_id} no longer readable")),
+        };
+    if let Some(id) = component.filter(|id| !on && native.iter().any(|n| n.as_str() == *id)) {
+        ctx.error(&format!(
+            "{pack_id}/{id} is a built-in view; it cannot be switched off"
+        ));
+        return 2;
+    }
     let chosen: Vec<String> = match component {
-        None => ids.clone(),
+        None => ids
+            .iter()
+            .filter(|id| !native.contains(*id))
+            .cloned()
+            .collect(),
         Some(id) if ids.iter().any(|known| known == id) => vec![id.to_string()],
         Some(id) => {
             ctx.error(&format!(

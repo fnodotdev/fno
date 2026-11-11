@@ -86,3 +86,6 @@ pub(crate) fn random_hex(n: usize) -> String {
     }
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
+
+#[cfg(test)]
+mod mods_tests;

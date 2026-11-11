@@ -1,0 +1,37 @@
+# The first-party panels, declared on the same mod contract a third-party
+# pack uses. Content, not code: the host reads this file by path.
+# docs/architecture/mods-and-layouts.md is the contract.
+id: fno-panels
+version: 0.1.0
+footnote_compat:
+  minimum: "0.3.0"
+
+mods:
+  - id: backlog-board
+    title: Backlog board
+    summary: The backlog as columns, from intake to done.
+    preview: mods/backlog-board/preview.png
+    recipe: mods/backlog-board/RECIPE.md
+    native: backlog-board
+
+  - id: review-ledger
+    title: Review ledger
+    summary: The newest review verdict on each branch, newest first.
+    preview: mods/review-ledger/preview.png
+    recipe: mods/review-ledger/RECIPE.md
+    feed:
+      argv: [fno-agents, review-summary, --ledger]
+      columns:
+        - {key: /ts, title: when}
+        - {key: /branch, title: branch}
+        - {key: /head, title: head}
+        - {key: /verdict, title: verdict}
+        - {key: /round, title: round}
+        - {key: /findings, title: findings}
+
+  - id: decisions
+    title: Decisions
+    summary: Laws and rulings, with the door that records a new one.
+    preview: mods/decisions/preview.png
+    recipe: mods/decisions/RECIPE.md
+    native: decisions

@@ -271,7 +271,7 @@ const LEDGER_ROWS: usize = 40;
 
 /// The review ledger feed: the newest attestation on each branch, newest
 /// first, as the rows a review-ledger panel draws.
-fn ledger(events_text: &str, limit: usize) -> Value {
+pub(crate) fn ledger(events_text: &str, limit: usize) -> Value {
     let mut rows: Vec<(String, AttestationRow)> = index_rows(events_text)
         .into_iter()
         .filter_map(|(branch, rows)| rows.last().cloned().map(|row| (branch, row)))

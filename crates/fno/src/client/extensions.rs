@@ -29,6 +29,9 @@ pub(crate) struct Component {
     pub(crate) enabled: bool,
     #[serde(default)]
     pub(crate) runs_code: bool,
+    /// `run`, `feed` or `native`; a layout carries none.
+    #[serde(default)]
+    pub(crate) kind: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -73,6 +76,8 @@ pub(crate) enum Act {
     Browse,
     /// A gallery row: open the URL field holding its install command's URL.
     Pick(String),
+    /// Show `pack/mod` in a pane on the right through `fno config plugins open`.
+    Show(String),
 }
 
 /// The page state: the last reads and the open URL field.
@@ -161,13 +166,24 @@ pub(super) fn rows(view: &View) -> (Vec<PopupRow>, Vec<AuxAction>) {
         Some(Ok(list)) => {
             for (pack, c) in list {
                 let target = format!("{pack}/{}", c.id);
-                let code = if c.runs_code { " · runs code" } else { "" };
-                rows.push(entry(
-                    if c.enabled { "☑" } else { "☐" },
-                    format!("{} · {target}{code}", c.title),
-                    true,
-                ));
-                actions.push(AuxAction::Extension(Act::Switch(target, !c.enabled)));
+                if c.kind == "native" {
+                    rows.push(inert(format!("■ {} · {target} · built in", c.title)));
+                } else {
+                    let code = if c.runs_code { " · runs code" } else { "" };
+                    rows.push(entry(
+                        if c.enabled { "☑" } else { "☐" },
+                        format!("{} · {target}{code}", c.title),
+                        true,
+                    ));
+                    actions.push(AuxAction::Extension(Act::Switch(
+                        target.clone(),
+                        !c.enabled,
+                    )));
+                }
+                if c.enabled && (c.kind == "feed" || c.kind == "run") {
+                    rows.push(entry(" ", "  open in a pane".into(), true));
+                    actions.push(AuxAction::Extension(Act::Show(target)));
+                }
                 for (word, path) in [("preview", &c.preview), ("recipe", &c.recipe)] {
                     if !path.is_empty() {
                         rows.push(entry(" ", format!("  {word}"), true));
@@ -215,27 +231,29 @@ pub(super) fn submit(view: &mut View, url: String) -> bool {
         return false;
     }
     view.extensions.url = None;
+    let notice = in_pane(&["install", url.as_str()], &format!("install {url}"));
+    view.set_notice(notice);
+    view.extensions.installed = None;
+    true
+}
+
+/// Run `fno config plugins <args>` in a new pane on the right, so its output
+/// and any prompt reach a real terminal. Returns the notice to show.
+fn in_pane(args: &[&str], what: &str) -> String {
     let fno = crate::server::fno_bin();
     let fno_text = fno.to_string_lossy().into_owned();
     let spawned = std::process::Command::new(&fno)
         .args(["mux", "pane", "run", "--split", "right", "--"])
-        .args([
-            fno_text.as_str(),
-            "config",
-            "plugins",
-            "install",
-            url.as_str(),
-        ])
+        .args([fno_text.as_str(), "config", "plugins"])
+        .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
-    view.set_notice(match spawned {
-        Ok(_) => format!("install: {url} opened in a pane on the right"),
-        Err(e) => format!("install: cannot open a pane: {e}"),
-    });
-    view.extensions.installed = None;
-    true
+    match spawned {
+        Ok(_) => format!("{what}: opened in a pane on the right"),
+        Err(e) => format!("{what}: cannot open a pane: {e}"),
+    }
 }
 
 pub(super) async fn act(
@@ -261,6 +279,10 @@ pub(super) async fn act(
             let loaded = file_viewer::load(PathBuf::from(path), None, Default::default());
             view.aux = None;
             return file_viewer::open(view, loaded, sock_w).await;
+        }
+        Act::Show(target) => {
+            let notice = in_pane(&["open", target.as_str()], &target);
+            view.set_notice(notice);
         }
         Act::Install => {
             if view.extensions.url.is_none() {

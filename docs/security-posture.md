@@ -50,6 +50,10 @@ For Claude-hosted workers whose PreToolUse hooks run footnote's plugin, there is
 
 What the guard does not cover: an effect hidden inside a script or a raw `curl` (the Bash rows match leading command tokens). It also does not cover a harness whose PreToolUse hooks footnote does not wire (codex, opencode, pi, agy). The merge effect stays with `authorized-merge` and git-protection. The tool list remains the outer boundary. The effect guard narrows what a hooked tool call can do inside it.
 
+## Installing a pack from a URL
+
+`fno config plugins install <git-url>` runs third-party content, so it stages before anything runs. The clone points hooks at `/dev/null` and fetches no submodules. The pack must verify on the staged tree and may carry only mods and layouts: roles, skills, agents, adapters, workflows and evaluators install from a local path only. A sha256 over every file binds the consent. An attended terminal says yes, or a principal approves the `local.plugin-install` request for that digest with `fno inbox approvals decide`. A mod that runs its own program starts off, and every launch hashes the pack again and refuses on a change. The gallery lists repos and never installs one; every row reads "not reviewed by fno". Full contract: [mods-and-layouts](architecture/mods-and-layouts.md).
+
 ## Code scanning dispositions
 
 CodeQL runs through advanced setup (`.github/workflows/codeql.yml` with `.github/codeql/codeql-config.yml`). The analyze job is skipped until the repository switches from default setup to advanced setup. The gate is the `CODEQL_ADVANCED_SETUP` repository variable. Between merge and the switch, default setup keeps its weekly scan and the skipped job keeps main green. Rule classes judged not to apply are excluded in the config or dismissed per alert, with the reasons below.

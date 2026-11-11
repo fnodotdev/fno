@@ -225,3 +225,41 @@ async fn lane_custom_entry_enter_refuses_an_invalid_color_without_saving() {
         "nothing saved; the field stays open for a fix"
     );
 }
+
+/// The Extensions tab: one switch per mod from `ls --json`, a built-in view
+/// without one, and a failed read as one notice row with no mod rows.
+#[test]
+fn extensions_tab_lists_switches_and_names_a_failed_read() {
+    use crate::client::extensions::{parse_installed, Act};
+    let listing = br#"{"packs": [{"pack_id": "p", "mods": [
+        {"id": "on", "title": "On", "enabled": true, "kind": "feed", "preview": "/x.png"},
+        {"id": "off", "title": "Off", "enabled": false, "kind": "run", "runs_code": true},
+        {"id": "board", "title": "Board", "enabled": true, "kind": "native"}]}]}"#;
+    let mut v = two_pane_view();
+    v.extensions.installed = Some(parse_installed(Ok(listing.to_vec())));
+    let (rows, actions) = v.settings_rows_for(SettingsTab::Extensions);
+    let text = format!("{rows:?}");
+    assert!(text.contains("☑") && text.contains("☐"), "{text}");
+    assert!(text.contains("Board · p/board · built in"), "{text}");
+    let switches: Vec<_> = actions
+        .iter()
+        .filter_map(|a| match a {
+            AuxAction::Extension(Act::Switch(t, on)) => Some((t.as_str(), *on)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(switches, [("p/on", false), ("p/off", true)]);
+
+    v.extensions.installed = Some(parse_installed(Err(
+        "`fno config plugins ls --json` exited 1".into(),
+    )));
+    let (rows, actions) = v.settings_rows_for(SettingsTab::Extensions);
+    let text = format!("{rows:?}");
+    assert!(
+        text.contains("`fno config plugins ls --json` exited 1"),
+        "{text}"
+    );
+    assert!(!actions
+        .iter()
+        .any(|a| matches!(a, AuxAction::Extension(Act::Switch(..)))));
+}
