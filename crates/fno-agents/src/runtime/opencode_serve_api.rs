@@ -219,10 +219,13 @@ pub(super) fn create_body(
 /// the native command route with its arguments as `text`; prose rides
 /// `/prompt`. 2.x `run` dropped `--command`, so this route is the only one that
 /// expands a command template server-side.
+/// Only a real command token routes there: a path-led line (`/tmp/x is
+/// broken`) is prose, or the serve would answer CommandNotFound.
 pub(super) fn turn_request(session_id: &str, message: &str) -> (String, serde_json::Value) {
     if let Some(rest) = message.strip_prefix('/') {
         let (name, args) = rest.split_once(' ').unwrap_or((rest, ""));
-        if !name.is_empty() {
+        let first = message.split_whitespace().next().unwrap_or("");
+        if crate::provider::parse_command_token(first).is_some() {
             return (
                 format!("/api/session/{session_id}/command"),
                 serde_json::json!({"name": name, "text": args}),
@@ -307,6 +310,8 @@ mod tests {
         let (path, body) = turn_request("ses_a", "do the thing");
         assert_eq!(path, "/api/session/ses_a/prompt");
         assert_eq!(body, serde_json::json!({"text": "do the thing"}));
+        let (path, _) = turn_request("ses_a", "/tmp/x is broken");
+        assert_eq!(path, "/api/session/ses_a/prompt", "a path is prose");
     }
 
     #[test]
