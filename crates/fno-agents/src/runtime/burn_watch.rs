@@ -153,6 +153,9 @@ struct Counters {
     conflict_merges: Option<u32>,
     diff_lines: Option<u64>,
     hours: Option<i64>,
+    /// Context only, never trips: the node's age from its earliest execute
+    /// start, labeled in the notice beside the worker's own hours.
+    node_hours: Option<i64>,
     slot_wait_min: Option<i64>,
 }
 
@@ -668,7 +671,13 @@ fn diff_lines(cwd: &str, base: &str, runner: Runner) -> Option<u64> {
 
 /// The five counters for one in-scope worker's checkout. `base` unset, a
 /// probe that dies, an unreadable listing: each reads None and never trips.
-fn sample_counters(cwd: &str, facts: &NodeFacts, runner: Runner, now_epoch: i64) -> Counters {
+fn sample_counters(
+    cwd: &str,
+    facts: &NodeFacts,
+    worker_started_at: Option<i64>,
+    runner: Runner,
+    now_epoch: i64,
+) -> Counters {
     let base = first_line(
         &runner(
             &[
@@ -691,7 +700,12 @@ fn sample_counters(cwd: &str, facts: &NodeFacts, runner: Runner, now_epoch: i64)
             .as_deref()
             .and_then(|b| conflict_merges(cwd, b, runner)),
         diff_lines: base.as_deref().and_then(|b| diff_lines(cwd, b, runner)),
-        hours: facts.first_execute_at.map(|t| (now_epoch - t) / 3600),
+        // The burn clock reads THIS worker's own session start, never the
+        // node's earliest execute row: a node's age across a handoff or
+        // repo cutover says nothing about the live worker (lead ruling).
+        // The node's age rides the notice as a labeled context line.
+        hours: worker_started_at.map(|t| (now_epoch - t) / 3600),
+        node_hours: facts.first_execute_at.map(|t| (now_epoch - t) / 3600),
         slot_wait_min: crate::test_run::build_wait_since_ms(Path::new(cwd))
             .map(|since| (now_ms - since) / 60_000),
     }
@@ -897,7 +911,7 @@ fn escalation_trips(counters: &Counters, t: &Thresholds) -> Vec<String> {
     if t.hours > 0 {
         if let Some(h) = counters.hours {
             if h >= t.hours {
-                trips.push(format!("{h}h on the node (threshold {}h)", t.hours));
+                trips.push(format!("{h}h on this worker (threshold {}h)", t.hours));
             }
         }
     }
@@ -963,8 +977,8 @@ fn escalation_note_text(
     }
     if let Some(h) = counters.hours {
         if let Some(text) = reading(
-            tripped.iter().any(|t| t.contains("h on the node")),
-            format!("{h}h on the node"),
+            tripped.iter().any(|t| t.contains("h on this worker")),
+            format!("{h}h on this worker"),
         ) {
             untripped.push(text);
         }
@@ -982,9 +996,13 @@ fn escalation_note_text(
     } else {
         untripped.join("; ")
     };
+    let node_age = counters
+        .node_hours
+        .map(|h| format!(" Node age: {h}h."))
+        .unwrap_or_default();
     format!(
         "{SENDER_LINE} node {node}, session {sid} on {harness} / {model}: {}. \
-         Other readings: {untripped_word}. The team chooses the destination: \
+         Other readings: {untripped_word}.{node_age} The team chooses the destination: \
          `skills/target/scripts/handoff.sh --harness <harness> --model <model>` \
          (docs/architecture/target-self-handoff.md). Nothing was moved. \
          This note is sent once per worker.",
@@ -1386,6 +1404,7 @@ fn run_pass(
             let counters = sample_counters(
                 cwd,
                 facts.get(node).unwrap_or(&NodeFacts::default()),
+                scoped.started_at,
                 runner,
                 now_epoch,
             );
