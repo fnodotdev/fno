@@ -2163,14 +2163,27 @@ mod tests {
             .iter()
             .find(|a| a.get(2).is_some_and(|p| p.contains("actions/runs?")))
             .expect("two gh reads");
-        assert!(listing.get(2).is_some_and(|p| p.contains("branch=feature/x")), "{listing:?}");
         assert!(
-            listing.get(2).is_some_and(|p| p.contains("head_sha=1111111111111111111111111111111111111111")),
+            listing
+                .get(2)
+                .is_some_and(|p| p.contains("branch=feature/x")),
             "{listing:?}"
         );
-        assert!(listing.get(2).is_some_and(|p| p.contains("status=failure")), "{listing:?}");
+        assert!(
+            listing
+                .get(2)
+                .is_some_and(|p| p.contains("head_sha=1111111111111111111111111111111111111111")),
+            "{listing:?}"
+        );
+        assert!(
+            listing.get(2).is_some_and(|p| p.contains("status=failure")),
+            "{listing:?}"
+        );
         assert_eq!(listing.get(4), Some(&RUNS_AT_HEAD_JQ.to_string()));
-        assert_eq!(calls.first().and_then(|a| a.get(4)), Some(&PR_HEAD_JQ.to_string()));
+        assert_eq!(
+            calls.first().and_then(|a| a.get(4)),
+            Some(&PR_HEAD_JQ.to_string())
+        );
     }
 
     #[test]
@@ -2226,10 +2239,15 @@ mod tests {
         let trips = escalation_trips(&trip, &t);
         assert_eq!(trips.len(), 1, "{trips:?}");
         assert!(
-            trips.first().is_some_and(|t| t.contains("cli-ci, guards, main-binaries")),
+            trips
+                .first()
+                .is_some_and(|t| t.contains("cli-ci, guards, main-binaries")),
             "{trips:?}"
         );
-        assert!(trips.first().is_some_and(|t| t.contains("threshold 3")), "{trips:?}");
+        assert!(
+            trips.first().is_some_and(|t| t.contains("threshold 3")),
+            "{trips:?}"
+        );
         let clean = Counters {
             red: Some(Vec::new()),
             ..Default::default()
