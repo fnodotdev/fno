@@ -832,16 +832,17 @@ thread = "serve-external-directory"
 headless = "unmeasured"
 
 # The thread lane's carrier row (spawn flag passthrough; see claude's for the
-# vocabulary). The serve lane maps two axes beside the model. Effort lands as
-# opencode's persisted model variant: dispatch_opencode_serve calls
-# apply_opencode_variant(selected_model, effort), writing
-# ~/.local/state/opencode/model.json (live row read 2026-10-05:
-# "zai-coding-plan/glm-5.3-flash": "high"). The state-root grant rides
-# FNO_WORKER_ADD_DIRS -> per-session external_directory rules, published for
-# every non-pane lane independently of the operator --add-dir axis, which
-# refuses on this lane (client.rs fail-closed matrix). Every other flag still
-# demotes to the pane. Steering and readback are implemented by the shared
-# attach writer, and the journey names the evidence for this seat.
+# vocabulary). The serve lane maps two axes beside the model. Effort rides the
+# spawn route's --effort. On 1.x it lands as opencode's persisted model
+# variant: dispatch_opencode_serve calls apply_opencode_variant(selected_model,
+# effort), writing ~/.local/state/opencode/model.json (live row read
+# 2026-10-05: "zai-coding-plan/glm-5.3-flash": "high"). On 2.x it rides the
+# session's model ref as its variant. The serve-level allow-all is the whole
+# directory grant; no per-session external_directory rules are written. The
+# operator --add-dir axis refuses on this lane (client.rs fail-closed matrix).
+# Every other flag still demotes to the pane. Steering and readback run on the
+# 1.x attach writer or the 2.x /api/session routes, and the journey names the
+# evidence for this seat.
 [harness.opencode.thread]
 carries = ["model", "effort"]
 passthrough = ["-m", "--model"]
@@ -850,7 +851,9 @@ passthrough = ["-m", "--model"]
 # (the title names it), the turn runs on the shared serve, and the row binds
 # at the worker's session report - the same posture the claude native lane
 # holds. The {payload} hole marks the slot; the tail owns the tokens
-# (opencode_run_tail at dispatch). {serve_url} never drops.
+# (opencode_run_tail at dispatch). {serve_url} never drops. This line is the
+# 1.x launch. 2.x `run` has no --attach and no --command, so a 2.x serve mints
+# the session and starts its turn over POST /api/session and /command|/prompt.
 [harness.opencode.launch]
 argv = ["opencode", "run", "--attach", "{serve_url}", "--title", "{name}", "--dangerously-skip-permissions", "-m", "{model}", "{payload}"]
 [harness.opencode.permission_response.allow_once]

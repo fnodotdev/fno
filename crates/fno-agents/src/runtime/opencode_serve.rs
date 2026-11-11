@@ -256,6 +256,23 @@ fn probe_health(
 /// busy node event loop can miss one 3s probe while workers run turns, and
 /// the unhealthy branch SIGTERMs the serve (killing every worker session on
 /// it). Three attempts, 1s apart - slow answers survive, dead ones do not.
+/// The route set a freshly booted serve answers, or `None` while it answers
+/// neither. A 2.x binary gets the 2.x routes. Early 2.x serves still answered
+/// the 1.x set (a recorded run on 2.0.19 and 2.2.2 worked over it), so a 2.x
+/// binary that answers only `/global/health` keeps the 1.x path it ran on.
+fn boot_routes(
+    base_url: &str,
+    token: &str,
+    contract: OpencodeContract,
+) -> Option<OpencodeContract> {
+    if serve_healthy(base_url, token, contract) {
+        return Some(contract);
+    }
+    (contract == OpencodeContract::V2
+        && probe_health(base_url, token, OpencodeContract::V1, HEALTH_TIMEOUT).is_some())
+    .then_some(OpencodeContract::V1)
+}
+
 fn serve_healthy(base_url: &str, token: &str, contract: OpencodeContract) -> bool {
     for attempt in 0..3 {
         if attempt > 0 {
@@ -501,14 +518,14 @@ impl crate::harness_daemon::HarnessDaemonAdapter for OpenCodeDaemonAdapter<'_> {
             if let Ok(log_text) = std::fs::read_to_string(&log_path) {
                 if let Some(port) = serve_port_from_log(&log_text) {
                     let base_url = format!("http://127.0.0.1:{port}");
-                    if serve_healthy(&base_url, &token, contract) {
+                    if let Some(api) = boot_routes(&base_url, &token, contract) {
                         let record = serde_json::json!({
                             "base_url": base_url,
                             "port": port,
                             "pid": pid,
                             "pid_start": pid_start,
                             "token": token,
-                            "api": contract.label(),
+                            "api": api.label(),
                         });
                         let incarnation = pid_start
                             .map(|start| format!("{pid}:{start}"))
