@@ -495,6 +495,9 @@ mod tests {
         let _home = crate::AgentsHomeEnvGuard::set(&root);
         let home = crate::paths::AgentsHome::from_env();
         let path = home.test_pause_json();
+        // The announce path reads the registry store; an uninitialized home
+        // fails the send, so seed it the way the hold test does.
+        crate::state::update_registry(&home.registry_json(), |_r| ()).unwrap();
         // A pause record an older build wrote is what makes this pass a
         // lift rather than a first hold.
         write_state(
