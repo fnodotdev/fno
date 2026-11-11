@@ -10,7 +10,8 @@
 //! path. It reuses the shared `subprocess_ask` primitives (stdin `/dev/null`,
 //! watchdog, process-group SIGINT) rather than duplicating agy's error taxonomy.
 //!
-//! `ask` (resume-by-name) routes serve rows through the shared attach writer;
+//! `ask` (resume-by-name) routes serve rows through the shared turn driver,
+//! and `ask --answer allow_once|deny` replies to the row's pending permission ask;
 //! other opencode rows still receive the explicit refusal instead of falling
 //! through to `bin/client.rs`'s generic "provider is required" text.
 //! Mirrors [`crate::agy_ask::maybe_run_agy_ask`]'s shape.
@@ -58,6 +59,16 @@ pub fn maybe_run_opencode_ask(
     if existing.is_some_and(|entry| {
         entry.harness_name() == "opencode" && entry.substrate.as_deref() == Some("thread")
     }) {
+        if let Some(choice) = params.get("answer").and_then(|v| v.as_str()) {
+            let outcome = crate::opencode_serve::answer_registered_session(home, name, choice);
+            if !outcome.stderr.is_empty() {
+                eprintln!("{}", outcome.stderr.trim_end());
+            }
+            if !outcome.stdout.is_empty() {
+                println!("{}", outcome.stdout.trim_end());
+            }
+            return Some(outcome.exit_code);
+        }
         let message = params.get("message").and_then(|v| v.as_str()).unwrap_or("");
         let from_name_stamped =
             crate::mail_cli::send::stamp_from(params.get("from_name").and_then(|v| v.as_str()));

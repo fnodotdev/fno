@@ -1,6 +1,6 @@
 //! The unattended journey for opencode's serve lane. It covers launch,
-//! attach-writer steering, structured readback, and session liveness after the
-//! writer exits. Cleanup deletes the session and stops the private serve.
+//! turn-driver steering, structured readback, and session liveness after the
+//! driver exits. Cleanup deletes the session and stops the private serve.
 //!
 //! Server-kill survival, review-lane selection, and viewport materialisation
 //! remain separate environment checks. They must not be inferred from a
@@ -93,11 +93,10 @@ fn opencode_bg_worker_completes_unattended_over_serve() {
 
     let serve = ensure_serve(&home).expect("serve boots unattended");
     let _reaper = ServeReaper(serve.pid);
-    // Boot proof: the generated config carries the unattended permission posture.
-    let config = std::fs::read_to_string(home.root().join("opencode-serve-config.json")).unwrap();
+    // Boot proof: fno writes no permission config; the user's grants bind.
     assert!(
-        config.contains("allow") && config.contains("*"),
-        "config: {config}"
+        !home.root().join("opencode-serve-config.json").exists(),
+        "fno writes no serve permission config"
     );
 
     // The dispatch under test: the public entry, so the env-read dirs path is
@@ -169,10 +168,10 @@ fn opencode_bg_worker_completes_unattended_over_serve() {
     assert_eq!(row.harness.as_deref(), Some("opencode"));
     assert_eq!(row.harness_session_id.as_deref(), Some(session_id.as_str()));
     assert_eq!(row.substrate.as_deref(), Some("thread"));
-    assert!(row.pid.is_none(), "writer pid is not session liveness");
+    assert!(row.pid.is_none(), "driver pid is not session liveness");
 
-    // Structured capture is the SERVE's message readback, not the writer's
-    // stdout (the attach writer prints nothing - verified live). The readback
+    // Structured capture is the SERVE's message readback, not the driver's
+    // stdout (the driver prints only diagnostics). The readback
     // above already proved role/text; pin the structured fields a pane scrape
     // could never give: model identity and message ids.
     {
@@ -203,7 +202,7 @@ fn opencode_bg_worker_completes_unattended_over_serve() {
         );
     }
 
-    // The writer's log is the diagnostics trail (its stderr; stdout is empty
+    // The driver's log is the diagnostics trail (its stderr; stdout is empty
     // on the attach path). Existence is the claim - non-emptiness is not,
     // because a quiet run writes nothing.
     assert!(
@@ -212,10 +211,10 @@ fn opencode_bg_worker_completes_unattended_over_serve() {
             .join("logs")
             .join("wk-journey.jsonl")
             .exists(),
-        "writer log file missing"
+        "driver log file missing"
     );
 
-    // Steering reuses the launch writer and confirms a new serve message by
+    // Steering reuses the launch driver and confirms a new serve message by
     // id. The recalled token is the positive session marker for the second
     // turn; a merely non-empty reply would only prove transport.
     let recalled = "serve-session-recall-efa4";
@@ -247,9 +246,9 @@ fn opencode_bg_worker_completes_unattended_over_serve() {
         recalled_reply.is_some(),
         "second turn did not recall {recalled}"
     );
-    // The serve session remains addressable after the one-turn writer exits.
+    // The serve session remains addressable after the one-turn driver exits.
     fetch_session(&serve.base_url, &serve.token, &session_id)
-        .expect("session liveness readback after writer exit");
+        .expect("session liveness readback after driver exit");
 
     // Cleanup: session deleted; the reaper drops the serve pid on exit.
     delete_session(&serve.base_url, &serve.token, &session_id).expect("session teardown");
