@@ -411,13 +411,15 @@ mod tests {
         assert!(pending.label(now_ms).ends_with("pending"));
     }
 
-    /// The ranking drops non-matches and keeps navigator tiers: a full
-    /// substring hit ranks below a name start but stays above a drop.
+    /// The ranking drops non-matches and keeps navigator tiers: a full-word
+    /// hit is the word-start tier (2), a mid-word substring (no word starts
+    /// with it) is tier 3, and a non-match drops.
     #[test]
     fn score_tiers_and_drop() {
         let r = row("why did the gate refuse?", "kilo", "answered", false);
         assert_eq!(r.score(""), Some(0));
-        assert_eq!(r.score("gate"), Some(3));
+        assert_eq!(r.score("gate"), Some(2));
+        assert_eq!(r.score("use"), Some(3));
         assert_eq!(r.score("kilo"), Some(2));
         assert_eq!(r.score("zzz"), None);
     }
