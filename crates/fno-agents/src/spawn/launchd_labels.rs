@@ -188,7 +188,7 @@ pub fn is_non_aqua_manager(manager_name: &str) -> bool {
 pub fn supervisor_birth_refusal() -> Option<String> {
     const CURE: &str = "From a GUI terminal, run `claude daemon stop --any`, \
          then start any `claude --bg` command; the restart recipe is the \
-         `claude supervisor bootstrap` entry in docs/fleet-faq.md.";
+         `claude supervisor` entry in docs/fleet-faq.md.";
     if inside_fno_launchd_job() {
         return Some(format!(
             "this process runs inside an fno launchd job, and a supervisor born \

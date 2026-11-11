@@ -63,7 +63,7 @@ elif [[ "$DNS_BROKEN" == "1" ]]; then
 fi
 
 if [[ -n "$REASON" ]]; then
-    printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"[fno] %s Cure: from a GUI terminal, run \`claude daemon stop --any\`, then start any \`claude --bg\` command; the recipe is the claude supervisor bootstrap entry in docs/fleet-faq.md."}}\n' "$REASON"
+    printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"[fno] %s Cure: from a GUI terminal, run \`claude daemon stop --any\`, then start any \`claude --bg\` command; the recipe is the claude supervisor entry in docs/fleet-faq.md."}}\n' "$REASON"
 fi
 
 exit 0

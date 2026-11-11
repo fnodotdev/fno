@@ -1948,7 +1948,7 @@ mod tests {
             &[],
             &["c1".to_string()],
             &["k1".to_string()],
-            |_| {},
+            |_| crate::claude_supervisor::BirthVerdict::Proceed,
             |_, name| {
                 revived.lock().unwrap().push(name.to_string());
                 ReceiptRow::new(name, "revived", "x")

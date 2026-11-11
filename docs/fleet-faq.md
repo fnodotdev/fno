@@ -465,7 +465,7 @@ The same read reported both branches as 32 commits behind `main`. That is the no
 
 *Graduates to:* a receipt from the graph commands naming the elapsed time, so a caller can tell a slow write from a lost one.
 
-## Every claude bg session loses DNS, gh, ps and the keychain at once
+## A claude supervisor born outside the GUI session breaks DNS, gh and ps for every session it hosts
 
 **Answer.** A claude supervisor born outside the user's Aqua GUI session hosts sessions that inherit its broken bootstrap. Every hosted session loses the same services at the same moment. `getaddrinfo` cannot resolve `github.com`. `scutil --dns` prints nothing. `pgrep` says `Cannot get process list`. The Tailscale CLI says `Failed to load preferences`. When its last client disconnects, the claude daemon exits. The supervisor serving the fleet is the one the most recent client birthed. A client typed in an ssh login, a bad pane keeper, or an fno launchd job births the supervisor there. When the job is replaced, a supervisor born inside an fno launchd job dies to DNS and keychain. fno refuses to birth a supervisor from those contexts and exits 13 with the cure. A SessionStart hook names the state from inside a hosted session. A bare `claude` typed in a non-GUI pane never reaches fno, so it births the bad supervisor anyway.
 
