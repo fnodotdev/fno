@@ -662,7 +662,7 @@ jobs:
             exit 0
           fi
           echo "fno version: ${VERSION}"
-          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/bllshttng/homebrew-fno.git" tap
+          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/fnodotdev/homebrew-fno.git" tap
           # The seed is the structure source: copy it over the tap formula
           # before the patch, so the tap's url shape and install block move
           # with this repo's seed on every release instead of diverging.

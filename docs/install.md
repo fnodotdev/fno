@@ -46,7 +46,7 @@ Every other harness has its own page under [harnesses/](harnesses/). [HARNESSES.
 
 ### The CLI alone
 
-`curl -fsSL fno.sh | sh` installs the release tarball into `~/.fno/install/bin`. The tarball holds the four Rust binaries: the `fno` front door and the three `fno-agents` binaries. `brew install bllshttng/fno/fno` installs the same tarball. The PyPI wheel (`uv tool install fno` or `pip install fno`) is a bridge for old installs. It carries the same four binaries and no Python code. An update moves it to the tarball install. `cargo install fno fno-agents` is the source route. It builds the front door and the three `fno-agents` binaries into the cargo bin dir with your Rust toolchain.
+`curl -fsSL fno.sh | sh` installs the release tarball into `~/.fno/install/bin`. The tarball holds the four Rust binaries: the `fno` front door and the three `fno-agents` binaries. `brew install fnodotdev/fno/fno` installs the same tarball. The PyPI wheel (`uv tool install fno` or `pip install fno`) is a bridge for old installs. It carries the same four binaries and no Python code. An update moves it to the tarball install. `cargo install fno fno-agents` is the source route. It builds the front door and the three `fno-agents` binaries into the cargo bin dir with your Rust toolchain.
 
 ### Local clone
 
