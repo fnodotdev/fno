@@ -43,7 +43,7 @@ A mod declares exactly one render path:
 | `run` | The pack's own argv, from the pack directory. | off, until switched on |
 | `native` | Nothing. It names a view the mux paints itself, such as `backlog-board`. | on, and stays on |
 
-Verify checks each mod and layout: a safe id, one render path, a feed that starts with `fno` or `fno-agents`, a `preview` that is a PNG under 2 MiB and 4096 pixels a side, a `recipe` that exists, and both inside the pack directory. A layout binds exactly one `anchor` slot, every tree leaf names a slot, and every `mod` binding names a mod of the same pack.
+Verify checks each mod and layout. The id is one safe path component, and the mod has one render path. A feed starts with `fno` or `fno-agents`. The `preview` is a PNG under 2 MiB and 4096 pixels a side. The `recipe` exists. Both files sit inside the pack directory. A layout binds exactly one `anchor` slot, every tree leaf names a slot, and every `mod` binding names a mod of the same pack.
 
 A pack that declares no mods or layouts keeps the digest it had before these fields existed.
 
@@ -66,10 +66,10 @@ The mux settings modal has an Extensions tab. It reads the same `ls --json` and 
 A URL install runs third-party content, so no step before consent lets that content run.
 
 1. Stage. A shallow clone with `core.hooksPath=/dev/null` and no submodules, into `<role root>/.packs/.staging-*`. No repo hook, submodule or script runs.
-2. Measure. The manifest parses, verify passes on the staged tree, and a sha256 covers every file (path and bytes, sorted, `.git` excluded). A symlink refuses. A pack that declares roles, skills, agents, adapters, workflows or evaluators refuses: those reach agents, so they install from a local path only.
-3. Show. The consent card prints the URL, commit, content digest, every argv a mod runs or reads, every declared effect, and "not reviewed by fno".
-4. Consent. An attended terminal answers yes. Otherwise install files a `local.plugin-install` effect request bound to the content digest, prints `fno inbox approvals decide <digest> --as <principal> --approve`, and exits 2. A principal that config names for that class approves it, and the next install of the same commit proceeds. An agent can stage; only the operator consents.
-5. Commit. The tree moves to `<role root>/.packs/<pack>/` and the registry records the URL, commit, digest, who consented and when. Before `open` runs a command mod, it hashes the pack again and refuses on any change. A new commit is a new digest, so a new consent. Nothing updates on its own.
+2. Measure. The manifest parses and verify passes on the staged tree. A sha256 covers every file: path and bytes, sorted, `.git` left out. A symlink refuses. Roles, skills, agents, adapters, workflows and evaluators reach agents. A URL pack that declares one refuses, so those install from a local path only.
+3. Show. The consent card prints the URL, the commit and the content digest. It names every argv a mod runs or reads and every declared effect. It ends with "not reviewed by fno".
+4. Consent. An attended terminal answers yes. Otherwise install files a `local.plugin-install` effect request bound to the content digest. It prints `fno inbox approvals decide <digest> --as <principal> --approve` and exits 2. A principal that config names for that class approves it, and the next install of the same commit proceeds. An agent can stage. Only the operator consents.
+5. Commit. The tree moves to `<role root>/.packs/<pack>/`. The registry records the URL, the commit, the digest, the consenting principal and the time. Before `open` runs a command mod, it hashes the pack again and refuses on any change. A new commit is a new digest, so a new consent. Nothing updates on its own.
 
 ## Publish a pack
 

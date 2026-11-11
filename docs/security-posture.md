@@ -52,7 +52,7 @@ What the guard does not cover: an effect hidden inside a script or a raw `curl` 
 
 ## Installing a pack from a URL
 
-`fno config plugins install <git-url>` runs third-party content, so it stages before anything runs. The clone points hooks at `/dev/null` and fetches no submodules. The pack must verify on the staged tree and may carry only mods and layouts: roles, skills, agents, adapters, workflows and evaluators install from a local path only. A sha256 over every file binds the consent. An attended terminal says yes, or a principal approves the `local.plugin-install` request for that digest with `fno inbox approvals decide`. A mod that runs its own program starts off, and every launch hashes the pack again and refuses on a change. The gallery lists repos and never installs one; every row reads "not reviewed by fno". Full contract: [mods-and-layouts](architecture/mods-and-layouts.md).
+`fno config plugins install <git-url>` runs third-party content, so it stages before anything runs. The clone points hooks at `/dev/null` and fetches no submodules. The pack must verify on the staged tree, and it can carry only mods and layouts. Roles, skills, agents, adapters, workflows and evaluators install from a local path only. A sha256 over every file binds the consent. An attended terminal says yes, or a principal approves the `local.plugin-install` request for that digest with `fno inbox approvals decide`. A mod that runs its own program starts off, and every launch hashes the pack again and refuses on a change. The gallery lists repos and never installs one. Every row reads "not reviewed by fno". Full contract: [mods-and-layouts](architecture/mods-and-layouts.md).
 
 ## Code scanning dispositions
 

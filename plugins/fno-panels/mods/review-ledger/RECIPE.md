@@ -1,6 +1,6 @@
 # Review ledger
 
-The newest review verdict on each branch, newest first: when it posted, the branch, the reviewed head, pass or fail, the round, and the finding count.
+The newest review verdict on each branch, newest first. Each row shows the time, the branch, the reviewed head, the verdict, the round and the finding count.
 
 ## What it runs
 
