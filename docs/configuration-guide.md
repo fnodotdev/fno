@@ -376,5 +376,5 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `merge.architect.diff_chars` | int | `80000` | advanced | Maximum diff characters included with the complete changed-file list. |
 | `merge.architect.routes` | list[str] | `["claude-opus-5-5", "claude-opus", "codex-sol"]` | advanced | Named reader routes in preference order. Unsupported safe readers warn. |
 | `merge.architect.vision_paths` | list[str] | `[]` | advanced | Additional project vision files. Paths may be absolute or relative to the canonical repository. |
-| `merge.visual_paint_paths` | list[str] \| None | _(none)_ | advanced | Paint paths used for optional look evidence. Explicit head-scoped user declines retain authority. |
+| `merge.visual_paint_paths` | list[str] \| None | _(none)_ | advanced | Render-surface paths whose PRs hold the merge until a look at their head is approved. Explicit head-scoped user declines retain authority. |
 | `merge.visual_shot_workflows` | list[str] \| None | _(none)_ | advanced | Legacy look workflow setting. Missing looks no longer cancel CI. |
