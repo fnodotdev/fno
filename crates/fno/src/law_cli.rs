@@ -105,7 +105,7 @@ pub fn run(args: &[OsString]) -> i32 {
                 "stdin": stdin_text,
             })
             .to_string();
-            let attended = record_attended(payload, std::io::stdin().is_terminal());
+            let attended = record_attended(std::io::stdin().is_terminal());
             law_exec(&request, attended)
         }
         "stage" | "match" => {
@@ -206,15 +206,16 @@ fn stdin_requested(argv: &[String]) -> bool {
 /// Whether the record door rides attended. The operator proof is the
 /// caller's real terminal on the worker's fd 0, so a `set` typed at a
 /// terminal inherits stdin with the request on argv, the same shape
-/// retract uses. A `--decision-file -` payload must ride the piped
-/// request, and a caller without a terminal (a daemon or an agent lane)
-/// keeps the piped shape and resolves its identity from its own process
-/// truth; either way the door's tty proof stays unforgeable.
-fn record_attended(payload_requested: bool, stdin_is_terminal: bool) -> Attended {
-    if payload_requested || !stdin_is_terminal {
-        Attended::No
-    } else {
+/// retract uses; a `--decision-file -` payload the terminal already fed
+/// this process rides argv inside the request. A caller without a
+/// terminal (a daemon or an agent lane) keeps the piped shape and
+/// resolves its identity from its own process truth, so the door's tty
+/// proof stays unforgeable.
+fn record_attended(stdin_is_terminal: bool) -> Attended {
+    if stdin_is_terminal {
         Attended::Yes
+    } else {
+        Attended::No
     }
 }
 
@@ -327,17 +328,6 @@ mod tests {
             "--decision-file=plan.md".to_string()
         ]));
         assert!(!stdin_requested(&[]));
-    }
-
-    #[test]
-    fn set_rides_attended_only_at_a_terminal_without_a_stdin_payload() {
-        // The user at a terminal: the case the tty proof exists for.
-        assert!(matches!(record_attended(false, true), Attended::Yes));
-        // A `--decision-file -` payload rides the piped request.
-        assert!(matches!(record_attended(true, true), Attended::No));
-        // A daemon or an agent lane has no terminal; the piped shape stays.
-        assert!(matches!(record_attended(false, false), Attended::No));
-        assert!(matches!(record_attended(true, false), Attended::No));
     }
 
     #[test]

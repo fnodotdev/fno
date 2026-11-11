@@ -169,6 +169,40 @@ fn a_terminal_set_records_under_operator_authority() {
 }
 
 #[test]
+fn a_payload_read_from_the_terminal_rides_argv_attended() {
+    let fixture = Fixture::new();
+    let (code, output) = spawn_attended(
+        &fixture,
+        &json!({
+            "mode": "record",
+            "argv": ["payload-door", "--decision-file", "-"],
+            "stdin": "The terminal fed the decision text.",
+        })
+        .to_string(),
+    );
+    assert_eq!(code, 0, "attended payload record refused: {output}");
+    let (code, stdout, stderr) = spawn_piped(&fixture, &history_request("payload-door"));
+    assert_eq!(code, 0, "history reads: {stderr}");
+    let answer: Value = serde_json::from_str(stdout.trim()).expect("history json");
+    let rows = answer
+        .get("chain")
+        .and_then(Value::as_array)
+        .expect("history chain");
+    assert!(!rows.is_empty(), "the recorded law reads back: {answer}");
+    let live = &rows[0];
+    assert_eq!(
+        field(live, "decision"),
+        &json!("The terminal fed the decision text."),
+        "{live}"
+    );
+    assert_eq!(
+        field(live, "authority_source"),
+        &json!("operator"),
+        "{live}"
+    );
+}
+
+#[test]
 fn a_piped_set_refuses_and_records_nothing() {
     let fixture = Fixture::new();
     let (code, stdout, stderr) = spawn_piped(
