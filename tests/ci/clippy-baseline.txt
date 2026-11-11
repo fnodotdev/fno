@@ -12592,3 +12592,8 @@ crates/fno/src/main.rs	clippy::indexing_slicing	|| args[2].to_str()? != "prior-h
 crates/fno/src/review_prior_head.rs	clippy::indexing_slicing	entry["error"].as_str().unwrap_or("unreadable")
 crates/fno/src/review_prior_head.rs	clippy::indexing_slicing	if entry["status"] == "unreadable" {
 crates/fno/src/review_prior_head.rs	clippy::indexing_slicing	let Some(row) = entry["matching_rows"]
+crates/fno-agents/src/gate/pr_status/tests.rs	clippy::indexing_slicing	assert_eq!(payload["ready"].as_bool(), Some(false));
+crates/fno-agents/src/gate/pr_status/tests.rs	clippy::indexing_slicing	assert_eq!(payload["ready_blockers"], json!(["ci_pending"]));
+crates/fno-agents/src/gate/pr_status/tests.rs	clippy::indexing_slicing	assert_eq!(payload["verdict"].as_str(), Some("pending"));
+crates/fno-agents/src/gate/pr_status_facts/tests.rs	clippy::indexing_slicing	assert_eq!(out["blockers"], json!(["ci_pending"]));
+crates/fno-agents/src/gate/pr_status_facts/tests.rs	clippy::indexing_slicing	assert_eq!(out["blockers"], json!(["ci_red"]));

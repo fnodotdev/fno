@@ -222,9 +222,9 @@ fn legacy_claude_migration(claude_dir: &Path) -> Vec<Vec<String>> {
 
 /// The stage serves its own copy of the public manifest with the fno entry
 /// pointed at the stage root (`source: "./"`), so `claude plugin install
-/// fno@fno` resolves in place and never clones a GitHub ref: the public
-/// pins (`stable`, `nightly`) are release-side refs a dev machine cannot rely
-/// on. The buddy entry points at `./plugins/buddy` the same way. The repo file
+/// fno@fno` resolves in place and never clones a GitHub ref: the public pin
+/// (a release tag) is a release-side ref a dev machine cannot rely on. The
+/// buddy entry points at `./plugins/buddy` the same way. The repo file
 /// stays verbatim. Anything that would leave the fno entry
 /// unserved is Err: a verbatim copy would silently resurrect the clone trap.
 fn staged_marketplace_bytes(source_bytes: &str, marketplace: &str) -> Result<String, String> {
@@ -1139,7 +1139,7 @@ fn claude_remote_remedy(plugin_id: &str) -> String {
     format!(
         "claude plugin uninstall {plugin_id} && claude plugin marketplace remove \
          {LEGACY_MARKETPLACE_NAME} && claude plugin marketplace add \
-         fnodotdev/fno@stable && claude plugin install {PLUGIN_ID}"
+         fnodotdev/fno && claude plugin install {PLUGIN_ID}"
     )
 }
 
@@ -1237,7 +1237,7 @@ fn rename_findings() -> Vec<RenameFinding> {
         } else {
             format!(
                 "claude plugin marketplace remove {LEGACY_MARKETPLACE_NAME} && claude \
-                 plugin marketplace add fnodotdev/fno@stable && claude plugin install \
+                 plugin marketplace add fnodotdev/fno && claude plugin install \
                  {PLUGIN_ID}"
             )
         };
@@ -2485,7 +2485,7 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
             eprintln!("         (no --stage checks every plugin root; exit is the worst status across roots)");
             eprintln!("       fno-agents plugin-install --restage [--source <dir>]");
             eprintln!("       fno-agents plugin-install codex --release [--json] | --status");
-            eprintln!("         converges codex onto the GitHub stable channel, or prints its freshness verdict");
+            eprintln!("         converges codex onto the GitHub release pin, or prints its freshness verdict");
             2
         }
     }
@@ -4304,6 +4304,13 @@ mod tests {
             claude_with(json!({"source": "github", "repo": "fnodotdev/fno", "ref": "stable"}))
                 .as_deref(),
             Some("stable (github:fnodotdev/fno#stable)")
+        );
+        assert_eq!(
+            claude_with(
+                json!({"source": "github", "repo": "fnodotdev/fno", "ref": "v0.4.8", "sha": "fd456348a2e1410ec4f9fc65d883de742c0a3067"})
+            )
+            .as_deref(),
+            Some("v0.4.8 (github:fnodotdev/fno#v0.4.8)")
         );
         assert_eq!(
             claude_with(
