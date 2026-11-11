@@ -3,7 +3,7 @@
 //! command the sideline click sends. A section whose read failed shows the
 //! error and keeps its last good rows.
 
-use gpui::{div, prelude::*, px, rgb, Context, Div, MouseButton, Stateful};
+use gpui::{div, prelude::*, px, rgb, Context, Div, Stateful};
 
 use super::link::Layout;
 use super::window::{Action, MainView, Root};
@@ -11,6 +11,18 @@ use crate::proto::{AgentBadge, AgentRow, Command};
 use crate::web_hq::Board;
 
 pub const WIDTH: f32 = 260.0;
+/// The agents shown before a "+N more" row, so the sections below stay above
+/// the fold.
+pub const AGENTS_SHOWN: usize = 8;
+
+/// How a row's label reads: a blocked agent in the error color, a question
+/// in the needs-you color the board's feed uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tone {
+    Plain,
+    Blocked,
+    Question,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Row {
@@ -19,8 +31,13 @@ pub enum Row {
         label: String,
         detail: String,
         active: bool,
-        needs: bool,
+        tone: Tone,
         action: Option<Action>,
+    },
+    /// The agents past [`AGENTS_SHOWN`], folded, or the row that folds
+    /// them back.
+    More {
+        hidden: usize,
     },
     /// A failed read. The section's last good rows follow it.
     Error(String),
@@ -45,23 +62,39 @@ fn agent_detail(a: &AgentRow) -> String {
     }
 }
 
-pub fn rows(layout: &Layout, board: &Board, now_secs: u64) -> Vec<Row> {
+pub fn rows(layout: &Layout, board: &Board, now_secs: u64, agents_open: bool) -> Vec<Row> {
     let mut out = vec![Row::Header("Agents")];
     let agents = crate::client::agent_sort::sideline_order(&layout.agents, now_secs);
     if agents.is_empty() {
         out.push(Row::Empty("no agents in this session"));
     }
-    for a in agents {
-        let action = match crate::client::agent_group::click_command(a) {
-            Ok(cmd) => Action::Send(cmd),
-            Err(notice) => Action::Notice(notice),
+    let total = agents.len();
+    let shown = if agents_open {
+        total
+    } else {
+        total.min(AGENTS_SHOWN)
+    };
+    for a in agents.into_iter().take(shown) {
+        use crate::client::agent_group::{click_command, RowClick};
+        let action = match click_command(a) {
+            RowClick::Send(cmd) => Action::Send(cmd),
+            RowClick::Notice(notice) => Action::Notice(notice),
         };
         out.push(Row::Item {
             label: a.name.clone(),
             detail: agent_detail(a),
             active: a.pane_id == Some(layout.focus),
-            needs: a.badge == Some(AgentBadge::Blocked),
+            tone: if a.badge == Some(AgentBadge::Blocked) {
+                Tone::Blocked
+            } else {
+                Tone::Plain
+            },
             action: Some(action),
+        });
+    }
+    if total > AGENTS_SHOWN {
+        out.push(Row::More {
+            hidden: total - shown,
         });
     }
 
@@ -77,7 +110,7 @@ pub fn rows(layout: &Layout, board: &Board, now_secs: u64) -> Vec<Row> {
                 if s.panes == 1 { "" } else { "s" }
             ),
             active: s.id == layout.active_squad,
-            needs: false,
+            tone: Tone::Plain,
             action: Some(Action::Send(Command::SelectSquad(s.id))),
         });
     }
@@ -102,7 +135,7 @@ pub fn rows(layout: &Layout, board: &Board, now_secs: u64) -> Vec<Row> {
             label: q.title.clone(),
             detail: q.node.clone().unwrap_or_else(|| q.kind.clone()),
             active: false,
-            needs: true,
+            tone: Tone::Question,
             action: Some(Action::Show(MainView::Orchestration)),
         });
     }
@@ -127,7 +160,7 @@ pub fn rows(layout: &Layout, board: &Board, now_secs: u64) -> Vec<Row> {
                 if seats == 1 { "" } else { "s" }
             ),
             active: m.local,
-            needs: false,
+            tone: Tone::Plain,
             action: None,
         });
     }
@@ -136,6 +169,8 @@ pub fn rows(layout: &Layout, board: &Board, now_secs: u64) -> Vec<Row> {
 
 pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stateful<Div> {
     let p = root.palette;
+    // The top band clears the traffic lights the transparent title bar
+    // draws over this pane.
     let mut pane = div()
         .id("left-pane")
         .flex()
@@ -144,13 +179,17 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
         .w(px(WIDTH))
         .h_full()
         .overflow_y_scroll()
-        .py_2()
+        .pt(px(28.0))
+        .pb_2()
         .bg(rgb(p.panel))
         .border_r_1()
         .border_color(rgb(p.border));
-    for row in rows(&root.layout, &root.board, now_secs) {
+    let rows = rows(&root.layout, &root.board, now_secs, root.agents_open);
+    for (i, row) in rows.into_iter().enumerate() {
+        let hover = p.border;
         pane = pane.child(match row {
             Row::Header(title) => div()
+                .id(i)
                 .px_3()
                 .pt_3()
                 .pb_1()
@@ -158,38 +197,63 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
                 .text_color(rgb(p.muted))
                 .child(title.to_uppercase()),
             Row::Error(e) => div()
+                .id(i)
                 .px_3()
                 .py_1()
                 .text_xs()
                 .text_color(rgb(p.error))
                 .child(e),
             Row::Empty(why) => div()
+                .id(i)
                 .px_3()
                 .py_1()
                 .text_xs()
                 .text_color(rgb(p.muted))
                 .child(why),
+            Row::More { hidden } => div()
+                .id(i)
+                .mx_1()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .text_xs()
+                .text_color(rgb(p.muted))
+                .cursor_pointer()
+                .hover(move |s| s.bg(rgb(hover)))
+                .active(move |s| s.bg(rgb(p.focus)))
+                .on_click(cx.listener(|root, _, _, cx| root.act(Action::ToggleAgents, cx)))
+                .child(if hidden > 0 {
+                    format!("+{hidden} more")
+                } else {
+                    "show fewer".to_string()
+                }),
             Row::Item {
                 label,
                 detail,
                 active,
-                needs,
+                tone,
                 action,
             } => {
+                let label_color = match tone {
+                    Tone::Plain => p.fg,
+                    Tone::Blocked => p.error,
+                    Tone::Question => p.warn,
+                };
+                // The active row carries a bar in the focus color as well as
+                // the fill, so it reads at a glance.
                 let mut item = div()
+                    .id(i)
                     .mx_1()
-                    .px_2()
+                    .pl(px(6.0))
+                    .pr_2()
                     .py_1()
                     .rounded_md()
                     .flex()
                     .flex_col()
+                    .border_l_2()
+                    .border_color(rgb(if active { p.ok } else { p.panel }))
                     .when(active, |d| d.bg(rgb(p.border)))
-                    .child(
-                        div()
-                            .truncate()
-                            .text_color(rgb(if needs { p.warn } else { p.fg }))
-                            .child(label),
-                    )
+                    .child(div().truncate().text_color(rgb(label_color)).child(label))
                     .child(
                         div()
                             .truncate()
@@ -198,10 +262,13 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
                             .child(detail),
                     );
                 if let Some(action) = action {
-                    item = item.cursor_pointer().on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |root, _, _, cx| root.act(action.clone(), cx)),
-                    );
+                    // On click: a press that leaves the row before release
+                    // does nothing.
+                    item = item
+                        .cursor_pointer()
+                        .hover(move |s| s.bg(rgb(hover)))
+                        .active(move |s| s.bg(rgb(p.focus)))
+                        .on_click(cx.listener(move |root, _, _, cx| root.act(action.clone(), cx)));
                 }
                 item
             }
@@ -270,7 +337,7 @@ mod tests {
             &[],
         );
 
-        let rows = rows(&layout, &board, 100);
+        let rows = rows(&layout, &board, 100, false);
         let items = |rows: &[Row]| -> Vec<(String, Option<Action>)> {
             rows.iter()
                 .filter_map(|r| match r {

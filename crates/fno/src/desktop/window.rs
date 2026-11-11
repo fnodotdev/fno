@@ -7,13 +7,14 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use gpui::{
     canvas, div, font, point, prelude::*, px, rgb, size, AnyView, App, Application, Bounds,
     ClipboardItem, Context, ElementInputHandler, Entity, EntityInputHandler, FocusHandle,
     InputHandler, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, ScrollWheelEvent, Size, Subscription, Task, UTF16Selection, Window, WindowBounds,
-    WindowOptions,
+    Point, ScrollWheelEvent, Size, Subscription, Task, TitlebarOptions, UTF16Selection, Window,
+    WindowBounds, WindowOptions,
 };
 
 use super::grid::{Metrics, PaneView};
@@ -41,21 +42,40 @@ pub enum MainView {
 pub enum Action {
     Send(Command),
     Notice(String),
-    Answer { id: String, option: u32 },
+    Answer {
+        id: String,
+        option: u32,
+    },
     Show(MainView),
+    /// Show every agent in the left pane, or only the first few.
+    ToggleAgents,
 }
+
+/// Where an answer the user clicked stands. The row shows it in place of its
+/// options until the next read drops the question.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnswerState {
+    Sending(u32),
+    Done(u32),
+    Refused(String),
+}
+
+/// How long a notice stays in the corner.
+const NOTICE_FOR: Duration = Duration::from_secs(4);
 
 /// The most wheel lines one event sends, so a fling cannot flood the socket.
 const WHEEL_CAP: i32 = 10;
 
 pub struct Root {
-    main: MainView,
+    pub(super) main: MainView,
     link: Option<Link>,
     pub(super) layout: Layout,
     frames: HashMap<u64, Arc<Frame>>,
     panes: HashMap<u64, Entity<PaneView>>,
     modes: Modes,
     notice: Option<String>,
+    /// Bumped by each notice, so only the newest one's timer clears it.
+    notice_gen: u64,
     closed: Option<String>,
     metrics: Metrics,
     pub(super) palette: Palette,
@@ -69,11 +89,16 @@ pub struct Root {
     /// The pane a left-button drag started in.
     drag: Option<(u64, Rect)>,
     wheel: f32,
+    /// The pane the wheel remainder belongs to.
+    wheel_pane: Option<u64>,
+    pub(super) answers: HashMap<String, AnswerState>,
+    pub(super) agents_open: bool,
     /// The input handler's uncommitted text.
     preedit: Option<String>,
     _reader: Option<Task<()>>,
     _hq: Option<Task<()>>,
     _activation: Option<Subscription>,
+    _notice: Option<Task<()>>,
 }
 
 /// The status line's and the tab strip's height: one cell plus padding.
@@ -81,12 +106,12 @@ fn bar_height(cell: Size<Pixels>) -> Pixels {
     cell.height + px(8.0)
 }
 
-/// The content size sent to the server. The left pane, the strip and the
-/// status line are always reserved, so a notice never resizes the panes, and
+/// The content size sent to the server. The left pane and the strip are
+/// always reserved. A notice floats over the grid and never resizes it, and
 /// one row and one column are kept for the outer borders, which sit half a
 /// cell outside the grid.
 fn grid_size(viewport: Size<Pixels>, cell: Size<Pixels>) -> (u16, u16) {
-    let height = viewport.height - bar_height(cell) * 2.0;
+    let height = viewport.height - bar_height(cell);
     let width = viewport.width - px(left_pane::WIDTH);
     let rows = ((height / cell.height).floor() - 1.0).max(1.0);
     let cols = ((width / cell.width).floor() - 1.0).max(1.0);
@@ -107,6 +132,7 @@ impl Root {
             panes: HashMap::new(),
             modes: Modes::default(),
             notice: None,
+            notice_gen: 0,
             closed: None,
             metrics,
             palette: Palette::from_theme(&Theme::default_theme()),
@@ -117,10 +143,14 @@ impl Root {
             area: Rc::new(Cell::new(Bounds::default())),
             drag: None,
             wheel: 0.0,
+            wheel_pane: None,
+            answers: HashMap::new(),
+            agents_open: false,
             preedit: None,
             _reader: None,
             _hq: None,
             _activation: None,
+            _notice: None,
         };
         // Repaint every pane on (de)activation: the cursor turns hollow. The
         // board poll pauses while the window is inactive.
@@ -174,38 +204,67 @@ impl Root {
         }
     }
 
+    /// Show `text` in the corner for [`NOTICE_FOR`].
+    fn say(&mut self, text: String, cx: &mut Context<Self>) {
+        self.notice = Some(text);
+        self.notice_gen += 1;
+        let gen = self.notice_gen;
+        self._notice = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(NOTICE_FOR).await;
+            let _ = this.update(cx, |root, cx| {
+                if root.notice_gen == gen {
+                    root.notice = None;
+                    cx.notify();
+                }
+            });
+        }));
+    }
+
     pub(super) fn act(&mut self, action: Action, cx: &mut Context<Self>) {
         match action {
             Action::Send(cmd) => {
                 self.main = MainView::Terminal;
                 self.send(ClientMsg::Command(cmd));
             }
-            Action::Notice(text) => self.notice = Some(text),
+            Action::Notice(text) => self.say(text, cx),
             Action::Answer { id, option } => match &self.poller {
+                // A row already sent or answered takes no second click.
+                Some(_) if self.answers.contains_key(&id) => {}
                 Some(poller) => {
-                    poller.answer(id, option);
-                    self.notice = Some(format!("answering option {option}"));
+                    poller.answer(id.clone(), option);
+                    self.answers.insert(id, AnswerState::Sending(option));
                 }
-                None => self.notice = Some("no board poll: cannot answer".into()),
+                None => self.say("no board poll: cannot answer".into(), cx),
             },
             Action::Show(view) => self.main = view,
+            Action::ToggleAgents => self.agents_open = !self.agents_open,
         }
         cx.notify();
     }
 
     fn on_hq(&mut self, reply: Reply, cx: &mut Context<Self>) {
         match reply {
-            Reply::Reading(r) => {
-                self.board.record(
-                    r.fleet,
-                    r.questions,
-                    &r.backlog,
-                    r.measured_at,
-                    &self.layout.agents,
-                );
+            Reply::Board(board) => {
+                self.board = *board;
+                // A question the read no longer lists needs no answer state;
+                // a refusal stays so the row keeps its reason.
+                let open: Vec<&str> = self
+                    .board
+                    .questions()
+                    .iter()
+                    .map(|q| q.item.id.as_str())
+                    .collect();
+                self.answers.retain(|id, _| open.contains(&id.as_str()));
             }
-            Reply::Answered(Ok(receipt)) => self.notice = Some(receipt),
-            Reply::Answered(Err(why)) => self.notice = Some(format!("answer refused: {why}")),
+            Reply::Answered { id, receipt } => {
+                if let Some(AnswerState::Sending(option)) = self.answers.get(&id).cloned() {
+                    self.answers.insert(id, AnswerState::Done(option));
+                }
+                self.say(receipt, cx);
+            }
+            Reply::Refused { id, why } => {
+                self.answers.insert(id, AnswerState::Refused(why));
+            }
         }
         cx.notify();
     }
@@ -245,15 +304,13 @@ impl Root {
                     relayout = true;
                 }
                 Event::Modes(bytes) => self.modes.apply(&bytes),
-                Event::Notice(text) => {
-                    self.notice = Some(text);
-                    relayout = true;
-                }
+                Event::Notice(text) => self.say(text, cx),
+                // A plain click selects nothing; it never wipes the clipboard.
+                Event::Copy(text) if text.is_empty() => {}
                 Event::Copy(text) => {
                     let n = text.chars().count();
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
-                    self.notice = Some(format!("copied {n} characters"));
-                    relayout = true;
+                    self.say(format!("copied {n} characters"), cx);
                 }
                 Event::OpenLink(url) => {
                     if crate::link::is_openable(&url) {
@@ -438,6 +495,11 @@ impl Root {
         let Some(hit) = mouse::hit(x, y, self.cell(), &self.layout.panes) else {
             return;
         };
+        // A remainder left over from another pane never scrolls this one.
+        if self.wheel_pane != Some(hit.pane) {
+            self.wheel_pane = Some(hit.pane);
+            self.wheel = 0.0;
+        }
         let line = self.metrics.cell.height;
         let dy = f32::from(ev.delta.pixel_delta(line).y);
         let lines = mouse::wheel_lines(&mut self.wheel, dy, f32::from(line));
@@ -480,7 +542,7 @@ impl Root {
         for (id, rect) in rects {
             let view = self.pane_view(id, cx);
             let border = if id == self.layout.focus {
-                self.palette.accent
+                self.palette.focus
             } else {
                 self.palette.border
             };
@@ -734,20 +796,29 @@ impl Render for Root {
             .items_center()
             .font_family(".SystemUIFont")
             .text_sm();
-        let status = self.closed.clone().or_else(|| self.notice.clone());
-        let status_color = if self.closed.is_some() {
-            self.palette.error
-        } else {
-            self.palette.fg
+        // A closed link stays in the error color; a notice is muted and
+        // expires. Neither takes a row: the toast floats over the corner.
+        let (status, status_color) = match (&self.closed, &self.notice) {
+            (Some(c), _) => (Some(c.clone()), self.palette.error),
+            (None, n) => (n.clone(), self.palette.muted),
         };
-        let status_line = div()
-            .h(bar_height(self.metrics.cell))
-            .flex_none()
-            .px_2()
-            .py_1()
-            .bg(rgb(self.palette.border))
-            .text_color(rgb(status_color))
-            .children(status);
+        let toast = status.map(|text| {
+            div()
+                .absolute()
+                .right(px(12.0))
+                .bottom(px(12.0))
+                .max_w(px(520.0))
+                .px_3()
+                .py_1()
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(self.palette.border))
+                .bg(rgb(self.palette.panel))
+                .text_color(rgb(status_color))
+                .font_family(".SystemUIFont")
+                .text_sm()
+                .child(text)
+        });
         div()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
@@ -763,13 +834,14 @@ impl Render for Root {
             .child(left)
             .child(
                 div()
+                    .relative()
                     .flex_1()
                     .min_w_0()
                     .flex()
                     .flex_col()
                     .child(strip)
                     .child(main)
-                    .child(status_line),
+                    .children(toast),
             )
     }
 }
@@ -781,6 +853,13 @@ pub fn run(session: String, family: String, font_size: f32) {
         let opened = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                // The content runs under the title bar; the traffic lights
+                // sit over the left pane, which pads its top for them.
+                titlebar: Some(TitlebarOptions {
+                    title: Some("fno".into()),
+                    appears_transparent: true,
+                    traffic_light_position: Some(point(px(12.0), px(12.0))),
+                }),
                 ..Default::default()
             },
             move |window, cx| {

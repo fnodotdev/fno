@@ -31,11 +31,13 @@ The `codesign -s -` step gives the binary an ad-hoc signature. No developer acco
 
 ## The window
 
-The left pane has four sections. Agents come in the order the TUI sideline uses. A click focuses the agent's pane, or opens a paneless agent in portal 0. Sessions are the mux squads. A click switches to one. Questions are the open questions that wait on you, newest first. Machines are the fleet's hosts with their seat counts. A section whose read failed shows the error above its last good rows. While the window is active, the fleet and the questions refresh every 60 seconds. They also refresh at once after an answer, and on your return to the window. The backlog behind seat titles refreshes every 5 minutes.
+The left pane has four sections. Agents come in the order the TUI sideline uses. The pane shows the first 8, and a "+N more" row shows the rest. A click focuses the agent's pane, or opens a paneless agent in portal 0. Sessions are the mux squads. A click switches to one. Questions are the open questions that wait on you, newest first. Machines are the fleet's hosts with their seat counts. A section whose read failed shows the error above its last good rows. While the window is active, the fleet and the questions refresh every 60 seconds. They also refresh at once after an answer, and on your return to the window. The backlog behind seat titles refreshes every 5 minutes.
 
-The strip above the grid shows the active session's tabs. A click selects a tab.
+The strip above the grid shows the active session's tabs. A tab without a chosen name shows its pane's title. A click selects a tab. The Terminal and Board buttons at the right of the strip switch the main view.
 
-cmd-2 opens orchestration mode, the command center board. TABLE lists every seat on every machine with its node. FEED lists each open question with its options. A click on an option answers it through the same door the TUI uses. cmd-1 goes back to the terminal.
+cmd-2 or Board opens orchestration mode, the command center board. TABLE lists every seat with its node and status. With more than one host in the fleet, a MACHINE column shows too. FEED lists each open question with its options, and the recommended option is marked. A click on an option answers it through the same door the TUI uses. The question then shows "sending", then "answered", until the next read drops it. A refused answer shows its reason and keeps the options. cmd-1 or Terminal goes back to the terminal.
+
+Release the mouse on a button, a row or an option to act on it. Release somewhere else to cancel. A notice shows in the bottom corner for 4 seconds.
 
 ## Keys
 

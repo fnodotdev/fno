@@ -18,6 +18,11 @@ pub struct Palette {
     pub accent: u32,
     /// Every other pane border.
     pub border: u32,
+    /// The focused pane's border: a step above `border`, never the text
+    /// white.
+    pub focus: u32,
+    /// The recommended answer and a seat at work.
+    pub ok: u32,
     /// The status line's text when the connection has closed.
     pub error: u32,
     /// Labels and secondary text: the values beside them keep `fg`.
@@ -71,6 +76,8 @@ impl Palette {
             bg: rgb_or(t.base, 0x141414),
             accent: rgb_or(t.border, 0xe8e8e8),
             border: rgb_or(t.sel, 0x2b2b2b),
+            focus: mix(rgb_or(t.sel, 0x2b2b2b), rgb_or(t.stamp, 0xe8e8e8), 0.3),
+            ok: rgb_or(t.ok, 0x9cc49c),
             error: rgb_or(t.error, 0xe1a6a3),
             muted: rgb_or(t.dim, 0x8a8a8a),
             panel: mix(rgb_or(t.base, 0x141414), rgb_or(t.stamp, 0xe8e8e8), 0.05),
@@ -85,6 +92,17 @@ impl Palette {
             Color::Indexed(i) if i < 16 => self.ansi[i as usize],
             Color::Indexed(i) => xterm256(i),
             Color::Rgb(r, g, b) => pack(r, g, b),
+        }
+    }
+
+    /// A seat or agent status word's color: blocked reads as an error, work
+    /// in progress as ok, the rest muted.
+    pub fn status(&self, word: &str) -> u32 {
+        match word {
+            "blocked" => self.error,
+            "writing" | "working" => self.ok,
+            "parked" => self.warn,
+            _ => self.muted,
         }
     }
 

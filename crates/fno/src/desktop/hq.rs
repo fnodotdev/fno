@@ -7,12 +7,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use serde_json::Value;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use crate::backlog_model::Inputs;
-use crate::needs_overlay::{AnswerPick, QuestionsFold};
+use crate::needs_overlay::AnswerPick;
 use crate::proto::AgentRow;
+use crate::web_hq::Board;
 
 /// The fleet and question reads, at the bridge's own cadence. Measured on
 /// a 38-seat fleet: `needs` takes about 1 CPU-second a call, so a 10 s cycle
@@ -22,18 +22,13 @@ const POLL_EVERY: Duration = Duration::from_secs(60);
 /// board takes only titles and PR links from it, so it may lag.
 const BACKLOG_EVERY: Duration = Duration::from_secs(300);
 
-/// One cycle's raw reads. The UI thread records them into its board.
-pub struct Reading {
-    pub fleet: Result<Value, String>,
-    pub questions: Result<QuestionsFold, String>,
-    pub backlog: Arc<Inputs>,
-    pub measured_at: u64,
-}
-
 pub enum Reply {
-    Reading(Reading),
-    /// The answer door's receipt, or why it refused.
-    Answered(Result<String, String>),
+    /// The poll thread's board after a read. It folds off the UI thread.
+    Board(Box<Board>),
+    /// The answer door's receipt for question `id`.
+    Answered { id: String, receipt: String },
+    /// Why the answer door refused question `id`.
+    Refused { id: String, why: String },
 }
 
 enum Ask {
@@ -42,13 +37,18 @@ enum Ask {
 }
 
 /// Read the fleet and the questions, and the backlog unless `backlog` is
-/// given, together.
-pub async fn read(agents: Vec<AgentRow>, backlog: Option<Arc<Inputs>>) -> Reading {
+/// given, together, and record them into `board`. Returns the backlog read
+/// so a caller can reuse it.
+pub async fn read(
+    board: &mut Board,
+    agents: &[AgentRow],
+    backlog: Option<Arc<Inputs>>,
+) -> Arc<Inputs> {
     let graph = crate::backlog_view::graph_path();
     let gather = async {
         match backlog {
             Some(b) => b,
-            None => Arc::new(crate::backlog_model::gather(&graph, agents).await),
+            None => Arc::new(crate::backlog_model::gather(&graph, agents.to_vec()).await),
         }
     };
     let (fleet, questions, backlog) = tokio::join!(
@@ -56,12 +56,9 @@ pub async fn read(agents: Vec<AgentRow>, backlog: Option<Arc<Inputs>>) -> Readin
         crate::needs_overlay::questions_now(),
         gather,
     );
-    Reading {
-        fleet,
-        questions,
-        backlog,
-        measured_at: chrono::Utc::now().timestamp().max(0) as u64,
-    }
+    let measured_at = chrono::Utc::now().timestamp().max(0) as u64;
+    board.record(fleet, questions, &backlog, measured_at, agents);
+    backlog
 }
 
 /// The poll thread's handle. Dropping it stops the thread at its next wake.
@@ -90,6 +87,7 @@ impl Poller {
             .spawn(move || {
                 rt.block_on(async move {
                     let mut backlog: Option<(Arc<Inputs>, Instant)> = None;
+                    let mut board = Board::default();
                     let mut due = true;
                     loop {
                         if due {
@@ -99,11 +97,11 @@ impl Poller {
                                 .filter(|(_, at)| at.elapsed() < BACKLOG_EVERY)
                                 .map(|(b, _)| b.clone());
                             let fresh = cached.is_none();
-                            let reading = read(agents, cached).await;
+                            let read_back = read(&mut board, &agents, cached).await;
                             if fresh {
-                                backlog = Some((reading.backlog.clone(), Instant::now()));
+                                backlog = Some((read_back, Instant::now()));
                             }
-                            if out.send(Reply::Reading(reading)).is_err() {
+                            if out.send(Reply::Board(Box::new(board.clone()))).is_err() {
                                 return;
                             }
                         }
@@ -111,10 +109,16 @@ impl Poller {
                             Ok(None) => return,
                             Ok(Some(Ask::Refresh)) => true,
                             Ok(Some(Ask::Answer { id, option })) => {
-                                let receipt =
-                                    crate::needs_overlay::answer(&id, AnswerPick::Option(option))
-                                        .await;
-                                if out.send(Reply::Answered(receipt)).is_err() {
+                                let reply = match crate::needs_overlay::answer(
+                                    &id,
+                                    AnswerPick::Option(option),
+                                )
+                                .await
+                                {
+                                    Ok(receipt) => Reply::Answered { id, receipt },
+                                    Err(why) => Reply::Refused { id, why },
+                                };
+                                if out.send(reply).is_err() {
                                     return;
                                 }
                                 true

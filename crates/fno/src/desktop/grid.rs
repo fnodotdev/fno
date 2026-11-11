@@ -205,11 +205,42 @@ fn paint_outline(b: Bounds<Pixels>, c: Hsla, window: &mut Window) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The IME draft at the cursor cell, over a ground as wide as its display
+/// width: a CJK draft takes two cells a char. It paints whether or not the
+/// app shows its cursor, since Claude Code hides it.
+fn paint_preedit(
+    frame: &Frame,
+    text: &str,
+    m: &Metrics,
+    p: &Palette,
+    origin: Point<Pixels>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let (cw, ch) = (m.cell.width, m.cell.height);
+    let (r, c) = (frame.cursor_row as f32, frame.cursor_col as f32);
+    let at = point(origin.x + cw * c, origin.y + ch * r);
+    let width = cw * unicode_width::UnicodeWidthStr::width(text) as f32;
+    window.paint_quad(fill(
+        Bounds::new(at, size(width, ch)),
+        color(p.panel, false),
+    ));
+    paint_text(
+        text.to_string(),
+        at,
+        m.font.clone(),
+        color(p.fg, false),
+        true,
+        None,
+        m,
+        window,
+        cx,
+    );
+}
+
 fn paint_cursor(
     frame: &Frame,
     solid: bool,
-    preedit: Option<&str>,
     m: &Metrics,
     p: &Palette,
     origin: Point<Pixels>,
@@ -223,26 +254,6 @@ fn paint_cursor(
         return;
     };
     let at = point(origin.x + cw * c as f32, origin.y + ch * r as f32);
-    if let Some(text) = preedit.filter(|t| !t.is_empty()) {
-        let width = cw * text.chars().count() as f32;
-        window.paint_quad(fill(
-            Bounds::new(at, size(width, ch)),
-            color(p.panel, false),
-        ));
-        let font = m.font.clone();
-        paint_text(
-            text.to_string(),
-            at,
-            font,
-            color(p.fg, false),
-            true,
-            None,
-            m,
-            window,
-            cx,
-        );
-        return;
-    }
     let s = style_of(cell, p);
     let wide = frame
         .cells
@@ -358,11 +369,13 @@ fn paint_frame(
             );
         }
     }
-    if frame.cursor_visible && frame.scroll_offset == 0 {
+    let preedit = preedit.filter(|t| focused && !t.is_empty());
+    if let (Some(text), 0) = (preedit, frame.scroll_offset) {
+        paint_preedit(frame, text, m, p, origin, window, cx);
+    } else if frame.cursor_visible && frame.scroll_offset == 0 {
         // Solid only where keys land: the focused pane of the active window.
         let solid = focused && window.is_window_active();
-        let preedit = preedit.filter(|_| focused);
-        paint_cursor(frame, solid, preedit, m, p, origin, window, cx);
+        paint_cursor(frame, solid, m, p, origin, window, cx);
     }
     if frame.scroll_offset > 0 {
         paint_scroll_badge(frame, m, p, origin, window, cx);

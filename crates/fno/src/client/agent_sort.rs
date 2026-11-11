@@ -375,6 +375,7 @@ impl View {
 /// pins first. The desktop app's left pane reads it, so the app never sorts its
 /// own way. The app has no needs fold, so a row ranks as the TUI ranks it
 /// before that fold reads.
+#[cfg(feature = "desktop")]
 pub(crate) fn sideline_order(rows: &[AgentRow], now_secs: u64) -> Vec<&AgentRow> {
     let order = AgentOrder { manual: &[] };
     let mut out: Vec<&AgentRow> = rows.iter().collect();

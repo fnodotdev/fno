@@ -33,7 +33,7 @@ pub(crate) struct OpenQuestion {
 /// The command center board: the fleet fold, the open questions and the open
 /// PRs. The bridge's `/hq/model.json` and the desktop app both build it here,
 /// so the two never show different seats or questions.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(crate) struct Board {
     /// The fold, its machines as JSON, and when it was read.
     good: Option<(Fleet, Value, Instant)>,
@@ -60,16 +60,9 @@ impl HqCache {
         true
     }
 
-    pub(crate) async fn record(
-        &self,
-        fleet: Result<Value, String>,
-        questions: Result<QuestionsFold, String>,
-        backlog: &Inputs,
-        measured_at: u64,
-        agents: &[crate::proto::AgentRow],
-    ) {
-        let mut st = self.state.lock().await;
-        st.record(fleet, questions, backlog, measured_at, agents);
+    /// The board, locked. A refresh records into it.
+    pub(crate) async fn board(&self) -> tokio::sync::MutexGuard<'_, Board> {
+        self.state.lock().await
     }
 
     /// The node of a question the page already shows, from the last read. `None`
@@ -133,6 +126,7 @@ impl Board {
     }
 
     /// Why the newest fleet read failed, or that none has run.
+    #[cfg(feature = "desktop")]
     pub(crate) fn fleet_error(&self) -> Option<&str> {
         match (&self.failure, &self.good) {
             (Some((reason, _)), _) => Some(reason),
@@ -143,16 +137,19 @@ impl Board {
 
     /// False until the first refresh lands: the errors then name "not read
     /// yet", which a view shows as waiting, never as a failure.
+    #[cfg(feature = "desktop")]
     pub(crate) fn read_yet(&self) -> bool {
         self.questions_read
     }
 
     /// The last good open questions, in fold order.
+    #[cfg(feature = "desktop")]
     pub(crate) fn questions(&self) -> &[OpenQuestion] {
         &self.questions
     }
 
     /// The same questions newest first, the order the desktop views show.
+    #[cfg(feature = "desktop")]
     pub(crate) fn questions_newest_first(&self) -> Vec<&OpenQuestion> {
         let mut out: Vec<&OpenQuestion> = self.questions.iter().collect();
         out.sort_by(|a, b| b.item.created_at.cmp(&a.item.created_at));
@@ -169,14 +166,16 @@ impl Board {
     }
 
     pub(crate) fn model(&self) -> Value {
-        let mut waiting = json!({ "prs": self.prs, "prs_error": self.prs_error });
+        let mut waiting = serde_json::Map::new();
+        waiting.insert("prs".into(), json!(self.prs));
+        waiting.insert("prs_error".into(), json!(self.prs_error));
         match self.questions_error() {
-            Some(reason) => waiting["questions_error"] = json!(reason),
+            Some(reason) => waiting.insert("questions_error".into(), json!(reason)),
             None => {
                 let items: Vec<Value> = self.questions.iter().map(question_json).collect();
-                waiting["questions"] = json!(items);
+                waiting.insert("questions".into(), json!(items))
             }
-        }
+        };
         let fleet = self.fleet();
         let fleet_error = match (&self.failure, &self.good) {
             (Some((reason, at)), _) => {
@@ -400,7 +399,7 @@ mod tests {
             rows: crate::node_row::rows_from_values(rows),
             ..Inputs::default()
         };
-        cache.record(fleet, qs, &backlog, at, agents).await;
+        cache.board().await.record(fleet, qs, &backlog, at, agents);
         cache.model().await
     }
 
@@ -478,8 +477,9 @@ mod tests {
             ..Inputs::default()
         };
         cache
-            .record(fail("x"), Err("x".into()), &locked, 300, &[])
-            .await;
+            .board()
+            .await
+            .record(fail("x"), Err("x".into()), &locked, 300, &[]);
         let m = cache.model().await;
         assert_eq!(m["waiting"]["prs"].as_array().map(Vec::len), Some(2));
         assert_eq!(m["waiting"]["prs_error"], "graph locked");

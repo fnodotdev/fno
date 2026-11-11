@@ -151,20 +151,27 @@ pub(super) fn enter_placement() -> PanePlacement {
     }
 }
 
+/// What a click on an agent row does: send a command, or say why it sends
+/// none.
+#[cfg(feature = "desktop")]
+pub(crate) enum RowClick {
+    Send(Command),
+    Notice(String),
+}
+
 /// The one command a click on an agent row sends: the sideline click's own
-/// [`agent_hit`]. `Err` carries the notice that says why the row has none.
-pub(crate) fn click_command(a: &AgentRow) -> Result<Command, String> {
+/// [`agent_hit`].
+#[cfg(feature = "desktop")]
+pub(crate) fn click_command(a: &AgentRow) -> RowClick {
+    let none = || RowClick::Notice(format!("{}: no action", a.name));
     match agent_hit(a, 0) {
-        ChromeHit::Cmds(cmds) => cmds
-            .into_iter()
-            .next()
-            .ok_or_else(|| format!("{}: no action", a.name)),
-        ChromeHit::OpenRemote(remote) => Ok(Command::ReachRemote {
+        ChromeHit::Cmds(cmds) => cmds.into_iter().next().map_or_else(none, RowClick::Send),
+        ChromeHit::OpenRemote(remote) => RowClick::Send(Command::ReachRemote {
             remote,
             placement: enter_placement(),
         }),
-        ChromeHit::Notice(notice) => Err(notice),
-        _ => Err(format!("{}: no action", a.name)),
+        ChromeHit::Notice(notice) => RowClick::Notice(notice),
+        _ => none(),
     }
 }
 
