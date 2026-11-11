@@ -84,7 +84,7 @@ impl Root {
                     }
                 }));
             }
-            Err(e) => root.closed = Some(e),
+            Err(e) => root.closed = Some(e.to_string()),
         }
         root
     }
@@ -92,7 +92,7 @@ impl Root {
     fn send(&mut self, msg: ClientMsg) {
         if let Some(link) = &self.link {
             if let Err(e) = link.send(&msg) {
-                self.closed = Some(e);
+                self.closed = Some(e.to_string());
                 self.link = None;
             }
         }

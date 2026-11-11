@@ -53,21 +53,38 @@ fn to_event(msg: ServerMsg) -> Option<Event> {
     }
 }
 
-fn socket(session: &str) -> Result<PathBuf, String> {
-    proto::socket_path(session)
+/// Why an attach or a write failed. Each variant's text is what the window
+/// shows and what `--probe` prints.
+#[derive(Debug, thiserror::Error)]
+pub enum LinkError {
+    #[error("{0}")]
+    Session(String),
+    #[error("cannot connect to session socket {}: {source}\n  is the mux server running? start one with `fno mux`.", path.display())]
+    Connect {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("{what} failed: {source}")]
+    Io {
+        what: &'static str,
+        source: std::io::Error,
+    },
+    #[error("{what} failed: {source}")]
+    Write {
+        what: &'static str,
+        source: ProtoError,
+    },
+    #[error("the socket writer lock was poisoned")]
+    Poisoned,
 }
 
 /// Connect and send `Attach`. `rows`/`cols` (0, 0) attach as an observer,
 /// which never resizes a pane: the probe uses that so it cannot disturb the
 /// user's layout.
-fn attach(session: &str, rows: u16, cols: u16) -> Result<UnixStream, String> {
-    let path = socket(session)?;
-    let mut stream = proto::connect_unix_timeout(&path, CONNECT_TIMEOUT).map_err(|e| {
-        format!(
-            "cannot connect to session socket {}: {e}\n  is the mux server running? start one with `fno mux`.",
-            path.display()
-        )
-    })?;
+fn attach(session: &str, rows: u16, cols: u16) -> Result<UnixStream, LinkError> {
+    let path = proto::socket_path(session).map_err(LinkError::Session)?;
+    let mut stream = proto::connect_unix_timeout(&path, CONNECT_TIMEOUT)
+        .map_err(|source| LinkError::Connect { path, source })?;
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
@@ -81,7 +98,10 @@ fn attach(session: &str, rows: u16, cols: u16) -> Result<UnixStream, String> {
             cwd,
         },
     )
-    .map_err(|e| format!("attach write failed: {e}"))?;
+    .map_err(|source| LinkError::Write {
+        what: "attach write",
+        source,
+    })?;
     Ok(stream)
 }
 
@@ -97,16 +117,20 @@ impl Link {
         session: &str,
         rows: u16,
         cols: u16,
-    ) -> Result<(Link, UnboundedReceiver<Event>), String> {
+    ) -> Result<(Link, UnboundedReceiver<Event>), LinkError> {
         let stream = attach(session, rows, cols)?;
-        let reader = stream
-            .try_clone()
-            .map_err(|e| format!("socket clone failed: {e}"))?;
+        let reader = stream.try_clone().map_err(|source| LinkError::Io {
+            what: "socket clone",
+            source,
+        })?;
         let (tx, rx) = unbounded_channel();
         std::thread::Builder::new()
             .name("fno-desktop-reader".into())
             .spawn(move || read_loop(reader, tx))
-            .map_err(|e| format!("reader thread failed to start: {e}"))?;
+            .map_err(|source| LinkError::Io {
+                what: "reader thread start",
+                source,
+            })?;
         Ok((
             Link {
                 writer: Arc::new(Mutex::new(stream)),
@@ -115,9 +139,12 @@ impl Link {
         ))
     }
 
-    pub fn send(&self, msg: &ClientMsg) -> Result<(), String> {
-        let mut w = self.writer.lock().map_err(|_| "writer lock poisoned")?;
-        proto::write_msg_sync(&mut *w, msg).map_err(|e| format!("write failed: {e}"))
+    pub fn send(&self, msg: &ClientMsg) -> Result<(), LinkError> {
+        let mut w = self.writer.lock().map_err(|_| LinkError::Poisoned)?;
+        proto::write_msg_sync(&mut *w, msg).map_err(|source| LinkError::Write {
+            what: "write",
+            source,
+        })
     }
 }
 
