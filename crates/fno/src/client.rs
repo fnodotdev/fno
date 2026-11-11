@@ -66,6 +66,7 @@ mod launch;
 mod panic_log;
 mod placement_pickers;
 mod report;
+mod search_reply;
 pub mod snapshot;
 
 use self::placement_pickers::{
@@ -6920,34 +6921,16 @@ async fn attach_and_run(
                         }
                     }
                 }
-                Ok(ServerMsg::SearchResult {
-                    pane_id,
-                    total,
-                    current,
-                }) => {
-                    // Land the counter on the active search line. A lost reply
-                    // never wedges the client (Esc exits locally); a reply for a
-                    // search we already closed is simply dropped. Total 0 = no
-                    // matches: a BEL makes the empty result audible (AC1-ERR).
-                    // Filter on pane_id AND submitted: results only answer a
-                    // submit/step, so a stale reply from a superseded search must
-                    // not paint its counter (or a zero-match BEL) onto a different
-                    // pane's search, nor onto a new query still being typed.
-                    if let Some(sv) = view
-                        .search
-                        .as_mut()
-                        .filter(|sv| sv.pane == pane_id && sv.submitted)
+                Ok(ServerMsg::SearchResult { pane_id, total, current }) => {
+                    // The counter landing, the BEL and the pane
+                    // filter live in client/search_reply.rs;
+                    // this arm draws when a match lands.
+                    if search_reply::result(&mut view, pane_id,
+                        total, current)
                     {
-                        sv.result = Some((total, current));
-                        // BEL only while the search is still open: a late
-                        // zero-result reply arriving after a local Esc must not
-                        // sound a confusing bell.
-                        if total == 0 {
-                            let _ = raw_out(b"\x07");
+                        if let Err(e) = compositor.draw(&view.compose()) {
+                            break Err(format!("draw: {e}"));
                         }
-                    }
-                    if let Err(e) = compositor.draw(&view.compose()) {
-                        break Err(format!("draw: {e}"));
                     }
                 }
                 Ok(ServerMsg::AnchorJumped { pane_id, jumped }) => {
