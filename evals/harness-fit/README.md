@@ -201,12 +201,12 @@ Run 1 gains a fifth lane, `harness-fit-footnote`, and the observe door learns to
 
 ## Amendment 15 (2026-11-11, the bank rebase, before any new Run 1 result)
 
-The replay bank graded a dead runtime. Measured 2026-11-11: the Python `cli/tests` tree is gone, so the seven replay tasks whose grades ran `uv run pytest` cannot grade (the 2026-10-02/03 Run 1 rows: 16 ran, 0 passed against those grades). This rebase lands before any new Run 1 result and changes no recorded row.
+The replay bank graded a dead runtime. The Python `cli/tests` tree is gone. The seven replay tasks whose grades ran `uv run pytest` cannot grade. The 2026-10-02/03 Run 1 rows prove it: 16 ran, 0 passed against those grades. This rebase lands before any new Run 1 result and changes no recorded row.
 
 - The five replay tasks whose grade was Python-only (`replay-x-1018`, `replay-x-71e9`, `replay-x-a23c`, `replay-x-a8f3`, `replay-x-c911`) carry the `demoted` tag. Selection never picks a demoted task unless a person names it with `--task`.
-- The two mixed tasks keep their surviving Rust half: `replay-x-5978` grades the restored `provider_cap_transcript_bridge` target only, `replay-x-70e1` grades the restored `retirement_e2e` target only. Their prompts still narrate the whole node.
-- Two grade-only goldens re-based on the live bank join the bank: `hf-golden-target-start` and `hf-golden-pr-status`. Their fixture is HEAD, so they grade current Rust on every future run and never a deleted tree. They carry the `golden` tag, so the PR gate excludes them; a lane run does not.
-- `bank/cohorts.yaml` is new. Each lane cohort (`harness-fit-<lane>`) declares the same five members: the two goldens and the three pure-Rust replay tasks (`replay-x-5baf`, `replay-x-861c`, `replay-x-f188`), which stay gradeable by inspection (their sha-restore plus `cargo test` mechanic is unchanged) and unmeasured: the freeze bars a re-run until it lifts.
+- The two mixed tasks keep their surviving Rust half. `replay-x-5978` grades the restored `provider_cap_transcript_bridge` target only. `replay-x-70e1` grades the restored `retirement_e2e` target only. Their prompts still narrate the whole node.
+- Two grade-only goldens re-based on the live bank join the bank: `hf-golden-target-start` and `hf-golden-pr-status`. Their fixture is HEAD, so they grade current Rust on every future run and never a deleted tree. They carry the `golden` tag. The PR gate excludes them, and a lane run does not.
+- `bank/cohorts.yaml` is new. Each lane cohort (`harness-fit-<lane>`) declares the same five members. The members are the two goldens plus the three pure-Rust replay tasks (`replay-x-5baf`, `replay-x-861c`, `replay-x-f188`). Those three stay gradeable by inspection. Their sha-restore plus `cargo test` mechanic is unchanged. A re-run waits for the test freeze to lift.
 - The lane command is unchanged: `run1.sh` still passes `--cohort harness-fit-<lane>`, now validated against the new split.
 
 ## Scope and limits
