@@ -1,5 +1,12 @@
 use super::*;
 
+/// The selector half of the target read, for the row-choice tests: the
+/// production callers need both halves, the row-choice contract is about
+/// the number alone.
+fn row_selector(cwd: &std::path::Path, node: Option<&str>) -> Option<String> {
+    pr_read::manifest_node_pr_target(cwd, node).map(|(selector, _)| selector)
+}
+
 /// AC5-EDGE: an unexpected gh state string maps to PrState::None
 /// (fail-closed), never panics.
 #[test]
@@ -65,10 +72,7 @@ fn manifest_node_selector_reads_the_primary_pr_and_fails_open() {
     )
     .unwrap();
 
-    assert_eq!(
-        manifest_node_pr_selector(&cwd, Some("x-sel")).as_deref(),
-        Some("930")
-    );
+    assert_eq!(row_selector(&cwd, Some("x-sel")).as_deref(), Some("930"));
     // The target carries the chosen row's url-derived owner/repo: a node
     // whose PR lives in another repo reads THAT repo, never the ambient
     // origin's same-number PR. A row without a url (or with a non-GitHub
@@ -77,10 +81,10 @@ fn manifest_node_selector_reads_the_primary_pr_and_fails_open() {
     assert_eq!(selector, "930");
     assert_eq!(repo.as_deref(), Some("o/r"));
     assert_eq!(pr_read::manifest_node_pr_target(&cwd, Some("x-bare")), None);
-    assert_eq!(manifest_node_pr_selector(&cwd, Some("x-bare")), None);
+    assert_eq!(row_selector(&cwd, Some("x-bare")), None);
     // An unknown node and a missing manifest node both fail open.
-    assert_eq!(manifest_node_pr_selector(&cwd, Some("x-absent")), None);
-    assert_eq!(manifest_node_pr_selector(&cwd, None), None);
+    assert_eq!(row_selector(&cwd, Some("x-absent")), None);
+    assert_eq!(row_selector(&cwd, None), None);
 
     // A node whose attached rows disagree: a merged-stamped primary with a
     // later attached row picks the later PR, and an all-terminal node picks
@@ -180,30 +184,15 @@ fn manifest_node_selector_reads_the_primary_pr_and_fails_open() {
     )
     .unwrap();
 
-    assert_eq!(
-        manifest_node_pr_selector(&cwd, Some("x-multi")).as_deref(),
-        Some("940")
-    );
+    assert_eq!(row_selector(&cwd, Some("x-multi")).as_deref(), Some("940"));
     // A reopened node's history row: the older unstamped row predates the
     // stamp, so the merged current pr_number pins the gate.
-    assert_eq!(
-        manifest_node_pr_selector(&cwd, Some("x-reolder")).as_deref(),
-        Some("960")
-    );
+    assert_eq!(row_selector(&cwd, Some("x-reolder")).as_deref(), Some("960"));
     // A marked history row sinks even newer than the stamp: state beats
     // number order.
-    assert_eq!(
-        manifest_node_pr_selector(&cwd, Some("x-marked")).as_deref(),
-        Some("900")
-    );
-    assert_eq!(
-        manifest_node_pr_selector(&cwd, Some("x-reopen")).as_deref(),
-        Some("930")
-    );
-    assert_eq!(
-        manifest_node_pr_selector(&cwd, Some("x-lower")).as_deref(),
-        Some("950")
-    );
+    assert_eq!(row_selector(&cwd, Some("x-marked")).as_deref(), Some("900"));
+    assert_eq!(row_selector(&cwd, Some("x-reopen")).as_deref(), Some("930"));
+    assert_eq!(row_selector(&cwd, Some("x-lower")).as_deref(), Some("950"));
     std::env::remove_var("FNO_STATE_DIR");
 }
 

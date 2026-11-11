@@ -248,7 +248,7 @@ pub(crate) use gh_read::PR_INFO_FALLBACK_FIELDS;
 use gh_read::{
     attestation_in_scope, failed_read_tail, git_head_branch, git_head_sha,
     graphql_exhausted_reason, head_is_shipped, pr_head_oid, primary_exhaustion_park_s,
-    probe_graphql_quota, read_pr_head_oid, read_pr_view, refusal_is_secondary,
+    probe_graphql_quota, read_pr_head_oid, read_pr_view_in, refusal_is_secondary,
     stderr_is_unauthenticated, stderr_smells_rate_limit, GraphqlQuota,
 };
 pub(crate) use gh_read::{coverage_adapter, internal_gh_adapter, is_graphql_read};
@@ -274,8 +274,6 @@ use posture::{
     resolved_required_bots_for_author, PostureConfig, PostureVerdict, LOCAL_PEER_REVIEWER,
     SAME_MODEL_LOCAL_PEER_SENTINEL, SAME_MODEL_PEER_SENTINEL,
 };
-#[cfg(test)]
-use pr_read::manifest_node_pr_selector;
 pub(crate) use pr_read::CiConclusion;
 use pr_read::{node_done_terminal, DoneNodeTerminal};
 use pr_read::{read_pr_info, PrInfo, PrState};

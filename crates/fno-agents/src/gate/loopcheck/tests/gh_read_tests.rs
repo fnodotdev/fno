@@ -441,10 +441,11 @@ fn graphql_fallback_failure_returns_the_original_rest_refusal() {
         // refusal tail carries only the rate-limit line the assert reads.
         std::env::set_var("FGB_CALLS", &calls);
         std::env::set_var("FNO_LOOPCHECK_GH_BIN", &bin);
-        let read = read_pr_view(
+        let read = read_pr_view_in(
             bin.to_str().unwrap(),
             dir.path(),
             Some("42"),
+            None,
             std::time::Duration::from_secs(10),
         );
         std::env::remove_var("FGB_CALLS");
@@ -483,10 +484,11 @@ fn a_secondary_refusal_earns_the_fallback_and_names_both_routes() {
         );
         std::env::set_var("FGB_CALLS", &calls);
         std::env::set_var("FNO_LOOPCHECK_GH_BIN", &bin);
-        let read = read_pr_view(
+        let read = read_pr_view_in(
             bin.to_str().unwrap(),
             dir.path(),
             Some("42"),
+            None,
             std::time::Duration::from_secs(10),
         );
         std::env::remove_var("FGB_CALLS");

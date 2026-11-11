@@ -225,10 +225,7 @@ fn terminal_stamp(status: &Option<&str>) -> bool {
 /// reopen history, never live work. Rows the reopen demotion writes carry
 /// the explicit `history: true` mark and sink whatever their number; the
 /// age rule remains for rows written before the mark existed.
-pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Option<String> {
-    manifest_node_pr_target(cwd, node_id).map(|(selector, _)| selector)
-}
-
+///
 /// The manifest node's live PR row: (number selector, the row url's
 /// `owner/repo`). The slug is the repo the PR READS answer against: a node
 /// whose PR lives in another repo (the 2026-11-11 cutover moved workers to

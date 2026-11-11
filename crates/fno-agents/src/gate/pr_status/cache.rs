@@ -295,7 +295,7 @@ fn status_read(payload: &Value) -> (i32, String, String) {
     (code, stdout, stderr)
 }
 
-/// `cached_status`: the coalescing chokepoint. Head-keyed rows, one live
+/// `cached_status_in`: the coalescing chokepoint. Head-keyed rows, one live
 /// read per TTL under the per-key flock, and the fail-closed stale serve
 /// when the head read itself refuses on a class no route can answer (a
 /// rate-limit refusal goes live through the route chain instead).
@@ -303,20 +303,11 @@ fn status_read(payload: &Value) -> (i32, String, String) {
 /// a complete block is both the fresh-serve guard and the key material, so
 /// the tick spends the read once; a refused read (empty sha) guards with a
 /// sha no row can carry; None is the self-reading status command.
-pub(crate) fn cached_status(
-    cwd_str: &str,
-    pr: u64,
-    refresh: bool,
-    head_read: Option<&Value>,
-) -> (i32, Value, Vec<String>, usize) {
-    cached_status_in(cwd_str, pr, refresh, head_read, true, None)
-}
-
-/// [`cached_status`] with the slug pinned and the shared-row follow switched
-/// by `follow`. Only the callers that read the verdict and the settled flag
-/// follow a peer poller. The slug pin (`repo`, the session node's PR repo)
-/// outranks the ambient origin, so a node whose pr_url names another repo
-/// reads - and cache-keys - THAT repo's PR.
+/// The slug pin (`repo`, the session node's PR repo) outranks the ambient
+/// origin, so a node whose pr_url names another repo reads - and
+/// cache-keys - THAT repo's PR. `follow` switches the shared-row follow:
+/// only the callers that read the verdict and the settled flag follow a
+/// peer poller.
 pub(crate) fn cached_status_in(
     cwd_str: &str,
     pr: u64,
@@ -696,13 +687,8 @@ fn fresh_serve(
 /// The light head read behind the wait's cache guard: `read_head`'s block
 /// (head sha, state, pulls) with the gh calls it spent, or None when the
 /// read refuses (the caller then guards with an empty sha and rides the
-/// degraded serve until the read recovers).
-pub(crate) fn head_read(cwd: &Path, pr: u64) -> (Option<Value>, usize) {
-    head_read_in(cwd, pr, None)
-}
-
-/// [`head_read`] with the slug pinned: the session node's PR repo outranks
-/// the ambient origin.
+/// degraded serve until the read recovers). The slug pin (`repo`, the
+/// session node's PR repo) outranks the ambient origin.
 pub(crate) fn head_read_in(cwd: &Path, pr: u64, repo: Option<&str>) -> (Option<Value>, usize) {
     let Some(slug) = repo
         .filter(|s| !s.is_empty())
