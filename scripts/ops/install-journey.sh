@@ -53,7 +53,7 @@ WORKER_SEED="You are an install-journey probe worker. Check your mail now and th
 # The first build: a stdlib-only newsletter page beside the demo tally app.
 TARGET_SEED="Run /fno:target with this feature for this repo: a stdlib-only Python package newsletter/ beside tally/. python -m newsletter.issue <photos-dir> --family \"Reyes\" --month 2026-11 --out issue.html reads captions.json in that dir (file name, date, caption) and writes one HTML page: title \"The Reyes Family, November 2026\" and one figure per photo in date order, each with its caption; a photo with no caption gets its date as the caption; an empty dir exits 2 with \"no photos in <dir>\". Add tests/test_newsletter.py with three tests (order by date, missing caption, empty dir) and newsletter/sample/ with three placeholder photos plus a captions.json. Ship it as a PR on this repo."
 
-RUN_DIR="" REPO_DIR="" FROM_STEP="" ONLY="" LIST_PLAIN=0 LIST_JSON=0 DRY_RUN=0 NODE_MAP=""
+RUN_DIR="" REPO_DIR="" FROM_STEP="" ONLY="" LIST_PLAIN=0 LIST_JSON=0 DRY_RUN=0 NODE_MAP="" REAL_HOME=""
 JHOME="" BASE="" LOG_JSON="" LOG_MD="" STATE_FILE=""
 NONCE="" WORKER="" PR_NUM="" BASE_LABELS="" HAD_DAEMON=0
 FAILS=0 PASSES=0 HUMANS=0 SKIPS=0
@@ -183,18 +183,18 @@ launchd baseline: $(printf '%s' "$BASE_LABELS" | grep -c . ) fno labels"
 
 step_1() {
     local served tagged want plat url got
-    fresh curl -fsSL "https://fno.sh" -o "$RUN_DIR/fno.sh.downloaded" 2>"$RUN_DIR/step1-curl.err" || true
+    fresh curl -fsSL --max-time 45 "https://fno.sh" -o "$RUN_DIR/fno.sh.downloaded" 2>"$RUN_DIR/step1-curl.err" || true
     [ -f "$RUN_DIR/fno.sh.downloaded" ] || { ST=fail; DF="download-failed"; EV="${EV}curl could not fetch https://fno.sh
 "; return; }
     served=$(shasum -a 256 "$RUN_DIR/fno.sh.downloaded" 2>/dev/null | awk '{print $1}')
     tagged=$(gh api "repos/fnodotdev/fno/contents/scripts/install/fno.sh?ref=v$VERSION" --jq .content 2>/dev/null | base64 -d 2>/dev/null | shasum -a 256 2>/dev/null | awk '{print $1}')
-    [ -n "$tagged" ] || tagged=$(curl -fsSL "https://raw.githubusercontent.com/fnodotdev/fno/v$VERSION/scripts/install/fno.sh" 2>/dev/null | shasum -a 256 | awk '{print $1}')
+    [ -n "$tagged" ] || tagged=$(curl -fsSL --max-time 45 "https://raw.githubusercontent.com/fnodotdev/fno/v$VERSION/scripts/install/fno.sh" 2>/dev/null | shasum -a 256 | awk '{print $1}')
     EV="${EV}served fno.sh sha256: $served
 v$VERSION scripts/install/fno.sh sha256: $tagged"
     case "$(uname -m)" in x86_64) plat=macos-x64 ;; arm64) plat=macos-arm64 ;; *) plat=macos-x64 ;; esac
     url="https://github.com/fnodotdev/fno/releases/download/v$VERSION/fno-agents-$plat.tar.gz"
-    fresh curl -fsSL "$url" -o "$RUN_DIR/tarball.gz" 2>/dev/null || true
-    fresh curl -fsSL "$url.sha256" -o "$RUN_DIR/tarball.gz.sha256" 2>/dev/null || true
+    fresh curl -fsSL --max-time 45 "$url" -o "$RUN_DIR/tarball.gz" 2>/dev/null || true
+    fresh curl -fsSL --max-time 45 "$url.sha256" -o "$RUN_DIR/tarball.gz.sha256" 2>/dev/null || true
     want=$(cut -d' ' -f1 "$RUN_DIR/tarball.gz.sha256" 2>/dev/null)
     got=$(shasum -a 256 "$RUN_DIR/tarball.gz" 2>/dev/null | awk '{print $1}')
     EV="${EV}tarball fno-agents-$plat.tar.gz sha256: $got (want $want)"
@@ -243,7 +243,7 @@ fno-agents --version exit: $frc"
 step_5() {
     local out row
     out=$(fresh claude plugin list --json 2>/dev/null) || true
-    row=$(printf '%s' "$out" | grep -F '"id": "fno@' | head -1)
+    row=$(printf '%s' "$out" | grep -E '"id": *"fno@' | head -1)
     if [ -n "$row" ]; then
         EV="${EV}$(clean "$row")"
         ST=pass
@@ -266,7 +266,9 @@ step_6() {
 defect: codex-wire-unverified"
     fi
     oc=$(fresh fno-agents plugin-install --check --json 2>/dev/null) || true
-    if printf '%s' "$oc" | grep -F '"opencode"' >/dev/null && printf '%s' "$oc" | grep -F 'installed' >/dev/null; then
+    # The status field, not the bare word: JSON elsewhere in the output names
+    # installed_plugins.json, which a bare 'installed' grep would count.
+    if printf '%s' "$oc" | grep -F '"opencode"' >/dev/null && printf '%s' "$oc" | grep -Eq '"status": *"installed"'; then
         EV="${EV}opencode: plugin-install --check reads installed"
     else
         EV="${EV}WARN opencode: not installed on first wire (expected before the first Claude session; re-probe below)
@@ -279,7 +281,7 @@ step_7() {
     local waited=0
     printf '  HUMAN step: sign in to claude.ai for the fresh config dir.\n'
     printf '  In a terminal run:\n    env CLAUDE_CONFIG_DIR=%s/.claude claude\n  then run /login inside it. Waiting for the probe (15s cadence, Ctrl-C aborts).\n' "$JHOME"
-    until fresh sh -c 'claude auth status' 2>/dev/null | grep -q '"loggedIn": true'; do
+    until fresh sh -c 'claude auth status' 2>/dev/null | grep '"loggedIn": true' >/dev/null; do
         sleep 15; waited=$((waited + 15)); printf '.'
     done
     printf '\n'
@@ -331,41 +333,48 @@ step_11() {
     local out id title nonce2 oc
     nonce2="journey-$(date +%s)"
     out=$(fresh fno backlog idea "install journey probe $nonce2" 2>/dev/null || true)
-    id=$(printf '%s' "$out" | tail -5 | grep -Eo '[a-z]{2,4}-[0-9a-f]{4,8}' | head -1)
+    # Whole-token match only: an unanchored grep once extracted the nonce's
+    # own tail ("rney-17313264") ahead of the real node id.
+    id=$(printf '%s' "$out" | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^[a-z]{2,4}-[0-9a-f]{4,8}$/) { print $i; exit } }')
     title=$(fresh fno backlog get "$id" 2>/dev/null || true)
     EV="${EV}minted: ${id:-none}; title read back: $(clean "$(printf '%s' "$title" | head -1)")"
     oc=$(fresh fno-agents plugin-install --check --json 2>/dev/null || true)
-    printf '%s' "$oc" | grep -F '"opencode"' >/dev/null && printf '%s' "$oc" | grep -F 'installed' >/dev/null \
-        && EV="${EV}opencode re-probe: installed" \
-        || EV="${EV}WARN opencode re-probe: still not installed"
+    if printf '%s' "$oc" | grep -F '"opencode"' >/dev/null && printf '%s' "$oc" | grep -Eq '"status": *"installed"'; then
+        EV="${EV}opencode re-probe: installed"
+    else
+        EV="${EV}WARN opencode re-probe: still not installed"
+    fi
     if [ -n "$id" ] && printf '%s' "$title" | grep -q "$nonce2"; then ST=pass; else ST=fail; DF="backlog-roundtrip"; fi
 }
 
 step_12() {
-    local out alive=0 deadline
+    local alive=0 src deadline
     fresh gh repo clone "$DEMO_REPO" "$REPO_DIR" >/dev/null 2>"$RUN_DIR/step12-clone.err" || true
     [ -d "$REPO_DIR/.git" ] || { ST=fail; DF="demo-clone-failed"; EV="${EV}clone failed: $(clean "$(tail -2 "$RUN_DIR/step12-clone.err" 2>/dev/null)")"; return; }
     EV="${EV}cloned $DEMO_REPO into $REPO_DIR"
     WORKER="journey-w${NONCE}"
-    out=$(fresh fno agents spawn "$WORKER" "$WORKER_SEED" --cwd "$REPO_DIR" --no-wait 2>&1) || true
+    fresh fno agents spawn "$WORKER" "$WORKER_SEED" --cwd "$REPO_DIR" --no-wait > "$RUN_DIR/step12-spawn.out" 2>&1
+    src=$?
     state_set WORKER "$WORKER"
-    EV="${EV}spawn exit: $?, name: $WORKER"
+    EV="${EV}spawn exit: $src, name: $WORKER (output tail: $(clean "$(tail -1 "$RUN_DIR/step12-spawn.out" 2>/dev/null)"))"
     deadline=$(( $(date +%s) + 120 ))
     while [ "$(date +%s)" -lt "$deadline" ]; do
-        if fresh fno agents session list 2>/dev/null | grep -qF "$WORKER"; then alive=1; break; fi
+        # grep without -q: -q can close the pipe early and SIGPIPE the writer,
+        # which pipefail reads as a failed poll on a match.
+        if fresh fno agents session list 2>/dev/null | grep -F "$WORKER" >/dev/null; then alive=1; break; fi
         sleep 10
     done
     if [ "$alive" -eq 1 ]; then ST=pass; else ST=fail; DF="worker-not-listed"; fi
 }
 
 step_13() {
-    local n out got=0 deadline sent
+    local n got=0 deadline sent
     n="nonce-$(date +%s)"
     sent=$(fresh fno agents mail send "$WORKER" "install journey probe: reply with exactly $n" 2>&1) || true
     EV="${EV}sent to $WORKER: $(clean "$(printf '%s' "$sent" | tail -1)")"
-    local deadline=$(( $(date +%s) + 120 ))
+    deadline=$(( $(date +%s) + 120 ))
     while [ "$(date +%s)" -lt "$deadline" ]; do
-        if fresh fno agents mail unread 2>/dev/null | grep -qF "$n"; then got=1; break; fi
+        if fresh fno agents mail unread 2>/dev/null | grep -F "$n" >/dev/null; then got=1; break; fi
         sleep 10
     done
     EV="${EV}reply carrying $n received: $([ $got -eq 1 ] && echo yes || echo no)"
@@ -432,25 +441,43 @@ step_16() {
 }
 
 step_17() {
-    local out outside
+    local out outside danger p
     out=$(fresh fno uninstall --dry-run 2>&1); ST=$?
-    outside=$(printf '%s' "$out" | grep -oE '/[[:alnum:]./ _-]+' | grep -v "^$JHOME" | sort -u | head -3)
+    # Path tokens without spaces, so prose paths are tokens too; the FAIL
+    # class is the dangerous one (the operator's real home), not any outside
+    # path the report happens to mention.
+    outside=$(printf '%s' "$out" | grep -oE '/[[:alnum:]./-]+' | grep -v "^$JHOME" | sort -u | head -5)
+    danger=""
+    for p in $outside; do
+        case "$p" in "$REAL_HOME"|"$REAL_HOME"/*) danger="$danger $p" ;; esac
+    done
     EV="${EV}dry-run exit: $ST
-paths named outside $JHOME: $(clean "$(printf '%s' "$outside" | tr '\n' ' ')")"
-    if [ "$ST" -eq 0 ] && [ -z "$outside" ]; then
+paths named outside $JHOME: $(clean "$(printf '%s' "$outside" | tr '\n' ' ')")
+paths under the real home: $(clean "${danger:-none}")"
+    if [ "$ST" -eq 0 ] && [ -z "$danger" ]; then
         ST=pass
     else
-        ST=fail; DF="uninstall-lists-outside-home"
+        ST=fail; DF="uninstall-reaches-real-home"
     fi
 }
 
 step_18() {
-    local pids rc now_cache now_labels left
+    local pids rc now_cache now_labels left lost bp
     if [ "$HAD_DAEMON" -eq 1 ]; then
         pids=$(pgrep -f -U "$(id -u)" fno-agents-daemon 2>/dev/null | sort || true)
+        lost=""
+        while IFS= read -r bp; do
+            [ -n "$bp" ] || continue
+            kill -0 "$bp" 2>/dev/null || lost="$lost $bp"
+        done < "$BASE/daemon-pids.txt"
         EV="${EV}SKIP: daemon pids of this uid existed at step 0; uninstall signals every daemon of the uid, so the live run is held until the scoped-signal fix lands (map defect key uninstall-daemon-shared-uid)
-fleet daemons now: $(printf '%s' "$pids" | tr '\n' ' ')"
-        ST=skip; DF="uninstall-daemon-shared-uid"
+fleet daemons now: $(printf '%s' "$pids" | tr '\n' ' ')
+baseline daemons no longer alive:${lost:- none}"
+        if [ -n "$lost" ]; then
+            ST=fail; DF="fleet-daemon-lost"
+        else
+            ST=skip; DF="uninstall-daemon-shared-uid"
+        fi
         return
     fi
     fresh fno uninstall --yes >/dev/null 2>"$RUN_DIR/step18.err"; rc=$?
@@ -474,7 +501,7 @@ home leftovers vs step 0: $(diff <(grep -v total "$BASE/home-listing.txt" 2>/dev
 # --- record -----------------------------------------------------------------
 # Reads ST (status), EV (evidence lines), DF (defect key), SECS (override).
 record() {
-    local n="$1" meta name kind budget status line node defect json_ev first
+    local n="$1" meta name kind budget status node defect json_ev first
     meta=$(step_meta "$n") || return 0
     name=${meta%%|*}; rest=${meta#*|}; kind=${rest%%|*}; budget=${rest##*|}
     status=${ST:-fail}
@@ -507,7 +534,7 @@ record() {
 }
 
 # --- args, refusals, main ---------------------------------------------------
-usage() { sed -n '2,40p' "$0" | grep -E '^#' | sed 's/^# \{0,1\}//' >&2; }
+usage() { awk 'NR > 1 && /^# /{ sub(/^# ?/, ""); print } /^set /{ exit }' "$0" >&2; }
 
 while [ $# -gt 0 ]; do
     case $1 in
@@ -553,6 +580,7 @@ REPO_DIR="${REPO_DIR:-/Users/Shared/fno-clean/$(basename "$RUN_DIR")/fno-demo}"
 # refusals - nothing is written before all of them pass
 real_home=$(dscl . -read "/Users/$USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
 [ -n "$real_home" ] || real_home="$HOME"
+REAL_HOME="$real_home"
 # exact matches only: the required /Users/<you>/fno-clean/ location sits
 # under the real home by design; only BEING the real home is dangerous.
 case "$RUN_DIR" in "$real_home") refuse "--run-dir $RUN_DIR is the real home" ;; esac
