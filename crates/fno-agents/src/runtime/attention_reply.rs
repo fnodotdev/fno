@@ -1259,7 +1259,8 @@ mod tests {
     }
 
     fn sync_questions() {
-        sync_questions();
+        let questions = crate::provider_cap::questions_path(&crate::paths::AgentsHome::from_env());
+        crate::event_store::sync(&questions).unwrap();
     }
 
     #[test]
