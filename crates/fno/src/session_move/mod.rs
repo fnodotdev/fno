@@ -574,6 +574,14 @@ pub fn daemon_is_gui_born(env_line: &str) -> Result<(), Fault> {
         .find_map(|w| w.strip_prefix("XPC_SERVICE_NAME="));
     match service {
         Some(s) if s.starts_with("application.") => Ok(()),
+        // A plain GUI-terminal birth (ghostty, Terminal.app) reads `0`:
+        // launchd gave the parent app a stub service name, and the daemon
+        // inherited the user's gui bootstrap with it. The ssh-login case is
+        // refused above (SSH_CONNECTION), and an fno job names itself
+        // (sh.fno.*), so `0` alone is the terminal case (measured on the
+        // incident host: the live terminal-born daemon reads 0 and hosts
+        // sessions whose managername reads Aqua).
+        Some(s) if s == "0" => Ok(()),
         Some(s) => Err(Fault(format!("born under XPC_SERVICE_NAME={s}"))),
         None => Err("its launch environment names no gui service".into()),
     }
