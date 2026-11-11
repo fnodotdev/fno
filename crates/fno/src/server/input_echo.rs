@@ -15,13 +15,16 @@ pub(super) fn no_echo_subject(
     pane: u64,
     pid: Option<u32>,
 ) -> String {
-    if let Some((idx, portal)) = portals.iter().find(|(_, p)| p.seat == pane) {
-        let name = row_for_pane(portals, pane, agents).map_or("unnamed", |r| r.name.as_str());
-        return format!("name={name:?} portal={idx} row_key={:?}", portal.row_key);
-    }
-    let name = super::pane_meta::pane_registry_name(agents, session, pane, pid)
+    // A re-seated pane worker keeps `mux: Some(..)`, which `row_for_pane`
+    // skips, so the pane lookup still answers for it.
+    let name = row_for_pane(portals, pane, agents)
+        .map(|row| row.name.clone())
+        .or_else(|| super::pane_meta::pane_registry_name(agents, session, pane, pid))
         .unwrap_or_else(|| "unnamed".into());
-    format!("name={name:?}")
+    match portals.iter().find(|(_, p)| p.seat == pane) {
+        Some((idx, portal)) => format!("name={name:?} portal={idx} row_key={:?}", portal.row_key),
+        None => format!("name={name:?}"),
+    }
 }
 
 #[derive(Default)]
@@ -95,7 +98,24 @@ mod tests {
                 tab: 1,
             },
         );
-        let agents = [row];
+        let reseated = RegistryAgent {
+            name: "pane-worker".into(),
+            mux: Some(("sess".into(), 50)),
+            ..RegistryAgent::default()
+        };
+        portals.insert(
+            4,
+            Portal {
+                row_key: "pane-worker".into(),
+                seat: 50,
+                tab: 1,
+            },
+        );
+        let agents = [row, reseated];
+        assert_eq!(
+            no_echo_subject(&portals, &agents, "sess", 50, None),
+            "name=\"pane-worker\" portal=4 row_key=\"pane-worker\""
+        );
         assert_eq!(
             no_echo_subject(&portals, &agents, "sess", 42, None),
             "name=\"worker\" portal=3 row_key=\"deadbee1\""
