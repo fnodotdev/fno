@@ -643,12 +643,7 @@ fno agents registry whoami             # THIS worker's own registered name (+ en
 fno agents session logs "<name>"      # the worker's transcript
 ```
 
-`whoami` answers "what is MY registered name" - the handle peers use to address
-you via `fno agents mail send <name>`. It reads `FNO_AGENT_SELF` (the env the spawn path
-injects), so a worker that lost track of its name after compaction has a
-`fno`-native answer. Exit 3 (`not a registered mesh agent`) for a human /
-top-level session. Distinct from top-level `fno whoami`, which reports operating
-context (fleet -> walker -> session), not the mesh name.
+`whoami` answers "what is MY registered name". Peers address you with `fno agents mail send <session-id>`. It reads `FNO_AGENT_SELF`, the env the spawn path injects. So a worker that lost track of its name after compaction has a `fno`-native answer. It exits 3 (`not a registered mesh agent`) for a human or top-level session. Top-level `fno whoami` is different: it reports operating context (fleet -> walker -> session), not the mesh name.
 
 For a stream-json (headless) thread there is no TUI - observe via `watch`/`logs`,
 never a terminal. If the raw command errors, relay the real error; do not invent

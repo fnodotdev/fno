@@ -212,6 +212,7 @@ pub(super) fn classify_payload_for_floor(
     git_bin: &str,
     cwd: &Path,
     pr_selector: Option<&str>,
+    node_pr_repo: Option<&str>,
 ) -> (bool, bool) {
     let local = classify_payload(git_bin, cwd);
     if local.0 {
@@ -220,8 +221,16 @@ pub(super) fn classify_payload_for_floor(
     // A consult read, not the terminal one: the ordinary bound. The floored
     // bound belongs to the run_done read whose MERGED answer retires the
     // fire; a consult that took it near the deadline would spend the margin
-    // floor and starve the very read it precedes.
-    match read_pr_view(gh_bin, cwd, pr_selector, stopgate_read_timeout()) {
+    // floor and starve the very read it precedes. The node repo pins the
+    // consult, the same pin every PR read below answers under.
+    match read_pr_view_fields(
+        gh_bin,
+        cwd,
+        pr_selector,
+        super::gh_read::PR_VIEW_FIELDS_GRAPHQL,
+        node_pr_repo,
+        stopgate_read_timeout(),
+    ) {
         Ok(Some(view)) => {
             let number = view
                 .get("number")
@@ -231,7 +240,13 @@ pub(super) fn classify_payload_for_floor(
                 // A malformed view is a degraded probe, not a docs PR.
                 return (true, true);
             }
-            let target = format!("repos/{{owner}}/{{repo}}/pulls/{number}/files");
+            // The literal slug replaces gh's ambient `{owner}/{repo}`
+            // template when the node repo is known, the same pin read 4
+            // applies to the pulls-comments path.
+            let target = match node_pr_repo.filter(|s| !s.is_empty()) {
+                Some(slug) => format!("repos/{slug}/pulls/{number}/files"),
+                None => format!("repos/{{owner}}/{{repo}}/pulls/{number}/files"),
+            };
             let files = bounded_read(
                 gh_bin.as_ref(),
                 &["api", &target, "--paginate"],

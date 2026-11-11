@@ -272,11 +272,17 @@ fn checks(args: &[String], cwd: Option<&Path>) -> RunResult {
             };
         }
     };
-    let payload = json!({
+    let mut payload = json!({
         "op": "status-ci",
         "cwd": cwd_path(cwd).to_string_lossy(),
         "pr": number,
     });
+    // `--repo` is load-bearing here as everywhere else: a caller that pinned
+    // the repository must never be answered from the ambient origin's
+    // same-number PR.
+    if let Some(repo) = option(args, "--repo") {
+        payload["repo"] = json!(repo);
+    }
     let (code, stdout, stderr) = crate::pr_status::status_ci(&payload);
     RunResult {
         returncode: code,

@@ -2,7 +2,7 @@
 
 > Creation moved to `fno agents spawn` - see [fno-agents-spawn.md](fno-agents-spawn.md).
 
-`fno agents mail ask <name> "<message>"` messages an EXISTING agent: it delivers the message to the running session and prints the recipient's reply on stdout. An unknown name errors with exit 16 ("spawn it first") - creation moved to `fno agents spawn` in the cross-agent bus epic (Group 1): `fno agents spawn --name <name> --harness claude "<initial-prompt>"` creates the `claude --bg` session and prints a compact JSON receipt carrying the supervisor's 8-hex `short_id`.
+`fno agents mail ask <session-id> "<message>"` messages an EXISTING agent: it delivers the message to the running session and prints the recipient's reply on stdout. An unknown name errors with exit 16 ("spawn it first"). Creation moved to `fno agents spawn` in the cross-agent bus epic (Group 1). `fno agents spawn --name <name> --harness claude "<initial-prompt>"` creates the `claude --bg` session and prints a compact JSON receipt carrying the supervisor's 8-hex `short_id`.
 
 Use this guide when you have an orchestrator (script, LLM session, CI job) that needs to hand work to a long-running Claude agent and read back the response without managing the session id, socket, or attach lifecycle yourself.
 
@@ -10,7 +10,7 @@ Use this guide when you have an orchestrator (script, LLM session, CI job) that 
 
 Both lanes inject the message into the live session the same way; everything after delivery differs. Neither is a wrapper over the other, so retiring either would delete a contract, not deduplicate a path.
 
-| | `fno agents mail ask <name> "..."` | `fno agents mail send <name> "..."` |
+| | `fno agents mail ask <session-id> "..."` | `fno agents mail send <session-id> "..."` |
 |---|---|---|
 | Contract | synchronous request-reply | asynchronous fire-and-receipt |
 | Returns | the recipient's REPLY on stdout (pipeable) | a delivery receipt (`accepted-new-turn`, `parked`, ..., or `queued (durable)`) |

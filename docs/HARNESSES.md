@@ -29,7 +29,7 @@ Not for: per-CLI command syntax or hook wiring detail. Those are the harness's o
 
 ### footnote
 
-`fno agents spawn -H footnote --as pane "<task>" -- -m zai/glm-5.3-flash` runs footnote's own loop. The prefix names a `config.model_routing.providers` record, and `-P` is a claude route that this harness refuses. footnote sends each turn to the model API. It runs the tools (Read, Glob, Grep, Edit, Write, Bash, Skill, Footnotes) under `hooks/hooks.json`. It reads permissions and the sandbox switch from the footnote settings files: `~/.footnote/settings.json`, then `.footnote/settings.json`, then `.footnote/settings.local.json`. It writes every call to `~/.fno/sessions/<project-slug>/<fno_id>.jsonl` before it acts. `fno agents mail ask <name>` resumes by name. A resume never re-runs a started Edit, Write or Bash. It tells the model the outcome is unknown. The `footnote` binary is built from the private repo bllshttng/fnh with `cargo install --locked --path <your fnh checkout>`. `FNO_FOOTNOTE_BIN` names another path. The release tarball ships no footnote binary; an update installs only a compat stub at that name. The spawn row stays deliberately `capable`, so the thread lane keeps the honest seat refusal instead of launching the stub.
+`fno agents spawn -H footnote --as pane "<task>" -- -m zai/glm-5.3-flash` runs footnote's own loop. The prefix names a `config.model_routing.providers` record, and `-P` is a claude route that this harness refuses. footnote sends each turn to the model API. It runs the tools (Read, Glob, Grep, Edit, Write, Bash, Skill, Footnotes) under `hooks/hooks.json`. It reads permissions and the sandbox switch from the footnote settings files: `~/.footnote/settings.json`, then `.footnote/settings.json`, then `.footnote/settings.local.json`. It writes every call to `~/.fno/sessions/<project-slug>/<fno_id>.jsonl` before it acts. `fno agents mail ask <session-id>` resumes that session. A resume never re-runs a started Edit, Write or Bash. It tells the model the outcome is unknown. The `footnote` binary is built from the private repo bllshttng/fnh with `cargo install --locked --path <your fnh checkout>`. `FNO_FOOTNOTE_BIN` names another path. The release tarball ships no footnote binary. An update installs only a compat stub at that name. The spawn row stays deliberately `capable`, so the thread lane keeps the honest seat refusal instead of launching the stub.
 
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -48,24 +48,24 @@ Tools run with your own permissions. There is no sandbox.
 
 | Command | ACP message |
 |---|---|
-| `fno agents mail send <name> ...` | `session/prompt` with `_meta["footnote/origin"]` = `{kind: "mail", sender_session_id, message_id}`. fnh records the turn's origin as `mail`. |
-| `fno agents mail ask <name> "<text>"` | `session/prompt` with no origin, so fnh records `operator`. |
-| `fno agents mail ask <name> --answer allow_once\|deny` | The answer to the pending `session/request_permission`: `allow_once`, or `reject_once` for `deny`. |
+| `fno agents mail send <session-id> ...` | `session/prompt` with `_meta["footnote/origin"]` = `{kind: "mail", sender_session_id, message_id}`. fnh records the turn's origin as `mail`. |
+| `fno agents mail ask <session-id> "<text>"` | `session/prompt` with no origin, so fnh records `operator`. |
+| `fno agents mail ask <session-id> --answer allow_once\|deny` | The answer to the pending `session/request_permission`: `allow_once`, or `reject_once` for `deny`. |
 | `fno agents session stop <name>` | The stop signals the host. The host rejects any pending ask, sends `session/cancel`, and closes fnh's stdin. fnh writes its terminal record. |
 
 Mail and asks run one turn at a time. A mail sent during a turn waits until the turn ends. An ask nobody answers rejects after 290 s, and fnh rejects on its own at 300 s. Neither side allows by default. The permission-response rows in the capability table stay unsupported, because they describe pane keystrokes.
 
 ### muse
 
-`fno agents spawn -H muse --as thread "<task>"` starts Muse Code (Meta's coding CLI). One-time setup: `fno config plugin install muse` registers the stage's skills as a Muse-native plugin bundle (`.muse-plugin/plugin.json` plus copies of the stage's skill dirs, installed into Muse's own cache), so `/target` and the rest resolve in any repo. `FNO_MUSE_BIN` names the binary the install runs. The `fno-agents-worker --muse-host` process runs `muse serve`, holds its stdin and stdout, and serves the session on a socket under `~/.fno/agents/muse/`. The registry row carries the Muse session id, the host pid and that socket. fno picks the session id, so the row is bound before the first turn. `--as headless` runs one `muse exec --json --session-id <id>` turn instead. `fno agents mail ask <name>` on a headless row runs the same form again, and Muse continues the session. Tokens after the `--` fence go to `muse serve` or `muse exec` unchanged. Muse refuses an unknown flag itself. `FNO_MUSE_BIN` names another binary. Log in first with `muse login` or `META_API_KEY`.
+`fno agents spawn -H muse --as thread "<task>"` starts Muse Code (Meta's coding CLI). One-time setup: `fno config plugin install muse` registers the stage's skills as a Muse-native plugin bundle. The bundle is `.muse-plugin/plugin.json` plus copies of the stage's skill dirs, installed into Muse's own cache. So `/target` and the rest resolve in any repo. `FNO_MUSE_BIN` names the binary the install runs. The `fno-agents-worker --muse-host` process runs `muse serve`, holds its stdin and stdout, and serves the session on a socket under `~/.fno/agents/muse/`. The registry row carries the Muse session id, the host pid and that socket. fno picks the session id, so the row is bound before the first turn. `--as headless` runs one `muse exec --json --session-id <id>` turn instead. `fno agents mail ask <session-id>` on a headless row runs the same form again, and Muse continues the session. Tokens after the `--` fence go to `muse serve` or `muse exec` unchanged. Muse refuses an unknown flag itself. `FNO_MUSE_BIN` names another binary. Log in first with `muse login` or `META_API_KEY`.
 
 #### The thread lane: steering over MSP
 
 | Command | MSP message |
 |---|---|
-| `fno agents mail send <name> ...` | `turn/start` with the wrapped mail as text, `ifBusy: "queue"`, and `displayText` set to `[fno-mail <envelope id>]`. |
-| `fno agents mail ask <name> "<text>"` | `turn/start`. A text that starts with `/<skill>` goes as a skill part. |
-| `fno agents mail ask <name> --answer allow_once\|deny` | `approval/decide` with the choice Muse offered for that decision. |
+| `fno agents mail send <session-id> ...` | `turn/start` with the wrapped mail as text, `ifBusy: "queue"`, and `displayText` set to `[fno-mail <envelope id>]`. |
+| `fno agents mail ask <session-id> "<text>"` | `turn/start`. A text that starts with `/<skill>` goes as a skill part. |
+| `fno agents mail ask <session-id> --answer allow_once\|deny` | `approval/decide` with the choice Muse offered for that decision. |
 | `fno agents session stop <name>` | The host denies a pending approval, sends `turn/interrupt` and `session/leave` with `stop: true`, then closes `muse serve`'s stdin. |
 
 The proof of a delivery is the user message that Muse records with the host's own `commandId` and the envelope id. A `turn/started` event alone does not count, because a queued turn starts later. The host answers within 10 s with one of the delivery states. `accepted-new-turn` means Muse recorded the message. `parked` means the message waits in Muse's queue behind a running turn. Muse runs it when that turn ends, so the send reports it hosted and writes no durable copy, which would reach the worker twice. The host appends the late landing to `~/.fno/agents/muse/<session>.delivery.jsonl`. An approval nobody answers is denied after 290 s, the footnote host's bound. `failed` names a reason: `reclaimed` for `turn/unqueued`, `retracted`, or the MSP error kind. Mail never steers a running turn.

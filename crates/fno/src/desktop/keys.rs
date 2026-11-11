@@ -67,7 +67,7 @@ pub enum Shortcut {
     Paste,
     Quit,
     /// cmd-1 shows the chat, cmd-2 the orchestration board, cmd-3 the
-    /// terminal.
+    /// extensions, cmd-4 the terminal.
     View(u8),
 }
 
@@ -88,6 +88,7 @@ pub fn shortcut(k: &Key) -> Option<Shortcut> {
         ("1", _) => Shortcut::View(1),
         ("2", _) => Shortcut::View(2),
         ("3", _) => Shortcut::View(3),
+        ("4", _) => Shortcut::View(4),
         _ => return None,
     })
 }
@@ -232,6 +233,24 @@ mod tests {
             key: name,
             ..Key::default()
         }
+    }
+
+    #[test]
+    fn cmd_digits_pick_the_main_view() {
+        use super::super::window::MainView;
+        let cmd = |k| Key {
+            key: k,
+            cmd: true,
+            ..Key::default()
+        };
+        let shown = |k| match shortcut(&cmd(k)) {
+            Some(Shortcut::View(n)) => MainView::for_shortcut(n),
+            other => panic!("cmd-{k} is {other:?}"),
+        };
+        assert_eq!(shown("3"), MainView::Extensions);
+        assert_eq!(shown("2"), MainView::Orchestration);
+        assert_eq!(shown("1"), MainView::Chat);
+        assert_eq!(shown("4"), MainView::Terminal);
     }
 
     #[test]

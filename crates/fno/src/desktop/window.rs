@@ -24,21 +24,34 @@ use super::keys::{self, Key, Modes, Shortcut};
 use super::link::{Event, Layout, Link};
 use super::mouse::{self, Hit};
 use super::palette::Palette;
-use super::{left_pane, orchestration, tabs};
+use super::{extensions, left_pane, orchestration, tabs};
 use crate::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};
-use crate::theme::Theme;
 use crate::tree::Rect;
 use crate::web_hq::Board;
 
-/// What fills the main area. The Extensions view adds its variant here.
+/// What fills the main area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum MainView {
     /// The focused agent's conversation (cmd-1), the mode the app opens in.
     Chat,
-    /// The server's panes (cmd-3).
+    /// The server's panes (cmd-4).
     Terminal,
     /// The command center board (cmd-2).
     Orchestration,
+    /// The mods and layouts from `fno config plugins ls` (cmd-3).
+    Extensions,
+}
+
+impl MainView {
+    /// The view cmd-`n` shows.
+    pub fn for_shortcut(n: u8) -> MainView {
+        match n {
+            1 => MainView::Chat,
+            2 => MainView::Orchestration,
+            3 => MainView::Extensions,
+            _ => MainView::Terminal,
+        }
+    }
 }
 
 /// What a click in the left pane, the strip or the board does.
@@ -74,7 +87,6 @@ const WHEEL_CAP: i32 = 10;
 
 pub struct Root {
     pub(super) main: MainView,
-    session: String,
     link: Option<Link>,
     pub(super) layout: Layout,
     frames: HashMap<u64, Arc<Frame>>,
@@ -101,12 +113,18 @@ pub struct Root {
     pub(super) answers: HashMap<String, AnswerState>,
     pub(super) agents_open: bool,
     pub(super) chat: Chat,
+    /// The mux session this window attached to; panes open on it.
+    pub(super) session: String,
+    pub(super) ext: extensions::Page,
     /// The input handler's uncommitted text.
     preedit: Option<String>,
     _reader: Option<Task<()>>,
     _chat: Option<Task<()>>,
     _hq: Option<Task<()>>,
+    _plugins: Option<Task<()>>,
+    _plugins_tick: Option<Task<()>>,
     _activation: Option<Subscription>,
+    _appearance: Option<Subscription>,
     _notice: Option<Task<()>>,
 }
 
@@ -139,19 +157,22 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> Self {
         let sent_size = grid_size(window.viewport_size(), metrics.cell);
+        let (palette, theme_warning) = super::palette::for_appearance(
+            super::palette::appearance_is_light(window.appearance()),
+            &std::env::current_dir().unwrap_or_else(|_| "/".into()),
+        );
         let mut root = Root {
             main,
-            session: session.clone(),
             link: None,
             layout: Layout::default(),
             frames: HashMap::new(),
             panes: HashMap::new(),
             modes: Modes::default(),
-            notice: None,
+            notice: theme_warning,
             notice_gen: 0,
             closed: None,
             metrics,
-            palette: Palette::from_theme(&Theme::default_theme()),
+            palette,
             focus: cx.focus_handle(),
             sent_size,
             board: Board::default(),
@@ -162,12 +183,16 @@ impl Root {
             wheel_pane: None,
             answers: HashMap::new(),
             agents_open: false,
-            chat: Chat::default(),
+            session: session.clone(),
+            ext: extensions::Page::default(),
             preedit: None,
             _reader: None,
             _chat: None,
             _hq: None,
+            _plugins: None,
+            _plugins_tick: None,
             _activation: None,
+            _appearance: None,
             _notice: None,
         };
         // Repaint every pane on (de)activation: the cursor turns hollow. The
@@ -179,6 +204,13 @@ impl Root {
             for view in root.panes.values() {
                 view.update(cx, |_, cx| cx.notify());
             }
+        }));
+        // Follow the system appearance live: macOS flips at dusk with the app
+        // open.
+        root._appearance = Some(cx.observe_window_appearance(window, |root, window, cx| {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
+            let light = super::palette::appearance_is_light(window.appearance());
+            root.set_palette(super::palette::for_appearance(light, &cwd).0, cx);
         }));
         match Link::connect(&session, sent_size.0, sent_size.1) {
             Ok((link, mut rx)) => {
@@ -210,7 +242,44 @@ impl Root {
             }
             Err(e) => root.notice = Some(format!("the board poll did not start: {e}")),
         }
+        root.start_plugins(cx);
         root
+    }
+
+    /// Start the plugins thread, its reply reader and the timer that re-reads
+    /// the list while the Extensions view shows.
+    fn start_plugins(&mut self, cx: &mut Context<Self>) {
+        match extensions::start() {
+            Ok((asks, mut rx)) => {
+                self.ext = extensions::Page::new(asks);
+                self._plugins = Some(cx.spawn(async move |this, cx| {
+                    while let Some(reply) = rx.recv().await {
+                        let landed = this.update(cx, |root, cx| {
+                            if let Some(text) = root.ext.apply(reply) {
+                                root.say(text, cx);
+                            }
+                            cx.notify();
+                        });
+                        if landed.is_err() {
+                            break;
+                        }
+                    }
+                }));
+                self._plugins_tick = Some(cx.spawn(async move |this, cx| loop {
+                    cx.background_executor().timer(extensions::REREAD).await;
+                    let open = this.update(cx, |root, _| {
+                        let shown = root.main == MainView::Extensions;
+                        if shown {
+                            root.ext.read();
+                        }
+                    });
+                    if open.is_err() {
+                        break;
+                    }
+                }));
+            }
+            Err(e) => self.notice = Some(format!("the plugins read did not start: {e}")),
+        }
     }
 
     fn send(&mut self, msg: ClientMsg) {
@@ -223,7 +292,7 @@ impl Root {
     }
 
     /// Show `text` in the corner for [`NOTICE_FOR`].
-    fn say(&mut self, text: String, cx: &mut Context<Self>) {
+    pub(super) fn say(&mut self, text: String, cx: &mut Context<Self>) {
         self.notice = Some(text);
         self.notice_gen += 1;
         let gen = self.notice_gen;
@@ -271,6 +340,9 @@ impl Root {
 
     fn show(&mut self, view: MainView, cx: &mut Context<Self>) {
         self.main = view;
+        if view == MainView::Extensions {
+            self.ext.read();
+        }
         // Asking for chat again retries a stream that closed.
         if view == MainView::Chat && self.chat.error.is_some() {
             self.chat.key = None;
@@ -388,6 +460,18 @@ impl Root {
         cx.notify();
     }
 
+    /// Repaint every pane and the chrome in `palette`.
+    fn set_palette(&mut self, palette: Palette, cx: &mut Context<Self>) {
+        self.palette = palette;
+        for view in self.panes.values() {
+            view.update(cx, |v, cx| {
+                v.palette = palette;
+                cx.notify();
+            });
+        }
+        cx.notify();
+    }
+
     fn pane_view(&mut self, id: u64, cx: &mut Context<Self>) -> Entity<PaneView> {
         let frame = self.frames.get(&id).cloned();
         let focused = id == self.layout.focus;
@@ -495,12 +579,19 @@ impl Root {
                 Shortcut::Command(c) => self.send(ClientMsg::Command(c)),
                 Shortcut::Paste => {
                     if let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) {
-                        if self.main == MainView::Chat {
-                            self.chat.draft.push_str(&text);
-                            cx.notify();
-                        } else {
-                            let bytes = keys::paste(&text, self.modes);
-                            self.send(ClientMsg::Input(bytes));
+                        match self.main {
+                            MainView::Extensions => {
+                                extensions::paste(self, &text, cx);
+                                return;
+                            }
+                            MainView::Chat => {
+                                self.chat.draft.push_str(&text);
+                                cx.notify();
+                            }
+                            _ => {
+                                let bytes = keys::paste(&text, self.modes);
+                                self.send(ClientMsg::Input(bytes));
+                            }
                         }
                     }
                 }
@@ -509,12 +600,7 @@ impl Root {
                     cx.quit();
                 }
                 Shortcut::View(n) => {
-                    let view = match n {
-                        1 => MainView::Chat,
-                        2 => MainView::Orchestration,
-                        _ => MainView::Terminal,
-                    };
-                    self.show(view, cx);
+                    self.show(MainView::for_shortcut(n), cx);
                     cx.notify();
                 }
             }
@@ -531,6 +617,10 @@ impl Root {
             }
             cx.stop_propagation();
             cx.notify();
+            return;
+        }
+        if self.main == MainView::Extensions && extensions::key(self, &key, cx) {
+            cx.stop_propagation();
             return;
         }
         // The board takes no typing, and text keys reach the pane through the
@@ -958,6 +1048,10 @@ impl Render for Root {
             MainView::Chat => self.chat_view(cx).into_any_element(),
             MainView::Terminal => self.terminal(cx).into_any_element(),
             MainView::Orchestration => orchestration::render(self, cx)
+                .font_family(".SystemUIFont")
+                .text_sm()
+                .into_any_element(),
+            MainView::Extensions => extensions::render(self, cx)
                 .font_family(".SystemUIFont")
                 .text_sm()
                 .into_any_element(),

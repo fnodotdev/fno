@@ -4,6 +4,7 @@
 
 mod boxdraw;
 mod chat;
+mod extensions;
 mod grid;
 mod hq;
 pub mod keys;

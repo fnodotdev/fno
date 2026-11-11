@@ -295,7 +295,8 @@ fn stdout_deny(stdout: &str) -> Option<String> {
         .get("hookSpecificOutput")
         .and_then(|h| h.get("permissionDecision"))
         .and_then(Value::as_str);
-    if permission == Some("deny") {
+    // These wires have no prompt to show an `ask` on, so it relays as a deny.
+    if matches!(permission, Some("deny") | Some("ask")) {
         return Some(
             v.get("hookSpecificOutput")
                 .and_then(|h| h.get("permissionDecisionReason"))

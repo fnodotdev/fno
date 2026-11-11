@@ -1,0 +1,16 @@
+# Capability tier: does a reader of the mail skill's routing table address
+# a send to the worker's session id, not its name? A name send can miss
+# when no store carries the name; the short id always resolves.
+id: capability-send-addresses-session-id
+tier: capability
+prompt: |
+  You are working in this repository. Read the routing table in skills/mail/SKILL.md.
+
+  A worker is listed as `t-decisions-read-as` with short id `6bf63c59`. You must mail it the body `ping`. Do not run any command and do not change any other file. Write your answer to send.md in the repository root (the directory you were started in). The first line is exactly `command: <the one command you would run>`.
+grade:
+  - kind: file-exists
+    path: "send.md"
+  - kind: exit
+    command: "sed -n 1p send.md | tr -d '`\\r' | grep -Eq '^command: *fno (agents )?mail send 6bf63c59 +.ping.? *$'"
+timeout_minutes: 10
+tags: [capability, mail]

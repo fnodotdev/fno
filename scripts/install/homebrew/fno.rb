@@ -15,7 +15,7 @@
 # on first use of a Python-side command. brew owns the keg + symlinks, so
 # `brew uninstall`/`brew upgrade` are clean (Locked Decisions 2 + 3).
 #
-# NOTE: this is the SEED snapshot. The live tap (bllshttng/homebrew-fno, what
+# NOTE: this is the SEED snapshot. The live tap (fnodotdev/homebrew-fno, what
 # `brew install` reads) is auto-bumped on every release by
 # scripts/release/update-homebrew-formula.py ; these values are just the
 # last-release snapshot, not the source of truth.

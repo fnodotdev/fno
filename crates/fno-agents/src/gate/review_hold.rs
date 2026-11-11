@@ -278,13 +278,16 @@ fn release_hold(branch: &str, holder: Option<&str>) -> bool {
 }
 
 /// The gh REST read for a PR's head ref, oid and state. Tests pin
-/// FNO_REVIEW_HOLD_GH; production resolves plain `gh`.
+/// FNO_REVIEW_HOLD_GH; production resolves plain `gh`. The session node's PR
+/// repo pins the read, the same pin every PR read answers under.
 fn pr_head_ref_and_oid(cwd: &Path, pr: &str) -> Option<(String, String, String)> {
     let gh = std::env::var("FNO_REVIEW_HOLD_GH").unwrap_or_else(|_| "gh".to_string());
-    let pr_json = crate::loopcheck::gh_read::read_pr_view(
+    let repo = crate::loopcheck::pr_read::session_node_pr_target(cwd).1;
+    let pr_json = crate::loopcheck::gh_read::read_pr_view_in(
         &gh,
         cwd,
         Some(pr),
+        repo.as_deref(),
         std::time::Duration::from_secs(10),
     )
     .ok()??;

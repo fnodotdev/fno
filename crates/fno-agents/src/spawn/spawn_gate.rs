@@ -566,6 +566,7 @@ pub fn gate_node() -> Option<String> {
 // moved it out of this over-budget file); re-exported so every existing
 // reader keeps its `spawn_gate::live_rows` path.
 pub(crate) use crate::cap_liveness::live_rows;
+pub(crate) use crate::cap_liveness::{live_rows_checked, LiveRead};
 
 /// Count fno WORKER SLOTS in use for the `max_live` cap: liveness-filtered fno
 /// registry rows + live `worker:<name>` headless slot claims. A lead row (it

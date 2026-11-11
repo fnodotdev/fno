@@ -1,5 +1,7 @@
 // Ported from the single-file draft of send.rs; split by question.
 use super::*;
+use crate::claude_roster::ClaudeAgentRow;
+use fno_mail::session::ShortForm;
 
 /// 32-hex or dashed-uuid shape.
 /// `pub(crate)`: the reply leaf's provenance arm reads it.
@@ -314,6 +316,47 @@ pub(super) fn reachable_from_harness_stores(_token: &str) -> (Vec<ReachableSessi
     (Vec::new(), true)
 }
 
+fn daemon_list_rows() -> (Vec<ClaudeAgentRow>, bool) {
+    use crate::claude_roster::ClaudeAgentsSnapshot;
+    if std::env::var("FNO_TEST_HERMETIC").ok().as_deref() == Some("1") {
+        return (Vec::new(), true);
+    }
+    let snapshot = crate::claude_roster::read_all_agents_union();
+    // Rows from a partial read are still evidence. An empty Unknown read
+    // stays a clean miss, not a degraded one: a host with no claude binary
+    // reads Unknown every time, and degrading there would turn every unknown
+    // name on a codex-only box into "unreadable stores".
+    let (ClaudeAgentsSnapshot::Known { rows, .. } | ClaudeAgentsSnapshot::Unknown { rows, .. }) =
+        snapshot;
+    (rows, true)
+}
+
+pub(crate) fn daemon_hits_from_rows(token: &str, rows: &[ClaudeAgentRow]) -> Vec<ReachableSession> {
+    rows.iter()
+        .filter_map(|row| {
+            let name = row.name.as_deref()?;
+            if name != token && !name.eq_ignore_ascii_case(token) {
+                return None;
+            }
+            let sid = row.session_id.as_deref()?;
+            Some(ReachableSession {
+                session_id: sid.to_string(),
+                source: "daemon",
+                agent: "claude".to_string(),
+                cwd: row.cwd.clone(),
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn reachable_from_daemon_list(token: &str) -> (Vec<ReachableSession>, bool) {
+    let (rows, read_ok) = daemon_list_rows();
+    if !read_ok {
+        return (Vec::new(), false);
+    }
+    (daemon_hits_from_rows(token, &rows), true)
+}
+
 /// Python `resolve_reachable`: the union with the same merge, ambiguity and
 /// degradation rules.
 /// `pub(crate)`: the reply leaf's ladder resolves through it.
@@ -332,10 +375,11 @@ pub(crate) fn resolve_reachable(token: &str) -> ReachResult {
         Err(()) => degraded.push("registry"),
     }
     type Source = fn(&str) -> (Vec<ReachableSession>, bool);
-    let sources: [(&'static str, Source); 5] = [
+    let sources: [(&'static str, Source); 6] = [
         ("transcript", reachable_from_transcripts),
         ("harness-store", reachable_from_harness_stores),
         ("registry", reachable_from_registry),
+        ("daemon", reachable_from_daemon_list),
         ("roster", reachable_from_roster),
         ("graph", reachable_from_graph),
     ];
@@ -452,7 +496,10 @@ pub(super) fn unreachable_token_line(name: &str, candidates: &[String]) -> Strin
     let hint = if candidates.is_empty() {
         String::new()
     } else {
-        format!(" Closest live sessions: {}.", candidates.join(", "))
+        format!(
+            " Send to a session id. Closest live sessions: {}.",
+            candidates.join(", ")
+        )
     };
     format!(
         "unknown agent or live-session handle: {}.{hint}",
@@ -464,31 +511,6 @@ pub(super) fn unreachable_token_line(name: &str, candidates: &[String]) -> Strin
 pub(crate) fn unreachable_token_exit(name: &str, candidates: &[String], code: i32) -> i32 {
     eprintln!("{}", unreachable_token_line(name, candidates));
     code
-}
-
-#[cfg(test)]
-mod token_exit_tests {
-    use super::*;
-
-    /// The unknown-handle refusal names the closest live handles when the
-    /// resolver found any, and stays bare when it found none.
-    #[test]
-    fn the_unknown_handle_refusal_names_closest_live_sessions_when_any_exist() {
-        let line = unreachable_token_line(
-            "nope",
-            &["fno-think001".to_string(), "fno-tgt00001".to_string()],
-        );
-        assert!(
-            line.contains("Closest live sessions: fno-think001"),
-            "{line}"
-        );
-        assert!(
-            line.contains("unknown agent or live-session handle"),
-            "{line}"
-        );
-        let bare = unreachable_token_line("nope", &[]);
-        assert!(!bare.contains("Closest live sessions"), "{bare}");
-    }
 }
 
 /// `pub(crate)`: the reply leaf mirrors the send leaf's refusal exits.
@@ -506,6 +528,77 @@ pub(crate) fn unavailable_token_exit(name: &str, failed: &[String], candidates: 
     );
     eprintln!("{line}");
     2
+}
+
+pub(crate) fn spelling_near(name: &str, token: &str) -> bool {
+    let (name, token) = (name.to_lowercase(), token.to_lowercase());
+    if name.starts_with(&token) || token.starts_with(&name) {
+        return true;
+    }
+    if name.len() < 3 || token.len() < 3 {
+        return name == token;
+    }
+    name.as_bytes()
+        .windows(3)
+        .any(|w| token.as_bytes().windows(3).any(|t| t == w))
+}
+
+/// The near rows over daemon rows: name spelling-neighbors, short id first.
+pub(crate) fn near_from_daemon_rows(
+    token: &str,
+    rows: &[ClaudeAgentRow],
+) -> Vec<(ShortForm, String)> {
+    rows.iter()
+        .filter_map(|row| {
+            let name = row.name.as_deref()?;
+            if !spelling_near(name, token) {
+                return None;
+            }
+            Some((ShortForm::from_head(&row.short_id), name.to_string()))
+        })
+        .collect()
+}
+
+/// The near rows over registry rows: harness_title (or name) spelling
+/// neighbors, short id keyed.
+pub(crate) fn near_from_registry_rows(token: &str, rows: &[Value]) -> Vec<(ShortForm, String)> {
+    rows.iter()
+        .filter_map(|row| {
+            let sid = opt_str_field(row, "short_id")?;
+            let title =
+                opt_str_field(row, "harness_title").or_else(|| opt_str_field(row, "name"))?;
+            if !spelling_near(&title, token) {
+                return None;
+            }
+            Some((ShortForm::from_head(&sid), title))
+        })
+        .collect()
+}
+
+/// The live sessions whose names or titles share a spelling with the token:
+/// the daemon rows first, then registry rows, dedup by short id, at most 5.
+pub(crate) fn near_sessions(token: &str) -> Vec<(ShortForm, String)> {
+    let mut out: Vec<(ShortForm, String)> = Vec::new();
+    let (rows, read_ok) = daemon_list_rows();
+    if read_ok {
+        out.extend(near_from_daemon_rows(token, &rows));
+    }
+    let registry = AgentsHome::shared_registry_json();
+    if let Ok(entries) = crate::client_commands::load_registry_entries(&registry) {
+        out.extend(near_from_registry_rows(token, &entries));
+    }
+    // Dedup by short id, daemon rows first.
+    let mut seen: std::collections::HashSet<String> = Default::default();
+    out.retain(|(sid, _)| seen.insert(sid.as_str().to_string()));
+    out.truncate(5);
+    out
+}
+
+/// The refusal's candidate strings: `<short id> (<name>)`.
+pub(crate) fn format_near(near: &[(ShortForm, String)]) -> Vec<String> {
+    near.iter()
+        .map(|(sid, name)| format!("{} ({})", sid.as_str(), name))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -606,4 +699,73 @@ pub(super) enum TokenFailure {
 
 pub(super) fn is_job_token(token: &str) -> bool {
     token.starts_with("node:") || token.starts_with("pr:")
+}
+
+#[cfg(test)]
+mod mail_addr_tests {
+    use super::*;
+
+    fn daemon_row(name: &str, sid: &str) -> ClaudeAgentRow {
+        let mut row = ClaudeAgentRow::new("6bf63c59", None);
+        row.name = Some(name.to_string());
+        row.session_id = Some(sid.to_string());
+        row
+    }
+
+    /// A daemon row named t-decisions-read-as with session 6bf63c59-... and
+    /// a registry row named 6bf63c59 with no aliases: the send resolves to
+    /// the daemon row's session (AC1-HP).
+    #[test]
+    fn mail_addr_name_resolves_through_daemon_list() {
+        let rows = vec![daemon_row(
+            "t-decisions-read-as",
+            "6bf63c59-753c-4e01-9d5d-000000000001",
+        )];
+        let hits = daemon_hits_from_rows("t-decisions-read-as", &rows);
+        let [hit] = hits.as_slice() else {
+            panic!("one daemon hit expected: {hits:?}");
+        };
+        assert_eq!(hit.session_id, "6bf63c59-753c-4e01-9d5d-000000000001");
+        assert_eq!(hit.source, "daemon");
+        let hits = daemon_hits_from_rows("T-DECISIONS-READ-AS", &rows);
+        assert_eq!(hits.len(), 1, "case-folded match");
+    }
+
+    /// A token no store answers: the refusal names each near session as
+    /// `<short id> (<name>)` (AC2-ERR).
+    #[test]
+    fn mail_addr_unknown_refusal_names_short_ids() {
+        let rows = vec![daemon_row(
+            "t-decisions-read-as",
+            "6bf63c59-753c-4e01-9d5d-000000000001",
+        )];
+        let near = near_from_daemon_rows("t-decis", &rows);
+        assert_eq!(near.len(), 1);
+        let formatted = format_near(&near);
+        assert_eq!(
+            formatted,
+            vec!["6bf63c59 (t-decisions-read-as)".to_string()]
+        );
+        let line = unreachable_token_line("t-decis", &formatted);
+        assert!(
+            line.contains("Closest live sessions: 6bf63c59 (t-decisions-read-as)."),
+            "{line}"
+        );
+        let bare = near_from_daemon_rows("zzz", &rows);
+        assert!(bare.is_empty(), "{bare:?}");
+        let bare_line = unreachable_token_line("zzz", &format_near(&bare));
+        assert!(!bare_line.contains("Closest live sessions"), "{bare_line}");
+        // Registry rows fill near too, titled by harness_title.
+        let registry_row = serde_json::json!({
+            "short_id": "9aa11bb2",
+            "name": "t-alpha-1",
+            "harness_title": "t-alpha-1",
+            "harness_session_id": "9aa11bb2-1111-2222-3333-444455556666"
+        });
+        let near = near_from_registry_rows("t-alp", &[registry_row]);
+        let [(short, _)] = near.as_slice() else {
+            panic!("one registry near row expected: {near:?}");
+        };
+        assert_eq!(short.as_str(), "9aa11bb2");
+    }
 }
