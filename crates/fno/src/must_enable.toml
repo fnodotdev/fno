@@ -2,7 +2,37 @@
 # worker runs, translated per harness by must_enable.rs. A word that is a
 # list matches any one of its strings. A row may name no interpreter, shell
 # or runner (filter A) and nothing that launches, merges or rotates (the
-# never-list): the loader refuses both.
+# never-list): the loader refuses both. Every rule needs a corpus command it
+# allows, and CI replays every corpus command through fno's Bash guards.
+
+corpus = [
+  "fno backlog get x-0000",
+  "fno backlog note x-0000 progress",
+  "fno inbox operator status",
+  "fno mail unread",
+  "fno whoami",
+  "fno agents mail unread",
+  "fno agents claim status node:x-0000",
+  "fno agents session list",
+  "fno do plan path",
+  "fno do state get",
+  "fno do pr status 1",
+  "fno do pr wait 1 --until settled --timeout 15m",
+  "fno do pr info 1",
+  "fno do pr list",
+  "fno do pr logs 1",
+  "grep -rn foo src | head -20",
+  "tail -n 5 README.md",
+  "rg -n main src",
+  "jq .name package.json",
+  "git status",
+  "git diff --stat",
+  "git log --oneline -5",
+  "git show HEAD",
+  "gh pr view 1",
+  "gh pr checks 1",
+  "gh pr list",
+]
 
 [[rule]]
 prefix = ["fno", "backlog"]
@@ -43,81 +73,3 @@ why = "git reads"
 [[rule]]
 prefix = ["gh", "pr", ["view", "checks", "list"]]
 why = "GitHub PR reads"
-
-[[corpus]]
-command = "fno backlog get x-0000"
-
-[[corpus]]
-command = "fno backlog note x-0000 progress"
-
-[[corpus]]
-command = "fno inbox operator status"
-
-[[corpus]]
-command = "fno mail unread"
-
-[[corpus]]
-command = "fno whoami"
-
-[[corpus]]
-command = "fno agents mail unread"
-
-[[corpus]]
-command = "fno agents claim status node:x-0000"
-
-[[corpus]]
-command = "fno agents session list"
-
-[[corpus]]
-command = "fno do plan path"
-
-[[corpus]]
-command = "fno do state get"
-
-[[corpus]]
-command = "fno do pr status 1"
-
-[[corpus]]
-command = "fno do pr wait 1 --until settled --timeout 15m"
-
-[[corpus]]
-command = "fno do pr info 1"
-
-[[corpus]]
-command = "fno do pr list"
-
-[[corpus]]
-command = "fno do pr logs 1"
-
-[[corpus]]
-command = "grep -rn foo src | head -20"
-
-[[corpus]]
-command = "tail -n 5 README.md"
-
-[[corpus]]
-command = "rg -n main src"
-
-[[corpus]]
-command = "jq .name package.json"
-
-[[corpus]]
-command = "git status"
-
-[[corpus]]
-command = "git diff --stat"
-
-[[corpus]]
-command = "git log --oneline -5"
-
-[[corpus]]
-command = "git show HEAD"
-
-[[corpus]]
-command = "gh pr view 1"
-
-[[corpus]]
-command = "gh pr checks 1"
-
-[[corpus]]
-command = "gh pr list"

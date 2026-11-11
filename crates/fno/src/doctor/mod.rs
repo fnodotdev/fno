@@ -684,6 +684,10 @@ fn run_home(args: &[String]) -> i32 {
             "auto_mode_rules".into(),
             report::auto_mode_rules(&auto_mode_settings),
         );
+        report.insert(
+            "must_enable_rules".into(),
+            crate::must_enable::doctor_report(),
+        );
     }
     let blockers = Blockers::of(&rep.value);
     let source_blocked = rep
@@ -728,6 +732,11 @@ fn run_home(args: &[String]) -> i32 {
                 auto_mode_settings.display()
             )),
             _ => {}
+        }
+        if let Some(rules) = rep.value.get("must_enable_rules") {
+            for line in crate::must_enable::doctor_lines(rules) {
+                echo_stdout(&line);
+            }
         }
         if !fix {
             if let Some(line) = report::preamble_budget_line(src.as_ref().and_then(|p| p.to_str()))

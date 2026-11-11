@@ -78,14 +78,9 @@ struct Row {
 }
 
 #[derive(Deserialize)]
-struct Corpus {
-    command: String,
-}
-
-#[derive(Deserialize)]
 struct Table {
     rule: Vec<Row>,
-    corpus: Vec<Corpus>,
+    corpus: Vec<String>,
 }
 
 pub(crate) struct List {
@@ -171,7 +166,7 @@ fn starts_with(words: &[&str], prefix: &[String]) -> bool {
 
 pub(crate) fn load(text: &str) -> Result<List, String> {
     let table: Table = toml::from_str(text).map_err(|e| format!("must_enable.toml: {e}"))?;
-    let corpus: Vec<String> = table.corpus.into_iter().map(|c| c.command).collect();
+    let corpus = table.corpus;
     for row in &table.rule {
         for words in expand(&row.prefix) {
             let rule = words.join(" ");
@@ -533,6 +528,41 @@ pub(crate) fn status(h: Harness, list: &List, path: Option<&Path>) -> Value {
     }
 }
 
+/// The doctor's `must_enable_rules` key: one status row per harness.
+pub(crate) fn doctor_report() -> Value {
+    let list = shipped();
+    let rows = Harness::ALL.iter().map(|&h| {
+        let path = target(h);
+        let mut row = status(h, &list, path.as_deref());
+        if h == Harness::Claude && path.as_deref().is_some_and(claude_rewrites_through_rtk) {
+            row["rewriter"] = json!("rtk");
+        }
+        row
+    });
+    Value::Array(rows.collect())
+}
+
+/// One human line per harness that is missing rules, edited or unreadable.
+pub(crate) fn doctor_lines(report: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    for row in report.as_array().into_iter().flatten() {
+        let (h, path) = (
+            row["harness"].as_str().unwrap_or("?"),
+            row["path"].as_str().unwrap_or(""),
+        );
+        match row["status"].as_str() {
+            Some("missing") => out.push(format!("fno doctor: {h} has none of fno's must-enable rules at {path}. Add them: `fno config setup run --only permission-rules`.")),
+            Some("drift") => out.push(format!("fno doctor: {h} must-enable rules at {path} differ from the shipped list; your edit stays and doctor never reverts it.")),
+            Some("unknown") => out.push(format!("fno doctor: {h} rules at {path} could not be read: {}", row["detail"].as_str().unwrap_or(""))),
+            _ => {}
+        }
+        if row["rewriter"] == "rtk" {
+            out.push("fno doctor: a Claude PreToolUse hook rewrites Bash through rtk, and Claude matches permissions.allow against the rewritten command, so read rules such as Bash(grep *) do not match `rtk grep`.".into());
+        }
+    }
+    out
+}
+
 fn split(rules: Vec<String>, has: impl Fn(&str) -> bool) -> (Vec<String>, Vec<String>) {
     rules.into_iter().partition(|r| has(r))
 }
@@ -630,14 +660,14 @@ mod tests {
 
     #[test]
     fn filter_a_and_the_never_list_refuse_a_row() {
-        let corpus = "[[corpus]]\ncommand = \"python3 x\"\n[[corpus]]\ncommand = \"uv run x\"\n[[corpus]]\ncommand = \"fno agents spawn x\"\n";
+        let corpus = "corpus = [\"python3 x\", \"uv run x\", \"fno agents spawn x\"]\n";
         for (prefix, word) in [
             ("[\"python3\"]", "filter A"),
             ("[\"uv\"]", "filter A"),
             ("[\"fno\", \"agents\"]", "never-list"),
             ("[\"fno\", \"agents\", [\"mail\", \"spawn\"]]", "never-list"),
         ] {
-            let text = format!("[[rule]]\nprefix = {prefix}\nwhy = \"x\"\n{corpus}");
+            let text = format!("{corpus}[[rule]]\nprefix = {prefix}\nwhy = \"x\"\n");
             let err = load(&text)
                 .err()
                 .unwrap_or_else(|| panic!("{prefix} loaded"));
