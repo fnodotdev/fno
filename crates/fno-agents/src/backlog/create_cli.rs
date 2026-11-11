@@ -279,6 +279,18 @@ pub(crate) fn detect_project(cwd: &Path) -> Option<String> {
             }
         }
     }
+    // The exact path missed: a worktree, a subdirectory, or a sibling clone
+    // of a mapped checkout still names the project through repo identity.
+    let Some(caller_repo) = crate::paths::canonical_repo_root(cwd) else {
+        return None;
+    };
+    for doc in super::settings::config_candidates() {
+        for (name, raw) in work_pairs(&doc) {
+            if crate::paths::canonical_repo_root(&expand_home(&raw)) == Some(caller_repo.clone()) {
+                return Some(name);
+            }
+        }
+    }
     None
 }
 
@@ -318,6 +330,43 @@ pub(crate) fn expand_home(path: &str) -> PathBuf {
         }
     }
     PathBuf::from(path)
+}
+
+/// The configured checkout to stamp on a new node when the caller's
+/// canonical repo root IS the repo one of the work-map entries canonicalizes
+/// to: the config names the project's checkout, so the node stores it rather
+/// than whatever clone the filer stood in. None keeps the caller root.
+/// `repo_of` is injected so the core stays pure; the production wrapper
+/// shells git once per work-map entry.
+fn configured_checkout_for_in(
+    caller_root: &str,
+    pairs: &[(String, String)],
+    repo_of: &dyn Fn(&Path) -> Option<PathBuf>,
+) -> Option<(String, String)> {
+    let caller_repo = repo_of(Path::new(caller_root));
+    for (name, raw) in pairs {
+        let configured = expand_home(raw);
+        if caller_repo.is_some() && repo_of(&configured) == caller_repo {
+            return Some((name.clone(), configured.to_string_lossy().into_owned()));
+        }
+    }
+    None
+}
+
+/// [`configured_checkout_for_in`] over the config candidates and real git:
+/// first candidate naming a repo-match wins.
+fn configured_checkout_for(caller_root: &str) -> Option<(String, String)> {
+    for doc in super::settings::config_candidates() {
+        let found = configured_checkout_for_in(
+            caller_root,
+            &work_pairs(&doc),
+            &crate::paths::canonical_repo_root,
+        );
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
 }
 
 /// The shared priority gate: PRIORITY_ORDER membership, then the write rule.
@@ -1156,7 +1205,15 @@ pub(crate) fn create_node(
                     };
                     joined.to_string_lossy().into_owned()
                 }
-                (None, None) => repo_root(&cwd_root),
+                // The default arm stamps the CONFIGURED checkout: the
+                // caller's canonical repo root names the project through the
+                // work map, and the node stores the work map's path, not
+                // whatever clone the filer stood in (the 2026-11-11 cutover
+                // stamped 1777 open rows with a retired checkout).
+                (None, None) => match configured_checkout_for(&repo_root(&cwd_root)) {
+                    Some((_, path)) => path,
+                    None => repo_root(&cwd_root),
+                },
             };
             (
                 args.project
@@ -1745,6 +1802,41 @@ mod tests {
             number: Some("x-5555".into()),
         };
         assert_eq!(receipt_json(&minted, "t")["number"], "x-5555");
+    }
+
+    /// The intake stamp's both arms: a caller whose canonical repo
+    /// root matches a work-map entry's repo stamps the CONFIGURED checkout;
+    /// no match keeps the caller root.
+    #[test]
+    fn the_default_arm_stamps_the_configured_checkout_on_a_repo_match() {
+        let pairs = vec![
+            ("footnote".to_string(), "/repo/footnote".to_string()),
+            ("web".to_string(), "/other/web".to_string()),
+        ];
+        let repo_of = |p: &Path| {
+            if p.starts_with("/repo") {
+                Some(PathBuf::from("/repo"))
+            } else {
+                p.starts_with("/other").then(|| PathBuf::from("/other"))
+            }
+        };
+        // The filer stood in a retired clone of the same repo.
+        let got = configured_checkout_for_in("/repo/retired-clone", &pairs, &repo_of);
+        assert_eq!(
+            got,
+            Some(("footnote".to_string(), "/repo/footnote".to_string())),
+            "a repo match stamps the configured checkout"
+        );
+        // A caller inside the configured checkout itself: unchanged.
+        let got = configured_checkout_for_in("/repo/footnote", &pairs, &repo_of);
+        assert_eq!(
+            got,
+            Some(("footnote".to_string(), "/repo/footnote".to_string()))
+        );
+        // No repo identity at all (missing checkout, bare dir): the caller
+        // root stays.
+        let got = configured_checkout_for_in("/nowhere", &pairs, &repo_of);
+        assert_eq!(got, None);
     }
 
     #[test]
