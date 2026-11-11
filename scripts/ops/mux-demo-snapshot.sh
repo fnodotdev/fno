@@ -16,6 +16,8 @@
 set -euo pipefail
 
 FNO="${FNO_BIN:-fno}"
+# Resolved before any cd: the shoot runs from inside the throwaway root.
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
 # Backlog commands exec the fno-agents binary, not this front door. A branch
 # build drives its own tree's agents sibling, so the seeded mint (which reads
 # FNO_DEMO_ID_SEED there) is the one under test, never the deployed binary.
@@ -534,7 +536,7 @@ W=(--workspace checkout)
 # row the seat folds into.
 if [ -n "$INSTALL_CARD" ]; then
   PACK="$ROOT/packsrc/demo-$INSTALL_CARD"
-  PANELS="$(cd "$(dirname "$0")/../../plugins/fno-panels/mods" && pwd -P)"
+  PANELS="$REPO_ROOT/plugins/fno-panels/mods"
   mkdir -p "$PACK/mods/one"
   cp "$PANELS/review-ledger/preview.png" "$PACK/mods/one/preview.png"
   printf '# Recipe\n\nOpen it from Settings, Extensions.\n' > "$PACK/mods/one/RECIPE.md"
