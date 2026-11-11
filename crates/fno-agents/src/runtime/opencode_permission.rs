@@ -266,11 +266,11 @@ pub(crate) fn user_rule_asks(rules: &Value, action: &str, resources: &[String]) 
     let mut flat: Vec<(&str, &str, &str)> = Vec::new();
     for (perm, v) in map {
         match v {
-            Value::String(a) => flat.push((perm, "*", a)),
+            Value::String(a) => flat.push((perm.as_str(), "*", a.as_str())),
             Value::Object(patterns) => {
                 for (pat, a) in patterns {
                     if let Some(a) = a.as_str() {
-                        flat.push((perm, pat, a));
+                        flat.push((perm.as_str(), pat.as_str(), a));
                     }
                 }
             }

@@ -67,12 +67,16 @@ pub fn run(spec_path: &Path) -> i32 {
             return 2;
         }
     };
+    // The spec carries the serve token; it is read once.
+    let _ = std::fs::remove_file(spec_path);
+    let lock = spec_path.with_file_name(format!("{}.lock", spec.session_id));
     let contract = serve_contract(&spec.base_url, &spec.token);
     match drive(
         &spec,
         contract,
         hold_window(&spec.cwd),
         START_GRACE,
+        Some(&lock),
         &thread_permission::decide,
     ) {
         Ok(()) => 0,
@@ -128,6 +132,7 @@ pub(crate) fn drive(
     contract: Contract,
     hold: Duration,
     grace: Duration,
+    answer_lock: Option<&Path>,
     decide: &dyn Fn(&thread_permission::ThreadAsk, &Path) -> Answer,
 ) -> Result<(), String> {
     let sid = &spec.session_id;
@@ -184,6 +189,12 @@ pub(crate) fn drive(
         }
     };
 
+    // One answerer per session: a steer's driver sends its turn, then waits
+    // here while an earlier driver of the same session still answers.
+    let _lock = match answer_lock {
+        Some(path) => Some(lock_exclusive(path)?),
+        None => None,
+    };
     let serve = Serve {
         base_url: &spec.base_url,
         token: &spec.token,
@@ -256,6 +267,27 @@ fn answer_one(
         held.insert(p.request_id.clone(), (Instant::now(), question_id.clone()));
     }
     let _ = perm::answer(serve, &spec.cwd, p, &answer, &spec.events);
+}
+
+/// Block until this process holds an exclusive flock on `path`. The lock
+/// drops with the file handle when the driver exits.
+fn lock_exclusive(path: &Path) -> Result<std::fs::File, String> {
+    use std::os::unix::io::AsRawFd;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|e| format!("answer lock {}: {e}", path.display()))?;
+    // SAFETY: flock on an fd this function owns for the File's lifetime.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(format!(
+            "answer lock {}: {}",
+            path.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(file)
 }
 
 /// `GET /session/status`: the session is busy (`busy` or `retry`), idle
@@ -366,7 +398,7 @@ mod tests {
         };
         // The fake never reads busy, so a zero grace ends the turn at once.
         let s = spec(&fake.url, "do it", dir.path());
-        drive(&s, Contract::V1, Duration::from_secs(60), Duration::ZERO, &decide).unwrap();
+        drive(&s, Contract::V1, Duration::from_secs(60), Duration::ZERO, None, &decide).unwrap();
         assert_eq!(*calls.lock().unwrap(), 1, "one decision per ask id");
         let seen = fake.seen.lock().unwrap();
         let prompt = seen
