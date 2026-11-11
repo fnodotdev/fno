@@ -198,6 +198,84 @@ pub fn live_project_root(project: &str) -> Option<PathBuf> {
         .filter(|p| p.is_dir())
 }
 
+/// The checkout a dispatch resolves for a node row: the live configured root
+/// of the row's project first (a stored cwd predates config changes), then
+/// the served row's `_resolved_cwd` annotation, then the stored `cwd`. The
+/// three field keys live at this one boundary (R1: one site for the string
+/// keys; a typed row struct replaces the whole site).
+pub fn node_row_checkout(row: &Value) -> Option<String> {
+    if let Some(root) = row
+        .get("project")
+        .and_then(Value::as_str)
+        .and_then(live_project_root)
+    {
+        return Some(root.to_string_lossy().into_owned());
+    }
+    for field in ["_resolved_cwd", "cwd"] {
+        if let Some(cwd) = row.get(field).and_then(Value::as_str) {
+            let trimmed = cwd.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod checkout_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The checkout ladder over a pinned config: a live configured root wins
+    /// over both recorded fields; a project whose configured path is missing
+    /// falls through; the annotation outranks the stored cwd; nothing
+    /// recorded answers None.
+    #[test]
+    fn node_row_checkout_prefers_the_live_root_then_the_annotation() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _cfg = crate::claims::EnvVarGuard::unset("FNO_CONFIG");
+        let tmp = std::env::temp_dir().join("fno-node-row-checkout-test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let cfg = tmp.join("config.toml");
+        std::fs::write(
+            &cfg,
+            format!(
+                "[[work.workspaces.ws.projects]]\nname = \"live\"\npath = \"{}\"\n\n\
+                 [[work.workspaces.ws.projects]]\nname = \"gone\"\n\
+                 path = \"/nonexistent-fno-row-checkout\"\n",
+                tmp.display()
+            ),
+        )
+        .unwrap();
+        let _pin = crate::claims::EnvVarGuard::set("FNO_GLOBAL_SETTINGS_PATH", &cfg);
+        let live = json!({"project": "live", "_resolved_cwd": "/annotated", "cwd": "/stored"});
+        assert_eq!(
+            node_row_checkout(&live),
+            Some(tmp.to_string_lossy().into_owned()),
+            "the live configured root wins over both recorded fields"
+        );
+        let gone = json!({"project": "gone", "_resolved_cwd": "/annotated", "cwd": "/stored"});
+        assert_eq!(
+            node_row_checkout(&gone),
+            Some("/annotated".to_string()),
+            "a configured path off disk falls through to the annotation"
+        );
+        let annotated = json!({"_resolved_cwd": "/annotated", "cwd": "/stored"});
+        assert_eq!(
+            node_row_checkout(&annotated),
+            Some("/annotated".to_string())
+        );
+        let stored = json!({"cwd": "  /stored  "});
+        assert_eq!(node_row_checkout(&stored), Some("/stored".to_string()));
+        assert_eq!(node_row_checkout(&json!({})), None);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+}
+
 /// Every registered project path, in candidate then declaration order,
 /// first occurrence kept.
 pub fn project_roots() -> Vec<PathBuf> {

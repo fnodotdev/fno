@@ -1210,10 +1210,13 @@ pub(crate) fn create_node(
                 // work map, and the node stores the work map's path, not
                 // whatever clone the filer stood in (the 2026-11-11 cutover
                 // stamped 1777 open rows with a retired checkout).
-                (None, None) => match configured_checkout_for(&repo_root(&cwd_root)) {
-                    Some((_, path)) => path,
-                    None => repo_root(&cwd_root),
-                },
+                (None, None) => {
+                    let caller_root = repo_root(&cwd_root);
+                    match configured_checkout_for(&caller_root) {
+                        Some((_, path)) => path,
+                        None => caller_root,
+                    }
+                }
             };
             (
                 args.project

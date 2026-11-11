@@ -503,18 +503,10 @@ pub fn spawn_payload_command_notice(params: &Value, cwd: &Path) -> Option<String
     // loads from the row's checkout resolved through the work map (a stored
     // cwd predates config changes; the configured root wins when the row's
     // project has a live one), the caller's cwd answering only when nothing
-    // resolves.
-    let project = row
-        .get("project")
-        .and_then(Value::as_str)
-        .and_then(super::settings::live_project_root)
-        .or_else(|| {
-            row.get("cwd")
-                .and_then(Value::as_str)
-                .map(Path::new)
-                .filter(|p| p.is_dir())
-                .map(Path::to_path_buf)
-        })
+    // on the row resolves to an existing dir.
+    let project = super::settings::node_row_checkout(&row)
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.is_dir())
         .unwrap_or_else(|| cwd.to_path_buf());
     let floor = crate::agents_config::config_lookup(&project, &["dispatch", "blueprint_floor"])
         .and_then(|v| v.as_str().map(|s| s.trim().to_string()))
@@ -569,7 +561,7 @@ fn spawn_node_cwd_in(
     caller: &Path,
     rows: &[Value],
     repo_of: &dyn Fn(&Path) -> Option<std::path::PathBuf>,
-    project_root_of: &dyn Fn(&str) -> Option<std::path::PathBuf>,
+    checkout_of: &dyn Fn(&Value) -> Option<std::path::PathBuf>,
 ) -> SpawnNodeCwd {
     let resolved = resolve_node(payload);
     let node = resolved
@@ -585,18 +577,10 @@ fn spawn_node_cwd_in(
     else {
         return SpawnNodeCwd::Unnamed;
     };
-    let Some(cwd) = row
-        .get("cwd")
-        .and_then(Value::as_str)
-        .filter(|c| !c.trim().is_empty())
-    else {
+    let Some(cwd) = checkout_of(row) else {
         return SpawnNodeCwd::Unnamed;
     };
-    let project = row
-        .get("project")
-        .and_then(Value::as_str)
-        .and_then(project_root_of)
-        .unwrap_or_else(|| std::path::PathBuf::from(cwd));
+    let project = cwd;
     if let (Some(caller_repo), Some(node_repo)) = (repo_of(caller), repo_of(&project)) {
         if caller_repo != node_repo {
             return SpawnNodeCwd::Foreign(format!(
@@ -658,7 +642,7 @@ pub fn spawn_node_cwd(params: &Value, caller: &Path) -> SpawnNodeCwd {
         caller,
         &rows,
         &crate::paths::canonical_repo_root,
-        &super::settings::live_project_root,
+        &|row: &Value| super::settings::node_row_checkout(row).map(std::path::PathBuf::from),
     )
 }
 
@@ -804,14 +788,8 @@ mod tests {
             &payload,
             Path::new(caller),
             &rows,
-            &|p: &Path| {
-                if p.starts_with("/repo") {
-                    Some(PathBuf::from("/repo"))
-                } else {
-                    p.starts_with("/other").then(|| PathBuf::from("/other"))
-                }
-            },
-            &|name: &str| (name == "footnote").then(|| PathBuf::from("/repo/footnote")),
+            &repo_of_test,
+            &|row: &Value| super::settings::node_row_checkout(row).map(PathBuf::from),
         )
     }
 
@@ -855,6 +833,23 @@ mod tests {
     /// unchanged.
     #[test]
     fn stored_cwd_resolves_through_the_work_map() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join("fno-node-seed-cwd-test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let cfg = tmp.join("config.toml");
+        std::fs::write(
+            &cfg,
+            format!(
+                "[[work.workspaces.ws.projects]]\nname = \"footnote\"\npath = \"{}\"\n",
+                tmp.display()
+            ),
+        )
+        .unwrap();
+        let _cfg_pin = crate::claims::EnvVarGuard::set("FNO_GLOBAL_SETTINGS_PATH", &cfg);
+        let _fno_pin = crate::claims::EnvVarGuard::unset("FNO_CONFIG");
         // Retired arm: the row stores the retired checkout; the work map
         // names the live one and wins.
         let retired = json!({"id": "x-4444", "cwd": "/repo/retired", "project": "footnote"});
@@ -863,11 +858,11 @@ mod tests {
             Path::new("/repo/wt"),
             &[retired],
             &repo_of_test,
-            &|name: &str| (name == "footnote").then(|| PathBuf::from("/repo/footnote")),
+            &|row: &Value| super::settings::node_row_checkout(row).map(PathBuf::from),
         );
         assert_eq!(
             got,
-            SpawnNodeCwd::Project(PathBuf::from("/repo/footnote")),
+            SpawnNodeCwd::Project(tmp.clone()),
             "a retired stored cwd dispatches from the configured root"
         );
 
@@ -878,11 +873,11 @@ mod tests {
             Path::new("/repo/wt"),
             &[matching],
             &repo_of_test,
-            &|name: &str| (name == "footnote").then(|| PathBuf::from("/repo/footnote")),
+            &|row: &Value| super::settings::node_row_checkout(row).map(PathBuf::from),
         );
         assert_eq!(
             got,
-            SpawnNodeCwd::Project(PathBuf::from("/repo/footnote")),
+            SpawnNodeCwd::Project(tmp.clone()),
             "a matching stored cwd is unchanged"
         );
     }
@@ -891,6 +886,14 @@ mod tests {
     /// stored cwd stays trusted (nothing to resolve against).
     #[test]
     fn an_unmapped_project_keeps_the_stored_cwd() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _cfg_pin = crate::claims::EnvVarGuard::set(
+            "FNO_GLOBAL_SETTINGS_PATH",
+            "/nonexistent-fno-unmapped-test",
+        );
+        let _fno_pin = crate::claims::EnvVarGuard::unset("FNO_CONFIG");
         for row in [
             json!({"id": "x-4444", "cwd": "/repo/legacy"}),
             json!({"id": "x-4444", "cwd": "/repo/legacy", "project": "nowhere"}),
@@ -902,7 +905,7 @@ mod tests {
                 Path::new("/repo/wt"),
                 std::slice::from_ref(row),
                 &repo_of_test,
-                &|_: &str| None,
+                &|row: &Value| super::settings::node_row_checkout(row).map(PathBuf::from),
             );
             assert_eq!(
                 got,

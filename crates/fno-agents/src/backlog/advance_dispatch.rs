@@ -793,27 +793,10 @@ fn resolve_node_spawn_inner(
     // dispatch reads the dependent's config. The checkout resolves through
     // the work map first (a stored cwd predates config changes), then the
     // served row's `_resolved_cwd` annotation, then the stored cwd.
-    let node_project = text_field(node.get("project"));
-    let resolved_checkout = node_project
-        .as_deref()
-        .and_then(super::settings::live_project_root)
-        .map(|p| p.to_string_lossy().into_owned());
+    let resolved_checkout = super::settings::node_row_checkout(node).map(std::path::PathBuf::from);
     let cfg_root = resolved_checkout
         .clone()
-        .or_else(|| {
-            node.get("_resolved_cwd")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-        })
-        .or_else(|| {
-            node.get("cwd")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-        })
+        .map(|p| p.to_string_lossy().into_owned())
         .or_else(|| node_cwd.map(str::to_string))
         .unwrap_or_else(|| root_of());
     let lifecycle = if command.is_some() {
@@ -993,7 +976,9 @@ fn resolve_node_spawn_inner(
         // The launch cwd carries the same work-map resolution: an explicit
         // --cwd on the argv defeats the client door's node guard, so a stale
         // value here would dispatch the worker into a retired checkout.
-        node_cwd: resolved_checkout.or_else(|| node_cwd.map(str::to_string)),
+        node_cwd: resolved_checkout
+            .map(|p| p.to_string_lossy().into_owned())
+            .or_else(|| node_cwd.map(str::to_string)),
         node_slug: node_slug.map(str::to_string),
         harness: prov,
         resolved_harness: resolved.harness,
