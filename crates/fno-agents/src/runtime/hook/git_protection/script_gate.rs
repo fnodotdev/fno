@@ -174,13 +174,23 @@ fn parse_script_text(command: &str, label: &str, text: &str) -> Result<Vec<Segme
     match segments::command_segments(text) {
         Ok(inner) => Ok(inner),
         Err(_) => {
-            if is_a_push(text) {
+            if could_push(text) {
                 Err(refusal(command, label, "cannot be parsed as shell text"))
             } else {
                 Ok(Vec::new())
             }
         }
     }
+}
+
+/// The fallback's push read at text level. Quote characters drop before the
+/// match, so a spliced spelling (`git 'pu'sh`) in a script the parser cannot
+/// read still refuses: bash joins `'pu'` and `sh` into one word the raw-text
+/// regex never sees. A quoted prose mention refuses too, which is the cheap
+/// direction for an unreadable script.
+fn could_push(text: &str) -> bool {
+    let stripped: String = text.chars().filter(|c| *c != '\'' && *c != '"').collect();
+    is_a_push(&stripped)
 }
 
 fn refusal(command: &str, script: &str, why: &str) -> Refusal {
@@ -505,6 +515,24 @@ mod tests {
                 && refusal.contains("Script: bad.sh"),
             "{refusal}"
         );
+    }
+
+    #[test]
+    fn a_quote_spliced_push_in_an_unparsable_script_refuses() {
+        // `$''` quoting is valid bash the parser cannot read, and quote
+        // splicing (`git 'pu'sh`) hid the push pair from the text match:
+        // bash joins `'pu'` and `sh` into one word. The fallback strips
+        // quote characters before matching.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("splice.sh"),
+            "mode=$'don\\'t'\ngit 'pu'sh origin main\n",
+        )
+        .unwrap();
+        let fake = feature(dir.path());
+        let c = ctx(dir.path(), &fake);
+        let refusal = judge_with(&bash("bash splice.sh"), &c).unwrap();
+        assert!(refusal.contains("cannot be gated"), "{refusal}");
     }
 
     #[test]
