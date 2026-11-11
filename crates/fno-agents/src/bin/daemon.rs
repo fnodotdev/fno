@@ -56,6 +56,16 @@ fn main() {
         libc::pthread_sigmask(libc::SIG_UNBLOCK, &set, std::ptr::null_mut());
     }
 
+    // SIGHUP, SIGINT and SIGQUIT have no graceful arm and kill the process
+    // with no trace. Name the signal on stderr, then die the way the default
+    // action would. SIGKILL cannot be caught; SIGTERM logs from the loop.
+    #[cfg(unix)]
+    unsafe {
+        for sig in [libc::SIGHUP, libc::SIGINT, libc::SIGQUIT] {
+            libc::signal(sig, log_fatal_signal as *const () as libc::sighandler_t);
+        }
+    }
+
     // Env mutation is only sound while the process is single-threaded: fill
     // the build-dir env before the runtime below spawns threads, so the heal
     // lane's `fno doctor update` and every other child inherits it even when
@@ -259,6 +269,21 @@ fn absolutize_home(launch: Option<&std::path::Path>, home: &std::path::Path) -> 
         return home.to_path_buf();
     }
     launch.unwrap_or(std::path::Path::new(".")).join(home)
+}
+
+/// Async-signal-safe: one `write(2)` of a fixed line, then the default action.
+#[cfg(unix)]
+extern "C" fn log_fatal_signal(sig: libc::c_int) {
+    let line: &[u8] = match sig {
+        libc::SIGHUP => b"fno-agents-daemon: exiting reason=sighup\n",
+        libc::SIGINT => b"fno-agents-daemon: exiting reason=sigint\n",
+        _ => b"fno-agents-daemon: exiting reason=sigquit\n",
+    };
+    unsafe {
+        libc::write(2, line.as_ptr().cast(), line.len());
+        libc::signal(sig, libc::SIG_DFL);
+        libc::raise(sig);
+    }
 }
 
 #[cfg(test)]
