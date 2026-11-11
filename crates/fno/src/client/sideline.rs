@@ -1454,15 +1454,14 @@ impl View {
                     None => label,
                 };
                 // The queued-mail marker renders whole or not at all: the
-                // full `[N queued, oldest 12m]` (the wait names itself the
-                // oldest; no `· dnd` inside the badge, the word belongs to
-                // the hold the row already paints) when the label keeps its
-                // room beside it, else the compact closed `[Nq 12m]` - an
-                // unclosed ` [8` clip reads as broken paint, and a head-cut
-                // name misreads who holds the mail. A card row's line 1
-                // lies about its width (the frame re-clips at the true
-                // cell), so the card carries the marker on its detail line
-                // instead; lists decide here.
+                // full `[N queued, oldest 12m]` (no `· dnd` inside the
+                // badge; the word belongs to the hold the row already
+                // paints) when the label keeps its room, else the compact
+                // closed `[Nq 12m]` - an unclosed ` [8` clip reads as
+                // broken paint, and a head-cut name misreads who holds the
+                // mail. A card row's line 1 lies about its width, so the
+                // card carries the marker on its detail line; lists decide
+                // here.
                 let suffix = match held_badge.filter(|_| !card) {
                     Some(held) => {
                         let (age_full, age_compact) = match a.mail_held_since {
