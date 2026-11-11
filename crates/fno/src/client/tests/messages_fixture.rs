@@ -1064,7 +1064,7 @@ async fn messages_wheel_scrolls_pointer_column() {
     let up = crate::proto::MouseKind::WheelUp;
     let down = crate::proto::MouseKind::WheelDown;
     let mut sink = tokio::io::sink();
-    let (tree_w, part_w) = split(100, &Default::default());
+    let (tree_w, _) = split(100, &Default::default());
     // Focus parked on Thread so no wheel can be confused with it.
     view.messages_board.as_mut().unwrap().col = Col::Thread;
     // Wheel down over the Tree column: +3 clamped into the row count...
