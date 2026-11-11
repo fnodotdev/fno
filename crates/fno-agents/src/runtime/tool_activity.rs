@@ -406,13 +406,16 @@ mod tests {
             }))
             .unwrap()
         };
+        // Each write ends in a newline: absorb defers a partial tail, so
+        // the last row of a bare `.join("\n")` would wait for the next pass.
         std::fs::write(
             &path,
             [
                 row("enqueue", "m1", "2026-11-10T10:00:00.500Z"),
                 row("enqueue", "m2", "2026-11-10T10:05:00Z"),
             ]
-            .join("\n"),
+            .join("\n")
+                + "\n",
         )
         .unwrap();
         let mut folds = HashMap::new();
@@ -430,7 +433,8 @@ mod tests {
                 row("enqueue", "m2", "2026-11-10T10:05:00Z"),
                 row("dequeue", "m1", "2026-11-10T10:06:00Z"),
             ]
-            .join("\n"),
+            .join("\n")
+                + "\n",
         )
         .unwrap();
         let counts = count_rows(&rows(), &mut folds, &mut find);
@@ -439,6 +443,25 @@ mod tests {
             Some(&(0, 0, 1, Some("2026-11-10T10:05:00Z".to_string()))),
             "the stamp moves to the next entry on a front release"
         );
+        std::fs::write(
+            &path,
+            [
+                row("enqueue", "m1", "2026-11-10T10:00:00.500Z"),
+                row("enqueue", "m2", "2026-11-10T10:05:00Z"),
+                row("dequeue", "m1", "2026-11-10T10:06:00Z"),
+                row("remove", "m2", "2026-11-10T10:20:00Z"),
+            ]
+            .join("\n")
+                + "\n",
+        )
+        .unwrap();
+        let counts = count_rows(&rows(), &mut folds, &mut find);
+        assert_eq!(
+            counts.get("s1"),
+            Some(&(0, 0, 0, None)),
+            "a remove by content clears the count and the stamp"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// AC4: a cached path that was removed resolves again, and the counts
