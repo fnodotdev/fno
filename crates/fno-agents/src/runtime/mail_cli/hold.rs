@@ -40,6 +40,10 @@ fn self_identity_or_exit() -> Option<(String, String)> {
     }
 }
 
+/// The hold command's `mail_hold_stamped` writer value, as the event schema
+/// names it.
+const HOLD_WRITER: &str = "hold_verb"; // verb-wording: allow (event writer enum value)
+
 const HOLD_USAGE: &str =
     "usage: fno agents mail admin hold (--on | --for <minutes> | --minutes <minutes> | --off | --status)
   --on         do-not-disturb until the hold ceiling (mail.hold.max_minutes)
@@ -163,8 +167,7 @@ pub fn run_hold(args: &[String]) -> i32 {
         eprintln!("hold: {exc}");
         return 1;
     }
-    // verb-wording: allow (event writer enum value)
-    let hold = match put_hold(&session_id, length, idle, SetBy::User, "hold_verb") {
+    let hold = match put_hold(&session_id, length, idle, SetBy::User, HOLD_WRITER) {
         Ok(hold) => hold,
         Err(exc) => {
             eprintln!("hold: {exc}");

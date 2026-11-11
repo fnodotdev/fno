@@ -262,6 +262,24 @@ pub(crate) fn live_hold(session_id: &str, now: chrono::DateTime<chrono::Utc>) ->
     hold_store().live(&session, now)
 }
 
+/// Why a hold write or removal did not happen.
+#[derive(Debug)]
+pub(crate) enum HoldWriteError {
+    /// The id is not a full session id.
+    Session(fno_mail::session::SessionIdError),
+    /// The store refused the write or the removal.
+    Store(std::io::Error),
+}
+
+impl std::fmt::Display for HoldWriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HoldWriteError::Session(e) => write!(f, "{e}"),
+            HoldWriteError::Store(e) => write!(f, "the hold store refused the change: {e}"),
+        }
+    }
+}
+
 /// Write one hold for `session_id` and journal who set it.
 pub(crate) fn put_hold(
     session_id: &str,
@@ -269,8 +287,8 @@ pub(crate) fn put_hold(
     idle: bool,
     set_by: SetBy,
     reason: &str,
-) -> Result<Hold, String> {
-    let session = SessionId::parse(session_id).map_err(|e| e.to_string())?;
+) -> Result<Hold, HoldWriteError> {
+    let session = SessionId::parse(session_id).map_err(HoldWriteError::Session)?;
     let hold = Hold::new(
         session,
         length,
@@ -280,9 +298,7 @@ pub(crate) fn put_hold(
         set_by,
         reason,
     );
-    hold_store()
-        .put(&hold)
-        .map_err(|e| format!("could not write the hold record: {e}"))?;
+    hold_store().put(&hold).map_err(HoldWriteError::Store)?;
     let writer = match set_by {
         SetBy::User => reason,
         SetBy::Conversation => "conversation_arm",
@@ -292,11 +308,9 @@ pub(crate) fn put_hold(
 }
 
 /// Remove the hold for `session_id`. True when a record was there.
-pub(crate) fn clear_hold(session_id: &str) -> Result<bool, String> {
-    let session = SessionId::parse(session_id).map_err(|e| e.to_string())?;
-    hold_store()
-        .clear(&session)
-        .map_err(|e| format!("could not remove the hold record: {e}"))
+pub(crate) fn clear_hold(session_id: &str) -> Result<bool, HoldWriteError> {
+    let session = SessionId::parse(session_id).map_err(HoldWriteError::Session)?;
+    hold_store().clear(&session).map_err(HoldWriteError::Store)
 }
 
 /// The registry row's `bus-only` value: the lane capability the register
