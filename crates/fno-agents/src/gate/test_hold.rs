@@ -504,10 +504,12 @@ mod tests {
         // send fails and the assertion would measure the fixture, not the
         // announcement.
         std::fs::create_dir_all(dir.path().join("db/mail/bus")).unwrap();
-        // The send refuses on an empty audience ("no live recipients"), so
-        // seat one busy entry exactly the way the hold test does.
+        // The write refuses an unresolvable row ("no resolvable handle") and
+        // the send refuses an empty audience ("no live recipients"), so seat
+        // one busy entry with a session id exactly the way the hold test does.
         let mut entry = crate::state::RegistryEntry::default();
         entry.status = crate::AgentStatus::Busy;
+        entry.harness_session_id = Some("lift-audience-sess".into());
         crate::state::update_registry(&home.registry_json(), |r| r.entries.push(entry)).unwrap();
         // A pause record an older build wrote is what makes this pass a
         // lift rather than a first hold.
@@ -687,7 +689,12 @@ mod tests {
 
         // The hold announcement scopes the all-clear's reach like the lift
         // does: an agent told to wait for the all-clear must read there what
-        // the all-clear does and does not restore.
+        // the all-clear does and does not restore. Surface the send's own
+        // verdict first: a bus read can only name NotFound, never why.
+        outcome
+            .announced
+            .as_ref()
+            .unwrap_or_else(|| panic!("the hold announces: {outcome:?}"));
         let dot_fno = home.root().parent().unwrap_or(home.root()).to_path_buf();
         let bus = std::fs::read_to_string(crate::mail_paths::bus_log_path(&dot_fno))
             .expect("the hold announcement lands on the bus");
