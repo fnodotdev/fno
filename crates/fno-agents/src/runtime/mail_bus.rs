@@ -540,7 +540,7 @@ mod tests {
             injected.push(row.msg_id.clone());
             // The pull's contract is the injector's: inject_row marks the row
             // delivered itself, so the stub does the same.
-            let _ = mail_bus::mark(remote, &row.msg_id, mail_bus::DELIVERED, None);
+            let _ = mark(remote, &row.msg_id, DELIVERED, None);
             true
         });
         assert_eq!((delivered, injected), (1, vec!["fmail-clean".to_string()]));
