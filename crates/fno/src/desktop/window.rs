@@ -41,9 +41,18 @@ struct Root {
     _reader: Option<Task<()>>,
 }
 
+/// The status line's height: one cell plus its vertical padding.
+fn status_height(cell: Size<Pixels>) -> Pixels {
+    cell.height + px(8.0)
+}
+
+/// The content size sent to the server. The status line is always reserved,
+/// so a notice never resizes the panes, and one row and one column are kept
+/// for the outer borders, which sit half a cell outside the grid.
 fn grid_size(viewport: Size<Pixels>, cell: Size<Pixels>) -> (u16, u16) {
-    let rows = (viewport.height / cell.height).floor().max(1.0);
-    let cols = (viewport.width / cell.width).floor().max(1.0);
+    let height = viewport.height - status_height(cell);
+    let rows = ((height / cell.height).floor() - 1.0).max(1.0);
+    let cols = ((viewport.width / cell.width).floor() - 1.0).max(1.0);
     (
         rows.min(u16::MAX as f32) as u16,
         cols.min(u16::MAX as f32) as u16,
@@ -218,13 +227,14 @@ impl Root {
                 self.palette.border
             };
             // The border sits in the one-cell gap the server leaves
-            // between rects: half a cell out on every side.
+            // between rects: half a cell out on every side. The grid itself
+            // starts half a cell in, so the outer borders are never clipped.
             let (hx, hy) = (cw / 2.0, ch / 2.0);
             area = area.child(
                 div()
                     .absolute()
-                    .left(cw * rect.x as f32 - hx)
-                    .top(ch * rect.y as f32 - hy)
+                    .left(cw * rect.x as f32)
+                    .top(ch * rect.y as f32)
                     .w(cw * rect.cols as f32 + cw)
                     .h(ch * rect.rows as f32 + ch)
                     .border_1()
@@ -280,11 +290,27 @@ impl Render for Root {
         if let Some(left) = self.left.clone() {
             root = root.child(left);
         }
-        let mut column = div().flex_1().flex().flex_col().child(main);
-        if let Some(text) = status {
-            column = column.child(div().px_2().bg(rgb(self.palette.border)).child(text));
-        }
-        root.child(column)
+        let status_color = if self.closed.is_some() {
+            self.palette.error
+        } else {
+            self.palette.fg
+        };
+        let status_line = div()
+            .h(status_height(self.metrics.cell))
+            .flex_none()
+            .px_2()
+            .py_1()
+            .bg(rgb(self.palette.border))
+            .text_color(rgb(status_color))
+            .children(status);
+        root.child(
+            div()
+                .flex_1()
+                .flex()
+                .flex_col()
+                .child(main)
+                .child(status_line),
+        )
     }
 }
 
@@ -306,10 +332,14 @@ pub fn run(session: String, family: String, font_size: f32) {
                     .advance(id, font_size, 'm')
                     .map(|s| s.width)
                     .unwrap_or(font_size * 0.6);
+                // Snap the cell to whole device pixels, so cell edges never
+                // land between pixels and drift across a wide row.
+                let scale = window.scale_factor();
+                let snap = |v: Pixels| px((f32::from(v) * scale).round() / scale);
                 let metrics = Metrics {
                     font,
                     font_size,
-                    cell: size(width, (font_size * 1.25).round()),
+                    cell: size(snap(width), snap(font_size * 1.25)),
                 };
                 cx.new(|cx| {
                     let root = Root::new(session, metrics, window, cx);

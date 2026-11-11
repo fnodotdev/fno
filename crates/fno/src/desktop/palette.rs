@@ -18,6 +18,8 @@ pub struct Palette {
     pub accent: u32,
     /// Every other pane border.
     pub border: u32,
+    /// The status line's text when the connection has closed.
+    pub error: u32,
     ansi: [u32; 16],
 }
 
@@ -56,6 +58,7 @@ impl Palette {
             bg: rgb_or(t.base, 0x141414),
             accent: rgb_or(t.border, 0xe8e8e8),
             border: rgb_or(t.sel, 0x2b2b2b),
+            error: rgb_or(t.error, 0xe1a6a3),
             ansi,
         }
     }
