@@ -68,7 +68,11 @@ function makeFixtureRoot(baseDir) {
       `#!/bin/bash
 cat > "$CAPTURE_DIR/${name}.json"
 echo "${name}" >> "$CAPTURE_DIR/seq.txt"
-echo '{"hookSpecificOutput":{"additionalContext":"[fixture] ${name}"}}'
+# CAPTURE_CONTEXT gates the context line: the real carriers stay silent
+# when they have nothing to deliver, and the announce-deferral test needs
+# that silence on its second boundary.
+[ -n "\$CAPTURE_CONTEXT" ] && echo '{"hookSpecificOutput":{"additionalContext":"[fixture] ${name}"}}'
+exit 0
 `,
       { mode: 0o755 },
     )
@@ -121,6 +125,7 @@ function makeWorld({
     STUB_LOOPCHECK_REPLY: replyPath,
     FNO_HOME: makeFixtureHome(dir, fixtureRoot),
     CAPTURE_DIR: captureDir,
+    CAPTURE_CONTEXT: fixtureRoot ? "1" : "",
     ...env,
   }
   for (const [k, v] of Object.entries(next)) {
@@ -475,6 +480,38 @@ test("the mail-notify and node-bind carriers ride every prompt with the claude p
     assert.ok(text.includes("[fixture] inject-mail-notify.sh"), text)
     assert.equal(answer.message.display, false)
     assert.equal(answer.message.customType, "fno-role")
+  } finally {
+    world.cleanup()
+  }
+})
+
+test("context text defers the announce: it answers alone, and the announce lands at the next boundary", async () => {
+  const world = makeWorld({ root: true, env: { STUB_ANNOUNCE: "[announce] fleet news" } })
+  try {
+    await world.handlers["session_start"]({ reason: "startup" }, {
+      sessionManager: { getSessionId: () => "s-1" },
+    })
+    const first = await world.handlers["before_agent_start"]({ prompt: "one" }, {
+      sessionManager: { getSessionId: () => "s-1" },
+    })
+    const firstText = first?.message?.content?.[0]?.text || ""
+    assert.ok(firstText.includes("[fixture] session-start-using-fno.sh"), firstText)
+    assert.ok(!firstText.includes("[announce] fleet news"), "no join with the announce")
+    assert.equal(first.message.display, false)
+    assert.ok(
+      !world.log().includes("announce read"),
+      "the announce cursor is not consumed under context",
+    )
+    // Boundary two: the carriers go silent (nothing to deliver), as the
+    // real ones do, so the announce finally answers alone.
+    delete process.env.CAPTURE_CONTEXT
+    const second = await world.handlers["before_agent_start"]({ prompt: "two" }, {
+      sessionManager: { getSessionId: () => "s-1" },
+    })
+    const secondText = second?.message?.content?.[0]?.text || ""
+    assert.ok(secondText.includes("[announce] fleet news"), secondText)
+    assert.equal(second.message.display, true)
+    assert.equal(second.message.customType, "fno-announce")
   } finally {
     world.cleanup()
   }

@@ -485,11 +485,14 @@ export default function (pi: {
   })
 
   // PROMPT BOUNDARY: every before_agent_start is pi's UserPromptSubmit.
-  // The message that returns joins, in order: the post-compact role
-  // re-inject, the queued SessionStart/PreCompact carrier context, the
-  // inject-mail-notify and node-bind prompt carriers, and the fleet
-  // announce. Only the announce renders in the transcript (display: true) -
-  // everything else mirrors claude's context-only channel.
+  // One message returns, and pi's display flag is per-message, so the
+  // boundary keeps two classes apart instead of joining them: context text
+  // (the post-compact role re-inject, the queued SessionStart/PreCompact
+  // carrier context, the prompt carriers) always answers alone and stays
+  // off the transcript, exactly the claude context-only channel; the fleet
+  // announce answers alone and renders. The announce read advances its
+  // per-session cursor, so when context answers, the announce is not read
+  // at all - it delivers, unread, at the next boundary.
   pi.on("before_agent_start", async (event: unknown, ctx: unknown) => {
     pushState("UserPromptSubmit", ctx)
     try {
@@ -560,19 +563,30 @@ export default function (pi: {
         }
         runBounded(bin, reportArgs, 2000).catch(() => {})
       }
+      // Context text answers alone, off the transcript; the announce read
+      // waits for a boundary with no context, so its cursor never consumes
+      // an announcement this boundary cannot show.
+      if (texts.length) {
+        return {
+          message: {
+            customType: "fno-role",
+            content: [{ type: "text", text: texts.join("\n\n") }],
+            display: false,
+          },
+        }
+      }
       const out = await runBounded(
         bin,
         ["announce", "read", "--session-id", sessionKey, "--harness", "pi", "--boundary", "prompt"],
         2000,
       )
       const announce = out.trim()
-      if (announce) texts.push(announce)
-      if (!texts.length) return
+      if (!announce) return
       return {
         message: {
-          customType: announce ? "fno-announce" : "fno-role",
-          content: [{ type: "text", text: texts.join("\n\n") }],
-          display: Boolean(announce),
+          customType: "fno-announce",
+          content: [{ type: "text", text: announce }],
+          display: true,
         },
       }
     } catch {
