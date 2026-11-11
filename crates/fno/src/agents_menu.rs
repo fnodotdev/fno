@@ -211,6 +211,7 @@ const AUDIT: &[Node] = &[
     command("friction-escalate", &["friction-escalate"], "Reconcile one watchdog-friction question to the fleet."),
     moved("incident", &["incident"], &[&["fleet-incident"]], "The durable fleet incident breaker."),
     command("test-run", &["test-run"], "The native test-suite process-group owner."),
+    moved("restart", &["restart"], &[&["session", "restart"]], "Restart running fno processes onto fresh binaries."),
     command("harness", &["harness"], "Instruments over the harness capability table."),
     command(
         "claude-fallback",
@@ -231,7 +232,7 @@ const SESSION: &[Node] = &[
     command("rm", &["rm"], "Remove an agent: its session first, its registry row after."),
     command("resume", &["resume"], "Resume a registered agent."),
     command("recover", &["recover"], "Restore a recorded claude session under its account."),
-    command("restart", &["restart"], "Restart running fno processes onto fresh binaries."),
+    command("move", &["move"], "Move a session to another machine with its transcript."),
     command("status", &["status"], "Daemon liveness and the control-plane arms table."),
 ];
 

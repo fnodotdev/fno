@@ -260,6 +260,8 @@ pub mod server;
 #[cfg(feature = "full")]
 pub mod server_stats;
 #[cfg(feature = "full")]
+pub mod session_move;
+#[cfg(feature = "full")]
 pub mod session_origin;
 #[cfg(feature = "full")]
 pub mod setup_autowire;

@@ -91,6 +91,8 @@ To lead a scope on this machine, follow these steps in order:
 
 A session with no role still reads, reports and mails a named peer. The lead skill lists the three forms.
 
+To take a machine out of service, move its live sessions with `fno agents session move <name> --to <host>`. The page [session-move](session-move.md) lists what a move carries and how to recover from a failed one.
+
 ## The store clock decides a peer's lease
 
 A machine cannot probe a peer's pids. So for a row another machine wrote, only the lease decides, read on the primary's clock. A takeover of a peer's row carries `claims.expires_at <= <store clock>` in its compare-and-swap. Two machines with skewed clocks still agree on the moment a lease ran out.

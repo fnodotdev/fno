@@ -286,7 +286,7 @@ _gate_records() {
 _record_present() {
     if _gate_records "$1"; then
         printf '%s' "$_RECORDS_JSON" \
-            | jq -e --arg k "$2" '.records != null and .records[$k] != null' >/dev/null 2>&1
+            | jq -e --arg k "$2" '(.records[$k] // .frontmatter[$k]) != null' >/dev/null 2>&1
         return $?
     fi
     _fm_has "^$2:" "$1" && return 0
@@ -307,8 +307,9 @@ _record_in_frontmatter() {
 _acknowledged_ids() {
     if _gate_records "$1"; then
         printf '%s' "$_RECORDS_JSON" \
-            | jq -r '.records.consolidation.decisions_acknowledged[]?.decision_id,
-                    .records.decisions_acknowledged[]?.decision_id' 2>/dev/null \
+            | jq -r '(.records, .frontmatter) | select(. != null)
+                    | (.consolidation.decisions_acknowledged[]?.decision_id,
+                       .decisions_acknowledged[]?.decision_id)' 2>/dev/null \
             | grep -v '^[[:space:]]*$'
         return 0
     fi
