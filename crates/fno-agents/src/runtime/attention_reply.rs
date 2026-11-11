@@ -4,7 +4,8 @@
 //! ladder is the delivery half. One beat step per item, a pure
 //! [`step`] decision over stored per-item state, and every effect (the
 //! clear, the resume, the team mail) behind an injected runner, so tests
-//! stage the world. Rungs: the clear's mail leg, a resume of an idle asker
+//! stage the world. Rungs: the clear's mail leg (a pane-only receipt confirms
+//! by transcript content before it reads landed), a resume of an idle asker
 //! confirmed by content in its transcript, a wrapped mail to the team over
 //! the asker's node, and `none` when no team covers it.
 
@@ -37,6 +38,12 @@ pub struct ReplyState {
     /// The clear's posture line (the last stderr line it printed).
     #[serde(default)]
     pub receipt: String,
+    /// When the clear's mail leg ran: the pane-receipt confirm window's
+    /// anchor. A turn-record receipt lands at once; a pane-only one
+    /// (`parked`, `injected`, `typed`) waits in this window for the asker's
+    /// transcript to prove the bytes surfaced.
+    #[serde(default)]
+    pub mailed_at: Option<u64>,
     /// The note path's one explicit answer mail went out.
     #[serde(default)]
     pub note_mail_sent: bool,
@@ -103,6 +110,8 @@ pub enum Step {
 /// the answer landed, and whether the clear's mail leg already delivered.
 pub struct Facts<'a> {
     pub mail_landed: bool,
+    /// The receipt names a turn-record landing, not just a pane reach.
+    pub mail_strong: bool,
     pub is_note: bool,
     pub session: Option<(&'a str, &'a str)>,
     pub confirmed: bool,
@@ -119,13 +128,40 @@ pub fn step(state: &ReplyState, facts: &Facts) -> Step {
         return Step::TeamNeeded;
     }
     if facts.mail_landed {
-        return Step::Deliver(Delivery {
-            rung: "mail",
-            outcome: "landed",
-            evidence: state.receipt.clone(),
-            holder: None,
-            session_id: facts.session.map(|(sid, _)| sid.to_string()),
-        });
+        if facts.mail_strong {
+            return Step::Deliver(Delivery {
+                rung: "mail",
+                outcome: "landed",
+                evidence: state.receipt.clone(),
+                holder: None,
+                session_id: facts.session.map(|(sid, _)| sid.to_string()),
+            });
+        }
+        // A pane-only receipt (parked, injected, typed): the bytes reached
+        // the asker's input path, but no turn record proves they surfaced -
+        // a composer park waits for a submit that may never come, and a
+        // session exit loses it (the dropped-board-answer specimens). The
+        // transcript decides; the window closing empty falls to the resume
+        // rung.
+        if facts.confirmed {
+            return Step::Deliver(Delivery {
+                rung: "mail",
+                outcome: "confirmed",
+                evidence: format!("found {} in the asker's transcript", state.item_id),
+                holder: None,
+                session_id: facts.session.map(|(sid, _)| sid.to_string()),
+            });
+        }
+        if facts.session.is_none() {
+            // No session facts: nothing can ever confirm or resume. Alert.
+            return Step::TeamNeeded;
+        }
+        match state.mailed_at {
+            Some(at) if facts.now.saturating_sub(at) <= CONFIRM_WINDOW_S => {
+                return Step::Idle;
+            }
+            _ => {}
+        }
     }
     if facts.is_note && !state.note_mail_sent {
         return Step::MailNote;
@@ -225,6 +261,10 @@ pub fn tick_answers(
             let item = items.iter().find(|i| i.id == *item_id);
             let open = item.is_some_and(|i| matches!(i.state.as_str(), "open" | "answered"));
             if open && !item_id.starts_with("note-") {
+                // The pre-clear transcript length: a pane-receipt confirm scan
+                // reads from here, so a marker the mail leg landed inside this
+                // beat still counts.
+                state.offset = pre_clear_offset(item);
                 match io.clear(item_id, answer) {
                     Ok(posture) => {
                         state.cleared = true;
@@ -238,6 +278,7 @@ pub fn tick_answers(
                         // the delivery row right before any send, and whose
                         // resume leg delivers what no lane did.
                         state.receipt = posture;
+                        state.mailed_at = Some(now);
                         acted += 1;
                     }
                     Err(e) => {
@@ -373,12 +414,14 @@ fn step_of(state: &ReplyState, items: &[AttentionItem], now: u64, cwd: &Path) ->
                 .map(|sid| (sid.to_string(), a.harness.clone().unwrap_or_default()))
         })
     });
-    let confirmed = if state.resumed_at.is_some() && state.resume_exit == Some(0) {
+    let confirm_armed =
+        state.mailed_at.is_some() || (state.resumed_at.is_some() && state.resume_exit == Some(0));
+    let confirmed = if confirm_armed {
         session.as_ref().is_some_and(|(sid, harness)| {
             transcript_confirm(sid, harness, state.item_id.as_str(), state.offset)
         })
     } else {
-        // No session facts (or a failed resume) to confirm against: not
+        // No confirm phase is open (no mail leg ran, no live resume): not
         // confirmed this beat.
         false
     };
@@ -391,6 +434,7 @@ fn step_of(state: &ReplyState, items: &[AttentionItem], now: u64, cwd: &Path) ->
         });
     let facts = Facts {
         mail_landed: fno_mail::state::receipt_reached(&state.receipt),
+        mail_strong: fno_mail::state::receipt_in_turn_record(&state.receipt),
         is_note: state.item_id.starts_with("note-"),
         session: session.as_ref().map(|(s, h)| (s.as_str(), h.as_str())),
         confirmed,
@@ -569,12 +613,38 @@ pub(crate) fn team_holder(item: &AttentionItem, cwd: &Path) -> Option<String> {
 }
 
 /// Whether the question id shows up in the asker's transcript after the byte
-/// offset the resume saved: the content-confirm the mail lane lacks.
+/// offset the mail leg or the resume saved: the content-confirm.
 fn transcript_confirm(sid: &str, harness: &str, marker: &str, offset: Option<u64>) -> bool {
     let Some(path) = crate::context_run::session_transcript(sid, harness) else {
         return false;
     };
-    crate::mail_inject::confirm_content_after(&path, marker, offset.unwrap_or(0)).unwrap_or(false)
+    confirm_marker_forms(
+        &path,
+        marker,
+        &crate::numbers::display(marker),
+        offset.unwrap_or(0),
+    )
+}
+
+/// The content-confirm over both id forms: the raw id and the board label
+/// (`numbers::display`). The resume message and the question pages carry the
+/// label only, so a scan keyed on the raw id alone never confirms on a
+/// numbered board.
+fn confirm_marker_forms(path: &Path, marker: &str, label: &str, since: u64) -> bool {
+    if crate::mail_inject::confirm_content_after(path, marker, since).unwrap_or(false) {
+        return true;
+    }
+    label != marker
+        && crate::mail_inject::confirm_content_after(path, label, since).unwrap_or(false)
+}
+
+/// The transcript's byte length before the clear's mail leg runs, for the
+/// asker session the confirm scan reads. None without a session.
+fn pre_clear_offset(item: Option<&AttentionItem>) -> Option<u64> {
+    let asker = item?.asker.as_ref()?;
+    let sid = asker.session_id.as_deref().filter(|s| !s.is_empty())?;
+    let harness = asker.harness.as_deref().unwrap_or_default();
+    crate::context_run::session_transcript(sid, harness).map(|p| transcript_len(&p))
 }
 
 /// The transcript's byte length, read once: the resume's before-offset.
@@ -922,8 +992,7 @@ mod tests {
         let state_dir = tempfile::tempdir().unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         let runner = &|_argv: &[String]| (0, String::new(), String::new());
-        let questions = crate::provider_cap::questions_path(&crate::paths::AgentsHome::from_env());
-        crate::event_store::sync(&questions).unwrap();
+        sync_questions();
         let path = crate::event_store::store_path(&questions);
         let db = rusqlite::Connection::open(path).unwrap();
         db.execute_batch("CREATE TABLE recovery_history(event_id TEXT PRIMARY KEY, batch TEXT NOT NULL); INSERT INTO recovery_history SELECT event_id, 'copy-batch' FROM events WHERE type='attention_answer';").unwrap();
@@ -984,7 +1053,6 @@ mod tests {
             clears: 0,
         };
         let state_dir = tempfile::tempdir().unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         let resumes = std::rc::Rc::new(std::cell::Cell::new(0u32));
         let count = resumes.clone();
         // The resume argv is ["fno", "agents", "resume", <sid>, ...]: the
@@ -995,16 +1063,8 @@ mod tests {
             }
             (0, String::new(), String::new())
         };
-        let questions = crate::provider_cap::questions_path(&crate::paths::AgentsHome::from_env());
-        crate::event_store::sync(&questions).unwrap();
-        let (acted1, _d1) = tick_answers(
-            &items,
-            Path::new("."),
-            state_dir.path(),
-            deadline,
-            &mut io,
-            &runner,
-        );
+        sync_questions();
+        let (acted1, _d) = beat(&items, &mut io, &runner, state_dir.path());
         assert_eq!(io.clears, 1);
         assert_eq!(
             acted1, 1,
@@ -1033,8 +1093,7 @@ mod tests {
             "the answer endpoint's own send accepted (typed (pane 3))",
             Some("s1"),
         );
-        let questions = crate::provider_cap::questions_path(&crate::paths::AgentsHome::from_env());
-        crate::event_store::sync(&questions).unwrap();
+        sync_questions();
         assert!(delivered_row_exists("q-row"));
         assert!(!delivered_row_exists("q-absent"));
         let mut io = FakeIo {
@@ -1148,5 +1207,225 @@ mod tests {
         let j = journal();
         assert!(j.contains("\"rung\":\"resume\""), "{j}");
         assert!(j.contains("\"outcome\":\"confirmed\""), "{j}");
+    }
+
+    /// Stage one transcript under PROJECTS_DIR_ENV the way ac2 does, and
+    /// return the staging base so a test can append rows between beats.
+    fn staged_transcript(tag: &str, sid: &str, pre: &str) -> PathBuf {
+        let base = std::env::temp_dir().join(format!("reply-{tag}-{}", std::process::id()));
+        let proj = base.join("proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(proj.join(format!("{sid}.jsonl")), pre).unwrap();
+        std::env::set_var(crate::claude_drive::PROJECTS_DIR_ENV, &base);
+        base
+    }
+
+    fn append_transcript(base: &Path, sid: &str, row: &str) {
+        use std::io::Write as _;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(base.join("proj").join(format!("{sid}.jsonl")))
+            .unwrap();
+        f.write_all(row.as_bytes()).unwrap();
+    }
+
+    /// Backdate one persisted ladder field, the way the 300 s windows are
+    /// crossed in tests without sleeping.
+    fn backdate(state_dir: &Path, item_id: &str, edit: impl FnOnce(&mut ReplyState)) {
+        let mut states = load_states(state_dir);
+        edit(states.get_mut(item_id).expect("state kept"));
+        save_states(state_dir, &states);
+    }
+
+    /// One staged beat: the common tick_answers arguments, fresh deadline.
+    fn beat(
+        items: &[AttentionItem],
+        io: &mut FakeIo,
+        runner: &dyn Fn(&[String]) -> (i32, String, String),
+        state_dir: &std::path::Path,
+    ) -> (u64, Vec<String>) {
+        tick_answers(
+            items,
+            Path::new("."),
+            state_dir,
+            std::time::Instant::now() + std::time::Duration::from_secs(60),
+            io,
+            runner,
+        )
+    }
+
+    fn sync_questions() {
+        sync_questions();
+    }
+
+    #[test]
+    fn a_composer_park_confirms_then_redelivers_then_alerts() {
+        // The dropped-board-answer specimens: a weak receipt (parked) read
+        // landed while the thread never showed the answer. Confirm, then
+        // re-deliver, then alert.
+        let _root = crate::paths::DeclaredRoot::declare("reply_weak_arc");
+        let sid = "01234567-89ab-cdef-0123-456789abcdef";
+        let base = staged_transcript(
+            "arc",
+            sid,
+            "{\"text\":\"the asker's own turn before the clear\"}\n",
+        );
+        let items = vec![ready_item("q-park", Some("claude"), Some(sid))];
+        record_answer("q-park");
+        sync_questions();
+        let mut io = FakeIo {
+            posture: "outstanding: q-park answered; mail to w1: parked (composer)".into(),
+            clears: 0,
+        };
+        let resumed = std::sync::atomic::AtomicUsize::new(0);
+        let r = &resumed;
+        let runner = move |argv: &[String]| -> (i32, String, String) {
+            if argv.get(2).map(String::as_str) == Some("resume") {
+                r.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            (0, String::new(), String::new())
+        };
+        let state_dir = tempfile::tempdir().unwrap();
+        let (acted1, _d) = beat(&items, &mut io, &runner, state_dir.path());
+        assert_eq!(io.clears, 1);
+        assert_eq!(acted1, 1, "the clear acted; nothing delivered yet");
+        assert!(
+            !journal().contains("\"rung\":\"mail\""),
+            "a parked receipt never reads landed: {}",
+            journal()
+        );
+        let states = load_states(state_dir.path());
+        let state = states.get("q-park").expect("pending state kept");
+        assert_eq!(state.outcome, "", "not terminal while nothing confirmed");
+        // The confirm window closes empty: the resume re-delivers once.
+        backdate(state_dir.path(), "q-park", |s| {
+            s.mailed_at = Some(now_secs().saturating_sub(CONFIRM_WINDOW_S + 5));
+        });
+        let (acted2, _d) = beat(&items, &mut io, &runner, state_dir.path());
+        assert_eq!(
+            resumed.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "one resume re-delivery"
+        );
+        assert_eq!(acted2, 0, "the resume ran; nothing delivered yet");
+        assert!(!journal().contains("\"rung\":\"mail\""), "{}", journal());
+        // The resume's own window closes with no marker: the alert rung.
+        backdate(state_dir.path(), "q-park", |s| {
+            s.resumed_at = Some(now_secs().saturating_sub(CONFIRM_WINDOW_S + 5));
+        });
+        let (acted3, _d) = beat(&items, &mut io, &runner, state_dir.path());
+        assert_eq!(
+            resumed.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "no second resume"
+        );
+        assert_eq!(acted3, 1, "the alert rung commits the row");
+        let j = journal();
+        assert!(
+            j.contains("\"rung\":\"team\"") || j.contains("\"rung\":\"none\""),
+            "the arc ends on an alert rung: {j}"
+        );
+        assert!(
+            !j.contains("\"outcome\":\"landed\""),
+            "the parked answer never reads landed: {j}"
+        );
+        let _ = base;
+    }
+
+    #[test]
+    fn a_parked_receipt_confirms_when_the_answer_shows_in_the_transcript() {
+        // The mail leg landed inside the window (the marker appears in the
+        // asker's transcript after the pre-clear offset): rung mail reads
+        // confirmed, and no resume rides on top.
+        let _root = crate::paths::DeclaredRoot::declare("reply_weak_confirm");
+        let sid = "01234567-89ab-cdef-0123-456789abcdef";
+        let base = staged_transcript(
+            "confirm",
+            sid,
+            "{\"text\":\"the asker's own turn before the clear\"}\n",
+        );
+        let items = vec![ready_item("q-show", Some("claude"), Some(sid))];
+        record_answer("q-show");
+        sync_questions();
+        let mut io = FakeIo {
+            posture: "outstanding: q-show answered; mail to w1: parked (composer)".into(),
+            clears: 0,
+        };
+        let resumed = std::sync::atomic::AtomicUsize::new(0);
+        let r = &resumed;
+        let runner = move |argv: &[String]| -> (i32, String, String) {
+            if argv.get(2).map(String::as_str) == Some("resume") {
+                r.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            (0, String::new(), String::new())
+        };
+        let state_dir = tempfile::tempdir().unwrap();
+        let (acted1, _d) = beat(&items, &mut io, &runner, state_dir.path());
+        assert_eq!(io.clears, 1);
+        assert_eq!(acted1, 1);
+        assert_eq!(resumed.load(std::sync::atomic::Ordering::SeqCst), 0);
+        append_transcript(
+            &base,
+            sid,
+            "{\"text\":\"Answer to your question q-show: yes\"}\n",
+        );
+        let (acted2, _d) = beat(&items, &mut io, &runner, state_dir.path());
+        assert_eq!(
+            resumed.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "no resume rides a confirmed mail leg"
+        );
+        assert_eq!(acted2, 1, "the confirm commits the row");
+        let j = journal();
+        assert!(j.contains("\"rung\":\"mail\""), "{j}");
+        assert!(j.contains("\"outcome\":\"confirmed\""), "{j}");
+    }
+
+    #[test]
+    fn a_weak_receipt_without_a_session_never_reads_landed() {
+        // No session facts: nothing can ever confirm or resume, so the weak
+        // receipt goes straight to the alert rung instead of reading landed.
+        let _root = crate::paths::DeclaredRoot::declare("reply_weak_nosess");
+        let items = vec![ready_item("q-nosess", None, None)];
+        record_answer("q-nosess");
+        sync_questions();
+        let mut io = FakeIo {
+            posture: "outstanding: q-nosess answered; mail to w1: injected".into(),
+            clears: 0,
+        };
+        let state_dir = tempfile::tempdir().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let runner = &|_argv: &[String]| (0, String::new(), String::new());
+        let (acted1, _d1) = tick_answers(
+            &items,
+            Path::new("."),
+            state_dir.path(),
+            deadline,
+            &mut io,
+            runner,
+        );
+        assert_eq!(io.clears, 1);
+        assert_eq!(acted1, 2, "the clear and the alert rung both acted");
+        let j = journal();
+        assert!(
+            !j.contains("\"rung\":\"mail\""),
+            "an unconfirmable answer never reads landed: {j}"
+        );
+        let states = load_states(state_dir.path());
+        let state = states.get("q-nosess").expect("terminal state kept");
+        assert_eq!(state.outcome, "failed", "the no-team alert arc: {state:?}");
+    }
+
+    #[test]
+    fn the_confirm_scan_matches_the_board_label_form() {
+        // resume_message carries numbers::display(id); a scan keyed on the
+        // raw id alone never confirms on a numbered board.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.jsonl");
+        std::fs::write(&path, "{\"text\":\"Answer to your question Q77: yes\"}\n").unwrap();
+        assert!(confirm_marker_forms(&path, "q-abcdef", "Q77", 0));
+        assert!(!confirm_marker_forms(&path, "q-abcdef", "q-abcdef", 0));
+        std::fs::write(&path, "{\"text\":\"raw q-abcdef surfaces too\"}\n").unwrap();
+        assert!(confirm_marker_forms(&path, "q-abcdef", "Q77", 0));
     }
 }

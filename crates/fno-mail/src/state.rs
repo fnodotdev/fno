@@ -297,6 +297,34 @@ const REACHED_WORDS: [&str; 5] = [
     "typed",
 ];
 
+/// The receipt words for a send whose bytes sit IN the recipient's turn
+/// record, provable from the receipt alone: an accepted steer or a new-turn
+/// record. Every other reached receipt (`parked`, `injected`, `typed`, the
+/// legacy `delivered (…)` shapes) only reached the pane, so a caller that
+/// needs the bytes visible confirms them by transcript content before it
+/// calls the delivery done.
+const TURN_RECORD_WORDS: [&str; 2] = ["accepted-new-turn", "accepted-steer"];
+
+/// The receipt line folded to its status text: a JSON receipt's `status`
+/// field, else the line itself.
+fn receipt_status_text(line: &str) -> String {
+    serde_json::from_str::<Value>(line)
+        .ok()
+        .and_then(|v| v.get("status").and_then(Value::as_str).map(str::to_string))
+        .unwrap_or_else(|| line.to_string())
+}
+
+/// Do the status text's head words (or a posture tail after `": "`) hit the
+/// word list? The shared matcher under [`receipt_reached`] and
+/// [`receipt_in_turn_record`].
+fn receipt_words_in(status: &str, words: &[&str]) -> bool {
+    let head_matches = |s: &str| s.split_whitespace().take(2).any(|t| words.contains(&t));
+    head_matches(status)
+        || status
+            .rsplit_once(": ")
+            .is_some_and(|(_, tail)| head_matches(tail))
+}
+
 /// Did a `fno agents mail send` receipt line say the bytes reached the
 /// recipient (so a durable copy or a resend would duplicate them)? The line
 /// is the JSON receipt, a plain `<id> <status>` line, or a posture line that
@@ -304,21 +332,17 @@ const REACHED_WORDS: [&str; 5] = [
 /// `delivered (hosted)` and `delivered (woken)` receipts, which still read as
 /// reached; `delivered (durable)` never did.
 pub fn receipt_reached(line: &str) -> bool {
-    let status = serde_json::from_str::<Value>(line)
-        .ok()
-        .and_then(|v| v.get("status").and_then(Value::as_str).map(str::to_string))
-        .unwrap_or_else(|| line.to_string());
-    let head_reached = |s: &str| {
-        s.split_whitespace()
-            .take(2)
-            .any(|t| REACHED_WORDS.contains(&t))
-    };
-    head_reached(status.as_str())
-        || status
-            .rsplit_once(": ")
-            .is_some_and(|(_, tail)| head_reached(tail))
+    let status = receipt_status_text(line);
+    receipt_words_in(&status, &REACHED_WORDS)
         || status.contains("delivered (hosted)")
         || status.contains("delivered (woken)")
+}
+
+/// Does the receipt name a state only a turn-record landing can produce? The
+/// reply ladder's landed gate reads this, not [`receipt_reached`]: a pane
+/// park never certifies its own delivery.
+pub fn receipt_in_turn_record(line: &str) -> bool {
+    receipt_words_in(&receipt_status_text(line), &TURN_RECORD_WORDS)
 }
 
 #[cfg(test)]
