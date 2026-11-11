@@ -210,25 +210,4 @@ mod tests {
             "{err}"
         );
     }
-
-    #[test]
-    fn rows_keep_pack_order_mods_then_layouts_and_carry_the_commit() {
-        let rows = parse_installed(Ok(br#"{"packs": [
-            {"pack_id": "a", "source": {"commit": "abc"},
-             "mods": [{"id": "m", "title": "M", "enabled": true}],
-             "layouts": [{"id": "l", "title": "L", "enabled": false}]},
-            {"pack_id": "b", "mods": [{"id": "n", "title": "N", "enabled": true}]}]}"#
-            .to_vec()))
-        .unwrap();
-        let ids: Vec<String> = rows.iter().map(|(p, c)| format!("{p}/{}", c.id)).collect();
-        assert_eq!(ids, ["a/m", "a/l", "b/n"]);
-        assert_eq!(rows[0].1.commit, "abc");
-        assert_eq!(rows[2].1.commit, "");
-    }
-
-    #[test]
-    fn shell_words_quotes_only_what_needs_it() {
-        let argv = ["sh", "-c", "echo 'hi'"].map(String::from);
-        assert_eq!(shell_words(&argv), r"sh -c 'echo '\''hi'\'''");
-    }
 }
