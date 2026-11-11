@@ -185,6 +185,9 @@ impl View {
                 "tab or click a section · esc close"
             })
             .min_width(widest.max(crate::popup::WIDTH_CAP))
+            // The six-label strip is wider than the default cap; without
+            // this the clamp cut the box short of the strip's right air.
+            .width_cap(crate::popup::WIDTH_CAP + 20)
             .plain_body();
         AuxPopup { popup, actions }
     }
