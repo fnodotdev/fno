@@ -210,9 +210,15 @@ pub(crate) fn shell_words(argv: &[String]) -> String {
         .join(" ")
 }
 
+/// The page's one door to the plugins owner: every read and pane runs the
+/// fno front door, which hands `config plugins` to fno-agents.
+fn fno_door() -> std::path::PathBuf {
+    crate::server::fno_bin()
+}
+
 fn fno_json(args: &[&str]) -> Result<Vec<u8>, ReadFailed> {
     let shown = format!("fno {}", args.join(" "));
-    let mut cmd = crate::process_admission::std_command(crate::server::fno_bin());
+    let mut cmd = crate::process_admission::std_command(fno_door());
     cmd.args(args).stdin(std::process::Stdio::null());
     let out = crate::process_admission::std_output(&mut cmd)
         .map_err(|e| ReadFailed(format!("`{shown}` did not start: {e}")))?;
@@ -249,10 +255,10 @@ pub(crate) fn parse_installed(
         .collect())
 }
 
-/// Read the installed rows now (the tab switch; a local, fast read).
+/// The tab came into focus: the next tick reads the installed rows off the
+/// loop, and the last rows stay painted until that read lands.
 pub(super) fn refresh(view: &mut View) {
-    view.extensions.installed = Some(parse_installed(fno_json(&LS)));
-    view.extensions.last_read = Some(Instant::now());
+    view.extensions.last_read = None;
 }
 
 fn tab_open(view: &View) -> bool {
@@ -473,7 +479,7 @@ pub(super) fn submit(view: &mut View, url: String) -> bool {
 /// `sh`, which keeps the pane open on the result until Enter. The argv rides
 /// as positional parameters, so no word of it is shell-parsed.
 fn in_pane(args: &[&str], what: &str) -> String {
-    let fno = crate::server::fno_bin();
+    let fno = fno_door();
     let fno_text = fno.to_string_lossy().into_owned();
     let script = r#"fno="$1"; shift; "$fno" config plugins "$@"; printf '\n[exit %s] press enter to close\n' "$?"; read -r _"#;
     let mut cmd = crate::process_admission::std_command(&fno);

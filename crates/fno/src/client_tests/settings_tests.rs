@@ -133,12 +133,14 @@ async fn settings_tabs_switch_by_tab_and_by_tap() {
     let mut v = settings_on(SettingsTab::General);
     let mut keys = Keys::new();
     // The tab cycle walks the header order and wraps, never leaving the
-    // modal: general, theme, colors, experimental, remote hosts, general.
+    // modal: general, theme, colors, experimental, remote hosts,
+    // extensions, general.
     for want in [
         SettingsTab::Theme,
         SettingsTab::Colors,
         SettingsTab::Experimental,
         SettingsTab::RemoteHosts,
+        SettingsTab::Extensions,
         SettingsTab::General,
     ] {
         keys.send(&mut v, b"\t").await;
@@ -160,7 +162,14 @@ async fn settings_tabs_switch_by_tab_and_by_tap() {
         .collect();
     assert_eq!(
         tabs,
-        ["general", "theme", "colors", "experimental", "remote hosts"]
+        [
+            "general",
+            "theme",
+            "colors",
+            "experimental",
+            "remote hosts",
+            "extensions"
+        ]
     );
     // A hover over a tab label moves no row selection.
     let sel = v.aux.as_ref().unwrap().popup.sel;
