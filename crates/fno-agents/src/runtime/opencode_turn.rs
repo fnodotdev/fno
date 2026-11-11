@@ -34,7 +34,7 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(10);
 /// A command turn holds its HTTP call open for the whole turn.
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(12 * 3600);
 /// A prompt the serve never marks busy is a turn that ended (or never ran).
-const START_GRACE: Duration = Duration::from_secs(20);
+const START_GRACE: Duration = Duration::from_secs(60);
 /// The serve unreachable this long ends the driver; the session is lost.
 const UNREACHABLE_LIMIT: Duration = Duration::from_secs(120);
 const DEFAULT_HOLD_MINUTES: u64 = 30;
