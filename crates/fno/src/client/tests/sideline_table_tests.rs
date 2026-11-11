@@ -1525,20 +1525,33 @@ fn a_lead_rung_question_and_a_dead_row_never_stamp() {
     assert_eq!(v.need_input_count(), 0);
 }
 
-// The registry name is the fallback join when the ask carried no session
-// id: the row still stamps, or a rename would orphan the flag.
+// The registry name is the fallback join when the ask's session id joins no
+// harness id (an ask records the manifest's fno id): the row still stamps,
+// and the questions view's `w` opens that row's own harness session.
 #[test]
-fn the_asking_name_matches_when_the_session_id_is_absent() {
+fn the_asking_name_matches_when_the_session_id_joins_no_row() {
     let item = crate::needs_overlay::QuestionItem {
         kind: "question".into(),
         state: "open".into(),
         origin: Some(crate::needs_overlay::QuestionOrigin {
             name: Some("wren".into()),
+            session_id: Some("fno-id-of-wren".into()),
             ..Default::default()
         }),
         ..Default::default()
     };
-    let mut v = wide_view(vec![agent_row("wren", 4, Some(AgentBadge::Working), false)]);
+    let mut wren = agent_row("wren", 4, Some(AgentBadge::Working), false);
+    wren.harness_session_id = Some("sid-wren".into());
+    // An exited asker still joins by name, so `w` reaches its resume door.
+    let mut dead = wren.clone();
+    dead.exited = true;
+    for row in [&wren, &dead] {
+        assert_eq!(
+            crate::client::questions::asker_session(&item, std::slice::from_ref(row)).as_deref(),
+            Some("sid-wren")
+        );
+    }
+    let mut v = wide_view(vec![wren]);
     v.apply_questions_fold(Ok(crate::needs_overlay::QuestionsFold {
         items: vec![item],
         ..Default::default()

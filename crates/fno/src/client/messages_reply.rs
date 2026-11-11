@@ -81,6 +81,12 @@ fn compose_popup(body: &str) -> Popup {
     .footer("enter send · esc cancel")
 }
 
+/// A carrier row came from another machine, so no pane here can take the
+/// reply; the notice names the command that reaches the sender.
+fn carrier_notice(from_key: &str) -> String {
+    format!("this mail is on another machine; reply with: fno agents mail send {from_key}")
+}
+
 /// Open the two-person choice for one projected message row.
 pub(super) fn open(view: &mut View, row: Value) {
     let Some(board) = view.messages_board.as_ref() else {
@@ -90,6 +96,10 @@ pub(super) fn open(view: &mut View, row: Value) {
     let receiver_key = text(&row, "to_key").to_string();
     if sender_key.is_empty() || receiver_key.is_empty() {
         view.set_notice("reply: message has no sender or receiver session".into());
+        return;
+    }
+    if text(&row, "origin") == "carrier" {
+        view.set_notice(carrier_notice(&sender_key));
         return;
     }
     let sender = Endpoint {
