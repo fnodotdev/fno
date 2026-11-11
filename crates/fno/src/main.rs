@@ -669,7 +669,10 @@ fn run_link(args: fno::mux_link::LinkArgs) -> i32 {
     match fno::mux_link::serve(&args) {
         fno::mux_link::Door::Exit(code) => code,
         fno::mux_link::Door::Attach(name) => {
-            fno_agents_exec(LABEL, &["attach", "--inline"], &[OsString::from(name)])
+            let bin = fno::digest_overlay::fno_agents_bin();
+            let error = fno::mux_link::attach_command(&bin, &name).exec();
+            eprintln!("{LABEL}: could not run fno-agents: {error}");
+            1
         }
     }
 }
