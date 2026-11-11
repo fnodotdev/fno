@@ -8257,6 +8257,20 @@ crates/fno-agents/src/eval/tick_ledger.rs	clippy::indexing_slicing	let pm = &mut
 crates/fno-agents/src/eval/tick_ledger.rs	clippy::indexing_slicing	let second = digits(&bytes[17..19])?;
 crates/fno-agents/src/eval/tick_ledger.rs	clippy::indexing_slicing	let year = digits(&bytes[0..4])?;
 crates/fno-agents/src/eval/tick_ledger.rs	clippy::indexing_slicing	slot.last_exit = cols[1].trim().parse::<i64>().ok();
+crates/fno-agents/src/eval/usage_events.rs	clippy::indexing_slicing	!doc["properties"]
+crates/fno-agents/src/eval/usage_events.rs	clippy::indexing_slicing	assert_eq!(doc["properties"]["command"], "fno do pr merge 12");
+crates/fno-agents/src/eval/usage_events.rs	clippy::indexing_slicing	assert_eq!(doc["properties"]["hold_ms"], 4210);
+crates/fno-agents/src/eval/usage_events.rs	clippy::indexing_slicing	assert_eq!(first["properties"]["$process_person_profile"], false);
+crates/fno-agents/src/eval/usage_events.rs	clippy::indexing_slicing	assert_eq!(first["properties"]["machine"], crate::claims::hostname());
+crates/fno-agents/src/eval/usage_events.rs	clippy::indexing_slicing	assert_eq!(mk(json!({"exit": 0}))["properties"]["exit"], 0);
+crates/fno-agents/src/eval/usage_events.rs	clippy::indexing_slicing	assert_eq!(sent["api_key"], "tok");
+crates/fno-agents/src/eval/usage_events.rs	clippy::indexing_slicing	assert_eq!(sent["batch"].as_array().unwrap().len(), 2);
+crates/fno-agents/src/eval/usage_events.rs	clippy::indexing_slicing	let first = &sent["batch"][0];
+crates/fno-agents/src/eval/usage_events.rs	clippy::indexing_slicing	let props = doc["properties"].as_object().expect("properties object");
+crates/fno-agents/src/eval/usage_events.rs	clippy::indexing_slicing	let sent: Value = serde_json::from_str(&held.bodies[0]).unwrap();
+crates/fno-agents/src/eval/usage_events.rs	clippy::indexing_slicing	let sent: Value = serde_json::from_str(&ok.bodies[0]).unwrap();
+crates/fno-agents/src/eval/usage_events.rs	clippy::indexing_slicing	let ts = doc["timestamp"].as_str().unwrap_or_default().to_string();
+crates/fno-agents/src/eval/usage_events.rs	clippy::indexing_slicing	mk(json!({"duration_ms": 4210}))["properties"]["duration_ms"],
 crates/fno-agents/src/runtime/tool_activity.rs	clippy::indexing_slicing	assert_eq!(count_rows(&rows(), &mut folds, &mut find)["s1"], (1, 0));
 crates/fno-agents/src/runtime/tool_activity.rs	clippy::indexing_slicing	assert_eq!(count_rows(&rows(), &mut folds, &mut find)["s1"], (2, 0));
 crates/fno-agents/src/runtime/tool_activity.rs	clippy::indexing_slicing	assert_eq!(counts["s1"], (1, 0));

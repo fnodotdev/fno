@@ -387,7 +387,7 @@ fn reconcile_locked(home: &AgentsHome, path: &Path) -> Result<Outcome, String> {
         outcome.lifted = true;
         announce(
             &mut outcome,
-            "All clear: the test hold is lifted. Tests may run again.",
+            "All clear: the test hold is lifted. The user's tests may run again. Agent sessions still ride CI unless a lead grants a checkout test:priority.",
         );
         std::fs::remove_file(path).map_err(|e| format!("{}: {e}", path.display()))?;
         return Ok(outcome);
@@ -438,7 +438,7 @@ fn reconcile_locked(home: &AgentsHome, path: &Path) -> Result<Outcome, String> {
         };
         announce(
             &mut outcome,
-            &format!("{lead} Keep coding. Do not rerun tests. Wait for the all-clear."),
+            &format!("{lead} Keep coding. Do not rerun tests. An all-clear lifts this hold for the user's tests; agent sessions still ride CI unless a lead grants a checkout test:priority."),
         );
         state.announced = outcome.announced.clone();
     }
@@ -482,6 +482,63 @@ mod tests {
     use super::*;
     use crate::census::test_proc_row as row;
 
+    /// The lift announcement must not promise agent sessions their test
+    /// runs back: the run door still refuses them (CI is the gate;
+    /// `test:priority` is the only lift), and the 2026-11-10 all-clear
+    /// read to a worker as a broken wrapper (the exit-86 filing). The body
+    /// that reaches the bus names the standing refusal and its lever.
+    #[test]
+    fn the_lift_announcement_does_not_promise_agent_test_runs() {
+        // The home sits at <dir>/agents, the incident_claim fixture's
+        // shape: a home pinned directly at a temp subdir resolves its bus
+        // to the SHARED temp-dir-root bus, where every from_env-pinned
+        // test's fleet-incident sends collect and the rolling-hour limit
+        // then refuses the send under test.
+        let dir = tempfile::TempDir::new().unwrap();
+        let home = crate::paths::AgentsHome::at(dir.path().join("agents"));
+        std::fs::create_dir_all(home.root()).unwrap();
+        let _home = crate::AgentsHomeEnvGuard::set(home.root());
+        let path = home.test_pause_json();
+        // The announce send writes the bus row and reads the registry
+        // store: pre-create the bus directory and seat a registry, or the
+        // send fails and the assertion would measure the fixture, not the
+        // announcement.
+        std::fs::create_dir_all(dir.path().join("db/mail/bus")).unwrap();
+        // The write refuses an unresolvable row ("no resolvable handle"), the
+        // read refuses a row without an identity token ("no valid identity
+        // token": harness, lowercase), and the send refuses an empty audience,
+        // so seat one busy entry the way the hold test does: a harness, a
+        // session id, Busy.
+        let mut entry = crate::state::RegistryEntry::default();
+        entry.status = crate::AgentStatus::Busy;
+        entry.harness = Some("claude".into());
+        entry.harness_session_id = Some("lift-audience-sess".into());
+        crate::state::update_registry(&home.registry_json(), |r| r.entries.push(entry)).unwrap();
+        // A pause record an older build wrote is what makes this pass a
+        // lift rather than a first hold.
+        write_state(
+            &path,
+            &PauseState {
+                generation: 7,
+                paused: vec![],
+                announced: None,
+            },
+        )
+        .unwrap();
+        let outcome = reconcile(&home).unwrap();
+        assert!(outcome.lifted, "the hold must read as lifted: {outcome:?}");
+        outcome
+            .announced
+            .as_ref()
+            .unwrap_or_else(|| panic!("the lift announces: {outcome:?}"));
+        let bus = std::fs::read_to_string(crate::mail_paths::bus_log_path(dir.path()))
+            .expect("the announcement lands on the bus");
+        assert!(
+            bus.contains("test:priority"),
+            "the all-clear must name the standing agent refusal and its lift lever: {bus}"
+        );
+    }
+
     /// A held fleet test run ends (SIGKILL, not SIGSTOP) within one
     /// reconcile pass, and the pid-anchored claims it held (`build:cargo`,
     /// a run slot) admit a waiting build at once. The selection matrix the
@@ -518,6 +575,13 @@ mod tests {
         let root = std::env::temp_dir().join(format!("fno-test-hold-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("bin")).unwrap();
+        // The home sits at <root>/agents so the hold's bus lands under
+        // <root>, isolated from every other test's fleet-incident sends on
+        // the shared temp-dir-root bus (the incident_claim fixture's
+        // shape). Pre-create the bus directory the send writes.
+        let home = crate::paths::AgentsHome::at(root.join("agents"));
+        std::fs::create_dir_all(home.root()).unwrap();
+        std::fs::create_dir_all(root.join("db/mail/bus")).unwrap();
         // A real binary named `cargo` that naps. A shebang script will not
         // do: the process table shows the interpreter's argv (`/bin/sh
         // <path>/cargo test ...`), which `is_test_root` never matches.
@@ -547,8 +611,7 @@ mod tests {
             .unwrap();
         let pid = child.id();
 
-        let _home = crate::AgentsHomeEnvGuard::set(&root);
-        let home = crate::paths::AgentsHome::from_env();
+        let _home = crate::AgentsHomeEnvGuard::set(home.root());
         let mut visible = false;
         for _ in 0..50 {
             let (table, _) = crate::census::process_table();
@@ -568,6 +631,9 @@ mod tests {
         entry.status = crate::AgentStatus::Busy;
         entry.pid = Some(pid);
         entry.pid_start_time = crate::daemon::process_start_time(pid);
+        // The announce read refuses a row without an identity token: the
+        // lowercase harness name is what makes this row loadable.
+        entry.harness = Some("claude".into());
         entry.harness_session_id = Some("held-run-sess".into());
         crate::state::update_registry(&home.registry_json(), |r| r.entries.push(entry)).unwrap();
 
@@ -626,6 +692,22 @@ mod tests {
                 "{key} did not free within one tick"
             );
         }
+
+        // The hold announcement scopes the all-clear's reach like the lift
+        // does: an agent told to wait for the all-clear must read there what
+        // the all-clear does and does not restore. Surface the send's own
+        // verdict first: a bus read can only name NotFound, never why.
+        outcome
+            .announced
+            .as_ref()
+            .unwrap_or_else(|| panic!("the hold announces: {outcome:?}"));
+        let dot_fno = home.root().parent().unwrap_or(home.root()).to_path_buf();
+        let bus = std::fs::read_to_string(crate::mail_paths::bus_log_path(&dot_fno))
+            .expect("the hold announcement lands on the bus");
+        assert!(
+            bus.contains("test:priority"),
+            "the hold announcement must name the standing agent refusal and its lift lever: {bus}"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
