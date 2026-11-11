@@ -264,16 +264,8 @@ run_hook() {  # run_hook <payload> ; sets OUT, RC
 # Same resolution order as scripts/lib/events.sh. The store commit is the
 # write boundary: the pinned journal keeps no byte trace, so the assertion
 # reads committed rows through the command and jq -r unwraps the escapes.
-ROWS_BIN="${FNO_BIN:-}"
-if [[ -z "$ROWS_BIN" ]]; then
-    for _profile in debug release; do
-        if [[ -x "$REPO_ROOT/crates/fno/target/$_profile/fno" ]]; then
-            ROWS_BIN="$REPO_ROOT/crates/fno/target/$_profile/fno"
-            break
-        fi
-    done
-fi
-[[ -n "$ROWS_BIN" ]] || ROWS_BIN=$(command -v fno 2>/dev/null)
+# shellcheck source=scripts/lib/store-bin.sh
+source "$REPO_ROOT/scripts/lib/store-bin.sh"
 
 events_has() { "$ROWS_BIN" doctor event rows --events "$SBX/.fno/events.jsonl" 2>/dev/null | jq -r '.[]' 2>/dev/null | grep -q "\"type\":\"$1\""; }
 
