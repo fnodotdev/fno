@@ -33,6 +33,13 @@ fn pack(r: u8, g: u8, b: u8) -> u32 {
     (r as u32) << 16 | (g as u32) << 8 | b as u32
 }
 
+/// `a` moved toward `b` by `t`, per channel.
+fn mix(a: u32, b: u32, t: f32) -> u32 {
+    let ch =
+        |v: u32, s: u32| ((v >> s & 0xff) as f32 * (1.0 - t) + (b >> s & 0xff) as f32 * t) as u8;
+    pack(ch(a, 16), ch(a, 8), ch(a, 0))
+}
+
 fn rgb_or(c: Color, fallback: u32) -> u32 {
     match c {
         Color::Rgb(r, g, b) => pack(r, g, b),
@@ -66,7 +73,7 @@ impl Palette {
             border: rgb_or(t.sel, 0x2b2b2b),
             error: rgb_or(t.error, 0xe1a6a3),
             muted: rgb_or(t.dim, 0x8a8a8a),
-            panel: rgb_or(t.chip, 0x1c1c1c),
+            panel: mix(rgb_or(t.base, 0x141414), rgb_or(t.stamp, 0xe8e8e8), 0.05),
             warn: rgb_or(t.needs_you, 0xe5c07b),
             ansi,
         }

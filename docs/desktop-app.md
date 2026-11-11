@@ -6,7 +6,7 @@
 
 The app is macOS only and is built from source. It is not part of `cargo install fno`.
 
-The build compiles Metal shaders, so it needs Xcode and its Metal toolchain. If the build stops on `missing Metal Toolchain`, install it once with `xcodebuild -downloadComponent MetalToolchain`.
+The build compiles Metal shaders, so it needs Xcode and its Metal toolchain. If the build stops on `missing Metal Toolchain`, install it once with `xcodebuild -downloadComponent MetalToolchain`. To build without it, add `gpui/runtime_shaders` to `--features`: the app then compiles its shaders at launch.
 
 ```bash
 cargo build --release --manifest-path crates/fno/Cargo.toml --features desktop --bin fno-desktop
@@ -25,9 +25,17 @@ The `codesign -s -` step gives the binary an ad-hoc signature. No developer acco
 | `--session <name>` | `FNO_SERVER`, then `default` | The mux session to attach to. |
 | `--font <family>` | `Menlo` | The terminal font family. |
 | `--font-size <pt>` | `13` | The terminal font size. |
-| `--probe` | off | Attach with no window, print one line, and exit. |
+| `--probe` | off | Attach with no window, print two lines, and exit. |
 
-`--probe` attaches as an observer, so it never resizes a pane. It waits up to 5 seconds for the layout and one frame per pane. Then it prints `attached session=<s> panes=<n> frames=<m>` and exits 0. With no server it prints the socket path it tried and exits 1.
+`--probe` attaches as an observer, so it never resizes a pane. It waits up to 5 seconds for the layout and one frame per pane. Then it prints `attached session=<s> panes=<n> frames=<m>`. Next it reads the fleet, the open questions and the backlog the way the window does, and prints `agents=<n> questions=<m> seats=<k>`. It exits 0 when the attach succeeded. With no server it prints the socket path it tried and exits 1. A failed fleet or question read prints its reason on stderr.
+
+## The window
+
+The left pane has four sections. Agents come in the order the TUI sideline uses. A click focuses the agent's pane, or opens a paneless agent in portal 0. Sessions are the mux squads; a click switches to one. Questions are the open questions that wait on you, newest first. Machines are the fleet's hosts with their seat counts. A section whose read failed shows the error above its last good rows. The fleet and the questions refresh every 10 seconds.
+
+The strip above the grid shows the active session's tabs. A click selects a tab.
+
+cmd-2 opens orchestration mode, the command center board. TABLE lists every seat on every machine with its node. FEED lists each open question with its options. A click on an option answers it through the same door the TUI uses. cmd-1 goes back to the terminal.
 
 ## Keys
 
@@ -40,7 +48,13 @@ Keys go to the focused pane as a terminal sends them. The mux prefix key passes 
 | cmd-] / cmd-[ | Next pane / previous pane |
 | cmd-t | New tab |
 | cmd-w | Close pane |
+| cmd-c | Copy the focused pane's selection |
 | cmd-v | Paste (bracketed when the pane asks for it) |
+| cmd-1 / cmd-2 | Terminal / orchestration board |
 | cmd-q | Detach and quit |
 
-A click on a pane focuses it.
+Typed text goes through the macOS input system, so dead keys, option-compose and IME input work. Option on a letter types the composed character, as in Terminal.app; option on an arrow or backspace still sends the meta form.
+
+## Mouse
+
+A click on a pane focuses it. A drag selects text, and the release copies it. The wheel scrolls the pane's history, and `[+N]` at the top right shows how many lines up the pane is. A click on a border or a gap does nothing.

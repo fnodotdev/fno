@@ -30,14 +30,15 @@ fn table(root: &Root) -> Div {
     if let Some(e) = root.board.fleet_error() {
         out = out.child(error_line(e, root));
     }
+    // A width of 0 takes the rest of the row: the title column.
     let cell = |text: String, w: f32, color: u32| {
-        div()
-            .w(px(w))
-            .flex_none()
-            .px_2()
-            .truncate()
-            .text_color(rgb(color))
-            .child(text)
+        let d = div();
+        let d = if w > 0.0 {
+            d.w(px(w)).flex_none()
+        } else {
+            d.flex_1().min_w_0()
+        };
+        d.px_2().truncate().text_color(rgb(color)).child(text)
     };
     out = out.child(
         div()
@@ -49,7 +50,7 @@ fn table(root: &Root) -> Div {
             .child(cell("SEAT".into(), 180.0, p.muted))
             .child(cell("STATUS".into(), 110.0, p.muted))
             .child(cell("NODE".into(), 90.0, p.muted))
-            .child(cell("TITLE".into(), 360.0, p.muted)),
+            .child(cell("TITLE".into(), 0.0, p.muted)),
     );
     let machines = root
         .board
@@ -77,7 +78,7 @@ fn table(root: &Root) -> Div {
                     ))
                     .child(cell(
                         work.and_then(|w| w.title.clone()).unwrap_or_default(),
-                        360.0,
+                        0.0,
                         p.fg,
                     )),
             );
@@ -155,14 +156,25 @@ fn feed(root: &Root, cx: &mut Context<Root>) -> Div {
     out
 }
 
-pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Stateful<Div> {
+/// TABLE and FEED side by side, each scrolling on its own, so a long seat
+/// list never pushes the questions out of sight.
+pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
+    let column = |id: &'static str| -> Stateful<Div> {
+        div().id(id).h_full().overflow_y_scroll().px_4().pb_4()
+    };
     div()
-        .id("orchestration")
+        .flex()
+        .flex_row()
         .flex_1()
+        .min_h_0()
         .w_full()
-        .overflow_y_scroll()
-        .px_4()
-        .pb_4()
-        .child(table(root))
-        .child(feed(root, cx))
+        .child(column("board-table").flex_1().min_w_0().child(table(root)))
+        .child(
+            column("board-feed")
+                .w(px(440.0))
+                .flex_none()
+                .border_l_1()
+                .border_color(rgb(root.palette.border))
+                .child(feed(root, cx)),
+        )
 }
