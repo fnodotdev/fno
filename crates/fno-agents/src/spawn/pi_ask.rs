@@ -1,9 +1,13 @@
-//! pi's headless lane: one `pi --print --mode json` turn run to completion.
+//! The headless lane of pi and of its fork omp: one `--print --mode json`
+//! turn run to completion.
 //!
-//! STATELESS like the opencode and agy one-shots: `--no-session` keeps pi from
-//! writing a session file, no session id is minted, and no registry row is
-//! created. The route (`--model`, `--provider`, `--thinking`) is the one
-//! [`crate::pi::pi_route`] already builds for the keeper and pane lanes.
+//! STATELESS like the opencode and agy one-shots: `--no-session` keeps the
+//! harness from writing a session file, no session id is minted, and no
+//! registry row is created. pi's route (`--model`, `--provider`,
+//! `--thinking`) is the one [`crate::pi::pi_route`] already builds for the
+//! keeper and pane lanes. omp reads its route from its own settings unless
+//! the caller names `--model` / `--thinking`, and the two harnesses print the
+//! same `turn_end` / `agent_end` events, so one parser reads both.
 //!
 //! pi exits 0 when the model call fails. The failure is only in the event
 //! stream: the final assistant message carries `stopReason: "error"` and an
@@ -20,10 +24,10 @@ use crate::opencode_ask::{AskOutcome, DEFAULT_ONE_SHOT_TIMEOUT};
 
 /// A footnote command seed (`/fno:command`, either sigil) is a command, so it rides
 /// bare; a prose message keeps the `[from:]` envelope.
-fn pi_prompt(message: &str, from_name: &str) -> String {
+fn pi_prompt(message: &str, from_name: &str, harness: &str) -> String {
     let seed = crate::provider::render_command_seed(
         if message.is_empty() { "hello" } else { message },
-        "pi",
+        harness,
     );
     let first = seed.split_whitespace().next().unwrap_or("");
     if crate::provider::parse_command_token(first).is_some() {
@@ -56,9 +60,32 @@ fn build_pi_argv(
     argv
 }
 
+/// `omp --print --mode json --no-session [--model m] [--thinking e] <fenced
+/// args> -- <prompt>`. Unlike pi, omp's parser treats `--` as the POSIX
+/// positional separator (cli/args.ts), so the prompt rides behind a real fence.
+fn build_omp_argv(
+    prompt: &str,
+    model: Option<&str>,
+    effort: Option<&str>,
+    harness_args: &[String],
+) -> Vec<String> {
+    let mut argv = crate::harness_capabilities::render_session_argv("omp", "headless_create", None)
+        .expect("embedded omp headless-create capability");
+    for (flag, value) in [("--model", model), ("--thinking", effort)] {
+        if let Some(value) = value.map(str::trim).filter(|v| !v.is_empty()) {
+            argv.push(flag.to_string());
+            argv.push(value.to_string());
+        }
+    }
+    argv.extend(harness_args.iter().cloned());
+    argv.push("--".to_string());
+    argv.push(prompt.to_string());
+    argv
+}
+
 /// The reply text of the last assistant message in a `--mode json` stream, or
 /// the model's own error when that message stopped on one.
-fn parse_pi_stream(stdout: &str) -> Result<String, String> {
+fn parse_pi_stream(harness: &str, stdout: &str) -> Result<String, String> {
     let mut last: Option<Value> = None;
     for line in stdout.lines() {
         let Ok(event) = serde_json::from_str::<Value>(line) else {
@@ -83,7 +110,7 @@ fn parse_pi_stream(stdout: &str) -> Result<String, String> {
             _ => {}
         }
     }
-    let message = last.ok_or("pi emitted no assistant message")?;
+    let message = last.ok_or_else(|| format!("{harness} emitted no assistant message"))?;
     let stop = message
         .get("stopReason")
         .and_then(Value::as_str)
@@ -95,7 +122,7 @@ fn parse_pi_stream(stdout: &str) -> Result<String, String> {
             .get("errorMessage")
             .and_then(Value::as_str)
             .unwrap_or("the turn did not end on stop");
-        return Err(format!("pi stopped with {stop}: {detail}"));
+        return Err(format!("{harness} stopped with {stop}: {detail}"));
     }
     let text: String = message
         .get("content")
@@ -106,15 +133,16 @@ fn parse_pi_stream(stdout: &str) -> Result<String, String> {
         .filter_map(|block| block.get("text").and_then(Value::as_str))
         .collect();
     match text.trim() {
-        "" => Err("pi ended its turn with no text".to_string()),
+        "" => Err(format!("{harness} ended its turn with no text")),
         reply => Ok(reply.to_string()),
     }
 }
 
-/// Orchestrate one `spawn --substrate headless --harness pi`: validate, check
-/// the registry (fail-closed) for a name collision, then run the turn.
+/// Orchestrate one `spawn --substrate headless --harness pi|omp`: validate,
+/// check the registry (fail-closed) for a name collision, then run the turn.
 #[allow(clippy::too_many_arguments)]
 pub fn dispatch_pi_once(
+    harness: &str,
     home: &crate::paths::AgentsHome,
     name: &str,
     message: &str,
@@ -140,7 +168,7 @@ pub fn dispatch_pi_once(
                 &[
                     ("stage", "registry-read".into()),
                     ("name", name.into()),
-                    ("provider", "pi".into()),
+                    ("provider", harness.into()),
                     ("error", e.to_string().into()),
                 ],
             );
@@ -157,15 +185,20 @@ pub fn dispatch_pi_once(
         );
     }
 
-    let argv = build_pi_argv(&pi_prompt(message, from_name), model, effort, harness_args);
+    let prompt = pi_prompt(message, from_name, harness);
+    let argv = if harness == "omp" {
+        build_omp_argv(&prompt, model, effort, harness_args)
+    } else {
+        build_pi_argv(&prompt, model, effort, harness_args)
+    };
     let log_path = home
         .root()
         .join("agents")
         .join("logs")
         .join(format!("{name}.jsonl"));
     let timeout = timeout.or(Some(DEFAULT_ONE_SHOT_TIMEOUT));
-    let run = crate::opencode_ask::run_one_shot("pi", &argv, &log_path, timeout, cwd, name)
-        .and_then(|stdout| parse_pi_stream(&stdout).map_err(|msg| (1, msg)));
+    let run = crate::opencode_ask::run_one_shot(harness, &argv, &log_path, timeout, cwd, name)
+        .and_then(|stdout| parse_pi_stream(harness, &stdout).map_err(|msg| (1, msg)));
     match run {
         Ok(reply) => AskOutcome::ok_reply(format!("{reply}\n")),
         Err((code, msg)) => {
@@ -173,9 +206,9 @@ pub fn dispatch_pi_once(
                 &events,
                 "agent_ask_failed",
                 &[
-                    ("stage", "pi-once".into()),
+                    ("stage", format!("{harness}-once").into()),
                     ("name", name.into()),
-                    ("provider", "pi".into()),
+                    ("provider", harness.into()),
                     ("error", msg.clone().into()),
                 ],
             );
@@ -202,14 +235,14 @@ mod tests {
 
     #[test]
     fn a_model_error_exiting_zero_is_not_a_reply() {
-        let err = parse_pi_stream(ERROR_STREAM).unwrap_err();
+        let err = parse_pi_stream("pi", ERROR_STREAM).unwrap_err();
         assert_eq!(
             err,
             "pi stopped with error: Codex error: model not supported"
         );
         let cut_off = r#"{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"par"}],"stopReason":"length"}}"#;
         assert_eq!(
-            parse_pi_stream(cut_off).unwrap_err(),
+            parse_pi_stream("pi", cut_off).unwrap_err(),
             "pi stopped with length: the turn did not end on stop"
         );
     }
@@ -221,6 +254,6 @@ mod tests {
             "\n",
             r#"{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"po"},{"type":"thinking","thinking":"x"},{"type":"text","text":"ng\n"}],"stopReason":"stop"}}"#,
         );
-        assert_eq!(parse_pi_stream(stream).as_deref(), Ok("pong"));
+        assert_eq!(parse_pi_stream("pi", stream).as_deref(), Ok("pong"));
     }
 }
