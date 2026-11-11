@@ -21,6 +21,7 @@ pub(in crate::server) fn empty_core() -> Core {
         exit_tx,
         self_tx,
         input_echo: HashMap::new(),
+        anchors: HashMap::new(),
         agents: Vec::new(),
         agents_read_ok: false,
         journal: crate::spawn_journal::JournalCache::default(),

@@ -6961,7 +6961,7 @@ async fn attach_and_run(
                         .as_ref()
                         .and_then(|b| b.pending_jump.as_ref())
                         .map(|(sid, pane, _)| (sid.clone(), *pane));
-                    if let Some((sid, pane)) = pending.filter(|(_, p)| *p == pane_id) {
+                    if let Some((sid, _pane)) = pending.filter(|(_, p)| *p == pane_id) {
                         if let Some(b) = view.messages_board.as_mut() {
                             b.pending_jump = None;
                         }
