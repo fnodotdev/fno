@@ -66,7 +66,7 @@ pub(super) fn note_asked(payload: &Value, guards: &[&str]) {
     let path = asks_path(&cwd, &session);
     let mut entries = load(&path);
     let now = now_secs();
-    entries.retain(|_, e| e.get("expires").and_then(Value::as_u64).unwrap_or(0) > now);
+    entries.retain(|_, e| AskEntry::read(e).is_some_and(|a| a.expires > now));
     entries.insert(
         shape_key(&cwd, &command),
         json!({"guards": guards, "expires": now + ENTRY_TTL_SECS}),
@@ -87,19 +87,23 @@ fn take_overrides(path: &Path, now: u64, key: &str) -> Vec<String> {
         return Vec::new();
     };
     save(path, &entries);
-    if entry.get("expires").and_then(Value::as_u64).unwrap_or(0) <= now {
-        return Vec::new();
+    match AskEntry::read(&entry) {
+        Some(ask) if ask.expires > now => ask.guards,
+        _ => Vec::new(),
     }
-    entry
-        .get("guards")
-        .and_then(Value::as_array)
-        .map(|g| {
-            g.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
+}
+
+/// One asked shape in the ledger.
+#[derive(serde::Deserialize)]
+struct AskEntry {
+    guards: Vec<String>,
+    expires: u64,
+}
+
+impl AskEntry {
+    fn read(entry: &Value) -> Option<Self> {
+        serde_json::from_value(entry.clone()).ok()
+    }
 }
 
 /// The post side against the resolved payload: bump, restart or clear the

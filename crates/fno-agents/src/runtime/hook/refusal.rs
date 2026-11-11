@@ -273,7 +273,7 @@ mod tests {
         assert!(!asks_with(env(&[ATT])));
         let ask = answer("r", true);
         assert_eq!(ask["hookSpecificOutput"]["permissionDecision"], "ask");
-        assert!(ask.get("decision").is_none());
+        assert!(ask["decision"].is_null());
         let deny = answer("r", false);
         assert_eq!(deny["hookSpecificOutput"]["permissionDecision"], "deny");
         assert_eq!(deny["decision"], "block");

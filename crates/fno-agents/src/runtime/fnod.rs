@@ -93,11 +93,13 @@ impl Escalate {
 }
 
 /// fnod's answer. A noul question labels `yes` or `no` and keeps its raw
-/// score under `probabilities.noul`; a choice question labels the argmax.
+/// score in `noul`; a choice question labels the argmax.
 #[derive(Debug)]
 pub(crate) struct Decision {
     pub label: Option<String>,
     pub probabilities: Map<String, Value>,
+    /// A noul question's raw score.
+    pub noul: Option<f64>,
     pub confidence: f64,
     pub escalate: Escalate,
     pub ms: u64,
@@ -123,11 +125,14 @@ pub(crate) fn ask(url: &str, timeout: Duration, state: Value, q: &Question) -> D
                 200 => serde_json::from_str::<Value>(&text).map_err(|e| format!("reply: {e}")),
                 _ => Err(format!("HTTP {status}")),
             })
-            .and_then(|reply| read_answer(&reply, &q.id))
+            .and_then(|reply| {
+                read_answer(&reply, &q.id)
+                    .ok_or_else(|| format!("reply carries no usable answers.{}", q.id))
+            })
     };
     let ms = start.elapsed().as_millis() as u64;
     match reply {
-        Ok((label, probabilities, confidence)) => {
+        Ok((label, probabilities, confidence, noul)) => {
             let escalate = if !q.trained || confidence < q.escalate_below {
                 Escalate::Model
             } else if q.irreversible {
@@ -138,6 +143,7 @@ pub(crate) fn ask(url: &str, timeout: Duration, state: Value, q: &Question) -> D
             Decision {
                 label: Some(label),
                 probabilities,
+                noul,
                 confidence,
                 escalate,
                 ms,
@@ -147,6 +153,7 @@ pub(crate) fn ask(url: &str, timeout: Duration, state: Value, q: &Question) -> D
         Err(why) => Decision {
             label: None,
             probabilities: Map::new(),
+            noul: None,
             confidence: 0.0,
             escalate: Escalate::Model,
             ms,
@@ -155,27 +162,30 @@ pub(crate) fn ask(url: &str, timeout: Duration, state: Value, q: &Question) -> D
     }
 }
 
-fn read_answer(reply: &Value, id: &str) -> Result<(String, Map<String, Value>, f64), String> {
-    let answer = reply
-        .pointer(&format!("/answers/{id}"))
-        .ok_or_else(|| format!("reply carries no answers.{id}"))?;
-    if let Some(p) = answer.get("noul").and_then(Value::as_f64) {
+/// One question's answer in a kev reply: a noul score or choice
+/// probabilities.
+#[derive(serde::Deserialize)]
+struct Answer {
+    noul: Option<f64>,
+    #[serde(default)]
+    probabilities: Map<String, Value>,
+}
+
+/// The label, the probabilities, the confidence and the raw noul score, or
+/// None when the reply carries no usable answer for `id`.
+fn read_answer(reply: &Value, id: &str) -> Option<(String, Map<String, Value>, f64, Option<f64>)> {
+    let answer: Answer =
+        serde_json::from_value(reply.pointer(&format!("/answers/{id}"))?.clone()).ok()?;
+    if let Some(p) = answer.noul {
         let label = if p >= 0.5 { "yes" } else { "no" };
-        let mut probabilities = Map::new();
-        probabilities.insert("noul".to_string(), json!(p));
-        return Ok((label.to_string(), probabilities, p.max(1.0 - p)));
+        return Some((label.to_string(), Map::new(), p.max(1.0 - p), Some(p)));
     }
-    let probabilities = answer
-        .get("probabilities")
-        .and_then(Value::as_object)
-        .cloned()
-        .ok_or_else(|| format!("reply carries no answers.{id}.noul or probabilities"))?;
-    let (label, p) = probabilities
+    let (label, p) = answer
+        .probabilities
         .iter()
         .filter_map(|(k, v)| v.as_f64().map(|p| (k.clone(), p)))
-        .max_by(|a, b| a.1.total_cmp(&b.1))
-        .ok_or_else(|| format!("reply carries empty {id} probabilities"))?;
-    Ok((label, probabilities, p))
+        .max_by(|a, b| a.1.total_cmp(&b.1))?;
+    Some((label, answer.probabilities, p, None))
 }
 
 /// fnod's answer to "does `message` ask the user for a decision or an
@@ -200,9 +210,9 @@ pub(crate) fn is_ask(cwd: &Path, message: &str) -> Map<String, Value> {
     out.insert("fnod_question".to_string(), json!(q.id));
     out.insert("fnod_trained".to_string(), json!(q.trained));
     out.insert("fnod_escalate".to_string(), json!(d.escalate.as_str()));
-    match (d.probabilities.get("noul"), d.error) {
+    match (d.noul, d.error) {
         (Some(p), None) => {
-            out.insert("fnod_is_ask".to_string(), p.clone());
+            out.insert("fnod_is_ask".to_string(), json!(p));
             out.insert("fnod_confidence".to_string(), json!(d.confidence));
             out.insert("fnod_ms".to_string(), json!(d.ms));
         }
