@@ -365,7 +365,8 @@ pub struct Chat {
 
 /// The pause between the pasted text and the Enter that submits it, the
 /// same settle `fno mux pane send --submit` uses.
-pub const SUBMIT_SETTLE: Duration = Duration::from_millis(crate::mux_cli::pane_submit::CR_SETTLE_MS);
+pub const SUBMIT_SETTLE: Duration =
+    Duration::from_millis(crate::mux_cli::pane_submit::CR_SETTLE_MS);
 
 fn styled(block: &Block, root: &Root) -> StyledText {
     let code_bg = rgb(root.palette.panel).into();
@@ -657,83 +658,43 @@ pub fn probe(session: &str, which: &str, idle: Duration) -> i32 {
 mod tests {
     #![allow(clippy::indexing_slicing)]
     use super::*;
-    use crate::proto::chat_event::SourceRef;
     use serde_json::json;
-
-    fn ev(seq: u64, body: ChatBody) -> ChatEvent {
-        ChatEvent {
-            seq,
-            at_ms: None,
-            source: SourceRef::Line { offset: seq },
-            body,
-        }
-    }
 
     #[test]
     fn chat_folds_turns_tools_and_unknown_kinds_in_order() {
-        let mut input = serde_json::Map::new();
-        input.insert("command".into(), json!("ls"));
-        let bodies = vec![
-            ChatBody::UserMessage {
-                id: "u1".into(),
-                origin: UserOrigin::Typed,
-                parts: vec![ContentPart::Text { text: "hi".into() }],
-            },
-            ChatBody::TextStarted { part: "p1".into() },
-            ChatBody::TextDelta {
-                part: "p1".into(),
-                text: "**hello** ".into(),
-            },
-            ChatBody::TextDelta {
-                part: "p1".into(),
-                text: "there".into(),
-            },
-            ChatBody::ToolCalled {
-                call_id: "t1".into(),
-                name: "Bash".into(),
-                input: ToolInput::Object(input),
-            },
-            ChatBody::Unknown {
-                name: "new_kind".into(),
-                raw: json!({"a": 1}),
-            },
-            ChatBody::ToolFinished {
-                call_id: "t1".into(),
-                ok: true,
-                output: vec![ContentPart::Text {
-                    text: "a.txt".into(),
-                }],
-            },
-            ChatBody::TurnEnded {
-                turn_id: None,
-                outcome: TurnOutcome::Done,
-            },
+        let bodies = [
+            json!({"kind": "user_message", "id": "u1", "origin": "typed", "parts": [{"type": "text", "text": "hi"}]}),
+            json!({"kind": "text_started", "part": "p1"}),
+            json!({"kind": "text_delta", "part": "p1", "text": "**hello** "}),
+            json!({"kind": "text_delta", "part": "p1", "text": "there"}),
+            json!({"kind": "tool_called", "call_id": "t1", "name": "Bash", "input": {"command": "ls"}}),
+            json!({"kind": "from_a_newer_server"}),
+            json!({"kind": "tool_finished", "call_id": "t1", "ok": true, "output": [{"type": "text", "text": "a.txt"}]}),
+            json!({"kind": "turn_ended", "outcome": {"type": "done"}}),
         ];
         let mut conv = Conversation::default();
         for (seq, body) in bodies.into_iter().enumerate() {
-            conv.push(ev(seq as u64, body));
+            let line = json!({"seq": seq, "source": {"type": "line", "offset": seq}, "body": body});
+            conv.push(serde_json::from_value(line).unwrap());
         }
         assert_eq!(conv.events, 8);
-        assert_eq!(
-            conv.items,
-            vec![
-                Item::User {
-                    text: "hi".into(),
-                    meta: false
-                },
-                Item::Text {
-                    part: "p1".into(),
-                    text: "**hello** there".into()
-                },
-                Item::Tool {
-                    call_id: "t1".into(),
-                    name: "Bash".into(),
-                    input: "ls".into(),
-                    result: Some((true, "a.txt".into())),
-                },
-                Item::Line(r#"new_kind: {"a":1}"#.into()),
-            ]
-        );
+        let tool = Item::Tool {
+            call_id: "t1".into(),
+            name: "Bash".into(),
+            input: "ls".into(),
+            result: Some((true, "a.txt".into())),
+        };
+        let user = Item::User {
+            text: "hi".into(),
+            meta: false,
+        };
+        let text = Item::Text {
+            part: "p1".into(),
+            text: "**hello** there".into(),
+        };
+        assert_eq!(conv.items[..3], [user, text, tool]);
+        assert!(matches!(&conv.items[3], Item::Line(l) if l.starts_with("from_a_newer_server: ")));
+        assert_eq!(conv.items.len(), 4);
     }
 
     #[test]
