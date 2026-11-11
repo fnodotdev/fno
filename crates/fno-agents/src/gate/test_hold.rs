@@ -438,7 +438,7 @@ fn reconcile_locked(home: &AgentsHome, path: &Path) -> Result<Outcome, String> {
         };
         announce(
             &mut outcome,
-            &format!("{lead} Keep coding. Do not rerun tests. Wait for the all-clear."),
+            &format!("{lead} Keep coding. Do not rerun tests. An all-clear lifts this hold for the user's tests; agent sessions still ride CI unless a lead grants a checkout test:priority."),
         );
         state.announced = outcome.announced.clone();
     }
