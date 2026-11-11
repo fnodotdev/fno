@@ -102,7 +102,21 @@ pub(crate) fn shell_words(argv: &[String]) -> String {
 /// The one door to the plugins owner: every read and pane runs the fno front
 /// door, which hands `config plugins` to fno-agents.
 fn fno_door() -> std::path::PathBuf {
-    crate::server::fno_bin()
+    door_for(crate::server::fno_bin())
+}
+
+/// The desktop app is its own executable, which does not speak `config
+/// plugins`: take the `fno` beside it, else the one on PATH.
+fn door_for(exe: std::path::PathBuf) -> std::path::PathBuf {
+    if exe.file_stem().is_some_and(|s| s == "fno-desktop") {
+        let sibling = exe.with_file_name("fno");
+        return if sibling.exists() {
+            sibling
+        } else {
+            "fno".into()
+        };
+    }
+    exe
 }
 
 pub(crate) fn fno_json(args: &[&str]) -> Result<Vec<u8>, ReadFailed> {
@@ -242,6 +256,15 @@ mod tests {
         assert_eq!(
             argv[argv.len() - 3..],
             ["/bin/fno", "install", "https://x/y"]
+        );
+        assert_eq!(
+            door_for("/opt/x/fno".into()),
+            std::path::PathBuf::from("/opt/x/fno")
+        );
+        assert_eq!(
+            door_for("/nonexistent/fno-desktop".into()),
+            std::path::PathBuf::from("fno"),
+            "the app's own executable is never the door"
         );
         let none = run_in_pane(&["open", "p/m"], "p/m", 0, None).unwrap_err();
         assert_eq!(none.0, "No pane to split yet");
