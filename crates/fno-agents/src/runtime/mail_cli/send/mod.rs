@@ -562,6 +562,7 @@ struct SendArgs {
     /// the harness queue parks until a turn boundary.
     steer: bool,
     cwd: Option<PathBuf>,
+    subject: Option<String>,
 }
 
 fn parse_args(args: &[String]) -> Result<SendArgs, i32> {
@@ -642,6 +643,17 @@ fn parse_args(args: &[String]) -> Result<SendArgs, i32> {
             "--style-exception" => {
                 out.style_exception = Some(take_arg(args, &mut index, "--style-exception")?)
             }
+            "--subject" => {
+                let value = take_arg(args, &mut index, "--subject")?;
+                if value.len() > 200 {
+                    eprintln!(
+                        "error: --subject is {} characters (cap 200); put the detail in the body",
+                        value.len()
+                    );
+                    return Err(2);
+                }
+                out.subject = Some(value);
+            }
             other => {
                 if other.starts_with('-') && other.len() > 1 {
                     eprintln!("fno agents mail send: unknown argument {:?}", other);
@@ -651,6 +663,12 @@ fn parse_args(args: &[String]) -> Result<SendArgs, i32> {
             }
         }
         index += 1;
+    }
+    if out.raw && out.subject.is_some() {
+        eprintln!(
+            "error: --raw strips the envelope, so a subject (--subject) has nothing to ride; drop one of the two"
+        );
+        return Err(2);
     }
     // Typer accepted at most two positionals; extra ones died in its parser.
     if positionals.len() > 2 {
@@ -1375,19 +1393,13 @@ pub fn run(args: &[String]) -> i32 {
         );
         return 2;
     }
-    let subject = (std::env::var("FNO_MAIL_SUBJECT").unwrap_or_default().trim()).to_string();
-    let subject = if subject.is_empty() {
-        None
-    } else {
-        if subject.len() > 200 {
-            eprintln!(
-                "error: FNO_MAIL_SUBJECT is {} characters (cap 200); put the detail in the body",
-                subject.len()
-            );
-            return 2;
-        }
-        Some(subject)
-    };
+    let subject = args.subject.clone().or_else(|| {
+        let from_env = std::env::var("FNO_MAIL_SUBJECT")
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        (!from_env.is_empty()).then_some(from_env)
+    });
     let body_text = match resolve_body_text(&args) {
         Ok(text) => text,
         Err((msg, code)) => {
@@ -1996,5 +2008,49 @@ mod system_arm_inbox_tests {
         for bad in ["a/b/c", "/arm", "fno/", "a/..", "../x", "./x", "a\\b"] {
             assert!(validate_recipient(bad).is_err(), "{bad} must stay refused");
         }
+    }
+}
+
+#[cfg(test)]
+mod subject_arg_tests {
+    use super::*;
+
+    #[test]
+    fn mail_send_parses_subject() {
+        // The lead skill documents the flag (skills/lead/SKILL.md); the
+        // parser had no arm, so it died in the unknown-argument catch-all.
+        let args = parse_args(&[
+            "peer-name".to_string(),
+            "hello".to_string(),
+            "--subject".to_string(),
+            "the headline".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(args.subject.as_deref(), Some("the headline"));
+        // --raw strips the envelope, so a subject has nothing to ride: the
+        // same refusal the env path already answers.
+        let refused = parse_args(&[
+            "peer-name".to_string(),
+            "hi".to_string(),
+            "--raw".to_string(),
+            "--subject".to_string(),
+            "s".to_string(),
+        ]);
+        assert!(refused.is_err(), "--raw and --subject refuse together");
+        // No flag, no subject: the env path stays the only fallback.
+        let plain = parse_args(&["peer-name".to_string(), "hello".to_string()]).unwrap();
+        assert_eq!(plain.subject, None);
+    }
+
+    #[test]
+    fn a_subject_over_the_cap_refuses_at_parse() {
+        let long = "x".repeat(201);
+        let refused = parse_args(&[
+            "peer-name".to_string(),
+            "hello".to_string(),
+            "--subject".to_string(),
+            long,
+        ]);
+        assert!(refused.is_err(), "a 201-char subject refuses");
     }
 }
