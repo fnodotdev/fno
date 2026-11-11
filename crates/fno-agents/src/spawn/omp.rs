@@ -139,8 +139,8 @@ struct StreamMessage {
     content: MessageContent,
 }
 
-/// A user message may carry a bare string; an assistant message carries
-/// typed blocks.
+/// Message content: typed blocks, or a bare string (the session format
+/// permits both).
 #[derive(Deserialize, Default)]
 #[serde(untagged)]
 enum MessageContent {
@@ -171,14 +171,15 @@ fn agent_end_reply(event: &StreamEvent) -> Option<String> {
     if message.stop_reason.as_deref() != Some("stop") {
         return None;
     }
-    let MessageContent::Blocks(blocks) = &message.content else {
-        return None;
+    let text: String = match &message.content {
+        MessageContent::Blocks(blocks) => blocks
+            .iter()
+            .filter(|b| b.kind.as_deref() == Some("text"))
+            .filter_map(|b| b.text.as_deref())
+            .collect(),
+        MessageContent::Text(text) => text.clone(),
+        MessageContent::Empty => return None,
     };
-    let text: String = blocks
-        .iter()
-        .filter(|b| b.kind.as_deref() == Some("text"))
-        .filter_map(|b| b.text.as_deref())
-        .collect();
     let text = text.trim();
     (!text.is_empty()).then(|| text.to_string())
 }
