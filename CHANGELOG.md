@@ -169,7 +169,7 @@ Three features ship switched off. Each is a toggle in the mux: open the menu, ch
 
 ## [0.4.1] - 2026-10-13
 
-616 pull requests since 0.4.0. Two machines can share one backlog. The live cap learns from machine load. Kings and crowns became leads and teams. Agent mail opens with a one-line header.
+616 pull requests since 0.4.0. Two machines can share one backlog. The live cap learns from machine load. The old role names became leads and teams. Agent mail opens with a one-line header.
 
 ## [0.4.0] - 2026-09-28
 
