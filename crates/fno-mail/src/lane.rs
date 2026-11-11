@@ -4,6 +4,7 @@
 //! daemon RPC, control socket) stay with the caller that owns the registry.
 
 use super::state::DeliveryState;
+use super::turn::{NewlineRule, TurnText};
 
 /// What the engine knows about the recipient, flattened from its registry row
 /// so this module never sees the registry's JSON.
@@ -61,7 +62,7 @@ impl LaneKind {
     }
 }
 
-/// One transport. `deliver` returns what the lane reached; a lane that cannot
+/// One transport. `deliver` types `turn` rendered by `newline_rule` and returns what the lane reached; a lane that cannot
 /// reach the recipient says `Failed` with a reason and pushes it on `reasons`.
 pub trait Lane {
     fn kind(&self) -> LaneKind;
@@ -70,7 +71,10 @@ pub trait Lane {
         self.kind().applies(t)
     }
 
-    fn deliver(&self, wrapped: &str, t: &Target, reasons: &mut Vec<String>) -> DeliveryState;
+    /// How this lane keeps the new line between header and body.
+    fn newline_rule(&self) -> NewlineRule;
+
+    fn deliver(&self, turn: &TurnText, t: &Target, reasons: &mut Vec<String>) -> DeliveryState;
 }
 
 /// The first lane whose `applies` is true, trying `lanes` in the order given.

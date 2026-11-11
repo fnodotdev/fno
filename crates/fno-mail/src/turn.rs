@@ -143,6 +143,29 @@ impl TurnText {
         }
     }
 
+    /// A stored turn read back (a bus row's body, for a retry). It parses only when its first line is a header the checks accept.
+    pub fn parse(stored: &str) -> Result<TurnText, TurnError> {
+        let (line, body) = stored.split_once('\n').unwrap_or((stored, ""));
+        let not_a_turn = || TurnError::Forges {
+            field: "header",
+            value: line.to_string(),
+        };
+        let inner = line
+            .strip_prefix('`')
+            .and_then(|l| l.strip_suffix('`'))
+            .ok_or_else(not_a_turn)?;
+        let mut fields = inner.splitn(3, " · ");
+        let who = fields.next().unwrap_or_default();
+        let id = fields.next().ok_or_else(not_a_turn)?;
+        let subject = fields.next();
+        let (form, sender) = match who.strip_prefix('@') {
+            Some(sender) => (HeaderForm::Mention, sender),
+            None => (HeaderForm::Plain, who),
+        };
+        let header = TurnHeader::new(form, sender, id, subject)?;
+        Ok(TurnText::compose(&header, body))
+    }
+
     /// The stored form, real new lines kept.
     pub fn as_str(&self) -> &str {
         &self.0
@@ -252,6 +275,23 @@ mod tests {
             "`@zenobia · fmail-1a2b` one two"
         );
         assert_eq!(turn.render(NewlineRule::Verbatim), turn.as_str());
+    }
+
+    #[test]
+    fn a_stored_turn_parses_back_and_a_bare_body_does_not() {
+        let turn = TurnText::compose(&header(), "line one\nline two");
+        assert_eq!(TurnText::parse(turn.as_str()), Ok(turn));
+        for stored in [
+            "just a body",
+            "`@zenobia`\nbody",
+            "`@a · b · c · d`\nbody",
+            "`@ · fmail-1`",
+        ] {
+            assert!(
+                TurnText::parse(stored).is_err(),
+                "{stored:?} must not parse"
+            );
+        }
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use fno_mail::turn::{TurnHeader, TurnText};
 use serde_json::Value;
 use std::io::Read;
 use std::path::Path;
@@ -158,6 +159,19 @@ fn render(input: &Value, registry_path: &Path) -> Result<String, String> {
             );
         }
         return Ok(body.to_string());
+    }
+    render_turn(input, registry_path).map(|turn| turn.as_str().to_string())
+}
+
+/// The live turn for every mode but held-release: a checked header, then the
+/// body. A held-release fold is not one message, so it never builds a turn.
+fn render_turn(input: &Value, registry_path: &Path) -> Result<TurnText, String> {
+    let mode = input.get("mode").and_then(Value::as_str).unwrap_or("wrap");
+    let wrapping = input.get("body").and_then(Value::as_str);
+    if !matches!(mode, "wrap" | "tag" | "header") {
+        return Err(format!(
+            "mail envelope: render mode {mode:?} builds no live turn"
+        ));
     }
     if let Some(body) = wrapping {
         if crate::mail_inject::contains_fno_mail_tag_anywhere(body) {
@@ -331,24 +345,31 @@ fn render(input: &Value, registry_path: &Path) -> Result<String, String> {
         }
     };
     let third = crate::mail_header::header_third_field(subject, body_text);
-    let header = crate::mail_header::render_header(form, sender, msg_id, third.as_deref());
+    let header = TurnHeader::new(form, sender, msg_id, third.as_deref())
+        .map_err(|e| format!("mail envelope: {e}"))?;
     // The law form: the body rides whole under the two-field header; the
     // sentence-drop at delivery died with the third field.
     let delivered = body_text;
     Ok(match wrapping {
         Some(_) if fence_requested(input) => {
-            let fence = fence_for(&delivered);
+            let fence = fence_for(delivered);
             // The open fence carries the fno-pane marker so a reader can
             // strip exactly this fence and never a body's own code fence.
-            format!("{header}\n{fence}fno-pane\n{delivered}\n{fence}")
+            TurnText::compose(&header, &format!("{fence}fno-pane\n{delivered}\n{fence}"))
         }
-        Some(_) => format!("{header}\n{delivered}"),
-        None => header,
+        Some(_) => TurnText::compose(&header, delivered),
+        None => TurnText::compose(&header, ""),
     })
 }
 
 pub fn render_at(input: &Value, registry_path: &Path) -> Result<String, String> {
     render(input, registry_path)
+}
+
+/// The live turn a lane types. A render refusal is an error, never the bare
+/// body: a lane that cannot get a turn delivers nothing live.
+pub fn render_turn_at(input: &Value, registry_path: &Path) -> Result<TurnText, String> {
+    render_turn(input, registry_path)
 }
 
 pub fn run(args: &[String]) -> i32 {
