@@ -13,19 +13,19 @@ Not for: a first PR. That is the [quickstart](quickstart.md).
 In any Claude Code session:
 
 ```
-/plugin marketplace add fnodotdev/fno#stable
+/plugin marketplace add fnodotdev/fno
 /plugin install fno@fno
 ```
 
-The stable branch of release 0.4.4 still names its marketplace `footnote`, so the second command fails there. Until the next stable release, run `/plugin install fno@footnote` instead. `curl -fsSL fno.sh | sh` handles both names.
+The catalog pins the fno entry to the newest release tag with its commit sha, and the release job moves that pin. Turn on auto-update so releases reach you: in `/plugin`, open **Marketplaces**, select **fno**, and choose **Enable auto-update** (it is off by default). Without it, run `/plugin marketplace update fno` after a release.
 
-`#stable` matters. Without it, the add clones `main` (7,949 files, 80s+) instead of `stable` (781 files, 4s). A slow connection can then hit Claude Desktop's 120s "Add marketplace" timeout.
+The add clones the repository, so a slow connection can hit the 120-second "Add marketplace" timeout. Retrying usually lands it.
 
 If the add refuses because the name `fno` is already in use: `fno config plugin install claude` already staged a local directory marketplace under that same name, at `~/.fno/install/plugin-stage/fno`. Remove that entry, or the whole stage, before you add the GitHub source under the same name. Or skip the GitHub add and keep using the staged copy.
 
 The previous stage path, `~/.fno/plugin-stage`, remains readable during migration. `fno doctor update` rebuilds the new stage, repoints configured harnesses, and keeps the old stage until earlier sessions exit and no config names that old path.
 
-`fno config plugin install claude` is the dev channel: it installs your local checkout for development. Claude's own `marketplace add` replaces a GitHub `fno` source with the local stage and says nothing. When your plugin comes from a GitHub marketplace (stable, rc or nightly), the dev install refuses with exit 3 and names your channel. Pass `--dev` to switch to your local checkout.
+`fno config plugin install claude` is the dev channel: it installs your local checkout for development. Claude's own `marketplace add` replaces a GitHub `fno` source with the local stage and says nothing. When your plugin comes from a GitHub marketplace, the dev install refuses with exit 3 and names your channel. Pass `--dev` to switch to your local checkout.
 
 An install made before the marketplace rename reads `fno@footnote`. It keeps working, and `fno doctor` reads it and names the move. To move a GitHub install to `fno@fno`, run `/plugin uninstall fno@footnote` and `/plugin marketplace remove footnote`, then the two commands above. The dev install, `fno config plugin install claude`, moves a local `footnote` stage by itself. For Codex, `fno config setup run --only harness-wiring` moves a release install and `fno config plugin install codex` moves a dev install.
 
@@ -36,7 +36,7 @@ On the first session after install, footnote prints the install plan and starts 
 Codex CLI:
 
 ```
-codex plugin marketplace add fnodotdev/fno@stable
+codex plugin marketplace add fnodotdev/fno
 codex plugin add fno@fno
 ```
 
@@ -46,7 +46,7 @@ Every other harness has its own page under [harnesses/](harnesses/). [HARNESSES.
 
 ### The CLI alone
 
-`curl -fsSL fno.sh | sh` installs the release tarball into `~/.fno/install/bin`. The tarball holds the four Rust binaries: the `fno` front door and the three `fno-agents` binaries. `brew install bllshttng/fno/fno` installs the same tarball. The PyPI wheel (`uv tool install fno` or `pip install fno`) is a bridge for old installs. It carries the same four binaries and no Python code. An update moves it to the tarball install. `cargo install fno fno-agents` is the source route. It builds the front door and the three `fno-agents` binaries into the cargo bin dir with your Rust toolchain.
+`curl -fsSL fno.sh | sh` installs the release tarball into `~/.fno/install/bin`. The tarball holds the four Rust binaries: the `fno` front door and the three `fno-agents` binaries. `brew install bllshttng/fno/fno` installs the same tarball. The PyPI wheel (`uv tool install fno` or `pip install fno`) is a bridge for old installs, frozen at 0.4.8: PyPI no longer takes new releases, and an update moves the wheel install to the tarball install. `cargo install fno fno-agents` is the source route. It builds the front door and the three `fno-agents` binaries into the cargo bin dir with your Rust toolchain.
 
 ### Local clone
 
