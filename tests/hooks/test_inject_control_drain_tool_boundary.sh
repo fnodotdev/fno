@@ -21,7 +21,25 @@ ok()  { PASS=$((PASS + 1)); echo "ok: $1"; }
 bad() { FAIL=$((FAIL + 1)); echo "FAIL: $1"; }
 
 mkdir -p "$TMP/bin" "$TMP/nojq"
-printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$LOG" > "$TMP/bin/fno-agents"
+# The stub answers the dir door the way the real binary does (FNO_BUS_DIR,
+# then the layout fold: folded when it exists, legacy when it exists, folded
+# on fresh) and logs every other argv as the delivery call it passed.
+cat > "$TMP/bin/fno-agents" <<'STUB'
+#!/usr/bin/env bash
+case "$*" in
+  "state path dir bus")
+    [[ "${FNO_STUB_DOOR_FAIL:-0}" == "1" ]] && exit 1
+    if [[ -n "${FNO_BUS_DIR:-}" ]]; then printf '%s\n' "$FNO_BUS_DIR"; exit 0; fi
+    root="${FNO_STATE_DIR:-$HOME/.fno}"
+    if [[ -d "$root/db/mail/bus" ]]; then printf '%s\n' "$root/db/mail/bus"
+    elif [[ -d "$root/bus" ]]; then printf '%s\n' "$root/bus"
+    else printf '%s\n' "$root/db/mail/bus"; fi
+    exit 0
+    ;;
+esac
+printf '%s\n' "$*" >> "${FNO_STUB_LOG:?}"
+exit 0
+STUB
 # A jq that answers like a missing binary: the hook must still read the id.
 printf '#!/usr/bin/env bash\nexit 127\n' > "$TMP/nojq/jq"
 chmod +x "$TMP/bin/fno-agents" "$TMP/nojq/jq"
@@ -34,11 +52,11 @@ fresh() {
 }
 
 run_hook() {  # $1 extra PATH prefix
-    PATH="$1:$TMP/bin:$PATH" FNO_STATE_DIR="$TMP/state" bash "$HOOK" \
+    PATH="$1:$TMP/bin:$PATH" FNO_STATE_DIR="$TMP/state" FNO_STUB_LOG="$LOG" bash "$HOOK" \
         <<<"{\"session_id\":\"$SID\",\"tool_name\":\"Bash\",\"tool_input\":{}}"
 }
 
-called() { grep -q -- "--control-drain --bus-dir $BUS --session $SID" "$LOG"; }
+called() { grep -q -- "--control-drain --bus-dir ${1:-$BUS} --session $SID" "$LOG"; }
 
 # AC4: jq missing, control flag set: the drain still runs.
 fresh
@@ -59,6 +77,22 @@ called && bad "fresh stamp still ran the command" || ok "fresh stamp skips the c
 fresh
 run_hook ""
 called && ok "missing stamp runs the command" || bad "missing stamp skipped the command"
+
+# Folded layout: seed ONLY <state>/db/mail/bus; the drain must follow the
+# door's answer there. (The pre-fix hook exited 0 and never drained.)
+fresh
+rm -rf "$TMP/state/bus"
+mkdir -p "$TMP/state/db/mail/bus/control-pending" "$TMP/state/db/mail/bus/tool-boundary"
+touch "$TMP/state/db/mail/bus/control-pending/${SID:0:8}.flag"
+run_hook ""
+called "$TMP/state/db/mail/bus" \
+    && ok "folded layout drains through the door's answer" \
+    || bad "folded layout: no drain (args=$(cat "$LOG" 2>/dev/null))"
+
+# A door that cannot answer is a no-answer: no drain, no guessed path.
+fresh
+FNO_STUB_DOOR_FAIL=1 run_hook ""
+called && bad "door failure still drained" || ok "door failure skips the drain silently"
 
 echo "passed=$PASS failed=$FAIL"
 [[ "$FAIL" -eq 0 ]]

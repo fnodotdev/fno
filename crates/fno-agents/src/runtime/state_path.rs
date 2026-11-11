@@ -179,6 +179,20 @@ fn dir_paths(args: &[String]) -> Result<Vec<PathBuf>, String> {
     if crate::state_layout::find(name).map(|r| r.kind) != Some(crate::state_layout::Kind::Dir) {
         return Err(format!("dir: {name} is not a state-root dir"));
     }
+    // `bus` ambient is the mail ladder, not the bare layout: the mail
+    // readers and writers resolve FNO_BUS_DIR, then config.paths.bus_dir,
+    // then the layout table (mail_paths::bus_log_path), so the dir a hook
+    // stats and the dir the binary reads are one answer. A --root call
+    // stays a layout probe of that root.
+    if name == "bus" && root.is_none() {
+        let dir = crate::mail_paths::state_bus_dir_opt().ok_or_else(|| {
+            "dir: bus: no state root resolves and no FNO_BUS_DIR names the bus".to_string()
+        })?;
+        if children || file.is_some() {
+            return Err("dir: bus: --file/--children need --root".to_string());
+        }
+        return Ok(vec![dir]);
+    }
     let root = root.unwrap_or_else(dir_door_root);
     if children {
         return Ok(crate::state_layout::list_dir_children(&root, name));
@@ -412,6 +426,51 @@ mod tests {
         // A name the table carries with a non-dir kind is refused too.
         assert!(dir_paths(&dir_args(&["graph.json"])).is_err());
         assert!(dir_paths(&dir_args(&[])).is_err());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn state_dir_door_answers_bus_through_the_mail_ladder() {
+        let _lock = test_env_lock();
+        let base = std::env::temp_dir().join(format!("fno-state-path-bus-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let _state = crate::claims::EnvVarGuard::set("FNO_STATE_DIR", base.to_str().unwrap());
+        let _bus = crate::claims::EnvVarGuard::unset("FNO_BUS_DIR");
+        let args = |rest: &[&str]| -> Vec<String> { rest.iter().map(|s| s.to_string()).collect() };
+        // Fresh root: the folded dir the db fold names, not the legacy one.
+        assert_eq!(
+            dir_paths(&args(&["bus"])).unwrap(),
+            vec![base.join("db").join("mail").join("bus")]
+        );
+        // Migrated root: the folded log exists and answers.
+        fs::create_dir_all(base.join("db/mail/bus")).unwrap();
+        fs::write(base.join("db/mail/bus/messages.jsonl"), b"{}\n").unwrap();
+        assert_eq!(
+            dir_paths(&args(&["bus"])).unwrap(),
+            vec![base.join("db").join("mail").join("bus")]
+        );
+        // Unmigrated root: a straggler log at the legacy spelling keeps
+        // answering (the file-level read-old-as-fallback in place_in).
+        fs::remove_dir_all(base.join("db")).unwrap();
+        fs::create_dir_all(base.join("bus")).unwrap();
+        fs::write(base.join("bus/messages.jsonl"), b"{}\n").unwrap();
+        assert_eq!(dir_paths(&args(&["bus"])).unwrap(), vec![base.join("bus")]);
+        // The env pin outranks the layout: the readers' FNO_BUS_DIR ladder.
+        let custom = base.join("custom");
+        fs::create_dir_all(&custom).unwrap();
+        {
+            let _pin = crate::claims::EnvVarGuard::set("FNO_BUS_DIR", custom.to_str().unwrap());
+            assert_eq!(dir_paths(&args(&["bus"])).unwrap(), vec![custom]);
+        }
+        // A --root call stays a layout probe of that root, blind to the env.
+        let probe = base.join("probe");
+        fs::create_dir_all(probe.join("bus")).unwrap();
+        assert_eq!(
+            dir_paths(&args(&["bus", "--root", probe.to_str().unwrap()])).unwrap(),
+            vec![probe.join("bus")]
+        );
+        // Ambient --file/--children need --root; the dir itself is the answer.
+        assert!(dir_paths(&args(&["bus", "--file", "messages.jsonl"])).is_err());
         let _ = fs::remove_dir_all(&base);
     }
 }

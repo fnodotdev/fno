@@ -9,8 +9,8 @@
 # three stat calls against the sender-stamped control flags, plus one builtin
 # `-nt` test of the bus log against this session's stamp, which the command sets
 # after each pass. Then the fno-agents command owns config, scan, cursors, dedup,
-# and rendering. A config-redirected bus degrades to prompt-boundary
-# delivery, never a loss.
+# and rendering. The bus dir comes from the binary's dir door, the one
+# ladder the readers share, so a config-redirected bus follows the redirect.
 
 set -uo pipefail
 
@@ -29,15 +29,23 @@ if [[ -z "$SID" ]]; then
 fi
 [[ "$SID" =~ ^[0-9a-f-]{16,}$ ]] || exit 0
 
-BUS="${FNO_STATE_DIR:-$HOME/.fno}/bus"
+# The binary gate runs first: with no binary nothing drains, and the bus
+# dir is the binary's answer.
+command -v fno-agents >/dev/null 2>&1 || exit 0
+
+# The bus dir is the dir door's answer - the one ladder the mail readers
+# share (FNO_BUS_DIR, config.paths.bus_dir, the layout table) - so the db
+# fold retargets this hook without touching it. A door miss is a no-answer,
+# never a guessed path: exit 0 and stay silent.
+BUS="$(fno-agents state path dir bus 2>/dev/null)" || exit 0
+[[ -n "$BUS" ]] || exit 0
+
 FIRST8="${SID:0:8}"
 LAST8="${SID: -8}"
 if [[ ! -f "$BUS/control-pending/$FIRST8.flag" && ! -f "$BUS/control-pending/$SID.flag" && ! -f "$BUS/control-pending/$LAST8.flag" ]] \
   && [[ ! "$BUS/messages.jsonl" -nt "$BUS/tool-boundary/$SID.stamp" ]]; then
   exit 0
 fi
-
-command -v fno-agents >/dev/null 2>&1 || exit 0
 
 # Stdout of the command IS the hook payload: it streams through fd 3 untouched,
 # byte-for-byte (same discipline as inject-mail-notify.sh). A miss never

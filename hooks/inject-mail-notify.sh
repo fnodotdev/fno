@@ -6,8 +6,9 @@
 # flush, and only then cursor acknowledgement: a Rust early-dispatch arm
 # answers in microseconds where the old Python path paid a full interpreter
 # start and was cancelled at its budget on every run. This shell layer is a
-# cheap gate now: it checks the session identity, the bus log, and the
-# binary, then relays the command's already-valid envelope through fd 3
+# cheap gate now: it checks the binary, the session identity, and the bus
+# log (the bus dir resolved through the binary's dir door), then relays the
+# command's already-valid envelope through fd 3
 # byte-for-byte, so there is no second capture or write boundary between
 # visible delivery and acknowledgement. Silent when there is no harness
 # identity or mail; the one load-aware hook budget bounds a hung binary;
@@ -28,14 +29,23 @@ source "$HOOK_DIR/../scripts/lib/hook-budget.sh" 2>/dev/null || exit 0
 # the lost-mail case. Skipped mail stays pending and delivers next turn.
 hook_overloaded && exit 0
 
-# No bus log, nothing to deliver: one stat guards the common no-mail case
-# before any fork.
-BUS="${FNO_STATE_DIR:-$HOME/.fno}/bus"
-[[ -f "$BUS/messages.jsonl" ]] || exit 0
-
 # The binary gate runs before identity: a gate skip records nothing, so a
 # missing fno-agents must not be able to masquerade as a missing session id.
+# It runs before the bus stat too: with no binary nothing delivers, and the
+# bus dir is the binary's answer.
 command -v fno-agents >/dev/null 2>&1 || exit 0
+
+# The bus dir is the dir door's answer - the one ladder the mail readers
+# share (FNO_BUS_DIR, config.paths.bus_dir, the layout table) - so the db
+# fold retargets this hook without touching it. A door miss is a no-answer,
+# never a guessed path: exit 0 and stay silent.
+budget="$(hook_budget_secs)"
+[[ "$budget" -gt 0 ]] || exit 0
+BUS="$(with_timeout "$budget" fno-agents state path dir bus 2>/dev/null)" || exit 0
+[[ -n "$BUS" ]] || exit 0
+
+# No bus log, nothing to deliver: one stat guards the common no-mail case.
+[[ -f "$BUS/messages.jsonl" ]] || exit 0
 
 # No harness identity, no delivery. The pattern admits opencode's ses_ ids
 # alongside claude's session uuids; canonical_handle() first-eights both.
@@ -62,8 +72,6 @@ esac
 # recorded, never raised: the turn always proceeds (contract above). The
 # budget is the one load-aware hook budget: under fleet load it SHORTENS to
 # 1s and past the load threshold the read is skipped entirely.
-budget="$(hook_budget_secs)"
-[[ "$budget" -gt 0 ]] || exit 0
 exec 3>&1
 notify_err="$(with_timeout "$budget" fno-agents mail-notify-self --bus-dir "$BUS" --session "$SID" 2>&1 1>&3 3>&-)"
 notify_rc=$?
