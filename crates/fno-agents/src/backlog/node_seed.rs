@@ -788,7 +788,7 @@ mod tests {
             Path::new(caller),
             &rows,
             &repo_of_test,
-            &|row: &Value| super::settings::node_row_checkout(row).map(PathBuf::from),
+            &|row: &Value| crate::backlog::settings::node_row_checkout(row).map(PathBuf::from),
         )
     }
 
@@ -847,7 +847,8 @@ mod tests {
             ),
         )
         .unwrap();
-        let _cfg_pin = crate::claims::EnvVarGuard::set("FNO_GLOBAL_SETTINGS_PATH", &cfg);
+        let _cfg_pin =
+            crate::claims::EnvVarGuard::set("FNO_GLOBAL_SETTINGS_PATH", cfg.to_str().unwrap());
         let _fno_pin = crate::claims::EnvVarGuard::unset("FNO_CONFIG");
         // Retired arm: the row stores the retired checkout; the work map
         // names the live one and wins.
@@ -857,7 +858,7 @@ mod tests {
             Path::new("/repo/wt"),
             &[retired],
             &repo_of_test,
-            &|row: &Value| super::settings::node_row_checkout(row).map(PathBuf::from),
+            &|row: &Value| crate::backlog::settings::node_row_checkout(row).map(PathBuf::from),
         );
         assert_eq!(
             got,
@@ -866,13 +867,17 @@ mod tests {
         );
 
         // Matching arm: the row already sits at the configured root.
-        let matching = json!({"id": "x-4444", "cwd": "/repo/footnote", "project": "footnote"});
+        let matching = json!({
+            "id": "x-4444",
+            "cwd": Value::String(tmp.to_string_lossy().into_owned()),
+            "project": "footnote",
+        });
         let got = spawn_node_cwd_in(
             &seed_payload("/fno:target x-4444", Value::Null),
             Path::new("/repo/wt"),
             &[matching],
             &repo_of_test,
-            &|row: &Value| super::settings::node_row_checkout(row).map(PathBuf::from),
+            &|row: &Value| crate::backlog::settings::node_row_checkout(row).map(PathBuf::from),
         );
         assert_eq!(
             got,
@@ -904,7 +909,7 @@ mod tests {
                 Path::new("/repo/wt"),
                 std::slice::from_ref(row),
                 &repo_of_test,
-                &|row: &Value| super::settings::node_row_checkout(row).map(PathBuf::from),
+                &|row: &Value| crate::backlog::settings::node_row_checkout(row).map(PathBuf::from),
             );
             assert_eq!(
                 got,

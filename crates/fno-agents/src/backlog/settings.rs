@@ -241,7 +241,8 @@ mod checkout_tests {
             ),
         )
         .unwrap();
-        let _pin = crate::claims::EnvVarGuard::set("FNO_GLOBAL_SETTINGS_PATH", &cfg);
+        let _pin =
+            crate::claims::EnvVarGuard::set("FNO_GLOBAL_SETTINGS_PATH", cfg.to_str().unwrap());
         let live = json!({"project": "live", "_resolved_cwd": "/annotated", "cwd": "/stored"});
         assert_eq!(
             node_row_checkout(&live),
