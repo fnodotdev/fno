@@ -27,6 +27,7 @@ use sha2::Sha256;
 // unchanged by the move.
 use crate::correction_detect::detect_user;
 use crate::provenance::{classify, is_user_turn, turn_text, turn_ts_epoch};
+use super::turn_witness::{headerless, record, WITNESS_WINDOW_S};
 
 /// A held turn in the scan cursor; the payload adds the rendered excerpt.
 #[derive(Debug, Clone, Serialize)]
@@ -344,6 +345,7 @@ pub(crate) fn read_queue(
         let kept = &raw[..cut + 1];
         let rows: Vec<&[u8]> = kept[..cut].split(|&b| b == b'\n').collect();
         let known: HashSet<String> = state.turns.iter().map(|t| t.turn_id.clone()).collect();
+        let mut witness = TurnWitness::new(session, capture_dir, now_epoch);
         for (i, row) in rows.iter().enumerate() {
             let Ok(obj) = serde_json::from_str::<Value>(&String::from_utf8_lossy(row)) else {
                 continue;
@@ -362,9 +364,11 @@ pub(crate) fn read_queue(
             if known.contains(&id) {
                 continue;
             }
+            let ts_epoch = turn_ts_epoch(&obj);
+            witness.see(&text, ts_epoch);
             state.turns.push(StoredTurn {
                 turn_id: id,
-                ts_epoch: turn_ts_epoch(&obj),
+                ts_epoch,
                 text,
             });
         }
@@ -390,6 +394,51 @@ pub(crate) fn read_queue(
         payload: build_payload(state, now_epoch, cursor_error, seen_total),
         warnings,
     })
+}
+
+/// The recipient witness over one queue read: the bus loads once, on the
+/// first recent turn, and each turn the witness flags is recorded once in
+/// the capture dir.
+struct TurnWitness<'a> {
+    session: &'a str,
+    store: PathBuf,
+    now_epoch: f64,
+    bus: Option<crate::provenance::BusIndex>,
+}
+
+impl<'a> TurnWitness<'a> {
+    fn new(session: &'a str, capture_dir: &Path, now_epoch: f64) -> Self {
+        TurnWitness {
+            session,
+            store: capture_dir.join("headerless-turns.json"),
+            now_epoch,
+            bus: None,
+        }
+    }
+
+    fn see(&mut self, text: &str, ts_epoch: Option<f64>) {
+        let Some(ts) = ts_epoch.filter(|ts| self.now_epoch - ts < WITNESS_WINDOW_S) else {
+            return;
+        };
+        let bus = self.bus.get_or_insert_with(|| {
+            crate::mail_paths::state_bus_dir_opt()
+                .map(|dir| crate::provenance::BusIndex::load(&dir.join("messages.jsonl")))
+                .unwrap_or_else(crate::provenance::BusIndex::empty)
+        });
+        let at_ms = (ts * 1000.0) as i64;
+        let journal = crate::paths::AgentsHome::from_env().events_jsonl();
+        let found = headerless(self.session, text, at_ms, bus, || {
+            crate::operator_witness::submitted_since(
+                &journal,
+                self.session,
+                at_ms - crate::operator_witness::SUBMIT_WINDOW_AFTER_MS,
+                at_ms,
+            )
+        });
+        if let Some(found) = found {
+            record(&found, &self.store);
+        }
+    }
 }
 
 pub(crate) fn pending_stand_down(

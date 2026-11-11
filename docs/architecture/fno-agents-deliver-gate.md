@@ -178,7 +178,7 @@ Two consequences landed from this measurement:
 
 ## Mail is typed as one line, never a paste (C17)
 
-The typed lanes (`inject_with_submit` in `crates/fno-agents/src/runtime/mail_inject.rs`) no longer bracket-paste a multi-line mail body. A delivery is flattened to ONE line by `one_line`. Every newline run becomes the return glyph ` ⏎ `. A tab becomes a space. Every other control byte (ESC included) is dropped. The typed turn is one write, then the separate wire-level CR. The durable bus copy keeps the real newlines. Only the keystrokes are flattened (role ruling d-9187ccf6: one constant, `NEWLINE_GLYPH`, and the user can change it). A paste is only the user's own, so a delivered message never wears the pasted-content label.
+The typed lanes (`inject_with_submit` in `crates/fno-agents/src/runtime/mail_inject.rs`) never bracket-paste a mail body. A live turn is a `TurnText` that only `fno-mail` builds: the `@sender · fmail-id` header, a real new line, then the body (user law d-b720d23c). Each lane declares a `NewlineRule`. The pane and keeper lanes type each new line as LF (ctrl+j), which does not submit, then a separate wire-level CR. The paneless claude lane over control.sock types the turn as one line, because any new line parks it in the harness queue (user law d-5641722b). A tab becomes a space and every other control byte, ESC included, is dropped. The durable bus copy keeps the real new lines. A paste is only the user's own, so a delivered message never wears the pasted-content label. Only `crates/fno-agents/src/runtime/delivery/claude_control.rs` opens a claude control socket; `scripts/ci/check-control-sock-writers.sh` holds that.
 
 Two consequences:
 
