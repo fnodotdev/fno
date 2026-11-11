@@ -26,7 +26,7 @@ Set the targets. Your agents do the rest. Say F[no] to mostly done.
 
 The line at the top installs the `fno` binaries into `~/.fno/install/bin`. It wires the plugin into every agent CLI it finds and runs the one-time setup with defaults. `FNO_NO_WIRE=1` skips the wiring and the setup. `fno config setup run --check` names anything the machine still lacks. Keep it current with `fno update`.
 
-[docs/install.md](docs/install.md) covers the other routes: plugin marketplaces, Homebrew, `cargo install fno`, a clone, and each harness.
+[docs/install.md](docs/install.md) covers the other routes: plugin marketplaces, Homebrew, `cargo install fno fno-agents`, a clone, and each harness.
 
 ## Uninstall
 

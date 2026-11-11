@@ -1,8 +1,6 @@
 # fno
 
-`cargo install fno` lands the fno terminal front door: a native terminal
-multiplexer plus the bootstrapper that provisions and forwards to the fno
-Python CLI.
+`cargo install fno fno-agents` builds the four fno binaries with your Rust toolchain. The set: the `fno` front door and the three `fno-agents` binaries.
 
 ## The mux
 
@@ -28,6 +26,6 @@ curl -fsSL fno.sh | sh
 fno --help
 ```
 
-`cargo install fno` builds the front door alone. A command that needs `fno-agents` then refuses and names `fno update` as the fix.
+`cargo install fno fno-agents` installs the full set into the cargo bin dir. The front door alone (`cargo install fno`) refuses an agents command with the install remedy.
 
 Apache-2.0.

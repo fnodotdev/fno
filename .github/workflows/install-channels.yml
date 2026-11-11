@@ -135,7 +135,7 @@ jobs:
             runs-on: ubuntu-24.04
             expect: pass
             node: ''
-            readme: ['cargo install fno']
+            readme: ['cargo install fno fno-agents']
           - id: skills-sh
             runs-on: ubuntu-24.04
             expect: pass
