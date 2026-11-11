@@ -419,15 +419,9 @@ jobs:
           version="${{ needs.resolve.outputs.version }}"
           stamped="${{ needs.resolve.outputs.sha }}"
 
-      - name: Publish the nightly release
-        run: |
-          set -euo pipefail
-          version="${{ needs.resolve.outputs.version }}"
-          stamped="${{ steps.stamp.outputs.stamped }}"
-
           # Tolerate "not found": the first nightly (or a previous delete) has
           # nothing to remove. No --cleanup-tag: the rolling tag itself was
-          # just force-pushed by the stamp step and must survive.
+          # just force-pushed by the tag-move step above and must survive.
           gh release delete nightly -y 2>/dev/null || true
 
           notes="nightly build of footnote.
