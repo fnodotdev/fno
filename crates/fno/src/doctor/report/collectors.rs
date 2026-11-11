@@ -88,6 +88,7 @@ impl Report {
             map.insert("orphan_files".into(), Value::Array(orphan_report()));
             map.insert("pr_watch".into(), pr_watch_liveness());
             map.insert("control_plane_arms".into(), control_plane_arms_report());
+            map.insert("web_bridge".into(), web_bridge_report());
             map.insert("fd_limit".into(), fd_limit_report());
             map.insert("dead_letter".into(), dead_letter_report());
             map.insert("codex_app_server".into(), super::codex_app_server_report());
@@ -840,6 +841,206 @@ fn source_checkout_sync(source: Option<&Path>) -> Value {
         );
     }
     report
+}
+
+/// The web-bridge section's typed shape: what `web_bridge_report` writes
+/// and the renderer reads back. Deserializing once at each boundary keeps
+/// the crate's string-keyed-read ratchet flat (R1). Every key is always
+/// present: the empty-machine doctor output is golden-frozen, so the
+/// section must read identically where nothing is installed.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct WebBridgeReport {
+    pub label: String,
+    pub plist: bool,
+    pub loaded: bool,
+    pub bridge_running: bool,
+    pub bridge_detail: BridgeDetail,
+    pub answer_urls: Vec<AnswerUrl>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct BridgeDetail {
+    pub state: String,
+    pub detail: String,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct AnswerUrl {
+    pub url: String,
+    pub status: String,
+    pub verdict: String,
+}
+
+/// One configured sink row's only field the doctor reads.
+#[derive(Debug, serde::Deserialize)]
+struct SinkAnswerBase {
+    #[serde(default)]
+    answer_base_url: Option<String>,
+}
+
+/// The web bridge's boot-persistence health: the agent's plist and loaded
+/// state, the bridge marker liveness, and every configured
+/// `[[attention.sinks]]` row's `answer_base_url` probed with one bounded
+/// GET (the answer buttons are the thing a dead bridge takes down). Sink
+/// rows come from the global config (`setup_messaging::sink_rows`), where
+/// setup writes them.
+fn web_bridge_report() -> Value {
+    let label = crate::setup_services::web_bridge_label();
+    let plist_path = home_dir()
+        .join("Library")
+        .join("LaunchAgents")
+        .join(crate::setup_services::WEB_BRIDGE_PLIST_FILENAME);
+    let plist = plist_path.exists();
+    let loaded = launchctl_labels()
+        .map(|labels| labels.iter().any(|l| l == &label))
+        .unwrap_or(false);
+    let (bridge_running, bridge_detail) = bridge_marker_report();
+    let answer_urls: Vec<AnswerUrl> = answer_base_urls()
+        .into_iter()
+        .take(8)
+        .map(|url| probe_answer_base(&url))
+        .collect();
+    let report = WebBridgeReport {
+        label,
+        plist,
+        loaded,
+        bridge_running,
+        bridge_detail,
+        answer_urls,
+    };
+    serde_json::to_value(&report).unwrap_or(Value::Null)
+}
+
+/// The `launchctl list` labels, one bounded call; `None` when the read
+/// fails (the caller reports not-loaded rather than guessing).
+fn launchctl_labels() -> Option<Vec<String>> {
+    let (_, out, _) = bounded_command(&["launchctl".to_string(), "list".to_string()])?;
+    Some(
+        out.lines()
+            .filter_map(|l| l.split_whitespace().last().map(String::from))
+            .collect(),
+    )
+}
+
+/// The default session's bridge marker, read the way `mux web reap` reads
+/// it: a marker whose recorded pid is gone, or whose port refuses, is a
+/// corpse. No marker reads as not-running with the install hint.
+fn bridge_marker_report() -> (bool, BridgeDetail) {
+    let path = crate::proto::mux_dir().join(format!("web-{}.json", crate::proto::DEFAULT_SESSION));
+    let Some(raw) = std::fs::read_to_string(&path).ok() else {
+        return (
+            false,
+            BridgeDetail {
+                state: "absent".to_string(),
+                detail: "no bridge marker; start one with `fno mux serve --web --attention-api` or install the agent".to_string(),
+            },
+        );
+    };
+    let Ok(state) = serde_json::from_str::<Value>(&raw) else {
+        return (
+            false,
+            BridgeDetail {
+                state: "unreadable".to_string(),
+                detail: format!("{} is not valid JSON", path.display()),
+            },
+        );
+    };
+    let Ok(marker) = serde_json::from_value::<crate::web::BridgeMarker>(state.clone()) else {
+        return (
+            false,
+            BridgeDetail {
+                state: "unreadable".to_string(),
+                detail: format!("{} carries no usable bind/port", path.display()),
+            },
+        );
+    };
+    if !crate::web::recorded_pid_is_live(&state) {
+        return (
+            false,
+            BridgeDetail {
+                state: "dead_pid".to_string(),
+                detail: format!(
+                    "marker pid is gone ({} names pid {})",
+                    path.display(),
+                    marker
+                        .pid
+                        .map(|p| p.to_string())
+                        .unwrap_or_else(|| "?".into())
+                ),
+            },
+        );
+    }
+    if !crate::mux_cli::web_ctl::bridge_alive(&marker.bind, marker.port) {
+        return (
+            false,
+            BridgeDetail {
+                state: "port_refuses".to_string(),
+                detail: format!("nothing answers on {}:{}", marker.bind, marker.port),
+            },
+        );
+    }
+    (
+        true,
+        BridgeDetail {
+            state: "running".to_string(),
+            detail: format!("{}:{}", marker.bind, marker.port),
+        },
+    )
+}
+
+/// Every non-empty `answer_base_url` across the configured sinks, deduped,
+/// in config order.
+fn answer_base_urls() -> Vec<String> {
+    let Ok(rows) = crate::setup_messaging::sink_rows() else {
+        return Vec::new();
+    };
+    let mut urls: Vec<String> = Vec::new();
+    for row in rows {
+        let Ok(row) = serde_json::from_value::<SinkAnswerBase>(row) else {
+            continue;
+        };
+        if let Some(url) = row.answer_base_url.filter(|u| !u.is_empty()) {
+            if !urls.iter().any(|u| u == &url) {
+                urls.push(url);
+            }
+        }
+    }
+    urls
+}
+
+/// One bounded GET. `status` is the curl-written HTTP code ("000" when the
+/// connection itself failed); `verdict` folds it: 2xx green, everything
+/// else red with the code named - a 502 on the answer base is exactly the
+/// outage shape the node filed.
+fn probe_answer_base(url: &str) -> AnswerUrl {
+    let Some((code, out, _)) = bounded_command(&[
+        "curl".to_string(),
+        "-s".to_string(),
+        "-o".to_string(),
+        "/dev/null".to_string(),
+        "-w".to_string(),
+        "%{http_code}".to_string(),
+        "-m".to_string(),
+        "5".to_string(),
+        url.to_string(),
+    ]) else {
+        return AnswerUrl {
+            url: url.to_string(),
+            status: "000".to_string(),
+            verdict: "unreachable".to_string(),
+        };
+    };
+    let status = out.trim().to_string();
+    let ok = code == 0 && matches!(status.parse::<u16>(), Ok(p) if (200..300).contains(&p));
+    AnswerUrl {
+        url: url.to_string(),
+        status: if status.is_empty() {
+            "000".to_string()
+        } else {
+            status
+        },
+        verdict: if ok { "green" } else { "unreachable" }.to_string(),
+    }
 }
 
 fn launch_agent_failures() -> Value {

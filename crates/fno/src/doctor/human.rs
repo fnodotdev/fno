@@ -125,6 +125,7 @@ pub(crate) fn emit_human(rep: &Value, src: Option<&Path>, err: bool, cargo_prese
     emit_orphans(rep, err);
     emit_pr_watch(rep, err);
     emit_control_plane_arms(rep, err);
+    emit_web_bridge(rep, err);
     emit_observer_unavailable(rep, err);
     emit_fd_limit(rep, err);
     emit_dead_letter(rep, err);
@@ -601,6 +602,45 @@ fn emit_control_plane_arms(rep: &Value, err: bool) {
         .filter_map(|v| v.as_str())
     {
         emit(err, &format!("fno doctor: {line}"));
+    }
+}
+
+/// The web-bridge section, printed only when it has something to say: the
+/// empty-machine doctor output is golden-frozen, so a silent section is the
+/// stable shape.
+fn emit_web_bridge(rep: &Value, err: bool) {
+    let Some(wb) = rep
+        .get("web_bridge")
+        .cloned()
+        .and_then(|v| serde_json::from_value::<crate::doctor::report::WebBridgeReport>(v).ok())
+    else {
+        return;
+    };
+    if wb.plist && !wb.loaded {
+        emit(
+            err,
+            "fno doctor: web bridge: plist present but the label is not loaded; run `fno mux web install-agent` again, or read `launchctl print gui/$UID/<label>`",
+        );
+    }
+    if wb.loaded && !wb.bridge_running {
+        emit(
+            err,
+            &format!(
+                "fno doctor: web bridge: the agent is loaded but the bridge is {} ({}); if this repeats, read ~/.fno/logs/web-bridge.err.log - KeepAlive may be restarting a bridge that cannot bind. Permanent stop: `fno mux web uninstall-agent`.",
+                wb.bridge_detail.state, wb.bridge_detail.detail
+            ),
+        );
+    }
+    for row in &wb.answer_urls {
+        if row.verdict == "unreachable" {
+            emit(
+                err,
+                &format!(
+                    "fno doctor: web bridge: answer_base_url {} answers {} (unreachable); the phone answer buttons are down",
+                    row.url, row.status
+                ),
+            );
+        }
     }
 }
 

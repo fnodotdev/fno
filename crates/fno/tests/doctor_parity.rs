@@ -80,7 +80,7 @@ fn cases() -> Vec<Case> {
 /// canonical macOS temp path contains the raw form as a substring), then
 /// the raw forms.
 fn mask(text: &str, paths: &[(String, &str)]) -> String {
-    let patterns: [(&str, &str); 6] = [
+    let patterns: [(&str, &str); 7] = [
         (r#""free_gb": [0-9.]+"#, "\"free_gb\": <FREE>"),
         (r#""soft": [0-9]+"#, "\"soft\": <FD>"),
         (
@@ -94,6 +94,10 @@ fn mask(text: &str, paths: &[(String, &str)]) -> String {
         (
             r#""kern_maxfiles": (?:null|[0-9]+)"#,
             "\"kern_maxfiles\": <KERN>",
+        ),
+        (
+            r#""label": "sh\.fno\.web-bridge\.[0-9a-f]{8}""#,
+            "\"label\": \"<WEBBRIDGELABEL>\"",
         ),
         (r#"("git_version": \{"version": ")[^"]*"#, "$1<GITVER>"),
     ];

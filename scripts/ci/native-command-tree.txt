@@ -49,7 +49,9 @@ mux thread	group	hidden	-	-
 mux thread reseat	leaf	hidden	-	-
 mux view	leaf	visible	-	-
 mux web	group	visible	-	-
+mux web install-agent	leaf	visible	-	-
 mux web reap	leaf	visible	-	-
+mux web uninstall-agent	leaf	visible	-	-
 mux where	leaf	visible	-	-
 mux workspace	group	visible	-	-
 mux workspace origin	leaf	visible	-	-

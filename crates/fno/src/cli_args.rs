@@ -457,13 +457,15 @@ impl WorkspaceOp {
 impl WebOp {
     pub fn tail(&self) -> Vec<OsString> {
         match self {
-            WebOp::Reap(t) => t.tail.clone(),
+            WebOp::Reap(t) | WebOp::InstallAgent(t) | WebOp::UninstallAgent(t) => t.tail.clone(),
         }
     }
 
     fn with_tail(self, t: MuxTail) -> Self {
         match self {
             WebOp::Reap(_) => WebOp::Reap(t),
+            WebOp::InstallAgent(_) => WebOp::InstallAgent(t),
+            WebOp::UninstallAgent(_) => WebOp::UninstallAgent(t),
         }
     }
 }
@@ -514,6 +516,12 @@ pub enum WebOp {
     /// `mux web reap [--json]`: remove every bridge marker whose recorded pid is gone or whose port refuses
     #[command(disable_help_flag = true)]
     Reap(MuxTail),
+    /// `mux web install-agent [--bin <path>] [--port N] [--attention-port N] [--json]`: install the launchd agent that keeps the web bridge and answer endpoint up across reboots
+    #[command(disable_help_flag = true)]
+    InstallAgent(MuxTail),
+    /// `mux web uninstall-agent [--json]`: unload the web-bridge launchd agent and remove its plist
+    #[command(disable_help_flag = true)]
+    UninstallAgent(MuxTail),
 }
 
 /// `mux pane`'s operation set (the order today's dispatcher taught, `keeper`

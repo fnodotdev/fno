@@ -496,6 +496,21 @@ pub(crate) fn recorded_pid_is_live(v: &serde_json::Value) -> bool {
         && recorded.is_none_or(|r| proto::pid_start_time(pid as u32).is_some_and(|now| now == r))
 }
 
+/// The bridge marker's typed read (`web-<session>.json`, written by
+/// `WebStateFile`): each reader deserializes it once at its boundary,
+/// beside the raw Value the pid-liveness check consumes.
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct BridgeMarker {
+    #[serde(default = "default_bridge_bind")]
+    pub(crate) bind: String,
+    pub(crate) port: u16,
+    pub(crate) pid: Option<u32>,
+}
+
+fn default_bridge_bind() -> String {
+    "127.0.0.1".to_string()
+}
+
 /// Does something answer TCP on host:port right now?
 fn tcp_answers(host: &str, port: u16) -> bool {
     use std::net::ToSocketAddrs;

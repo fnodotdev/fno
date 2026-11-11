@@ -345,6 +345,13 @@ pub const STEPS: &[Step] = &[
         effect: "runs `fno backlog groom --install-agent`",
     },
     Step {
+        id: "web-bridge-agent",
+        layer: Layer::Global,
+        kind: Kind::Approve,
+        question: "Install the web-bridge launchd agent (the /fno page and answer buttons survive reboots)?",
+        effect: "runs `fno mux web install-agent`",
+    },
+    Step {
         id: "projects",
         layer: Layer::Global,
         kind: Kind::Approve,
@@ -1182,6 +1189,39 @@ fn step_groom_agent(exe: &Path, rep: &mut Report, loaded: &mut Vec<String>) {
         }
         Err(e) => {
             let message = format!("groom-agent: {e}");
+            rep.rows
+                .push(row("needs_human", "service_install", message.clone()));
+            rep.needs_human.push(message);
+        }
+    }
+}
+
+/// The web-bridge agent: one launchd install that keeps `fno mux serve --web
+/// --attention-api` up across reboots, so the /fno page and the phone answer
+/// buttons come back after a machine restart. A loaded agent skips, the
+/// pr-watcher's reason.
+fn step_web_bridge_agent(exe: &Path, rep: &mut Report, loaded: &mut Vec<String>) {
+    if !crate::setup_services::macos() {
+        service_platform("web-bridge-agent", "fno mux web install-agent", rep);
+        return;
+    }
+    if crate::setup_services::is_loaded(&crate::setup_services::web_bridge_label()) {
+        rep.skipped
+            .push("web-bridge-agent: agent already loaded, restarting nothing".into());
+        return;
+    }
+    let exe_str = exe.to_string_lossy().into_owned();
+    match crate::setup_detect::bounded_for(
+        &[exe_str.as_str(), "mux", "web", "install-agent"],
+        crate::setup_services::INSTALL_CAP,
+    ) {
+        Ok(_) => {
+            rep.done
+                .push("web-bridge-agent: agent installed and loaded".into());
+            loaded.push(crate::setup_services::web_bridge_label());
+        }
+        Err(e) => {
+            let message = format!("web-bridge-agent: {e}");
             rep.rows
                 .push(row("needs_human", "service_install", message.clone()));
             rep.needs_human.push(message);
@@ -2179,6 +2219,7 @@ pub(crate) fn apply_wizard_pending(
             "pr-watcher" => step_pr_watcher(exe, &mut rep, &mut loaded),
             "auto-heal" => step_auto_heal(exe, &mut rep),
             "groom-agent" => step_groom_agent(exe, &mut rep, &mut loaded),
+            "web-bridge-agent" => step_web_bridge_agent(exe, &mut rep, &mut loaded),
             "projects" => step_projects(exe, root, &mut rep),
             "messaging" => step_messaging(exe, true, Some(&[p.value.as_str()]), &mut rep),
             "claude-auto-mode" => step_claude_auto_mode(&mut rep),
