@@ -52,13 +52,22 @@ const SESSION_LANES: [&str; 5] = [
     "headless_create",
     "headless_resume",
 ];
+/// Lanes a harness MAY declare beside the required five: opencode's serve
+/// attach drives a session through a shared serve, which no other harness has.
+const OPTIONAL_SESSION_LANES: [&str; 1] = ["interactive_serve_attach"];
 const RESPONSE_ACTIONS: [&str; 3] = ["allow_once", "allow_always", "deny"];
 /// The rule states a capability row may DECLARE. A readiness manifest carries
 /// more (`working`, and rules that hold the current state), but only these two
 /// are part of the row's contract, and the Python validator enforces the same
 /// pair.
 const DECLARABLE_RULE_STATES: [&str; 2] = ["idle", "blocked"];
-const RESUME_KINDS: [&str; 4] = ["flag", "subcommand", "session_flag", "unsupported"];
+const RESUME_KINDS: [&str; 5] = [
+    "flag",
+    "subcommand",
+    "session_flag",
+    "unsupported",
+    "serve_attach",
+];
 const MODEL_SWITCH_KINDS: [&str; 3] = ["direct", "menu_walk", "unsupported"];
 const MODEL_SWITCH_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 const STOP_STRATEGIES: [&str; 2] = ["claude-short-id", "registry-noop"];
@@ -1688,7 +1697,12 @@ fn validate_row(harness: &str, caps: &HarnessCapabilities) -> Result<(), Contrac
         .keys()
         .map(String::as_str)
         .collect();
-    if lanes != SESSION_LANES.into_iter().collect() {
+    let required: BTreeSet<&str> = SESSION_LANES.into_iter().collect();
+    if !required.is_subset(&lanes)
+        || lanes
+            .iter()
+            .any(|lane| !required.contains(lane) && !OPTIONAL_SESSION_LANES.contains(lane))
+    {
         return Err(field_error(
             harness,
             "resume_strategy",
@@ -1697,6 +1711,7 @@ fn validate_row(harness: &str, caps: &HarnessCapabilities) -> Result<(), Contrac
     }
     for (lane, form) in &caps.resume_strategy.forms {
         if !RESUME_KINDS.contains(&form.kind.as_str())
+            || (form.kind == "serve_attach") != (lane == "interactive_serve_attach")
             || form.tokens.iter().any(String::is_empty)
             || (form.kind == "unsupported" && !form.tokens.is_empty())
             || (lane.ends_with("resume")
