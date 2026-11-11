@@ -443,7 +443,15 @@ pub fn command(args: &[String]) -> i32 {
 }
 
 fn turn_on(home: &AgentsHome, today: NaiveDate) -> i32 {
-    if ci_set() || !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal()) {
+    // A pane an agent drives is a real pty, so the terminal check alone
+    // admits it; an agent harness's own shell carries one of these markers.
+    let agent_shell = ["CLAUDECODE", "CODEX_THREAD_ID", "FNO_AGENT_SELF"]
+        .iter()
+        .any(|var| std::env::var(var).is_ok_and(|v| !v.trim().is_empty()));
+    if ci_set()
+        || agent_shell
+        || !(std::io::stdin().is_terminal() && std::io::stderr().is_terminal())
+    {
         eprintln!("usage report: consent needs a person at a terminal; nothing recorded");
         return 2;
     }

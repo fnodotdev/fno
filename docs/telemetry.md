@@ -8,7 +8,7 @@ fno can send its maintainers one usage report a day. It sends nothing until you 
 |---|---|
 | `fno doctor telemetry status` | Prints whether the report is on, and when it is off, the first gate that holds it. |
 | `fno doctor telemetry show` | Prints the exact JSON body the next send posts. It sends nothing. |
-| `fno doctor telemetry on` | Prints the report, then asks `Send this report once a day? [y/N]`. Only `y` or `yes` turns it on. It refuses with exit 2 when stdin or stderr is not a terminal, or when `CI` is set. |
+| `fno doctor telemetry on` | Prints the report, then asks `Send this report once a day? [y/N]`. Only `y` or `yes` turns it on. It refuses with exit 2 in three cases: stdin or stderr is not a terminal, `CI` is set, or the shell belongs to an agent harness (`CLAUDECODE`, `CODEX_THREAD_ID` or `FNO_AGENT_SELF` is set). |
 | `fno doctor telemetry off` | Records no. It works from any context, a script included. |
 
 The setup wizard asks the same question. Its default is no, and `fno config setup run --yes` never answers yes. A yes in the wizard records nothing: it names `fno doctor telemetry on` as your next step, so you see the report before you answer.
