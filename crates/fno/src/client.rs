@@ -6097,7 +6097,7 @@ fn brand_label(name: &str) -> String {
     }
 }
 
-fn tab_label_text(name: &str, i: usize, named: bool) -> String {
+pub(crate) fn tab_label_text(name: &str, i: usize, named: bool) -> String {
     let ordinal = (i + 1).to_string();
     // Collapse (AC7): a name equal to its own ordinal renders as
     // the bare digit, byte-identical to an unnamed ordinal - even a chosen one.
@@ -9404,9 +9404,9 @@ mod row_meter;
 mod sideline;
 
 #[path = "client/agent_group.rs"]
-mod agent_group;
+pub(crate) mod agent_group;
 #[path = "client/agent_sort.rs"]
-mod agent_sort;
+pub(crate) mod agent_sort;
 use agent_group::agent_hit;
 mod hold;
 #[path = "client/machine_tree.rs"]

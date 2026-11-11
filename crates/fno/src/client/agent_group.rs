@@ -151,6 +151,23 @@ pub(super) fn enter_placement() -> PanePlacement {
     }
 }
 
+/// The one command a click on an agent row sends: the sideline click's own
+/// [`agent_hit`]. `Err` carries the notice that says why the row has none.
+pub(crate) fn click_command(a: &AgentRow) -> Result<Command, String> {
+    match agent_hit(a, 0) {
+        ChromeHit::Cmds(cmds) => cmds
+            .into_iter()
+            .next()
+            .ok_or_else(|| format!("{}: no action", a.name)),
+        ChromeHit::OpenRemote(remote) => Ok(Command::ReachRemote {
+            remote,
+            placement: enter_placement(),
+        }),
+        ChromeHit::Notice(notice) => Err(notice),
+        _ => Err(format!("{}: no action", a.name)),
+    }
+}
+
 type Bucket<'a> = (String, Vec<&'a AgentRow>);
 
 fn push<'a>(buckets: &mut Vec<Bucket<'a>>, key: String, a: &'a AgentRow) {

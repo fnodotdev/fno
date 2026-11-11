@@ -370,3 +370,16 @@ impl View {
         self.reanchor_selector(held);
     }
 }
+
+/// The sideline's default order over a flat row list: the Status column with
+/// pins first. The desktop app's left pane reads it, so the app never sorts its
+/// own way. The app has no needs fold, so a row ranks as the TUI ranks it
+/// before that fold reads.
+pub(crate) fn sideline_order(rows: &[AgentRow], now_secs: u64) -> Vec<&AgentRow> {
+    let order = AgentOrder { manual: &[] };
+    let mut out: Vec<&AgentRow> = rows.iter().collect();
+    out.sort_by(|a, b| {
+        compare_agent_rows(a, b, AgentSort::default(), None, None, now_secs, &order)
+    });
+    out
+}
