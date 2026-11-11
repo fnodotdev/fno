@@ -536,15 +536,29 @@ mod tests {
             host: "ph.example".into(),
             token: "tok".into(),
         };
-        let emitter = crate::runtime::events::EventEmitter::new(home.events_jsonl(), "test");
-        emitter
+        let daemon = crate::runtime::events::EventEmitter::new(home.events_jsonl(), "daemon");
+        daemon
             .emit("agent_spawned", &json!({"node": "x-aaaa"}))
             .unwrap();
-        emitter
-            .emit("consult_call", &json!({"harness": "claude", "exit": 0}))
+        let consult = crate::runtime::events::EventEmitter::new(home.events_jsonl(), "consult");
+        consult
+            .emit(
+                "consult_call",
+                &json!({
+                    "session_id": "sess-1",
+                    "harness": "claude",
+                    "model": "glm-5.3-flash",
+                    "question_chars": 10,
+                    "context_bytes": 20,
+                    "input_tokens": 30,
+                    "output_tokens": 40,
+                    "cost_usd": 0.5,
+                    "exit": 0
+                }),
+            )
             .unwrap();
         // A kind outside the type allowlist never leaves the machine.
-        emitter.emit("daemon_started", &json!({"pid": 1})).unwrap();
+        daemon.emit("daemon_started", &json!({"pid": 1})).unwrap();
 
         let mut held = scripted(Some(503));
         let report = run_beat(&cfg, &home, &mut held, otlp_export::now_ms());
