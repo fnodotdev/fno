@@ -92,6 +92,10 @@ jobs:
 
       - name: Build the fno-agents binaries
         working-directory: crates/fno-agents
+        # The public PostHog key for the opt-in usage report. Only this
+        # release build embeds it; every other build never sends.
+        env:
+          FNO_POSTHOG_PUBLIC_KEY: ${{ vars.FNO_POSTHOG_PUBLIC_KEY }}
         run: cargo build --release --target ${{ matrix.target.rust-target }} --bins
 
       - name: Build the fno front-door binary
