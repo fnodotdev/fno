@@ -38,6 +38,7 @@ const START_GRACE: Duration = Duration::from_secs(20);
 /// The serve unreachable this long ends the driver; the session is lost.
 const UNREACHABLE_LIMIT: Duration = Duration::from_secs(120);
 const DEFAULT_HOLD_MINUTES: u64 = 30;
+const MAX_REPLY_TRIES: u32 = 10;
 
 /// Everything one turn needs, written by the serve lane beside the log.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -205,29 +206,43 @@ pub(crate) fn drive(
     let mut last_reach = Instant::now();
     let mut answered: HashSet<String> = HashSet::new();
     let mut held: HashMap<String, (Instant, String)> = HashMap::new();
+    // A decided answer whose reply did not land: sent again on the next
+    // poll, the same answer, so one failed POST cannot hang the turn. A
+    // reply that keeps failing stops after MAX_REPLY_TRIES.
+    let mut unsent: HashMap<String, (Answer, u32)> = HashMap::new();
     loop {
         match perm::list_pending(&serve, &spec.cwd, sid) {
             Ok(pending) => {
                 last_reach = Instant::now();
                 let live: HashSet<&str> = pending.iter().map(|p| p.request_id.as_str()).collect();
                 held.retain(|id, _| live.contains(id.as_str()));
+                unsent.retain(|id, _| live.contains(id.as_str()));
                 for p in &pending {
-                    if let Some((since, qid)) = held.get(&p.request_id) {
-                        if since.elapsed() >= hold {
-                            let note = format!(
-                                "fno held this {} call for the user (question {qid}) and nobody answered in time. Do not retry it. Do the task another way, or say in your reply that this step needs the user.",
-                                p.action
-                            );
-                            let _ = perm::reply(&serve, &spec.cwd, p, Reply::Reject(&note));
-                            held.remove(&p.request_id);
-                            answered.insert(p.request_id.clone());
+                    let (answer, tries) = if let Some(retry) = unsent.remove(&p.request_id) {
+                        retry
+                    } else if let Some((since, qid)) = held.get(&p.request_id) {
+                        if since.elapsed() < hold {
+                            continue;
                         }
+                        let note = format!(
+                            "fno held this {} call for the user (question {qid}) and nobody answered in time. Do not retry it. Do the task another way, or say in your reply that this step needs the user.",
+                            p.action
+                        );
+                        held.remove(&p.request_id);
+                        (Answer::ModelNote(note), 0)
+                    } else if answered.insert(p.request_id.clone()) {
+                        let a = decide_one(spec, &serve, p, decide);
+                        if let Answer::HoldForUser { question_id } = &a {
+                            held.insert(p.request_id.clone(), (Instant::now(), question_id.clone()));
+                        }
+                        (a, 0)
+                    } else {
                         continue;
+                    };
+                    let sent = perm::answer(&serve, &spec.cwd, p, &answer, &spec.events);
+                    if sent.is_err() && tries + 1 < MAX_REPLY_TRIES {
+                        unsent.insert(p.request_id.clone(), (answer, tries + 1));
                     }
-                    if !answered.insert(p.request_id.clone()) {
-                        continue;
-                    }
-                    answer_one(spec, &serve, p, decide, &mut held);
                 }
             }
             Err(e) if last_reach.elapsed() >= UNREACHABLE_LIMIT => {
@@ -252,21 +267,16 @@ pub(crate) fn drive(
     }
 }
 
-fn answer_one(
+fn decide_one(
     spec: &TurnSpec,
     serve: &Serve,
     p: &Pending,
     decide: &dyn Fn(&thread_permission::ThreadAsk, &Path) -> Answer,
-    held: &mut HashMap<String, (Instant, String)>,
-) {
+) -> Answer {
     let user_rule =
         perm::user_rule_asks(&perm::user_rules(serve, &spec.cwd), &p.action, &p.resources);
     let ask = perm::thread_ask(p, &spec.cwd, spec.worker.as_deref(), user_rule);
-    let answer = decide(&ask, &spec.events);
-    if let Answer::HoldForUser { question_id } = &answer {
-        held.insert(p.request_id.clone(), (Instant::now(), question_id.clone()));
-    }
-    let _ = perm::answer(serve, &spec.cwd, p, &answer, &spec.events);
+    decide(&ask, &spec.events)
 }
 
 /// Block until this process holds an exclusive flock on `path`. The lock
