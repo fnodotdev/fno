@@ -66,6 +66,8 @@ pub enum Shortcut {
     Command(Command),
     Paste,
     Quit,
+    /// cmd-1 shows the terminal, cmd-2 the orchestration board.
+    View(u8),
 }
 
 pub fn shortcut(k: &Key) -> Option<Shortcut> {
@@ -79,8 +81,11 @@ pub fn shortcut(k: &Key) -> Option<Shortcut> {
         ("[", _) => Shortcut::Command(Command::LastPane),
         ("t", _) => Shortcut::Command(Command::NewTab),
         ("w", _) => Shortcut::Command(Command::ClosePane),
+        ("c", _) => Shortcut::Command(Command::CopySelection),
         ("v", _) => Shortcut::Paste,
         ("q", _) => Shortcut::Quit,
+        ("1", _) => Shortcut::View(1),
+        ("2", _) => Shortcut::View(2),
         _ => return None,
     })
 }
@@ -112,26 +117,18 @@ fn tilde_key(k: &Key, n: u8) -> Vec<u8> {
     }
 }
 
-/// The US-layout shifted form of one key, for option-as-meta: the composed
-/// glyph macOS reports for option-shift is never what a terminal wants.
-fn shifted(key: &str) -> String {
-    const PAIRS: &str = "1!2@3#4$5%6^7&8*9(0)-_=+[{]}\\|;:'\",<.>/?`~";
-    let mut chars = PAIRS.chars();
-    while let (Some(plain), Some(shift)) = (chars.next(), chars.next()) {
-        if key.len() == 1 && key.starts_with(plain) {
-            return shift.to_string();
-        }
-    }
-    key.to_uppercase()
+/// True for a key that types text: the window leaves it to the platform
+/// input handler, so dead keys, option-compose and IME compose before the
+/// text reaches the pane. Ctrl, cmd and named keys are encoded here.
+pub fn is_text(k: &Key) -> bool {
+    !k.cmd
+        && !k.ctrl
+        && named(k, Modes::default()).is_none()
+        && (k.key_char.is_some_and(|t| !t.is_empty()) || k.key == "space")
 }
 
-/// The bytes for one non-cmd keystroke, or `None` for a key that types
-/// nothing (a bare modifier, an unknown function key).
-pub fn encode(k: &Key, modes: Modes) -> Option<Vec<u8>> {
-    if k.cmd {
-        return None;
-    }
-    let named: Option<Vec<u8>> = match k.key {
+fn named(k: &Key, modes: Modes) -> Option<Vec<u8>> {
+    match k.key {
         "enter" => Some(b"\r".to_vec()),
         "tab" if k.shift => Some(b"\x1b[Z".to_vec()),
         "tab" => Some(b"\t".to_vec()),
@@ -160,13 +157,25 @@ pub fn encode(k: &Key, modes: Modes) -> Option<Vec<u8>> {
         "f11" => Some(tilde_key(k, 23)),
         "f12" => Some(tilde_key(k, 24)),
         _ => None,
-    };
-    if let Some(mut bytes) = named {
+    }
+    .map(|mut bytes| {
         // Alt on a plain named key is ESC-prefixed; cursor and tilde keys
         // already carry alt in their modifier parameter.
         if k.alt && bytes.len() == 1 {
             bytes.insert(0, 0x1b);
         }
+        bytes
+    })
+}
+
+/// The bytes for one non-cmd keystroke, or `None` for a key that types
+/// nothing (a bare modifier, an unknown function key). Option on a text key
+/// composes through the input handler, so it is never meta here.
+pub fn encode(k: &Key, modes: Modes) -> Option<Vec<u8>> {
+    if k.cmd {
+        return None;
+    }
+    if let Some(bytes) = named(k, modes) {
         return Some(bytes);
     }
     let mut out = Vec::new();
@@ -187,20 +196,6 @@ pub fn encode(k: &Key, modes: Modes) -> Option<Vec<u8>> {
             out.push(0x1b);
         }
         out.push(byte);
-        return Some(out);
-    }
-    if k.alt {
-        // Option as meta: ESC plus the unshifted key, never the composed glyph.
-        let text = if k.key == "space" { " " } else { k.key };
-        if text.chars().count() != 1 {
-            return None;
-        }
-        out.push(0x1b);
-        if k.shift {
-            out.extend(shifted(text).bytes());
-        } else {
-            out.extend(text.bytes());
-        }
         return Some(out);
     }
     let text = match k.key_char {
@@ -253,14 +248,23 @@ mod tests {
             ..Key::default()
         };
         assert_eq!(encode(&ctrl_c, modes).unwrap(), vec![0x03]);
-        let meta_bang = Key {
+        // Option on a text key composes through the input handler; named
+        // and ctrl keys never do.
+        let option_bang = Key {
             key: "1",
             key_char: Some("⁄"),
             alt: true,
             shift: true,
             ..Key::default()
         };
-        assert_eq!(encode(&meta_bang, modes).unwrap(), b"\x1b!");
+        assert!(is_text(&option_bang));
+        assert!(!is_text(&ctrl_c) && !is_text(&key("up")));
+        let alt_back = Key {
+            key: "backspace",
+            alt: true,
+            ..Key::default()
+        };
+        assert_eq!(encode(&alt_back, modes).unwrap(), b"\x1b\x7f");
         let cmd_d = Key {
             key: "d",
             cmd: true,
