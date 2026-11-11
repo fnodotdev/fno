@@ -343,7 +343,7 @@ fn prune_sent(home: &AgentsHome) {
 /// One send for the last complete day, at most once. A 2xx or a permanent
 /// 4xx stamps the day with the body that went; anything else retries on the
 /// next tick.
-pub fn send_if_due(
+pub(crate) fn send_if_due(
     home: &AgentsHome,
     key: &str,
     poster: &mut dyn HttpPost,

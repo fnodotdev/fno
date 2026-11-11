@@ -1,4 +1,4 @@
-//! The onboarding conversation as a pure module: eighteen screens in a
+//! The onboarding conversation as a pure module: nineteen screens in a
 //! fixed order, three presets as per-screen stop flags, and a proposal
 //! list the terminal host applies. No terminal, no subprocess and no
 //! clock live here - a scripted prompter drives the same flow in tests,
@@ -119,7 +119,7 @@ pub struct Screen {
 
 /// The fixed screen order. The wizard never reorders; a false `when`
 /// records a skip and moves on.
-pub const SCREENS: [Screen; 18] = [
+pub const SCREENS: [Screen; 19] = [
     Screen {
         id: "preflight",
         when: When::Always,
