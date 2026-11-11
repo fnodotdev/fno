@@ -66,7 +66,8 @@ pub enum Shortcut {
     Command(Command),
     Paste,
     Quit,
-    /// cmd-1 shows the terminal, cmd-2 the orchestration board.
+    /// cmd-1 shows the chat, cmd-2 the orchestration board, cmd-3 the
+    /// terminal.
     View(u8),
 }
 
@@ -86,6 +87,7 @@ pub fn shortcut(k: &Key) -> Option<Shortcut> {
         ("q", _) => Shortcut::Quit,
         ("1", _) => Shortcut::View(1),
         ("2", _) => Shortcut::View(2),
+        ("3", _) => Shortcut::View(3),
         _ => return None,
     })
 }

@@ -81,6 +81,7 @@ pub use pane_args::{
     PANE_SEND_RAW_HELP,
 };
 pub(crate) use pane_keeper_list::pane_keeper_list;
+pub(crate) use pane_submit::CR_SETTLE_MS;
 pub use server_axis::{
     env_server, note_server_flag, resolve_session, LEGACY_SERVER_ENV, SERVER_ENV,
 };

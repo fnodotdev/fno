@@ -1,6 +1,6 @@
 # The fno desktop app
 
-`fno-desktop` is a macOS window onto a running mux session. It draws the frames the mux server sends and types into the focused pane. It runs no terminal emulator of its own, so it shows exactly what the TUI shows.
+`fno-desktop` is a macOS window onto a running mux session. It opens in chat mode: the focused agent's conversation, drawn as turns. The terminal view draws the frames the mux server sends and types into the focused pane. The app runs no terminal emulator and parses no transcript of its own, so it shows exactly what the mux serves.
 
 ## Build and run
 
@@ -25,23 +25,35 @@ The `codesign -s -` step gives the binary an ad-hoc signature. No developer acco
 | `--session <name>` | `FNO_SERVER`, then `default` | The mux session to attach to. |
 | `--font <family>` | `Menlo` | The terminal font family. |
 | `--font-size <pt>` | `13` | The terminal font size. |
+| `--mode <view>` | `chat` | The view the window opens on: `chat`, `terminal` or `orchestration`. |
 | `--probe` | off | Attach with no window, print two lines, and exit. |
+| `--chat <id>` | none | With `--probe`: stream one claude session's chat instead of attaching. `newest` picks the most recently written transcript. |
 
 `--probe` attaches as an observer, so it never resizes a pane. It waits up to 5 seconds for the layout and one frame per pane. Then it prints `attached session=<s> panes=<n> frames=<m>`. Next it reads the fleet, the open questions and the backlog the way the window does, and prints `agents=<n> questions=<m> seats=<k>`. After a good attach it exits 0. With no server it prints the socket path it tried and exits 1. A failed fleet or question read prints its reason on stderr.
+
+`--probe --chat <id>` asks the server for that claude session's chat stream. It counts the events until no batch comes for 2 seconds, prints `chat_events=<n> session=<id>`, and exits 0 when n is at least 1. A session the server cannot find prints the server's reason and exits 1.
 
 ## The window
 
 The left pane has four sections. Agents come in the order the TUI sideline uses. The pane shows the first 8, and a "+N more" row shows the rest. A click focuses the agent's pane, or opens a paneless agent in portal 0. Sessions are the mux squads. A click switches to one. Questions are the open questions that wait on you, newest first. Machines are the fleet's hosts with their seat counts. A section whose read failed shows the error above its last good rows. While the window is active, the fleet and the questions refresh every 60 seconds. They also refresh at once after an answer, and on your return to the window. The backlog behind seat titles refreshes every 5 minutes.
 
-The strip above the grid shows the active session's tabs. A tab without a chosen name shows its pane's title. A click selects a tab. The Terminal and Board buttons at the right of the strip switch the main view.
+The strip above the grid shows the active session's tabs. A tab without a chosen name shows its pane's title. A click selects a tab. The Chat, Terminal and Board buttons at the right of the strip switch the main view.
 
-cmd-2 or Board opens orchestration mode, the command center board. TABLE lists every seat with its node and status. With more than one host in the fleet, a MACHINE column shows too. FEED lists each open question with its options, and the recommended option is marked. A click on an option answers it through the same door the TUI uses. The question then shows "sending", then "answered", until the next read drops it. A refused answer shows its reason and keeps the options. cmd-1 or Terminal goes back to the terminal.
+## Chat mode
+
+cmd-1 or Chat shows the conversation of the agent in the focused pane. The app reads it from the mux server's chat stream, which serves claude, codex and opencode sessions in one event shape. Your turns sit on the right. The agent's text renders as markdown: headings, lists, bold, italic, inline code and code blocks. Tables and images show as plain text. Thinking and each tool call take one line. A click opens one to show its text, or the call's input and output. A mark shows each call's state: … while it runs, ✓ when it succeeded, ✗ when it failed. A kind the app does not know shows as one plain line. New turns append as the agent writes them. The view follows them while it is scrolled to the bottom.
+
+Focus another pane to read its agent. A pane with no agent session says so.
+
+The composer at the bottom takes your message. Enter sends it, Shift-Enter adds a line, and cmd-v pastes into it. The app types the text into the agent's pane as a paste, waits 800 ms, then presses Enter: the same path `fno mux pane send --submit` takes. Your turn shows up in the view when the agent's transcript records it.
+
+cmd-2 or Board opens orchestration mode, the command center board. TABLE lists every seat with its node and status. With more than one host in the fleet, a MACHINE column shows too. FEED lists each open question with its options, and the recommended option is marked. A click on an option answers it through the same door the TUI uses. The question then shows "sending", then "answered", until the next read drops it. A refused answer shows its reason and keeps the options. cmd-3 or Terminal goes to the terminal.
 
 Release the mouse on a button, a row or an option to act on it. Release somewhere else to cancel. A notice shows in the bottom corner for 4 seconds.
 
 ## Keys
 
-Keys go to the focused pane as a terminal sends them. The mux prefix key passes through, so every mux binding works as it does in the TUI. The app keeps these cmd shortcuts for itself:
+In the terminal view, keys go to the focused pane as a terminal sends them. The mux prefix key passes through, so every mux binding works as it does in the TUI. The app keeps these cmd shortcuts for itself:
 
 | Shortcut | Action |
 |---|---|
@@ -52,7 +64,7 @@ Keys go to the focused pane as a terminal sends them. The mux prefix key passes 
 | cmd-w | Close pane |
 | cmd-c | Copy the focused pane's selection |
 | cmd-v | Paste (bracketed when the pane asks for it) |
-| cmd-1 / cmd-2 | Terminal / orchestration board |
+| cmd-1 / cmd-2 / cmd-3 | Chat / orchestration board / terminal |
 | cmd-q | Detach and quit |
 
 Typed text goes through the macOS input system, so dead keys, option-compose and IME input work. Option on a letter types the composed character, as in Terminal.app. Option on an arrow or backspace still sends the meta form.

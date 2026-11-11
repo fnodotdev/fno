@@ -19,6 +19,13 @@ struct Args {
     /// and `agents=<n> questions=<m> seats=<k>`, and exit.
     #[arg(long)]
     probe: bool,
+    /// The view the window opens on.
+    #[arg(long, value_enum, default_value_t = fno::desktop::MainView::Chat)]
+    mode: fno::desktop::MainView,
+    /// With --probe: stream this claude session's chat (a session id, or
+    /// `newest`), print `chat_events=<n> session=<id>`, and exit.
+    #[arg(long, requires = "probe")]
+    chat: Option<String>,
 }
 
 fn main() {
@@ -28,5 +35,7 @@ fn main() {
         font: args.font,
         font_size: args.font_size,
         probe: args.probe,
+        mode: args.mode,
+        chat: args.chat,
     }));
 }

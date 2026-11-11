@@ -105,6 +105,7 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
         .border_1()
         .border_color(rgb(p.border));
     let views = [
+        ("Chat", MainView::Chat),
         ("Terminal", MainView::Terminal),
         ("Board", MainView::Orchestration),
     ];
