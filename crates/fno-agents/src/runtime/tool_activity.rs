@@ -192,9 +192,10 @@ fn content_hash(content: &str) -> u64 {
 fn wall_stamp(row: &serde_json::Value) -> Option<String> {
     let ts = row.pointer("/timestamp").and_then(|v| v.as_str())?;
     let b = ts.as_bytes();
-    if b.len() >= 20 && b[19] == b'.' {
-        Some(format!("{}Z", &ts[..19]))
-    } else if b.len() == 20 && b[19] == b'Z' {
+    let c19 = b.get(19).copied();
+    if b.len() >= 20 && c19 == Some(b'.') {
+        Some(format!("{}Z", ts.get(..19)?))
+    } else if b.len() == 20 && c19 == Some(b'Z') {
         Some(ts.to_string())
     } else {
         None
