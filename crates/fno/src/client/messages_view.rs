@@ -2514,6 +2514,9 @@ pub(crate) async fn mouse(
         rep.kind,
         crate::proto::MouseKind::Press(crate::proto::MouseButton::Left)
     ) {
+        if matches!(rep.kind, MouseKind::WheelUp | MouseKind::WheelDown) {
+            wheel(view, rep);
+        }
         return Ok(());
     }
     view.region_owner = super::region_focus::RegionOwner::Board;
@@ -2734,6 +2737,60 @@ pub(crate) async fn mouse(
         return Ok(());
     }
     act(view, sock).await
+}
+
+/// The wheel steps the pointer column's cursor three rows a tick (the file
+/// viewer's WHEEL_ROWS); the paint follows the cursor, so the column
+/// scrolls. Focus stays put: a scroll is not a click, and the sideline's
+/// own wheel arm never moves it either. The detail modal's popup owns the
+/// wheel over itself (the keys modal's rule); the reply dock takes none.
+/// The asks views need no arm of their own: their rows are the Thread
+/// column's.
+fn wheel(view: &mut View, rep: crate::mouse::MouseReport) {
+    const WHEEL_ROWS: usize = 3;
+    let down = matches!(rep.kind, MouseKind::WheelDown);
+    let Some(b) = view.messages_board.as_mut() else {
+        return;
+    };
+    if b.reply.is_some() {
+        return;
+    }
+    if b.detail
+        .as_ref()
+        .is_some_and(|d| d.popup.render(view.term).contains(rep.row, rep.col))
+    {
+        if let Some(d) = b.detail.as_mut() {
+            let delta = if down {
+                WHEEL_ROWS as isize
+            } else {
+                -(WHEEL_ROWS as isize)
+            };
+            d.popup.scroll_by(delta);
+        }
+        return;
+    }
+    if b.detail.is_some() {
+        return;
+    }
+    let (tree_w, part_w) = split(view.term.1 as usize, &view.edge_sizes);
+    let col = if (rep.col as usize) < tree_w {
+        Col::Tree
+    } else if (rep.col as usize) < tree_w + part_w {
+        Col::Chats
+    } else {
+        Col::Thread
+    };
+    let len = match col {
+        Col::Tree => b.tree_rows().len(),
+        Col::Chats => b.active_chat_rows().len(),
+        Col::Thread => thread_len(b),
+    };
+    let cur = b.cursors[col as usize];
+    b.cursors[col as usize] = if down {
+        (cur + WHEEL_ROWS).min(len.saturating_sub(1))
+    } else {
+        cur.saturating_sub(WHEEL_ROWS)
+    };
 }
 
 #[cfg(test)]

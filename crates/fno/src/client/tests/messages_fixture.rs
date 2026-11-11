@@ -1007,3 +1007,168 @@ async fn message_body_paints_inline_bold_and_code_without_marks() {
         nest_line.text
     );
 }
+
+/// The wheel scrolls the column under the pointer: the column's cursor
+/// steps three rows a tick and clamps at both ends, focus stays on the
+/// active column (a scroll is not a click), and the detail modal's popup
+/// owns the wheel over itself - inside scrolls it, outside does nothing.
+#[tokio::test]
+async fn messages_wheel_scrolls_pointer_column() {
+    use serde_json::json;
+    let mut view = View::new(
+        (24, 100),
+        "main".into(),
+        LayoutView {
+            squads: Vec::new(),
+            active_squad: 0,
+            panes: Vec::new(),
+            focus: 0,
+            area: (0, 0),
+            agents: Vec::new(),
+            focus_node: None,
+        },
+    );
+    check_fixture(&mut view);
+    let prefs = tempfile::tempdir().unwrap();
+    crate::view_store::set_test_path(prefs.path());
+    {
+        let b = view.messages_board.as_mut().unwrap();
+        b.snapshot.apply(json!({
+            "participants": [
+                {"key":"s1","name":"first","system":false,"live":true},
+                {"key":"s2","name":"second","system":false,"live":true},
+                {"key":"s3","name":"third","system":false,"live":true},
+                {"key":"s4","name":"fourth","system":false,"live":true},
+                {"key":"s5","name":"fifth","system":false,"live":true},
+            ],
+            "threads": [
+                {"chat_id":"chat-1","participants":["s1","s2"],
+                 "rows":[
+                   {"id":"m1","ts":"2026-11-01T09:00:00Z","from":"second","from_key":"s2","to_key":"s1","summary":"one","body":"one","system":false},
+                   {"id":"m2","ts":"2026-11-01T09:01:00Z","from":"first","from_key":"s1","to_key":"s2","summary":"two","body":"two","system":false}],
+                 "last_ts":"2026-11-01T09:01:00Z"},
+                {"chat_id":"chat-2","participants":["s1","s3"],
+                 "rows":[
+                   {"id":"m3","ts":"2026-11-01T09:02:00Z","from":"third","from_key":"s3","to_key":"s1","summary":"three","body":"three","system":false}],
+                 "last_ts":"2026-11-01T09:02:00Z"}
+            ],
+        }));
+    }
+    let wheel = |kind, col: u16| crate::mouse::MouseReport {
+        kind,
+        row: 5,
+        col,
+        shift: false,
+        alt: false,
+    };
+    let up = crate::proto::MouseKind::WheelUp;
+    let down = crate::proto::MouseKind::WheelDown;
+    let mut sink = tokio::io::sink();
+    let (tree_w, part_w) = split(100, &Default::default());
+    // Focus parked on Thread so no wheel can be confused with it.
+    view.messages_board.as_mut().unwrap().col = Col::Thread;
+    // Wheel down over the Tree column: +3 clamped into the row count...
+    super::mouse(&mut view, wheel(down, 3), &mut sink)
+        .await
+        .unwrap();
+    {
+        let b = view.messages_board.as_ref().unwrap();
+        assert_eq!(b.cursors[0], 3, "three rows a tick");
+        assert_eq!(b.col, Col::Thread, "the wheel never moves focus");
+    }
+    // ...and two more downs clamp at the last row, one up returns.
+    super::mouse(&mut view, wheel(down, 3), &mut sink)
+        .await
+        .unwrap();
+    super::mouse(&mut view, wheel(down, 3), &mut sink)
+        .await
+        .unwrap();
+    {
+        let b = view.messages_board.as_ref().unwrap();
+        assert_eq!(b.cursors[0], 4, "clamped at len-1 (5 rows)");
+        assert_eq!(b.col, Col::Thread);
+    }
+    super::mouse(&mut view, wheel(up, 3), &mut sink)
+        .await
+        .unwrap();
+    assert_eq!(
+        view.messages_board.as_ref().unwrap().cursors[0],
+        0,
+        "saturating at the top"
+    );
+    // The Chats column under the pointer: sel_agent fixed, 2 rows, so a
+    // down-tick lands on row 1 (clamped), the up-tick back at 0.
+    {
+        let b = view.messages_board.as_mut().unwrap();
+        b.sel_agent = Some("s1".into());
+        b.col2 = ChatTab::Chats;
+    }
+    super::mouse(&mut view, wheel(down, (tree_w + 2) as u16), &mut sink)
+        .await
+        .unwrap();
+    assert_eq!(
+        view.messages_board.as_ref().unwrap().cursors[1],
+        1,
+        "chats column: 2 rows clamp the tick"
+    );
+    super::mouse(&mut view, wheel(up, (tree_w + 2) as u16), &mut sink)
+        .await
+        .unwrap();
+    assert_eq!(view.messages_board.as_ref().unwrap().cursors[1], 0);
+    // The detail modal's popup owns the wheel over itself; outside it the
+    // board takes nothing and the cursors stay.
+    super::super::messages_detail::open(&mut view, "s1".into());
+    let (inside, outside) = {
+        let b = view.messages_board.as_ref().unwrap();
+        let d = b.detail.as_ref().unwrap();
+        let r = d.popup.render(view.term);
+        let (r0, c0) = r.origin;
+        (((r0 + 1) as u16, (c0 + 1) as u16), (0u16, 0u16))
+    };
+    let inside_tap = crate::mouse::MouseReport {
+        kind: down,
+        row: inside.0,
+        col: inside.1,
+        shift: false,
+        alt: false,
+    };
+    super::mouse(&mut view, inside_tap, &mut sink)
+        .await
+        .unwrap();
+    let scrolled = view
+        .messages_board
+        .as_ref()
+        .unwrap()
+        .detail
+        .as_ref()
+        .unwrap()
+        .popup
+        .scroll;
+    assert_eq!(scrolled, 3, "wheel inside the detail popup scrolls it");
+    let outside_tap = crate::mouse::MouseReport {
+        kind: down,
+        row: outside.0,
+        col: outside.1,
+        shift: false,
+        alt: false,
+    };
+    super::mouse(&mut view, outside_tap, &mut sink)
+        .await
+        .unwrap();
+    assert_eq!(
+        view.messages_board
+            .as_ref()
+            .unwrap()
+            .detail
+            .as_ref()
+            .unwrap()
+            .popup
+            .scroll,
+        3,
+        "wheel outside the popup does nothing"
+    );
+    // The board's cursors never moved under the detail modal.
+    let cursors = view.messages_board.as_ref().unwrap().cursors;
+    assert_eq!(cursors, [0, 0, 0]);
+    crate::view_store::clear_test_path();
+}
