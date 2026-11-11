@@ -929,6 +929,24 @@ pub fn keymap(cwd: &Path) -> (crate::keys::Keymap, Vec<crate::keys::KeymapWarnin
     (map, warnings)
 }
 
+/// Every file [`keymap`] may read, for the client's change poll: the pinned
+/// or ladder config files that carry `mux.prefix` and the legacy key table,
+/// and `keybindings.json`.
+pub(crate) fn keymap_sources(cwd: &Path) -> Vec<PathBuf> {
+    let configs: Vec<PathBuf> = match non_empty_env_os("FNO_CONFIG") {
+        Some(explicit) => vec![PathBuf::from(explicit)],
+        None => config_roots(cwd)
+            .into_iter()
+            .map(|r| r.join(".fno/config.toml"))
+            .chain(global_config_toml())
+            .collect(),
+    };
+    configs
+        .into_iter()
+        .chain(crate::keybindings_file::path())
+        .collect()
+}
+
 /// The key rows and preset the mux runs on, plus what stopped the reader.
 ///
 /// `keybindings.json` wins whenever it exists. The retired `[mux.keys]` and

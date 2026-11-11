@@ -183,7 +183,7 @@ pub fn reference_markdown() -> String {
          Generated from `default_bindings` and `preset_rows` in `crates/fno/src/keys.rs`. \
          Do not edit by hand: run `cargo test -p fno --lib regenerate_key_reference -- --ignored` to rewrite it.\n\n\
          Each row is one action id. Put the id in `~/.fno/keybindings.json` with a key string to rebind it. \
-         The file is one flat object, and `\"preset\"` is its one reserved key. \
+         The file is one flat object, and `\"preset\"` is its one reserved key. A value of two to four keys split by spaces (`\"g s\"`) binds a multi-stroke chord. Its first key must not be bound alone. The mux reloads the file when it changes. \
          The keys below come after the prefix.\n\n\
          | Action id | Built-in | tmux | zellij | Meaning |\n|---|---|---|---|---|\n",
     );
@@ -250,6 +250,9 @@ fn origin_under(preset: Option<&str>, action: &str, live_key: u8) -> Origin {
         .find(|kb| kb.action == action)
         .map(|kb| kb.key);
     match (preset_key, default_key) {
+        // Key 0 on a live row is a multi-stroke chord, which only the user's
+        // file can bind: presets and the shipped table hold single keys.
+        _ if live_key == 0 => Origin::Yours,
         (Some(p), _) if p == live_key => Origin::Preset,
         (None, Some(d)) if d == live_key => Origin::BuiltIn,
         _ => Origin::Yours,

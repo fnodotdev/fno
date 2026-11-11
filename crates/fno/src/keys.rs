@@ -57,15 +57,33 @@ pub struct Keymap {
     pub prefix: u8,
     /// `(action id, post-prefix byte)`, overriding that action's table default.
     pub rebinds: Vec<(String, u8)>,
+    /// `(action id, 2 to 4 post-prefix bytes)`: a multi-stroke chord. The
+    /// action leaves its single-byte default, and no single bind may sit on
+    /// the first stroke, so a sequence never shadows a whole chord.
+    pub sequences: Vec<(String, Vec<u8>)>,
 }
+
+/// The most strokes one `[mux.keys]` value may hold.
+const MAX_STROKES: usize = 4;
 
 impl Default for Keymap {
     fn default() -> Self {
         Keymap {
             prefix: DEFAULT_PREFIX,
             rebinds: Vec::new(),
+            sequences: Vec::new(),
         }
     }
+}
+
+/// How a stroke sequence prints and parses: each stroke's [`key_disp`],
+/// space-separated (`g s`).
+pub fn strokes_disp(strokes: &[u8]) -> String {
+    strokes
+        .iter()
+        .map(|b| key_disp(*b))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// One rejected config entry, so the caller can say WHY a rebind did not take
@@ -184,7 +202,7 @@ pub fn with_preset(
     };
     let claimed: Vec<u8> = user
         .iter()
-        .filter_map(|(_, spec)| parse_key(spec))
+        .filter_map(|(_, spec)| spec.split_whitespace().next().and_then(parse_key))
         .collect();
     let mut merged: Vec<(String, String)> = rows
         .iter()
@@ -253,12 +271,25 @@ pub fn resolve_keymap(
 
     // Pass 1: everything judgeable about an entry on its own.
     let mut proposed: Vec<(String, u8)> = Vec::new();
+    let mut sequences: Vec<(String, Vec<u8>)> = Vec::new();
     for (action, spec) in rebinds {
         let action = action.trim().to_ascii_lowercase();
         if !defaults.iter().any(|(a, _)| *a == action) {
             warnings.push(KeymapWarning(format!(
                 "config.mux.keys.{action}: no such action (see `prefix+?` for the list)"
             )));
+            continue;
+        }
+        let strokes: Vec<&str> = spec.split_whitespace().collect();
+        if strokes.len() > 1 {
+            match read_strokes(&action, &strokes) {
+                Ok(seq) => {
+                    proposed.retain(|(a, _)| *a != action);
+                    sequences.retain(|(a, _)| *a != action);
+                    sequences.push((action, seq));
+                }
+                Err(w) => warnings.push(w),
+            }
             continue;
         }
         let Some(byte) = parse_key(spec) else {
@@ -281,6 +312,7 @@ pub fn resolve_keymap(
             continue;
         }
         proposed.retain(|(a, _)| *a != action); // a repeated action: last wins
+        sequences.retain(|(a, _)| *a != action);
         proposed.push((action, byte));
     }
 
@@ -293,6 +325,16 @@ pub fn resolve_keymap(
             if let Some(slot) = final_map.iter_mut().find(|(a, _)| a == action) {
                 slot.1 = *byte;
             }
+        }
+        for (action, _) in &sequences {
+            if let Some(slot) = final_map.iter_mut().find(|(a, _)| a == action) {
+                slot.1 = 0;
+            }
+        }
+        if let Some((i, w)) = sequence_conflict(&sequences, &final_map, prefix) {
+            warnings.push(w);
+            sequences.remove(i);
+            continue;
         }
         // A key sitting on the prefix byte can never dispatch. Sentinel
         // rows (key 0) hold no chord, so they can sit beside anything.
@@ -352,9 +394,68 @@ pub fn resolve_keymap(
         Keymap {
             prefix,
             rebinds: proposed,
+            sequences,
         },
         warnings,
     )
+}
+
+/// Parse a multi-stroke value. The first stroke follows the single-key
+/// rules (a digit would hold a tab number instead); later strokes may be
+/// any key `parse_key` reads.
+fn read_strokes(action: &str, strokes: &[&str]) -> Result<Vec<u8>, KeymapWarning> {
+    let warn = |why: String| KeymapWarning(format!("config.mux.keys.{action}: {why}"));
+    if strokes.len() > MAX_STROKES {
+        return Err(warn(format!("a chord holds at most {MAX_STROKES} strokes")));
+    }
+    let seq = strokes
+        .iter()
+        .map(|s| parse_key(s).ok_or_else(|| warn(format!("cannot read {s:?} as a key"))))
+        .collect::<Result<Vec<u8>, _>>()?;
+    match seq.first().copied().unwrap_or_default() {
+        b if b.is_ascii_digit() && b != b'0' => {
+            Err(warn("1-9 select tabs and cannot start a chord".into()))
+        }
+        b => match terminal_twin(b) {
+            Some(twin) => Err(warn(format!(
+                "{} is the same byte as {twin}, so the chord would never fire",
+                key_disp(b)
+            ))),
+            None => Ok(seq),
+        },
+    }
+}
+
+/// The first sequence that cannot fire, with the reason. A first stroke on
+/// the prefix or on a single bind would never reach the sequence; two
+/// sequences where one starts the other would leave the shorter ambiguous.
+/// The later sequence loses.
+fn sequence_conflict(
+    sequences: &[(String, Vec<u8>)],
+    singles: &[(String, u8)],
+    prefix: u8,
+) -> Option<(usize, KeymapWarning)> {
+    sequences.iter().enumerate().find_map(|(i, (action, seq))| {
+        let warn =
+            |why: String| Some((i, KeymapWarning(format!("config.mux.keys.{action}: {why}"))));
+        let lead = seq.first().copied().unwrap_or_default();
+        let first = key_disp(lead);
+        if lead == prefix {
+            return warn(format!(
+                "{first} is the prefix, so the chord would never fire"
+            ));
+        }
+        if let Some((other, _)) = singles.iter().find(|(_, k)| *k == lead) {
+            return warn(format!(
+                "{first} is already {other}, so it cannot start a chord"
+            ));
+        }
+        let (other, _) = sequences
+            .iter()
+            .take(i)
+            .find(|(_, s)| s.starts_with(seq) || seq.starts_with(s))?;
+        warn(format!("{} overlaps {other}", strokes_disp(seq)))
+    })
 }
 
 /// The whole `[mux.keys]` table for a map, as the JSON object `fno config
@@ -364,6 +465,11 @@ pub fn rebinds_json(map: &Keymap) -> String {
         .rebinds
         .iter()
         .map(|(action, byte)| (action.clone(), key_disp(*byte).into()))
+        .chain(
+            map.sequences
+                .iter()
+                .map(|(action, seq)| (action.clone(), strokes_disp(seq).into())),
+        )
         .collect();
     serde_json::Value::Object(table).to_string()
 }
@@ -629,6 +735,9 @@ enum State {
     ChordEsc(Vec<u8>),
     /// Saw the prefix; the next key (or escape sequence) is a chord.
     Prefix,
+    /// The strokes typed so far of a multi-stroke chord, after the prefix.
+    /// A stroke that leaves every sequence sounds BEL; nothing forwards.
+    Seq(Vec<u8>),
     /// Holding a tab number: the digits typed so far after a prefix
     /// digit or an Alt+digit. More digits keep appending; Enter, any
     /// non-digit, or the caller's quiet-window flush resolves the ordinal.
@@ -651,6 +760,9 @@ pub struct Scanner {
     /// The repeatable action and its deadline. Keeping the action beside the
     /// deadline prevents a pane-id pulse from being mistaken for resize input.
     repeat: Option<RepeatState>,
+    /// A keymap pinned for this scanner alone, so a test can drive a rebind
+    /// without the process-global [`install`]. `None` reads the live map.
+    pinned: Option<Keymap>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -670,6 +782,7 @@ impl Default for Scanner {
         Scanner {
             state: State::Normal(0),
             repeat: None,
+            pinned: None,
         }
     }
 }
@@ -841,10 +954,37 @@ impl Scanner {
                         // quiet-window flush covers the number-then-nothing
                         // case. One buffer, three doors in.
                         self.state = State::Digits(vec![b]);
+                    } else if self
+                        .map()
+                        .sequences
+                        .iter()
+                        .any(|(_, s)| s.first() == Some(&b))
+                    {
+                        self.state = State::Seq(vec![b]);
                     } else {
                         let ev = self.chord(b);
                         self.arm_if_repeat(&ev, now);
                         out.push(ev);
+                    }
+                }
+                State::Seq(mut seq) => {
+                    seq.push(b);
+                    let map = self.map();
+                    let done = map.sequences.iter().find(|(_, s)| *s == seq);
+                    if let Some(kb) = done.and_then(|(action, _)| {
+                        bindings_for(&map)
+                            .into_iter()
+                            .find(|kb| kb.action == action)
+                    }) {
+                        self.arm_if_repeat(&kb.event, now);
+                        out.push(kb.event);
+                    } else if map.sequences.iter().any(|(_, s)| s.starts_with(&seq)) {
+                        self.state = State::Seq(seq);
+                    } else {
+                        out.push(Event::Bell);
+                        // An ESC may open a paste: drop the chord, then replay
+                        // the ESC through Normal so the paste-open roll sees it.
+                        replay = b == 0x1b;
                     }
                 }
                 State::Digits(mut digits) => {
@@ -962,7 +1102,10 @@ impl Scanner {
     /// A prefix chord is mid-flight (US4): the client arms the which-key
     /// hint timer while this holds and clears the hint when it stops.
     pub fn prefix_pending(&self) -> bool {
-        matches!(self.state, State::Prefix | State::PrefixEsc(_))
+        matches!(
+            self.state,
+            State::Prefix | State::PrefixEsc(_) | State::Seq(_)
+        )
     }
 
     /// True while the selected repeat action's window is open at `now`.
@@ -1013,7 +1156,19 @@ impl Scanner {
     // must reach the next keystroke through this read, not through a stored
     // copy of the keymap.
     fn chord(&self, byte: u8) -> Event {
-        chord_for(&keymap(), byte)
+        chord_for(&self.map(), byte)
+    }
+
+    fn map(&self) -> Keymap {
+        self.pinned.clone().unwrap_or_else(keymap)
+    }
+
+    #[cfg(test)]
+    fn with_keymap(map: Keymap) -> Self {
+        Scanner {
+            pinned: Some(map),
+            ..Scanner::default()
+        }
     }
 }
 
@@ -1568,11 +1723,22 @@ fn bindings_for(map: &Keymap) -> Vec<KeyBinding> {
     // A sentinel row (key 0: bindable, no default chord) enters the live
     // table only once a rebind gives it a real key; shipping it unbound
     // would break the parity contract between `chord()` and the modal.
-    rows.retain(|kb| kb.key != 0 || map.rebinds.iter().any(|(a, _)| a == &kb.action));
+    let named = |a: &str| {
+        map.rebinds.iter().any(|(x, _)| x == a) || map.sequences.iter().any(|(x, _)| x == a)
+    };
+    rows.retain(|kb| kb.key != 0 || named(kb.action));
     for (action, byte) in &map.rebinds {
         if let Some(kb) = rows.iter_mut().find(|kb| kb.action == action) {
             kb.key = *byte;
             kb.disp = key_disp(*byte);
+        }
+    }
+    // A sequenced row keeps key 0 (no single byte dispatches it); the scanner
+    // reaches it through `Keymap::sequences`, and the modal prints its strokes.
+    for (action, seq) in &map.sequences {
+        if let Some(kb) = rows.iter_mut().find(|kb| kb.action == action) {
+            kb.key = 0;
+            kb.disp = strokes_disp(seq);
         }
     }
     rows
@@ -2003,7 +2169,7 @@ fn chord_for(map: &Keymap, b: u8) -> Event {
         b'1'..=b'9' => Event::SelectTabIdx((b - b'0') as usize),
         _ => bindings_for(map)
             .into_iter()
-            .find(|kb| kb.key == b)
+            .find(|kb| kb.key == b && kb.key != 0)
             .map(|kb| kb.event)
             .unwrap_or(Event::Bell),
     }
@@ -2903,5 +3069,71 @@ mod tests {
         input.extend_from_slice(PASTE_CLOSE);
         let mut scanner = Scanner::default();
         assert_eq!(forwarded_only(&scanner.scan(&input, Instant::now())), input);
+    }
+
+    fn rows(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(a, k)| (a.to_string(), k.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn a_two_stroke_chord_fires_and_a_dead_end_bells_without_leaking() {
+        // AC3-HP. `g` is grab-work's default, so the chord alone is refused
+        // and names the bind it would shadow. Moving grab-work onto the `%`
+        // that split-right left frees `g` for the chord.
+        let (_, warnings) = resolve_keymap(None, &rows(&[("split-right", "g s")]));
+        assert!(
+            warnings.iter().any(|w| w.0.contains("already grab-work")),
+            "{warnings:?}"
+        );
+        let (map, warnings) =
+            resolve_keymap(None, &rows(&[("split-right", "g s"), ("grab-work", "%")]));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let split = chord_for(&resolve_keymap(None, &[]).0, b'%');
+        let mut s = Scanner::with_keymap(map.clone());
+        let now = Instant::now();
+        assert_eq!(s.scan(b"\x02g", now), vec![]);
+        assert!(s.prefix_pending());
+        assert_eq!(s.scan(b"s", now), vec![split]);
+        assert_eq!(s.scan(b"\x02gx", now), vec![Event::Bell]);
+        // A paste landing mid-chord drops the chord and still pastes whole.
+        let paste = b"\x1b[200~\x02s\x1b[201~";
+        let mut typed = b"\x02g".to_vec();
+        typed.extend_from_slice(paste);
+        assert_eq!(
+            s.scan(&typed, now),
+            vec![Event::Bell, Event::Forward(paste.to_vec())]
+        );
+        assert_eq!(s.scan(b"\x02%", now), vec![Event::DispatchNext]);
+        assert_eq!(
+            rebinds_json(&map),
+            r#"{"grab-work":"%","split-right":"g s"}"#
+        );
+    }
+
+    #[test]
+    fn a_chord_value_is_refused_past_four_strokes_or_on_an_overlap() {
+        let (map, warnings) = resolve_keymap(
+            None,
+            &rows(&[
+                ("split-right", "q a b c d"),
+                ("split-down", "ctrl+x a"),
+                ("zoom-pane", "ctrl+x a b"),
+            ]),
+        );
+        assert!(
+            warnings.iter().any(|w| w.0.contains("at most 4")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.0.contains("overlaps split-down")),
+            "{warnings:?}"
+        );
+        assert_eq!(
+            map.sequences,
+            vec![("split-down".to_string(), vec![0x18, b'a'])]
+        );
     }
 }
