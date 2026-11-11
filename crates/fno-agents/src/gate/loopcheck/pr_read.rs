@@ -250,10 +250,10 @@ pub(super) fn manifest_node_pr_target(
     // stamped ones. The stamps ride the writers' own spelling, which is
     // lowercase today but GitHub-adjacent prose elsewhere, so the compare is
     // case-insensitive on purpose. `merge_status` is None on every attached
-    // live row beats a stamped dead one, and a node whose only PR is merged
-    // still pins it. An unstamped row at or below the newest stamp shares
-    // the stamped rows' key: it predates them, and a row the reopen marked
-    // history sinks whatever its number.
+    // row, so an untracked live PR beats a stamped dead one, and a node
+    // whose only PR is merged still pins it. An unstamped row at or below
+    // the newest stamp shares the stamped rows' key: it predates them, and
+    // a row the reopen marked history sinks whatever its number.
     let terminal = terminal_stamp;
     let max_terminal = rows
         .iter()
