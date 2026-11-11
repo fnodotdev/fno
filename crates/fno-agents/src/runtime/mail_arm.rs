@@ -215,7 +215,12 @@ pub(crate) fn pull_rows_with(
             Ok(()) => true,
             Err(Refusal::Untrusted(reason)) => {
                 eprintln!("mail-arm: refused {}: {reason}", row.msg_id);
-                if let Err(e) = mail_bus::mark(remote, &row.msg_id, mail_bus::REFUSED) {
+                if let Err(e) = mail_bus::mark(
+                    remote,
+                    &row.msg_id,
+                    mail_bus::REFUSED,
+                    Some(&format!("untrusted: {reason}")),
+                ) {
                     eprintln!("mail-arm: refused mark for {}: {e}", row.msg_id);
                 }
                 continue;
@@ -589,7 +594,7 @@ fn seen(remote: &Remote, home: &std::path::Path, row: &BusRow) -> bool {
         })
         .unwrap_or(false);
     if already {
-        let _ = mail_bus::mark(remote, &row.msg_id, mail_bus::DELIVERED);
+        let _ = mail_bus::mark(remote, &row.msg_id, mail_bus::DELIVERED, None);
     }
     already
 }
@@ -619,7 +624,11 @@ fn inject_row(remote: &Remote, home: &std::path::Path, row: &BusRow) -> bool {
     // nothing: the tailnet is the boundary, the allowlist is the second
     // check (operator ruling, 2026-10-10).
     if row.raw && !raw_sender_allowed(&row.from_id) {
-        let _ = mail_bus::mark(remote, &row.msg_id, mail_bus::REFUSED);
+        let reason = format!(
+            "raw row: sender {} is not in this receiver's agents.remote.raw_senders",
+            row.from_id
+        );
+        let _ = mail_bus::mark(remote, &row.msg_id, mail_bus::REFUSED, Some(&reason));
         return true;
     }
     let argv = local_send_argv(&row.to_name, &row.payload, row.raw, &row.from_id);
@@ -639,7 +648,7 @@ fn inject_row(remote: &Remote, home: &std::path::Path, row: &BusRow) -> bool {
             }) {
                 SendVerdict::Delivered => {
                     if record_seen(home, &row.msg_id).is_ok() {
-                        let _ = mail_bus::mark(remote, &row.msg_id, mail_bus::DELIVERED);
+                        let _ = mail_bus::mark(remote, &row.msg_id, mail_bus::DELIVERED, None);
                         return true;
                     }
                     // The send landed but the ledger write failed: leave
@@ -651,12 +660,19 @@ fn inject_row(remote: &Remote, home: &std::path::Path, row: &BusRow) -> bool {
                     false
                 }
                 SendVerdict::Refused => {
+                    let tail = brief(&output.stderr, 300);
                     eprintln!(
-                        "mail-arm: local send for {} refused (exit {code:?}): {}",
-                        row.msg_id,
-                        brief(&output.stderr, 300)
+                        "mail-arm: local send for {} refused (exit {code:?}): {tail}",
+                        row.msg_id
                     );
-                    if let Err(e) = mail_bus::mark(remote, &row.msg_id, mail_bus::REFUSED) {
+                    let reason = if tail.is_empty() {
+                        format!("receiver's local send refused it (exit {code:?})")
+                    } else {
+                        format!("receiver's local send refused it (exit {code:?}): {tail}")
+                    };
+                    if let Err(e) =
+                        mail_bus::mark(remote, &row.msg_id, mail_bus::REFUSED, Some(&reason))
+                    {
                         eprintln!("mail-arm: refused mark for {}: {e}", row.msg_id);
                     }
                     true

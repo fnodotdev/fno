@@ -1937,8 +1937,9 @@ impl View {
             org_generation: 0,
             sideline_view: crate::view_store::load_sideline_view(),
             board_full: view_store::load_board_full(),
-            experimental_org_board: view_store::load_experimental(
+            experimental_org_board: view_store::load_experimental_or(
                 view_store::EXPERIMENTAL_ORG_BOARD,
+                true,
             ),
             experimental_pane_share: view_store::load_experimental(
                 view_store::EXPERIMENTAL_PANE_SHARE,
@@ -6279,8 +6280,7 @@ async fn attach_and_run(
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
     let mut view = View::new((rows, cols), session, LayoutView::default());
-    // A fresh launch opens on Agents whatever sideline view was last persisted.
-    backlog_board::set_sideline_view(&mut view, crate::view_store::SidelineView::Agents);
+    org_board::boot_sideline(&mut view);
     // Latch the focus-follows-mouse off-switch once; a direct
     // config.toml read (fail-open to on), the digest_overlay idiom.
     view.hover_focus = crate::digest_overlay::hover_focus_enabled(Path::new(&cwd));
