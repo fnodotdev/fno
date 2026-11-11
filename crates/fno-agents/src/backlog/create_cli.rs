@@ -281,14 +281,14 @@ pub(crate) fn detect_project(cwd: &Path) -> Option<String> {
     }
     // The exact path missed: a worktree, a subdirectory, or a sibling clone
     // of a mapped checkout still names the project through repo identity.
-    let Some(caller_repo) = crate::paths::canonical_repo_root(cwd) else {
-        return None;
-    };
+    let caller_repo = crate::paths::canonical_repo_root(cwd);
     for doc in super::settings::config_candidates() {
-        for (name, raw) in work_pairs(&doc) {
-            if crate::paths::canonical_repo_root(&expand_home(&raw)) == Some(caller_repo.clone()) {
-                return Some(name);
-            }
+        if let Some((name, _)) = configured_checkout_for_in(
+            caller_repo.clone(),
+            &work_pairs(&doc),
+            &crate::paths::canonical_repo_root,
+        ) {
+            return Some(name);
         }
     }
     None
@@ -332,33 +332,37 @@ pub(crate) fn expand_home(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
-/// The configured checkout to stamp on a new node when the caller's
-/// canonical repo root IS the repo one of the work-map entries canonicalizes
-/// to: the config names the project's checkout, so the node stores it rather
-/// than whatever clone the filer stood in. None keeps the caller root.
-/// `repo_of` is injected so the core stays pure; the production wrapper
-/// shells git once per work-map entry.
+/// The configured checkout whose repo identity matches `caller_repo`, over
+/// one work map: the config names the project's checkout, so a node stores
+/// it rather than whatever clone the filer stood in. None when the caller
+/// has no repo identity or no entry's repo matches. `repo_of` is injected
+/// so the core stays pure; the production wrapper shells git once per
+/// work-map entry.
 fn configured_checkout_for_in(
-    caller_root: &str,
+    caller_repo: Option<PathBuf>,
     pairs: &[(String, String)],
     repo_of: &dyn Fn(&Path) -> Option<PathBuf>,
 ) -> Option<(String, String)> {
-    let caller_repo = repo_of(Path::new(caller_root));
+    if caller_repo.is_none() {
+        return None;
+    }
     for (name, raw) in pairs {
         let configured = expand_home(raw);
-        if caller_repo.is_some() && repo_of(&configured) == caller_repo {
+        if repo_of(&configured) == caller_repo {
             return Some((name.clone(), configured.to_string_lossy().into_owned()));
         }
     }
     None
 }
 
-/// [`configured_checkout_for_in`] over the config candidates and real git:
-/// first candidate naming a repo-match wins.
+/// [`configured_checkout_for_in`] over the config candidates and real git,
+/// keyed on a caller root's repo identity: first candidate naming a
+/// repo-match wins.
 fn configured_checkout_for(caller_root: &str) -> Option<(String, String)> {
+    let caller_repo = crate::paths::canonical_repo_root(Path::new(caller_root));
     for doc in super::settings::config_candidates() {
         let found = configured_checkout_for_in(
-            caller_root,
+            caller_repo.clone(),
             &work_pairs(&doc),
             &crate::paths::canonical_repo_root,
         );
@@ -1824,21 +1828,21 @@ mod tests {
             }
         };
         // The filer stood in a retired clone of the same repo.
-        let got = configured_checkout_for_in("/repo/retired-clone", &pairs, &repo_of);
+        let got = configured_checkout_for_in(Some(PathBuf::from("/repo")), &pairs, &repo_of);
         assert_eq!(
             got,
             Some(("footnote".to_string(), "/repo/footnote".to_string())),
             "a repo match stamps the configured checkout"
         );
         // A caller inside the configured checkout itself: unchanged.
-        let got = configured_checkout_for_in("/repo/footnote", &pairs, &repo_of);
+        let got = configured_checkout_for_in(Some(PathBuf::from("/repo")), &pairs, &repo_of);
         assert_eq!(
             got,
             Some(("footnote".to_string(), "/repo/footnote".to_string()))
         );
         // No repo identity at all (missing checkout, bare dir): the caller
         // root stays.
-        let got = configured_checkout_for_in("/nowhere", &pairs, &repo_of);
+        let got = configured_checkout_for_in(None, &pairs, &repo_of);
         assert_eq!(got, None);
     }
 
