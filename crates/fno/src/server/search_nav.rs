@@ -1,8 +1,8 @@
-//! The pane's shared-viewport search verbs (v12), moved here under the
+//! The pane's shared-viewport search commands (v12), moved here under the
 //! file-budget ratchet: opening, stepping and clearing a free-text find
 //! over a pane's server-side history, and the initiator-only counter
 //! reply. The exchange picker's anchor jump (the other shared-viewport
-//! verb) lives next door in pane_anchors.rs.
+//! command) lives next door in pane_anchors.rs.
 
 use super::*;
 

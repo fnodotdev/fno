@@ -165,7 +165,7 @@ pub enum ClientMsg {
         pane: u64,
         top: bool,
     },
-    /// (v127, v127) Land the exchange picker's jump: the server picks the
+    /// (v128) Land the exchange picker's jump: the server picks the
     /// pane's stamped prompt anchor nearest `ts_ms` (the transcript row's
     /// submit stamp, epoch milliseconds), verifies the anchor's row still
     /// carries its text, then highlights + scrolls to it. The reply is one
@@ -428,7 +428,7 @@ pub enum ServerMsg {
         total: u32,
         current: u32,
     },
-    /// (v127, v127) The initiator-only result of an
+    /// (v128) The initiator-only result of an
     /// [`ClientMsg::AnchorJump`]: `true` means the anchor's row still carried
     /// its stamped text and the pane now shows it highlighted; `false` means
     /// the anchor aged out or the pane redrew, and no scroll happened - the

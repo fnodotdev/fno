@@ -1,4 +1,4 @@
-//! The exchange picker (v127): an fzf-style find over the You exchanges.
+//! The exchange picker (v128): an fzf-style find over the You exchanges.
 //!
 //! The pairing already exists server-side: `you_threads` pairs each typed
 //! turn with its reply in the `mail-threads` projection `you[].items[]`,
@@ -114,6 +114,19 @@ pub(crate) fn ts_to_ms(ts: &str) -> u64 {
         .unwrap_or(0)
 }
 
+/// One you-thread exchange row, exactly the fields the picker reads, as
+/// the `mail-threads` projection writes them; `#[serde(default)]` keeps a
+/// sparse row readable instead of dropping the exchange.
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct ExchangeItemJson {
+    typed_text: String,
+    ts: String,
+    state: String,
+    reply_text: String,
+    turn_id: String,
+}
+
 impl MessagesBoard {
     /// Open the picker. The query starts empty: the full index, newest
     /// exchange first.
@@ -139,35 +152,30 @@ impl MessagesBoard {
             .flat_map(|t| {
                 let sid = text_of(t, "session_id");
                 let agent = text_of(t, "name");
-                t.get("items")
-                    .and_then(Value::as_array)
-                    .map(|items| {
-                        items
-                            .iter()
-                            .map(move |i| (sid, agent, i))
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default()
+                let items: Vec<ExchangeItemJson> =
+                    serde_json::from_value(t["items"].clone()).unwrap_or_default();
+                items
+                    .into_iter()
+                    .map(move |i| (sid, agent, i))
+                    .collect::<Vec<_>>()
             })
             .filter_map(|(sid, agent, item)| {
-                let typed = text_of(item, "typed_text");
+                let typed = item.typed_text;
                 if typed.trim().is_empty() {
                     return None;
                 }
-                let ts = text_of(item, "ts");
-                let ts_ms = ts_to_ms(ts);
-                let state = text_of(item, "state").to_string();
-                let replied = state == "answered" && !text_of(item, "reply_text").trim().is_empty();
-                let turn_id = text_of(item, "turn_id").to_string();
+                let ts_ms = ts_to_ms(&item.ts);
+                let replied = item.state == "answered" && !item.reply_text.trim().is_empty();
+                let turn_id = item.turn_id;
                 let key = format!("xchg:{}:{}", sid, turn_id);
                 let unread = replied && !marks.contains_key(&key);
                 Some(ExchangeRow {
                     sid: sid.to_string(),
                     agent: agent.to_string(),
-                    ts: ts.to_string(),
+                    ts: item.ts,
                     ts_ms,
-                    typed: typed.to_string(),
-                    state,
+                    typed,
+                    state: item.state,
                     unread,
                     turn_id,
                 })
@@ -231,7 +239,7 @@ pub(crate) async fn picker_keys(
     view: &mut View,
     bytes: &[u8],
     sock: &mut (impl tokio::io::AsyncWrite + Unpin),
-) -> Result<StdinFlow, String> {
+) -> Result<StdinFlow, crate::proto::ProtoError> {
     let Some(b) = view.messages_board.as_mut() else {
         return Ok(StdinFlow::Continue);
     };
@@ -313,7 +321,7 @@ fn picker_move(view: &mut View, dir: isize) {
 async fn jump_to_exchange(
     view: &mut View,
     sock: &mut (impl tokio::io::AsyncWrite + Unpin),
-) -> Result<(), String> {
+) -> Result<(), crate::proto::ProtoError> {
     let row = {
         let Some(b) = view.messages_board.as_ref() else {
             return Ok(());
@@ -365,12 +373,8 @@ async fn jump_to_exchange(
         b.pending_jump = Some((sid.clone(), pane_ref, ts_ms));
     });
     let _ = view.set_notice(format!("jump: {}", first_line(&row.typed)));
-    write_msg(sock, &ClientMsg::Command(Command::FocusPane(pane)))
-        .await
-        .map_err(|e| format!("exchange jump send failed: {e}"))?;
-    write_msg(sock, &ClientMsg::AnchorJump { pane, ts_ms })
-        .await
-        .map_err(|e| format!("exchange jump send failed: {e}"))
+    write_msg(sock, &ClientMsg::Command(Command::FocusPane(pane))).await?;
+    write_msg(sock, &ClientMsg::AnchorJump { pane, ts_ms }).await
 }
 
 #[cfg(test)]

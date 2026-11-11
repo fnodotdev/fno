@@ -1197,7 +1197,7 @@ impl Pane {
         self.scroll_to_abs(m.abs_row);
     }
 
-    // -- Prompt anchors (v127) -----------------------------------------
+    // -- Prompt anchors (v128) -----------------------------------------
 
     /// The cursor's absolute row: the server stamps it when a pane input
     /// burst submits, and the exchange picker's jump lands here.

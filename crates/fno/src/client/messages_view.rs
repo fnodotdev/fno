@@ -1993,7 +1993,9 @@ pub(crate) async fn keys(
         return Ok(StdinFlow::Continue);
     }
     if b.picker.is_some() {
-        return exchanges::picker_keys(view, bytes, sock).await;
+        return exchanges::picker_keys(view, bytes, sock)
+            .await
+            .map_err(|e| format!("picker: {e}"));
     }
     let tokens = if bytes == [27] && b.esc.is_empty() {
         vec![ModalKey::Esc]
