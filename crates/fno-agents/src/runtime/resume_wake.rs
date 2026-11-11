@@ -996,12 +996,16 @@ fn revive_parked_claude_session(
         |plan| crate::claude_supervisor::guard_birth_for_plan(&plan.env),
         || relaunch_command(&plan).status(),
     ) {
-        Ok(status) => status,
+        Ok(Ok(status)) => status,
+        Ok(Err(e)) => {
+            eprintln!("fno agents resume: failed to plan argv run: {e}");
+            return Err((16, "launch-failed".to_string()));
+        }
         Err(e) => {
             if e.0 == crate::claude_supervisor::BIRTH_REFUSED_EXIT {
                 return Err(e);
             }
-            eprintln!("fno agents resume: failed to plan argv run: {e}");
+            eprintln!("fno agents resume: failed to plan argv run: {e:?}");
             return Err((16, "launch-failed".to_string()));
         }
     };
