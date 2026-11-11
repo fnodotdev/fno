@@ -1411,7 +1411,7 @@ fn an_unreadable_body_or_graph_refuses_to_assume_bound() {
 }
 
 #[test]
-fn process_conditions_warn_on_merge_arm_and_preview() {
+fn process_conditions_warn_on_merge_arm_and_preview_pending_holds() {
     for code in [
         "review_in_flight",
         "review_coverage_uncovered",
@@ -1445,6 +1445,18 @@ fn process_conditions_warn_on_merge_arm_and_preview() {
                 ..request(effect)
             };
             let outcome = run(&fake, &req);
+            if code == "ci_pending" && effect == Effect::Merge {
+                // The one cell the warning does not cover: a pending read
+                // holds the merge door until the newest attempt settles.
+                assert_eq!(outcome.word(), "held", "{code}: {outcome:?}");
+                assert!(
+                    outcome
+                        .detail()
+                        .contains("checks are pending; require_checks_pass"),
+                    "{outcome:?}"
+                );
+                continue;
+            }
             assert_eq!(outcome.word(), word, "{code}: {outcome:?}");
             assert!(outcome.warnings().iter().any(|w| w.code == code));
         }
