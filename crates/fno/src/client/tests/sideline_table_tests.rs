@@ -1206,6 +1206,27 @@ fn pinned_needs_panel_groups_remote_rows_under_host_labels() {
         "no remote blocked rows keeps the flat shape, got {} rows",
         pinned.len()
     );
+
+    // A collapsed host group hides its rows: the caret and the row filter
+    // read one authority, so they can never disagree.
+    let mut v3 = wide_view(vec![agent_row("b1", 4, Some(AgentBadge::Blocked), false)]);
+    v3.machine_tree.on = true;
+    crate::client::machine_tree::apply(&mut v3, Ok(fleet(true)));
+    let fold_key = crate::view_store::SectionKey::Group("@needs-input/mac2".into());
+    v3.section_view.insert(fold_key, SectionView::Collapsed);
+    v3.needs_open = true;
+    let pinned: Vec<DisplayRow> = v3
+        .display_rows()
+        .into_iter()
+        .take_while(|r| !matches!(r, DisplayRow::Blank))
+        .collect();
+    assert!(
+        !pinned
+            .iter()
+            .any(|r| matches!(r, DisplayRow::Agent(a) if a.name == "heron@mac2")),
+        "a collapsed host group hides its rows, got {} rows",
+        pinned.len()
+    );
 }
 
 #[test]

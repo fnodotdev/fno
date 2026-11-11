@@ -496,13 +496,17 @@ impl View {
                     .map(|(host, rows)| (host.to_string(), rows)),
             ) {
                 let key = SectionKey::Group(format!("@needs-input/{label}"));
+                let view = self.section_view(&key);
                 out.push(DisplayRow::Header {
                     label,
                     rollup: vec![(LatticeState::Blocked, agents.len())],
                     key: key.clone(),
-                    view: self.section_view(&key),
+                    view,
                 });
                 out_depths.push(0);
+                if view == SectionView::Collapsed {
+                    continue;
+                }
                 for a in agents {
                     out.push(DisplayRow::Agent(a));
                     out_depths.push(1);
