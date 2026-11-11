@@ -1,8 +1,7 @@
 // Ported from the single-file draft of send.rs; split by question.
 use super::*;
 use crate::claude_roster::ClaudeAgentRow;
-use fno_mail::directory::Resolution;
-use fno_mail::session::{SessionId, ShortForm};
+use fno_mail::session::ShortForm;
 
 /// 32-hex or dashed-uuid shape.
 /// `pub(crate)`: the reply leaf's provenance arm reads it.
@@ -317,81 +316,19 @@ pub(super) fn reachable_from_harness_stores(_token: &str) -> (Vec<ReachableSessi
     (Vec::new(), true)
 }
 
-fn daemon_list_rows() -> (Vec<crate::claude_roster::ClaudeAgentRow>, bool) {
-    if let Some(path) = std::env::var_os("FNO_DAEMON_AGENTS_JSON").filter(|v| !v.is_empty()) {
-        return match std::fs::read(&path)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
-            .and_then(|doc| Some(parse_agents_value(&doc)))
-        {
-            Some(rows) => (rows, true),
-            None => (Vec::new(), false),
-        };
-    }
+fn daemon_list_rows() -> (Vec<ClaudeAgentRow>, bool) {
+    use crate::claude_roster::ClaudeAgentsSnapshot;
     if std::env::var("FNO_TEST_HERMETIC").ok().as_deref() == Some("1") {
         return (Vec::new(), true);
     }
-    match crate::claude_roster::read_all_agents_union() {
-        crate::claude_roster::ClaudeAgentsSnapshot::Known { rows, .. } => (rows, true),
-        // Rows from a partial union are still evidence. An empty Unknown
-        // read stays a clean miss, not a degraded one: a host with no claude
-        // binary reads Unknown every time, and degrading there would turn
-        // every unknown name on a codex-only box into "unreadable stores".
-        crate::claude_roster::ClaudeAgentsSnapshot::Unknown { rows, .. } => (rows, true),
-    }
-}
-
-fn parse_agents_value(doc: &Value) -> Vec<ClaudeAgentRow> {
-    let rows = match doc {
-        Value::Array(rows) => rows.clone(),
-        Value::Object(o) => match o.get("agents") {
-            Some(Value::Array(rows)) => rows.clone(),
-            _ => return Vec::new(),
-        },
-        _ => return Vec::new(),
-    };
-    rows.iter()
-        .filter_map(|r| r.as_object())
-        .filter(|o| o.get("kind").and_then(Value::as_str) != Some("interactive"))
-        .filter_map(|o| {
-            let short_id = ["short_id", "id"]
-                .into_iter()
-                .find_map(|k| o.get(k).and_then(Value::as_str))
-                .filter(|v| !v.is_empty())?
-                .to_string();
-            let session_id = ["session_id", "sessionId"]
-                .into_iter()
-                .find_map(|k| o.get(k).and_then(Value::as_str))
-                .filter(|v| !v.is_empty())
-                .map(String::from);
-            let name = ["name", "title"]
-                .into_iter()
-                .find_map(|k| o.get(k).and_then(Value::as_str))
-                .filter(|v| !v.is_empty())
-                .map(String::from);
-            let cwd = ["cwd"]
-                .into_iter()
-                .find_map(|k| o.get(k).and_then(Value::as_str))
-                .filter(|v| !v.is_empty())
-                .map(String::from);
-            let state = o.get("state").and_then(Value::as_str);
-            Some(build_agent_row(&short_id, session_id, name, cwd, state))
-        })
-        .collect()
-}
-
-fn build_agent_row(
-    short_id: &str,
-    session_id: Option<String>,
-    name: Option<String>,
-    cwd: Option<String>,
-    state: Option<&str>,
-) -> ClaudeAgentRow {
-    let mut row = ClaudeAgentRow::new(short_id, state);
-    row.session_id = session_id;
-    row.name = name;
-    row.cwd = cwd;
-    row
+    let snapshot = crate::claude_roster::read_all_agents_union();
+    // Rows from a partial read are still evidence. An empty Unknown read
+    // stays a clean miss, not a degraded one: a host with no claude binary
+    // reads Unknown every time, and degrading there would turn every unknown
+    // name on a codex-only box into "unreadable stores".
+    let (ClaudeAgentsSnapshot::Known { rows, .. } | ClaudeAgentsSnapshot::Unknown { rows, .. }) =
+        snapshot;
+    (rows, true)
 }
 
 pub(crate) fn daemon_hits_from_rows(token: &str, rows: &[ClaudeAgentRow]) -> Vec<ReachableSession> {
@@ -609,7 +546,7 @@ pub(crate) fn spelling_near(name: &str, token: &str) -> bool {
 /// The near rows over daemon rows: name spelling-neighbors, short id first.
 pub(crate) fn near_from_daemon_rows(
     token: &str,
-    rows: &[crate::claude_roster::ClaudeAgentRow],
+    rows: &[ClaudeAgentRow],
 ) -> Vec<(ShortForm, String)> {
     rows.iter()
         .filter_map(|row| {
@@ -662,37 +599,6 @@ pub(crate) fn format_near(near: &[(ShortForm, String)]) -> Vec<String> {
     near.iter()
         .map(|(sid, name)| format!("{} ({})", sid.as_str(), name))
         .collect()
-}
-
-/// The Directory impl the send path calls: the six resolution sources, one
-/// merge, and the near rows on a clean miss. The daemon rows reach the impl
-/// through the same staged-file door the leg reads.
-pub(crate) struct MailDirectory;
-
-impl fno_mail::directory::Directory for MailDirectory {
-    fn resolve(&self, token: &str) -> Resolution {
-        let reach = resolve_reachable(token);
-        let mut hits: Vec<SessionId> = Vec::new();
-        if let Some(hit) = &reach.hit {
-            if let Ok(sid) = SessionId::parse(&hit.session_id) {
-                hits.push(sid);
-            }
-        }
-        for candidate in &reach.ambiguous {
-            if let Ok(sid) = SessionId::parse(candidate) {
-                hits.push(sid);
-            }
-        }
-        let resolution = Resolution::from_hits(hits);
-        match resolution {
-            // A clean miss fills the near rows; every other outcome returns
-            // as resolved or ambiguous.
-            Resolution::None { .. } => Resolution::None {
-                near: near_sessions(token),
-            },
-            other => other,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -798,7 +704,8 @@ pub(super) fn is_job_token(token: &str) -> bool {
 #[cfg(test)]
 mod mail_addr_tests {
     use super::*;
-    use crate::claude_roster::ClaudeAgentRow;
+    use fno_mail::directory::Resolution;
+    use fno_mail::session::SessionId;
 
     fn daemon_row(name: &str, sid: &str) -> ClaudeAgentRow {
         let mut row = ClaudeAgentRow::new("6bf63c59", None);
