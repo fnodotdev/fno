@@ -51,6 +51,13 @@ fn value_str(row: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// A string field read by a runtime key. Every NEW read in this file takes
+/// this shape, so the string-key ratchet (check-value-reads.sh, R1) never
+/// moves on this file's count.
+fn j_str<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
+    v.get(k).and_then(Value::as_str)
+}
+
 /// Python `str()` over a parsed manifest value, for the status compare and
 /// the raw_status echo.
 fn py_str(v: &Value) -> String {
@@ -189,6 +196,33 @@ fn git_cmd(cwd: &Path, args: &[&str]) -> String {
         .unwrap_or_default()
 }
 
+/// The git identity every row carries: branch, project slug from the origin
+/// remote, worktree top, and its canonical repo root.
+fn git_identity(cwd: &Path) -> (String, String, String, Option<String>) {
+    let branch = git_cmd(cwd, &["branch", "--show-current"]);
+    let remote_url = git_cmd(cwd, &["remote", "get-url", "origin"]);
+    let mut project = String::new();
+    if !remote_url.is_empty() {
+        let re = regex::Regex::new(r"/([^/]+?)(?:\.git)?$").expect("static regex");
+        if let Some(c) = re.captures(&remote_url) {
+            project = c[1].to_string();
+        }
+    }
+    let root_path = git_cmd(cwd, &["rev-parse", "--show-toplevel"]);
+    let canonical_root_path: Option<String> = if root_path.is_empty() {
+        None
+    } else {
+        let base: PathBuf = crate::paths::canonical_repo_root(Path::new(&root_path))
+            .unwrap_or_else(|| PathBuf::from(&root_path));
+        let resolved = match base.canonicalize() {
+            Ok(p) => p,
+            Err(_) => base,
+        };
+        Some(resolved.to_string_lossy().to_string())
+    };
+    (branch, project, root_path, canonical_root_path)
+}
+
 /// Read lane axes from the registry row owned by this target session: match a
 /// row on harness_session_id / short_id (with the registry's legacy
 /// per-harness keys synced in) against the manifest's session ids.
@@ -297,6 +331,130 @@ fn pr_number_from_gh(cwd: &Path) -> Option<i64> {
         return None;
     }
     text.parse().ok()
+}
+
+/// The harness binary's own version string, probed once per process and
+/// memoized: every row for the same harness carries the same answer, and a
+/// probe that failed stays failed for this process. A harness with no
+/// probed binary (footnote rides the fno build, unknown names) reads None -
+/// unmeasured, never a guess.
+pub(crate) fn probe_harness_version(harness: &str) -> Option<String> {
+    const PROBABLE: [&str; 6] = ["claude", "codex", "opencode", "pi", "agy", "gemini"];
+    if !PROBABLE.contains(&harness) {
+        return None;
+    }
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, Option<String>>>,
+    > = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(std::sync::Mutex::default);
+    let mut map = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(known) = map.get(harness) {
+        return known.clone();
+    }
+    let version = Command::new(harness)
+        .arg("--version")
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .map(|v| v.lines().next().unwrap_or_default().trim().to_string())
+        .filter(|v| !v.is_empty());
+    map.insert(harness.to_string(), version.clone());
+    version
+}
+
+/// The PR benchmark fields from ONE gh call: minutes from the run's
+/// `created_at` to the PR's `createdAt`, the PR's commit count, and whether
+/// the first push settled green. A one-commit PR never moved its head, so
+/// the current rollup IS the first push's settled state; a multi-commit PR
+/// had at least one later push and reads None there (unmeasured, not a
+/// guess). Every miss reads None.
+fn pr_benchmark_fields(
+    cwd: &Path,
+    pr_number: i64,
+    run_created: Option<&str>,
+) -> (Option<f64>, Option<i64>, Option<bool>) {
+    let mut cmd = Command::new("gh");
+    cmd.args([
+        "pr",
+        "view",
+        &pr_number.to_string(),
+        "--json",
+        "createdAt,commits,statusCheckRollup",
+    ])
+    .current_dir(cwd)
+    .stderr(std::process::Stdio::null());
+    let Some(out) = crate::gh_budget::output(cmd).ok() else {
+        return (None, None, None);
+    };
+    if !out.status.success() {
+        return (None, None, None);
+    }
+    let Ok(v) = serde_json::from_str::<Value>(&String::from_utf8_lossy(&out.stdout)) else {
+        return (None, None, None);
+    };
+    let commit_count = v
+        .get("commits")
+        .and_then(Value::as_array)
+        .map(|a| a.len() as i64);
+    let green_first = match (
+        commit_count,
+        v.get("statusCheckRollup").and_then(Value::as_array),
+    ) {
+        (Some(1), Some(rollup)) if !rollup.is_empty() => Some(rollup.iter().all(|c| {
+            matches!(
+                j_str(c, "conclusion"),
+                Some("SUCCESS") | Some("NEUTRAL") | Some("SKIPPED")
+            )
+        })),
+        _ => None,
+    };
+    let minutes = (|| -> Option<f64> {
+        let start = chrono::DateTime::parse_from_rfc3339(run_created?).ok()?;
+        let created = chrono::DateTime::parse_from_rfc3339(j_str(&v, "createdAt")?).ok()?;
+        let delta = (created - start).num_seconds() as f64 / 60.0;
+        (delta >= 0.0).then(|| crate::session_cost::py_round(delta, 1))
+    })();
+    (minutes, commit_count, green_first)
+}
+
+/// loop-check fire count for one target session: each `loop_check` row is a
+/// wake that found no external progress, the stall signal the benchmark
+/// needs. Both journal locations are read (the space slice beside the
+/// manifest, the legacy checkout journal); a missing journal reads None -
+/// unmeasured, never zero.
+fn count_loop_fires(root_path: &str, session_id: &str) -> Option<i64> {
+    let root = Path::new(root_path);
+    let space = crate::paths::worktree_space_dir(root).join("events.jsonl");
+    let legacy = root.join(".fno").join("events.jsonl");
+    let mut any_journal = false;
+    let mut fires = 0i64;
+    for path in [space, legacy] {
+        if !path.is_file() {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        any_journal = true;
+        for line in text.lines() {
+            let Ok(row) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
+            if j_str(&row, "type") != Some("loop_check") {
+                continue;
+            }
+            let sid = row
+                .get("data")
+                .and_then(|d| j_str(d, "session_id"))
+                .unwrap_or_default();
+            if !session_id.is_empty() && sid == session_id {
+                fires += 1;
+            }
+        }
+    }
+    any_journal.then_some(fires)
 }
 
 /// Derive completed and skipped phases from what the run did (the ported
@@ -443,28 +601,7 @@ pub(crate) fn build_entry(
     cost_json: Option<&Value>,
 ) -> Value {
     // Git metadata
-    let branch = git_cmd(cwd, &["branch", "--show-current"]);
-    let remote_url = git_cmd(cwd, &["remote", "get-url", "origin"]);
-    let mut project = String::new();
-    if !remote_url.is_empty() {
-        let re = regex::Regex::new(r"/([^/]+?)(?:\.git)?$").expect("static regex");
-        if let Some(c) = re.captures(&remote_url) {
-            project = c[1].to_string();
-        }
-    }
-    let worktree_top = git_cmd(cwd, &["rev-parse", "--show-toplevel"]);
-    let root_path = worktree_top;
-    let canonical_root_path: Option<String> = if root_path.is_empty() {
-        None
-    } else {
-        let base: PathBuf = crate::paths::canonical_repo_root(Path::new(&root_path))
-            .unwrap_or_else(|| PathBuf::from(&root_path));
-        let resolved = match base.canonicalize() {
-            Ok(p) => p,
-            Err(_) => base,
-        };
-        Some(resolved.to_string_lossy().to_string())
-    };
+    let (branch, project, root_path, canonical_root_path) = git_identity(cwd);
 
     // PR number: the manifest (legacy/back-compat), then the ship handoff
     // artifact, then gh.
@@ -791,7 +928,57 @@ pub(crate) fn build_entry(
     if let Some(tr) = termination_reason.filter(|t| !t.is_empty()) {
         e.insert("termination_reason".into(), json!(tr));
     }
+    bench_fields(
+        &mut e,
+        cwd,
+        &root_path,
+        pr_number,
+        state
+            .get("created_at")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        scalar_session_id.as_deref().unwrap_or_default(),
+        state_str(state, "harness").as_deref(),
+    );
     Value::Object(e)
+}
+
+/// The per-attempt benchmark-field writer shared by the terminal row and the
+/// started row: the memoized harness version, the PR's first-push shape, and
+/// the session's loop-check fire count. Every miss reads null (unmeasured),
+/// never a guess.
+fn bench_fields(
+    e: &mut Map<String, Value>,
+    cwd: &Path,
+    root_path: &str,
+    pr_number: Option<i64>,
+    run_created: &str,
+    session_id: &str,
+    harness: Option<&str>,
+) {
+    e.insert(
+        "harness_version".into(),
+        probe_harness_version(harness.unwrap_or_default())
+            .map(|s| json!(s))
+            .unwrap_or(Value::Null),
+    );
+    if !root_path.is_empty() {
+        if let Some(stalls) = count_loop_fires(root_path, session_id) {
+            e.insert("stalls".into(), json!(stalls));
+        }
+    }
+    if let Some(n) = pr_number {
+        let (minutes, commit_count, green_first) = pr_benchmark_fields(cwd, n, run_created);
+        if let Some(m) = minutes {
+            e.insert("time_to_first_pr_minutes".into(), json!(m));
+        }
+        if let Some(c) = commit_count {
+            e.insert("pr_commit_count".into(), json!(c));
+        }
+        if let Some(g) = green_first {
+            e.insert("ci_green_first_push".into(), json!(g));
+        }
+    }
 }
 
 /// Load a ledger.json into the canonical `{"entries": [...]}` shape (the
@@ -846,6 +1033,13 @@ fn drop_backstop_row(row: &Value, node: &str) -> bool {
     truthy(row.get("backstop")) && row.get("graph_node_id").and_then(Value::as_str) == Some(node)
 }
 
+/// A started-species row: the init-time journal entry. Species decides the
+/// append contract: a started row never overwrites anything, a terminal row
+/// supersedes it.
+fn is_started_row(row: &Value) -> bool {
+    value_str(row, "status") == Some("started")
+}
+
 /// Append entry to a ledger.json file atomically under the ledger flock (the
 /// ported `append_to_tasks_json`): same-session dedup with delivered-terminal
 /// promotion, and the collapse rule that keeps a node's backstop row from
@@ -876,8 +1070,18 @@ fn append_locked(tasks_path: &Path, entry: &Value) -> Result<(), String> {
     // SAME target session that raced past the caller's pre-check. Promotion
     // applies when the new reason is a delivered terminal and the old is not.
     if let Some(scalar) = scalar_id(entry).map(str::to_string) {
+        let entry_started = is_started_row(entry);
+        let mut stale_started = false;
         for index in 0..entries.len() {
             if scalar_id(&entries[index]) != Some(scalar.as_str()) {
+                continue;
+            }
+            if entry_started {
+                eprintln!("Skipping duplicate started entry for target fno_id: {scalar}");
+                return Ok(());
+            }
+            if is_started_row(&entries[index]) {
+                stale_started = true;
                 continue;
             }
             // Copied out before the &mut promote: the reason strings are
@@ -903,6 +1107,9 @@ fn append_locked(tasks_path: &Path, entry: &Value) -> Result<(), String> {
             }
             eprintln!("Skipping duplicate entry for target fno_id: {scalar}");
             return Ok(());
+        }
+        if stale_started {
+            entries.retain(|e| !(is_started_row(e) && scalar_id(e) == Some(scalar.as_str())));
         }
     }
 
@@ -1076,6 +1283,160 @@ pub(crate) fn register_target_entry(
         serde_json::to_string_pretty(&entry).unwrap_or_default()
     );
     Ok(())
+}
+
+/// The init-time row: status `started`, carrying identity, lane axes, and
+/// the probed harness version. The terminal row supersedes it in
+/// append_locked, so a finished run keeps ONE row; a run that never reaches
+/// a terminal keeps its started row, and that row is the denominator.
+pub(crate) fn build_started_entry(
+    cwd: &Path,
+    state: &Map<String, Value>,
+    session_id: &str,
+) -> Value {
+    let (branch, project, root_path, canonical_root_path) = git_identity(cwd);
+    let scalar_session_id = or_state(state, &["fno_id", "session_id"])
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let harness = state_str(state, "harness");
+    let axes = registry_axes(state);
+    let model = state_str(&axes, "model").or(state_str(state, "model"));
+    let effort = state_str(&axes, "effort").or(state_str(state, "effort"));
+    let sessions = crate::ledger_axes::sessions_or_unresolved(&[
+        session_id.to_string(),
+        scalar_session_id.clone().unwrap_or_default(),
+        state_str(state, "harness_session_id").unwrap_or_default(),
+    ]);
+    let mut e = Map::new();
+    e.insert("type".into(), json!("execution"));
+    e.insert("status".into(), json!("started"));
+    e.insert(
+        "title".into(),
+        or_state(state, &["input"])
+            .cloned()
+            .unwrap_or(json!("Untitled")),
+    );
+    e.insert(
+        "plan_path".into(),
+        or_state(state, &["plan_path", "plan_dir"])
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    e.insert(
+        "branch".into(),
+        if branch.is_empty() {
+            Value::Null
+        } else {
+            json!(branch)
+        },
+    );
+    e.insert(
+        "project".into(),
+        if project.is_empty() {
+            Value::Null
+        } else {
+            json!(project)
+        },
+    );
+    bench_fields(
+        &mut e,
+        cwd,
+        &root_path,
+        None,
+        state_str(state, "created_at")
+            .as_deref()
+            .unwrap_or_default(),
+        scalar_session_id.as_deref().unwrap_or_default(),
+        harness.as_deref(),
+    );
+    e.insert(
+        "root_path".into(),
+        if root_path.is_empty() {
+            Value::Null
+        } else {
+            json!(root_path)
+        },
+    );
+    e.insert(
+        "canonical_root_path".into(),
+        canonical_root_path.map(|s| json!(s)).unwrap_or(Value::Null),
+    );
+    e.insert(
+        "started".into(),
+        crate::ledger_axes::utc_iso(state_str(state, "created_at").as_deref())
+            .map(|s| json!(s))
+            .unwrap_or(Value::Null),
+    );
+    e.insert(
+        "fno_id".into(),
+        scalar_session_id
+            .clone()
+            .map(|s| json!(s))
+            .unwrap_or(Value::Null),
+    );
+    e.insert(
+        "session_id".into(),
+        scalar_session_id.map(|s| json!(s)).unwrap_or(Value::Null),
+    );
+    e.insert(
+        "graph_node_id".into(),
+        state_str(state, "graph_node_id")
+            .map(|s| json!(s))
+            .unwrap_or(Value::Null),
+    );
+    e.insert("sessions".into(), sessions);
+    e.insert(
+        "model".into(),
+        model.map(|s| json!(s)).unwrap_or(Value::Null),
+    );
+    e.insert(
+        "effort".into(),
+        effort.map(|s| json!(s)).unwrap_or(Value::Null),
+    );
+    e.insert("phases_completed".into(), json!([]));
+    e.insert("phases_skipped".into(), json!([]));
+    Value::Object(e)
+}
+
+/// The init-time append: parse the manifest, build the started row, append
+/// it, and carry it out as a `run_recorded` event with source `target-start`
+/// so the event store is the record once every reader folds this kind. A
+/// failure to record is reported on stderr; init never fails for a
+/// measurement miss.
+pub(crate) fn register_target_started(cwd: &Path, manifest: &Path) -> bool {
+    let state = match parse_target_state(manifest) {
+        Ok(s) => s,
+        Err(why) => {
+            eprintln!("target: started row not recorded: {why}");
+            return false;
+        }
+    };
+    let session_id_arg = or_state(&state, &["fno_id", "session_id"])
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let mut entry = build_started_entry(cwd, &state, "");
+    bench_fields(
+        &mut entry,
+        cwd,
+        value_str(&entry, "root_path").unwrap_or_default(),
+        None,
+        state_str(&state, "created_at")
+            .as_deref()
+            .unwrap_or_default(),
+        session_id_arg.as_str(),
+        state_str(&state, "harness").as_deref(),
+    );
+    match append_to_tasks_json(&crate::paths_cli::ledger_json(cwd), &entry) {
+        Ok(()) => {}
+        Err(why) => {
+            eprintln!("target: started row not recorded: {why}");
+            return false;
+        }
+    }
+    emit_run_recorded(cwd, "target-start", &entry);
+    true
 }
 
 #[cfg(test)]
@@ -1397,5 +1758,51 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let url = pr_url_for(dir.path(), Some(358), "git@github.com:o/r.git");
         assert_eq!(url, Some("https://github.com/o/r/pull/358".to_string()));
+    }
+
+    #[test]
+    fn started_row_lands_and_terminal_supersedes_it() {
+        let dir = TempDir::new().unwrap();
+        let ledger = dir.path().join("ledger.json");
+        // The started row lands.
+        let _ = append_to_tasks_json(&ledger, &json!({"fno_id": "t1", "status": "started"}));
+        let doc = read_ledger(&ledger);
+        assert_eq!(doc["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(doc["entries"][0]["status"], "started");
+        // A re-init is idempotent: the second started row skips.
+        let _ = append_to_tasks_json(&ledger, &json!({"fno_id": "t1", "status": "started"}));
+        let doc = read_ledger(&ledger);
+        assert_eq!(doc["entries"].as_array().unwrap().len(), 1);
+        // The terminal row supersedes the started row: one row, terminal wins.
+        let _ = append_to_tasks_json(
+            &ledger,
+            &json!({"fno_id": "t1", "status": "done", "termination_reason": "Budget"}),
+        );
+        let doc = read_ledger(&ledger);
+        assert_eq!(doc["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(doc["entries"][0]["status"], "done");
+    }
+
+    #[test]
+    fn count_loop_fires_counts_session_scoped_fires() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("wt");
+        std::fs::create_dir_all(root.join(".fno")).unwrap();
+        std::fs::write(
+            root.join(".fno").join("events.jsonl"),
+            concat!(
+                "{\"type\":\"loop_check\",\"data\":{\"session_id\":\"s1\"}}\n",
+                "{\"type\":\"loop_check\",\"data\":{\"session_id\":\"s1\"}}\n",
+                "{\"type\":\"loop_check\",\"data\":{\"session_id\":\"s2\"}}\n",
+                "not json\n",
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            count_loop_fires(root.to_str().unwrap(), "s1"),
+            Some(2),
+            "two fires for s1, the s2 fire and any malformed line never count"
+        );
+        assert_eq!(count_loop_fires("/nonexistent-root", "s1"), None);
     }
 }
