@@ -11,7 +11,7 @@ use crate::provenance::{
     claude_shaped_tool_uses, claude_shaped_turns, in_roots, within_window, SessionFile,
     TranscriptSource, Turn,
 };
-use rusqlite::OpenFlags;
+use rusqlite::{OpenFlags, OptionalExtension};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -24,6 +24,23 @@ const SESSION_SQL: &str = "SELECT s.id, s.directory, s.time_updated, \
 const PART_SQL: &str = "SELECT m.id, m.data, p.data, m.time_created FROM part p \
      JOIN message m ON m.id = p.message_id WHERE p.session_id = ?1 \
      ORDER BY m.time_created, m.id, p.id";
+
+/// The 2.x session list: the row carries its own token rollups, so the size
+/// sums the message data lengths.
+const V2_SESSION_SQL: &str = "SELECT s.id, s.directory, s.time_updated, \
+     (SELECT coalesce(sum(length(m.data)), 0) FROM session_message m WHERE m.session_id = s.id) \
+     FROM session_v2 s WHERE s.parent_id IS NULL";
+
+/// The 2.x stream: message rows (`k` 0) then their part rows (`k` 1),
+/// durable-seq ordered; a part's `ordinal` is its slot in the message.
+const V2_READ_SQL: &str =
+    "SELECT 0, m.seq, m.id, m.type, m.data, NULL, NULL, NULL, m.time_created \
+     FROM session_message m WHERE m.session_id = ?1 \
+     UNION ALL \
+     SELECT 1, msg.seq, msg.id, msg.type, msg.data, p.ordinal, p.type, p.data, p.time_created \
+     FROM session_part p JOIN session_message msg ON msg.id = p.message_id \
+     WHERE p.session_id = ?1 \
+     ORDER BY 2, 1, 5";
 
 /// `${XDG_DATA_HOME:-$HOME/.local/share}/opencode`, the directory opencode
 /// keeps its per-channel stores in (`opencode.db`, `opencode-<channel>.db`).
@@ -76,6 +93,37 @@ pub(crate) fn open_read_only(path: &Path) -> Result<rusqlite::Connection, String
     Ok(conn)
 }
 
+/// Which store family a connection holds: `Some(true)` is 2.x
+/// (`session_v2` present), `Some(false)` is 1.x (`session` present), `None`
+/// is neither.
+pub(crate) fn store_family(conn: &rusqlite::Connection) -> Option<bool> {
+    let v2 = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_v2'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    if v2.is_some() {
+        return Some(true);
+    }
+    let v1 = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    if v1.is_some() {
+        return Some(false);
+    }
+    None
+}
+
 /// The opencode transcript store: one or more sqlite databases read-only.
 /// `dbs` is [`opencode_stores`]' result (tests inject fixture stores);
 /// `roots` scopes the fold to the requested projects, `None` reads every
@@ -98,10 +146,21 @@ impl OpencodeSource {
         }
         for db in &self.dbs {
             let conn = open_read_only(db)?;
-            conn.prepare(SESSION_SQL)
-                .map_err(|e| format!("{}: {e}", db.display()))?;
-            conn.prepare(PART_SQL)
-                .map_err(|e| format!("{}: {e}", db.display()))?;
+            match store_family(&conn) {
+                Some(true) => {
+                    conn.prepare(V2_SESSION_SQL)
+                        .map_err(|e| format!("{}: {e}", db.display()))?;
+                    conn.prepare(V2_READ_SQL)
+                        .map_err(|e| format!("{}: {e}", db.display()))?;
+                }
+                Some(false) => {
+                    conn.prepare(SESSION_SQL)
+                        .map_err(|e| format!("{}: {e}", db.display()))?;
+                    conn.prepare(PART_SQL)
+                        .map_err(|e| format!("{}: {e}", db.display()))?;
+                }
+                None => return Err(format!("{}: no session or session_v2 table", db.display())),
+            }
         }
         Ok(())
     }
@@ -122,7 +181,11 @@ impl TranscriptSource for OpencodeSource {
             let Ok(conn) = open_read_only(db) else {
                 continue;
             };
-            let Ok(mut stmt) = conn.prepare(SESSION_SQL) else {
+            let Some(is_v2) = store_family(&conn) else {
+                continue;
+            };
+            let Ok(mut stmt) = conn.prepare(if is_v2 { V2_SESSION_SQL } else { SESSION_SQL })
+            else {
                 continue;
             };
             let Ok(rows) = stmt
@@ -170,6 +233,9 @@ impl TranscriptSource for OpencodeSource {
         let Ok(conn) = open_read_only(Path::new(db)) else {
             return String::new();
         };
+        if store_family(&conn) == Some(true) {
+            return read_v2(&conn, sid);
+        }
         let Ok(mut stmt) = conn.prepare(PART_SQL) else {
             return String::new();
         };
@@ -276,6 +342,97 @@ fn render_message(out: &mut String, m_data: &str, parts: &[(String, i64)]) {
                     "message": {"content": [{"type": "tool_use"}]},
                 }),
             );
+        }
+    }
+}
+
+/// The 2.x read: group the stream rows by message and render each group.
+fn read_v2(conn: &rusqlite::Connection, sid: &str) -> String {
+    let Ok(mut stmt) = conn.prepare(V2_READ_SQL) else {
+        return String::new();
+    };
+    let Ok(rows) = stmt
+        .query_map([sid], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, Option<i64>>(5)?,
+                r.get::<_, Option<String>>(7)?,
+                r.get::<_, i64>(8)?,
+                r.get::<_, Option<i64>>(6)?,
+            ))
+        })
+        .map_err(|e| e.to_string())
+    else {
+        return String::new();
+    };
+    // The ordering keeps a message's rows adjacent: the message row first
+    // (ordinal NULL), then its parts by ordinal.
+    let mut current: Option<(String, String, String, Vec<(String, String, i64)>)> = None;
+    let mut out = String::new();
+    for row in rows.flatten() {
+        let (_k, mid, mtype, mdata, ordinal, pdata, created, _ptype) = row;
+        match &mut current {
+            Some((cur_id, _, _, parts)) if *cur_id == mid => {
+                if let (Some(ordinal), Some(pdata)) = (ordinal, pdata) {
+                    parts.push((ordinal.to_string(), pdata, created));
+                }
+            }
+            _ => {
+                if let Some((_, mtype, mdata, parts)) = current.take() {
+                    render_v2_message(&mut out, &mtype, &mdata, parts);
+                }
+                current = Some((mid, mtype, mdata, vec![]));
+            }
+        }
+    }
+    if let Some((_, mtype, mdata, parts)) = current.take() {
+        render_v2_message(&mut out, &mtype, &mdata, parts);
+    }
+    out
+}
+
+/// One 2.x message group rendered as claude-shaped JSONL: a user message's
+/// text comes from the message row itself, a synthetic message renders the
+/// isMeta row, and an assistant message's tool parts render tool_use rows
+/// (the same shapes the 1.x renderer emits).
+fn render_v2_message(
+    out: &mut String,
+    mtype: &str,
+    mdata: &str,
+    parts: Vec<(String, String, i64)>,
+) {
+    let msg: Value = serde_json::from_str(mdata).unwrap_or(Value::Null);
+    let ts = msg
+        .get("time")
+        .and_then(|t| t.get("created"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    if mtype == "user" {
+        if let Some(text) = msg.get("text").and_then(|v| v.as_str()) {
+            push_user_row(out, ts, text);
+        }
+    }
+    if mtype == "synthetic" {
+        if let Some(text) = msg.get("text").and_then(|v| v.as_str()) {
+            let row = serde_json::json!({
+                "type": "user", "isMeta": true, "timestamp": rfc3339_ms(ts),
+                "message": {"role": "user", "content": text},
+            });
+            push_row(out, &row);
+        }
+    }
+    if mtype == "assistant" {
+        for (_ordinal, ptype, _pdata) in &parts {
+            if ptype == "tool" {
+                let row = serde_json::json!({
+                    "type": "assistant",
+                    "message": {"content": [{"type": "tool_use"}]},
+                });
+                push_row(out, &row);
+            }
         }
     }
 }
@@ -511,6 +668,81 @@ mod tests {
         {
             let conn = Connection::open(&db).unwrap();
             conn.execute("DELETE FROM session WHERE id = 'ses_fresh'", [])
+                .unwrap();
+        }
+        assert!(src.sessions(1).is_empty());
+        let _ = std::fs::remove_dir_all(db.parent().unwrap());
+    }
+
+    /// The 2.x positive control: same window and read contract as the 1.x
+    /// real-schema control, against a store whose reader-touched columns
+    /// mirror upstream's `session_v2` family DDL.
+    fn v2_store(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("fno-opencode-v2-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("opencode.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT NOT NULL, time_updated INTEGER NOT NULL);
+             CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL, seq INTEGER NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
+             CREATE TABLE session_part (message_id TEXT NOT NULL, session_id TEXT NOT NULL, ordinal INTEGER NOT NULL, type TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (message_id, ordinal));",
+        )
+        .unwrap();
+        for (id, updated) in [
+            ("ses_fresh", NOW_MS),
+            ("ses_stale", NOW_MS - 3 * 24 * 3600 * 1000),
+        ] {
+            conn.execute(
+                "INSERT INTO session_v2 (id, parent_id, directory, time_updated) VALUES (?1, NULL, '/fixture/v2', ?2)",
+                rusqlite::params![id, updated],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES \
+             ('vm1', 'ses_fresh', 'user', 1, ?1, ?1, ?2)",
+            rusqlite::params![NOW_MS, r#"{"text":"v2 real-schema control"}"#],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES \
+             ('vm2', 'ses_fresh', 'assistant', 2, ?1, ?1, ?2)",
+            rusqlite::params![NOW_MS, r#"{"time":{"created":2}}"#],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO session_part (message_id, session_id, ordinal, type, data) VALUES \
+             ('vm2', 'ses_fresh', 0, 'tool', ?1)",
+            rusqlite::params![
+                r#"{"type":"tool","name":"bash","state":{"status":"completed","input":{}}}"#
+            ],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn v2_real_schema_window_and_read() {
+        let db = v2_store("v2win");
+        let src = OpencodeSource {
+            dbs: vec![db.clone()],
+            roots: None,
+        };
+        let ids: Vec<String> = src
+            .sessions(1)
+            .iter()
+            .map(|s| s.session_id.clone())
+            .collect();
+        assert_eq!(ids, vec!["ses_fresh".to_string()]);
+        let raw = src.read(&src.sessions(1)[0]);
+        assert!(
+            raw.contains("v2 real-schema control"),
+            "user text renders: {raw}"
+        );
+        assert_eq!(src.tool_uses(&raw), 1, "tool part renders");
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute("DELETE FROM session_v2 WHERE id = 'ses_fresh'", [])
                 .unwrap();
         }
         assert!(src.sessions(1).is_empty());

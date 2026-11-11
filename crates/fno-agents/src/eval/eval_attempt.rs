@@ -520,7 +520,14 @@ fn observe_opencode(dbs: &[PathBuf], workdir: &str, started: f64, now: f64) -> O
         let Some(conn) = crate::graph_store::open_read_only_wal_safe(db) else {
             continue;
         };
-        let Ok(mut stmt) = conn.prepare(SESSION_SQL) else {
+        let sql = match crate::opencode_transcript::store_family(&conn) {
+            Some(true) => {
+                "SELECT id, time_updated FROM session_v2 \
+                 WHERE directory = ?1 AND parent_id IS NULL"
+            }
+            _ => SESSION_SQL,
+        };
+        let Ok(mut stmt) = conn.prepare(sql) else {
             continue;
         };
         let Ok(rows) = stmt.query_map([workdir], |r| {
@@ -545,6 +552,15 @@ fn observe_opencode(dbs: &[PathBuf], workdir: &str, started: f64, now: f64) -> O
         let Some(conn) = crate::graph_store::open_read_only_wal_safe(db) else {
             continue;
         };
+        if crate::opencode_transcript::store_family(&conn) == Some(true) {
+            if let Some(observed) = observe_opencode_v2(&conn, &session_id) {
+                if model.is_none() {
+                    model = observed.0;
+                }
+                usage = Some(add_usage(usage, observed.1));
+            }
+            continue;
+        }
         let Ok(mut stmt) = conn.prepare(MESSAGE_SQL) else {
             continue;
         };
@@ -594,6 +610,49 @@ fn observe_opencode(dbs: &[PathBuf], workdir: &str, started: f64, now: f64) -> O
         usage: usage.map(usage_json),
         source: "opencode-store",
     })
+}
+
+/// The 2.x observe: the session row carries its own token rollups and the
+/// selected model, so one row answers what the 1.x walk recomputed from
+/// every assistant message.
+fn observe_opencode_v2(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+) -> Option<(Option<String>, (u64, u64, u64, u64))> {
+    const SQL: &str = "SELECT model, tokens_input, tokens_output, tokens_reasoning, \
+         tokens_cache_read, tokens_cache_write FROM session_v2 WHERE id = ?1";
+    let (model_raw, ti, to, tr, tcr, tcw) = conn
+        .query_row(SQL, [session_id], |r| {
+            Ok((
+                r.get::<_, Option<String>>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, i64>(5)?,
+            ))
+        })
+        .ok()?;
+    // Reasoning is billed as output, and opencode counts it apart, the same
+    // fold the 1.x walk applies.
+    let output = (to + tr).max(0) as u64;
+    let model = model_raw.and_then(|raw| {
+        serde_json::from_str::<Value>(&raw).ok().and_then(|m| {
+            m.get("providerID")
+                .and_then(Value::as_str)
+                .zip(m.get("id").and_then(Value::as_str))
+                .map(|(p, i)| format!("{p}/{i}"))
+        })
+    });
+    Some((
+        model,
+        (
+            ti.max(0) as u64,
+            output,
+            tcr.max(0) as u64,
+            tcw.max(0) as u64,
+        ),
+    ))
 }
 
 /// The newest session under `root/<project>/` whose launch cwd is `workdir`

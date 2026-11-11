@@ -240,14 +240,15 @@ pub enum Liveness {
 }
 
 /// The harnesses whose transcripts `fno agents session peek` can tail: the
-/// file-backed reader arms in `record_parser`
+/// reader arms in `record_parser`
 /// (crates/fno-agents/src/runtime/session_truth.rs), which owns `--follow`'s
-/// tailable-file question. A static mirror of that seam, because this crate
+/// tailable-source question. A static mirror of that seam, because this crate
 /// does not link fno-agents; `thread_reach_mirrors_the_peek_reader_seam`
-/// pins it against the source so the two cannot drift. opencode has readable
-/// history but writes a directory tree with no tailable file, so it has no
-/// arm there and this list omits it.
-const PEEK_READER_HARNESSES: [&str; 2] = ["claude", "codex"];
+/// pins it against the source so the two cannot drift. opencode follows its
+/// 2.x serve's `/api/event` stream (its store has no tailable file, so the
+/// arm is the SSE one and a pre-2.x serve still answers tail-only at
+/// runtime).
+const PEEK_READER_HARNESSES: [&str; 3] = ["claude", "codex", "opencode"];
 
 /// The argv that opens pi's OWN interface on `session_id`.
 ///
@@ -4178,10 +4179,9 @@ config_dir = "~/.claude-alt"
         // its transcript still reads, so Follow, never Locate.
         assert_eq!(thread_reach(Some("claude"), None), Reach::Follow);
         assert_eq!(thread_reach(Some("codex"), None), Reach::Follow);
-        // opencode's history reads fine (recent_records supports it), but it
-        // writes a directory tree with no tailable file, so --follow has
-        // nothing to run - Locate, not Follow (PEEK_READER_HARNESSES doc).
-        assert_eq!(thread_reach(Some("opencode"), None), Reach::Locate);
+        // opencode follows its 2.x serve's /api/event stream (PEEK_READER_
+        // HARNESSES doc); a pre-2.x serve still answers tail-only at runtime.
+        assert_eq!(thread_reach(Some("opencode"), None), Reach::Follow);
         assert_eq!(thread_reach(Some("gemini"), None), Reach::Locate);
         assert_eq!(thread_reach(Some("agy"), None), Reach::Locate);
         // A harness the contract has never heard of, and a row with no
