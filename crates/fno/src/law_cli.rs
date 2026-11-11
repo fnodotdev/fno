@@ -9,7 +9,7 @@
 //! nested under `inbox`.
 
 use std::ffi::OsString;
-use std::io::{Read, Write};
+use std::io::{IsTerminal, Read, Write};
 use std::process::{Command, Stdio};
 
 /// The commands the native surface serves. The Python `fno inbox law` group
@@ -91,7 +91,8 @@ pub fn run(args: &[OsString]) -> i32 {
             // A piped stdin rides the request ONLY for `--decision-file -`:
             // every other call never touches stdin, so a daemon whose stdin
             // is an open pipe cannot block the command.
-            let stdin_text = if stdin_requested(&argv) {
+            let payload = stdin_requested(&argv);
+            let stdin_text = if payload {
                 let mut buf = String::new();
                 let _ = std::io::stdin().read_to_string(&mut buf);
                 buf
@@ -104,7 +105,8 @@ pub fn run(args: &[OsString]) -> i32 {
                 "stdin": stdin_text,
             })
             .to_string();
-            law_exec(&request, Attended::No)
+            let attended = record_attended(payload, std::io::stdin().is_terminal());
+            law_exec(&request, attended)
         }
         "stage" | "match" => {
             // The caller shapes the request (the hook wraps its payload as a
@@ -199,6 +201,21 @@ fn stdin_requested(argv: &[String]) -> bool {
         .iter()
         .zip(argv.iter().skip(1))
         .any(|(flag, value)| flag == "--decision-file" && value == "-")
+}
+
+/// Whether the record door rides attended. The operator proof is the
+/// caller's real terminal on the worker's fd 0, so a `set` typed at a
+/// terminal inherits stdin with the request on argv, the same shape
+/// retract uses. A `--decision-file -` payload must ride the piped
+/// request, and a caller without a terminal (a daemon or an agent lane)
+/// keeps the piped shape and resolves its identity from its own process
+/// truth; either way the door's tty proof stays unforgeable.
+fn record_attended(payload_requested: bool, stdin_is_terminal: bool) -> Attended {
+    if payload_requested || !stdin_is_terminal {
+        Attended::No
+    } else {
+        Attended::Yes
+    }
 }
 
 /// Whether the child inherits this process's stdin. `Yes` is the attended
@@ -310,6 +327,17 @@ mod tests {
             "--decision-file=plan.md".to_string()
         ]));
         assert!(!stdin_requested(&[]));
+    }
+
+    #[test]
+    fn set_rides_attended_only_at_a_terminal_without_a_stdin_payload() {
+        // The user at a terminal: the case the tty proof exists for.
+        assert!(matches!(record_attended(false, true), Attended::Yes));
+        // A `--decision-file -` payload rides the piped request.
+        assert!(matches!(record_attended(true, true), Attended::No));
+        // A daemon or an agent lane has no terminal; the piped shape stays.
+        assert!(matches!(record_attended(false, false), Attended::No));
+        assert!(matches!(record_attended(true, false), Attended::No));
     }
 
     #[test]
