@@ -60,6 +60,7 @@ use sweep_scope::{begin_sweep_apply, build_sweep_modal, run_sweep_command, Sweep
 // modules: client.rs is shrink-only under the file-budget gate.
 pub(crate) mod attach_handshake;
 mod health;
+mod keys_reload;
 mod launch;
 mod panic_log;
 mod placement_pickers;
@@ -677,6 +678,7 @@ pub(crate) struct View {
     layout: LayoutView,
     frames: HashMap<u64, Frame>,
     health: health::Health,
+    keys_watch: keys_reload::KeysWatch,
     report: Option<report::Report>,
     /// Manual sideline toggle; narrow terminals override it (auto-hide).
     /// Orthogonal to [`View::density`]: this is visibility, that is how much
@@ -1829,6 +1831,7 @@ impl View {
         let sideline_width = stored_width.unwrap_or_else(|| canonical_width(density));
         View {
             health: health::Health::new(Instant::now()),
+            keys_watch: keys_reload::KeysWatch::new(Instant::now()),
             report: None,
             term,
             session,
@@ -3653,20 +3656,6 @@ impl View {
             )),
             DisplayRow::NewSquad => Some(ChromeHit::OpenCreate),
         }
-    }
-
-    /// The navigator rows matching the current text + state filter,
-    /// recomputed per keypress (no cache): case-insensitive substring on the
-    /// match key (label + identity) AND the state chip when one is set.
-    /// Text and state compose (both must match); letters only ever edit the
-    /// query (Locked 5).
-    fn nav_filtered(&self, nav: &NavView) -> Vec<NavRow> {
-        let q = nav.query.to_lowercase();
-        self.nav_rows()
-            .into_iter()
-            .filter(|r| nav.state_filter.is_none_or(|s| r.state == s))
-            .filter(|r| q.is_empty() || r.match_key.contains(&q))
-            .collect()
     }
 
     /// Move the navigator cursor by `delta`, clamped to the filtered row count
@@ -9422,6 +9411,8 @@ use agent_group::agent_hit;
 mod hold;
 #[path = "client/machine_tree.rs"]
 mod machine_tree;
+#[path = "client/nav_rank.rs"]
+mod nav_rank;
 #[path = "client/nav_rows.rs"]
 mod nav_rows;
 #[path = "client/needs_queue.rs"]

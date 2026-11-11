@@ -578,12 +578,14 @@ pub(super) fn deadline(view: &View) -> Option<Instant> {
         .deadline()
         .into_iter()
         .chain(view.report.as_ref().and_then(Report::deadline))
+        .chain([view.keys_watch.next])
         .min()
 }
 
 pub(super) fn tick(view: &mut View, compositor: &mut Compositor) -> Result<(), String> {
     view.health.record();
-    if poll(view) {
+    let keys = super::keys_reload::tick(view, Instant::now());
+    if poll(view) | keys {
         compositor
             .draw(&view.compose())
             .map_err(|e| format!("draw: {e}"))?;

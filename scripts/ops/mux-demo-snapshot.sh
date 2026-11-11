@@ -268,11 +268,12 @@ mkdir -p "$ROOT/claimroot/.fno/claims"
 # HOME too, for every process: the server reads harness rosters under it,
 # and a real home would list real sessions in the sideline.
 export HOME="$ROOT"
-# The keys-tags view shows a preset row and a user row, so it needs a file.
-# Only that view gets one: a preset would move key hints in every other shot.
+# The keys-tags view shows a preset row, a user row and a two-stroke chord,
+# so it needs a file. Only that view gets one: a preset would move key hints
+# in every other shot. grab-work leaves `g` so the chord can start on it.
 case " $* " in
   *" --view keys-tags "*)
-    printf '{\n  "preset": "zellij",\n  "split-up": "}"\n}\n' >"$ROOT/.fno/keybindings.json"
+    printf '{\n  "preset": "zellij",\n  "split-up": "}",\n  "split-left": "g s",\n  "grab-work": "^"\n}\n' >"$ROOT/.fno/keybindings.json"
     ;;
 esac
 unset FNO_SERVER FNO_SESSION FNO_PANE FNO_OWNER_BIRTH
