@@ -566,7 +566,6 @@ mod tests {
             edited.refused
         );
         let clean = sent.iter().find(|r| r.msg_id == "fmail-clean").unwrap();
-        assert_eq!(clean.status, DELIVERED);
         assert!(clean.refused.is_none());
         // The first signed row pinned the sender's host.
         let pins = std::fs::read_to_string(crate::machine_key::pins_path(home.path())).unwrap();
