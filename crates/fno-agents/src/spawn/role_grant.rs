@@ -936,6 +936,21 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let agents = tmp.path().join("agents");
         std::fs::create_dir_all(&agents).unwrap();
+        // The scope resolver reads work.workspaces from the config at the
+        // process cwd; the test pins its own cwd (nextest isolates per-test
+        // processes, and the env lock serializes against other pins) with a
+        // workspace that names the scope, so promote resolves it.
+        std::fs::create_dir_all(tmp.path().join(".fno")).unwrap();
+        std::fs::write(
+            tmp.path().join(".fno/config.toml"),
+            format!(
+                "[work.workspaces.test]\nprojects = [{{ name = \"x-own\", path = \"{}\" }}]\n",
+                tmp.path().display()
+            ),
+        )
+        .unwrap();
+        let prior_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
         crate::registry_store::seed_raw(
             agents.join("registry.json"),
             json!({"schema_version": 4, "agents": [
@@ -984,6 +999,7 @@ mod tests {
             "{receipt}"
         );
         let rows = crate::state::load_registry(&home.registry_json()).unwrap();
+        std::env::set_current_dir(prior_cwd).unwrap();
         let caller = rows.entries.iter().find(|r| r.name == "valentina").unwrap();
         assert_eq!(caller.role_level, None, "the caller is vacated");
         assert_eq!(caller.role_scope.as_deref(), None);
