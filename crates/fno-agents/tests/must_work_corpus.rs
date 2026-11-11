@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use serde_json::{json, Value};
+use serde_json::json;
 
 const TABLE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -50,25 +50,40 @@ fn refusal(command: &str, preset: &str) -> Option<String> {
             String::from_utf8_lossy(&out.stderr)
         ));
     }
-    let Ok(v) = serde_json::from_str::<Value>(text.trim()) else {
+    let Ok(v) = serde_json::from_str::<HookOut>(text.trim()) else {
         return None;
     };
-    let decision = v["hookSpecificOutput"]["permissionDecision"].as_str();
-    if v["decision"] == "block" || matches!(decision, Some("deny" | "ask")) {
+    let decision = v.hook_specific_output.permission_decision.as_str();
+    if v.decision == "block" || matches!(decision, "deny" | "ask") {
         return Some(text.into_owned());
     }
     None
 }
 
+#[derive(serde::Deserialize, Default)]
+struct HookOut {
+    #[serde(default)]
+    decision: String,
+    #[serde(default, rename = "hookSpecificOutput")]
+    hook_specific_output: HookSpecific,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct HookSpecific {
+    #[serde(default, rename = "permissionDecision")]
+    permission_decision: String,
+}
+
+#[derive(serde::Deserialize)]
+struct Table {
+    corpus: Vec<String>,
+}
+
 #[test]
 fn every_must_work_command_passes_the_bash_guards_under_both_presets() {
-    let table: toml::Value = toml::from_str(TABLE).expect("must_enable.toml parses");
-    let corpus: Vec<&str> = table["corpus"]
-        .as_array()
-        .expect("corpus array")
-        .iter()
-        .filter_map(toml::Value::as_str)
-        .collect();
+    let corpus = toml::from_str::<Table>(TABLE)
+        .expect("must_enable.toml parses")
+        .corpus;
     assert!(corpus.len() > 10, "the corpus shrank to {}", corpus.len());
     let mut refused = Vec::new();
     for preset in ["standard", "strict"] {

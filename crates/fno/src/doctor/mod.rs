@@ -685,7 +685,10 @@ fn run_home(args: &[String]) -> i32 {
             "auto_mode_rules".into(),
             report::auto_mode_rules(&auto_mode_settings),
         );
-        report.insert("must_enable_rules".into(), must_enable.clone());
+        report.insert(
+            "must_enable_rules".into(),
+            serde_json::to_value(&must_enable).unwrap_or(Value::Null),
+        );
     }
     let blockers = Blockers::of(&rep.value);
     let source_blocked = rep

@@ -212,9 +212,7 @@ fn expand(prefix: &[Word]) -> Vec<Vec<String>> {
 /// True when one word sequence is a prefix of the other, so a rule for
 /// either one covers a command of the shorter one's family.
 fn overlaps(a: &[String], b: &str) -> bool {
-    let b: Vec<&str> = b.split(' ').collect();
-    let n = a.len().min(b.len());
-    a[..n].iter().zip(&b[..n]).all(|(x, y)| x == y)
+    a.iter().zip(b.split(' ')).all(|(x, y)| x == y)
 }
 
 /// The plain-word segments of a compound command, split where all three
@@ -568,17 +566,20 @@ fn opencode_allowed(d: Map<String, Value>) -> Result<Vec<String>, MustEnableErro
 
 /// `{harness, status, path, missing}` with status one of present, missing,
 /// drift, untranslatable, absent or unknown. A read, never a repair.
-pub(crate) fn status(h: Harness, list: &List, path: Option<&Path>) -> Value {
-    let name = h.name();
+pub(crate) fn status(h: Harness, list: &List, path: Option<&Path>) -> StatusRow {
+    let mut row = StatusRow {
+        harness: h.name(),
+        ..StatusRow::default()
+    };
     let Some(path) = path else {
-        let status = if matches!(h, Harness::Pi | Harness::Agy) {
+        row.status = if matches!(h, Harness::Pi | Harness::Agy) {
             "untranslatable"
         } else {
             "absent"
         };
-        return json!({"harness": name, "status": status});
+        return row;
     };
-    let shown = path.display().to_string();
+    row.path = path.display().to_string();
     let present: Result<(Vec<String>, Vec<String>), MustEnableError> = match h {
         Harness::Claude => crate::cli_hooks::load_settings(path)
             .map_err(MustEnableError::Unreadable)
@@ -591,9 +592,10 @@ pub(crate) fn status(h: Harness, list: &List, path: Option<&Path>) -> Value {
             }),
         Harness::Codex => match std::fs::read_to_string(path) {
             Ok(have) if have == list.codex() => Ok((vec!["fno.rules".into()], vec![])),
-            Ok(_) => {
-                return json!({"harness": name, "status": "drift", "path": shown, "missing": []})
-            }
+            Ok(_) => Ok((
+                vec!["fno.rules".into()],
+                vec!["the shipped fno.rules".into()],
+            )),
             Err(_) => Ok((vec![], vec!["fno.rules".into()])),
         },
         Harness::Opencode => read_opencode(path)
@@ -603,48 +605,65 @@ pub(crate) fn status(h: Harness, list: &List, path: Option<&Path>) -> Value {
     };
     match present {
         Err(detail) => {
-            json!({"harness": name, "status": "unknown", "path": shown, "detail": detail.to_string()})
+            row.status = "unknown";
+            row.detail = detail.to_string();
         }
         Ok((have, missing)) => {
-            let status = match (have.is_empty(), missing.is_empty()) {
+            row.status = match (have.is_empty(), missing.is_empty()) {
                 (_, true) => "present",
                 (true, false) => "missing",
                 (false, false) => "drift",
             };
-            json!({"harness": name, "status": status, "path": shown, "missing": missing})
+            row.missing = missing;
         }
     }
+    row
+}
+
+/// One harness's must-enable state, as the doctor report carries it.
+#[derive(serde::Serialize, Default, Debug)]
+pub(crate) struct StatusRow {
+    harness: &'static str,
+    pub(crate) status: &'static str,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    path: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    missing: Vec<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    detail: String,
+    /// Set when a Claude PreToolUse hook rewrites Bash through rtk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rewriter: Option<&'static str>,
 }
 
 /// The doctor's `must_enable_rules` key: one status row per harness.
-pub(crate) fn doctor_report() -> Value {
+pub(crate) fn doctor_report() -> Vec<StatusRow> {
     let list = shipped();
-    let rows = Harness::ALL.iter().map(|&h| {
-        let path = target(h);
-        let mut row = status(h, &list, path.as_deref());
-        if h == Harness::Claude && path.as_deref().is_some_and(claude_rewrites_through_rtk) {
-            row["rewriter"] = json!("rtk");
-        }
-        row
-    });
-    Value::Array(rows.collect())
+    Harness::ALL
+        .iter()
+        .map(|&h| {
+            let path = target(h);
+            let mut row = status(h, &list, path.as_deref());
+            if h == Harness::Claude && path.as_deref().is_some_and(claude_rewrites_through_rtk) {
+                row.rewriter = Some("rtk");
+            }
+            row
+        })
+        .collect()
 }
 
 /// One human line per harness that is missing rules, edited or unreadable.
-pub(crate) fn doctor_lines(report: &Value) -> Vec<String> {
+pub(crate) fn doctor_lines(rows: &[StatusRow]) -> Vec<String> {
     let mut out = Vec::new();
-    for row in report.as_array().into_iter().flatten() {
-        let (h, path) = (
-            row["harness"].as_str().unwrap_or("?"),
-            row["path"].as_str().unwrap_or(""),
-        );
-        match row["status"].as_str() {
-            Some("missing") => out.push(format!("fno doctor: {h} has none of fno's must-enable rules at {path}. Add them: `fno config setup run --only permission-rules`.")),
-            Some("drift") => out.push(format!("fno doctor: {h} must-enable rules at {path} differ from the shipped list; your edit stays and doctor never reverts it.")),
-            Some("unknown") => out.push(format!("fno doctor: {h} rules at {path} could not be read: {}", row["detail"].as_str().unwrap_or(""))),
+    for row in rows {
+        let (h, path) = (row.harness, &row.path);
+        match row.status {
+            "missing" => out.push(format!("fno doctor: {h} has none of fno's must-enable rules at {path}. Add them: `fno config setup run --only permission-rules`.")),
+            "drift" => out.push(format!("fno doctor: {h} must-enable rules at {path} differ from the shipped list; your edit stays and doctor never reverts it.")),
+            "unknown" => out.push(format!("fno doctor: {h} rules at {path} could not be read: {}", row.detail)),
             _ => {}
         }
-        if row["rewriter"] == "rtk" {
+        if row.rewriter.is_some() {
             out.push("fno doctor: a Claude PreToolUse hook rewrites Bash through rtk, and Claude matches permissions.allow against the rewritten command, so read rules such as Bash(grep *) do not match `rtk grep`.".into());
         }
     }
@@ -699,9 +718,16 @@ mod tests {
         fn go(p: &[u8], t: &[u8]) -> bool {
             match p.first() {
                 None => t.is_empty(),
-                Some(b'*') => (0..=t.len()).any(|i| go(&p[1..], &t[i..])),
-                Some(b'?') => !t.is_empty() && go(&p[1..], &t[1..]),
-                Some(c) => t.first() == Some(c) && go(&p[1..], &t[1..]),
+                Some(b'*') => (0..=t.len()).any(|i| {
+                    t.get(i..)
+                        .is_some_and(|rest| go(p.get(1..).unwrap_or_default(), rest))
+                }),
+                Some(b'?') => t
+                    .split_first()
+                    .is_some_and(|(_, rest)| go(p.get(1..).unwrap_or_default(), rest)),
+                Some(c) => t
+                    .split_first()
+                    .is_some_and(|(h, rest)| h == c && go(p.get(1..).unwrap_or_default(), rest)),
             }
         }
         go(pat.as_bytes(), text.as_bytes())
@@ -738,7 +764,7 @@ mod tests {
             }
         }
         for h in [Harness::Pi, Harness::Agy] {
-            assert_eq!(status(h, &list, None)["status"], "untranslatable");
+            assert_eq!(status(h, &list, None).status, "untranslatable");
         }
     }
 
@@ -789,11 +815,17 @@ mod tests {
             .map(|p| std::fs::read(p).unwrap())
             .collect();
         assert_eq!(bytes, again, "a second run changed bytes");
-        let c: Value = serde_json::from_slice(&again[0]).unwrap();
-        assert_eq!(c["permissions"]["allow"][0], "Bash(ls *)");
-        assert_eq!(c["autoMode"], json!({"allow": ["x"]}));
-        let o: Value = serde_json::from_slice(&again[2]).unwrap();
-        let rows = o["permissions"].as_array().unwrap();
+        let [c, _, o] = again.as_slice() else {
+            panic!("three files")
+        };
+        let c: Value = serde_json::from_slice(c).unwrap();
+        assert_eq!(
+            c.pointer("/permissions/allow/0"),
+            Some(&json!("Bash(ls *)"))
+        );
+        assert_eq!(c.pointer("/autoMode"), Some(&json!({"allow": ["x"]})));
+        let o: Value = serde_json::from_slice(o).unwrap();
+        let rows = o.pointer("/permissions").and_then(Value::as_array).unwrap();
         assert_eq!(
             rows.last(),
             Some(&user),
@@ -805,7 +837,7 @@ mod tests {
             (Harness::Opencode, &oc),
         ] {
             assert_eq!(
-                status(h, &list, Some(p.as_path()))["status"],
+                status(h, &list, Some(p.as_path())).status,
                 "present",
                 "{h:?}"
             );
@@ -813,7 +845,10 @@ mod tests {
         let v1 = dir.path().join("v1.json");
         assert_eq!(install_opencode(&list, &v1, none), Outcome::Wrote);
         let v: Value = serde_json::from_slice(&std::fs::read(&v1).unwrap()).unwrap();
-        assert_eq!(v["permission"]["bash"]["fno backlog *"], "allow");
+        assert_eq!(
+            v.pointer("/permission/bash/fno backlog *"),
+            Some(&json!("allow"))
+        );
     }
 
     #[test]
@@ -851,7 +886,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&oc).unwrap(), "{ // mine\n}");
         assert_eq!(std::fs::read_to_string(&codex).unwrap(), "# mine\n");
         assert_eq!(
-            status(Harness::Codex, &list, Some(codex.as_path()))["status"],
+            status(Harness::Codex, &list, Some(codex.as_path())).status,
             "drift"
         );
         let mut rules = list.claude();
@@ -863,8 +898,8 @@ mod tests {
         .unwrap();
         let before = std::fs::read(&claude).unwrap();
         let s = status(Harness::Claude, &list, Some(claude.as_path()));
-        assert_eq!(s["status"], "drift");
-        assert_eq!(s["missing"], json!([removed]));
+        assert_eq!(s.status, "drift");
+        assert_eq!(s.missing, vec![removed]);
         assert_eq!(std::fs::read(&claude).unwrap(), before);
     }
 }
