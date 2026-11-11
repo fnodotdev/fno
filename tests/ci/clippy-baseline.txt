@@ -9062,8 +9062,12 @@ crates/fno-agents/tests/keeper_survival.rs	clippy::indexing_slicing	reply["sessi
 crates/fno-agents/tests/keeper_survival.rs	clippy::indexing_slicing	reply["session_id"].is_null(),
 crates/fno-agents/tests/keeper_survival.rs	clippy::indexing_slicing	reply["v"],
 crates/fno-agents/tests/lane_fill_rss_guard.rs	clippy::disallowed_methods	.output()
+crates/fno-agents/tests/lead_drain_unreadable_cause.rs	clippy::indexing_slicing	assert_eq!(payload["decision"], "allow", "{output}");
 crates/fno-agents/tests/lead_drain_unreadable_cause.rs	clippy::indexing_slicing	assert_eq!(payload["decision"], "block", "{output}");
+crates/fno-agents/tests/lead_drain_unreadable_cause.rs	clippy::indexing_slicing	assert_eq!(payload["termination_reason"], "NoWork", "{output}");
+crates/fno-agents/tests/lead_drain_unreadable_cause.rs	clippy::indexing_slicing	if row["type"] == "lead_loop_check" {
 crates/fno-agents/tests/lead_drain_unreadable_cause.rs	clippy::indexing_slicing	let reason = payload["reason"].as_str().unwrap();
+crates/fno-agents/tests/lead_drain_unreadable_cause.rs	clippy::indexing_slicing	receipt["data"]["undelivered"],
 crates/fno-agents/tests/lead_lifecycle_parity.rs	clippy::disallowed_methods	.output()
 crates/fno-agents/tests/lead_lifecycle_parity.rs	clippy::indexing_slicing	assert_eq!(set["data"]["path"], sentinel.display().to_string());
 crates/fno-agents/tests/lead_lifecycle_parity.rs	clippy::indexing_slicing	assert_eq!(set["type"], "cancel_signal_set");
