@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::paths::AgentsHome;
+use crate::spawn_gate::LiveRead;
 
 pub const BURN_WATCH_INTERVAL_S: u64 = 900;
 pub const DEFAULT_IDLE_S: i64 = 7200;
@@ -563,7 +564,8 @@ fn red_at_pr_head(pr: u64, cwd: &str, runner: Runner, now_ms: i64) -> Option<Vec
     if code != 0 {
         return None;
     }
-    let mut parts = first_line(&out)?.split_whitespace();
+    let line = first_line(&out)?;
+    let mut parts = line.split_whitespace();
     let sha = parts.next()?.to_string();
     if sha.chars().count() < 7 {
         return None;
@@ -1297,7 +1299,8 @@ fn run_pass(
     for (sid, scoped) in &scope {
         let node = scoped.node.as_str();
         let Some(entry) = live.get(sid) else { continue };
-        let Some(cwd) = resolve_worker_cwd(&cwds, sid, node, &entry.cwd) else {
+        let resolved = resolve_worker_cwd(&cwds, sid, node, &entry.cwd);
+        let Some(cwd) = resolved.as_deref() else {
             continue;
         };
         // A node that left the open set is the reaper's question, not ours.
