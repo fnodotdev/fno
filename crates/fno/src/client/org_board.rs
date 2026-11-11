@@ -598,6 +598,20 @@ pub(crate) fn open(view: &mut View) {
     view.region_owner = super::region_focus::RegionOwner::Board;
     super::backlog_board::set_sideline_view(view, SidelineView::Org);
 }
+
+/// The boot-time first-run show: arm the board for frame one with the
+/// sideline on Org, but never take the keyboard. The interactive
+/// [`open`] keeps its input-owner semantics for explicit opens; a user
+/// booted into the command center still types into their pane. The caller
+/// read the flag, so no notice and no gate here, and the seen marker saves
+/// once so the show happens once.
+pub(crate) fn open_first_run(view: &mut View) {
+    view.org_generation = view.org_generation.wrapping_add(1);
+    view.org_board = Some(OrgBoard::new(view.org_generation));
+    view.backlog_board = None;
+    super::backlog_board::set_sideline_view(view, SidelineView::Org);
+    crate::view_store::save_experimental(crate::view_store::EXPERIMENTAL_ORG_BOARD_SEEN, true);
+}
 pub(crate) fn maybe_kick(view: &mut View, tx: &OrgTx) {
     super::machine_tree::maybe_kick(view, tx);
     let Some(b) = view.org_board.as_mut() else {

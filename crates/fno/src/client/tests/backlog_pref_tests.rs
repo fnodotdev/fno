@@ -82,3 +82,32 @@ fn org_board_opens_only_while_its_experimental_flag_is_on() {
     org_board::open(&mut v);
     assert!(v.org_board.is_some(), "on: the board opens");
 }
+
+// The first-run show arms the board for frame one and lands the sideline on
+// Org, but never takes the keyboard: a user booted into the command center
+// still types into their pane. It saves the seen marker, so the show happens
+// once, and raises no notice: the caller already read the flag.
+#[test]
+fn open_first_run_paints_the_board_without_taking_the_keyboard() {
+    let prefs = tempfile::tempdir().expect("tempdir");
+    crate::view_store::set_test_path(prefs.path());
+    let mut v = two_pane_view();
+    v.experimental_org_board = true;
+    let owner_before = v.region_owner;
+    org_board::open_first_run(&mut v);
+    assert!(
+        v.org_board.is_some(),
+        "the board is armed for the first paint"
+    );
+    assert_eq!(v.sideline_view, crate::view_store::SidelineView::Org);
+    assert_eq!(v.region_owner, owner_before, "input stays on the pane");
+    assert!(
+        v.notice.is_none(),
+        "no flag-off notice on the first-run path"
+    );
+    assert!(v.backlog_board.is_none(), "no backlog board rides along");
+    assert!(
+        crate::view_store::load_experimental(crate::view_store::EXPERIMENTAL_ORG_BOARD_SEEN),
+        "the seen marker persists"
+    );
+}

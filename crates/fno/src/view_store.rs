@@ -550,6 +550,7 @@ pub fn save_open_target(pick: &str) {
 }
 
 pub const EXPERIMENTAL_ORG_BOARD: &str = "org_board";
+pub const EXPERIMENTAL_ORG_BOARD_SEEN: &str = "org_board_seen";
 pub const EXPERIMENTAL_PANE_SHARE: &str = "pane_share";
 pub const EXPERIMENTAL_OTHER_MACHINES: &str = "other_machines";
 
@@ -564,6 +565,22 @@ pub fn load_experimental(name: &str) -> bool {
         .experimental
         .and_then(|v| v.get(name).and_then(|b| b.as_bool()))
         .unwrap_or(false)
+}
+
+/// Read one experimental toggle with an explicit absent default. The stored
+/// value always wins; absent or corrupt reads `default`. The store keeps
+/// [`load_experimental`]'s off-until-touched contract, so the ship policy
+/// lives at the call site: the org board passes `true` (x-d3b3), every other
+/// feature keeps the off bias.
+pub fn load_experimental_or(name: &str, default: bool) -> bool {
+    #[cfg(test)]
+    if TEST_PATH.with(|c| c.borrow().is_none()) {
+        return false;
+    }
+    read_raw()
+        .experimental
+        .and_then(|v| v.get(name).and_then(|b| b.as_bool()))
+        .unwrap_or(default)
 }
 
 /// Persist one experimental toggle, keeping the others. Best-effort like
@@ -1133,6 +1150,36 @@ mod tests {
         save_experimental("pane_share", false);
         assert!(load_experimental("org_board"));
         assert!(!load_experimental("pane_share"));
+    }
+
+    // The ship default rides the call site, not the store: an absent key
+    // reads whatever default the caller passes, and a stored value always
+    // wins. Corrupt reads the default too.
+    #[test]
+    fn load_experimental_or_stored_value_beats_the_caller_default() {
+        let _s = Scratch::new("experimental-or");
+        assert!(
+            load_experimental_or(EXPERIMENTAL_ORG_BOARD, true),
+            "absent reads the passed default"
+        );
+        assert!(
+            !load_experimental_or(EXPERIMENTAL_PANE_SHARE, false),
+            "absent reads the passed default"
+        );
+        save_experimental(EXPERIMENTAL_ORG_BOARD, false);
+        assert!(
+            !load_experimental_or(EXPERIMENTAL_ORG_BOARD, true),
+            "stored false beats a true default"
+        );
+        std::fs::write(
+            view_path(),
+            r#"{"experimental":{"org_board":"yes-please"}}"#,
+        )
+        .unwrap();
+        assert!(
+            load_experimental_or(EXPERIMENTAL_ORG_BOARD, true),
+            "corrupt reads the passed default"
+        );
     }
 
     // The sideline view pref: absent reads agents, a corrupt or unknown
