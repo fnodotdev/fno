@@ -2199,7 +2199,7 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
                 .and_then(|v| v.as_u64())
                 .and_then(|n| u32::try_from(n).ok()),
             mail_held_since: row
-                .get("mail_held_since")
+                .pointer("/mail_held_since")
                 .and_then(|v| v.as_str())
                 .and_then(rfc3339_like_to_secs),
             node: row

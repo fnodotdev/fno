@@ -109,7 +109,7 @@ impl ToolFold {
                 Some("enqueue") => {
                     self.held = self.held.saturating_add(1);
                     let hash = row
-                        .get("content")
+                        .pointer("/content")
                         .and_then(|v| v.as_str())
                         .map(content_hash)
                         .unwrap_or(0);
@@ -122,7 +122,7 @@ impl ToolFold {
                 Some("remove") => {
                     self.held = self.held.saturating_sub(1);
                     let hash = row
-                        .get("content")
+                        .pointer("/content")
                         .and_then(|v| v.as_str())
                         .map(content_hash);
                     let at = hash.and_then(|h| self.held_stamps.iter().position(|(k, _)| *k == h));
@@ -190,7 +190,7 @@ fn content_hash(content: &str) -> u64 {
 /// `YYYY-MM-DDTHH:MM:SSZ` shape, with the transcript's millis truncated.
 /// `None` when the row carries no readable stamp.
 fn wall_stamp(row: &serde_json::Value) -> Option<String> {
-    let ts = row.get("timestamp").and_then(|v| v.as_str())?;
+    let ts = row.pointer("/timestamp").and_then(|v| v.as_str())?;
     let b = ts.as_bytes();
     if b.len() >= 20 && b[19] == b'.' {
         Some(format!("{}Z", &ts[..19]))
