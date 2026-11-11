@@ -429,6 +429,10 @@ pub(super) struct GraphqlQuota {
     /// The CORE bucket's reset, passed through to the ledger so a recorded
     /// exhaustion refuses until the real reset, never one hop guessed.
     pub(super) core_reset_epoch: Option<i64>,
+    /// The probe read GitHub's anonymous bucket: gh sent no token here.
+    /// Its numbers are this machine's, never the account's, so they must
+    /// not reach the shared ledger.
+    pub(super) anonymous: bool,
 }
 
 /// Below this GraphQL remaining count, a no-promise fire stands down entirely:
@@ -459,6 +463,7 @@ pub(super) fn probe_graphql_quota(gh_bin: &str, cwd: &Path) -> Option<GraphqlQuo
             .pointer("/resources/core/remaining")
             .and_then(|x| x.as_i64()),
         core_reset_epoch: core.and_then(|c| c.get("reset")).and_then(|x| x.as_i64()),
+        anonymous: crate::gh_budget::is_anonymous_core(&v),
     })
 }
 

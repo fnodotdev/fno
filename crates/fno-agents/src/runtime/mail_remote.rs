@@ -960,8 +960,13 @@ fn cmd_status(_args: &[String]) -> i32 {
             let host = fno_mail::address::normalize_host(&crate::claims::hostname());
             match mail_bus::sent_rows(&remote, &host) {
                 Ok(rows) => {
-                    for (msg_id, status) in rows {
-                        println!("{msg_id} {status}");
+                    for row in rows {
+                        match row.refused {
+                            Some(reason) => {
+                                println!("{} {}: {reason}", row.msg_id, row.status)
+                            }
+                            None => println!("{} {}", row.msg_id, row.status),
+                        }
                     }
                     0
                 }

@@ -2586,7 +2586,12 @@ pub(crate) fn decide_with_payload(
                 // fails this fire TOWARD backoff, but it never opens a
                 // machine-wide wall on evidence a mock, a proxy, or a reword
                 // could manufacture. A no-op while a backoff is already live.
+                // A keyless gh reads the anonymous bucket: its refusal is this
+                // machine's auth fault, so it opens no fleet wall and stamps no
+                // account core reading.
+                let anonymous = quota.as_ref().is_some_and(|q| q.anonymous);
                 if secondary
+                    && !anonymous
                     && (failed_stderr.contains("HTTP 403") || failed_stderr.contains("HTTP 429"))
                 {
                     let _ = crate::gh_budget::record_refusal(
@@ -2600,7 +2605,10 @@ pub(crate) fn decide_with_payload(
                 // exhaustion the classify probe sees: record it so the
                 // ledger refuses in process until the real reset instead
                 // of every fire re-attempting the refused read.
-                if !is_graphql_read && quota.as_ref().and_then(|q| q.core_remaining) == Some(0) {
+                if !is_graphql_read
+                    && !anonymous
+                    && quota.as_ref().and_then(|q| q.core_remaining) == Some(0)
+                {
                     crate::gh_budget::record_core_observation(
                         0,
                         quota.as_ref().and_then(|q| q.core_reset_epoch).unwrap_or(0),

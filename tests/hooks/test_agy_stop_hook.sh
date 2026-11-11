@@ -49,16 +49,8 @@ setup_env() {
 # second. The store commit is the write boundary: the pinned journal keeps no
 # byte trace, so emission asserts read committed rows through the command and
 # jq -r unwraps the escaped envelope strings back to plain JSON lines.
-ROWS_BIN="${FNO_BIN:-}"
-if [[ -z "$ROWS_BIN" ]]; then
-    for _profile in debug release; do
-        if [[ -x "$REPO_ROOT/crates/fno/target/$_profile/fno" ]]; then
-            ROWS_BIN="$REPO_ROOT/crates/fno/target/$_profile/fno"
-            break
-        fi
-    done
-fi
-[[ -n "$ROWS_BIN" ]] || ROWS_BIN=$(command -v fno 2>/dev/null)
+# shellcheck source=scripts/lib/store-bin.sh
+source "$REPO_ROOT/scripts/lib/store-bin.sh"
 
 committed_rows() {
     [[ -n "$ROWS_BIN" ]] || return 0
