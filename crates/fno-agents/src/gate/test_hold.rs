@@ -504,11 +504,14 @@ mod tests {
         // send fails and the assertion would measure the fixture, not the
         // announcement.
         std::fs::create_dir_all(dir.path().join("db/mail/bus")).unwrap();
-        // The write refuses an unresolvable row ("no resolvable handle") and
-        // the send refuses an empty audience ("no live recipients"), so seat
-        // one busy entry with a session id exactly the way the hold test does.
+        // The write refuses an unresolvable row ("no resolvable handle"), the
+        // read refuses a row without an identity token ("no valid identity
+        // token": harness, lowercase), and the send refuses an empty audience,
+        // so seat one busy entry the way the hold test does: a harness, a
+        // session id, Busy.
         let mut entry = crate::state::RegistryEntry::default();
         entry.status = crate::AgentStatus::Busy;
+        entry.harness = Some("claude".into());
         entry.harness_session_id = Some("lift-audience-sess".into());
         crate::state::update_registry(&home.registry_json(), |r| r.entries.push(entry)).unwrap();
         // A pause record an older build wrote is what makes this pass a
@@ -628,6 +631,9 @@ mod tests {
         entry.status = crate::AgentStatus::Busy;
         entry.pid = Some(pid);
         entry.pid_start_time = crate::daemon::process_start_time(pid);
+        // The announce read refuses a row without an identity token: the
+        // lowercase harness name is what makes this row loadable.
+        entry.harness = Some("claude".into());
         entry.harness_session_id = Some("held-run-sess".into());
         crate::state::update_registry(&home.registry_json(), |r| r.entries.push(entry)).unwrap();
 
