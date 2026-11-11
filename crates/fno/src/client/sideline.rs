@@ -1935,15 +1935,30 @@ impl View {
         // the line's own ellipsis never cuts it: line 1's name cell
         // re-clips at its true width, so a marker there renders broken. The
         // count names the busy queue, not the agent hold, and the oldest
-        // wait names itself when the transcript carried a stamp.
+        // wait names itself when the transcript carried a stamp. A rail too
+        // narrow for the whole marker reads the compact closed form, the
+        // same rule the list row answers to - a mid-word `old…` clip is
+        // broken paint.
         if let Some(held) = a.mail_held.filter(|n| *n > 0) {
-            match a.mail_held_since {
-                Some(since) => segments.push(format!(
-                    "[{held} queued, oldest {}]",
-                    row_meter::up_cell(Some(since), now)
-                )),
-                None => segments.push(format!("[{held} queued]")),
-            }
+            let age = a.mail_held_since.map(|s| row_meter::up_cell(Some(s), now));
+            let full = format!(
+                "[{held} queued{}]",
+                age.as_deref()
+                    .map(|x| format!(", oldest {x}"))
+                    .unwrap_or_default()
+            );
+            let compact = format!(
+                "[{held}q{}]",
+                age.as_deref().map(|x| format!(" {x}")).unwrap_or_default()
+            );
+            // The tail (created and activity ages over one separator and a
+            // gap) owns at most 12 columns beside the marker.
+            let badge = if crate::chrome::str_cols(&full) + 12 > text_w {
+                compact
+            } else {
+                full
+            };
+            segments.push(badge);
         }
         if let Some(model) = card_line::model_label(a) {
             segments.push(model);
