@@ -44,7 +44,8 @@ const TYPES: &[&str] = &[
     "graph_lock_held",
 ];
 
-/// String fields that ship when the row carries them, one identifier each.
+/// String fields that ship when the row carries them; `command` keeps its
+/// words through its own gate, the rest pass one identifier each.
 const STRING_FIELDS: &[&str] = &[
     "command",
     "harness",
