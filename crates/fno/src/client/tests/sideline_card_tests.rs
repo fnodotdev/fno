@@ -483,8 +483,22 @@ fn card_slug_drops_node_and_model_and_the_node_taps_open() {
         "{line}"
     );
     assert!(!line.contains("remote") && !line.contains("u"), "{line}");
+    // A remote row is reportable now: a field its machine has not served yet
+    // pulses exactly as a local row's does, until the 10s dash. Both twins
+    // lose the same field, and both pulse.
     remote_row.compaction_count = None;
-    assert!(!card_line::has_loading(&remote_row, graph, 0));
+    local_row.compaction_count = None;
+    assert!(card_line::has_loading(&remote_row, graph, 0));
+    assert!(
+        card_line::has_loading(&local_row, graph, 0),
+        "parity: the local twin loads too"
+    );
+    let mut aged = remote_row.clone();
+    aged.started_at = Some(0);
+    assert!(
+        !card_line::has_loading(&aged, graph, 11),
+        "past 10s the dash holds"
+    );
     // Identity fields share a right-aligned line and remain whole tap fields.
     a.context_used_pct = Some(28);
     assert_eq!(card_line::node_span(&a, 30), Some(23..29));
@@ -1693,5 +1707,127 @@ fn the_selector_follows_mercedes_through_a_fleet_re_sort() {
     assert_eq!(
         v.hover_row, None,
         "a hover whose row moved away clears instead of drifting"
+    );
+}
+
+/// The parity fixtures: one session's full card, first as the served local
+/// row, then as the seat JSON the beat carries. Every field the composer
+/// reads is matched, so a remote card that paints anything else has lost a
+/// field on the wire.
+fn parity_row() -> AgentRow {
+    let mut a = agent_row("t-parity-w1", 5, Some(AgentBadge::Working), false);
+    a.harness = Some("claude".into());
+    a.node = Some("x-parity".into());
+    a.pr = Some(42);
+    a.model = Some("claude-opus-5-5".into());
+    a.context_used_pct = Some(28);
+    a.session_cost_cents = Some(42);
+    a.session_tokens = Some(90_000);
+    a.compaction_count = Some(2);
+    a.tail = Some("reading the fold".into());
+    a.activity = Some(vec![(1, 0), (3, 1)]);
+    a.bindings = vec![crate::proto::SessionBinding {
+        node: "x-parity".into(),
+        pr: Some(42),
+        pr_url: None,
+        pr_count: 2,
+        source: "spawn".into(),
+        state: "open".into(),
+        inferred: true,
+    }];
+    a.build = Some(crate::proto::BuildMark {
+        stage: crate::proto::BuildStage::Compiling,
+        position: None,
+    });
+    let at = chrono::DateTime::parse_from_rfc3339("2027-01-15T06:40:00Z")
+        .unwrap()
+        .timestamp() as u64;
+    a.started_at = Some(at);
+    a.updated_at = Some(at);
+    a
+}
+
+fn parity_seat() -> serde_json::Value {
+    let at = "2027-01-15T06:40:00Z";
+    serde_json::json!({
+        "name": "t-parity-w1", "harness": "claude", "project": "fno",
+        "status": "writing", "node": "x-parity", "model": "claude-opus-5-5",
+        "context_pct": 28, "cost_cents": 42, "tokens": 90000, "compactions": 2,
+        "started_at": at, "last_message_at": at, "last_message": "reading the fold",
+        "badge": "working", "seen": false, "pr": 42,
+        "build": {"stage": "compiling"},
+        "activity": [[1, 0], [3, 1]],
+        "bindings": [{"node": "x-parity", "pr": 42, "pr_count": 2,
+            "source": "spawn", "state": "open", "inferred": true}],
+        "session_id": "parity-sess",
+        // The fold's band name: fold_seat's cwd base comes from here.
+        "cwd": "/Users/bb16/code/footnote/footnote",
+        "workspace": "fno",
+    })
+}
+
+fn parity_fleet() -> serde_json::Value {
+    serde_json::json!({"machines": [
+        {"host": "u2", "local": false, "fresh": true, "age_s": 3, "sessions": [
+            parity_seat(),
+        ]},
+        {"host": "local-host", "local": true, "fresh": true, "age_s": 3, "sessions": []},
+    ]})
+}
+
+#[test]
+fn a_remote_card_paints_byte_identical_to_its_local_twin() {
+    // x-11d5 done-when: one session painted as a local row and as a remote
+    // row, cards byte-identical. The seat JSON carries every card field the
+    // beat forwards (fleet_card): pr, bindings, beat-backed badge, seen,
+    // build, activity, context, cost, tokens, compactions, model, node and
+    // the last line.
+    let local = parity_row();
+    let mut v = card_view(vec![local]);
+    machine_tree::set_on(&mut v, true);
+    machine_tree::apply(&mut v, Ok(parity_fleet()));
+    let lw = v.sideline_paint_w() - 1;
+    let frame = v.compose();
+    let off = v.sideline_offset();
+    let card_lines = |name: &str| -> Vec<String> {
+        let i = painted_agent_at(&v, name);
+        [i, i + 1, i + 2]
+            .map(|d| row_text(&frame, d - off + 1, lw))
+            .to_vec()
+    };
+    let local_lines = card_lines("t-parity-w1");
+    let remote_lines = card_lines("t-parity-w1@u2");
+    assert_eq!(
+        local_lines, remote_lines,
+        "the remote card paints exactly its local twin"
+    );
+    // The equality is not vacuous: the card paints every parity field.
+    let (id, detail, line3) = (
+        local_lines.first().unwrap().as_str(),
+        local_lines.get(1).unwrap().as_str(),
+        local_lines.get(2).unwrap().as_str(),
+    );
+    assert!(id.contains("x-parity · #42"), "{id:?}");
+    assert!(id.contains("+1 PRs"), "{id:?}");
+    assert!(detail.contains("x-parity spawn #42 open"), "{detail:?}");
+    assert!(line3.contains("28%"), "{line3:?}");
+    assert!(line3.contains("2c"), "{line3:?}");
+    // The context-bar graph reads the same parity on both sides too.
+    let mut ctx = card_view(vec![parity_row()]);
+    ctx.card_graph = crate::client::CardGraph::Context;
+    machine_tree::set_on(&mut ctx, true);
+    machine_tree::apply(&mut ctx, Ok(parity_fleet()));
+    let frame = ctx.compose();
+    let off = ctx.sideline_offset();
+    let card_lines = |name: &str| -> Vec<String> {
+        let i = painted_agent_at(&ctx, name);
+        [i, i + 1, i + 2]
+            .map(|d| row_text(&frame, d - off + 1, lw))
+            .to_vec()
+    };
+    assert_eq!(
+        card_lines("t-parity-w1"),
+        card_lines("t-parity-w1@u2"),
+        "the context bar paints the same parity"
     );
 }

@@ -82,17 +82,58 @@ pub(crate) fn meters(rows: &[AgentRow]) -> BTreeMap<String, serde_json::Value> {
         .collect()
 }
 
+/// Session id to the look of its card: everything the sideline composer reads
+/// off a local row, so a remote row paints from the same facts this machine's
+/// own mux serves. The daemon forwards the JSON verbatim; the remote client
+/// does the one typed parse. A session with no card fact files nothing.
+pub(crate) fn cards(rows: &[AgentRow]) -> BTreeMap<String, serde_json::Value> {
+    rows.iter()
+        .filter_map(|row| {
+            let session = row
+                .harness_session_id
+                .as_deref()
+                .filter(|s| !s.is_empty())?;
+            (row.badge.is_some()
+                || row.pr.is_some()
+                || row.build.is_some()
+                || row.activity.is_some()
+                || row.context_used_pct.is_some()
+                || !row.bindings.is_empty())
+            .then(|| {
+                (
+                    session.to_string(),
+                    serde_json::json!({
+                        "badge": row.badge,
+                        "seen": row.seen,
+                        "context_pct": row.context_used_pct,
+                        "pr": row.pr,
+                        "build": row.build,
+                        "activity": row.activity,
+                        "bindings": row.bindings,
+                    }),
+                )
+            })
+        })
+        .collect()
+}
+
 fn write(
     root: &Path,
     workspaces: &BTreeMap<String, String>,
     meters: &BTreeMap<String, serde_json::Value>,
+    cards: &BTreeMap<String, serde_json::Value>,
     now_secs: u64,
 ) -> std::io::Result<()> {
     let file = path(root);
     if let Some(dir) = file.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let body = serde_json::json!({"at": now_secs, "by_session": workspaces, "meters": meters});
+    let body = serde_json::json!({
+        "at": now_secs,
+        "by_session": workspaces,
+        "meters": meters,
+        "cards": cards,
+    });
     let tmp = file.with_extension("json.tmp");
     std::fs::write(&tmp, serde_json::to_vec(&body)?)?;
     std::fs::rename(&tmp, &file)
@@ -110,7 +151,13 @@ pub(crate) fn publish(root: &Path, rows: &[AgentRow], name_of: impl Fn(u64) -> O
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    if let Err(error) = write(root, &by_session(rows, name_of), &meters(rows), now) {
+    if let Err(error) = write(
+        root,
+        &by_session(rows, name_of),
+        &meters(rows),
+        &cards(rows),
+        now,
+    ) {
         static WARNED: std::sync::Once = std::sync::Once::new();
         WARNED.call_once(|| eprintln!("workspace sidecar: {}: {error}", path(root).display()));
     }
@@ -129,12 +176,27 @@ mod tests {
             session_tokens: session.filter(|s| *s == "s1").map(|_| 9000),
             ..AgentRow::default()
         };
-        let rows = [
+        let mut rows = [
             row(Some("s1"), Some(1)),
             row(Some("s2"), Some(2)),
             row(Some("s3"), None),
             row(None, Some(1)),
         ];
+        // s1 carries a full card: every field the composer reads travels as
+        // one JSON object the daemon forwards verbatim.
+        rows[0].badge = Some(crate::proto::AgentBadge::Working);
+        rows[0].pr = Some(7);
+        rows[0].context_used_pct = Some(40);
+        rows[0].activity = Some(vec![(1, 0), (3, 1)]);
+        rows[0].bindings = vec![crate::proto::SessionBinding {
+            node: "x-1".into(),
+            pr: Some(7),
+            pr_url: None,
+            pr_count: 2,
+            source: "spawn".into(),
+            state: "open".into(),
+            inferred: true,
+        }];
         let got = by_session(&rows, |id| (id == 1).then(|| "fno".to_string()));
         assert_eq!(got, BTreeMap::from([("s1".to_string(), "fno".to_string())]));
 
@@ -151,19 +213,54 @@ mod tests {
             )]),
             "only a session with a reading files a meter"
         );
-        write(dir.path(), &got, &counts, 1000).unwrap();
         assert_eq!(
-            read(),
+            cards(&rows),
+            BTreeMap::from([(
+                "s1".to_string(),
+                serde_json::json!({
+                    "badge": "working",
+                    "seen": false,
+                    "context_pct": 40,
+                    "pr": 7,
+                    "build": null,
+                    "activity": [[1, 0], [3, 1]],
+                    "bindings": [{
+                        "node": "x-1", "pr": 7, "pr_count": 2,
+                        "source": "spawn", "state": "open", "inferred": true,
+                    }],
+                }),
+            )]),
+            "only a session with a card fact files a card"
+        );
+        write(dir.path(), &got, &counts, &cards(&rows), 1000).unwrap();
+        let body = read();
+        assert_eq!(
+            body,
             serde_json::json!({
                 "at": 1000,
                 "by_session": {"s1": "fno"},
                 "meters": {"s1": {"cost_cents": 42, "tokens": 9000, "compactions": null}},
-            })
+                "cards": {"s1": {
+                    "badge": "working", "seen": false, "context_pct": 40,
+                    "pr": 7, "build": null, "activity": [[1, 0], [3, 1]],
+                    "bindings": [{"node": "x-1", "pr": 7, "pr_count": 2,
+                        "source": "spawn", "state": "open", "inferred": true}],
+                }},
+            }),
+            "the file carries the cards beside the meters"
         );
-        write(dir.path(), &BTreeMap::new(), &BTreeMap::new(), 1060).unwrap();
+        write(
+            dir.path(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            1060,
+        )
+        .unwrap();
         assert_eq!(
             read(),
-            serde_json::json!({"at": 1060, "by_session": {}, "meters": {}})
+            serde_json::json!({"at": 1060, "by_session": {}, "meters": {}, "cards": {}}),
+            "each write replaces the last"
         );
     }
 }

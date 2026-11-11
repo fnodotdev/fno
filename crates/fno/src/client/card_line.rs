@@ -112,7 +112,9 @@ pub(super) struct IdentitySpans {
 
 /// One metrics-line field's render state: a served value, a loading skeleton
 /// (the fold has not landed yet), or hidden - this harness or role cannot
-/// report it, so it never prints a `?`.
+/// report it, so it never prints a `?`. A remote row counts as reportable
+/// once its machine serves the card fields through the beat, so an unserved
+/// field pulses there exactly as it does on a local row.
 pub(super) enum MetricCell {
     Value(String),
     Loading,
@@ -139,8 +141,7 @@ pub enum CardGraph {
 /// a dash for the activity cell - never a fabricated flat line - and a
 /// bare pane or an exited row's unserved fields hide instead of pulsing.
 pub(super) fn metric_cells(a: &AgentRow, mode: CardGraph) -> [MetricCell; 4] {
-    let reportable =
-        !a.exited && a.remote.is_none() && matches!(a.harness.as_deref(), Some("claude" | "codex"));
+    let reportable = !a.exited && matches!(a.harness.as_deref(), Some("claude" | "codex"));
     let codex = a.harness.as_deref() == Some("codex");
     let field = |value: Option<String>, hidden: bool| {
         if hidden {

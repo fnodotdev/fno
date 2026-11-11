@@ -337,7 +337,9 @@ impl<'a> Marks<'a> {
     /// for a bare session id too, because a keep mark outlives its row. It
     /// reads true wherever the reapers keep the row, an unreadable keep store
     /// included, so the remote sideline never pins less than the sweep keeps.
-    fn of(&self, w: &Worker, entry: Option<&RegistryEntry>) -> [(&'static str, Value); 6] {
+    /// The card facts ride the mux server's own reading, so a remote card
+    /// paints the fields a local one does; the daemon forwards them verbatim.
+    fn of(&self, w: &Worker, entry: Option<&RegistryEntry>) -> Vec<(&'static str, Value)> {
         let ids = [
             w.session_id.as_deref(),
             entry.and_then(|e| e.harness_session_id.as_deref()),
@@ -350,6 +352,10 @@ impl<'a> Marks<'a> {
             .into_iter()
             .flatten()
             .find_map(|id| self.filed.meters.get(id));
+        let card = ids
+            .iter()
+            .flatten()
+            .find_map(|id| self.filed.cards.get(*id));
         let pinned = match (entry, w.session_id.as_deref()) {
             (Some(e), _) => Some(crate::keep_mark::for_row(self.home, e).is_some()),
             (None, Some(id)) => Some(crate::keep_mark::for_session(self.home, id).is_some()),
@@ -358,13 +364,22 @@ impl<'a> Marks<'a> {
         let needs_input = entry.map(|e| {
             crate::wait::effective_state(e, self.now_secs).0 == crate::wait::EffState::Blocked
         });
-        [
+        vec![
             ("workspace", json!(workspace)),
             ("needs_input", json!(needs_input)),
             ("pinned", json!(pinned)),
             ("cost_cents", json!(meter.and_then(|m| m.cost_cents))),
             ("tokens", json!(meter.and_then(|m| m.tokens))),
             ("compactions", json!(meter.and_then(|m| m.compactions))),
+            ("badge", json!(card.and_then(|c| c.badge.as_deref()))),
+            ("seen", json!(card.and_then(|c| c.seen))),
+            // `card_pr`, not `pr`: the row's own `pr` is the claim join's
+            // answer (with its `pr_basis`), and the card refines it, never
+            // clobbers it. The mux reading wins below, the join falls back.
+            ("card_pr", json!(card.and_then(|c| c.pr))),
+            ("build", json!(card.and_then(|c| c.build.clone()))),
+            ("activity", json!(card.and_then(|c| c.activity.clone()))),
+            ("bindings", json!(card.and_then(|c| c.bindings.clone()))),
         ]
     }
 }
@@ -404,6 +419,17 @@ fn seat_facts(
     let last_message = probe
         .and_then(|p| p.last_message.as_deref())
         .map(|m| m.chars().take(LAST_MESSAGE_CHARS).collect::<String>());
+    // The mux server's context reading outranks the daemon's sweep: it is
+    // the same number the session's own card paints, so the remote card
+    // carries no second opinion.
+    let ids = [
+        w.session_id.as_deref(),
+        entry.and_then(|e| e.harness_session_id.as_deref()),
+    ];
+    let card_pct = ids
+        .iter()
+        .flatten()
+        .find_map(|id| marks.filed.cards.get(*id).and_then(|c| c.context_pct));
     let facts = json!({
         "session_id": w.session_id.as_deref().or(entry.and_then(|e| e.harness_session_id.as_deref())),
         "model": model,
@@ -414,7 +440,7 @@ fn seat_facts(
         "cwd": cwd,
         "project_root": root,
         "project": project,
-        "context_pct": entry.and_then(|e| e.context_used_pct),
+        "context_pct": card_pct.or(entry.and_then(|e| e.context_used_pct.map(|p| p as i64))),
     });
     let mut map = match facts {
         Value::Object(map) => map,
@@ -423,6 +449,7 @@ fn seat_facts(
     map.extend(
         marks
             .of(w, entry)
+            .into_iter()
             .map(|(key, value)| (key.to_string(), value)),
     );
     map
