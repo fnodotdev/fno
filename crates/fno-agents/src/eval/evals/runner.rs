@@ -863,12 +863,12 @@ pub struct LaneRow {
 pub fn resolve_lane(name: &str) -> Result<LaneRow, String> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let lane = lane_from_inventory(&crate::route_gather::inventory(&cwd), name)?;
-    if lane.harness == "claude" && !lane.account.is_empty() {
+    if !lane.account.is_empty() {
         if let Ok(accounts) = crate::accounts::records::load(None, &cwd) {
             let ids: Vec<&str> = accounts
                 .records
                 .iter()
-                .filter(|r| r.harness == "claude")
+                .filter(|r| r.harness == lane.harness)
                 .map(|r| r.id.as_str())
                 .collect();
             lane_account_check(&lane, &ids)?;
@@ -877,19 +877,21 @@ pub fn resolve_lane(name: &str) -> Result<LaneRow, String> {
     Ok(lane)
 }
 
-/// A claude lane's `account` must name a registered record. A route such as
-/// `zai/...` is a vendor, not an account: naming it as one made every spawn on
-/// the lane exit 2 after the gate had already queued its trials.
-fn lane_account_check(lane: &LaneRow, claude_ids: &[&str]) -> Result<(), String> {
-    if claude_ids.contains(&lane.account.as_str()) {
+/// A lane's `account` must name a registered record for its own harness.
+/// A route such as `zai/...` is a vendor, not an account: naming it as one
+/// made every spawn on the lane exit 2 after the gate had already queued its
+/// trials. The refusal fires at lane resolution, before any attempt spends.
+fn lane_account_check(lane: &LaneRow, harness_ids: &[&str]) -> Result<(), String> {
+    if harness_ids.contains(&lane.account.as_str()) {
         return Ok(());
     }
     Err(format!(
-        "lane '{}' names account '{}', which is not a registered claude account ({}); \
+        "lane '{}' names account '{}', which is not a registered {} account ({}); \
          drop `account` from its routing.models row or register it",
         lane.name,
         lane.account,
-        claude_ids.join(", ")
+        lane.harness,
+        harness_ids.join(", ")
     ))
 }
 
@@ -997,6 +999,10 @@ pub fn run_task(
     let mut results: Vec<RunResult> = Vec::new();
     let run_id = uuid_v4();
     let spawn_harness = seat_harness(lane, worker_provider);
+    // One probe per run: every attempt row of this run carries the same
+    // harness version, so a pinned-version read never guesses.
+    let harness_version =
+        crate::ledger_register::probe_harness_version(spawn_harness.unwrap_or_default());
     // A run that dies before a verdict is an infra failure, not a grade: it
     // reruns once, and a second death leaves the live runs to decide.
     let mut queue: std::collections::VecDeque<(u32, u32)> = (0..repeat).map(|i| (i, 0)).collect();
@@ -1212,6 +1218,10 @@ pub fn run_task(
             }
             row["requested_account"] = json!(l.account);
         }
+        row["harness_version"] = match &harness_version {
+            Some(v) => json!(v),
+            None => Value::Null,
+        };
         let _ = super::history::append_attempt(history_path, &row);
         results.push(RunResult {
             task_id: task.id.clone(),
@@ -1254,6 +1264,23 @@ fn now_iso() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lane_account_check_refuses_a_foreign_harness_account() {
+        let lane = LaneRow {
+            name: "hf-opencode".into(),
+            harness: "opencode".into(),
+            account: "zai".into(),
+            ..LaneRow::default()
+        };
+        let err = lane_account_check(&lane, &[]).unwrap_err();
+        assert!(
+            err.contains("registered opencode account"),
+            "refusal names the harness: {err}"
+        );
+        // A registered id passes for the same harness.
+        assert!(lane_account_check(&lane, &["zai"]).is_ok());
+    }
 
     #[test]
     fn a_missing_workdir_fails_the_spawn_with_the_named_path() {
