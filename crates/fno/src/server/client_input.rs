@@ -76,7 +76,10 @@ impl Core {
             if !self.buffer_in_flight_input(focus, &bytes) {
                 if let Some(entry) = self.panes.get(&focus) {
                     match entry.pty.write_input(&bytes) {
-                        Ok(()) => self.watch_input(focus, &bytes),
+                        Ok(()) => {
+                            self.stamp_anchor(focus, &bytes);
+                            self.watch_input(focus, &bytes);
+                        }
                         Err(crate::pty::PtyError::Write(error))
                             if error.kind() == std::io::ErrorKind::WouldBlock =>
                         {

@@ -82,6 +82,7 @@ mod input_echo;
 mod keeper_adopt;
 pub(crate) mod lifecycle_target;
 mod mouse_route;
+mod pane_anchors;
 mod pane_scroll;
 use pane_scroll::{wheel_gate, WheelGateState};
 pub(crate) mod links;
@@ -551,6 +552,15 @@ pub(crate) enum CoreMsg {
         id: u64,
         pane: u64,
         top: bool,
+    },
+    /// (v127, v127) Land the exchange picker's jump on the pane's stamped
+    /// prompt anchor nearest `ts_ms`. Shared scroll + highlight like Search;
+    /// `id` alone learns the verdict ([`ServerMsg::AnchorJumped`]) so a miss
+    /// falls back to the transcript only for the operator who asked.
+    AnchorJump {
+        id: u64,
+        pane: u64,
+        ts_ms: u64,
     },
     /// (v9) Answer a blocked prompt: re-verify the region fingerprint
     /// against the live grid, then inject the daemon-pinned `keystroke`. `id`
@@ -1501,6 +1511,12 @@ pub(crate) struct Core {
     /// fact and squad assignment are joined at layout time, where the live
     /// pane set and the squad catalog live.
     input_echo: HashMap<u64, input_echo::EchoWatch>,
+    /// (v127, v127) Per-pane stamped prompt anchors, oldest first, written
+    /// when a pane input burst submits. The exchange picker's jump joins a
+    /// transcript turn to its on-screen row through the anchor's submit
+    /// stamp. A dead pane's ring is dropped at removal; a live pane's ring
+    /// is bounded (`pane_anchors::MAX_PER_PANE`).
+    anchors: HashMap<u64, std::collections::VecDeque<pane_anchors::PaneAnchor>>,
     agents: Vec<RegistryAgent>,
     /// The last `AgentRows` reader's registry+roster read succeeded.
     /// Starts false (no read yet = unknown), so the registry-absence death
@@ -8587,7 +8603,13 @@ impl Core {
             }
         }
         match entry.pty.write_input(bytes) {
-            Ok(()) => ServerMsg::Ok,
+            Ok(()) => {
+                // Stamp before the child drains the write: the grid still
+                // shows the echoed prompt under the cursor, which is what
+                // the anchor freezes (v127). The entry borrow ends here.
+                self.stamp_anchor(pane, bytes);
+                ServerMsg::Ok
+            }
             // A dead/wedged pane fails closed: the child exited (BrokenPipe) or
             // stopped reading (WouldBlock). The send did not land - never a
             // silent Ok.
@@ -10464,6 +10486,9 @@ impl Core {
             | CoreMsg::Search { id, .. }
             | CoreMsg::PaneScroll { id, .. }
             | CoreMsg::PaneScrollEdge { id, .. }
+            // AnchorJump moves the shared scroll + selection exactly like
+            // Search does; same read-only gate.
+            | CoreMsg::AnchorJump { id, .. }
             // PaneAnswer injects a keystroke into a pane PTY; a
             // read-only observer must never reach it (same class as Input).
             | CoreMsg::PaneAnswer { id, .. }
@@ -10571,6 +10596,10 @@ impl Core {
             }
             CoreMsg::Search { id, pane, op } => {
                 self.search_nav(id, pane, op);
+                Flow::Continue
+            }
+            CoreMsg::AnchorJump { id, pane, ts_ms } => {
+                self.anchor_jump(id, pane, ts_ms);
                 Flow::Continue
             }
             CoreMsg::PaneScroll { id, pane, delta } => {

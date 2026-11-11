@@ -165,6 +165,17 @@ pub enum ClientMsg {
         pane: u64,
         top: bool,
     },
+    /// (v127, v127) Land the exchange picker's jump: the server picks the
+    /// pane's stamped prompt anchor nearest `ts_ms` (the transcript row's
+    /// submit stamp, epoch milliseconds), verifies the anchor's row still
+    /// carries its text, then highlights + scrolls to it. The reply is one
+    /// [`ServerMsg::AnchorJumped`] to the initiator; a miss (`jumped == false`)
+    /// means the anchor aged out or the pane's row space was rebuilt, and the
+    /// client falls back to the session transcript instead of a wrong-row jump.
+    AnchorJump {
+        pane: u64,
+        ts_ms: u64,
+    },
     /// (v83, ) The sideline new-agent popup submits one typed launch
     /// request. The server validates pre-birth, shells canonical
     /// `fno agents spawn` OFF the core loop, and answers this client with
@@ -406,6 +417,15 @@ pub enum ServerMsg {
         pane_id: u64,
         total: u32,
         current: u32,
+    },
+    /// (v127, v127) The initiator-only result of an
+    /// [`ClientMsg::AnchorJump`]: `true` means the anchor's row still carried
+    /// its stamped text and the pane now shows it highlighted; `false` means
+    /// the anchor aged out or the pane redrew, and no scroll happened - the
+    /// client falls back to the session transcript. Reliable.
+    AnchorJumped {
+        pane_id: u64,
+        jumped: bool,
     },
     /// (v29) The transcript body for a [`Command::PeekAgent`], sent only
     /// to the requesting client. `seq` echoes the request's counter so the client
