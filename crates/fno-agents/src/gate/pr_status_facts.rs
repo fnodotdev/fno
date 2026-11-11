@@ -378,6 +378,19 @@ pub(crate) fn merge_blocker<P: GhProbe>(probes: &P, payload: &Value) -> Value {
             format!("mergeable_state {other}"),
         ),
     };
+    // The head's own CI verdict rides the same payload: GitHub's merge state
+    // reads `unstable` for pending or failing NON-required checks and calls
+    // the PR mergeable there. The gate's own CI read decides readiness: an
+    // attempt in flight holds ready until it settles, and a settled failure
+    // is a red the merge door refuses under require_checks_pass. Without
+    // this, PR 4775 read ready:true while cli-ci attempt 2 was in flight and
+    // merged red main (x-e98b, 2026-11-10). Absent (legacy callers, no
+    // checks configured) the fact adds nothing.
+    match payload.get("ci_verdict").and_then(Value::as_str) {
+        Some("red") => blockers.push("ci_red_at_head".to_string()),
+        Some("pending") => blockers.push("ci_unsettled_at_head".to_string()),
+        _ => {}
+    }
     // The mergeable conjunct: GitHub's own conflict answer. DIRTY under
     // mergeStateStatus says only "unmergeable somehow"; this field names the
     // conflict. Null (still computing) fails closed, an absent key (an old

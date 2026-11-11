@@ -218,6 +218,58 @@ fn block_rows() {
     assert_eq!(out["missing_required_checks"], json!(["smoke"]));
 }
 
+/// The receipt's `ready` must read the head's own CI verdict, not GitHub's
+/// merge state alone: `unstable` means pending or failing NON-required
+/// checks, and PR 4775 read ready:true on it while cli-ci attempt 2 was in
+/// flight (x-e98b, merged 2026-11-10, main went red).
+#[test]
+fn ci_verdict_fact_blocks_ready_on_red_and_pending() {
+    let probes = FakeGh {
+        ok: true,
+        output: String::new(),
+        review_decision: String::new(),
+        calls: RefCell::new(Vec::new()),
+    };
+    // An attempt in flight: pending holds ready until it settles.
+    let out = merge_blocker(
+        &probes,
+        &json!({"merge_state": "unstable", "cwd": "/repo", "ci_verdict": "pending"}),
+    );
+    assert_eq!(out["blockers"], json!(["ci_unsettled_at_head"]));
+
+    // A settled failure reads red even under GitHub's unstable state.
+    let out = merge_blocker(
+        &probes,
+        &json!({"merge_state": "unstable", "cwd": "/repo", "ci_verdict": "red"}),
+    );
+    assert_eq!(out["blockers"], json!(["ci_red_at_head"]));
+
+    // Green adds nothing, and a payload without the fact (legacy callers,
+    // no checks configured) keeps today's answer.
+    let out = merge_blocker(
+        &probes,
+        &json!({"merge_state": "unstable", "cwd": "/repo", "ci_verdict": "green"}),
+    );
+    assert_eq!(out["blockers"], json!([]));
+    let out = merge_blocker(&probes, &json!({"merge_state": "clean", "cwd": "/repo"}));
+    assert_eq!(out["blockers"], json!([]));
+
+    // The CI fact rides beside the GitHub ones, sorted and deduped with them.
+    let out = merge_blocker(
+        &probes,
+        &json!({
+            "merge_state": "unstable",
+            "mergeable": "CONFLICTING",
+            "cwd": "/repo",
+            "ci_verdict": "pending",
+        }),
+    );
+    assert_eq!(
+        out["blockers"],
+        json!(["ci_unsettled_at_head", "not_mergeable_conflicting"])
+    );
+}
+
 // --- AC5-HP .. AC9-HP: failure_cause ----------------------------------------
 
 /// A raw Actions-log line: GitHub prefixes every line with an ISO timestamp.

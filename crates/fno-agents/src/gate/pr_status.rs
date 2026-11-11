@@ -1237,6 +1237,7 @@ pub(crate) fn status_payload<P: GhProbe>(
             "op": "status-merge-blocker",
             "cwd": cwd.to_string_lossy(),
             "pr": pr,
+            "ci_verdict": verdict,
             "mergeStateStatus": pr_json.get("mergeStateStatus").cloned().unwrap_or(Value::Null),
             "baseRefName": pr_json.get("baseRefName").cloned().unwrap_or(Value::Null),
             "mergeable": pr_json.get("mergeable").cloned().unwrap_or(Value::Null),
