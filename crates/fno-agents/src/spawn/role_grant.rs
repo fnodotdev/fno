@@ -953,7 +953,7 @@ mod tests {
         std::env::set_current_dir(tmp.path()).unwrap();
         crate::registry_store::seed_raw(
             agents.join("registry.json"),
-            json!({"schema_version": 4, "agents": [
+            json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": [
                 {"name": "valentina", "status": "live", "role_scope": "x-own", "role_level": 2,
                  "cwd": tmp.path().display().to_string(), "harness": "claude",
                  "harness_session_id": "s-v", "log_path": "s-v.jsonl",
