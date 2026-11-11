@@ -465,6 +465,14 @@ The same read reported both branches as 32 commits behind `main`. That is the no
 
 *Graduates to:* a receipt from the graph commands naming the elapsed time, so a caller can tell a slow write from a lost one.
 
+## Every claude bg session loses DNS, gh, ps and the keychain at once
+
+**Answer.** A claude supervisor born outside the user's Aqua GUI session hosts sessions that inherit its broken bootstrap. Every hosted session loses the same services at the same moment. `getaddrinfo` cannot resolve `github.com`. `scutil --dns` prints nothing. `pgrep` says `Cannot get process list`. The Tailscale CLI says `Failed to load preferences`. When its last client disconnects, the claude daemon exits. The supervisor serving the fleet is the one the most recent client birthed. A client typed in an ssh login, a bad pane keeper, or an fno launchd job births the supervisor there. When the job is replaced, a supervisor born inside an fno launchd job dies to DNS and keychain. fno refuses to birth a supervisor from those contexts and exits 13 with the cure. A SessionStart hook names the state from inside a hosted session. A bare `claude` typed in a non-GUI pane never reaches fno, so it births the bad supervisor anyway.
+
+**Answer.** The cure is a restart from a GUI terminal. Run `claude daemon stop --any`, then start any `claude --bg` command from that GUI shell (or a GUI-born mux pane), and resume each stopped session with `claude --bg --resume <session-id>`. Stopping and resuming one session does not cure it. The supervisor, not the session, holds the broken bootstrap, so every session under the old supervisor stays broken until the supervisor itself is restarted. Read `claude agents` before each resume and skip rows that are already live. Mail can wake a session in the gap between the stop and the resume, and a blind resume forks a copy. `claude stop` on a copy also stops its original.
+
+*Graduates to:* claude refusing to birth its own supervisor outside the Aqua session, or an fno hook that blocks the bare-claude birth road.
+
 ## Retired
 
 Closed gaps, newest first. Each line names the PR that closed it, so a reader can see the machinery absorb the list.
