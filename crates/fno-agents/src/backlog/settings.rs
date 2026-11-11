@@ -186,6 +186,18 @@ pub fn project_root(project: &str) -> Option<String> {
     None
 }
 
+/// The configured checkout for `project` when it exists on disk, else None.
+/// The dispatch-side resolution: a node row's stored cwd predates config
+/// changes, so a spawn or dispatch prefers the live work map over the row
+/// (the 2026-11-11 cutover left 1777 open rows pointing at a retired
+/// checkout). A path that no longer exists answers None so callers keep the
+/// stored cwd instead of failing at launch.
+pub fn live_project_root(project: &str) -> Option<PathBuf> {
+    project_root(project)
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+}
+
 /// Every registered project path, in candidate then declaration order,
 /// first occurrence kept.
 pub fn project_roots() -> Vec<PathBuf> {
