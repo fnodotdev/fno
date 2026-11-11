@@ -369,7 +369,11 @@ pub(super) fn submit(view: &mut View, url: String) -> bool {
         return false;
     }
     view.extensions.url = None;
-    queue_pane(view, vec!["install".into(), url.clone()], format!("Install {url}"));
+    queue_pane(
+        view,
+        vec!["install".into(), url.clone()],
+        format!("Install {url}"),
+    );
     true
 }
 

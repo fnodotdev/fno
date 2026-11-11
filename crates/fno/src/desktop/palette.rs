@@ -291,7 +291,11 @@ mod tests {
         ] {
             let p = Palette::from_theme(&Theme::from_name(name).0);
             let c = contrast(p.recommend, p.bg);
-            assert!(c >= 4.5, "{name}: recommend {:06x} is {c:.2}:1", p.recommend);
+            assert!(
+                c >= 4.5,
+                "{name}: recommend {:06x} is {c:.2}:1",
+                p.recommend
+            );
             let c = contrast(p.focus, p.bg);
             assert!(c >= 3.0, "{name}: focus {:06x} is {c:.2}:1", p.focus);
             for (fill, what) in [(p.row_fill, "row_fill"), (p.pressed, "pressed")] {
