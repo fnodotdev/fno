@@ -528,7 +528,6 @@ mod tests {
             bus.contains("test:priority"),
             "the all-clear must name the standing agent refusal and its lift lever: {bus}"
         );
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A held fleet test run ends (SIGKILL, not SIGSTOP) within one
