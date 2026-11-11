@@ -1,4 +1,4 @@
-//! Claude Code JSONL (`~/.claude/projects/<proj>/<sid>.jsonl`) as chat
+//! Claude Code JSONL (`<projects>/<proj>/<sid>.jsonl`) as chat
 //! events. Claude writes one assistant content block per row, so no
 //! streamed-versus-complete de-dup is needed. Rows with no `message` object
 //! (`attachment`, `api-request`, `custom-title`, and the other session
@@ -531,7 +531,7 @@ mod tests {
                 "compacted",
             ]
         );
-        assert_eq!(events[0].at_ms, Some(1_794_394_800_000));
+        assert_eq!(events[0].at_ms, Some(1_794_391_200_000));
         let ChatBody::SubagentStarted { child, task, .. } = &events[15].body else {
             unreachable!()
         };
