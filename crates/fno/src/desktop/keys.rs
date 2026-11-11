@@ -112,6 +112,19 @@ fn tilde_key(k: &Key, n: u8) -> Vec<u8> {
     }
 }
 
+/// The US-layout shifted form of one key, for option-as-meta: the composed
+/// glyph macOS reports for option-shift is never what a terminal wants.
+fn shifted(key: &str) -> String {
+    const PAIRS: &str = "1!2@3#4$5%6^7&8*9(0)-_=+[{]}\\|;:'\",<.>/?`~";
+    let mut chars = PAIRS.chars();
+    while let (Some(plain), Some(shift)) = (chars.next(), chars.next()) {
+        if key.len() == 1 && key.starts_with(plain) {
+            return shift.to_string();
+        }
+    }
+    key.to_uppercase()
+}
+
 /// The bytes for one non-cmd keystroke, or `None` for a key that types
 /// nothing (a bare modifier, an unknown function key).
 pub fn encode(k: &Key, modes: Modes) -> Option<Vec<u8>> {
@@ -184,7 +197,7 @@ pub fn encode(k: &Key, modes: Modes) -> Option<Vec<u8>> {
         }
         out.push(0x1b);
         if k.shift {
-            out.extend(text.to_uppercase().bytes());
+            out.extend(shifted(text).bytes());
         } else {
             out.extend(text.bytes());
         }
@@ -240,6 +253,14 @@ mod tests {
             ..Key::default()
         };
         assert_eq!(encode(&ctrl_c, modes).unwrap(), vec![0x03]);
+        let meta_bang = Key {
+            key: "1",
+            key_char: Some("⁄"),
+            alt: true,
+            shift: true,
+            ..Key::default()
+        };
+        assert_eq!(encode(&meta_bang, modes).unwrap(), b"\x1b!");
         let cmd_d = Key {
             key: "d",
             cmd: true,
