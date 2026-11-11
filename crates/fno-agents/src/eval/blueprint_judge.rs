@@ -1754,7 +1754,7 @@ mod tests {
         // Law d-3244: the seam judges the raw emitted spelling, so the
         // builder's own shape must pass it - owned flags before the prompt,
         // prompt directly before the explicit fence. The merge-architect
-        // reader (x-7d53) exited 2 on exactly this violation.
+        // reader exited 2 on exactly this violation.
         for extra in [
             &[][..],
             &[

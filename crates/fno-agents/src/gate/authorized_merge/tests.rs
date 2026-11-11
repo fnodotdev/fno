@@ -1356,7 +1356,7 @@ fn an_unreadable_body_or_graph_refuses_to_assume_bound() {
 
 #[test]
 fn coverage_rows_are_advisory_never_say_refused_and_read_one_verdict() {
-    // x-7d53: PR 37 merged while the coverage warning read "unreviewed merge
+    // A PR merged while the coverage warning read "unreviewed merge
     // refused" - a refusal word on a row that never refuses (law d-3173), so
     // `pr status` ready=true and the merge's own output contradicted each
     // other. The row stays advisory in both walks, and the words say so.
@@ -1416,7 +1416,7 @@ fn coverage_rows_are_advisory_never_say_refused_and_read_one_verdict() {
         assert_eq!(
             preview.warnings(),
             outcome.warnings(),
-            "one verdict: status and merge read the same rows (x-7d53)"
+            "one verdict: status and merge read the same rows"
         );
     }
 }
