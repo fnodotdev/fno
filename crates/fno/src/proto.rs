@@ -1149,8 +1149,8 @@ pub struct AgentRow {
     /// Missing on an older wire defaults false and false stays off the wire.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dnd: bool,
-    /// (v106) The hold is machine-armed: a live conversation clock
-    /// in the mail-hold sidecar backs this row's bus-only stamp, so the
+    /// (v106) The hold is machine-armed: a conversation clock, live or
+    /// lapsed, in the mail-hold sidecar backs this row's bus-only stamp, so the
     /// sideline renders `[HELD]`, never the `[DND]` a lead reads as its own
     /// deliberate hold. Additive like `dnd`: an older wire defaults false,
     /// which degrades to the old label, never a wrong one.

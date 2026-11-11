@@ -255,13 +255,15 @@ pub(crate) fn self_status(session_id: &str) -> Result<serde_json::Value, String>
     Ok(serde_json::json!({
         "clock_live": clock.as_ref().is_some_and(|clock| clock.live(now)),
         "clock_until": until.map(|until| until.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+        // The machine-armed mark: a clock the conversation rules wrote, so
+        // the check-in labels the hold as its own state instead of a DND the
+        // lead thinks it armed itself. A lapsed one still counts while its
+        // bus-only stamp waits on the release timer.
+        "conversation": clock.as_ref().is_some_and(|clock| {
+            clock.source.as_deref() == Some(CONVERSATION_SOURCE)
+                && (clock.live(now) || delivery_policy.as_deref() == Some("bus-only"))
+        }),
         "delivery_policy": delivery_policy,
-        // The machine-armed mark: a live clock the conversation
-        // rules wrote, so the check-in labels the hold as its own state
-        // instead of a DND the lead thinks it armed itself.
-        "conversation": clock
-            .as_ref()
-            .is_some_and(|clock| clock.live(now) && clock.source.as_deref() == Some(CONVERSATION_SOURCE)),
     }))
 }
 
@@ -1900,6 +1902,19 @@ pub(crate) mod tests {
             // short handle; the gate must hold on it, not deliver.
             let first8 = identity_key(SID).get(..8).unwrap().to_string();
             assert!(!gate(&first8, None, chrono::Utc::now()).deliver);
+            // A lapsed conversation clock whose stamp waits on its release
+            // is still the machine's hold, never a DND.
+            write_clock(
+                &identity_key(SID),
+                Some(chrono::Utc::now() - chrono::Duration::seconds(30)),
+                60,
+                "wall",
+                None,
+                Some(CONVERSATION_SOURCE),
+            )
+            .unwrap();
+            let status = self_status(SID).unwrap();
+            assert_eq!(status["conversation"], true);
             std::fs::remove_file(clock_path(dir, SID)).unwrap();
             let status = self_status(SID).unwrap();
             assert_eq!(status["clock_live"], false);

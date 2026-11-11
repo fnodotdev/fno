@@ -599,8 +599,9 @@ fn sideline_marks_active_squad_and_focused_agent_row() {
 fn client_agent_row_renders_dnd_as_presence_not_liveness() {
     // The hold-badge vertical (sidecar -> overlay -> wire -> render): a
     // conversation-sourced sidecar marks the row, and the render reads
-    // [HELD] for the machine-armed hold while a hold you set keeps [DND].
-    let now = chrono::Utc::now().timestamp() as u64;
+    // [HELD] for the machine-armed hold while a hold you set keeps [DND]. The
+    // conversation clock has lapsed: its stamp still waits on the release
+    // timer, and that window must not read as a hold the user set.
     let stamp = |t: chrono::DateTime<chrono::Utc>| t.format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let dir = std::env::temp_dir().join(format!("hold-badge-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -609,7 +610,7 @@ fn client_agent_row_renders_dnd_as_presence_not_liveness() {
         dir.join("aaaa1111-2222-3333-4444-555566667777.json"),
         format!(
             "{{\"until\": \"{}\", \"window_s\": 3600, \"clock_kind\": \"wall\", \"ceiling\": null, \"source\": \"conversation\"}}\n",
-            stamp(chrono::Utc::now() + chrono::Duration::seconds(600))
+            stamp(chrono::Utc::now() - chrono::Duration::seconds(30))
         ),
     )
     .unwrap();
@@ -635,7 +636,7 @@ fn client_agent_row_renders_dnd_as_presence_not_liveness() {
             ..Default::default()
         },
     ];
-    crate::agents_view::overlay_hold_marks_at(&mut rows, &dir, now);
+    crate::agents_view::overlay_hold_marks_at(&mut rows, &dir);
     assert!(
         rows[0].held_conversation,
         "conversation sidecar marks the row"
