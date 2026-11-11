@@ -2784,9 +2784,13 @@ fn wheel(view: &mut View, rep: crate::mouse::MouseReport) {
         return;
     }
     let len = column_len(b, col);
-    let cur = b.cursors[col as usize];
-    b.cursors[col as usize] = if down {
-        (cur + WHEEL_ROWS).min(len.saturating_sub(1))
+    let cur = match col {
+        Col::Tree => &mut b.cursors[0],
+        Col::Chats => &mut b.cursors[1],
+        Col::Thread => &mut b.cursors[2],
+    };
+    *cur = if down {
+        (*cur + WHEEL_ROWS).min(len.saturating_sub(1))
     } else {
         cur.saturating_sub(WHEEL_ROWS)
     };

@@ -1085,9 +1085,18 @@ async fn messages_wheel_scrolls_pointer_column() {
         .unwrap();
     {
         let b = view.messages_board.as_ref().unwrap();
-        assert_eq!(b.cursors[0], 4, "clamped at len-1 (5 rows)");
+        let last = b.tree_rows().len().saturating_sub(1);
+        assert_eq!(b.cursors[0], last, "clamped at the last tree row");
         assert_eq!(b.col, Col::Thread);
     }
+    super::mouse(&mut view, wheel(up, 3), &mut sink)
+        .await
+        .unwrap();
+    assert_eq!(
+        view.messages_board.as_ref().unwrap().cursors[0],
+        2,
+        "three rows a tick on the way up"
+    );
     super::mouse(&mut view, wheel(up, 3), &mut sink)
         .await
         .unwrap();
