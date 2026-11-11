@@ -179,9 +179,10 @@ fn tui_version(bin: &str) -> Option<String> {
 
 /// Parse a `major.minor.patch` (or `v`-prefixed) version line to its major.
 fn parse_major(version: &str) -> Option<u32> {
+    let version = version.trim();
     version
-        .trim()
-        .strip_prefix('v')?
+        .strip_prefix('v')
+        .unwrap_or(version)
         .split('.')
         .next()?
         .parse()
