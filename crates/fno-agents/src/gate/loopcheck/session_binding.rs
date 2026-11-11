@@ -207,14 +207,17 @@ pub(super) fn render_continuation_for_harness(
     let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&out) else {
         return (code, out);
     };
-    if value.get("continuation").and_then(Value::as_str) == Some("/target --resume") {
-        value["continuation"] = serde_json::Value::String(crate::provider::render_command_seed(
-            "/target resume",
-            harness,
-        ));
-        return (code, value.to_string());
-    }
-    (code, out)
+    let Some(slot) = value
+        .get_mut("continuation")
+        .filter(|c| c.as_str() == Some("/target --resume"))
+    else {
+        return (code, out);
+    };
+    *slot = Value::String(crate::provider::render_command_seed(
+        "/target resume",
+        harness,
+    ));
+    (code, value.to_string())
 }
 
 fn cwd_matches(row_cwd: &str, asked: &Path) -> bool {

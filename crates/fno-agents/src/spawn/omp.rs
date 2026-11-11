@@ -20,7 +20,7 @@
 
 use crate::provider::{AgentEntry, CreateContext, Provider, ReachabilityProbeError, ResumeContext};
 use crate::ParsedEvent;
-use serde_json::Value;
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -54,25 +54,26 @@ fn agent_dir_from(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> PathBuf {
     }
 }
 
-/// The session header row of one session file, found by `type == "session"`
-/// within the first few lines.
-pub fn header(path: &Path) -> Option<Value> {
+/// One leading row of a session file: the title slot or the header.
+#[derive(Deserialize)]
+struct LeadRow {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    id: Option<String>,
+}
+
+/// The session id of one session file's header row, found by
+/// `type == "session"` within the first few lines.
+pub fn header_id(path: &Path) -> Option<String> {
     let file = std::fs::File::open(path).ok()?;
     use std::io::BufRead;
     std::io::BufReader::new(file)
         .lines()
         .take(HEADER_SCAN_LINES)
         .map_while(Result::ok)
-        .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
-        .find(|row| row.get("type").and_then(Value::as_str) == Some("session"))
-}
-
-/// The header's session id, when the header names one.
-pub fn header_id(path: &Path) -> Option<String> {
-    header(path)?
-        .get("id")
-        .and_then(Value::as_str)
-        .map(str::to_string)
+        .filter_map(|line| serde_json::from_str::<LeadRow>(&line).ok())
+        .find(|row| row.kind.as_deref() == Some("session"))?
+        .id
 }
 
 /// Where a lookup by id landed.
@@ -120,24 +121,63 @@ pub fn lookup_session(root: &Path, id: &str) -> SessionLookup {
     }
 }
 
+/// One `--mode json` stream event, read only as far as the reply needs.
+#[derive(Deserialize)]
+struct StreamEvent {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    #[serde(default)]
+    messages: Vec<StreamMessage>,
+}
+
+#[derive(Deserialize)]
+struct StreamMessage {
+    role: Option<String>,
+    #[serde(rename = "stopReason")]
+    stop_reason: Option<String>,
+    #[serde(default)]
+    content: MessageContent,
+}
+
+/// A user message may carry a bare string; an assistant message carries
+/// typed blocks.
+#[derive(Deserialize, Default)]
+#[serde(untagged)]
+enum MessageContent {
+    Blocks(Vec<ContentBlock>),
+    Text(String),
+    #[default]
+    Empty,
+}
+
+#[derive(Deserialize)]
+struct ContentBlock {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    text: Option<String>,
+}
+
 /// The reply text of an `agent_end` event's last assistant message, when that
 /// message stopped on `stop`.
-fn agent_end_reply(event: &Value) -> Option<String> {
-    let message = event
-        .get("messages")?
-        .as_array()?
-        .iter()
-        .rev()
-        .find(|m| m.get("role").and_then(Value::as_str) == Some("assistant"))?;
-    if message.get("stopReason").and_then(Value::as_str) != Some("stop") {
+fn agent_end_reply(event: &StreamEvent) -> Option<String> {
+    if event.kind.as_deref() != Some("agent_end") {
         return None;
     }
-    let text: String = message
-        .get("content")?
-        .as_array()?
+    let message = event
+        .messages
         .iter()
-        .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
-        .filter_map(|b| b.get("text").and_then(Value::as_str))
+        .rev()
+        .find(|m| m.role.as_deref() == Some("assistant"))?;
+    if message.stop_reason.as_deref() != Some("stop") {
+        return None;
+    }
+    let MessageContent::Blocks(blocks) = &message.content else {
+        return None;
+    };
+    let text: String = blocks
+        .iter()
+        .filter(|b| b.kind.as_deref() == Some("text"))
+        .filter_map(|b| b.text.as_deref())
         .collect();
     let text = text.trim();
     (!text.is_empty()).then(|| text.to_string())
@@ -172,9 +212,8 @@ impl Provider for OmpProvider {
     }
 
     fn parse_stream_event(&self, chunk: &str) -> ParsedEvent {
-        let reply = serde_json::from_str::<Value>(chunk.trim())
+        let reply = serde_json::from_str::<StreamEvent>(chunk.trim())
             .ok()
-            .filter(|e| e.get("type").and_then(Value::as_str) == Some("agent_end"))
             .and_then(|e| agent_end_reply(&e));
         match reply {
             Some(text) => ParsedEvent::ReplyComplete {
