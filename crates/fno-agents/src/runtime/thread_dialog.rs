@@ -5,16 +5,9 @@
 //! person has to act at the machine, and the answer path must say so instead
 //! of typing a key the screen ignores.
 
-use crate::claude_attach::{attach_for_frames, AttachRequest};
-use std::io::Read;
-use std::os::unix::net::UnixStream;
+use crate::mail_inject::claude_control::read_screen;
 use std::path::Path;
-use std::time::{Duration, Instant};
 
-/// How long one read waits for the redraw to settle.
-const READ_WINDOW: Duration = Duration::from_millis(1500);
-/// A redraw is a few KB; this bounds a chatty worker.
-const MAX_BYTES: usize = 256 * 1024;
 const GRANTS: [(&str, &str); 2] = [
     ("accessibility", "Accessibility"),
     ("screen recording", "Screen Recording"),
@@ -76,49 +69,6 @@ pub(crate) fn read_thread(daemon_dir: &Path, short: &str) -> Result<String, Stri
         worker.short_id(),
         crate::claude_roster::read_control_key_in(daemon_dir),
     )
-}
-
-/// Attach, feed the redraw through the terminal grid, return the visible text.
-pub(crate) fn read_screen(
-    socket: &Path,
-    short: &str,
-    auth: Option<String>,
-) -> Result<String, String> {
-    let stream = UnixStream::connect(socket).map_err(|e| format!("connect: {e}"))?;
-    stream
-        .set_read_timeout(Some(Duration::from_millis(400)))
-        .map_err(|e| e.to_string())?;
-    let writer = stream.try_clone().map_err(|e| e.to_string())?;
-    let (_, mut frames) = attach_for_frames(
-        writer,
-        stream,
-        &AttachRequest::for_frame_stream(short, auth),
-    )
-    .map_err(|e| e.to_string())?;
-    let mut grid = crate::screen::TerminalGrid::with_default_size();
-    let (start, mut total) = (Instant::now(), 0usize);
-    let mut buf = [0u8; 8192];
-    while start.elapsed() < READ_WINDOW && total < MAX_BYTES {
-        match frames.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => {
-                total += n;
-                grid.feed(buf.get(..n).unwrap_or_default());
-            }
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) =>
-            {
-                if total > 0 {
-                    break;
-                }
-            }
-            Err(e) => return Err(e.to_string()),
-        }
-    }
-    Ok(grid.snapshot().text)
 }
 
 #[cfg(test)]
