@@ -595,13 +595,13 @@ fn observe_opencode(dbs: &[PathBuf], workdir: &str, started: f64, now: f64) -> O
                     });
                     if let Some(model_str) = model {
                         v2_best = Some((updated_ms, id, model_str));
+                        v2_usage = Some((
+                            ti.max(0) as u64,
+                            (to.max(0) + tr.max(0)) as u64,
+                            tcr.max(0) as u64,
+                            tcw.max(0) as u64,
+                        ));
                     }
-                    v2_usage = Some((
-                        ti.max(0) as u64,
-                        (to.max(0) + tr.max(0)) as u64,
-                        tcr.max(0) as u64,
-                        tcw.max(0) as u64,
-                    ));
                 }
             }
         }

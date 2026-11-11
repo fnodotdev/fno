@@ -1417,6 +1417,13 @@ pub(crate) fn register_target_started(cwd: &Path, manifest: &Path) -> bool {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    // No scalar id means the append's species dedup cannot see the row, so
+    // a re-init would stack duplicates. Refuse to record rather than land
+    // rows nothing can dedup.
+    if session_id_arg.is_empty() {
+        eprintln!("target: started row not recorded: the manifest names no session id");
+        return false;
+    }
     let mut entry = build_started_entry(cwd, &state, "");
     let started_root = value_str(&entry, "root_path").unwrap_or_default();
     if let Some(map) = entry.as_object_mut() {
