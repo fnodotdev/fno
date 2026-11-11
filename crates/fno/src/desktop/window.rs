@@ -271,6 +271,10 @@ impl Root {
 
     fn show(&mut self, view: MainView, cx: &mut Context<Self>) {
         self.main = view;
+        // Asking for chat again retries a stream that closed.
+        if view == MainView::Chat && self.chat.error.is_some() {
+            self.chat.key = None;
+        }
         self.sync_chat(cx);
     }
 
@@ -336,7 +340,11 @@ impl Root {
             self.say("no agent session to send to".into(), cx);
             return;
         }
-        let text = std::mem::take(&mut self.chat.draft);
+        let mut text = std::mem::take(&mut self.chat.draft);
+        // Unbracketed, each newline would type Enter and submit early.
+        if !self.modes.bracketed_paste {
+            text = text.replace('\n', " ");
+        }
         self.send(ClientMsg::Input(keys::paste(&text, self.modes)));
         let link = self.link.clone();
         cx.spawn(async move |_, cx| {
