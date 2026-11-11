@@ -1065,7 +1065,7 @@ mod tests {
             }))
             .expect("the grant check answers")
             .as_object()
-            .and_then(|answer| answer.iter().find(|(k, _)| k == "refusal"))
+            .and_then(|answer| answer.iter().find(|(k, _)| k.as_str() == "refusal"))
             .and_then(|(_, v)| v.as_str())
             .map(str::to_string)
         };
@@ -1090,7 +1090,7 @@ mod tests {
         }))
         .expect("the grant check answers")
         .as_object()
-        .and_then(|answer| answer.iter().find(|(k, _)| k == "refusal"))
+        .and_then(|answer| answer.iter().find(|(k, _)| k.as_str() == "refusal"))
         .and_then(|(_, v)| v.as_str())
         .map(str::to_string);
         assert!(lower.is_none(), "an L0 grants a lower scope: {lower:?}");

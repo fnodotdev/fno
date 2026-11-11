@@ -975,8 +975,10 @@ mod tests {
             .expect("the holder hands its own scope over");
         assert_eq!(
             receipt
-                .iter()
-                .find(|(k, _)| k == "succession_vacated")
+                .as_object()
+                .and_then(|receipt| receipt
+                    .iter()
+                    .find(|(k, _)| k.as_str() == "succession_vacated"))
                 .and_then(|(_, v)| v.as_str()),
             Some("valentina"),
             "{receipt}"
