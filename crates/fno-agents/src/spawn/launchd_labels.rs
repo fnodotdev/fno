@@ -195,9 +195,10 @@ pub fn supervisor_birth_refusal() -> Option<String> {
              here dies to DNS and keychain when the job is replaced. {CURE}"
         ));
     }
-    if !cfg!(target_os = "macos") {
-        return None;
-    }
+    // The refusal keys to the manager answer, not the compile target: a
+    // `launchctl` that answers a non-Aqua session names a birth this binary
+    // must not mediate, wherever it runs. Off macOS nothing usually answers,
+    // and the failed probe reads as unknown, never a refusal.
     let out = launchctl(&["managername"]).ok()?;
     let manager = String::from_utf8_lossy(&out).trim().to_string();
     is_non_aqua_manager(&manager).then(|| {
