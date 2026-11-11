@@ -238,7 +238,7 @@ fn the_gate_pins_every_pr_read_to_the_node_pr_url_repo() {
     let oid = "a".repeat(40);
     let script = format!(
         r#"#!/bin/sh
-printf '%s\n' "$@" >> "$RECORD_CALLS"
+printf '%s\n' "$*" >> "$RECORD_CALLS"
 case "$*" in
   *pr*view*)
     echo '{{"state":"OPEN","number":7,"headRefName":"feature","headRefOid":"{oid}","mergeable":"MERGEABLE","mergeStateStatus":"clean","baseRefName":"main","author":{{"login":"jj"}},"url":"https://github.com/b/r/pull/7"}}'
