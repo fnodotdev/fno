@@ -607,46 +607,7 @@ fn spawn_attach_writer(
     let mut argv = writer_argv(serve, session_id, message, model);
     argv[0] = opencode_bin.to_string();
     let argv = crate::spawn_gate::qos_wrap(cwd, argv);
-    use std::os::unix::process::CommandExt;
-    use std::process::{Command, Stdio};
-    let out = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path);
-    let mut cmd = Command::new(&argv[0]);
-    cmd.args(&argv[1..]);
-    cmd.stdin(Stdio::null());
-    if let Ok(fh) = out {
-        cmd.stdout(Stdio::from(fh));
-        if let Ok(err_fh) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(log_path)
-        {
-            cmd.stderr(Stdio::from(err_fh));
-        }
-    }
-    cmd.current_dir(cwd);
-    // opencode resolves its project from $PWD, not the process cwd.
-    cmd.env("PWD", cwd);
-    crate::claims::stamp_command_env(&mut cmd, Some(name), "opencode", Some(session_id));
-    cmd.env_remove("NO_COLOR");
-    cmd.env_remove("FORCE_COLOR");
-    cmd.env("OPENCODE_SERVER_PASSWORD", &serve.token);
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
-    }
-    cmd.spawn()
-        .map(|child| {
-            let pid = child.id();
-            std::mem::forget(child);
-            crate::orphan_reap::release_child(pid);
-            pid
-        })
-        .map_err(|e| e.to_string())
+    exec_detached(&argv, cwd, name, Some(session_id), log_path, serve)
 }
 
 /// Orchestrate one `spawn --harness opencode --substrate bg`: validate,
@@ -815,7 +776,7 @@ fn dispatch_opencode_serve_inner(
         .join(format!("{name}.jsonl"));
     let session_id = match argv {
         Some(argv) => {
-            if let Err(error) = exec_launch_writer(&argv, cwd, name, &log_path, &serve) {
+            if let Err(error) = exec_detached(&argv, cwd, name, None, &log_path, &serve) {
                 return AskOutcome::err(format!("opencode launch: {error}"), 2);
             }
             // 1.x: the writer's opencode mints the id and the worker's
@@ -896,15 +857,16 @@ fn v1_launch_argv(
     Ok(argv)
 }
 
-/// The 1.x detached exec: one turn's writer over the template's argv, with
-/// the same log and detach mechanics the steering writer uses.
-fn exec_launch_writer(
+/// One detached 1.x writer: the launch and every steer share these log,
+/// env, and process-group mechanics, so the two entry points cannot drift.
+fn exec_detached(
     argv: &[String],
     cwd: &Path,
     name: &str,
+    session_id: Option<&str>,
     log_path: &Path,
     serve: &ServeHandle,
-) -> Result<(), String> {
+) -> Result<u32, String> {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     if let Some(parent) = log_path.parent() {
@@ -930,7 +892,7 @@ fn exec_launch_writer(
     cmd.current_dir(cwd);
     // opencode resolves its project from $PWD, not the process cwd.
     cmd.env("PWD", cwd);
-    crate::claims::stamp_command_env(&mut cmd, Some(name), "opencode", None);
+    crate::claims::stamp_command_env(&mut cmd, Some(name), "opencode", session_id);
     cmd.env_remove("NO_COLOR");
     cmd.env_remove("FORCE_COLOR");
     cmd.env("OPENCODE_SERVER_PASSWORD", &serve.token);
@@ -940,7 +902,14 @@ fn exec_launch_writer(
             Ok(())
         });
     }
-    cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
+    cmd.spawn()
+        .map(|child| {
+            let pid = child.id();
+            std::mem::forget(child);
+            crate::orphan_reap::release_child(pid);
+            pid
+        })
+        .map_err(|e| e.to_string())
 }
 
 /// The 2.x launch: mint the session over HTTP (title = worker name, bound to
