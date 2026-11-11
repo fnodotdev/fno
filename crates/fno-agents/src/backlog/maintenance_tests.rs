@@ -438,7 +438,7 @@ fn repo_moved_floor_keeps_rows_below_min_number() {
     let payload: Value = serde_json::from_str(&out.stdout).unwrap();
     let moved = payload.get("repo_moved").expect("repo_moved block");
     assert_eq!(moved.get("min_number"), Some(&json!(27)));
-    assert_eq!(moved.get("candidates"), Some(&json!(3)));
+    assert_eq!(moved.get("candidates"), Some(&json!(4)));
     assert_eq!(
         fx.row("ab-mov1003").get("pr_url").and_then(Value::as_str),
         Some("https://github.com/fnodotdev/fno/pull/4038"),
@@ -474,6 +474,11 @@ fn repo_moved_floor_keeps_rows_below_min_number() {
         Some("https://github.com/fnodotdev/fno-workshop/pull/4038")
     );
     let moved4 = fx.row("ab-mov1004");
+    assert_eq!(
+        moved4.get("pr_url").and_then(Value::as_str),
+        Some("https://github.com/fnodotdev/fno-workshop/pull/4800"),
+        "a primary url at or above the floor moves"
+    );
     let extras = moved4
         .get("additional_prs")
         .and_then(Value::as_array)
