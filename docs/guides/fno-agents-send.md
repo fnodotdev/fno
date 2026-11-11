@@ -45,8 +45,7 @@ Both are exit 0.
 The `msg-<8hex>` id is stable and appears in the live `<fno_mail>` envelope, but it exists in the bus log only for a `queued (durable)` send.
 Bus-log reply lookup therefore applies only to durable delivery; hosted delivery is independently evidenced by the recipient transcript.
 
-A `parked` receipt means the recipient harness is holding the submitted turn in its own busy queue until a turn boundary.
-The mux sideline shows that queue on the recipient's row: a count with a do-not-disturb mark, for example `[3 queued · dnd]`, while the harness holds mail, and both drop the moment the harness records the releases. The badge names the oldest wait when the transcript carries its stamp, so `[1 queued 12m]` reads as a stuck queue and `[1 queued 4s]` as one about to drain.
+A `parked` receipt means the recipient harness is holding the submitted turn in its own busy queue until a turn boundary. The mux sideline shows that queue on the recipient's row: a count with a do-not-disturb mark, for example `[3 queued · dnd]`. Both drop the moment the harness records the releases. When the transcript carries its stamp, the badge names the oldest wait. `[1 queued 12m]` reads as a stuck queue. `[1 queued 4s]` reads as one about to drain.
 A target-loop session can run hours between boundaries, so a parked answer to its own question reaches it late; the questions lane is the surface where that latency is ruled on, not the general mail lane.
 
 ## Flags
