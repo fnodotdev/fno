@@ -16,9 +16,18 @@ const MAX_SCRIPT_BYTES: u64 = 1 << 20;
 /// A chain deeper than this is adversarial: refuse, never follow.
 const MAX_DEPTH: usize = 3;
 
+/// Which fail-closed rule produced a refusal. Read failures soften at
+/// nested levels to the push-pair fallback; the piped-runner refusal
+/// always propagates, because the piped text never appears in any command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RefusalKind {
+    Read,
+    Piped,
+}
+
 /// The refusal text a script door blocks with, newtyped so this module adds
 /// no string-error surface (R6: that pattern is shrink-only per crate).
-pub(super) struct Refusal(pub String);
+pub(super) struct Refusal(pub String, pub RefusalKind);
 
 impl From<Refusal> for String {
     fn from(r: Refusal) -> String {
@@ -47,10 +56,13 @@ fn visit(
     out: &mut Vec<Segment>,
 ) -> Result<(), Refusal> {
     if depth > MAX_DEPTH {
-        return Err(Refusal(format!(
-            "🚫 BLOCKED: script chain nests more than {MAX_DEPTH} shells deep\n\n\
-             Command: {command}\n\nA script the guard cannot follow to the bottom refuses."
-        )));
+        return Err(Refusal(
+            format!(
+                "🚫 BLOCKED: script chain nests more than {MAX_DEPTH} shells deep\n\n\
+                 Command: {command}\n\nA script the guard cannot follow to the bottom refuses."
+            ),
+            RefusalKind::Read,
+        ));
     }
     for seg in segs {
         let (text, label) = match runner_script(command, seg, ctx) {
@@ -61,8 +73,10 @@ fn visit(
             // readable text. Judge it by the same fallback as an
             // unparsable body: a push pair in the surrounding script
             // refuses, otherwise the runner skips. `bash missing.sh` at
-            // the top level still refuses fail-closed.
-            Err(inner) if depth > 0 => {
+            // the top level still refuses fail-closed, and the
+            // piped-runner refusal always propagates: the piped text
+            // never appears in any command.
+            Err(inner) if depth > 0 && inner.1 == RefusalKind::Read => {
                 if could_push(command) {
                     return Err(inner);
                 }
@@ -208,23 +222,29 @@ fn could_push(text: &str) -> bool {
 }
 
 fn refusal(command: &str, script: &str, why: &str) -> Refusal {
-    Refusal(format!(
-        "🚫 BLOCKED: the script this command would run cannot be gated\n\nCommand: {command}\n\n\
+    Refusal(
+        format!(
+            "🚫 BLOCKED: the script this command would run cannot be gated\n\nCommand: {command}\n\n\
          Script: {script}\nReason: {why}\n\n\
          A shell runner on a script file must let the guard read the script, so the \
          protected-branch push gate can see every line it executes. No marker opens this \
          door: write the script where the guard can read it, or run the steps as typed commands."
-    ))
+        ),
+        RefusalKind::Read,
+    )
 }
 
 fn piped_refusal(command: &str) -> Refusal {
-    Refusal(format!(
-        "🚫 BLOCKED: a piped shell runner cannot be gated\n\nCommand: {command}\n\n\
+    Refusal(
+        format!(
+            "🚫 BLOCKED: a piped shell runner cannot be gated\n\nCommand: {command}\n\n\
          The script this command pipes into the runner is not in the command text, so the \
          protected-branch push gate can never read the lines it executes. No marker opens \
          this door: write the script to a file, feed it with a quoted heredoc (`bash <<'EOF'`), \
          or run the steps as typed commands."
-    ))
+        ),
+        RefusalKind::Piped,
+    )
 }
 
 #[cfg(test)]
