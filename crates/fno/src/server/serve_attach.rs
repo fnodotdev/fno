@@ -30,6 +30,21 @@ struct ServeState {
     pid: Option<u32>,
     #[serde(default)]
     token: String,
+    /// The HTTP contract the runtime recorded at boot (`"2.x"` or `"1.x"`);
+    /// a record without it came from a 1.x boot.
+    #[serde(default)]
+    api: Option<String>,
+}
+
+impl ServeState {
+    /// The health route for the recorded contract: 2.x answers `/api/info`
+    /// and has no `/global/health`.
+    fn health_path(&self) -> &'static str {
+        match self.api.as_deref() {
+            Some("2.x") => "/api/info",
+            _ => "/global/health",
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -64,12 +79,13 @@ fn tui_candidate() -> String {
     std::env::var("FNO_OPENCODE_BIN").unwrap_or_else(|_| "opencode".to_string())
 }
 
-/// One bounded probe of `/global/health` with `opencode:<token>` Basic
-/// auth, mirroring the runtime's http_json (opencode_serve.rs) because the
-/// dep direction forbids importing it. One attempt, 500ms connect and read
-/// bounds: the reach runs on the server loop, and a dead port must not
-/// stall it long.
-fn serve_health(base_url: &str, token: &str) -> Option<ServeHealth> {
+/// One bounded probe of the contract's health route with `opencode:<token>`
+/// Basic auth, mirroring the runtime's http_json (opencode_serve.rs) because
+/// the dep direction forbids importing it. One attempt, 500ms connect and
+/// read bounds: the reach runs on the server loop, and a dead port must not
+/// stall it long. 1.x says `healthy: true`; 2.x has no such field, so a 200
+/// carrying a version is its healthy answer.
+fn serve_health(base_url: &str, token: &str, path: &str) -> Option<ServeHealth> {
     let after_scheme = base_url.strip_prefix("http://")?;
     let authority = after_scheme.trim_end_matches('/');
     use std::io::{Read as _, Write as _};
@@ -85,7 +101,7 @@ fn serve_health(base_url: &str, token: &str) -> Option<ServeHealth> {
     stream.set_read_timeout(Some(PROBE_TIMEOUT)).ok()?;
     stream.set_write_timeout(Some(PROBE_TIMEOUT)).ok()?;
     let request = format!(
-        "GET /global/health HTTP/1.1\r\nHost: {authority}\r\nAuthorization: Basic {}\r\nConnection: close\r\n\r\n",
+        "GET {path} HTTP/1.1\r\nHost: {authority}\r\nAuthorization: Basic {}\r\nConnection: close\r\n\r\n",
         basic_auth("opencode", token),
     );
     stream.write_all(request.as_bytes()).ok()?;
@@ -94,14 +110,17 @@ fn serve_health(base_url: &str, token: &str) -> Option<ServeHealth> {
     let status_ok = buf.starts_with("HTTP/1.1 200") || buf.starts_with("HTTP/1.0 200");
     let body = buf.split("\r\n\r\n").nth(1)?;
     let doc: serde_json::Value = serde_json::from_str(body).ok()?;
-    let healthy = doc
-        .get("healthy")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
     let version = doc
         .get("version")
         .and_then(|v| v.as_str())
         .map(str::to_string);
+    let healthy = match path {
+        "/api/info" => version.is_some(),
+        _ => doc
+            .get("healthy")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+    };
     (status_ok && healthy).then_some(ServeHealth { healthy, version })
 }
 
@@ -178,7 +197,7 @@ fn tui_version(bin: &str) -> Option<String> {
 fn parse_major(version: &str) -> Option<u32> {
     version
         .trim()
-        .strip_prefix('v')?
+        .trim_start_matches('v')
         .split('.')
         .next()?
         .parse()
@@ -218,12 +237,12 @@ fn state_path_read() -> Option<ServeState> {
 }
 
 /// The health verdict, override-aware for tests.
-fn health_verdict(base_url: &str, token: &str) -> Option<ServeHealth> {
+fn health_verdict(state: &ServeState) -> Option<ServeHealth> {
     #[cfg(test)]
     if let Some(pinned) = HEALTH_OVERRIDE.with(|p| p.borrow().clone()) {
         return Some(pinned);
     }
-    serve_health(base_url, token)
+    serve_health(&state.base_url, &state.token, state.health_path())
 }
 
 /// The primary TUI candidate: the FNO_OPENCODE_BIN / PATH binary with its
@@ -275,19 +294,23 @@ pub(crate) fn serve_seat(row: &RegistryAgent) -> ServeSeat {
                 .into(),
         );
     };
-    let Some(health) = health_verdict(&state.base_url, &state.token) else {
+    let Some(health) = health_verdict(&state) else {
         return honest_at(
             &state,
             format!(
-                "the shared serve at {} answered nothing on /global/health",
-                state.base_url
+                "the shared serve at {} answered nothing on {}",
+                state.base_url,
+                state.health_path()
             ),
         );
     };
     if !health.healthy {
         return honest_at(
             &state,
-            "the shared serve answered unhealthy on /global/health".into(),
+            format!(
+                "the shared serve answered unhealthy on {}",
+                state.health_path()
+            ),
         );
     }
     let Some(serve_version) = health.version.clone() else {
@@ -429,6 +452,7 @@ pub(super) fn set_pinned_state(base_url: &str, port: Option<u16>, pid: Option<u3
             port,
             pid,
             token: token.to_string(),
+            api: None,
         }))
     });
 }
