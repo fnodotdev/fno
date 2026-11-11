@@ -1094,12 +1094,21 @@ pub(crate) fn session_cost_exact(otel_db: &Path, ledger: &Path, sid: &str) -> Op
     crate::team_spend::session_meter(otel_db, ledger, None, Some(sid)).usd()
 }
 
+/// One worktree manifest's checkout answer: where the worker sits, and the
+/// session id that owns the manifest, when it names one.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ManifestCwd {
+    pub cwd: String,
+    pub sid: String,
+}
+
 /// The node-to-worktree map for the project's space: one read of each
-/// worktree's target manifest, `graph_node_id` -> `owner_cwd`. A manifest
-/// without both fields, or a worktrees dir that does not exist, contributes
-/// nothing.
-fn manifest_cwds(space: &Path) -> HashMap<String, String> {
-    let mut out = HashMap::new();
+/// worktree's target manifest. A manifest without an `owner_cwd`, or a
+/// worktrees dir that does not exist, contributes nothing. Several
+/// manifests can name one node across re-runs; the session id each names
+/// is what lets the resolver pick the live one.
+pub(crate) fn manifest_cwds(space: &Path) -> HashMap<String, Vec<ManifestCwd>> {
+    let mut out: HashMap<String, Vec<ManifestCwd>> = HashMap::new();
     let Ok(entries) = std::fs::read_dir(space.join("worktrees")) else {
         return out;
     };
@@ -1115,30 +1124,44 @@ fn manifest_cwds(space: &Path) -> HashMap<String, String> {
         else {
             continue;
         };
-        let Some(cwd) = crate::backlog::birth::scan_md_field(&text, "owner_cwd") else {
+        let Some(cwd) =
+            crate::backlog::birth::scan_md_field(&text, "owner_cwd").filter(|c| !c.is_empty())
+        else {
             continue;
         };
-        if cwd.is_empty() {
-            continue;
-        }
-        out.entry(node).or_insert(cwd);
+        let sid = ["harness_session_id", "codex_thread_id", "claude_session_id"]
+            .iter()
+            .find_map(|k| crate::backlog::birth::scan_md_field(&text, k))
+            .unwrap_or_default();
+        out.entry(node).or_default().push(ManifestCwd { cwd, sid });
     }
     out
 }
 
-/// The checkout this worker's git and CI reads must run in: the node's
-/// target manifest names its worktree (`owner_cwd`); a worktree that no
-/// longer exists leaves the session unmeasured this pass. A node with no
-/// manifest falls back to the registry row's own cwd. Returning None never
-/// fires anything: unmeasured, never red.
-fn resolve_worker_cwd(
-    cwds: &HashMap<String, String>,
+/// The checkout this worker's git and CI reads must run in. The session-
+/// matching manifest wins: re-runs of one node leave older manifests
+/// behind, and a sorted first-pick could sample a stale, merged tree. No
+/// match among several manifests is ambiguous: unmeasured, never the wrong
+/// tree. One manifest, or none, resolves as before (the row's own cwd as
+/// the fallback). None never fires anything: unmeasured, never red.
+pub(crate) fn resolve_worker_cwd(
+    cwds: &HashMap<String, Vec<ManifestCwd>>,
+    sid: &str,
     node: &str,
     entry_cwd: &str,
 ) -> Option<String> {
+    let pick =
+        |m: &ManifestCwd| (!m.cwd.is_empty() && Path::new(&m.cwd).exists()).then(|| m.cwd.clone());
     match cwds.get(node) {
-        Some(cwd) if Path::new(cwd).exists() => Some(cwd.clone()),
-        Some(_) => None,
+        Some(list) => {
+            if let Some(mine) = list.iter().find(|m| !m.sid.is_empty() && m.sid == sid) {
+                return pick(mine);
+            }
+            if list.len() == 1 {
+                return list.first().and_then(pick);
+            }
+            None
+        }
         None => (!entry_cwd.is_empty()).then(|| entry_cwd.to_string()),
     }
 }
@@ -1274,7 +1297,7 @@ fn run_pass(
     for (sid, scoped) in &scope {
         let node = scoped.node.as_str();
         let Some(entry) = live.get(sid) else { continue };
-        let Some(cwd) = resolve_worker_cwd(&cwds, node, &entry.cwd) else {
+        let Some(cwd) = resolve_worker_cwd(&cwds, sid, node, &entry.cwd) else {
             continue;
         };
         // A node that left the open set is the reaper's question, not ours.
@@ -2054,41 +2077,62 @@ mod tests {
     fn the_cwd_join_reads_the_nodes_manifest() {
         let temp = tempfile::tempdir().unwrap();
         let space = temp.path().join("space");
-        std::fs::create_dir_all(space.join("worktrees/w1")).unwrap();
-        std::fs::create_dir_all(space.join("worktrees/w2")).unwrap();
+        for name in ["w1", "w2", "w3"] {
+            std::fs::create_dir_all(space.join("worktrees").join(name)).unwrap();
+        }
         std::fs::create_dir_all(temp.path().join("never/w1")).unwrap();
-        std::fs::write(
-            space.join("worktrees/w1/target-state.md"),
+        std::fs::create_dir_all(temp.path().join("never/w2")).unwrap();
+        let manifest = |name: &str, body: String| {
+            std::fs::write(
+                space.join("worktrees").join(name).join("target-state.md"),
+                body,
+            )
+            .unwrap()
+        };
+        manifest(
+            "w1",
             format!(
-                "graph_node_id: x-1\nowner_cwd: {}\n",
+                "graph_node_id: x-1\nharness_session_id: sess-1\nowner_cwd: {}\n",
                 temp.path().join("never/w1").display()
             ),
-        )
-        .unwrap();
-        std::fs::write(
-            space.join("worktrees/w2/target-state.md"),
-            "graph_node_id: x-2\nowner_cwd: /gone-tree-never-created\n",
-        )
-        .unwrap();
+        );
+        manifest(
+            "w2",
+            format!(
+                "graph_node_id: x-1\nharness_session_id: sess-2\nowner_cwd: {}\n",
+                temp.path().join("never/w2").display()
+            ),
+        );
+        manifest(
+            "w3",
+            format!(
+                "graph_node_id: x-2\nowner_cwd: {}\n",
+                temp.path().join("never/w1").display()
+            ),
+        );
         let map = manifest_cwds(&space);
+        // The session-matching manifest wins over the sorted first pick.
         assert_eq!(
-            map.get("x-1").map(String::as_str),
-            Some(temp.path().join("never/w1").to_str().unwrap())
+            resolve_worker_cwd(&map, "sess-2", "x-1", "/canonical"),
+            Some(temp.path().join("never/w2").to_str().unwrap().to_string())
         );
         assert_eq!(
-            map.get("x-2").map(String::as_str),
-            Some("/gone-tree-never-created")
-        );
-        assert_eq!(
-            resolve_worker_cwd(&map, "x-1", "/canonical"),
+            resolve_worker_cwd(&map, "sess-1", "x-1", "/canonical"),
             Some(temp.path().join("never/w1").to_str().unwrap().to_string())
         );
-        assert_eq!(resolve_worker_cwd(&map, "x-2", "/canonical"), None);
+        // An unmatched sid among several manifests is ambiguous: unmeasured.
+        assert_eq!(resolve_worker_cwd(&map, "other", "x-1", "/canonical"), None);
+        // One manifest resolves without a sid match.
         assert_eq!(
-            resolve_worker_cwd(&map, "x-9", "/canonical"),
+            resolve_worker_cwd(&map, "nope", "x-2", "/canonical"),
+            Some(temp.path().join("never/w1").to_str().unwrap().to_string())
+        );
+        // No manifest: the row's own cwd answers; an empty one does not.
+        assert_eq!(
+            resolve_worker_cwd(&map, "s", "x-9", "/canonical"),
             Some("/canonical".to_string())
         );
-        assert_eq!(resolve_worker_cwd(&map, "x-9", ""), None);
+        assert_eq!(resolve_worker_cwd(&map, "s", "x-9", ""), None);
     }
 
     #[test]

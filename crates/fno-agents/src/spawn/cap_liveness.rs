@@ -125,13 +125,6 @@ fn live_rows_with_blocked(
             warnings.push(format!(
                 "{NOTE} fno registry unreadable ({e}); slot count degraded to 0"
             ));
-            if !dropped_blocked.is_empty() {
-                warnings.push(format!(
-                    "{NOTE} {} claude row(s) usage-blocked per claude agents, slot(s) freed: {}",
-                    dropped_blocked.len(),
-                    dropped_blocked.join(", ")
-                ))
-            }
             return LiveRead::RegistryUnreadable(e.to_string());
         }
     }
