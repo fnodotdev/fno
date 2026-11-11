@@ -997,6 +997,7 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         let runner = &|_argv: &[String]| (0, String::new(), String::new());
         sync_questions();
+        let questions = crate::provider_cap::questions_path(&crate::paths::AgentsHome::from_env());
         let path = crate::event_store::store_path(&questions);
         let db = rusqlite::Connection::open(path).unwrap();
         db.execute_batch("CREATE TABLE recovery_history(event_id TEXT PRIMARY KEY, batch TEXT NOT NULL); INSERT INTO recovery_history SELECT event_id, 'copy-batch' FROM events WHERE type='attention_answer';").unwrap();
