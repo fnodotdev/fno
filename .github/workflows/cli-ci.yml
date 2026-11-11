@@ -594,8 +594,11 @@ jobs:
     # before any budget ran each time. 2026-11-04: the residue port grew the
     # crate again and nine branch runs died at this cap before the save step
     # could land a warm tree, so the cap moved to 25m to give one cold run
-    # room to save.
-    timeout-minutes: 25
+    # room to save. 2026-11-11: three budget scenarios stacked 60s retry
+    # gaps onto the cold build and the job died at 25m on a branch run and
+    # a main run alike, seconds before the last scenario reported, so the
+    # cap moved to 30m.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
