@@ -53,8 +53,22 @@ fn visit(
         )));
     }
     for seg in segs {
-        let Some((text, label)) = runner_script(command, seg, ctx)? else {
-            continue;
+        let (text, label) = match runner_script(command, seg, ctx) {
+            Ok(Some(pair)) => pair,
+            Ok(None) => continue,
+            // A nested helper the door cannot read (a variable script
+            // path, or a file absent beside the script) carries no
+            // readable text. Judge it by the same fallback as an
+            // unparsable body: a push pair in the surrounding script
+            // refuses, otherwise the runner skips. `bash missing.sh` at
+            // the top level still refuses fail-closed.
+            Err(inner) if depth > 0 => {
+                if could_push(command) {
+                    return Err(inner);
+                }
+                continue;
+            }
+            Err(inner) => return Err(inner),
         };
         let inner = parse_script_text(command, &label, &text)?;
         out.extend(inner.iter().cloned());
@@ -532,6 +546,45 @@ mod tests {
         let fake = feature(dir.path());
         let c = ctx(dir.path(), &fake);
         let refusal = judge_with(&bash("bash splice.sh"), &c).unwrap();
+        assert!(refusal.contains("cannot be gated"), "{refusal}");
+    }
+
+    #[test]
+    fn a_nested_runner_on_an_absent_helper_skips_when_the_script_could_not_push() {
+        // `$(bash "$helper" ...)` with a variable path reads no file: the
+        // runtime resolves it (or skips it), and no hidden text exists.
+        // The nested read failure once refused the whole enclosing
+        // script, which broke every producer script that nests a helper.
+        // The fallback applies: no push pair in the enclosing script
+        // skips the helper.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("nest.sh"),
+            "#!/bin/bash\nrepo=$(git rev-parse --show-toplevel 2>/dev/null || true)\nout=$(bash \"$helper\" \"$repo\" 2>/dev/null)\necho \"$out\"\n",
+        )
+        .unwrap();
+        let fake = feature(dir.path());
+        let c = ctx(dir.path(), &fake);
+        assert_eq!(
+            judge_with(&bash("bash nest.sh"), &c),
+            None,
+            "an absent nested helper must not refuse a push-free script"
+        );
+    }
+
+    #[test]
+    fn a_nested_runner_on_an_absent_helper_refuses_when_the_script_could_push() {
+        // The same shape with a push pair in the enclosing script keeps
+        // the fail-closed refusal: the unreadable helper stays unread.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("nest-push.sh"),
+            "#!/bin/bash\ngit push origin main\nout=$(bash \"$helper\" x 2>/dev/null)\n",
+        )
+        .unwrap();
+        let fake = feature(dir.path());
+        let c = ctx(dir.path(), &fake);
+        let refusal = judge_with(&bash("bash nest-push.sh"), &c).unwrap();
         assert!(refusal.contains("cannot be gated"), "{refusal}");
     }
 
