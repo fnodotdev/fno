@@ -20,6 +20,12 @@ pub struct Palette {
     pub border: u32,
     /// The status line's text when the connection has closed.
     pub error: u32,
+    /// Labels and secondary text: the values beside them keep `fg`.
+    pub muted: u32,
+    /// The left pane's and the strip's background.
+    pub panel: u32,
+    /// A row that needs the user.
+    pub warn: u32,
     ansi: [u32; 16],
 }
 
@@ -59,6 +65,9 @@ impl Palette {
             accent: rgb_or(t.border, 0xe8e8e8),
             border: rgb_or(t.sel, 0x2b2b2b),
             error: rgb_or(t.error, 0xe1a6a3),
+            muted: rgb_or(t.dim, 0x8a8a8a),
+            panel: rgb_or(t.chip, 0x1c1c1c),
+            warn: rgb_or(t.needs_you, 0xe5c07b),
             ansi,
         }
     }

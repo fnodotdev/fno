@@ -10,7 +10,10 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
-use crate::proto::{self, ClientMsg, Frame, ProtoError, ServerMsg, BUILD_VERSION, PROTO_VERSION};
+use crate::proto::{
+    self, AgentRow, ClientMsg, Frame, ProtoError, ServerMsg, SquadMeta, BUILD_VERSION,
+    PROTO_VERSION,
+};
 use crate::tree::Rect;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -18,9 +21,12 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 /// The parts of a server `Layout` the app draws.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Layout {
+    pub squads: Vec<SquadMeta>,
+    pub active_squad: u64,
     pub panes: Vec<(u64, Rect)>,
     pub focus: u64,
     pub area: (u16, u16),
+    pub agents: Vec<AgentRow>,
 }
 
 /// What the reader thread hands the UI.
@@ -30,6 +36,11 @@ pub enum Event {
     Frame(u64, Frame),
     Modes(Vec<u8>),
     Notice(String),
+    /// Text the server copied (a selection release or Cmd+C) for the
+    /// clipboard.
+    Copy(String),
+    /// A link the user clicked in a pane.
+    OpenLink(String),
     /// The server ended the connection (`Bye`) or the socket failed. The
     /// reader has stopped.
     Closed(String),
@@ -41,8 +52,23 @@ pub enum Event {
 fn to_event(msg: ServerMsg) -> Option<Event> {
     match msg {
         ServerMsg::Layout {
-            panes, focus, area, ..
-        } => Some(Event::Layout(Layout { panes, focus, area })),
+            squads,
+            active_squad,
+            panes,
+            focus,
+            area,
+            agents,
+            ..
+        } => Some(Event::Layout(Layout {
+            squads,
+            active_squad,
+            panes,
+            focus,
+            area,
+            agents,
+        })),
+        ServerMsg::Copy { text } => Some(Event::Copy(text)),
+        ServerMsg::OpenLink { url } => Some(Event::OpenLink(url)),
         ServerMsg::Frame { pane_id, frame } if frame.geometry_ok() => {
             Some(Event::Frame(pane_id, frame))
         }
@@ -167,13 +193,13 @@ fn read_loop(mut stream: UnixStream, tx: UnboundedSender<Event>) {
 
 /// `--probe`: attach as an observer, wait up to `budget` for a `Layout`
 /// and a frame for each of its panes, print one line, and return the exit
-/// code. No window is opened.
-pub fn probe(session: &str, budget: Duration) -> i32 {
+/// code with the layout read. No window is opened.
+pub fn probe(session: &str, budget: Duration) -> (i32, Option<Layout>) {
     let mut stream = match attach(session, 0, 0) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("fno-desktop: {e}");
-            return 1;
+            return (1, None);
         }
     };
     let deadline = Instant::now() + budget;
@@ -216,7 +242,7 @@ pub fn probe(session: &str, budget: Duration) -> i32 {
             "fno-desktop: no layout from session {session}: {}",
             failure.unwrap_or_default()
         );
-        return 1;
+        return (1, None);
     };
     let counted: usize = layout
         .panes
@@ -227,11 +253,12 @@ pub fn probe(session: &str, budget: Duration) -> i32 {
         "attached session={session} panes={} frames={counted}",
         layout.panes.len()
     );
-    match failure {
+    let code = match failure {
         Some(why) => {
             eprintln!("fno-desktop: {why}");
             1
         }
         None => 0,
-    }
+    };
+    (code, Some(layout))
 }

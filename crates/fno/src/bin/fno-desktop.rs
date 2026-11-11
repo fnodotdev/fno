@@ -15,7 +15,8 @@ struct Args {
     /// The terminal font size in points.
     #[arg(long, default_value_t = 13.0)]
     font_size: f32,
-    /// Attach with no window, print `attached session=<s> panes=<n> frames=<m>`, and exit.
+    /// Attach with no window, print `attached session=<s> panes=<n> frames=<m>`
+    /// and `agents=<n> questions=<m> seats=<k>`, and exit.
     #[arg(long)]
     probe: bool,
 }

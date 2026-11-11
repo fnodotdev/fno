@@ -5,10 +5,11 @@ use std::sync::Arc;
 
 use gpui::{
     canvas, fill, point, px, rgb, rgba, size, App, Bounds, Context, Font, FontStyle, FontWeight,
-    Hsla, IntoElement, ParentElement, Pixels, Render, SharedString, Size, Styled, TextRun,
+    Hsla, IntoElement, ParentElement, Pixels, Point, Render, SharedString, Size, Styled, TextRun,
     UnderlineStyle, Window,
 };
 
+use super::boxdraw;
 use super::palette::Palette;
 use crate::proto::{cell_flags, Cell, Frame};
 
@@ -23,6 +24,9 @@ pub struct Metrics {
 pub struct PaneView {
     pub frame: Option<Arc<Frame>>,
     pub focused: bool,
+    /// Text the input handler is composing (a dead key, an IME draft),
+    /// drawn at the cursor of the focused pane until it commits.
+    pub preedit: Option<String>,
     pub metrics: Metrics,
     pub palette: Palette,
 }
@@ -63,6 +67,27 @@ fn color(hex: u32, dim: bool) -> Hsla {
     }
 }
 
+fn font_for(m: &Metrics, bold: bool, italic: bool) -> Font {
+    Font {
+        weight: if bold {
+            FontWeight::BOLD
+        } else {
+            m.font.weight
+        },
+        style: if italic {
+            FontStyle::Italic
+        } else {
+            FontStyle::Normal
+        },
+        ..m.font.clone()
+    }
+}
+
+/// True for the chars painted as quads, never through the font.
+fn is_box(c: char) -> bool {
+    matches!(c as u32, 0x2500..=0x259f)
+}
+
 /// A run of cells on one row that share a style and paint as one line.
 struct Run {
     col: usize,
@@ -70,6 +95,8 @@ struct Run {
     style: Style,
     /// A wide glyph is its own run and is shaped at its natural width.
     wide: bool,
+    /// Box drawing and block chars, painted as quads.
+    boxed: bool,
 }
 
 fn row_runs(cells: &[Cell], p: &Palette) -> Vec<Run> {
@@ -82,25 +109,209 @@ fn row_runs(cells: &[Cell], p: &Palette) -> Vec<Run> {
         let wide = cells
             .get(col + 1)
             .is_some_and(|n| n.flags & cell_flags::WIDE_SPACER != 0);
+        let boxed = is_box(cell.c);
         match runs.last_mut() {
-            Some(last) if !wide && !last.wide && last.style == style => last.text.push(cell.c),
+            Some(last) if !wide && !last.wide && last.boxed == boxed && last.style == style => {
+                last.text.push(cell.c)
+            }
             _ => runs.push(Run {
                 col,
                 text: cell.c.to_string(),
                 style,
                 wide,
+                boxed,
             }),
         }
     }
     runs
 }
 
+#[allow(clippy::too_many_arguments)]
+fn paint_text(
+    text: String,
+    at: Point<Pixels>,
+    font: Font,
+    fg: Hsla,
+    underline: bool,
+    force: Option<Pixels>,
+    m: &Metrics,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let run = TextRun {
+        len: text.len(),
+        font,
+        color: fg,
+        background_color: None,
+        underline: underline.then_some(UnderlineStyle {
+            thickness: px(1.0),
+            color: Some(fg),
+            wavy: false,
+        }),
+        strikethrough: None,
+    };
+    let line =
+        window
+            .text_system()
+            .shape_line(SharedString::from(text), m.font_size, &[run], force);
+    let _ = line.paint(at, m.cell.height, window, cx);
+}
+
+/// Paint box chars as quads; a char with no quads (a diagonal) falls back
+/// to the font.
+fn paint_box_run(run: &Run, at: Point<Pixels>, m: &Metrics, window: &mut Window, cx: &mut App) {
+    let (cw, ch) = (m.cell.width, m.cell.height);
+    let light = (f32::from(ch) / 16.0).round().max(1.0);
+    let fg = color(run.style.fg, run.style.dim);
+    for (i, c) in run.text.chars().enumerate() {
+        let x = at.x + cw * i as f32;
+        match boxdraw::quads(c, f32::from(cw), f32::from(ch), light) {
+            Some(quads) => {
+                for q in quads {
+                    let mut c = fg;
+                    c.a *= q.alpha;
+                    window.paint_quad(fill(
+                        Bounds::new(point(x + px(q.x), at.y + px(q.y)), size(px(q.w), px(q.h))),
+                        c,
+                    ));
+                }
+            }
+            None => paint_text(
+                c.to_string(),
+                point(x, at.y),
+                m.font.clone(),
+                fg,
+                false,
+                Some(cw),
+                m,
+                window,
+                cx,
+            ),
+        }
+    }
+}
+
+/// A 1px outline: the cursor of a pane that does not take keys.
+fn paint_outline(b: Bounds<Pixels>, c: Hsla, window: &mut Window) {
+    let t = px(1.0);
+    let (o, s) = (b.origin, b.size);
+    for r in [
+        Bounds::new(o, size(s.width, t)),
+        Bounds::new(point(o.x, o.y + s.height - t), size(s.width, t)),
+        Bounds::new(o, size(t, s.height)),
+        Bounds::new(point(o.x + s.width - t, o.y), size(t, s.height)),
+    ] {
+        window.paint_quad(fill(r, c));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_cursor(
+    frame: &Frame,
+    solid: bool,
+    preedit: Option<&str>,
+    m: &Metrics,
+    p: &Palette,
+    origin: Point<Pixels>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let (cw, ch) = (m.cell.width, m.cell.height);
+    let cols = frame.cols as usize;
+    let (r, c) = (frame.cursor_row as usize, frame.cursor_col as usize);
+    let Some(cell) = frame.cells.get(r * cols + c) else {
+        return;
+    };
+    let at = point(origin.x + cw * c as f32, origin.y + ch * r as f32);
+    if let Some(text) = preedit.filter(|t| !t.is_empty()) {
+        let width = cw * text.chars().count() as f32;
+        window.paint_quad(fill(
+            Bounds::new(at, size(width, ch)),
+            color(p.panel, false),
+        ));
+        let font = m.font.clone();
+        paint_text(
+            text.to_string(),
+            at,
+            font,
+            color(p.fg, false),
+            true,
+            None,
+            m,
+            window,
+            cx,
+        );
+        return;
+    }
+    let s = style_of(cell, p);
+    let wide = frame
+        .cells
+        .get(r * cols + c + 1)
+        .is_some_and(|n| c + 1 < cols && n.flags & cell_flags::WIDE_SPACER != 0);
+    let bounds = Bounds::new(at, size(cw * if wide { 2.0 } else { 1.0 }, ch));
+    if !solid {
+        paint_outline(bounds, color(s.fg, false), window);
+        return;
+    }
+    window.paint_quad(fill(bounds, color(s.fg, false)));
+    if cell.c != ' ' {
+        let font = font_for(m, s.bold, s.italic);
+        let force = (!wide).then_some(cw);
+        paint_text(
+            cell.c.to_string(),
+            at,
+            font,
+            color(s.bg, false),
+            false,
+            force,
+            m,
+            window,
+            cx,
+        );
+    }
+}
+
+/// `[+N]` at the pane's top right while it shows history N lines up.
+fn paint_scroll_badge(
+    frame: &Frame,
+    m: &Metrics,
+    p: &Palette,
+    origin: Point<Pixels>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let cw = m.cell.width;
+    let text = format!("[+{}]", frame.scroll_offset);
+    // Half a cell of padding on each side, so the text never touches the
+    // pane's border.
+    let width = cw * (text.chars().count() as f32 + 1.0);
+    let x = origin.x + cw * frame.cols as f32 - width;
+    let at = point(x, origin.y);
+    window.paint_quad(fill(
+        Bounds::new(at, size(width, m.cell.height)),
+        color(p.accent, false),
+    ));
+    paint_text(
+        text,
+        point(x + cw / 2.0, origin.y),
+        m.font.clone(),
+        color(p.bg, false),
+        false,
+        Some(cw),
+        m,
+        window,
+        cx,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
 fn paint_frame(
     frame: &Frame,
     focused: bool,
+    preedit: Option<&str>,
     m: &Metrics,
     p: &Palette,
-    origin: gpui::Point<Pixels>,
+    origin: Point<Pixels>,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -123,69 +334,37 @@ fn paint_frame(
                     c,
                 ));
             }
+            if run.boxed {
+                paint_box_run(&run, point(x, y), m, window, cx);
+                continue;
+            }
             if run.text.trim().is_empty() && !s.underline {
                 continue;
             }
-            let fg = color(s.fg, s.dim);
-            let font = Font {
-                weight: if s.bold {
-                    FontWeight::BOLD
-                } else {
-                    m.font.weight
-                },
-                style: if s.italic {
-                    FontStyle::Italic
-                } else {
-                    FontStyle::Normal
-                },
-                ..m.font.clone()
-            };
-            let text_run = TextRun {
-                len: run.text.len(),
-                font,
-                color: fg,
-                background_color: None,
-                underline: s.underline.then_some(UnderlineStyle {
-                    thickness: px(1.0),
-                    color: Some(fg),
-                    wavy: false,
-                }),
-                strikethrough: None,
-            };
             let force = (!run.wide).then_some(cw);
-            let line = window.text_system().shape_line(
-                SharedString::from(run.text),
-                m.font_size,
-                &[text_run],
+            let font = font_for(m, s.bold, s.italic);
+            let fg = color(s.fg, s.dim);
+            paint_text(
+                run.text,
+                point(x, y),
+                font,
+                fg,
+                s.underline,
                 force,
+                m,
+                window,
+                cx,
             );
-            let _ = line.paint(point(x, y), ch, window, cx);
         }
     }
-    if focused && frame.cursor_visible && frame.scroll_offset == 0 {
-        let (r, c) = (frame.cursor_row as usize, frame.cursor_col as usize);
-        if let Some(cell) = frame.cells.get(r * cols + c) {
-            let s = style_of(cell, p);
-            let at = point(origin.x + cw * c as f32, origin.y + ch * r as f32);
-            window.paint_quad(fill(Bounds::new(at, m.cell), color(s.fg, false)));
-            if cell.c != ' ' {
-                let run = TextRun {
-                    len: cell.c.len_utf8(),
-                    font: m.font.clone(),
-                    color: color(s.bg, false),
-                    background_color: None,
-                    underline: None,
-                    strikethrough: None,
-                };
-                let line = window.text_system().shape_line(
-                    SharedString::from(cell.c.to_string()),
-                    m.font_size,
-                    &[run],
-                    Some(cw),
-                );
-                let _ = line.paint(at, ch, window, cx);
-            }
-        }
+    if frame.cursor_visible && frame.scroll_offset == 0 {
+        // Solid only where keys land: the focused pane of the active window.
+        let solid = focused && window.is_window_active();
+        let preedit = preedit.filter(|_| focused);
+        paint_cursor(frame, solid, preedit, m, p, origin, window, cx);
+    }
+    if frame.scroll_offset > 0 {
+        paint_scroll_badge(frame, m, p, origin, window, cx);
     }
 }
 
@@ -193,6 +372,7 @@ impl Render for PaneView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let frame = self.frame.clone();
         let focused = self.focused;
+        let preedit = self.preedit.clone();
         let metrics = self.metrics.clone();
         let palette = self.palette;
         gpui::div().size_full().child(
@@ -203,6 +383,7 @@ impl Render for PaneView {
                         paint_frame(
                             &frame,
                             focused,
+                            preedit.as_deref(),
                             &metrics,
                             &palette,
                             bounds.origin,
