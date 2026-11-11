@@ -612,6 +612,7 @@ fn rule_names(rule: &u32) -> &'static str {
         9 => "glue",
         10 => "number",
         11 => "dnumber",
+        12 => "routes",
         _ => "?",
     }
 }
@@ -951,6 +952,73 @@ fn check_glue(masked: &str) -> Vec<Violation> {
     violations
 }
 
+/// Rule 12 markers: the cannot-shaped claims about a task route, matched on
+/// the lowered text with the curly apostrophe normalised first. A closed
+/// list, like rule 8's, so the refusal stays explainable.
+fn cannot_claim_re() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(
+            r"(?i)\b(cannot|can't|couldn't|can not|unable to|impossible to|not possible|no way to|does not work|do not work|did not work|will not work)\b",
+        )
+        .expect("static regex")
+    })
+}
+
+/// Rule 12 route language: a body that names what it tried, or states the
+/// tool fact that refused, carries its routes and never trips the rule.
+/// Stem shapes, so "the gate refuses" clears the rule the same way
+/// "refused by the gate" does.
+fn route_marker_re() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(
+            r"(?i)\b(tried|tries|attempt\w*|ran|checked|verif\w*|tested|probed|read|quer\w*|fetched|inspected|because|refus\w*|deni\w*|reject\w*|rate.limit|blocked by|forbidden)\b",
+        )
+        .expect("static regex")
+    })
+}
+
+/// Rule 12: a cannot claim names no route tried. One violation per
+/// cannot-shaped sentence, and only when the body names no route anywhere:
+/// route language in an adjacent sentence still names the routes. A
+/// negated marker ("not impossible to") is not a claim and skips. The
+/// masked text arrives precomputed from `check`, so quoted tool output
+/// never fires.
+pub fn check_cannot_claims(masked: &str) -> Vec<Violation> {
+    let text = masked.replace('\u{2019}', "'");
+    let lowered = text.to_lowercase();
+    if !cannot_claim_re().is_match(&lowered) || route_marker_re().is_match(&lowered) {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for line in text.split('\n') {
+        for sentence in split_sentences(line) {
+            let lowered_sentence = sentence.to_lowercase();
+            let Some(found) = cannot_claim_re().find(&lowered_sentence) else {
+                continue;
+            };
+            if found.start() >= 4 && lowered_sentence[found.start() - 4..found.start()] == "not " {
+                continue;
+            }
+            out.push(Violation {
+                rule: 12,
+                sentence_index: 0,
+                sentence,
+                detail: "the cannot claim names no route tried. Try the other routes, then name each one tried in the claim, or state the tool fact that refused.".to_string(),
+            });
+        }
+    }
+    out
+}
+
+/// The stop hook's cannot gate reads the same rule through one detector:
+/// masks the report first, then asks the lint. True only when the report
+/// claims cannot and names no route tried.
+pub fn has_unrouted_cannot_claim(text: &str) -> bool {
+    !check_cannot_claims(&mask(text)).is_empty()
+}
+
 /// Return every violation found in `text`. Every surface runs rules 1 to 8;
 /// the capped surfaces (mail, encounter) also carry the prose word cap and
 /// the glue refusal.
@@ -965,6 +1033,12 @@ pub fn check(text: &str, surface: &str, word_cap: Option<usize>) -> Vec<Violatio
             word_cap.unwrap_or(MESSAGE_WORD_CAP),
         ));
         violations.extend(check_glue(&masked));
+    }
+    // Rule 12 rides the mail surface only. Encounter evidence quotes tool
+    // refusals as its raw material, so a cannot-shaped quote there is data,
+    // not a claim.
+    if surface == "mail" {
+        violations.extend(check_cannot_claims(&mask(text)));
     }
     violations
 }
@@ -1681,13 +1755,15 @@ digits with no separator. A pr-body also refuses a standalone node hash whose
 short number exists: write the number, or the `number (hash)` pair. Mail,
 pr-body, and markdown prose also refuse a bare decision or question hash that
 holds a number: write D142, or `D142 (d-1a2b3c4d)` when the hash must stay
-copyable."#;
+copyable. Mail prose also refuses a cannot claim that names no route tried:
+try the other routes first, then name each one tried in the claim, or state
+the tool fact that refused."#;
 
 /// The usage text `fno doctor lint style --help` prints (the Typer help the
 /// Python leg printed, carried over as the command's own documentation).
 fn print_usage() {
     print!(
-        "Check text against the ten style rules in docs/style-rules.md.
+        "Check text against the twelve style rules in docs/style-rules.md.
 
 Usage: fno doctor lint style [OPTIONS]
 
@@ -1999,5 +2075,79 @@ mod tests {
             v.is_empty(),
             "pair form and unnumbered tokens stay clean: {v:?}"
         );
+    }
+
+    #[test]
+    fn rule_12_fires_on_a_cannot_claim_that_names_no_route() {
+        let fired = |body: &str| {
+            check(body, "mail", None)
+                .iter()
+                .find(|v| v.rule == 12)
+                .map(|v| v.detail.to_string())
+        };
+        for body in [
+            "I cannot merge the PR today.\n",
+            "Not possible to touch the store from here.\n",
+            "Upgrading the lockfile is unable to complete.\n",
+        ] {
+            let detail = fired(body).unwrap_or_else(|| panic!("no rule 12 for {body:?}"));
+            assert!(detail.contains("route"), "{detail}");
+        }
+        // A body with no cannot claim never trips the rule.
+        assert!(fired("The merge landed green at noon.\n").is_none());
+    }
+
+    #[test]
+    fn rule_12_clears_when_the_claim_names_its_routes() {
+        let rule12 = |body: &str| {
+            check(body, "mail", None)
+                .iter()
+                .filter(|v| v.rule == 12)
+                .count()
+        };
+        // Route language anywhere in the body clears every sentence.
+        assert_eq!(
+            rule12("Cannot merge. Tried the gate, then the REST read.\n"),
+            0
+        );
+        // The tool fact that refused is route language too.
+        assert_eq!(
+            rule12("Cannot read the PR because that API is rate-limited right now.\n"),
+            0
+        );
+        // The honest tool-fact phrasing clears the rule in any inflection.
+        assert_eq!(
+            rule12("Cannot spawn: the gate refuses new workers now.\n"),
+            0
+        );
+        // A negated marker is not a claim.
+        assert_eq!(rule12("It is not impossible to finish this today.\n"), 0);
+        // Quoted tool output is masked before the rule reads.
+        assert_eq!(
+            rule12("The log says \"error: cannot read file\" at line 3.\n"),
+            0
+        );
+        // Encounter evidence quotes refusals as data; the rule never runs there.
+        assert_eq!(
+            check("I cannot merge the PR today.\n", "encounter", None)
+                .iter()
+                .filter(|v| v.rule == 12)
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn the_stop_gate_detector_reads_the_same_rule_through_the_mask() {
+        assert!(has_unrouted_cannot_claim(
+            "Blocked. Cannot reach the graph store.\n"
+        ));
+        assert!(!has_unrouted_cannot_claim(
+            "Cannot reach the store: tried the socket, then the reader.\n"
+        ));
+        // A fenced log quoting a cannot-shaped line is not a claim.
+        assert!(!has_unrouted_cannot_claim(
+            "```\nerror: cannot read file\n```\nThe build finished green.\n"
+        ));
     }
 }

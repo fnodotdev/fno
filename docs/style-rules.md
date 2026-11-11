@@ -1,6 +1,6 @@
 # House style for agent-authored text
 
-Agent text is re-read by every recipient on every turn. It must read once. A machine checks nine rules at the tool boundary, on every surface. Mail and encounter evidence carry rule 7 as well, the 80-word cap, its number config-driven per surface, and rule 9, the glue refusal.
+Agent text is re-read by every recipient on every turn. It must read once. A machine checks twelve rules at the tool boundary. Mail and encounter evidence carry rule 7 as well, the 80-word cap, its number config-driven per surface, and rule 9, the glue refusal.
 
 ## The house style
 
@@ -29,7 +29,7 @@ A worker who reads both rules without this section picks one and drops the other
 
 ## What the checker enforces
 
-The house style above is the standard a person writes to. The list below is the part a machine can decide. The two lists are different things, and one counts six while the other counts eleven. The checker is the floor, never the whole style. A draft that passes it can still bury the point, and no gate catches that.
+The house style above is the standard a person writes to. The list below is the part a machine can decide. The two lists are different things, and one counts six while the other counts twelve. The checker is the floor, never the whole style. A draft that passes it can still bury the point, and no gate catches that.
 
 1. A list-item sentence is 20 words or fewer. Every other sentence is 25 words or fewer.
 2. No semicolon. Write two sentences.
@@ -42,6 +42,7 @@ The house style above is the standard a person writes to. The list below is the 
 9. No glued tokens on mail and encounter. A glued token writes a word and digits as one token, or joins two wordlist words with no separator. "staticprogress" and "PIDs76751" are the shapes. This rule runs only where rule 7 runs, because the cap is the pressure that pays for gluing.
 10. A pr-body refuses a standalone node hash whose short number exists. Write the number, or the `number (hash)` pair the closure renderer emits. The checker reads the store once and fails open. An unread store flags nothing, and an unnumbered hash flags nothing.
 11. Mail, pr-body, and markdown prose refuse a bare decision or question hash that holds a number. When the hash must stay copyable, write the pair form `D142 (d-1a2b3c4d)`. Otherwise write the number alone. The store read and the fail-open posture are rule 10's.
+12. Mail prose refuses a cannot claim that names no route tried. Before "cannot", try the other routes, then name each one tried in the claim, or state the tool fact that refused ("that API is rate-limited"). The rule reads masked text, so quoted output never fires, and route language anywhere in the body clears every sentence. This rule runs on mail only: encounter evidence quotes tool refusals as its raw material.
 
 Until 2026-09-11 mail ran the word cap only, and rules 1 to 6 never saw a mail body. That was a decision, recorded in this file and in the checker's docstring. The premise aged: agent mail is read by a human in the transcript, and every mail is re-read by a model whose context it spends. Mail now runs the full rule set. Measured on 2026-09-11 against 6,964 authored bodies from the bus corpus, rules 1 to 6 refuse 18.6 percent, and rule 8 adds about 3 percent. The 80-word cap refuses as before. The gate cannot wedge the bus: the `control:` lane, a `style-exception:` line, and `FNO_STYLE_ENFORCE=0` all bypass.
 
