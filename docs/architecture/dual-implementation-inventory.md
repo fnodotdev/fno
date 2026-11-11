@@ -473,6 +473,8 @@ The shell resolver in `scripts/lib/worktree-lifecycle.sh::_cargo_build_base` sta
 
 When Cargo runs the wrapper before a native fno binary exists, the wrapper uses the current base for `SCCACHE_DIR`. When the caller sets `SCCACHE_DIR`, the wrapper keeps that value.
 
+**Thread permission answering.** Shared-vocabulary, live (2026-11-11). One ladder decides a thread worker's permission ask: `decide` in `crates/fno-agents/src/runtime/thread_permission.rs`, over `fnod::ask`. Each harness has its own transport. The opencode serve lane lists and replies in `crates/fno-agents/src/runtime/opencode_permission.rs`. The codex app-server approvals transport is owed by the codex half of this work and calls the same `decide`. The fnh thread host's `ask_answerer` (`crates/fno-agents/src/runtime/footnote_harness/thread.rs`) still parks and rejects on its own window. It is the next transport to adopt the ladder.
+
 **The ssh fast options.** Shared-vocabulary. `SSH_FAST_OPTIONS` in `crates/fno-agents/src/runtime/mail_remote.rs` and the option pair in `crates/fno/src/client/remote_hosts.rs` `probe_argv` spell the same BatchMode + ConnectTimeout=5 probe prefix at two sites. The fno crate lists no fno-agents dependency, so neither site can import the other. A served constant door through an `fno-agents` read is the one-owner form. Until then the copy is named here, so the next audit counts it.
 
 ## The four CI parity scripts

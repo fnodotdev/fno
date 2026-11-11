@@ -70,11 +70,32 @@ After a host restart the harness relaunches only some sessions. fno covers the r
 | agy | `keeper` | true | Resume is a session flag, `agy --conversation {id}`, and the id is callee-minted: `agy -p` prints a JSON envelope carrying `conversation_id`. Measured 2026-09-03 on agy 1.1.24. The minted id named a real db under `~/.gemini/antigravity-cli/conversations` and a fresh process restored that transcript. Journey: `cli/tests/agents/test_agy_spawn_journey.py`, opt-in `FNO_AGY_LIVE=1`. The HEADLESS lane stays unmeasured and the arm refuses it by name. |
 | cursor-agent | `keeper` | true | `create-chat` mints the chat id before the child launches, so the id exists before any worker starts. `--print` is output-only, so there is no one-shot form to offer instead. |
 | grok | `keeper` | true | `--session-id` adopts a caller-assigned uuid and `--resume` on a fresh process recalls a prior turn across a SIGKILL. Re-using a spent id is a grok refusal, never a resume, so the arm refuses a resume-form spawn rather than rendering a create form with a used id. |
-| opencode | `keeper` | false | The serve lane is launch-only, and its session binding is `store-lookup` with `required = false`, which races the store write; the keeper PTY itself is built and reusable. |
+| opencode | `keeper` | false | The serve lane is launch-only, and its session binding is `store-lookup` with `required = false`, which races the store write; the keeper PTY itself is built and reusable. fno mints the serve session and drives each turn over HTTP, and it answers the turn's permission asks (see [Permission asks on the opencode serve lane](#permission-asks-on-the-opencode-serve-lane)). |
 | pi | `keeper` | true | The keeper PTY is built and the seven-step restart journey passed: both supervisors SIGKILLed, the recorded child pid surviving under the same keeper, cwd/session id/session store unchanged, the second mail prompt answered (`cli/tests/agents/test_thread_keeper_journey.py`, opt-in `FNO_PI_LIVE=1`). The bit backs the thread lane a one-shot dispatch resolves onto; the autonomous `/target` template still refuses at the loop gate until pi's loop extension ships. The pi thread spawn arm is the Rust client's `keeper_spawn.rs` (row 5 of the agents port); the Python leg still serves python mode until the dispatch_spawn port deletes it. |
 | zcode | none | false | The TUI is unbuildable on the measured 3.14.3 install: the bundle resolves no `@zcode/tui`, so a TUI launch exits 1 before painting. There is no persistent child to keep and no attach lane. The measured lane is headless one-shot turns with session-id read-back: `zcode -p` mints `sess_<uuid>`, `--resume` recalls it from a second process, and `fno agents mail ask` resumes by name. Measured 2026-09-29. |
 | muse | host | false | `muse serve` speaks MSP on stdio, so an fno host (`fno-agents-worker --muse-host`) holds the session and serves a socket, the footnote host's shape. The client's host arm runs before the keeper arm, so the resolver's `keeper` reading of `muse resume <id>` is never used for a spawn. A second host cannot take a session another host holds (`sessionInUse`), so there is no attach lane. Measured 2026-10-24 on Muse Code 1.4.12, echo provider. |
 | gemini | n/a | false | Refused earlier, at `command_surface`: the harness is deprecated in favor of agy and never reaches the thread gate. Its resume form would otherwise read `keeper`. |
+
+## Permission asks on the opencode serve lane
+
+A thread worker has no person at its terminal, so somebody else must answer its permission asks. On the opencode serve lane that is fno. The user's own opencode rules decide first: fno writes no permission config into the serve, so an act the user allows never asks and an act the user denies never runs. Before 2026-11-11 the serve booted with an `OPENCODE_CONFIG` file holding `{"permission":{"*":"allow"}}`. That `*` merged last and beat the user's own denies.
+
+fno creates each worker session with `POST /session?directory=<cwd>`. The create body carries the worker rules. `question`, `plan_enter` and `plan_exit` are denied, because no person answers them. `external_directory` is allowed for the worktree and for every `FNO_WORKER_ADD_DIRS` root, which is the state-root grant.
+
+Each turn runs under `fno-agents-worker --opencode-turn <spec>` (`crates/fno-agents/src/runtime/opencode_turn.rs`). Prose rides `prompt_async`. A slash command rides `POST /session/{id}/command`, which expands the template in the serve and answers only when the turn ends. The driver polls the pending asks once a second and stops when the session goes idle.
+
+Each ask goes through one ladder, `crates/fno-agents/src/runtime/thread_permission.rs`. fnod gets one choice question (`routine`, `unsure`, `irreversible`). A sure `routine` answer allows the call once. An unsure, untrained, slow or absent fnod refuses the call with a note, which the model reads as the tool's refusal. A sure irreversible act, or one the user's own `ask` rule raised, is filed as an outstanding ask and held. fnod down never allows. No corpus head is trained on the question yet, so today every ask goes to the model. Each answer journals one `thread_permission_answered` event.
+
+A held ask waits on the serve itself. `fno agents ask <name> --answer allow_once|deny` replies to the oldest pending ask of the row's session, and exits 2 when none is pending. After `agents.thread_permission.hold_minutes` (default 30) the driver refuses the call with a note naming the question id. The serve never times an ask out on its own: an unanswered ask stayed pending for 742 seconds in the measurement.
+
+The V1 frames, measured on opencode 1.18.33 on 2026-11-11:
+
+| Call | V1 (1.18.33) | V2 (2.x docs) |
+|---|---|---|
+| List pending | `GET /permission?directory=<cwd>` answers `[{id, sessionID, permission, patterns, metadata, always, tool}]`. With no `directory` it reads `[]` while an ask waits. | `GET /api/session/{sid}/permission` answers `{data: [{id, sessionID, action, resources}]}` |
+| Reply | `POST /permission/{id}/reply?directory=<cwd>` with `{reply: once|reject, message?}` | `POST /api/session/{sid}/permission/{id}/reply` with `{decision: once|reject, message?}` |
+
+1.18.33 also serves the `/api` routes, but its asks never show there. fno never replies `always`, because that saves a rule and fno owns no permission layer. The V2 launch is not built: opencode 2.2.2's `run` has no `--attach`, and the serve binary choice belongs to the opencode v2 thread work.
 
 ## The keeper arm table
 
