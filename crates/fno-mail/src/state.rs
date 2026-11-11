@@ -287,8 +287,9 @@ pub fn receipt(state: &DeliveryState, lane: &str) -> String {
 /// The receipt words for a send whose bytes reached the recipient's harness.
 /// `typed` is the pane transport's own word (`typed (pane <id>)`): the bytes
 /// were typed at the recipient's prompt, which the absorption battery
-/// proved a mid-turn claude absorbs, so the ladder counts the pane
-/// answer as landed.
+/// proved a mid-turn claude absorbs. Reaching is not landing: the reply
+/// ladder confirms a pane-only receipt by transcript content (see
+/// [`TURN_RECORD_WORDS`]) before it reads the answer delivered.
 const REACHED_WORDS: [&str; 5] = [
     "injected",
     "parked",

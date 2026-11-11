@@ -414,8 +414,12 @@ fn step_of(state: &ReplyState, items: &[AttentionItem], now: u64, cwd: &Path) ->
                 .map(|sid| (sid.to_string(), a.harness.clone().unwrap_or_default()))
         })
     });
-    let confirm_armed =
-        state.mailed_at.is_some() || (state.resumed_at.is_some() && state.resume_exit == Some(0));
+    let mail_strong = fno_mail::state::receipt_in_turn_record(&state.receipt);
+    // A turn-record receipt never opens the confirm phase: it lands without
+    // reading the transcript, and the scan is the cost the ladder refuses to
+    // pay before it must.
+    let confirm_armed = (state.mailed_at.is_some() && !mail_strong)
+        || (state.resumed_at.is_some() && state.resume_exit == Some(0));
     let confirmed = if confirm_armed {
         session.as_ref().is_some_and(|(sid, harness)| {
             transcript_confirm(sid, harness, state.item_id.as_str(), state.offset)
@@ -434,7 +438,7 @@ fn step_of(state: &ReplyState, items: &[AttentionItem], now: u64, cwd: &Path) ->
         });
     let facts = Facts {
         mail_landed: fno_mail::state::receipt_reached(&state.receipt),
-        mail_strong: fno_mail::state::receipt_in_turn_record(&state.receipt),
+        mail_strong,
         is_note: state.item_id.starts_with("note-"),
         session: session.as_ref().map(|(s, h)| (s.as_str(), h.as_str())),
         confirmed,
