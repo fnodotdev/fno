@@ -59,7 +59,7 @@ run_hook() {
 out="$(FAKE_MANAGER_NAME=Background run_hook)"
 code=$?
 [[ $code -eq 0 ]] || fail "hook exited $code under a Background manager"
-[[ "$(printf '%s' "$out" | wc -l | tr -d ' ')" == "1" ]] || fail "expected exactly one line, got: $out"
+[[ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" == "1" ]] || fail "expected exactly one line, got: $out"
 printf '%s' "$out" | jq -e '.hookSpecificOutput.hookEventName == "SessionStart"' >/dev/null || fail "not a SessionStart JSON line: $out"
 printf '%s' "$out" | jq -e '.hookSpecificOutput.additionalContext' >/dev/null || fail "no additionalContext: $out"
 printf '%s' "$out" | grep -q "claude daemon stop --any" || fail "the line must name the cure: $out"

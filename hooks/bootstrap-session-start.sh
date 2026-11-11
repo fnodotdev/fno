@@ -45,7 +45,7 @@ bounded_probe "$WORK/dns" scutil --dns
 
 MGR="$(head -n 1 "$WORK/mgr" 2>/dev/null | tr -d '[:space:]')"
 DNS_BROKEN=1
-if grep -q "DNS configuration" "$WORK/dns" 2>/dev/null; then
+if grep -q "^DNS configuration" "$WORK/dns" 2>/dev/null; then
     DNS_BROKEN=0
 fi
 
@@ -63,7 +63,7 @@ elif [[ "$DNS_BROKEN" == "1" ]]; then
 fi
 
 if [[ -n "$REASON" ]]; then
-    printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"[fno] %s Cure: from a GUI terminal, run \`claude daemon stop --any\`, then start any \`claude --bg\` command; the recipe is the claude supervisor entry in docs/fleet-faq.md."}}\n' "$REASON"
+    printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"[fno] %s Cure: from a GUI terminal, run `claude daemon stop --any`, then start any `claude --bg` command; the recipe is the claude supervisor entry in docs/fleet-faq.md."}}\n' "$REASON"
 fi
 
 exit 0
