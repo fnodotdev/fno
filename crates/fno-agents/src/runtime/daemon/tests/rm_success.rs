@@ -5,6 +5,168 @@
 //! daemon.rs for file budget: test motion is the sanctioned shrink.
 
 use super::*;
+
+#[tokio::test]
+async fn rm_closes_the_dead_childs_pane_and_preserves_a_reused_coordinate() {
+    let _env = crate::claims::test_env_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    for (failure, identityless, stored_pane, listing_failure, replaced_child, substrate) in [
+        (false, false, 76, false, false, Some("pane")),
+        (true, false, 76, false, false, Some("pane")),
+        (false, true, 99, false, false, Some("pane")),
+        (false, true, 76, false, false, Some("pane")),
+        (false, false, 76, true, false, Some("pane")),
+        (false, false, 76, false, true, Some("pane")),
+        (false, true, 99, false, false, None),
+        (false, false, 76, false, false, Some("thread")),
+        (true, false, 76, false, false, Some("thread")),
+    ] {
+        let home = short_home(if failure {
+            "rmdeadpanefail"
+        } else {
+            "rmdeadpane"
+        });
+        let spaces = home.root().join("spaces");
+        let _spaces = crate::claims::EnvVarGuard::set("FNO_SPACES_DIR", spaces.to_str().unwrap());
+        let sid = "finished-pane-session";
+        let session = crate::footnote_harness::transcript::sessions_root()
+            .join("fixture")
+            .join(sid);
+        std::fs::create_dir_all(&session).unwrap();
+        let pid = 0x7fff_fff0;
+        let record = crate::footnote_harness::transcript::transcript_file(&session, sid);
+        std::fs::write(
+            &record,
+            json!({"type":"heartbeat", "ts":"2020-01-01T00:00:00Z", "data":{"pid":pid}})
+                .to_string(),
+        )
+        .unwrap();
+        let panes = home.root().join("panes.json");
+        let successor = json!({"pane_id":76,"child_pid":std::process::id()});
+        std::fs::write(
+            &panes,
+            json!([{"pane_id":99,"child_pid":pid}, successor.clone()]).to_string(),
+        )
+        .unwrap();
+        let current_child = home.root().join("current-child");
+        std::fs::write(&current_child, pid.to_string()).unwrap();
+        let kill = if failure {
+            "echo 'pane server unreachable' >&2; exit 1".to_string()
+        } else {
+            format!(
+                "printf '%s' '{}' > '{}'",
+                json!([successor.clone()]),
+                panes.display()
+            )
+        };
+        let list = if listing_failure {
+            "echo 'pane listing unavailable' >&2; exit 1".to_string()
+        } else if replaced_child {
+            format!(
+                "cat '{}'; printf '%s' '{}' > '{}'; printf '%s' '{}' > '{}'",
+                panes.display(),
+                std::process::id(),
+                current_child.display(),
+                json!([{"pane_id":99,"child_pid":std::process::id()}, successor.clone()]),
+                panes.display()
+            )
+        } else {
+            format!("cat '{}'", panes.display())
+        };
+        let retire = if failure {
+            format!(
+                "printf '%s' '{}'",
+                json!({"retired":0,"panes_closed":0,"skipped_typing":1})
+            )
+        } else {
+            format!(
+                "printf '%s' '{}' > '{}'; printf '%s' '{}'",
+                json!([successor.clone()]),
+                panes.display(),
+                json!({"retired":1,"panes_closed":1,"skipped_typing":0})
+            )
+        };
+        let stub = crate::write_exec_stub(
+            home.root(),
+            "fno",
+            &format!(
+                "#!/bin/sh\ncase \"$*\" in\n'mux pane ls --server main --json') {} ;;\n'mux pane kill --server main 99 --expect-child-pid '*) if [ \"$8\" != \"$(cat '{}')\" ]; then echo 'pane child changed' >&2; exit 1; fi; {} ;;\n'mux retire-session main --harness footnote --session-id finished-pane-session --json') {} ;;\n*) echo \"unexpected: $*\" >&2; exit 2 ;;\nesac\n",
+                list, current_child.display(), kill, retire
+            ),
+        );
+        let _fno = crate::claims::EnvVarGuard::set("FNO_BIN", stub.to_str().unwrap());
+        let mut row = ask_row("finished-pane", Some("2020-01-01T00:00:00Z"));
+        row.harness = Some("footnote".into());
+        row.harness_session_id = (!identityless).then(|| sid.into());
+        row.log_path = Some(record.to_string_lossy().into_owned());
+        row.substrate = substrate.map(str::to_string);
+        row.pid = (!identityless).then_some(pid);
+        row.mux = Some(state::MuxRef {
+            session: "main".into(),
+            pane_id: stored_pane,
+        });
+        state::update_registry(&home.registry_json(), |registry| registry.entries.push(row))
+            .unwrap();
+        let ctx = test_ctx(home.clone(), PathBuf::from("fno-agents-worker"));
+        let response = handle_rm_with(
+            &ctx,
+            &Request::new(1, "agent.rm", json!({"name":"finished-pane"})),
+            &|| panic!("a footnote row never reads the claude roster"),
+            &|_| panic!("a footnote row never calls claude rm"),
+            &|_, _| panic!("a footnote row never calls claude stop"),
+            &|server, entry| {
+                assert_eq!(entry.substrate.as_deref(), Some("thread"));
+                crate::gc_native::retire_attached_session(server, entry)
+            },
+            &|_, _| PaneProbe::Unknown,
+        )
+        .await;
+        let remaining: Value = serde_json::from_slice(&std::fs::read(&panes).unwrap()).unwrap();
+        if failure || listing_failure || replaced_child || (identityless && stored_pane == 76) {
+            let message = &response
+                .error()
+                .expect("unsafe or failed removal refuses")
+                .message;
+            if failure {
+                let reason = if substrate == Some("thread") {
+                    "typing"
+                } else {
+                    "pane server unreachable"
+                };
+                assert!(message.contains(reason), "{message}");
+            }
+            if listing_failure {
+                assert!(message.contains("pane listing unavailable"), "{message}");
+            }
+            if replaced_child {
+                assert!(message.contains("pane child changed"), "{message}");
+            }
+            assert_eq!(remaining.as_array().unwrap().len(), 2);
+            assert_eq!(
+                state::load_registry(&home.registry_json())
+                    .unwrap()
+                    .entries
+                    .len(),
+                1
+            );
+        } else {
+            assert!(response.error().is_none(), "{response:?}");
+            assert_eq!(
+                remaining,
+                json!([successor]),
+                "rm left the dead child's pane behind"
+            );
+            assert_eq!(response.result().unwrap()["pane_removed"], true);
+            assert!(state::load_registry(&home.registry_json())
+                .unwrap()
+                .entries
+                .is_empty());
+        }
+        std::fs::remove_dir_all(home.root()).ok();
+    }
+}
+
 #[tokio::test]
 async fn rm_cascades_claude_before_removing_the_registry_row() {
     let _env = crate::claims::test_env_lock()
@@ -167,8 +329,8 @@ async fn rm_clears_a_stored_live_pane_row_whose_pane_is_provably_absent() {
         &|| panic!("non-Claude row must not read the Claude list"),
         &|_| panic!("non-Claude row must not call claude rm"),
         &|_, _| panic!("no claude stop may run in this test"),
-        &|session, pane_id| {
-            assert_eq!((session, pane_id), ("main", 76));
+        &|session, entry| {
+            assert_eq!((session, entry.mux.as_ref().unwrap().pane_id), ("main", 76));
             Ok(false)
         },
         &|session, pane_id| {

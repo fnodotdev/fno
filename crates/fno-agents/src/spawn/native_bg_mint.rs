@@ -517,6 +517,7 @@ fn prepare_row(
         harness: Some("claude".into()),
         substrate: Some(SUBSTRATE.into()),
         node,
+        node_basis: record.and_then(|r| r.node_basis.clone()),
         created_at: crate::daemon::now_rfc3339_like(),
         // The listing pid can be a pre-warmed spare in claude's bg daemon,
         // not this session; the row stays pidless and routes by short id.

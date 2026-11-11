@@ -36,6 +36,12 @@ use crate::state::RegistryEntry;
 use crate::AgentStatus;
 use std::collections::{BTreeMap, HashSet};
 
+/// The claim metadata mark that makes a worker slot a background job.
+#[derive(Deserialize)]
+struct BackgroundMark {
+    background_job: Option<bool>,
+}
+
 /// Exit codes, allocated by the shared table in
 /// `cli/src/fno/agents/spawn_gate.py` and kept unique across both trees by
 /// `cli/tests/unit/test_exit_code_allocation.py` (values >= 64 claim a number
@@ -1044,6 +1050,13 @@ pub(crate) fn live_worker_slot_claims(warnings: &mut Vec<String>) -> Vec<SlotRes
     for key in keys {
         match claims::status(&key, Some(&root)) {
             (state @ (claims::ClaimState::Live | claims::ClaimState::Suspect), Some(rec)) => {
+                if BackgroundMark::deserialize(&rec.metadata)
+                    .ok()
+                    .and_then(|m| m.background_job)
+                    == Some(true)
+                {
+                    continue;
+                }
                 found.push(SlotReservation {
                     name: key.strip_prefix("worker:").unwrap_or(&key).to_string(),
                     holder: rec.holder,
@@ -1315,6 +1328,7 @@ pub struct GateInput {
     pub seed: Option<String>,
     /// An explicit `--session-phase` label.
     pub session_phase: Option<String>,
+    pub background_job: bool,
 }
 
 pub type NodeOccupancy = Result<BTreeMap<String, Vec<String>>, String>;
@@ -1483,6 +1497,7 @@ fn decide_gate(
     let flags = input.flags;
     let route_provider = input.route_provider.as_deref();
     let admitted_node = input.node.clone().or_else(gate_node);
+    let background_job = input.background_job && substrate == "headless" && admitted_node.is_none();
     let holder_pid = input.holder_pid.unwrap_or_else(std::process::id);
     let holder = format!("spawn-gate:{}:{}", holder_pid, name);
     let root = gate_claims_root();
@@ -1547,12 +1562,20 @@ fn decide_gate(
         check_node_occupancy(node, input.caller_session.as_deref(), flags.force)?;
     }
 
-    // A caller with no worker identity is the human's own typed command: no
-    // capacity gate below may refuse or hold it. The slot acquire stays
-    // best-effort so the spawned worker still joins the roster accounting.
+    // Human callers never wait in the capacity queue. Background jobs keep
+    // admission checks but their reservation does not charge foreground slots.
     if !crate::spawn_gate_admission::gate_agent_origin() {
         if substrate == "headless" || substrate == "cloud" {
-            acquire_worker_slot(&mut guard, name, &holder, holder_pid, route_provider, false).ok();
+            acquire_worker_slot(
+                &mut guard,
+                name,
+                &holder,
+                holder_pid,
+                route_provider,
+                background_job,
+                false,
+            )
+            .ok();
         }
         return Ok(guard);
     }
@@ -1617,7 +1640,16 @@ fn decide_gate(
         );
         if substrate == "headless" || substrate == "cloud" {
             // fail_closed=false: this arm cannot fault, only warn.
-            acquire_worker_slot(&mut guard, name, &holder, holder_pid, route_provider, false).ok();
+            acquire_worker_slot(
+                &mut guard,
+                name,
+                &holder,
+                holder_pid,
+                route_provider,
+                background_job,
+                false,
+            )
+            .ok();
         }
         return Ok(guard);
     }
@@ -1817,6 +1849,7 @@ fn decide_gate(
                             &holder,
                             holder_pid,
                             route_provider,
+                            background_job,
                             true,
                         ) {
                             guard.release();
@@ -2069,6 +2102,7 @@ fn decide_gate(
                                     &holder,
                                     holder_pid,
                                     route_provider,
+                                    background_job,
                                     provider_cap.is_some(),
                                 ) {
                                     guard.release();
@@ -2100,6 +2134,7 @@ fn decide_gate(
                                     &holder,
                                     holder_pid,
                                     route_provider,
+                                    background_job,
                                     true,
                                 ) {
                                     guard.release();
@@ -2711,10 +2746,14 @@ fn acquire_worker_slot(
     holder: &str,
     holder_pid: u32,
     route_provider: Option<&str>,
+    background_job: bool,
     fail_closed: bool,
 ) -> Result<(), String> {
     let key = format!("worker:{name}");
     let mut metadata = serde_json::Map::new();
+    if background_job {
+        metadata.insert("background_job".into(), serde_json::json!(true));
+    }
     metadata.insert(
         "model_provider".to_string(),
         serde_json::Value::String(

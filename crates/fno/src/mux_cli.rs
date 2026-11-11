@@ -2078,8 +2078,7 @@ pub enum PaneCmd {
         pane: u64,
         name: Option<String>,
     },
-    /// `pane focus <pane>`: move the OPERATOR's view to a pane; every other `pane` command acts for an
-    /// agent. A digit argument is a pane id, else a registry selector; `--fzf` opens the picker.
+    /// Move the operator's view: a digit selects a pane, a label a registry row; --fzf opens the picker.
     Focus {
         target: FocusTarget,
     },
@@ -2090,9 +2089,7 @@ pub enum PaneCmd {
         placement: PanePlacement,
         /// `--worker <name>`: a squad member joined to that registry row, resumable after a restart.
         worker: Option<String>,
-        /// `--fno-id <id>`: the caller's preassigned session id, recorded as
-        /// the pane's resume birthright so the pane is addressable before its
-        /// registry row exists.
+        /// Preassigned identity, available before its registry row exists.
         fno_id: Option<String>,
         /// `--size <cols>x<rows>`: the pty size; a client viewing the tab later fits it to its screen.
         size: Option<(u16, u16)>,
@@ -2100,46 +2097,25 @@ pub enum PaneCmd {
     Send {
         pane: u64,
         source: SendSource,
-        /// `--guarded`: refuse the paste (TARGET_NOT_IDLE) unless the pane is
-        /// provably idle, so a mid-turn recipient demotes to durable instead of
-        /// swallowing bytes an external sender would miscall delivered. Default
-        /// off: the raw channel is the writer-claim holder's own.
+        /// Refuse unless provably idle; TARGET_NOT_IDLE lets the caller queue delivery.
         guarded: bool,
-        /// Submit the pasted text with a separate wire-level carriage return,
-        /// then require a positive changed-frame marker before returning zero.
+        /// Submit with a separate carriage return, then require a changed-frame receipt.
         submit: bool,
-        /// `--raw`: type these bytes verbatim. Default OFF, so an ordinary
-        /// `pane send` carries the same `<fno_mail>` envelope the mail lane
-        /// produces and is refused when the pane is showing an option prompt
-        /// (node). Raw is for the genuine keystroke cases: a digit
-        /// answering a prompt, a bare control key, a shell command, clearing a
-        /// modal. An envelope around the character `1` is nonsense.
+        /// Bypass the attributed envelope for literal keys and commands.
+        /// Enveloping a prompt reply would corrupt it.
         raw: bool,
         /// (v51) The pane-captured identity the caller addressed.
         expected_identity: Option<String>,
-        /// `--style-exception <reason>`: the reasoned one-send exception the
-        /// mail commands honor, threaded to the Python renderer so the escape
-        /// hatch keeps one shape across every enveloped lane. A raw send
-        /// never renders, so the flag beside `--raw` has no effect.
+        /// A reasoned style exception for this envelope; ignored with --raw.
         style_exception: Option<String>,
-        /// `--source <label>`: caller-declared provenance for the
-        /// audit row. The mail lane declares `mail`; absent, the row reads
-        /// `unattributed:<pid>`. Declared, never sniffed from the payload:
-        /// `--raw` carries both a wrapped mail body and an operator's
-        /// verbatim keystrokes, which no byte inspection can tell apart.
+        /// Declared audit provenance; absent means unattributed:<pid>.
+        /// Payload bytes cannot distinguish mail from an operator's keystrokes.
         provenance: Option<String>,
-        /// (v94) `--hold-pass`: the caller's send already passed the Rust
-        /// hold gate (own send, `control:` mail), so the pane's DND refusal
-        /// stands down for this write. Hidden: it exists for the two
-        /// transport arms above it, never for interactive typing.
+        /// Hidden transport flag: this send already passed the hold gate.
         hold_pass: bool,
-        /// `--harness <name>`: opt into the composer read-back for a harness
-        /// whose capabilities row declares the keys (the queue affordance,
-        /// Tab recovery, the deciding key). Absent: the plain confirm.
+        /// Opt into the harness-declared composer readback; absent uses plain confirm.
         harness: Option<String>,
-        /// `--clear-composer`: send the harness's composer-clear keys and
-        /// verify the empty marker before the payload, for the
-        /// rejected-command-rides-along case.
+        /// Clear and verify the composer before sending the payload.
         clear_composer: bool,
     },
     Wait {
@@ -2151,10 +2127,9 @@ pub enum PaneCmd {
     },
     Kill {
         pane: u64,
-        /// `--hand-off-to <socket>`: release the pane to the thread lane
-        /// instead of killing it. The keeper socket is renamed there and
-        /// the child keeps running.
+        /// Release the keeper socket without killing its child.
         hand_off_to: Option<String>,
+        expected_child_pid: Option<u32>,
     },
     Claim {
         pane: u64,
@@ -3968,8 +3943,19 @@ pub(crate) fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> 
             },
             Duration::from_millis(timeout_ms) + Duration::from_secs(2),
         ),
-        PaneCmd::Kill { pane, hand_off_to } => (
-            ControlCommand::PaneKill { pane, hand_off_to },
+        PaneCmd::Kill {
+            pane,
+            hand_off_to,
+            expected_child_pid,
+        } => (
+            match expected_child_pid {
+                Some(expected_child_pid) => ControlCommand::PaneKillChecked {
+                    pane,
+                    expected_child_pid,
+                    hand_off_to,
+                },
+                None => ControlCommand::PaneKill { pane, hand_off_to },
+            },
             CONTROL_TIMEOUT,
         ),
         PaneCmd::Claim { pane, pid } => (
@@ -5127,6 +5113,7 @@ mod tests {
                 PaneCmd::Kill {
                     pane: 76,
                     hand_off_to: None,
+                    expected_child_pid: None,
                 },
             ),
             (
@@ -5135,6 +5122,7 @@ mod tests {
                 PaneCmd::Kill {
                     pane: 76,
                     hand_off_to: None,
+                    expected_child_pid: None,
                 },
             ),
             (
@@ -5143,6 +5131,16 @@ mod tests {
                 PaneCmd::Kill {
                     pane: 76,
                     hand_off_to: None,
+                    expected_child_pid: None,
+                },
+            ),
+            (
+                &["kill", "76", "--expect-child-pid", "4242"],
+                None,
+                PaneCmd::Kill {
+                    pane: 76,
+                    hand_off_to: None,
+                    expected_child_pid: Some(4242),
                 },
             ),
             (
@@ -5721,7 +5719,8 @@ mod tests {
                 json: false,
                 cmd: PaneCmd::Kill {
                     pane: 3,
-                    hand_off_to: None
+                    hand_off_to: None,
+                    expected_child_pid: None,
                 }
             }
         );

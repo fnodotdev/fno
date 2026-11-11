@@ -500,7 +500,7 @@ pub use crate::process_probe::process_start_time;
 pub(crate) use crate::gc_inventory::index_tree;
 // the pane kill and its absence vocabulary moved to pane_stop.rs
 // with the stop helper that now shares them.
-pub(crate) use crate::pane_stop::{mux_pane_is_absent, run_mux_pane_kill};
+pub(crate) use crate::pane_stop::mux_pane_is_absent;
 
 /// Wall-clock bound for one harness removal subprocess (`run_claude_rm`). A
 /// hung removal must never wedge its caller (the operator measured a 300s+
@@ -4094,7 +4094,7 @@ async fn handle_rm_with(
     read_claude_agents: &(dyn Fn() -> crate::claude_roster::ClaudeAgentsSnapshot + Sync),
     claude_rm: &(dyn Fn(&str) -> Result<(), String> + Sync),
     claude_stop: &(dyn Fn(&str, Option<&str>) -> rm_teardown::StopLeg + Sync),
-    mux_pane_kill: &(dyn Fn(&str, u64) -> Result<bool, String> + Sync),
+    mux_retire: &(dyn Fn(&str, &RegistryEntry) -> Result<bool, String> + Sync),
     mux_pane_probe: &(dyn Fn(&str, u64) -> PaneProbe + Sync),
 ) -> Response {
     let requested_name = match req.params.get("name").and_then(|v| v.as_str()) {
@@ -4245,20 +4245,16 @@ async fn handle_rm_with(
     }
     let pane_outcome;
     let mut pane_stop_detail: Option<String> = None;
-    let pane_arm_ran = entry.substrate.as_deref() == Some("pane");
+    let pane_arm_ran = crate::pane_stop::requires_pane_stop(&entry);
     if pane_arm_ran {
-        // a pane row's ONE live ref is the pane process, and a
-        // successful or absent pane kill is not a death - the stored pane id
-        // is not an address for a process a keeper re-adopt. rm proves the
-        // stop the same way the reap does: verified pid, pane found by child
-        // pid, ESRCH only.
+        // Prove the process and bind cleanup to the currently observed child.
         let e_for_stop = entry.clone();
         let stop = off_executor(move || crate::pane_stop::stop_pane_process_confirmed(&e_for_stop));
         let (outcome, detail) = crate::pane_stop::rm_pane_outcome(&stop);
         pane_outcome = outcome;
         pane_stop_detail = detail;
     } else if let Some(mux) = entry.mux.as_ref() {
-        pane_outcome = match off_executor(|| mux_pane_kill(&mux.session, mux.pane_id)) {
+        pane_outcome = match off_executor(|| mux_retire(&mux.session, &entry)) {
             Ok(true) => CascadeOutcome::Removed,
             Ok(false) => CascadeOutcome::AlreadyAbsent("mux pane already absent".into()),
             Err(reason) => CascadeOutcome::Failed(reason),
@@ -4293,8 +4289,8 @@ async fn handle_rm_with(
                 req.id,
                 ErrorCode::Internal,
                 format!(
-                    "agent {name}: {harness_note}registry retained; mux pane {}:{} removal failed: {reason}",
-                    mux.session, mux.pane_id
+                    "agent {name}: {harness_note}registry retained; mux view for {} on {} removal failed: {reason}",
+                    entry.harness_session_id.as_deref().unwrap_or("unknown"), mux.session
                 ),
             );
         }

@@ -48,6 +48,8 @@ pub struct Launch {
 pub struct Record {
     #[serde(flatten)]
     pub launch: Launch,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_basis: Option<String>,
     pub launcher_session: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launcher_harness: Option<String>,
@@ -743,8 +745,19 @@ fn write_record_with(
     now_ms: i64,
 ) -> std::io::Result<()> {
     launch.cwd = canonical(&launch.cwd);
+    let node_basis = if launch.node.is_none() {
+        launch.node = crate::state::load_registry(&root.join("registry.json"))
+            .ok()
+            .and_then(|registry| {
+                parent_node(&registry.entries, launcher_session, launcher_harness)
+            });
+        launch.node.as_ref().map(|_| "parent".to_string())
+    } else {
+        None
+    };
     let record = Record {
         launch,
+        node_basis,
         launcher_session: launcher_session.to_string(),
         launcher_harness: launcher_harness.map(str::to_string),
         launcher_cwd: launcher_cwd.map(str::to_string),
@@ -754,6 +767,27 @@ fn write_record_with(
         claimed_at_ms: None,
     };
     write_atomic(&pending_dir(root).join(file_key(&record)), &record)
+}
+
+/// A launcher's node is inherited only when its full session and harness
+/// agree. Conflicting registry rows cannot assign work to the child.
+pub(crate) fn parent_node(
+    entries: &[crate::state::RegistryEntry],
+    session: &str,
+    harness: Option<&str>,
+) -> Option<String> {
+    let harness = harness.filter(|h| !h.is_empty())?;
+    let mut nodes = entries
+        .iter()
+        .filter(|row| {
+            row.harness_name() == harness
+                && row.harness_session_id.as_deref().is_some_and(|sid| {
+                    !session.is_empty() && crate::claims::same_session_id(sid, session)
+                })
+        })
+        .filter_map(|row| row.node.as_deref().filter(|node| !node.is_empty()));
+    let node = nodes.next()?;
+    nodes.all(|other| other == node).then(|| node.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -985,7 +1019,7 @@ pub fn child_name_from_env() -> Option<String> {
         .filter(|n| !n.is_empty())
 }
 
-/// The SessionStart leg: claim this child's record and stamp its node.
+/// The SessionStart leg: claim this child's record and stamp an explicit node launch.
 /// Never fails the report; every miss is silent or one stderr line.
 pub fn claim_and_stamp(root: &Path, graph: &Path, child: &Child) -> Option<Record> {
     // A worker's SessionStart reports twice; only the first claim stamps.
@@ -993,6 +1027,9 @@ pub fn claim_and_stamp(root: &Path, graph: &Path, child: &Child) -> Option<Recor
         return Some(done);
     }
     let record = claim(root, child)?;
+    if record.node_basis.as_deref() == Some("parent") {
+        return Some(record);
+    }
     if let Some(node) = record.launch.node.as_deref() {
         if crate::backlog::workflows::active_backend_name() == "graph" {
             match stamp_node(

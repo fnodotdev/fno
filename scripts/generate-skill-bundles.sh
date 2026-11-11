@@ -81,7 +81,7 @@ fi
 # output and report success.
 ROWS_FILE="$(mktemp)"
 META_FILE="$(mktemp)"
-trap 'rm -f "$ROWS_FILE" "$META_FILE" "${TMP_DST:-}"' EXIT
+trap 'command -p rm -f "$ROWS_FILE" "$META_FILE" "${TMP_DST:-}"' EXIT
 if ! "${PY[@]}" "$PARSER" "$MANIFEST" > "$ROWS_FILE"; then
   echo "ERROR: parse-bundle-manifest.py failed" >&2
   exit 1
@@ -204,7 +204,7 @@ while IFS=$'\t' read -r TYPE SKILL SOURCE DEST META; do
   # completes; the tmp + mv pattern keeps the committed bundle valid as long
   # as some prior generator run succeeded.
   TMP_DST="${DST_PATH}.tmp.$$"
-  rm -rf "$TMP_DST"
+  command -p rm -rf "$TMP_DST"
 
   case "$TYPE" in
     file)
@@ -235,14 +235,14 @@ while IFS=$'\t' read -r TYPE SKILL SOURCE DEST META; do
       ;;
     *)
       echo "ERROR: unknown bundle type: $TYPE" >&2
-      rm -rf "$TMP_DST"
+      command -p rm -rf "$TMP_DST"
       exit 1
       ;;
   esac
 
   # pack-skill staged a directory; replace the destination whole.
   if [[ "$TYPE" == "pack-skill" && -e "$DST_PATH" ]]; then
-    rm -rf "$DST_PATH"
+    command -p rm -rf "$DST_PATH"
   fi
   mv "$TMP_DST" "$DST_PATH"
 

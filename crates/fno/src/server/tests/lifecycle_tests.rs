@@ -8,6 +8,102 @@
 
 use super::*;
 
+#[tokio::test]
+async fn checked_pane_kill_refuses_a_replaced_child_before_closing_the_pane() {
+    async fn request(core: &mut Core, pane: u64, child: u32, command: &str) -> (ServerMsg, bool) {
+        let (mut peer, server) = UnixStream::pair().unwrap();
+        let (tx, mut rx) = mpsc::channel(1);
+        let resolver = Arc::new(Mutex::new(Resolver::default()));
+        let mut worker = tokio::spawn(handle_client(
+            server,
+            tx,
+            resolver,
+            1,
+            Arc::new(RwLock::new(HashMap::new())),
+        ));
+        let wire = crate::proto::PROTO_VERSION + u32::from(command == "PaneKillCheckedFuture");
+        let raw = serde_json::json!({"Control": {
+            "proto": wire,
+            "build": crate::proto::BUILD_VERSION,
+            "verb": {command: {"pane":pane,"expected_child_pid":child,"hand_off_to":null}}
+        }});
+        write_msg(&mut peer, &raw).await.unwrap();
+        let routed = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                msg = rx.recv() => {
+                    match msg {
+                        Some(msg) => { core.handle(msg); true },
+                        None => false,
+                    }
+                },
+                outcome = &mut worker => {
+                    outcome.unwrap();
+                    false
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let reply = tokio::time::timeout(Duration::from_secs(5), read_msg(&mut peer))
+            .await
+            .unwrap()
+            .unwrap();
+        if routed {
+            worker.await.unwrap();
+        }
+        (reply, routed)
+    }
+
+    let _store = StoreScratch::new("checked-pane-kill");
+    let (mut core, pane) = template_core();
+    let observed_child = core.panes.get(&pane).unwrap().pty.child_pid().unwrap();
+    let replacement = core.spawn_pane(24, 80, "/tmp").unwrap();
+    let successor = core.panes.remove(&replacement).unwrap();
+    let successor_child = successor.pty.child_pid().unwrap();
+    assert_ne!(observed_child, successor_child);
+    core.panes.insert(pane, successor).unwrap().pty.kill();
+
+    let (unknown, routed) = request(&mut core, pane, observed_child, "PaneKillCheckedFuture").await;
+    assert!(
+        !routed,
+        "an unknown guarded command must never reach the effect"
+    );
+    match unknown {
+        ServerMsg::Err { code, msg } => {
+            assert_eq!(code, err_code::BAD_REQUEST);
+            assert!(msg.contains("PaneKillCheckedFuture"), "{msg}");
+            assert!(
+                msg.contains(&format!("v{}", crate::proto::PROTO_VERSION)),
+                "{msg}"
+            );
+        }
+        other => panic!("expected a typed unknown-command refusal, got {other:?}"),
+    }
+    assert!(core.panes.contains_key(&pane));
+
+    let (mismatch, _) = request(&mut core, pane, observed_child, "PaneKillChecked").await;
+    assert!(
+        matches!(
+            mismatch,
+            ServerMsg::Err {
+                code: err_code::TARGET_IDENTITY_MISMATCH,
+                ..
+            }
+        ),
+        "a replaced child must be refused at the effect: {mismatch:?}"
+    );
+    assert_eq!(
+        core.panes.get(&pane).unwrap().pty.child_pid(),
+        Some(successor_child)
+    );
+    assert_eq!(unsafe { libc::kill(successor_child as libc::pid_t, 0) }, 0);
+
+    let (matched, routed) = request(&mut core, pane, successor_child, "PaneKillChecked").await;
+    assert!(routed);
+    assert!(matches!(matched, ServerMsg::Ok), "{matched:?}");
+    assert!(!core.panes.contains_key(&pane));
+}
+
 #[test]
 fn lifecycle_resolution_prefers_identity_over_label() {
     let mut core = empty_core();

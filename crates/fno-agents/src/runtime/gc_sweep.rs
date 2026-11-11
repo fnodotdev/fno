@@ -1082,16 +1082,18 @@ pub(crate) fn read_graph_node_states(
 /// under `spawn_blocking`), and a fresh thread is legal in both. A runtime
 /// that cannot be built fails closed: the row keeps under `stop_refused`.
 pub(crate) fn stop_row_process(home: &AgentsHome, e: &state::RegistryEntry) -> bool {
-    stop_row_process_with(home, e, &crate::pane_stop::run_mux_pane_kill)
+    stop_row_process_with(home, e, &crate::gc_native::retire_attached_session)
 }
 
-/// The injectable body of [`stop_row_process`]: `kill` is the same mux
-/// pane kill seam `fno agents rm` runs, so a test stages its answers.
+/// The injectable body shares rm's identity-bound mux retirement.
 pub(crate) fn stop_row_process_with(
     home: &AgentsHome,
     e: &state::RegistryEntry,
-    kill: &dyn Fn(&str, u64) -> Result<bool, String>,
+    retire: &dyn Fn(&str, &state::RegistryEntry) -> Result<bool, String>,
 ) -> bool {
+    if crate::pane_stop::requires_pane_stop(e) {
+        return crate::pane_stop::stop_pane_process_confirmed(e).confirmed;
+    }
     // Law d-81c6da7e: only a claude background thread stops before its
     // removal (and only `rm` composes that stop now). A claude pane or
     // headless row ends like any other row. A claude row owns no worker
@@ -1102,11 +1104,8 @@ pub(crate) fn stop_row_process_with(
     if crate::gc_native::stop_precedes_removal(e) {
         return crate::gc_claude_stop::stop_claude_confirmed(e);
     }
-    // A row with a mux ref: the pane kill IS the process end - the same
-    // seam rm runs. Ok(_) (killed, or already absent) confirms; an error
-    // holds the row for the next pass.
-    if let Some(mux) = e.mux.as_ref() {
-        return mux_pane_kill_stop(mux, kill).confirmed;
+    if e.mux.is_some() {
+        return mux_session_retire_stop(e, retire).confirmed;
     }
     let home = home.clone();
     let entry = e.clone();
@@ -1121,26 +1120,25 @@ pub(crate) fn stop_row_process_with(
     .unwrap_or(false)
 }
 
-/// One mux-ref row's process end through the pane kill seam. The detail is
-/// the measurement: `killed`, `already absent`, or the kill's error - so a
-/// receipt (and rm's hold) names what actually happened, never a bare bool.
-pub(crate) fn mux_pane_kill_stop(
-    mux: &state::MuxRef,
-    kill: &dyn Fn(&str, u64) -> Result<bool, String>,
+/// Record the exact session retirement, including a refusal's own reason.
+fn mux_session_retire_stop(
+    e: &state::RegistryEntry,
+    retire: &dyn Fn(&str, &state::RegistryEntry) -> Result<bool, String>,
 ) -> crate::pane_stop::PaneStop {
-    let (session, pane_id) = (mux.session.clone(), mux.pane_id);
-    match kill(&session, pane_id) {
+    let server = &e.mux.as_ref().expect("mux row carries its server").session;
+    let session = e.harness_session_id.as_deref().unwrap_or_default();
+    match retire(server, e) {
         Ok(true) => crate::pane_stop::PaneStop {
             confirmed: true,
-            detail: format!("mux pane {session}:{pane_id} killed"),
+            detail: format!("mux session {session} panes retired on {server}"),
         },
         Ok(false) => crate::pane_stop::PaneStop {
             confirmed: true,
-            detail: format!("mux pane {session}:{pane_id} already absent"),
+            detail: format!("mux session {session} panes already absent on {server}"),
         },
         Err(reason) => crate::pane_stop::PaneStop {
             confirmed: false,
-            detail: format!("mux pane {session}:{pane_id} kill failed: {reason}"),
+            detail: format!("mux session {session} retirement failed on {server}: {reason}"),
         },
     }
 }
@@ -1610,25 +1608,41 @@ pub(crate) fn run_with_release(
     let graph = read_graph(home);
     let bus = std::cell::OnceCell::new();
     let now = crate::daemon::now_epoch_secs();
-    // One claims read per sweep:the global root plus every distinct row
-    // cwd's local store. A live or suspect record names its holder
-    // session, keyed through the record's `session_id` stamp (never the
-    // holder string, a credential). An unreadable root reads as no facts.
-    let mut claims_dirs: Vec<std::path::PathBuf> = Vec::new();
-    if let Some(global) = crate::claims_root::global_claims_dir() {
-        claims_dirs.push(global);
+    let global_claims = crate::claims_root::global_claims_dir();
+    let mut claims_dirs: Vec<PathBuf> = global_claims.iter().cloned().collect();
+    claims_dirs.extend(registry.entries.iter().filter_map(|row| {
+        let cwd = Path::new(&row.cwd);
+        if !cwd.is_absolute() {
+            return None;
+        }
+        let local = crate::claims_root::claims_dir("reaper", Some(cwd))
+            .expect("an explicit claims root always resolves");
+        let base = local.parent().expect("the claims directory has a parent");
+        match std::fs::metadata(base) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            _ => Some(local),
+        }
+    }));
+    claims_dirs.sort();
+    claims_dirs.dedup();
+    let mut claim_records = Vec::new();
+    let mut unread_claims = HashMap::new();
+    let mut global_claims_error = global_claims
+        .is_none()
+        .then(|| "global claims root is unavailable".to_string());
+    // One unread local scope must not erase another scope's answered claims.
+    for dir in claims_dirs {
+        match crate::claims::list_in(std::slice::from_ref(&dir), None, false) {
+            Ok(records) => claim_records.extend(records),
+            Err(error) => {
+                let detail = format!("{}: {error}", dir.display());
+                if global_claims.as_ref() == Some(&dir) {
+                    global_claims_error = Some(detail.clone());
+                }
+                unread_claims.insert(dir, detail);
+            }
+        }
     }
-    let mut row_cwds: Vec<&String> = registry.entries.iter().map(|e| &e.cwd).collect();
-    row_cwds.sort();
-    row_cwds.dedup();
-    claims_dirs.extend(
-        row_cwds
-            .iter()
-            .map(|c| std::path::Path::new(c.as_str()).join(crate::claims::CLAIMS_DIRNAME)),
-    );
-    let claim_records = crate::claims::list_in(&claims_dirs, None, false).unwrap_or_default();
-    // A claim on a done node is not live work: the node it guards is over,
-    // so it never shields the row that still holds it.
     let claim_on_done_node = |key: &str| {
         key.strip_prefix("node:").is_some_and(|node| {
             graph
@@ -1637,14 +1651,35 @@ pub(crate) fn run_with_release(
                 .is_some_and(|status| status == "done")
         })
     };
-    let claims_by_session: std::collections::HashMap<String, String> = claim_records
+    let mut claims_by_session = HashMap::new();
+    for rec in claim_records
         .iter()
         .filter(|rec| !claim_on_done_node(&rec.key))
-        .filter_map(|rec| {
-            let sid = rec.session_id.as_deref()?.trim().to_ascii_lowercase();
-            (!sid.is_empty()).then_some((sid, format!("{} (holder {})", rec.key, rec.holder)))
-        })
-        .collect();
+    {
+        let detail = format!("{} (holder {})", rec.key, rec.holder);
+        if let Some(sid) = rec
+            .session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|sid| !sid.is_empty())
+        {
+            claims_by_session.insert(sid.to_ascii_lowercase(), detail);
+            continue;
+        }
+        let Some(node) = rec.key.strip_prefix("node:") else {
+            continue;
+        };
+        if let Some(graph) = &graph {
+            // Legacy claims carry no session stamp; only an actual open execution supplies it.
+            for (sid, nodes) in &graph.open_do {
+                if nodes.iter().any(|named| named == node) {
+                    claims_by_session
+                        .entry(sid.clone())
+                        .or_insert_with(|| detail.clone());
+                }
+            }
+        }
+    }
     // One ledger parse per sweep: every receipt's enrichment reads these rows.
     let ledger = ledger_rows(&default_ledger_path());
     let mut receipts: std::collections::BTreeMap<String, ReapReceipt> =
@@ -1799,6 +1834,25 @@ pub(crate) fn run_with_release(
         let sid = e.harness_session_id.as_deref().unwrap_or("").trim();
         let hits = store_matches(e);
         let (hold_age_s, hold_age_basis) = hold_clock(*age, e, now);
+        let local_claims = crate::claims_root::claims_dir("reaper", Some(Path::new(&e.cwd)))
+            .expect("an explicit claims root always resolves");
+        if let Some(detail) = global_claims_error
+            .as_ref()
+            .or_else(|| unread_claims.get(&local_claims))
+        {
+            summary
+                .kept_other
+                .push((id.clone(), "claims unreadable".into()));
+            summary.holds.push(Hold {
+                id,
+                reason: "claims unreadable",
+                detail: detail.clone(),
+                age_s: hold_age_s,
+                age_basis: hold_age_basis,
+                escalated: false,
+            });
+            continue;
+        }
         // K5: a typed user turn inside the attended window. The user is
         // talking to this session.
         if let Some(hold) = crate::attended::sweep_hold(
@@ -1897,6 +1951,7 @@ pub(crate) fn run_with_release(
         // A transcript written inside the grace keeps the row whatever its
         // ends say, so only a quiet row pays the head and tail reads.
         let quiet = !matches!(age, Some(a) if a <= grace_secs);
+        let reported_done = quiet && crate::reap_evidence::reported_done(e, now.max(0) as u64);
         let row = GcRow {
             origin: e.origin.clone(),
             teamed: false,
@@ -1910,7 +1965,8 @@ pub(crate) fn run_with_release(
             fno_skill: quiet
                 .then(|| crate::reap_evidence::fno_skill(hits.as_deref()))
                 .flatten(),
-            tail_done: quiet && crate::reap_evidence::tail_done(hits.as_deref(), e.harness_name()),
+            tail_done: reported_done
+                || (quiet && crate::reap_evidence::tail_done(hits.as_deref(), e.harness_name())),
             live_claim: claims_by_session
                 .get(sid.to_ascii_lowercase().as_str())
                 .cloned(),
@@ -2317,7 +2373,7 @@ pub(crate) fn run_with_release(
             released,
             idle_hour_past,
             &stop_on_death,
-            &crate::pane_stop::run_mux_pane_kill,
+            &crate::gc_native::retire_attached_session,
             surface_removal,
             mux_member,
             &mut receipts,
@@ -2421,7 +2477,9 @@ pub(crate) fn run_with_release(
         // Why the policy retired it: the transcript tail, a finished eval,
         // or the idle window it sat past.
         let window = crate::gc::idle_window(&probed, grace_secs);
-        let why = if probed.tail_done {
+        let why = if reported_done {
+            "session report says done".to_string()
+        } else if probed.tail_done {
             "transcript ends in a promise".to_string()
         } else if probed.eval_finished {
             "eval attempt finished".to_string()
@@ -2601,7 +2659,7 @@ pub(crate) fn stage_session_retirement(
     session_released: bool,
     idle_hour_past: bool,
     stop_confirmed: &dyn Fn(&state::RegistryEntry) -> bool,
-    mux_kill: &dyn Fn(&str, u64) -> Result<bool, String>,
+    mux_retire: &dyn Fn(&str, &state::RegistryEntry) -> Result<bool, String>,
     surface_removal: &dyn Fn(&state::RegistryEntry) -> crate::daemon::CascadeOutcome,
     mux_member: &dyn Fn(&state::RegistryEntry) -> crate::daemon::CascadeOutcome,
     receipts: &mut std::collections::BTreeMap<String, ReapReceipt>,
@@ -2680,19 +2738,11 @@ pub(crate) fn stage_session_retirement(
             "receipt did not persist: {err}"
         )));
     }
-    // Effect 1: the confirmed stop of the held process. Pane-substrate rows
-    // stop through the pid-proving helper (change 1): the roster and
-    // the worker socket never held the pane, so both today's arms confirm a
-    // stop that never happened. A mux ref without a pane substrate takes
-    // the pane kill rm itself runs (law d-81c6da7e): the bool seam cannot
-    // carry its reason, so the kill runs HERE and the error becomes the
-    // hold detail. The detail is the receipt's measurement, so the routing
-    // decision lives here where the effect is built - never in the seam
-    // closure, whose bool answer cannot carry it.
-    let pane_stop = if e.substrate.as_deref() == Some("pane") {
+    // Physical workers need pid proof; thread views retire by exact session.
+    let pane_stop = if crate::pane_stop::requires_pane_stop(e) {
         Some(crate::pane_stop::stop_pane_process_confirmed(e))
-    } else if let Some(mux) = e.mux.as_ref() {
-        Some(mux_pane_kill_stop(mux, mux_kill))
+    } else if e.mux.is_some() {
+        Some(mux_session_retire_stop(e, mux_retire))
     } else {
         None
     };
@@ -2772,6 +2822,7 @@ pub(crate) fn resume_evidence_effect_unbuilt() -> EffectRecord {
 
 /// The resume-evidence op, measured off the staged receipt: the resume
 /// tokens are present AND at least one located transcript exists on disk.
+/// A declared terminal receipt records recovery as not applicable.
 /// The `detail` carries the measured basis, so the event's `resumable`
 /// answer is auditable rather than a bare yes: `transcript-present`,
 /// `no-transcript`, or `no-resume-form`. A `failed` outcome does not hold
@@ -2779,6 +2830,14 @@ pub(crate) fn resume_evidence_effect_unbuilt() -> EffectRecord {
 /// unverifiable so the gate refuses it rather than certifying a retirement
 /// nothing can recover (AC6-EDGE).
 pub(crate) fn resume_evidence_effect(receipt: &ReapReceipt) -> EffectRecord {
+    if let Some(reason) = receipt.resume_unavailable_reason() {
+        return EffectRecord {
+            op: "resume-evidence".into(),
+            outcome: "not-applicable".into(),
+            detail: Some(format!("not resumable: {reason}")),
+            at: crate::daemon::now_rfc3339_like(),
+        };
+    }
     let transcript_exists = receipt.native_locator.as_ref().is_some_and(|loc| {
         loc.get("transcripts")
             .and_then(Value::as_array)

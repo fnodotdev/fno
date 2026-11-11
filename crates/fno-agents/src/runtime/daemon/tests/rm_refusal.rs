@@ -174,11 +174,9 @@ async fn rm_refuses_a_blocked_claude_row_after_its_own_stop() {
     std::fs::remove_dir_all(home.root()).ok();
 }
 
-/// A live row with a mux ref is ended by rm's own mux pane kill. When the
-/// kill fails, the row stays and the refusal quotes the kill's reason -
-/// never a stop command (AC3-ERR's mux-arm shape).
+/// Failed attached-session retirement keeps the row and names the reason.
 #[tokio::test]
-async fn rm_keeps_the_row_when_the_mux_pane_kill_fails() {
+async fn rm_keeps_the_row_when_attached_session_retirement_fails() {
     let home = short_home("rmpanekill");
     let mut row = ask_row("pane-worker", Some("2020-01-01T00:00:00Z"));
     row.status = AgentStatus::Live;
@@ -196,8 +194,8 @@ async fn rm_keeps_the_row_when_the_mux_pane_kill_fails() {
         &|| panic!("a non-claude row must not read the claude roster"),
         &|_| panic!("rm must not reach claude rm"),
         &|_, _| panic!("no claude stop may run for a non-claude row"),
-        &|session, pane_id| {
-            assert_eq!((session, pane_id), ("main", 33));
+        &|session, entry| {
+            assert_eq!((session, entry.mux.as_ref().unwrap().pane_id), ("main", 33));
             Err("pane server unreachable".into())
         },
         &|_, _| PaneProbe::Unknown,
@@ -206,7 +204,9 @@ async fn rm_keeps_the_row_when_the_mux_pane_kill_fails() {
 
     let message = &response.error().unwrap().message;
     assert!(
-        message.contains("mux pane main:33 removal failed: pane server unreachable"),
+        message.contains(
+            "mux view for pane-worker-sess on main removal failed: pane server unreachable"
+        ),
         "must quote the kill reason: {message}"
     );
     assert!(

@@ -85,6 +85,12 @@ fn run_pane(scratch: &Scratch, cwd: &Path, placement: PanePlacement) -> Result<u
 /// `stty size` in the FOCUSED pane must report `rows cols`. Wire-level proof
 /// that the kernel winsize followed the layout rect (items 1 and 3).
 fn assert_focused_winsize(c: &mut FakeClient, pane: u64, rows: u16, cols: u16) {
+    // The first Layout can reserve a pane before its keeper resize lands.
+    // Wait for its sized frame, then ask the kernel independently.
+    c.wait(15, "pane frame resized", |c| {
+        let frame = c.frames.get(&pane)?;
+        ((frame.rows, frame.cols) == (rows, cols)).then_some(())
+    });
     c.input(b"echo sz=$(stty size)#\r");
     let want = format!("sz={rows} {cols}#");
     c.wait_pane_text(15, pane, |t| t.contains(&want));
@@ -435,7 +441,7 @@ fn layout_e2e_multi_pane_multi_tab_reattach_restores_all_state() {
             .any(|b| String::from_utf8_lossy(b).contains("?2004h"))
             .then_some(())
     });
-    let before = c.layout.clone().unwrap();
+    let mut before = c.layout.clone().unwrap();
     c.detach();
     drop(c);
 
@@ -445,7 +451,11 @@ fn layout_e2e_multi_pane_multi_tab_reattach_restores_all_state() {
     // the focused pane's negotiated modes BEFORE it draws (item 7's modes
     // half - a fresh terminal starts raw, so the sync must replay ?2004h).
     let mut c2 = FakeClient::attach(&scratch.sock(), 24, 80, cwd.to_str().unwrap());
-    let after = c2.wait_layout(10, "reattach layout", |l| !l.panes.is_empty());
+    let mut after = c2.wait_layout(10, "reattach layout", |l| !l.panes.is_empty());
+    // Activity age advances across reconnects.
+    for agent in before.agents.iter_mut().chain(after.agents.iter_mut()) {
+        agent.last_activity_age_s = None;
+    }
     assert_eq!(after, before, "layout must survive detach exactly");
     assert_eq!(after.focus, pane_c, "focus lands on tab 2's pane");
     assert_eq!(
@@ -537,15 +547,17 @@ fn layout_e2e_worktree_attach_rolls_up_to_one_squad() {
     // unrelated plain directory.
     let repo = scratch.dir("footnote");
     let git = |args: &[&str], cwd: &Path| {
+        // Fixture commits are independent of the caller's global hooks.
+        let output = std::process::Command::new("git")
+            .args(["-c", "core.hooksPath=/dev/null"])
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .unwrap();
         assert!(
-            std::process::Command::new("git")
-                .args(args)
-                .current_dir(cwd)
-                .output()
-                .unwrap()
-                .status
-                .success(),
-            "git {args:?} failed"
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
         );
     };
     git(&["init", "-q"], &repo);

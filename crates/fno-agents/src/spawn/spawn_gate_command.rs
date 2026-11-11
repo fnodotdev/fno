@@ -280,6 +280,10 @@ fn gate_answer(payload: &Value) -> Value {
         holder_pid: Some(holder_pid as u32),
         seed: opt_str_of(payload, "seed"),
         session_phase: opt_str_of(payload, "session_phase"),
+        background_job: crate::spawn_contract::background_job(
+            payload,
+            &str_of(payload, "substrate"),
+        ),
     };
     let (caller, name) = (input.caller_session.clone(), input.name.clone());
     match spawn_gate::run_gate(&config_cwd, &home.registry_json(), input) {
@@ -1694,6 +1698,56 @@ mod tests {
             "no_wait": true,
             "holder_pid": std::process::id(),
         }));
+        crate::claims::release(
+            handed.pointer("/gate_key").and_then(Value::as_str).unwrap(),
+            handed
+                .pointer("/gate_holder")
+                .and_then(Value::as_str)
+                .unwrap(),
+            Some(&claims_root),
+            None,
+        )
+        .expect("release the handed-back gate before the next admission");
+        let mut job = json!({
+            "name": "daily-job", "substrate": "headless", "no_wait": true,
+            "holder_pid": std::process::id(),
+            "origin": {"kind":"non_session", "source": {
+                "kind":"daemon", "exe":"fno-agents", "arm":"backlog-groom", "cause":"gr"
+            }},
+            "owner": {"kind":"mission", "project":"fixture", "mission":"groom"},
+        });
+        let background = gate_answer(&job);
+        assert_eq!(
+            background.pointer("/status").and_then(Value::as_str),
+            Some("admitted"),
+            "{background}"
+        );
+        let (_, record) = crate::claims::status("worker:daily-job", Some(&claims_root));
+        assert_eq!(
+            Value::Object(record.unwrap().metadata)
+                .pointer("/background_job")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(spawn_gate::live_worker_slot_claims(&mut Vec::new()).is_empty());
+        let job_fields = job.as_object_mut().unwrap();
+        job_fields.insert("name".into(), json!("foreground-job"));
+        job_fields.insert(
+            "origin".into(),
+            json!({"kind":"session", "parent": {
+                "harness":"claude", "session_id":"fixture-parent", "cwd":"/fixture"
+            }}),
+        );
+        let ordinary = gate_answer(&job);
+        assert_eq!(
+            ordinary.pointer("/status").and_then(Value::as_str),
+            Some("admitted"),
+            "{ordinary}"
+        );
+        assert_eq!(
+            spawn_gate::live_worker_slot_claims(&mut Vec::new()).len(),
+            1
+        );
         let _ = std::fs::remove_dir_all(&dir);
 
         assert_eq!(held["status"], "admitted", "{held}");

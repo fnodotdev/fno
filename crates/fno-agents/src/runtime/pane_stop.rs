@@ -13,11 +13,10 @@
 use crate::state::RegistryEntry;
 use std::time::Duration;
 
-/// What stopping one pane worker measured. `confirmed` is true only on
-/// `pid_is_gone` (ESRCH) - a pane kill that "succeeded", an absent pane,
-/// and an unreachable socket are none of them a death. `detail` names what
-/// actually ran, so the receipt's native-stop record and rm's printed line
-/// are measurements, not assertions.
+/// What stopping one pane worker measured: the process is gone and its
+/// remaining pane was removed. With no session identity or recorded pid,
+/// a known absent pane is sufficient; an unreadable socket never is.
+/// `detail` records the evidence and effects behind the result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PaneStop {
     pub confirmed: bool,
@@ -38,11 +37,10 @@ pub(crate) struct PaneSighting {
 /// missing pid without spawning anything.
 pub(crate) struct PaneStopSeams {
     /// Live panes for `Some(session)`, or every session when the row has no
-    /// mux ref. An empty Vec means the listing could not answer; that is
-    /// never a death - the escalation below still reaches the pid directly.
-    pub pane_lookup: Box<dyn Fn(Option<&str>) -> Vec<PaneSighting>>,
+    /// mux ref. A failed listing never proves a pane absent.
+    pub pane_lookup: Box<dyn Fn(Option<&str>) -> Result<Vec<PaneSighting>, MuxCallError>>,
     /// Kill one pane. `Ok(true)` removed, `Ok(false)` already absent.
-    pub pane_kill: Box<dyn Fn(&str, u64) -> Result<bool, String>>,
+    pub pane_kill: Box<dyn Fn(&str, u64, u32) -> Result<bool, String>>,
     /// The ownership-checked liveness probe that gates every action.
     pub pid_ours: Box<dyn Fn(u32, Option<u64>) -> bool>,
     /// The existence-specific death probe (ESRCH only) - the one
@@ -74,7 +72,7 @@ const POLL_TICK_MS: u64 = 100;
 /// precheck can never drift into reading two different worlds.
 fn production_seams() -> PaneStopSeams {
     PaneStopSeams {
-        pane_lookup: Box::new(pane_list_via_fno),
+        pane_lookup: Box::new(pane_list_checked),
         pane_kill: Box::new(run_mux_pane_kill),
         pid_ours: Box::new(crate::daemon::pid_is_ours),
         pid_gone: Box::new(crate::daemon::pid_is_gone),
@@ -91,24 +89,148 @@ pub(crate) fn stop_pane_process_confirmed(e: &RegistryEntry) -> PaneStop {
     stop_pane_process_confirmed_with(e, &production_seams())
 }
 
+/// Identified thread views retire by session. Old mux rows without a
+/// session identity need the same process proof as explicit pane workers.
+pub(crate) fn requires_pane_stop(e: &RegistryEntry) -> bool {
+    e.substrate.as_deref() == Some("pane")
+        || (e.substrate.is_none()
+            && e.mux.is_some()
+            && e.harness_session_id.as_deref().is_none_or(str::is_empty))
+}
+
 /// The one pane-stop body, shared by the reap and `fno agents rm`. Resolves
-/// the process to end once, then confirms ONLY on the pid reading gone;
-/// every earlier answer is a not-confirmed detail naming what ran.
+/// the process to end once, then requires both its death and removal of
+/// any pane still hosting that child.
 pub(crate) fn stop_pane_process_confirmed_with(
     e: &RegistryEntry,
     seams: &PaneStopSeams,
 ) -> PaneStop {
     match resolve_stop_target(e, seams) {
-        StopTarget::Stopped(detail) => PaneStop {
-            confirmed: true,
-            detail,
+        StopTarget::Stopped(detail) => match stopped_pane_cleanup(e, seams) {
+            Ok(pane) => PaneStop {
+                confirmed: true,
+                detail: pane.map_or(detail.clone(), |pane| format!("{detail}; {pane}")),
+            },
+            Err(pane) => PaneStop {
+                confirmed: false,
+                detail: format!("{detail}; {pane}"),
+            },
         },
+        StopTarget::Refuse(detail)
+            if e.harness_session_id.as_deref().is_none_or(str::is_empty)
+                && e.mux.is_some()
+                && (e.pid.is_some_and(|pid| (seams.pid_gone)(pid))
+                    || (e.status == crate::AgentStatus::Exited && e.exited_at.is_some())) =>
+        {
+            match stopped_pane_cleanup(e, seams) {
+                Ok(Some(pane)) => PaneStop {
+                    confirmed: true,
+                    detail: pane,
+                },
+                outcome => PaneStop {
+                    confirmed: false,
+                    detail: outcome
+                        .err()
+                        .map_or(detail.clone(), |pane| format!("{detail}; {pane}")),
+                },
+            }
+        }
         StopTarget::Refuse(detail) => PaneStop {
             confirmed: false,
             detail,
         },
         StopTarget::Kill(t) => kill_target_confirmed(t, e, seams),
     }
+}
+
+/// A mux read or call that failed, carrying the command's own words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MuxCallError(pub String);
+
+impl std::fmt::Display for MuxCallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<&str> for MuxCallError {
+    fn from(detail: &str) -> Self {
+        Self(detail.to_string())
+    }
+}
+
+impl From<String> for MuxCallError {
+    fn from(detail: String) -> Self {
+        Self(detail)
+    }
+}
+
+impl From<MuxCallError> for String {
+    fn from(error: MuxCallError) -> Self {
+        error.0
+    }
+}
+
+fn stopped_pane_cleanup(
+    e: &RegistryEntry,
+    seams: &PaneStopSeams,
+) -> Result<Option<String>, MuxCallError> {
+    let panes = (seams.pane_lookup)(e.mux.as_ref().map(|m| m.session.as_str()))?;
+    let owned: Vec<&PaneSighting> = match e.pid {
+        Some(pid) if (seams.pid_gone)(pid) => panes
+            .iter()
+            .filter(|pane| pane.child_pid == Some(pid))
+            .collect(),
+        Some(_) => Vec::new(),
+        None => match e.mux.as_ref() {
+            Some(mux) => match panes
+                .iter()
+                .find(|p| p.session == mux.session && p.pane_id == mux.pane_id)
+            {
+                None => {
+                    return Ok(Some(format!(
+                        "pane {}:{} already absent",
+                        mux.session, mux.pane_id
+                    )))
+                }
+                Some(pane) if pane.child_pid.is_some_and(|pid| (seams.pid_gone)(pid)) => vec![pane],
+                Some(_) => {
+                    return Err(format!(
+                    "pane {}:{} has no proven-dead child; refusing to remove a possible successor",
+                    mux.session, mux.pane_id
+                )
+                    .into())
+                }
+            },
+            None => Vec::new(),
+        },
+    };
+    let mut details = Vec::new();
+    for pane in owned {
+        let pid = pane.child_pid.expect("owned panes name a dead child");
+        // A stored coordinate may now belong to a successor; only the
+        // freshly listed dead child is permission to remove this pane.
+        if !(seams.pid_gone)(pid) {
+            return Err(format!(
+                "pane {}:{} child {pid} no longer reads dead",
+                pane.session, pane.pane_id
+            )
+            .into());
+        }
+        let removed = (seams.pane_kill)(&pane.session, pane.pane_id, pid).map_err(|err| {
+            format!(
+                "pane {}:{} (child {pid}) removal failed: {err}",
+                pane.session, pane.pane_id
+            )
+        })?;
+        details.push(format!(
+            "pane {}:{} (child {pid}) {}",
+            pane.session,
+            pane.pane_id,
+            if removed { "removed" } else { "already absent" }
+        ));
+    }
+    Ok((!details.is_empty()).then(|| details.join("; ")))
 }
 
 /// The one process a stop may end, resolved once so the dry-run precheck
@@ -207,9 +329,11 @@ fn ask_holder(
             // proves the pid is ours, because a bare open-file holder can
             // be a shared host process.
             if !proven {
-                let hosted = (seams.pane_lookup)(e.mux.as_ref().map(|m| m.session.as_str()))
-                    .iter()
-                    .any(|p| p.child_pid == Some(holder));
+                let panes = match (seams.pane_lookup)(e.mux.as_ref().map(|m| m.session.as_str())) {
+                    Ok(panes) => panes,
+                    Err(detail) => return StopTarget::Refuse(format!("{fact}; {why}; {detail}")),
+                };
+                let hosted = panes.iter().any(|p| p.child_pid == Some(holder));
                 if !hosted {
                     return StopTarget::Refuse(format!(
                         "{fact}; {why}, and no live pane hosts pid {holder}. A holder read from \
@@ -247,11 +371,20 @@ fn kill_target_confirmed(t: KillTarget, e: &RegistryEntry, seams: &PaneStopSeams
     //    mux.pane_id alone: the server re-mints pane ids when it re-adopts a
     //    keeper, and the cascade that trusted the stored id killed a stale
     //    id and read the missing pane as absent.
-    let sightings = (seams.pane_lookup)(e.mux.as_ref().map(|m| m.session.as_str()));
+    let sightings = match (seams.pane_lookup)(e.mux.as_ref().map(|m| m.session.as_str())) {
+        Ok(panes) => panes,
+        Err(detail) => {
+            return PaneStop {
+                confirmed: false,
+                detail: detail.into(),
+            }
+        }
+    };
     let pane_hosts = sightings.iter().any(|p| p.child_pid == Some(pid));
     let mut pane_killed = false;
+    let mut pane_failed = false;
     match sightings.iter().find(|p| p.child_pid == Some(pid)) {
-        Some(pane) => match (seams.pane_kill)(&pane.session, pane.pane_id) {
+        Some(pane) => match (seams.pane_kill)(&pane.session, pane.pane_id, pid) {
             Ok(true) => {
                 pane_killed = true;
                 ran.push(format!(
@@ -265,10 +398,13 @@ fn kill_target_confirmed(t: KillTarget, e: &RegistryEntry, seams: &PaneStopSeams
                     pane.session, pane.pane_id
                 ));
             }
-            Err(err) => ran.push(format!(
-                "pane {}:{} (child {pid}) kill failed: {err}",
-                pane.session, pane.pane_id
-            )),
+            Err(err) => {
+                pane_failed = true;
+                ran.push(format!(
+                    "pane {}:{} (child {pid}) kill failed: {err}",
+                    pane.session, pane.pane_id
+                ));
+            }
         },
         None => {
             // A keeper can hold the child with no pane at all (a server
@@ -285,7 +421,7 @@ fn kill_target_confirmed(t: KillTarget, e: &RegistryEntry, seams: &PaneStopSeams
     }
     // 3. Poll for death after the pane kill.
     if poll_gone(seams, pid, KILL_POLL_TICKS) {
-        return confirmed(ran, pid);
+        return stopped(ran, pid, !pane_failed);
     }
     // 4. Escalate while the pid lives, re-checking ownership before every
     //    signal: a recycled pid is never ours to signal. An open-file
@@ -318,13 +454,13 @@ fn kill_target_confirmed(t: KillTarget, e: &RegistryEntry, seams: &PaneStopSeams
     if (seams.pid_ours)(pid, t.start) && (seams.signal)(pid, libc::SIGTERM) {
         ran.push(format!("SIGTERM sent to {pid}"));
         if poll_gone(seams, pid, TERM_POLL_TICKS) {
-            return confirmed(ran, pid);
+            return stopped(ran, pid, !pane_failed);
         }
     }
     if (seams.pid_ours)(pid, t.start) && (seams.signal)(pid, libc::SIGKILL) {
         ran.push(format!("SIGKILL sent to {pid}"));
         if poll_gone(seams, pid, KILL9_POLL_TICKS) {
-            return confirmed(ran, pid);
+            return stopped(ran, pid, !pane_failed);
         }
     }
     // 5. Only ESRCH confirms; anything else holds the caller's row.
@@ -334,9 +470,9 @@ fn kill_target_confirmed(t: KillTarget, e: &RegistryEntry, seams: &PaneStopSeams
     }
 }
 
-fn confirmed(ran: Vec<String>, pid: u32) -> PaneStop {
+fn stopped(ran: Vec<String>, pid: u32, pane_removed: bool) -> PaneStop {
     PaneStop {
-        confirmed: true,
+        confirmed: pane_removed,
         detail: format!("{}; pid {pid} gone", ran.join("; ")),
     }
 }
@@ -638,7 +774,7 @@ fn footnote_holder(
 /// On a confirmed stop the detail rides BESIDE the outcome (`Removed`
 /// carries no reason of its own); on an unconfirmed stop the detail IS the
 /// failure reason - without `--force` rm refuses on it, with `--force` the
-/// row drops and the audit line records that the pid is still alive.
+/// row drops and the audit line records which teardown effect failed.
 pub(crate) fn rm_pane_outcome(stop: &PaneStop) -> (crate::daemon::CascadeOutcome, Option<String>) {
     if stop.confirmed {
         (
@@ -690,42 +826,56 @@ pub(crate) fn run_fno(args: &[&str]) -> Result<FnoRun, String> {
     })
 }
 
-/// The production pane listing: `fno mux pane ls --session <s> --json` for
-/// the row's own session, or one ls per session the mux dir holds a socket
-/// for when the row carries no mux ref. A failed or unparseable ls answers
-/// an empty Vec - the caller treats a missing LISTING as no panes, and the
-/// escalation still reaches the pid directly.
+/// The converter's best-effort listing; stop callers use the checked read.
 pub(crate) fn pane_list_via_fno(session: Option<&str>) -> Vec<PaneSighting> {
-    let sessions: Vec<String> = match session {
+    lookup_sessions(session)
+        .into_iter()
+        .filter_map(|s| pane_list_for_session(&s).ok())
+        .flatten()
+        .collect()
+}
+
+fn lookup_sessions(session: Option<&str>) -> Vec<String> {
+    match session {
         Some(s) => vec![s.to_string()],
         None => mux_session_names(),
-    };
+    }
+}
+
+fn pane_list_checked(session: Option<&str>) -> Result<Vec<PaneSighting>, MuxCallError> {
     let mut found = Vec::new();
-    for s in sessions {
-        let Ok(run) = run_fno(&["mux", "pane", "ls", "--server", &s, "--json"]) else {
-            continue;
-        };
-        if !run.ok {
-            continue;
+    for session in lookup_sessions(session) {
+        found.extend(pane_list_for_session(&session)?);
+    }
+    Ok(found)
+}
+
+fn pane_list_for_session(session: &str) -> Result<Vec<PaneSighting>, MuxCallError> {
+    let run = run_fno(&["mux", "pane", "ls", "--server", session, "--json"])?;
+    if !run.ok {
+        if mux_pane_is_absent(&run.stderr) {
+            return Ok(Vec::new());
         }
-        let Ok(panes) = serde_json::from_slice::<Vec<serde_json::Value>>(&run.stdout) else {
-            continue;
-        };
-        for pane in panes {
-            found.push(PaneSighting {
-                session: s.clone(),
+        return Err(format!("pane listing for {session} failed: {}", run.stderr).into());
+    }
+    let panes: Vec<serde_json::Value> = serde_json::from_slice(&run.stdout)
+        .map_err(|err| format!("pane listing for {session} is unreadable: {err}"))?;
+    panes
+        .into_iter()
+        .map(|pane| {
+            Ok(PaneSighting {
+                session: session.to_string(),
                 pane_id: pane
                     .get("pane_id")
                     .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(0),
+                    .ok_or_else(|| format!("pane listing for {session} names no pane id"))?,
                 child_pid: pane
                     .get("child_pid")
                     .and_then(serde_json::Value::as_u64)
-                    .map(|p| p as u32),
-            });
-        }
-    }
-    found
+                    .and_then(|pid| u32::try_from(pid).ok()),
+            })
+        })
+        .collect()
 }
 
 /// Session names for the all-sessions listing: the `*.sock` stems of the mux
@@ -766,10 +916,11 @@ fn mux_session_names() -> Vec<String> {
 /// Moved from daemon.rs with the callers that share it. `Ok(false)` is the
 /// absent-pane word, never a death verdict: the caller confirms on the pid,
 /// not on the pane.
-pub(crate) fn run_mux_pane_kill(session: &str, pane_id: u64) -> Result<bool, String> {
+fn run_mux_pane_kill(session: &str, pane_id: u64, child_pid: u32) -> Result<bool, String> {
     let pane_id = pane_id.to_string();
     let mut child = std::process::Command::new(crate::scrape::fno_bin())
         .args(["mux", "pane", "kill", "--server", session, &pane_id])
+        .args(["--expect-child-pid", &child_pid.to_string()])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -908,8 +1059,8 @@ mod tests {
         let sig_log = Shared::clone(&log);
         let sig_phase = Shared::clone(&phase);
         PaneStopSeams {
-            pane_lookup: Box::new(move |_| sightings.clone()),
-            pane_kill: Box::new(move |s, p| {
+            pane_lookup: Box::new(move |_| Ok(sightings.clone())),
+            pane_kill: Box::new(move |s, p, _| {
                 kill_log.borrow_mut().kills.push((s.to_string(), p));
                 *kill_phase.borrow_mut() = 1;
                 kill_result.clone()
@@ -996,6 +1147,25 @@ mod tests {
         assert!(
             stop.detail.ends_with("pid 22287 still alive"),
             "{}",
+            stop.detail
+        );
+
+        let sx = self::seams(
+            Shared::new(RefCell::new(Log::default())),
+            vec![PaneSighting {
+                session: "main".into(),
+                pane_id: 2034,
+                child_pid: Some(22287),
+            }],
+            Err("pane server unreachable".into()),
+            false,
+            true,
+            true,
+        );
+        let stop = stop_pane_process_confirmed_with(&test_row(), &sx);
+        assert!(
+            !stop.confirmed,
+            "a dead child must not hide a pane removal failure: {}",
             stop.detail
         );
     }

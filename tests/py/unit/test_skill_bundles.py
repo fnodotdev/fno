@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import filecmp
 import os
+import shlex
 import shutil
 import stat
 import subprocess
@@ -22,7 +23,7 @@ AUDIT = REPO_ROOT / "scripts" / "lint" / "no-repo-root-scripts-in-skills.sh"
 
 
 def _run(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, env=env, check=False)
+    return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, env=env, check=False, timeout=30)
 
 
 def _shelled_python_has_yaml() -> bool:
@@ -107,13 +108,33 @@ def test_generator_handles_mixed_manifest(tmp_path):
         "          tools: [Read]\n"
     )
 
+    shadow_bin = tmp_path / "shadow-bin"
+    shadow_bin.mkdir()
+    shadow_marker = tmp_path / "shadow-rm-called"
+    shadow_rm = shadow_bin / "rm"
+    shadow_rm.write_text(
+        f"#!/bin/sh\nprintf shadow-rm-called > {shlex.quote(str(shadow_marker))}\nexit 73\n"
+    )
+    shadow_rm.chmod(0o755)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
     env = dict(os.environ)
+    env["PATH"] = str(shadow_bin) + os.pathsep + env["PATH"]
+    env["TMPDIR"] = str(scratch)
     env["REPO_ROOT"] = str(fake_root)
     result = _run(
         ["bash", str(fake_root / "scripts" / "generate-skill-bundles.sh")],
         env=env,
     )
     assert result.returncode == 0, result.stderr
+    result = _run(
+        ["bash", str(fake_root / "scripts" / "generate-skill-bundles.sh")],
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert not shadow_marker.exists()
+    assert not list(scratch.iterdir())
+    assert not list(fake_root.rglob("*.tmp.*"))
 
     # File: byte-identical + executable bit preserved
     bundled_file = fake_root / "skills" / "consumer" / "scripts" / "lib" / "tool.sh"

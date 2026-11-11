@@ -406,6 +406,29 @@ pub fn parse_request_provenance(
     }
 }
 
+#[derive(serde::Deserialize)]
+struct NodeParam<'a> {
+    node: Option<&'a str>,
+}
+
+/// Node-less daemon jobs do not occupy foreground worker capacity.
+pub fn background_job(params: &serde_json::Value, substrate: &str) -> bool {
+    substrate == "headless"
+        && NodeParam::deserialize(params)
+            .ok()
+            .and_then(|p| p.node)
+            .is_none_or(str::is_empty)
+        && matches!(
+            parse_request_provenance(params),
+            Ok(Some(SpawnProvenance {
+                origin: SpawnOrigin::NonSession {
+                    source: NonSessionSource::Daemon { .. } | NonSessionSource::LaunchAgent { .. },
+                },
+                ..
+            }))
+        )
+}
+
 /// The one validation gate: request -> `ValidatedSpawn` or a named refusal.
 /// Runs before ANY worker effect (no backend is reachable from here), so a
 /// defective request never creates a worker, harness session, live row, or
