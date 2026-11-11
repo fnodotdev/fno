@@ -307,15 +307,17 @@ fn dispatch(sub: &str, tail: &[String]) -> i32 {
             crate::loopcheck::run_review_coverage(&argv)
         }
         "info" => {
+            let cwd = current_cwd_string();
+            let node_repo =
+                crate::gate::loopcheck::pr_read::session_node_pr_target(std::path::Path::new(&cwd))
+                    .1;
             let mut ask = json!({
                 "op": "status-pr-info",
-                "cwd": current_cwd_string(),
+                "cwd": cwd,
+                "repo": option_value(tail, "--repo").or(node_repo),
             });
             if let Some(pr) = pr_operand(tail) {
                 ask["pr"] = json!(pr);
-            }
-            if let Some(repo) = option_value(tail, "--repo") {
-                ask["repo"] = json!(repo);
             }
             let answer = crate::pr_info::run_op(&ask);
             if let Ok(line) = serde_json::to_string(&answer) {
