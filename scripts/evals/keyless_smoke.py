@@ -204,7 +204,11 @@ esac
             [
                 agents_bin, "spawn", "keyless-smoke", "-H", "codex",
                 "--once",
-                "--cwd", str(project), "--timeout", "10", "--", "keyless seed",
+                "--cwd", str(project), "--timeout", "10",
+                # The prompt rides last with no fence: a fence-seeded prompt
+                # is warned this release and refused by the next (spawn-argv
+                # boundary law).
+                "keyless seed",
             ],
             cwd=repo_root,
             env=env,
