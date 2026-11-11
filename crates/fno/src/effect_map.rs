@@ -120,8 +120,9 @@ fn mapped(class: &'static str, destination: String, tool: &str, input: &Value) -
 }
 
 /// Map one tool call to its effect class, or None when the call carries none.
-/// `gh pr merge` and `git push` map to None on purpose: the merge gate and
-/// git-protection own them, and this guard never decides them twice.
+/// `gh pr merge` and `git push` map to None on purpose: merging is decided
+/// by `fno do pr merge` and the server ruleset, pushes by git-protection,
+/// and this guard never decides them twice.
 pub fn map_tool_call(tool_name: &str, tool_input: &Value) -> Option<MappedEffect> {
     if tool_name == "Bash" {
         return map_bash_command(
@@ -181,9 +182,10 @@ pub fn map_tool_call(tool_name: &str, tool_input: &Value) -> Option<MappedEffect
 pub fn map_bash_command(command: &str) -> Option<MappedEffect> {
     let tokens: Vec<&str> = command.split_whitespace().collect();
     let input = json!({ "command": command });
-    // Merge effects belong to the merge gate and git-protection. A PR or
-    // issue comment is part of the review loop, like `gh pr create` and the
-    // `gh api` review comments: no person outside the repo receives it.
+    // Merge and push effects belong to git-protection and the PR-side
+    // merge machinery. A PR or issue comment is part of the review loop,
+    // like `gh pr create` and the `gh api` review comments: no person
+    // outside the repo receives it.
     if matches!(tokens.as_slice(), ["gh", "pr", "merge", ..])
         || matches!(tokens.as_slice(), ["git", "push", ..])
     {

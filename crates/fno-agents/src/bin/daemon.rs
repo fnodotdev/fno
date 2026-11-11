@@ -8,7 +8,7 @@
 //! ```
 //! Any other argv refuses (exit 2) before the runtime builds: the daemon
 //! takes no subcommands, so a caller that mis-resolved the daemon binary (a
-//! merge-gate hop that fell back to current_exe) fails loud instead
+//! hook probe hop that fell back to current_exe) fails loud instead
 //! of booting a resident daemon wearing the hop's argv.
 //! The client lazy-starts this detached on first need; running it directly is
 //! for debugging and for the Python wrapper's explicit `daemon` sub-mode.
@@ -32,7 +32,7 @@ fn main() {
     }
 
     // Any argv the daemon does not own is a caller that resolved this binary
-    // by mistake (a merge-gate hop execed `fno-agents-daemon pr-worktree`;
+    // by mistake (a hook probe hop execed `fno-agents-daemon pr-worktree`;
     // the old silent ignore booted a full resident daemon with that argv).
     // Refuse before the runtime builds, with the usage beside the cause.
     let (home_arg, unknown) = parse_daemon_args(&args);

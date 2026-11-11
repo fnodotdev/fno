@@ -42,10 +42,6 @@ pub(crate) struct ScopedReads {
 }
 
 impl ScopedReads {
-    pub(crate) fn repository(&self) -> Option<&str> {
-        self.repo.as_deref()
-    }
-
     pub(crate) fn for_checkout(cwd: &Path) -> Self {
         Self {
             repo: crate::finalize::repo_identity_from_git_remote(cwd)
@@ -2733,5 +2729,148 @@ mod tests {
             paint_hunk_summary(bare),
             "crates/fno/src/client/help.rs (no hunk bodies in the compare)"
         );
+    }
+}
+#[cfg(test)]
+mod scoped_read_tests {
+    use super::*;
+    use crate::merge_gates::GateReads;
+    use std::time::Duration;
+
+    #[test]
+    fn resolved_reads_pin_actual_child_repo_and_host() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo-b");
+        std::fs::create_dir_all(&repo).unwrap();
+        for args in [
+            vec!["init", "--quiet"],
+            vec!["remote", "add", "origin", "https://github.com/owner/b.git"],
+        ] {
+            assert!(std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_WORK_TREE")
+                .status()
+                .unwrap()
+                .success());
+        }
+        let config = dir.path().join("config.toml");
+        std::fs::write(
+            &config,
+            format!(
+                "state_dir = {:?}\n[merge]\nvisual_paint_paths = [\"paint.rs\"]\n",
+                dir.path()
+            ),
+        )
+        .unwrap();
+        let log = dir.path().join("targets");
+        let script = format!(
+            r#"#!/bin/sh
+printf '%s|%s|%s\n' "$GH_REPO" "$GH_HOST" "$*" >> '{}'
+case "$1" in
+  api) printf '%s\n' other.rs ;;
+  pr) printf '%s\n' '{{"baseRefName":"main","headRefName":"feature"}}' ;;
+  *) printf '%s\n' '{{}}' ;;
+esac
+"#,
+            log.display()
+        );
+        crate::write_exec_stub(dir.path(), "gh", &script);
+        let fno = crate::write_exec_stub(dir.path(), "fno", &script);
+        let _fno = crate::claims::EnvVarGuard::set("FNO_BIN", fno.to_str().unwrap());
+        let path = format!(
+            "{}:{}",
+            dir.path().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let _path = crate::claims::EnvVarGuard::set("PATH", &path);
+        let _cfg = crate::claims::EnvVarGuard::set("FNO_CONFIG", config.to_str().unwrap());
+        let _repo = crate::claims::EnvVarGuard::set("GH_REPO", "owner/a");
+        let _host = crate::claims::EnvVarGuard::set("GH_HOST", "ambient.invalid");
+
+        assert!(std::process::Command::new("git")
+            .args([
+                "config",
+                "url./local-mirror/.insteadOf",
+                "https://github.com/"
+            ])
+            .current_dir(&repo)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .status()
+            .unwrap()
+            .success());
+        let facts = PrFacts {
+            number: 42,
+            head_sha: "a".repeat(40),
+            head_ref: "feature".into(),
+            base_ref: "main".into(),
+            url: "https://github.com/owner/b/pull/42".into(),
+            body: Some(String::new()),
+            state: "OPEN".into(),
+            armed: false,
+        };
+        let reads = crate::merge_gates::ScopedReads::for_checkout(&repo);
+        assert!(crate::merge_gates::visual_approval_blocker(
+            &reads,
+            &repo,
+            facts.number,
+            &facts.head_sha
+        )
+        .is_none());
+        assert!(crate::docs_gate::docs_gate_blocker(&reads, &repo, &facts).is_none());
+        assert_eq!(
+            crate::merge_gates::pr_base_head_refs(&ScopedReads::for_checkout(&repo), &repo, 42),
+            Some(("main".into(), "feature".into()))
+        );
+        ScopedReads::for_checkout(&repo)
+            .program(
+                fno.as_os_str(),
+                &["pr", "coverage-check", "42"],
+                &repo,
+                Duration::from_secs(5),
+            )
+            .unwrap();
+        ScopedReads::for_checkout(&repo)
+            .fno_read(
+                &repo,
+                &[
+                    "backlog".into(),
+                    "decisions".into(),
+                    "subject".into(),
+                    "--json".into(),
+                ],
+            )
+            .unwrap();
+        let targets = std::fs::read_to_string(log).unwrap();
+        eprintln!("Actual scoped child targets:\n{targets}");
+        for required in ["|pr coverage-check 42", "|backlog decisions subject --json"] {
+            assert!(
+                targets.lines().any(|target| target.contains(required)),
+                "missing scoped read {required}: {targets}"
+            );
+        }
+        assert!(
+            !targets.contains("{owner}"),
+            "unscoped API endpoint: {targets}"
+        );
+        assert!(
+            targets.contains("api repos/owner/b/pulls/42/files"),
+            "{targets}"
+        );
+        assert!(
+            targets.contains("--repo owner/b"),
+            "unscoped pr view: {targets}"
+        );
+        for target in targets.lines() {
+            assert!(
+                target.starts_with("owner/b|github.com|"),
+                "wrong read target: {target}"
+            );
+        }
     }
 }
