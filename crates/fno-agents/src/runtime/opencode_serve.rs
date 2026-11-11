@@ -531,13 +531,7 @@ fn spawn_turn_driver(
         .truncate(true)
         .mode(0o600)
         .open(&spec_path)
-        .and_then(|mut f| {
-            f.write_all(
-                serde_json::to_string(&spec)
-                    .unwrap_or_default()
-                    .as_bytes(),
-            )
-        })
+        .and_then(|mut f| f.write_all(serde_json::to_string(&spec).unwrap_or_default().as_bytes()))
         .map_err(|e| format!("turn spec {}: {e}", spec_path.display()))?;
     let argv = crate::spawn_gate::qos_wrap(
         cwd,
@@ -1486,32 +1480,6 @@ mod tests {
     }
 
     #[test]
-    fn worker_sessions_deny_unanswerable_asks_and_grant_each_root() {
-        let rules = session_rules(Path::new("/w/tree"), &["/s/root/".to_string()]);
-        let text = rules.to_string();
-        let denied: Vec<&str> = rules
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|r| r["action"] == "deny" && r["pattern"] == "*")
-            .filter_map(|r| r["permission"].as_str())
-            .collect();
-        assert_eq!(denied, vec!["question", "plan_enter", "plan_exit"]);
-        let allows: Vec<&str> = rules
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|r| r["permission"] == "external_directory" && r["action"] == "allow")
-            .filter_map(|r| r["pattern"].as_str())
-            .collect();
-        assert_eq!(allows, vec!["/w/tree", "/w/tree/*", "/s/root", "/s/root/*"]);
-        assert!(
-            !text.contains("\"*\":\"allow\""),
-            "no allow-all rides a session: {text}"
-        );
-    }
-
-    #[test]
     fn steering_readback_requires_a_message_id_after_high_water_mark() {
         let before = serde_json::json!([
             {"info": {"id": "msg_old"}, "parts": []}
@@ -1601,7 +1569,11 @@ mod tests {
             "opencode",
             crate::claims::now_ms(),
         );
-        assert_eq!(pending, vec!["wk-serve".to_string()], "the record holds the lane");
+        assert_eq!(
+            pending,
+            vec!["wk-serve".to_string()],
+            "the record holds the lane"
+        );
 
         // The create body carries the worker rules: three denies and one
         // external_directory allow pair per writable dir.
@@ -1613,8 +1585,16 @@ mod tests {
         let body: serde_json::Value = serde_json::from_str(body).unwrap();
         assert_eq!(body["title"], "wk-serve");
         let rules = body["permission"].as_array().unwrap();
-        let denies = rules.iter().filter(|r| r["action"] == "deny").count();
-        assert_eq!(denies, 3);
+        let denied: Vec<&str> = rules
+            .iter()
+            .filter(|r| r["action"] == "deny" && r["pattern"] == "*")
+            .filter_map(|r| r["permission"].as_str())
+            .collect();
+        assert_eq!(denied, vec!["question", "plan_enter", "plan_exit"]);
+        assert!(
+            !body.to_string().contains("\"*\":\"allow\""),
+            "no allow-all rides a session"
+        );
         let allows: Vec<&str> = rules
             .iter()
             .filter(|r| r["permission"] == "external_directory")

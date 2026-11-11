@@ -233,7 +233,10 @@ pub(crate) fn drive(
                     } else if answered.insert(p.request_id.clone()) {
                         let a = decide_one(spec, &serve, p, decide);
                         if let Answer::HoldForUser { question_id } = &a {
-                            held.insert(p.request_id.clone(), (Instant::now(), question_id.clone()));
+                            held.insert(
+                                p.request_id.clone(),
+                                (Instant::now(), question_id.clone()),
+                            );
                         }
                         (a, 0)
                     } else {
@@ -374,7 +377,7 @@ mod tests {
     const ONE_ASK: &str = r#"[{"id":"per_1","sessionID":"ses_a","permission":"bash","patterns":["touch /tmp/x"],"metadata":{},"always":[]}]"#;
 
     #[test]
-    fn command_of_splits_a_slash_seed_and_leaves_prose() {
+    fn a_prose_turn_prompts_async_and_the_ladder_answers_each_ask_once() {
         assert_eq!(
             command_of("/fno:target --no-merge x-1"),
             Some(("fno:target".into(), "--no-merge x-1".into()))
@@ -384,10 +387,6 @@ mod tests {
             Some(("fno:whoami".into(), String::new()))
         );
         assert_eq!(command_of("[from: op]\n\nhello"), None);
-    }
-
-    #[test]
-    fn a_prose_turn_prompts_async_and_the_ladder_answers_each_ask_once() {
         let dir = tempfile::tempdir().unwrap();
         let fake = Fake::start(vec![
             (
@@ -408,7 +407,15 @@ mod tests {
         };
         // The fake never reads busy, so a zero grace ends the turn at once.
         let s = spec(&fake.url, "do it", dir.path());
-        drive(&s, Contract::V1, Duration::from_secs(60), Duration::ZERO, None, &decide).unwrap();
+        drive(
+            &s,
+            Contract::V1,
+            Duration::from_secs(60),
+            Duration::ZERO,
+            None,
+            &decide,
+        )
+        .unwrap();
         assert_eq!(*calls.lock().unwrap(), 1, "one decision per ask id");
         let seen = fake.seen.lock().unwrap();
         let prompt = seen

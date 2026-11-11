@@ -369,8 +369,9 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn v2_lists_the_session_ask_and_allow_posts_once() {
-        let fake = Fake::start(vec![
+    fn each_contract_lists_the_session_ask_and_replies_in_its_shape() {
+        {
+            let fake = Fake::start(vec![
             (
                 "GET /api/session/ses_a/permission",
                 "200 OK",
@@ -378,36 +379,33 @@ pub(crate) mod tests {
             ),
             ("POST /api/session/ses_a/permission/per_1/reply", "200 OK", "true".into()),
         ]);
-        let serve = Serve {
-            base_url: &fake.url,
-            token: "t",
-            contract: Contract::V2,
-        };
-        let dir = tempfile::tempdir().unwrap();
-        let listed = list_pending(&serve, Path::new("/w"), "ses_a").unwrap();
-        assert_eq!(listed, vec![pending("ses_a")]);
-        answer(
-            &serve,
-            Path::new("/w"),
-            &listed[0],
-            &Answer::Allow,
-            &dir.path().join("e.jsonl"),
-        )
-        .unwrap();
-        let seen = fake.seen.lock().unwrap();
-        let (line, body) = seen.last().unwrap();
-        assert!(
-            line.starts_with("POST /api/session/ses_a/permission/per_1/reply"),
-            "{line}"
-        );
-        assert_eq!(
-            serde_json::from_str::<Value>(body).unwrap(),
-            json!({"decision": "once"})
-        );
-    }
-
-    #[test]
-    fn v1_lists_by_directory_filters_the_session_and_rejects_with_the_note() {
+            let serve = Serve {
+                base_url: &fake.url,
+                token: "t",
+                contract: Contract::V2,
+            };
+            let dir = tempfile::tempdir().unwrap();
+            let listed = list_pending(&serve, Path::new("/w"), "ses_a").unwrap();
+            assert_eq!(listed, vec![pending("ses_a")]);
+            answer(
+                &serve,
+                Path::new("/w"),
+                &listed[0],
+                &Answer::Allow,
+                &dir.path().join("e.jsonl"),
+            )
+            .unwrap();
+            let seen = fake.seen.lock().unwrap();
+            let (line, body) = seen.last().unwrap();
+            assert!(
+                line.starts_with("POST /api/session/ses_a/permission/per_1/reply"),
+                "{line}"
+            );
+            assert_eq!(
+                serde_json::from_str::<Value>(body).unwrap(),
+                json!({"decision": "once"})
+            );
+        }
         let fake = Fake::start(vec![
             (
                 "GET /permission?directory=/w%20x",

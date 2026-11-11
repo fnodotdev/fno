@@ -7,6 +7,7 @@
 //! prove nothing.
 
 use super::*;
+use crate::opencode_permission::encode_query_path;
 use std::sync::{Arc, Mutex};
 
 /// How the fake serve behaves for one test.
@@ -203,9 +204,6 @@ fn an_id_of_another_harnesss_shape_never_reaches_the_serve() {
 /// Re-measure [`ARCHIVE_MIN_VERSION`] against a real opencode serve. The
 /// version bound is a claim about a vendor binary, and only a live run can
 /// renew it. Ignored by default because it needs a serve:
-
-use crate::opencode_permission::encode_query_path;
-
 ///
 /// ```text
 /// OPENCODE_SERVER_PASSWORD=tok opencode serve --port 45999 --hostname 127.0.0.1 &
