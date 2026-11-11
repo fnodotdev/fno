@@ -64,6 +64,7 @@ fn floor_payload_classifies_the_named_pr_for_the_coverage_command() {
         git.to_str().unwrap(),
         Path::new("."),
         Some("7"),
+        None,
     );
     assert!(
         is_code,
@@ -83,6 +84,7 @@ fn floor_payload_classifies_the_named_pr_for_the_coverage_command() {
         git.to_str().unwrap(),
         Path::new("."),
         Some("7"),
+        None,
     );
     assert!(is_code, "an unreadable named PR must fail closed");
     assert!(assumed);

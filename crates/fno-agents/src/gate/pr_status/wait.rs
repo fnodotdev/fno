@@ -360,10 +360,19 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
     let sleeper = |s: f64| std::thread::sleep(std::time::Duration::from_secs_f64(s));
     let start = Instant::now();
     let clock = move || start.elapsed().as_secs_f64();
+    // The session node's PR repo pins every PR read: a node whose pr_url
+    // names another repo must never be answered from the ambient origin's
+    // same-number PR (the cutover shape: repo A checkout, repo B node).
+    let slug_override: Option<String> =
+        crate::gate::loopcheck::pr_read::session_node_pr_target(cwd).1;
     if until == "review" {
         // The slug resolves once, not per tick; an unresolvable slug retries
-        // per tick, so a transient failure never wedges the wait.
-        let slug = super::cache::git_slug(cwd);
+        // per tick, so a transient failure never wedges the wait. The node
+        // pin outranks the ambient origin on both the first resolve and the
+        // per-tick retry.
+        let pinned = slug_override
+            .clone()
+            .or_else(|| super::cache::git_slug(cwd));
         let probe = crate::pr_status::cache::CountingProbe {
             inner: RealGhProbe,
             calls: std::sync::atomic::AtomicUsize::new(0),
@@ -372,9 +381,12 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
             // No hold skip: the read chain (app-token swap, GraphQL route)
             // answers through a live hold, so a rate-limited tick still
             // counts reviews instead of riding out to hold expiry.
-            let slug = match &slug {
+            let slug = match &pinned {
                 Some(s) => s.clone(),
-                None => match super::cache::git_slug(cwd) {
+                None => match slug_override
+                    .clone()
+                    .or_else(|| super::cache::git_slug(cwd))
+                {
                     Some(s) => s,
                     None => return None,
                 },
@@ -433,7 +445,9 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
         // read for free. A miss (no row, expired, a pushed head) falls to
         // the network path below, same as today.
         if let Some(sha) = local_head_sha(cwd) {
-            if let Some((code, payload, lines)) = super::cache::fresh_tick(cwd, pr, Some(&sha)) {
+            if let Some((code, payload, lines)) =
+                super::cache::fresh_tick(cwd, pr, Some(&sha), slug_override.as_deref())
+            {
                 return (code, payload, lines, 0);
             }
         }
@@ -441,10 +455,16 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
         // live hold, so the tick reads the head it would have skipped and
         // the cache serves the row minted for THAT answer. The spread beat
         // above still spaces the fleet's first post-hold read.
-        let (head, head_calls) = super::cache::head_read(cwd, pr);
+        let (head, head_calls) = super::cache::head_read_in(cwd, pr, slug_override.as_deref());
         let block = head.unwrap_or_else(|| json!({"head_sha": ""}));
-        let (code, payload, lines, tick_calls) =
-            super::cache::cached_status(cwd_str, pr, false, Some(&block));
+        let (code, payload, lines, tick_calls) = super::cache::cached_status_in(
+            cwd_str,
+            pr,
+            false,
+            Some(&block),
+            true,
+            slug_override.as_deref(),
+        );
         (code, payload, lines, tick_calls + head_calls)
     };
     let on_red = |payload: &Value| {
@@ -1285,5 +1305,108 @@ echo '{}'
 exit 1
 "#,
         )
+    }
+
+    /// The node's test shape: a node bound to repo B, run from a checkout
+    /// whose origin is repo A, same PR number. The wait reads repo B on both
+    /// arms - the review count and the status tick - and never the ambient
+    /// origin's same-number PR.
+    #[test]
+    fn the_wait_reads_the_repo_the_node_pr_url_names() {
+        use crate::claims::EnvVarGuard;
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let spaces = tempfile::tempdir().unwrap();
+        let _home = EnvVarGuard::set(crate::paths::HOME_ENV, home.path().to_str().unwrap());
+        std::env::set_var("FNO_SPACES_DIR", spaces.path());
+        std::env::remove_var("FNO_STATE_DIR");
+        let work = dir.path().join("work");
+        std::fs::create_dir_all(work.join(".fno")).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&work)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .output()
+                .expect("git spawns");
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["remote", "add", "origin", "https://github.com/a/r.git"]);
+        std::fs::write(work.join(".fno/target-state.md"), "graph_node_id: x-wait\n").unwrap();
+        // The graph store the manifest's node reads through.
+        let store_dir = tempfile::tempdir().unwrap();
+        std::env::set_var("FNO_STATE_DIR", store_dir.path());
+        let graph = crate::graph_get::graph_path_for(&work);
+        std::fs::create_dir_all(graph.parent().unwrap()).unwrap();
+        std::fs::write(&graph, b"{\"entries\": []}").unwrap();
+        let connection = crate::backlog::open(&graph).unwrap();
+        crate::backlog::save_aggregate(
+            &connection,
+            &crate::backlog::model::Node::from_json(&serde_json::json!({
+                "id": "x-wait", "slug": "wait", "title": "W", "type": "bug",
+                "status": "in_progress", "priority": "p2", "domain": "code",
+                "created_at": "2026-11-11T00:00:00+00:00",
+                "pr_number": 7,
+                "pr_url": "https://github.com/b/r/pull/7",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let calls = dir.path().join("calls");
+        let script = r#"#!/bin/sh
+printf '%s\n' "$@" >> "$RECORD_CALLS"
+case "$*" in
+  *repos/b/r/pulls/7/reviews*)
+    echo '[{"id":1}]'
+    exit 0 ;;
+  *repos/b/r/pulls/7*)
+    echo '{"state":"open","head":{"sha":"c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1"},"base":{"ref":"main"},"mergeable":true,"mergeable_state":"clean","html_url":"https://github.com/b/r/pull/7"}'
+    exit 0 ;;
+esac
+echo '{}'
+exit 1
+"#
+        .to_string();
+        crate::write_exec_stub(dir.path(), "gh", &script);
+        // The stub rides PATH: RealGhProbe spawns the literal `gh`.
+        let old_path = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var(
+            "PATH",
+            format!("{}:{}", dir.path().to_str().unwrap(), old_path),
+        );
+        std::env::set_var("RECORD_CALLS", &calls);
+        let payload = serde_json::json!({
+            "cwd": work.to_string_lossy(),
+            "pr": 7,
+            "until": "review",
+            "timeout": "4s",
+            "interval": "5s",
+        });
+        let (code, _out, _err) = super::run_wait(&payload);
+        std::env::set_var("PATH", old_path);
+        std::env::remove_var("FNO_STATE_DIR");
+        std::env::remove_var("FNO_SPACES_DIR");
+        std::env::remove_var("RECORD_CALLS");
+        let recorded = std::fs::read_to_string(&calls).unwrap();
+        assert!(
+            recorded.contains("repos/b/r/pulls/7/reviews"),
+            "the review read names the node repo: {recorded}"
+        );
+        assert!(
+            !recorded.contains("repos/a/r/"),
+            "the ambient origin never answers a read: {recorded}"
+        );
+        // The exit code is the no-new-review timeout; the assertion above is
+        // the contract. Guard the destructure so the intent stays visible.
+        let _ = code;
     }
 }

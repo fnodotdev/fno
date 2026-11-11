@@ -523,7 +523,23 @@ fn run_pass(home: &AgentsHome, dry_run: bool) -> Result<u64, String> {
                 crate::claims::ClaimState::Corrupted => Claim::Unreadable,
             }
         },
-        &|cwd, pr| crate::pr_status::cache::cached_status(cwd, pr, false, None).1,
+        &|cwd, pr| {
+            // The session node's PR repo pins the wake read, the same pin the
+            // wait applies: a cutover worktree must not read the ambient
+            // origin's same-number PR.
+            let node_repo =
+                crate::gate::loopcheck::pr_read::session_node_pr_target(std::path::Path::new(cwd))
+                    .1;
+            crate::pr_status::cache::cached_status_in(
+                cwd,
+                pr,
+                false,
+                None,
+                true,
+                node_repo.as_deref(),
+            )
+            .1
+        },
         &|sid, drive, text| match drive {
             Drive::TurnStart => match crate::codex_inject::deliver_via_codex_daemon_sync(sid, text)
             {

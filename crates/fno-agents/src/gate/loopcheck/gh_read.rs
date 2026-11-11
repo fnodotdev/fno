@@ -292,13 +292,15 @@ fn read_pr_view_once(
 /// The gate's `pr view` read: the metadata field set over REST, with the
 /// earned broker-field-set fallback when the core bucket is spent. `pub(crate)`
 /// because the ported review-hold read (review_hold.rs) rides the same argv.
-pub(crate) fn read_pr_view(
+/// `repo` pins the repository (the node PR's own repo) over the ambient origin.
+pub(crate) fn read_pr_view_in(
     gh_bin: &str,
     cwd: &Path,
     selector: Option<&str>,
+    repo: Option<&str>,
     timeout: std::time::Duration,
 ) -> Result<Option<Value>, GhReadError> {
-    read_pr_view_fields(gh_bin, cwd, selector, PR_VIEW_FIELDS_GRAPHQL, None, timeout)
+    read_pr_view_fields(gh_bin, cwd, selector, PR_VIEW_FIELDS_GRAPHQL, repo, timeout)
 }
 
 /// The earned-fallback read, parametrized for callers whose payload needs
@@ -382,10 +384,18 @@ pub(super) fn read_pr_head_oid(
     gh_bin: &str,
     cwd: &Path,
     selector: &str,
+    repo: Option<&str>,
 ) -> Result<Option<(String, Value)>, GhReadError> {
     // The same terminal purpose as read_pr_info's own read: the payload this
     // returns fills PrInfo, so it takes the floored bound.
-    let Some(pr_json) = read_pr_view(gh_bin, cwd, Some(selector), stopgate_pr_meta_timeout())?
+    let Some(pr_json) = read_pr_view_fields(
+        gh_bin,
+        cwd,
+        Some(selector),
+        PR_VIEW_FIELDS_GRAPHQL,
+        repo,
+        stopgate_pr_meta_timeout(),
+    )?
     else {
         return Ok(None);
     };
