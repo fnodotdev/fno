@@ -63,6 +63,7 @@ impl Scratch {
 
     #[allow(dead_code)]
     pub fn isolate_command(&self, cmd: &mut std::process::Command) {
+        seed_steady_state_landing(&self.0);
         let home = self.0.join("home");
         for (key, _) in std::env::vars_os() {
             if key.to_string_lossy().starts_with("FNO_") {
@@ -113,6 +114,9 @@ impl Scratch {
     }
 
     fn isolate_pty_command(&self, cmd: &mut CommandBuilder) {
+        if !self.0.join(".no-steady-seed").exists() {
+            seed_steady_state_landing(&self.0);
+        }
         let home = self.0.join("home");
         for (key, _) in std::env::vars_os() {
             if key.to_string_lossy().starts_with("FNO_") {
@@ -172,6 +176,33 @@ impl Scratch {
 #[allow(dead_code)]
 pub fn sidecar_pid_field(text: &str) -> Option<i32> {
     text.trim().split(':').next()?.parse().ok()
+}
+
+/// The e2e boots are steady-state by default: a fresh iso store reads as the
+/// machine's FIRST run, and the first-run landing paints the command center
+/// over the view these tests assert. Seed the seen marker with the product's
+/// own store format so every spawned client lands on Agents. A test that
+/// wants the first-run boot deletes the seeded file first.
+#[allow(dead_code)]
+pub fn seed_steady_state_landing(root: &std::path::Path) {
+    let dir = root.join("iso-agents");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let _ = std::fs::write(
+        dir.join("mux-view.json"),
+        r#"{"experimental":{"org_board_seen":true}}"#,
+    );
+}
+
+/// Undo the steady-state seed so the next spawned client reads as a machine's
+/// first run: the first-run landing test's setup, in one named step. The pty
+/// isolator re-seeds unless the root carries the `.no-steady-seed` sentinel,
+/// so the caller writes that first.
+#[allow(dead_code)]
+pub fn clear_first_run_seed(root: &std::path::Path) {
+    let _ = std::fs::remove_file(root.join("iso-agents").join("mux-view.json"));
+    let _ = std::fs::write(root.join(".no-steady-seed"), "");
 }
 
 /// A line of pane text with any leading shell prompts removed. A CR nudge

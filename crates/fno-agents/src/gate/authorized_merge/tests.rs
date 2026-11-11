@@ -997,8 +997,11 @@ fn slot_holder_error_fails_open_to_the_stale_hold_without_taking_a_slot() {
     assert!(fake.take_slot_calls.borrow().is_empty());
 }
 
+/// A stale-base green retests (one update-branch), then waits out the new
+/// head's own CI: under the 2026-11-10 pending-hold law the pending read on the retested head holds,
+/// so the settle after the retest is the CI settle, not the merge itself.
 #[test]
-fn a_green_pr_whose_ci_predates_main_retests_without_a_pending_ci_veto() {
+fn a_green_pr_whose_ci_predates_main_retests_then_waits_out_the_pending_new_head() {
     let mut fake = Fake {
         ci_base: Some(ProbeOutcome::Refused(
             "ci_base_stale: run predates base".to_string(),
@@ -1030,8 +1033,61 @@ fn a_green_pr_whose_ci_predates_main_retests_without_a_pending_ci_veto() {
     fake.checks = Some("pending".to_string());
     fake.ci_base = Some(ProbeOutcome::Clear);
     let outcome = run(&fake, &req);
-    assert_eq!(outcome.word(), "merged");
-    assert!(outcome.warnings().iter().any(|w| w.code == "ci_pending"));
+    assert_eq!(outcome.word(), "held", "{outcome:?}");
+    assert!(outcome.detail().contains("pending"), "{outcome:?}");
+
+    // The settle after the retest's CI lands is the merge.
+    fake.checks = None;
+    let outcome = run(&fake, &req);
+    assert_eq!(outcome.word(), "merged", "{outcome:?}");
+}
+
+/// A 2026-11-10 incident merged a PR while its cli-ci rerun was still in
+/// flight. The pending verdict fell through `require_checks_pass` with only
+/// an advisory warning, and main went red on the merged head. The newest
+/// attempt's settled green is the merge precondition; pending is a hold.
+/// Arm keeps its fall-through: it hands the PR to GitHub's queue, which
+/// waits out requirements that are required.
+#[test]
+fn a_pending_ci_read_holds_the_merge_until_the_newest_attempt_settles() {
+    let mut fake = Fake {
+        checks: Some("pending".to_string()),
+        ..clean()
+    };
+    let mut req = request(Effect::Merge);
+    req.require_checks = true;
+    let outcome = run(&fake, &req);
+    assert_eq!(outcome.word(), "held", "{outcome:?}");
+    assert!(
+        outcome
+            .detail()
+            .contains("checks are pending; require_checks_pass"),
+        "{outcome:?}"
+    );
+
+    // Preview still answers, and arm still hands off: neither lands a merge.
+    let preview = run(
+        &fake,
+        &Request {
+            require_checks: true,
+            ..request(Effect::Preview)
+        },
+    );
+    assert_eq!(preview.word(), "authorized", "{preview:?}");
+    let armed = run(
+        &fake,
+        &Request {
+            require_checks: true,
+            ..request(Effect::Arm)
+        },
+    );
+    assert_eq!(armed.word(), "armed", "{armed:?}");
+
+    // The unknown verdict stays fall-through: a PR with no check-run CI at
+    // all (docs-only) must keep its merge door.
+    fake.checks = Some("unknown".to_string());
+    let outcome = run(&fake, &req);
+    assert_eq!(outcome.word(), "merged", "{outcome:?}");
 }
 
 #[test]
@@ -1355,7 +1411,7 @@ fn an_unreadable_body_or_graph_refuses_to_assume_bound() {
 }
 
 #[test]
-fn process_conditions_warn_on_merge_arm_and_preview() {
+fn process_conditions_warn_on_merge_arm_and_preview_pending_holds() {
     for code in [
         "review_in_flight",
         "review_coverage_uncovered",
@@ -1389,6 +1445,18 @@ fn process_conditions_warn_on_merge_arm_and_preview() {
                 ..request(effect)
             };
             let outcome = run(&fake, &req);
+            if code == "ci_pending" && effect == Effect::Merge {
+                // The one cell the warning does not cover: a pending read
+                // holds the merge door until the newest attempt settles.
+                assert_eq!(outcome.word(), "held", "{code}: {outcome:?}");
+                assert!(
+                    outcome
+                        .detail()
+                        .contains("checks are pending; require_checks_pass"),
+                    "{outcome:?}"
+                );
+                continue;
+            }
             assert_eq!(outcome.word(), word, "{code}: {outcome:?}");
             assert!(outcome.warnings().iter().any(|w| w.code == code));
         }
