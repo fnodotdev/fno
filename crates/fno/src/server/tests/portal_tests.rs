@@ -612,11 +612,9 @@ fn remote_row_reach_opens_a_portal_seat_running_the_link() {
     core.command(client_id, reach(&hostile, enter));
     assert_eq!(core.panes.len(), panes, "an ssh option is not a host");
     let notices = drain_notices(&mut rx);
-    assert!(
-        notices
-            .iter()
-            .any(|t| t.contains("portal 0: already showing"))
-    );
+    assert!(notices
+        .iter()
+        .any(|t| t.contains("portal 0: already showing")));
     assert!(notices.iter().any(|t| t.contains("no remote row at")));
     core.reap_pane(seat);
 }
@@ -659,11 +657,9 @@ fn thread_pane_open_rows() {
         Some("cat"),
         "the pane runs the attach argv"
     );
-    assert!(
-        drain_notices(&mut rx)
-            .iter()
-            .any(|t| t.contains("thread pane ->"))
-    );
+    assert!(drain_notices(&mut rx)
+        .iter()
+        .any(|t| t.contains("thread pane ->")));
     core.reap_pane(new_pid); // don't leak the stand-in child
 
     // AC4-EDGE: a slot showing A, a reach on B: the same tree slot now
@@ -768,11 +764,9 @@ fn thread_pane_open_rows() {
         pid,
         "the reach focused the showing pane"
     );
-    assert!(
-        drain_notices(&mut rx)
-            .iter()
-            .any(|t| t.contains("already showing"))
-    );
+    assert!(drain_notices(&mut rx)
+        .iter()
+        .any(|t| t.contains("already showing")));
     core.reap_pane(pid);
 
     // The TUI door keys the slot by the attach id; `fno agents attach`
@@ -796,11 +790,9 @@ fn thread_pane_open_rows() {
         }),
         "the slot keeps its original key and pane"
     );
-    assert!(
-        drain_notices(&mut rx)
-            .iter()
-            .any(|t| t.contains("already showing"))
-    );
+    assert!(drain_notices(&mut rx)
+        .iter()
+        .any(|t| t.contains("already showing")));
     core.reap_pane(pid);
 }
 
@@ -1400,11 +1392,9 @@ fn portal_refusal_rows() {
     );
     assert_eq!(core.panes.len(), panes_before, "no pane spawned");
     assert!(core.portals.is_empty(), "no portal entry written");
-    assert!(
-        drain_notices(&mut rx)
-            .iter()
-            .any(|t| t.contains("a portal takes no split"))
-    );
+    assert!(drain_notices(&mut rx)
+        .iter()
+        .any(|t| t.contains("a portal takes no split")));
 
     // (x-9b60, AC4-EDGE) A caller tab the server cannot resolve refuses
     // BEFORE a pane exists: no spawn, no portal entry, a notice that

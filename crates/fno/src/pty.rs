@@ -10,7 +10,7 @@
 //! queue (AC2-EDGE).
 
 use crate::shell_init::{BASH_SHELL_INIT, ZSH_SHELL_INIT};
-use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
