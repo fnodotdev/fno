@@ -6869,7 +6869,7 @@ async fn attach_and_run(
                     | ServerMsg::LayoutApplied { .. }
                     | ServerMsg::LayoutGrafted { .. }
                     | ServerMsg::TabLocation { .. }
-                    | ServerMsg::TabClosed { .. }
+                    | ServerMsg::TabClosed { .. } | ServerMsg::ChatEvents { .. }
                     | ServerMsg::WorkspaceRestored { .. } | ServerMsg::SquadReloaded { .. }
                     | ServerMsg::SessionRetired { .. } | ServerMsg::AgentRowsReceipt { .. }
                     | ServerMsg::ServerStats { .. } | ServerMsg::NoticeSent { .. }) => {}

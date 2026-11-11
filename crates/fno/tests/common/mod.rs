@@ -1217,7 +1217,7 @@ impl FakeClient {
             ServerMsg::DesktopNotice { .. } => {}
             // (v110) Notify receipt: one-shot control reply, never an
             // attached client.
-            ServerMsg::NoticeSent { .. } => {}
+            ServerMsg::NoticeSent { .. } | ServerMsg::ChatEvents { .. } => {}
             // (v127) Anchor-jump verdict: the interactive client's picker
             // consumes it; the absorber records nothing.
             ServerMsg::AnchorJumped { .. } => {}

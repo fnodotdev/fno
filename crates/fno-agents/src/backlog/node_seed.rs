@@ -500,14 +500,15 @@ pub fn spawn_payload_command_notice(params: &Value, cwd: &Path) -> Option<String
     };
     let row = crate::spawn_compose::graph_row_for(&node)?;
     // The floor is the node's project's, the same config the Python door
-    // loads from the row's cwd; the caller's cwd answers only a row with none.
-    let project = row
-        .get("cwd")
-        .and_then(Value::as_str)
-        .map(Path::new)
+    // loads from the row's checkout resolved through the work map (a stored
+    // cwd predates config changes; the configured root wins when the row's
+    // project has a live one), the caller's cwd answering only when nothing
+    // on the row resolves to an existing dir.
+    let project = super::settings::node_row_checkout(&row)
+        .map(std::path::PathBuf::from)
         .filter(|p| p.is_dir())
-        .unwrap_or(cwd);
-    let floor = crate::agents_config::config_lookup(project, &["dispatch", "blueprint_floor"])
+        .unwrap_or_else(|| cwd.to_path_buf());
+    let floor = crate::agents_config::config_lookup(&project, &["dispatch", "blueprint_floor"])
         .and_then(|v| v.as_str().map(|s| s.trim().to_string()))
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR.to_string());
@@ -544,19 +545,22 @@ pub enum SpawnNodeCwd {
 
 /// The launch dir for a spawn whose payload names a node, and whether the
 /// caller must be refused instead. The node comes from [`resolve_node`]
-/// (explicit flag, then the seed's first-line scan), the project cwd from the
-/// node's graph row, and refuse-vs-dispatch from the two repo roots: a caller
+/// (explicit flag, then the seed's first-line scan), the project checkout
+/// from the node's graph row resolved through the work map via
+/// `checkout_of`, and refuse-vs-dispatch from the two repo roots: a caller
 /// inside ANOTHER git repo is refused naming both paths (the 2026-09-27
-/// incident dispatched a node's worker into the caller's private config repo,
-/// whose "canonical" is the caller-repo-relative default), while a caller in
-/// the node's own repo - any worktree - or outside git entirely dispatches
-/// from the node's project cwd. [`spawn_node_cwd`] is the production shape
-/// over the machine graph; this pure core is the testable one.
+/// incident dispatched a
+/// node's worker into the caller's private config repo, whose "canonical" is
+/// the caller-repo-relative default), while a caller in the node's own repo -
+/// any worktree - or outside git entirely dispatches from the node's project
+/// checkout. [`spawn_node_cwd`] is the production shape over the machine
+/// graph; this pure core is the testable one.
 fn spawn_node_cwd_in(
     payload: &Value,
     caller: &Path,
     rows: &[Value],
     repo_of: &dyn Fn(&Path) -> Option<std::path::PathBuf>,
+    checkout_of: &dyn Fn(&Value) -> Option<std::path::PathBuf>,
 ) -> SpawnNodeCwd {
     let resolved = resolve_node(payload);
     let node = resolved
@@ -572,14 +576,10 @@ fn spawn_node_cwd_in(
     else {
         return SpawnNodeCwd::Unnamed;
     };
-    let Some(cwd) = row
-        .get("cwd")
-        .and_then(Value::as_str)
-        .filter(|c| !c.trim().is_empty())
-    else {
+    let Some(cwd) = checkout_of(row) else {
         return SpawnNodeCwd::Unnamed;
     };
-    let project = std::path::PathBuf::from(cwd);
+    let project = cwd;
     if let (Some(caller_repo), Some(node_repo)) = (repo_of(caller), repo_of(&project)) {
         if caller_repo != node_repo {
             return SpawnNodeCwd::Foreign(format!(
@@ -625,13 +625,24 @@ pub fn spawn_node_cwd(params: &Value, caller: &Path) -> SpawnNodeCwd {
                 id_in: Some(wanted),
                 ..Default::default()
             },
-            fields: Some(["id", "cwd"].into_iter().map(str::to_string).collect()),
+            fields: Some(
+                ["id", "cwd", "project"]
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+            ),
             with_blockers: true,
             ..Default::default()
         },
     )
     .unwrap_or_default();
-    spawn_node_cwd_in(&payload, caller, &rows, &crate::paths::canonical_repo_root)
+    spawn_node_cwd_in(
+        &payload,
+        caller,
+        &rows,
+        &crate::paths::canonical_repo_root,
+        &|row: &Value| super::settings::node_row_checkout(row).map(std::path::PathBuf::from),
+    )
 }
 
 /// Which node does this spawn work, answered with the source that named it:
@@ -764,20 +775,21 @@ mod tests {
 
     /// The guard over pinned rows and a repo resolver modelling two canonical
     /// repos: every path under `/repo` (any worktree) maps to `/repo`, every
-    /// path under `/other` to `/other`, anything else to None.
+    /// path under `/other` to `/other`, anything else to None. `footnote` is
+    /// the one mapped project, its live configured root `/repo/footnote`.
     fn cwd_guard(payload: Value, caller: &str) -> SpawnNodeCwd {
         let rows = vec![
-            json!({"id": "x-1111", "cwd": "/repo/footnote"}),
+            json!({"id": "x-1111", "cwd": "/repo/footnote", "project": "footnote"}),
             json!({"id": "x-2222", "cwd": ""}),
             json!({"id": "x-3333", "cwd": "/other/project"}),
         ];
-        spawn_node_cwd_in(&payload, Path::new(caller), &rows, &|p: &Path| {
-            if p.starts_with("/repo") {
-                Some(PathBuf::from("/repo"))
-            } else {
-                p.starts_with("/other").then(|| PathBuf::from("/other"))
-            }
-        })
+        spawn_node_cwd_in(
+            &payload,
+            Path::new(caller),
+            &rows,
+            &repo_of_test,
+            &|row: &Value| crate::backlog::settings::node_row_checkout(row).map(PathBuf::from),
+        )
     }
 
     fn seed_payload(seed: &str, flag_node: Value) -> Value {
@@ -790,15 +802,120 @@ mod tests {
         })
     }
 
+    /// The test repo resolver from the [`cwd_guard`] fixture, standalone for
+    /// the arm tests: under `/repo` answers `/repo`, under `/other`
+    /// `/other`, else None.
+    fn repo_of_test(p: &Path) -> Option<PathBuf> {
+        if p.starts_with("/repo") {
+            Some(PathBuf::from("/repo"))
+        } else {
+            p.starts_with("/other").then(|| PathBuf::from("/other"))
+        }
+    }
+
+    fn refusal_names_both_paths(msg: String) {
+        assert!(msg.contains("/other/project"), "{msg}");
+        assert!(msg.contains("another repo (/repo)"), "{msg}");
+    }
+
     #[test]
     fn foreign_repo_caller_is_refused_naming_both() {
         let got = cwd_guard(seed_payload("/fno:target x-3333", Value::Null), "/repo/wt");
         match got {
-            SpawnNodeCwd::Foreign(msg) => {
-                assert!(msg.contains("/other/project"), "{msg}");
-                assert!(msg.contains("another repo (/repo)"), "{msg}");
-            }
+            SpawnNodeCwd::Foreign(msg) => refusal_names_both_paths(msg),
             other => panic!("expected Foreign, got {other:?}"),
+        }
+    }
+
+    /// The two demanded arms: a row whose stored cwd predates the
+    /// cutover dispatches from the configured root; a row already at it is
+    /// unchanged.
+    #[test]
+    fn stored_cwd_resolves_through_the_work_map() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = std::env::temp_dir().join("fno-node-seed-cwd-test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let cfg = tmp.join("config.toml");
+        std::fs::write(
+            &cfg,
+            format!(
+                "[[work.workspaces.ws.projects]]\nname = \"footnote\"\npath = \"{}\"\n",
+                tmp.display()
+            ),
+        )
+        .unwrap();
+        let _cfg_pin =
+            crate::claims::EnvVarGuard::set("FNO_GLOBAL_SETTINGS_PATH", cfg.to_str().unwrap());
+        let _fno_pin = crate::claims::EnvVarGuard::unset("FNO_CONFIG");
+        // Retired arm: the row stores the retired checkout; the work map
+        // names the live one and wins.
+        let retired = json!({"id": "x-4444", "cwd": "/repo/retired", "project": "footnote"});
+        let got = spawn_node_cwd_in(
+            &seed_payload("/fno:target x-4444", Value::Null),
+            Path::new("/repo/wt"),
+            &[retired],
+            &repo_of_test,
+            &|row: &Value| crate::backlog::settings::node_row_checkout(row).map(PathBuf::from),
+        );
+        assert_eq!(
+            got,
+            SpawnNodeCwd::Project(tmp.clone()),
+            "a retired stored cwd dispatches from the configured root"
+        );
+
+        // Matching arm: the row already sits at the configured root.
+        let matching = json!({
+            "id": "x-4444",
+            "cwd": Value::String(tmp.to_string_lossy().into_owned()),
+            "project": "footnote",
+        });
+        let got = spawn_node_cwd_in(
+            &seed_payload("/fno:target x-4444", Value::Null),
+            Path::new("/repo/wt"),
+            &[matching],
+            &repo_of_test,
+            &|row: &Value| crate::backlog::settings::node_row_checkout(row).map(PathBuf::from),
+        );
+        assert_eq!(
+            got,
+            SpawnNodeCwd::Project(tmp.clone()),
+            "a matching stored cwd is unchanged"
+        );
+    }
+
+    /// No project field, or a project with no live configured root: the
+    /// stored cwd stays trusted (nothing to resolve against).
+    #[test]
+    fn an_unmapped_project_keeps_the_stored_cwd() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _cfg_pin = crate::claims::EnvVarGuard::set(
+            "FNO_GLOBAL_SETTINGS_PATH",
+            "/nonexistent-fno-unmapped-test",
+        );
+        let _fno_pin = crate::claims::EnvVarGuard::unset("FNO_CONFIG");
+        for row in [
+            json!({"id": "x-4444", "cwd": "/repo/legacy"}),
+            json!({"id": "x-4444", "cwd": "/repo/legacy", "project": "nowhere"}),
+        ]
+        .iter()
+        {
+            let got = spawn_node_cwd_in(
+                &seed_payload("/fno:target x-4444", Value::Null),
+                Path::new("/repo/wt"),
+                std::slice::from_ref(row),
+                &repo_of_test,
+                &|row: &Value| crate::backlog::settings::node_row_checkout(row).map(PathBuf::from),
+            );
+            assert_eq!(
+                got,
+                SpawnNodeCwd::Project(PathBuf::from("/repo/legacy")),
+                "{row}"
+            );
         }
     }
 

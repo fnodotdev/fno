@@ -21,6 +21,7 @@
   ],
   "pack_hooks": [
     "hooks/attest-model.sh",
+    "hooks/bootstrap-session-start.sh",
     "hooks/born-with-why-offer-inject.sh",
     "hooks/cache-keepalive-inject.sh",
     "hooks/capture-plan-mode.sh",

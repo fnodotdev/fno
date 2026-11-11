@@ -411,9 +411,11 @@ fn default_true() -> bool {
 /// v125: `PaneMeta.host` + `cwd` (serde default), the pane frame's machine
 /// and working directory; floor stays 58.
 /// v126: `ControlCommand::PaneKillChecked` binds removal to the observed child.
-/// v127: `ClientMsg::AnchorJump` + `ServerMsg::AnchorJumped` (v127): the
-/// exchange picker's jump lands a pane on the row where a submitted prompt
-/// was echoed, keyed by the prompt's submit stamp.
+/// v127: `ClientMsg::AnchorJump` + `ServerMsg::AnchorJumped`: the exchange
+/// picker's jump lands a pane on the row where a submitted prompt was
+/// echoed, keyed by the prompt's submit stamp.
+/// v127: `ClientMsg::ChatTail` and `ServerMsg::ChatEvents`, the chat event
+/// stream; floor stays 58.
 pub const PROTO_VERSION: u32 = 127;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
@@ -442,6 +444,7 @@ pub use limits::{BUILD_VERSION, MAX_MAIL_TEXT, MAX_SQUAD_NAME, MAX_TAB_NAME};
 pub mod err_code;
 
 pub mod agent_launch;
+pub mod chat_event;
 pub use agent_launch::{AgentLaunchRequest, AgentLaunchUpdate, LaunchState};
 
 pub mod link;
@@ -4254,7 +4257,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 126);
+        assert_eq!(PROTO_VERSION, 127);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the
