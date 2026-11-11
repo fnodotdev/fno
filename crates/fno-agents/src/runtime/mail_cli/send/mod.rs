@@ -2040,17 +2040,14 @@ mod subject_arg_tests {
         // No flag, no subject: the env path stays the only fallback.
         let plain = parse_args(&["peer-name".to_string(), "hello".to_string()]).unwrap();
         assert_eq!(plain.subject, None);
-    }
-
-    #[test]
-    fn a_subject_over_the_cap_refuses_at_parse() {
+        // The 200-character cap fires at parse, before any send machinery.
         let long = "x".repeat(201);
-        let refused = parse_args(&[
+        let capped = parse_args(&[
             "peer-name".to_string(),
             "hello".to_string(),
             "--subject".to_string(),
             long,
         ]);
-        assert!(refused.is_err(), "a 201-char subject refuses");
+        assert!(capped.is_err(), "a 201-char subject refuses");
     }
 }
