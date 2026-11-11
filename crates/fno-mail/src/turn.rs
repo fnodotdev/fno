@@ -175,7 +175,7 @@ impl TurnText {
     pub fn render(&self, rule: NewlineRule) -> String {
         match rule {
             NewlineRule::Verbatim => self.0.clone(),
-            NewlineRule::OneLine => self.0.split_whitespace().collect::<Vec<_>>().join(" "),
+            NewlineRule::OneLine => one_line(&self.0),
             NewlineRule::NonSubmittingKey => non_submitting(&self.0),
         }
     }
@@ -187,8 +187,13 @@ impl fmt::Display for TurnText {
     }
 }
 
-/// Every new line run (`\r\n`, `\n`, `\r`) becomes one LF; a tab becomes a space; every other control character, ESC included, is dropped.
-fn non_submitting(text: &str) -> String {
+/// The `NewlineRule::OneLine` keystrokes: every whitespace run becomes one space.
+pub fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The `NewlineRule::NonSubmittingKey` keystrokes: every new line run (`\r\n`, `\n`, `\r`) becomes one LF; a tab becomes a space; every other control character, ESC included, is dropped; a trailing new line run is cut.
+pub fn non_submitting(text: &str) -> String {
     let text = text.trim_end_matches(['\r', '\n']);
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();

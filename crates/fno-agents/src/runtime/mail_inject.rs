@@ -630,24 +630,7 @@ pub(crate) const NEWLINE_GLYPH: &str = " ⏎ ";
 /// nothing else the raw-keystroke path would act on survives: no ESC opens
 /// an escape sequence. The durable bus copy keeps the real newlines.
 fn one_line(text: &str) -> String {
-    let text = text.trim_end_matches(['\r', '\n']);
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '\r' => {
-                if chars.peek() == Some(&'\n') {
-                    chars.next();
-                }
-                out.push('\n');
-            }
-            '\n' => out.push('\n'),
-            '\t' => out.push(' '),
-            other if other.is_control() => {}
-            other => out.push(other),
-        }
-    }
-    out
+    fno_mail::turn::non_submitting(text)
 }
 
 /// The content-confirm marker for a typed inject: the typed text up to its first line break.
@@ -668,7 +651,7 @@ pub(crate) fn typed_marker(text: &str) -> String {
 /// multi-line envelope parks in the harness queue until a turn boundary the
 /// target loop may never reach. Pure so the contract is unit-tested.
 pub(crate) fn steer_line(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    fno_mail::turn::one_line(text)
 }
 
 /// Type the envelope as RAW BYTES on the ATTACHED transport -- line breaks
