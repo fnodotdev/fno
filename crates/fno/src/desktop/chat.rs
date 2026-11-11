@@ -312,10 +312,20 @@ impl Drop for Stream {
 }
 
 /// Open `key`'s chat stream on the `session` server, from the first event.
-pub fn open(session: &str, key: SessionKey) -> Result<(Stream, UnboundedReceiver<Msg>), String> {
-    let socket = crate::proto::socket_path(session)?;
-    let tail = tail_sync(&socket, key, 0).map_err(|e| e.to_string())?;
-    let closer = tail.closer().map_err(|e| format!("chat stream: {e}"))?;
+#[derive(Debug, thiserror::Error)]
+pub enum OpenError {
+    #[error("{0}")]
+    Session(String),
+    #[error(transparent)]
+    Read(#[from] ChatReadError),
+    #[error("chat stream: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+pub fn open(session: &str, key: SessionKey) -> Result<(Stream, UnboundedReceiver<Msg>), OpenError> {
+    let socket = crate::proto::socket_path(session).map_err(OpenError::Session)?;
+    let tail = tail_sync(&socket, key, 0)?;
+    let closer = tail.closer()?;
     let (tx, rx) = unbounded_channel();
     std::thread::Builder::new()
         .name("fno-desktop-chat".into())
@@ -330,8 +340,7 @@ pub fn open(session: &str, key: SessionKey) -> Result<(Stream, UnboundedReceiver
                 }
             }
             let _ = tx.send(Msg::Closed("the chat stream ended".into()));
-        })
-        .map_err(|e| format!("chat stream thread: {e}"))?;
+        })?;
     Ok((Stream { closer }, rx))
 }
 

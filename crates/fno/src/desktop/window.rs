@@ -84,7 +84,7 @@ pub struct Root {
     /// Bumped by each notice, so only the newest one's timer clears it.
     notice_gen: u64,
     closed: Option<String>,
-    metrics: Metrics,
+    pub(super) metrics: Metrics,
     pub(super) palette: Palette,
     focus: FocusHandle,
     /// The content size (rows, cols) last sent to the server.
@@ -308,7 +308,7 @@ impl Root {
                     }
                 }));
             }
-            Err(e) => self.chat.error = Some(e),
+            Err(e) => self.chat.error = Some(e.to_string()),
         }
     }
 
