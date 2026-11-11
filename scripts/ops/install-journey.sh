@@ -183,7 +183,8 @@ launchd baseline: $(printf '%s' "$BASE_LABELS" | grep -c . ) fno labels"
 
 step_1() {
     local served tagged want plat url got
-    fresh curl -fsSL --max-time 45 "https://fno.sh" -o "$RUN_DIR/fno.sh.downloaded" 2>"$RUN_DIR/step1-curl.err" || true
+    # x-fno-probe:1 keeps this validation fetch out of the Worker's install count; the served bytes are identical without it.
+    fresh curl -fsSL -H x-fno-probe:1 --max-time 45 "https://fno.sh" -o "$RUN_DIR/fno.sh.downloaded" 2>"$RUN_DIR/step1-curl.err" || true
     [ -f "$RUN_DIR/fno.sh.downloaded" ] || { ST=fail; DF="download-failed"; EV="${EV}curl could not fetch https://fno.sh
 "; return; }
     served=$(shasum -a 256 "$RUN_DIR/fno.sh.downloaded" 2>/dev/null | awk '{print $1}')
@@ -208,9 +209,9 @@ v$VERSION scripts/install/fno.sh sha256: $tagged"
 
 step_2() {
     local out rc last
-    out=$(fresh sh -c 'curl -fsSL fno.sh | sh' 2>&1); rc=$?
+    out=$(fresh sh -c 'curl -fsSL -H x-fno-probe:1 fno.sh | sh' 2>&1); rc=$?
     last=$(printf '%s' "$out" | tail -1)
-    EV="${EV}README line: curl -fsSL fno.sh | sh
+    EV="${EV}README line replayed with x-fno-probe:1: curl -fsSL fno.sh | sh
 exit code: $rc
 last installer line: $(clean "$last")"
     if [ $rc -eq 0 ]; then
