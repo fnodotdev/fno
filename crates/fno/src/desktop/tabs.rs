@@ -107,6 +107,7 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
     let views = [
         ("Terminal", MainView::Terminal),
         ("Board", MainView::Orchestration),
+        ("Extensions", MainView::Extensions),
     ];
     for (i, (name, view)) in views.into_iter().enumerate() {
         let id = ElementId::NamedInteger("mode".into(), i as u64);

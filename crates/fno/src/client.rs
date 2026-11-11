@@ -1739,7 +1739,7 @@ mod config_set;
 mod experimental;
 mod extensions;
 mod lane_entry;
-mod node_detail;
+pub(crate) mod node_detail;
 mod share_flow;
 pub(crate) use node_detail::{wrap_line, wrap_line_joined};
 mod editor;

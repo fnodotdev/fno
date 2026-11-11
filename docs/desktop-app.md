@@ -33,9 +33,11 @@ The `codesign -s -` step gives the binary an ad-hoc signature. No developer acco
 
 The left pane has four sections. Agents come in the order the TUI sideline uses. The pane shows the first 8, and a "+N more" row shows the rest. A click focuses the agent's pane, or opens a paneless agent in portal 0. Sessions are the mux squads. A click switches to one. Questions are the open questions that wait on you, newest first. Machines are the fleet's hosts with their seat counts. A section whose read failed shows the error above its last good rows. While the window is active, the fleet and the questions refresh every 60 seconds. They also refresh at once after an answer, and on your return to the window. The backlog behind seat titles refreshes every 5 minutes.
 
-The strip above the grid shows the active session's tabs. A tab without a chosen name shows its pane's title. A click selects a tab. The Terminal and Board buttons at the right of the strip switch the main view.
+The strip above the grid shows the active session's tabs. A tab without a chosen name shows its pane's title. A click selects a tab. The Terminal, Board and Extensions buttons at the right of the strip switch the main view.
 
 cmd-2 or Board opens orchestration mode, the command center board. TABLE lists every seat with its node and status. With more than one host in the fleet, a MACHINE column shows too. FEED lists each open question with its options, and the recommended option is marked. A click on an option answers it through the same door the TUI uses. The question then shows "sending", then "answered", until the next read drops it. A refused answer shows its reason and keeps the options. cmd-1 or Terminal goes back to the terminal.
+
+cmd-3 or Extensions lists the mods and layouts from `fno config plugins ls --json`, the feed the mux settings tab reads. A row shows its title, its `pack/id` and its summary. An On or Off button switches it. A built-in mod shows "Built in" and has no switch. A click on a name shows its preview image and its rendered recipe on the right. A mod that runs code asks first: the first switch-on shows the command and the commit, and nothing runs until you press "Turn it on and let it run". The list re-reads every 3 seconds while the view shows. A failed read shows its error above the last good rows. "Install from URL" and "Open in a pane" run `fno config plugins install` or `open` in a pane on the attached session and switch to the terminal so you see it. The app never installs by itself: the pane shows what the pack runs and asks you, as the CLI does. "Browse published packs" reads `fno config plugins gallery --json`, and a click on a row fills the URL field. Typed text and cmd-v go to the URL field while it is open. Escape closes it.
 
 The window follows the macOS appearance. A Mac in dark mode gets footnote-superscript. A Mac in light mode gets footnote-paper. When the system switches, the window repaints with no restart. A `mux.theme` pin in your config wins over the appearance, as it does in the TUI, so a pinned dark theme stays dark. Programs inside panes keep the colors the mux server gave them. A pane that paints its own dark ground stays dark in a light window.
 
@@ -54,7 +56,7 @@ Keys go to the focused pane as a terminal sends them. The mux prefix key passes 
 | cmd-w | Close pane |
 | cmd-c | Copy the focused pane's selection |
 | cmd-v | Paste (bracketed when the pane asks for it) |
-| cmd-1 / cmd-2 | Terminal / orchestration board |
+| cmd-1 / cmd-2 / cmd-3 | Terminal / orchestration board / extensions |
 | cmd-q | Detach and quit |
 
 Typed text goes through the macOS input system, so dead keys, option-compose and IME input work. Option on a letter types the composed character, as in Terminal.app. Option on an arrow or backspace still sends the meta form.

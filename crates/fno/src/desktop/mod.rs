@@ -3,6 +3,7 @@
 //! terminal emulator of its own.
 
 mod boxdraw;
+mod extensions;
 mod grid;
 mod hq;
 pub mod keys;

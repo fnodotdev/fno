@@ -23,17 +23,30 @@ use super::keys::{self, Key, Modes, Shortcut};
 use super::link::{Event, Layout, Link};
 use super::mouse::{self, Hit};
 use super::palette::Palette;
-use super::{left_pane, orchestration, tabs};
+use super::{extensions, left_pane, orchestration, tabs};
 use crate::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};
 use crate::tree::Rect;
 use crate::web_hq::Board;
 
-/// What fills the main area. The Extensions view adds its variant here.
+/// What fills the main area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MainView {
     Terminal,
     /// The command center board (cmd-2).
     Orchestration,
+    /// The mods and layouts from `fno config plugins ls` (cmd-3).
+    Extensions,
+}
+
+impl MainView {
+    /// The view cmd-`n` shows.
+    pub fn for_shortcut(n: u8) -> MainView {
+        match n {
+            2 => MainView::Orchestration,
+            3 => MainView::Extensions,
+            _ => MainView::Terminal,
+        }
+    }
 }
 
 /// What a click in the left pane, the strip or the board does.
@@ -92,10 +105,15 @@ pub struct Root {
     wheel_pane: Option<u64>,
     pub(super) answers: HashMap<String, AnswerState>,
     pub(super) agents_open: bool,
+    /// The mux session this window attached to; panes open on it.
+    pub(super) session: String,
+    pub(super) ext: extensions::Page,
     /// The input handler's uncommitted text.
     preedit: Option<String>,
     _reader: Option<Task<()>>,
     _hq: Option<Task<()>>,
+    _plugins: Option<Task<()>>,
+    _plugins_tick: Option<Task<()>>,
     _activation: Option<Subscription>,
     _appearance: Option<Subscription>,
     _notice: Option<Task<()>>,
@@ -150,9 +168,13 @@ impl Root {
             wheel_pane: None,
             answers: HashMap::new(),
             agents_open: false,
+            session: session.clone(),
+            ext: extensions::Page::default(),
             preedit: None,
             _reader: None,
             _hq: None,
+            _plugins: None,
+            _plugins_tick: None,
             _activation: None,
             _appearance: None,
             _notice: None,
@@ -204,7 +226,44 @@ impl Root {
             }
             Err(e) => root.notice = Some(format!("the board poll did not start: {e}")),
         }
+        root.start_plugins(cx);
         root
+    }
+
+    /// Start the plugins thread, its reply reader and the timer that re-reads
+    /// the list while the Extensions view shows.
+    fn start_plugins(&mut self, cx: &mut Context<Self>) {
+        match extensions::start() {
+            Ok((asks, mut rx)) => {
+                self.ext = extensions::Page::new(asks);
+                self._plugins = Some(cx.spawn(async move |this, cx| {
+                    while let Some(reply) = rx.recv().await {
+                        let landed = this.update(cx, |root, cx| {
+                            if let Some(text) = root.ext.apply(reply) {
+                                root.say(text, cx);
+                            }
+                            cx.notify();
+                        });
+                        if landed.is_err() {
+                            break;
+                        }
+                    }
+                }));
+                self._plugins_tick = Some(cx.spawn(async move |this, cx| loop {
+                    cx.background_executor().timer(extensions::REREAD).await;
+                    let open = this.update(cx, |root, _| {
+                        let shown = root.main == MainView::Extensions;
+                        if shown {
+                            root.ext.read();
+                        }
+                    });
+                    if open.is_err() {
+                        break;
+                    }
+                }));
+            }
+            Err(e) => self.notice = Some(format!("the plugins read did not start: {e}")),
+        }
     }
 
     fn send(&mut self, msg: ClientMsg) {
@@ -217,7 +276,7 @@ impl Root {
     }
 
     /// Show `text` in the corner for [`NOTICE_FOR`].
-    fn say(&mut self, text: String, cx: &mut Context<Self>) {
+    pub(super) fn say(&mut self, text: String, cx: &mut Context<Self>) {
         self.notice = Some(text);
         self.notice_gen += 1;
         let gen = self.notice_gen;
@@ -248,7 +307,12 @@ impl Root {
                 }
                 None => self.say("no board poll: cannot answer".into(), cx),
             },
-            Action::Show(view) => self.main = view,
+            Action::Show(view) => {
+                self.main = view;
+                if view == MainView::Extensions {
+                    self.ext.read();
+                }
+            }
             Action::ToggleAgents => self.agents_open = !self.agents_open,
         }
         cx.notify();
@@ -399,6 +463,10 @@ impl Root {
                 Shortcut::Command(c) => self.send(ClientMsg::Command(c)),
                 Shortcut::Paste => {
                     if let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) {
+                        if self.main == MainView::Extensions {
+                            extensions::paste(self, &text, cx);
+                            return;
+                        }
                         let bytes = keys::paste(&text, self.modes);
                         self.send(ClientMsg::Input(bytes));
                     }
@@ -408,14 +476,17 @@ impl Root {
                     cx.quit();
                 }
                 Shortcut::View(n) => {
-                    self.main = if n == 2 {
-                        MainView::Orchestration
-                    } else {
-                        MainView::Terminal
-                    };
+                    self.main = MainView::for_shortcut(n);
+                    if self.main == MainView::Extensions {
+                        self.ext.read();
+                    }
                     cx.notify();
                 }
             }
+            return;
+        }
+        if self.main == MainView::Extensions && extensions::key(self, &key, cx) {
+            cx.stop_propagation();
             return;
         }
         // The board takes no typing, and text keys reach the pane through the
@@ -807,6 +878,10 @@ impl Render for Root {
         let main = match self.main {
             MainView::Terminal => self.terminal(cx).into_any_element(),
             MainView::Orchestration => orchestration::render(self, cx)
+                .font_family(".SystemUIFont")
+                .text_sm()
+                .into_any_element(),
+            MainView::Extensions => extensions::render(self, cx)
                 .font_family(".SystemUIFont")
                 .text_sm()
                 .into_any_element(),
