@@ -54,7 +54,7 @@ fn probe(session: &str) -> i32 {
             return 1;
         }
     };
-    let r = rt.block_on(hq::read(agents.clone()));
+    let r = rt.block_on(hq::read(agents.clone(), None));
     let mut board = Board::default();
     board.record(r.fleet, r.questions, &r.backlog, r.measured_at, &agents);
     let seats = board.fleet().map_or(0, |f| f.seats().count());

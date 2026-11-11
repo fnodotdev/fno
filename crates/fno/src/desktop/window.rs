@@ -122,8 +122,12 @@ impl Root {
             _hq: None,
             _activation: None,
         };
-        // Repaint every pane on (de)activation: the cursor turns hollow.
-        root._activation = Some(cx.observe_window_activation(window, |root, _, cx| {
+        // Repaint every pane on (de)activation: the cursor turns hollow. The
+        // board poll pauses while the window is inactive.
+        root._activation = Some(cx.observe_window_activation(window, |root, window, cx| {
+            if let Some(poller) = &root.poller {
+                poller.set_active(window.is_window_active());
+            }
             for view in root.panes.values() {
                 view.update(cx, |_, cx| cx.notify());
             }
@@ -381,6 +385,11 @@ impl Root {
                 .find(|(id, _)| *id == hit.pane)
                 .map(|p| p.1);
             self.drag = rect.map(|r| (hit.pane, r));
+            // The server's mouse path selects and forwards; it never moves
+            // focus. A click on another pane focuses it first, as the TUI does.
+            if hit.pane != self.layout.focus {
+                self.send(ClientMsg::Command(Command::FocusPane(hit.pane)));
+            }
             self.mouse(
                 hit,
                 MouseKind::Press(proto::MouseButton::Left),

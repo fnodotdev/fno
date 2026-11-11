@@ -280,13 +280,10 @@ mod tests {
                 })
                 .collect()
         };
-        let want: Vec<String> = crate::client::agent_sort::sideline_order(&layout.agents, 100)
-            .iter()
-            .map(|a| a.name.clone())
-            .collect();
+        // The sideline's default Status sort: blocked, then working, then idle.
         let got = items(&rows);
-        let names: Vec<String> = got.iter().take(3).map(|(n, _)| n.clone()).collect();
-        assert_eq!(names, want);
+        let names: Vec<&str> = got.iter().take(3).map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["stuck", "busy", "idle"]);
         let stuck = got.iter().find(|(n, _)| n == "stuck").unwrap();
         assert_eq!(stuck.1, Some(Action::Send(Command::FocusPane(2))));
         // The failed question read names its error and keeps "ship it?".

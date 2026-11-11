@@ -31,7 +31,7 @@ The `codesign -s -` step gives the binary an ad-hoc signature. No developer acco
 
 ## The window
 
-The left pane has four sections. Agents come in the order the TUI sideline uses. A click focuses the agent's pane, or opens a paneless agent in portal 0. Sessions are the mux squads. A click switches to one. Questions are the open questions that wait on you, newest first. Machines are the fleet's hosts with their seat counts. A section whose read failed shows the error above its last good rows. The fleet and the questions refresh every 10 seconds.
+The left pane has four sections. Agents come in the order the TUI sideline uses. A click focuses the agent's pane, or opens a paneless agent in portal 0. Sessions are the mux squads. A click switches to one. Questions are the open questions that wait on you, newest first. Machines are the fleet's hosts with their seat counts. A section whose read failed shows the error above its last good rows. The fleet and the questions refresh every 60 seconds while the window is active, and at once when you come back to it or answer a question. The backlog behind seat titles refreshes every 5 minutes.
 
 The strip above the grid shows the active session's tabs. A click selects a tab.
 
