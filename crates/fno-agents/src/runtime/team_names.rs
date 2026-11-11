@@ -2410,9 +2410,9 @@ mod tests {
         }
 
         fn binder_rebinds_own_name_on_checkin() {
-            // The binder session checks back in with the name it bound while
-            // its team's store record is gone: the ledger row it wrote at the
-            // original bind is its own, not a reuse.
+            // The binder session rebinds the name it bound while its team's
+            // store record is gone (the resumed-lead shape): the ledger row
+            // it wrote at the original bind is its own, not a reuse.
             let tmp = tempfile::TempDir::new().unwrap();
             write_registry(tmp.path(), json!([team_row("atticus", "fno", 0, "sess-a")]));
             let store = store_path(tmp.path());
@@ -2422,19 +2422,8 @@ mod tests {
                 NameHistoryEntry::here("atticus", "fno", Some("sess-a".into()), "bound"),
             )
             .unwrap();
-            // The binder is an established lead: its scope named its theme
-            // long ago, and the hoisted theme-required refusal reads it.
-            set_theme(&store, &registry, "fno", "ops cadence").unwrap();
-            apply_team_naming(
-                &store,
-                &registry,
-                Some("Atticus"),
-                None,
-                None,
-                Some(0),
-                "fno",
-            )
-            .expect("the binder checks in under its own name");
+            let shown = name_team(&store, &registry, "fno", "Atticus").unwrap();
+            assert_eq!(shown, "Atticus");
             let after = read(&store).unwrap();
             assert!(
                 after
