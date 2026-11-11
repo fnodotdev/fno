@@ -2401,6 +2401,38 @@ mod tests {
             assert!(refused.contains("never reused"), "{refused}");
         }
 
+        fn binder_rebinds_own_name_on_checkin() {
+            // The binder session checks back in with the name it bound while
+            // its team's store record is gone: the ledger row it wrote at the
+            // original bind is its own, not a reuse.
+            let tmp = tempfile::TempDir::new().unwrap();
+            write_registry(tmp.path(), json!([team_row("atticus", "fno", 0, "sess-a")]));
+            let store = store_path(tmp.path());
+            let registry = registry_path(tmp.path());
+            history_append(
+                &store,
+                &NameHistoryEntry::here("atticus", "fno", Some("sess-a".into()), "bound"),
+            )
+            .unwrap();
+            apply_team_naming(
+                &store,
+                &registry,
+                Some("Atticus"),
+                None,
+                None,
+                Some(0),
+                "fno",
+            )
+            .expect("the binder checks in under its own name");
+            let after = read(&store).unwrap();
+            assert_eq!(
+                after.teams.get("fno").map(|rec| rec.name.as_str()),
+                Some("Atticus"),
+                "{:?}",
+                after.teams
+            );
+        }
+
         fn a_beat_without_a_theme_refuses_and_names_the_flag() {
             let tmp = tempfile::TempDir::new().unwrap();
             write_registry(
@@ -2895,5 +2927,6 @@ mod tests {
         the_record_mirrors_the_label_and_the_ceremony_stays_reachable();
         a_refused_checkin_binds_nothing();
         binder_reclaims_own_name_through_the_rename_door();
+        binder_rebinds_own_name_on_checkin();
     }
 }
