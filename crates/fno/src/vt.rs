@@ -373,6 +373,13 @@ impl Pane {
     pub fn resize(&mut self, rows: u16, cols: u16) {
         let rows = rows.max(1);
         let cols = cols.max(1);
+        // rio-vt's resize ends an open sync window, so bytes parked in it
+        // would be stranded (no deadline left to flush them) and replay ahead
+        // of the next window. Land them on the old grid first, in order.
+        let held = std::mem::take(&mut self.held);
+        if !held.is_empty() {
+            self.processor.advance(&mut self.term, &held);
+        }
         self.term.resize(GridSize {
             rows: rows as usize,
             cols: cols as usize,
@@ -2357,6 +2364,19 @@ mod tests {
             "re-armed window survives the flush"
         );
         assert!(!pane.expire_sync(deadline), "fresh window expires later");
+    }
+
+    #[test]
+    fn resize_flushes_bytes_parked_in_a_sync_window() {
+        let mut pane = Pane::new(4, 20);
+        pane.feed(b"\x1b[?2026hparked");
+        assert!(!frame_text(&pane.frame()).contains("parked"));
+        pane.resize(4, 30);
+        assert!(
+            frame_text(&pane.frame()).contains("parked"),
+            "resize ends the window, so the parked bytes land"
+        );
+        assert!(pane.sync_deadline().is_none());
     }
 
     #[test]

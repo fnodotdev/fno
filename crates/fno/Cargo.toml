@@ -157,7 +157,7 @@ clap = { version = "4", features = ["derive"], optional = true }
 clap_complete = { version = "4", optional = true }
 # Popup chrome measures and paints in terminal columns: a fullwidth
 # glyph is one char and two cells. Already resolved transitively via
-# rio-vt, so this adds no new build artifact.
+# ratatui-core, so this adds no new build artifact.
 unicode-width = { version = "0.2", optional = true }
 rusqlite = { version = "0.41.1", features = ["bundled", "backup", "fallible_uint", "functions"], optional = true }
 # The generated rules module compares rule review dates through it.
