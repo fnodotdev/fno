@@ -275,7 +275,7 @@ pub(crate) async fn picker_keys(
                 }
                 0x20..=0x7e => {
                     if let Some(p) = view.messages_board.as_mut().and_then(|b| b.picker.as_mut()) {
-                        if p.query.len() < 64 {
+                        if p.query.len() < super::super::MAX_SEARCH_QUERY {
                             p.query.push(b as char);
                             p.cursor = 0;
                         }

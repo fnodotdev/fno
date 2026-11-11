@@ -1660,7 +1660,7 @@ pub(crate) fn paint(
     // The context help line (item 8), on the row the three panels leave
     // free. Truncated to the width: at a degenerate terminal the keys still
     // work, only the hint shortens.
-    let help = "h/l or \u{2190}/\u{2192} columns \u{b7} j/k move \u{b7} enter open \u{b7} esc back \u{b7} a/b filter \u{b7} s sort \u{b7} d details \u{b7} r retry \u{b7} m id \u{b7} y copy \u{b7} q close";
+    let help = "h/l or \u{2190}/\u{2192} columns \u{b7} j/k move \u{b7} enter open \u{b7} esc back \u{b7} a/b filter \u{b7} s sort \u{b7} d details \u{b7} r retry \u{b7} x exchanges \u{b7} m id \u{b7} y copy \u{b7} q close";
     let help: String = help.chars().take(width.saturating_sub(1)).collect();
     if b.keys_footer {
         let grid = super::key_grid::grid_rows(super::key_grid::KeyView::Messages, width);

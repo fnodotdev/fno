@@ -70,6 +70,7 @@ pub(crate) fn hints(view: KeyView) -> &'static [KeyHint] {
             ("s", "sort"),
             ("d", "details"),
             ("r", "retry"),
+            ("x", "exchanges"),
             ("m", "id"),
             ("y", "copy"),
             ("q", "close"),

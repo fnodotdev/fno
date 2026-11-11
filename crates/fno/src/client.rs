@@ -6966,10 +6966,6 @@ async fn attach_and_run(
                             b.pending_jump = None;
                         }
                         if !jumped {
-                            let notice = format!(
-                                "the pane no longer holds that turn - opened the session transcript"
-                            );
-                            view.set_notice(notice);
                             let idx = view
                                 .display_rows()
                                 .iter()
@@ -6987,6 +6983,15 @@ async fn attach_and_run(
                                     .map(|a| a.name.clone())
                                     .unwrap_or_else(|| sid.get(..8).unwrap_or(&sid).to_string());
                                 view.open_peek(idx, name);
+                                view.set_notice(
+                                    "the pane no longer holds that turn - opened the session transcript"
+                                        .to_string(),
+                                );
+                            } else {
+                                view.set_notice(
+                                    "the pane no longer holds that turn - open the session from the sideline to read the reply"
+                                        .to_string(),
+                                );
                             }
                         }
                         if let Err(e) = compositor.draw(&view.compose()) {
