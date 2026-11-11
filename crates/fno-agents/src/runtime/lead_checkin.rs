@@ -3324,8 +3324,12 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     // waited paste hung past the beat's ceiling and the beat never
     // journaled. Detached, and the next beat's title check retries for
     // free.
-    if let Err(error) = rename_harness_title_for_team(&ctx.scope) {
-        eprintln!("fno-agents lead-checkin: harness title rename failed: {error}");
+    match rename_harness_title_for_team(&ctx.scope) {
+        Ok(Some(line)) => lines.push(line),
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("fno-agents lead-checkin: harness title rename failed: {error}")
+        }
     }
 
     let output_error = if as_json {
@@ -3432,9 +3436,22 @@ fn rename_harness_title_for_team(scope: &str) -> Result<(), String> {
     }
     let label = row.name.as_str();
     let Some(command) = title_rename_command(harness, label, row.harness_title.as_deref()) else {
-        return Ok(());
+        return Ok(None);
     };
-    crate::rename::deliver_command_to_session_detached(session, harness, &command, true)
+    // A human may be watching this very composer: the paste only fires when
+    // the harness marks the session unattended (CLAUDE_CODE_SESSION_ATTENDED=0,
+    // the bg-worker stamp). An attended session reads the titled line in the
+    // beat instead of a /rename it never typed, and the registry label never
+    // moves: the title is the team's, the name stays the agent's.
+    let unattended = std::env::var("CLAUDE_CODE_SESSION_ATTENDED")
+        .ok()
+        .is_some_and(|v| v.trim() == "0");
+    if unattended {
+        crate::rename::deliver_command_to_session_detached(session, harness, &command, true)?;
+        Ok(None)
+    } else {
+        Ok(Some(format!("this session is now titled {label}")))
+    }
 }
 
 #[cfg(test)]
@@ -3443,6 +3460,47 @@ mod tests {
 
     mod watch_projection_tests {
         include!("lead_checkin_watch_tests.rs");
+    }
+
+    #[test]
+    fn attended_composer_never_pasted() {
+        // The operator watched a check-in type `/rename valentina` into their
+        // live composer, detached, while the beat printed not-confirmed. An
+        // attended session now reads the titled line in the beat; the paste
+        // fires only when the harness marks the session unattended, and the
+        // registry label never moves.
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let agents = tmp.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        crate::registry_store::seed_raw(
+            agents.join("registry.json"),
+            serde_json::json!({"schema_version": 4, "agents": [
+                {"name": "valentina", "status": "live", "role_scope": "fno",
+                 "cwd": tmp.path().display().to_string(), "harness": "claude",
+                 "harness_session_id": "s-granted", "harness_title": "old title",
+                 "created_at": "2026-11-10T06:21:00Z"}
+            ]})
+            .to_string(),
+        );
+        let _home = crate::claims::EnvVarGuard::set(
+            crate::paths::HOME_ENV,
+            agents.display().to_string().as_str(),
+        );
+        let _attend = crate::claims::EnvVarGuard::unset("CLAUDE_CODE_SESSION_ATTENDED");
+        let _hn = crate::claims::EnvVarGuard::set("FNO_HARNESS_NAME", "claude");
+        let _hsid = crate::claims::EnvVarGuard::set("FNO_HARNESS_SESSION_ID", "s-granted");
+        let _attest = crate::claims::EnvVarGuard::set("CLAUDE_CODE_SESSION_ID", "s-granted");
+        let home = crate::paths::AgentsHome::from_env();
+        let _ = &home;
+        let line = rename_harness_title_for_team("fno").expect("the attended arm answers");
+        assert_eq!(
+            line.as_deref(),
+            Some("this session is now titled valentina"),
+            "{line:?}"
+        );
     }
 
     include!("lead_checkin_readings_tests.rs");
