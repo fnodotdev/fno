@@ -171,18 +171,21 @@ fn a_killed_drain_parks_the_lead_and_names_its_timeout() {
         "the rerun advice sent the lead in a circle: {reason}"
     );
     // Not a silent clean: the fire's receipt row records the unread read,
-    // with the sentinel count riding beside it.
-    let events = std::fs::read_to_string(dir.path().join("events.jsonl")).unwrap();
-    let receipt = events
-        .lines()
-        .find_map(|line| {
-            let row: Value = serde_json::from_str(line).ok()?;
-            if row["type"] == "lead_loop_check" {
-                Some(row)
-            } else {
-                None
-            }
-        })
+    // with the sentinel count riding beside it. Committed rows live only in
+    // the store; the journal stopped receiving appends.
+    let journal = dir.path().join("events.jsonl");
+    let _ = fno_agents::event_store::import_all(&journal);
+    let rows = fno_agents::event_store::query_events(
+        &journal,
+        &fno_agents::event_store::EventQuery {
+            types: vec!["lead_loop_check".to_string()],
+            ..Default::default()
+        },
+    )
+    .unwrap_or_default();
+    let receipt = rows
+        .iter()
+        .find_map(|row| serde_json::from_str::<Value>(&row.line).ok())
         .expect("the unread drain must leave its receipt row");
     assert_eq!(
         receipt["data"]["undelivered"],
