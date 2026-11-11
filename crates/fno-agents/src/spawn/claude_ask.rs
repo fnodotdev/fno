@@ -2379,7 +2379,7 @@ fn answer_thread_prompt(home: &AgentsHome, name: &str, answer: &str) -> Option<A
         }
     };
     let registry = load_registry(&home.registry_json()).ok()?;
-    let entry = registry.find_name_or_full_session_id(name)?;
+    let entry = registry.find_name_session_or_short_id(name)?;
     if entry.harness_name() != "claude" {
         return Some(AskOutcome::err("ask --answer reaches only a claude row", 2));
     }
@@ -2500,7 +2500,7 @@ pub fn dispatch_claude_ask(
         .ok()
         .and_then(|registry| {
             registry
-                .find_name_or_full_session_id(name)
+                .find_name_session_or_short_id(name)
                 .map(|entry| entry.name.clone())
         })
         .unwrap_or_else(|| name.to_string());
@@ -2550,7 +2550,7 @@ pub fn dispatch_claude_ask(
             return AskOutcome::err(format!("registry read failed: {}", e), 12);
         }
     };
-    let existing = registry.find_name_or_full_session_id(name).cloned();
+    let existing = registry.find_name_session_or_short_id(name).cloned();
 
     match existing {
         Some(entry) => {

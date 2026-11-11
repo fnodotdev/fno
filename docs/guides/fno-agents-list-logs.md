@@ -184,7 +184,7 @@ fno agents session list --json | jq -r '
 fno agents registry whoami
 ```
 
-Answers the one question `list` cannot: *what is MY registered name* — the handle peers use to address you via `fno agents mail send <name>`. A worker that lost track of its name after a compaction has a native answer instead of grepping `list` for its own session.
+Answers the one question `list` cannot: *what is MY registered name* — the handle peers use to address you via `fno agents mail send <session-id>`. A worker that lost track of its name after a compaction has a native answer instead of grepping `list` for its own session.
 
 It resolves identity with a process-tree prover. A proven harness marker wins over inherited markers. If multiple harness families are present and no marker is proven, the command refuses instead of guessing. It exits 4. The refusal names the markers and prints a `find ~/.codex/sessions ~/.claude/projects -name '*<id>*'` lookup. With one marker, behavior remains unchanged. The command then enriches the name from the registry row and the local target session.
 

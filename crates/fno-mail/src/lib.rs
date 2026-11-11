@@ -2,6 +2,7 @@
 //! holds that rule: the manifest names only serde and serde_json.
 
 pub mod address;
+pub mod directory;
 pub mod envelope;
 pub mod frame;
 pub mod lane;

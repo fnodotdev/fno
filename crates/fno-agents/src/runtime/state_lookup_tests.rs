@@ -125,3 +125,24 @@ fn keyed_write_hits_only_the_resolved_row_ac1_hp() {
     assert!(reg.find_mut("dup").is_none());
     assert_eq!(reg.label_matches_count("dup"), 2, "both rows answer it");
 }
+
+#[test]
+fn ask_resolves_a_unique_short_id_and_refuses_a_shared_head() {
+    // The prompt-parked notice prints the transport short id; ask must take
+    // it. A head two rows share resolves to nothing.
+    let sid_a = "e3c2d45e-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    let sid_b = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    let mut worker = entry("t-main-red-at", "claude", Some(sid_a));
+    worker.short_id = "9f00aa11".into();
+    let mut reg = Registry::default();
+    reg.entries = vec![worker, entry("other", "claude", Some(sid_b))];
+    assert!(reg.find_name_or_full_session_id("e3c2d45e").is_none());
+    let by_head = reg.find_name_session_or_short_id("e3c2d45e").unwrap();
+    assert_eq!(by_head.name, "t-main-red-at");
+    let by_short = reg.find_name_session_or_short_id("9f00aa11").unwrap();
+    assert_eq!(by_short.name, "t-main-red-at");
+
+    let twin = "e3c2d45e-cccc-4ccc-8ccc-cccccccccccc";
+    reg.entries.push(entry("twin", "claude", Some(twin)));
+    assert!(reg.find_name_session_or_short_id("e3c2d45e").is_none());
+}
