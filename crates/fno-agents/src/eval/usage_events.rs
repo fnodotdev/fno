@@ -176,12 +176,21 @@ fn event_uuid(event_id: &str) -> String {
     )
 }
 
+/// The journal line envelope, parsed once at the boundary (rust-style R1):
+/// a timestamp and the emitter's data object; everything the arm reads
+/// lives inside `data`.
+#[derive(serde::Deserialize)]
+struct Envelope {
+    ts: String,
+    data: Map<String, Value>,
+}
+
 /// One journal row as one PostHog event. None for a row whose line is not
 /// the envelope shape (query_events already rejected those rows; this is a
 /// belt-and-braces read).
 fn event(row: &crate::event_store::EventRow, machine: &str) -> Option<Value> {
-    let line: Value = serde_json::from_str(&row.line).ok()?;
-    let data = line.get("data")?.as_object()?;
+    let parsed: Envelope = serde_json::from_str(&row.line).ok()?;
+    let data = &parsed.data;
     let mut props = Map::new();
     props.insert("machine".into(), json!(machine));
     props.insert("$process_person_profile".into(), json!(false));
@@ -206,7 +215,7 @@ fn event(row: &crate::event_store::EventRow, machine: &str) -> Option<Value> {
     Some(json!({
         "event": event_name,
         "uuid": event_uuid(&row.event_id),
-        "timestamp": line.get("ts")?.as_str()?.to_string(),
+        "timestamp": parsed.ts,
         "distinct_id": DISTINCT_ID,
         "properties": props,
     }))
@@ -472,7 +481,7 @@ mod tests {
             "agent_spawned",
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             json!({
-                "node": "x-de46",
+                "node": "x-aaaa",
                 "model": "glm-5.3-flash",
                 "spawned_by_harness": "claude",
                 "title": "secret title words",
@@ -485,13 +494,13 @@ mod tests {
         assert!(!text.contains("secret"), "free text leaked: {text}");
         let props = &doc["properties"];
         assert_eq!(props["machine"], "mac1");
-        assert_eq!(props["node"], "x-de46");
+        assert_eq!(props["node"], "x-aaaa");
         assert_eq!(props["model"], "glm-5.3-flash");
         assert_eq!(props["spawned_by_harness"], "claude");
         assert_eq!(props["$process_person_profile"], false);
-        assert!(props.get("title").is_none(), "titles never ship");
-        assert!(props.get("prompt").is_none(), "prompts never ship");
-        assert!(props.get("cmdline").is_none(), "unlisted fields never ship");
+        assert!(!props.contains_key("title"), "titles never ship");
+        assert!(!props.contains_key("prompt"), "prompts never ship");
+        assert!(!props.contains_key("cmdline"), "unlisted fields never ship");
     }
 
     /// A redelivered batch still dedups: every event_id shape (bare hex, the
@@ -528,7 +537,7 @@ mod tests {
         };
         let emitter = crate::runtime::events::EventEmitter::new(home.events_jsonl(), "test");
         emitter
-            .emit("agent_spawned", &json!({"node": "x-de46"}))
+            .emit("agent_spawned", &json!({"node": "x-aaaa"}))
             .unwrap();
         emitter
             .emit("consult_call", &json!({"harness": "claude", "exit": 0}))
@@ -659,13 +668,22 @@ mod tests {
         ] {
             let doc = mk(rejected);
             assert!(
-                doc["properties"].get("command").is_none(),
+                !doc["properties"]
+                    .as_object()
+                    .unwrap()
+                    .contains_key("command"),
                 "a path-bearing or non-identifier command shipped: {rejected}"
             );
         }
         let long = format!("fno {}", "x".repeat(130));
         let doc = mk(&long);
-        assert!(doc["properties"].get("command").is_none(), "over 120 drops");
+        assert!(
+            !doc["properties"]
+                .as_object()
+                .unwrap()
+                .contains_key("command"),
+            "over 120 drops"
+        );
     }
 
     /// One token per string field: identifiers ship, prose and paths and
@@ -684,7 +702,7 @@ mod tests {
             "reason",
             &mk(json!({"reason": "PR state: conflicting with main"}))
         ));
-        assert!(ships("node", &mk(json!({"node": "x-de46"}))));
+        assert!(ships("node", &mk(json!({"node": "x-aaaa"}))));
         assert!(drops("node", &mk(json!({"node": "/Users/bb16/code/x"}))));
         assert!(ships("harness", &mk(json!({"harness": "claude"}))));
         assert!(drops(

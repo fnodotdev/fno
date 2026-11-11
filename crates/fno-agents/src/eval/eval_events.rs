@@ -72,7 +72,7 @@ pub fn resolve(cwd: &Path) -> Resolved {
     }
     let token_env = read("token_env", DEFAULT_TOKEN_ENV);
     let token_file = read("token_file", DEFAULT_TOKEN_FILE);
-    let token = match token_from_env_or_file(&token_env, &token_file) {
+    let token = match otlp_export::token_from_env_or_file(&token_env, &token_file) {
         Ok(token) => token,
         Err(reason) => return Resolved::Refused(reason),
     };
@@ -82,13 +82,6 @@ pub fn resolve(cwd: &Path) -> Resolved {
         host: base.trim_start_matches("https://").to_string(),
         token: token.trim().to_string(),
     })
-}
-
-/// The token read is shared: `otlp_export::token_from_env_or_file` serves
-/// both capture-route arms, so a rotation picked up by one is picked up by
-/// the other. (Moved here 2026-11-11 when the usage arm joined.)
-fn token_from_env_or_file(token_env: &str, token_file: &str) -> Result<String, String> {
-    otlp_export::token_from_env_or_file(token_env, token_file)
 }
 
 /// A row value ships only when it reads as an identifier. A cohort is a typed
