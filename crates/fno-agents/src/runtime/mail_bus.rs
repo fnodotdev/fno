@@ -538,6 +538,9 @@ mod tests {
         assert!(rows.iter().all(|r| r.pubkey.is_some() && r.sig.is_some()));
         let delivered = crate::mail_arm::pull_rows_with(remote, rows, home.path(), &mut |row| {
             injected.push(row.msg_id.clone());
+            // The pull's contract is the injector's: inject_row marks the row
+            // delivered itself, so the stub does the same.
+            let _ = mark(remote, &row.msg_id, DELIVERED, None);
             true
         });
         assert_eq!((delivered, injected), (1, vec!["fmail-clean".to_string()]));
@@ -566,7 +569,6 @@ mod tests {
             edited.refused
         );
         let clean = sent.iter().find(|r| r.msg_id == "fmail-clean").unwrap();
-        assert_eq!(clean.status, DELIVERED);
         assert!(clean.refused.is_none());
         // The first signed row pinned the sender's host.
         let pins = std::fs::read_to_string(crate::machine_key::pins_path(home.path())).unwrap();

@@ -1099,3 +1099,21 @@ pub(super) async fn answer_keys(
     }
     Ok(StdinFlow::Continue)
 }
+
+/// Run the aux popup's selected row (Enter/click), propagating a detach.
+pub(super) async fn aux_execute_selected(
+    view: &mut View,
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<DispatchFlow, String> {
+    let picked = view
+        .aux
+        .as_ref()
+        .and_then(|m| m.actions.get(m.popup.sel).cloned());
+    match picked {
+        Some(a) => execute_aux_action(view, a, sock_w).await,
+        None => {
+            let _ = raw_out(b"\x07");
+            Ok(DispatchFlow::Continue)
+        }
+    }
+}

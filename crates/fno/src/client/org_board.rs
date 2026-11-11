@@ -25,6 +25,8 @@ pub(crate) enum OrgMsg {
     Machines(Result<serde_json::Value, String>),
     /// One configured remote host's ssh probe landed.
     HostProbe(String, super::remote_hosts::HostState),
+    /// A settings Extensions read landed off the loop.
+    Extensions(super::extensions::Landed),
 }
 
 pub(crate) fn apply(view: &mut View, gen: u64, msg: OrgMsg) {
@@ -33,6 +35,7 @@ pub(crate) fn apply(view: &mut View, gen: u64, msg: OrgMsg) {
         OrgMsg::Action(done) => apply_action(view, gen, done),
         OrgMsg::Machines(read) => super::machine_tree::apply(view, read),
         OrgMsg::HostProbe(name, state) => super::remote_hosts::apply(view, name, state),
+        OrgMsg::Extensions(landed) => super::extensions::apply(view, landed),
     }
 }
 
@@ -597,6 +600,35 @@ pub(crate) fn open(view: &mut View) {
     view.backlog_board = None;
     view.region_owner = super::region_focus::RegionOwner::Board;
     super::backlog_board::set_sideline_view(view, SidelineView::Org);
+}
+
+/// The boot-time first-run show: arm the board for frame one with the
+/// sideline on Org, but never take the keyboard. The interactive
+/// [`open`] keeps its input-owner semantics for explicit opens; a user
+/// booted into the command center still types into their pane. The caller
+/// read the flag, so no notice and no gate here, and the seen marker saves
+/// once so the show happens once.
+pub(crate) fn open_first_run(view: &mut View) {
+    view.org_generation = view.org_generation.wrapping_add(1);
+    view.org_board = Some(OrgBoard::new(view.org_generation));
+    view.backlog_board = None;
+    super::backlog_board::set_sideline_view(view, SidelineView::Org);
+    crate::view_store::save_experimental(crate::view_store::EXPERIMENTAL_ORG_BOARD_SEEN, true);
+}
+
+/// The boot landing for every launch: the org board ships on by default, and
+/// a store with no seen marker arms the first-run show, so frame one paints
+/// the command center with the keyboard left on the pane. Every later
+/// launch, and any store whose operator turned the flag off, opens on Agents
+/// whatever was persisted.
+pub(crate) fn boot_sideline(view: &mut View) {
+    if view.experimental_org_board
+        && !crate::view_store::load_experimental(crate::view_store::EXPERIMENTAL_ORG_BOARD_SEEN)
+    {
+        open_first_run(view);
+    } else {
+        super::backlog_board::set_sideline_view(view, crate::view_store::SidelineView::Agents);
+    }
 }
 pub(crate) fn maybe_kick(view: &mut View, tx: &OrgTx) {
     super::machine_tree::maybe_kick(view, tx);

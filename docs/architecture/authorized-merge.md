@@ -166,6 +166,8 @@ The freeze does not cover a merge through the GitHub web page or a bare `gh pr m
 
 While main's latest settled run is red, the gate refuses every merge to main. One lane is exempt: a PR whose node carries the `main-repair` tag. That lane is how main turns green again.
 
+A cancelled run is not a settled verdict. A timeout, a hand cancel and a concurrency supersede all stamp `cancelled`. A cancelled head sha never re-tests until a rerun lands. So the gate reads a cancelled head run as pending and names the newest settled run as the floor. Specimen 2026-11-11: four CodeQL runs died at their own 30-minute job timeout. GitHub stamped those jobs cancelled. The gate then held every merge until a human reran one by hand.
+
 The `main_revert` daemon arm opens that lane on its own. It is off by default. Turn it on per repo:
 
 ```toml

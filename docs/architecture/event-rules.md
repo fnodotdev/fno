@@ -127,6 +127,28 @@ A block on a row that names `last_message_decision_ask` also asks fnod, the loca
 
 fnod is the `kev.serve` server on loopback. Start it with `python -m kev.serve --run <student run dir> --port 8008` from the kev checkout. `fnod.url` in fno config moves it (default `http://127.0.0.1:8008`). It must resolve to a loopback address, or the call is refused and the message never leaves the machine. An empty value turns the score off. `fnod.timeout_ms` bounds the connect and the reply wait (default 500). No server, a timeout or a malformed reply writes `fnod_error` and the Stop goes on.
 
+### fnod questions and who acts next
+
+`fnod::ask` is the one fnod client. It sends one question and returns a label, its probabilities, a confidence and an escalation. fnod labels and picks. It is no guard and holds no permission. The escalation names who acts next:
+
+| Escalation | When |
+|---|---|
+| `model` | The call failed, the question's wording was never trained, or the confidence is under the question's `escalate_below`. |
+| `user` | fnod is sure, and the caller marked the act irreversible. |
+| `none` | fnod is sure, and the act is routine. |
+
+An unsure answer goes to the model first, never straight to the user.
+
+A user edits a question live in fno config. The edit applies on the next call, with no restart:
+
+```toml
+[fnod.questions.is_ask]
+escalate_below = 0.9
+instructions = "Does this message ask the user for a decision?"
+```
+
+A choice question also takes `[fnod.questions.<id>.criteria]`, one line per label. An edit to `instructions` or `criteria` changes the wording, so the question reads untrained and escalates to the model. The is_ask span carries `fnod_question`, `fnod_trained`, `fnod_escalate` and `fnod_confidence`.
+
 ## The tier-1 scorer: BM25 stays
 
 The tier-1 ranked match was measured against an embedding scorer before either got more code (the rule-engine wiring plan, 2026-10-29). The case set: 72 cases over the 12 measured tier-1 laws. 36 prompts name a law that must rank. 36 are real node titles from unrelated work, where none must rank. Pool: the 170 live laws. Both scorers answer top-3.

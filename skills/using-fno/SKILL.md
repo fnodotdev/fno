@@ -24,6 +24,10 @@ Use `Status: X. Why Y. Done at Z.` or `Approval: Problem X. Options Y/Z. Recomme
 
 Stop, resume, or scope change? Start the body with `control:`: own 60-word lane, skips the style check.
 
+## Verified facts only
+
+State facts you verified this turn, each with its footnote: a file:line, a command output, or a source link. A done claim needs fresh command output, read this turn. Before "cannot", try the other routes, then name each one tried in the claim. A refusal from one tool is a fact about that tool, never about the task. The rule with its worked examples: `skills/verify-footnotes/SKILL.md`.
+
 ## 1. Workflow commands (orchestration, reasoning-required)
 
 Invoke plugin-qualified per harness: `/fno:<command>` on claude/opencode, `$fno:<command>` on codex (reserves `/` for harness commands). Front door:

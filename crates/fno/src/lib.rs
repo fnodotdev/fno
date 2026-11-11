@@ -49,6 +49,8 @@ pub mod bootstrap;
 #[cfg(feature = "full")]
 pub mod build_drift;
 #[cfg(feature = "full")]
+pub mod chat_events;
+#[cfg(feature = "full")]
 pub mod chokepoint;
 #[cfg(feature = "full")]
 pub mod chokepoint_events;
@@ -208,6 +210,8 @@ pub mod path_migration;
 mod path_migration_tests;
 #[cfg(feature = "full")]
 pub mod paths_route;
+#[cfg(feature = "full")]
+pub(crate) mod plugins_feed;
 #[cfg(feature = "full")]
 pub mod popup;
 #[cfg(feature = "full")]

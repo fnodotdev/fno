@@ -458,23 +458,27 @@ fn judge(cwd: &Path, bundle: &Bundle, timeout: u64) -> Result<Judgment, String> 
             bundle.head.chars().take(8).collect::<String>(),
             invocation_id()
         );
-        let mut argv =
-            crate::blueprint_judge::reader_argv(&reader_name, &prompt, cwd, remaining, model);
-        let fence = argv
-            .iter()
-            .position(|a| a == "--")
-            .ok_or("reader argv has no fence")?;
-        let mut flags = vec!["--role".into(), "review-verdict".into()];
+        let mut flags = vec!["--role".to_string(), "review-verdict".to_string()];
         for field in ["route", "account", "effort"] {
             if let Some(value) = lane
                 .get(field)
                 .and_then(Value::as_str)
                 .filter(|v| !v.is_empty())
             {
-                flags.extend([format!("--{field}"), value.into()]);
+                flags.extend([format!("--{field}"), value.to_string()]);
             }
         }
-        argv.splice(fence..fence, flags);
+        // The flags ride BEFORE the prompt: the positional boundary refuses a
+        // spawn-owned flag after the prompt (law d-3244), the exit-2 this
+        // reader's claude lanes answered before the move.
+        let argv = crate::blueprint_judge::reader_argv(
+            &reader_name,
+            &prompt,
+            cwd,
+            remaining,
+            model,
+            &flags,
+        );
         match crate::blueprint_judge::bounded_fno(&argv, remaining, cwd) {
             Ok((0, out, _)) => return parse(&out, bundle),
             Ok((code, _, err)) => errors.push(format!(

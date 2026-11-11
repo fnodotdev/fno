@@ -713,6 +713,7 @@ pub(crate) struct View {
     agent_group: AgentGroup,
     machine_tree: machine_tree::MachineTree,
     remote_hosts: remote_hosts::RemoteHosts,
+    extensions: extensions::Extensions,
     /// The card's `node · PR` header row switch (prefix+Y), persisted.
     show_card_head: bool,
     /// Nest workers under their lead in the card layout (prefix+t),
@@ -1708,6 +1709,7 @@ pub(crate) enum AuxAction {
     /// names, so this carries one of them.
     ApplyTheme(String),
     RemoteHost(remote_hosts::Act),
+    Extension(extensions::Act),
     ThemeImportOpen,
     ThemeImportSave,
     ThemeImportCancel,
@@ -1735,8 +1737,9 @@ mod sideline_rows;
 use sideline_rows::{row_is_inert, ChromeHit, DisplayRow};
 mod config_set;
 mod experimental;
+mod extensions;
 mod lane_entry;
-mod node_detail;
+pub(crate) mod node_detail;
 mod share_flow;
 pub(crate) use node_detail::{wrap_line, wrap_line_joined};
 mod editor;
@@ -1775,6 +1778,7 @@ pub(crate) mod input_field;
 mod input_folds;
 mod mail_input;
 mod overlay_keys;
+use overlay_keys::aux_execute_selected;
 mod reply_dock;
 mod terminal_cursor;
 // The overlay key state machines live in the module; the re-import keeps
@@ -1846,6 +1850,7 @@ impl View {
             agent_group,
             machine_tree: machine_tree::MachineTree::load(),
             remote_hosts: remote_hosts::RemoteHosts::load(),
+            extensions: Default::default(),
             show_card_head,
             group_by_lead,
             manual_order,
@@ -1937,8 +1942,9 @@ impl View {
             org_generation: 0,
             sideline_view: crate::view_store::load_sideline_view(),
             board_full: view_store::load_board_full(),
-            experimental_org_board: view_store::load_experimental(
+            experimental_org_board: view_store::load_experimental_or(
                 view_store::EXPERIMENTAL_ORG_BOARD,
+                true,
             ),
             experimental_pane_share: view_store::load_experimental(
                 view_store::EXPERIMENTAL_PANE_SHARE,
@@ -6097,7 +6103,7 @@ fn brand_label(name: &str) -> String {
     }
 }
 
-fn tab_label_text(name: &str, i: usize, named: bool) -> String {
+pub(crate) fn tab_label_text(name: &str, i: usize, named: bool) -> String {
     let ordinal = (i + 1).to_string();
     // Collapse (AC7): a name equal to its own ordinal renders as
     // the bare digit, byte-identical to an unnamed ordinal - even a chosen one.
@@ -6279,8 +6285,7 @@ async fn attach_and_run(
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
     let mut view = View::new((rows, cols), session, LayoutView::default());
-    // A fresh launch opens on Agents whatever sideline view was last persisted.
-    backlog_board::set_sideline_view(&mut view, crate::view_store::SidelineView::Agents);
+    org_board::boot_sideline(&mut view);
     // Latch the focus-follows-mouse off-switch once; a direct
     // config.toml read (fail-open to on), the digest_overlay idiom.
     view.hover_focus = crate::digest_overlay::hover_focus_enabled(Path::new(&cwd));
@@ -6869,7 +6874,7 @@ async fn attach_and_run(
                     | ServerMsg::LayoutApplied { .. }
                     | ServerMsg::LayoutGrafted { .. }
                     | ServerMsg::TabLocation { .. }
-                    | ServerMsg::TabClosed { .. }
+                    | ServerMsg::TabClosed { .. } | ServerMsg::ChatEvents { .. }
                     | ServerMsg::WorkspaceRestored { .. } | ServerMsg::SquadReloaded { .. }
                     | ServerMsg::SessionRetired { .. } | ServerMsg::AgentRowsReceipt { .. }
                     | ServerMsg::ServerStats { .. } | ServerMsg::NoticeSent { .. }) => {}
@@ -8437,6 +8442,7 @@ async fn execute_aux_action(
         | AuxAction::ToggleSidelineLayout
         | AuxAction::ApplyTheme(_)
         | AuxAction::RemoteHost(_)
+        | AuxAction::Extension(_)
         | AuxAction::ThemeImportOpen
         | AuxAction::ThemeImportSave
         | AuxAction::ThemeImportCancel
@@ -8448,24 +8454,6 @@ async fn execute_aux_action(
         | AuxAction::LaneColorSet(..) => settings_modal::run_action(view, action, sock_w).await?,
     }
     Ok(DispatchFlow::Continue)
-}
-
-/// Run the aux popup's selected row (Enter/click), propagating a detach.
-async fn aux_execute_selected(
-    view: &mut View,
-    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
-) -> Result<DispatchFlow, String> {
-    let picked = view
-        .aux
-        .as_ref()
-        .and_then(|m| m.actions.get(m.popup.sel).cloned());
-    match picked {
-        Some(a) => execute_aux_action(view, a, sock_w).await,
-        None => {
-            let _ = raw_out(b"\x07");
-            Ok(DispatchFlow::Continue)
-        }
-    }
 }
 
 /// Aux-popup keys (US4/US5): arrows select (scrolling to keep the selection
@@ -9404,9 +9392,9 @@ mod row_meter;
 mod sideline;
 
 #[path = "client/agent_group.rs"]
-mod agent_group;
+pub(crate) mod agent_group;
 #[path = "client/agent_sort.rs"]
-mod agent_sort;
+pub(crate) mod agent_sort;
 use agent_group::agent_hit;
 mod hold;
 #[path = "client/machine_tree.rs"]

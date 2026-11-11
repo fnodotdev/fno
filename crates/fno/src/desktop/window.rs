@@ -1,58 +1,138 @@
-//! The app window: one root view that lays out the server's pane rects and
-//! routes keys to the focused pane.
+//! The app window: one root view that lays out the left pane, the tab strip
+//! and the server's pane rects, routes keys and mouse to the focused pane,
+//! and hosts the orchestration board.
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::ops::Range;
+use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use gpui::{
-    div, font, prelude::*, px, rgb, size, AnyView, App, Application, Bounds, Context, Entity,
-    FocusHandle, KeyDownEvent, MouseButton, Pixels, Size, Task, Window, WindowBounds,
-    WindowOptions,
+    canvas, div, font, point, prelude::*, px, rgb, size, AnyView, App, Application, Bounds,
+    ClipboardItem, Context, ElementInputHandler, Entity, EntityInputHandler, FocusHandle,
+    InputHandler, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Point, ScrollWheelEvent, Size, Subscription, Task, TitlebarOptions, UTF16Selection, Window,
+    WindowBounds, WindowOptions,
 };
 
 use super::grid::{Metrics, PaneView};
+use super::hq::{Poller, Reply};
 use super::keys::{self, Key, Modes, Shortcut};
 use super::link::{Event, Layout, Link};
+use super::mouse::{self, Hit};
 use super::palette::Palette;
-use crate::proto::{ClientMsg, Command, Frame};
-use crate::theme::Theme;
+use super::{extensions, left_pane, orchestration, tabs};
+use crate::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};
+use crate::tree::Rect;
+use crate::web_hq::Board;
 
-/// What fills the main area. The Extensions view adds its variant here.
+/// What fills the main area.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MainView {
     Terminal,
+    /// The command center board (cmd-2).
+    Orchestration,
+    /// The mods and layouts from `fno config plugins ls` (cmd-3).
+    Extensions,
 }
 
-struct Root {
-    main: MainView,
-    /// The native left pane. Empty until the left pane lands.
-    left: Option<AnyView>,
+impl MainView {
+    /// The view cmd-`n` shows.
+    pub fn for_shortcut(n: u8) -> MainView {
+        match n {
+            2 => MainView::Orchestration,
+            3 => MainView::Extensions,
+            _ => MainView::Terminal,
+        }
+    }
+}
+
+/// What a click in the left pane, the strip or the board does.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Action {
+    Send(Command),
+    Notice(String),
+    Answer {
+        id: String,
+        option: u32,
+    },
+    Show(MainView),
+    /// Show every agent in the left pane, or only the first few.
+    ToggleAgents,
+}
+
+/// Where an answer the user clicked stands. The row shows it in place of its
+/// options until the next read drops the question.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnswerState {
+    Sending(u32),
+    Done(u32),
+    Refused(String),
+}
+
+/// How long a notice stays in the corner.
+const NOTICE_FOR: Duration = Duration::from_secs(4);
+
+/// The most wheel lines one event sends, so a fling cannot flood the socket.
+const WHEEL_CAP: i32 = 10;
+
+pub struct Root {
+    pub(super) main: MainView,
     link: Option<Link>,
-    layout: Layout,
+    pub(super) layout: Layout,
     frames: HashMap<u64, Arc<Frame>>,
     panes: HashMap<u64, Entity<PaneView>>,
     modes: Modes,
     notice: Option<String>,
+    /// Bumped by each notice, so only the newest one's timer clears it.
+    notice_gen: u64,
     closed: Option<String>,
     metrics: Metrics,
-    palette: Palette,
+    pub(super) palette: Palette,
     focus: FocusHandle,
     /// The content size (rows, cols) last sent to the server.
     sent_size: (u16, u16),
+    pub(super) board: Board,
+    poller: Option<Poller>,
+    /// The terminal area's bounds at the last paint, for mouse hit tests.
+    area: Rc<Cell<Bounds<Pixels>>>,
+    /// The pane a left-button drag started in.
+    drag: Option<(u64, Rect)>,
+    wheel: f32,
+    /// The pane the wheel remainder belongs to.
+    wheel_pane: Option<u64>,
+    pub(super) answers: HashMap<String, AnswerState>,
+    pub(super) agents_open: bool,
+    /// The mux session this window attached to; panes open on it.
+    pub(super) session: String,
+    pub(super) ext: extensions::Page,
+    /// The input handler's uncommitted text.
+    preedit: Option<String>,
     _reader: Option<Task<()>>,
+    _hq: Option<Task<()>>,
+    _plugins: Option<Task<()>>,
+    _plugins_tick: Option<Task<()>>,
+    _activation: Option<Subscription>,
+    _appearance: Option<Subscription>,
+    _notice: Option<Task<()>>,
 }
 
-/// The status line's height: one cell plus its vertical padding.
-fn status_height(cell: Size<Pixels>) -> Pixels {
+/// The status line's and the tab strip's height: one cell plus padding.
+fn bar_height(cell: Size<Pixels>) -> Pixels {
     cell.height + px(8.0)
 }
 
-/// The content size sent to the server. The status line is always reserved,
-/// so a notice never resizes the panes, and one row and one column are kept
-/// for the outer borders, which sit half a cell outside the grid.
+/// The content size sent to the server. The left pane and the strip are
+/// always reserved. A notice floats over the grid and never resizes it, and
+/// one row and one column are kept for the outer borders, which sit half a
+/// cell outside the grid.
 fn grid_size(viewport: Size<Pixels>, cell: Size<Pixels>) -> (u16, u16) {
-    let height = viewport.height - status_height(cell);
+    let height = viewport.height - bar_height(cell);
+    let width = viewport.width - px(left_pane::WIDTH);
     let rows = ((height / cell.height).floor() - 1.0).max(1.0);
-    let cols = ((viewport.width / cell.width).floor() - 1.0).max(1.0);
+    let cols = ((width / cell.width).floor() - 1.0).max(1.0);
     (
         rows.min(u16::MAX as f32) as u16,
         cols.min(u16::MAX as f32) as u16,
@@ -62,22 +142,60 @@ fn grid_size(viewport: Size<Pixels>, cell: Size<Pixels>) -> (u16, u16) {
 impl Root {
     fn new(session: String, metrics: Metrics, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let sent_size = grid_size(window.viewport_size(), metrics.cell);
+        let (palette, theme_warning) = super::palette::for_appearance(
+            super::palette::appearance_is_light(window.appearance()),
+            &std::env::current_dir().unwrap_or_else(|_| "/".into()),
+        );
         let mut root = Root {
             main: MainView::Terminal,
-            left: None,
             link: None,
             layout: Layout::default(),
             frames: HashMap::new(),
             panes: HashMap::new(),
             modes: Modes::default(),
-            notice: None,
+            notice: theme_warning,
+            notice_gen: 0,
             closed: None,
             metrics,
-            palette: Palette::from_theme(&Theme::default_theme()),
+            palette,
             focus: cx.focus_handle(),
             sent_size,
+            board: Board::default(),
+            poller: None,
+            area: Rc::new(Cell::new(Bounds::default())),
+            drag: None,
+            wheel: 0.0,
+            wheel_pane: None,
+            answers: HashMap::new(),
+            agents_open: false,
+            session: session.clone(),
+            ext: extensions::Page::default(),
+            preedit: None,
             _reader: None,
+            _hq: None,
+            _plugins: None,
+            _plugins_tick: None,
+            _activation: None,
+            _appearance: None,
+            _notice: None,
         };
+        // Repaint every pane on (de)activation: the cursor turns hollow. The
+        // board poll pauses while the window is inactive.
+        root._activation = Some(cx.observe_window_activation(window, |root, window, cx| {
+            if let Some(poller) = &root.poller {
+                poller.set_active(window.is_window_active());
+            }
+            for view in root.panes.values() {
+                view.update(cx, |_, cx| cx.notify());
+            }
+        }));
+        // Follow the system appearance live: macOS flips at dusk with the app
+        // open.
+        root._appearance = Some(cx.observe_window_appearance(window, |root, window, cx| {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
+            let light = super::palette::appearance_is_light(window.appearance());
+            root.set_palette(super::palette::for_appearance(light, &cwd).0, cx);
+        }));
         match Link::connect(&session, sent_size.0, sent_size.1) {
             Ok((link, mut rx)) => {
                 root.link = Some(link);
@@ -95,7 +213,57 @@ impl Root {
             }
             Err(e) => root.closed = Some(e.to_string()),
         }
+        match Poller::start() {
+            Ok((poller, mut rx)) => {
+                root.poller = Some(poller);
+                root._hq = Some(cx.spawn(async move |this, cx| {
+                    while let Some(reply) = rx.recv().await {
+                        if this.update(cx, |root, cx| root.on_hq(reply, cx)).is_err() {
+                            break;
+                        }
+                    }
+                }));
+            }
+            Err(e) => root.notice = Some(format!("the board poll did not start: {e}")),
+        }
+        root.start_plugins(cx);
         root
+    }
+
+    /// Start the plugins thread, its reply reader and the timer that re-reads
+    /// the list while the Extensions view shows.
+    fn start_plugins(&mut self, cx: &mut Context<Self>) {
+        match extensions::start() {
+            Ok((asks, mut rx)) => {
+                self.ext = extensions::Page::new(asks);
+                self._plugins = Some(cx.spawn(async move |this, cx| {
+                    while let Some(reply) = rx.recv().await {
+                        let landed = this.update(cx, |root, cx| {
+                            if let Some(text) = root.ext.apply(reply) {
+                                root.say(text, cx);
+                            }
+                            cx.notify();
+                        });
+                        if landed.is_err() {
+                            break;
+                        }
+                    }
+                }));
+                self._plugins_tick = Some(cx.spawn(async move |this, cx| loop {
+                    cx.background_executor().timer(extensions::REREAD).await;
+                    let open = this.update(cx, |root, _| {
+                        let shown = root.main == MainView::Extensions;
+                        if shown {
+                            root.ext.read();
+                        }
+                    });
+                    if open.is_err() {
+                        break;
+                    }
+                }));
+            }
+            Err(e) => self.notice = Some(format!("the plugins read did not start: {e}")),
+        }
     }
 
     fn send(&mut self, msg: ClientMsg) {
@@ -105,6 +273,88 @@ impl Root {
                 self.link = None;
             }
         }
+    }
+
+    /// Show `text` in the corner for [`NOTICE_FOR`].
+    pub(super) fn say(&mut self, text: String, cx: &mut Context<Self>) {
+        self.notice = Some(text);
+        self.notice_gen += 1;
+        let gen = self.notice_gen;
+        self._notice = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(NOTICE_FOR).await;
+            let _ = this.update(cx, |root, cx| {
+                if root.notice_gen == gen {
+                    root.notice = None;
+                    cx.notify();
+                }
+            });
+        }));
+    }
+
+    pub(super) fn act(&mut self, action: Action, cx: &mut Context<Self>) {
+        match action {
+            Action::Send(cmd) => {
+                self.main = MainView::Terminal;
+                self.send(ClientMsg::Command(cmd));
+            }
+            Action::Notice(text) => self.say(text, cx),
+            Action::Answer { id, option } => match &self.poller {
+                // A row already sent or answered takes no second click.
+                Some(_) if self.answers.contains_key(&id) => {}
+                Some(poller) => {
+                    poller.answer(id.clone(), option);
+                    self.answers.insert(id, AnswerState::Sending(option));
+                }
+                None => self.say("no board poll: cannot answer".into(), cx),
+            },
+            Action::Show(view) => {
+                self.main = view;
+                if view == MainView::Extensions {
+                    self.ext.read();
+                }
+            }
+            Action::ToggleAgents => self.agents_open = !self.agents_open,
+        }
+        cx.notify();
+    }
+
+    fn on_hq(&mut self, reply: Reply, cx: &mut Context<Self>) {
+        match reply {
+            Reply::Board(board) => {
+                self.board = *board;
+                // A question the read no longer lists needs no answer state;
+                // a refusal stays so the row keeps its reason.
+                let open: Vec<&str> = self
+                    .board
+                    .questions()
+                    .iter()
+                    .map(|q| q.item.id.as_str())
+                    .collect();
+                self.answers.retain(|id, _| open.contains(&id.as_str()));
+            }
+            Reply::Answered { id, receipt } => {
+                if let Some(AnswerState::Sending(option)) = self.answers.get(&id).cloned() {
+                    self.answers.insert(id, AnswerState::Done(option));
+                }
+                self.say(receipt, cx);
+            }
+            Reply::Refused { id, why } => {
+                self.answers.insert(id, AnswerState::Refused(why));
+            }
+        }
+        cx.notify();
+    }
+
+    /// Repaint every pane and the chrome in `palette`.
+    fn set_palette(&mut self, palette: Palette, cx: &mut Context<Self>) {
+        self.palette = palette;
+        for view in self.panes.values() {
+            view.update(cx, |v, cx| {
+                v.palette = palette;
+                cx.notify();
+            });
+        }
+        cx.notify();
     }
 
     fn pane_view(&mut self, id: u64, cx: &mut Context<Self>) -> Entity<PaneView> {
@@ -117,6 +367,7 @@ impl Root {
                 cx.new(|_| PaneView {
                     frame,
                     focused,
+                    preedit: None,
                     metrics,
                     palette,
                 })
@@ -135,12 +386,24 @@ impl Root {
                 }
                 Event::Layout(l) => {
                     self.layout = l;
+                    if let Some(poller) = &self.poller {
+                        poller.set_roster(&self.layout.agents);
+                    }
                     relayout = true;
                 }
                 Event::Modes(bytes) => self.modes.apply(&bytes),
-                Event::Notice(text) => {
-                    self.notice = Some(text);
-                    relayout = true;
+                Event::Notice(text) => self.say(text, cx),
+                // A plain click selects nothing; it never wipes the clipboard.
+                Event::Copy(text) if text.is_empty() => {}
+                Event::Copy(text) => {
+                    let n = text.chars().count();
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    self.say(format!("copied {n} characters"), cx);
+                }
+                Event::OpenLink(url) => {
+                    if crate::link::is_openable(&url) {
+                        cx.open_url(&url);
+                    }
                 }
                 Event::Closed(reason) => {
                     self.closed = Some(reason);
@@ -163,17 +426,24 @@ impl Root {
             let live: Vec<u64> = self.layout.panes.iter().map(|(id, _)| *id).collect();
             self.panes.retain(|id, _| live.contains(id));
             self.frames.retain(|id, _| live.contains(id));
-            let focus = self.layout.focus;
-            for (id, view) in &self.panes {
-                let focused = *id == focus;
-                view.update(cx, |p, cx| {
-                    if p.focused != focused {
-                        p.focused = focused;
-                        cx.notify();
-                    }
-                });
-            }
+            self.sync_panes(cx);
             cx.notify();
+        }
+    }
+
+    /// Push the focus and the input handler's draft to every pane view.
+    fn sync_panes(&mut self, cx: &mut Context<Self>) {
+        let focus = self.layout.focus;
+        for (id, view) in &self.panes {
+            let focused = *id == focus;
+            let preedit = self.preedit.clone().filter(|_| focused);
+            view.update(cx, |p, cx| {
+                if p.focused != focused || p.preedit != preedit {
+                    p.focused = focused;
+                    p.preedit = preedit;
+                    cx.notify();
+                }
+            });
         }
     }
 
@@ -193,6 +463,10 @@ impl Root {
                 Shortcut::Command(c) => self.send(ClientMsg::Command(c)),
                 Shortcut::Paste => {
                     if let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) {
+                        if self.main == MainView::Extensions {
+                            extensions::paste(self, &text, cx);
+                            return;
+                        }
                         let bytes = keys::paste(&text, self.modes);
                         self.send(ClientMsg::Input(bytes));
                     }
@@ -201,7 +475,23 @@ impl Root {
                     self.send(ClientMsg::Detach);
                     cx.quit();
                 }
+                Shortcut::View(n) => {
+                    self.main = MainView::for_shortcut(n);
+                    if self.main == MainView::Extensions {
+                        self.ext.read();
+                    }
+                    cx.notify();
+                }
             }
+            return;
+        }
+        if self.main == MainView::Extensions && extensions::key(self, &key, cx) {
+            cx.stop_propagation();
+            return;
+        }
+        // The board takes no typing, and text keys reach the pane through the
+        // input handler, which composes dead keys and IME drafts first.
+        if self.main != MainView::Terminal || keys::is_text(&key) {
             return;
         }
         if let Some(bytes) = keys::encode(&key, self.modes) {
@@ -213,16 +503,141 @@ impl Root {
         }
     }
 
+    /// A window point relative to the terminal area.
+    fn local(&self, at: Point<Pixels>) -> (f32, f32) {
+        let o = self.area.get().origin;
+        (f32::from(at.x - o.x), f32::from(at.y - o.y))
+    }
+
+    fn cell(&self) -> (f32, f32) {
+        let c = self.metrics.cell;
+        (f32::from(c.width), f32::from(c.height))
+    }
+
+    fn mouse(&mut self, hit: Hit, kind: MouseKind, alt: bool) {
+        self.send(ClientMsg::Mouse {
+            pane: hit.pane,
+            event: MouseEvent {
+                row: hit.row,
+                col: hit.col,
+                kind,
+                alt,
+            },
+        });
+    }
+
+    fn on_down(&mut self, ev: &MouseDownEvent, window: &mut Window, _cx: &mut Context<Self>) {
+        window.focus(&self.focus);
+        let (x, y) = self.local(ev.position);
+        // A drag whose release never reached the window is closed first, so
+        // the server never keeps a half-made selection.
+        if let Some((pane, rect)) = self.drag.take() {
+            let end = mouse::clamped(x, y, self.cell(), pane, rect);
+            self.mouse(end, MouseKind::Release(proto::MouseButton::Left), false);
+        }
+        if let Some(hit) = mouse::hit(x, y, self.cell(), &self.layout.panes) {
+            let rect = self
+                .layout
+                .panes
+                .iter()
+                .find(|(id, _)| *id == hit.pane)
+                .map(|p| p.1);
+            self.drag = rect.map(|r| (hit.pane, r));
+            // The server's mouse path selects and forwards; it never moves
+            // focus. A click on another pane focuses it first, as the TUI does.
+            if hit.pane != self.layout.focus {
+                self.send(ClientMsg::Command(Command::FocusPane(hit.pane)));
+            }
+            self.mouse(
+                hit,
+                MouseKind::Press(proto::MouseButton::Left),
+                ev.modifiers.alt,
+            );
+        }
+    }
+
+    fn on_move(&mut self, ev: &MouseMoveEvent, _window: &mut Window, _cx: &mut Context<Self>) {
+        let Some((pane, rect)) = self.drag else {
+            return;
+        };
+        if ev.pressed_button != Some(MouseButton::Left) {
+            return;
+        }
+        let (x, y) = self.local(ev.position);
+        let hit = mouse::clamped(x, y, self.cell(), pane, rect);
+        self.mouse(
+            hit,
+            MouseKind::Drag(proto::MouseButton::Left),
+            ev.modifiers.alt,
+        );
+    }
+
+    fn on_up(&mut self, ev: &MouseUpEvent, _window: &mut Window, _cx: &mut Context<Self>) {
+        let Some((pane, rect)) = self.drag.take() else {
+            return;
+        };
+        let (x, y) = self.local(ev.position);
+        let hit = mouse::clamped(x, y, self.cell(), pane, rect);
+        self.mouse(
+            hit,
+            MouseKind::Release(proto::MouseButton::Left),
+            ev.modifiers.alt,
+        );
+    }
+
+    fn on_wheel(&mut self, ev: &ScrollWheelEvent, _window: &mut Window, _cx: &mut Context<Self>) {
+        let (x, y) = self.local(ev.position);
+        let Some(hit) = mouse::hit(x, y, self.cell(), &self.layout.panes) else {
+            return;
+        };
+        // A remainder left over from another pane never scrolls this one.
+        if self.wheel_pane != Some(hit.pane) {
+            self.wheel_pane = Some(hit.pane);
+            self.wheel = 0.0;
+        }
+        let line = self.metrics.cell.height;
+        let dy = f32::from(ev.delta.pixel_delta(line).y);
+        let lines = mouse::wheel_lines(&mut self.wheel, dy, f32::from(line));
+        let kind = if lines > 0 {
+            MouseKind::WheelUp
+        } else {
+            MouseKind::WheelDown
+        };
+        for _ in 0..lines.abs().min(WHEEL_CAP) {
+            self.mouse(hit, kind, ev.modifiers.alt);
+        }
+    }
+
     fn terminal(&mut self, cx: &mut Context<Self>) -> gpui::Div {
         let (cw, ch) = (self.metrics.cell.width, self.metrics.cell.height);
+        let area = self.area.clone();
+        let focus = self.focus.clone();
+        let me = cx.entity();
         // flex_1, not size_full: the status line below must not push the
         // grid's last row out of the window.
-        let mut area = div().relative().flex_1().w_full().overflow_hidden();
+        let mut out = div()
+            .relative()
+            .flex_1()
+            .w_full()
+            .overflow_hidden()
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::on_down))
+            .on_scroll_wheel(cx.listener(Self::on_wheel))
+            .child(
+                canvas(
+                    move |bounds, _, _| area.set(bounds),
+                    move |bounds, (), window, cx| {
+                        let handler = TermInput(ElementInputHandler::new(bounds, me));
+                        window.handle_input(&focus, handler, cx);
+                    },
+                )
+                .absolute()
+                .size_full(),
+            );
         let rects = self.layout.panes.clone();
         for (id, rect) in rects {
             let view = self.pane_view(id, cx);
             let border = if id == self.layout.focus {
-                self.palette.accent
+                self.palette.focus
             } else {
                 self.palette.border
             };
@@ -230,7 +645,7 @@ impl Root {
             // between rects: half a cell out on every side. The grid itself
             // starts half a cell in, so the outer borders are never clipped.
             let (hx, hy) = (cw / 2.0, ch / 2.0);
-            area = area.child(
+            out = out.child(
                 div()
                     .absolute()
                     .left(cw * rect.x as f32)
@@ -239,12 +654,6 @@ impl Root {
                     .h(ch * rect.rows as f32 + ch)
                     .border_1()
                     .border_color(rgb(border))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |root, _, _, _| {
-                            root.send(ClientMsg::Command(Command::FocusPane(id)))
-                        }),
-                    )
                     .child(
                         div()
                             .absolute()
@@ -259,7 +668,200 @@ impl Root {
                     ),
             );
         }
-        area
+        out
+    }
+
+    /// The focused pane's cursor cell in window coordinates, where the IME
+    /// candidate window opens.
+    fn cursor_bounds(&self, area: Bounds<Pixels>) -> Option<Bounds<Pixels>> {
+        let focus = self.layout.focus;
+        let rect = self.layout.panes.iter().find(|(id, _)| *id == focus)?.1;
+        let frame = self.frames.get(&focus)?;
+        let c = self.metrics.cell;
+        let col = rect.x as f32 + 0.5 + frame.cursor_col as f32;
+        let row = rect.y as f32 + 0.5 + frame.cursor_row as f32;
+        Some(Bounds::new(
+            point(
+                area.origin.x + c.width * col,
+                area.origin.y + c.height * row,
+            ),
+            c,
+        ))
+    }
+
+    fn set_preedit(&mut self, text: Option<String>, cx: &mut Context<Self>) {
+        self.preedit = text.filter(|t| !t.is_empty());
+        self.sync_panes(cx);
+    }
+}
+
+fn utf16_len(s: &str) -> usize {
+    s.encode_utf16().count()
+}
+
+/// The pane takes typed text through here, so dead keys, option-compose and
+/// IME drafts commit before the bytes reach the PTY. The draft is never sent:
+/// only committed text is.
+impl EntityInputHandler for Root {
+    fn text_for_range(
+        &mut self,
+        _range: Range<usize>,
+        adjusted: &mut Option<Range<usize>>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<String> {
+        let text = self.preedit.clone().unwrap_or_default();
+        *adjusted = Some(0..utf16_len(&text));
+        Some(text)
+    }
+
+    fn selected_text_range(
+        &mut self,
+        _ignore_disabled_input: bool,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<UTF16Selection> {
+        let end = self.preedit.as_deref().map_or(0, utf16_len);
+        Some(UTF16Selection {
+            range: end..end,
+            reversed: false,
+        })
+    }
+
+    fn marked_text_range(
+        &self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Range<usize>> {
+        self.preedit.as_deref().map(|t| 0..utf16_len(t))
+    }
+
+    fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.set_preedit(None, cx);
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        _range: Option<Range<usize>>,
+        text: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_preedit(None, cx);
+        if self.main != MainView::Terminal || text.is_empty() {
+            return;
+        }
+        if self.notice.take().is_some() {
+            cx.notify();
+        }
+        self.send(ClientMsg::Input(text.as_bytes().to_vec()));
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        _range: Option<Range<usize>>,
+        new_text: &str,
+        _new_selected_range: Option<Range<usize>>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_preedit(Some(new_text.to_string()), cx);
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        _range_utf16: Range<usize>,
+        element_bounds: Bounds<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
+        self.cursor_bounds(element_bounds)
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        _point: Point<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        None
+    }
+}
+
+/// The element handler with macOS press-and-hold off: a held key repeats,
+/// as in every terminal, and never opens the accent menu.
+struct TermInput(ElementInputHandler<Root>);
+
+impl InputHandler for TermInput {
+    fn selected_text_range(
+        &mut self,
+        ignore: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<UTF16Selection> {
+        self.0.selected_text_range(ignore, window, cx)
+    }
+
+    fn marked_text_range(&mut self, window: &mut Window, cx: &mut App) -> Option<Range<usize>> {
+        self.0.marked_text_range(window, cx)
+    }
+
+    fn text_for_range(
+        &mut self,
+        range: Range<usize>,
+        adjusted: &mut Option<Range<usize>>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<String> {
+        self.0.text_for_range(range, adjusted, window, cx)
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: &str,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.0.replace_text_in_range(range, text, window, cx)
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: &str,
+        selected: Option<Range<usize>>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.0
+            .replace_and_mark_text_in_range(range, text, selected, window, cx)
+    }
+
+    fn unmark_text(&mut self, window: &mut Window, cx: &mut App) {
+        self.0.unmark_text(window, cx)
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        range: Range<usize>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Bounds<Pixels>> {
+        self.0.bounds_for_range(range, window, cx)
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        at: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<usize> {
+        self.0.character_index_for_point(at, window, cx)
+    }
+
+    fn apple_press_and_hold_enabled(&mut self) -> bool {
+        false
     }
 }
 
@@ -274,53 +876,89 @@ impl Render for Root {
             });
         }
         let main = match self.main {
-            MainView::Terminal => self.terminal(cx),
+            MainView::Terminal => self.terminal(cx).into_any_element(),
+            MainView::Orchestration => orchestration::render(self, cx)
+                .font_family(".SystemUIFont")
+                .text_sm()
+                .into_any_element(),
+            MainView::Extensions => extensions::render(self, cx)
+                .font_family(".SystemUIFont")
+                .text_sm()
+                .into_any_element(),
         };
-        let status = self.closed.clone().or_else(|| self.notice.clone());
-        let mut root = div()
+        let now = crate::digest_overlay::now_secs();
+        let left = left_pane::render(self, now, cx)
+            .font_family(".SystemUIFont")
+            .text_sm();
+        let strip = tabs::render(self, cx)
+            .h(bar_height(self.metrics.cell))
+            .items_center()
+            .font_family(".SystemUIFont")
+            .text_sm();
+        // A closed link stays in the error color; a notice is muted and
+        // expires. Neither takes a row: the toast floats over the corner.
+        let (status, status_color) = match (&self.closed, &self.notice) {
+            (Some(c), _) => (Some(c.clone()), self.palette.error),
+            (None, n) => (n.clone(), self.palette.muted),
+        };
+        let toast = status.map(|text| {
+            div()
+                .absolute()
+                .right(px(12.0))
+                .bottom(px(12.0))
+                .max_w(px(520.0))
+                .px_3()
+                .py_1()
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(self.palette.border))
+                .bg(rgb(self.palette.panel))
+                .text_color(rgb(status_color))
+                .font_family(".SystemUIFont")
+                .text_sm()
+                .child(text)
+        });
+        div()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
+            .on_mouse_move(cx.listener(Self::on_move))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_up))
             .size_full()
             .flex()
             .flex_row()
             .bg(rgb(self.palette.bg))
             .text_color(rgb(self.palette.fg))
             .font_family(self.metrics.font.family.clone())
-            .text_size(self.metrics.font_size);
-        if let Some(left) = self.left.clone() {
-            root = root.child(left);
-        }
-        let status_color = if self.closed.is_some() {
-            self.palette.error
-        } else {
-            self.palette.fg
-        };
-        let status_line = div()
-            .h(status_height(self.metrics.cell))
-            .flex_none()
-            .px_2()
-            .py_1()
-            .bg(rgb(self.palette.border))
-            .text_color(rgb(status_color))
-            .children(status);
-        root.child(
-            div()
-                .flex_1()
-                .flex()
-                .flex_col()
-                .child(main)
-                .child(status_line),
-        )
+            .text_size(self.metrics.font_size)
+            .child(left)
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(strip)
+                    .child(main)
+                    .children(toast),
+            )
     }
 }
 
 /// Open the window and run the app until it quits.
 pub fn run(session: String, family: String, font_size: f32) {
     Application::new().run(move |cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(1100.0), px(720.0)), cx);
+        let bounds = Bounds::centered(None, size(px(1360.0), px(800.0)), cx);
         let opened = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                // The content runs under the title bar; the traffic lights
+                // sit over the left pane, which pads its top for them.
+                titlebar: Some(TitlebarOptions {
+                    title: Some("fno".into()),
+                    appears_transparent: true,
+                    traffic_light_position: Some(point(px(12.0), px(12.0))),
+                }),
                 ..Default::default()
             },
             move |window, cx| {

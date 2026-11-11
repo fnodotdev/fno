@@ -224,19 +224,21 @@ pub(super) async fn client_reader(mut r: OwnedReadHalf, core_tx: mpsc::Sender<Co
                 break;
             }
             // A second Attach, a pre-Attach-only Query/KillServer, or a
-            // one-shot Control on a live connection is a protocol violation:
+            // one-shot Control or ChatTail on a live connection is a protocol violation:
             // log it (this stderr is the session log) and close rather than
             // acting on a confused stream.
             Ok(
                 msg @ (ClientMsg::Attach { .. }
                 | ClientMsg::Query
                 | ClientMsg::KillServer
-                | ClientMsg::Control { .. }),
+                | ClientMsg::Control { .. }
+                | ClientMsg::ChatTail { .. }),
             ) => {
                 let name = match msg {
                     ClientMsg::Attach { .. } => "Attach",
                     ClientMsg::Query => "Query",
                     ClientMsg::Control { .. } => "Control",
+                    ClientMsg::ChatTail { .. } => "ChatTail",
                     _ => "KillServer",
                 };
                 crate::mux_log!(error; "fno mux: client {id} sent {name} on a live connection; dropping it");
