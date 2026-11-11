@@ -37,6 +37,8 @@ The strip above the grid shows the active session's tabs. A tab without a chosen
 
 cmd-2 or Board opens orchestration mode, the command center board. TABLE lists every seat with its node and status. With more than one host in the fleet, a MACHINE column shows too. FEED lists each open question with its options, and the recommended option is marked. A click on an option answers it through the same door the TUI uses. The question then shows "sending", then "answered", until the next read drops it. A refused answer shows its reason and keeps the options. cmd-1 or Terminal goes back to the terminal.
 
+The window follows the macOS appearance. A Mac in dark mode gets footnote-superscript. A Mac in light mode gets footnote-paper. When the system switches, the window repaints with no restart. A `mux.theme` pin in your config wins over the appearance, as it does in the TUI, so a pinned dark theme stays dark. Programs inside panes keep the colors the mux server gave them. A pane that paints its own dark ground stays dark in a light window.
+
 Release the mouse on a button, a row or an option to act on it. Release somewhere else to cancel. A notice shows in the bottom corner for 4 seconds.
 
 ## Keys
