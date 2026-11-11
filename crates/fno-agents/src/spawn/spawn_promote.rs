@@ -1007,9 +1007,14 @@ mod tests {
         assert_eq!(row.role_level, Some(0), "{calling:?}");
         assert_eq!(sid, "s-granted");
         let params = json!({"role_level": json!(0), "role_scope": json!("fnh,fno")});
+        // The gate's grant check validates the requested scope against the
+        // project map, so the test supplies one covering both scopes.
+        let projects: std::collections::HashMap<String, String> = [("fnh", "fnh"), ("fno", "fno")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
         assert!(
-            raw_role_pair_checked(&calling, &params, &[], &std::collections::HashMap::new())
-                .is_none(),
+            raw_role_pair_checked(&calling, &params, &[], &projects).is_none(),
             "the granted level-0 caller passes the raw pair gate"
         );
     }
