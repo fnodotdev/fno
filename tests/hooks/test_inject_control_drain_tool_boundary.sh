@@ -61,8 +61,12 @@ run_hook() {  # $1 extra PATH prefix
 called() { grep -q -- "--control-drain --bus-dir ${1:-$BUS} --session $SID" "$LOG"; }
 
 # The miss row lives in the sibling store --events names, not the jsonl, so
-# the read goes through the binary the same way the write did.
-read_miss_rows() { fno doctor event rows --events "$EVENTS" 2>/dev/null; }
+# the read goes through the binary the write did. The sourced helper resolves
+# it the way events.sh's append does: the checkout build outranks PATH, so a
+# smoke runner with no installed fno still reads the row back.
+# shellcheck source=scripts/lib/store-bin.sh
+source "$HERE/../../scripts/lib/store-bin.sh"
+read_miss_rows() { "$ROWS_BIN" doctor event rows --events "$EVENTS" 2>/dev/null; }
 
 # AC4: jq missing, control flag set: the drain still runs.
 fresh

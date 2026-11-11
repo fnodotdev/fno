@@ -5,7 +5,7 @@ name = "fno"
 # typo, not a real version line. Protocol compat is PROTO_VERSION, not this.
 version = "0.4.5"
 edition = "2021"
-# The mux pulls in tokio + alacritty_terminal + portable-pty, so this crate no
+# The mux pulls in tokio + rio-vt + portable-pty, so this crate no
 # longer targets the old pure-std 1.74 floor. 1.89 matched fno-agents (the
 # in-tree floor these same dependencies already build on); the PDF viewer's
 # hayro declares MSRV 1.92, so the floor follows it rather than failing an
@@ -25,6 +25,14 @@ publish = true
 name = "fno"
 path = "src/main.rs"
 required-features = ["full"]
+
+# The macOS desktop app: a thin GPUI client that draws the mux's frames.
+# Behind the non-default `desktop` feature, so `cargo install fno` and the
+# Linux builds never compile gpui.
+[[bin]]
+name = "fno-desktop"
+path = "src/bin/fno-desktop.rs"
+required-features = ["desktop"]
 
 [[example]]
 name = "mux_latency"
@@ -48,7 +56,7 @@ required-features = ["full"]
 default = ["full"]
 full = [
     "dep:axum",
-    "dep:alacritty_terminal",
+    "dep:rio-vt",
     "dep:crossterm",
     "dep:ratatui-core",
     "dep:ratatui-widgets",
@@ -73,14 +81,19 @@ full = [
     "dep:tempfile",
     "dep:tokio",
 ]
+desktop = ["full", "dep:gpui"]
 
 [dependencies]
 # `fno mux serve --web`: the read-only web bridge's HTTP + WebSocket
 # surface. axum handles the untrusted-input HTTP parsing and WS handshake so
 # the web-facing bridge does not hand-roll that security-sensitive code.
 axum = { version = "0.8", features = ["ws"], optional = true }
-# Same major versions as crates/fno-agents, which already builds this stack.
-alacritty_terminal = { version = "0.26", optional = true }
+# rio-vt replaces alacritty_terminal as the mux VT engine. `default-features
+# = false` drops the PTY stack (the mux owns PTYs) and every renderer and
+# windowing dep. The 0.5.29 registry tarball was verified byte-identical to
+# the audited upstream source (raphamorim/rio at 0d9ede193ace8a); the exact
+# pin keeps that audit true.
+rio-vt = { version = "=0.5.29", default-features = false, optional = true }
 crossterm = { version = "0.29", features = ["event-stream"], optional = true }
 # The sideline's widget layer: `draw_sideline` renders a `Table` into a
 # standalone `Buffer` and `ratatui_blit` copies it into the compositor's
@@ -153,7 +166,7 @@ clap = { version = "4", features = ["derive"], optional = true }
 clap_complete = { version = "4", optional = true }
 # Popup chrome measures and paints in terminal columns: a fullwidth
 # glyph is one char and two cells. Already resolved transitively via
-# alacritty_terminal, so this adds no new build artifact.
+# ratatui-core, so this adds no new build artifact.
 unicode-width = { version = "0.2", optional = true }
 rusqlite = { version = "0.41.1", features = ["bundled", "backup", "fallible_uint", "functions"], optional = true }
 # The generated rules module compares rule review dates through it.
@@ -163,6 +176,9 @@ chrono = { version = "0.4", default-features = false, features = ["std", "alloc"
 strsim = { version = "0.11", optional = true }
 thiserror = { version = "2", optional = true }
 tempfile = { version = "3", optional = true }
+# The desktop app's window, text and input layer (Zed's UI framework). Off
+# by default; `font-kit` is the one feature the macOS text system needs.
+gpui = { version = "0.2.2", default-features = false, features = ["font-kit"], optional = true }
 tokio = { optional = true, version = "1", features = [
     "rt-multi-thread",
     "net",

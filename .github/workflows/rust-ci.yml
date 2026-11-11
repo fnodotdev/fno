@@ -352,6 +352,59 @@ jobs:
           path: shots/*.png
           if-no-files-found: error
 
+  desktop:
+    name: cargo check fno-desktop (macOS)
+    # The desktop app builds on macOS only, behind the non-default `desktop`
+    # feature, so no Linux job compiles it. A macOS runner costs ten Linux
+    # minutes per minute, so the job checks only when the app's own files
+    # or the crate manifest change.
+    if: github.event_name == 'pull_request'
+    runs-on: macos-15
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Check only when the desktop surface changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')"
+          if printf '%s\n' "$files" | grep -qE '^crates/fno/src/desktop/|^crates/fno/src/bin/fno-desktop\.rs$|^crates/fno/Cargo\.toml$'; then
+            echo "check=1" >> "$GITHUB_ENV"
+            echo "the desktop surface changed: checking"
+          else
+            echo "check=" >> "$GITHUB_ENV"
+            echo "the desktop surface is untouched: no check this run"
+          fi
+
+      - name: Install stable Rust toolchain
+        if: env.check == '1'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry + build artifacts
+        if: env.check == '1'
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/fno/target
+          key: ${{ runner.os }}-desktop-${{ hashFiles('crates/fno/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-desktop-
+
+      - name: cargo check --features desktop
+        if: env.check == '1'
+        run: cargo check --locked --manifest-path crates/fno/Cargo.toml --features desktop --bin fno-desktop
+
+      - name: cargo test desktop
+        if: env.check == '1'
+        run: "cargo test --locked --manifest-path crates/fno/Cargo.toml --features desktop --lib desktop::"
+
   release-version-math:
     name: release version math (sync-version + release-version)
     # The nightly stamps a .devN version through these scripts; a PEP 440
