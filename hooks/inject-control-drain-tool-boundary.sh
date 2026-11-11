@@ -18,6 +18,10 @@ set -uo pipefail
 PATH="${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
 
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/lib/with-timeout.sh
+source "$HOOK_DIR/../scripts/lib/with-timeout.sh" 2>/dev/null || true
+
 IFS= read -r -d '' INPUT || true
 SID="$(jq -r '.session_id // empty' 2>/dev/null <<<"$INPUT")" || SID=""
 if [[ -z "$SID" ]]; then
@@ -37,7 +41,7 @@ command -v fno-agents >/dev/null 2>&1 || exit 0
 # share (FNO_BUS_DIR, config.paths.bus_dir, the layout table) - so the db
 # fold retargets this hook without touching it. A door miss is a no-answer,
 # never a guessed path: exit 0 and stay silent.
-BUS="$(fno-agents state path dir bus 2>/dev/null)" || exit 0
+BUS="$(with_timeout 5 fno-agents state path dir bus 2>/dev/null)" || exit 0
 [[ -n "$BUS" ]] || exit 0
 
 FIRST8="${SID:0:8}"
@@ -51,6 +55,6 @@ fi
 # byte-for-byte (same discipline as inject-mail-notify.sh). A miss never
 # blocks the tool call it rode in on.
 exec 3>&1
-drain_err="$(fno-agents mail-inject --control-drain --bus-dir "$BUS" --session "$SID" 2>&1 1>&3 3>&-)"
+drain_err="$(with_timeout 5 fno-agents mail-inject --control-drain --bus-dir "$BUS" --session "$SID" 2>&1 1>&3 3>&-)"
 exec 3>&-
 exit 0
