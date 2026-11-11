@@ -146,32 +146,19 @@ fn main_ci_token_from_pages<'a>(
             None => true,
         };
         // A non-push completion replaces the incumbent when the incumbent
-        // cannot answer for its own job set (a CANCELLED run, the
-        // concurrency hand-off this pass exists for, or another non-push
-        // run settling newest-wins among themselves), or when the
-        // incumbent is a failure the newer run answers: the replacement
-        // clause below. A schedule or dispatch run of an already-seeded
-        // workflow at the same sha also runs the trigger-gated jobs push
-        // skips (cli-ci's slow-e2e), so its verdict is about a LARGER job
-        // set: its pass proves the push set (the failure clause), but its
-        // failure proves nothing about the push set and must never
-        // overwrite the push run's own green - a schedule-only job failing
-        // would hold every merge while head push CI is green. With no
-        // completed push run yet, the workflow stays pending until the
-        // push run itself lands a verdict.
+        // cannot answer for its own job set (a CANCELLED run, or another
+        // non-push run settling newest-wins among themselves), or when the
+        // incumbent is a failure a newer run answers: a non-push variant
+        // of a workflow runs the push job set plus the trigger-gated
+        // extras, so its pass proves the push set, while its failure
+        // proves nothing about the push set and never overwrites a push
+        // pass - a schedule-only job failing must not hold merges while
+        // head push CI is green. A non-push cancel is no verdict, so it
+        // answers nothing; with no completed push run yet, the workflow
+        // stays pending until the push run lands a verdict.
         let incumbent_replaceable = newest_completed.as_ref().is_some_and(|c| {
             crate::pr_push::rest_bucket(c) == "cancel"
                 || c.get("event").and_then(Value::as_str) != Some("push")
-                // A newer completed pass of the same workflow at the same
-                // sha answers an older failure regardless of trigger: the
-                // schedule variant runs the push job set plus the
-                // trigger-gated extras, so its pass proves the push set
-                // (the 2026-11-10 reverse case: a schedule pass that was
-                // 15 minutes newer than the push failure it answered still
-                // read main red). The
-                // inverse stays closed: a non-push red never replaces a
-                // push pass, and a non-push cancel is no verdict, so it
-                // never answers a failure either.
                 || (crate::pr_push::rest_bucket(c) == "fail"
                     && crate::pr_push::rest_bucket(run) == "pass")
         });
@@ -827,13 +814,10 @@ mod tests {
         );
     }
 
-    /// The filed reverse case (2026-11-10): cli-ci's push
-    /// run at main's head failed at 16:51 and its schedule run at the same
-    /// sha passed at 17:06. The supersede pass refused a non-push
-    /// completion over a push failure, so main read red off the older run
-    /// and held every merge while the newest completed run had answered.
-    /// A newer pass answers an older failure of the same workflow at the
-    /// same sha regardless of trigger.
+    /// The filed reverse case (2026-11-10): cli-ci's push run failed at
+    /// 16:51, its schedule run at the same sha passed at 17:06, and main
+    /// still read red off the older run. A newer pass answers an older
+    /// failure of the same workflow at the same sha regardless of trigger.
     #[test]
     fn a_newer_schedule_pass_answers_a_push_failure_at_the_same_sha() {
         let at_sha = vec![wf_run_with_id(

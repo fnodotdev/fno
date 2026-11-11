@@ -378,16 +378,10 @@ pub(crate) fn merge_blocker<P: GhProbe>(probes: &P, payload: &Value) -> Value {
             format!("mergeable_state {other}"),
         ),
     };
-    // The head's own CI verdict rides the same payload: GitHub's merge state
-    // reads `unstable` for pending or failing NON-required checks and calls
-    // the PR mergeable there. The gate's own CI read decides readiness: an
-    // attempt in flight holds ready until it settles, and a settled failure
-    // is a red the merge door refuses under require_checks_pass. Without
-    // this, a PR read ready:true while its cli-ci rerun was still in flight
-    // and merged red main (2026-11-10). The codes are `ci_blocker_word`'s,
-    // the golden receipts' vocabulary, so one word names the hold on every
-    // path. Absent (legacy callers, no
-    // checks configured) the fact adds nothing.
+    // The head's own CI verdict: an attempt in flight holds ready until it
+    // settles (unstable means pending or failing non-required checks), a
+    // settled failure is a red, unknown or absent adds nothing. Codes are
+    // ci_blocker_word's, the golden receipts' vocabulary.
     match payload.get("ci_verdict").and_then(Value::as_str) {
         Some("red") => blockers.push("ci_red".to_string()),
         Some("pending") => blockers.push("ci_pending".to_string()),
