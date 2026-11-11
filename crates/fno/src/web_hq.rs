@@ -141,6 +141,12 @@ impl Board {
         }
     }
 
+    /// False until the first refresh lands: the errors then name "not read
+    /// yet", which a view shows as waiting, never as a failure.
+    pub(crate) fn read_yet(&self) -> bool {
+        self.questions_read
+    }
+
     /// The last good open questions, in fold order.
     pub(crate) fn questions(&self) -> &[OpenQuestion] {
         &self.questions

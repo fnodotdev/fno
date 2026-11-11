@@ -82,10 +82,16 @@ pub fn rows(layout: &Layout, board: &Board, now_secs: u64) -> Vec<Row> {
         });
     }
 
+    // Before the first read, a section waits; after it, a failure is an error.
+    let failed = |e: Option<&str>| -> Option<Row> {
+        match (board.read_yet(), e) {
+            (false, _) => Some(Row::Empty("reading…")),
+            (true, Some(e)) => Some(Row::Error(e.to_string())),
+            (true, None) => None,
+        }
+    };
     out.push(Row::Header("Questions"));
-    if let Some(e) = board.questions_error() {
-        out.push(Row::Error(e.to_string()));
-    }
+    out.extend(failed(board.questions_error()));
     let mut questions: Vec<_> = board.questions().iter().collect();
     questions.sort_by(|a, b| b.item.created_at.cmp(&a.item.created_at));
     if questions.is_empty() && board.questions_error().is_none() {
@@ -103,9 +109,7 @@ pub fn rows(layout: &Layout, board: &Board, now_secs: u64) -> Vec<Row> {
     }
 
     out.push(Row::Header("Machines"));
-    if let Some(e) = board.fleet_error() {
-        out.push(Row::Error(e.to_string()));
-    }
+    out.extend(failed(board.fleet_error()));
     for m in board
         .fleet()
         .map(|f| f.machines.as_slice())

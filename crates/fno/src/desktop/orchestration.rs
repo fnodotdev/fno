@@ -17,16 +17,23 @@ fn section(title: &'static str, root: &Root) -> Div {
         .child(title)
 }
 
+/// A failed read in the error color; before the first read, a muted wait.
 fn error_line(text: &str, root: &Root) -> Div {
-    div()
-        .py_1()
-        .text_color(rgb(root.palette.error))
-        .child(text.to_string())
+    let (color, text) = if root.board.read_yet() {
+        (root.palette.error, text)
+    } else {
+        (root.palette.muted, "reading…")
+    };
+    div().py_1().text_color(rgb(color)).child(text.to_string())
 }
 
 fn table(root: &Root) -> Div {
     let p = root.palette;
-    let mut out = div().flex().flex_col().child(section("TABLE", root));
+    let mut out = div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .child(section("TABLE", root));
     if let Some(e) = root.board.fleet_error() {
         out = out.child(error_line(e, root));
     }
@@ -44,10 +51,11 @@ fn table(root: &Root) -> Div {
         div()
             .flex()
             .flex_row()
+            .w_full()
             .py_1()
             .text_xs()
-            .child(cell("MACHINE".into(), 140.0, p.muted))
-            .child(cell("SEAT".into(), 180.0, p.muted))
+            .child(cell("MACHINE".into(), 110.0, p.muted))
+            .child(cell("SEAT".into(), 170.0, p.muted))
             .child(cell("STATUS".into(), 110.0, p.muted))
             .child(cell("NODE".into(), 90.0, p.muted))
             .child(cell("TITLE".into(), 0.0, p.muted)),
@@ -65,11 +73,12 @@ fn table(root: &Root) -> Div {
                 div()
                     .flex()
                     .flex_row()
+                    .w_full()
                     .py_1()
                     .border_t_1()
                     .border_color(rgb(p.border))
-                    .child(cell(host.clone(), 140.0, p.muted))
-                    .child(cell(seat.name.clone(), 180.0, p.fg))
+                    .child(cell(host.clone(), 110.0, p.muted))
+                    .child(cell(seat.name.clone(), 170.0, p.fg))
                     .child(cell(seat.status.to_string(), 110.0, p.fg))
                     .child(cell(
                         work.map(|w| w.id.clone()).unwrap_or_default(),
@@ -108,7 +117,7 @@ fn feed(root: &Root, cx: &mut Context<Root>) -> Div {
     for q in questions {
         let q = &q.item;
         let recommended = q.recommendation.as_ref().map(|r| r.option);
-        let mut options = div().flex().flex_row().flex_wrap().gap_2().pt_2();
+        let mut options = div().flex().flex_col().gap_2().pt_2();
         for o in &q.options {
             let action = Action::Answer {
                 id: q.id.clone(),
@@ -160,7 +169,13 @@ fn feed(root: &Root, cx: &mut Context<Root>) -> Div {
 /// list never pushes the questions out of sight.
 pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
     let column = |id: &'static str| -> Stateful<Div> {
-        div().id(id).h_full().overflow_y_scroll().px_4().pb_4()
+        div()
+            .id(id)
+            .h_full()
+            .overflow_x_hidden()
+            .overflow_y_scroll()
+            .px_4()
+            .pb_4()
     };
     div()
         .flex()

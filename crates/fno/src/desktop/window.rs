@@ -749,6 +749,7 @@ impl Render for Root {
             .child(
                 div()
                     .flex_1()
+                    .min_w_0()
                     .flex()
                     .flex_col()
                     .child(strip)
