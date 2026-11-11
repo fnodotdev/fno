@@ -119,15 +119,16 @@ fn basic_auth(user: &str, password: &str) -> String {
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let b = [
-            chunk[0],
+            *chunk.first().unwrap_or(&0),
             *chunk.get(1).unwrap_or(&0),
             *chunk.get(2).unwrap_or(&0),
         ];
         let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | (b[2] as u32);
-        out.push(TABLE[(n >> 18) as usize & 63] as char);
-        out.push(TABLE[(n >> 12) as usize & 63] as char);
-        out.push(TABLE[(n >> 6) as usize & 63] as char);
-        out.push(TABLE[n as usize & 63] as char);
+        // the six-bit masks keep every table index inside the 64 entries
+        out.push(*TABLE.get(((n >> 18) & 63) as usize).unwrap_or(&0) as char);
+        out.push(*TABLE.get(((n >> 12) & 63) as usize).unwrap_or(&0) as char);
+        out.push(*TABLE.get(((n >> 6) & 63) as usize).unwrap_or(&0) as char);
+        out.push(*TABLE.get((n & 63) as usize).unwrap_or(&0) as char);
     }
     let pad = (3 - bytes.len() % 3) % 3;
     let len = out.len() - pad;
