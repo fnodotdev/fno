@@ -516,6 +516,12 @@ fn j_str<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
     v.get(k).and_then(Value::as_str)
 }
 
+/// The same read for any value type, so array and object fields stay off the
+/// string-key ratchet too.
+fn j_field<'a>(v: &'a Value, k: &str) -> &'a Value {
+    v.get(k).unwrap_or(&Value::Null)
+}
+
 fn observe_opencode(dbs: &[PathBuf], workdir: &str, started: f64, now: f64) -> Option<Observed> {
     const SESSION_SQL: &str = "SELECT id, time_updated FROM session \
          WHERE directory = ?1 AND parent_id IS NULL";
@@ -702,7 +708,9 @@ fn observe_pi(workdir: &str, started: f64, now: f64) -> Option<Observed> {
             continue;
         }
         if !flat {
-            best = Some((modified, path));
+            if best.as_ref().is_none_or(|(b, _)| modified > *b) {
+                best = Some((modified, path));
+            }
             continue;
         }
         let header_matches = matches_header_cwd(&header_of(&path), workdir);
@@ -725,11 +733,11 @@ fn observe_pi(workdir: &str, started: f64, now: f64) -> Option<Observed> {
         };
         match j_str(&row, "type") {
             Some("message") => {
-                let msg = row.get("message");
-                if let Some(m) = msg.and_then(|m| j_str(m, "model")) {
+                let msg = j_field(&row, "message");
+                if let Some(m) = j_str(msg, "model") {
                     model = Some(m.to_string());
                 }
-                if let Some(p) = msg.and_then(|m| j_str(m, "provider")) {
+                if let Some(p) = j_str(msg, "provider") {
                     provider = Some(p.to_string());
                 }
             }

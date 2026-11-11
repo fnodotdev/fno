@@ -58,6 +58,12 @@ fn j_str<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
     v.get(k).and_then(Value::as_str)
 }
 
+/// The same read for any value type, so array and object fields stay off the
+/// string-key ratchet too.
+fn j_field<'a>(v: &'a Value, k: &str) -> &'a Value {
+    v.get(k).unwrap_or(&Value::Null)
+}
+
 /// Python `str()` over a parsed manifest value, for the status compare and
 /// the raw_status echo.
 fn py_str(v: &Value) -> String {
@@ -394,14 +400,8 @@ fn pr_benchmark_fields(
     let Ok(v) = serde_json::from_str::<Value>(&String::from_utf8_lossy(&out.stdout)) else {
         return (None, None, None);
     };
-    let commit_count = v
-        .get("commits")
-        .and_then(Value::as_array)
-        .map(|a| a.len() as i64);
-    let green_first = match (
-        commit_count,
-        v.get("statusCheckRollup").and_then(Value::as_array),
-    ) {
+    let commit_count = j_field(&v, "commits").as_array().map(|a| a.len() as i64);
+    let green_first = match (commit_count, j_field(&v, "statusCheckRollup").as_array()) {
         (Some(1), Some(rollup)) if !rollup.is_empty() => Some(rollup.iter().all(|c| {
             matches!(
                 j_str(c, "conclusion"),
@@ -445,10 +445,7 @@ fn count_loop_fires(root_path: &str, session_id: &str) -> Option<i64> {
             if j_str(&row, "type") != Some("loop_check") {
                 continue;
             }
-            let sid = row
-                .get("data")
-                .and_then(|d| j_str(d, "session_id"))
-                .unwrap_or_default();
+            let sid = j_str(j_field(&row, "data"), "session_id").unwrap_or_default();
             if !session_id.is_empty() && sid == session_id {
                 fires += 1;
             }
@@ -937,9 +934,8 @@ pub(crate) fn build_entry(
         cwd,
         &root_path,
         pr_number,
-        state
-            .get("created_at")
-            .and_then(Value::as_str)
+        state_str(state, "created_at")
+            .as_deref()
             .unwrap_or_default(),
         scalar_session_id.as_deref().unwrap_or_default(),
         state_str(state, "harness").as_deref(),
