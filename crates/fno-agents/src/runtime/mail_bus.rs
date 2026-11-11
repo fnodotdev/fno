@@ -37,15 +37,20 @@ created_at INTEGER NOT NULL, \
 expire_at INTEGER NOT NULL, \
 status TEXT NOT NULL DEFAULT 'pending', \
 delivered_at INTEGER, \
+refused TEXT, \
 pubkey TEXT, \
 sig TEXT)";
 
-/// The signature columns, added to a table created before they existed.
-/// SQLite has no `ADD COLUMN IF NOT EXISTS`, so each runs alone and a
-/// duplicate-column error from a host that won the race reads as success.
-const ADDED_COLUMNS: [(&str, &str); 2] = [
+/// Columns added to a table created before they existed. SQLite has no
+/// `ADD COLUMN IF NOT EXISTS`, so each runs alone and a duplicate-column
+/// error from a host that won the race reads as success.
+const ADDED_COLUMNS: [(&str, &str); 3] = [
     ("pubkey", "ALTER TABLE fno_mail_bus ADD COLUMN pubkey TEXT"),
     ("sig", "ALTER TABLE fno_mail_bus ADD COLUMN sig TEXT"),
+    (
+        "refused",
+        "ALTER TABLE fno_mail_bus ADD COLUMN refused TEXT",
+    ),
 ];
 
 /// A unique bus msg_id. 12 hex like the Python bus ids (`fmail-…`), minted
@@ -282,21 +287,53 @@ WHERE to_host IN ({marks}) AND status = 'pending' ORDER BY seq"
 
 /// Flip one row to `status`. Guarded on `pending`, so a pull that delivered a
 /// row and an expire leg that raced it cannot double-write; the loser's
-/// affected reads 0 and it leaves the winner alone.
-pub fn mark(remote: &Remote, msg_id: &str, status: &str) -> Result<u64, String> {
-    let sql = if status == DELIVERED {
-        "UPDATE fno_mail_bus SET status = ?, delivered_at = (SELECT strftime('%s','now')) \
-WHERE msg_id = ? AND status = 'pending'"
+/// affected reads 0 and it leaves the winner alone. A `refused` mark carries
+/// `refusal`: the rule the receiver refused the row by, which the sender's
+/// status read shows instead of a bare status word.
+pub fn mark(
+    remote: &Remote,
+    msg_id: &str,
+    status: &str,
+    refusal: Option<&str>,
+) -> Result<u64, String> {
+    let (sql, args) = if status == DELIVERED {
+        (
+            "UPDATE fno_mail_bus SET status = ?, delivered_at = (SELECT strftime('%s','now')) \
+WHERE msg_id = ? AND status = 'pending'",
+            vec![
+                SqlValue::Text(status.to_string()),
+                SqlValue::Text(msg_id.to_string()),
+            ],
+        )
+    } else if status == REFUSED {
+        match refusal {
+            Some(reason) => (
+                "UPDATE fno_mail_bus SET status = ?, refused = ? \
+WHERE msg_id = ? AND status = 'pending'",
+                vec![
+                    SqlValue::Text(status.to_string()),
+                    SqlValue::Text(reason.to_string()),
+                    SqlValue::Text(msg_id.to_string()),
+                ],
+            ),
+            None => (
+                "UPDATE fno_mail_bus SET status = ? WHERE msg_id = ? AND status = 'pending'",
+                vec![
+                    SqlValue::Text(status.to_string()),
+                    SqlValue::Text(msg_id.to_string()),
+                ],
+            ),
+        }
     } else {
-        "UPDATE fno_mail_bus SET status = ? WHERE msg_id = ? AND status = 'pending'"
+        (
+            "UPDATE fno_mail_bus SET status = ? WHERE msg_id = ? AND status = 'pending'",
+            vec![
+                SqlValue::Text(status.to_string()),
+                SqlValue::Text(msg_id.to_string()),
+            ],
+        )
     };
-    let reply = remote.execute(
-        sql,
-        &[
-            SqlValue::Text(status.to_string()),
-            SqlValue::Text(msg_id.to_string()),
-        ],
-    )?;
+    let reply = remote.execute(sql, &args)?;
     Ok(reply.affected)
 }
 
@@ -311,19 +348,33 @@ WHERE status = 'pending' AND expire_at < (SELECT strftime('%s','now'))",
     Ok(reply.affected)
 }
 
+/// One of this host's sent rows as the status read returns it. `refused`
+/// carries the receiver-side refusal rule for a refused row; `None` from a
+/// sender that predates the column or a row refused by an old receiver.
+#[derive(Debug, PartialEq, Eq)]
+pub struct SentRow {
+    pub msg_id: String,
+    pub status: String,
+    pub refused: Option<String>,
+}
+
 /// The send-side status read: this host's own rows, newest last, so a sender
-/// learns delivered, expired, or refused per msg_id.
-pub fn sent_rows(remote: &Remote, from_host: &str) -> Result<Vec<(String, String)>, String> {
+/// learns delivered, expired, or refused (with the rule) per msg_id.
+pub fn sent_rows(remote: &Remote, from_host: &str) -> Result<Vec<SentRow>, String> {
     let reply = remote.execute(
-        "SELECT msg_id, status FROM fno_mail_bus WHERE from_host = ? ORDER BY seq LIMIT 200",
+        "SELECT msg_id, status, refused FROM fno_mail_bus \
+WHERE from_host = ? ORDER BY seq LIMIT 200",
         &[SqlValue::Text(normalize_host(from_host).to_string())],
     )?;
     Ok(reply
         .rows
         .iter()
-        .filter_map(|row| match (row.first(), row.get(1)) {
-            (Some(id), Some(status)) => Some((id.text()?.to_string(), status.text()?.to_string())),
-            _ => None,
+        .filter_map(|row| {
+            Some(SentRow {
+                msg_id: row.first()?.text()?.to_string(),
+                status: row.get(1)?.text()?.to_string(),
+                refused: row.get(2).and_then(|v| v.text()).map(str::to_string),
+            })
         })
         .collect())
 }
@@ -501,6 +552,21 @@ mod tests {
                 .clone()
         };
         assert_eq!(status("fmail-edited"), SqlValue::Text(REFUSED.into()));
+        // The refusal carries the rule, and the sender's status read returns
+        // it: the reason the receiver hit, not a bare status word.
+        let sent = sent_rows(remote, "mac2").unwrap();
+        let edited = sent.iter().find(|r| r.msg_id == "fmail-edited").unwrap();
+        assert_eq!(edited.status, REFUSED);
+        assert!(
+            edited
+                .refused
+                .as_deref()
+                .is_some_and(|r| r.contains("untrusted")),
+            "refusal rule recorded: {:?}",
+            edited.refused
+        );
+        let clean = sent.iter().find(|r| r.msg_id == "fmail-clean").unwrap();
+        assert!(clean.refused.is_none());
         // The first signed row pinned the sender's host.
         let pins = std::fs::read_to_string(crate::machine_key::pins_path(home.path())).unwrap();
         assert!(pins.contains("\"mac2\""), "{pins}");

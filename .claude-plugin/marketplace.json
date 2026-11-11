@@ -8,28 +8,22 @@
     "description": "Set the targets. Your agents do the rest. Say F[no] to mostly done.",
     "version": "0.4.5"
   },
+  "forceRemoveDeletedPlugins": true,
+  "renames": {
+    "fno-nightly": null
+  },
   "plugins": [
     {
       "name": "fno",
       "source": {
         "source": "github",
         "repo": "fnodotdev/fno",
-        "ref": "stable"
+        "ref": "v0.4.8",
+        "sha": "fd456348a2e1410ec4f9fc65d883de742c0a3067"
       },
       "description": "Set the targets. Your agents do the rest. Say F[no] to mostly done.",
       "category": "workflow",
       "tags": ["workflow", "tdd", "planning", "code-review", "autonomous", "target"]
-    },
-    {
-      "name": "fno-nightly",
-      "source": {
-        "source": "github",
-        "repo": "fnodotdev/fno",
-        "ref": "plugin-nightly"
-      },
-      "description": "Footnote nightly: yesterday's green main, rolling and replaceable.",
-      "category": "workflow",
-      "tags": ["workflow", "nightly", "tdd", "planning", "autonomous", "target"]
     },
     {
       "name": "buddy",

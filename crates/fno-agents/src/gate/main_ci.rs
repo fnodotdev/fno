@@ -145,20 +145,22 @@ fn main_ci_token_from_pages<'a>(
             Some(c) => created > c.get("created_at").and_then(Value::as_str).unwrap_or(""),
             None => true,
         };
-        // A non-push completion replaces the incumbent only when the
-        // incumbent cannot answer for its own job set: a CANCELLED run (the
-        // concurrency hand-off this pass exists for) or another non-push run
-        // (non-push completions settle newest-wins among themselves). A
-        // schedule or dispatch run of an already-seeded workflow at the same
-        // sha also runs the trigger-gated jobs push skips (cli-ci's
-        // slow-e2e), so its verdict is about a different job set and must
-        // never overwrite the push run's own green - a schedule-only job
-        // failing would hold every merge while head push CI is green - nor
-        // clear the push run's red. With no completed push run yet, the
-        // workflow stays pending until the push run itself lands a verdict.
+        // A non-push completion replaces the incumbent when the incumbent
+        // cannot answer for its own job set (a CANCELLED run, or another
+        // non-push run settling newest-wins among themselves), or when the
+        // incumbent is a failure a newer run answers: a non-push variant
+        // of a workflow runs the push job set plus the trigger-gated
+        // extras, so its pass proves the push set, while its failure
+        // proves nothing about the push set and never overwrites a push
+        // pass - a schedule-only job failing must not hold merges while
+        // head push CI is green. A non-push cancel is no verdict, so it
+        // answers nothing; with no completed push run yet, the workflow
+        // stays pending until the push run lands a verdict.
         let incumbent_replaceable = newest_completed.as_ref().is_some_and(|c| {
             crate::pr_push::rest_bucket(c) == "cancel"
                 || c.get("event").and_then(Value::as_str) != Some("push")
+                || (crate::pr_push::rest_bucket(c) == "fail"
+                    && crate::pr_push::rest_bucket(run) == "pass")
         });
         if is_newer && incumbent_replaceable {
             *newest_completed = Some(run);
@@ -809,6 +811,88 @@ mod tests {
         assert_eq!(
             token_at("head", &at_sha, &[]),
             serde_json::json!({"verdict": "pending"})
+        );
+    }
+
+    /// The filed reverse case (2026-11-10): cli-ci's push run failed at
+    /// 16:51, its schedule run at the same sha passed at 17:06, and main
+    /// still read red off the older run. A newer pass answers an older
+    /// failure of the same workflow at the same sha regardless of trigger.
+    #[test]
+    fn a_newer_schedule_pass_answers_a_push_failure_at_the_same_sha() {
+        let at_sha = vec![wf_run_with_id(
+            "cli-ci",
+            "head",
+            "completed",
+            "failure",
+            "2026-10-31T08:00:00Z",
+            "push",
+            42,
+        )];
+        let on_main = vec![
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "failure",
+                "2026-10-31T08:00:00Z",
+                "push",
+                42,
+            ),
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "success",
+                "2026-10-31T08:15:00Z",
+                "schedule",
+                42,
+            ),
+        ];
+        assert_eq!(
+            token_at("head", &at_sha, &on_main),
+            serde_json::json!({"verdict": "green"})
+        );
+    }
+
+    /// The guard direction: a non-push cancel is no verdict, so it never
+    /// answers a push failure. The verdict stays red on the push run.
+    #[test]
+    fn a_newer_schedule_cancel_never_answers_a_push_failure() {
+        let at_sha = vec![wf_run_with_id(
+            "cli-ci",
+            "head",
+            "completed",
+            "failure",
+            "2026-10-31T08:00:00Z",
+            "push",
+            42,
+        )];
+        let on_main = vec![
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "failure",
+                "2026-10-31T08:00:00Z",
+                "push",
+                42,
+            ),
+            wf_run_with_id(
+                "cli-ci",
+                "head",
+                "completed",
+                "cancelled",
+                "2026-10-31T08:15:00Z",
+                "schedule",
+                42,
+            ),
+        ];
+        assert_eq!(
+            token_at("head", &at_sha, &on_main),
+            serde_json::json!({
+                "verdict": "red", "workflow": "cli-ci", "sha": "head"
+            })
         );
     }
 

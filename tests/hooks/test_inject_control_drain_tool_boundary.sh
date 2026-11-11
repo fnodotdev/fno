@@ -41,27 +41,9 @@ esac
 printf '%s\n' "$*" >> "${FNO_STUB_LOG:?}"
 exit 0
 STUB
-# A stub front door: events.sh commits every row through `fno doctor event
-# emit-envelope`, and a CI runner has no fno installed and no checkout build,
-# so the real binary silently loses the miss row this test asserts on. The
-# stub stores into the events file the same way the read stub reads it.
-cat > "$TMP/bin/fno" <<'FSTUB'
-#!/usr/bin/env bash
-path=""
-prev=""
-for a in "$@"; do
-    [[ "$prev" == "--events" ]] && path="$a"
-    prev="$a"
-done
-case "$*" in
-  *"emit-envelope"*) cat >> "$path"; exit 0 ;;
-  *"event rows"*)    cat "$path" 2>/dev/null; exit 0 ;;
-esac
-exit 0
-FSTUB
 # A jq that answers like a missing binary: the hook must still read the id.
 printf '#!/usr/bin/env bash\nexit 127\n' > "$TMP/nojq/jq"
-chmod +x "$TMP/bin/fno-agents" "$TMP/bin/fno" "$TMP/nojq/jq"
+chmod +x "$TMP/bin/fno-agents" "$TMP/nojq/jq"
 
 fresh() {
     rm -rf "$TMP/state"
@@ -72,18 +54,19 @@ fresh() {
 }
 
 run_hook() {  # $1 extra PATH prefix
-    # FNO_BIN pins events.sh's writer to the stub: the real store commits
-    # rows into a SQLite sibling of --events, never the jsonl, so a runner
-    # with a checkout build would bypass the stub and the read would miss.
-    PATH="$1:$TMP/bin:$PATH" FNO_BIN="$TMP/bin/fno" FNO_STATE_DIR="$TMP/state" FNO_STUB_LOG="$LOG" EVENTS_FILE="$EVENTS" bash "$HOOK" \
+    PATH="$1:$TMP/bin:$PATH" FNO_STATE_DIR="$TMP/state" FNO_STUB_LOG="$LOG" EVENTS_FILE="$EVENTS" bash "$HOOK" \
         <<<"{\"session_id\":\"$SID\",\"tool_name\":\"Bash\",\"tool_input\":{}}"
 }
 
 called() { grep -q -- "--control-drain --bus-dir ${1:-$BUS} --session $SID" "$LOG"; }
 
 # The miss row lives in the sibling store --events names, not the jsonl, so
-# the read goes through the stub the same way the write did.
-read_miss_rows() { "$TMP/bin/fno" doctor event rows --events "$EVENTS" 2>/dev/null; }
+# the read goes through the binary the write did. The sourced helper resolves
+# it the way events.sh's append does: the checkout build outranks PATH, so a
+# smoke runner with no installed fno still reads the row back.
+# shellcheck source=scripts/lib/store-bin.sh
+source "$HERE/../../scripts/lib/store-bin.sh"
+read_miss_rows() { "$ROWS_BIN" doctor event rows --events "$EVENTS" 2>/dev/null; }
 
 # AC4: jq missing, control flag set: the drain still runs.
 fresh
