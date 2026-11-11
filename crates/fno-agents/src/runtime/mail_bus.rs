@@ -538,6 +538,9 @@ mod tests {
         assert!(rows.iter().all(|r| r.pubkey.is_some() && r.sig.is_some()));
         let delivered = crate::mail_arm::pull_rows_with(remote, rows, home.path(), &mut |row| {
             injected.push(row.msg_id.clone());
+            // The pull's contract is the injector's: inject_row marks the row
+            // delivered itself, so the stub does the same.
+            let _ = mail_bus::mark(remote, &row.msg_id, mail_bus::DELIVERED, None);
             true
         });
         assert_eq!((delivered, injected), (1, vec!["fmail-clean".to_string()]));
