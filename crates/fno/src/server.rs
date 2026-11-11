@@ -69,11 +69,13 @@ pub(crate) mod agent_launch;
 mod agent_rows_apply;
 mod agent_rows_join;
 mod attach_argv;
+mod chat_stream;
 mod client_input;
 mod client_read;
 mod client_writer;
 mod drift_retire;
 mod first_attach;
+mod first_message;
 mod focus_recall;
 mod fresh_attach;
 mod grid_reconcile;
@@ -12157,34 +12159,6 @@ async fn handle_control(
     }
 }
 
-/// Recover enough of an undecodable `Control` envelope to answer a newer
-/// floor-compatible client instead of closing silently on an unknown command.
-fn unknown_control_refusal(value: &serde_json::Value) -> Option<ServerMsg> {
-    let control = value.get("Control")?.as_object()?;
-    let proto = u32::try_from(control.get("proto")?.as_u64()?).ok()?;
-    let build = control.get("build")?.as_str()?;
-    if let Err(reason) = check_attach_version(proto, build) {
-        return Some(ServerMsg::Err {
-            code: err_code::VERSION_SKEW,
-            msg: reason,
-        });
-    }
-    let command = control
-        .get("verb")
-        .and_then(serde_json::Value::as_object)
-        .and_then(|object| object.keys().next())
-        .map(String::as_str)
-        .unwrap_or("unknown");
-    Some(ServerMsg::Err {
-        code: err_code::BAD_REQUEST,
-        msg: format!(
-            "unknown control command {command:?}; server {} speaks wire v{}",
-            crate::proto::BUILD_VERSION,
-            crate::proto::PROTO_VERSION
-        ),
-    })
-}
-
 /// Resolve when the control peer closes its half (or sends stray bytes). Used
 /// only to notice a mid-`PaneWait` disconnect; a one-shot client is otherwise
 /// silent until it reads the reply and closes.
@@ -12203,41 +12177,8 @@ async fn handle_client(
     id: u64,
     stats: PaneStats,
 ) {
-    let first = tokio::time::timeout(
-        ATTACH_TIMEOUT,
-        read_msg::<_, serde_json::Value>(&mut stream),
-    )
-    .await;
-    let first = match first {
-        Ok(Ok(value)) => match <ClientMsg as serde::Deserialize>::deserialize(&value) {
-            Ok(message) => message,
-            Err(error) => {
-                if let Some(reply) = unknown_control_refusal(&value) {
-                    let _ = write_msg(&mut stream, &reply).await;
-                } else {
-                    crate::mux_log!(error; "fno mux: initial client message failed to decode: {error}");
-                    // The refusal above recovers every envelope shape this
-                    // build knows. An envelope it cannot interpret at all
-                    // must not restore the silent close this branch removed:
-                    // even a hopeless decode gets a loud refusal, so drift
-                    // surfaces as a client-side error, never a dead socket.
-                    let _ = write_msg(
-                        &mut stream,
-                        &ServerMsg::Err {
-                            code: err_code::BAD_REQUEST,
-                            msg: format!(
-                                "undecodable first message; server {} speaks wire v{}",
-                                crate::proto::BUILD_VERSION,
-                                crate::proto::PROTO_VERSION
-                            ),
-                        },
-                    )
-                    .await;
-                }
-                return;
-            }
-        },
-        _ => return,
+    let Some(first) = first_message::read_first(&mut stream).await else {
+        return;
     };
     let (rows, cols, cwd) = match first {
         ClientMsg::Attach {
@@ -12280,6 +12221,16 @@ async fn handle_client(
             command,
         } => {
             handle_control(stream, core_tx, resolver, proto, build, command).await;
+            return;
+        }
+        ClientMsg::ChatTail {
+            proto,
+            build,
+            session,
+            from_seq,
+        } => {
+            let roots = crate::chat_events::ChatRoots::host();
+            chat_stream::serve(stream, roots, proto, build, session, from_seq).await;
             return;
         }
         // Liveness probes connect and vanish; malformed first messages and
