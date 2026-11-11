@@ -97,6 +97,8 @@ Role mail delivers live between beats. Peers, other leads included, message thro
 
 Every status update to the user is the `lineup:` table `fno agents org checkin` prints. Paste it as printed. Seated workers come first, then the on-deck queue in seat order. Do not rebuild the table by hand from per-node reads. Record the seat order with `fno agents org checkin --queue <ids>`. The ids are a comma list, on-deck first to last. Never use `fno backlog rank`: it orders dispatch, not the lineup.
 
+State only facts this beat verified. Every claim in the beat report carries its footnote: the reading line, a command result you read this turn, or a file:line. A done claim needs fresh output read this turn. A previous beat proves nothing. Before a cannot claim, try the other routes, then name each one tried. A refusal from one tool is a fact about that tool, never about the task. The full rule is `skills/verify-footnotes/SKILL.md` sections 2 and 3.
+
 Then run `fno agents org checkin` (bare from the titled session, or `--scope <scope>` elsewhere). The board read inside it defaults to this role's manifest, so its rows are your scope. It prints, one line each, and this is the command's documented output contract:
 
 - `Handoff orders (canon doc):` the canon doc's `fno:session` blocks, verbatim. Prints on this holder's first beat and whenever the blocks changed since its last beat. When the blocks are unchanged, the doc is absent, or every block is still the writer's placeholder, nothing prints.
