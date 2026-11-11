@@ -157,7 +157,9 @@ fn a_terminal_set_records_under_operator_authority() {
         .and_then(Value::as_array)
         .expect("history chain");
     assert!(!rows.is_empty(), "the recorded law reads back: {answer}");
-    let live = &rows[0];
+    let live = rows
+        .first()
+        .expect("the non-empty chain holds the live row");
     assert_eq!(field(live, "decision_id"), &json!(id), "{live}");
     assert_eq!(
         field(live, "authority_source"),
@@ -189,7 +191,9 @@ fn a_payload_read_from_the_terminal_rides_argv_attended() {
         .and_then(Value::as_array)
         .expect("history chain");
     assert!(!rows.is_empty(), "the recorded law reads back: {answer}");
-    let live = &rows[0];
+    let live = rows
+        .first()
+        .expect("the non-empty chain holds the live row");
     assert_eq!(
         field(live, "decision"),
         &json!("The terminal fed the decision text."),
