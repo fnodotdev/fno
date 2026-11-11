@@ -46,9 +46,14 @@ fn cell(text: String, w: f32, color: u32) -> Div {
     } else {
         d.flex_1().min_w_0()
     };
-    d.px_2()
-        .overflow_hidden()
-        .child(div().w_full().truncate().text_color(rgb(color)).child(text))
+    d.px_2().overflow_hidden().child(
+        div()
+            .w_full()
+            .line_clamp(1)
+            .text_ellipsis()
+            .text_color(rgb(color))
+            .child(text),
+    )
 }
 
 fn table(root: &Root) -> Div {
@@ -67,7 +72,18 @@ fn table(root: &Root) -> Div {
         .map(|f| f.machines.as_slice())
         .unwrap_or_default();
     // One host in view: the MACHINE column would repeat one name.
-    let hosts = machines.len() > 1;
+    let host_of = |m: &crate::client::org_seats::Machine| {
+        m.display_name.clone().unwrap_or_else(|| m.host.clone())
+    };
+    // Count only hosts with a seat row: a seatless host shows no row.
+    let mut names: Vec<String> = machines
+        .iter()
+        .filter(|m| m.leads.iter().any(|l| !l.seats.is_empty()))
+        .map(host_of)
+        .collect();
+    names.sort();
+    names.dedup();
+    let hosts = names.len() > 1;
     let mut head = div().flex().flex_row().w_full().py_1().text_xs();
     if hosts {
         head = head.child(cell("MACHINE".into(), 110.0, p.muted));
@@ -82,7 +98,7 @@ fn table(root: &Root) -> Div {
         return out.child(quiet("reading…", root));
     }
     for m in machines {
-        let host = m.display_name.clone().unwrap_or_else(|| m.host.clone());
+        let host = host_of(m);
         for seat in m.leads.iter().flat_map(|l| &l.seats) {
             let work = seat.work.as_ref();
             let mut row = div()
@@ -144,7 +160,7 @@ fn options(q: &crate::needs_overlay::QuestionItem, root: &Root, cx: &mut Context
             option: o.n,
         };
         let (border, mark) = if recommended == Some(o.n) {
-            (p.ok, " · recommended")
+            (p.ok, "recommended")
         } else {
             (p.border, "")
         };
