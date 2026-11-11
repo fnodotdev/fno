@@ -2633,6 +2633,13 @@ fn render_lines_with(
         }
     }
     lines.push(format!("change: {change}"));
+    // The beat closes on the report rule (verify-footnotes sections 2 and
+    // 3), so the lead re-reads it before composing the report from these
+    // lines. The wording carries "tried": the stop hook's cannot gate reads
+    // this line too, and "routes" alone names no route marker.
+    lines.push(
+        "report rule: state only verified facts, show fresh output for done, and a cannot claim names the routes it tried".into(),
+    );
     lines
 }
 
@@ -3611,6 +3618,19 @@ mod tests {
         assert!(lines
             .iter()
             .any(|l| l == "READER FAILED session_orders: canon doc unreadable"));
+    }
+
+    #[test]
+    fn the_beat_closes_on_the_report_rule_line() {
+        let data = Map::new();
+        let lines = render_lines("x-bbbb", &[], &data, &None, "", "no change");
+        assert_eq!(
+            lines.last().map(String::as_str),
+            Some(
+                "report rule: state only verified facts, show fresh output for done, and a cannot claim names the routes it tried",
+            ),
+            "the report rule is the beat's closing line: {lines:?}"
+        );
     }
 
     fn board_payload() -> Value {

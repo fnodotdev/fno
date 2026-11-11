@@ -71,15 +71,16 @@ fn print_style_rules() {
 }
 
 const SEND_HELP: &str = "\
-Usage: fno agents mail send [OPTIONS] [name] [message]
+Usage: fno agents mail send [OPTIONS] [session-id] [message]
 
   Send a message to a registered agent or a project.
 
 Arguments:
-  name     Agent name, short-id, or full session id. A codex head-8 is a
-           65.536-second UUIDv7 bucket, not random, and is refused against a
-           codex row; claude ids are UUIDv4, so either form works.
-  message  Message to send (async, fire-and-forget).
+  session-id  Short id or full session id; a name still resolves. A
+              codex head-8 is a 65.536-second UUIDv7 bucket, not random, and
+              is refused against a codex row; claude ids are UUIDv4, so either
+              form works.
+  message     Message to send (async, fire-and-forget).
 
 Options:
   -H, --harness <str>      claude | codex | gemini (optional; used for

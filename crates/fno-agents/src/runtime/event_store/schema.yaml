@@ -4603,8 +4603,8 @@ event_types:
           description: "Guard name: graph-write-protect, worktree-write-protect, generated-write-guard, join-partition-write-guard, plan-location-guard, git-protection, or bg-process-guard."
         decision:
           type: string
-          enum: [allow, block]
-          description: "One vocabulary across languages: a refusal is 'block' whether the guard's own output says block (bash) or deny (python permissionDecision)."
+          enum: [allow, block, nudge, override]
+          description: "One vocabulary across languages: a refusal is 'block' whether the guard's own output says block (bash) or deny (python permissionDecision). 'nudge' is an allow that carried a guard note. 'override' is a call that ran after its guard returned ask, so the person approved it."
         tool:
           type: string
           description: "Tool name from the payload; 'unknown' when the guard approved before parsing."

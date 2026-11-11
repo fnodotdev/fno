@@ -39,6 +39,8 @@ cmd-2 or Board opens orchestration mode, the command center board. TABLE lists e
 
 cmd-3 or Extensions lists the mods and layouts from `fno config plugins ls --json`, the feed the mux settings tab reads. A row shows its title, its `pack/id` and its summary. An On or Off button switches it. A built-in mod shows "Built in" and has no switch. A click on a name shows its preview image and its rendered recipe on the right. A mod that runs code asks first: the first switch-on shows the command and the commit, and nothing runs until you press "Turn it on and let it run". The list re-reads every 3 seconds while the view shows. A failed read shows its error above the last good rows. "Install from URL" and "Open in a pane" run `fno config plugins install` or `open` in a pane on the attached session and switch to the terminal so you see it. The app never installs by itself: the pane shows what the pack runs and asks you, as the CLI does. "Browse published packs" reads `fno config plugins gallery --json`, and a click on a row fills the URL field. Typed text and cmd-v go to the URL field while it is open. Escape closes it.
 
+The window follows the macOS appearance. A Mac in dark mode gets footnote-superscript. A Mac in light mode gets footnote-paper. When the system switches, the window repaints with no restart. A `mux.theme` pin in your config wins over the appearance, as it does in the TUI, so a pinned dark theme stays dark. Programs inside panes keep the colors the mux server gave them. A pane that paints its own dark ground stays dark in a light window.
+
 Release the mouse on a button, a row or an option to act on it. Release somewhere else to cancel. A notice shows in the bottom corner for 4 seconds.
 
 ## Keys

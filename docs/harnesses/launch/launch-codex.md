@@ -29,7 +29,7 @@ On spawn, `-Y` maps to codex `--dangerously-bypass-approvals-and-sandbox`. On th
 ## Get the result back
 
 - `fno agents list` and `fno agents peek <name>` read the row and its latest turn.
-- `fno agents mail send <name> "<text>"` reaches it. A busy worker leaves mail in the composer, so peek after every send.
+- `fno agents mail send <session-id> "<text>"` reaches it. A busy worker leaves mail in the composer, so peek after every send.
 - `codex resume <id> --remote unix://` rejoins a session by hand.
 
 ## Known refusals

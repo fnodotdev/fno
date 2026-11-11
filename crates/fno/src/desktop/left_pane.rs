@@ -45,6 +45,22 @@ pub enum Row {
     Empty(&'static str),
 }
 
+/// A row line in its own full-width box, so a long one ends in an ellipsis
+/// and never clips mid-glyph.
+fn clamp(text: String, color: u32, small: bool) -> Div {
+    let line = div()
+        .w_full()
+        .line_clamp(1)
+        .text_ellipsis()
+        .text_color(rgb(color))
+        .child(text);
+    div()
+        .w_full()
+        .min_w_0()
+        .overflow_hidden()
+        .child(if small { line.text_xs() } else { line })
+}
+
 fn agent_detail(a: &AgentRow) -> String {
     let state = if a.exited {
         Some("exited")
@@ -250,17 +266,12 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
                     .rounded_md()
                     .flex()
                     .flex_col()
+                    .min_w_0()
                     .border_l_2()
                     .border_color(rgb(if active { p.ok } else { p.panel }))
                     .when(active, |d| d.bg(rgb(p.border)))
-                    .child(div().truncate().text_color(rgb(label_color)).child(label))
-                    .child(
-                        div()
-                            .truncate()
-                            .text_xs()
-                            .text_color(rgb(p.muted))
-                            .child(detail),
-                    );
+                    .child(clamp(label, label_color, false))
+                    .child(clamp(detail, p.muted, true));
                 if let Some(action) = action {
                     // On click: a press that leaves the row before release
                     // does nothing.

@@ -655,7 +655,7 @@ fn parse_args(args: &[String]) -> Result<SendArgs, i32> {
     // Typer accepted at most two positionals; extra ones died in its parser.
     if positionals.len() > 2 {
         eprintln!(
-            "usage: fno agents mail send <name> <message>  (or --to-project <project> <message>)"
+            "usage: fno agents mail send <session-id> <message>  (or --to-project <project> <message>)"
         );
         return Err(2);
     }
@@ -1651,10 +1651,7 @@ pub fn run(args: &[String]) -> i32 {
                             &result.msg_id,
                             subject.as_deref(),
                             &to,
-                            &fno_mail::state::receipt(
-                                &result.state,
-                                &format!("[project {project}]"),
-                            ),
+                            &result.receipt(&format!("[project {project}]")),
                         )
                     );
                 } else {
@@ -1670,7 +1667,7 @@ pub fn run(args: &[String]) -> i32 {
     } else if let Some(token) = name.as_deref() {
         if token.is_empty() {
             eprintln!(
-                "usage: fno agents mail send <name> <message>  (or --to-project <project> <message>)"
+                "usage: fno agents mail send <session-id> <message>  (or --to-project <project> <message>)"
             );
             return 2;
         }
@@ -1699,13 +1696,13 @@ pub fn run(args: &[String]) -> i32 {
         }
         let Some(body) = message.clone() else {
             eprintln!(
-                "usage: fno agents mail send <name> <message>  (or --to-project <project> <message>)"
+                "usage: fno agents mail send <session-id> <message>  (or --to-project <project> <message>)"
             );
             return 2;
         };
         if body.trim().is_empty() {
             eprintln!(
-                "usage: fno agents mail send <name> <message>  (or --to-project <project> <message>)"
+                "usage: fno agents mail send <session-id> <message>  (or --to-project <project> <message>)"
             );
             return 2;
         }
@@ -1732,7 +1729,7 @@ pub fn run(args: &[String]) -> i32 {
         );
     } else {
         eprintln!(
-            "usage: fno agents mail send <name> <message>  (or --to-project <project> <message>)"
+            "usage: fno agents mail send <session-id> <message>  (or --to-project <project> <message>)"
         );
         return 2;
     }

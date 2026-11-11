@@ -435,39 +435,17 @@ fn all_pairs(plans: &Path, graph: &Path, repo: &Path) -> Vec<Pair> {
 
 /// The corpus question, word for word: a reworded question is a new input.
 fn local_score(url: &str, pair: &Pair) -> Result<Answer, String> {
-    if !crate::fnod::loopback(url) {
-        return Err(format!("{url} is not loopback; refused"));
+    let state =
+        json!({"claim": pair.claim, "record_call": pair.record_kind, "record": pair.record});
+    let q = crate::fnod::Question::shipped("claim_support");
+    let decision = crate::fnod::ask(url, LOCAL_TIMEOUT, state, &q);
+    match (decision.label, decision.error) {
+        (Some(label), None) => Ok(Answer {
+            label,
+            dollars: Some(0.0),
+        }),
+        (_, why) => Err(why.unwrap_or_else(|| "reply carries no label".to_string())),
     }
-    let body = json!({
-        "state": {"claim": pair.claim, "record_call": pair.record_kind, "record": pair.record},
-        "questions": {"claim_support": crate::intel_corpus::question("claim_support")},
-    });
-    let (status, text) = crate::opencode_serve::http_json(
-        url,
-        "POST",
-        "/v1/systemone",
-        Some(&body),
-        None,
-        LOCAL_TIMEOUT,
-    )?;
-    if status != 200 {
-        return Err(format!("HTTP {status}"));
-    }
-    let reply: Value = serde_json::from_str(&text).map_err(|e| format!("reply: {e}"))?;
-    let probabilities = reply
-        .pointer("/answers/claim_support/probabilities")
-        .and_then(Value::as_object)
-        .ok_or("reply carries no claim_support probabilities")?;
-    let label = probabilities
-        .iter()
-        .filter_map(|(k, v)| v.as_f64().map(|p| (k, p)))
-        .max_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(k, _)| k.clone())
-        .ok_or("reply carries empty probabilities")?;
-    Ok(Answer {
-        label,
-        dollars: Some(0.0),
-    })
 }
 
 /// A hosted rung is a command the user supplied. It reads the pair's JSON file

@@ -25,7 +25,6 @@ use super::mouse::{self, Hit};
 use super::palette::Palette;
 use super::{extensions, left_pane, orchestration, tabs};
 use crate::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};
-use crate::theme::Theme;
 use crate::tree::Rect;
 use crate::web_hq::Board;
 
@@ -116,6 +115,7 @@ pub struct Root {
     _plugins: Option<Task<()>>,
     _plugins_tick: Option<Task<()>>,
     _activation: Option<Subscription>,
+    _appearance: Option<Subscription>,
     _notice: Option<Task<()>>,
 }
 
@@ -142,6 +142,10 @@ fn grid_size(viewport: Size<Pixels>, cell: Size<Pixels>) -> (u16, u16) {
 impl Root {
     fn new(session: String, metrics: Metrics, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let sent_size = grid_size(window.viewport_size(), metrics.cell);
+        let (palette, theme_warning) = super::palette::for_appearance(
+            super::palette::appearance_is_light(window.appearance()),
+            &std::env::current_dir().unwrap_or_else(|_| "/".into()),
+        );
         let mut root = Root {
             main: MainView::Terminal,
             link: None,
@@ -149,11 +153,11 @@ impl Root {
             frames: HashMap::new(),
             panes: HashMap::new(),
             modes: Modes::default(),
-            notice: None,
+            notice: theme_warning,
             notice_gen: 0,
             closed: None,
             metrics,
-            palette: Palette::from_theme(&Theme::default_theme()),
+            palette,
             focus: cx.focus_handle(),
             sent_size,
             board: Board::default(),
@@ -172,6 +176,7 @@ impl Root {
             _plugins: None,
             _plugins_tick: None,
             _activation: None,
+            _appearance: None,
             _notice: None,
         };
         // Repaint every pane on (de)activation: the cursor turns hollow. The
@@ -183,6 +188,13 @@ impl Root {
             for view in root.panes.values() {
                 view.update(cx, |_, cx| cx.notify());
             }
+        }));
+        // Follow the system appearance live: macOS flips at dusk with the app
+        // open.
+        root._appearance = Some(cx.observe_window_appearance(window, |root, window, cx| {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
+            let light = super::palette::appearance_is_light(window.appearance());
+            root.set_palette(super::palette::for_appearance(light, &cwd).0, cx);
         }));
         match Link::connect(&session, sent_size.0, sent_size.1) {
             Ok((link, mut rx)) => {
@@ -329,6 +341,18 @@ impl Root {
             Reply::Refused { id, why } => {
                 self.answers.insert(id, AnswerState::Refused(why));
             }
+        }
+        cx.notify();
+    }
+
+    /// Repaint every pane and the chrome in `palette`.
+    fn set_palette(&mut self, palette: Palette, cx: &mut Context<Self>) {
+        self.palette = palette;
+        for view in self.panes.values() {
+            view.update(cx, |v, cx| {
+                v.palette = palette;
+                cx.notify();
+            });
         }
         cx.notify();
     }
