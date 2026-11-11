@@ -474,14 +474,7 @@ where
                 // any of them lazily births the refused supervisor anyway.
                 // Keeper rows launch no claude process, so they keep going.
                 eprintln!("fno: boot revival stopped: {reason}");
-                for (name, _) in &planned {
-                    rows.push(ReceiptRow::new(
-                        name,
-                        "failed",
-                        "claude supervisor birth refused",
-                    ));
-                }
-                for name in leads {
+                for name in planned.iter().map(|(n, _)| n).chain(leads.iter()) {
                     rows.push(ReceiptRow::new(
                         name,
                         "failed",
