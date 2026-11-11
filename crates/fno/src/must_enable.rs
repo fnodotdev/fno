@@ -12,43 +12,14 @@ use serde_json::{json, Map, Value};
 const TABLE: &str = include_str!("must_enable.toml");
 
 /// A rule whose first words are one of these allows arbitrary code, so the
-/// loader refuses it (filter A).
+/// loader refuses it (filter A). `rg` is here because `rg --pre` runs any
+/// program on every file it searches.
+#[rustfmt::skip]
 const FILTER_A: &[&str] = &[
-    "python",
-    "python3",
-    "node",
-    "bun",
-    "deno",
-    "ruby",
-    "perl",
-    "php",
-    "lua",
-    "bash",
-    "sh",
-    "zsh",
-    "fish",
-    "eval",
-    "exec",
-    "ssh",
-    "npx",
-    "bunx",
-    "uvx",
-    "uv run",
-    "xargs",
-    "env",
-    "awk",
-    "sudo",
-    "gh api",
-    "git fetch",
-    "git remote",
-    "docker run",
-    "docker exec",
-    "kubectl exec",
-    "npm run",
-    "make",
-    "just",
-    "cargo run",
-    "go run",
+    "python", "python3", "node", "bun", "deno", "ruby", "perl", "php", "lua", "bash", "sh", "zsh",
+    "fish", "eval", "exec", "ssh", "npx", "bunx", "uvx", "uv run", "xargs", "env", "awk", "sudo",
+    "gh api", "git fetch", "git remote", "docker run", "docker exec", "kubectl exec", "npm run",
+    "make", "just", "cargo run", "go run", "rg",
 ];
 
 /// Commands that launch, merge or rotate. A rule may neither name one nor

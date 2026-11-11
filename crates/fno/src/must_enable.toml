@@ -26,7 +26,6 @@ corpus = [
   "fno do pr logs 1",
   "grep -rn foo src | head -20",
   "tail -n 5 README.md",
-  "rg -n main src",
   "jq .name package.json",
   "git status",
   "git diff --stat",
@@ -70,7 +69,7 @@ prefix = ["fno", "do", "pr", ["status", "wait", "info", "list", "logs"]]
 why = "PR reads; never create, push or merge"
 
 [[rule]]
-prefix = [["grep", "head", "tail", "rg", "jq"]]
+prefix = [["grep", "head", "tail", "jq"]]
 why = "plain reads"
 
 [[rule]]
