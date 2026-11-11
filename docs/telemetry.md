@@ -29,7 +29,7 @@ Schema 1. One `fno_usage_report` event per UTC day, for the last complete day.
 | `harness` | `{"claude": 9, "codex": 3}` | Counts of those rows by harness name. |
 | `model` | `{"claude-opus-5-5": 9}` | Counts of those rows by model name. |
 
-A harness or model value counts only if it reads as one identifier. It holds letters, digits and `-_.:/`, at most 128 characters, with no leading `/` or `~` and no `..`. Anything else is dropped. The report never holds a prompt, code, a path, a title, a hostname, a machine id or free text. The event also carries PostHog's `$process_person_profile: false`, so PostHog builds no person profile.
+If a harness or model value reads as one identifier, it counts. An identifier holds letters, digits and `-_.:/`, at most 128 characters, with no leading `/` or `~` and no `..`. Anything else is dropped. The report never holds a prompt, code, a path, a title, a hostname, a machine id or free text. The event also carries PostHog's `$process_person_profile: false`, so PostHog builds no person profile.
 
 An example body, as `show` prints it:
 
