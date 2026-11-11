@@ -1145,6 +1145,118 @@ fn needs_input_section_holds_agent_rows_only() {
 }
 
 #[test]
+fn pinned_needs_panel_groups_remote_rows_under_host_labels() {
+    // AC2: the pinned panel partitions blocked rows by machine, local
+    // first, each group under a host label; with no remote row blocked the
+    // panel keeps today's flat shape (AC2-ERR).
+    let fleet = |needs: bool| {
+        serde_json::json!({"machines": [
+        {"host": "mac2", "local": false, "fresh": true, "age_s": 9, "sessions": [
+            {"name": "heron", "harness": "claude", "session_id": "aaaa1111-remote-1",
+             "needs_input": needs}
+        ]}]})
+    };
+    let mut v = wide_view(vec![agent_row("b1", 4, Some(AgentBadge::Blocked), false)]);
+    v.machine_tree.on = true;
+    crate::client::machine_tree::apply(&mut v, Ok(fleet(true)));
+    v.needs_open = true;
+    let (rows, depths) = v.display_rows_with_depths();
+    let mut labels: Vec<String> = Vec::new();
+    let mut agent_depths: Vec<usize> = Vec::new();
+    for (r, d) in rows
+        .iter()
+        .zip(&depths)
+        .take_while(|(r, _)| !matches!(*r, DisplayRow::Blank))
+    {
+        match r {
+            DisplayRow::Header { label, .. } => labels.push(label.clone()),
+            DisplayRow::Agent(_) => agent_depths.push(*d),
+            _ => {}
+        }
+    }
+    assert_eq!(
+        labels,
+        vec![
+            "Needs input".to_string(),
+            crate::agents_view::demo_hostname(),
+            "mac2".to_string()
+        ],
+        "one host label per machine, local first"
+    );
+    assert_eq!(
+        agent_depths,
+        vec![1, 1],
+        "rows indent under their host label"
+    );
+
+    // AC2-ERR: the remote seat is quiet, so the panel paints the flat
+    // single-machine shape.
+    let mut v2 = wide_view(vec![agent_row("b1", 4, Some(AgentBadge::Blocked), false)]);
+    v2.machine_tree.on = true;
+    crate::client::machine_tree::apply(&mut v2, Ok(fleet(false)));
+    v2.needs_open = true;
+    let pinned: Vec<DisplayRow> = v2
+        .display_rows()
+        .into_iter()
+        .take_while(|r| !matches!(r, DisplayRow::Blank))
+        .collect();
+    assert!(
+        matches!(&pinned[..], [DisplayRow::Header { label, .. }, DisplayRow::Agent(_)]
+            if label.as_str() == "Needs input"),
+        "no remote blocked rows keeps the flat shape, got {} rows",
+        pinned.len()
+    );
+}
+
+#[test]
+fn strip_label_names_machines_when_only_remote_rows_need_input() {
+    // AC3: with no local row blocked, the label carries a short machine
+    // tag; with any local row blocked it carries none; two remote
+    // machines read as a count of machines.
+    let fleet = |hosts: &[(&str, bool)]| {
+        let machines: Vec<serde_json::Value> = hosts
+            .iter()
+            .map(|(host, needs)| {
+                serde_json::json!({
+                    "host": host, "local": false, "fresh": true, "age_s": 9,
+                    "sessions": [{"name": "heron", "harness": "claude",
+                                  "session_id": format!("aaaa1111-{host}"),
+                                  "needs_input": needs}]
+                })
+            })
+            .collect();
+        serde_json::json!({"machines": machines})
+    };
+    // Only remote rows blocked: the tag names the one machine.
+    let mut v = wide_view(vec![agent_row("w1", 4, Some(AgentBadge::Working), false)]);
+    v.machine_tree.on = true;
+    crate::client::machine_tree::apply(&mut v, Ok(fleet(&[("mac2", true)])));
+    assert_eq!(
+        v.need_input_label(v.need_input_count()),
+        "1 needs input · mac2",
+        "a solo remote machine is named"
+    );
+    // Any local row blocked: no tag.
+    let mut v2 = wide_view(vec![agent_row("b1", 4, Some(AgentBadge::Blocked), false)]);
+    v2.machine_tree.on = true;
+    crate::client::machine_tree::apply(&mut v2, Ok(fleet(&[("mac2", true)])));
+    assert_eq!(
+        v2.need_input_label(v2.need_input_count()),
+        "2 need input",
+        "a local row drops the tag"
+    );
+    // Two remote machines hold the blocked rows: the tag counts machines.
+    let mut v3 = wide_view(vec![agent_row("w1", 4, Some(AgentBadge::Working), false)]);
+    v3.machine_tree.on = true;
+    crate::client::machine_tree::apply(&mut v3, Ok(fleet(&[("mac2", true), ("u9", true)])));
+    assert_eq!(
+        v3.need_input_label(v3.need_input_count()),
+        "2 need input · 2 machines",
+        "several machines read as a count"
+    );
+}
+
+#[test]
 fn pinned_needs_agent_row_taps_like_its_group_row() {
     let mut v = wide_view(vec![
         agent_row("b1", 4, Some(AgentBadge::Blocked), false),
@@ -1444,7 +1556,7 @@ fn a_filed_question_stamps_the_asking_row_blocked() {
     assert_eq!(v.need_input_count(), 1, "the strip count reads the stamp");
     let row = top_row(&v);
     assert!(
-        row[row.chars().next().map_or(0, char::len_utf8)..].starts_with("1 need input"),
+        row[row.chars().next().map_or(0, char::len_utf8)..].starts_with("1 needs input"),
         "{row:?}"
     );
 

@@ -107,6 +107,32 @@ impl MachineTree {
             .flat_map(|band| &band.seats)
             .map(|seat| &seat.row)
     }
+
+    /// Each remote band's blocked rows, in band order (local-first, then
+    /// hosts). The pinned Needs input panel groups on this; the local
+    /// machine's rows never come from here, because its band holds no seats
+    /// and the server Layout supplies them.
+    pub(super) fn blocked_by_host(&self) -> Vec<(&str, Vec<&AgentRow>)> {
+        self.bands
+            .iter()
+            .filter(|b| !b.local)
+            .filter_map(|b| {
+                let rows: Vec<&AgentRow> = b
+                    .seats
+                    .iter()
+                    .map(|s| &s.row)
+                    .filter(|r| r.badge == Some(AgentBadge::Blocked))
+                    .collect();
+                (!rows.is_empty()).then_some((b.host.as_str(), rows))
+            })
+            .collect()
+    }
+
+    /// This machine's band host, when a fleet read landed. The pinned panel
+    /// labels the local group with it; the Layout supplies the rows.
+    pub(super) fn local_host(&self) -> Option<&str> {
+        self.bands.iter().find(|b| b.local).map(|b| b.host.as_str())
+    }
 }
 
 /// The glyph form of a remote row's address: the label its portal seat pane

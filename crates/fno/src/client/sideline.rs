@@ -407,6 +407,31 @@ impl View {
         local + self.machine_tree.blocked_remote()
     }
 
+    /// The strip's count label: "1 needs input" at one, else "{n} need
+    /// input". When every blocked row sits on another machine, a short
+    /// machine tag follows: the solo host's name, or a count of machines
+    /// when several hold them. The tap map and the paint both call it, so
+    /// the width never drifts from the text.
+    pub(super) fn need_input_label(&self, need: usize) -> String {
+        let noun = if need == 1 { "needs" } else { "need" };
+        let mut label = format!("{need} {noun} input");
+        let local = self
+            .layout
+            .agents
+            .iter()
+            .filter(|a| agent_lattice_state(a) == LatticeState::Blocked)
+            .count();
+        let remote = self.machine_tree.blocked_by_host();
+        if local == 0 && !remote.is_empty() {
+            if let [(host, _)] = remote.as_slice() {
+                label.push_str(&format!(" · {host}"));
+            } else {
+                label.push_str(&format!(" · {} machines", remote.len()));
+            }
+        }
+        label
+    }
+
     /// Columns the strip's count label covers, for the tap map. Zero when
     /// the label does not paint (nothing needs input, or another view).
     pub(super) fn need_input_label_cols(&self) -> usize {
@@ -423,7 +448,10 @@ impl View {
             .first()
             .map_or(limit, |s| s.0.saturating_sub(1))
             .min(limit);
-        format!(" {need} need input").chars().count().min(stop)
+        format!(" {}", self.need_input_label(need))
+            .chars()
+            .count()
+            .min(stop)
     }
 
     /// The pinned Needs input section: a header, then the blocked rows
@@ -431,6 +459,13 @@ impl View {
     /// here; the notifications panel lists and answers them. The rows also
     /// stay in their groups below, so a click never lands on a row that
     /// moved.
+    ///
+    /// When a remote machine holds blocked rows, the panel groups by
+    /// machine: this machine's rows first under its host label, then one
+    /// host label per remote band, agent rows indented one step under each
+    /// label (the depth the workspace tree nests children at). With no
+    /// remote blocked rows the panel paints the flat shape it always did,
+    /// so the single-machine case reads as before.
     pub(super) fn pin_needs<'a>(
         &'a self,
         rows: Vec<DisplayRow<'a>>,
@@ -440,23 +475,44 @@ impl View {
             return (rows, depths);
         }
         let blocked = |a: &&AgentRow| agent_lattice_state(a) == LatticeState::Blocked;
-        let agents: Vec<&AgentRow> = self
-            .layout
-            .agents
-            .iter()
-            .filter(blocked)
-            .chain(self.machine_tree.rows().filter(blocked))
-            .collect();
+        let local: Vec<&AgentRow> = self.layout.agents.iter().filter(blocked).collect();
+        let remote: Vec<(&str, Vec<&AgentRow>)> = self.machine_tree.blocked_by_host();
+        let need = local.len() + remote.iter().map(|(_, rows)| rows.len()).sum::<usize>();
         let mut out = vec![DisplayRow::Header {
             label: "Needs input".into(),
-            rollup: vec![(LatticeState::Blocked, agents.len())],
+            rollup: vec![(LatticeState::Blocked, need)],
             key: SectionKey::Group("@needs-input".into()),
             view: SectionView::Expanded,
         }];
         let mut out_depths = vec![0];
-        for a in agents {
-            out.push(DisplayRow::Agent(a));
-            out_depths.push(0);
+        if !remote.is_empty() {
+            let local_host = self
+                .machine_tree
+                .local_host()
+                .map_or_else(|| crate::agents_view::demo_hostname(), str::to_string);
+            for (label, agents) in std::iter::once((local_host.to_string(), local)).chain(
+                remote
+                    .into_iter()
+                    .map(|(host, rows)| (host.to_string(), rows)),
+            ) {
+                let key = SectionKey::Group(format!("@needs-input/{label}"));
+                out.push(DisplayRow::Header {
+                    label,
+                    rollup: vec![(LatticeState::Blocked, agents.len())],
+                    key: key.clone(),
+                    view: self.section_view(&key),
+                });
+                out_depths.push(0);
+                for a in agents {
+                    out.push(DisplayRow::Agent(a));
+                    out_depths.push(1);
+                }
+            }
+        } else {
+            for a in local {
+                out.push(DisplayRow::Agent(a));
+                out_depths.push(0);
+            }
         }
         out.push(DisplayRow::Blank);
         out_depths.push(0);
@@ -495,7 +551,10 @@ impl View {
                 .first()
                 .map_or(limit, |s| s.0.saturating_sub(1));
             let mark = self.need_input_pulse();
-            for (col, ch) in format!("{mark}{need} need input").chars().enumerate() {
+            for (col, ch) in format!("{mark}{}", self.need_input_label(need))
+                .chars()
+                .enumerate()
+            {
                 if col >= stop.min(limit) {
                     break;
                 }
