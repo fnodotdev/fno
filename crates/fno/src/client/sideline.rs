@@ -1454,15 +1454,14 @@ impl View {
                     None => label,
                 };
                 // The queued-mail marker renders whole or not at all: the
-                // full `[N queued, oldest 12m]` (the wait names itself the
-                // oldest; no `· dnd` inside the badge, the word belongs to
-                // the hold the row already paints) when the label keeps its
-                // room beside it, else the compact closed `[Nq 12m]` - an
-                // unclosed ` [8` clip reads as broken paint, and a head-cut
-                // name misreads who holds the mail. A card row's line 1
-                // lies about its width (the frame re-clips at the true
-                // cell), so the card carries the marker on its detail line
-                // instead; lists decide here.
+                // full `[N queued, oldest 12m]` (no `· dnd` inside the
+                // badge; the word belongs to the hold the row already
+                // paints) when the label keeps its room, else the compact
+                // closed `[Nq 12m]` - an unclosed ` [8` clip reads as
+                // broken paint, and a head-cut name misreads who holds the
+                // mail. A card row's line 1 lies about its width, so the
+                // card carries the marker on its detail line; lists decide
+                // here.
                 let suffix = match held_badge.filter(|_| !card) {
                     Some(held) => {
                         let (age_full, age_compact) = match a.mail_held_since {
@@ -1932,13 +1931,10 @@ impl View {
     pub(super) fn card_detail_text(&self, a: &AgentRow, now: u64, text_w: usize) -> String {
         let mut segments: Vec<String> = Vec::new();
         // The card's detail line carries the queued-mail marker, first so
-        // the line's own ellipsis never cuts it: line 1's name cell
-        // re-clips at its true width, so a marker there renders broken. The
-        // count names the busy queue, not the agent hold, and the oldest
-        // wait names itself when the transcript carried a stamp. A rail too
-        // narrow for the whole marker reads the compact closed form, the
-        // same rule the list row answers to - a mid-word `old…` clip is
-        // broken paint.
+        // the line's own ellipsis never cuts it. The count names the busy
+        // queue, the oldest wait names itself, and a rail too narrow for
+        // the whole marker reads the compact closed form - a mid-word clip
+        // is broken paint, the rule the list row answers to.
         if let Some(held) = a.mail_held.filter(|n| *n > 0) {
             let age = a.mail_held_since.map(|s| row_meter::up_cell(Some(s), now));
             let full = format!(
@@ -1951,8 +1947,8 @@ impl View {
                 "[{held}q{}]",
                 age.as_deref().map(|x| format!(" {x}")).unwrap_or_default()
             );
-            // The tail (created and activity ages over one separator and a
-            // gap) owns at most 12 columns beside the marker.
+            // The two ages and their separator beside the marker take at
+            // most 12 columns.
             let badge = if crate::chrome::str_cols(&full) + 12 > text_w {
                 compact
             } else {
