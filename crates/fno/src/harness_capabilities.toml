@@ -1,8 +1,7 @@
 # CANONICAL at crates/fno-agents/src/harness_capabilities.toml. crates/fno-agents/build.rs
-# regenerates both copies on every build: cli/src/fno/agents/harness_capabilities.toml
-# (Python package data) and crates/fno/src/harness_capabilities.toml (include_str!ed by
-# the fno mux). Edit the canonical and rebuild; the rust-ci generated-copies dirty-tree
-# step fails on a hand-edited copy.
+# regenerates the one copy on every build: crates/fno/src/harness_capabilities.toml
+# (include_str!ed by the fno mux). Edit the canonical and rebuild; the
+# rust-ci generated-copies dirty-tree step fails on a hand-edited copy.
 map_version = 26
 
 [harness.claude]
