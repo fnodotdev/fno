@@ -318,8 +318,7 @@ impl Page {
     }
 
     /// A switch press. A code mod's first switch-on arms a confirm and runs
-    /// nothing.
-    /// A press on a switch whose answer is still out does nothing.
+    /// nothing. A press on a switch whose answer is still out does nothing.
     fn toggle(&mut self, want: String, on: bool) {
         if self.pending.contains(&want) {
             return;
@@ -799,7 +798,9 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
         ));
     };
     let Some(c) = page.selected_component() else {
-        return div().pt_4().child(quiet(format!("{want} is no longer installed"), root));
+        return div()
+            .pt_4()
+            .child(quiet(format!("{want} is no longer installed"), root));
     };
     let mut out = div()
         .flex()
@@ -993,7 +994,10 @@ mod tests {
         page.toggle("demo-clock/ci-feed".into(), false);
         page.toggle("demo-clock/ci-feed".into(), false);
         assert!(matches!(rx.try_recv(), Ok(Ask::Switch(..))));
-        assert!(rx.try_recv().is_err(), "a second press sent a second switch");
+        assert!(
+            rx.try_recv().is_err(),
+            "a second press sent a second switch"
+        );
         page.apply(Reply::Switched("demo-clock/ci-feed".into(), false, Ok(())));
         assert!(page.pending.is_empty());
 
@@ -1007,7 +1011,10 @@ mod tests {
         assert_eq!(page.selected.as_deref(), Some("fno-panels/backlog-board"));
         assert_eq!(page.selected_switch(), None, "a built-in mod has no switch");
         page.select("demo-clock/clock".into());
-        assert_eq!(page.selected_switch(), Some(("demo-clock/clock".into(), true)));
+        assert_eq!(
+            page.selected_switch(),
+            Some(("demo-clock/clock".into(), true))
+        );
         assert_eq!(page.selected_open(), None, "a disabled mod has no pane");
         page.select("demo-clock/ci-feed".into());
         assert_eq!(page.selected_open().as_deref(), Some("demo-clock/ci-feed"));
@@ -1030,7 +1037,9 @@ mod tests {
 
         let landed = page.apply(Reply::Paned(
             "Install x".into(),
-            Err(ReadFailed("Install x did not open a pane: exit 2: no anchor".into())),
+            Err(ReadFailed(
+                "Install x did not open a pane: exit 2: no anchor".into(),
+            )),
         ));
         assert!(!landed.terminal);
         assert!(landed.notice.is_some_and(|n| n.contains("exit 2")));
