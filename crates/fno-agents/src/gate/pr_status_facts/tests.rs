@@ -235,14 +235,14 @@ fn ci_verdict_fact_blocks_ready_on_red_and_pending() {
         &probes,
         &json!({"merge_state": "unstable", "cwd": "/repo", "ci_verdict": "pending"}),
     );
-    assert_eq!(out["blockers"], json!(["ci_unsettled_at_head"]));
+    assert_eq!(out["blockers"], json!(["ci_pending"]));
 
     // A settled failure reads red even under GitHub's unstable state.
     let out = merge_blocker(
         &probes,
         &json!({"merge_state": "unstable", "cwd": "/repo", "ci_verdict": "red"}),
     );
-    assert_eq!(out["blockers"], json!(["ci_red_at_head"]));
+    assert_eq!(out["blockers"], json!(["ci_red"]));
 
     // Green adds nothing, and a payload without the fact (legacy callers,
     // no checks configured) keeps today's answer.
@@ -266,7 +266,7 @@ fn ci_verdict_fact_blocks_ready_on_red_and_pending() {
     );
     assert_eq!(
         out["blockers"],
-        json!(["ci_unsettled_at_head", "not_mergeable_conflicting"])
+        json!(["ci_pending", "not_mergeable_conflicting"])
     );
 }
 

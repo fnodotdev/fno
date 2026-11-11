@@ -160,7 +160,7 @@ pub(crate) fn compose_payload(inputs: &ComposeInputs) -> (i32, Value, Vec<String
     // ONE merge decision: the preview receipt rides the ask, so the owner
     // never spawns a second status read.
     let receipt = inputs.receipt.clone();
-    let blocker_words: Vec<String> = receipt
+    let mut blocker_words: Vec<String> = receipt
         .get("blockers")
         .and_then(Value::as_array)
         .map(|blockers| {
@@ -171,6 +171,23 @@ pub(crate) fn compose_payload(inputs: &ComposeInputs) -> (i32, Value, Vec<String
                 .collect()
         })
         .unwrap_or_default();
+    // The receipt's doors say clear; the head's own CI verdict must agree
+    // before ready reads true. An attempt in flight or a settled failure
+    // holds ready even in the window where GitHub has not computed
+    // mergeStateStatus (the merge-blocker op never runs there, so no
+    // supplied blocker names the hold). unknown, the no-CI-configured
+    // answer, stays ready-capable. The codes are `ci_blocker_word`'s and the
+    // golden receipts', so one word names the hold on every path.
+    let ci_code = match verdict.as_str() {
+        "red" => Some("ci_red"),
+        "pending" => Some("ci_pending"),
+        _ => None,
+    };
+    if let Some(code) = ci_code {
+        if !blocker_words.iter().any(|b| b == code) {
+            blocker_words.push(code.to_string());
+        }
+    }
 
     let mut payload = Map::new();
     payload.insert("pr".into(), json!(inputs.pr));

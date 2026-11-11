@@ -384,11 +384,13 @@ pub(crate) fn merge_blocker<P: GhProbe>(probes: &P, payload: &Value) -> Value {
     // attempt in flight holds ready until it settles, and a settled failure
     // is a red the merge door refuses under require_checks_pass. Without
     // this, a PR read ready:true while its cli-ci rerun was still in flight
-    // and merged red main (2026-11-10). Absent (legacy callers, no
+    // and merged red main (2026-11-10). The codes are `ci_blocker_word`'s,
+    // the golden receipts' vocabulary, so one word names the hold on every
+    // path. Absent (legacy callers, no
     // checks configured) the fact adds nothing.
     match payload.get("ci_verdict").and_then(Value::as_str) {
-        Some("red") => blockers.push("ci_red_at_head".to_string()),
-        Some("pending") => blockers.push("ci_unsettled_at_head".to_string()),
+        Some("red") => blockers.push("ci_red".to_string()),
+        Some("pending") => blockers.push("ci_pending".to_string()),
         _ => {}
     }
     // The mergeable conjunct: GitHub's own conflict answer. DIRTY under
