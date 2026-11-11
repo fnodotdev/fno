@@ -4722,6 +4722,42 @@
    "doc": "Path to the PostHog project token file (mode 0600); token_env wins when set; a leading ~ expands against $HOME."
   },
   {
+   "path": "telemetry.usage_events.enabled",
+   "type": "bool",
+   "default": false,
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "Send allowlisted fleet journal rows (spawns, refusals, merges, latency) to PostHog as events, identifiers only (default off)."
+  },
+  {
+   "path": "telemetry.usage_events.host",
+   "type": "str",
+   "default": "https://us.i.posthog.com",
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "PostHog ingest host, https only."
+  },
+  {
+   "path": "telemetry.usage_events.token_env",
+   "type": "str",
+   "default": "FNO_POSTHOG_PROJECT_TOKEN",
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "Env var holding the PostHog project token."
+  },
+  {
+   "path": "telemetry.usage_events.token_file",
+   "type": "str",
+   "default": "~/.fno/secrets/posthog-project-token",
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "Path to the PostHog project token file (mode 0600); token_env wins when set; a leading ~ expands against $HOME."
+  },
+  {
    "path": "attention.enabled",
    "type": "bool",
    "default": true,

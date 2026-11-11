@@ -198,6 +198,16 @@ token_env = "FNO_POSTHOG_PROJECT_TOKEN"
 # Path to the PostHog project token file (mode 0600); token_env wins when set; a leading ~ expands against $HOME.
 token_file = "~/.fno/secrets/posthog-project-token"
 
+[telemetry.usage_events]
+# Send allowlisted fleet journal rows (spawns, refusals, merges, latency) to PostHog as events, identifiers only (default off).
+enabled = false
+# PostHog ingest host, https only.
+host = "https://us.i.posthog.com"
+# Env var holding the PostHog project token.
+token_env = "FNO_POSTHOG_PROJECT_TOKEN"
+# Path to the PostHog project token file (mode 0600); token_env wins when set; a leading ~ expands against $HOME.
+token_file = "~/.fno/secrets/posthog-project-token"
+
 [telemetry.install_count]
 # Send one install-count event per machine per day (version, channel, OS, arch, a random install id; no free text). Opt out to send nothing.
 enabled = true

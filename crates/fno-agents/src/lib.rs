@@ -109,7 +109,7 @@ pub use eval::{
     otel_ingest, otel_read, otlp_export, prove_it_verdicts, reader_cost, refusal_fold,
     refusal_rate, refusal_trend, research, retro, scoreboard, scoreboard_escalation,
     scoreboard_provider, session_cost, session_report, skill_diff, skill_drift, stability_report,
-    test_census, tick_ledger, wake_meter,
+    test_census, tick_ledger, usage_events, wake_meter,
 };
 pub use gate::{
     acceptance_evidence, approvals, attest, authorized_merge, autonomy_policy, autonomy_status,
@@ -129,7 +129,7 @@ pub use gate::{
     review_summary, stub_manifest, subagent_hold, surface_check, symptom_recheck, target_blast,
     target_denominator, target_gates, target_init, target_orient, target_start, test_changed,
     test_command, test_delta, test_env, test_hold, test_run, test_smoke, test_smoke_discovery,
-    test_smoke_registry, usage_events, verify_advise, verify_evidence,
+    test_smoke_registry, verify_advise, verify_evidence,
 };
 pub(crate) use gate::{build_marks, pr_idle, stacked_base_stamp};
 use gate::{cancel_sentinel, completion_output, merge_architect, test_run_journal, test_run_pins};

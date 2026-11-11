@@ -8,7 +8,6 @@
 
 use crate::otlp_export::{self, ExportState};
 use serde_json::{json, Map, Value};
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
