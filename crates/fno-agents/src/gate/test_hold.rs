@@ -504,7 +504,11 @@ mod tests {
         // send fails and the assertion would measure the fixture, not the
         // announcement.
         std::fs::create_dir_all(dir.path().join("db/mail/bus")).unwrap();
-        crate::state::update_registry(&home.registry_json(), |_r| ()).unwrap();
+        // The send refuses on an empty audience ("no live recipients"), so
+        // seat one busy entry exactly the way the hold test does.
+        let mut entry = crate::state::RegistryEntry::default();
+        entry.status = crate::AgentStatus::Busy;
+        crate::state::update_registry(&home.registry_json(), |r| r.entries.push(entry)).unwrap();
         // A pause record an older build wrote is what makes this pass a
         // lift rather than a first hold.
         write_state(
