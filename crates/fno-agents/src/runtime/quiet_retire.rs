@@ -129,6 +129,17 @@ pub(crate) fn daemon_exited_payload(reason: &str) -> serde_json::Value {
     json!({"clean": reason != "socket-lost", "reason": reason})
 }
 
+/// The one stderr line a daemon leaves when its loop ends, so a restart has a
+/// named cause in `daemon.stderr.log` and not only in the event stream. The
+/// parent pid is the nearest evidence of who sent a SIGTERM.
+pub(crate) fn log_exit(reason: &str) {
+    let ppid = unsafe { libc::getppid() } as u32;
+    eprintln!(
+        "fno-agents-daemon: exiting reason={reason} pid={} ppid={ppid}",
+        std::process::id()
+    );
+}
+
 /// The daemon's settled drift flag: the stat pair runs off-loop every 6th
 /// tick (30s) behind a one-in-flight gate, and the select arm reads only the
 /// settled bool, never the filesystem. A drifted binary stays drifted until

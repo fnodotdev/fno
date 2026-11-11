@@ -90,7 +90,7 @@ pub(super) enum ChromeHit {
     /// The strip row's view word (`Agents  Messages`, R15): switch the
     /// sideline to that view.
     TopRow(crate::view_store::SidelineView),
-    /// The `N need input` count on the strip row: opens or closes the
+    /// The need-input count on the strip row: opens or closes the
     /// pinned Needs input section.
     NeedInput,
     Bell(bell::Hit),
