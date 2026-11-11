@@ -1,9 +1,8 @@
 # CANONICAL at crates/fno-agents/src/harness_capabilities.toml. crates/fno-agents/build.rs
-# regenerates both copies on every build: cli/src/fno/agents/harness_capabilities.toml
-# (Python package data) and crates/fno/src/harness_capabilities.toml (include_str!ed by
-# the fno mux). Edit the canonical and rebuild; the rust-ci generated-copies dirty-tree
-# step fails on a hand-edited copy.
-map_version = 25
+# regenerates the one copy on every build: crates/fno/src/harness_capabilities.toml
+# (include_str!ed by the fno mux). Edit the canonical and rebuild; the
+# rust-ci generated-copies dirty-tree step fails on a hand-edited copy.
+map_version = 26
 
 [harness.claude]
 # THE DELIVERED-MAIL HEADER FORM. Every delivered mail opens with one
@@ -882,6 +881,24 @@ tokens = ["opencode", "--session", "{session_id}"]
 [harness.opencode.resume_strategy.forms.interactive_attach]
 kind = "unsupported"
 tokens = []
+
+# THE SERVE SEAT. opencode's interactive attach names a SERVER,
+# not just a session: the pane execs the TUI pointed at the shared serve
+# with the row's session id, the Basic-auth password riding child env
+# (never argv - the measured mail-attach ruling). Two CLI generations, selected by the
+# TUI's own major against boundary_major: 1.x execs `opencode attach
+# <serve-url> --session <id>`; 2.x execs `opencode --server <serve-url>
+# --session <id>`. A TUI whose generation does not match the live serve's
+# dies UnsupportedContentType (measured 2026-11-10), so the seat gates on
+# the pair before it spawns anything. The generic interactive_attach lane
+# above stays honest: no session-only attach form exists.
+[harness.opencode.resume_strategy.forms.interactive_serve_attach]
+kind = "serve_attach"
+tokens = []
+tokens_v1 = ["opencode", "attach", "{serve_url}", "--session", "{session_id}"]
+tokens_v2 = ["opencode", "--server", "{serve_url}", "--session", "{session_id}"]
+boundary_major = 2
+password_env = "OPENCODE_SERVER_PASSWORD"
 
 [harness.opencode.resume_strategy.forms.headless_create]
 kind = "subcommand"

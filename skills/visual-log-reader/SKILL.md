@@ -16,7 +16,7 @@ The Visual Log page carries Approve and Change buttons on every entry. A tap wri
 Spawn the reader once, on the thread lane:
 
 ```bash
-fno agents spawn visual-log-reader "/fno:visual-log-reader" --as thread
+fno agents spawn --as thread --name visual-log-reader "/fno:visual-log-reader"
 ```
 
 The daemon revives a dead reader. `worker_wake` resumes proven-dead sessions. `claude_restart_watch` re-binds a claude job the daemon restart moved. `fno mux workspace restore` brings a reader back through the claude revive plan after a reboot or a killed mux server. A member already live is focused, never spawned twice.
