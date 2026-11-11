@@ -41,9 +41,27 @@ esac
 printf '%s\n' "$*" >> "${FNO_STUB_LOG:?}"
 exit 0
 STUB
+# A stub front door: events.sh commits every row through `fno doctor event
+# emit-envelope`, and a CI runner has no fno installed and no checkout build,
+# so the real binary silently loses the miss row this test asserts on. The
+# stub stores into the events file the same way the read stub reads it.
+cat > "$TMP/bin/fno" <<'STUB'
+#!/usr/bin/env bash
+path=""
+prev=""
+for a in "$@"; do
+    [[ "$prev" == "--events" ]] && path="$a"
+    prev="$a"
+done
+case "$*" in
+  *"emit-envelope"*) cat >> "$path"; exit 0 ;;
+  *"event rows"*)    cat "$path" 2>/dev/null; exit 0 ;;
+esac
+exit 0
+STUB
 # A jq that answers like a missing binary: the hook must still read the id.
 printf '#!/usr/bin/env bash\nexit 127\n' > "$TMP/nojq/jq"
-chmod +x "$TMP/bin/fno-agents" "$TMP/nojq/jq"
+chmod +x "$TMP/bin/fno-agents" "$TMP/bin/fno" "$TMP/nojq/jq"
 
 fresh() {
     rm -rf "$TMP/state"
@@ -61,8 +79,8 @@ run_hook() {  # $1 extra PATH prefix
 called() { grep -q -- "--control-drain --bus-dir ${1:-$BUS} --session $SID" "$LOG"; }
 
 # The miss row lives in the sibling store --events names, not the jsonl, so
-# the read goes through the binary the same way the write did.
-read_miss_rows() { fno doctor event rows --events "$EVENTS" 2>/dev/null; }
+# the read goes through the stub the same way the write did.
+read_miss_rows() { "$TMP/bin/fno" doctor event rows --events "$EVENTS" 2>/dev/null; }
 
 # AC4: jq missing, control flag set: the drain still runs.
 fresh
