@@ -1275,7 +1275,10 @@ fn run_pass(
                     crate::tick_ledger::SCHED_DAEMON,
                     0,
                     Some("registry unreadable; sweep held"),
-                    Some(&format!("scope {} sessions", scope.len())),
+                    Some(&format!(
+                        "scope {} sessions; registry read: {e}",
+                        scope.len()
+                    )),
                     BURN_WATCH_INTERVAL_S,
                 );
                 return;
