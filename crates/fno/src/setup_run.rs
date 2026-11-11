@@ -1699,7 +1699,7 @@ fn compute_proposals(
                 let list = shipped();
                 let owed = [Harness::Claude, Harness::Codex, Harness::Opencode]
                     .into_iter()
-                    .filter_map(|h| target(h).map(|p| status(h, &list, Some(&p))))
+                    .filter_map(|h| target(h).map(|p| status(h, &list, Some(p.as_path()))))
                     .any(|s| s["status"] == "missing");
                 if owed {
                     proposed.push(Proposal {

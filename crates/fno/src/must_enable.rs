@@ -351,7 +351,7 @@ fn install_claude(list: &List, path: &Path) -> Outcome {
     let missing: Vec<String> = list
         .claude()
         .into_iter()
-        .filter(|r| !allow.iter().any(|v| v.as_str() == Some(r)))
+        .filter(|r| !allow.iter().any(|v| v.as_str() == Some(r.as_str())))
         .collect();
     if missing.is_empty() {
         return Outcome::AlreadyPresent;
@@ -720,7 +720,11 @@ mod tests {
             (Harness::Codex, &codex),
             (Harness::Opencode, &oc),
         ] {
-            assert_eq!(status(h, &list, Some(p))["status"], "present", "{h:?}");
+            assert_eq!(
+                status(h, &list, Some(p.as_path()))["status"],
+                "present",
+                "{h:?}"
+            );
         }
         let v1 = dir.path().join("v1.json");
         assert_eq!(install_opencode(&list, &v1, none), Outcome::Wrote);
@@ -763,7 +767,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&oc).unwrap(), "{ // mine\n}");
         assert_eq!(std::fs::read_to_string(&codex).unwrap(), "# mine\n");
         assert_eq!(
-            status(Harness::Codex, &list, Some(&codex))["status"],
+            status(Harness::Codex, &list, Some(codex.as_path()))["status"],
             "drift"
         );
         let mut rules = list.claude();
@@ -774,7 +778,7 @@ mod tests {
         )
         .unwrap();
         let before = std::fs::read(&claude).unwrap();
-        let s = status(Harness::Claude, &list, Some(&claude));
+        let s = status(Harness::Claude, &list, Some(claude.as_path()));
         assert_eq!(s["status"], "drift");
         assert_eq!(s["missing"], json!([removed]));
         assert_eq!(std::fs::read(&claude).unwrap(), before);
