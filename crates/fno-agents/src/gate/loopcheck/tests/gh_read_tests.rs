@@ -111,6 +111,7 @@ fn graphql_exhausted_reason_names_reset_and_rest_lane() {
         reset_epoch: Utc::now().timestamp() + 40 * 60 + 5,
         core_remaining: None,
         core_reset_epoch: None,
+        anonymous: false,
     };
     let msg = graphql_exhausted_reason(&q);
     assert!(msg.contains("GraphQL quota exhausted"), "got: {msg}");
@@ -150,6 +151,20 @@ fn probe_graphql_quota_parses_the_graphql_bucket() {
     // The core bucket from the SAME probe read feeds the secondary-limit
     // classifier; a payload without it must degrade to None, not to 0.
     assert_eq!(q.core_remaining, Some(4980));
+    assert!(!q.anonymous, "a 5000 core limit is an authed token");
+    // A keyless gh reads the 60-request anonymous bucket; the probe must
+    // say so, or the stop gate stamps it onto the shared account ledger.
+    let anon_dir = tempfile::tempdir().unwrap();
+    let anon_gh = write_exec(
+        anon_dir.path(),
+        "gh",
+        "#!/bin/sh\necho '{\"resources\":{\"graphql\":{\"remaining\":0,\"reset\":1750000000},\
+             \"core\":{\"remaining\":0,\"limit\":60,\"reset\":1750000000}}}'\n",
+    );
+    let anon = (0..5)
+        .find_map(|_| probe_graphql_quota(anon_gh.to_str().unwrap(), anon_dir.path()))
+        .expect("anonymous probe kept failing across 5 retries");
+    assert!(anon.anonymous, "a 60 core limit is the anonymous bucket");
 }
 
 fn quota_with(graphql_remaining: i64, core_remaining: Option<i64>) -> GraphqlQuota {
@@ -158,6 +173,7 @@ fn quota_with(graphql_remaining: i64, core_remaining: Option<i64>) -> GraphqlQuo
         reset_epoch: 1_750_000_000,
         core_remaining,
         core_reset_epoch: None,
+        anonymous: false,
     }
 }
 
@@ -240,6 +256,7 @@ fn primary_exhaustion_parks_on_the_ledger_core_reset() {
         reset_epoch: now + 300,
         core_remaining: Some(0),
         core_reset_epoch: Some(now + 2400),
+        anonymous: false,
     };
     let stderr = "gh: API rate limit exceeded for user ID 4994564 (HTTP 403)";
     assert_eq!(
@@ -258,6 +275,7 @@ fn graphql_exhaustion_parks_on_the_probe_reset() {
         reset_epoch: now + 720,
         core_remaining: Some(4980),
         core_reset_epoch: Some(now + 2400),
+        anonymous: false,
     };
     let stderr = "gh: API rate limit exceeded for user ID 4994564 (HTTP 403)";
     assert_eq!(
@@ -274,6 +292,7 @@ fn park_refuses_every_non_exhaustion_shape() {
         reset_epoch: now + 300,
         core_remaining: Some(0),
         core_reset_epoch: Some(now + 2400),
+        anonymous: false,
     };
     let stderr = "gh: API rate limit exceeded for user ID 4994564 (HTTP 403)";
     // A blip that is not a rate limit takes the old block: the read may
@@ -300,6 +319,7 @@ fn park_refuses_every_non_exhaustion_shape() {
         reset_epoch: now + 300,
         core_remaining: Some(4980),
         core_reset_epoch: Some(now + 2400),
+        anonymous: false,
     };
     assert_eq!(
         primary_exhaustion_park_s("pr_info_rest", stderr, Some(&core_high), 2400, now),

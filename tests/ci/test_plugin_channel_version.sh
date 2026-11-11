@@ -62,19 +62,24 @@ with open(".claude-plugin/marketplace.json") as fh:
 entries = {p["name"]: p for p in marketplace["plugins"]}
 
 fail = []
-for channel in ("fno", "fno-nightly"):
-    entry = entries.get(channel)
-    if entry is None:
-        fail.append(f"{channel} entry missing")
-        continue
+if "fno-nightly" in entries:
+    fail.append("fno-nightly entry still listed; the nightly plugin channel is retired")
+if marketplace.get("renames", {}).get("fno-nightly", "missing") is not None:
+    fail.append("renames must map fno-nightly to null so old installs migrate")
+if not marketplace.get("forceRemoveDeletedPlugins"):
+    fail.append("forceRemoveDeletedPlugins must be true so retired installs uninstall")
+entry = entries.get("fno")
+if entry is None:
+    fail.append("fno entry missing")
+else:
     src = entry.get("source") or {}
     if src.get("source") != "github" or src.get("repo") != "fnodotdev/fno":
-        fail.append(f"{channel} source is not the github repo")
+        fail.append("fno source is not the github repo")
     if "version" in entry:
-        fail.append(f"{channel} entry carries a version field; plugin.json is the one version")
-for name, ref in (("fno", "stable"), ("fno-nightly", "nightly")):
-    if name in entries and (entries[name].get("source") or {}).get("ref") != ref:
-        fail.append(f"{name} does not pin ref {ref}")
+        fail.append("fno entry carries a version field; plugin.json is the one version")
+    ref, sha = src.get("ref", ""), src.get("sha", "")
+    if not (ref.startswith("v") and len(sha) == 40):
+        fail.append(f"fno must pin a v* tag ref and a full sha; got ref={ref!r} sha={sha!r}")
 
 for manifest in (".claude-plugin/plugin.json", ".codex-plugin/plugin.json"):
     with open(manifest) as fh:
@@ -82,12 +87,21 @@ for manifest in (".claude-plugin/plugin.json", ".codex-plugin/plugin.json"):
     if not plugin.get("version"):
         fail.append(f"{manifest} carries no version")
 
+with open(".agents/plugins/marketplace.json") as fh:
+    agents_market = json.load(fh)
+agents_entry = (agents_market.get("plugins") or [{}])[0]
+agents_src = agents_entry.get("source") or {}
+if agents_src.get("ref", "").startswith("v") and len(agents_src.get("sha", "")) == 40:
+    pass
+else:
+    fail.append("the codex catalog fno entry must pin a v* tag ref and a full sha")
+
 if fail:
     for line in fail:
         print(f"  FAIL: {line}", file=sys.stderr)
     sys.exit(1)
 PY
-[ "$?" = "0" ]; check "marketplace entries pin stable/nightly refs; plugin.json holds the versions" $?
+[ "$?" = "0" ]; check "catalogs pin the release tag with ref and sha; the nightly entry is renamed to null" $?
 
 # ------------------------------------- fno.sh resolves the tree's channel (x-6f1d)
 # scripts/install/fno.sh run INSIDE a tree must not pair the tree's nightly

@@ -345,6 +345,10 @@ crates/fno-agents/src/spawn/accounts/staging.rs
 crates/fno-agents/src/spawn/accounts/store.rs
 crates/fno-agents/src/spawn/project_sandbox.rs
 scripts/ops/sandbox-leak-probe.sh
+# install-journey.sh builds CLAUDE_CONFIG_DIR under a throwaway run home and
+# reads the plugin cache there to prove the wiring; it writes no fno state
+# into any real .claude dir.
+scripts/ops/install-journey.sh
 crates/fno-agents/src/spawn/accounts/reconcile.rs
 crates/fno-agents/src/spawn/capability_leaves.rs
 crates/fno-agents/src/runtime/slot_cutover.rs

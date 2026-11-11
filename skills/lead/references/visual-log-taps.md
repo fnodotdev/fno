@@ -1,6 +1,6 @@
 # Visual Log taps
 
-Each project's Visual Log page carries an Approve and a Change button on every entry. A tap writes a row to the page's database. The lead reads new rows every 2 minutes, records each one, mails the PR's worker and lead, and writes an ack row back. The page then shows Recorded, Stale or Not recorded under the buttons. Before the ack it shows Waiting.
+Each project's Visual Log page carries an Approve and a Change button on every entry. A tap writes a row to the page's database. The lead reads new rows every 15 minutes, records each one, mails the PR's worker and lead, and writes an ack row back. The page then shows Recorded, Stale or Not recorded under the buttons. Before the ack it shows Waiting.
 
 The page template is [../assets/visual-log-v3.html](../assets/visual-log-v3.html). The visual-log law (`visual-log:per-project`) names each project's current page.
 
@@ -31,9 +31,9 @@ The owner shares the page with the user's organization at Contributor level. A V
 
 Prepend one object to the `LOG` array with `edit_version` (replace `const LOG = [\n` with the array opener plus the new line). `head` is the full sha of the PR head the shots show. Upload the shots with `publish_files` in patch mode first and cite them by relative path. Newest PR first. A push to the PR makes a new head. Add a new entry for it and keep the old one. Taps on the old entry read Stale.
 
-## The reader, every 2 minutes
+## The reader, every 15 minutes
 
-Arm it once per lead session: `CronCreate` with `*/2 * * * *`, or `/loop 2m` on this procedure. For each page:
+Arm it once per lead session: `CronCreate` with `7,22,37,52 * * * *`, or `/loop 15m` on this procedure. The minute marks sit off the :00 and :30 marks, where the fleet's other crons fire. For each page:
 
 1. Read `taps`, `acks` and `config/approvers` (`db_list`, `db_get`).
 2. Pick each tap row with no ack, or an ack older than the tap.

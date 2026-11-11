@@ -1,7 +1,7 @@
 //! URL detection and open-safety for clickable links in mux panes.
 //!
 //! Two sources feed the same model. An app can declare a link explicitly with
-//! OSC 8, which `alacritty_terminal` already parses into `Cell::hyperlink()`;
+//! OSC 8, which `rio-vt` already parses into a per-cell hyperlink;
 //! everything else is plain text, which is the common case (a printed PR URL
 //! from `gh`, a session link from a coding agent). [`find_urls`] covers the
 //! second. Detection is pure and unit-tested; the grid walk lives in
