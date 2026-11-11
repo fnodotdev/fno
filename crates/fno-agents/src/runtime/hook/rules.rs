@@ -34,7 +34,8 @@ pub fn run(event: &str) -> i32 {
         .to_string();
     match render(&ev, &ruling.decision, &ruling.unread, &hook_event) {
         Rendered::Block(reason) => {
-            let refusal = crate::hook::refusal::Refusal::new("law", reason);
+            let refusal =
+                crate::hook::refusal::Refusal::new(crate::hook::refusal::Guard::Law, reason);
             if hook_event == "PreToolUse" {
                 crate::hook::refusal::emit_one(refusal)
             } else {

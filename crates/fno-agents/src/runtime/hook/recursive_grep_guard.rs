@@ -70,9 +70,9 @@ pub fn run(_args: &[String]) -> i32 {
     let decision = if note.is_some() { "nudge" } else { "allow" };
     super::emit_guard_row(&cwd, "recursive-grep-guard", "Bash", decision);
     match note {
-        Some(reason) => {
-            super::emit_warn(&super::refusal::Refusal::new("recursive-grep guard", reason).render())
-        }
+        Some(reason) => super::emit_warn(
+            &super::refusal::Refusal::new(super::refusal::Guard::RecursiveGrep, reason).render(),
+        ),
         None => super::emit_allow(),
     }
 }

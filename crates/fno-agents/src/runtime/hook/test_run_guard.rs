@@ -203,9 +203,10 @@ pub fn run(_args: &[String]) -> i32 {
         eprintln!("test-run-guard: allow at {}", evaluation.stage);
     }
     match evaluation.refusal {
-        Some(reason) => {
-            super::refusal::emit_one(super::refusal::Refusal::new("test-run guard", reason))
-        }
+        Some(reason) => super::refusal::emit_one(super::refusal::Refusal::new(
+            super::refusal::Guard::TestRun,
+            reason,
+        )),
         None => super::emit_allow(),
     }
 }

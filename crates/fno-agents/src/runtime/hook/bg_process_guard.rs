@@ -77,9 +77,10 @@ pub fn run(_args: &[String]) -> i32 {
     let refusal = judge(&payload);
     super::emit_guard_decision(&cwd, "bg-process-guard", "Bash", refusal.is_some());
     match refusal {
-        Some(reason) => {
-            super::refusal::emit_one(super::refusal::Refusal::new("bg-process guard", reason))
-        }
+        Some(reason) => super::refusal::emit_one(super::refusal::Refusal::new(
+            super::refusal::Guard::BgProcess,
+            reason,
+        )),
         None => super::emit_allow(),
     }
 }

@@ -22,7 +22,7 @@ pub fn run(_args: &[String]) -> i32 {
     let payload: Value = serde_json::from_str(super::read_stdin().trim()).unwrap_or(Value::Null);
     match reason_for(&payload) {
         Some(reason) => super::refusal::emit_one(super::refusal::Refusal::new(
-            "subagent-worktree guard",
+            super::refusal::Guard::SubagentWorktree,
             reason,
         )),
         None => super::emit_allow(),

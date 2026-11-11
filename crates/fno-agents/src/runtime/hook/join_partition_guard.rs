@@ -16,9 +16,10 @@ const PATCH_PREFIXES: [&str; 4] = [
 
 pub fn run(_args: &[String]) -> i32 {
     match judge(&super::read_stdin()) {
-        Some(reason) => {
-            super::refusal::emit_one(super::refusal::Refusal::new("join-partition guard", reason))
-        }
+        Some(reason) => super::refusal::emit_one(super::refusal::Refusal::new(
+            super::refusal::Guard::JoinPartition,
+            reason,
+        )),
         None => super::emit_allow(),
     }
 }

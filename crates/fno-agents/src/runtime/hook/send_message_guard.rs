@@ -71,7 +71,7 @@ pub fn run(_args: &[String]) -> i32 {
                 true,
             );
             super::refusal::emit_one(super::refusal::Refusal::new(
-                "send-message guard",
+                super::refusal::Guard::SendMessage,
                 format!(
                     "use fno mail, not SendMessage: `{to}` is an fno-registered session, \
                  and a native send never reaches the mail journal (feed, Messages tab, \

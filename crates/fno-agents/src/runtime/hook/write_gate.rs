@@ -81,10 +81,14 @@ fn norm(s: &str) -> String {
 /// not: an fd duplication (`2>&1`, `>&-`), whose `1` the relative-path arm
 /// read as the file `<cwd>/1`, and the body of a QUOTED heredoc
 /// (`<<'EOF'`), which is literal data. An unquoted body still expands
-/// `$(...)`, so it stays.
+/// `$(...)`, and a body fed to a shell runs, so both stay.
 fn shell_surface(cmd: &str) -> String {
     let heredoc =
         regex::Regex::new(r#"<<-?[[:space:]]*(['"])([A-Za-z_][A-Za-z0-9_]*)(['"])"#).unwrap();
+    let shell = regex::Regex::new(
+        r"(^|[[:space:];|&(])(bash|sh|zsh|dash|ksh|eval|source|ssh)([[:space:]]|$)",
+    )
+    .unwrap();
     let mut kept: Vec<&str> = Vec::new();
     let mut close: Vec<(String, bool)> = Vec::new();
     for line in cmd.lines() {
@@ -100,7 +104,9 @@ fn shell_surface(cmd: &str) -> String {
             continue;
         }
         for caps in heredoc.captures_iter(line) {
-            if caps[1] == caps[3] {
+            // `bash <<'EOF'` runs its body as shell, so that body stays.
+            let before = &line[..caps.get(0).map_or(0, |m| m.start())];
+            if caps[1] == caps[3] && !shell.is_match(before) {
                 let dash = caps[0].starts_with("<<-");
                 close.push((caps[2].to_string(), dash));
             }
@@ -137,7 +143,7 @@ pub fn run(_args: &[String]) -> i32 {
         if raw_tokens_hint_graph(&raw) {
             mark(&cwd, "graph-write-protect", &row_tool, true);
             return super::refusal::emit_one(super::refusal::Refusal::new(
-                "graph-write-protect",
+                super::refusal::Guard::GraphWrite,
                 FAILCLOSED_MALFORMED,
             ));
         }
@@ -214,16 +220,25 @@ pub fn run(_args: &[String]) -> i32 {
     // silent exactly as when the harness denied before their siblings ran.
     // A warn lets the write land and rides the allow.
     let mut warnings: Vec<String> = Vec::new();
-    let sections: [(&'static str, fn(&Payload, &Path) -> Sec); 3] = [
-        ("graph-write-protect", graph_section),
-        ("claude-config-write-guard", config_section),
-        ("generated-write-guard", generated_section),
+    use super::refusal::Guard;
+    let sections: [(&str, Guard, fn(&Payload, &Path) -> Sec); 3] = [
+        ("graph-write-protect", Guard::GraphWrite, graph_section),
+        (
+            "claude-config-write-guard",
+            Guard::ConfigWrite,
+            config_section,
+        ),
+        (
+            "generated-write-guard",
+            Guard::GeneratedWrite,
+            generated_section,
+        ),
     ];
-    for (guard, section) in sections {
+    for (guard, tag, section) in sections {
         match section(&p, &cwd) {
             Sec::Block(reason) => {
                 mark(&cwd, guard, &row_tool, true);
-                return super::refusal::emit_one(super::refusal::Refusal::new(guard, reason));
+                return super::refusal::emit_one(super::refusal::Refusal::new(tag, reason));
             }
             Sec::Warn(note) => {
                 mark(&cwd, guard, &row_tool, false);
@@ -1436,6 +1451,9 @@ mod tests {
         // An unquoted body expands $(...), so it is still scanned.
         let live = format!("cat <<EOF\n$(echo x > {newtop})\nEOF");
         assert!(matches!(judge(&live), Sec::Warn(_)));
+        // A quoted body fed to a shell runs, so it is still scanned too.
+        let run = format!("bash <<'EOF'\necho x > {newtop}\nEOF");
+        assert!(matches!(judge(&run), Sec::Warn(_)));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

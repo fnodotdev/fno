@@ -30,13 +30,13 @@ pub fn run(_args: &[String]) -> i32 {
     if crate::agents_config::preset_runs(preset, "bg-process") {
         let bg_refusal = super::bg_process_guard::judge(&payload);
         super::emit_guard_decision(&cwd, "bg-process-guard", "Bash", bg_refusal.is_some());
-        refusals.extend(bg_refusal.map(|r| Refusal::new("bg-process guard", r)));
+        refusals.extend(bg_refusal.map(|r| Refusal::new(super::refusal::Guard::BgProcess, r)));
     }
 
     if crate::agents_config::preset_runs(preset, "bin-install") {
         let bin_refusal = super::bin_install_guard::judge(&payload);
         super::emit_guard_decision(&cwd, "bin-install-guard", "Bash", bin_refusal.is_some());
-        refusals.extend(bin_refusal.map(|r| Refusal::new("bin-install guard", r)));
+        refusals.extend(bin_refusal.map(|r| Refusal::new(super::refusal::Guard::BinInstall, r)));
     }
 
     if crate::agents_config::preset_runs(preset, "git-protection") {
@@ -46,7 +46,7 @@ pub fn run(_args: &[String]) -> i32 {
         match super::git_protection::judge(&payload, &process_cwd) {
             super::git_protection::Verdict::Block(reason) => {
                 super::emit_guard_decision(&cwd, "git-protection", "Bash", true);
-                refusals.push(Refusal::new("git-protection", reason));
+                refusals.push(Refusal::new(super::refusal::Guard::GitProtection, reason));
             }
             super::git_protection::Verdict::Warn(reason) => {
                 super::emit_guard_decision(&cwd, "git-protection", "Bash", false);
@@ -66,7 +66,9 @@ pub fn run(_args: &[String]) -> i32 {
             "Bash",
             impostor_refusal.is_some(),
         );
-        refusals.extend(impostor_refusal.map(|r| Refusal::new("backlog-impostor guard", r)));
+        refusals.extend(
+            impostor_refusal.map(|r| Refusal::new(super::refusal::Guard::BacklogImpostor, r)),
+        );
     }
 
     if crate::agents_config::preset_runs(preset, "recursive-grep") {
@@ -78,7 +80,9 @@ pub fn run(_args: &[String]) -> i32 {
             "allow"
         };
         super::emit_guard_row(&cwd, "recursive-grep-guard", "Bash", decision);
-        notices.extend(grep_note.map(|n| Refusal::new("recursive-grep guard", n).render()));
+        notices.extend(
+            grep_note.map(|n| Refusal::new(super::refusal::Guard::RecursiveGrep, n).render()),
+        );
     }
 
     let test = if crate::agents_config::preset_runs(preset, "test-run") {
@@ -98,18 +102,22 @@ pub fn run(_args: &[String]) -> i32 {
             test.refusal.is_some(),
         );
     }
-    refusals.extend(test.refusal.map(|r| Refusal::new("test-run guard", r)));
+    refusals.extend(
+        test.refusal
+            .map(|r| Refusal::new(super::refusal::Guard::TestRun, r)),
+    );
 
     if crate::agents_config::preset_runs(preset, "effect") {
         let effect_refusal = crate::effect_gate::judge(&payload, &cwd);
         super::emit_guard_decision(&cwd, "effect-guard", "Bash", effect_refusal.is_some());
-        refusals.extend(effect_refusal.map(|r| Refusal::new("effect guard", r)));
+        refusals.extend(effect_refusal.map(|r| Refusal::new(super::refusal::Guard::Effect, r)));
     }
 
     if crate::agents_config::preset_runs(preset, "refusal-streak") {
         let streak_refusal = super::refusal_streak::judge_pre(&payload);
         super::emit_guard_decision(&cwd, "refusal-streak", "Bash", streak_refusal.is_some());
-        refusals.extend(streak_refusal.map(|r| Refusal::new("refusal-streak", r)));
+        refusals
+            .extend(streak_refusal.map(|r| Refusal::new(super::refusal::Guard::RefusalStreak, r)));
     }
 
     let mut renamed = false;
@@ -119,7 +127,7 @@ pub fn run(_args: &[String]) -> i32 {
             renamed = rewrote;
         }
         if let Some(reason) = gate_native_launch(&payload, &cwd) {
-            refusals.push(Refusal::new("spawn gate", reason));
+            refusals.push(Refusal::new(super::refusal::Guard::SpawnGate, reason));
         }
     }
     if !refusals.is_empty() {

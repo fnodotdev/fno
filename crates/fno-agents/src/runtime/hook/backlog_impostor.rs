@@ -43,7 +43,7 @@ pub fn run(_args: &[String]) -> i32 {
     super::emit_guard_decision(&cwd, "backlog-impostor-guard", "Bash", refusal.is_some());
     match refusal {
         Some(reason) => super::refusal::emit_one(super::refusal::Refusal::new(
-            "backlog-impostor guard",
+            super::refusal::Guard::BacklogImpostor,
             reason,
         )),
         None => super::emit_allow(),

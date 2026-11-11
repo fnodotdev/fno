@@ -4,8 +4,8 @@
 //! reads as the harness refusing and leaves the person no way out. Every
 //! refusal here starts `[fno <guard>]`, then names a `Way out:` (the safe
 //! form of the same intent) and an `Override:` (how the person runs it
-//! anyway). [`CONTRACTS`] holds both lines per guard; a guard missing from
-//! it fails the render test, not a user's turn.
+//! anyway). [`Guard::contract`] holds both lines; its match is exhaustive,
+//! so a new guard without them does not compile.
 //!
 //! fno owns no permission layer. On a Claude session a person attends, a
 //! stop returns `ask`, so the harness's own prompt is the person's key to
@@ -16,11 +16,26 @@
 
 use serde_json::json;
 
-/// The way out and the override for one guard tag.
-pub(crate) struct Contract {
-    pub guard: &'static str,
-    pub way_out: &'static str,
-    pub override_hint: &'static str,
+/// Every fno guard that can stop a call or leave a note.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Guard {
+    BgProcess,
+    BinInstall,
+    GitProtection,
+    BacklogImpostor,
+    RecursiveGrep,
+    TestRun,
+    Effect,
+    RefusalStreak,
+    SpawnGate,
+    GraphWrite,
+    ConfigWrite,
+    GeneratedWrite,
+    Lead,
+    Law,
+    JoinPartition,
+    SendMessage,
+    SubagentWorktree,
 }
 
 const PRESET_STRICT: &str = "this guard runs only under `guards.preset = \"strict\"`; set `guards.preset = \"standard\"` in .fno/config.toml to stop it.";
@@ -28,97 +43,83 @@ const PRESET_OFF: &str =
     "set `guards.preset = \"off\"` in .fno/config.toml to stop every gatable fno guard.";
 const OWN_SHELL: &str = "a person runs the same line in their own shell, where no fno hook runs.";
 
-pub(crate) const CONTRACTS: &[Contract] = &[
-    Contract {
-        guard: "bg-process guard",
-        way_out: "give the command a bound: `timeout <secs> <cmd>`, or `bash scripts/lib/loadgen.sh start <label> <seconds>` for load.",
-        override_hint: PRESET_STRICT,
-    },
-    Contract {
-        guard: "bin-install guard",
-        way_out: "pin your build with `export FNO_AGENTS_FRONT=\"$PWD/crates/fno-agents/target/debug/fno-agents\"`; deploy with `fno doctor update`.",
-        override_hint: PRESET_STRICT,
-    },
-    Contract {
-        guard: "git-protection",
-        way_out: "push and merge through `fno do pr push` and `fno do pr merge`; the reason above names the form for this command.",
-        override_hint: PRESET_OFF,
-    },
-    Contract {
-        guard: "backlog-impostor guard",
-        way_out: "prefix the command: `fno backlog ...`.",
-        override_hint: "run the third-party CLI by its full path, `~/.bun/bin/backlog`, or set `guards.preset = \"off\"` in .fno/config.toml.",
-    },
-    Contract {
-        guard: "recursive-grep guard",
-        way_out: "use `rg <pattern> <path>` or the harness Grep tool; both honor .gitignore.",
-        override_hint: PRESET_STRICT,
-    },
-    Contract {
-        guard: "test-run guard",
-        way_out: "run `fno doctor test <changed test files>`, or push and let CI run the suite.",
-        override_hint: "prefix `FNO_TEST_FULL=1` for a whole-suite run; this guard runs only under `guards.preset = \"strict\"`.",
-    },
-    Contract {
-        guard: "effect guard",
-        way_out: "the reason above names the request digest; retry the same call unchanged once it is approved.",
-        override_hint: "approve it with `fno inbox approvals decide <digest> --as <principal> --approve`.",
-    },
-    Contract {
-        guard: "refusal-streak",
-        way_out: "file the blocker (`fno backlog idea \"...\"`) or mail your lead, then move to other work.",
-        override_hint: "change the command, or wait 10 minutes for the streak to expire.",
-    },
-    Contract {
-        guard: "spawn gate",
-        way_out: "`fno agents admit status` shows the queue; the reason above names the remedy.",
-        override_hint: OWN_SHELL,
-    },
-    Contract {
-        guard: "graph-write-protect",
-        way_out: "change state through `fno backlog` or `fno do state`; they own these files.",
-        override_hint: OWN_SHELL,
-    },
-    Contract {
-        guard: "generated-write-guard",
-        way_out: "edit the source file the reason names, then run its regen command.",
-        override_hint: OWN_SHELL,
-    },
-    Contract {
-        guard: "lead guard",
-        way_out: "hand the edit to a worker (`fno agents spawn`) or a subagent.",
-        override_hint: "set `lead.implementation_guard = \"warn\"` (or `\"off\"`) in .fno/config.toml.",
-    },
-    Contract {
-        guard: "law",
-        way_out: "the rule above names what it wants instead.",
-        override_hint: "the person who owns the rule edits or retires it with `/fno:law`.",
-    },
-    Contract {
-        guard: "join-partition guard",
-        way_out: "edit only the files your band owns; the reason above names the band.",
-        override_hint: "the join lead widens the band policy under `.fno/join-partition/`.",
-    },
-    Contract {
-        guard: "send-message guard",
-        way_out: "send with `fno agents mail send <to> \"<message>\"`.",
-        override_hint: "SendMessage opens again by itself while fno mail is unhealthy.",
-    },
-    Contract {
-        guard: "subagent-worktree guard",
-        way_out: "use absolute paths: Read, Edit and Write take them, and git runs as `git -C <path> ...`.",
-        override_hint: "call EnterWorktree from the top-level session instead of the subagent.",
-    },
-];
+impl Guard {
+    #[cfg(test)]
+    const ALL: [Guard; 17] = [
+        Guard::BgProcess,
+        Guard::BinInstall,
+        Guard::GitProtection,
+        Guard::BacklogImpostor,
+        Guard::RecursiveGrep,
+        Guard::TestRun,
+        Guard::Effect,
+        Guard::RefusalStreak,
+        Guard::SpawnGate,
+        Guard::GraphWrite,
+        Guard::ConfigWrite,
+        Guard::GeneratedWrite,
+        Guard::Lead,
+        Guard::Law,
+        Guard::JoinPartition,
+        Guard::SendMessage,
+        Guard::SubagentWorktree,
+    ];
 
-/// One guard's refusal: the tag and the guard's own reason text.
+    /// The name inside `[fno <tag>]`.
+    pub(crate) fn tag(self) -> &'static str {
+        match self {
+            Guard::BgProcess => "bg-process guard",
+            Guard::BinInstall => "bin-install guard",
+            Guard::GitProtection => "git-protection",
+            Guard::BacklogImpostor => "backlog-impostor guard",
+            Guard::RecursiveGrep => "recursive-grep guard",
+            Guard::TestRun => "test-run guard",
+            Guard::Effect => "effect guard",
+            Guard::RefusalStreak => "refusal-streak",
+            Guard::SpawnGate => "spawn gate",
+            Guard::GraphWrite => "graph-write-protect",
+            Guard::ConfigWrite => "claude-config-write-guard",
+            Guard::GeneratedWrite => "generated-write-guard",
+            Guard::Lead => "lead guard",
+            Guard::Law => "law",
+            Guard::JoinPartition => "join-partition guard",
+            Guard::SendMessage => "send-message guard",
+            Guard::SubagentWorktree => "subagent-worktree guard",
+        }
+    }
+
+    /// The `Way out:` and `Override:` lines.
+    fn contract(self) -> (&'static str, &'static str) {
+        match self {
+            Guard::BgProcess => ("give the command a bound: `timeout <secs> <cmd>`, or `bash scripts/lib/loadgen.sh start <label> <seconds>` for load.", PRESET_STRICT),
+            Guard::BinInstall => ("pin your build with `export FNO_AGENTS_FRONT=\"$PWD/crates/fno-agents/target/debug/fno-agents\"`; deploy with `fno doctor update`.", PRESET_STRICT),
+            Guard::GitProtection => ("push and merge through `fno do pr push` and `fno do pr merge`; the reason above names the form for this command.", PRESET_OFF),
+            Guard::BacklogImpostor => ("prefix the command: `fno backlog ...`.", PRESET_OFF),
+            Guard::RecursiveGrep => ("use `rg <pattern> <path>` or the harness Grep tool; both honor .gitignore.", PRESET_STRICT),
+            Guard::TestRun => ("run `fno doctor test <changed test files>`, or push and let CI run the suite.", "prefix `FNO_TEST_FULL=1` for a whole-suite run; this guard runs only under `guards.preset = \"strict\"`."),
+            Guard::Effect => ("retry the same call unchanged once its request is approved.", "when the reason names a request digest, approve it with `fno inbox approvals decide <digest> --as <principal> --approve`; a core-policy deny has no override."),
+            Guard::RefusalStreak => ("file the blocker (`fno backlog idea \"...\"`) or mail your lead, then move to other work.", "change the command, or wait 10 minutes for the streak to expire."),
+            Guard::SpawnGate => ("`fno agents admit status` shows the queue; the reason above names the remedy.", OWN_SHELL),
+            Guard::GraphWrite => ("change state through `fno backlog` or `fno do state`; they own these files.", OWN_SHELL),
+            Guard::ConfigWrite => ("write scratch in this session's job dir; the reason above names it.", OWN_SHELL),
+            Guard::GeneratedWrite => ("edit the source file the reason names, then run its regen command.", OWN_SHELL),
+            Guard::Lead => ("leave source edits to the session that owns the work; a lead writes plans, notes and mail.", "set `lead.implementation_guard = \"warn\"` (or `\"off\"`) in .fno/config.toml."),
+            Guard::Law => ("the rule above names what it wants instead.", "the person who owns the rule edits or retires it with `/fno:law`."),
+            Guard::JoinPartition => ("edit only the files your band owns; the reason above names the band.", "the join lead widens the band policy under `.fno/join-partition/`."),
+            Guard::SendMessage => ("send with `fno agents mail send <to> \"<message>\"`.", "SendMessage opens again by itself while fno mail is unhealthy."),
+            Guard::SubagentWorktree => ("use absolute paths: Read, Edit and Write take them, and git runs as `git -C <path> ...`.", "call EnterWorktree from the top-level session instead of the subagent."),
+        }
+    }
+}
+
+/// One guard's refusal: the guard and its own reason text.
 pub(crate) struct Refusal {
-    guard: &'static str,
+    guard: Guard,
     why: String,
 }
 
 impl Refusal {
-    pub(crate) fn new(guard: &'static str, why: impl Into<String>) -> Self {
+    pub(crate) fn new(guard: Guard, why: impl Into<String>) -> Self {
         Self {
             guard,
             why: why.into(),
@@ -126,24 +127,18 @@ impl Refusal {
     }
 
     pub(crate) fn guard(&self) -> &'static str {
-        self.guard
-    }
-
-    fn contract(&self) -> Option<&'static Contract> {
-        CONTRACTS.iter().find(|c| c.guard == self.guard)
+        self.guard.tag()
     }
 
     /// `[fno <guard>] <why>`, then the `Way out:` and `Override:` lines. A
     /// reason that already carries an `[fno ...]` tag keeps one tag.
     pub(crate) fn render(&self) -> String {
         let why = strip_tag(self.why.trim());
-        match self.contract() {
-            Some(c) => format!(
-                "[fno {}] {why}\nWay out: {}\nOverride: {}",
-                c.guard, c.way_out, c.override_hint
-            ),
-            None => format!("[fno {}] {why}", self.guard),
-        }
+        let (way_out, override_hint) = self.guard.contract();
+        format!(
+            "[fno {}] {why}\nWay out: {way_out}\nOverride: {override_hint}",
+            self.guard.tag()
+        )
     }
 }
 
@@ -157,7 +152,7 @@ fn strip_tag(why: &str) -> &str {
 }
 
 /// True when the calling harness shows a PreToolUse `ask` to a person who
-/// can answer it: a Claude session that is attended and is no fno worker.
+/// can answer it: a Claude session marked attended that is no fno worker.
 pub(crate) fn harness_asks() -> bool {
     asks_with(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
 }
@@ -174,10 +169,11 @@ fn asks_with(env: impl Fn(&str) -> Option<String>) -> bool {
     .any(|k| env(k).is_some());
     // The agy and pi guard host runs these guards with the wire's name set.
     let hosted = env("FNO_HOOK_HARNESS").is_some_and(|h| h != "claude");
-    env("CLAUDECODE").as_deref() == Some("1")
-        && !hosted
-        && env("CLAUDE_CODE_SESSION_ATTENDED").as_deref() != Some("0")
-        && !foreign
+    let claude = env("CLAUDECODE").as_deref() == Some("1") || env("CLAUDE_PLUGIN_ROOT").is_some();
+    // Attendance must be positive: a prompt nobody answers wedges a worker,
+    // while a deny only costs one retry.
+    let attended = env("CLAUDE_CODE_SESSION_ATTENDED").as_deref() == Some("1");
+    claude && attended && !hosted && !foreign
 }
 
 /// Print one PreToolUse answer for these refusals, notices riding along,
@@ -222,62 +218,24 @@ fn answer(reason: &str, ask: bool) -> serde_json::Value {
 mod tests {
     use super::*;
 
-    /// Every guard that stops a call renders its tag, a way out and an
-    /// override; an empty line in the table fails here, naming the guard.
+    /// Every guard renders one tag, a way out and an override, and only an
+    /// attended Claude session that is no fno worker gets `ask`.
     #[test]
-    fn every_guard_renders_tag_way_out_and_override() {
-        for c in CONTRACTS {
-            assert!(!c.way_out.trim().is_empty(), "{}: empty way_out", c.guard);
+    fn every_guard_renders_tag_way_out_and_override_and_only_attended_claude_asks() {
+        for g in Guard::ALL {
+            let (way_out, override_hint) = g.contract();
+            assert!(!way_out.trim().is_empty(), "{}: empty way out", g.tag());
             assert!(
-                !c.override_hint.trim().is_empty(),
-                "{}: empty override_hint",
-                c.guard
+                !override_hint.trim().is_empty(),
+                "{}: empty override",
+                g.tag()
             );
-            let text = Refusal::new(c.guard, format!("[fno {}] why it stopped", c.guard)).render();
-            assert!(
-                text.starts_with(&format!("[fno {}] why it stopped\n", c.guard)),
-                "{}: one tag, then the reason: {text}",
-                c.guard
-            );
-            assert!(text.contains("\nWay out: "), "{}: {text}", c.guard);
-            assert!(text.contains("\nOverride: "), "{}: {text}", c.guard);
-        }
-        // Every tag a guard passes is in the table.
-        let source = [
-            include_str!("pretooluse_bash.rs"),
-            include_str!("write_gate.rs"),
-            include_str!("lead_guard.rs"),
-            include_str!("rules.rs"),
-            include_str!("join_partition_guard.rs"),
-            include_str!("send_message_guard.rs"),
-            include_str!("subagent_worktree_guard.rs"),
-            include_str!("bg_process_guard.rs"),
-            include_str!("bin_install_guard.rs"),
-            include_str!("backlog_impostor.rs"),
-            include_str!("recursive_grep_guard.rs"),
-            include_str!("test_run_guard.rs"),
-            include_str!("git_protection/mod.rs"),
-            include_str!("../../gate/effect_gate.rs"),
-        ]
-        .concat();
-        let used = regex::Regex::new(r#"Refusal::new\(\s*"([^"]+)""#).unwrap();
-        for caps in used.captures_iter(&source) {
-            assert!(
-                CONTRACTS.iter().any(|c| c.guard == &caps[1]),
-                "{}: no contract row",
-                &caps[1]
-            );
-        }
-        // And every row names a guard some caller passes.
-        for c in CONTRACTS {
-            assert!(
-                source.contains(&format!("\"{}\"", c.guard)),
-                "{}: no caller",
-                c.guard
-            );
+            let text = Refusal::new(g, format!("[fno {}] why it stopped", g.tag())).render();
+            let head = format!("[fno {}] why it stopped\nWay out: ", g.tag());
+            assert!(text.starts_with(&head), "{}: {text}", g.tag());
+            assert!(text.contains("\nOverride: "), "{}: {text}", g.tag());
         }
 
-        // Only an attended Claude session that is no fno worker gets `ask`.
         let env = |pairs: &'static [(&'static str, &'static str)]| {
             move |k: &str| {
                 pairs
@@ -286,38 +244,38 @@ mod tests {
                     .map(|(_, v)| (*v).to_string())
             }
         };
-        assert!(asks_with(env(&[("CLAUDECODE", "1")])));
-        assert!(asks_with(env(&[
-            ("CLAUDECODE", "1"),
-            ("CLAUDE_CODE_SESSION_ATTENDED", "1")
-        ])));
+        const ATT: (&str, &str) = ("CLAUDE_CODE_SESSION_ATTENDED", "1");
+        assert!(asks_with(env(&[("CLAUDECODE", "1"), ATT])));
+        assert!(asks_with(env(&[("CLAUDE_PLUGIN_ROOT", "/p"), ATT])));
+        assert!(
+            !asks_with(env(&[("CLAUDECODE", "1")])),
+            "attendance unknown"
+        );
         assert!(!asks_with(env(&[
             ("CLAUDECODE", "1"),
             ("CLAUDE_CODE_SESSION_ATTENDED", "0")
         ])));
         assert!(!asks_with(env(&[
             ("CLAUDECODE", "1"),
+            ATT,
             ("FNO_AGENT_SELF", "w1")
         ])));
         assert!(!asks_with(env(&[
             ("CLAUDECODE", "1"),
+            ATT,
             ("CODEX_THREAD_ID", "t")
         ])));
-        assert!(!asks_with(env(&[("CODEX_THREAD_ID", "t")])));
         assert!(!asks_with(env(&[
-            ("CLAUDECODE", "1"),
+            ("CLAUDE_PLUGIN_ROOT", "/p"),
+            ATT,
             ("FNO_HOOK_HARNESS", "pi")
         ])));
-        assert!(!asks_with(env(&[])));
-        assert_eq!(
-            answer("r", true)["hookSpecificOutput"]["permissionDecision"],
-            "ask"
-        );
-        assert!(answer("r", true).get("decision").is_none());
-        assert_eq!(
-            answer("r", false)["hookSpecificOutput"]["permissionDecision"],
-            "deny"
-        );
-        assert_eq!(answer("r", false)["decision"], "block");
+        assert!(!asks_with(env(&[ATT])));
+        let ask = answer("r", true);
+        assert_eq!(ask["hookSpecificOutput"]["permissionDecision"], "ask");
+        assert!(ask.get("decision").is_none());
+        let deny = answer("r", false);
+        assert_eq!(deny["hookSpecificOutput"]["permissionDecision"], "deny");
+        assert_eq!(deny["decision"], "block");
     }
 }

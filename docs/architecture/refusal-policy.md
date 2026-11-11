@@ -60,9 +60,9 @@ Way out: <the safe form of the same intent>
 Override: <how the person runs it anyway>
 ```
 
-The contract table in `crates/fno-agents/src/runtime/hook/refusal.rs` holds the two last lines for each guard. A guard with no row fails the render test.
+`Guard::contract` in `crates/fno-agents/src/runtime/hook/refusal.rs` holds the two last lines for each guard. Its match is exhaustive, so a guard without both lines does not compile.
 
-fno owns no permission layer, so the harness decides how a stop lands. On a Claude session that a person attends, a stop returns `ask`. The harness prompt is then the person's key to run the call once. Everywhere else the same text returns `deny`. Codex parses `ask` but runs the call anyway. An unattended worker (`CLAUDE_CODE_SESSION_ATTENDED=0` or `FNO_AGENT_SELF` set) has nobody to answer a prompt, and the agy and pi guard host has none to show. A call that got `ask` and then ran writes a `guard_decision` row with decision `override`. A guard with many overrides is in the way.
+fno owns no permission layer, so the harness decides how a stop lands. On a Claude session marked attended (`CLAUDE_CODE_SESSION_ATTENDED=1`), a stop returns `ask`. The harness prompt is then the person's key to run the call once. Everywhere else the same text returns `deny`. Codex parses `ask` but runs the call anyway. A worker (`FNO_AGENT_SELF` set, or no attended mark) has nobody to answer a prompt, and the agy and pi guard host has none to show. A call that got `ask` and then ran writes a `guard_decision` row with decision `override`. A guard with many overrides is in the way.
 
 ## Adding a guard
 
