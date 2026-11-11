@@ -396,9 +396,10 @@ pub(crate) fn read_queue(
     })
 }
 
-/// The recipient witness over one queue read: the bus loads once, on the
-/// first recent turn, and each turn the witness flags is recorded once in
-/// the capture dir.
+/// The recipient witness over one queue read: the live bus segment loads
+/// once, on the first recent turn (a rotation is about a week old, past the
+/// witness window), and each turn the witness flags is recorded once in the
+/// capture dir.
 struct TurnWitness<'a> {
     session: &'a str,
     store: PathBuf,
@@ -422,7 +423,7 @@ impl<'a> TurnWitness<'a> {
         };
         let bus = self.bus.get_or_insert_with(|| {
             crate::mail_paths::state_bus_dir_opt()
-                .map(|dir| crate::provenance::BusIndex::load(&dir.join("messages.jsonl")))
+                .map(|dir| crate::provenance::BusIndex::load_segments(&dir.join("messages.jsonl"), 1))
                 .unwrap_or_else(crate::provenance::BusIndex::empty)
         });
         let at_ms = (ts * 1000.0) as i64;

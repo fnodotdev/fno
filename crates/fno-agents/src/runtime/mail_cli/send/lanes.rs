@@ -1285,12 +1285,12 @@ pub(super) fn job_lane_send(
     let provider = job.harness.clone().unwrap_or_else(|| "claude".to_string());
     let mut reasons: Vec<String> = Vec::new();
     // A job holder's claude lane is control.sock, which parks on a new line,
-    // so it gets the one-line turn a running session absorbs.
+    // so the child types the one-line turn a running session absorbs.
     let state = if provider == "codex" {
         mail_inject_codex(&session_id, wrapped, Some(&mut reasons), None)
     } else {
-        let line = turn.render(fno_mail::turn::NewlineRule::OneLine);
-        mail_inject_claude(&session_id, &line, Some(&mut reasons), None, true)
+        // `--steer`: the child types the whole turn as one line.
+        mail_inject_claude(&session_id, wrapped, Some(&mut reasons), None, true)
     };
     crate::mail_receipt::record(&msg_id, &state, &sender, &recipient);
     let injected = state.reached();

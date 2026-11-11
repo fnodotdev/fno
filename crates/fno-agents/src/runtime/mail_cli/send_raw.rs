@@ -178,6 +178,10 @@ fn raw_send(
             "payload is just a bare marker; nothing to invoke",
         );
     }
+    const COMMAND_ONLY: &str = "raw is for running a command only: the payload must start with / or $. Drop --raw and send the message wrapped.";
+    if !stripped.starts_with('/') && !stripped.starts_with('$') {
+        return refused(check, true, COMMAND_ONLY);
+    }
     // The newline check reads the UNSTRIPPED payload: leading whitespace on a
     // second line survives trim on line one, and the refusal is about what
     // rides in as trailing content on the same submitted turn.
@@ -188,12 +192,9 @@ fn raw_send(
             "payload must be a single line (a second line rides in as trailing content on the same submitted turn)",
         );
     }
+    // A command names itself: `/ compact` or `$5` is prose behind a marker.
     if fno_mail::turn::RawCommand::parse(stripped).is_err() {
-        return refused(
-            check,
-            true,
-            "raw is for running a command only: the payload must be one /command or $verb. Drop --raw and send the message wrapped.",
-        );
+        return refused(check, true, COMMAND_ONLY);
     }
     if let Some(code) = enforce_body_cap(stripped, check) {
         return code;

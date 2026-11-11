@@ -245,18 +245,6 @@ mod tests {
     }
 
     #[test]
-    fn compose_puts_a_real_new_line_between_header_and_body() {
-        let turn = TurnText::compose(&header(), "line one\nline two");
-        assert_eq!(turn.as_str(), "`@zenobia · fmail-1a2b`\nline one\nline two");
-        let plain =
-            TurnHeader::new(HeaderForm::Plain, "zenobia", "fmail-1a2b", Some("ping")).unwrap();
-        assert_eq!(
-            TurnText::compose(&plain, "").as_str(),
-            "`zenobia · fmail-1a2b · ping`"
-        );
-    }
-
-    #[test]
     fn pane_turn_types_ctrl_j_between_header_and_body() {
         let typed =
             TurnText::compose(&header(), "one\r\ntwo\n\n").render(NewlineRule::NonSubmittingKey);
@@ -280,7 +268,12 @@ mod tests {
     #[test]
     fn a_stored_turn_parses_back_and_a_bare_body_does_not() {
         let turn = TurnText::compose(&header(), "line one\nline two");
+        assert_eq!(turn.as_str(), "`@zenobia · fmail-1a2b`\nline one\nline two");
         assert_eq!(TurnText::parse(turn.as_str()), Ok(turn));
+        let plain = TurnHeader::new(HeaderForm::Plain, "zenobia", "fmail-1a2b", Some("ping")).unwrap();
+        let header_only = TurnText::compose(&plain, "");
+        assert_eq!(header_only.as_str(), "`zenobia · fmail-1a2b · ping`");
+        assert_eq!(TurnText::parse(header_only.as_str()), Ok(header_only));
         for stored in [
             "just a body",
             "`@zenobia`\nbody",

@@ -1158,10 +1158,13 @@ impl Lane for ClaudeSwitchboardLane<'_> {
             }
             Some(recipient) => mail_inject_claude(
                 &recipient,
-                &turn.render(self.newline_rule()),
+                // The child's framing guards read the header line, so the
+                // turn crosses whole; `--steer` makes the child type it as
+                // this lane's one line.
+                turn.as_str(),
                 Some(reason_out),
                 Some(t.harness.as_str()),
-                true,
+                self.newline_rule() == NewlineRule::OneLine,
             ),
         }
     }
@@ -1237,8 +1240,10 @@ pub(super) fn queue_durable_fallback(
         "subject": subject,
     });
     let registry_path = AgentsHome::shared_registry_json();
+    // A refused render refuses the durable copy too: the drain would type
+    // the bare body, header-less, the same as the live lane would have.
     let durable_body = crate::mail_envelope::render_at(&input, &registry_path)
-        .unwrap_or_else(|_| message.to_string());
+        .map_err(|why| (format!("error: {why}"), 2))?;
     let words = crate::backlog::style_check::word_count(message) as i64;
     let write = write_durable_thread(
         &durable_recipient,
