@@ -244,6 +244,14 @@ fn the_daemon_probe_tells_gui_born_from_ssh_and_job_born() {
         daemon_is_gui_born("claude daemon run XPC_SERVICE_NAME=application.com.x.1 HOME=/h")
             .is_ok()
     );
+    // AC5: a plain terminal app birth reads the stub service name `0` and
+    // inherits the user's gui bootstrap; it is healthy and must pass.
+    assert!(daemon_is_gui_born(
+        "claude daemon run XPC_SERVICE_NAME=0 __CFBundleIdentifier=com.mitchellh.ghostty"
+    )
+    .is_ok());
+    assert!(daemon_is_gui_born("claude daemon run XPC_SERVICE_NAME=0").is_ok());
+    // AC6: the ssh birth keeps its marker and still refuses.
     assert!(
         daemon_is_gui_born("claude daemon run SSH_CONNECTION=1.2.3.4 XPC_SERVICE_NAME=0").is_err()
     );
