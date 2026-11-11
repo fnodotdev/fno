@@ -6949,6 +6949,51 @@ async fn attach_and_run(
                         break Err(format!("draw: {e}"));
                     }
                 }
+                Ok(ServerMsg::AnchorJumped { pane_id, jumped }) => {
+                    // The exchange picker's jump verdict. The pending jump
+                    // (session id, pane, ts) filters the reply to the pane
+                    // it named; anything else is dropped. A miss never
+                    // jumps: the notice says why and the session transcript
+                    // (the peek overlay) opens instead - the transcript is
+                    // the anchor that never goes stale.
+                    let pending = view
+                        .messages_board
+                        .as_ref()
+                        .and_then(|b| b.pending_jump.as_ref())
+                        .map(|(sid, pane, _)| (sid.clone(), *pane));
+                    if let Some((sid, pane)) = pending.filter(|(_, p)| *p == pane_id) {
+                        if let Some(b) = view.messages_board.as_mut() {
+                            b.pending_jump = None;
+                        }
+                        if !jumped {
+                            let notice = format!(
+                                "the pane no longer holds that turn - opened the session transcript"
+                            );
+                            view.set_notice(notice);
+                            let idx = view
+                                .display_rows()
+                                .iter()
+                                .position(|r| matches!(
+                                    r,
+                                    DisplayRow::Agent(a)
+                                        if a.harness_session_id.as_deref() == Some(sid.as_str())
+                                ));
+                            if let Some(idx) = idx {
+                                let name = view.layout.agents
+                                    .iter()
+                                    .find(|a| {
+                                        a.harness_session_id.as_deref() == Some(sid.as_str())
+                                    })
+                                    .map(|a| a.name.clone())
+                                    .unwrap_or_else(|| sid.get(..8).unwrap_or(&sid).to_string());
+                                view.open_peek(idx, name);
+                            }
+                        }
+                        if let Err(e) = compositor.draw(&view.compose()) {
+                            break Err(format!("draw: {e}"));
+                        }
+                    }
+                }
                 Ok(ServerMsg::PeekBody { seq, lines, .. }) => {
                     // the seq guard (AC1-FR) drops a superseded body so
                     // B's header never shows A's transcript. `name` is a wire

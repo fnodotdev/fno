@@ -6,6 +6,7 @@
 //! (`Agents  Messages`) is the sideline's, not this module's.
 
 mod asks_topics;
+mod exchanges;
 use super::*;
 use crate::messages_model::MessagesSnapshot;
 use crate::text_style::{TLine, TSeg, TextStyle};
@@ -381,6 +382,12 @@ pub(crate) struct MessagesBoard {
     /// The read marks, loaded once per open and kept in step with each
     /// save, so no paint reads the marks file.
     marks: RefCell<Option<Rc<BTreeMap<String, String>>>>,
+    /// (v127) The exchange picker overlay; `Some` owns the keyboard.
+    pub(crate) picker: Option<exchanges::ExchangePicker>,
+    /// (v127) The picker's jump in flight: `(session id, pane, ts_ms)`.
+    /// The `AnchorJumped` reply resolves it; a reply naming another pane is
+    /// dropped.
+    pub(crate) pending_jump: Option<(String, u64, u64)>,
 }
 
 /// The memo behind [`MessagesBoard::tree_rows`] and
@@ -424,6 +431,8 @@ impl MessagesBoard {
             esc: Vec::new(),
             derived: RefCell::new(Derived::default()),
             marks: RefCell::new(None),
+            picker: None,
+            pending_jump: None,
         }
     }
 
@@ -1163,9 +1172,9 @@ impl MessagesBoard {
         };
         if sel == "asks" {
             let (label, hint): (String, &str) = match &self.asks_view {
-                AsksView::Flat => ("You".to_string(), "  [t topics]"),
-                AsksView::Topics => ("You by topic".to_string(), "  [t]  ..."),
-                AsksView::Topic(name) => (format!("You \u{b7} {name}"), "  [t]"),
+                AsksView::Flat => ("You".to_string(), "  [t topics]  [x exchanges]"),
+                AsksView::Topics => ("You by topic".to_string(), "  [t]  [x exchanges]"),
+                AsksView::Topic(name) => (format!("You \u{b7} {name}"), "  [t]  [x exchanges]"),
             };
             return TLine::of(&[seg(label, TextStyle::Title), seg(hint, TextStyle::Meta)]);
         }
@@ -1229,6 +1238,9 @@ impl MessagesBoard {
     /// padding).
     pub(crate) fn thread_lines(&self, w: usize) -> (Vec<TLine>, Vec<Option<usize>>) {
         let title = self.thread_title();
+        if self.picker.is_some() {
+            return exchanges::picker_lines(self, w);
+        }
         if self.sel_thread.as_deref() == Some("asks") {
             return self.asks_lines(w);
         }
@@ -1980,6 +1992,9 @@ pub(crate) async fn keys(
         }
         return Ok(StdinFlow::Continue);
     }
+    if b.picker.is_some() {
+        return exchanges::picker_keys(view, bytes, sock).await;
+    }
     let tokens = if bytes == [27] && b.esc.is_empty() {
         vec![ModalKey::Esc]
     } else {
@@ -2060,6 +2075,10 @@ pub(crate) async fn keys(
                 };
                 b.cursors[2] = 0;
             }
+            // [x] opens the exchange picker: one row per typed ask with the
+            // agent's reply, unread dot on unseen answers, enter jumps to
+            // the pane row where the prompt echoed (v127).
+            ModalKey::Byte(b'x') => b.open_picker(),
             ModalKey::Byte(b'\t') => {
                 // In the chats column Tab cycles the tab; elsewhere it
                 // steps the column.
