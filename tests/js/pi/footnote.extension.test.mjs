@@ -606,6 +606,9 @@ const hasPi = (() => {
 })()
 
 test("a real pi host fires session_start producers and prompt carriers through the extension", { skip: !hasPi }, async () => {
+  // Bun's node:test shim ignores the skip option object, so the guard runs
+  // in the body too: without it, a pi-less runner dies at the spawn itself.
+  if (!hasPi) return
   const { spawn } = await import("node:child_process")
   const dir = mkdtempSync(join(tmpdir(), "fno-pi-real-"))
   const captureDir = join(dir, "capture")
