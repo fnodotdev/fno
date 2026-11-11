@@ -46,6 +46,7 @@ const TYPES: &[&str] = &[
 
 /// String fields that ship when the row carries them, one identifier each.
 const STRING_FIELDS: &[&str] = &[
+    "command",
     "harness",
     "model",
     "spawned_by_harness",
