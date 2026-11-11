@@ -131,11 +131,11 @@ fn switches_default_by_kind_persist_and_an_unknown_pack_exits_2() {
     let installed = loaded.packs.first().expect("one pack");
     assert!(installed.enabled("table", false));
     assert!(!installed.enabled("tool", true), "code starts off");
-    assert!(!registry.to_json()["packs"]
-        .get(0)
+    assert!(!registry
+        .to_json()
+        .pointer("/packs/0")
+        .and_then(serde_json::Value::as_object)
         .expect("one pack")
-        .as_object()
-        .unwrap()
         .contains_key("toggles"));
 
     let args = |a: &[&str]| -> Vec<String> {
