@@ -27,11 +27,11 @@ The `codesign -s -` step gives the binary an ad-hoc signature. No developer acco
 | `--font-size <pt>` | `13` | The terminal font size. |
 | `--probe` | off | Attach with no window, print two lines, and exit. |
 
-`--probe` attaches as an observer, so it never resizes a pane. It waits up to 5 seconds for the layout and one frame per pane. Then it prints `attached session=<s> panes=<n> frames=<m>`. Next it reads the fleet, the open questions and the backlog the way the window does, and prints `agents=<n> questions=<m> seats=<k>`. It exits 0 when the attach succeeded. With no server it prints the socket path it tried and exits 1. A failed fleet or question read prints its reason on stderr.
+`--probe` attaches as an observer, so it never resizes a pane. It waits up to 5 seconds for the layout and one frame per pane. Then it prints `attached session=<s> panes=<n> frames=<m>`. Next it reads the fleet, the open questions and the backlog the way the window does, and prints `agents=<n> questions=<m> seats=<k>`. After a good attach it exits 0. With no server it prints the socket path it tried and exits 1. A failed fleet or question read prints its reason on stderr.
 
 ## The window
 
-The left pane has four sections. Agents come in the order the TUI sideline uses. A click focuses the agent's pane, or opens a paneless agent in portal 0. Sessions are the mux squads; a click switches to one. Questions are the open questions that wait on you, newest first. Machines are the fleet's hosts with their seat counts. A section whose read failed shows the error above its last good rows. The fleet and the questions refresh every 10 seconds.
+The left pane has four sections. Agents come in the order the TUI sideline uses. A click focuses the agent's pane, or opens a paneless agent in portal 0. Sessions are the mux squads. A click switches to one. Questions are the open questions that wait on you, newest first. Machines are the fleet's hosts with their seat counts. A section whose read failed shows the error above its last good rows. The fleet and the questions refresh every 10 seconds.
 
 The strip above the grid shows the active session's tabs. A click selects a tab.
 
@@ -53,7 +53,7 @@ Keys go to the focused pane as a terminal sends them. The mux prefix key passes 
 | cmd-1 / cmd-2 | Terminal / orchestration board |
 | cmd-q | Detach and quit |
 
-Typed text goes through the macOS input system, so dead keys, option-compose and IME input work. Option on a letter types the composed character, as in Terminal.app; option on an arrow or backspace still sends the meta form.
+Typed text goes through the macOS input system, so dead keys, option-compose and IME input work. Option on a letter types the composed character, as in Terminal.app. Option on an arrow or backspace still sends the meta form.
 
 ## Mouse
 
