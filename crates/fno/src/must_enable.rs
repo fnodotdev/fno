@@ -64,6 +64,100 @@ pub(crate) struct List {
     corpus: Vec<String>,
 }
 
+/// Why the list would not load, or a harness file would not read.
+#[derive(Debug)]
+pub(crate) enum MustEnableError {
+    Table(String),
+    FilterA { rule: String, hit: &'static str },
+    Never { rule: String, hit: &'static str },
+    NoWitness(String),
+    Unreadable(String),
+    NotObject(PathBuf),
+    NotPlainJson(PathBuf),
+}
+
+impl std::fmt::Display for MustEnableError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Table(e) => write!(f, "must_enable.toml: {e}"),
+            Self::FilterA { rule, hit } => write!(f, "filter A refuses rule `{rule}`: it reaches `{hit}`, which runs any code"),
+            Self::Never { rule, hit } => write!(f, "the never-list refuses rule `{rule}`: it reaches `{hit}`"),
+            Self::NoWitness(rule) => write!(f, "rule `{rule}` has no corpus command it allows; add one"),
+            Self::Unreadable(e) => f.write_str(e),
+            Self::NotObject(p) => write!(f, "{} is not a JSON object; left unchanged", p.display()),
+            Self::NotPlainJson(p) => write!(f, "{} holds comments or is not plain JSON; fno will not rewrite it. Add the rules by hand", p.display()),
+        }
+    }
+}
+
+/// The parts of a Claude settings file these rules read, one struct per
+/// key so a strange `hooks` shape never hides the allow list.
+#[derive(Deserialize)]
+struct ClaudePermsRead {
+    #[serde(default)]
+    permissions: ClaudePerms,
+}
+
+#[derive(Deserialize)]
+struct ClaudeHooksRead {
+    #[serde(default)]
+    hooks: ClaudeHooks,
+}
+
+#[derive(Deserialize, Default)]
+struct ClaudePerms {
+    #[serde(default)]
+    allow: Vec<Value>,
+}
+
+#[derive(Deserialize, Default)]
+struct ClaudeHooks {
+    #[serde(default, rename = "PreToolUse")]
+    pre_tool_use: Vec<HookGroup>,
+}
+
+#[derive(Deserialize)]
+struct HookGroup {
+    #[serde(default)]
+    hooks: Vec<HookCmd>,
+}
+
+#[derive(Deserialize)]
+struct HookCmd {
+    #[serde(default)]
+    command: String,
+}
+
+/// The parts of an opencode config these rules read: v1 `permission.bash`
+/// and v2 `permissions` rows.
+#[derive(Deserialize, Default)]
+struct OpencodeRead {
+    #[serde(default)]
+    permission: Value,
+    #[serde(default)]
+    permissions: Value,
+}
+
+#[derive(Deserialize, Default)]
+struct OpencodeV1 {
+    #[serde(default)]
+    bash: Map<String, Value>,
+}
+
+#[derive(Deserialize)]
+struct OpencodeV2 {
+    #[serde(default)]
+    action: String,
+    #[serde(default)]
+    resource: String,
+    #[serde(default)]
+    effect: String,
+}
+
+fn typed<T: serde::de::DeserializeOwned>(d: Map<String, Value>) -> Result<T, MustEnableError> {
+    serde_json::from_value(Value::Object(d)).map_err(|e| MustEnableError::Unreadable(e.to_string()))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Harness {
     Claude,
@@ -140,29 +234,23 @@ fn starts_with(words: &[&str], prefix: &[String]) -> bool {
     words.len() >= prefix.len() && prefix.iter().zip(words).all(|(p, w)| p == w)
 }
 
-pub(crate) fn load(text: &str) -> Result<List, String> {
-    let table: Table = toml::from_str(text).map_err(|e| format!("must_enable.toml: {e}"))?;
+pub(crate) fn load(text: &str) -> Result<List, MustEnableError> {
+    let table: Table = toml::from_str(text).map_err(|e| MustEnableError::Table(e.to_string()))?;
     let corpus = table.corpus;
     for row in &table.rule {
         for words in expand(&row.prefix) {
             let rule = words.join(" ");
-            if let Some(hit) = FILTER_A.iter().find(|f| overlaps(&words, f)) {
-                return Err(format!(
-                    "filter A refuses rule `{rule}`: it reaches `{hit}`, which runs any code"
-                ));
+            if let Some(&hit) = FILTER_A.iter().find(|f| overlaps(&words, f)) {
+                return Err(MustEnableError::FilterA { rule, hit });
             }
-            if let Some(hit) = NEVER.iter().find(|f| overlaps(&words, f)) {
-                return Err(format!(
-                    "the never-list refuses rule `{rule}`: it reaches `{hit}`"
-                ));
+            if let Some(&hit) = NEVER.iter().find(|f| overlaps(&words, f)) {
+                return Err(MustEnableError::Never { rule, hit });
             }
             let witnessed = corpus
                 .iter()
                 .any(|c| segments(c).iter().any(|seg| starts_with(seg, &words)));
             if !witnessed {
-                return Err(format!(
-                    "rule `{rule}` has no corpus command it allows; add one"
-                ));
+                return Err(MustEnableError::NoWitness(rule));
             }
         }
     }
@@ -384,7 +472,7 @@ fn opencode_major() -> Option<u32> {
 fn install_opencode(list: &List, path: &Path, major: fn() -> Option<u32>) -> Outcome {
     let mut data = match read_opencode(path) {
         Ok(d) => d,
-        Err(e) => return Outcome::Refused(e),
+        Err(e) => return Outcome::Refused(e.to_string()),
     };
     let v2 = data.contains_key("permissions")
         || (!data.contains_key("permission") && major().is_some_and(|m| m >= 2));
@@ -437,20 +525,41 @@ fn install_opencode(list: &List, path: &Path, major: fn() -> Option<u32>) -> Out
 
 /// An absent file reads as empty. A file with comments or trailing commas
 /// is refused rather than rewritten without them.
-fn read_opencode(path: &Path) -> Result<Map<String, Value>, String> {
+fn read_opencode(path: &Path) -> Result<Map<String, Value>, MustEnableError> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Map::new()),
-        Err(e) => return Err(format!("{} could not be read ({e})", path.display())),
+        Err(e) => {
+            return Err(MustEnableError::Unreadable(format!(
+                "{} could not be read ({e})",
+                path.display()
+            )))
+        }
     };
     match serde_json::from_str::<Value>(&text) {
         Ok(Value::Object(m)) => Ok(m),
-        Ok(_) => Err(format!("{} is not a JSON object; left unchanged", path.display())),
-        Err(_) => Err(format!(
-            "{} holds comments or is not plain JSON; fno will not rewrite it. Add the rules by hand",
-            path.display()
-        )),
+        Ok(_) => Err(MustEnableError::NotObject(path.to_path_buf())),
+        Err(_) => Err(MustEnableError::NotPlainJson(path.to_path_buf())),
     }
+}
+
+/// The fno rule keys an opencode config already allows, in either syntax.
+fn opencode_allowed(d: Map<String, Value>) -> Result<Vec<String>, MustEnableError> {
+    let read: OpencodeRead = typed(d)?;
+    let v1: OpencodeV1 = serde_json::from_value(read.permission).unwrap_or_default();
+    let v2: Vec<OpencodeV2> = serde_json::from_value(read.permissions).unwrap_or_default();
+    let mut keys: Vec<String> = v1
+        .bash
+        .into_iter()
+        .filter(|(_, v)| v == "allow")
+        .map(|(k, _)| k)
+        .collect();
+    keys.extend(
+        v2.into_iter()
+            .filter(|r| r.action == "shell" && r.effect == "allow")
+            .map(|r| r.resource),
+    );
+    Ok(keys)
 }
 
 // ---------------------------------------------------------------------------
@@ -470,18 +579,16 @@ pub(crate) fn status(h: Harness, list: &List, path: Option<&Path>) -> Value {
         return json!({"harness": name, "status": status});
     };
     let shown = path.display().to_string();
-    let present: Result<(Vec<String>, Vec<String>), String> = match h {
-        Harness::Claude => crate::cli_hooks::load_settings(path).map(|d| {
-            let allow = d
-                .get("permissions")
-                .and_then(|p| p.get("allow"))
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            split(list.claude(), |r| {
-                allow.iter().any(|v| v.as_str() == Some(r))
-            })
-        }),
+    let present: Result<(Vec<String>, Vec<String>), MustEnableError> = match h {
+        Harness::Claude => crate::cli_hooks::load_settings(path)
+            .map_err(MustEnableError::Unreadable)
+            .and_then(typed::<ClaudePermsRead>)
+            .map(|d| {
+                let allow = d.permissions.allow;
+                split(list.claude(), |r| {
+                    allow.iter().any(|v| v.as_str() == Some(r))
+                })
+            }),
         Harness::Codex => match std::fs::read_to_string(path) {
             Ok(have) if have == list.codex() => Ok((vec!["fno.rules".into()], vec![])),
             Ok(_) => {
@@ -489,22 +596,14 @@ pub(crate) fn status(h: Harness, list: &List, path: Option<&Path>) -> Value {
             }
             Err(_) => Ok((vec![], vec!["fno.rules".into()])),
         },
-        Harness::Opencode => read_opencode(path).map(|d| {
-            let v1 = d.get("permission").and_then(|p| p.get("bash"));
-            let v2 = d.get("permissions").and_then(Value::as_array);
-            split(list.opencode_v1(), |k| {
-                v1.and_then(|b| b.get(k)).and_then(Value::as_str) == Some("allow")
-                    || v2.is_some_and(|rows| {
-                        rows.iter()
-                            .any(|r| r["resource"].as_str() == Some(k) && r["effect"] == "allow")
-                    })
-            })
-        }),
+        Harness::Opencode => read_opencode(path)
+            .and_then(opencode_allowed)
+            .map(|keys| split(list.opencode_v1(), |k| keys.iter().any(|have| have == k))),
         Harness::Pi | Harness::Agy => unreachable!("no target path"),
     };
     match present {
         Err(detail) => {
-            json!({"harness": name, "status": "unknown", "path": shown, "detail": detail})
+            json!({"harness": name, "status": "unknown", "path": shown, "detail": detail.to_string()})
         }
         Ok((have, missing)) => {
             let status = match (have.is_empty(), missing.is_empty()) {
@@ -563,19 +662,15 @@ pub(crate) fn claude_rewrites_through_rtk(path: &Path) -> bool {
     let Ok(d) = crate::cli_hooks::load_settings(path) else {
         return false;
     };
-    d.get("hooks")
-        .and_then(|h| h.get("PreToolUse"))
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .flat_map(|g| {
-            g.get("hooks")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-        })
-        .filter_map(|h| h.get("command").and_then(Value::as_str))
-        .any(|c| {
+    let Ok(read) = typed::<ClaudeHooksRead>(d) else {
+        return false;
+    };
+    read.hooks
+        .pre_tool_use
+        .iter()
+        .flat_map(|g| &g.hooks)
+        .any(|h| {
+            let c = &h.command;
             c.split(|ch: char| !ch.is_ascii_alphanumeric())
                 .any(|w| w == "rtk")
         })
@@ -660,7 +755,7 @@ mod tests {
             let err = load(&text)
                 .err()
                 .unwrap_or_else(|| panic!("{prefix} loaded"));
-            assert!(err.contains(word), "{prefix}: {err}");
+            assert!(err.to_string().contains(word), "{prefix}: {err}");
         }
     }
 
