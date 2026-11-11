@@ -547,11 +547,11 @@ pub(crate) struct GateVerdict {
     /// (`own`), or the body opens with a `control:` directive line
     /// (`control`).
     pub pass: Option<&'static str>,
-    /// The C16 receipt naming when the hold ends. `None` for a hand-stamped
-    /// hold with no clock, where the Python caller keeps its existing text.
+    /// The C16 receipt naming when the hold ends. `None` for a mail-only
+    /// row, which has no end, and when delivering.
     pub receipt: Option<String>,
-    /// The live clock's `until`, for the verdict JSON. `None` when untimed
-    /// or delivering.
+    /// The live hold's `until`. `None` for a mail-only row or when
+    /// delivering.
     pub until: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -712,9 +712,9 @@ pub(crate) fn gate_parked_line(
     if body.trim().is_empty() || typable {
         return None;
     }
-    // The receipt promises a run-when, so a hold with no deadline never
-    // parks: a hand-stamped hold (until: null or no clock) never lapses, the
-    // runner would sit on the payload to its 24 h bound, and the raw lane's
+    // The receipt promises a run-when, so a held shape with no deadline never
+    // parks: a mail-only row never takes typed text at all, the runner
+    // would sit on the payload to its 24 h bound, and the raw lane's
     // documented answer for that case is the non-zero refusal. A
     // control-prefixed body carries a deliver verdict with no until and
     // parks as typed text, so only the held-and-undated shape refuses.
@@ -744,7 +744,7 @@ fn process_alive(pid: i32) -> bool {
 }
 
 /// The park receipt, on the gate's time rule: a wall or grace clock names
-/// its local hour, a conversation or hand-stamped hold just says held.
+/// its local hour, a conversation hold just says held.
 fn park_receipt(session_id: &str, payload_first_line: &str, name: &str) -> String {
     let now = chrono::Utc::now();
     let verdict = gate(session_id, None, now);
@@ -856,8 +856,8 @@ const RUN_PARKED_POLL_S: u64 = 5;
 /// runner retries at doubling intervals up to this cap until its bound.
 const RUN_PARKED_STALL_BACKOFF_CAP_S: u64 = 600;
 
-/// The runner's absolute ceiling: a hold can legitimately last hours (a
-/// hand-stamped one may never lapse), so the runner keeps polling until its
+/// The runner's absolute ceiling: a hold can legitimately last hours (up to
+/// the hold ceiling), so the runner keeps polling until its
 /// files drain, its session's row vanishes, or this bound fires.
 const RUN_PARKED_BOUND_S: u64 = 24 * 3600;
 

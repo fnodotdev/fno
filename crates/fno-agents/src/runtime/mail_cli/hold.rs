@@ -148,7 +148,9 @@ pub fn run_hold(args: &[String]) -> i32 {
             );
             return 2;
         }
-        Some(window) => chrono::Duration::minutes(window),
+        // The clamp keeps a huge ask from overflowing the duration; the
+        // record caps it at the ceiling anyway.
+        Some(window) => chrono::Duration::minutes(window.min(7 * 24 * 60)),
         None if on => max_hold(),
         None => {
             eprintln!("{HOLD_USAGE}");

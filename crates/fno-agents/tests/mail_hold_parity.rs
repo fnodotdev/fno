@@ -202,7 +202,8 @@ fn apply_setup(root: &Path, setup: &Setup) {
             std::fs::write(dir.join("messages.jsonl"), BUS_LOG).unwrap();
         }
         Setup::Clock => {
-            let dir = root.join("mail-hold");
+            // The hold store reads only the state layout's own dir.
+            let dir = root.join("db/mail/mail-hold");
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join(format!("{SID}.json")), CLOCK_FILE).unwrap();
         }

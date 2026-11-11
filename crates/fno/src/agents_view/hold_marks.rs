@@ -32,21 +32,28 @@ fn hold_dir() -> PathBuf {
 }
 
 pub(crate) fn overlay_hold_marks_at(rows: &mut [RegistryAgent], hold_dir: &Path) {
-    let store = HoldStore::new(hold_dir);
     let now = chrono::Utc::now();
+    // One directory read per render, never one file per row. `list`, not
+    // `live`: a render never removes a record.
+    let live: std::collections::HashMap<SessionId, SetBy> = HoldStore::new(hold_dir)
+        .list()
+        .into_iter()
+        .filter(|h| h.live(now))
+        .map(|h| (h.session().clone(), h.set_by()))
+        .collect();
+    if live.is_empty() {
+        return;
+    }
     for row in rows.iter_mut() {
-        let Some(session) = row
+        let Some(set_by) = row
             .harness_session_id
             .as_deref()
             .and_then(|sid| SessionId::parse(sid).ok())
+            .and_then(|session| live.get(&session))
         else {
             continue;
         };
-        // `get`, not `live`: a render never removes a record.
-        let Some(hold) = store.get(&session).filter(|h| h.live(now)) else {
-            continue;
-        };
         row.dnd = true;
-        row.held_conversation = hold.set_by() == SetBy::Conversation;
+        row.held_conversation = *set_by == SetBy::Conversation;
     }
 }
