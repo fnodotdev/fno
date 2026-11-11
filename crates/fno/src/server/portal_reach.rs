@@ -850,7 +850,7 @@ impl Core {
         let mut serve_env: Vec<(String, String)> = Vec::new();
         let argv = match (link, tier, seat) {
             (Some(argv), _, _) => argv,
-            (None, Reach::Drive) => {
+            (None, Reach::Drive, _) => {
                 let id = row.attach_id.clone().expect("Drive implies attach_id");
                 // The Drive argv is the canonical re-entry plan for a
                 // claude row. `None` means the plan is resolving off-loop; the
@@ -881,7 +881,7 @@ impl Core {
             (None, Reach::Locate, serve_attach::ServeSeat::Honest(truth)) => {
                 locate_argv_with(&row, Some(truth.why.as_str()), &truth.facts)
             }
-            (None, Reach::Follow) => peek_argv(&row.name),
+            (None, Reach::Follow, _) => peek_argv(&row.name),
             (None, Reach::Locate, serve_attach::ServeSeat::Outside) => locate_argv(&row),
         };
         let mechanism = match serve_env.is_empty() {

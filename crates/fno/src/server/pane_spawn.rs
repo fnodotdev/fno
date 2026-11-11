@@ -95,6 +95,7 @@ pub(crate) fn walk_shell_candidates(
             out_tx.clone(),
             exit_tx.clone(),
             permit,
+            &[],
         ) {
             Ok((shell, ring)) => {
                 return Ok(ShellWalk::Kept {

@@ -141,6 +141,10 @@ fn basic_auth(user: &str, password: &str) -> String {
 /// subprocess: `opencode --version`. The npm wrapper answers in a few
 /// hundred ms; a wedged binary is bounded by a 2s poll deadline.
 fn tui_version(bin: &str) -> Option<String> {
+    #[cfg(test)]
+    if let Some(pinned) = TUI_VERSION_OVERRIDE.with(|p| p.borrow().clone()) {
+        return pinned;
+    }
     let mut child = std::process::Command::new(bin)
         .arg("--version")
         .stdout(std::process::Stdio::piped())
@@ -155,7 +159,6 @@ fn tui_version(bin: &str) -> Option<String> {
                     return None;
                 }
                 let mut out = String::new();
-                use std::io::Read as _;
                 std::io::Read::read_to_string(&mut child.stdout.take()?, &mut out).ok()?;
                 return Some(out);
             }
@@ -199,6 +202,7 @@ thread_local! {
 
 /// Read the shared serve's state file. Typed; unreadable is None.
 fn read_serve_state() -> Option<ServeState> {
+    #[cfg(test)]
     if let Some(pinned) = STATE_OVERRIDE.with(|p| p.borrow().clone()) {
         return pinned;
     }
@@ -214,6 +218,7 @@ fn state_path_read() -> Option<ServeState> {
 
 /// The health verdict, override-aware for tests.
 fn health_verdict(base_url: &str, token: &str) -> Option<ServeHealth> {
+    #[cfg(test)]
     if let Some(pinned) = HEALTH_OVERRIDE.with(|p| p.borrow().clone()) {
         return Some(pinned);
     }
@@ -261,11 +266,12 @@ pub(crate) fn serve_seat(row: &RegistryAgent) -> ServeSeat {
         return ServeSeat::Outside;
     };
     let Some(sid) = row.effective_identity() else {
-        return honest("the row carries no session id, so a serve attach cannot name it");
+        return honest("the row carries no session id, so a serve attach cannot name it".into());
     };
     let Some(state) = read_serve_state() else {
         return honest(
-            "no shared opencode serve is recorded (no opencode-serve.json at the agents home)",
+            "no shared opencode serve is recorded (no opencode-serve.json at the agents home)"
+                .into(),
         );
     };
     let Some(health) = health_verdict(&state.base_url, &state.token) else {
