@@ -459,6 +459,16 @@ jobs:
     # 2026-09-24 was 21.3m, so 30 fails a hang 20 minutes sooner and still
     # clears it by 40 percent.
     timeout-minutes: 30
+    # Same measured cut the cargo-test-shard job took after its own disk
+    # deaths (2026-10-27): line tables keep file:line in a panic backtrace
+    # while dropping the bulk of the debug target dir, and DEV and TEST must
+    # match or cargo builds every dependency twice. This job pays the build
+    # twice, in the journey builds mid-suite and in the stress tail's three
+    # test binaries; the 2026-11-04 and 2026-11-10 shard deaths were the
+    # stress tail's rlib archive step at ENOSPC after the disk step had run.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
     steps:
       - name: Checkout
         uses: actions/checkout@v4

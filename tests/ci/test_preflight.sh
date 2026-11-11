@@ -44,13 +44,8 @@ rm -f "$TMP/global-events.db"
 # The store commit is the write boundary: a receipt lands in events.db beside
 # the journal, so every read here goes through the rows command and a reset
 # removes the sibling store too.
-ROWS_BIN="${FNO_BIN:-}"
-if [[ -z "$ROWS_BIN" ]]; then
-    for _profile in debug release; do
-        [[ -x "$REPO_ROOT/crates/fno/target/$_profile/fno" ]] && { ROWS_BIN="$REPO_ROOT/crates/fno/target/$_profile/fno"; break; }
-    done
-fi
-[[ -n "$ROWS_BIN" ]] || ROWS_BIN=$(command -v fno 2>/dev/null)
+# shellcheck source=scripts/lib/store-bin.sh
+source "$REPO_ROOT/scripts/lib/store-bin.sh"
 rows_lines() { "$ROWS_BIN" doctor event rows --events "$1" 2>/dev/null | jq -r '.[]' 2>/dev/null; }
 export ROWS_BIN
 

@@ -167,7 +167,7 @@ fn push_names_explicit_dest(command: &str) -> bool {
     args.len() >= 2 && !matches!(args.last(), Some(&"HEAD") | Some(&"@"))
 }
 
-fn is_a_push(command: &str) -> bool {
+pub(super) fn is_a_push(command: &str) -> bool {
     static R: OnceLock<Regex> = OnceLock::new();
     re(&R, r"(?i)git\s+push").is_match(command)
 }

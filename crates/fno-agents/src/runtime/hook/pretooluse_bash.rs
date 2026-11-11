@@ -197,7 +197,7 @@ fn gate_native_launch(payload: &Value, cwd: &Path) -> Option<String> {
         .get("session_id")
         .and_then(Value::as_str)
         .map(str::to_string);
-    for launch in launches {
+    for launch in launches.iter().filter(|l| gated(l)) {
         let input = crate::spawn_gate::GateInput {
             name: launch.name.clone().unwrap_or_default(),
             substrate: crate::launch_record::native_substrate_word(&launch.harness).into(),
@@ -241,6 +241,15 @@ fn gate_native_launch(payload: &Value, cwd: &Path) -> Option<String> {
         }
     }
     None
+}
+
+/// Law D1521: a revival re-seats a row that already held a seat, so the
+/// gate never sees it. The resume of a session that still runs, the one
+/// real revival harm, is refused earlier, by `claude_bg_refusal`.
+/// `claude respawn <job>` is the other revival form: it parses as no
+/// launch at all, so it never reaches this loop either.
+fn gated(launch: &crate::launch_record::Launch) -> bool {
+    launch.resume.is_none()
 }
 
 /// A live process holds `id`: its argv names it, or claude's own listing
@@ -332,5 +341,46 @@ mod floor_setter_tests {
         // A quoted payload string is payload, never the setter.
         assert!(refuse_floor_setter("fno agents spawn w1 \"use --floor N\"").is_none());
         assert!(refuse_floor_setter("fno agents spawn w1 \"say \\\"hi\\\" --floor x\"").is_none());
+    }
+}
+
+#[cfg(test)]
+mod native_launch_tests {
+    use super::gated;
+    use crate::launch_record::parse_command;
+
+    /// Law D1521: a revival re-seats a row that already held a seat, so the
+    /// gate never sees it. The rule is `gated`: a launch that carries a
+    /// resume id is not gated, a fresh launch is. The resume of a RUNNING
+    /// session is refused earlier, by claude_bg_refusal, which launch_record
+    /// tests already pin. `claude respawn <job>` and `claude respawn --all`,
+    /// the other revival form, parse as no launch at all, so they never
+    /// reach the gate either. The full gate stays integration-tested in CI,
+    /// which runs on a machine whose real CPU answers the axis.
+    #[test]
+    fn a_revival_launch_is_never_gated_a_fresh_launch_is() {
+        let fresh = parse_command("claude --bg --name w1 \"go\"", "/repo");
+        assert!(
+            !fresh.is_empty(),
+            "premise: a fresh line parses as a launch"
+        );
+        assert!(fresh.iter().all(gated), "a fresh launch is gated");
+
+        let revival = parse_command(
+            "claude --bg --name Linnea --resume 8bb54c80-a111-4a1b-839a-14ee77c0f52d \"Lead Linnea: revival\"",
+            "/repo",
+        );
+        assert_eq!(revival.len(), 1, "premise: the revival line parses once");
+        assert!(
+            revival.iter().all(|l| !gated(l)),
+            "a revival is never gated"
+        );
+
+        for line in ["claude respawn t-linnea", "claude respawn --all"] {
+            assert!(
+                parse_command(line, "/repo").is_empty(),
+                "{line} parses as no launch, so the gate never sees it"
+            );
+        }
     }
 }

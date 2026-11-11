@@ -411,9 +411,11 @@ fn default_true() -> bool {
 /// v125: `PaneMeta.host` + `cwd` (serde default), the pane frame's machine
 /// and working directory; floor stays 58.
 /// v126: `ControlCommand::PaneKillChecked` binds removal to the observed child.
-/// v127: `AgentRow.mail_held_since` (serde default), the wall stamp of the
+/// v127: `ClientMsg::ChatTail` and `ServerMsg::ChatEvents`, the chat event
+/// stream; floor stays 58.
+/// v128: `AgentRow.mail_held_since` (serde default), the wall stamp of the
 /// oldest held submission; floor stays 58.
-pub const PROTO_VERSION: u32 = 127;
+pub const PROTO_VERSION: u32 = 128;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -441,6 +443,7 @@ pub use limits::{BUILD_VERSION, MAX_MAIL_TEXT, MAX_SQUAD_NAME, MAX_TAB_NAME};
 pub mod err_code;
 
 pub mod agent_launch;
+pub mod chat_event;
 pub use agent_launch::{AgentLaunchRequest, AgentLaunchUpdate, LaunchState};
 
 pub mod link;
@@ -1230,7 +1233,7 @@ pub struct AgentRow {
     /// field wire-tolerant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mail_held: Option<u32>,
-    /// (v127) The wall stamp of the OLDEST submission the harness still
+    /// (v128) The wall stamp of the OLDEST submission the harness still
     /// holds (epoch seconds, parsed from the registry row), so the badge
     /// can age the wait: `[1 queued 12m]`. `None` = nothing held or no
     /// stamp read; never a fabricated zero. `#[serde(default)]` keeps a
@@ -4260,7 +4263,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 126);
+        assert_eq!(PROTO_VERSION, 127);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the

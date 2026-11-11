@@ -18,11 +18,10 @@ use serde_json::Value;
 
 use crate::process_admission::{std_command, std_spawn};
 
-/// The marketplace / repo the integrations install from. `#stable` pins the
-/// add to the `stable` branch (781 files, ~4s); the bare repo clones `main`
-/// (7,949 files, 80s+) and can exceed Claude Desktop's 120s "Add marketplace"
-/// timeout.
-const MARKETPLACE: &str = "fnodotdev/fno#stable";
+/// The marketplace the integrations install from. The catalog on main pins
+/// the fno entry to the release tag with its sha, so the bare add serves
+/// release-pinned content; see the catalog pins in .claude-plugin/marketplace.json.
+const MARKETPLACE: &str = "fnodotdev/fno";
 const REPO_URL: &str = "https://github.com/fnodotdev/fno";
 /// The skills-dir fallback drop's directory name under ~/.claude/skills.
 /// A named constant rather than a literal: the seam-crossings ratchet reads
