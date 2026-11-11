@@ -83,14 +83,14 @@ pub struct RegistryAgent {
     pub related_session_id: Option<String>,
     /// Registry status is terminal (exited/permanent-dead).
     pub exited: bool,
-    /// Active do-not-disturb delivery policy. Presence only: it never changes
-    /// the row's liveness badge or whether the worker is alive.
+    /// Live mail is held: a live hold record, or the mail-only capability.
+    /// Presence only: it never changes the row's liveness badge or whether
+    /// the worker is alive.
     pub dnd: bool,
-    /// The hold is machine-armed: a live conversation clock in the
-    /// mail-hold sidecar backs this row's bus-only stamp, so the sideline
-    /// labels it `[HELD]`, never `[DND]`. Stamped only by the render-path
-    /// overlay, never by `derive_rows` (the registry doc carries no such
-    /// fact); absent on every hand-built row.
+    /// The hold is machine-armed: the live hold record was set by the
+    /// conversation rules, so the sideline labels it `[HELD]`, never `[DND]`.
+    /// Stamped only by the render-path overlay, never by `derive_rows` (the
+    /// registry doc carries no such fact); absent on every hand-built row.
     pub held_conversation: bool,
     /// The user pinned this session; only the render-path overlay stamps it.
     pub pinned: bool,

@@ -1220,7 +1220,7 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // Quiet-recovery's revival-rule skip: a deliberately stopped worker on a
     // delivered node, recorded instead of revived (codex_watch/quiet.rs).
     "quiet_worker_skip",
-    // Who stamped a row bus-only (mail_hold.rs record_stamp).
+    // Who wrote a hold record or the mail-only capability (mail_hold.rs record_stamp).
     "mail_hold_stamped",
     "quiet_worker_error",
     // Blueprint-stall lane (codex_watch/stall.rs): stall evidence observed,

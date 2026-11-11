@@ -52,7 +52,7 @@ The achievable guarantee is therefore at-least-once display around process failu
 
 Live injection is a bracketed paste into the recipient's input buffer. For a worker that is correct: a BUSY recipient records the paste as a submit-time queue-operation row. It reads the row at its next turn boundary (pinned at `crates/fno-agents/src/runtime/mail_inject.rs`). For a session with a human at the keyboard it is a defect. The paste lands mid-sentence in the box the operator is typing into. Two live specimens on 2026-08-14, both inside the operator's own reports of the bug.
 
-The fix is a recipient-level delivery policy, not a heuristic: `delivery_policy: bus-only` on the agents registry row.
+The fix is a recipient-level delivery policy, not a heuristic: `delivery_policy: bus-only` on the agents registry row. It is a lane capability with no end. A do-not-disturb hold is a different thing: one record per session in the fno-mail hold store, always with an end, set by `fno agents mail hold --on|--for|--minutes` and capped at `mail.hold.max_minutes` (default 480).
 
 - **Who sets it:** the session itself, once: `fno agents registry register --delivery-policy bus-only` (in the human-attended session). `--delivery-policy off` clears it. A later flagless re-register preserves the stamp. The re-firing SessionStart hook cannot silently revert the recipient to injectable.
 - **What senders see:** `queued (durable) for <handle> [DND (bus-only): recipient polls the bus at each turn boundary]` on the name, job, and registered-agent lanes. No recovery warning, no send-time escalation. The queue is designed, not stranded, and it drains through this doc's own turn-boundary push (`fno-agents mail-notify-self`).

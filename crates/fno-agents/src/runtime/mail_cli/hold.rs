@@ -1,12 +1,12 @@
 //! The hold front commands: `hold` (alias `dnd`) and `hold-release`.
 //!
-//! Port of the Python hold front onto the native mail-hold clock and the
-//! registry delivery stamp. The receipt and help name do-not-disturb (DND);
+//! Both read and write the session's hold record in the fno-mail hold
+//! store. The receipt and help name do-not-disturb (DND);
 //! the command stays `hold` with `dnd` accepted as an alias everywhere the
 //! front dispatches.
 
 use crate::mail_header::{render_held_release, HeldMessage, HeldRelease};
-use crate::mail_hold::{clock_description, hold_sidecar_path, identity_key, read_clock};
+use crate::mail_hold::{clock_description, hold_store, live_hold, max_hold, put_hold};
 use crate::mail_notify_self::read_bus;
 use crate::paths::AgentsHome;
 use crate::spawn_context::{resolve_self_identity, OwnedDisposition};
@@ -16,8 +16,11 @@ use std::io::Write as _;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// The identity refusal shared by both commands: hold stamps a delivery policy
-/// on a registry row, so an unprovable self is a hard stop, not a default.
+use fno_mail::hold::SetBy;
+use fno_mail::session::SessionId;
+
+/// The identity refusal shared by both commands: hold writes a record for one
+/// session, so an unprovable self is a hard stop, not a default.
 /// The ambiguous case prints its own detail; the generic line is the
 /// missing-identity message only, matching the Python leg's per-case output.
 fn self_identity_or_exit() -> Option<(String, String)> {
@@ -25,7 +28,7 @@ fn self_identity_or_exit() -> Option<(String, String)> {
     let ident = resolve_self_identity(&|name| std::env::var(name).ok(), None, None, &home);
     if matches!(ident.disposition, OwnedDisposition::Ambiguous) {
         eprintln!("cannot decide which session is 'self': multiple harness markers present (inherited env?)");
-        eprintln!("a hold stamped on the wrong row holds another agent's mail");
+        eprintln!("a hold on the wrong session holds another agent's mail");
         return None;
     }
     match (ident.session_id.clone(), ident.harness.clone()) {
@@ -38,15 +41,17 @@ fn self_identity_or_exit() -> Option<(String, String)> {
 }
 
 const HOLD_USAGE: &str =
-    "usage: fno agents mail admin hold (--for <minutes> | --minutes <minutes> | --off | --status)
+    "usage: fno agents mail admin hold (--on | --for <minutes> | --minutes <minutes> | --off | --status)
+  --on         do-not-disturb until the hold ceiling (mail.hold.max_minutes)
   --for N      do-not-disturb for N wall-clock minutes
   --minutes N  do-not-disturb until N quiet minutes pass
   --off        lift do-not-disturb and deliver what it held
   --status     say whether do-not-disturb is on";
 
-/// `hold` (alias `dnd`): stamp bus-only on the self row and arm the clock.
-/// A bare call prints usage and writes nothing: an arm is always a choice
-/// the caller names, never a default a stray call falls into.
+/// `hold` (alias `dnd`): write this session's hold record. A bare call
+/// prints usage and writes nothing: an arm is always a choice the caller
+/// names, never a default a stray call falls into. Every hold has an end:
+/// `--on` asks for the ceiling, and a longer ask is capped there.
 pub fn run_hold(args: &[String]) -> i32 {
     if args.is_empty() {
         eprintln!("{HOLD_USAGE}");
@@ -54,6 +59,7 @@ pub fn run_hold(args: &[String]) -> i32 {
     }
     let mut minutes: Option<i64> = None;
     let mut for_minutes: Option<i64> = None;
+    let mut on = false;
     let mut status = false;
     let mut off = false;
     let mut it = args.iter();
@@ -77,6 +83,7 @@ pub fn run_hold(args: &[String]) -> i32 {
                 println!("{HOLD_USAGE}");
                 return 0;
             }
+            "--on" => on = true,
             "--status" => status = true,
             "--off" => off = true,
             other => {
@@ -85,37 +92,25 @@ pub fn run_hold(args: &[String]) -> i32 {
             }
         }
     }
-    if minutes.is_some() && for_minutes.is_some() {
-        eprintln!("error: --minutes and --for are mutually exclusive");
+    if [minutes.is_some(), for_minutes.is_some(), on].iter().filter(|x| **x).count() > 1 {
+        eprintln!("error: --on, --minutes and --for are mutually exclusive");
         return 2;
     }
     let Some((session_id, harness)) = self_identity_or_exit() else {
         return 3;
     };
     let handle = crate::identity::canonical_handle(&session_id);
-    let clock_key = identity_key(&session_id);
 
     if status {
-        let policy = entry_for(&session_id)
-            .and_then(|e| e.delivery_policy)
-            .unwrap_or_default();
-        return crate::mail_hold::run_mail_hold(&[
-            "--status-line".to_string(),
-            handle,
-            "--policy".to_string(),
-            policy,
-        ]);
+        println!("{}", status_line(&session_id, &handle, chrono::Utc::now()));
+        return 0;
     }
 
     if off {
-        let was_on = entry_for(&session_id)
-            .and_then(|e| e.delivery_policy)
-            .as_deref()
-            == Some("bus-only")
-            || read_clock(&clock_key).is_some();
-        let result = release(&clock_key, 0);
-        if result.get("policy_cleared").and_then(Value::as_bool) != Some(true) {
-            eprintln!("hold NOT off: the registry write failed, so {handle} still reads bus-only and mail is still held. Retry, or check `fno agents list` for the row.");
+        let was_on = live_hold(&session_id, chrono::Utc::now()).is_some();
+        let result = release(&session_id, 0);
+        if result.get("hold_cleared").and_then(Value::as_bool) != Some(true) {
+            eprintln!("hold NOT off: the hold record could not be removed, so {handle} still holds mail. Retry, or check the mail-hold store.");
             return 1;
         }
         let held = result
@@ -139,67 +134,84 @@ pub fn run_hold(args: &[String]) -> i32 {
         return 0;
     }
 
-    let wall = for_minutes.is_some();
-    let Some(window) = for_minutes.or(minutes) else {
-        eprintln!("{HOLD_USAGE}");
-        return 2;
+    let idle = minutes.is_some();
+    let length = match for_minutes.or(minutes) {
+        Some(window) if window < 1 => {
+            eprintln!(
+                "error: {} must be at least 1",
+                if idle { "--minutes" } else { "--for" }
+            );
+            return 2;
+        }
+        Some(window) => chrono::Duration::minutes(window),
+        None if on => max_hold(),
+        None => {
+            eprintln!("{HOLD_USAGE}");
+            return 2;
+        }
     };
-    if window < 1 {
-        eprintln!(
-            "error: {} must be at least 1",
-            if wall { "--for" } else { "--minutes" }
-        );
-        return 2;
-    }
-    if let Err(exc) = registrable(&harness, &session_id) {
+    // The gate finds a session by its registry row, so the row exists
+    // before the hold does.
+    if let Err(exc) = register_existing_session(&harness, &session_id) {
         eprintln!("hold: {exc}");
         return 1;
     }
-
-    // Clock before stamp, as the conversation arm does: the orphan sweep
-    // clears a stamped row with no clock, so a stamp written first could be
-    // swept before its clock lands.
-    let mut arm = vec![
-        "--arm".to_string(),
-        clock_key.clone(),
-        "--minutes".to_string(),
-        window.to_string(),
-    ];
-    if wall {
-        arm.push("--kind".to_string());
-        arm.push("wall".to_string());
-    }
-    let code = crate::mail_hold::run_mail_hold(&arm);
-    if code != 0 {
-        return code;
-    }
-    if let Err(exc) = register_existing_session(&harness, &session_id, true) {
-        eprintln!("hold: {exc}");
-        return 1;
-    }
-    let clock = read_clock(&clock_key);
-    let clock_text = match &clock {
-        Some(c) => clock_description(c),
-        None => "no expiry".to_string(),
+    // verb-wording: allow (event writer enum value)
+    let hold = match put_hold(&session_id, length, idle, SetBy::User, "hold_verb") {
+        Ok(hold) => hold,
+        Err(exc) => {
+            eprintln!("hold: {exc}");
+            return 1;
+        }
     };
-    let holds_until = clock
-        .as_ref()
-        .and_then(|c| c.until)
-        .map(|u| u.format("%H:%M:%S UTC").to_string())
-        .unwrap_or_else(|| "an unknown time".to_string());
-    println!("do-not-disturb on for {handle}: {clock_text}, holds until {holds_until} ({window}m), then delivers itself.");
+    crate::mail_hold::spawn_release_timer(&session_id);
+    let minutes = (hold.until() - chrono::Utc::now()).num_seconds().div_euclid(60).max(0) + 1;
+    println!(
+        "do-not-disturb on for {handle}: {}, holds until {} ({minutes}m), then delivers itself.",
+        clock_description(&hold),
+        hold.until().format("%H:%M:%S UTC"),
+    );
     0
 }
 
-/// `hold-release`: wait out the clock on `--handle`, then drain what it held.
+/// The `--status` line. A hold is live with an end, or there is none; a
+/// mail-only row says so, because it holds typed text but is not a hold.
+pub(crate) fn status_line(session_id: &str, handle: &str, now: chrono::DateTime<chrono::Utc>) -> String {
+    if let Some(hold) = live_hold(session_id, now) {
+        if hold.set_by() == SetBy::Conversation {
+            return format!(
+                "{handle}: holding mail, machine-armed while you talk ({}), lifts about 2 min after your answer",
+                clock_description(&hold)
+            );
+        }
+        let ms = (hold.until() - now).num_milliseconds();
+        let label = if ms < 60_000 {
+            format!("~{}s", ms / 1000)
+        } else {
+            format!("~{}m", (ms + 59_999) / 60_000)
+        };
+        return format!("{handle}: holding mail, {}, lifts in {label}", clock_description(&hold));
+    }
+    let mail_only = entry_for(session_id).and_then(|e| e.delivery_policy).as_deref()
+        == Some(crate::mail_hold::MAIL_ONLY);
+    if mail_only {
+        format!("{handle}: no hold - this session takes mail only, never typed text")
+    } else {
+        format!("{handle}: no hold - mail delivers normally")
+    }
+}
+
+/// `hold-release`: wait out the hold on `--handle` (a full session id),
+/// then drain what it held. A record that is gone, ended, or removed by
+/// `--off` all mean the wait is over.
 pub fn run_hold_release(args: &[String]) -> i32 {
     let mut handle: Option<String> = None;
     let mut poll_s: f64 = 15.0;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
-            // A flag-shaped value is a typo'd invocation; the old typer
-            // surface refused it, so a quiet no-clock exit would hide the miss.
+            // A flag-shaped value is a typo'd invocation; a quiet exit
+            // would hide the miss.
             "--handle" => match it.next() {
                 Some(v) if !v.starts_with("--") => handle = Some(v.clone()),
                 _ => {
@@ -224,19 +236,19 @@ pub fn run_hold_release(args: &[String]) -> i32 {
         eprintln!("error: --handle is required");
         return 2;
     };
-
+    let Ok(session) = SessionId::parse(&handle) else {
+        eprintln!("error: --handle wants a full session id, got {handle:?}");
+        return 2;
+    };
+    let store = hold_store();
     let started = Instant::now();
     loop {
-        let until = read_clock(&handle).and_then(|c| c.until);
-        let Some(until) = until else {
-            // No clock, or a clock with no deadline (permanent): nothing to
-            // wait out, so leave quietly without touching the registry.
-            return 0;
+        let Some(hold) = store.get(&session) else {
+            break;
         };
-        // Whole-second truncation releases early: a 0.4s remainder read as
-        // 0 and the loop broke before the deadline. Milliseconds keep the
-        // sub-second slice, and nap covers it when under the poll interval.
-        let remaining_ms = (until - chrono::Utc::now()).num_milliseconds();
+        // Milliseconds, not whole seconds: a 0.4 s remainder read as 0 and
+        // released before the deadline.
+        let remaining_ms = (hold.until() - chrono::Utc::now()).num_milliseconds();
         if remaining_ms <= 0 {
             break;
         }
@@ -245,27 +257,28 @@ pub fn run_hold_release(args: &[String]) -> i32 {
         std::thread::sleep(nap);
     }
     let held_for_s = started.elapsed().as_secs() as i64;
-    let result = release(&handle, held_for_s);
+    let result = release(session.as_str(), held_for_s);
     println!("{}", serde_json::to_string(&result).unwrap_or_default());
     0
 }
 
-/// Drain the held bus for `handle` and clear the delivery stamp. Port of the
-/// Python release primitive: clock text is read BEFORE any mutation, the
-/// stamp clears first (a failed stamp leaves everything as it was), and the
-/// entry resolves after the clear so lanes re-check policy on what we hand over.
-pub(crate) fn release(handle: &str, held_for_s: i64) -> Value {
-    let clock_text = match read_clock(handle) {
-        Some(c) => clock_description(&c),
-        None => "no expiry".to_string(),
+/// Drain the held bus for `session_id` and remove its hold record. The
+/// clock text is read before the record goes, and the record goes first so
+/// the lanes the drain hands over to read no hold.
+pub(crate) fn release(session_id: &str, held_for_s: i64) -> Value {
+    let session = SessionId::parse(session_id).ok();
+    let clock_text = session
+        .as_ref()
+        .and_then(|s| hold_store().get(s))
+        .map(|h| clock_description(&h))
+        .unwrap_or_else(|| "no hold".to_string());
+    let hold_cleared = match &session {
+        Some(s) => hold_store().clear(s).is_ok(),
+        None => true,
     };
-    let policy_cleared = clear_policy(handle);
-    if policy_cleared {
-        let _ = std::fs::remove_file(hold_sidecar_path(handle));
-    }
 
     let home = AgentsHome::from_env();
-    let entry = entry_for(handle);
+    let entry = entry_for(session_id);
     let sid = entry.as_ref().and_then(|e| e.harness_session_id.clone());
     let stored: Vec<String> = crate::state::load_registry(&AgentsHome::shared_registry_json())
         .map(|registry| {
@@ -276,21 +289,14 @@ pub(crate) fn release(handle: &str, held_for_s: i64) -> Value {
                 .collect()
         })
         .unwrap_or_default();
-    let (mut forms, refused) = match &sid {
-        Some(sid) => crate::identity::bus_drain_forms(sid, &stored),
-        None => (vec![handle.to_string()], Vec::new()),
-    };
-    // A legacy timer may still pass the short handle as --handle: it is the
-    // row's head, so a second session answering to it keeps the handle in
-    // `refused` and the release never drains under it.
-    if !forms.contains(&handle.to_string()) && !refused.contains(&handle.to_string()) {
-        forms.push(handle.to_string());
-    }
+    let drain_id = sid.clone().unwrap_or_else(|| session_id.to_string());
+    let (forms, refused) = crate::identity::bus_drain_forms(&drain_id, &stored);
     for form in &refused {
         eprintln!(
             "note: held-mail release skips short form {form}: more than one stored session answers to it; mail addressed to a full session id still releases"
         );
     }
+    let handle = session_id;
 
     let bus = crate::mail_paths::state_bus_dir(&home);
     let msgs = read_bus(&bus);
@@ -372,7 +378,7 @@ pub(crate) fn release(handle: &str, held_for_s: i64) -> Value {
         "held_for_s": held_for_s,
         "outcome": outcome,
         "miss_reason": miss_reason,
-        "policy_cleared": policy_cleared,
+        "hold_cleared": hold_cleared,
     })
 }
 
@@ -406,18 +412,6 @@ fn emit_release_marker(handle: &str, held_count: usize, outcome: &str, held_for_
     }
 }
 
-/// The registry stamp, as a tri-state: true when the desired state holds
-/// (no row to strand counts as success), false only on a store failure.
-fn clear_policy(session_id: &str) -> bool {
-    let path = AgentsHome::shared_registry_json();
-    crate::state::update_registry(&path, |registry| {
-        if let Some(i) = crate::mail_hold::sole_row_for_token(registry, session_id) {
-            registry.entries[i].delivery_policy = None;
-        }
-    })
-    .is_ok()
-}
-
 fn entry_for(session_id: &str) -> Option<crate::state::RegistryEntry> {
     let registry = crate::state::load_registry(&AgentsHome::shared_registry_json()).ok()?;
     crate::mail_hold::sole_row_for_token(&registry, session_id).map(|i| registry.entries[i].clone())
@@ -443,22 +437,13 @@ fn registrable(harness: &str, session_id: &str) -> Result<(), String> {
 /// Register this session's row, minting one when absent. Port of the Python
 /// register_existing_session: refusal inside a self-spawn, a known-harness
 /// check, idempotent refresh on (harness, harness_session_id).
-///
-/// `stamp` is the hold command's bus-only stamp, journaled here so no caller
-/// can stamp without a `mail_hold_stamped` row. A join registers with
-/// `stamp = false`: joining fno is not a do-not-disturb. A minted row gets
-/// `created_at` now, so the orphan sweep can age a stamp whose clock is gone.
-pub(crate) fn register_existing_session(
-    harness: &str,
-    session_id: &str,
-    stamp: bool,
-) -> Result<(), String> {
+/// A minted row gets `created_at` now.
+pub(crate) fn register_existing_session(harness: &str, session_id: &str) -> Result<(), String> {
     registrable(harness, session_id)?;
     let cwd = std::env::current_dir()
         .map(|p| p.display().to_string())
         .unwrap_or_default();
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let policy = stamp.then(|| "bus-only".to_string());
     let path = AgentsHome::shared_registry_json();
     // Resolved before the registry lock: the census walk reads the whole
     // process table.
@@ -469,9 +454,6 @@ pub(crate) fn register_existing_session(
                 && e.harness_session_id.as_deref() == Some(session_id)
         });
         if let Some(row) = existing {
-            if stamp {
-                row.delivery_policy = policy.clone();
-            }
             if row.cwd.is_empty() {
                 row.cwd = cwd.clone();
             }
@@ -489,7 +471,6 @@ pub(crate) fn register_existing_session(
             name,
             harness: Some(harness.to_string()),
             cwd,
-            delivery_policy: policy,
             status: crate::AgentStatus::Idle,
             created_at: now,
             ..crate::state::RegistryEntry::new(
@@ -501,9 +482,6 @@ pub(crate) fn register_existing_session(
         });
     })
     .map_err(|e| format!("registry write failed: {e}"))?;
-    if stamp {
-        crate::mail_hold::record_stamp("hold_verb", session_id); // verb-wording: allow (event writer enum value)
-    }
     Ok(())
 }
 
@@ -633,7 +611,7 @@ mod tests {
         );
         crate::spawn_context::set_test_ancestry_table(Some(table));
 
-        let outcome = register_existing_session("codex", "sid-join", false);
+        let outcome = register_existing_session("codex", "sid-join");
         assert!(outcome.is_ok(), "{outcome:?}");
 
         let registry = crate::state::load_registry(&AgentsHome::shared_registry_json()).unwrap();

@@ -77,7 +77,7 @@ pub fn join(root: &Path, harness: &str, session_id: &str) -> Result<JoinOutcome,
         write_marker(root, harness, session_id)?;
         return Ok(JoinOutcome::SpawnedWorker);
     }
-    crate::mail_cli::hold::register_existing_session(harness, session_id, false)?;
+    crate::mail_cli::hold::register_existing_session(harness, session_id)?;
     write_marker(root, harness, session_id)?;
     Ok(JoinOutcome::Joined)
 }
