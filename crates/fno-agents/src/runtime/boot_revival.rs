@@ -8,6 +8,8 @@
 //! cursor-agent) never rides that listing - it never lists their jobs - and
 //! comes back through its own keeper revival on the contract's resume form.
 //! A worker whose node is done or superseded stays stopped.
+//! A worker an `fno agents stop` or `claude stop` stopped on purpose (an
+//! Exited row still carrying its stop record) stays stopped on any node.
 //! Leads go first. A revival re-seats a row that already held a seat, so it
 //! never asks the spawn gate. One receipt row per worker lands in
 //! `<agents home>/boot-revival.json`; that file's boot stamp makes the pass
@@ -788,6 +790,18 @@ pub(crate) fn plan(
         if !crate::daemon::is_non_terminal(e.status) && !exited_after_boot {
             continue;
         }
+        // A stop someone ran through `fno agents stop` or `claude stop`
+        // still stands on the row: the worker was put down on purpose, so a
+        // daemon restart or a reboot must not bring it back. A resume clears
+        // the record, which is the one way back.
+        if deliberate_stop(e) && e.stop.as_ref().is_some_and(|s| s.by == "stop-command") {
+            skipped.push(ReceiptRow::new(
+                &e.name,
+                "skipped",
+                "stopped on purpose by a stop command; resume it by hand",
+            ));
+            continue;
+        }
         if e.harness_name() == "claude" {
             // An unread listing reads every claude job as unlisted, so the
             // claude half waits as a named skip row and the retire arm's
@@ -1397,6 +1411,40 @@ mod tests {
         assert_eq!(names, vec!["kestrel"], "{skipped:?}");
         assert!(
             skipped[0].reason.contains("merged") && skipped[0].reason.contains("never revived"),
+            "{skipped:?}"
+        );
+    }
+
+    #[test]
+    fn a_worker_stopped_by_a_stop_command_is_never_revived() {
+        let mut stopped = row("kestrel", "11112222-bbbb", AgentStatus::Exited);
+        crate::state::record_stop(&mut stopped, "stop-command", Some("claude".into()));
+        stopped.exited_at = Some("2026-09-26T01:01:00Z".into());
+        let mut resumed = row("quill", "9999aaaa-aaaa", AgentStatus::Live);
+        crate::state::record_stop(&mut resumed, "stop-command", None);
+        let listing = ClaudeAgentsSnapshot::known(vec![
+            ClaudeAgentRow::new("11112222", Some("stopped")),
+            ClaudeAgentRow::new("9999aaaa", Some("stopped")),
+        ]);
+        let (leads, workers, _keepers, skipped) = plan(
+            &[stopped, resumed],
+            &listing,
+            &HashSet::new(),
+            &HashSet::new(),
+            BOOT,
+        );
+        assert!(leads.is_empty());
+        assert_eq!(
+            workers,
+            vec!["quill"],
+            "a row that resumed past its stop comes back"
+        );
+        let names: Vec<_> = skipped.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["kestrel"], "{skipped:?}");
+        assert!(
+            skipped
+                .first()
+                .is_some_and(|r| r.reason.contains("stopped on purpose")),
             "{skipped:?}"
         );
     }

@@ -202,10 +202,10 @@ fn coord_renders_through(lane: Option<&str>) -> bool {
     lane.map_or(true, |l| l == "coord")
 }
 
-struct ListOut {
-    label: String,
-    rows: Vec<Value>,
-    damaged: usize,
+pub(crate) struct ListOut {
+    pub(crate) label: String,
+    pub(crate) rows: Vec<Value>,
+    pub(crate) damaged: usize,
 }
 
 fn decisions_jsonl() -> PathBuf {
@@ -257,11 +257,18 @@ fn soft_entries_at(graph: &Path, subject: &str, lane: Option<&str>) -> Option<Ve
             return Some(vec![row]);
         }
     }
+    // A scheme-shaped subject (`pr-hold:`, `merge-grant:`, waiver) is no
+    // node spelling: the resolution tiers cannot answer it, so the full
+    // graph read below resolves nothing the exact match does not (measured:
+    // the full read was most of the subject-query cost).
+    if lane.is_some_and(|l| l != "coord") && subject.contains(':') {
+        return None;
+    }
     read_entries_soft_at(graph)
 }
 
 /// `soft_entries_at` over the machine's default store.
-fn soft_entries(subject: &str, lane: Option<&str>) -> Option<Vec<Value>> {
+pub(crate) fn soft_entries(subject: &str, lane: Option<&str>) -> Option<Vec<Value>> {
     soft_entries_at(&crate::graph_get::default_graph_path(), subject, lane)
 }
 
@@ -630,7 +637,7 @@ pub(crate) fn live_rows_over(
 
 /// The pure listing over injected store rows: flatten, derive, filter,
 /// sort, scope.
-fn list_core_over(
+pub(crate) fn list_core_over(
     rows: Vec<Value>,
     damaged: usize,
     entries: &mut Option<Vec<Value>>,
@@ -980,7 +987,7 @@ fn review_over_entries(rows: Vec<Value>, damaged: usize, ent: &[Value]) -> Value
 /// The near-miss scan, `near_miss_subjects` verbatim: containment in either
 /// direction, never a subject the exact matcher answered, counted by
 /// distinct decision id, ranked heaviest first, capped at ten.
-fn near_miss_subjects(
+pub(crate) fn near_miss_subjects(
     subject: &str,
     rows: &[Value],
     entries: Option<&[Value]>,

@@ -1452,8 +1452,7 @@ pub async fn run(home: AgentsHome, opts: DaemonOptions) -> Result<(), DaemonErro
     // `spawn_blocking` plus a one-in-flight `AtomicBool`, the shape every arm
     // in `fleet_arms::FleetArms::tick` keeps.
     // The reason the serve loop ended, threaded to the shared exit tail so
-    // `daemon_exited` can tell an abnormal ending from a graceful one
-    // every break carries its reason string.
+    // `daemon_exited` can tell an abnormal ending from a graceful one.
     let exit_reason: &str = loop {
         tokio::select! {
             accepted = listener.accept() => {
@@ -1611,6 +1610,7 @@ pub async fn run(home: AgentsHome, opts: DaemonOptions) -> Result<(), DaemonErro
     if still_ours {
         let _ = std::fs::remove_file(&sock_path);
     }
+    crate::quiet_retire::log_exit(exit_reason);
     emit_state(&ctx.emitter, DaemonState::Exited);
     let _ = ctx.emitter.emit(
         "daemon_exited",
