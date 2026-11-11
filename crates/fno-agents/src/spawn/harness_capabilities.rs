@@ -2062,7 +2062,13 @@ mod tests {
                 assert_eq!(caps.permission_response.len(), 3, "{name}");
                 assert!(!caps.submit_keys.is_empty(), "{name}");
             }
-            assert_eq!(caps.resume_strategy.forms.len(), 5, "{name}");
+            let required = caps
+                .resume_strategy
+                .forms
+                .keys()
+                .filter(|lane| SESSION_LANES.contains(&lane.as_str()))
+                .count();
+            assert_eq!(required, SESSION_LANES.len(), "{name}");
             assert!(!caps.model_switch_strategy.kind.is_empty(), "{name}");
             assert!(
                 LOOP_PARTICIPATION.contains(&caps.loop_participation.as_str()),
