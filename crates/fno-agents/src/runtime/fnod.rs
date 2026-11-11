@@ -1,7 +1,14 @@
-//! fnod: the local decision model, served by `kev.serve` on loopback. Its
-//! answers are advice only. A caller journals the score beside its own rule
-//! verdict and keeps the rule's answer, so a missing server, a timeout or a
-//! malformed reply costs the score and nothing else.
+//! fnod: the local decision model, served by `kev.serve` on loopback. It
+//! labels and picks among choices; it is no guard and holds no permission.
+//! A caller journals the answer beside its own rule verdict and keeps the
+//! rule's answer, so a missing server, a timeout or a malformed reply costs
+//! the answer and nothing else.
+//!
+//! [`ask`] is the one client. Its [`Decision`] says who acts next: nobody
+//! (fnod is sure), the model (fnod failed, is unsure, or was asked a
+//! question it was never trained on), or the user (only for an act the
+//! caller marked irreversible, and only once fnod is sure). Unsure never
+//! goes straight to the user.
 
 use serde_json::{json, Map, Value};
 use std::path::Path;
@@ -13,55 +20,194 @@ const DEFAULT_TIMEOUT_MS: u64 = 500;
 /// Asks sit at the end of a message, so a long one keeps its tail.
 const MAX_MESSAGE_CHARS: usize = 16_000;
 
-/// The question the is_ask head was trained on, word for word
-/// (`intel_corpus.rs::question`): a reworded question is a different input.
-const IS_ASK: &str = "Does this message ask the user for a decision or an answer?";
+/// One question for fnod: the wire form kev reads (`type`, `instructions`,
+/// and `criteria` for a choice), where it was trained, and the caller's bar.
+pub(crate) struct Question {
+    pub id: String,
+    pub wire: Value,
+    /// A head scores at chance on wording it never saw, so an edited or
+    /// new question always escalates.
+    pub trained: bool,
+    pub escalate_below: f64,
+    pub irreversible: bool,
+}
 
-/// fnod's answer to "does `message` ask the user for a decision or an
-/// answer?" as journal attrs: `fnod_is_ask` (the probability) and `fnod_ms`,
-/// or `fnod_error` with the reason the score is missing. `fnod.url` (empty
-/// turns it off) and `fnod.timeout_ms` come from fno config.
-pub(crate) fn is_ask(cwd: &Path, message: &str) -> Map<String, Value> {
-    let url = configured_url(cwd);
-    let timeout = crate::agents_config::config_value_deep(cwd, &["fnod", "timeout_ms"])
-        .and_then(|v| v.as_integer())
-        .and_then(|n| u64::try_from(n).ok())
-        .unwrap_or(DEFAULT_TIMEOUT_MS);
-    let body = json!({
-        "state": {"message": tail(message, MAX_MESSAGE_CHARS)},
-        "questions": {"is_ask": {"type": "noul", "instructions": IS_ASK}},
-    });
+impl Question {
+    /// The shipped corpus question `id` (`intel_corpus::question`), word
+    /// for word, so it reads as trained.
+    pub(crate) fn shipped(id: &str) -> Self {
+        Self {
+            id: id.to_string(),
+            wire: crate::intel_corpus::question(id),
+            trained: true,
+            escalate_below: 0.0,
+            irreversible: false,
+        }
+    }
+
+    /// The shipped question with the user's live edits from
+    /// `[fnod.questions.<id>]`: `instructions`, `criteria.<label>` and
+    /// `escalate_below`. Config is read on every call, so an edit applies
+    /// on the next fire with no restart. Changed wording is untrained.
+    pub(crate) fn configured(cwd: &Path, id: &str) -> Self {
+        let mut q = Self::shipped(id);
+        let read = |key: &str| {
+            crate::agents_config::config_value_deep(cwd, &["fnod", "questions", id, key])
+        };
+        if let Some(text) = read("instructions").and_then(|v| v.as_str().map(str::to_string)) {
+            q.wire["instructions"] = json!(text);
+        }
+        if let Some(toml::Value::Table(criteria)) = read("criteria") {
+            let map: Map<String, Value> = criteria
+                .iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), json!(s))))
+                .collect();
+            q.wire["criteria"] = Value::Object(map);
+        }
+        if let Some(bar) = read("escalate_below")
+            .and_then(|v| v.as_float().or_else(|| v.as_integer().map(|n| n as f64)))
+        {
+            q.escalate_below = bar;
+        }
+        q.trained = q.wire == crate::intel_corpus::question(id);
+        q
+    }
+}
+
+/// Who acts on a [`Decision`] next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Escalate {
+    None,
+    Model,
+    User,
+}
+
+impl Escalate {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Escalate::None => "none",
+            Escalate::Model => "model",
+            Escalate::User => "user",
+        }
+    }
+}
+
+/// fnod's answer. A noul question labels `yes` or `no` and keeps its raw
+/// score under `probabilities.noul`; a choice question labels the argmax.
+#[derive(Debug)]
+pub(crate) struct Decision {
+    pub label: Option<String>,
+    pub probabilities: Map<String, Value>,
+    pub confidence: f64,
+    pub escalate: Escalate,
+    pub ms: u64,
+    pub error: Option<String>,
+}
+
+/// Ask fnod one question about `state`. Never fails: an off, refused,
+/// slow or malformed server answers `escalate: Model` with the reason.
+pub(crate) fn ask(url: &str, timeout: Duration, state: Value, q: &Question) -> Decision {
     let start = Instant::now();
-    let score = if url.trim().is_empty() {
+    let reply = if url.trim().is_empty() {
         Err("off".to_string())
-    } else if !loopback(&url) {
-        // The message is chat text: a project config must not route it off
+    } else if !loopback(url) {
+        // The state is chat or record text: config must not route it off
         // the machine.
         Err(format!("fnod.url {url} is not loopback; refused"))
     } else {
-        let wait = Duration::from_millis(timeout);
-        crate::opencode_serve::http_json(&url, "POST", "/v1/systemone", Some(&body), None, wait)
+        let mut questions = Map::new();
+        questions.insert(q.id.clone(), q.wire.clone());
+        let body = json!({"state": state, "questions": questions});
+        crate::opencode_serve::http_json(url, "POST", "/v1/systemone", Some(&body), None, timeout)
             .and_then(|(status, text)| match status {
                 200 => serde_json::from_str::<Value>(&text).map_err(|e| format!("reply: {e}")),
                 _ => Err(format!("HTTP {status}")),
             })
-            .and_then(|reply| {
-                reply
-                    .pointer("/answers/is_ask/noul")
-                    .and_then(Value::as_f64)
-                    .ok_or_else(|| "reply carries no answers.is_ask.noul".to_string())
-            })
+            .and_then(|reply| read_answer(&reply, &q.id))
     };
-    let mut out = Map::new();
-    match score {
-        Ok(p) => {
-            out.insert("fnod_is_ask".to_string(), json!(p));
-            out.insert(
-                "fnod_ms".to_string(),
-                json!(start.elapsed().as_millis() as u64),
-            );
+    let ms = start.elapsed().as_millis() as u64;
+    match reply {
+        Ok((label, probabilities, confidence)) => {
+            let escalate = if !q.trained || confidence < q.escalate_below {
+                Escalate::Model
+            } else if q.irreversible {
+                Escalate::User
+            } else {
+                Escalate::None
+            };
+            Decision {
+                label: Some(label),
+                probabilities,
+                confidence,
+                escalate,
+                ms,
+                error: None,
+            }
         }
-        Err(why) => {
+        Err(why) => Decision {
+            label: None,
+            probabilities: Map::new(),
+            confidence: 0.0,
+            escalate: Escalate::Model,
+            ms,
+            error: Some(why),
+        },
+    }
+}
+
+fn read_answer(reply: &Value, id: &str) -> Result<(String, Map<String, Value>, f64), String> {
+    let answer = reply
+        .pointer(&format!("/answers/{id}"))
+        .ok_or_else(|| format!("reply carries no answers.{id}"))?;
+    if let Some(p) = answer.get("noul").and_then(Value::as_f64) {
+        let label = if p >= 0.5 { "yes" } else { "no" };
+        let mut probabilities = Map::new();
+        probabilities.insert("noul".to_string(), json!(p));
+        return Ok((label.to_string(), probabilities, p.max(1.0 - p)));
+    }
+    let probabilities = answer
+        .get("probabilities")
+        .and_then(Value::as_object)
+        .cloned()
+        .ok_or_else(|| format!("reply carries no answers.{id}.noul or probabilities"))?;
+    let (label, p) = probabilities
+        .iter()
+        .filter_map(|(k, v)| v.as_f64().map(|p| (k.clone(), p)))
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .ok_or_else(|| format!("reply carries empty {id} probabilities"))?;
+    Ok((label, probabilities, p))
+}
+
+/// fnod's answer to "does `message` ask the user for a decision or an
+/// answer?" as journal attrs: `fnod_is_ask` (the probability), `fnod_ms`,
+/// `fnod_trained` and `fnod_escalate`, or `fnod_error` with the reason the
+/// score is missing. `fnod.url` (empty turns it off), `fnod.timeout_ms`
+/// and `[fnod.questions.is_ask]` come from fno config.
+pub(crate) fn is_ask(cwd: &Path, message: &str) -> Map<String, Value> {
+    let timeout = crate::agents_config::config_value_deep(cwd, &["fnod", "timeout_ms"])
+        .and_then(|v| v.as_integer())
+        .and_then(|n| u64::try_from(n).ok())
+        .unwrap_or(DEFAULT_TIMEOUT_MS);
+    let q = Question::configured(cwd, "is_ask");
+    let state = json!({"message": tail(message, MAX_MESSAGE_CHARS)});
+    let d = ask(
+        &configured_url(cwd),
+        Duration::from_millis(timeout),
+        state,
+        &q,
+    );
+    let mut out = Map::new();
+    out.insert("fnod_question".to_string(), json!(q.id));
+    out.insert("fnod_trained".to_string(), json!(q.trained));
+    out.insert("fnod_escalate".to_string(), json!(d.escalate.as_str()));
+    match (d.probabilities.get("noul"), d.error) {
+        (Some(p), None) => {
+            out.insert("fnod_is_ask".to_string(), p.clone());
+            out.insert("fnod_confidence".to_string(), json!(d.confidence));
+            out.insert("fnod_ms".to_string(), json!(d.ms));
+        }
+        (_, why) => {
+            let why = why.unwrap_or_else(|| "reply carries no answers.is_ask.noul".to_string());
             out.insert("fnod_error".to_string(), json!(why));
         }
     }
@@ -154,6 +300,87 @@ pub(crate) mod tests {
         dir
     }
 
+    /// A sure answer acts alone, an unsure, failed or untrained one goes to
+    /// the model, and only a sure answer on an irreversible act goes to the
+    /// user. Live config edits apply per call.
+    #[test]
+    fn ask_picks_a_label_and_escalates_unsure_to_the_model_first() {
+        let wait = Duration::from_secs(2);
+        let choice = |bar: f64, irreversible: bool| Question {
+            id: "pick".into(),
+            wire: json!({"type": "choice", "criteria": {"a": "A.", "b": "B."}}),
+            trained: true,
+            escalate_below: bar,
+            irreversible,
+        };
+        let reply = r#"{"answers":{"pick":{"probabilities":{"a":0.8,"b":0.2}}}}"#;
+        let (url, server) = serve_once(reply, Duration::ZERO);
+        let d = ask(&url, wait, json!({}), &choice(0.6, false));
+        server.join().unwrap();
+        assert_eq!(d.label.as_deref(), Some("a"));
+        assert_eq!(d.confidence, 0.8);
+        assert_eq!(d.escalate, Escalate::None);
+        let (url, server) = serve_once(reply, Duration::ZERO);
+        assert_eq!(
+            ask(&url, wait, json!({}), &choice(0.6, true)).escalate,
+            Escalate::User
+        );
+        server.join().unwrap();
+        let (url, server) = serve_once(reply, Duration::ZERO);
+        assert_eq!(
+            ask(&url, wait, json!({}), &choice(0.9, true)).escalate,
+            Escalate::Model
+        );
+        server.join().unwrap();
+        let mut untrained = choice(0.0, true);
+        untrained.trained = false;
+        let (url, server) = serve_once(reply, Duration::ZERO);
+        assert_eq!(
+            ask(&url, wait, json!({}), &untrained).escalate,
+            Escalate::Model
+        );
+        server.join().unwrap();
+        let (url, server) = serve_once(reply, Duration::from_millis(600));
+        let slow = ask(
+            &url,
+            Duration::from_millis(100),
+            json!({}),
+            &choice(0.0, true),
+        );
+        assert_eq!(
+            slow.escalate,
+            Escalate::Model,
+            "a timeout never reaches the user"
+        );
+        assert!(slow.error.is_some());
+        server.join().ok();
+
+        // A raised bar escalates a trained question; changed wording reads
+        // untrained. Both apply with no restart.
+        let (url, server) = serve_once(
+            r#"{"answers":{"is_ask":{"type":"noul","noul":0.85}}}"#,
+            Duration::ZERO,
+        );
+        let cwd = cwd_with(&url, 2000);
+        let cfg = cwd.path().join(".fno/config.toml");
+        let base = std::fs::read_to_string(&cfg).unwrap();
+        std::fs::write(
+            &cfg,
+            format!("{base}[fnod.questions.is_ask]\nescalate_below = 0.9\n"),
+        )
+        .unwrap();
+        let row = is_ask(cwd.path(), "Ship it?");
+        server.join().unwrap();
+        assert_eq!(row["fnod_trained"], true);
+        assert_eq!(row["fnod_escalate"], "model");
+        std::fs::write(
+            &cfg,
+            format!("{base}[fnod.questions.is_ask]\ninstructions = \"Is this a question?\"\n"),
+        )
+        .unwrap();
+        assert!(!Question::configured(cwd.path(), "is_ask").trained);
+    }
+
     #[test]
     fn a_kev_reply_scores_and_a_slow_or_absent_server_fails_open() {
         let (url, server) = serve_once(
@@ -164,7 +391,10 @@ pub(crate) mod tests {
         let answer = is_ask(cwd.path(), "Ship it now or wait for review?");
         assert_eq!(answer["fnod_is_ask"], 0.91);
         let sent: Value = serde_json::from_str(&server.join().unwrap()).unwrap();
-        assert_eq!(sent["questions"]["is_ask"]["instructions"], IS_ASK);
+        assert_eq!(
+            sent["questions"]["is_ask"],
+            crate::intel_corpus::question("is_ask")
+        );
         assert_eq!(sent["state"]["message"], "Ship it now or wait for review?");
 
         let (url, server) = serve_once("{}", Duration::from_millis(600));
