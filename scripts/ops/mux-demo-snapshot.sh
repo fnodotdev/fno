@@ -792,6 +792,10 @@ write("chat-demo-review", [
     # A first failure: its cause and r retry, no copy rung yet.
     msg(10, 0, "rowan", "scout", "Then post the 429 shot on the visual page."),
     state(10, 0, "failed", "not-confirmed"),
+    # Inline markdown the reading pane renders: **bold** and `code` paint
+    # their spans, never the markers.
+    msg(12, 0, "scout", "rowan", "**Settings:** run `fno doctor test` locally, then push."),
+    state(12, 0, "accepted-new-turn"),
 ])
 write("chat-demo-keys", [
     msg(8, 4, "rowan", "archer", "Rotate the staging key once the deploy is green."),

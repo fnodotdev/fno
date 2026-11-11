@@ -910,3 +910,88 @@ async fn topics_paint_drill_and_return() {
         "the list repaints on return: {text}"
     );
 }
+
+#[tokio::test]
+async fn message_body_paints_inline_bold_and_code_without_marks() {
+    use serde_json::json;
+    let mut view = View::new(
+        (24, 100),
+        "main".into(),
+        LayoutView {
+            squads: Vec::new(),
+            active_squad: 0,
+            panes: Vec::new(),
+            focus: 0,
+            area: (0, 0),
+            agents: Vec::new(),
+            focus_node: None,
+        },
+    );
+    check_fixture(&mut view);
+    let prefs = tempfile::tempdir().unwrap();
+    crate::view_store::set_test_path(prefs.path());
+    let b = view.messages_board.as_mut().expect("open");
+    b.snapshot.apply(json!({
+        "participants": [
+            {"key":"s1","name":"first","system":false,"live":true,"last_ts":"2026-10-01T09:00:00Z"},
+        ],
+        "threads": [
+            {"chat_id":"chat-md","participants":["s1"],
+             "rows":[
+               {"id":"m1","ts":"2026-10-01T09:00:00Z","from":"first","from_key":"s1","to_key":"s1",
+                "summary":"md","body":"**Settings:** use `fno doctor` now\n**run `fno doctor test` bold**\nand a plain star * stays literal","system":false}],
+             "last_ts":"2026-10-01T09:00:00Z"}
+        ],
+        "system": {}, "channels": [], "announcements": [], "unreadable": 0,
+    }));
+    b.sel_thread = Some("chat-md".into());
+    let (lines, _) = b.thread_lines(50);
+    let texts: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+    let all = texts.join("\n");
+    // The markers never paint.
+    assert!(!all.contains("**"), "stars survive: {all}");
+    assert!(!all.contains('`'), "backticks survive: {all}");
+    // "**Settings:**" paints "Settings:" bold: the char roles at the span
+    // carry the terminal's bold role while the plain tail stays Item.
+    let at = texts
+        .iter()
+        .position(|t| t.contains("Settings: use"))
+        .expect("bold line painted");
+    let line = lines.get(at).expect("bold line row");
+    let bold_at = line.text.find("Settings:").expect("span text");
+    assert_eq!(
+        line.roles.get(bold_at),
+        Some(&TextStyle::Title),
+        "{:?}",
+        line.text
+    );
+    let code_at = line.text.find("fno doctor").expect("code span");
+    assert_eq!(
+        line.roles.get(code_at),
+        Some(&TextStyle::Meta),
+        "{:?}",
+        line.text
+    );
+    let tail_at = line.text.find(" now").expect("plain tail");
+    assert_eq!(
+        line.roles.get(tail_at),
+        Some(&TextStyle::Item),
+        "{:?}",
+        line.text
+    );
+    // A single `*` with no pair is prose, not a span: it stays literal.
+    assert!(all.contains("a plain star * stays"), "{all}");
+    // Backticks inside bold are nesting markdown: dropped, content bold.
+    let nest = texts
+        .iter()
+        .position(|t| t.contains("run fno doctor test bold"))
+        .expect("nested line painted");
+    let nest_line = lines.get(nest).expect("nested line row");
+    let nest_at = nest_line.text.find("run fno").expect("nested span");
+    assert_eq!(
+        nest_line.roles.get(nest_at),
+        Some(&TextStyle::Title),
+        "{:?}",
+        nest_line.text
+    );
+}

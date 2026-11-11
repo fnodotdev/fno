@@ -86,12 +86,74 @@ fn body_lines(text: &str, w: usize, role: TextStyle) -> Vec<TLine> {
         {
             continue;
         }
-        for mut line in TLine::of(&[seg(para, role)]).wrap(inner) {
+        for mut line in TLine::of(&inline_spans(para, role)).wrap(inner) {
             line.text.insert_str(0, BODY_INDENT);
             line.roles.splice(0..0, [role; BODY_INDENT.len()]);
             out.push(line);
         }
     }
+    out
+}
+
+/// Inline spans for one stored line: plain runs keep the body's `role`,
+/// `**bold**` paints `Title` (the terminal's bold fg) and `` `code` ``
+/// paints `Meta` (the dim slot), with the markers dropped before wrap so
+/// widths measure the painted text. An unterminated marker stays literal,
+/// so prose with a stray `*` or backtick never mangles.
+fn inline_spans(para: &str, role: TextStyle) -> Vec<TSeg> {
+    fn flush(out: &mut Vec<TSeg>, run: &mut String, r: TextStyle) {
+        if !run.is_empty() {
+            out.push(TSeg {
+                text: std::mem::take(run),
+                role: r,
+            });
+        }
+    }
+    let mut out: Vec<TSeg> = Vec::new();
+    let mut run = String::new();
+    let chars: Vec<char> = para.chars().collect();
+    let mut i = 0usize;
+    while let Some(&here) = chars.get(i) {
+        let bold_open = here == '*' && chars.get(i + 1) == Some(&'*');
+        let bold_close = if bold_open {
+            (i + 2..chars.len())
+                .find(|&j| chars.get(j) == Some(&'*') && chars.get(j + 1) == Some(&'*'))
+        } else {
+            None
+        };
+        if let Some(close) = bold_close {
+            flush(&mut out, &mut run, role);
+            // A backtick inside bold is nesting markdown, not literal
+            // content: drop it and paint the inner text bold.
+            let bold: String = chars
+                .get(i + 2..close)
+                .unwrap_or_default()
+                .iter()
+                .filter(|&&c| c != '`')
+                .collect();
+            out.push(TSeg {
+                text: bold,
+                role: TextStyle::Title,
+            });
+            i = close + 2;
+            continue;
+        }
+        if here == '`' {
+            if let Some(close) = (i + 1..chars.len()).find(|&j| chars.get(j) == Some(&'`')) {
+                flush(&mut out, &mut run, role);
+                let code: String = chars.get(i + 1..close).unwrap_or_default().iter().collect();
+                out.push(TSeg {
+                    text: code,
+                    role: TextStyle::Meta,
+                });
+                i = close + 1;
+                continue;
+            }
+        }
+        run.push(here);
+        i += 1;
+    }
+    flush(&mut out, &mut run, role);
     out
 }
 
@@ -209,7 +271,7 @@ fn channel_label(scope: &str) -> String {
 /// stamp reads `lead-settle` (item 5). A display rename only - the mail
 /// identity, and every stored row, still say `fno/lead-settle`.
 fn display_label(name: &str) -> String {
-    name.replace("lead-settle", "lead-settle")
+    name.replace("fno/lead-settle", "lead-settle")
 }
 
 /// What the background poll sends back to the input loop.
