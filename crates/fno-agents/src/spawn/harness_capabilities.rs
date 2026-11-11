@@ -45,18 +45,17 @@ pub fn session_state_names_no_blocked_producer(harness: &str) -> bool {
     set.contains(harness)
 }
 
-const SESSION_LANES: [&str; 6] = [
+const SESSION_LANES: [&str; 5] = [
     "interactive_create",
     "interactive_resume",
     "interactive_attach",
-    // The serve seat: an attach variant that names the shared serve rather
-    // than a bare session, gated by the TUI generation against the serve's.
-    "interactive_serve_attach",
     "headless_create",
     "headless_resume",
 ];
 /// The one lane a harness may carry beyond [`SESSION_LANES`]: a seat that
-/// attaches a TUI to a shared serve. Its form has its own shape.
+/// attaches a TUI to a shared serve. Only opencode declares it, so it is not
+/// a session lane every row must carry. Its kind is `serve_attach`, which no
+/// other lane may use, and its token lists ride `tokens_v1`/`tokens_v2`.
 const SERVE_ATTACH_LANE: &str = "interactive_serve_attach";
 const RESPONSE_ACTIONS: [&str; 3] = ["allow_once", "allow_always", "deny"];
 /// The rule states a capability row may DECLARE. A readiness manifest carries
@@ -64,16 +63,7 @@ const RESPONSE_ACTIONS: [&str; 3] = ["allow_once", "allow_always", "deny"];
 /// are part of the row's contract, and the Python validator enforces the same
 /// pair.
 const DECLARABLE_RULE_STATES: [&str; 2] = ["idle", "blocked"];
-/// `serve_attach` is the serve seat's kind: its token lists (`tokens_v1`,
-/// `tokens_v2`), generation boundary, and password env ride the form's own
-/// fields, so its `tokens` stay empty.
-const RESUME_KINDS: [&str; 5] = [
-    "flag",
-    "subcommand",
-    "session_flag",
-    "unsupported",
-    "serve_attach",
-];
+const RESUME_KINDS: [&str; 4] = ["flag", "subcommand", "session_flag", "unsupported"];
 const MODEL_SWITCH_KINDS: [&str; 3] = ["direct", "menu_walk", "unsupported"];
 const MODEL_SWITCH_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 const STOP_STRATEGIES: [&str; 2] = ["claude-short-id", "registry-noop"];
