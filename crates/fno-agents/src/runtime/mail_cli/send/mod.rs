@@ -590,6 +590,7 @@ fn parse_args(args: &[String]) -> Result<SendArgs, i32> {
         style_exception: None,
         steer: false,
         cwd: None,
+        subject: None,
     };
     let mut positionals: Vec<String> = Vec::new();
     let mut fenced = false;
