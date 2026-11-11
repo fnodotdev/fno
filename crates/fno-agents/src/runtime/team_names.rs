@@ -2066,8 +2066,13 @@ pub fn apply_team_naming(
     // The level-0/2 theme-required refusal runs BEFORE the name action: a
     // refused check-in never leaves a freshly drawn name bound (the node's
     // incident: `--name redraw` bound the drawn name, then this refusal
-    // fired). Same refusal text, earlier position.
-    if matches!(level, Some(0) | Some(2)) && theme_for(&store_path, scope).is_none() {
+    // fired). Same refusal text, earlier position. A command that carries
+    // --theme owes nothing here: validate_theme gates it above, and
+    // set_theme commits it after the name action.
+    if matches!(level, Some(0) | Some(2))
+        && theme.is_none()
+        && theme_for(&store_path, scope).is_none()
+    {
         return Err(
             "every lead names its theme once per scope; check in with --theme <theme>".into(),
         );

@@ -1401,6 +1401,16 @@ pub fn run(args: &[String]) -> i32 {
             .to_string();
         (!from_env.is_empty()).then_some(from_env)
     });
+    // The cap holds whichever way the subject arrived: the flag path already
+    // refused over 200 at parse, and the env path (the old guard's post) is
+    // checked here, before anything rides the envelope.
+    if subject.as_ref().is_some_and(|s| s.len() > 200) {
+        eprintln!(
+            "error: FNO_MAIL_SUBJECT is {} characters (cap 200); put the detail in the body",
+            subject.as_ref().map_or(0, |s| s.len())
+        );
+        return 2;
+    }
     let body_text = match resolve_body_text(&args) {
         Ok(text) => text,
         Err((msg, code)) => {

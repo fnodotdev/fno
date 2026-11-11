@@ -946,8 +946,6 @@ mod attended_title_tests {
         let _hn = crate::claims::EnvVarGuard::set("FNO_HARNESS_NAME", "claude");
         let _hsid = crate::claims::EnvVarGuard::set("FNO_HARNESS_SESSION_ID", "s-granted");
         let _attest = crate::claims::EnvVarGuard::set("CLAUDE_CODE_SESSION_ID", "s-granted");
-        let home = crate::paths::AgentsHome::from_env();
-        let _ = &home;
         let line = rename_harness_title_for_team("fno").expect("the attended arm answers");
         assert_eq!(
             line.as_deref(),

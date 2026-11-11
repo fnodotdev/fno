@@ -327,14 +327,16 @@ pub fn promote(home: &AgentsHome, handle: &str, scopes: &[String]) -> Result<Val
         .map_or(grantor_name.clone(), str::to_string);
     let same =
         |a: Option<&str>, b: &str| crate::loop_lead::same_territory(a.unwrap_or(""), b, &projects);
-    // A same-scope caller IS the succession intent: the door vacates the
-    // caller and stamps the target in the single registry write below, so
-    // the scope is never doubly ruled and never briefly unruled. The old
-    // refusal sent this shape to `spawn --promote --hand-off`; the widened
-    // acceptance makes the direct door perform it.
+    // A same-scope caller handing to a DIFFERENT row is the succession
+    // intent: the door vacates the caller and stamps the target in the
+    // single registry write below, so the scope is never doubly ruled and
+    // never briefly unruled. The old refusal sent this shape to
+    // `spawn --promote --hand-off`; the widened acceptance makes the direct
+    // door perform it. A self-role is a re-stamp the widened door admits,
+    // never a hand-off: nothing vacates.
     let succession = caller
         .as_ref()
-        .is_some_and(|c| same(c.role_scope.as_deref(), &scope));
+        .is_some_and(|c| same(c.role_scope.as_deref(), &scope) && c.name != target_name);
     let granting_scope = caller.as_ref().and_then(|c| c.role_scope.clone());
 
     let mut receipt = Map::new();
@@ -434,19 +436,17 @@ pub fn promote(home: &AgentsHome, handle: &str, scopes: &[String]) -> Result<Val
         }
         // The succession half of the same write: the caller's own row
         // vacates as the target arms, so the scope never has two rulers.
+        // The row resolves through locked() (name AND session), the same
+        // identity match the grantor liveness read above uses.
         if succession {
             if let Some(c) = &caller {
-                let row = reg
-                    .entries
-                    .iter_mut()
-                    .find(|r| r.name == c.name)
-                    .ok_or_else(|| {
-                        format!(
-                            "refusing to role {}: the calling row disappeared before the \
-                             succession committed.",
-                            py_repr_str(handle)
-                        )
-                    })?;
+                let row = locked(&mut reg.entries, c).ok_or_else(|| {
+                    format!(
+                        "refusing to role {}: the calling row disappeared before the \
+                         succession committed.",
+                        py_repr_str(handle)
+                    )
+                })?;
                 if holder_session(row).is_none() {
                     return Err(format!(
                         "refusing to role {}: the calling row carries no session, so the \
