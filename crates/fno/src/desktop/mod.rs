@@ -35,21 +35,27 @@ pub struct Options {
     pub probe: bool,
     /// The view the window opens on.
     pub mode: MainView,
-    /// With `probe`: count the chat events of this claude session (or of
-    /// the newest one) instead of attaching.
+    /// A claude session id, or `newest`: the chat view shows it instead of
+    /// the focused agent's. With `probe`, count its events instead.
     pub chat: Option<String>,
 }
 
 /// Run the app (or the headless probe) and return the process exit code.
 pub fn run(opts: Options) -> i32 {
     let session = resolve_session(opts.session.as_deref(), env_server().as_deref());
-    if let (true, Some(which)) = (opts.probe, &opts.chat) {
-        return chat::probe(&session, which, CHAT_PROBE_IDLE);
+    let pinned = match opts.chat.as_deref().map(chat::claude_key) {
+        Some(None) => {
+            eprintln!("fno-desktop: no claude transcript to read");
+            return 1;
+        }
+        Some(key) => key,
+        None => None,
+    };
+    match (opts.probe, pinned) {
+        (true, Some(key)) => return chat::probe(&session, key, CHAT_PROBE_IDLE),
+        (true, None) => return probe(&session),
+        (false, pinned) => window::run(session, opts.mode, pinned, opts.font, opts.font_size),
     }
-    if opts.probe {
-        return probe(&session);
-    }
-    window::run(session, opts.mode, opts.font, opts.font_size);
     0
 }
 

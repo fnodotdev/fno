@@ -346,6 +346,9 @@ pub fn open(session: &str, key: SessionKey) -> Result<(Stream, UnboundedReceiver
 
 /// The focused pane's agent session, when the row names one.
 pub fn focused_key(root: &Root) -> Option<SessionKey> {
+    if let Some(key) = &root.pinned {
+        return Some(key.clone());
+    }
     let row = root
         .layout
         .agents
@@ -605,25 +608,23 @@ fn newest_claude_session() -> Option<String> {
         .map(|(_, id)| id)
 }
 
+/// `--chat <id|newest>` as a claude session key.
+pub fn claude_key(which: &str) -> Option<SessionKey> {
+    let session_id = match which {
+        "newest" => newest_claude_session()?,
+        id => id.to_string(),
+    };
+    Some(SessionKey {
+        harness: "claude".into(),
+        session_id,
+        subagent: None,
+    })
+}
+
 /// `--probe --chat <id|newest>`: stream one claude session from the server,
 /// count its events until no batch comes for `idle`, and print the count.
-pub fn probe(session: &str, which: &str, idle: Duration) -> i32 {
-    let id = if which == "newest" {
-        match newest_claude_session() {
-            Some(id) => id,
-            None => {
-                eprintln!("fno-desktop: no claude transcript to read");
-                return 1;
-            }
-        }
-    } else {
-        which.to_string()
-    };
-    let key = SessionKey {
-        harness: "claude".into(),
-        session_id: id.clone(),
-        subagent: None,
-    };
+pub fn probe(session: &str, key: SessionKey, idle: Duration) -> i32 {
+    let id = key.session_id.clone();
     let tail = match crate::proto::socket_path(session)
         .map_err(|e| e.to_string())
         .and_then(|socket| tail_sync(&socket, key, 0).map_err(|e| e.to_string()))

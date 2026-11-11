@@ -22,9 +22,10 @@ struct Args {
     /// The view the window opens on.
     #[arg(long, value_enum, default_value_t = fno::desktop::MainView::Chat)]
     mode: fno::desktop::MainView,
-    /// With --probe: stream this claude session's chat (a session id, or
-    /// `newest`), print `chat_events=<n> session=<id>`, and exit.
-    #[arg(long, requires = "probe")]
+    /// Show this claude session's chat (a session id, or `newest`) instead
+    /// of the focused agent's. With --probe, print
+    /// `chat_events=<n> session=<id>` and exit.
+    #[arg(long)]
     chat: Option<String>,
 }
 

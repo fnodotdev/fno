@@ -25,6 +25,7 @@ use super::link::{Event, Layout, Link};
 use super::mouse::{self, Hit};
 use super::palette::Palette;
 use super::{extensions, left_pane, orchestration, tabs};
+use crate::proto::chat_event::SessionKey;
 use crate::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};
 use crate::tree::Rect;
 use crate::web_hq::Board;
@@ -113,6 +114,8 @@ pub struct Root {
     pub(super) answers: HashMap<String, AnswerState>,
     pub(super) agents_open: bool,
     pub(super) chat: Chat,
+    /// `--chat <id>`: the session chat mode shows, whatever has focus.
+    pub(super) pinned: Option<SessionKey>,
     /// The mux session this window attached to; panes open on it.
     pub(super) session: String,
     pub(super) ext: extensions::Page,
@@ -152,6 +155,7 @@ impl Root {
     fn new(
         session: String,
         main: MainView,
+        pinned: Option<SessionKey>,
         metrics: Metrics,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -185,6 +189,8 @@ impl Root {
             agents_open: false,
             session: session.clone(),
             ext: extensions::Page::default(),
+            chat: Chat::default(),
+            pinned,
             preedit: None,
             _reader: None,
             _chat: None,
@@ -408,8 +414,11 @@ impl Root {
         if self.chat.draft.trim().is_empty() {
             return;
         }
-        if self.chat.key.is_none() || self.link.is_none() {
-            self.say("no agent session to send to".into(), cx);
+        if self.pinned.is_some() || self.chat.key.is_none() || self.link.is_none() {
+            self.say(
+                "no agent pane to send to: focus the agent's pane".into(),
+                cx,
+            );
             return;
         }
         let mut text = std::mem::take(&mut self.chat.draft);
@@ -1116,7 +1125,13 @@ impl Render for Root {
 }
 
 /// Open the window and run the app until it quits.
-pub fn run(session: String, main: MainView, family: String, font_size: f32) {
+pub fn run(
+    session: String,
+    main: MainView,
+    pinned: Option<SessionKey>,
+    family: String,
+    font_size: f32,
+) {
     Application::new().run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1360.0), px(800.0)), cx);
         let opened = cx.open_window(
@@ -1150,7 +1165,7 @@ pub fn run(session: String, main: MainView, family: String, font_size: f32) {
                     cell: size(snap(width), snap(font_size * 1.25)),
                 };
                 cx.new(|cx| {
-                    let root = Root::new(session, main, metrics, window, cx);
+                    let root = Root::new(session, main, pinned, metrics, window, cx);
                     window.focus(&root.focus);
                     root
                 })

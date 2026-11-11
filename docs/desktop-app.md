@@ -27,7 +27,7 @@ The `codesign -s -` step gives the binary an ad-hoc signature. No developer acco
 | `--font-size <pt>` | `13` | The terminal font size. |
 | `--mode <view>` | `chat` | The view the window opens on: `chat`, `terminal`, `orchestration` or `extensions`. |
 | `--probe` | off | Attach with no window, print two lines, and exit. |
-| `--chat <id>` | none | With `--probe`: stream one claude session's chat instead of attaching. `newest` picks the most recently written transcript. |
+| `--chat <id>` | none | Show one claude session's chat instead of the focused agent's. `newest` picks the most recently written transcript. With `--probe`, count its events instead of attaching. |
 
 `--probe` attaches as an observer, so it never resizes a pane. It waits up to 5 seconds for the layout and one frame per pane. Then it prints `attached session=<s> panes=<n> frames=<m>`. Next it reads the fleet, the open questions and the backlog the way the window does, and prints `agents=<n> questions=<m> seats=<k>`. After a good attach it exits 0. With no server it prints the socket path it tried and exits 1. A failed fleet or question read prints its reason on stderr.
 
@@ -43,7 +43,7 @@ The strip above the grid shows the active session's tabs. A tab without a chosen
 
 cmd-1 or Chat shows the conversation of the agent in the focused pane. The app reads it from the mux server's chat stream, which serves claude, codex and opencode sessions in one event shape. Your turns sit on the right. The agent's text renders as markdown: headings, lists, bold, italic, inline code and code blocks. Tables and images show as plain text. Thinking and each tool call take one line. A click opens one to show its text, or the call's input and output. A mark shows each call's state: … for a call that runs, ✓ for a success, ✗ for a failure. A kind the app does not know shows as one plain line. New turns append as the agent writes them. The view follows them while it is scrolled to the bottom.
 
-Focus another pane to read its agent. A pane with no agent session says so.
+Focus another pane to read its agent. A pane with no agent session says so. With `--chat <id>`, the view stays on that session and the composer sends nothing, since no pane of yours hosts it.
 
 The composer at the bottom takes your message. Enter sends it, Shift-Enter adds a line, and cmd-v pastes into it. The app types the text into the agent's pane as a paste, waits 800 ms, then presses Enter: the same path `fno mux pane send --submit` takes. After the agent's transcript records your turn, it shows up in the view.
 
