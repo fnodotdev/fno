@@ -33,4 +33,4 @@ Prepend one object to the `LOG` array with `edit_version` (replace `const LOG = 
 
 ## The reader
 
-The reading loop is fleet-owned, not a lead duty. One spawned session runs it; the beat procedure, the liveness probe, and the repairs live in [skills/visual-log-reader/SKILL.md](../../visual-log-reader/SKILL.md). Never arm a per-session reader: two readers double-record approvals, and a lead's cron dies with the lead.
+The reading loop is fleet-owned, not a lead duty. One spawned session runs it. The beat procedure and the repairs live in [skills/visual-log-reader/SKILL.md](../../visual-log-reader/SKILL.md). The probe is `ensure-reader.sh` beside it. Never arm a per-session reader: two readers double-record approvals, and a lead's cron dies with the lead.

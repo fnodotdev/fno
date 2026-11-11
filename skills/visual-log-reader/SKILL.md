@@ -9,7 +9,7 @@ metadata:
 
 # Visual Log tap reader
 
-The Visual Log page carries Approve and Change buttons on every entry. A tap writes a row to the page's database; this skill reads new rows, records each one, and writes the ack back. The reader is ONE fleet-owned session, not a duty of whichever lead happens to be alive. A lead session's cron dies with the lead, and a second reader double-records approvals, so no session ever arms a private reader cron.
+The Visual Log page carries Approve and Change buttons on every entry. A tap writes a row to the page's database. This skill reads new rows, records each one, and writes the ack back. The reader is ONE fleet-owned session, not a duty of whichever lead happens to be alive. A lead session's cron dies with the lead, and a second reader double-records approvals, so no session ever arms a private reader cron.
 
 ## Fleet ownership
 
@@ -19,7 +19,7 @@ Spawn the reader once, on the thread lane:
 fno agents spawn visual-log-reader "/fno:visual-log-reader" --as thread
 ```
 
-The daemon revives it: worker_wake resumes proven-dead sessions, claude_restart_watch re-binds a claude job the daemon restart moved, and `fno mux workspace restore` brings it back through the claude revive plan after a reboot or a killed mux server. A member already live is focused, never spawned twice.
+The daemon revives a dead reader. `worker_wake` resumes proven-dead sessions. `claude_restart_watch` re-binds a claude job the daemon restart moved. `fno mux workspace restore` brings a reader back through the claude revive plan after a reboot or a killed mux server. A member already live is focused, never spawned twice.
 
 ## Liveness
 
@@ -30,7 +30,7 @@ SKILL_DIR="$(cat ~/.fno/install/plugin-root 2>/dev/null)/skills/visual-log-reade
 bash "$SKILL_DIR/scripts/ensure-reader.sh" check
 ```
 
-Exit 0 means present and fresh (last activity inside 20 minutes). Exit 1 means absent or stale, and the output names the repair: the spawn line for an absent reader, `fno agents session resume visual-log-reader` for a stale one. `ensure-reader.sh spawn` runs the same check first and fires the spawn only on an absent row; a stale reader resumes, it never respawns. In a source checkout the script lives at `skills/visual-log-reader/scripts/ensure-reader.sh`.
+Exit 0 means present and fresh (last activity inside 20 minutes). Exit 1 means absent or stale, and the output names the repair: the spawn line for an absent reader, `fno agents session resume visual-log-reader` for a stale one. `ensure-reader.sh spawn` runs the same check first and fires the spawn only on an absent row. A stale reader resumes, it never respawns. In a source checkout the script lives at `skills/visual-log-reader/scripts/ensure-reader.sh`.
 
 ## The beat, every 15 minutes
 
@@ -57,4 +57,4 @@ A beat with no new tap writes nothing and mails nobody.
 
 ## Where the data lives
 
-The page template, the database rules, the taps/acks/config shapes, and how to add an entry are owned by [skills/lead/references/visual-log-taps.md](../lead/references/visual-log-taps.md). That file owns the data contract; this skill owns the reading loop.
+The page template, the database rules, the taps/acks/config shapes, and how to add an entry are owned by [skills/lead/references/visual-log-taps.md](../lead/references/visual-log-taps.md). That file owns the data contract. This skill owns the reading loop.
