@@ -2422,6 +2422,9 @@ mod tests {
                 NameHistoryEntry::here("atticus", "fno", Some("sess-a".into()), "bound"),
             )
             .unwrap();
+            // The binder is an established lead: its scope named its theme
+            // long ago, and the hoisted theme-required refusal reads it.
+            set_theme(&store, &registry, "fno", "ops cadence").unwrap();
             apply_team_naming(
                 &store,
                 &registry,
