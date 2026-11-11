@@ -30,8 +30,8 @@ fn client_e2e_first_run_boots_command_center_and_types_into_the_pane() {
         .expect("the first-run boot writes the seen marker");
     let seed: serde_json::Value = serde_json::from_str(&seed).expect("the store stays valid JSON");
     assert_eq!(
-        seed["experimental"]["org_board_seen"],
-        serde_json::json!(true),
+        seed.pointer("/experimental/org_board_seen"),
+        Some(&serde_json::json!(true)),
         "the marker landed in the store"
     );
 }
