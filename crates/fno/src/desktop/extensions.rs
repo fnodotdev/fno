@@ -818,7 +818,10 @@ mod tests {
         page.edit("backspace", None);
         page.edit("backspace", None);
         page.edit("h", Some("https://github.com/o/r"));
-        assert_eq!(page.url_to_install().as_deref(), Some("https://github.com/o/r"));
+        assert_eq!(
+            page.url_to_install().as_deref(),
+            Some("https://github.com/o/r")
+        );
         assert_eq!(page.edit("enter", None), Edit::Submit);
         assert_eq!(page.edit("escape", None), Edit::Close);
     }
