@@ -210,6 +210,9 @@ pub(crate) fn drive(
     // poll, the same answer, so one failed POST cannot hang the turn. A
     // reply that keeps failing stops after MAX_REPLY_TRIES.
     let mut unsent: HashMap<String, (Answer, u32)> = HashMap::new();
+    // The held ids, published beside the lock so `--answer` finds them.
+    let held_file = answer_lock.map(|p| p.with_extension("held"));
+    let mut published = String::new();
     loop {
         match perm::list_pending(&serve, &spec.cwd, sid) {
             Ok(pending) => {
@@ -255,6 +258,15 @@ pub(crate) fn drive(
                 ));
             }
             Err(_) => {}
+        }
+        if let Some(file) = &held_file {
+            let mut ids: Vec<&str> = held.keys().map(String::as_str).collect();
+            ids.sort_unstable();
+            let now = ids.join("\n");
+            if now != published {
+                let _ = std::fs::write(file, &now);
+                published = now;
+            }
         }
         let busy = session_busy(&spec.base_url, &spec.token, &dir, sid);
         seen_busy |= busy == Some(true);
@@ -326,7 +338,17 @@ fn session_busy(base_url: &str, token: &str, dir: &str, sid: &str) -> Option<boo
     Some(matches!(kind, Some("busy" | "retry")))
 }
 
-/// Answer the oldest pending ask of `session_id` for the user:
+/// The held ask ids a driver publishes for `session_id` under `turns`.
+pub(crate) fn held_ids(turns: &Path, session_id: &str) -> Vec<String> {
+    std::fs::read_to_string(turns.join(format!("{session_id}.held")))
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Answer a held ask of `session_id` for the user, else the oldest pending:
 /// `allow_once` or `deny`. Errors name why nothing was sent.
 pub(crate) fn answer_for_user(
     base_url: &str,
@@ -334,6 +356,7 @@ pub(crate) fn answer_for_user(
     cwd: &Path,
     session_id: &str,
     choice: &str,
+    held: &[String],
 ) -> Result<String, String> {
     let reply = match choice {
         "allow_once" => Reply::Once,
@@ -346,7 +369,11 @@ pub(crate) fn answer_for_user(
         contract: serve_contract(base_url, token),
     };
     let pending = perm::list_pending(&serve, cwd, session_id)?;
-    let Some(first) = pending.first() else {
+    let target = pending
+        .iter()
+        .find(|p| held.contains(&p.request_id))
+        .or(pending.first());
+    let Some(first) = target else {
         return Err(format!(
             "no permission ask is pending for session {session_id}"
         ));
@@ -450,15 +477,41 @@ mod tests {
             ("GET /permission?directory=/w", "200 OK", ONE_ASK.into()),
             ("POST /permission/per_1/reply", "200 OK", "true".into()),
         ]);
-        let id = answer_for_user(&fake.url, "t", Path::new("/w"), "ses_a", "deny").unwrap();
+        let id = answer_for_user(&fake.url, "t", Path::new("/w"), "ses_a", "deny", &[]).unwrap();
         assert_eq!(id, "per_1");
         let seen = fake.seen.lock().unwrap();
         let body: Value = serde_json::from_str(&seen.last().unwrap().1).unwrap();
         assert_eq!(body["reply"], "reject");
         drop(seen);
-        let err = answer_for_user(&fake.url, "t", Path::new("/w"), "ses_other", "allow_once")
-            .unwrap_err();
+        let err = answer_for_user(
+            &fake.url,
+            "t",
+            Path::new("/w"),
+            "ses_other",
+            "allow_once",
+            &[],
+        )
+        .unwrap_err();
         assert!(err.contains("no permission ask is pending"), "{err}");
-        assert!(answer_for_user(&fake.url, "t", Path::new("/w"), "ses_a", "always").is_err());
+        assert!(answer_for_user(&fake.url, "t", Path::new("/w"), "ses_a", "always", &[]).is_err());
+
+        // With two asks pending, the held one gets the user's answer, and the
+        // driver's published file names it.
+        let two = Fake::start(vec![
+            ("GET /global/health", "200 OK", r#"{"version":"1.18.33"}"#.into()),
+            (
+                "GET /permission?directory=/w",
+                "200 OK",
+                r#"[{"id":"per_1","sessionID":"ses_a","permission":"bash","patterns":["ls"],"metadata":{},"always":[]},
+                    {"id":"per_2","sessionID":"ses_a","permission":"bash","patterns":["rm x"],"metadata":{},"always":[]}]"#.into(),
+            ),
+            ("POST /permission/per_2/reply", "200 OK", "true".into()),
+        ]);
+        let turns = tempfile::tempdir().unwrap();
+        std::fs::write(turns.path().join("ses_a.held"), "per_2").unwrap();
+        let held = held_ids(turns.path(), "ses_a");
+        let id =
+            answer_for_user(&two.url, "t", Path::new("/w"), "ses_a", "allow_once", &held).unwrap();
+        assert_eq!(id, "per_2");
     }
 }

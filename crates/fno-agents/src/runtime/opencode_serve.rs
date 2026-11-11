@@ -1049,6 +1049,7 @@ pub fn answer_registered_session(home: &AgentsHome, name: &str, choice: &str) ->
         Path::new(&entry.cwd),
         session_id,
         choice,
+        &crate::opencode_turn::held_ids(&home.root().join("agents").join("turns"), session_id),
     ) {
         Ok(request_id) => AskOutcome::ok_reply(
             serde_json::json!({"ok": true, "answered": request_id, "answer": choice}).to_string(),
