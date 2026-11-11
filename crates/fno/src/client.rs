@@ -6869,11 +6869,10 @@ async fn attach_and_run(
                     | ServerMsg::LayoutApplied { .. }
                     | ServerMsg::LayoutGrafted { .. }
                     | ServerMsg::TabLocation { .. }
-                    | ServerMsg::TabClosed { .. }
+                    | ServerMsg::TabClosed { .. } | ServerMsg::ChatEvents { .. }
                     | ServerMsg::WorkspaceRestored { .. } | ServerMsg::SquadReloaded { .. }
                     | ServerMsg::SessionRetired { .. } | ServerMsg::AgentRowsReceipt { .. }
-                    | ServerMsg::ServerStats { .. } | ServerMsg::NoticeSent { .. }
-                    | ServerMsg::ChatEvents { .. }) => {}
+                    | ServerMsg::ServerStats { .. } | ServerMsg::NoticeSent { .. }) => {}
                 Ok(ServerMsg::DesktopNotice { title, body }) => crate::notify::deliver(&title, &body, raw_out),
                 Ok(ServerMsg::Copy { text }) => {
                     // Land the server-extracted selection on the clipboard: local
