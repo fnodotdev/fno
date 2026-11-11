@@ -29,7 +29,7 @@ Schema 1. One `fno_usage_report` event per UTC day, for the last complete day.
 | `harness` | `{"claude": 9, "codex": 3}` | Counts of those rows by harness name. |
 | `model` | `{"claude-opus-5-5": 9}` | Counts of those rows by model name. |
 
-A harness or model value counts only when it reads as one identifier: letters, digits and `-_.:/`, at most 128 characters, no leading `/` or `~`, and no `..`. Anything else is dropped. The report never holds a prompt, code, a path, a title, a hostname, a machine id or free text. The event also carries PostHog's `$process_person_profile: false`, so PostHog builds no person profile.
+A harness or model value counts only if it reads as one identifier. It holds letters, digits and `-_.:/`, at most 128 characters, with no leading `/` or `~` and no `..`. Anything else is dropped. The report never holds a prompt, code, a path, a title, a hostname, a machine id or free text. The event also carries PostHog's `$process_person_profile: false`, so PostHog builds no person profile.
 
 An example body, as `show` prints it:
 
@@ -55,4 +55,4 @@ All under the agents home (`~/.fno/agents` by default), in `otlp_export/usage_re
 - `consent.json`: `{answer, at, schema}`. Only `fno doctor telemetry on` and `off` write it.
 - `sent/<day>.json`: the exact body each send posted. The last 30 stay.
 
-The install id lives at `~/.fno/install/fno_install_seen.id`. The daemon checks once an hour and sends when the last complete day has no `sent/` file.
+The install id lives at `~/.fno/install/fno_install_seen.id`. The daemon checks once an hour. If the last complete day has no `sent/` file, it sends.

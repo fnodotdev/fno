@@ -6,9 +6,9 @@ Footnote is an open-source workflow plugin. It stores project state, agent trans
 
 Footnote can send its maintainers one usage report a day, and only after you opt in. Nothing leaves your machine before you say yes. Run `fno doctor telemetry show` to see the exact report the next send posts. Run `fno doctor telemetry on` to read that report and answer yes or no at a terminal. The setup wizard offers the same question, and its default is no. An agent cannot say yes for you: `on` refuses without a person at a terminal, and no config key can turn the report on.
 
-The report holds counts and identifiers only. Its fields are the fno version, the install channel, the OS, the CPU arch, the UTC day, a random install id, and counts of event kinds, harness names and model names. It never holds a prompt, code, a path, a title, a hostname, a machine id or free text. The full field list is in `docs/telemetry.md`. Each sent report stays on your machine under the agents home at `otlp_export/usage_report/sent/` (the last 30), so you can check what went.
+The report holds counts and identifiers only. It names the fno version, the install channel, the OS, the CPU arch, the UTC day and a random install id. It counts event kinds, harness names and model names. It never holds a prompt, code, a path, a title, a hostname, a machine id or free text. The full field list is in `docs/telemetry.md`. Each sent report stays on your machine under the agents home at `otlp_export/usage_report/sent/` (the last 30), so you can check what went.
 
-The report goes to PostHog, a third-party analytics service, in a project kept for these reports. Only official release builds carry the PostHog key, so a source build or a crates.io build never sends. The report never sends when `CI` is set.
+The report goes to PostHog, a third-party analytics service, in a project kept for these reports. Only official release builds carry the PostHog key, so a source build or a crates.io build never sends. If `CI` is set, the report never sends.
 
 You can turn it off at any time. Run `fno doctor telemetry off`, set `DO_NOT_TRACK=1` or `OTEL_SDK_DISABLED=true`, or set `[telemetry.usage_report] enabled = false` in config. When a later release adds a field, the report stops until you opt in again.
 
