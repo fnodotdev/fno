@@ -3536,11 +3536,11 @@ fn opencode_serve_seat_locate_names_the_real_blocker() {
 mod serve_setup {
     use super::serve_attach;
 
-    pub fn none() -> impl Fn() {
+    pub fn none() -> fn() {
         || serve_attach::clear_pinned_state()
     }
 
-    pub fn dead() -> impl Fn() {
+    pub fn dead() -> fn() {
         move || {
             serve_attach::set_pinned_state("http://127.0.0.1:1", Some(4096), Some(4043), "t");
             serve_attach::clear_pinned_health();

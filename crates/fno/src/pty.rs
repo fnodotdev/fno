@@ -2363,6 +2363,7 @@ mod tests {
             80,
             None,
             &["/bin/cat".to_string()],
+            &[],
         );
         let envs: std::collections::HashMap<String, String> = cmd
             .get_envs()

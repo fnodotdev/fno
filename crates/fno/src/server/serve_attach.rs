@@ -21,7 +21,7 @@ pub(crate) struct ServeHonest {
     pub facts: Vec<String>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Clone)]
 struct ServeState {
     base_url: String,
     #[serde(default)]
@@ -32,6 +32,7 @@ struct ServeState {
     token: String,
 }
 
+#[derive(Clone)]
 struct ServeHealth {
     healthy: bool,
     version: Option<String>,
@@ -302,10 +303,10 @@ pub(crate) fn serve_seat(row: &RegistryAgent) -> ServeSeat {
         );
     };
     let primary = tui_primary();
-    let Some(tui_version) = primary.1 else {
+    let Some(tui_version) = primary.1.as_deref() else {
         return honest_at(&state, "the opencode binary reported no version".into());
     };
-    let Some(tui_major) = parse_major(&tui_version) else {
+    let Some(tui_major) = parse_major(tui_version) else {
         return honest_at(
             &state,
             format!("the opencode binary's version {tui_version:?} reads no major"),
