@@ -38,6 +38,12 @@ fixture "$ABSENT_FIXTURE" '{"agents": [{"name": "other-worker", "last_activity_a
 UNKNOWN_AGE_FIXTURE="$TMP/unknown-age.json"
 fixture "$UNKNOWN_AGE_FIXTURE" '{"agents": [{"name": "visual-log-reader", "last_activity_age_s": null}]}'
 
+FLOAT_AGE_FIXTURE="$TMP/float-age.json"
+fixture "$FLOAT_AGE_FIXTURE" '{"agents": [{"name": "visual-log-reader", "last_activity_age_s": 120.5}]}'
+
+EMPTY_FIXTURE="$TMP/empty.json"
+: > "$EMPTY_FIXTURE"
+
 fail_count=0
 expect() {
     # expect <desc> <want_exit> <want_output_pattern> <cmd...>
@@ -70,6 +76,10 @@ expect "absent repair names the thread lane" 1 "\\-\\-as thread" \
     bash "$SCRIPT" check --status-file "$ABSENT_FIXTURE"
 expect "unknown last activity exits 1" 1 "" \
     bash "$SCRIPT" check --status-file "$UNKNOWN_AGE_FIXTURE"
+expect "float age floors to an integer and reads fresh" 0 "" \
+    bash "$SCRIPT" check --status-file "$FLOAT_AGE_FIXTURE"
+expect "a failed registry read never reads fresh" 1 "unreadable" \
+    bash "$SCRIPT" check --status-file "$EMPTY_FIXTURE"
 expect "freshness bound is overridable" 1 "" \
     bash "$SCRIPT" check --status-file "$FRESH_FIXTURE" --fresh-seconds 60
 

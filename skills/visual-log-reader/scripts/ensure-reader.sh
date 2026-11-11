@@ -60,8 +60,13 @@ do_check() {
     age_read="$(printf '%s' "$BLOB" | jq -r --arg n "$READER_NAME" \
         'if ([.agents[]? | select(.name == $n)] | length) == 0 then "absent"
          else (.agents[] | select(.name == $n) | .last_activity_age_s
-              | if type == "number" then tostring else "unknown" end)
+              | if type == "number" then (floor | tostring) else "unknown" end)
          end' | head -1)"
+    # A failed registry read leaves this empty, and the registry's served
+    # age is f64 (a float kills bash arithmetic). A non-numeric read other
+    # than "absent" lands in the unknown branch: an unreadable state never
+    # reads fresh.
+    [[ "$age_read" == "absent" || "$age_read" =~ ^[0-9]+$ ]] || age_read="unknown"
     case "$age_read" in
         absent)
             echo "reader absent from the registry; repair: ${SPAWN_LINE}"
