@@ -415,6 +415,7 @@ fn back_navigation_and_the_write_latch() {
         Que::T(Ticks::Ok(vec![])),     // loop skills, none
         Que::T(Ticks::Ok(vec![0, 2])), // services
         Que::C(Conf::No),              // Auto Mode: decline settings write
+        Que::C(Conf::No),              // usage report: decline
         Que::T(Ticks::Ok(vec![])),     // messaging: none
         Que::C(Conf::Yes),             // projects: register
         Que::C(Conf::No),              // projects: no scan
@@ -453,6 +454,7 @@ fn back_navigation_and_the_write_latch() {
         Que::T(Ticks::Ok(vec![])),     // interview: loop skills, none
         Que::T(Ticks::Ok(vec![0, 2])), // services
         Que::C(Conf::No),              // Auto Mode: decline settings write
+        Que::C(Conf::No),              // usage report: decline
         Que::T(Ticks::Ok(vec![])),     // messaging: none
         Que::C(Conf::Yes),             // register
         Que::C(Conf::No),              // scan
@@ -494,6 +496,7 @@ fn back_navigation_and_the_write_latch() {
         Que::T(Ticks::Ok(vec![])),     // loop skills, none
         Que::T(Ticks::Ok(vec![0, 2])), // services
         Que::C(Conf::No),              // Auto Mode: decline settings write
+        Que::C(Conf::No),              // usage report: decline
         Que::T(Ticks::Ok(vec![])),     // messaging: none
         Que::C(Conf::Yes),             // projects: register
         Que::C(Conf::No),              // projects: no scan
