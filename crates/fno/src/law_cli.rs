@@ -99,13 +99,22 @@ pub fn run(args: &[OsString]) -> i32 {
             } else {
                 String::new()
             };
+            let stdin_is_terminal = std::io::stdin().is_terminal();
+            // A payload the terminal already fed this process rides argv
+            // inside the request, capped at the record door's 2000-char text
+            // contract: argv has a per-argument limit the pipe does not.
+            let stdin_text = if stdin_is_terminal {
+                stdin_text.chars().take(2000).collect()
+            } else {
+                stdin_text
+            };
             let request = serde_json::json!({
                 "mode": "record",
                 "argv": argv,
                 "stdin": stdin_text,
             })
             .to_string();
-            let attended = record_attended(std::io::stdin().is_terminal());
+            let attended = record_attended(stdin_is_terminal);
             law_exec(&request, attended)
         }
         "stage" | "match" => {
@@ -207,7 +216,8 @@ fn stdin_requested(argv: &[String]) -> bool {
 /// caller's real terminal on the worker's fd 0, so a `set` typed at a
 /// terminal inherits stdin with the request on argv, the same shape
 /// retract uses; a `--decision-file -` payload the terminal already fed
-/// this process rides argv inside the request. A caller without a
+/// this process rides argv inside the request, capped at the record
+/// door's 2000-char text contract. A caller without a
 /// terminal (a daemon or an agent lane) keeps the piped shape and
 /// resolves its identity from its own process truth, so the door's tty
 /// proof stays unforgeable.
