@@ -29,6 +29,12 @@ pub const DEPENDENCY: &str = "dependency";
 pub const CAPABILITY: &str = "capability";
 pub const COMPATIBILITY: &str = "compatibility";
 pub const DECLARED_TEST: &str = "declared-test";
+pub const UI: &str = "ui";
+
+/// A preview is read before any decode, so it is capped on bytes and on the
+/// dimensions its PNG header declares.
+pub const PREVIEW_MAX_BYTES: u64 = 2 * 1024 * 1024;
+pub const PREVIEW_MAX_SIDE: u32 = 4096;
 
 const TOPOLOGIES: [&str; 4] = ["direct", "loop", "squad", "pipeline"];
 
@@ -82,6 +88,9 @@ fn verdict(ok: bool, fail: &'static str) -> &'static str {
 pub struct Report {
     pub pack_path: String,
     pub conditions: Vec<Condition>,
+    /// One row per declared mod and layout, empty when the manifest did not load.
+    pub mods: Vec<Value>,
+    pub layouts: Vec<Value>,
 }
 
 impl Report {
@@ -100,6 +109,8 @@ impl Report {
                 "result": c.result,
                 "detail": c.detail,
             })).collect::<Vec<_>>(),
+            "mods": self.mods,
+            "layouts": self.layouts,
         })
     }
 }
@@ -234,6 +245,8 @@ fn schema_conditions(manifest: &PackManifest) -> Vec<Condition> {
         ("assets", manifest.assets.len()),
         ("permissions", manifest.permissions.len()),
         ("scenarios", manifest.scenarios.len()),
+        ("mods", manifest.mods.len()),
+        ("layouts", manifest.layouts.len()),
     ];
     let detail = counts
         .iter()
@@ -918,9 +931,20 @@ pub fn verify_manifest(
     conditions.extend(compatibility_conditions(manifest));
     conditions.extend(declared_test_conditions(manifest, base));
     conditions.extend(evaluator_conditions(manifest, base));
+    conditions.extend(ui_conditions(manifest, base));
     Report {
         pack_path: base.to_string_lossy().into_owned(),
         conditions,
+        mods: manifest
+            .mods
+            .iter()
+            .map(|m| json!({"id": m.id, "title": m.title, "runs_code": m.runs_code()}))
+            .collect(),
+        layouts: manifest
+            .layouts
+            .iter()
+            .map(|l| json!({"id": l.id, "title": l.title}))
+            .collect(),
     }
 }
 
@@ -930,6 +954,8 @@ pub fn verify_pack(path: &Path, installed: &BTreeMap<String, String>) -> Report 
         Err(failure) => Report {
             pack_path: path.to_string_lossy().into_owned(),
             conditions: vec![failure],
+            mods: Vec::new(),
+            layouts: Vec::new(),
         },
         Ok(manifest) => {
             let base = if path.is_file() {
@@ -940,4 +966,116 @@ pub fn verify_pack(path: &Path, installed: &BTreeMap<String, String>) -> Report 
             verify_manifest(&manifest, installed, &base)
         }
     }
+}
+
+/// The width and height a PNG header declares, read from the first 24 bytes.
+fn png_size(head: &[u8]) -> Option<(u32, u32)> {
+    const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    if head.len() < 24 || head[..8] != SIGNATURE || &head[12..16] != b"IHDR" {
+        return None;
+    }
+    let side = |at: usize| u32::from_be_bytes([head[at], head[at + 1], head[at + 2], head[at + 3]]);
+    Some((side(16), side(20)))
+}
+
+/// A pack-relative file that must exist under the pack root.
+fn contained_file(base: &Path, rel: &str) -> Option<PathBuf> {
+    let root = resolve_path(base);
+    let path = resolve_path(&base.join(rel));
+    (path != root && path.starts_with(&root) && path.is_file()).then_some(path)
+}
+
+fn preview_condition(kind: &str, id: &str, rel: &str, base: &Path) -> Condition {
+    let name = format!("preview:{kind}:{id}");
+    let Some(path) = contained_file(base, rel) else {
+        return cond(UI, name, "failed", Some(format!("{rel} missing or escapes the pack directory")));
+    };
+    let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(u64::MAX);
+    if size > PREVIEW_MAX_BYTES {
+        return cond(UI, name, "failed", Some(format!("{rel} is {size} bytes, over {PREVIEW_MAX_BYTES}")));
+    }
+    let mut head = [0u8; 24];
+    let read = std::fs::File::open(&path)
+        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut head))
+        .is_ok();
+    match png_size(&head).filter(|_| read) {
+        None => cond(UI, name, "failed", Some(format!("{rel} is not a PNG"))),
+        Some((w, h)) if w > PREVIEW_MAX_SIDE || h > PREVIEW_MAX_SIDE => cond(
+            UI,
+            name,
+            "failed",
+            Some(format!("{rel} is {w}x{h}, over {PREVIEW_MAX_SIDE} a side")),
+        ),
+        Some((w, h)) => cond(UI, name, "passed", Some(format!("{rel} {w}x{h}"))),
+    }
+}
+
+fn recipe_condition(kind: &str, id: &str, rel: &str, base: &Path) -> Condition {
+    let name = format!("recipe:{kind}:{id}");
+    match contained_file(base, rel) {
+        Some(_) => cond(UI, name, "passed", Some(format!("{rel} present"))),
+        None => cond(UI, name, "failed", Some(format!("{rel} missing or escapes the pack directory"))),
+    }
+}
+
+fn ui_conditions(manifest: &PackManifest, base: &Path) -> Vec<Condition> {
+    use super::ui::{Binding, Render, FEED_PROGRAMS};
+    let mut out = Vec::new();
+    for m in &manifest.mods {
+        out.push(cond(
+            UI,
+            format!("mod-id:{}", m.id),
+            verdict(is_safe_component(&m.id), "failed"),
+            Some(format!("{} must be a single path component", py_repr_str(&m.id))),
+        ));
+        let (result, detail) = match m.render() {
+            None => ("failed", "declare exactly one of run, feed or native".to_string()),
+            Some(Render::Feed(feed)) => match feed.argv.first() {
+                Some(program) if FEED_PROGRAMS.contains(&program.as_str()) => {
+                    ("passed", format!("feed {}", feed.argv.join(" ")))
+                }
+                _ => (
+                    "failed",
+                    format!("a feed argv starts with one of {}", FEED_PROGRAMS.join(", ")),
+                ),
+            },
+            Some(Render::Run(argv)) => ("passed", format!("runs code: {}", argv.join(" "))),
+            Some(Render::Native(view)) => ("passed", format!("native view {view}")),
+        };
+        out.push(cond(UI, format!("render:{}", m.id), result, Some(detail)));
+        out.push(preview_condition("mod", &m.id, &m.preview, base));
+        out.push(recipe_condition("mod", &m.id, &m.recipe, base));
+    }
+    let mod_ids: BTreeSet<&str> = manifest.mods.iter().map(|m| m.id.as_str()).collect();
+    for layout in &manifest.layouts {
+        let mut leaves = Vec::new();
+        layout.tree.leaves(&mut leaves);
+        let named: BTreeSet<&str> = layout.slots.iter().map(|s| s.name.as_str()).collect();
+        let anchors = layout
+            .slots
+            .iter()
+            .filter(|s| s.binding == Binding::Anchor)
+            .count();
+        let problem = if let Some(leaf) = leaves.iter().find(|l| !named.contains(*l)) {
+            Some(format!("tree leaf {} names no slot", py_repr_str(leaf)))
+        } else if let Some(slot) = layout.slots.iter().find(|s| match &s.binding {
+            Binding::Mod(id) => !mod_ids.contains(id.as_str()),
+            _ => false,
+        }) {
+            Some(format!("slot {} binds a mod this pack does not declare", py_repr_str(&slot.name)))
+        } else if anchors != 1 {
+            Some(format!("a layout binds exactly one anchor slot, found {anchors}"))
+        } else {
+            None
+        };
+        out.push(cond(
+            UI,
+            format!("slots:{}", layout.id),
+            verdict(problem.is_none(), "failed"),
+            problem.or_else(|| Some(format!("{} slot(s)", layout.slots.len()))),
+        ));
+        out.push(preview_condition("layout", &layout.id, &layout.preview, base));
+        out.push(recipe_condition("layout", &layout.id, &layout.recipe, base));
+    }
+    out
 }

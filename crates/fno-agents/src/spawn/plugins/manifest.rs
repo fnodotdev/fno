@@ -10,6 +10,7 @@
 //! manifest, checked by the role schema itself, so the digest the resolver
 //! computes over it is the same one discovery computes.
 
+use super::ui::{Layout, Mod};
 use super::version::Version;
 use crate::roles::models::{
     self, check_manifest, lax_bool, object, only_fields, optional_str, required_str, role_ref,
@@ -110,6 +111,8 @@ pub struct PackManifest {
     pub permissions: Vec<Effect>,
     pub scenarios: Vec<Scenario>,
     pub depends_on: Vec<Dependency>,
+    pub mods: Vec<Mod>,
+    pub layouts: Vec<Layout>,
 }
 
 fn pep440(value: &str, label: &str, at: &str) -> Result<(), String> {
@@ -268,6 +271,11 @@ fn dependency(value: &Value, at: &str) -> Result<Dependency, String> {
     })
 }
 
+/// A `mods` or `layouts` list, parsed through its serde type.
+fn typed<T: serde::de::DeserializeOwned>(obj: &Obj, key: &str) -> serde_json::Result<Vec<T>> {
+    super::ui::field(obj, key).map(Option::unwrap_or_default)
+}
+
 fn unique(field: &str, keys: &[String]) -> Result<(), String> {
     let mut seen = std::collections::HashSet::new();
     for key in keys {
@@ -299,6 +307,8 @@ impl PackManifest {
                 "permissions",
                 "scenarios",
                 "depends_on",
+                "mods",
+                "layouts",
             ],
             at,
         )?;
@@ -322,6 +332,8 @@ impl PackManifest {
             permissions: items(obj, "permissions", at, effect)?,
             scenarios: items(obj, "scenarios", at, scenario)?,
             depends_on: items(obj, "depends_on", at, dependency)?,
+            mods: typed(obj, "mods").map_err(|e| format!("{at}.mods: {e}"))?,
+            layouts: typed(obj, "layouts").map_err(|e| format!("{at}.layouts: {e}"))?,
         };
         let ids = |list: Vec<&String>| list.into_iter().cloned().collect::<Vec<_>>();
         unique(
@@ -358,6 +370,11 @@ impl PackManifest {
             "assets",
             &ids(manifest.assets.iter().map(|s| &s.id).collect()),
         )?;
+        unique("mods", &ids(manifest.mods.iter().map(|m| &m.id).collect()))?;
+        unique(
+            "layouts",
+            &ids(manifest.layouts.iter().map(|l| &l.id).collect()),
+        )?;
         unique(
             "scenarios",
             &ids(manifest.scenarios.iter().map(|s| &s.id).collect()),
@@ -370,7 +387,9 @@ impl PackManifest {
             && manifest.evaluators.is_empty()
             && manifest.assets.is_empty()
             && manifest.permissions.is_empty()
-            && manifest.scenarios.is_empty();
+            && manifest.scenarios.is_empty()
+            && manifest.mods.is_empty()
+            && manifest.layouts.is_empty();
         if empty {
             return Err("a pack must declare at least one component".into());
         }
@@ -422,9 +441,25 @@ impl PackManifest {
         })
     }
 
+    /// `to_json` with the UI components, which join the digest input only
+    /// when declared: a pack without them keeps the digest it had before
+    /// mods and layouts existed, so no install record goes stale.
+    fn digest_input(&self) -> Value {
+        let mut value = self.to_json();
+        if let Value::Object(map) = &mut value {
+            if !self.mods.is_empty() {
+                map.insert("mods".into(), json!(self.mods));
+            }
+            if !self.layouts.is_empty() {
+                map.insert("layouts".into(), json!(self.layouts));
+            }
+        }
+        value
+    }
+
     /// Stable sha256 over the canonical pack-manifest serialization.
     pub fn digest(&self) -> String {
-        models::canonical_digest("pack-manifest", &self.to_json())
+        models::canonical_digest("pack-manifest", &self.digest_input())
     }
 }
 

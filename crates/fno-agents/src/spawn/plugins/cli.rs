@@ -1,5 +1,6 @@
-//! `fno config plugins <command>`: `ls`, `inspect` and `verify` read;
-//! `activate` and `deactivate` are the only writers. Every command emits a
+//! `fno config plugins <command>`: `ls`, `inspect`, `verify`, `gallery` and
+//! `open` read; `activate`, `deactivate`, `install`, `enable` and
+//! `disable` write. Every command emits a
 //! versioned `--json` envelope, on failure paths too, so the skill layer and
 //! CI parse rather than scrape.
 //!
@@ -32,6 +33,11 @@ Commands:
   deactivate  Remove only the definition paths this pack's receipt recorded.
   ls          List installed packs with version, activation state, and...
   inspect     Print a pack's manifest with declarations labeled as...
+  install     Install a pack from a git URL behind the consent card.
+  enable      Switch on a pack, or one of its mods or layouts.
+  disable     Switch off a pack, or one of its mods or layouts.
+  gallery     List published packs from GitHub topics. Installs nothing.
+  open        Show one mod in this terminal: a feed as a table, a command...
 ";
 
 const OPTIONS_HELP: &str = "Options:
@@ -46,7 +52,7 @@ struct Command {
     argument: Option<(&'static str, &'static str)>,
 }
 
-const COMMANDS: [Command; 5] = [
+const COMMANDS: [Command; 10] = [
     Command {
         name: "verify",
         summary: "Verify a pack on two axes; exit non-zero unless every condition passed.",
@@ -72,6 +78,31 @@ const COMMANDS: [Command; 5] = [
         name: "inspect",
         summary: "Print a pack's manifest with declarations labeled as declarations.",
         argument: Some(("PACK_ID", "Installed pack id.")),
+    },
+    Command {
+        name: "install",
+        summary: "Install a pack from a git URL behind the consent card.",
+        argument: Some(("URL", "A git URL the pack's repo clones from.")),
+    },
+    Command {
+        name: "enable",
+        summary: "Switch on a pack, or one of its mods or layouts.",
+        argument: Some(("TARGET", "PACK_ID or PACK_ID/COMPONENT_ID.")),
+    },
+    Command {
+        name: "disable",
+        summary: "Switch off a pack, or one of its mods or layouts.",
+        argument: Some(("TARGET", "PACK_ID or PACK_ID/COMPONENT_ID.")),
+    },
+    Command {
+        name: "gallery",
+        summary: "List published packs from GitHub topics. Installs nothing.",
+        argument: None,
+    },
+    Command {
+        name: "open",
+        summary: "Show one mod in this terminal: a feed as a table, a command mod after its digest check.",
+        argument: Some(("TARGET", "PACK_ID/MOD_ID.")),
     },
 ];
 
@@ -240,6 +271,11 @@ pub fn run(args: &[String]) -> i32 {
         "activate" => activate_command(&ctx, argument),
         "deactivate" => deactivate(&ctx, argument),
         "ls" => list(&ctx),
+        "install" => super::install::run(ctx.json, &ctx.root, argument),
+        "enable" => toggle(&ctx, argument, true),
+        "disable" => toggle(&ctx, argument, false),
+        "gallery" => super::gallery::run(ctx.json),
+        "open" => super::open::run(&ctx.root, argument),
         _ => inspect(&ctx, argument),
     }
 }
@@ -376,13 +412,17 @@ fn list(ctx: &Ctx) -> i32 {
             .packs
             .iter()
             .map(|pack| {
-                json!({
+                let mut row = json!({
                     "pack_id": pack.pack_id,
                     "version": pack.resolved_version,
                     "activated": active(&pack.pack_id),
                     "digest": &pack.pack_digest[..12],
                     "declared_effects": pack.declared_effects.iter().map(|e| e.to_json()).collect::<Vec<_>>(),
-                })
+                });
+                if let Value::Object(map) = &mut row {
+                    map.extend(ui_rows(pack));
+                }
+                row
             })
             .collect();
         emit_json(&envelope(json!({"packs": packs})));
@@ -472,6 +512,128 @@ fn inspect(ctx: &Ctx, pack_id: &str) -> i32 {
             "  declares effect ceiling: {} -> {}",
             effect.effect_class, effect.destination
         );
+    }
+    0
+}
+
+/// The UI keys `ls --json` adds per pack, all additive: `mods`, `layouts`,
+/// `source`, and `manifest_error` when the manifest no longer loads.
+fn ui_rows(pack: &super::registry::InstalledPack) -> serde_json::Map<String, Value> {
+    let mut out = serde_json::Map::new();
+    out.insert("source".into(), json!(pack.source));
+    let manifest_path = Path::new(&pack.manifest_path);
+    let base = manifest_path.parent().unwrap_or(Path::new(""));
+    let abs = |rel: &str| super::resolve_path(&base.join(rel)).to_string_lossy().into_owned();
+    let (mods, layouts) = match load_manifest(manifest_path) {
+        Ok(manifest) => (
+            manifest
+                .mods
+                .iter()
+                .map(|m| {
+                    let kind = match m.render() {
+                        Some(super::ui::Render::Run(_)) => "run",
+                        Some(super::ui::Render::Feed(_)) => "feed",
+                        Some(super::ui::Render::Native(_)) => "native",
+                        None => "invalid",
+                    };
+                    json!({
+                        "id": m.id,
+                        "title": m.title,
+                        "summary": m.summary,
+                        "preview": abs(&m.preview),
+                        "recipe": abs(&m.recipe),
+                        "place": m.place,
+                        "kind": kind,
+                        "native": m.native,
+                        "runs_code": m.runs_code(),
+                        "enabled": pack.enabled(&m.id, m.runs_code()),
+                    })
+                })
+                .collect::<Vec<_>>(),
+            manifest
+                .layouts
+                .iter()
+                .map(|l| {
+                    json!({
+                        "id": l.id,
+                        "title": l.title,
+                        "summary": l.summary,
+                        "preview": abs(&l.preview),
+                        "recipe": abs(&l.recipe),
+                        "enabled": pack.enabled(&l.id, false),
+                    })
+                })
+                .collect::<Vec<_>>(),
+        ),
+        Err(failure) => {
+            out.insert("manifest_error".into(), json!(failure.detail));
+            (Vec::new(), Vec::new())
+        }
+    };
+    out.insert("mods".into(), json!(mods));
+    out.insert("layouts".into(), json!(layouts));
+    out
+}
+
+/// `enable`/`disable PACK[/ID]`. A bare pack id switches every component.
+/// An unknown pack or component exits 2 and names what is installed.
+fn toggle(ctx: &Ctx, target: &str, on: bool) -> i32 {
+    let store = ctx.store();
+    let _held = match store.lock() {
+        Ok(held) => held,
+        Err(e) => return ctx.error(&format!("registry lock failed: {e}")),
+    };
+    let mut registry = match store.load() {
+        Ok(registry) => registry,
+        Err(e) => return ctx.error(&format!("registry corrupt; cannot switch: {}", e.0)),
+    };
+    let (pack_id, component) = match target.split_once('/') {
+        Some((pack, id)) => (pack, Some(id)),
+        None => (target, None),
+    };
+    let known: Vec<String> = registry.packs.iter().map(|p| p.pack_id.clone()).collect();
+    let Some(pack) = registry.pack_by_id_mut(pack_id) else {
+        ctx.error(&format!(
+            "no installed pack {}; installed: {}",
+            quoted(pack_id),
+            if known.is_empty() { "none".to_string() } else { known.join(", ") }
+        ));
+        return 2;
+    };
+    let ids: Vec<String> = match load_manifest(Path::new(&pack.manifest_path)) {
+        Ok(manifest) => manifest
+            .mods
+            .iter()
+            .map(|m| m.id.clone())
+            .chain(manifest.layouts.iter().map(|l| l.id.clone()))
+            .collect(),
+        Err(_) => return ctx.error(&format!("manifest for {pack_id} no longer readable")),
+    };
+    let chosen: Vec<String> = match component {
+        None => ids.clone(),
+        Some(id) if ids.iter().any(|known| known == id) => vec![id.to_string()],
+        Some(id) => {
+            ctx.error(&format!(
+                "pack {pack_id} declares no mod or layout {}; declared: {}",
+                quoted(id),
+                if ids.is_empty() { "none".to_string() } else { ids.join(", ") }
+            ));
+            return 2;
+        }
+    };
+    for id in &chosen {
+        pack.toggles.insert(id.clone(), on);
+    }
+    if let Err(e) = store.save(&registry) {
+        return ctx.error(&format!("registry write failed: {e}"));
+    }
+    let state = if on { "on" } else { "off" };
+    if ctx.json {
+        emit_json(&envelope(json!({"pack_id": pack_id, "switched": chosen, "enabled": on})));
+    } else {
+        for id in &chosen {
+            println!("{pack_id}/{id} {state}");
+        }
     }
     0
 }

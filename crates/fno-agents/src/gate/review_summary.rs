@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 /// One selected `review_attestation` row, reduced to the fields the line needs.
 #[derive(Clone)]
 struct AttestationRow {
+    ts: String,
     head_sha: String,
     verdict: String,
     review_round: Option<u64>,
@@ -85,6 +86,11 @@ where
             .unwrap_or(0);
         if let Some(branch) = row_branch {
             let row = AttestationRow {
+                ts: val
+                    .pointer("/ts")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
                 head_sha,
                 verdict,
                 review_round,
@@ -261,6 +267,33 @@ fn declared_round_response(
     }
 }
 
+const LEDGER_ROWS: usize = 40;
+
+/// The review ledger feed: the newest attestation on each branch, newest
+/// first, as the rows a review-ledger panel draws.
+fn ledger(events_text: &str, limit: usize) -> Value {
+    let mut rows: Vec<(String, AttestationRow)> = index_rows(events_text)
+        .into_iter()
+        .filter_map(|(branch, rows)| rows.last().cloned().map(|row| (branch, row)))
+        .collect();
+    rows.sort_by(|a, b| b.1.ts.cmp(&a.1.ts).then_with(|| a.0.cmp(&b.0)));
+    Value::Array(
+        rows.into_iter()
+            .take(limit)
+            .map(|(branch, row)| {
+                serde_json::json!({
+                    "ts": row.ts,
+                    "branch": branch,
+                    "head": row.head_sha.get(..12).unwrap_or(&row.head_sha),
+                    "verdict": row.verdict,
+                    "round": row.review_round,
+                    "findings": row.findings,
+                })
+            })
+            .collect(),
+    )
+}
+
 /// `fno-agents review-summary` entry: prints the line or nothing, exit 0
 /// either way, when branch+head name a head to display. A parse failure is
 /// deliberate silence (print nothing, exit 0). `--evidence` replaces that
@@ -297,6 +330,10 @@ pub fn run_review_summary(args: &[String]) -> i32 {
         Ok(lines) => lines.join("\n"),
         Err(_) => return 0,
     };
+    if parsed.ledger {
+        println!("{}", ledger(&events_text, LEDGER_ROWS));
+        return 0;
+    }
     if let (Some(branch), Some(head)) = (&parsed.branch, &parsed.head) {
         if let Some(line) = summary_line(&events_text, branch, head) {
             println!("{line}");

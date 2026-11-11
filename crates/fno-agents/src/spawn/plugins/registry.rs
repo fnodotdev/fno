@@ -50,6 +50,28 @@ pub struct InstalledPack {
     pub pack_digest: String,
     pub manifest_path: String,
     pub declared_effects: Vec<Effect>,
+    /// Where a URL install came from and who consented; `None` for a pack
+    /// activated from a local path.
+    pub source: Option<Source>,
+    /// Mod or layout id -> on/off, as the operator switched it. A missing id
+    /// reads its default: on, except a mod that runs code, which starts off.
+    pub toggles: std::collections::BTreeMap<String, bool>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Source {
+    pub url: String,
+    pub commit: String,
+    pub content_digest: String,
+    pub consented_by: String,
+    pub consented_at: String,
+}
+
+impl InstalledPack {
+    pub fn enabled(&self, component: &str, runs_code: bool) -> bool {
+        self.toggles.get(component).copied().unwrap_or(!runs_code)
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -161,6 +183,8 @@ fn installed_pack(value: &Value, at: &str) -> Result<InstalledPack, String> {
             "pack_digest",
             "manifest_path",
             "declared_effects",
+            "source",
+            "toggles",
         ],
         at,
     )?;
@@ -174,6 +198,12 @@ fn installed_pack(value: &Value, at: &str) -> Result<InstalledPack, String> {
             .enumerate()
             .map(|(i, item)| manifest::effect(item, &format!("{at}.declared_effects.{i}")))
             .collect::<Result<_, _>>()?,
+        source: super::ui::field::<Option<Source>>(obj, "source")
+            .map_err(|e| format!("{at}.source: {e}"))?
+            .flatten(),
+        toggles: super::ui::field(obj, "toggles")
+            .map_err(|e| format!("{at}.toggles: {e}"))?
+            .unwrap_or_default(),
     })
 }
 
@@ -254,13 +284,26 @@ impl Registry {
 
     pub fn to_json(&self) -> Value {
         json!({
-            "packs": self.packs.iter().map(|p| json!({
-                "pack_id": p.pack_id,
-                "resolved_version": p.resolved_version,
-                "pack_digest": p.pack_digest,
-                "manifest_path": p.manifest_path,
-                "declared_effects": p.declared_effects.iter().map(Effect::to_json).collect::<Vec<_>>(),
-            })).collect::<Vec<_>>(),
+            "packs": self.packs.iter().map(|p| {
+                let mut row = json!({
+                    "pack_id": p.pack_id,
+                    "resolved_version": p.resolved_version,
+                    "pack_digest": p.pack_digest,
+                    "manifest_path": p.manifest_path,
+                    "declared_effects": p.declared_effects.iter().map(Effect::to_json).collect::<Vec<_>>(),
+                });
+                // Written only when set, so a registry with no UI state keeps
+                // the bytes it had before these fields existed.
+                if let Value::Object(map) = &mut row {
+                    if let Some(source) = &p.source {
+                        map.insert("source".into(), json!(source));
+                    }
+                    if !p.toggles.is_empty() {
+                        map.insert("toggles".into(), json!(p.toggles));
+                    }
+                }
+                row
+            }).collect::<Vec<_>>(),
             "receipts": self.receipts.iter().map(|r| json!({
                 "pack_id": r.pack_id,
                 "pack_digest": r.pack_digest,
@@ -295,15 +338,27 @@ impl Registry {
     }
 
     /// Record (or refresh) a pack as installed.
+    /// A refresh keeps the operator's switches and the recorded source.
     pub fn install(&mut self, manifest: &PackManifest, manifest_path: &Path) {
-        self.packs.retain(|p| p.pack_id != manifest.id);
+        let prior = self
+            .packs
+            .iter()
+            .position(|p| p.pack_id == manifest.id)
+            .map(|i| self.packs.remove(i));
+        let (source, toggles) = prior.map_or((None, Default::default()), |p| (p.source, p.toggles));
         self.packs.push(InstalledPack {
             pack_id: manifest.id.clone(),
             resolved_version: manifest.version.clone(),
             pack_digest: manifest.digest(),
             manifest_path: manifest_path.to_string_lossy().into_owned(),
             declared_effects: manifest.permissions.clone(),
+            source,
+            toggles,
         });
+    }
+
+    pub fn pack_by_id_mut(&mut self, pack_id: &str) -> Option<&mut InstalledPack> {
+        self.packs.iter_mut().find(|p| p.pack_id == pack_id)
     }
 
     pub fn record_activation(&mut self, receipt: Receipt) {

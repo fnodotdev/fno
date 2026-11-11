@@ -100,11 +100,14 @@ pub struct ReviewSummaryArgs {
     #[arg(long, value_name = "PATH")]
     pub events: Option<PathBuf>,
     /// Branch name the attestation must match
-    #[arg(long, value_name = "BRANCH", required_unless_present = "evidence")]
+    #[arg(long, value_name = "BRANCH", required_unless_present_any = ["evidence", "ledger"])]
     pub branch: Option<String>,
     /// Head sha (prefix ok, min 7) the attestation must be pinned to
-    #[arg(long, value_name = "SHA", required_unless_present = "evidence")]
+    #[arg(long, value_name = "SHA", required_unless_present_any = ["evidence", "ledger"])]
     pub head: Option<String>,
+    /// Print the newest attestation per branch as one JSON array, newest first
+    #[arg(long, conflicts_with_all = ["evidence", "branch", "head"])]
+    pub ledger: bool,
     /// Read observer items as JSON on stdin and print their review evidence as JSON
     #[arg(long)]
     pub evidence: bool,
