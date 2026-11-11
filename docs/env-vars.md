@@ -212,7 +212,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_PLANS_DIRS_CACHE_DIR` | rs | Overrides the plans-dirs cache directory the `state plans-dirs` command reads and writes; default `<state_dir>/cache/plans-dirs-v1.txt`. |
 | `FNO_PLAN_DEFAULT_DIFF_BUDGET` | rs | Global test/tuning override for `plan.default_diff_budget`; 0 disables the guard, and a non-numeric value falls through to config. |
 | `FNO_PLATFORM` | rs | unclear: crates/fno-agents/src/runtime/hook/lead_guard.rs:400 |
-| `FNO_POSTHOG_PROJECT_TOKEN` | rs | The PostHog project token env for the eval events arm: `telemetry.eval_events.token_env` names it (default this constant), and the var wins over `telemetry.eval_events.token_file`. |
+| `FNO_POSTHOG_PROJECT_TOKEN` | rs | The PostHog project token env for the capture-route arms: `telemetry.eval_events.token_env` and `telemetry.usage_events.token_env` name it (default this constant), and the var wins over either `token_file`. |
 | `FNO_PROBE_FNO` | rs | Names the fno porcelain the isolated live journey drives; the default is the PATH `fno`, and the override exists so a probe run can exercise a specific checkout. |
 | `FNO_PROBE_MODEL` | rs | The model the isolated live journey spawns with (`--model`). A model-borrowing harness such as footnote needs it, and a strict routing config refuses a spawn without it. |
 | `FNO_PROBE_PROVIDER` | rs | The provider the isolated live journey spawns with: `--provider` on claude, the `--model` prefix (`<provider>/<model>`) on footnote and opencode. The probe copies only this provider's `model_routing.providers` record into the isolated config. |

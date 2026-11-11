@@ -59,6 +59,49 @@ pub(crate) fn forced_off() -> Option<&'static str> {
         })
 }
 
+/// The PostHog token read shared by the capture-route arms (eval events and
+/// usage events). The env var wins while it holds a token; otherwise the
+/// token file is read fresh, so a daemon beat picks up a rotated token
+/// without a restart. The file must be mode 0600: group or other bits
+/// refuse the read.
+pub(crate) fn token_from_env_or_file(token_env: &str, token_file: &str) -> Result<String, String> {
+    if let Ok(from_env) = std::env::var(token_env) {
+        if !from_env.trim().is_empty() {
+            return Ok(from_env);
+        }
+    }
+    let path = crate::github_app::expand_tilde(Path::new(token_file));
+    let meta = match std::fs::metadata(&path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(format!(
+                "token env {token_env} is unset or empty and token file {} is missing",
+                path.display()
+            ));
+        }
+        Err(e) => {
+            return Err(format!(
+                "token env {token_env} is unset or empty and token file {} is unreadable: {e}",
+                path.display()
+            ));
+        }
+    };
+    if meta.permissions().mode() & 0o077 != 0 {
+        return Err(format!(
+            "token file {} must be mode 0600 (run chmod 600 {})",
+            path.display(),
+            path.display()
+        ));
+    }
+    let body = std::fs::read_to_string(&path)
+        .map_err(|e| format!("token file {} is unreadable: {e}", path.display()))?;
+    let token = body.trim();
+    if token.is_empty() {
+        return Err(format!("token file {} is empty", path.display()));
+    }
+    Ok(token.to_string())
+}
+
 /// Gates in order: env kill switches first (`OTEL_SDK_DISABLED`,
 /// `DO_NOT_TRACK`), because a machine saying "no telemetry" outranks any
 /// config file. Then the opt-in flag, then the endpoint scheme, then the

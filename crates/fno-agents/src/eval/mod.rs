@@ -14,6 +14,7 @@ pub mod correction_seat;
 pub mod delivery_eval;
 pub mod eval_attempt;
 pub mod eval_events;
+pub mod usage_events;
 pub mod eval_part4;
 pub mod eval_reap;
 pub mod evals;

@@ -39,7 +39,13 @@ pub fn run(args: &[String]) -> i32 {
         "candidates" => crate::evals_candidates::run(rest),
         "drafts" => crate::evals_drafts::run(rest),
         "gate-retry" => crate::evals_gate::retry(rest),
-        "events" => crate::eval_events::preview_command(rest),
+        "events" => {
+            if rest.iter().any(|a| a == "--usage") {
+                crate::usage_events::preview_command(rest)
+            } else {
+                crate::eval_events::preview_command(rest)
+            }
+        }
         // The remainder lands with the port's later commits; the skeleton
         // answers every spelling so the dispatch shape compiles first.
         _ => {

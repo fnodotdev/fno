@@ -85,45 +85,11 @@ pub fn resolve(cwd: &Path) -> Resolved {
     })
 }
 
-/// The env var wins while it holds a token; otherwise the token file is read
-/// fresh, so a daemon beat picks up a rotated token without a restart. The
-/// file must be mode 0600: group or other bits refuse the read.
+/// The token read is shared: `otlp_export::token_from_env_or_file` serves
+/// both capture-route arms, so a rotation picked up by one is picked up by
+/// the other. (Moved here 2026-11-11 when the usage arm joined.)
 fn token_from_env_or_file(token_env: &str, token_file: &str) -> Result<String, String> {
-    if let Ok(from_env) = std::env::var(token_env) {
-        if !from_env.trim().is_empty() {
-            return Ok(from_env);
-        }
-    }
-    let path = crate::github_app::expand_tilde(Path::new(token_file));
-    let meta = match std::fs::metadata(&path) {
-        Ok(meta) => meta,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(format!(
-                "token env {token_env} is unset or empty and token file {} is missing",
-                path.display()
-            ));
-        }
-        Err(e) => {
-            return Err(format!(
-                "token env {token_env} is unset or empty and token file {} is unreadable: {e}",
-                path.display()
-            ));
-        }
-    };
-    if meta.permissions().mode() & 0o077 != 0 {
-        return Err(format!(
-            "token file {} must be mode 0600 (run chmod 600 {})",
-            path.display(),
-            path.display()
-        ));
-    }
-    let body = std::fs::read_to_string(&path)
-        .map_err(|e| format!("token file {} is unreadable: {e}", path.display()))?;
-    let token = body.trim();
-    if token.is_empty() {
-        return Err(format!("token file {} is empty", path.display()));
-    }
-    Ok(token.to_string())
+    otlp_export::token_from_env_or_file(token_env, token_file)
 }
 
 /// A row value ships only when it reads as an identifier. A cohort is a typed
