@@ -530,12 +530,9 @@ fn an_in_flight_rerun_reads_ready_false_even_before_the_merge_state_arrives() {
     };
     let (code, payload, _stderr) = crate::pr_status::compose::compose_payload(&inputs);
     assert_eq!(code, 2, "an in-flight rerun reads pending");
-    assert_eq!(payload.get("ready").and_then(Value::as_bool), Some(false));
+    assert_eq!(payload["ready"].as_bool(), Some(false));
     assert_eq!(payload["ready_blockers"], json!(["ci_pending"]));
-    assert_eq!(
-        payload.get("verdict").and_then(Value::as_str),
-        Some("pending")
-    );
+    assert_eq!(payload["verdict"].as_str(), Some("pending"));
 }
 
 /// The refused read composes the error payload: exit 4, the reason field,

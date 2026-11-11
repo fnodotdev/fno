@@ -382,7 +382,7 @@ pub(crate) fn merge_blocker<P: GhProbe>(probes: &P, payload: &Value) -> Value {
     // settles (unstable means pending or failing non-required checks), a
     // settled failure is a red, unknown or absent adds nothing. Codes are
     // ci_blocker_word's, the golden receipts' vocabulary.
-    match payload.get("ci_verdict").and_then(Value::as_str) {
+    match payload["ci_verdict"].as_str() {
         Some("red") => blockers.push("ci_red".to_string()),
         Some("pending") => blockers.push("ci_pending".to_string()),
         _ => {}
