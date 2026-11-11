@@ -482,6 +482,43 @@ mod tests {
     use super::*;
     use crate::census::test_proc_row as row;
 
+    /// The lift announcement must not promise agent sessions their test
+    /// runs back: the run door still refuses them (CI is the gate;
+    /// `test:priority` is the only lift), and the 2026-11-10 all-clear
+    /// read to a worker as a broken wrapper (the exit-86 filing). The body
+    /// that reaches the bus names the standing refusal and its lever.
+    #[test]
+    fn the_lift_announcement_does_not_promise_agent_test_runs() {
+        let root = std::env::temp_dir().join(format!("fno-test-hold-lift-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let _home = crate::AgentsHomeEnvGuard::set(&root);
+        let home = crate::paths::AgentsHome::from_env();
+        let path = home.test_pause_json();
+        // A pause record an older build wrote is what makes this pass a
+        // lift rather than a first hold.
+        write_state(
+            &path,
+            &PauseState {
+                generation: 7,
+                paused: vec![],
+                announced: None,
+            },
+        )
+        .unwrap();
+        let outcome = reconcile(&home).unwrap();
+        assert!(outcome.lifted, "the hold must read as lifted: {outcome:?}");
+        outcome.announced.as_ref().expect("the lift announces");
+        let dot_fno = home.root().parent().unwrap_or(home.root()).to_path_buf();
+        let bus = std::fs::read_to_string(crate::mail_paths::bus_log_path(&dot_fno))
+            .expect("the announcement lands on the bus");
+        assert!(
+            bus.contains("test:priority"),
+            "the all-clear must name the standing agent refusal and its lift lever: {bus}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// A held fleet test run ends (SIGKILL, not SIGSTOP) within one
     /// reconcile pass, and the pid-anchored claims it held (`build:cargo`,
     /// a run slot) admit a waiting build at once. The selection matrix the
