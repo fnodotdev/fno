@@ -195,15 +195,16 @@ else
     bad "FNO_BUS_DIR pin: rc=$pin_rc args=$(cat "$ARGS_LOG" 2>/dev/null)"
 fi
 
-# A door that cannot answer is a no-answer: the hook stays silent and
-# never guesses a path.
+# A door that cannot answer is a no-answer: the hook stays silent, never
+# guesses a path, and records one miss row naming the rc.
 fresh_env
 seed_one "$STATE/bus/messages.jsonl"
 export FNO_STUB_DOOR_FAIL=1
 out="$(run_hook "$STDIN_OK")" && doorfail_rc=0 || doorfail_rc=$?
 unset FNO_STUB_DOOR_FAIL
-if [[ "$doorfail_rc" -eq 0 && -z "$out" && ! -s "$ARGS_LOG" ]]; then
-    ok "door failure: silent exit, no guessed path, delivery command not called"
+if [[ "$doorfail_rc" -eq 0 && -z "$out" && ! -s "$ARGS_LOG" ]] \
+    && miss_row_holding '.rc == 1 and .stderr_tail == "bus dir unresolved"' >/dev/null; then
+    ok "door failure: silent exit, no guessed path, miss row names the rc"
 else
     bad "door failure: rc=$doorfail_rc out=${#out} args=$(cat "$ARGS_LOG" 2>/dev/null)"
 fi

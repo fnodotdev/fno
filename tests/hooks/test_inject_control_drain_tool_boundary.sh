@@ -15,6 +15,7 @@ trap 'rm -rf "$TMP"' EXIT
 SID="ffffabcd-1111-2222-3333-444455556666"
 BUS="$TMP/state/bus"
 LOG="$TMP/args.log"
+EVENTS="$TMP/drain-events.jsonl"
 PASS=0
 FAIL=0
 ok()  { PASS=$((PASS + 1)); echo "ok: $1"; }
@@ -48,15 +49,20 @@ fresh() {
     rm -rf "$TMP/state"
     mkdir -p "$BUS"
     : > "$LOG"
+    : > "$EVENTS"
     echo '{"id":"m1"}' > "$BUS/messages.jsonl"
 }
 
 run_hook() {  # $1 extra PATH prefix
-    PATH="$1:$TMP/bin:$PATH" FNO_STATE_DIR="$TMP/state" FNO_STUB_LOG="$LOG" bash "$HOOK" \
+    PATH="$1:$TMP/bin:$PATH" FNO_STATE_DIR="$TMP/state" FNO_STUB_LOG="$LOG" EVENTS_FILE="$EVENTS" bash "$HOOK" \
         <<<"{\"session_id\":\"$SID\",\"tool_name\":\"Bash\",\"tool_input\":{}}"
 }
 
 called() { grep -q -- "--control-drain --bus-dir ${1:-$BUS} --session $SID" "$LOG"; }
+
+# The miss row lives in the sibling store --events names, not the jsonl, so
+# the read goes through the binary the same way the write did.
+read_miss_rows() { fno doctor event rows --events "$EVENTS" 2>/dev/null; }
 
 # AC4: jq missing, control flag set: the drain still runs.
 fresh
@@ -89,10 +95,17 @@ called "$TMP/state/db/mail/bus" \
     && ok "folded layout drains through the door's answer" \
     || bad "folded layout: no drain (args=$(cat "$LOG" 2>/dev/null))"
 
-# A door that cannot answer is a no-answer: no drain, no guessed path.
+# A door that cannot answer is a no-answer: no drain, no guessed path, and
+# one miss row naming the rc so a silently-disabled hook is still visible.
 fresh
 FNO_STUB_DOOR_FAIL=1 run_hook ""
-called && bad "door failure still drained" || ok "door failure skips the drain silently"
+if called; then
+    bad "door failure still drained"
+elif read_miss_rows | grep -q "bus dir unresolved"; then
+    ok "door failure skips the drain and lands a miss row"
+else
+    bad "door failure: skipped but no miss row (rows=$(read_miss_rows))"
+fi
 
 echo "passed=$PASS failed=$FAIL"
 [[ "$FAIL" -eq 0 ]]

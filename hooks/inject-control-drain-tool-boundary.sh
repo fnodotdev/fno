@@ -40,9 +40,16 @@ command -v fno-agents >/dev/null 2>&1 || exit 0
 # The bus dir is the dir door's answer - the one ladder the mail readers
 # share (FNO_BUS_DIR, config.paths.bus_dir, the layout table) - so the db
 # fold retargets this hook without touching it. A door miss is a no-answer,
-# never a guessed path: exit 0 and stay silent.
-BUS="$(with_timeout 5 fno-agents state path dir bus 2>/dev/null)" || exit 0
-[[ -n "$BUS" ]] || exit 0
+# never a guessed path: record one miss row naming the rc, then exit 0 and
+# stay silent; the tool call proceeds and pending mail stays pending.
+BUS="$(with_timeout 5 fno-agents state path dir bus 2>/dev/null)" && BUS_rc=0 || BUS_rc=$?
+if [[ "$BUS_rc" -ne 0 || -z "$BUS" ]]; then
+    source "$HOOK_DIR/../scripts/lib/events.sh" 2>/dev/null \
+        && emit_event_raw_literal mail_notify_self_missed \
+            "{\"rc\":$BUS_rc,\"stderr_tail\":\"bus dir unresolved\"}" \
+            "hook" 2>/dev/null
+    exit 0
+fi
 
 FIRST8="${SID:0:8}"
 LAST8="${SID: -8}"

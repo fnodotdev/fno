@@ -38,11 +38,18 @@ command -v fno-agents >/dev/null 2>&1 || exit 0
 # The bus dir is the dir door's answer - the one ladder the mail readers
 # share (FNO_BUS_DIR, config.paths.bus_dir, the layout table) - so the db
 # fold retargets this hook without touching it. A door miss is a no-answer,
-# never a guessed path: exit 0 and stay silent.
+# never a guessed path: record one miss row naming the rc, then exit 0 and
+# stay silent; the turn proceeds and the mail stays pending.
 budget="$(hook_budget_secs)"
 [[ "$budget" -gt 0 ]] || exit 0
-BUS="$(with_timeout "$budget" fno-agents state path dir bus 2>/dev/null)" || exit 0
-[[ -n "$BUS" ]] || exit 0
+BUS="$(with_timeout "$budget" fno-agents state path dir bus 2>/dev/null)" && door_rc=0 || door_rc=$?
+if [[ "$door_rc" -ne 0 || -z "$BUS" ]]; then
+    source "$HOOK_DIR/../scripts/lib/events.sh" 2>/dev/null \
+        && emit_event_raw_literal mail_notify_self_missed \
+            "{\"rc\":$door_rc,\"stderr_tail\":\"bus dir unresolved\"}" \
+            "hook" 2>/dev/null
+    exit 0
+fi
 
 # No bus log, nothing to deliver: one stat guards the common no-mail case.
 [[ -f "$BUS/messages.jsonl" ]] || exit 0
