@@ -11,6 +11,8 @@ use crate::proto::{AgentBadge, AgentRow, Command};
 use crate::web_hq::Board;
 
 pub const WIDTH: f32 = 260.0;
+/// A row's text width: the pane less the row's margins, padding and bar.
+const LABEL_WIDTH: f32 = WIDTH - 8.0 - 6.0 - 8.0 - 2.0;
 /// The agents shown before a "+N more" row, so the sections below stay above
 /// the fold.
 pub const AGENTS_SHOWN: usize = 8;
@@ -47,16 +49,19 @@ pub enum Row {
 
 /// A row line in its own full-width box, so a long one ends in an ellipsis
 /// and never clips mid-glyph.
+/// The width is fixed, not `w_full`: gpui wraps and truncates text against
+/// the width each layout pass offers, and a min-content pass inside the
+/// scrolling pane offered a few pixels, so labels showed three characters.
 fn clamp(text: String, color: u32, small: bool) -> Div {
     let line = div()
-        .w_full()
-        .line_clamp(1)
+        .w(px(LABEL_WIDTH))
+        .whitespace_nowrap()
+        .overflow_hidden()
         .text_ellipsis()
         .text_color(rgb(color))
         .child(text);
     div()
-        .w_full()
-        .min_w_0()
+        .w(px(LABEL_WIDTH))
         .overflow_hidden()
         .child(if small { line.text_xs() } else { line })
 }
