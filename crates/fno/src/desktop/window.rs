@@ -241,7 +241,11 @@ impl Root {
     pub(super) fn act(&mut self, action: Action, cx: &mut Context<Self>) {
         match action {
             Action::Send(cmd) => {
-                self.main = MainView::Terminal;
+                // A click on the board shows what it picked; chat and the
+                // terminal keep their view and follow the new focus.
+                if self.main == MainView::Orchestration {
+                    self.main = MainView::Chat;
+                }
                 self.send(ClientMsg::Command(cmd));
             }
             Action::Notice(text) => self.say(text, cx),
