@@ -440,8 +440,8 @@ pub use limits::{BUILD_VERSION, MAX_MAIL_TEXT, MAX_SQUAD_NAME, MAX_TAB_NAME};
 #[path = "proto_err_code.rs"]
 pub mod err_code;
 
-pub mod chat_event;
 pub mod agent_launch;
+pub mod chat_event;
 pub use agent_launch::{AgentLaunchRequest, AgentLaunchUpdate, LaunchState};
 
 pub mod link;
