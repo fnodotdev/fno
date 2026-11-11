@@ -2756,6 +2756,10 @@ fn col_at(view: &View, x: usize) -> Col {
 fn wheel(view: &mut View, rep: crate::mouse::MouseReport) {
     const WHEEL_ROWS: usize = 3;
     let down = matches!(rep.kind, MouseKind::WheelDown);
+    // Resolved before the board borrow starts: col_at takes the whole
+    // &View, and a call cannot borrow against the live as_mut() the way a
+    // direct field read can.
+    let col = col_at(view, rep.col as usize);
     let Some(b) = view.messages_board.as_mut() else {
         return;
     };
@@ -2779,7 +2783,6 @@ fn wheel(view: &mut View, rep: crate::mouse::MouseReport) {
     if b.detail.is_some() {
         return;
     }
-    let col = col_at(view, rep.col as usize);
     let len = column_len(b, col);
     let cur = b.cursors[col as usize];
     b.cursors[col as usize] = if down {
