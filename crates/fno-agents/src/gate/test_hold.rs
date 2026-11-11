@@ -495,8 +495,12 @@ mod tests {
         let _home = crate::AgentsHomeEnvGuard::set(&root);
         let home = crate::paths::AgentsHome::from_env();
         let path = home.test_pause_json();
-        // The announce path reads the registry store; an uninitialized home
-        // fails the send, so seed it the way the hold test does.
+        // The announce send writes the bus row and reads the registry
+        // store: mirror the incident_claim fixture, which pre-creates the
+        // bus directory and seats a registry, or the send fails and the
+        // assertion would measure the fixture, not the announcement.
+        let dot_fno = home.root().parent().unwrap_or(home.root()).to_path_buf();
+        std::fs::create_dir_all(dot_fno.join("db/mail/bus")).unwrap();
         crate::state::update_registry(&home.registry_json(), |_r| ()).unwrap();
         // A pause record an older build wrote is what makes this pass a
         // lift rather than a first hold.
@@ -589,6 +593,10 @@ mod tests {
 
         let _home = crate::AgentsHomeEnvGuard::set(&root);
         let home = crate::paths::AgentsHome::from_env();
+        // The hold's first pass announces; the bus send needs the bus
+        // directory (the incident_claim fixture pre-creates it).
+        let dot_fno = home.root().parent().unwrap_or(home.root()).to_path_buf();
+        std::fs::create_dir_all(dot_fno.join("db/mail/bus")).unwrap();
         let mut visible = false;
         for _ in 0..50 {
             let (table, _) = crate::census::process_table();
