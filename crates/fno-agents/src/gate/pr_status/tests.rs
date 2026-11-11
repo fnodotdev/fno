@@ -28,9 +28,27 @@ struct FakeGh {
     graphql_fail: Option<String>,
     /// Every probe call's args, oldest first, for asked-path assertions.
     calls: std::sync::Mutex<Vec<Vec<String>>>,
+    /// Set by `refusing`: `rate_limit` serves this payload and every other
+    /// call refuses with a 403 rate-limit stderr.
+    rate_limit: Option<&'static str>,
 }
 
 impl FakeGh {
+    /// A keyless-gh double: the rate_limit probe answers `payload`, and any
+    /// other call is a 403 rate-limit refusal.
+    fn refusing(payload: &'static str) -> Self {
+        FakeGh {
+            raw: Value::Null,
+            log_reads: AtomicUsize::new(0),
+            log_args: std::sync::Mutex::new(Vec::new()),
+            pulls_fail: None,
+            graphql_answer: None,
+            graphql_fail: None,
+            calls: std::sync::Mutex::new(Vec::new()),
+            rate_limit: Some(payload),
+        }
+    }
+
     fn from_fixture(name: &str) -> Self {
         let fixture = load_fixture(name);
         FakeGh {
@@ -41,6 +59,7 @@ impl FakeGh {
             graphql_answer: None,
             graphql_fail: None,
             calls: std::sync::Mutex::new(Vec::new()),
+            rate_limit: None,
         }
     }
 }
@@ -49,6 +68,16 @@ impl GhProbe for FakeGh {
     fn run_gh(&self, _cwd: &Path, args: &[String]) -> Result<(bool, String, String), String> {
         let cmd = args.join(" ");
         self.calls.lock().unwrap().push(args.to_vec());
+        if let Some(payload) = self.rate_limit {
+            if cmd.contains("rate_limit") {
+                return Ok((true, payload.to_string(), String::new()));
+            }
+            return Ok((
+                false,
+                String::new(),
+                "gh: API rate limit exceeded (HTTP 403)".into(),
+            ));
+        }
         let serve = |v: &Value| (true, v.to_string(), String::new());
         // A forced failure wins over serving: the reviews path also contains
         // "/pulls/", so this arm is checked first.
@@ -333,6 +362,7 @@ fn job_log_caches_one_attempt_and_never_a_failure() {
         graphql_answer: None,
         graphql_fail: None,
         calls: std::sync::Mutex::new(Vec::new()),
+        rate_limit: None,
     };
     let stripped = job_log(&colored_fake, cwd, "Owner--Repo", "Owner", "Repo", "3001").unwrap();
     assert!(!stripped.contains('\u{1b}'), "escape-free: {stripped:?}");
@@ -372,6 +402,7 @@ fn job_log_caches_one_attempt_and_never_a_failure() {
         graphql_answer: None,
         graphql_fail: None,
         calls: std::sync::Mutex::new(Vec::new()),
+        rate_limit: None,
     };
     let from_legacy = job_log(&empty_fake, cwd, "Owner--Repo", "Owner", "Repo", "4001").unwrap();
     assert!(
@@ -490,6 +521,51 @@ fn a_cancelled_run_never_kicks_a_passing_run_off_the_slot() {
     );
 }
 
+/// The compose gates `ready` on the head's own CI verdict, not only on the
+/// receipt: an attempt in flight reads ready:false naming the hold even
+/// while GitHub has not computed mergeStateStatus (the merge-blocker op
+/// never runs in that window, so no supplied blocker names it). This is the
+/// 2026-11-10 incident's shape, closed at the last layer that could still
+/// read ready:true.
+#[test]
+fn an_in_flight_rerun_reads_ready_false_even_before_the_merge_state_arrives() {
+    let pr_json = json!({
+        "number": 9,
+        "state": "OPEN",
+        "headRefOid": "abc123def456",
+        "statusCheckRollup": [
+            {"name": "cli-ci", "workflow": "cli-ci", "status": "IN_PROGRESS", "conclusion": Value::Null},
+        ],
+    });
+    let inputs = crate::pr_status::compose::ComposeInputs {
+        pr: "9".to_string(),
+        pr_json,
+        rerun_recovery: Value::Null,
+        branch_history: Value::Null,
+        optional_reviews: json!({
+            "optional_reviews": [],
+            "optional_reviews_unresolved": 0,
+            "optional_reviews_resolved_unchanged": 0,
+        }),
+        coverage_row: Value::Null,
+        hold_reason: Value::Null,
+        review_activity: Value::Null,
+        receipt: json!({"outcome": "authorized", "blockers": []}),
+        github_merge_blockers: Value::Null,
+        merge_authority: Value::Null,
+        merge_execution: Value::Null,
+        failures: Value::Null,
+        review_lane: false,
+        platform_incident: Value::Null,
+        ci_tier_keeper: Value::Null,
+    };
+    let (code, payload, _stderr) = crate::pr_status::compose::compose_payload(&inputs);
+    assert_eq!(code, 2, "an in-flight rerun reads pending");
+    assert_eq!(payload["ready"].as_bool(), Some(false));
+    assert_eq!(payload["ready_blockers"], json!(["ci_pending"]));
+    assert_eq!(payload["verdict"].as_str(), Some("pending"));
+}
+
 /// The refused read composes the error payload: exit 4, the reason field,
 /// the rate-limit class, and the one stderr line.
 #[test]
@@ -531,6 +607,26 @@ fn a_traceback_refusal_names_its_cause_line() {
     let probe = FakeGh::from_fixture("rest_refusal_rate_limit");
     let reason = crate::pr_status::rest_reason(&probe, Path::new("/tmp"), stderr);
     assert_eq!(reason.text, "ModuleNotFoundError: No module named 'fno.pr'");
+}
+
+/// The 2026-11-09 iMac refusal: a keyless `gh` reads GitHub's anonymous
+/// 60-request bucket. It must classify as a local auth fault with no
+/// rate-limit class, so no caller writes the shared fleet hold.
+#[test]
+fn a_keyless_refusal_is_an_auth_fault_not_a_fleet_hold() {
+    let _env = crate::claims::test_env_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let state = tempfile::tempdir().unwrap();
+    std::env::set_var("FNO_STATE_DIR", state.path());
+    let probe = FakeGh::refusing(
+        r#"{"resources":{"core":{"limit":60,"remaining":59,"reset":1794300000}}}"#,
+    );
+    let stderr = "gh: API rate limit exceeded for 203.0.113.7. (HTTP 403)";
+    let reason = crate::pr_status::rest_reason(&probe, Path::new("/tmp"), stderr);
+    std::env::remove_var("FNO_STATE_DIR");
+    assert_eq!(reason.rate_limit_class, "", "no class, so no hold");
+    assert!(reason.text.contains("no token here"), "{}", reason.text);
 }
 
 /// The stranded tier fact rides a cancelled-only payload: the field carries
@@ -605,6 +701,7 @@ fn optional_reviews_list_reads_rest_pages_and_keys_on_user_login() {
         graphql_answer: None,
         graphql_fail: None,
         calls: std::sync::Mutex::new(Vec::new()),
+        rate_limit: None,
     };
     let rows =
         reviews::fetch_reviews(&fake, cwd, "octocat/wordplay", 7).expect("both REST pages read");
@@ -645,6 +742,7 @@ fn optional_reviews_list_reads_rest_pages_and_keys_on_user_login() {
         graphql_answer: None,
         graphql_fail: None,
         calls: std::sync::Mutex::new(Vec::new()),
+        rate_limit: None,
     };
     assert!(reviews::fetch_reviews(&failed, cwd, "octocat/wordplay", 7).is_none());
     let out = reviews::optional_reviews(&failed, cwd, 7, "octocat/wordplay");

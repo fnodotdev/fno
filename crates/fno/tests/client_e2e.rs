@@ -10,8 +10,31 @@ mod common;
 use std::time::Duration;
 
 use common::{
-    line_ends_with_prompt, line_is_segment, screen_has_line, strip_prompts, ClientHarness, Scratch,
+    clear_first_run_seed, line_ends_with_prompt, line_is_segment, screen_has_line, strip_prompts,
+    ClientHarness, Scratch,
 };
+
+#[test]
+fn client_e2e_first_run_boots_command_center_and_types_into_the_pane() {
+    // The first-run landing, end to end: a store with no seen marker boots
+    // the real client into the first-run show, the keyboard stays on the
+    // pane (the typed line renders), and the boot itself writes the marker
+    // through the product's own store format.
+    let scratch = Scratch::new("first-run");
+    clear_first_run_seed(&scratch.0);
+    let mut h = ClientHarness::spawn(&scratch);
+    h.wait_screen(15, |s| !s.trim().is_empty());
+    h.type_bytes(b"echo pane-typing-works\r");
+    h.wait_screen(15, |s| screen_has_line(s, "pane-typing-works"));
+    let seed = std::fs::read_to_string(scratch.0.join("iso-agents").join("mux-view.json"))
+        .expect("the first-run boot writes the seen marker");
+    let seed: serde_json::Value = serde_json::from_str(&seed).expect("the store stays valid JSON");
+    assert_eq!(
+        seed.pointer("/experimental/org_board_seen"),
+        Some(&serde_json::json!(true)),
+        "the marker landed in the store"
+    );
+}
 
 #[test]
 fn client_e2e_prompt_appears_and_echo_roundtrips() {

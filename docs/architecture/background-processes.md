@@ -63,7 +63,7 @@ The gated table: one row per arm the readout can show. The scheduler cell is the
 
 | arm | scheduler | hosted by | what it does | default interval |
 |---|---|---|---|---|
-| `lead_wake` | `daemon` | `fno-agents-daemon` | wakes a lead one minute past its check-in beat and tells the rung up | 300 s |
+| `lead_wake` | `daemon` | `fno-agents-daemon` | wakes a lead one minute past its check-in beat; a second missed beat in a row also tells the operator | 300 s |
 | `worker_wake` | `daemon` | `fno-agents-daemon` | nudges ended Codex turns or resumes proven-dead sessions on unfinished work, preserving intentional waits | 60 s |
 | `lead_wake` | `launchd:sh.fno.pr-watcher` | the pr-watch tick | the python-served pre-rename spelling of `lead_wake` | 900 s |
 | `watchdog` | `launchd:sh.fno.pr-watcher` | the pr-watch tick | the fleet watchdog classifier over lanes | 600 s |

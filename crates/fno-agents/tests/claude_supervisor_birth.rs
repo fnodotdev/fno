@@ -30,6 +30,7 @@ fn tmpdir(tag: &str) -> PathBuf {
 /// dumps its whole env (the birth env the real supervisor would carry) and
 /// touches the state file so the guard's status poll goes green.
 fn install_fake_claude(bin_dir: &Path) {
+    install_fake_launchctl(bin_dir, "Aqua");
     let script = r#"#!/bin/sh
 if [ "$1" = "daemon" ] && [ "$2" = "status" ]; then
   if [ -f "$FAKE_STATE" ]; then exit 0; fi
@@ -54,6 +55,19 @@ exit 0
 
 fn path_with(bin_dir: &Path) -> String {
     format!("{}:/usr/bin:/bin", bin_dir.display())
+}
+
+/// A fake `launchctl` answering one manager name. `supervisor_birth_refusal`
+/// resolves `launchctl` through PATH, so the stub decides the birth context
+/// the guard sees; without it the host's real session would decide.
+fn install_fake_launchctl(bin_dir: &Path, manager: &str) {
+    let script = format!(
+        "#!/bin/sh\nif [ \"$1\" = \"managername\" ]; then echo {manager}; exit 0; fi\nexit 0\n"
+    );
+    let path = bin_dir.join("launchctl");
+    fs::write(&path, script).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 #[test]
@@ -244,4 +258,90 @@ fn birth_exec_maps_a_missing_claude_cli_to_127() {
         .next()
         .is_some_and(|line| line.starts_with("claude CLI not found")));
     let _ = fs::remove_dir_all(&empty_bin);
+}
+
+/// A config dir under HOME, not under the temp dir: a temp-dir config flips
+/// `birth_allowed` off, and the refusal contract is about a real birth.
+fn home_scratch_config_dir(tag: &str) -> PathBuf {
+    PathBuf::from(std::env::var_os("HOME").unwrap())
+        .join(format!(".fno-birth-exec-{tag}"))
+        .join(".claude")
+}
+
+#[test]
+fn birth_exec_refuses_to_exec_claude_from_a_non_aqua_session() {
+    // AC1: no supervisor serves the dir and `launchctl managername` reads
+    // Background: the client exits 13 with the cure line and execs nothing.
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let bin = tmpdir("refuse-bin");
+    install_fake_claude(&bin);
+    install_fake_launchctl(&bin, "Background");
+    let config_dir = home_scratch_config_dir("refuse");
+    let argv_dump = tmpdir("refuse-out").join("client-argv.txt");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_fno-agents"))
+        .envs(fno_agents::test_run::self_owner_env())
+        .args(["claude-birth-exec", "--", "claude", "--bg", "hi"])
+        .env("PATH", path_with(&bin))
+        .env("CLAUDE_CONFIG_DIR", &config_dir)
+        .env_remove("FNO_CLAUDE_DAEMON_DIR")
+        .env_remove("FNO_TEST_HERMETIC")
+        .env("FAKE_CLIENT_ARGV_DUMP", &argv_dump)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(13),
+        "a refused birth must stop the client exec; stderr: {stderr}"
+    );
+    assert!(
+        stderr
+            .lines()
+            .any(|line| line.starts_with("fno: no claude supervisor born")
+                && line.contains("Background")),
+        "the refusal line must name the session type and the cure: {stderr}"
+    );
+    assert!(
+        !argv_dump.exists(),
+        "the client exec ran despite the birth refusal"
+    );
+    let _ = fs::remove_dir_all(&bin);
+    let _ = fs::remove_dir_all(config_dir);
+    let _ = fs::remove_dir_all(argv_dump.parent().unwrap());
+}
+
+#[test]
+fn birth_exec_still_execs_when_a_supervisor_serves_a_non_aqua_session() {
+    // AC2: the refusal binds only the birth. With a supervisor already
+    // serving the dir, the client execs as today, non-Aqua session or not.
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let bin = tmpdir("serve-bin");
+    install_fake_claude(&bin);
+    install_fake_launchctl(&bin, "Background");
+    let dir = tmpdir("serve-dir");
+    let state = dir.join("state");
+    let argv_dump = dir.join("client-argv.txt");
+    fs::write(&state, "").unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_fno-agents"))
+        .envs(fno_agents::test_run::self_owner_env())
+        .args(["claude-birth-exec", "--", "claude", "--bg", "hi"])
+        .env("PATH", path_with(&bin))
+        .env("CLAUDE_CONFIG_DIR", &dir)
+        .env("FNO_TEST_HERMETIC", "1")
+        .env_remove("FNO_CLAUDE_DAEMON_DIR")
+        .env("FAKE_STATE", &state)
+        .env("FAKE_CLIENT_ARGV_DUMP", &argv_dump)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "a running supervisor keeps the exec path; stderr: {stderr}"
+    );
+    assert!(
+        argv_dump.exists(),
+        "the client must exec when a supervisor serves the dir"
+    );
+    let _ = fs::remove_dir_all(&dir);
+    let _ = fs::remove_dir_all(&bin);
 }

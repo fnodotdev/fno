@@ -49,6 +49,8 @@ pub mod bootstrap;
 #[cfg(feature = "full")]
 pub mod build_drift;
 #[cfg(feature = "full")]
+pub mod chat_events;
+#[cfg(feature = "full")]
 pub mod chokepoint;
 #[cfg(feature = "full")]
 pub mod chokepoint_events;
@@ -86,6 +88,8 @@ pub mod cursor;
 pub mod decisions_overlay;
 #[cfg(feature = "full")]
 pub mod decisions_table;
+#[cfg(feature = "desktop")]
+pub mod desktop;
 #[cfg(feature = "full")]
 pub mod digest_overlay;
 #[cfg(feature = "full")]

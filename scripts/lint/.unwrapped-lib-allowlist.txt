@@ -290,3 +290,10 @@ loadgen.sh
 # Sourced helpers for the git "initializing" worktree lock (setup and every
 # removal path). A pure library: no fno command wraps it.
 worktree-init-lock.sh
+
+# The store-binary resolver for shell test reads (FNO_BIN, then the checkout
+# build, then PATH - the append's own order from scripts/lib/events.sh).
+# Sourced by eight test files that read committed rows back; the tests and
+# the append are the entry points, so a wrapper would be a third path around
+# `fno doctor event rows`. Pure sourcing library; no CLI of its own.
+store-bin.sh

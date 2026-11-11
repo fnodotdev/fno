@@ -378,6 +378,15 @@ pub(crate) fn merge_blocker<P: GhProbe>(probes: &P, payload: &Value) -> Value {
             format!("mergeable_state {other}"),
         ),
     };
+    // The head's own CI verdict: an attempt in flight holds ready until it
+    // settles (unstable means pending or failing non-required checks), a
+    // settled failure is a red, unknown or absent adds nothing. Codes are
+    // ci_blocker_word's, the golden receipts' vocabulary.
+    match payload["ci_verdict"].as_str() {
+        Some("red") => blockers.push("ci_red".to_string()),
+        Some("pending") => blockers.push("ci_pending".to_string()),
+        _ => {}
+    }
     // The mergeable conjunct: GitHub's own conflict answer. DIRTY under
     // mergeStateStatus says only "unmergeable somehow"; this field names the
     // conflict. Null (still computing) fails closed, an absent key (an old

@@ -1066,6 +1066,19 @@ fn decide_with_warnings<P: Probes>(
                     },
                 })
             }
+            // A pending read fell through with only an advisory warning, a
+            // PR merged while its rerun was still in flight, and main went
+            // red (2026-11-10). Pending holds; arm and unknown keep their
+            // fall-through (GitHub's queue waits out required things; a
+            // docs-only PR with no check-run CI keeps its merge door).
+            "pending" if request.effect == Effect::Merge => {
+                return Err(Outcome::Held {
+                    reason: "checks are pending; require_checks_pass merges only the \
+                             newest attempt's settled green"
+                        .to_string(),
+                    warnings: Vec::new(),
+                })
+            }
             _ => {}
         }
     }

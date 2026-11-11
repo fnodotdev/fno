@@ -73,17 +73,15 @@ permissions:
   contents: read
 
 jobs:
-  plugin-tree:
+  plugin-hooks:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Install marketplace CLIs for artifact validation
-        run: npm install --global @openai/codex @anthropic-ai/claude-code
-      - name: Prove minimal tree, count refusal and fast-forward publication
-        run: bash scripts/ci/check-plugin-tree.sh
+      - name: Prove the packaged hooks relay and warn on a raw archive
+        run: bash scripts/ci/check-plugin-hooks.sh
 
   # The OpenCode plugin suites: the repo-local orchestration plugin and the
   # shipped stop bridge. Both files speak two OpenCode contracts (the 1.x

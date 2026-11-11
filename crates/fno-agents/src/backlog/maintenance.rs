@@ -31,7 +31,7 @@ const STALE_QUARANTINE_REASON: &str = "stale-quarantine (guard)";
 /// enough: a real checkout can live under /tmp, and pruning removes nodes.
 const TEMP_CWD_MARKERS: [&str; 3] = ["pytest-of-", "/pytest-", "fno-test-home-"];
 
-const USAGE: &str = "Usage: fno backlog maintain [--apply] [--json|-J] [--recheck] [--no-validity] [--suspect-reverts] [--repo-moved OLD=NEW]...
+const USAGE: &str = "Usage: fno backlog maintain [--apply] [--json|-J] [--recheck] [--no-validity] [--suspect-reverts] [--repo-moved OLD=NEW] [--min-number N]...
 
 Keep the backlog and the kanban board clean. Deterministic legs apply under
 --apply; the judgment legs (dedup, drain-stale, cap-Now, validity) only ever
@@ -56,6 +56,9 @@ Options:
                      repo rename reuses its numbers, so closed rows move too
                      or their numbers collide with the new repo's first PR.
                      Prints the count; writes only under --apply.
+  --min-number N     With --repo-moved: only stored PR numbers >= N move.
+                     After the new repo binds its own PRs, pass one above
+                     its highest number so its rows stay put.
   -h, --help         Show this message and exit.";
 
 // ---------------------------------------------------------------------------
@@ -71,6 +74,8 @@ pub(crate) struct Flags {
     pub suspect_reverts: bool,
     pub vision_sweep: bool,
     pub repo_moved: Vec<(String, String)>,
+    /// `--min-number N`: with `--repo-moved`, only stored PR numbers >= N move.
+    pub min_number: Option<i64>,
 }
 
 /// `owner/repo=owner/repo`, lowercased, both sides present and distinct.
@@ -107,6 +112,21 @@ fn parse_flags(tail: &[String]) -> Result<Flags, i32> {
                     }
                 }
             }
+            "--min-number" => {
+                let Some(raw) = iter.next() else {
+                    eprintln!("{USAGE}\n\nError: --min-number needs a number");
+                    return Err(2);
+                };
+                match raw.parse::<i64>().ok().filter(|n| *n > 0) {
+                    Some(n) => flags.min_number = Some(n),
+                    None => {
+                        eprintln!(
+                            "{USAGE}\n\nError: --min-number expects a positive integer, got '{raw}'"
+                        );
+                        return Err(2);
+                    }
+                }
+            }
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return Err(0);
@@ -116,6 +136,10 @@ fn parse_flags(tail: &[String]) -> Result<Flags, i32> {
                 return Err(2);
             }
         }
+    }
+    if flags.min_number.is_some() && flags.repo_moved.is_empty() {
+        eprintln!("{USAGE}\n\nError: --min-number only means something with --repo-moved");
+        return Err(2);
     }
     Ok(flags)
 }
@@ -2311,6 +2335,7 @@ fn moved_pr_url(url: &str, number: i64, moved: &[(String, String)]) -> Option<St
 fn detect_repo_moved_fixes(
     entries: &[Value],
     moved: &[(String, String)],
+    min_number: Option<i64>,
     slug: &dyn Fn(Option<&str>) -> Option<String>,
 ) -> Vec<RepoMovedFix> {
     let mut fixes = Vec::new();
@@ -2330,8 +2355,9 @@ fn detect_repo_moved_fixes(
                 .get("pr_number")
                 .and_then(Value::as_i64)
                 .or_else(|| url.rsplit('/').next().and_then(|t| t.parse().ok()));
-            if let Some((number, new_url)) =
-                number.and_then(|n| moved_pr_url(url, n, moved).map(|u| (n, u)))
+            if let Some((number, new_url)) = number
+                .and_then(|n| moved_pr_url(url, n, moved).map(|u| (n, u)))
+                .filter(|(n, _)| min_number.is_none_or(|floor| *n >= floor))
             {
                 fixes.push(RepoMovedFix {
                     node_id: nid.clone(),
@@ -2347,11 +2373,9 @@ fn detect_repo_moved_fixes(
                 .or_insert_with(|| slug(cwd.as_deref()))
                 .clone();
             if let Some(current) = current {
-                if let Some(new_url) = moved_pr_url(
-                    &super::pr_link::pr_url_from_slug(&current, number),
-                    number,
-                    moved,
-                ) {
+                let fill_url = (number >= min_number.unwrap_or(i64::MIN))
+                    .then(|| super::pr_link::pr_url_from_slug(&current, number));
+                if let Some(new_url) = fill_url.and_then(|u| moved_pr_url(&u, number, moved)) {
                     fixes.push(RepoMovedFix {
                         node_id: nid.clone(),
                         old_url: None,
@@ -2378,7 +2402,9 @@ fn detect_repo_moved_fixes(
             else {
                 continue;
             };
-            if let Some(new_url) = moved_pr_url(url, number, moved) {
+            if let Some(new_url) = moved_pr_url(url, number, moved)
+                .filter(|_| number >= min_number.unwrap_or(i64::MIN))
+            {
                 fixes.push(RepoMovedFix {
                     node_id: nid.clone(),
                     old_url: Some(url.to_string()),
@@ -2446,7 +2472,7 @@ fn apply_repo_moved(ents: &mut [Value], fixes: &[RepoMovedFix]) -> Vec<Value> {
 /// exit. It runs alone: this is a one-shot cutover operation, not a daily
 /// grooming leg, so the budget and the judgment legs stay out of the way.
 fn run_repo_moved(flags: Flags, seams: &Seams, entries: &[Value], out: &mut Out) -> i32 {
-    let fixes = detect_repo_moved_fixes(entries, &flags.repo_moved, seams.slug);
+    let fixes = detect_repo_moved_fixes(entries, &flags.repo_moved, flags.min_number, seams.slug);
     let mut applied: Vec<Value> = Vec::new();
     if flags.apply && !fixes.is_empty() {
         let result = crate::graph_store::mutate_rows(
@@ -2475,6 +2501,7 @@ fn run_repo_moved(flags: Flags, seams: &Seams, entries: &[Value], out: &mut Out)
         let payload = json!({
             "repo_moved": {
                 "specs": pairs,
+                "min_number": flags.min_number,
                 "candidates": fixes.len(),
                 "applied": applied,
                 "dry_run": !flags.apply,
@@ -2482,14 +2509,19 @@ fn run_repo_moved(flags: Flags, seams: &Seams, entries: &[Value], out: &mut Out)
         });
         out.line(payload.to_string());
     } else {
+        let floor = flags
+            .min_number
+            .map(|n| format!(", floor {n}"))
+            .unwrap_or_default();
         out.line(format!(
-            "repo-moved: {} url(s) {}{}",
+            "repo-moved: {} url(s) {}{}{}",
             if flags.apply {
                 applied.len()
             } else {
                 fixes.len()
             },
             pairs.join(", "),
+            floor,
             if flags.apply {
                 String::new()
             } else {

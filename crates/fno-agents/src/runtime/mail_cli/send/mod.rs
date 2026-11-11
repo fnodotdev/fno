@@ -997,7 +997,10 @@ pub(crate) fn reserve_send_budget(
             Ok(Some(r))
         }
         BudgetOutcome::Refused(pair, running, current, cap) => Err((
-            format!("refused: control word budget for {pair}: running {running} + {current} over cap {cap}. {CORRECTION_HINT}"),
+            format!(
+                "refused: control word budget for {pair}: running {running} + {current} \
+over cap {cap}: trim the body, or drop the control: prefix"
+            ),
             1,
         )),
         BudgetOutcome::Unavailable(pair, detail) => Err((format!("refused: {pair}: {detail}"), 1)),
@@ -1896,10 +1899,11 @@ mod style_gate_tests {
         assert!(lines.concat().contains("\"rule_ids\":[7]"), "{lines:?}");
     }
 
-    /// A spent control window refuses and names the node lane. Withdrawing
-    /// the charged message frees the window for its retry.
+    /// A spent control window refuses naming the cap, the body word count,
+    /// and the way out. Withdrawing the charged message frees the window
+    /// for its retry.
     #[test]
-    fn a_withdrawn_control_send_frees_its_words_and_the_refusal_names_the_node_lane() {
+    fn a_withdrawn_control_send_frees_its_words_and_the_refusal_names_the_way_out() {
         let _lock = crate::claims::test_env_lock()
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -1913,7 +1917,8 @@ mod style_gate_tests {
         let Err((refusal, 1)) = reserve_send_budget("a", "b", &body, "msg-R") else {
             panic!("a second 46-word control send must overrun the 60-word window");
         };
-        assert!(refusal.contains(CORRECTION_HINT), "{refusal}");
+        assert!(refusal.contains("running 46 + 46 over cap 60"), "{refusal}");
+        assert!(refusal.contains("drop the control: prefix"), "{refusal}");
         assert_eq!(release_budget_by_id("msg-A"), 1);
         assert_eq!(release_budget_by_id("msg-A"), 0);
         assert!(matches!(

@@ -456,7 +456,7 @@ fn revive_batch<F, G, R>(
     resolve_fn: R,
 ) -> Vec<ReceiptRow>
 where
-    G: Fn(&crate::reentry::ReentryPlan),
+    G: Fn(&crate::reentry::ReentryPlan) -> crate::claude_supervisor::BirthVerdict,
     F: Fn(&AgentsHome, &str) -> ReceiptRow + Sync,
     R: Fn(&AgentsHome, &str) -> Result<crate::reentry::ReentryPlan, String>,
 {
@@ -469,7 +469,24 @@ where
     let mut seen = HashSet::new();
     for (_, plan) in &planned {
         if seen.insert(plan_env_key(plan)) {
-            guard_fn(plan);
+            if let crate::claude_supervisor::BirthVerdict::Refuse(reason) = guard_fn(plan) {
+                // One line, then every claude row fails with the cure: reviving
+                // any of them lazily births the refused supervisor anyway.
+                // Keeper rows launch no claude process, so they keep going.
+                eprintln!("fno: boot revival stopped: {reason}");
+                for name in planned.iter().map(|(n, _)| n).chain(leads.iter()) {
+                    rows.push(ReceiptRow::new(
+                        name,
+                        "failed",
+                        "claude supervisor birth refused",
+                    ));
+                }
+                for chunk in keepers.chunks(REVIVE_CONCURRENCY) {
+                    revive_chunk(home, chunk, &revive_fn, &mut rows);
+                }
+                rows.extend(resolve_failed);
+                return rows;
+            }
         }
     }
     for name in leads {
@@ -1931,7 +1948,7 @@ mod tests {
             &[],
             &["c1".to_string()],
             &["k1".to_string()],
-            |_| {},
+            |_| crate::claude_supervisor::BirthVerdict::Proceed,
             |_, name| {
                 revived.lock().unwrap().push(name.to_string());
                 ReceiptRow::new(name, "revived", "x")

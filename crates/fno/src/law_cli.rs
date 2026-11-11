@@ -9,7 +9,7 @@
 //! nested under `inbox`.
 
 use std::ffi::OsString;
-use std::io::{Read, Write};
+use std::io::{IsTerminal, Read, Write};
 use std::process::{Command, Stdio};
 
 /// The commands the native surface serves. The Python `fno inbox law` group
@@ -91,12 +91,22 @@ pub fn run(args: &[OsString]) -> i32 {
             // A piped stdin rides the request ONLY for `--decision-file -`:
             // every other call never touches stdin, so a daemon whose stdin
             // is an open pipe cannot block the command.
-            let stdin_text = if stdin_requested(&argv) {
+            let payload = stdin_requested(&argv);
+            let stdin_text = if payload {
                 let mut buf = String::new();
                 let _ = std::io::stdin().read_to_string(&mut buf);
                 buf
             } else {
                 String::new()
+            };
+            let stdin_is_terminal = std::io::stdin().is_terminal();
+            // A payload the terminal already fed this process rides argv
+            // inside the request, capped at the record door's 2000-char text
+            // contract: argv has a per-argument limit the pipe does not.
+            let stdin_text = if stdin_is_terminal {
+                stdin_text.chars().take(2000).collect()
+            } else {
+                stdin_text
             };
             let request = serde_json::json!({
                 "mode": "record",
@@ -104,7 +114,8 @@ pub fn run(args: &[OsString]) -> i32 {
                 "stdin": stdin_text,
             })
             .to_string();
-            law_exec(&request, Attended::No)
+            let attended = record_attended(stdin_is_terminal);
+            law_exec(&request, attended)
         }
         "stage" | "match" => {
             // The caller shapes the request (the hook wraps its payload as a
@@ -199,6 +210,23 @@ fn stdin_requested(argv: &[String]) -> bool {
         .iter()
         .zip(argv.iter().skip(1))
         .any(|(flag, value)| flag == "--decision-file" && value == "-")
+}
+
+/// Whether the record door rides attended. The operator proof is the
+/// caller's real terminal on the worker's fd 0, so a `set` typed at a
+/// terminal inherits stdin with the request on argv, the same shape
+/// retract uses; a `--decision-file -` payload the terminal already fed
+/// this process rides argv inside the request, capped at the record
+/// door's 2000-char text contract. A caller without a
+/// terminal (a daemon or an agent lane) keeps the piped shape and
+/// resolves its identity from its own process truth, so the door's tty
+/// proof stays unforgeable.
+fn record_attended(stdin_is_terminal: bool) -> Attended {
+    if stdin_is_terminal {
+        Attended::Yes
+    } else {
+        Attended::No
+    }
 }
 
 /// Whether the child inherits this process's stdin. `Yes` is the attended
