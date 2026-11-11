@@ -1558,11 +1558,12 @@ fn the_held_mail_marker_reads_queued_not_held() {
     // from the [HELD]/[DND] hold the agent itself is under.
     let mut agents = lead_and_worker();
     agents[1].mail_held = Some(8);
+    agents[1].mail_held_since = Some(6480);
     let v = card_view(agents);
-    let line = v.card_detail_text(&v.layout.agents[1], 0, 80);
+    let line = v.card_detail_text(&v.layout.agents[1], 7200, 80);
     assert!(
-        line.contains("[8 queued]") && !line.contains("held"),
-        "the mail badge reads queued, not held: {line:?}"
+        line.contains("[8 queued, oldest 12m]") && !line.contains("held"),
+        "the card badge names the queue and the oldest wait: {line:?}"
     );
 }
 

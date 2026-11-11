@@ -1453,10 +1453,11 @@ impl View {
                     }
                     None => label,
                 };
-                // The queued-mail marker renders whole or not at all: the full
-                // `[N queued · dnd]` (the oldest wait rides the count when
-                // the transcript carried a stamp) when the label keeps its
-                // room beside it, else the compact closed `[Nq]` - an
+                // The queued-mail marker renders whole or not at all: the
+                // full `[N queued, oldest 12m]` (the wait names itself the
+                // oldest; no `· dnd` inside the badge, the word belongs to
+                // the hold the row already paints) when the label keeps its
+                // room beside it, else the compact closed `[Nq 12m]` - an
                 // unclosed ` [8` clip reads as broken paint, and a head-cut
                 // name misreads who holds the mail. A card row's line 1
                 // lies about its width (the frame re-clips at the true
@@ -1464,12 +1465,15 @@ impl View {
                 // instead; lists decide here.
                 let suffix = match held_badge.filter(|_| !card) {
                     Some(held) => {
-                        let age = a
-                            .mail_held_since
-                            .map(|s| format!(" {}", row_meter::up_cell(Some(s), now)))
-                            .unwrap_or_default();
-                        let full = format!(" [{held} queued{age} \u{b7} dnd]");
-                        let compact = format!(" [{held}q]");
+                        let age_s = a.mail_held_since.map(|s| row_meter::up_cell(Some(s), now));
+                        let full = format!(
+                            " [{held} queued{}]",
+                            age_s.map(|c| format!(", oldest {c}")).unwrap_or_default()
+                        );
+                        let compact = format!(
+                            " [{held}q{}]",
+                            age_s.map(|c| format!(" {c}")).unwrap_or_default()
+                        );
                         let fits = |badge: &str| {
                             crate::chrome::str_cols(&label)
                                 + crate::chrome::str_cols(badge)
@@ -1931,11 +1935,11 @@ impl View {
         // the line's own ellipsis never cuts it: line 1's name cell
         // re-clips at its true width, so a marker there renders broken. The
         // count names the busy queue, not the agent hold, and the oldest
-        // wait rides it when the transcript carried a stamp.
+        // wait names itself when the transcript carried a stamp.
         if let Some(held) = a.mail_held.filter(|n| *n > 0) {
             match a.mail_held_since {
                 Some(since) => segments.push(format!(
-                    "[{held} queued {}]",
+                    "[{held} queued, oldest {}]",
                     row_meter::up_cell(Some(since), now)
                 )),
                 None => segments.push(format!("[{held} queued]")),
