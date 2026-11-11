@@ -26,15 +26,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn graft_slot_takes_a_mod_target() {
+    fn graft_slot_takes_a_mod_target_and_refuses_an_empty_one() {
         assert_eq!(
             parse_graft_slot("mod:fno-panels/review-ledger"),
             Ok(LayoutBinding::Mod("fno-panels/review-ledger".into()))
         );
-    }
-
-    #[test]
-    fn graft_slot_refuses_an_empty_mod_target_naming_the_forms() {
         let err = parse_graft_slot("mod:").unwrap_err();
         assert!(
             err.contains("anchor|fno:<id>|mod:<pack>/<mod>|- (shell)"),
