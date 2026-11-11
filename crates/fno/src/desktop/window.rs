@@ -67,8 +67,15 @@ pub enum Action {
     Show(MainView),
     /// Show every agent in the left pane, or only the first few.
     ToggleAgents,
-    /// Open or close one chat row: a tool call or a thinking block.
+    /// Open or close one chat thinking row.
     ToggleChat(usize),
+    /// Open the sheet of one chat tool call.
+    OpenSheet(usize),
+    CloseSheet,
+    Copy(String),
+    SendChat,
+    /// Reopen a chat stream that closed.
+    Reconnect,
 }
 
 /// Where an answer the user clicked stands. The row shows it in place of its
@@ -123,6 +130,7 @@ pub struct Root {
     preedit: Option<String>,
     _reader: Option<Task<()>>,
     _chat: Option<Task<()>>,
+    _chat_wait: Option<Task<()>>,
     _hq: Option<Task<()>>,
     _plugins: Option<Task<()>>,
     _plugins_tick: Option<Task<()>>,
@@ -194,6 +202,7 @@ impl Root {
             preedit: None,
             _reader: None,
             _chat: None,
+            _chat_wait: None,
             _hq: None,
             _plugins: None,
             _plugins_tick: None,
@@ -336,10 +345,21 @@ impl Root {
             Action::Show(view) => self.show(view, cx),
             Action::ToggleAgents => self.agents_open = !self.agents_open,
             Action::ToggleChat(i) => {
-                if !self.chat.expanded.remove(&i) {
-                    self.chat.expanded.insert(i);
+                let open = &mut self.chat.conv.expanded;
+                if !open.remove(&i) {
+                    open.insert(i);
                 }
+                self.chat.list.splice(i..i + 1, 1);
             }
+            Action::OpenSheet(i) => self.chat.sheet = Some(i),
+            Action::CloseSheet => self.chat.sheet = None,
+            Action::Copy(text) => {
+                let n = text.chars().count();
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                self.say(format!("copied {n} characters"), cx);
+            }
+            Action::SendChat => self.submit_chat(cx),
+            Action::Reconnect => self.open_chat(cx),
         }
         cx.notify();
     }
@@ -349,29 +369,30 @@ impl Root {
         if view == MainView::Extensions {
             self.ext.read();
         }
-        // Asking for chat again retries a stream that closed.
-        if view == MainView::Chat && self.chat.error.is_some() {
-            self.chat.key = None;
-        }
         self.sync_chat(cx);
     }
 
     /// In chat mode, stream the focused pane's agent session. A new focus
-    /// opens a new stream; the old one closes when it drops.
+    /// parks the shown conversation and resumes the new one where it left.
     fn sync_chat(&mut self, cx: &mut Context<Self>) {
         let key = chat::focused_key(self);
         if self.main != MainView::Chat || key == self.chat.key {
             return;
         }
-        let draft = std::mem::take(&mut self.chat.draft);
-        self.chat = Chat {
-            key: key.clone(),
-            draft,
-            ..Chat::default()
-        };
+        self.chat.switch(key);
+        self.open_chat(cx);
+    }
+
+    /// (Re)open the shown session's stream from the next unread event.
+    fn open_chat(&mut self, cx: &mut Context<Self>) {
         self._chat = None;
-        let Some(key) = key else { return };
-        match chat::open(&self.session, key) {
+        self.chat.stream = None;
+        self.chat.closed = None;
+        self.chat.opened_at = std::time::Instant::now();
+        let Some(key) = self.chat.key.clone() else {
+            return;
+        };
+        match chat::open(&self.session, key, self.chat.conv.events) {
             Ok((stream, mut rx)) => {
                 self.chat.stream = Some(stream);
                 self._chat = Some(cx.spawn(async move |this, cx| {
@@ -385,61 +406,71 @@ impl Root {
                         }
                     }
                 }));
+                // An empty session sends nothing; repaint once its wait is up.
+                self._chat_wait = Some(cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(chat::EMPTY_AFTER).await;
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                }));
             }
-            Err(e) => self.chat.error = Some(e.to_string()),
+            Err(e) => self.chat.closed = Some(chat::Closed::Failed(e.to_string())),
         }
     }
 
     fn on_chat(&mut self, batch: Vec<chat::Msg>, cx: &mut Context<Self>) {
-        // Follow new turns only while the view sits at the bottom.
-        let h = &self.chat.scroll;
-        let pinned = h.offset().y <= -h.max_offset().height + px(4.0);
-        for msg in batch {
-            match msg {
-                chat::Msg::Events(events) => {
-                    events.into_iter().for_each(|e| self.chat.conv.push(e))
-                }
-                chat::Msg::Closed(reason) => self.chat.error = Some(reason),
-            }
-        }
-        if pinned {
-            self.chat.scroll.scroll_to_bottom();
-        }
+        self.chat.apply(batch);
         cx.notify();
     }
 
-    /// Send the draft to the session's pane as the TUI composer does: the
-    /// text as a paste, then Enter once the harness has taken it.
+    /// Send the draft as the TUI reply path does: a paste addressed to the
+    /// session's own pane, then Enter to that same pane once the harness has
+    /// taken it. Focus moving in between changes nothing.
     fn submit_chat(&mut self, cx: &mut Context<Self>) {
-        if self.chat.draft.trim().is_empty() {
+        if self.chat.draft.trim().is_empty() || self.chat.closed.is_some() {
             return;
         }
-        if self.pinned.is_some() || self.chat.key.is_none() || self.link.is_none() {
+        let target = self
+            .chat
+            .key
+            .as_ref()
+            .and_then(|key| chat::target_pane(self, key));
+        let (Some((pane, identity)), Some(link)) = (target, self.link.clone()) else {
             self.say(
-                "no agent pane to send to: focus the agent's pane".into(),
+                "no pane on screen hosts this session: open its pane to send".into(),
                 cx,
             );
             return;
-        }
+        };
         let mut text = std::mem::take(&mut self.chat.draft);
         // Unbracketed, each newline would type Enter and submit early.
         if !self.modes.bracketed_paste {
             text = text.replace('\n', " ");
         }
-        self.send(ClientMsg::Input(keys::paste(&text, self.modes)));
-        let link = self.link.clone();
+        let id = self.chat.next_request;
+        self.chat.next_request += 2;
+        let input = |request_id, bytes| {
+            ClientMsg::PaneInput(proto::pane_input::PaneInputRequest {
+                request_id,
+                pane,
+                expected_identity: identity.clone(),
+                bytes,
+            })
+        };
+        self.send(input(id, keys::paste(&text, self.modes)));
+        let enter = input(id + 1, b"\r".to_vec());
         cx.spawn(async move |_, cx| {
             cx.background_executor().timer(chat::SUBMIT_SETTLE).await;
-            if let Some(link) = link {
-                let _ = link.send(&ClientMsg::Input(b"\r".to_vec()));
-            }
+            let _ = link.send(&enter);
         })
         .detach();
-        self.chat.scroll.scroll_to_bottom();
+        self.chat.pending.push(text);
     }
 
     pub(super) fn preedit_text(&self) -> &str {
         self.preedit.as_deref().unwrap_or_default()
+    }
+
+    pub(super) fn has_focus(&self, window: &Window) -> bool {
+        self.focus.is_focused(window)
     }
 
     fn on_hq(&mut self, reply: Reply, cx: &mut Context<Self>) {
@@ -616,11 +647,27 @@ impl Root {
             return;
         }
         if self.main == MainView::Chat {
+            // An open sheet takes only Escape; an IME draft takes the keys.
+            if self.chat.sheet.is_some() {
+                if ks.key == "escape" {
+                    self.chat.sheet = None;
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+                return;
+            }
+            if self.preedit.is_some() {
+                return;
+            }
             match (ks.key.as_str(), ks.modifiers.shift) {
                 ("enter", false) => self.submit_chat(cx),
                 ("enter", true) => self.chat.draft.push('\n'),
                 ("backspace", _) => {
-                    self.chat.draft.pop();
+                    use unicode_segmentation::UnicodeSegmentation;
+                    let last = self.chat.draft.grapheme_indices(true).next_back();
+                    if let Some((at, _)) = last {
+                        self.chat.draft.truncate(at);
+                    }
                 }
                 _ => return,
             }
@@ -815,7 +862,7 @@ impl Root {
     }
 
     /// The chat view over the input handler that feeds its composer.
-    fn chat_view(&mut self, cx: &mut Context<Self>) -> gpui::Div {
+    fn chat_view(&mut self, window: &Window, cx: &mut Context<Self>) -> gpui::Div {
         let focus = self.focus.clone();
         let me = cx.entity();
         div()
@@ -838,7 +885,7 @@ impl Root {
                 .absolute()
                 .size_full(),
             )
-            .child(chat::render(self, cx))
+            .child(chat::render(self, window, cx))
     }
 
     /// The focused pane's cursor cell in window coordinates, where the IME
@@ -922,8 +969,10 @@ impl EntityInputHandler for Root {
     ) {
         self.set_preedit(None, cx);
         if self.main == MainView::Chat {
-            self.chat.draft.push_str(text);
-            cx.notify();
+            if self.chat.sheet.is_none() && self.chat.closed.is_none() {
+                self.chat.draft.push_str(text);
+                cx.notify();
+            }
             return;
         }
         if self.main != MainView::Terminal || text.is_empty() {
@@ -953,6 +1002,13 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
+        if self.main == MainView::Chat {
+            // The candidate window opens at the composer's last line.
+            let at = self.chat.composer.get();
+            let line = self.metrics.cell.height;
+            let origin = point(at.origin.x, at.origin.y + at.size.height - line);
+            return Some(Bounds::new(origin, size(px(1.0), line)));
+        }
         self.cursor_bounds(element_bounds)
     }
 
@@ -1054,7 +1110,7 @@ impl Render for Root {
             });
         }
         let main = match self.main {
-            MainView::Chat => self.chat_view(cx).into_any_element(),
+            MainView::Chat => self.chat_view(window, cx).into_any_element(),
             MainView::Terminal => self.terminal(cx).into_any_element(),
             MainView::Orchestration => orchestration::render(self, cx)
                 .font_family(".SystemUIFont")

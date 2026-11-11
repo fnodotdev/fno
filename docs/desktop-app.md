@@ -41,11 +41,17 @@ The strip above the grid shows the active session's tabs. A tab without a chosen
 
 ## Chat mode
 
-cmd-1 or Chat shows the conversation of the agent in the focused pane. The app reads it from the mux server's chat stream, which serves claude, codex and opencode sessions in one event shape. Your turns sit on the right. The agent's text renders as markdown: headings, lists, bold, italic, inline code and code blocks. Tables and images show as plain text. Thinking and each tool call take one line. A click opens one to show its text, or the call's input and output. A mark shows each call's state: … for a call that runs, ✓ for a success, ✗ for a failure. A kind the app does not know shows as one plain line. New turns append as the agent writes them. The view follows them while it is scrolled to the bottom.
+cmd-1 or Chat shows the conversation of the agent in the focused pane. The app reads it from the mux server's chat stream, which serves claude, codex and opencode sessions in one event shape. The conversation sits in a centred column. Your turns sit on the right in a bubble.
 
-Focus another pane to read its agent. A pane with no agent session says so. With `--chat <id>`, the view stays on that session and the composer sends nothing, since no pane of yours hosts it.
+The agent's text renders as markdown: headings, bold, italic, strikethrough, inline code in the terminal font, code blocks, bullet, numbered and task lists, quotes and tables. A link shows in the accent colour, and a click opens it. Images in your turns, in tool output and in markdown draw inline. An image too big for the stream shows its size instead.
 
-The composer at the bottom takes your message. Enter sends it, Shift-Enter adds a line, and cmd-v pastes into it. The app types the text into the agent's pane as a paste, waits 800 ms, then presses Enter: the same path `fno mux pane send --submit` takes. After the agent's transcript records your turn, it shows up in the view.
+Thinking takes one line, and a click opens its text. Each tool call takes one muted line with its state: … while it runs, ✓ for a success, ✗ for a failure. A click opens the call's sheet with its input and output in the terminal font, each with a Copy button. Output past 20,000 characters is cut, and the sheet says how many were cut. Escape, Close or a click outside closes the sheet. A kind the app does not know shows as one plain line. New turns append as the agent writes them. The view follows them while it is scrolled to the bottom.
+
+Focus another pane to read its agent. The app keeps each conversation it read, so focusing back resumes where it left off. A pane with no agent session says so. A session with no turns yet says so after 2 seconds. With `--chat <id>`, the view stays on that session whatever has focus.
+
+The composer at the bottom takes your message. Enter or Send sends it, Shift-Enter adds a line, Backspace deletes one character, and cmd-v pastes into it. While an input method composes, Enter goes to the input method. The app types the text into the session's own pane as a paste, waits 800 ms, then presses Enter in that same pane, as the TUI reply path does. Your turn shows at once with "sending…". After the transcript records it, the turn moves into the conversation. If no pane on screen hosts the session, the app says so and sends nothing.
+
+If the chat stream ends, the composer gives way to the reason and a Reconnect button. A normal end reads muted. A failure reads in the error colour. Reconnect resumes from the last event the view holds.
 
 cmd-2 or Board opens orchestration mode, the command center board. TABLE lists every seat with its node and status. With more than one host in the fleet, a MACHINE column shows too. FEED lists each open question with its options, and the recommended option is marked. A click on an option answers it through the same door the TUI uses. The question then shows "sending", then "answered", until the next read drops it. A refused answer shows its reason and keeps the options. cmd-4 or Terminal goes to the terminal.
 
