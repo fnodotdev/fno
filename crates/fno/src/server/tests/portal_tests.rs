@@ -612,9 +612,11 @@ fn remote_row_reach_opens_a_portal_seat_running_the_link() {
     core.command(client_id, reach(&hostile, enter));
     assert_eq!(core.panes.len(), panes, "an ssh option is not a host");
     let notices = drain_notices(&mut rx);
-    assert!(notices
-        .iter()
-        .any(|t| t.contains("portal 0: already showing")));
+    assert!(
+        notices
+            .iter()
+            .any(|t| t.contains("portal 0: already showing"))
+    );
     assert!(notices.iter().any(|t| t.contains("no remote row at")));
     core.reap_pane(seat);
 }
@@ -657,9 +659,11 @@ fn thread_pane_open_rows() {
         Some("cat"),
         "the pane runs the attach argv"
     );
-    assert!(drain_notices(&mut rx)
-        .iter()
-        .any(|t| t.contains("thread pane ->")));
+    assert!(
+        drain_notices(&mut rx)
+            .iter()
+            .any(|t| t.contains("thread pane ->"))
+    );
     core.reap_pane(new_pid); // don't leak the stand-in child
 
     // AC4-EDGE: a slot showing A, a reach on B: the same tree slot now
@@ -764,9 +768,11 @@ fn thread_pane_open_rows() {
         pid,
         "the reach focused the showing pane"
     );
-    assert!(drain_notices(&mut rx)
-        .iter()
-        .any(|t| t.contains("already showing")));
+    assert!(
+        drain_notices(&mut rx)
+            .iter()
+            .any(|t| t.contains("already showing"))
+    );
     core.reap_pane(pid);
 
     // The TUI door keys the slot by the attach id; `fno agents attach`
@@ -790,9 +796,11 @@ fn thread_pane_open_rows() {
         }),
         "the slot keeps its original key and pane"
     );
-    assert!(drain_notices(&mut rx)
-        .iter()
-        .any(|t| t.contains("already showing")));
+    assert!(
+        drain_notices(&mut rx)
+            .iter()
+            .any(|t| t.contains("already showing"))
+    );
     core.reap_pane(pid);
 }
 
@@ -1392,9 +1400,11 @@ fn portal_refusal_rows() {
     );
     assert_eq!(core.panes.len(), panes_before, "no pane spawned");
     assert!(core.portals.is_empty(), "no portal entry written");
-    assert!(drain_notices(&mut rx)
-        .iter()
-        .any(|t| t.contains("a portal takes no split")));
+    assert!(
+        drain_notices(&mut rx)
+            .iter()
+            .any(|t| t.contains("a portal takes no split"))
+    );
 
     // (x-9b60, AC4-EDGE) A caller tab the server cannot resolve refuses
     // BEFORE a pane exists: no spawn, no portal entry, a notice that
@@ -3379,4 +3389,171 @@ fn transient_attach_view_is_excluded_from_the_rescue() {
         "no replayed mapping leaked"
     );
     assert!(!core.panes.contains_key(&viewer));
+}
+
+#[test]
+fn opencode_serve_seat_drives_a_compatible_serve() {
+    // AC1-HP: a Locate-tier opencode row whose harness declares
+    // the serve-attach capability, with a healthy serve recorded and a
+    // version-compatible TUI, reaches Drive: the pane execs the serve
+    // attach with the row's session id and the password rides child env.
+    let (mut core, _client_id, _p1, mut rx) = thread_core();
+    let mut row = bg_row("oc-worker", "/tmp/seen", None);
+    row.harness = Some("opencode".into());
+    row.harness_session_id = Some("ses_full0123".into());
+    serve_attach::set_serve_bin("/bin/cat");
+    serve_attach::set_pinned_state("http://127.0.0.1:1", Some(4096), Some(4043), "served-token");
+    serve_attach::set_pinned_health(true, Some("1.18.33"));
+    serve_attach::set_pinned_tui_version(Some("1.18.33"));
+    let panes_before = core.panes.len();
+    let (tx, rxq) = tokio::sync::oneshot::channel::<ServerMsg>();
+    core.portal_ctl(
+        "ses_full0123",
+        0,
+        PanePlacement::default(),
+        Some(vec![row]),
+        tx,
+    );
+    match rxq.blocking_recv().expect("reply") {
+        ServerMsg::Notice { text } => assert!(
+            !text.contains("no live viewport"),
+            "a served row never reads as locate-only: {text}"
+        ),
+        other => panic!("expected a Notice landing, got {other:?}"),
+    }
+    let _ = rx.try_recv();
+    assert_eq!(core.panes.len(), panes_before + 1, "the viewer spawned");
+    let seat = core.portals.get(&0).expect("portal recorded").seat;
+    let entry = core.panes.get(&seat).expect("seat pane entry");
+    assert_eq!(entry.cmd.as_deref(), Some("cat"), "the stub bin spawned");
+    assert_eq!(
+        serve_attach::last_serve_argv(),
+        Some(vec![
+            "/bin/cat".to_string(),
+            "attach".to_string(),
+            "http://127.0.0.1:1".to_string(),
+            "--session".to_string(),
+            "ses_full0123".to_string(),
+        ]),
+        "the 1.x shape rendered with the row's full session id"
+    );
+    assert_eq!(
+        serve_attach::last_serve_env(),
+        Some(vec![(
+            "OPENCODE_SERVER_PASSWORD".to_string(),
+            "served-token".to_string()
+        )]),
+        "the password rode child env, never argv"
+    );
+}
+
+#[test]
+fn opencode_serve_seat_refuses_a_version_skew_with_no_pane() {
+    // AC1-EDGE: the serve is healthy but speaks another generation than
+    // the TUI: the reach refuses with a notice naming the serve version
+    // and the candidates, and nothing spawns.
+    let (mut core, _client_id, _p1, mut rx) = thread_core();
+    let mut row = bg_row("oc-worker", "/tmp/seen", None);
+    row.harness = Some("opencode".into());
+    row.harness_session_id = Some("ses_full0123".into());
+    serve_attach::set_serve_bin("/bin/cat");
+    serve_attach::set_pinned_state("http://127.0.0.1:1", Some(4096), Some(4043), "t");
+    serve_attach::set_pinned_health(true, Some("2.2.2"));
+    serve_attach::set_pinned_tui_version(Some("1.18.33"));
+    let panes_before = core.panes.len();
+    let (tx, rxq) = tokio::sync::oneshot::channel::<ServerMsg>();
+    core.portal_ctl(
+        "ses_full0123",
+        0,
+        PanePlacement::default(),
+        Some(vec![row]),
+        tx,
+    );
+    match rxq.blocking_recv().expect("reply") {
+        ServerMsg::Notice { text } => {
+            assert!(
+                text.contains("1.18.33") && text.contains("2.2.2"),
+                "names both versions: {text}"
+            );
+        }
+        other => panic!("expected a Notice landing, got {other:?}"),
+    }
+    let _ = rx.try_recv();
+    assert_eq!(core.panes.len(), panes_before, "no pane spawns on skew");
+    assert!(
+        core.portals.is_empty(),
+        "no slot recorded on a skew refusal"
+    );
+}
+
+#[test]
+fn opencode_serve_seat_locate_names_the_real_blocker() {
+    // AC2-HP: capability declared but the serve side broken: the
+    // Locate pane names the SPECIFIC blocker and never the blanket claim.
+    // Two arms: no serve recorded, and a recorded serve answering nothing
+    // (its facts still render).
+    let arms = [
+        ("no-serve", serve_setup::none()),
+        ("dead-serve", serve_setup::dead()),
+    ];
+    for (arm, pin) in arms {
+        let (mut core, _client_id, _p1, mut rx) = thread_core();
+        let mut row = bg_row("oc-worker", "/tmp/seen", None);
+        row.harness = Some("opencode".into());
+        row.harness_session_id = Some("ses_full0123".into());
+        pin();
+        let panes_before = core.panes.len();
+        let (tx, rxq) = tokio::sync::oneshot::channel::<ServerMsg>();
+        core.portal_ctl(
+            "ses_full0123",
+            0,
+            PanePlacement::default(),
+            Some(vec![row.clone()]),
+            tx,
+        );
+        let _ = rxq.blocking_recv().expect("reply");
+        let _ = rx.try_recv();
+        assert_eq!(
+            core.panes.len(),
+            panes_before + 1,
+            "{arm}: the locate pane spawned"
+        );
+        let joined = argv_facts::last_locate_screen()
+            .expect("the locate screen captured")
+            .join("\n");
+        assert!(
+            !joined.contains("owns no interactive attach form"),
+            "{arm}: the blanket claim never renders for a serve-capable row: {joined}"
+        );
+        if arm == "no-serve" {
+            assert!(
+                joined.contains("no shared opencode serve is recorded"),
+                "{arm}: names the real blocker: {joined}"
+            );
+        } else {
+            assert!(
+                joined.contains("answered nothing on /global/health"),
+                "{arm}: names the dead probe: {joined}"
+            );
+            assert!(
+                joined.contains("serve pid:  4043") && joined.contains("serve port: 4096"),
+                "{arm}: renders the recorded facts: {joined}"
+            );
+        }
+    }
+}
+
+mod serve_setup {
+    use super::serve_attach;
+
+    pub fn none() -> impl Fn() {
+        || serve_attach::clear_pinned_state()
+    }
+
+    pub fn dead() -> impl Fn() {
+        move || {
+            serve_attach::set_pinned_state("http://127.0.0.1:1", Some(4096), Some(4043), "t");
+            serve_attach::clear_pinned_health();
+        }
+    }
 }

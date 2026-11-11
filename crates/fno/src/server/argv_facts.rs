@@ -322,14 +322,44 @@ pub(super) fn set_peek_program(argv: &[&str]) {
 /// field can never parse as shell. `exec cat` holds the PTY open until the
 /// pane is closed - the screen is not an empty pane and not a dead one; it
 /// stays up, self-teaching, exactly until the operator closes it.
+#[cfg(test)]
+thread_local! {
+    /// Test capture of the last Locate screen (the lines, not the argv).
+    static LAST_LOCATE_SCREEN: std::cell::RefCell<Option<Vec<String>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn capture_locate_screen(lines: &[String]) {
+    LAST_LOCATE_SCREEN.with(|p| *p.borrow_mut() = Some(lines.to_vec()));
+}
+
+#[cfg(test)]
+pub(super) fn last_locate_screen() -> Option<Vec<String>> {
+    LAST_LOCATE_SCREEN.with(|p| p.borrow().clone())
+}
+
 pub(super) fn locate_argv(row: &RegistryAgent) -> Vec<String> {
+    locate_argv_with(row, None, &[])
+}
+
+/// The Locate tier's screen with the serve seat's truth folded in: an
+/// optional why-line naming the real blocker and the serve facts block
+/// (pid, port) read off the recorded state. The no-truth form is
+/// byte-identical to [`locate_argv`] - a harness without the serve-attach
+/// capability never changes what its Locate screen says.
+pub(super) fn locate_argv_with(
+    row: &RegistryAgent,
+    why_override: Option<&str>,
+    facts: &[String],
+) -> Vec<String> {
     let harness = row.harness.as_deref().unwrap_or("(none recorded)");
     let cwd = if row.cwd.is_empty() {
         "(none recorded)"
     } else {
         row.cwd.as_str()
     };
-    let lines = [
+    let mut lines: Vec<String> = vec![
         "thread view - no live viewport exists for this row".to_string(),
         String::new(),
         format!("name:      {}", row.name),
@@ -338,14 +368,23 @@ pub(super) fn locate_argv(row: &RegistryAgent) -> Vec<String> {
         // construction daemon-hosted, and that is the true thing to say.
         "substrate: daemon-hosted (no pane; the daemon owns the session)".to_string(),
         format!("cwd:       {cwd}"),
-        String::new(),
-        format!(
-            "why: the {harness} harness owns no interactive attach form and no \
-             transcript reader, so no live viewport can be opened for it here."
-        ),
-        String::new(),
-        format!("what reaches it: fno agents mail send {}", row.name),
     ];
+    lines.extend(facts.iter().cloned());
+    lines.push(String::new());
+    lines.push(format!(
+        "why: {}",
+        why_override.unwrap_or(&format!(
+            "the {harness} harness owns no interactive attach form and no \
+             transcript reader, so no live viewport can be opened for it here."
+        ))
+    ));
+    lines.push(String::new());
+    lines.push(format!(
+        "what reaches it: fno agents mail send {}",
+        row.name
+    ));
+    #[cfg(test)]
+    capture_locate_screen(&lines);
     let mut argv = vec![
         "sh".to_string(),
         "-c".to_string(),

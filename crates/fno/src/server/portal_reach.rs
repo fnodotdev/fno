@@ -337,6 +337,16 @@ pub(super) fn locate_tier_notice(row: &RegistryAgent) -> Option<String> {
         agents_view::thread_reach(row.harness.as_deref(), row.attach_id.as_deref()),
         Reach::Locate
     );
+    // A serve-attach-capable row can Drive on fill, so the restore
+    // collect's cheap read softens the notice: capability only, no probe.
+    if locate
+        && row
+            .harness
+            .as_deref()
+            .is_some_and(|h| agents_view::serve_attach_form(h).is_some())
+    {
+        return None;
+    }
     locate.then(|| {
         format!(
             "{} reaches Locate only - the portal shows where the thread lives, not the thread",
@@ -824,36 +834,49 @@ impl Core {
         // The tier's argv is built server-side, where the row set lives: the
         // client's reach command is tier-blind by design.
         let through_link = link.is_some();
-        let argv = match (link, tier) {
-            (Some(argv), _) => argv,
-            (None, Reach::Drive) => {
-                let id = row.attach_id.clone().expect("Drive implies attach_id");
-                // The Drive argv is the canonical re-entry plan for a
-                // claude row. `None` means the plan is resolving off-loop; the
-                // replay carries a portal placement, which re-lands in this
-                // reach with the verdict staged. The replay names THIS
-                // portal AND keeps the caller's geometry (split, tab,
-                // target), so an off-loop replay returns to the index the
-                // operator reached without discarding the split they asked
-                // for - the geometry the fresh open honors.
-                let placement = portal_replay_placement(placement, portal_idx);
-                let Some((argv, _cd)) = self.attach_gesture_argv(client_id, &id, &placement) else {
-                    return Flow::Continue;
-                };
+        // The serve seat: a Locate-tier row whose harness declares the
+        // serve-attach capability can still Drive, through the shared serve.
+        // Measured once per reach; the probes are tight-bounded (500ms
+        // health, 2s version) so a dead port never stalls the loop long.
+        let seat = match tier {
+            Reach::Locate => serve_attach::serve_seat(&row),
+            _ => serve_attach::ServeSeat::Outside,
+        };
+        let mut serve_env: Vec<(String, String)> = Vec::new();
+        let argv = match (link, tier, seat) {
+            (Some(argv), _, _) => argv,
+            (_, _, serve_attach::ServeSeat::Attach { argv, env }) => {
+                serve_env = env;
                 argv
             }
-            (None, Reach::Follow) => peek_argv(&row.name),
-            (None, Reach::Locate) => locate_argv(&row),
-        };
-        let mechanism = match (&tier, staged_plan_ms) {
-            _ if through_link => "link",
-            (Reach::Drive, None) => "attach-direct",
-            (Reach::Drive, Some(_)) if argv.iter().any(|a| a == "respawn" || a == "--resume") => {
-                "relaunch"
+            // Version skew refuses with a notice and no pane: the skew is
+            // the operator-fixable state (restart the serve or point
+            // FNO_OPENCODE_BIN at a matching build), and a frozen screen
+            // naming a stale pair adds nothing the notice doesn't.
+            (None, Reach::Locate, serve_attach::ServeSeat::Skew(notice)) => {
+                self.notice(client_id, notice);
+                return Flow::Continue;
             }
-            (Reach::Drive, Some(_)) => "attach-plan",
-            (Reach::Follow, _) => "follow",
-            (Reach::Locate, _) => "locate",
+            (None, Reach::Locate, serve_attach::ServeSeat::Honest(truth)) => {
+                locate_argv_with(&row, Some(truth.why.as_str()), &truth.facts)
+            }
+            (None, Reach::Follow) => peek_argv(&row.name),
+            (None, Reach::Locate, serve_attach::ServeSeat::Outside) => locate_argv(&row),
+        };
+        let mechanism = match serve_env.is_empty() {
+            false => "serve-attach",
+            true => match (&tier, staged_plan_ms) {
+                _ if through_link => "link",
+                (Reach::Drive, None) => "attach-direct",
+                (Reach::Drive, Some(_))
+                    if argv.iter().any(|a| a == "respawn" || a == "--resume") =>
+                {
+                    "relaunch"
+                }
+                (Reach::Drive, Some(_)) => "attach-plan",
+                (Reach::Follow, _) => "follow",
+                (Reach::Locate, _) => "locate",
+            },
         };
         let plan_ms = staged_plan_ms.unwrap_or(0);
         // The viewer spawns at the tab rect it will fill, so the harness
@@ -968,6 +991,7 @@ impl Core {
                         rows,
                         cols,
                         cwd: spawn_cwd,
+                        env: serve_env.clone(),
                         permit,
                         keeper: KEEPER_ROAD,
                     };
@@ -1175,6 +1199,7 @@ impl Core {
             rows,
             cols,
             cwd: spawn_cwd.clone(),
+            env: serve_env.clone(),
             permit,
             keeper: KEEPER_ROAD,
         };
@@ -1706,6 +1731,7 @@ impl Core {
         } else {
             row.cwd.clone()
         };
+        let mut serve_env: Vec<(String, String)> = Vec::new();
         let argv = match tier {
             Reach::Drive => {
                 let id = row.attach_id.clone().expect("Drive implies attach_id");
@@ -1717,7 +1743,26 @@ impl Core {
                 argv
             }
             Reach::Follow => peek_argv(&row.name),
-            Reach::Locate => locate_argv(&row),
+            Reach::Locate => {
+                // The serve seat, same as the portal seat: a Locate-tier
+                // row with the serve-attach capability Drives through the
+                // shared serve; skew refuses with a notice; an honest
+                // block renders the real state on the Locate screen.
+                match serve_attach::serve_seat(&row) {
+                    serve_attach::ServeSeat::Attach { argv, env } => {
+                        serve_env = env;
+                        argv
+                    }
+                    serve_attach::ServeSeat::Skew(notice) => {
+                        self.notice(client_id, notice);
+                        return Flow::Continue;
+                    }
+                    serve_attach::ServeSeat::Honest(truth) => {
+                        locate_argv_with(&row, Some(truth.why.as_str()), &truth.facts)
+                    }
+                    serve_attach::ServeSeat::Outside => locate_argv(&row),
+                }
+            }
         };
         // The marker rides the argv: provenance a later server re-derives
         // on keeper re-adoption. `env` chains (each env execs the next).
@@ -1750,6 +1795,7 @@ impl Core {
             rows,
             cols,
             cwd: spawn_cwd.clone(),
+            env: serve_env.clone(),
             permit,
             keeper: KEEPER_ROAD,
         };

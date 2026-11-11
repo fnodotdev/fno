@@ -83,6 +83,7 @@ mod keeper_adopt;
 pub(crate) mod lifecycle_target;
 mod mouse_route;
 mod pane_scroll;
+mod serve_attach;
 use pane_scroll::{wheel_gate, WheelGateState};
 pub(crate) mod links;
 mod notice;
