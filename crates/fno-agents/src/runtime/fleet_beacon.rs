@@ -117,6 +117,18 @@ CREATE TABLE IF NOT EXISTS fleet_mark (
     beat_at INTEGER NOT NULL,
     PRIMARY KEY (machine_id, name)
 );
+CREATE TABLE IF NOT EXISTS fleet_card (
+    machine_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    badge TEXT,
+    seen INTEGER,
+    pr INTEGER,
+    build TEXT,
+    activity TEXT,
+    bindings TEXT,
+    beat_at INTEGER NOT NULL,
+    PRIMARY KEY (machine_id, name)
+);
 CREATE TABLE IF NOT EXISTS fleet_machine_facts (
     machine_id TEXT PRIMARY KEY,
     display_name TEXT,
@@ -134,6 +146,8 @@ const TURN_COLUMNS: &str =
     "machine_id, name, last_message, last_prompt, user_turns, progress, beat_at";
 const MARK_COLUMNS: &str = "machine_id, name, workspace, needs_input, pinned, cost_cents, \
      tokens, compactions, beat_at";
+const CARD_COLUMNS: &str = "machine_id, name, badge, seen, pr, build, \
+     activity, bindings, beat_at";
 const FACTS_COLUMNS: &str = "machine_id, display_name, lanes, beat_at";
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -213,6 +227,17 @@ pub struct Session {
     pub cost_cents: Option<i64>,
     pub tokens: Option<i64>,
     pub compactions: Option<i64>,
+    /// The look of the card, as its own machine's mux serves it: the badge
+    /// word (`working` | `blocked` | `done`), the pane seen bit, the PR
+    /// number, the build mark, the tool-activity ring and the node bindings.
+    /// Values ride verbatim; the remote client owns the typed parse. Null for
+    /// a machine whose daemon predates `fleet_card`.
+    pub badge: Option<String>,
+    pub seen: Option<bool>,
+    pub pr: Option<i64>,
+    pub build: Option<Value>,
+    pub activity: Option<Value>,
+    pub bindings: Option<Value>,
 }
 
 impl Session {
@@ -230,6 +255,16 @@ impl Session {
             || self.cost_cents.is_some()
             || self.tokens.is_some()
             || self.compactions.is_some()
+    }
+
+    /// Any card look fact at all: a session with none files no card row.
+    fn has_card(&self) -> bool {
+        self.badge.is_some()
+            || self.seen.is_some()
+            || self.pr.is_some()
+            || self.build.is_some()
+            || self.activity.is_some()
+            || self.bindings.is_some()
     }
 
     fn has_seat(&self) -> bool {
@@ -371,6 +406,19 @@ pub fn lanes_from_top(top: &Value) -> Vec<Lane> {
         .collect()
 }
 
+/// The card facts one top row carries, read once at the boundary
+/// (docs/rust-style.md R1): the mux card's PR refines the claim join's own.
+#[derive(Debug, Default, Deserialize)]
+struct TopCardFacts {
+    badge: Option<String>,
+    seen: Option<bool>,
+    card_pr: Option<i64>,
+    pr: Option<i64>,
+    build: Option<Value>,
+    activity: Option<Value>,
+    bindings: Option<Value>,
+}
+
 /// Session rows from the `top` payload's worker rows.
 pub fn sessions_from_top(machine_id: &str, top: &Value) -> Vec<Session> {
     let text = |row: &Value, key: &str| row.get(key).and_then(Value::as_str).map(str::to_string);
@@ -379,6 +427,7 @@ pub fn sessions_from_top(machine_id: &str, top: &Value) -> Vec<Session> {
         .into_iter()
         .flatten()
         .filter_map(|row| {
+            let card: TopCardFacts = serde_json::from_value(row.clone()).unwrap_or_default();
             Some(Session {
                 machine_id: machine_id.to_string(),
                 name: text(row, "name")?,
@@ -410,6 +459,14 @@ pub fn sessions_from_top(machine_id: &str, top: &Value) -> Vec<Session> {
                 cost_cents: row.get("cost_cents").and_then(Value::as_i64),
                 tokens: row.get("tokens").and_then(Value::as_i64),
                 compactions: row.get("compactions").and_then(Value::as_i64),
+                badge: card.badge,
+                seen: card.seen,
+                // The mux card's PR wins; the claim join's own `pr` falls
+                // back, so a session no mux serves still carries a chip.
+                pr: card.card_pr.or(card.pr),
+                build: card.build.filter(|v| !v.is_null()),
+                activity: card.activity.filter(|v| !v.is_null()),
+                bindings: card.bindings.filter(|v| !v.is_null()),
                 ..Session::default()
             })
         })
@@ -477,6 +534,10 @@ pub fn publish(remote: &Remote, machine: &Machine, sessions: &[Session]) -> Resu
             vec![id.clone()],
         ),
         (
+            "DELETE FROM fleet_card WHERE machine_id = ?1".to_string(),
+            vec![id.clone()],
+        ),
+        (
             format!(
                 "INSERT OR REPLACE INTO fleet_machine_facts ({FACTS_COLUMNS}) \
                  VALUES (?1, ?2, ?3, ?4)"
@@ -522,6 +583,30 @@ pub fn publish(remote: &Remote, machine: &Machine, sessions: &[Session]) -> Resu
                     opt_text(&s.last_prompt),
                     opt_int(s.user_turns),
                     opt_text(&s.progress),
+                    SqlValue::Integer(machine.beat_at),
+                ],
+            ));
+        }
+        if s.has_card() {
+            let json = |v: &Option<Value>| {
+                v.as_ref()
+                    .map(|v| SqlValue::Text(v.to_string()))
+                    .unwrap_or(SqlValue::Null)
+            };
+            steps.push((
+                format!(
+                    "INSERT OR REPLACE INTO fleet_card ({CARD_COLUMNS}) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+                ),
+                vec![
+                    id.clone(),
+                    SqlValue::Text(s.name.clone()),
+                    opt_text(&s.badge),
+                    opt_flag(s.seen),
+                    opt_int(s.pr),
+                    json(&s.build),
+                    json(&s.activity),
+                    json(&s.bindings),
                     SqlValue::Integer(machine.beat_at),
                 ],
             ));
@@ -737,6 +822,30 @@ pub fn read(remote: &Remote) -> Result<Fleet, String> {
                 s.cost_cents = r[5].integer();
                 s.tokens = r[6].integer();
                 s.compactions = r[7].integer();
+            }
+        }
+        Err(error) => errors.push(error),
+    }
+    match remote.execute(&format!("SELECT {CARD_COLUMNS} FROM fleet_card"), &[]) {
+        Ok(reply) => {
+            let json = |v: &SqlValue| text(v).and_then(|s| serde_json::from_str::<Value>(&s).ok());
+            for r in &reply.rows {
+                let (machine_id, name) = (text(&r[0]), text(&r[1]));
+                let beat = r.get(8).and_then(SqlValue::integer);
+                if current(&fleet.machines, &machine_id, beat).is_none() {
+                    continue;
+                }
+                let Some(s) = fleet.sessions.iter_mut().find(|s| {
+                    Some(&s.machine_id) == machine_id.as_ref() && Some(&s.name) == name.as_ref()
+                }) else {
+                    continue;
+                };
+                s.badge = r.get(2).and_then(text);
+                s.seen = r.get(3).and_then(SqlValue::integer).map(|n| n != 0);
+                s.pr = r.get(4).and_then(SqlValue::integer);
+                s.build = r.get(5).and_then(json);
+                s.activity = r.get(6).and_then(json);
+                s.bindings = r.get(7).and_then(json);
             }
         }
         Err(error) => errors.push(error),

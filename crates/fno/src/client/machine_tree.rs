@@ -290,14 +290,18 @@ fn lead_of<'a>(seat: &'a Value, all: &[&'a Value]) -> String {
 }
 
 /// A fleet seat as a row that paints like a local one: the same model, cost,
-/// context, token and compaction fields, and the last line the session wrote.
-/// A count its own machine has no reading for stays `None` and the card hides
-/// it. `name@host` is the address peek and mail already route, so those two
+/// context, token, compaction, PR, binding, build and activity fields, and
+/// the last line the session wrote. A fact its own machine has no reading for
+/// stays `None` and the card hides it, exactly as a local card would.
+/// `name@host` is the address peek and mail already route, so those two
 /// work from the name alone. A seat waiting on the user badges blocked, so it
 /// sorts and rolls up as a local blocked row does.
 fn remote_row(seat: &Value, host: &str, needs_input: bool) -> AgentRow {
     let name = text(seat, "name").unwrap_or_default();
     let address = format!("{name}@{host}");
+    // The card look rides the beat (`fleet_card`): the values are the seat
+    // machine's own mux reading, forwarded verbatim, so the one typed parse
+    // happens here and every other crate stays schema-agnostic.
     AgentRow {
         name: address.clone(),
         harness: text(seat, "harness"),
@@ -310,11 +314,18 @@ fn remote_row(seat: &Value, host: &str, needs_input: bool) -> AgentRow {
         session_tokens: seat["tokens"].as_u64(),
         compaction_count: seat["compactions"].as_u64(),
         tail: text(seat, "last_message"),
-        badge: if needs_input {
-            Some(AgentBadge::Blocked)
-        } else {
-            (text(seat, "status").as_deref() == Some("writing")).then_some(AgentBadge::Working)
-        },
+        seen: seat["seen"].as_bool().unwrap_or(false),
+        pr: seat["pr"].as_u64(),
+        build: serde_json::from_value(seat["build"].clone()).ok(),
+        activity: serde_json::from_value(seat["activity"].clone()).ok(),
+        bindings: serde_json::from_value(seat["bindings"].clone()).unwrap_or_default(),
+        badge: seat["badge"]
+            .as_str()
+            .and_then(|w| serde_json::from_str::<AgentBadge>(w).ok())
+            .or_else(|| needs_input.then_some(AgentBadge::Blocked))
+            .or_else(|| {
+                (text(seat, "status").as_deref() == Some("writing")).then_some(AgentBadge::Working)
+            }),
         pinned: seat["pinned"].as_bool() == Some(true),
         // The Created and Modified sorts read these, so a remote row orders by
         // its own times inside a band.
@@ -525,7 +536,16 @@ mod tests {
         json!({"machines": [
             {"host": "u", "local": false, "fresh": true, "age_s": 45, "sessions": [
                 {"name": "muriel", "harness": "claude", "project": "fno",
-                 "session_id": "133a419b", "status": "writing"},
+                 "session_id": "133a419b", "status": "writing",
+                 "node": "x-1", "model": "claude-opus-5-5",
+                 "context_pct": 30, "cost_cents": 12, "tokens": 4000, "compactions": 1,
+                 "started_at": "2026-11-10T10:00:00Z",
+                 "last_message": "reading the fold",
+                 "badge": "working", "seen": false, "pr": 42,
+                 "build": null,
+                 "activity": [[2, 0], [5, 1]],
+                 "bindings": [{"node": "x-1", "pr": 42, "pr_count": 1,
+                     "source": "spawn", "state": "open", "inferred": true}]},
                 {"name": "ines", "harness": "claude", "project": "fnh", "age_s": 180},
                 {"name": "shell", "harness": "zsh"},
             ]},
@@ -552,6 +572,15 @@ mod tests {
             (remote.host.as_str(), remote.key.as_str()),
             ("u", "133a419b")
         );
+        // The card look rides the beat: pr, bindings, build, activity, seen
+        // fold into the row the composer reads, from the same seat JSON.
+        assert_eq!(row.pr, Some(42));
+        assert_eq!(row.seen, false);
+        assert_eq!(row.build, None);
+        assert_eq!(row.activity, Some(vec![(2, 0), (5, 1)]));
+        let binding = row.bindings.first().expect("the spawn binding folds");
+        assert_eq!(binding.node, "x-1");
+        assert_eq!(binding.source, "spawn");
         let ines = bands[1].seats[1].row.remote.as_ref().unwrap();
         assert_eq!(ines.key, "ines");
 
