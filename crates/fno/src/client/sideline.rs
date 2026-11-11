@@ -620,9 +620,9 @@ impl View {
         panel_w: usize,
     ) {
         let text_w = panel_w - 1; // last column is the divider
-                                  // The backlog view: the board's own render inside THIS column, no
-                                  // second border, the cursor row wearing the sideline band. The
-                                  // divider paints as in the agents view, then the agent path stops.
+        // The backlog view: the board's own render inside THIS column, no
+        // second border, the cursor row wearing the sideline band. The
+        // divider paints as in the agents view, then the agent path stops.
         if self.sideline_view != crate::view_store::SidelineView::Agents {
             // The strip row owns row 0 (R15) unless a board claims it: the
             // Org board paints rows 1 and below, the docked backlog board
@@ -721,13 +721,13 @@ impl View {
         // answer to the same height, or the render-time scroll lands the
         // selected row under the chrome that paints over it.
         let table_rows_n = list_rows.saturating_sub(chrome_rows).saturating_sub(1); // strip row
-                                                                                    // The sticky menu row (h): when the rows overflow the region, the
-                                                                                    // menu/add-workspace footer pins directly above the org block
-                                                                                    // and the widget area gives up its last row, so the footer is never
-                                                                                    // covered and the rows scroll to their true end above it. A region
-                                                                                    // down to one row keeps that row as list, never as footer. The pinned
-                                                                                    // copy yields while the in-list NewSquad row is inside the visible
-                                                                                    // window - one instance of the label in every scroll state.
+        // The sticky menu row (h): when the rows overflow the region, the
+        // menu/add-workspace footer pins directly above the org block
+        // and the widget area gives up its last row, so the footer is never
+        // covered and the rows scroll to their true end above it. A region
+        // down to one row keeps that row as list, never as footer. The pinned
+        // copy yields while the in-list NewSquad row is inside the visible
+        // window - one instance of the label in every scroll state.
         let sticky_footer = table_rows_n > 1 && display.len() > table_rows_n;
         let table_h = table_rows_n.saturating_sub(sticky_footer as usize);
         // The widget renders into a standalone Buffer (no terminal, no
@@ -1233,10 +1233,10 @@ impl View {
                 let start = range.start;
                 for (n, c) in range.clone().enumerate() {
                     let is_pad = n + 1 == DENSITY_BTN_W; // the trailing cell is the pad
-                                                         // The button yields to a blitted row's own cells: an
-                                                         // agent row scrolled to the top keeps its right-aligned
-                                                         // PR and age, and the density cycle keeps its keybind
-                                                         // (Locked Decision 5) - the button is never the only way.
+                    // The button yields to a blitted row's own cells: an
+                    // agent row scrolled to the top keeps its right-aligned
+                    // PR and age, and the density cycle keeps its keybind
+                    // (Locked Decision 5) - the button is never the only way.
                     if cells[c].c != ' ' {
                         continue;
                     }
@@ -1465,15 +1465,15 @@ impl View {
                 // instead; lists decide here.
                 let suffix = match held_badge.filter(|_| !card) {
                     Some(held) => {
-                        let age_s = a.mail_held_since.map(|s| row_meter::up_cell(Some(s), now));
-                        let full = format!(
-                            " [{held} queued{}]",
-                            age_s.map(|c| format!(", oldest {c}")).unwrap_or_default()
-                        );
-                        let compact = format!(
-                            " [{held}q{}]",
-                            age_s.map(|c| format!(" {c}")).unwrap_or_default()
-                        );
+                        let (age_full, age_compact) = match a.mail_held_since {
+                            Some(s) => {
+                                let c = row_meter::up_cell(Some(s), now);
+                                (format!(", oldest {c}"), format!(" {c}"))
+                            }
+                            None => (String::new(), String::new()),
+                        };
+                        let full = format!(" [{held} queued{age_full}]");
+                        let compact = format!(" [{held}q{age_compact}]");
                         let fits = |badge: &str| {
                             crate::chrome::str_cols(&label)
                                 + crate::chrome::str_cols(badge)
