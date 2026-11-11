@@ -35,16 +35,8 @@ export FNO_EVENTS_PATH="$EVENTS"
 
 # Same resolution order as scripts/lib/events.sh: checkout build first, PATH
 # second, so assertions never read through a stale installed binary.
-ROWS_BIN="${FNO_BIN:-}"
-if [[ -z "$ROWS_BIN" ]]; then
-    for _profile in debug release; do
-        if [[ -x "$REPO_ROOT/crates/fno/target/$_profile/fno" ]]; then
-            ROWS_BIN="$REPO_ROOT/crates/fno/target/$_profile/fno"
-            break
-        fi
-    done
-fi
-[[ -n "$ROWS_BIN" ]] || ROWS_BIN=$(command -v fno 2>/dev/null)
+# shellcheck source=scripts/lib/store-bin.sh
+source "$REPO_ROOT/scripts/lib/store-bin.sh"
 
 # The marker commit inside _append_bounded_event resolves its binary the same
 # way. Pin it here so a guard run under a faked PATH (the plan-location block
