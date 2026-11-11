@@ -425,9 +425,11 @@ row_codex_plugin_session() {
   score_plugin_session "$HOME/.local/state/fno/plugin-install/postinstall.log" "$HOME/.local/bin"
 }
 
+# Every fetch of fno.sh here sends x-fno-probe, so the Worker leaves it out of
+# the install count. A CI matrix is not a user.
 row_fno_sh_served() {
   assert_clean_machine
-  run_capture sh -c 'curl -fsSL https://fno.sh | sh'
+  run_capture sh -c 'curl -fsSL -H x-fno-probe:1 https://fno.sh | sh'
   if [ "$RC" -ne 0 ]; then
     miss "install" "curl | sh rc=$RC: $(printf '%s' "$OUT" | tail -1)"
     return 0
@@ -439,7 +441,7 @@ row_fno_sh_served() {
 # types. Expected to fail until a release carries the upgrade path.
 row_fno_update_released() {
   assert_clean_machine
-  run_capture sh -c 'curl -fsSL https://fno.sh | sh'
+  run_capture sh -c 'curl -fsSL -H x-fno-probe:1 https://fno.sh | sh'
   if [ "$RC" -ne 0 ]; then
     miss "install" "curl | sh rc=$RC: $(printf '%s' "$OUT" | tail -1)"
     return 0
@@ -477,7 +479,7 @@ row_fno_sh_fresh() {
     miss "fresh" "could not read the newest stable tag from fnodotdev/fno"
     return 0
   fi
-  curl -fsSL https://fno.sh > "$BASE/served.out" 2>/dev/null
+  curl -fsSL -H x-fno-probe:1 https://fno.sh > "$BASE/served.out" 2>/dev/null
   _served_rc=$?
   curl -fsSL "https://raw.githubusercontent.com/fnodotdev/fno/$tag/scripts/install/fno.sh" > "$BASE/released.out" 2>/dev/null
   _released_rc=$?
@@ -498,8 +500,8 @@ row_fno_sh_fresh() {
 
 row_install_sh_alias() {
   assert_clean_machine
-  curl -fsSL https://fno.sh > "$BASE/root.out" 2>/dev/null
-  curl -fsSL https://fno.sh/install.sh > "$BASE/alias.out" 2>/dev/null
+  curl -fsSL -H x-fno-probe:1 https://fno.sh > "$BASE/root.out" 2>/dev/null
+  curl -fsSL -H x-fno-probe:1 https://fno.sh/install.sh > "$BASE/alias.out" 2>/dev/null
   if cmp -s "$BASE/root.out" "$BASE/alias.out" && [ -s "$BASE/root.out" ]; then
     pass "alias" "install.sh serves the same bytes as the domain root"
   else
