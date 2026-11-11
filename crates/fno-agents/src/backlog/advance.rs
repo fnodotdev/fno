@@ -1927,11 +1927,9 @@ pub fn advance(input: &AdvanceInput) -> AdvanceResult {
     let Some(node_id) = node.get("id").and_then(Value::as_str).map(str::to_string) else {
         return skip("no-work", None, None, None, None, None);
     };
-    let node_cwd = node
-        .get("_resolved_cwd")
-        .and_then(Value::as_str)
-        .or_else(|| node.get("cwd").and_then(Value::as_str))
-        .map(str::to_string);
+    // The checkout resolves through the work map (a stored cwd predates
+    // config changes), then the served row's annotation, then the stored cwd.
+    let node_cwd = super::settings::node_row_checkout(&node);
 
     // 4. Already being worked? A live node claim means a worker is running;
     //    a live dispatch reservation means a peer advance is mid-flight.
