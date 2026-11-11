@@ -492,7 +492,7 @@ mod tests {
         let doc = event(&row, "mac1").unwrap();
         let text = doc.to_string();
         assert!(!text.contains("secret"), "free text leaked: {text}");
-        let props = &doc["properties"];
+        let props = doc["properties"].as_object().expect("properties object");
         assert_eq!(props["machine"], "mac1");
         assert_eq!(props["node"], "x-aaaa");
         assert_eq!(props["model"], "glm-5.3-flash");
