@@ -122,10 +122,10 @@ impl Core {
         self.broadcast_pane(pane);
     }
 
-    /// The largest single keyboard-scroll delta accepted from the wire. The
-    /// scrollback ceiling is 100k lines, so anything past ten of those is
-    /// meaningless; the bound keeps alacritty's `display_offset as i32 +
-    /// count` add overflow-free however the offset sits.
+    /// The largest single keyboard-scroll delta accepted from the wire. A
+    /// delta past the pane's scrollback cap (`mux.scrollback_lines`) only
+    /// clamps; the bound keeps alacritty's `display_offset as i32 + count`
+    /// add overflow-free however the offset sits.
     const MAX_SCROLL_DELTA: i32 = 1_000_000;
 
     /// Apply one keyboard-scroll op to `pane` (v118). Both move the SHARED

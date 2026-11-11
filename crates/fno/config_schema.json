@@ -1633,6 +1633,12 @@
       "title": "Attach Digest Threshold Min",
       "type": "integer"
      },
+     "scrollback_lines": {
+      "default": 10000,
+      "minimum": 1,
+      "title": "Scrollback Lines",
+      "type": "integer"
+     },
      "hover_focus": {
       "default": true,
       "title": "Hover Focus",
@@ -6848,6 +6854,15 @@
    "question": "",
    "default_source": "default",
    "doc": "Minutes since last detach before the catch-up digest overlay shows (default 10)."
+  },
+  {
+   "path": "mux.scrollback_lines",
+   "type": "int",
+   "default": 10000,
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "default",
+   "doc": "History lines each mux pane keeps (default 10000). Each line costs every column of the pane, about 2 MB per 1k lines at 80 columns, so 48 panes at 100k lines hold several GB. Latched at mux server birth; `fno mux kill-server` re-reads."
   },
   {
    "path": "mux.hover_focus",

@@ -30,6 +30,10 @@ required-features = ["full"]
 name = "mux_latency"
 required-features = ["full"]
 
+[[example]]
+name = "mux_footprint"
+required-features = ["full"]
+
 [features]
 # The contract build is `--no-default-features`: only the nine modules an
 # external harness links (footnote_transcript, effect_map, version,

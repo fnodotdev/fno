@@ -795,6 +795,8 @@ notify_on_done = false
 attach_digest = true
 # Minutes since last detach before the catch-up digest overlay shows (default 10).
 attach_digest_threshold_min = 10
+# History lines each mux pane keeps (default 10000). Each line costs every column of the pane, about 2 MB per 1k lines at 80 columns, so 48 panes at 100k lines hold several GB. Latched at mux server birth; `fno mux kill-server` re-reads.
+scrollback_lines = 10000
 # Focus-follows-mouse: hovering a coding pane makes it the keyboard focus after a short settle (default on).
 hover_focus = true
 # Show the mux status row at the bottom of the terminal (default on).

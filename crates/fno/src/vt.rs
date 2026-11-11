@@ -3,8 +3,8 @@
 //! Seeded from `crates/fno-agents/src/runtime/screen.rs` (headless
 //! `Term<VoidListener>` + `vte::ansi::Processor`) and its grid compositor's
 //! cell mapping, adapted for the mux: alt-screen is exercised (vim under
-//! detach/reattach, AC3-EDGE), scrollback is bounded (10k lines - a cap, not
-//! an upfront allocation, so server memory per pane is bounded), and the
+//! detach/reattach, AC3-EDGE), scrollback is bounded (`scrollback_lines` - a
+//! cap, not an upfront allocation, so server memory per pane is bounded), and the
 //! snapshot is a full styled [`Frame`], not trimmed text. The server grid is
 //! the single source of truth; the client never emulates VT itself.
 
@@ -55,16 +55,16 @@ pub const DEFAULT_COLS: u16 = 80;
 
 /// Default scrollback cap per pane. `Term::new` treats `scrolling_history` as a
 /// bound the history grows toward, not an allocation, so a pane that emits 500
-/// lines costs 500 lines even at this ceiling. 100k is alacritty's documented
-/// max; a memory-constrained deployment lowers it via the
-/// `FNO_MUX_SCROLLBACK_LINES` env var (see `scrollback_lines`). Governs how far
-/// `pane read --lines` and a still-streaming block can reach into history (4b).
-const SCROLLBACK_LINES: usize = 100_000;
+/// lines costs 500 lines. A full history row costs every column, whatever the
+/// line holds: the `mux_footprint` example reads about 2 MB per 1k lines of an
+/// 80-column pane, so 16 such panes at 100k lines held 3.2 GB in the server and
+/// 340 MB at 10k. Governs how far `pane read --lines` and a still-streaming
+/// block can reach into history (4b); raise it with `mux.scrollback_lines`.
+const SCROLLBACK_LINES: usize = 10_000;
 
-/// Resolve the per-pane scrollback cap. Read directly from the
-/// `FNO_MUX_SCROLLBACK_LINES` env var (set it yourself); it is NOT wired to
-/// `config.mux` - the crate reads env only, same pattern as
-/// `FNO_SESSION`/`FNO_MUX_DIR`. Falls back to the 100k default.
+/// Resolve the per-pane scrollback cap from the `FNO_MUX_SCROLLBACK_LINES` env
+/// var. The server reads env only: the client latches `mux.scrollback_lines`
+/// into that var when it spawns the server. Falls back to the default.
 fn scrollback_lines() -> usize {
     std::env::var("FNO_MUX_SCROLLBACK_LINES")
         .ok()
@@ -1117,8 +1117,8 @@ impl Pane {
         let cols = self.cols as usize;
         let nlen = needle.len();
         let mut out = Vec::new();
-        // Reused across rows (cleared per row) so a full 10k-line scrollback scan
-        // does not allocate a fresh Vec per row. (gemini review, MEDIUM)
+        // Reused across rows (cleared per row) so a full-scrollback scan does
+        // not allocate a fresh Vec per row.
         let mut cells: Vec<(char, usize)> = Vec::with_capacity(cols);
         let mut ln = top;
         while ln <= bot {
@@ -1665,7 +1665,7 @@ const MAX_BLOCK_BYTES: usize = 256 * 1024;
 
 /// Total retained-block-text budget per pane (8 MiB). Oldest blocks front-drop
 /// until under it, so a high-output agent's blocks stay bounded regardless of
-/// the (now 100k-line) scrollback.
+/// the scrollback cap.
 const MAX_RETAINED_BYTES: usize = 8 * 1024 * 1024;
 
 /// A completed command block: the output span between an OSC 133 `C` (output
