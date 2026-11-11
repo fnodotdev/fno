@@ -1754,6 +1754,10 @@ mod tests {
     }
 
     #[test]
+    // The slice drops the two leader tokens the builder always emits, so
+    // argv[2..] is in bounds by construction (the repo's indexing_slicing
+    // convention for proven bounds).
+    #[allow(clippy::indexing_slicing)]
     fn reader_argv_respects_the_spawn_positional_boundary() {
         // Law d-3244: the seam judges the raw emitted spelling, so the
         // builder's own shape must pass it - owned flags before the prompt,

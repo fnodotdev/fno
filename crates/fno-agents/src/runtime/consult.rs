@@ -765,6 +765,9 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
+    // The slice drops the two leader tokens the builder always emits, so
+    // argv[2..] is in bounds by construction.
+    #[allow(clippy::indexing_slicing)]
     fn the_consult_spawn_line_respects_the_positional_boundary() {
         let argv = consult_spawn_argv("consult me", "/tmp", "m");
         let prompt_at = argv

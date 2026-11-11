@@ -1185,6 +1185,9 @@ mod tests {
     use super::*;
 
     #[test]
+    // The slice drops the two leader tokens the builder always emits, so
+    // argv[2..] is in bounds by construction.
+    #[allow(clippy::indexing_slicing)]
     fn the_label_judge_spawn_line_respects_the_positional_boundary() {
         let argv = labels_spawn_argv("labels-arm", "grade it", "/tmp");
         let prompt_at = argv

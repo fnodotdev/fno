@@ -416,6 +416,9 @@ mod tests {
     use std::sync::Mutex;
 
     #[test]
+    // The slice drops the two leader tokens the builder always emits, so
+    // argv[2..] is in bounds by construction.
+    #[allow(clippy::indexing_slicing)]
     fn the_grader_spawn_line_respects_the_positional_boundary() {
         let argv = spawn_argv("grade it", Path::new("/tmp"), 60, "m");
         let prompt_at = argv
