@@ -10,7 +10,7 @@
 //! queue (AC2-EDGE).
 
 use crate::shell_init::{BASH_SHELL_INIT, ZSH_SHELL_INIT};
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
@@ -487,28 +487,6 @@ impl LocalPty {
         wire(pair, child, pane_id, out_tx, exit_tx, shell_rc)
     }
 
-    /// Spawn an explicit command (`argv[0]` + args) as a pane - the
-    /// `fno mux pane run` / agents-spawn primitive. No shell fallback: an
-    /// unspawnable argv is the caller's error, surfaced verbatim. Env + cwd
-    /// (incl. `FNO_SESSION`) match [`PtyShell::spawn`].
-    #[allow(clippy::too_many_arguments)]
-    pub fn spawn_cmd(
-        argv: &[String],
-        rows: u16,
-        cols: u16,
-        cwd: Option<&std::path::Path>,
-        session: &str,
-        pane_id: u64,
-        out_tx: tokio::sync::mpsc::Sender<(u64, PaneChunk)>,
-        exit_tx: tokio::sync::mpsc::Sender<u64>,
-    ) -> Result<LocalPty, PtyError> {
-        let permit =
-            crate::process_admission::admit_fleet().map_err(|e| PtyError::Spawn(e.to_string()))?;
-        Self::spawn_cmd_with_permit(
-            argv, rows, cols, cwd, session, pane_id, out_tx, exit_tx, permit,
-        )
-    }
-
     /// Spawn an explicit command after a server-owned admission decision.
     #[allow(clippy::too_many_arguments)]
     pub fn spawn_cmd_with_permit(
@@ -693,7 +671,14 @@ impl PtyShell {
         exit_tx: tokio::sync::mpsc::Sender<u64>,
     ) -> Result<PtyShell, PtyError> {
         LocalPty::spawn_cmd_with_permit(
-            argv, rows, cols, cwd, session, pane_id, out_tx, exit_tx,
+            argv,
+            rows,
+            cols,
+            cwd,
+            session,
+            pane_id,
+            out_tx,
+            exit_tx,
             crate::process_admission::admit_fleet().map_err(|e| PtyError::Spawn(e.to_string()))?,
             &[],
         )
@@ -1371,7 +1356,7 @@ fn keeper_handshake(
                 if e.kind() == std::io::ErrorKind::WouldBlock
                     || e.kind() == std::io::ErrorKind::TimedOut =>
             {
-                return Err(expired())
+                return Err(expired());
             }
             Err(e) => return Err(e.to_string()),
         };

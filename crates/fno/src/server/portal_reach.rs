@@ -838,13 +838,34 @@ impl Core {
         // serve-attach capability can still Drive, through the shared serve.
         // Measured once per reach; the probes are tight-bounded (500ms
         // health, 2s version) so a dead port never stalls the loop long.
-        let seat = match tier {
-            Reach::Locate => serve_attach::serve_seat(&row),
-            _ => serve_attach::ServeSeat::Outside,
+        // Link rows never probe: their seat runs the link argv.
+        let seat = if link.is_none() {
+            match tier {
+                Reach::Locate => serve_attach::serve_seat(&row),
+                _ => serve_attach::ServeSeat::Outside,
+            }
+        } else {
+            serve_attach::ServeSeat::Outside
         };
         let mut serve_env: Vec<(String, String)> = Vec::new();
         let argv = match (link, tier, seat) {
             (Some(argv), _, _) => argv,
+            (None, Reach::Drive) => {
+                let id = row.attach_id.clone().expect("Drive implies attach_id");
+                // The Drive argv is the canonical re-entry plan for a
+                // claude row. `None` means the plan is resolving off-loop; the
+                // replay carries a portal placement, which re-lands in this
+                // reach with the verdict staged. The replay names THIS
+                // portal AND keeps the caller's geometry (split, tab,
+                // target), so an off-loop replay returns to the index the
+                // operator reached without discarding the split they asked
+                // for - the geometry the fresh open honors.
+                let placement = portal_replay_placement(placement, portal_idx);
+                let Some((argv, _cd)) = self.attach_gesture_argv(client_id, &id, &placement) else {
+                    return Flow::Continue;
+                };
+                argv
+            }
             (_, _, serve_attach::ServeSeat::Attach { argv, env }) => {
                 serve_env = env;
                 argv

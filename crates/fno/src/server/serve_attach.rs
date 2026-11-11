@@ -220,12 +220,20 @@ fn health_verdict(base_url: &str, token: &str) -> Option<ServeHealth> {
     serve_health(base_url, token)
 }
 
+/// The primary TUI candidate: the FNO_OPENCODE_BIN / PATH binary with its
+/// version. The only probe a healthy reach pays.
+fn tui_primary() -> (String, Option<String>) {
+    let bin = tui_candidate();
+    let version = tui_version(&bin);
+    (bin, version)
+}
+
 /// Every opencode TUI candidate on this machine, the primary first: the
-/// FNO_OPENCODE_BIN / PATH candidate, then the vendor installer path and
-/// the bun path when they exist. A skew notice names each with its version
-/// so the fix is readable, not guessed.
-fn tui_candidates() -> Vec<(String, Option<String>)> {
-    let mut out = vec![(tui_candidate(), tui_version(&tui_candidate()))];
+/// vendor installer path and the bun path join when they exist. Probes run
+/// only on the skew arm, where the notice names each with its version so
+/// the fix is readable, not guessed.
+fn tui_candidates(primary: (String, Option<String>)) -> Vec<(String, Option<String>)> {
+    let mut out = vec![primary];
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     for path in [
         home.as_ref().map(|h| h.join(".opencode/bin/opencode")),
@@ -287,17 +295,18 @@ pub(crate) fn serve_seat(row: &RegistryAgent) -> ServeSeat {
             format!("the shared serve's version {serve_version:?} reads no major"),
         );
     };
-    let candidates = tui_candidates();
-    let Some((_, Some(tui_version))) = candidates.first() else {
+    let primary = tui_primary();
+    let Some(tui_version) = primary.1 else {
         return honest_at(&state, "the opencode binary reported no version".into());
     };
-    let Some(tui_major) = parse_major(tui_version) else {
+    let Some(tui_major) = parse_major(&tui_version) else {
         return honest_at(
             &state,
             format!("the opencode binary's version {tui_version:?} reads no major"),
         );
     };
     if tui_major != serve_major {
+        let candidates = tui_candidates(primary);
         return ServeSeat::Skew(notice_text(&serve_version, &candidates));
     }
     let mut argv = form.render(tui_major, &state.base_url, sid);

@@ -315,6 +315,7 @@ impl SpawnJob {
                     out_tx,
                     exit_tx,
                     fallback_permit,
+                    &env,
                 )
                 .map_err(|e| e.to_string())?;
                 Ok(SpawnedPane {
