@@ -515,13 +515,13 @@ An open do row wedges its node `in_progress`. The in-progress status hides the r
 
 The maintain pass carries a repo-rename sweep. An open node's PR url recorded under the repo's former name rewrites in place, primary or additional. The alias comes from config `[repo_aliases]` or GitHub's own redirect answer, cached in gh-facts. Closed rows keep their history.
 
-That sweep answers a true rename, where GitHub keeps redirecting. A cutover that hands the old name to a new repo kills the redirects. The alias probe then answers the new repo's own name, so the sweep cannot see the move. That shape has its own one-shot pass. It must run before the new repo binds its first PR. After that point old and new rows share both the slug and the number, and nothing can tell them apart:
+That sweep answers a true rename, where GitHub keeps redirecting. A cutover that hands the old name to a new repo kills the redirects. The alias probe then answers the new repo's own name, so the sweep cannot see the move. That shape has its own one-shot pass. Run it before the new repo binds its first PR; past that point pass `--min-number N`, with N one above the new repo's highest PR (measure with `gh pr list --repo <new> --state all --limit 500 --json number`), so the pass leaves the new repo's own rows alone:
 
 ```bash
 fno backlog maintain --repo-moved fnodotdev/fno=fnodotdev/fno-workshop --apply
 ```
 
-The pass moves every stored url naming the old slug to the new one. It covers open and closed rows alike. A closed row left behind collides with the new repo's first PR. It rewrites primary and `additional_prs` slots. Url-less rows whose cwd still resolves to the moved repo get filled. Dry run by default. `--json` reports candidates and applied rows. After it runs, every PR read binds by repo plus number. A url naming another repo never binds. A located ref outranks a bare number. Two bare rows naming one number refuse rather than guess.
+Without `--min-number`, the pass moves every stored url naming the old slug to the new one. It covers open and closed rows alike. A closed row left behind collides with the new repo's first PR. It rewrites primary and `additional_prs` slots. Url-less rows whose cwd still resolves to the moved repo get filled. Dry run by default. `--json` reports candidates and applied rows. After it runs, every PR read binds by repo plus number. A url naming another repo never binds. A located ref outranks a bare number. Two bare rows naming one number refuse rather than guess.
 
 A UTC-day claim, not the scheduler, enforces once-a-day, so a double-fire or a manual run on a day that already groomed is a no-op (`already-ran`, zero subprocesses).
 That makes the cadence boring to install:
