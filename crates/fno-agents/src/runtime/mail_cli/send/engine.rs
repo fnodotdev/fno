@@ -999,7 +999,12 @@ impl Lane for PaneLane<'_> {
                         });
                         if let Some(rebound) = rebound {
                             let fresh = opt_str_field(rebound, "harness_session_id").unwrap_or(sid);
-                            return mail_inject_codex(&fresh, turn.as_str(), Some(reason_out), None);
+                            return mail_inject_codex(
+                                &fresh,
+                                turn.as_str(),
+                                Some(reason_out),
+                                None,
+                            );
                         }
                     }
                 }
