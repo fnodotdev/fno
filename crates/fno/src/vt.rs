@@ -186,6 +186,27 @@ struct SearchState {
     current: usize,
 }
 
+/// An anchor row's comparison key: lowercase alphanumeric runs only, cut to
+/// [`ANCHOR_NEEDLE_CHARS`]. TUIs wrap and repaint with style runs, so the
+/// check compares words the prompt carried, not the row's exact rendering.
+/// `None` for a blank captured row, which skips the identity check (the
+/// stamp then trusts the row it froze, best effort).
+fn anchor_needle(text: &str) -> Option<String> {
+    let cleaned: String = text
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    let needle: String = cleaned.chars().take(ANCHOR_NEEDLE_CHARS).collect();
+    (!needle.is_empty()).then_some(needle)
+}
+
+/// How many cleaned characters an anchor's identity check needs. A dozen
+/// alphanumeric characters name a prompt line well past the common prefixes
+/// (`>` bubbles, line numbers) without depending on the tail, which a wrap
+/// pushes onto the next row.
+const ANCHOR_NEEDLE_CHARS: usize = 12;
+
 impl Pane {
     pub fn new(rows: u16, cols: u16) -> Self {
         Pane::with_scrollback(rows, cols, scrollback_lines())
@@ -1103,6 +1124,92 @@ impl Pane {
         self.term.selection = Some(sel);
         self.selected_block = None; // search now owns the shared selection
         self.scroll_to_abs(m.abs_row);
+    }
+
+    // -- Prompt anchors (v127) -----------------------------------------
+
+    /// The cursor's absolute row: the server stamps it when a pane input
+    /// burst submits, and the exchange picker's jump lands here.
+    pub fn cursor_abs_row(&self) -> i64 {
+        self.anchor_row()
+    }
+
+    /// One retained row's visible text (wide-char spacers skipped, HIDDEN
+    /// cells read as space), right-trimmed; `None` for a row outside the
+    /// live window. The anchor jump's identity check reads the row the
+    /// stamp captured, so a TUI that has since redrawn (resize, compaction,
+    /// clear) refuses instead of landing on a row that no longer holds the
+    /// prompt.
+    pub fn row_text(&self, abs_row: i64) -> Option<String> {
+        let grid = self.term.grid();
+        let hist = grid.history_size() as i64;
+        let top = grid.topmost_line().0 as i64;
+        let bot = grid.bottommost_line().0 as i64;
+        let ln = (abs_row - hist).clamp(top, bot);
+        if ln + hist != abs_row {
+            return None; // clamped: the row aged out of retained scrollback
+        }
+        let row = &grid[Line(ln as i32)];
+        let cols = self.cols as usize;
+        let mut out = String::with_capacity(cols);
+        for c in 0..cols {
+            let cell = &row[Column(c)];
+            if cell.flags.contains(Flags::WIDE_CHAR_SPACER)
+                || cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)
+            {
+                continue;
+            }
+            out.push(if cell.flags.contains(Flags::HIDDEN) {
+                ' '
+            } else {
+                cell.c
+            });
+        }
+        Some(out.trim_end().to_string())
+    }
+
+    /// Jump the shared scroll to a stamped prompt anchor. `text` is the row
+    /// captured at stamp time; the row must still be retained AND still
+    /// carry that text, because both failure modes (eviction past the
+    /// scrollback cap, a TUI redraw that rebuilt the row space) make the
+    /// frozen `abs_row` lie. Returns `false` for a dead anchor; the caller
+    /// falls back to the transcript instead of a wrong-row jump.
+    pub fn anchor_jump(&mut self, abs_row: i64, text: &str) -> bool {
+        if abs_row < self.term.grid().history_size() as i64 {
+            return false; // evicted past the scrollback cap
+        }
+        // The row must still exist in the live window: a shrunken pane puts
+        // a stamped row past the bottom, and even a text-less anchor must
+        // refuse rather than index out of range.
+        if self.row_text(abs_row).is_none() {
+            return false;
+        }
+        let needle = anchor_needle(text);
+        if let Some(expected) = needle {
+            let Some(actual) = self.row_text(abs_row) else {
+                return false;
+            };
+            if !anchor_needle(&actual).is_some_and(|a| a.contains(&expected)) {
+                return false; // redrawn: the row no longer holds the prompt
+            }
+        }
+        // Highlight the row (the search path's shared selection) and scroll
+        // it to the viewport top, mirroring `apply_current_match`.
+        let grid = self.term.grid();
+        let hist = grid.history_size() as i64;
+        let line = (abs_row - hist) as i32;
+        let last_col = Column(self.cols.saturating_sub(1) as usize);
+        let mut sel = Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(line), Column(0)),
+            Side::Left,
+        );
+        sel.update(Point::new(Line(line), last_col), Side::Right);
+        self.term.selection = Some(sel);
+        self.selected_block = None;
+        self.search = None; // the anchor now owns the shared selection
+        self.scroll_to_abs(abs_row);
+        true
     }
 
     /// Scan every retained row for `needle`, case-insensitively, returning
@@ -3294,5 +3401,29 @@ mod tests {
         assert!(!pane.has_search(), "resize drops the search snapshot");
         assert!(!pane.has_selection());
         assert_eq!(pane.search_step(BlockDir::Next), None);
+    }
+
+    /// The anchor jump: a hit lands the row highlighted at the viewport
+    /// top; a stale abs_row (evicted) and a redrawn row both refuse, so the
+    /// caller falls back to the transcript instead of a wrong-row jump.
+    #[test]
+    fn anchor_jump_validates_before_it_lands() {
+        let mut pane = Pane::new(6, 40);
+        // A prompt echoed on a retained row: type text, submit, and freeze
+        // the row the text echoed on.
+        pane.feed(b"join the 12 chars check");
+        let abs = pane.cursor_abs_row();
+        pane.feed(b"\r");
+        let text = pane.row_text(abs).unwrap_or_default();
+        // Hit: the row still carries the text; the viewport moved up.
+        assert!(pane.anchor_jump(abs, &text), "a live anchor lands");
+        assert!(pane.has_selection(), "the landed row is highlighted");
+        // Aged: a row below the retained window refuses.
+        assert!(!pane.anchor_jump(-5, &text), "an aged anchor refuses");
+        // Redrawn: a different text on the same row refuses.
+        assert!(
+            !pane.anchor_jump(abs + 5, "completely different words"),
+            "a redrawn row refuses"
+        );
     }
 }
