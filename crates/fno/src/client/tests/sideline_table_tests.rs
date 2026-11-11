@@ -686,6 +686,11 @@ fn the_held_mail_badge_reads_queued_on_the_list_row() {
                 "mail_held":2,"mail_held_since":{since}}}"#
     );
     let mut view = two_pane_view();
+    // The stored width clamps to 60% of the terminal, so the fixture's
+    // 100-col terminal would hold the rail at 60 and the full badge would
+    // never fit. Widen the terminal; the rail's ceiling moves, the panes
+    // keep their geometry.
+    view.term.1 = 340;
     view.sideline_width = 200;
     view.layout.agents = vec![serde_json::from_str(&row_json).unwrap()];
     let text = frame_text(&view.compose());
