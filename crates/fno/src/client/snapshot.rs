@@ -1219,15 +1219,16 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
             // shot cannot show what it exists to judge.
             let questions = runtime.block_on(crate::needs_overlay::questions_now());
             view.apply_questions_fold(questions);
-            if view.need_input_count() == 0 {
-                return Err("nothing needs input, so the section would shoot empty".to_string());
-            }
             // The panel groups by machine only when the other-machines layer
             // is on and the fleet map answers; a single-machine root keeps
-            // the flat panel, so no refusal here.
+            // the flat panel, so no refusal here. The layer lands before the
+            // count, so a root whose only blocked row is remote still shoots.
             super::machine_tree::set_on(&mut view, true);
             let read = runtime.block_on(super::org_seats::read_fleet());
             super::machine_tree::apply(&mut view, read);
+            if view.need_input_count() == 0 {
+                return Err("nothing needs input, so the section would shoot empty".to_string());
+            }
             view.needs_open = true;
         }
         Some(ViewKind::SplitMenu) => {
