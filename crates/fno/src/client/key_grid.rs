@@ -237,6 +237,8 @@ mod tests {
         let rows = grid_rows(KeyView::Messages, 100);
         assert_eq!(rows.len(), 4, "12 keys + the closing cell = 13 cells");
         assert!(rows[0].text.starts_with("h/l columns"));
-        assert!(rows[3].text.trim_end().ends_with("* all keys"));
+        assert!(rows
+            .last()
+            .is_some_and(|r| r.text.trim_end().ends_with("* all keys")));
     }
 }
