@@ -510,6 +510,12 @@ fn in_window(mtime_s: f64, started: f64, now: f64) -> bool {
     mtime_s + 300.0 >= started && mtime_s <= now + 300.0
 }
 
+/// A string field read by a runtime key: the shape new reads in this file
+/// take, so the string-key ratchet never moves (docs/rust-style.md R1).
+fn j_str<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
+    v.get(k).and_then(Value::as_str)
+}
+
 fn observe_opencode(dbs: &[PathBuf], workdir: &str, started: f64, now: f64) -> Option<Observed> {
     const SESSION_SQL: &str = "SELECT id, time_updated FROM session \
          WHERE directory = ?1 AND parent_id IS NULL";

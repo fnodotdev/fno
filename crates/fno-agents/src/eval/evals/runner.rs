@@ -1220,7 +1220,7 @@ pub fn run_task(
         }
         row["harness_version"] = match &harness_version {
             Some(v) => json!(v),
-            None => Value::Null,
+            None => serde_json::Value::Null,
         };
         let _ = super::history::append_attempt(history_path, &row);
         results.push(RunResult {

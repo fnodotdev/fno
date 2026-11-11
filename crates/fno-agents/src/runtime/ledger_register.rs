@@ -620,6 +620,7 @@ pub(crate) fn build_entry(
     if pr_number.is_none() {
         pr_number = pr_number_from_gh(cwd);
     }
+    let remote_url = git_cmd(cwd, &["remote", "get-url", "origin"]);
     let pr_url = pr_url_for(cwd, pr_number, &remote_url);
 
     // Phases and plan points
@@ -880,7 +881,10 @@ pub(crate) fn build_entry(
     );
     e.insert(
         "session_id".into(),
-        scalar_session_id.map(|s| json!(s)).unwrap_or(Value::Null),
+        scalar_session_id
+            .clone()
+            .map(|s| json!(s))
+            .unwrap_or(Value::Null),
     );
     e.insert(
         "graph_node_id".into(),
@@ -968,7 +972,8 @@ fn bench_fields(
         }
     }
     if let Some(n) = pr_number {
-        let (minutes, commit_count, green_first) = pr_benchmark_fields(cwd, n, run_created);
+        let (minutes, commit_count, green_first) =
+            pr_benchmark_fields(cwd, n, (!run_created.is_empty()).then_some(run_created));
         if let Some(m) = minutes {
             e.insert("time_to_first_pr_minutes".into(), json!(m));
         }
@@ -1037,7 +1042,7 @@ fn drop_backstop_row(row: &Value, node: &str) -> bool {
 /// append contract: a started row never overwrites anything, a terminal row
 /// supersedes it.
 fn is_started_row(row: &Value) -> bool {
-    value_str(row, "status") == Some("started")
+    value_str(row, "status").as_deref() == Some("started")
 }
 
 /// Append entry to a ledger.json file atomically under the ledger flock (the
@@ -1417,17 +1422,20 @@ pub(crate) fn register_target_started(cwd: &Path, manifest: &Path) -> bool {
         .unwrap_or_default()
         .to_string();
     let mut entry = build_started_entry(cwd, &state, "");
-    bench_fields(
-        &mut entry,
-        cwd,
-        value_str(&entry, "root_path").unwrap_or_default(),
-        None,
-        state_str(&state, "created_at")
-            .as_deref()
-            .unwrap_or_default(),
-        session_id_arg.as_str(),
-        state_str(&state, "harness").as_deref(),
-    );
+    let started_root = value_str(&entry, "root_path").unwrap_or_default();
+    if let Some(map) = entry.as_object_mut() {
+        bench_fields(
+            map,
+            cwd,
+            started_root.as_str(),
+            None,
+            state_str(&state, "created_at")
+                .as_deref()
+                .unwrap_or_default(),
+            session_id_arg.as_str(),
+            state_str(&state, "harness").as_deref(),
+        );
+    }
     match append_to_tasks_json(&crate::paths_cli::ledger_json(cwd), &entry) {
         Ok(()) => {}
         Err(why) => {
