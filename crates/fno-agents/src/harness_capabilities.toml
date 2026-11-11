@@ -890,6 +890,8 @@ tokens = []
 # the pair before it spawns anything. The generic interactive_attach lane
 # above stays honest: no session-only attach form exists.
 [harness.opencode.resume_strategy.forms.interactive_serve_attach]
+kind = "serve_attach"
+tokens = []
 tokens_v1 = ["opencode", "attach", "{serve_url}", "--session", "{session_id}"]
 tokens_v2 = ["opencode", "--server", "{serve_url}", "--session", "{session_id}"]
 boundary_major = 2

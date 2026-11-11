@@ -315,13 +315,13 @@ pub(super) fn set_peek_program(argv: &[&str]) {
     PEEK_PROGRAM.with(|p| *p.borrow_mut() = Some(argv.iter().map(|s| s.to_string()).collect()));
 }
 
-/// The Locate tier's one-screen explanation: the row's facts, the
-/// single sentence saying why no viewport exists for it, and the route that
-/// DOES reach it. Rendered through `sh -c 'printf ...; exec cat'` with every
-/// line as an ARGV (`"$@"`), never interpolated into the script, so a row
-/// field can never parse as shell. `exec cat` holds the PTY open until the
-/// pane is closed - the screen is not an empty pane and not a dead one; it
-/// stays up, self-teaching, exactly until the operator closes it.
+// The Locate tier's one-screen explanation: the row's facts, the
+// single sentence saying why no viewport exists for it, and the route that
+// DOES reach it. Rendered through `sh -c 'printf ...; exec cat'` with every
+// line as an ARGV (`"$@"`), never interpolated into the script, so a row
+// field can never parse as shell. `exec cat` holds the PTY open until the
+// pane is closed - the screen is not an empty pane and not a dead one; it
+// stays up, self-teaching, exactly until the operator closes it.
 #[cfg(test)]
 thread_local! {
     /// Test capture of the last Locate screen (the lines, not the argv).

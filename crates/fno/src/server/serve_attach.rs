@@ -316,6 +316,7 @@ pub(crate) fn serve_seat(row: &RegistryAgent) -> ServeSeat {
         let candidates = tui_candidates(primary);
         return ServeSeat::Skew(notice_text(&serve_version, &candidates));
     }
+    #[cfg_attr(not(test), allow(unused_mut))]
     let mut argv = form.render(tui_major, &state.base_url, sid);
     let env = vec![(form.password_env.clone(), state.token.clone())];
     #[cfg(test)]
