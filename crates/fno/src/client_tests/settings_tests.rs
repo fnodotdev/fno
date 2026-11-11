@@ -230,7 +230,7 @@ async fn lane_custom_entry_enter_refuses_an_invalid_color_without_saving() {
 /// without one, and a failed read as one notice row with no mod rows.
 #[test]
 fn extensions_tab_lists_switches_and_names_a_failed_read() {
-    use crate::client::extensions::{parse_installed, Act};
+    use crate::client::extensions::{parse_installed, Act, ReadFailed};
     let listing = br#"{"packs": [{"pack_id": "p", "mods": [
         {"id": "on", "title": "On", "enabled": true, "kind": "feed", "preview": "/x.png"},
         {"id": "off", "title": "Off", "enabled": false, "kind": "run", "runs_code": true},
@@ -250,9 +250,9 @@ fn extensions_tab_lists_switches_and_names_a_failed_read() {
         .collect();
     assert_eq!(switches, [("p/on", false), ("p/off", true)]);
 
-    v.extensions.installed = Some(parse_installed(Err(
+    v.extensions.installed = Some(parse_installed(Err(ReadFailed(
         "`fno config plugins ls --json` exited 1".into(),
-    )));
+    ))));
     let (rows, actions) = v.settings_rows_for(SettingsTab::Extensions);
     let text = format!("{rows:?}");
     assert!(

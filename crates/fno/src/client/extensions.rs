@@ -80,38 +80,48 @@ pub(crate) enum Act {
     Show(String),
 }
 
+/// A failed `fno config plugins` read, as the one line the page paints.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReadFailed(pub(crate) String);
+
+impl std::fmt::Display for ReadFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// The page state: the last reads and the open URL field.
 #[derive(Debug, Default)]
 pub(crate) struct Extensions {
     /// `(pack id, component)` pairs, or the failed read's notice.
-    pub(crate) installed: Option<Result<Vec<(String, Component)>, String>>,
-    pub(crate) gallery: Option<Result<Vec<Published>, String>>,
+    pub(crate) installed: Option<Result<Vec<(String, Component)>, ReadFailed>>,
+    pub(crate) gallery: Option<Result<Vec<Published>, ReadFailed>>,
     pub(crate) url: Option<InputField>,
 }
 
-fn fno_json(args: &[&str]) -> Result<Vec<u8>, String> {
+fn fno_json(args: &[&str]) -> Result<Vec<u8>, ReadFailed> {
     let shown = format!("fno {}", args.join(" "));
     let out = std::process::Command::new(crate::server::fno_bin())
         .args(args)
         .stdin(std::process::Stdio::null())
         .output()
-        .map_err(|e| format!("`{shown}` did not start: {e}"))?;
+        .map_err(|e| ReadFailed(format!("`{shown}` did not start: {e}")))?;
     if !out.status.success() {
-        return Err(format!(
+        return Err(ReadFailed(format!(
             "`{shown}` exited {}",
             out.status.code().unwrap_or(-1)
-        ));
+        )));
     }
     Ok(out.stdout)
 }
 
 /// Parse `ls --json` into page rows, mods before layouts per pack.
 pub(crate) fn parse_installed(
-    read: Result<Vec<u8>, String>,
-) -> Result<Vec<(String, Component)>, String> {
+    read: Result<Vec<u8>, ReadFailed>,
+) -> Result<Vec<(String, Component)>, ReadFailed> {
     let bytes = read?;
     let listing: Listing = serde_json::from_slice(&bytes)
-        .map_err(|e| format!("`fno {}` printed no listing: {e}", LS.join(" ")))?;
+        .map_err(|e| ReadFailed(format!("`fno {}` printed no listing: {e}", LS.join(" "))))?;
     Ok(listing
         .packs
         .into_iter()
@@ -159,7 +169,7 @@ pub(super) fn rows(view: &View) -> (Vec<PopupRow>, Vec<AuxAction>) {
     rows.push(PopupRow::Header("installed".into()));
     match &page.installed {
         None => rows.push(inert("reading installed packs".into())),
-        Some(Err(notice)) => rows.push(inert(notice.clone())),
+        Some(Err(notice)) => rows.push(inert(notice.0.clone())),
         Some(Ok(list)) if list.is_empty() => {
             rows.push(inert("no mods or layouts installed".into()))
         }
@@ -201,7 +211,7 @@ pub(super) fn rows(view: &View) -> (Vec<PopupRow>, Vec<AuxAction>) {
             rows.push(entry("›", "browse published packs".into(), true));
             actions.push(AuxAction::Extension(Act::Browse));
         }
-        Some(Err(notice)) => rows.push(inert(notice.clone())),
+        Some(Err(notice)) => rows.push(inert(notice.0.clone())),
         Some(Ok(list)) if list.is_empty() => rows.push(inert("no published packs yet".into())),
         Some(Ok(list)) => {
             for p in list {
@@ -256,17 +266,20 @@ fn in_pane(args: &[&str], what: &str) -> String {
     }
 }
 
-pub(super) async fn act(
-    view: &mut View,
-    act: Act,
-    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
-) -> Result<(), String> {
+/// Open a pack file (a preview or a recipe) in the file viewer.
+pub(super) fn load(path: String) -> file_viewer::Loaded {
+    file_viewer::load(PathBuf::from(path), None, Default::default())
+}
+
+/// Every row action but `Open`, which the modal runs because it writes to the
+/// server socket.
+pub(super) fn act(view: &mut View, act: Act) {
     match act {
         Act::Switch(target, on) => {
             let verb = if on { "enable" } else { "disable" };
             let notice = match fno_json(&["config", "plugins", verb, &target]) {
                 Ok(_) => format!("{target} {}", if on { "on" } else { "off" }),
-                Err(e) => e,
+                Err(e) => e.0,
             };
             view.set_notice(notice);
             refresh(view);
@@ -275,11 +288,7 @@ pub(super) async fn act(
             let url = install.rsplit(' ').next().unwrap_or_default();
             view.extensions.url = Some(InputField::new(PLACEHOLDER, MAX_URL).with_text(url));
         }
-        Act::Open(path) => {
-            let loaded = file_viewer::load(PathBuf::from(path), None, Default::default());
-            view.aux = None;
-            return file_viewer::open(view, loaded, sock_w).await;
-        }
+        Act::Open(_) => {}
         Act::Show(target) => {
             let notice = in_pane(&["open", target.as_str()], &target);
             view.set_notice(notice);
@@ -293,10 +302,14 @@ pub(super) async fn act(
             view.extensions.gallery = Some(fno_json(&GALLERY).and_then(|bytes| {
                 serde_json::from_slice::<Gallery>(&bytes)
                     .map(|g| g.repos)
-                    .map_err(|e| format!("`fno {}` printed no gallery: {e}", GALLERY.join(" ")))
+                    .map_err(|e| {
+                        ReadFailed(format!(
+                            "`fno {}` printed no gallery: {e}",
+                            GALLERY.join(" ")
+                        ))
+                    })
             }));
         }
     }
     view.reopen_settings_keeping_sel();
-    Ok(())
 }

@@ -391,7 +391,11 @@ pub(super) async fn run_action(
         }
         AuxAction::ApplyTheme(name) => theme_ground::apply(view, &name).await?,
         AuxAction::RemoteHost(act) => remote_hosts::act(view, act).await,
-        AuxAction::Extension(act) => extensions::act(view, act, sock_w).await?,
+        AuxAction::Extension(extensions::Act::Open(path)) => {
+            view.aux = None;
+            file_viewer::open(view, extensions::load(path), sock_w).await?;
+        }
+        AuxAction::Extension(act) => extensions::act(view, act),
         AuxAction::ThemeImportOpen => theme_import_ui::open(view),
         AuxAction::ThemeImportSave => theme_import_ui::save(view).await?,
         AuxAction::ThemeImportCancel => theme_import_ui::cancel(view),
