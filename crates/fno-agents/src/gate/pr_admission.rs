@@ -212,29 +212,46 @@ pub(crate) fn pr_hold(cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
     let Some(slug) = crate::merge_grant::repo_slug_from_pr_url(&facts.url) else {
         return ProbeOutcome::Inconclusive("pr_hold: the PR URL named no repository".to_string());
     };
-    let out = std::process::Command::new(crate::scrape::fno_bin())
-        .args([
-            "backlog",
-            "decisions",
-            &hold_subject(&slug, facts.number),
-            "--lane",
-            "law",
-            "--state",
-            "live",
-            "--json",
-        ])
-        .current_dir(cwd)
-        .output();
+    // The cached in-process read answers the exact argv the CLI would take
+    // in process; the spawn stays for an argv shape the cache declines.
+    let args: Vec<String> = [
+        "backlog",
+        "decisions",
+        hold_subject(&slug, facts.number).as_str(),
+        "--lane",
+        "law",
+        "--state",
+        "live",
+        "--json",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    let out = crate::backlog::decisions_cache::payload(&args);
     let stdout = match out {
-        Ok(o) if o.status.success() => Some(o.stdout),
-        Ok(o) => {
+        Some(crate::backlog::decisions_cache::Answer::Bytes(bytes)) => Some(bytes),
+        Some(crate::backlog::decisions_cache::Answer::Unreadable(reason)) => {
             return ProbeOutcome::Inconclusive(format!(
-                "pr_hold: the decisions read exited {}: {}",
-                o.status.code().unwrap_or(-1),
-                String::from_utf8_lossy(&o.stderr).trim()
+                "pr_hold: the decisions read exited 1: {reason}"
             ))
         }
-        Err(e) => return ProbeOutcome::Inconclusive(format!("pr_hold: {e}")),
+        None => {
+            let spawned = std::process::Command::new(crate::scrape::fno_bin())
+                .args(&args)
+                .current_dir(cwd)
+                .output();
+            match spawned {
+                Ok(o) if o.status.success() => Some(o.stdout),
+                Ok(o) => {
+                    return ProbeOutcome::Inconclusive(format!(
+                        "pr_hold: the decisions read exited {}: {}",
+                        o.status.code().unwrap_or(-1),
+                        String::from_utf8_lossy(&o.stderr).trim()
+                    ))
+                }
+                Err(e) => return ProbeOutcome::Inconclusive(format!("pr_hold: {e}")),
+            }
+        }
     };
     match held(stdout.as_deref()) {
         Ok(None) => ProbeOutcome::Clear,

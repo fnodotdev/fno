@@ -55,6 +55,16 @@ impl Io for RealIo<'_> {
     }
 
     fn fno(&self, args: &[String]) -> Result<String, String> {
+        // The cached in-process read answers the decisions argv in process;
+        // the bounded spawn stays for every other fno argv.
+        if let Some(answer) = crate::backlog::decisions_cache::payload(args) {
+            return match answer {
+                crate::backlog::decisions_cache::Answer::Bytes(bytes) => {
+                    Ok(String::from_utf8_lossy(&bytes).into_owned())
+                }
+                crate::backlog::decisions_cache::Answer::Unreadable(reason) => Err(reason),
+            };
+        }
         bounded_fno(
             std::ffi::OsString::from(self.fno_bin),
             args,
