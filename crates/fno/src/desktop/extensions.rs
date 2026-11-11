@@ -19,7 +19,7 @@ use gpui::{
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
 use super::keys::Key;
-use super::window::{MainView, Root};
+use super::window::Root;
 use crate::client::node_detail::backlog_md::md_lines;
 use crate::plugins_feed::{self as feed, Component, Published, ReadFailed};
 use crate::text_style::TextStyle;
