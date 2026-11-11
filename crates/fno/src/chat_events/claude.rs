@@ -412,7 +412,8 @@ impl RowMapper for ClaudeMapper {
             return Some(Vec::new());
         }
         let mut out = Vec::new();
-        if let Some(pending_at) = self.compact_pending.take() {
+        // Read, not taken: a held assistant row below must leave it pending.
+        if let Some(pending_at) = self.compact_pending {
             if !row.as_ref().is_some_and(|r| r.is_compact_summary) {
                 out.push(Mapped::new(
                     pending_at,
@@ -436,12 +437,14 @@ impl RowMapper for ClaudeMapper {
                 },
             )),
         }
+        self.compact_pending = None;
         Some(out)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
     use super::*;
     use crate::chat_events::SessionReader;
 
@@ -546,5 +549,19 @@ mod tests {
             unreachable!()
         };
         assert_eq!(summary.as_deref(), Some("Summary of the chat"));
+
+        // A held row changes no state: the pending compaction survives the
+        // hold and lands on the retry.
+        let mut mapper = ClaudeMapper::new(&dir.path().join("other.jsonl"));
+        let boundary = r#"{"type":"system","uuid":"s1","subtype":"compact_boundary"}"#;
+        let agent = r#"{"type":"assistant","uuid":"a1","message":{"id":"m","content":[{"type":"tool_use","id":"toolu_none","name":"Agent","input":{}}]}}"#;
+        assert_eq!(mapper.map(boundary, true), Some(Vec::new()));
+        assert_eq!(mapper.map(agent, false), None);
+        let retried = mapper.map(agent, true).unwrap();
+        assert!(matches!(
+            retried[0].body,
+            ChatBody::Compacted { summary: None, .. }
+        ));
+        assert!(matches!(retried[1].body, ChatBody::ToolCalled { .. }));
     }
 }

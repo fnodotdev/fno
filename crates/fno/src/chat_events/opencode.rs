@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 /// the order fno-agents' opencode reader uses.
 const PART_SQL: &str = "SELECT p.id, m.id, m.data, p.data, p.time_created FROM part p \
      JOIN message m ON m.id = p.message_id WHERE p.session_id = ?1 \
-     ORDER BY m.time_created, m.id, p.id";
+     ORDER BY m.time_created, m.id, p.id LIMIT -1 OFFSET ?2";
 
 const CURSOR_SQL: &str = "SELECT max(time_updated), count(*) FROM part WHERE session_id = ?1";
 
@@ -420,7 +420,7 @@ impl StoreTail {
             .prepare(PART_SQL)
             .map_err(|e| store_error(&self.path, e))?;
         let rows = stmt
-            .query_map(params![self.session_id], |r| {
+            .query_map(params![self.session_id, self.done as i64], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
@@ -431,7 +431,7 @@ impl StoreTail {
             })
             .map_err(|e| store_error(&self.path, e))?;
         let mut out = Vec::new();
-        for row in rows.skip(self.done) {
+        for row in rows {
             let (part_id, message_id, message, data, created) =
                 row.map_err(|e| store_error(&self.path, e))?;
             let role = serde_json::from_str::<MessageData>(&message)
@@ -476,6 +476,7 @@ fn unknown_part(data: &str) -> ChatBody {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
     use super::*;
     use crate::chat_events::{ChatRoots, SessionReader};
 

@@ -181,33 +181,29 @@ fn poll_lines(
     file.seek(SeekFrom::Start(*offset))?;
     let mut buf = Vec::new();
     file.read_to_end(&mut buf)?;
-    let Some(last_newline) = buf.iter().rposition(|b| *b == b'\n') else {
-        return Ok(Vec::new());
-    };
-    let complete = &buf[..=last_newline];
+    // Only newline-terminated chunks are lines; a partial last one waits.
+    let mut lines = buf
+        .split_inclusive(|b| *b == b'\n')
+        .filter(|chunk| chunk.ends_with(b"\n"))
+        .peekable();
     let mut out = Vec::new();
-    let mut start = 0;
-    while start < complete.len() {
-        let end = start
-            + complete[start..]
-                .iter()
-                .position(|b| *b == b'\n')
-                .unwrap_or(0)
-            + 1;
-        let line = String::from_utf8_lossy(&complete[start..end - 1]);
-        let line = line.trim_end_matches('\r');
+    let mut consumed = 0usize;
+    while let Some(chunk) = lines.next() {
+        let more = lines.peek().is_some();
+        let text = String::from_utf8_lossy(chunk.strip_suffix(b"\n").unwrap_or(chunk));
+        let line = text.trim_end_matches('\r');
         if !line.trim().is_empty() {
-            let Some(items) = mapper.map(line, end < complete.len()) else {
+            let Some(items) = mapper.map(line, more) else {
                 break;
             };
             let source = SourceRef::Line {
-                offset: *offset + start as u64,
+                offset: *offset + consumed as u64,
             };
             out.extend(items.into_iter().map(|m| (source.clone(), m)));
         }
-        start = end;
+        consumed += chunk.len();
     }
-    *offset += start as u64;
+    *offset += consumed as u64;
     Ok(out)
 }
 
@@ -285,6 +281,7 @@ impl Iterator for ChatTail {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
     use super::*;
     use crate::proto::chat_event::{ChatBody, UserOrigin};
     use std::io::Write;

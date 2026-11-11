@@ -350,6 +350,7 @@ impl RowMapper for CodexMapper {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
     use super::*;
     use crate::chat_events::SessionReader;
 

@@ -93,6 +93,7 @@ fn batches(events: Vec<ChatEvent>) -> Vec<Vec<ChatEvent>> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
     use super::*;
     use crate::chat_events::{tail_sync, ChatReadError};
     use crate::proto::chat_event::ChatBody;

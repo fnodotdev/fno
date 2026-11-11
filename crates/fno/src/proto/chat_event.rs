@@ -237,7 +237,7 @@ fn decode_base64(text: &str) -> Option<Vec<u8>> {
             2 => 1,
             _ => return None,
         };
-        out.extend_from_slice(&acc.to_be_bytes()[1..1 + take]);
+        out.extend(acc.to_be_bytes().iter().skip(1).take(take));
     }
     Some(out)
 }
@@ -261,6 +261,7 @@ fn body_or_unknown<'de, D: Deserializer<'de>>(d: D) -> Result<ChatBody, D::Error
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
     use super::*;
     use crate::proto::{read_msg_sync, write_msg_sync, ServerMsg};
 
