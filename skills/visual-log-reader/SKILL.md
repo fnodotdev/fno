@@ -58,3 +58,7 @@ A beat with no new tap writes nothing and mails nobody.
 ## Where the data lives
 
 The page template, the database rules, the taps/acks/config shapes, and how to add an entry are owned by [skills/lead/references/visual-log-taps.md](../lead/references/visual-log-taps.md). That file owns the data contract. This skill owns the reading loop.
+
+## Known Limitations and Deferred Work
+
+- The probe sees only this machine's registry row. See [LIMITATIONS.md](LIMITATIONS.md).
