@@ -295,7 +295,12 @@ impl Root {
                 }
                 None => self.say("no board poll: cannot answer".into(), cx),
             },
-            Action::Show(view) => self.main = view,
+            Action::Show(view) => {
+                self.main = view;
+                if view == MainView::Extensions {
+                    self.ext.read();
+                }
+            }
             Action::ToggleAgents => self.agents_open = !self.agents_open,
         }
         cx.notify();
