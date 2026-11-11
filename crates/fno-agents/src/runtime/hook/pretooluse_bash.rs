@@ -198,6 +198,14 @@ fn gate_native_launch(payload: &Value, cwd: &Path) -> Option<String> {
         .and_then(Value::as_str)
         .map(str::to_string);
     for launch in launches {
+        // Law D1521: a revival re-seats a row that already held a seat, so
+        // it never passes the spawn gate. The real revival harm, a resume of
+        // a session that still runs forking a copy, is refused above by
+        // claude_bg_refusal. `claude respawn <job>` is the other revival
+        // form: it parses as no launch at all, so the loop never sees it.
+        if launch.resume.is_some() {
+            continue;
+        }
         let input = crate::spawn_gate::GateInput {
             name: launch.name.clone().unwrap_or_default(),
             substrate: crate::launch_record::native_substrate_word(&launch.harness).into(),
@@ -332,5 +340,98 @@ mod floor_setter_tests {
         // A quoted payload string is payload, never the setter.
         assert!(refuse_floor_setter("fno agents spawn w1 \"use --floor N\"").is_none());
         assert!(refuse_floor_setter("fno agents spawn w1 \"say \\\"hi\\\" --floor x\"").is_none());
+    }
+}
+
+#[cfg(test)]
+mod native_launch_tests {
+    use super::gate_native_launch;
+    use crate::claims;
+    use serde_json::json;
+    use std::path::Path;
+
+    /// A pinned footprint probe answers `hold`, so the only refusal the
+    /// gate can reach in this sandbox is the CPU axis's.
+    const HOLD_PAYLOAD: &str = r#"{"admission":{"verdict":"hold","axis":"fleet_cpu_share","reason":"fleet 62.5% over 50.0%","bound":"exact","share_low":0.625,"share_high":0.625,"fleet_cores":7.5,"machine_cores":7.5,"capacity_cores":12.0,"ceiling":0.5,"gap":null}}"#;
+
+    fn hook_payload(cmd: &str) -> serde_json::Value {
+        json!({
+            "session_id": "hook-native-launch-test",
+            "cwd": "/repo",
+            "tool_name": "Bash",
+            "tool_input": {"command": cmd}
+        })
+    }
+
+    /// Law D1521: a revival re-seats a row that already held a seat, so it
+    /// never passes the spawn gate. A fresh `claude --bg` still refuses on
+    /// fleet_cpu_share (the positive control); a `--resume` of a stopped
+    /// session passes - the resume of a RUNNING one is refused earlier, by
+    /// claude_bg_refusal; and `claude respawn <job>`, the other revival
+    /// form, parses as no launch and never reaches the gate either.
+    #[test]
+    fn a_revival_skips_the_spawn_gate_a_fresh_launch_does_not() {
+        let _g = claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("fno-hook-revival-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("claims-root")).unwrap();
+        let priors = [
+            (
+                "FNO_CLAIMS_ROOT",
+                std::env::var_os("FNO_CLAIMS_ROOT"),
+                Some(dir.join("claims-root").into_os_string()),
+            ),
+            (
+                "FNO_AGENTS_HOME",
+                std::env::var_os("FNO_AGENTS_HOME"),
+                Some(dir.clone().into_os_string()),
+            ),
+            ("FNO_SPAWN_GATE", std::env::var_os("FNO_SPAWN_GATE"), None),
+            (
+                "FNO_TEST_FOOTPRINT_PAYLOAD",
+                std::env::var_os("FNO_TEST_FOOTPRINT_PAYLOAD"),
+                Some(HOLD_PAYLOAD.into()),
+            ),
+        ];
+        for (key, _, value) in &priors {
+            match value {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+
+        let fresh = gate_native_launch(
+            &hook_payload("claude --bg --name w1 \"go\""),
+            Path::new("/repo"),
+        );
+        let revival = gate_native_launch(
+            &hook_payload(
+                "claude --bg --name Linnea --resume 8bb54c80-a111-4a1b-839a-14ee77c0f52d \"Lead Linnea: revival\"",
+            ),
+            Path::new("/repo"),
+        );
+        let respawn =
+            gate_native_launch(&hook_payload("claude respawn t-linnea"), Path::new("/repo"));
+
+        for (key, prior, _) in &priors {
+            match prior {
+                Some(v) => std::env::set_var(key, v),
+                None => std::env::remove_var(key),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let reason = fresh.expect("a fresh launch must still refuse under a CPU hold");
+        assert!(reason.contains("fleet_cpu_share"), "{reason}");
+        assert_eq!(
+            revival, None,
+            "law D1521: a revival never passes the spawn gate"
+        );
+        assert_eq!(
+            respawn, None,
+            "claude respawn is the other revival form: it never passes the gate either"
+        );
     }
 }
