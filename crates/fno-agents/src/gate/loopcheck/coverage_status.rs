@@ -159,6 +159,36 @@ pub(super) enum LawStatus {
 }
 
 pub(super) fn current_law_status(fno_bin: &str, cwd: &Path, subject: &str) -> LawStatus {
+    // The cached in-process read answers the exact argv the CLI would take
+    // in process; the bounded spawn stays for a shape the cache declines.
+    let args: Vec<String> = [
+        "backlog",
+        "decisions",
+        subject,
+        "--lane",
+        "law",
+        "--state",
+        "live",
+        "--json",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    // The cache answers from the real machine store, so it may only answer
+    // for the binary the cache mirrors. A caller handing a different bin
+    // (the stub seam tests inject) defines its own store: skip the consult
+    // and run that bin. A real caller whose bin resolves under a different
+    // spelling loses only the cache and keeps the exact CLI answer.
+    if std::path::Path::new(fno_bin).as_os_str() == crate::runtime::scrape::fno_bin().as_os_str() {
+        if let Some(answer) = crate::backlog::decisions_cache::payload(&args) {
+            return match answer {
+                crate::backlog::decisions_cache::Answer::Bytes(bytes) => {
+                    law_status_from_stdout(&bytes)
+                }
+                crate::backlog::decisions_cache::Answer::Unreadable(_) => LawStatus::Unknown,
+            };
+        }
+    }
     match run_bounded(
         fno_bin.as_ref(),
         &[
@@ -174,34 +204,40 @@ pub(super) fn current_law_status(fno_bin: &str, cwd: &Path, subject: &str) -> La
         cwd,
         stopgate_read_timeout(),
     ) {
-        BoundedRun::Completed(out) if out.status.success() => {
-            // Mirror `law_authority` exactly: filter the rows to operator
-            // authority BEFORE the count, because a waiver asserts a person
-            // at a terminal read the diff and only `operator` carries that
-            // fact (any harness-identified session records `chat_attested`
-            // through the law door). Deriving from the rows rather than
-            // trusting current_law.status is the point: the CLI's verdict
-            // counts chat_attested rows too, so a forged row beside a real
-            // operator waiver would read conflict here and wedge the loop on
-            // a waiver the merge gate honors. An affirmative row with no
-            // readable decision stays malformed authority, Unknown, never a
-            // clean no.
-            let Some(rows) = operator_law_rows(&out.stdout) else {
-                // A payload without the decisions array is not a shape the
-                // CLI emits: a failed instrument, never a clean no.
-                return LawStatus::Unknown;
-            };
-            match rows.as_slice() {
-                [] => LawStatus::NoLaw,
-                [row] => match row.get("decision").and_then(|s| s.as_str()) {
-                    Some(d) if d == WAIVER_DECISION => LawStatus::Single,
-                    Some(_) => LawStatus::NoLaw,
-                    None => LawStatus::Unknown,
-                },
-                _ => LawStatus::Unknown,
-            }
-        }
+        BoundedRun::Completed(out) if out.status.success() => law_status_from_stdout(&out.stdout),
         _ => LawStatus::Unknown,
+    }
+}
+
+/// The law-status parse over one `decisions --json` payload, shared by the
+/// cached read and the bounded spawn.
+fn law_status_from_stdout(stdout: &[u8]) -> LawStatus {
+    {
+        // Mirror `law_authority` exactly: filter the rows to operator
+        // authority BEFORE the count, because a waiver asserts a person at a
+        // terminal read the diff and only `operator` carries that fact (any
+        // harness-identified session records `chat_attested`
+        // through the law door). Deriving from the rows rather than
+        // trusting current_law.status is the point: the CLI's verdict
+        // counts chat_attested rows too, so a forged row beside a real
+        // operator waiver would read conflict here and wedge the loop on
+        // a waiver the merge gate honors. An affirmative row with no
+        // readable decision stays malformed authority, Unknown, never a
+        // clean no.
+        let Some(rows) = operator_law_rows(stdout) else {
+            // A payload without the decisions array is not a shape the
+            // CLI emits: a failed instrument, never a clean no.
+            return LawStatus::Unknown;
+        };
+        match rows.as_slice() {
+            [] => LawStatus::NoLaw,
+            [row] => match row.get("decision").and_then(|s| s.as_str()) {
+                Some(d) if d == WAIVER_DECISION => LawStatus::Single,
+                Some(_) => LawStatus::NoLaw,
+                None => LawStatus::Unknown,
+            },
+            _ => LawStatus::Unknown,
+        }
     }
 }
 

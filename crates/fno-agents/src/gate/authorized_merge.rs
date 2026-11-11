@@ -2149,6 +2149,20 @@ impl RealProbes {
     }
 
     fn fno_strings(cwd: &Path, args: &[String]) -> Result<(Option<i32>, Vec<u8>, Vec<u8>), String> {
+        // The decisions reads answer in process from the one cached store
+        // read in process: six spawns per decide pass became zero, and the
+        // decide+effect double pass answers from the same cache. Non-hooks
+        // argv and an unreadable-store line keep the spawn path.
+        if let Some(answer) = crate::backlog::decisions_cache::payload(args) {
+            return Ok(match answer {
+                crate::backlog::decisions_cache::Answer::Bytes(bytes) => {
+                    (Some(0), bytes, Vec::new())
+                }
+                crate::backlog::decisions_cache::Answer::Unreadable(reason) => {
+                    (Some(1), Vec::new(), format!("{reason}\n").into_bytes())
+                }
+            });
+        }
         Self::fno_env(
             cwd,
             &args.iter().map(String::as_str).collect::<Vec<_>>(),
@@ -2595,6 +2609,13 @@ refusing to assume no review is running"
         ));
         // The decide path is polled, so it admits: a hold refuses in process
         // and reads as the failed read it is, never a verdict about the PR.
+        // pulls/<n>/files reads memoize per process: one decide pass
+        // paginated the same PR files 3-4 times, and the gate pins the head,
+        // so the answer is stable for the process. A failed read stores
+        // nothing; the reviews read never memoizes.
+        if let Some(answer) = crate::gate::gh_files_cache::answer(args) {
+            return Ok(answer);
+        }
         let mut cmd = Command::new("gh");
         cmd.args(args).current_dir(cwd);
         let out = crate::gh_budget::output(cmd).map_err(|error| error.to_string())?;
@@ -2607,7 +2628,9 @@ refusing to assume no review is running"
         if !out.status.success() {
             text.push_str(&String::from_utf8_lossy(&out.stderr));
         }
-        Ok((out.status.success(), text))
+        let answer = (out.status.success(), text);
+        crate::gate::gh_files_cache::remember(args, answer.clone());
+        Ok(answer)
     }
     fn merge_queue(
         &self,

@@ -86,6 +86,8 @@ pub mod cursor;
 pub mod decisions_overlay;
 #[cfg(feature = "full")]
 pub mod decisions_table;
+#[cfg(feature = "desktop")]
+pub mod desktop;
 #[cfg(feature = "full")]
 pub mod digest_overlay;
 #[cfg(feature = "full")]

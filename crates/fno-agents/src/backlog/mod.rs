@@ -127,6 +127,7 @@ pub mod day;
 pub mod decide_door;
 pub mod decision_index;
 pub mod decision_trace;
+pub mod decisions_cache;
 pub mod digest;
 pub mod epic_issue;
 pub mod feed;

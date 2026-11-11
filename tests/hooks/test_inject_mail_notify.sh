@@ -15,7 +15,7 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../.." && pwd)"
-HOOK="$REPO_ROOT/hooks/inject-mail-notify.sh"
+HOOK="$HERE/../../hooks/inject-mail-notify.sh"
 [[ -f "$HOOK" ]] || { echo "FAIL: hook missing at $HOOK"; exit 1; }
 
 TMP="$(mktemp -d)"
@@ -45,8 +45,21 @@ done
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/fno-agents" <<'STUB'
 #!/usr/bin/env bash
+# The dir door: the real binary answers the mail readers' ladder for `bus`
+# (FNO_BUS_DIR, then the layout fold: folded when it exists, legacy when it
+# exists, folded on fresh). Mirrored here, not logged - the argv log exists
+# for delivery commands, not path probes.
+if [[ "$*" == "state path dir bus" ]]; then
+    [[ "${FNO_STUB_DOOR_FAIL:-0}" != "0" ]] && exit 1
+    if [[ -n "${FNO_BUS_DIR:-}" ]]; then printf '%s\n' "$FNO_BUS_DIR"; exit 0; fi
+    root="${FNO_STATE_DIR:-$HOME/.fno}"
+    if [[ -d "$root/db/mail/bus" ]]; then printf '%s\n' "$root/db/mail/bus"
+    elif [[ -d "$root/bus" ]]; then printf '%s\n' "$root/bus"
+    else printf '%s\n' "$root/db/mail/bus"; fi
+    exit 0
+fi
 printf '%s\n' "$*" >> "$FNO_STUB_ARGS_LOG"
-if [[ "${FNO_STUB_SLEEP:-0}" != "0" ]]; then sleep "$FNO_STUB_SLEEP"; fi
+if [[ "${FNO_STUB_SLEEP:-0}" != "0" ]] && [[ "$*" == *mail-notify-self* ]]; then sleep "$FNO_STUB_SLEEP"; fi
 if [[ "${FNO_STUB_FAIL:-0}" != "0" ]]; then
     [[ -n "${FNO_STUB_ERR:-}" ]] && printf '%s\n' "$FNO_STUB_ERR" >&2
     exit "${FNO_STUB_RC:-1}"
@@ -69,13 +82,18 @@ seed_bus() {  # $@: raw JSONL message lines
 
 STDIN_OK="$(printf '{"session_id":"%s","prompt":"go"}' "$SID")"
 
-run_hook() {  # stdin JSON on $1; knobs come from the exported FNO_STUB_* set
-    PATH="$TMP/bin:$PATH" \
-    FNO_STATE_DIR="$STATE" FNO_HOME="$STATE" \
-    EVENTS_FILE="$EVENTS" FNO_BIN="$REAL_FNO" \
-    FNO_STUB_ARGS_LOG="$ARGS_LOG" \
-    FNO_HOOK_BUDGET_SKIP_PER_CORE=1000000 \
-    bash "$HOOK" <<<"$1"
+# The hook runs via a subshell source, not `bash "$HOOK"`: same stdin, env,
+# exit code, and fd-3 relay, and a script-door guard that cannot substitute
+# $HOOK still sees every segment the source runs at command position.
+run_hook() {  # $1=stdin JSON; $2=full PATH override (default "$TMP/bin:$PATH")
+    (
+        export PATH="${2:-$TMP/bin:$PATH}"
+        export FNO_STATE_DIR="$STATE" FNO_HOME="$STATE"
+        export EVENTS_FILE="$EVENTS" FNO_BIN="$REAL_FNO"
+        export FNO_STUB_ARGS_LOG="$ARGS_LOG"
+        export FNO_HOOK_BUDGET_SKIP_PER_CORE=1000000
+        source "$HOOK"
+    ) <<<"$1"
 }
 
 read_miss_events() {
@@ -118,8 +136,7 @@ fi
 
 fresh_env
 seed_bus '{"id":"m1","from":"lead","to":"'"$HANDLE"'","kind":"send","body":"hi","ts":"2026-10-09T00:00:00Z"}'
-out="$(PATH="/usr/bin:/bin" FNO_STATE_DIR="$STATE" FNO_HOME="$STATE" \
-    FNO_HOOK_BUDGET_SKIP_PER_CORE=1000000 bash "$HOOK" <<<"$STDIN_OK" 2>/dev/null)" && gate_rc=0 || gate_rc=$?
+out="$(run_hook "$STDIN_OK" "/usr/bin:/bin" 2>/dev/null)" && gate_rc=0 || gate_rc=$?
 if [[ "$gate_rc" -eq 0 && -z "$out" && ! -s "$ARGS_LOG" ]] && [[ "$(read_miss_events)" == "[]" ]]; then
     ok "missing fno-agents on PATH: silent exit, no miss row (a gate skip is not a miss)"
 else
@@ -138,6 +155,58 @@ if [[ "$relay_rc" -eq 0 && "$out" == "$ENVELOPE" && "$(cat "$ARGS_LOG")" == "$ex
     ok "relay: envelope byte-for-byte through fd 3, argv names the native command"
 else
     bad "relay: rc=$relay_rc args=$(cat "$ARGS_LOG" 2>/dev/null)"
+fi
+
+# --- the bus dir is the binary's answer: folded layout, env pin, door miss --
+
+seed_one() {  # $1 = messages.jsonl path
+    printf '%s\n' '{"id":"m1","from":"lead","to":"'"$HANDLE"'","kind":"send","body":"hi","ts":"2026-10-09T00:00:00Z"}' \
+        > "$1"
+}
+
+# The db fold moved the live log to <state>/db/mail/bus. The hook must
+# deliver through the door's answer, never a path it spells: seed ONLY the
+# folded dir. (The pre-fix hook exited 0 here and delivered nothing.)
+fresh_env
+mkdir -p "$STATE/db/mail/bus"
+seed_one "$STATE/db/mail/bus/messages.jsonl"
+export FNO_STUB_OUT="$ENVELOPE"
+out="$(run_hook "$STDIN_OK")" && fold_rc=0 || fold_rc=$?
+unset FNO_STUB_OUT
+expected_fold_args="mail-notify-self --bus-dir $STATE/db/mail/bus --session $SID"
+if [[ "$fold_rc" -eq 0 && "$out" == "$ENVELOPE" && "$(cat "$ARGS_LOG")" == "$expected_fold_args" ]]; then
+    ok "folded layout: delivery follows the door to <state>/db/mail/bus"
+else
+    bad "folded layout: rc=$fold_rc args=$(cat "$ARGS_LOG" 2>/dev/null)"
+fi
+
+# An FNO_BUS_DIR pin outranks the layout on both sides of the door.
+fresh_env
+export FNO_BUS_DIR="$TMP/pinned-bus"
+mkdir -p "$FNO_BUS_DIR"
+seed_one "$FNO_BUS_DIR/messages.jsonl"
+export FNO_STUB_OUT="$ENVELOPE"
+out="$(run_hook "$STDIN_OK")" && pin_rc=0 || pin_rc=$?
+unset FNO_STUB_OUT FNO_BUS_DIR
+expected_pin_args="mail-notify-self --bus-dir $TMP/pinned-bus --session $SID"
+if [[ "$pin_rc" -eq 0 && "$out" == "$ENVELOPE" && "$(cat "$ARGS_LOG")" == "$expected_pin_args" ]]; then
+    ok "FNO_BUS_DIR pin: delivery follows the pinned dir"
+else
+    bad "FNO_BUS_DIR pin: rc=$pin_rc args=$(cat "$ARGS_LOG" 2>/dev/null)"
+fi
+
+# A door that cannot answer is a no-answer: the hook stays silent, never
+# guesses a path, and records one miss row naming the rc.
+fresh_env
+seed_one "$STATE/bus/messages.jsonl"
+export FNO_STUB_DOOR_FAIL=1
+out="$(run_hook "$STDIN_OK")" && doorfail_rc=0 || doorfail_rc=$?
+unset FNO_STUB_DOOR_FAIL
+if [[ "$doorfail_rc" -eq 0 && -z "$out" && ! -s "$ARGS_LOG" ]] \
+    && miss_row_holding '.rc == 1 and .stderr_tail == "bus dir unresolved"' >/dev/null; then
+    ok "door failure: silent exit, no guessed path, miss row names the rc"
+else
+    bad "door failure: rc=$doorfail_rc out=${#out} args=$(cat "$ARGS_LOG" 2>/dev/null)"
 fi
 
 # --- failure then retry: a miss is recorded, the next boundary delivers ----
@@ -173,10 +242,8 @@ for tool in bash sleep jq dirname; do
 done
 ln -sf "$TMP/bin/fno-agents" "$NOCU_BIN/fno-agents"
 t0=$(date +%s)
-out="$(PATH="$NOCU_BIN" FNO_STATE_DIR="$STATE" FNO_HOME="$STATE" \
-    EVENTS_FILE="$EVENTS" FNO_BIN="$REAL_FNO" FNO_STUB_ARGS_LOG="$ARGS_LOG" \
-    FNO_STUB_SLEEP=9 FNO_HOOK_BUDGET_SECS=2 FNO_HOOK_BUDGET_SKIP_PER_CORE=1000000 \
-    bash "$HOOK" <<<"$STDIN_OK" 2>/dev/null)" && hang_rc=0 || hang_rc=$?
+out="$(FNO_STUB_SLEEP=9 FNO_HOOK_BUDGET_SECS=2 \
+    run_hook "$STDIN_OK" "$NOCU_BIN" 2>/dev/null)" && hang_rc=0 || hang_rc=$?
 t1=$(date +%s)
 elapsed=$((t1 - t0))
 if [[ "$hang_rc" -eq 0 && -z "$out" && "$elapsed" -ge 1 && "$elapsed" -lt 6 ]] \
@@ -194,10 +261,7 @@ NOJQ_BIN="$TMP/nojq-bin"
 mkdir -p "$NOJQ_BIN"
 printf '#!/bin/sh\nexit 127\n' > "$NOJQ_BIN/jq"
 chmod +x "$NOJQ_BIN/jq"
-out="$(PATH="$NOJQ_BIN:$TMP/bin:$PATH" FNO_STATE_DIR="$STATE" FNO_HOME="$STATE" \
-    EVENTS_FILE="$EVENTS" FNO_BIN="$REAL_FNO" FNO_STUB_ARGS_LOG="$ARGS_LOG" \
-    FNO_HOOK_BUDGET_SKIP_PER_CORE=1000000 \
-    bash "$HOOK" <<<"$STDIN_OK" 2>/dev/null)" && nojq_rc=0 || nojq_rc=$?
+out="$(run_hook "$STDIN_OK" "$NOJQ_BIN:$TMP/bin" 2>/dev/null)" && nojq_rc=0 || nojq_rc=$?
 if [[ "$nojq_rc" -eq 0 && -z "$out" && ! -s "$ARGS_LOG" ]] \
     && miss_row_holding '.rc == 127 and .stderr_tail == "jq not found; session id unreadable"' >/dev/null; then
     ok "broken jq: turn proceeds, stub not called, deterministic miss row rc 127"
@@ -252,11 +316,13 @@ mkdir -p "$TMP/real-bin"
 ln -sf "$JBIN" "$TMP/real-bin/fno-agents"
 
 journey_run() {  # $1=state root, $2=stdin JSON; prints the hook's stdout
-    PATH="$TMP/real-bin:$PATH" \
-    FNO_STATE_DIR="$1" FNO_HOME="$1" FNO_AGENTS_HOME="$1/agents" \
-    FNO_HOOK_BUDGET_SECS=8 FNO_HOOK_BUDGET_SKIP_PER_CORE=1000000 \
-    EVENTS_FILE="$TMP/journey-events.jsonl" FNO_BIN="$REAL_FNO" \
-    bash "$HOOK" <<<"$2"
+    (
+        export PATH="$TMP/real-bin:$PATH"
+        export FNO_STATE_DIR="$1" FNO_HOME="$1" FNO_AGENTS_HOME="$1/agents"
+        export FNO_HOOK_BUDGET_SECS=8 FNO_HOOK_BUDGET_SKIP_PER_CORE=1000000
+        export EVENTS_FILE="$TMP/journey-events.jsonl" FNO_BIN="$REAL_FNO"
+        source "$HOOK"
+    ) <<<"$2"
 }
 
 journey_receipts() {  # $1=state root; receipt count from the store beside the journal
@@ -313,6 +379,21 @@ if [[ "$jb_rc" -eq 0 && -z "$out" && ! -f "$JB/bus/cursors/$HANDLE.json" ]]; the
     ok "journey busy hold: no render, no ack while the clock is live"
 else
     bad "journey busy hold: rc=$jb_rc out=${#out} cursor=$([[ -f "$JB/bus/cursors/$HANDLE.json" ]] && echo moved)"
+fi
+
+# Folded layout journey: the real door answers <root>/db/mail/bus when that
+# is where the log lives, and delivery and cursor land there. This is the
+# db-fold repro end to end: the pre-fix hook exited 0 and delivered nothing.
+JF="$TMP/j-fold"
+mkdir -p "$JF/db/mail/bus"
+printf '%s\n' "$msg1" > "$JF/db/mail/bus/messages.jsonl"
+out="$(journey_run "$JF" "$STDIN_OK")" && jf_rc=0 || jf_rc=$?
+jf_cursor="$(jq -r '.last_seen_id' "$JF/db/mail/bus/cursors/$HANDLE.json" 2>/dev/null)"
+if [[ "$jf_rc" -eq 0 && "$out" == *"[fno agents mail] 1 message(s) for $HANDLE"* ]] \
+    && [[ "$jf_cursor" == "msg-j1" ]]; then
+    ok "journey folded layout: the real door delivers into <root>/db/mail/bus"
+else
+    bad "journey folded layout: rc=$jf_rc cursor=$jf_cursor"
 fi
 
 echo "----------------------------------------"
