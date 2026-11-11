@@ -69,16 +69,8 @@ count_marker() {
 }
 # Same resolution order as scripts/lib/events.sh: checkout build first, PATH
 # second, so the test never reads through a stale installed binary.
-ROWS_BIN="${FNO_BIN:-}"
-if [[ -z "$ROWS_BIN" ]]; then
-    for profile in debug release; do
-        if [[ -x "$REPO_ROOT/crates/fno/target/$profile/fno" ]]; then
-            ROWS_BIN="$REPO_ROOT/crates/fno/target/$profile/fno"
-            break
-        fi
-    done
-fi
-[[ -n "$ROWS_BIN" ]] || ROWS_BIN=$(command -v fno 2>/dev/null)
+# shellcheck source=scripts/lib/store-bin.sh
+source "$REPO_ROOT/scripts/lib/store-bin.sh"
 committed_marks() {
     [[ -n "$ROWS_BIN" ]] || { echo 0; return; }
     "$ROWS_BIN" doctor event rows --events "$1" 2>/dev/null | grep -c "$MARKER" || true
