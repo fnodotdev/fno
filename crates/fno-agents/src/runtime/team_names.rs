@@ -2403,7 +2403,10 @@ mod tests {
             let (from, to) = renamed.expect("the binder reclaims its own name");
             assert_eq!(to, "Esther", "{from} -> {to}");
             let refused = rename_team(&store, &registry, "sess-w", "esther", true).unwrap_err();
-            assert!(refused.contains("never reused"), "{refused}");
+            // After the binder's reclaim the name is LIVE again over x-aaaa,
+            // so a different holder hits the live-holder refusal, not the
+            // never-reuse ledger. Either way the name is untakeable.
+            assert!(refused.contains("held by valentina"), "{refused}");
         }
 
         fn binder_rebinds_own_name_on_checkin() {
