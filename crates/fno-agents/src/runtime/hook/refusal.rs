@@ -145,7 +145,7 @@ impl Refusal {
 fn strip_tag(why: &str) -> &str {
     if why.starts_with("[fno ") {
         if let Some(end) = why.find("] ") {
-            return &why[end + 2..];
+            return why.get(end + 2..).unwrap_or(why);
         }
     }
     why
@@ -272,10 +272,16 @@ mod tests {
         ])));
         assert!(!asks_with(env(&[ATT])));
         let ask = answer("r", true);
-        assert_eq!(ask["hookSpecificOutput"]["permissionDecision"], "ask");
-        assert!(ask["decision"].is_null());
+        assert_eq!(
+            ask.pointer("/hookSpecificOutput/permissionDecision"),
+            Some(&json!("ask"))
+        );
+        assert!(ask.pointer("/decision").is_none());
         let deny = answer("r", false);
-        assert_eq!(deny["hookSpecificOutput"]["permissionDecision"], "deny");
-        assert_eq!(deny["decision"], "block");
+        assert_eq!(
+            deny.pointer("/hookSpecificOutput/permissionDecision"),
+            Some(&json!("deny"))
+        );
+        assert_eq!(deny.pointer("/decision"), Some(&json!("block")));
     }
 }

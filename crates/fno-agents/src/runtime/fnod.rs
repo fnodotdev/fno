@@ -55,14 +55,18 @@ impl Question {
             crate::agents_config::config_value_deep(cwd, &["fnod", "questions", id, key])
         };
         if let Some(text) = read("instructions").and_then(|v| v.as_str().map(str::to_string)) {
-            q.wire["instructions"] = json!(text);
+            if let Some(wire) = q.wire.as_object_mut() {
+                wire.insert("instructions".to_string(), json!(text));
+            }
         }
         if let Some(toml::Value::Table(criteria)) = read("criteria") {
             let map: Map<String, Value> = criteria
                 .iter()
                 .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), json!(s))))
                 .collect();
-            q.wire["criteria"] = Value::Object(map);
+            if let Some(wire) = q.wire.as_object_mut() {
+                wire.insert("criteria".to_string(), Value::Object(map));
+            }
         }
         if let Some(bar) = read("escalate_below")
             .and_then(|v| v.as_float().or_else(|| v.as_integer().map(|n| n as f64)))
@@ -93,11 +97,10 @@ impl Escalate {
 }
 
 /// fnod's answer. A noul question labels `yes` or `no` and keeps its raw
-/// score in `noul`; a choice question labels the argmax.
+/// score in `noul`; a choice question labels the argmax of its probabilities.
 #[derive(Debug)]
 pub(crate) struct Decision {
     pub label: Option<String>,
-    pub probabilities: Map<String, Value>,
     /// A noul question's raw score.
     pub noul: Option<f64>,
     pub confidence: f64,
@@ -132,7 +135,7 @@ pub(crate) fn ask(url: &str, timeout: Duration, state: Value, q: &Question) -> D
     };
     let ms = start.elapsed().as_millis() as u64;
     match reply {
-        Ok((label, probabilities, confidence, noul)) => {
+        Ok((label, confidence, noul)) => {
             let escalate = if !q.trained || confidence < q.escalate_below {
                 Escalate::Model
             } else if q.irreversible {
@@ -142,7 +145,6 @@ pub(crate) fn ask(url: &str, timeout: Duration, state: Value, q: &Question) -> D
             };
             Decision {
                 label: Some(label),
-                probabilities,
                 noul,
                 confidence,
                 escalate,
@@ -152,7 +154,6 @@ pub(crate) fn ask(url: &str, timeout: Duration, state: Value, q: &Question) -> D
         }
         Err(why) => Decision {
             label: None,
-            probabilities: Map::new(),
             noul: None,
             confidence: 0.0,
             escalate: Escalate::Model,
@@ -171,21 +172,21 @@ struct Answer {
     probabilities: Map<String, Value>,
 }
 
-/// The label, the probabilities, the confidence and the raw noul score, or
+/// The label, the confidence and the raw noul score, or
 /// None when the reply carries no usable answer for `id`.
-fn read_answer(reply: &Value, id: &str) -> Option<(String, Map<String, Value>, f64, Option<f64>)> {
+fn read_answer(reply: &Value, id: &str) -> Option<(String, f64, Option<f64>)> {
     let answer: Answer =
         serde_json::from_value(reply.pointer(&format!("/answers/{id}"))?.clone()).ok()?;
     if let Some(p) = answer.noul {
         let label = if p >= 0.5 { "yes" } else { "no" };
-        return Some((label.to_string(), Map::new(), p.max(1.0 - p), Some(p)));
+        return Some((label.to_string(), p.max(1.0 - p), Some(p)));
     }
     let (label, p) = answer
         .probabilities
         .iter()
         .filter_map(|(k, v)| v.as_f64().map(|p| (k.clone(), p)))
         .max_by(|a, b| a.1.total_cmp(&b.1))?;
-    Some((label, answer.probabilities, p, None))
+    Some((label, p, None))
 }
 
 /// fnod's answer to "does `message` ask the user for a decision or an
@@ -379,10 +380,10 @@ pub(crate) mod tests {
             format!("{base}[fnod.questions.is_ask]\nescalate_below = 0.9\n"),
         )
         .unwrap();
-        let row = is_ask(cwd.path(), "Ship it?");
+        let row = Value::Object(is_ask(cwd.path(), "Ship it?"));
         server.join().unwrap();
-        assert_eq!(row["fnod_trained"], true);
-        assert_eq!(row["fnod_escalate"], "model");
+        assert_eq!(row.pointer("/fnod_trained"), Some(&json!(true)));
+        assert_eq!(row.pointer("/fnod_escalate"), Some(&json!("model")));
         std::fs::write(
             &cfg,
             format!("{base}[fnod.questions.is_ask]\ninstructions = \"Is this a question?\"\n"),
@@ -402,7 +403,9 @@ pub(crate) mod tests {
         assert_eq!(answer["fnod_is_ask"], 0.91);
         let sent: Value = serde_json::from_str(&server.join().unwrap()).unwrap();
         assert_eq!(
-            sent["questions"]["is_ask"],
+            sent.pointer("/questions/is_ask")
+                .cloned()
+                .unwrap_or_default(),
             crate::intel_corpus::question("is_ask")
         );
         assert_eq!(sent["state"]["message"], "Ship it now or wait for review?");

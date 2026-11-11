@@ -105,10 +105,12 @@ fn shell_surface(cmd: &str) -> String {
         }
         for caps in heredoc.captures_iter(line) {
             // `bash <<'EOF'` runs its body as shell, so that body stays.
-            let before = &line[..caps.get(0).map_or(0, |m| m.start())];
-            if caps[1] == caps[3] && !shell.is_match(before) {
-                let dash = caps[0].starts_with("<<-");
-                close.push((caps[2].to_string(), dash));
+            let text = |n: usize| caps.get(n).map_or("", |m| m.as_str());
+            let start = caps.get(0).map_or(0, |m| m.start());
+            let before = line.get(..start).unwrap_or("");
+            if text(1) == text(3) && !shell.is_match(before) {
+                let dash = text(0).starts_with("<<-");
+                close.push((text(2).to_string(), dash));
             }
         }
         kept.push(line);
