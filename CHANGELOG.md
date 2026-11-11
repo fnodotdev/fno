@@ -111,7 +111,7 @@ About 300 pull requests since 0.4.5.
 
 Three features ship switched off. Each is a toggle in the mux: open the menu, choose settings, then experimental. The choice persists. Turn a feature off the same way.
 
-* Fleet org board. A command center in the sideline shows the fleet, its machines, the leads on each machine and the seats of each lead. From the Fleet tab you can peek, view and spawn on another machine. Turn on `fleet org board`.
+* Fleet org board. A command center in the sideline shows the fleet and its machines. It also shows the leads on each machine and their seats. From the Fleet tab you can peek, view and spawn on another machine. Turn on `fleet org board`.
 * Pane share. Share the focused pane and copy a join link. Press prefix+X in a pane. Press it again to copy the link again. Turn on `pane share`.
 * Other machines. The sideline groups sessions by machine. Enter on a row from another machine opens that session in a portal. A remote row looks and acts like a local one. Turn on `other machines`.
 
@@ -138,7 +138,7 @@ Three features ship switched off. Each is a toggle in the mux: open the menu, ch
 
 * Changed `fno mail` to a root command, and retired the mail note lane.
 * Changed the PR watch tick, the agent sweeps and the last Bash guards to Rust. The Python packages are deleted.
-* Changed GitHub reads to go through the fnodotdev GitHub App, if it is set up. Then machines share one API quota.
+* Changed GitHub reads to use the fnodotdev GitHub App. With the app set up, machines share one API quota.
 * Changed `fno do pr push` to run `cargo fmt --check` on changed crates.
 * Changed a PR closed unmerged to move its node off `in_review`.
 * Changed `fno backlog` to refuse a `details=` replace that halves the stored text.
