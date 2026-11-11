@@ -612,6 +612,21 @@ pub(crate) fn open_first_run(view: &mut View) {
     super::backlog_board::set_sideline_view(view, SidelineView::Org);
     crate::view_store::save_experimental(crate::view_store::EXPERIMENTAL_ORG_BOARD_SEEN, true);
 }
+
+/// The boot landing for every launch: the org board ships on by default, and
+/// a store with no seen marker arms the first-run show, so frame one paints
+/// the command center with the keyboard left on the pane. Every later
+/// launch, and any store whose operator turned the flag off, opens on Agents
+/// whatever was persisted.
+pub(crate) fn boot_sideline(view: &mut View) {
+    if view.experimental_org_board
+        && !crate::view_store::load_experimental(crate::view_store::EXPERIMENTAL_ORG_BOARD_SEEN)
+    {
+        open_first_run(view);
+    } else {
+        super::backlog_board::set_sideline_view(view, crate::view_store::SidelineView::Agents);
+    }
+}
 pub(crate) fn maybe_kick(view: &mut View, tx: &OrgTx) {
     super::machine_tree::maybe_kick(view, tx);
     let Some(b) = view.org_board.as_mut() else {

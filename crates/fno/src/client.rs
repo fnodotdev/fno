@@ -6280,17 +6280,7 @@ async fn attach_and_run(
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
     let mut view = View::new((rows, cols), session, LayoutView::default());
-    // The command center on first run: the org board ships on by default,
-    // and a store with no seen marker arms the board for frame one with the
-    // keyboard left on the pane. Every later launch, and any store whose
-    // operator turned the flag off, opens on Agents whatever was persisted.
-    if view.experimental_org_board
-        && !view_store::load_experimental(view_store::EXPERIMENTAL_ORG_BOARD_SEEN)
-    {
-        org_board::open_first_run(&mut view);
-    } else {
-        backlog_board::set_sideline_view(&mut view, crate::view_store::SidelineView::Agents);
-    }
+    org_board::boot_sideline(&mut view);
     // Latch the focus-follows-mouse off-switch once; a direct
     // config.toml read (fail-open to on), the digest_overlay idiom.
     view.hover_focus = crate::digest_overlay::hover_focus_enabled(Path::new(&cwd));

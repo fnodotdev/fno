@@ -111,3 +111,38 @@ fn open_first_run_paints_the_board_without_taking_the_keyboard() {
         "the seen marker persists"
     );
 }
+
+// The boot landing is once-only: a store with the flag on and no marker gets
+// the first-run show, a store whose operator turned the flag off gets Agents
+// with no marker written, and a store that already saw the show gets Agents
+// with the marker left alone.
+#[test]
+fn boot_sideline_shows_once_then_lands_on_agents() {
+    let prefs = tempfile::tempdir().expect("tempdir");
+    crate::view_store::set_test_path(prefs.path());
+    // Fresh store: the show fires and writes the marker.
+    let mut v = two_pane_view();
+    v.experimental_org_board = true;
+    org_board::boot_sideline(&mut v);
+    assert!(v.org_board.is_some(), "first boot: the show fires");
+    assert_eq!(v.sideline_view, crate::view_store::SidelineView::Org);
+    // Seen store: no second show, and the marker survives untouched.
+    let mut v = two_pane_view();
+    v.experimental_org_board = true;
+    org_board::boot_sideline(&mut v);
+    assert!(v.org_board.is_none(), "second boot: no second show");
+    assert_eq!(v.sideline_view, crate::view_store::SidelineView::Agents);
+    // Flag off: Agents, and the marker stays unwritten so a later explicit
+    // turn-on still earns the show.
+    let prefs2 = tempfile::tempdir().expect("tempdir");
+    crate::view_store::set_test_path(prefs2.path());
+    let mut v = two_pane_view();
+    v.experimental_org_board = false;
+    org_board::boot_sideline(&mut v);
+    assert!(v.org_board.is_none(), "flag off: nothing opens");
+    assert_eq!(v.sideline_view, crate::view_store::SidelineView::Agents);
+    assert!(
+        !crate::view_store::load_experimental(crate::view_store::EXPERIMENTAL_ORG_BOARD_SEEN),
+        "flag off writes no marker"
+    );
+}
