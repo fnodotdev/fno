@@ -26,6 +26,14 @@ name = "fno"
 path = "src/main.rs"
 required-features = ["full"]
 
+# The macOS desktop app: a thin GPUI client that draws the mux's frames.
+# Behind the non-default `desktop` feature, so `cargo install fno` and the
+# Linux builds never compile gpui.
+[[bin]]
+name = "fno-desktop"
+path = "src/bin/fno-desktop.rs"
+required-features = ["desktop"]
+
 [[example]]
 name = "mux_latency"
 required-features = ["full"]
@@ -73,6 +81,7 @@ full = [
     "dep:tempfile",
     "dep:tokio",
 ]
+desktop = ["full", "dep:gpui"]
 
 [dependencies]
 # `fno mux serve --web`: the read-only web bridge's HTTP + WebSocket
@@ -167,6 +176,9 @@ chrono = { version = "0.4", default-features = false, features = ["std", "alloc"
 strsim = { version = "0.11", optional = true }
 thiserror = { version = "2", optional = true }
 tempfile = { version = "3", optional = true }
+# The desktop app's window, text and input layer (Zed's UI framework). Off
+# by default; `font-kit` is the one feature the macOS text system needs.
+gpui = { version = "0.2.2", default-features = false, features = ["font-kit"], optional = true }
 tokio = { optional = true, version = "1", features = [
     "rt-multi-thread",
     "net",
