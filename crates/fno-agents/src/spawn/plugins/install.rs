@@ -312,7 +312,9 @@ fn approval(card: &Card) -> Result<Option<String>, InstallError> {
         .prepare("SELECT request_digest FROM requests WHERE action_digest = ? AND effect_class = ?")
         .map_err(|e| InstallError::Io(e.to_string()))?;
     let filed: Vec<String> = statement
-        .query_map([card.content_digest.as_str(), EFFECT_CLASS], |row| row.get(0))
+        .query_map([card.content_digest.as_str(), EFFECT_CLASS], |row| {
+            row.get(0)
+        })
         .map_err(|e| InstallError::Io(e.to_string()))?
         .filter_map(Result::ok)
         .collect();

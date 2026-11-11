@@ -113,14 +113,17 @@ fn feed_output(feed: &Feed) -> Result<Value, OpenError> {
 /// What `open` does with a resolved mod.
 enum Opened {
     Feed(Feed),
-    Run { argv: Vec<String>, dir: std::path::PathBuf },
+    Run {
+        argv: Vec<String>,
+        dir: std::path::PathBuf,
+    },
 }
 
 /// An installed, switched-on mod.
 fn resolve(root: &Path, target: &str) -> Result<Opened, OpenError> {
-    let (pack_id, mod_id) = target.split_once('/').ok_or_else(|| {
-        OpenError::Target(format!("name a mod as PACK_ID/MOD_ID, got {target}"))
-    })?;
+    let (pack_id, mod_id) = target
+        .split_once('/')
+        .ok_or_else(|| OpenError::Target(format!("name a mod as PACK_ID/MOD_ID, got {target}")))?;
     let registry = Store::at_root(root)
         .load()
         .map_err(|e| OpenError::Target(e.0))?;
@@ -156,7 +159,9 @@ fn resolve(root: &Path, target: &str) -> Result<Opened, OpenError> {
         Some(Render::Native(view)) => Err(OpenError::Target(format!(
             "{target} is the mux's own {view} view; open it from the mux"
         ))),
-        None => Err(OpenError::Target(format!("{target} declares no render path"))),
+        None => Err(OpenError::Target(format!(
+            "{target} declares no render path"
+        ))),
     }
 }
 

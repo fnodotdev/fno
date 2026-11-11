@@ -523,7 +523,11 @@ fn ui_rows(pack: &super::registry::InstalledPack) -> serde_json::Map<String, Val
     out.insert("source".into(), json!(pack.source));
     let manifest_path = Path::new(&pack.manifest_path);
     let base = manifest_path.parent().unwrap_or(Path::new(""));
-    let abs = |rel: &str| super::resolve_path(&base.join(rel)).to_string_lossy().into_owned();
+    let abs = |rel: &str| {
+        super::resolve_path(&base.join(rel))
+            .to_string_lossy()
+            .into_owned()
+    };
     let (mods, layouts) = match load_manifest(manifest_path) {
         Ok(manifest) => (
             manifest
@@ -596,7 +600,11 @@ fn toggle(ctx: &Ctx, target: &str, on: bool) -> i32 {
         ctx.error(&format!(
             "no installed pack {}; installed: {}",
             quoted(pack_id),
-            if known.is_empty() { "none".to_string() } else { known.join(", ") }
+            if known.is_empty() {
+                "none".to_string()
+            } else {
+                known.join(", ")
+            }
         ));
         return 2;
     };
@@ -616,7 +624,11 @@ fn toggle(ctx: &Ctx, target: &str, on: bool) -> i32 {
             ctx.error(&format!(
                 "pack {pack_id} declares no mod or layout {}; declared: {}",
                 quoted(id),
-                if ids.is_empty() { "none".to_string() } else { ids.join(", ") }
+                if ids.is_empty() {
+                    "none".to_string()
+                } else {
+                    ids.join(", ")
+                }
             ));
             return 2;
         }
@@ -629,7 +641,9 @@ fn toggle(ctx: &Ctx, target: &str, on: bool) -> i32 {
     }
     let state = if on { "on" } else { "off" };
     if ctx.json {
-        emit_json(&envelope(json!({"pack_id": pack_id, "switched": chosen, "enabled": on})));
+        emit_json(&envelope(
+            json!({"pack_id": pack_id, "switched": chosen, "enabled": on}),
+        ));
     } else {
         for id in &chosen {
             println!("{pack_id}/{id} {state}");

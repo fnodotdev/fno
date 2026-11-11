@@ -988,11 +988,23 @@ fn contained_file(base: &Path, rel: &str) -> Option<PathBuf> {
 fn preview_condition(kind: &str, id: &str, rel: &str, base: &Path) -> Condition {
     let name = format!("preview:{kind}:{id}");
     let Some(path) = contained_file(base, rel) else {
-        return cond(UI, name, "failed", Some(format!("{rel} missing or escapes the pack directory")));
+        return cond(
+            UI,
+            name,
+            "failed",
+            Some(format!("{rel} missing or escapes the pack directory")),
+        );
     };
-    let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(u64::MAX);
+    let size = std::fs::metadata(&path)
+        .map(|m| m.len())
+        .unwrap_or(u64::MAX);
     if size > PREVIEW_MAX_BYTES {
-        return cond(UI, name, "failed", Some(format!("{rel} is {size} bytes, over {PREVIEW_MAX_BYTES}")));
+        return cond(
+            UI,
+            name,
+            "failed",
+            Some(format!("{rel} is {size} bytes, over {PREVIEW_MAX_BYTES}")),
+        );
     }
     let mut head = [0u8; 24];
     let read = std::fs::File::open(&path)
@@ -1014,7 +1026,12 @@ fn recipe_condition(kind: &str, id: &str, rel: &str, base: &Path) -> Condition {
     let name = format!("recipe:{kind}:{id}");
     match contained_file(base, rel) {
         Some(_) => cond(UI, name, "passed", Some(format!("{rel} present"))),
-        None => cond(UI, name, "failed", Some(format!("{rel} missing or escapes the pack directory"))),
+        None => cond(
+            UI,
+            name,
+            "failed",
+            Some(format!("{rel} missing or escapes the pack directory")),
+        ),
     }
 }
 
@@ -1026,17 +1043,26 @@ fn ui_conditions(manifest: &PackManifest, base: &Path) -> Vec<Condition> {
             UI,
             format!("mod-id:{}", m.id),
             verdict(is_safe_component(&m.id), "failed"),
-            Some(format!("{} must be a single path component", py_repr_str(&m.id))),
+            Some(format!(
+                "{} must be a single path component",
+                py_repr_str(&m.id)
+            )),
         ));
         let (result, detail) = match m.render() {
-            None => ("failed", "declare exactly one of run, feed or native".to_string()),
+            None => (
+                "failed",
+                "declare exactly one of run, feed or native".to_string(),
+            ),
             Some(Render::Feed(feed)) => match feed.argv.first() {
                 Some(program) if FEED_PROGRAMS.contains(&program.as_str()) => {
                     ("passed", format!("feed {}", feed.argv.join(" ")))
                 }
                 _ => (
                     "failed",
-                    format!("a feed argv starts with one of {}", FEED_PROGRAMS.join(", ")),
+                    format!(
+                        "a feed argv starts with one of {}",
+                        FEED_PROGRAMS.join(", ")
+                    ),
                 ),
             },
             Some(Render::Run(argv)) => ("passed", format!("runs code: {}", argv.join(" "))),
@@ -1062,9 +1088,14 @@ fn ui_conditions(manifest: &PackManifest, base: &Path) -> Vec<Condition> {
             Binding::Mod(id) => !mod_ids.contains(id.as_str()),
             _ => false,
         }) {
-            Some(format!("slot {} binds a mod this pack does not declare", py_repr_str(&slot.name)))
+            Some(format!(
+                "slot {} binds a mod this pack does not declare",
+                py_repr_str(&slot.name)
+            ))
         } else if anchors != 1 {
-            Some(format!("a layout binds exactly one anchor slot, found {anchors}"))
+            Some(format!(
+                "a layout binds exactly one anchor slot, found {anchors}"
+            ))
         } else {
             None
         };
@@ -1074,7 +1105,12 @@ fn ui_conditions(manifest: &PackManifest, base: &Path) -> Vec<Condition> {
             verdict(problem.is_none(), "failed"),
             problem.or_else(|| Some(format!("{} slot(s)", layout.slots.len()))),
         ));
-        out.push(preview_condition("layout", &layout.id, &layout.preview, base));
+        out.push(preview_condition(
+            "layout",
+            &layout.id,
+            &layout.preview,
+            base,
+        ));
         out.push(recipe_condition("layout", &layout.id, &layout.recipe, base));
     }
     out
