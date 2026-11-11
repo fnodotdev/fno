@@ -33,6 +33,7 @@ pub mod gate_probes;
 pub mod gh_budget;
 pub mod gh_cache;
 pub mod gh_etag;
+pub mod gh_files_cache;
 pub mod gh_incident;
 pub mod gh_login;
 pub mod gh_poller;
