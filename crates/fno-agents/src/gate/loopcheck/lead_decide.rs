@@ -458,35 +458,45 @@ pub(super) fn lead_decide(
             }
             return terminate(TerminationReason::NoWork, &quiet, 0, dry, &[]);
         }
-        // A readable quiet-undelivered fire is a park edge. Codex owns the
-        // preserved objective, so verify it is paused before finishing NoWork;
-        // any provider refusal keeps the existing bounded block.
-        let provider_goal_error =
-            if should_pause_codex_goal(manifest.harness.as_deref(), drain_error.is_none()) {
-                match crate::lead_goal::pause_codex_lead_goal(&manifest, &parsed.cwd) {
-                    Ok(provider_receipt) => {
-                        emit(
-                            "quiet-undelivered",
-                            serde_json::json!({
-                                "session_id": session_id,
-                                "scope": manifest.scope,
-                                "undelivered": undelivered,
-                                "provider_receipt": provider_receipt,
-                            }),
-                        );
-                        return terminate(
-                            TerminationReason::NoWork,
-                            "board quiet; provider goal paused with undelivered scope delivery",
-                            0,
-                            dry,
-                            &[],
-                        );
-                    }
-                    Err(error) => Some(error),
+        // A quiet-undelivered fire is a park edge. Codex owns the preserved
+        // objective, so verify it is paused before finishing NoWork. A
+        // timed-out drain parks too: an unreadable read is not harm, the fire
+        // is about to end on it, and an exit that leaves the goal active is
+        // the hang the parked beat exists to save. A failed drain is a broken
+        // command, not a spent fire, and never reaches the park exit; any
+        // provider refusal keeps the bounded block.
+        let timed_out = matches!(
+            drain_error.as_ref(),
+            Some(crate::loop_lead::ScopeDrainError::TimedOut { .. })
+        );
+        let provider_goal_error = if should_pause_codex_goal(
+            manifest.harness.as_deref(),
+            drain_error.is_none() || timed_out,
+        ) {
+            match crate::lead_goal::pause_codex_lead_goal(&manifest, &parsed.cwd) {
+                Ok(provider_receipt) => {
+                    emit(
+                        "quiet-undelivered",
+                        serde_json::json!({
+                            "session_id": session_id,
+                            "scope": manifest.scope,
+                            "undelivered": undelivered,
+                            "provider_receipt": provider_receipt,
+                        }),
+                    );
+                    let parked = if timed_out {
+                        "board quiet; the drain read timed out, provider goal paused; \
+                         the wake re-reads the drain"
+                    } else {
+                        "board quiet; provider goal paused with undelivered scope delivery"
+                    };
+                    return terminate(TerminationReason::NoWork, parked, 0, dry, &[]);
                 }
-            } else {
-                None
-            };
+                Err(error) => Some(error),
+            }
+        } else {
+            None
+        };
         let mut message =
             crate::lead_termination::lead_quiet_message(undelivered, drain_error.as_ref());
         if let Some(error) = provider_goal_error.as_deref() {
@@ -529,16 +539,26 @@ pub(super) fn lead_decide(
             }
         };
         emit("lead_loop_check", body);
-        if drain_error.is_none() && provider_goal_error.is_none() {
-            return terminate(
-                TerminationReason::NoWork,
-                &format!(
-                    "waiting on CI or a worker: {undelivered} driven rows undelivered; a quiet beat, not a finish line"
+        // An unreadable read is not harm: a quiet board whose drain child was
+        // killed by a spent fire parks instead of blocking. The block could
+        // never clear - the message's only remedy ("rerun the drain") is a
+        // command the stopping agent cannot aim at the hook's own read, so
+        // every later fire re-spent the budget and re-blocked. The receipt
+        // row above is the record the next wake re-reads against, never a
+        // silent clean. A failed drain still blocks: a broken command is
+        // harm the block surfaces.
+        if provider_goal_error.is_none() && (drain_error.is_none() || timed_out) {
+            let message = match drain_error.as_ref() {
+                Some(error) => format!(
+                    "board quiet; the scope delivery read timed out: {error}; \
+                     parking - the wake re-reads the drain"
                 ),
-                0,
-                dry,
-                &[],
-            );
+                None => format!(
+                    "waiting on CI or a worker: {undelivered} driven rows undelivered; \
+                     a quiet beat, not a finish line"
+                ),
+            };
+            return terminate(TerminationReason::NoWork, &message, 0, dry, &[]);
         }
         if let Some(b) = bounded(dry, &message) {
             return terminate(b.reason, &b.message, 0, b.fires, &readings);

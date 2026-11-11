@@ -315,6 +315,9 @@ pub(crate) fn lead_quiet_body(session_id: &str, actionable: i64) -> Value {
 
 /// The quiet-branch block message: what the drain read measured, or the
 /// error when the read failed (the sentinel count i64::MAX rides beside it).
+/// A timed-out drain never reaches this block - that fire parks on the
+/// quiet exit (lead_decide) - so the error rendered here is a failed
+/// command, the harm the block surfaces.
 pub(crate) fn lead_quiet_message(
     undelivered: i64,
     drain_error: Option<&crate::loop_lead::ScopeDrainError>,

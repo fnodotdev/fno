@@ -139,13 +139,20 @@ fn quiet_fire(body: &str) -> (tempfile::TempDir, [EnvGuard; 5], Vec<String>) {
 }
 
 #[test]
-fn a_killed_drain_names_its_timeout_never_a_bare_unreadable() {
+fn a_killed_drain_parks_the_lead_and_names_its_timeout() {
+    // An unreadable read is not harm: a quiet board whose drain child was
+    // killed by a spent fire allows the stop - the daemon wake re-reads the
+    // drain - and the fire's receipt row records the unread read. The old
+    // block trapped the lead: its only remedy ("rerun the drain") is a
+    // command the stopping agent cannot aim at the hook's own read, so every
+    // later fire re-spent the budget and re-blocked.
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let (_dir, _env, args) = quiet_fire("#!/bin/sh\nsleep 5\n");
+    let (dir, _env, args) = quiet_fire("#!/bin/sh\nsleep 5\n");
     let (code, output) = run_loop_check_capture(&args);
     let payload: Value = serde_json::from_str(&output).unwrap();
     assert_eq!(code, 0, "{output}");
-    assert_eq!(payload["decision"], "block", "{output}");
+    assert_eq!(payload["decision"], "allow", "{output}");
+    assert_eq!(payload["termination_reason"], "NoWork", "{output}");
     let reason = payload["reason"].as_str().unwrap();
     assert!(
         reason.contains("timed out"),
@@ -156,9 +163,49 @@ fn a_killed_drain_names_its_timeout_never_a_bare_unreadable() {
         "the message must name the drain read: {reason}"
     );
     assert!(
-        reason.contains("blocking completion"),
-        "the gate must stay fail-closed: {reason}"
+        reason.contains("wake"),
+        "the park must name what re-reads the drain: {reason}"
     );
+    assert!(
+        !reason.contains("rerun"),
+        "the rerun advice sent the lead in a circle: {reason}"
+    );
+    // Not a silent clean: the fire's receipt row records the unread read,
+    // with the sentinel count riding beside it.
+    let events = std::fs::read_to_string(dir.path().join("events.jsonl")).unwrap();
+    let receipt = events
+        .lines()
+        .find_map(|line| {
+            let row: Value = serde_json::from_str(line).ok()?;
+            if row["type"] == "lead_loop_check" {
+                Some(row)
+            } else {
+                None
+            }
+        })
+        .expect("the unread drain must leave its receipt row");
+    assert_eq!(
+        receipt["data"]["undelivered"],
+        serde_json::Value::from(i64::MAX)
+    );
+}
+
+#[test]
+fn a_readable_quiet_undelivered_board_exits_nowork() {
+    // The readable arm the timed-out park joins: a quiet board with driven
+    // rows still undelivered was already a NoWork exit (the workers drive,
+    // the wake brings the lead back). The pin guards the gate rewrite, not
+    // new behavior.
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (_dir, _env, args) = quiet_fire("#!/bin/sh\nprintf '{\"undelivered\": 2}\\n'\n");
+    let (code, output) = run_loop_check_capture(&args);
+    let payload: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(code, 0, "{output}");
+    assert_eq!(payload["decision"], "allow", "{output}");
+    assert_eq!(payload["termination_reason"], "NoWork", "{output}");
+    let reason = payload["reason"].as_str().unwrap();
+    assert!(reason.contains("waiting on CI or a worker"), "{reason}");
+    assert!(reason.contains('2'), "{reason}");
 }
 
 #[test]

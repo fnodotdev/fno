@@ -273,9 +273,11 @@ impl LeadQueue {
 
 /// Why the drain read could not answer. `TimedOut` is its own kind at the
 /// render site: a killed child means the read's bound was too small for the
-/// job (wait for a quieter fire, rerun); every other failure means the
-/// command is broken (debug it). The two demand opposite operator responses,
-/// and conflating them is how a hang reads as a blip forever.
+/// job, the fire ends without the answer, and on a quiet board the gate
+/// parks rather than blocks (the wake re-reads the drain). Every other
+/// failure means the command is broken (debug it). The two demand opposite
+/// operator responses, and conflating them is how a hang reads as a blip
+/// forever.
 #[derive(Debug, Clone)]
 pub(crate) enum ScopeDrainError {
     /// The drain child outlived its bound and was killed. The bound is the
@@ -294,7 +296,7 @@ impl std::fmt::Display for ScopeDrainError {
         match self {
             ScopeDrainError::TimedOut { scope, bound } => write!(
                 f,
-                "org drain for {scope} timed out after {}ms and was killed (drain floor {}ms; {}ms of harness margin left); wait for a quieter fire or rerun the drain",
+                "org drain for {scope} timed out after {}ms and was killed (drain floor {}ms; {}ms of harness margin left); the read is not certified and the wake re-reads it",
                 bound.as_millis(),
                 crate::loopcheck::STOPGATE_DRAIN_FLOOR.as_millis(),
                 crate::loopcheck::stopgate_harness_margin_remaining_ms()
