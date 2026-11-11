@@ -1338,7 +1338,9 @@ pub(super) fn job_lane_send(
         &recipient,
         &stamp_from(from_name),
         "send",
-        &envelope(None),
+        envelope(None)
+            .as_ref()
+            .map_or(wrapped, fno_mail::turn::TurnText::as_str),
         &msg_id,
         Some("node"),
         Some(&provider),
