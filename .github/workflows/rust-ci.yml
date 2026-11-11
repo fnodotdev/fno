@@ -441,6 +441,14 @@ jobs:
     # binaries across two jobs; do not raise it.
     runs-on: ubuntu-24.04
     timeout-minutes: 35
+    # The same measured cut the smoke-rest and cargo-test-shard jobs carry:
+    # this job builds the same three test binaries with full debug info, and
+    # its runner has no disk-freeing step, so the same ENOSPC death that hit
+    # the smoke shards would land here and render green under
+    # continue-on-error. Line tables keep file:line in a panic backtrace.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
     # REPORTS, does not gate. The step publishes its trial count to the run
     # summary and always exits 0; graduate by making it assert failures=0, and
     # only once the comparison below says something. `continue-on-error` stays
