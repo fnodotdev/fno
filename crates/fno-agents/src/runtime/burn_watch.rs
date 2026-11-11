@@ -2146,7 +2146,7 @@ mod tests {
         let mut calls: Vec<Vec<String>> = Vec::new();
         let mut runner: Runner = &mut |argv: &[String], _cwd: &str| {
             calls.push(argv.to_vec());
-            let path = &argv[2];
+            let path = argv.get(2).map(String::as_str).unwrap_or("");
             if path.contains("pulls/") {
                 (
                     0,
@@ -2215,7 +2215,7 @@ mod tests {
             ),
         ] {
             let mut runner: Runner = &mut |argv: &[String], _cwd: &str| {
-                if argv[2].contains("pulls/") {
+                if argv.get(2).is_some_and(|p| p.contains("pulls/")) {
                     (pr_code, pr_out.into(), String::new())
                 } else {
                     (runs_code, runs_out.into(), String::new())
