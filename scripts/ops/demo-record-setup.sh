@@ -22,8 +22,10 @@ SANDBOX=demo
 REPO=fnodotdev/fno-demo
 while [ $# -gt 0 ]; do
   case "$1" in
-    --sandbox) SANDBOX="$2"; shift 2 ;;
-    --repo) REPO="$2"; shift 2 ;;
+    --sandbox|--repo)
+      [ $# -ge 2 ] || { echo "demo-record-setup: $1 needs a value" >&2; exit 2; }
+      if [ "$1" = --sandbox ]; then SANDBOX="$2"; else REPO="$2"; fi
+      shift 2 ;;
     -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "demo-record-setup: unknown argument: $1" >&2; exit 2 ;;
   esac
