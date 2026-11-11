@@ -99,6 +99,12 @@ pub enum ViewKind {
     /// Settings on the Remote hosts tab, two seeded hosts showing both
     /// state words.
     RemoteHosts,
+    /// Settings on the Extensions tab: a first-party pack and a URL pack.
+    Extensions,
+    /// The Extensions tab with the published gallery drawn under it.
+    ExtensionsGallery,
+    /// The second press that turns on a mod that runs code.
+    ExtensionsConfirm,
     /// The which-key table, opened FROM settings: the printed key labels
     /// (`ctrl+b`) live here.
     Keys,
@@ -330,6 +336,9 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "split-menu" => Some(ViewKind::SplitMenu),
         "settings" => Some(ViewKind::Settings),
         "remote-hosts" => Some(ViewKind::RemoteHosts),
+        "extensions" => Some(ViewKind::Extensions),
+        "extensions-gallery" => Some(ViewKind::ExtensionsGallery),
+        "extensions-confirm" => Some(ViewKind::ExtensionsConfirm),
         "report" => Some(ViewKind::Report),
         "report-preview" => Some(ViewKind::ReportPreview),
         "keys" => Some(ViewKind::Keys),
@@ -1256,6 +1265,19 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
             // the live page re-opens itself on every probe, so nothing else
             // to gather here.
         }
+        Some(
+            kind @ (ViewKind::Extensions
+            | ViewKind::ExtensionsGallery
+            | ViewKind::ExtensionsConfirm),
+        ) => {
+            super::extensions::snapshot_seam(
+                &mut view,
+                matches!(kind, ViewKind::ExtensionsGallery),
+                matches!(kind, ViewKind::ExtensionsConfirm),
+            );
+            view.aux = Some(view.build_settings_modal());
+            view.aux_esc.clear();
+        }
         Some(ViewKind::Report) => runtime.block_on(super::report::snapshot(&mut view, false))?,
         Some(ViewKind::ReportPreview) => {
             runtime.block_on(super::report::snapshot(&mut view, true))?
@@ -1899,6 +1921,9 @@ mod tests {
             ("split-menu", ViewKind::SplitMenu),
             ("settings", ViewKind::Settings),
             ("remote-hosts", ViewKind::RemoteHosts),
+            ("extensions", ViewKind::Extensions),
+            ("extensions-gallery", ViewKind::ExtensionsGallery),
+            ("extensions-confirm", ViewKind::ExtensionsConfirm),
             ("report", ViewKind::Report),
             ("report-preview", ViewKind::ReportPreview),
             ("keys", ViewKind::Keys),

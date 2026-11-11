@@ -87,6 +87,7 @@ mod mouse_route;
 mod pane_anchors;
 mod pane_scroll;
 mod search_nav;
+mod serve_attach;
 use pane_scroll::{wheel_gate, WheelGateState};
 pub(crate) mod links;
 mod notice;
@@ -9463,6 +9464,7 @@ impl Core {
                         cwd: spawn_cwd,
                         permit,
                         keeper: KEEPER_ROAD,
+                        env: Vec::new(),
                     };
                     return self.spawn_then(order, Some(client_id), move |core, spawned| {
                         core.release_row_spawn(&id);
@@ -9616,6 +9618,7 @@ impl Core {
                     cwd: spawn_cwd.clone(),
                     permit,
                     keeper: KEEPER_ROAD,
+                    env: Vec::new(),
                 };
                 self.spawn_then(order, Some(client_id), move |core, spawned| {
                     core.release_row_spawn(&id);

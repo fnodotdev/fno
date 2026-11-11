@@ -211,6 +211,8 @@ mod path_migration_tests;
 #[cfg(feature = "full")]
 pub mod paths_route;
 #[cfg(feature = "full")]
+pub(crate) mod plugins_feed;
+#[cfg(feature = "full")]
 pub mod popup;
 #[cfg(feature = "full")]
 pub mod pr_diff;

@@ -874,6 +874,17 @@ pub struct ResumeForm {
     /// correct).
     #[serde(default)]
     pub pre_exec: Vec<String>,
+    /// The serve seat's generation token lists, boundary, and password env:
+    /// present only on an `interactive_serve_attach` form, empty or None
+    /// elsewhere, and never read for a form without them.
+    #[serde(default)]
+    pub tokens_v1: Vec<String>,
+    #[serde(default)]
+    pub tokens_v2: Vec<String>,
+    #[serde(default)]
+    pub boundary_major: Option<u32>,
+    #[serde(default)]
+    pub password_env: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

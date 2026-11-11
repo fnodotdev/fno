@@ -106,6 +106,7 @@ The table classifies the crossing sites, one line of reason each. The pass that 
 | `server.rs:10912` | conforming | pane counters through the same emit path |
 | `spawn_gate_lanes.rs:123` | conforming | pane listing fallback for the same probe, the pane owner's authoritative enumeration |
 | `doctor/report/ops.rs run_session_cost` | conforming | session cost through `fno-agents context-run --session-cost --json`, one answer per spawn |
+| `client/extensions.rs fno_door` | conforming | the Extensions tab reads and switches packs through `fno config plugins`, the plugins owner |
 | `doctor/mod.rs context_audit_run` | conforming | the context census through `fno-agents context-run --audit`, all its inputs in one spawn |
 
 The interpreter direction is retired. The doctor rows that once exec'd the wheel's interpreter now exec `fno-agents`, and the installed-package probe is gone with the wheel.

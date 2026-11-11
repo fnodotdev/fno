@@ -26,20 +26,21 @@ impl Core {
         let now = Instant::now();
         let panes = &self.panes;
         let agents = &self.agents;
+        let portals = &self.portals;
         let session = &self.session_name;
         self.input_echo.retain(|pane, watch| {
             let Some(entry) = panes.get(pane) else {
                 return false;
             };
             if watch.poll(now, entry.last_output) {
-                let name = super::pane_meta::pane_registry_name(
+                let subject = super::input_echo::no_echo_subject(
+                    portals,
                     agents,
                     session,
                     *pane,
                     entry.pty.child_pid(),
-                )
-                .unwrap_or_else(|| "unnamed".into());
-                crate::mux_log!(warn; "fno mux: input-no-echo pane={pane} name={name:?}");
+                );
+                crate::mux_log!(warn; "fno mux: input-no-echo pane={pane} {subject}");
             }
             true
         });

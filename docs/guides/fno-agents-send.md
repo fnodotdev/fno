@@ -1,6 +1,6 @@
 # How-to: send an async message to a peer agent with `fno agents mail send`
 
-`fno agents mail send <name> "<message>"` is the async sibling of `ask`.
+`fno agents mail send <session-id> "<message>"` is the async sibling of `ask`.
 It attempts a live inject first and falls back to a durable envelope only when that misses, returning without waiting for a reply.
 
 A live delivery writes nothing to the bus. A durable one is the recovery copy, not delivery. So read the receipt, not the exit code: a live state such as `accepted-new-turn`, or `queued (durable)`.
@@ -22,7 +22,7 @@ Use this guide when a script or LLM session needs to hand off work to a peer wit
 ## Basic send
 
 ```bash
-fno agents mail send frontend-worker "run the failing tests and open a PR"
+fno agents mail send 6bf63c59 "run the failing tests and open a PR"
 ```
 
 On success, stdout is exactly one line and the command exits 0:
@@ -60,7 +60,7 @@ A target-loop session can run hours between boundaries, so a parked answer to it
 ## Identify yourself to the recipient
 
 ```bash
-fno agents mail send backend-worker "review my PR diff" --from-name "orchestrator-alpha"
+fno agents mail send 0aa11bb2 "review my PR diff" --from-name "orchestrator-alpha"
 ```
 
 The recipient sees the body inside the `<fno_mail from="..."[ harness="..."][ from_rank="..."][ to="..."][ to_rank="..."][ id="..."]>` envelope. When one is proven, `from` holds the sender's full session id. The framing marks the sender as a peer, not the operator. The receiving model responds in a directed style rather than treating the injection as a user interrupt. See [docs/architecture/mail-live-inject.md](../architecture/mail-live-inject.md) for the envelope and delivery model.

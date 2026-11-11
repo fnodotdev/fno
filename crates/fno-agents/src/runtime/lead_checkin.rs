@@ -2633,6 +2633,13 @@ fn render_lines_with(
         }
     }
     lines.push(format!("change: {change}"));
+    // The beat closes on the report rule (verify-footnotes sections 2 and
+    // 3), so the lead re-reads it before composing the report from these
+    // lines. The wording carries "tried": the stop hook's cannot gate reads
+    // this line too, and "routes" alone names no route marker.
+    lines.push(
+        "report rule: state only verified facts, show fresh output for done, and a cannot claim names the routes it tried".into(),
+    );
     lines
 }
 
@@ -3324,8 +3331,12 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     // waited paste hung past the beat's ceiling and the beat never
     // journaled. Detached, and the next beat's title check retries for
     // free.
-    if let Err(error) = rename_harness_title_for_team(&ctx.scope) {
-        eprintln!("fno-agents lead-checkin: harness title rename failed: {error}");
+    match crate::rename::rename_harness_title_for_team(&ctx.scope) {
+        Ok(Some(line)) => lines.push(line),
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("fno-agents lead-checkin: harness title rename failed: {error}")
+        }
     }
 
     let output_error = if as_json {
@@ -3375,66 +3386,6 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
         error
     };
     finish_checkin(ctx.emit, emitted, output_error)
-}
-
-pub(crate) fn title_rename_command(
-    harness: &str,
-    label: &str,
-    title: Option<&str>,
-) -> Option<String> {
-    if title == Some(label) {
-        return None;
-    }
-    let contract = crate::harness_capabilities::HarnessContract::packaged().ok()?;
-    let capabilities = contract.capabilities(harness).ok()?;
-    capabilities
-        .native_verbs
-        .iter()
-        .any(|command| command == "/rename")
-        .then(|| format!("/rename {label}"))
-}
-
-fn rename_harness_title_for_team(scope: &str) -> Result<(), String> {
-    let home = crate::paths::AgentsHome::from_env();
-    let registry = crate::state::load_registry(&home.registry_json())
-        .map_err(|error| format!("registry read failed: {error}"))?;
-    let canonical = crate::territory::canonical_scope(scope);
-    let mut holders = registry.entries.iter().filter(|row| {
-        row.role_scope
-            .as_deref()
-            .is_some_and(|row_scope| crate::territory::canonical_scope(row_scope) == canonical)
-            && !matches!(
-                row.status,
-                crate::AgentStatus::Exited
-                    | crate::AgentStatus::Orphaned
-                    | crate::AgentStatus::Failed
-                    | crate::AgentStatus::PermanentDead
-            )
-    });
-    let row = holders
-        .next()
-        .ok_or_else(|| format!("no live holder for {canonical}"))?;
-    if holders.next().is_some() {
-        return Err(format!("multiple live holders for {canonical}"));
-    }
-    let session = row
-        .harness_session_id
-        .as_deref()
-        .filter(|session| !session.is_empty())
-        .ok_or_else(|| format!("{} has no harness session id", row.name))?;
-    let harness = row
-        .harness
-        .as_deref()
-        .filter(|harness| !harness.is_empty())
-        .ok_or_else(|| format!("{} has no harness", row.name))?;
-    if crate::claims::resolve_identity().0.as_deref() != Some(session) {
-        return Err("the live team holder is not this session".into());
-    }
-    let label = row.name.as_str();
-    let Some(command) = title_rename_command(harness, label, row.harness_title.as_deref()) else {
-        return Ok(());
-    };
-    crate::rename::deliver_command_to_session_detached(session, harness, &command, true)
 }
 
 #[cfg(test)]
@@ -3611,6 +3562,19 @@ mod tests {
         assert!(lines
             .iter()
             .any(|l| l == "READER FAILED session_orders: canon doc unreadable"));
+    }
+
+    #[test]
+    fn the_beat_closes_on_the_report_rule_line() {
+        let data = Map::new();
+        let lines = render_lines("x-bbbb", &[], &data, &None, "", "no change");
+        assert_eq!(
+            lines.last().map(String::as_str),
+            Some(
+                "report rule: state only verified facts, show fresh output for done, and a cannot claim names the routes it tried",
+            ),
+            "the report rule is the beat's closing line: {lines:?}"
+        );
     }
 
     fn board_payload() -> Value {

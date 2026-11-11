@@ -313,6 +313,7 @@ fn keeper_handshake_is_bounded_and_names_the_keepers_death() {
         tx2,
         exit_tx2,
         permit,
+        &[],
     )
     .err()
     .expect("the keeper died mid-handshake; spawn must fail");

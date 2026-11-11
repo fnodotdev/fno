@@ -6,7 +6,7 @@
 
 The app is macOS only and is built from source. It is not part of `cargo install fno`.
 
-The build compiles Metal shaders, so it needs Xcode and its Metal toolchain. If the build stops on `missing Metal Toolchain`, install it once with `xcodebuild -downloadComponent MetalToolchain`.
+The build compiles Metal shaders, so it needs Xcode and its Metal toolchain. If the build stops on `missing Metal Toolchain`, install it once with `xcodebuild -downloadComponent MetalToolchain`. To build without it, add `gpui/runtime_shaders` to `--features`: the app then compiles its shaders at launch.
 
 ```bash
 cargo build --release --manifest-path crates/fno/Cargo.toml --features desktop --bin fno-desktop
@@ -25,9 +25,23 @@ The `codesign -s -` step gives the binary an ad-hoc signature. No developer acco
 | `--session <name>` | `FNO_SERVER`, then `default` | The mux session to attach to. |
 | `--font <family>` | `Menlo` | The terminal font family. |
 | `--font-size <pt>` | `13` | The terminal font size. |
-| `--probe` | off | Attach with no window, print one line, and exit. |
+| `--probe` | off | Attach with no window, print two lines, and exit. |
 
-`--probe` attaches as an observer, so it never resizes a pane. It waits up to 5 seconds for the layout and one frame per pane. Then it prints `attached session=<s> panes=<n> frames=<m>` and exits 0. With no server it prints the socket path it tried and exits 1.
+`--probe` attaches as an observer, so it never resizes a pane. It waits up to 5 seconds for the layout and one frame per pane. Then it prints `attached session=<s> panes=<n> frames=<m>`. Next it reads the fleet, the open questions and the backlog the way the window does, and prints `agents=<n> questions=<m> seats=<k>`. After a good attach it exits 0. With no server it prints the socket path it tried and exits 1. A failed fleet or question read prints its reason on stderr.
+
+## The window
+
+The left pane has four sections. Agents come in the order the TUI sideline uses. The pane shows the first 8, and a "+N more" row shows the rest. A click focuses the agent's pane, or opens a paneless agent in portal 0. Sessions are the mux squads. A click switches to one. Questions are the open questions that wait on you, newest first. Machines are the fleet's hosts with their seat counts. A section whose read failed shows the error above its last good rows. While the window is active, the fleet and the questions refresh every 60 seconds. They also refresh at once after an answer, and on your return to the window. The backlog behind seat titles refreshes every 5 minutes.
+
+The strip above the grid shows the active session's tabs. A tab without a chosen name shows its pane's title. A click selects a tab. The Terminal, Board and Extensions buttons at the right of the strip switch the main view.
+
+cmd-2 or Board opens orchestration mode, the command center board. TABLE lists every seat with its node and status. With more than one host in the fleet, a MACHINE column shows too. FEED lists each open question with its options, and the recommended option is marked. A click on an option answers it through the same door the TUI uses. The question then shows "sending", then "answered", until the next read drops it. A refused answer shows its reason and keeps the options. cmd-1 or Terminal goes back to the terminal.
+
+cmd-3 or Extensions lists the mods and layouts from `fno config plugins ls --json`, the feed the mux settings tab reads. A row shows its title, its `pack/id` and its summary. An On or Off button switches it. A built-in mod shows "Built in" and has no switch. A click on a name shows its preview image and its rendered recipe on the right. A mod that runs code asks first: the first switch-on shows the command and the commit, and nothing runs until you press "Turn it on and let it run". The list re-reads every 3 seconds while the view shows. A failed read shows its error above the last good rows. "Install from URL" and "Open in a pane" run `fno config plugins install` or `open` in a pane on the attached session and switch to the terminal so you see it. The app never installs by itself: the pane shows what the pack runs and asks you, as the CLI does. "Browse published packs" reads `fno config plugins gallery --json`, and a click on a row fills the URL field. Typed text and cmd-v go to the URL field while it is open. Escape closes it.
+
+The window follows the macOS appearance. A Mac in dark mode gets footnote-superscript. A Mac in light mode gets footnote-paper. When the system switches, the window repaints with no restart. A `mux.theme` pin in your config wins over the appearance, as it does in the TUI, so a pinned dark theme stays dark. Programs inside panes keep the colors the mux server gave them. A pane that paints its own dark ground stays dark in a light window.
+
+Release the mouse on a button, a row or an option to act on it. Release somewhere else to cancel. A notice shows in the bottom corner for 4 seconds.
 
 ## Keys
 
@@ -40,7 +54,13 @@ Keys go to the focused pane as a terminal sends them. The mux prefix key passes 
 | cmd-] / cmd-[ | Next pane / previous pane |
 | cmd-t | New tab |
 | cmd-w | Close pane |
+| cmd-c | Copy the focused pane's selection |
 | cmd-v | Paste (bracketed when the pane asks for it) |
+| cmd-1 / cmd-2 / cmd-3 | Terminal / orchestration board / extensions |
 | cmd-q | Detach and quit |
 
-A click on a pane focuses it.
+Typed text goes through the macOS input system, so dead keys, option-compose and IME input work. Option on a letter types the composed character, as in Terminal.app. Option on an arrow or backspace still sends the meta form.
+
+## Mouse
+
+A click on a pane focuses it. A drag selects text, and the release copies it. The wheel scrolls the pane's history, and `[+N]` at the top right shows how many lines up the pane is. A click on a border or a gap does nothing.
