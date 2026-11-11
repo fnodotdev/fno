@@ -998,7 +998,10 @@ pub fn check_cannot_claims(masked: &str) -> Vec<Violation> {
             let Some(found) = cannot_claim_re().find(&lowered_sentence) else {
                 continue;
             };
-            if found.start() >= 4 && lowered_sentence[found.start() - 4..found.start()] == "not " {
+            // ends_with on the prefix, never a [start-4..start] slice: the
+            // four bytes before the boundary can land inside a multibyte
+            // char, and slicing there panics.
+            if lowered_sentence[..found.start()].ends_with("not ") {
                 continue;
             }
             out.push(Violation {
@@ -1033,12 +1036,12 @@ pub fn check(text: &str, surface: &str, word_cap: Option<usize>) -> Vec<Violatio
             word_cap.unwrap_or(MESSAGE_WORD_CAP),
         ));
         violations.extend(check_glue(&masked));
-    }
-    // Rule 12 rides the mail surface only. Encounter evidence quotes tool
-    // refusals as its raw material, so a cannot-shaped quote there is data,
-    // not a claim.
-    if surface == "mail" {
-        violations.extend(check_cannot_claims(&mask(text)));
+        // Rule 12 rides the mail surface only, off the same masked text.
+        // Encounter evidence quotes tool refusals as its raw material, so a
+        // cannot-shaped quote there is data, not a claim.
+        if surface == "mail" {
+            violations.extend(check_cannot_claims(&masked));
+        }
     }
     violations
 }
@@ -2122,6 +2125,9 @@ mod tests {
         );
         // A negated marker is not a claim.
         assert_eq!(rule12("It is not impossible to finish this today.\n"), 0);
+        // The negation guard reads bytes that can sit inside a multibyte
+        // char; the guard must slice on char boundaries only.
+        assert_eq!(rule12("文語 cannot merge this today.\n"), 1);
         // Quoted tool output is masked before the rule reads.
         assert_eq!(
             rule12("The log says \"error: cannot read file\" at line 3.\n"),

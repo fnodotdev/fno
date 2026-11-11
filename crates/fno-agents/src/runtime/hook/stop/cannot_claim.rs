@@ -18,6 +18,12 @@ If the routes are already tried, name them. skills/verify-footnotes/SKILL.md sec
 
 /// Some when the final report claims cannot and names no route tried.
 pub(super) fn gate(message: &str) -> Option<String> {
+    // A help emission already names its class and evidence - the route list
+    // the rule asks for - and the distress router owns that stop before this
+    // gate ever runs.
+    if message.contains("<help") {
+        return None;
+    }
     style_check::has_unrouted_cannot_claim(message).then(|| GATE_REASON.to_string())
 }
 
@@ -38,6 +44,9 @@ mod tests {
         assert!(gate("Cannot reach the store: tried the socket, then the reader.\n").is_none());
         // A report with no cannot claim never gates.
         assert!(gate("Shipped: the lint lands as a style note on the mail surface.\n").is_none());
+        // A help emission names its class and evidence; the distress router
+        // owns that stop.
+        assert!(gate("<help class=\"stuck\" reason=\"r\" evidence=\"e\">x</help>").is_none());
         // A fenced log quoting a cannot-shaped line is not a claim.
         assert!(gate("```\nerror: cannot read file\n```\nThe build finished green.\n").is_none());
     }
