@@ -79,6 +79,14 @@ A URL install runs third-party content, so no step before consent lets that cont
 
 The text an author can paste into an agent: "Install the fno pack at `<git URL>`: run `fno config plugins install <git URL>`, show me the consent card, and wait for my approval."
 
-## Not yet
+## A layout slot that holds a mod
 
-A layout slot that holds a mod is declared and verified, but `fno mux layout graft` cannot realize a `mod` binding yet. Native mods list and preview, and their views open from the mux as before.
+A graft spec binds a slot to a mod with `binding = { mod = "<pack>/<mod>" }`. The graft flag form is `--slot mod:<pack>/<mod>`. For example: `fno mux layout graft --at current --template <t> --slot mod:fno-panels/review-ledger`.
+
+The spec carries a target and no command. The server runs one fixed argv for it: `fno config plugins open <pack>/<mod>`. No spec can name another command. A target that is not `<pack>/<mod>` refuses before any pane starts.
+
+The server reads the switches with `fno config plugins -J ls` before it builds the layout. An enabled mod gets a pane, and its receipt reads outcome `mod`. A switched-off mod fills its slot with a shell. The receipt reads outcome `shell` with reason `mod off`. A mod that is not installed, or a read that fails, also fills a shell, and the reason says which. No other slot changes. The `open` command checks the switch and the digest again at launch.
+
+A mux restart does not reopen a mod pane. A mod pane returns only when its keeper re-adopts it. A lost keeper leaves a shell. Whole-window `layout apply` has no mod slot yet.
+
+Native mods list and preview, and their views open from the mux as before.
