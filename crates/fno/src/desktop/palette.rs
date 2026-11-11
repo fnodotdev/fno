@@ -1,8 +1,9 @@
 //! Mux cell colors to `0xRRGGBB` for the desktop grid. The ANSI 16 come from
 //! the active mux theme, so the app and the TUI paint the same palette.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use super::link::Layout;
 use crate::proto::Color;
 use crate::theme::{terminal16_slot, Theme};
 
@@ -36,6 +37,12 @@ pub struct Palette {
     pub panel: u32,
     /// A row that needs the user.
     pub warn: u32,
+    /// The fill of an active or hovered row: a step off `panel`, so every
+    /// label on it keeps its contrast.
+    pub row_fill: u32,
+    /// The fill under a press: a step above `row_fill`, derived from `panel`
+    /// for the same reason.
+    pub pressed: u32,
     ansi: [u32; 16],
 }
 
@@ -48,6 +55,30 @@ fn mix(a: u32, b: u32, t: f32) -> u32 {
     let ch =
         |v: u32, s: u32| ((v >> s & 0xff) as f32 * (1.0 - t) + (b >> s & 0xff) as f32 * t) as u8;
     pack(ch(a, 16), ch(a, 8), ch(a, 0))
+}
+
+/// WCAG contrast ratio of two `0xRRGGBB` colors.
+pub fn contrast(a: u32, b: u32) -> f32 {
+    let lin = |v: u32| {
+        let c = (v & 0xff) as f32 / 255.0;
+        if c <= 0.03928 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let lum = |c: u32| 0.2126 * lin(c >> 16) + 0.7152 * lin(c >> 8) + 0.0722 * lin(c);
+    let (x, y) = (lum(a), lum(b));
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
+/// `from` moved toward `to` in 5% steps until it reads `min`:1 on `ground`.
+/// The result stays as dim as that allows.
+fn mix_to_contrast(from: u32, to: u32, ground: u32, min: f32) -> u32 {
+    (0..=20)
+        .map(|i| mix(from, to, i as f32 * 0.05))
+        .find(|c| contrast(*c, ground) >= min)
+        .unwrap_or(to)
 }
 
 fn rgb_or(c: Color, fallback: u32) -> u32 {
@@ -84,6 +115,18 @@ pub fn for_appearance(light: bool, cwd: &Path) -> (Palette, Option<String>) {
     (Palette::from_theme(&theme), warn.map(|w| w.0))
 }
 
+/// The directory the active session works in: where its project's
+/// `mux.theme` pin lives. None until the first layout names a squad.
+pub fn project_dir(layout: &Layout) -> Option<PathBuf> {
+    layout
+        .squads
+        .iter()
+        .find(|s| s.id == layout.active_squad)
+        .map(|s| s.canonical_cwd.as_str())
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+}
+
 impl Palette {
     pub fn from_theme(t: &Theme) -> Self {
         let mut ansi = XTERM16;
@@ -92,18 +135,37 @@ impl Palette {
                 *out = rgb_or(c, *out);
             }
         }
+        let (fg, bg) = (rgb_or(t.stamp, 0xe8e8e8), rgb_or(t.base, 0x141414));
+        let panel = mix(bg, fg, 0.05);
+        let sel = rgb_or(t.sel, 0x2b2b2b);
+        // A theme with no terminal table has no blue slot: take the theme's
+        // own hued title, border or brand, the first that reads 4.5:1.
+        let recommend = match terminal16_slot(4, t) {
+            Some(c) => rgb_or(c, ansi[4]),
+            None => [t.title, t.border, t.brand]
+                .into_iter()
+                .filter_map(|c| match c {
+                    Color::Rgb(r, g, b) => Some(pack(r, g, b)),
+                    _ => None,
+                })
+                .find(|c| contrast(*c, bg) >= 4.5)
+                .unwrap_or(ansi[4]),
+        };
         Palette {
-            fg: rgb_or(t.stamp, 0xe8e8e8),
-            bg: rgb_or(t.base, 0x141414),
+            fg,
+            bg,
             accent: rgb_or(t.border, 0xe8e8e8),
-            border: rgb_or(t.sel, 0x2b2b2b),
-            focus: mix(rgb_or(t.sel, 0x2b2b2b), rgb_or(t.stamp, 0xe8e8e8), 0.3),
+            border: sel,
+            // Dim, but a focus ring reads 3:1 on the ground.
+            focus: mix_to_contrast(mix(sel, fg, 0.3), fg, bg, 3.0),
             ok: rgb_or(t.ok, 0x9cc49c),
-            recommend: ansi[4],
+            recommend,
             error: rgb_or(t.error, 0xe1a6a3),
             muted: rgb_or(t.dim, 0x8a8a8a),
-            panel: mix(rgb_or(t.base, 0x141414), rgb_or(t.stamp, 0xe8e8e8), 0.05),
+            panel,
             warn: rgb_or(t.needs_you, 0xe5c07b),
+            row_fill: mix(panel, fg, 0.06),
+            pressed: mix(panel, fg, 0.11),
             ansi,
         }
     }
@@ -158,20 +220,6 @@ mod tests {
         assert_eq!(p.bg(Color::Rgb(1, 2, 3)), 0x010203);
     }
 
-    fn contrast(a: u32, b: u32) -> f32 {
-        let lin = |v: u32| {
-            let c = (v & 0xff) as f32 / 255.0;
-            if c <= 0.03928 {
-                c / 12.92
-            } else {
-                ((c + 0.055) / 1.055).powf(2.4)
-            }
-        };
-        let lum = |c: u32| 0.2126 * lin(c >> 16) + 0.7152 * lin(c >> 8) + 0.0722 * lin(c);
-        let (x, y) = (lum(a), lum(b));
-        (x.max(y) + 0.05) / (x.min(y) + 0.05)
-    }
-
     fn saturation(c: u32) -> f32 {
         let ch = |s: u32| (c >> s & 0xff) as f32 / 255.0;
         let (r, g, b) = (ch(16), ch(8), ch(0));
@@ -193,6 +241,32 @@ mod tests {
         assert_ne!(paper.bg, dark.bg);
         let pinned = Palette::from_theme(&Theme::from_name("gruvbox").0);
         assert_ne!(pinned.bg, paper.bg);
+
+        // The appearance path itself, with a pin in the project's config: a
+        // light window takes the pin, read from the directory it is given.
+        let dir = std::env::temp_dir().join(format!("fno-palette-pin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::create_dir_all(dir.join(".fno")).unwrap();
+        std::fs::write(dir.join(".fno/config.toml"), "[mux]\ntheme = \"gruvbox\"\n").unwrap();
+        let (live, _) = for_appearance(true, &dir);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(live.bg, pinned.bg);
+
+        // The pin's directory is the active squad's, never the process cwd.
+        let squad = |id, cwd: &str| crate::proto::SquadMeta {
+            id,
+            name: String::new(),
+            canonical_cwd: cwd.into(),
+            tabs: Vec::new(),
+            active_tab: 0,
+            panes: 0,
+        };
+        let mut layout = Layout::default();
+        assert_eq!(project_dir(&layout), None);
+        layout.squads = vec![squad(1, "/a"), squad(2, "/b")];
+        layout.active_squad = 2;
+        assert_eq!(project_dir(&layout), Some(PathBuf::from("/b")));
     }
 
     #[test]
@@ -204,9 +278,35 @@ mod tests {
         }
     }
 
+    /// `terminal` inherits the emulator's palette, so it has no ground to
+    /// measure against; every other built-in theme carries its own.
     #[test]
-    fn recommend_falls_back_to_xterm_without_an_ansi_table() {
-        let p = Palette::from_theme(&Theme::from_name("terminal").0);
-        assert_eq!(p.recommend, XTERM16[4]);
+    fn built_in_themes_keep_recommend_focus_and_labels_readable() {
+        for name in [
+            "footnote-superscript",
+            "footnote-paper",
+            "catppuccin",
+            "tokyo-night",
+            "gruvbox",
+        ] {
+            let p = Palette::from_theme(&Theme::from_name(name).0);
+            let c = contrast(p.recommend, p.bg);
+            assert!(c >= 4.5, "{name}: recommend {:06x} is {c:.2}:1", p.recommend);
+            let c = contrast(p.focus, p.bg);
+            assert!(c >= 3.0, "{name}: focus {:06x} is {c:.2}:1", p.focus);
+            for (fill, what) in [(p.row_fill, "row_fill"), (p.pressed, "pressed")] {
+                for (label, text) in [
+                    (p.fg, "fg"),
+                    (p.muted, "muted"),
+                    (p.warn, "warn"),
+                    (p.error, "error"),
+                    (p.ok, "ok"),
+                    (p.recommend, "recommend"),
+                ] {
+                    let c = contrast(label, fill);
+                    assert!(c >= 4.5, "{name}: {text} on {what} is {c:.2}:1");
+                }
+            }
+        }
     }
 }

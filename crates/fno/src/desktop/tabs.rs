@@ -79,7 +79,7 @@ fn pill(
         .truncate()
         .cursor_pointer()
         .hover(move |s| s.bg(rgb(p.border)).text_color(rgb(p.fg)))
-        .active(move |s| s.bg(rgb(p.focus)))
+        .active(move |s| s.bg(rgb(p.pressed)))
         .on_click(cx.listener(move |root, _, _, cx| root.act(action.clone(), cx)))
         .child(text)
 }

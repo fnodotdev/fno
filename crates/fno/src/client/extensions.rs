@@ -13,7 +13,7 @@
 use super::input_field::{back_row, InputField};
 use super::org_board::{OrgMsg, OrgTx};
 use super::*;
-use crate::plugins_feed::{self as feed, in_pane};
+use crate::plugins_feed::{self as feed, run_in_pane};
 pub(crate) use crate::plugins_feed::{
     parse_installed, shell_words, Component, Published, ReadFailed,
 };
@@ -47,6 +47,16 @@ pub(crate) enum Act {
 pub(crate) enum Landed {
     Installed(Result<Vec<u8>, ReadFailed>),
     Gallery(Result<Vec<Published>, ReadFailed>),
+    /// A pane launch answered: the notice's subject and the launcher's result.
+    Paned(String, Result<(), ReadFailed>),
+}
+
+/// An install or open waiting for `kick` to run it off the loop.
+#[derive(Debug, Clone)]
+pub(crate) struct PaneAsk {
+    args: Vec<String>,
+    what: String,
+    anchor: u64,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -67,6 +77,7 @@ pub(crate) struct Extensions {
     pub(crate) url: Option<InputField>,
     /// The code mod a first press armed; the second press turns it on.
     pub(crate) confirm: Option<String>,
+    pane: Option<PaneAsk>,
     reading: bool,
     last_read: Option<Instant>,
 }
@@ -147,6 +158,19 @@ pub(super) fn kick(view: &mut View, tx: &OrgTx) {
             let _ = tx.send((0, OrgMsg::Extensions(Landed::Installed(read))));
         });
     }
+    if let Some(ask) = page.pane.take() {
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let what = ask.what.clone();
+            let done = tokio::task::spawn_blocking(move || {
+                let words: Vec<&str> = ask.args.iter().map(String::as_str).collect();
+                run_in_pane(&words, &ask.what, ask.anchor, None)
+            })
+            .await
+            .unwrap_or_else(|e| Err(ReadFailed(e.to_string())));
+            let _ = tx.send((0, OrgMsg::Extensions(Landed::Paned(what, done))));
+        });
+    }
     if page.gallery == GalleryState::Wanted {
         page.gallery = GalleryState::Reading;
         let tx = tx.clone();
@@ -167,6 +191,10 @@ pub(super) fn apply(view: &mut View, landed: Landed) {
             view.extensions.installed = Some(parse_installed(read));
         }
         Landed::Gallery(read) => view.extensions.gallery = GalleryState::Done(read),
+        Landed::Paned(what, done) => view.set_notice(match done {
+            Ok(()) => format!("{what} opened in a pane"),
+            Err(e) => e.0,
+        }),
     }
     if tab_open(view) {
         view.reopen_settings_keeping_sel();
@@ -308,10 +336,27 @@ pub(super) fn rows(view: &View) -> (Vec<PopupRow>, Vec<AuxAction>) {
     (rows, actions)
 }
 
-/// Close the URL field or the armed confirm. True when one was open.
+/// Escape: close the URL field first. An armed confirm stays until a second
+/// Escape. True when one was open.
 pub(super) fn cancel_url(view: &mut View) -> bool {
     let page = &mut view.extensions;
-    page.url.take().is_some() | page.confirm.take().is_some()
+    page.url.take().is_some() || page.confirm.take().is_some()
+}
+
+/// Leaving the tab drops the URL field and the armed confirm together.
+pub(super) fn reset(view: &mut View) {
+    let page = &mut view.extensions;
+    page.url = None;
+    page.confirm = None;
+}
+
+/// Queue a pane beside the focused one; `kick` runs it off the loop.
+fn queue_pane(view: &mut View, args: Vec<String>, what: String) {
+    view.extensions.pane = Some(PaneAsk {
+        args,
+        what,
+        anchor: view.layout.focus,
+    });
 }
 
 /// Submit the URL field: run the install in its own pane, where the consent
@@ -320,12 +365,11 @@ pub(super) fn cancel_url(view: &mut View) -> bool {
 pub(super) fn submit(view: &mut View, url: String) -> bool {
     let url = url.trim().to_string();
     if url.is_empty() || url.starts_with('-') {
-        view.set_notice("type a git URL".into());
+        view.set_notice("Type a git URL".into());
         return false;
     }
     view.extensions.url = None;
-    let notice = in_pane(&["install", url.as_str()], &format!("install {url}"), None);
-    view.set_notice(notice);
+    queue_pane(view, vec!["install".into(), url.clone()], format!("Install {url}"));
     true
 }
 
@@ -366,8 +410,7 @@ pub(crate) fn act(view: &mut View, act: Act) {
         }
         Act::Open(_) => {}
         Act::Show(target) => {
-            let notice = in_pane(&["open", target.as_str()], &target, None);
-            view.set_notice(notice);
+            queue_pane(view, vec!["open".into(), target.clone()], target);
         }
         Act::Install => {
             if view.extensions.url.is_none() {

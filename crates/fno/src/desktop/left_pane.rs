@@ -202,7 +202,7 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
         .border_color(rgb(p.border));
     let rows = rows(&root.layout, &root.board, now_secs, root.agents_open);
     for (i, row) in rows.into_iter().enumerate() {
-        let hover = p.border;
+        let hover = p.row_fill;
         pane = pane.child(match row {
             Row::Header(title) => div()
                 .id(i)
@@ -236,7 +236,7 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
                 .text_color(rgb(p.muted))
                 .cursor_pointer()
                 .hover(move |s| s.bg(rgb(hover)))
-                .active(move |s| s.bg(rgb(p.focus)))
+                .active(move |s| s.bg(rgb(p.pressed)))
                 .on_click(cx.listener(|root, _, _, cx| root.act(Action::ToggleAgents, cx)))
                 .child(if hidden > 0 {
                     format!("+{hidden} more")
@@ -269,7 +269,7 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
                     .min_w_0()
                     .border_l_2()
                     .border_color(rgb(if active { p.ok } else { p.panel }))
-                    .when(active, |d| d.bg(rgb(p.border)))
+                    .when(active, |d| d.bg(rgb(p.row_fill)))
                     .child(clamp(label, label_color, false))
                     .child(clamp(detail, p.muted, true));
                 if let Some(action) = action {
@@ -278,7 +278,7 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
                     item = item
                         .cursor_pointer()
                         .hover(move |s| s.bg(rgb(hover)))
-                        .active(move |s| s.bg(rgb(p.focus)))
+                        .active(move |s| s.bg(rgb(p.pressed)))
                         .on_click(cx.listener(move |root, _, _, cx| root.act(action.clone(), cx)));
                 }
                 item

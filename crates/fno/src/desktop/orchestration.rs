@@ -174,8 +174,8 @@ fn options(q: &crate::needs_overlay::QuestionItem, root: &Root, cx: &mut Context
                 .border_1()
                 .border_color(rgb(border))
                 .cursor_pointer()
-                .hover(move |s| s.bg(rgb(p.border)))
-                .active(move |s| s.bg(rgb(p.focus)))
+                .hover(move |s| s.bg(rgb(p.row_fill)))
+                .active(move |s| s.bg(rgb(p.pressed)))
                 // On click: a press dragged off the option answers nothing.
                 .on_click(cx.listener(move |root, _, _, cx| root.act(action.clone(), cx)))
                 .child(format!("{}. {}", o.n, o.text))
