@@ -493,6 +493,81 @@ pub(super) async fn nav_goto(
     apply_hit(view, target.hit, sock_w).await
 }
 
+/// The pane pid a nav row's hit focuses, when its terminal action is a pane
+/// focus. The extract form of the seed predicate below, so the jump walk
+/// and the navigator's cursor-seed test read the same rows as pane rows.
+pub(super) fn nav_row_focus_pid(r: &NavRow) -> Option<u64> {
+    match &r.hit {
+        ChromeHit::Cmds(cs) => cs.iter().find_map(|c| match c {
+            Command::FocusPane(p) => Some(*p),
+            _ => None,
+        }),
+        _ => None,
+    }
+}
+
+/// Whether a nav row's goto lands on pane `pid`: every pane-hosted row
+/// class (a plain pane, a pane-hosted agent) applies `FocusPane(pid)`. The
+/// cursor-seed predicate for opening the navigator on the focused pane,
+/// moved out of client.rs with the jump walk it shares the row reading
+/// with.
+pub(super) fn nav_row_targets_pane(r: &NavRow, pid: u64) -> bool {
+    nav_row_focus_pid(r) == Some(pid)
+}
+
+/// Focus the next pane whose derived state is Blocked - an agent waiting on
+/// the operator (prefix+Z). Walks [`View::nav_rows`], the same catalog the
+/// navigator filters, keeping rows that read Blocked AND focus a pane: a
+/// plain pane row always reads Idle, so in practice this is the
+/// pane-hosted agents, and a paneless or remote waiting row stays with the
+/// answers overlay (prefix+a). Cycling keys off the FOCUSED pane: the walk
+/// starts after the pane you are at and wraps; a focus outside the set
+/// starts at the first row. ONE wire command, bare
+/// [`Command::FocusPane`]: the command trunk resolves the leaf
+/// session-wide, moves the client's view onto its (squad, tab), and clears
+/// a Done pane's unseen bit - the same trunk the row menu's Focus and the
+/// sideline click end at, so a jump never diverges from a click.
+pub(super) async fn focus_next_blocked(
+    view: &mut View,
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<(), crate::proto::ProtoError> {
+    // Materialize the OWNED rows before mutating the view (nav_rows borrows
+    // the layout), then keep the blocked pane rows in catalog order.
+    let blocked: Vec<NavRow> = view
+        .nav_rows()
+        .into_iter()
+        .filter(|r| r.state == PaneState::Blocked && nav_row_focus_pid(r).is_some())
+        .collect();
+    if blocked.is_empty() {
+        // A silent no-op reads as a dead key; the BEL plus the notice mirror
+        // the SelectTabIdx miss and the stale-cursor BEL.
+        let _ = raw_out(b"\x07");
+        view.set_notice("no agent is waiting on you".to_string());
+        return Ok(());
+    }
+    let focus = view.layout.focus;
+    let idx = blocked
+        .iter()
+        .position(|r| nav_row_focus_pid(r) == Some(focus))
+        .map(|i| (i + 1) % blocked.len())
+        .unwrap_or(0);
+    let Some(target) = blocked.get(idx) else {
+        // Unreachable: idx is (position + 1) % len or 0, and len > 0 here.
+        // The get form keeps the slicing lint off the crate.
+        return Ok(());
+    };
+    let pid = nav_row_focus_pid(target).unwrap_or(focus);
+    view.note_command_sent(&Command::FocusPane(pid));
+    write_msg(sock_w, &ClientMsg::Command(Command::FocusPane(pid))).await?;
+    view.set_notice(format!(
+        "{} ({} of {} waiting)",
+        target.label,
+        idx + 1,
+        blocked.len()
+    ));
+    Ok(())
+}
+
 /// New-workspace name-input keys. Printable ASCII appends, Backspace pops,
 /// Up and Down cycle the folder the workspace will own (see
 /// `workspace_folder`), Enter sends [`Command::NewSquad`] with the typed name

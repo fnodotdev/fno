@@ -44,6 +44,7 @@ Each row is one action id. Put the id in `~/.fno/keybindings.json` with a key st
 | `rerun-block` | `r` | `r` | `u` | rerun block |
 | `search` | `/` | `/` | `/` | search scrollback |
 | `find` | `f` | `f` | `f` | find: goto workspace/tab/pane/agent |
+| `next-waiting` | `Z` | `Z` | `Z` | jump to the next agent waiting on you |
 | `selector` | `w` | `w` | `w` | sideline row selector |
 | `answers` | `a` | `a` | `a` | answer queue |
 | `open-messages` | `M` | `M` | `M` | open Messages (mail) |

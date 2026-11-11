@@ -6035,13 +6035,6 @@ fn nav_match_key(label: &str, tokens: &[String]) -> String {
     key
 }
 
-/// Whether a nav row's goto lands on pane `pid`: every pane-hosted
-/// row class (a plain pane, a pane-hosted agent) applies `FocusPane(pid)`.
-/// The cursor-seed predicate for opening the navigator on the focused pane.
-fn nav_row_targets_pane(r: &NavRow, pid: u64) -> bool {
-    matches!(&r.hit, ChromeHit::Cmds(cs) if cs.iter().any(|c| matches!(c, Command::FocusPane(p) if *p == pid)))
-}
-
 /// The navigator state of an agent row: an exited pane reads `Idle` (finished,
 /// nothing to act on); otherwise derive from the badge + the server-owned
 /// seen bit: a looked-at `Done` reads `Idle`, an unseen one
@@ -8114,7 +8107,7 @@ async fn dispatch_event(
             let seed = view
                 .nav_rows()
                 .iter()
-                .position(|r| nav_row_targets_pane(r, view.layout.focus))
+                .position(|r| overlay_keys::nav_row_targets_pane(r, view.layout.focus))
                 .unwrap_or(0);
             view.nav = Some(NavView {
                 query: String::new(),
@@ -8123,6 +8116,13 @@ async fn dispatch_event(
             });
             view.nav_esc.clear();
             return Ok(DispatchFlow::Break);
+        }
+        Event::FocusNextBlocked => {
+            // Client-local jump (prefix+Z): the walk lives with nav_goto in
+            // overlay_keys; Continue, since no typing mode opens.
+            overlay_keys::focus_next_blocked(view, sock_w)
+                .await
+                .map_err(|e| format!("jump-to-waiting send failed: {e}"))?;
         }
         Event::OpenRename => {
             // Rename targets the ACTIVE tab, resolved to its stable id at

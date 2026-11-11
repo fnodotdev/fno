@@ -247,3 +247,76 @@ fn find_with_the_toggle_off_lists_the_seat_pane_as_it_is() {
         "the seat pane focuses as a local pane"
     );
 }
+
+// ---- prefix+Z: jump to the next agent waiting on you ----------------------
+
+#[tokio::test]
+async fn jump_focuses_the_next_waiting_agent_and_cycles_on_repeat() {
+    // The walk follows nav_rows() catalog order and keys the cycle off the
+    // FOCUSED pane, so the server's layout push (the real client's focus
+    // follows the jump) is what advances the walk - simulated here by moving
+    // v.layout.focus between presses. Each press is ONE bare FocusPane on
+    // the wire: the command trunk carries the cross-squad, cross-tab
+    // landing, so no SelectSquad/SelectTab prefixes ride along.
+    let mut v = view_with_agents(vec![
+        agent_row("alpha", 10, Some(AgentBadge::Blocked), false),
+        agent_row("omega", 11, Some(AgentBadge::Blocked), false),
+    ]);
+    let mut buf: Vec<u8> = Vec::new();
+    dispatch_event(&mut v, Event::FocusNextBlocked, &mut buf)
+        .await
+        .unwrap();
+    assert_eq!(
+        decode_cmds(buf),
+        vec![Command::FocusPane(10)],
+        "focus is 11; the next waiting pane wraps to 10"
+    );
+    let (msg, _) = v.notice.clone().expect("the jump names its landing");
+    assert!(
+        msg.contains("alpha") && msg.contains("1 of 2"),
+        "the notice names the row and the cycle position: {msg}"
+    );
+    let mut buf: Vec<u8> = Vec::new();
+    v.layout.focus = 10;
+    dispatch_event(&mut v, Event::FocusNextBlocked, &mut buf)
+        .await
+        .unwrap();
+    assert_eq!(
+        decode_cmds(buf),
+        vec![Command::FocusPane(11)],
+        "the cycle advances to the next waiting pane"
+    );
+}
+
+#[tokio::test]
+async fn jump_with_no_waiting_agent_rings_and_says_so() {
+    // An empty waiting set is a BEL plus a notice - never a silent no-op
+    // that reads as a dead key, and never a wire message.
+    let mut v = view_with_agents(vec![agent_row("idle", 10, None, false)]);
+    let mut buf: Vec<u8> = Vec::new();
+    dispatch_event(&mut v, Event::FocusNextBlocked, &mut buf)
+        .await
+        .unwrap();
+    assert!(buf.is_empty(), "nothing is on the wire");
+    let (msg, _) = v.notice.expect("the empty set says so");
+    assert!(msg.contains("no agent is waiting"), "{msg}");
+}
+
+#[tokio::test]
+async fn jump_skips_working_rows_and_starts_at_the_first_waiting_pane() {
+    // A focus outside the waiting set starts the walk at its first row; a
+    // Working row is not waiting and never lands.
+    let mut v = view_with_agents(vec![
+        agent_row("busy", 10, Some(AgentBadge::Working), false),
+        agent_row("stuck", 11, Some(AgentBadge::Blocked), false),
+    ]);
+    let mut buf: Vec<u8> = Vec::new();
+    dispatch_event(&mut v, Event::FocusNextBlocked, &mut buf)
+        .await
+        .unwrap();
+    assert_eq!(
+        decode_cmds(buf),
+        vec![Command::FocusPane(11)],
+        "the working row is skipped; the walk starts at the first blocked row"
+    );
+}
