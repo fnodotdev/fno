@@ -41,6 +41,7 @@ fn meta_row(id: u64, label: &str, node: &str, branch: &str, ctx: &str) -> crate:
         node: Some(node.into()),
         branch: Some(branch.into()),
         ctx: Some(ctx.into()),
+        ..Default::default()
     }
 }
 

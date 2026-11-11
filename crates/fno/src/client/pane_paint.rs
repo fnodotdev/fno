@@ -410,6 +410,7 @@ impl View {
             let ls = lattice_style(st, self.theme.needs_you, self.theme.ok);
             (status_glyph(st), ls.flags, ls.fg, status_word(st))
         });
+        let cwd = meta.and_then(|m| m.cwd.as_deref()).map(super::abbrev_home);
         let fields = crate::pane_border::EdgeFields {
             name: meta.map(|m| m.label.as_str()).unwrap_or("shell"),
             status: status.map(|(g, _, _, w)| (g, w)),
@@ -419,6 +420,8 @@ impl View {
             node: meta.and_then(|m| m.node.as_deref()),
             branch: meta.and_then(|m| m.branch.as_deref()),
             ctx: meta.and_then(|m| m.ctx.as_deref()),
+            host: meta.and_then(|m| m.host.as_deref()),
+            cwd: cwd.as_deref(),
             observers: self.observers.iter().filter(|o| o.pane_id == pid).count(),
         };
         let laid = crate::pane_border::edges(&fields, rect, has_grip);
@@ -458,7 +461,7 @@ impl View {
                     None => dim,
                 },
                 Part::Observers => (watcher_fg, cell_flags::BOLD),
-                Part::Model | Part::Node | Part::Branch | Part::Ctx => dim,
+                Part::Model | Part::Node | Part::Branch | Part::Ctx | Part::Host | Part::Cwd => dim,
             }
         };
         let mut put_row = |edge: &[(char, crate::pane_border::Part)], r: usize| {

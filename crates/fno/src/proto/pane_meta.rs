@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// A pane's frame-edge facts beyond its label. `Option` + `serde(default)`
 /// keeps a pre-v91 reader wire-tolerant: absent decodes to `None`, and a row
-/// with all three `None` serializes to the v86 bytes.
+/// with every field `None` serializes to the v86 bytes.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PaneMeta {
     pub id: u64,
@@ -21,6 +21,14 @@ pub struct PaneMeta {
     /// states no window), bottom edge right.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ctx: Option<String>,
+    /// (v125) The machine the pane's pty runs on: the server's short
+    /// hostname, bottom edge right.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// (v125) The pane's working directory, the full path; the client
+    /// abbreviates `$HOME` to `~` when it paints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 #[cfg(test)]
@@ -35,6 +43,8 @@ mod tests {
             node: None,
             branch: None,
             ctx: None,
+            host: None,
+            cwd: None,
         };
         assert_eq!(
             serde_json::to_string(&v).unwrap(),
