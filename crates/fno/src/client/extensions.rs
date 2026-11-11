@@ -13,77 +13,15 @@
 use super::input_field::{back_row, InputField};
 use super::org_board::{OrgMsg, OrgTx};
 use super::*;
-use serde::Deserialize;
+use crate::plugins_feed::{self as feed, in_pane};
+pub(crate) use crate::plugins_feed::{
+    parse_installed, shell_words, Component, Published, ReadFailed,
+};
 use std::time::{Duration, Instant};
 
-const LS: [&str; 4] = ["config", "plugins", "ls", "--json"];
-const GALLERY: [&str; 4] = ["config", "plugins", "gallery", "--json"];
 const MAX_URL: usize = 512;
 const PLACEHOLDER: &str = "https://github.com/owner/repo";
 const REREAD: Duration = Duration::from_secs(3);
-
-/// One mod or layout row of `ls --json`, with its pack's install commit.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-pub(crate) struct Component {
-    pub(crate) id: String,
-    pub(crate) title: String,
-    #[serde(default)]
-    pub(crate) summary: String,
-    #[serde(default)]
-    pub(crate) preview: String,
-    #[serde(default)]
-    pub(crate) recipe: String,
-    pub(crate) enabled: bool,
-    #[serde(default)]
-    pub(crate) runs_code: bool,
-    /// `run`, `feed` or `native`; a layout carries none.
-    #[serde(default)]
-    pub(crate) kind: String,
-    /// A command mod's argv.
-    #[serde(default)]
-    pub(crate) run: Option<Vec<String>>,
-    /// The commit a URL install recorded; empty for a local pack.
-    #[serde(skip)]
-    pub(crate) commit: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct SourceRow {
-    commit: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct PackRow {
-    pack_id: String,
-    #[serde(default)]
-    source: Option<SourceRow>,
-    #[serde(default)]
-    mods: Vec<Component>,
-    #[serde(default)]
-    layouts: Vec<Component>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Listing {
-    packs: Vec<PackRow>,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-pub(crate) struct Published {
-    pub(crate) name: String,
-    #[serde(default)]
-    pub(crate) description: String,
-    #[serde(default)]
-    pub(crate) stars: u64,
-    pub(crate) install: String,
-    #[serde(default)]
-    pub(crate) reviewed: bool,
-}
-
-#[derive(Debug, Deserialize)]
-struct GalleryRead {
-    repos: Vec<Published>,
-}
 
 /// A row action on the Extensions page.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,16 +40,6 @@ pub(crate) enum Act {
     Pick(String),
     /// Show `pack/mod` in a pane on the right through `fno config plugins open`.
     Show(String),
-}
-
-/// A failed `fno config plugins` read, as the one line the page paints.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ReadFailed(pub(crate) String);
-
-impl std::fmt::Display for ReadFailed {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
 }
 
 /// A read that landed off the input loop.
@@ -192,69 +120,6 @@ pub(super) fn snapshot_seam(view: &mut View, gallery: bool, confirm: bool) {
     view.settings_tab = SettingsTab::Extensions;
 }
 
-/// One argv shown so a reader can paste it: plain words bare, anything
-/// else single-quoted.
-pub(crate) fn shell_words(argv: &[String]) -> String {
-    argv.iter()
-        .map(|a| {
-            let plain = !a.is_empty()
-                && a.chars()
-                    .all(|c| c.is_ascii_alphanumeric() || "-_./=:@,+".contains(c));
-            if plain {
-                a.clone()
-            } else {
-                format!("'{}'", a.replace('\'', r"'\''"))
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// The page's one door to the plugins owner: every read and pane runs the
-/// fno front door, which hands `config plugins` to fno-agents.
-fn fno_door() -> std::path::PathBuf {
-    crate::server::fno_bin()
-}
-
-fn fno_json(args: &[&str]) -> Result<Vec<u8>, ReadFailed> {
-    let shown = format!("fno {}", args.join(" "));
-    let mut cmd = crate::process_admission::std_command(fno_door());
-    cmd.args(args).stdin(std::process::Stdio::null());
-    let out = crate::process_admission::std_output(&mut cmd)
-        .map_err(|e| ReadFailed(format!("`{shown}` did not start: {e}")))?;
-    if !out.status.success() {
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        let first = stderr.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
-        return Err(ReadFailed(format!(
-            "`{shown}` exited {}: {}",
-            out.status.code().unwrap_or(-1),
-            first.trim()
-        )));
-    }
-    Ok(out.stdout)
-}
-
-/// Parse `ls --json` into page rows, mods before layouts per pack.
-pub(crate) fn parse_installed(
-    read: Result<Vec<u8>, ReadFailed>,
-) -> Result<Vec<(String, Component)>, ReadFailed> {
-    let bytes = read?;
-    let listing: Listing = serde_json::from_slice(&bytes)
-        .map_err(|e| ReadFailed(format!("`fno {}` printed no listing: {e}", LS.join(" "))))?;
-    Ok(listing
-        .packs
-        .into_iter()
-        .flat_map(|p| {
-            let id = p.pack_id;
-            let commit = p.source.map(|s| s.commit).unwrap_or_default();
-            p.mods.into_iter().chain(p.layouts).map(move |mut c| {
-                c.commit = commit.clone();
-                (id.clone(), c)
-            })
-        })
-        .collect())
-}
-
 /// The tab came into focus: the next tick reads the installed rows off the
 /// loop, and the last rows stay painted until that read lands.
 pub(super) fn refresh(view: &mut View) {
@@ -276,7 +141,7 @@ pub(super) fn kick(view: &mut View, tx: &OrgTx) {
         page.last_read = Some(Instant::now());
         let tx = tx.clone();
         tokio::spawn(async move {
-            let read = tokio::task::spawn_blocking(|| fno_json(&LS))
+            let read = tokio::task::spawn_blocking(|| feed::fno_json(&feed::LS))
                 .await
                 .unwrap_or_else(|e| Err(ReadFailed(e.to_string())));
             let _ = tx.send((0, OrgMsg::Extensions(Landed::Installed(read))));
@@ -286,20 +151,9 @@ pub(super) fn kick(view: &mut View, tx: &OrgTx) {
         page.gallery = GalleryState::Reading;
         let tx = tx.clone();
         tokio::spawn(async move {
-            let read = tokio::task::spawn_blocking(|| {
-                fno_json(&GALLERY).and_then(|bytes| {
-                    serde_json::from_slice::<GalleryRead>(&bytes)
-                        .map(|g| g.repos)
-                        .map_err(|e| {
-                            ReadFailed(format!(
-                                "`fno {}` printed no gallery: {e}",
-                                GALLERY.join(" ")
-                            ))
-                        })
-                })
-            })
-            .await
-            .unwrap_or_else(|e| Err(ReadFailed(e.to_string())));
+            let read = tokio::task::spawn_blocking(feed::read_gallery)
+                .await
+                .unwrap_or_else(|e| Err(ReadFailed(e.to_string())));
             let _ = tx.send((0, OrgMsg::Extensions(Landed::Gallery(read))));
         });
     }
@@ -470,35 +324,9 @@ pub(super) fn submit(view: &mut View, url: String) -> bool {
         return false;
     }
     view.extensions.url = None;
-    let notice = in_pane(&["install", url.as_str()], &format!("install {url}"));
+    let notice = in_pane(&["install", url.as_str()], &format!("install {url}"), None);
     view.set_notice(notice);
     true
-}
-
-/// Run `fno config plugins <args>` in a new pane on the right through
-/// `sh`, which keeps the pane open on the result until Enter. The argv rides
-/// as positional parameters, so no word of it is shell-parsed.
-fn in_pane(args: &[&str], what: &str) -> String {
-    let fno = fno_door();
-    let fno_text = fno.to_string_lossy().into_owned();
-    let script = r#"fno="$1"; shift; "$fno" config plugins "$@"; printf '\n[exit %s] press enter to close\n' "$?"; read -r _"#;
-    let mut cmd = crate::process_admission::std_command(&fno);
-    cmd.args([
-        "mux", "pane", "run", "--split", "right", "--", "sh", "-c", script, "sh",
-    ])
-    .arg(&fno_text)
-    .args(args)
-    .stdin(std::process::Stdio::null())
-    .stdout(std::process::Stdio::null())
-    .stderr(std::process::Stdio::null());
-    match crate::process_admission::std_spawn(&mut cmd) {
-        Ok(mut child) => {
-            // `pane run` returns once the pane exists; reap it off the loop.
-            std::thread::spawn(move || child.wait());
-            format!("{what}: opened in a pane on the right")
-        }
-        Err(e) => format!("{what}: cannot open a pane: {e}"),
-    }
 }
 
 /// Open a pack file (a preview or a recipe) in the file viewer.
@@ -507,9 +335,8 @@ pub(super) fn load(path: String) -> file_viewer::Loaded {
 }
 
 fn switch(view: &mut View, target: &str, on: bool) {
-    let command = if on { "enable" } else { "disable" };
-    let notice = match fno_json(&["config", "plugins", command, target]) {
-        Ok(_) => format!("{target} {}", if on { "on" } else { "off" }),
+    let notice = match feed::switch(target, on) {
+        Ok(()) => format!("{target} {}", if on { "on" } else { "off" }),
         Err(e) => e.0,
     };
     view.set_notice(notice);
@@ -539,7 +366,7 @@ pub(crate) fn act(view: &mut View, act: Act) {
         }
         Act::Open(_) => {}
         Act::Show(target) => {
-            let notice = in_pane(&["open", target.as_str()], &target);
+            let notice = in_pane(&["open", target.as_str()], &target, None);
             view.set_notice(notice);
         }
         Act::Install => {

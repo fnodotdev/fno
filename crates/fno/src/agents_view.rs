@@ -413,11 +413,187 @@ impl FormLane {
 ///
 /// The merge covers the WHOLE `harness.<name>` row, per field, config
 /// winning - the attach lane was its first surface and moved
-/// it up a level rather than growing a second reader beside it. The Python
-/// reader (harness_map.py) implements the same rules, so an override answers
-/// identically on both runtimes.
+/// it up a level rather than growing a second reader beside it.
 pub fn attach_form(harness: &str) -> Option<AttachForm> {
     declared_form(FormLane::Attach, harness)
+}
+
+/// The serve-attach form `harness` declares, or `None` when it declares
+/// none. opencode's interactive attach names a server, not just a session,
+/// so the generic [`AttachForm`] placeholder grammar (one id) cannot carry
+/// it: this lane reads its own block, `tokens_v1`/`tokens_v2` selected by
+/// the TUI's major against `boundary_major`, with the Basic-auth password
+/// named for child env. Same sources and precedence as [`attach_form`]:
+/// the bundled row with config merged over it per field, so an operator
+/// corrects either generation's shape without a release. Fail-open: a
+/// missing, malformed, or placeholder-less block reads "cannot attach",
+/// the safe direction.
+#[derive(Clone, Debug)]
+pub struct ServeAttachForm {
+    /// 1.x-generation argv: `opencode attach <serve-url> --session <id>`.
+    pub tokens_v1: Vec<String>,
+    /// 2.x-generation argv: `opencode --server <serve-url> --session <id>`.
+    pub tokens_v2: Vec<String>,
+    /// The TUI major that switches the shape: below it rides `tokens_v1`,
+    /// at or above it `tokens_v2`.
+    pub boundary_major: u32,
+    /// The env var the Basic-auth password rides. Child env, never argv.
+    pub password_env: String,
+}
+
+impl ServeAttachForm {
+    /// Fill both id holes with the serve URL and the session id, shaped by
+    /// the TUI generation the caller measured. The parse refuses a block
+    /// whose shapes miss either placeholder, so a render can never leave a
+    /// placeholder verbatim in the exec'd argv.
+    pub fn render(&self, tui_major: u32, serve_url: &str, session_id: &str) -> Vec<String> {
+        let tokens = if tui_major >= self.boundary_major {
+            &self.tokens_v2
+        } else {
+            &self.tokens_v1
+        };
+        tokens
+            .iter()
+            .map(|t| match t.as_str() {
+                "{serve_url}" => serve_url.to_string(),
+                "{session_id}" => session_id.to_string(),
+                other => other.to_string(),
+            })
+            .collect()
+    }
+}
+
+/// The ONE read of the `interactive_serve_attach` lane. `None` for a
+/// harness that declares nothing and for a block that cannot address a
+/// serve session.
+pub fn serve_attach_form(harness: &str) -> Option<ServeAttachForm> {
+    let row = resolved_rows().get(harness)?;
+    let block = row
+        .get("resume_strategy")?
+        .get("forms")?
+        .get("interactive_serve_attach")?;
+    parse_serve_attach(block)
+}
+
+/// The pure half of [`serve_attach_form`]: one form block into a form.
+/// A block whose shapes miss either placeholder, whose boundary is not a
+/// positive major, or whose password env is empty is not a form - a render
+/// could only half-fill it, leaving a placeholder verbatim in the exec'd
+/// argv.
+fn parse_serve_attach(block: &toml::Value) -> Option<ServeAttachForm> {
+    let tokens = |key: &str| -> Option<Vec<String>> {
+        block
+            .get(key)?
+            .as_array()?
+            .iter()
+            .map(|v| v.as_str().map(str::to_string))
+            .collect()
+    };
+    let v1 = tokens("tokens_v1")?;
+    let v2 = tokens("tokens_v2")?;
+    let covers = |t: &[String]| {
+        t.iter().any(|x| x == "{serve_url}") && t.iter().any(|x| x == "{session_id}")
+    };
+    if !covers(&v1) || !covers(&v2) {
+        return None;
+    }
+    let boundary_major = block.get("boundary_major")?.as_integer()?;
+    if !(1..=i32::MAX as i64).contains(&boundary_major) {
+        return None;
+    }
+    let password_env = block.get("password_env")?.as_str()?.to_string();
+    if password_env.is_empty() {
+        return None;
+    }
+    Some(ServeAttachForm {
+        tokens_v1: v1,
+        tokens_v2: v2,
+        boundary_major: boundary_major as u32,
+        password_env,
+    })
+}
+
+#[cfg(test)]
+mod serve_attach_tests {
+    use super::*;
+
+    #[test]
+    fn opencode_declares_the_serve_seat_and_renders_both_generations() {
+        let form = serve_attach_form("opencode").expect("bundled opencode declares the seat");
+        assert_eq!(form.boundary_major, 2);
+        assert_eq!(form.password_env, "OPENCODE_SERVER_PASSWORD");
+        let v1 = form.render(1, "http://127.0.0.1:4096", "ses_ab12");
+        assert_eq!(
+            v1,
+            vec![
+                "opencode",
+                "attach",
+                "http://127.0.0.1:4096",
+                "--session",
+                "ses_ab12"
+            ]
+        );
+        let v2 = form.render(2, "http://127.0.0.1:4096", "ses_ab12");
+        assert_eq!(
+            v2,
+            vec![
+                "opencode",
+                "--server",
+                "http://127.0.0.1:4096",
+                "--session",
+                "ses_ab12"
+            ]
+        );
+    }
+
+    #[test]
+    fn harnesses_without_the_lane_read_none() {
+        for h in ["claude", "codex", "gemini", "pi", "cursor-agent", "agy"] {
+            assert!(serve_attach_form(h).is_none(), "{h} declares no serve seat");
+        }
+    }
+
+    #[test]
+    fn a_block_that_cannot_address_a_serve_session_is_not_a_form() {
+        let malformed: toml::Value = toml::from_str(
+            r#"
+            tokens_v1 = ["opencode", "attach", "{serve_url}"]
+            tokens_v2 = ["opencode", "--server", "{serve_url}", "--session", "{session_id}"]
+            boundary_major = 2
+            password_env = "OPENCODE_SERVER_PASSWORD"
+            "#,
+        )
+        .unwrap();
+        assert!(
+            parse_serve_attach(&malformed).is_none(),
+            "v1 missing the session hole is refused"
+        );
+        let no_env: toml::Value = toml::from_str(
+            r#"
+            tokens_v1 = ["opencode", "attach", "{serve_url}", "--session", "{session_id}"]
+            tokens_v2 = ["opencode", "--server", "{serve_url}", "--session", "{session_id}"]
+            boundary_major = 2
+            "#,
+        )
+        .unwrap();
+        assert!(
+            parse_serve_attach(&no_env).is_none(),
+            "no password env is refused"
+        );
+        let bad_boundary: toml::Value = toml::from_str(
+            r#"
+            tokens_v1 = ["opencode", "attach", "{serve_url}", "--session", "{session_id}"]
+            tokens_v2 = ["opencode", "--server", "{serve_url}", "--session", "{session_id}"]
+            boundary_major = 0
+            password_env = "OPENCODE_SERVER_PASSWORD"
+            "#,
+        )
+        .unwrap();
+        assert!(
+            parse_serve_attach(&bad_boundary).is_none(),
+            "a zero boundary is refused"
+        );
+    }
 }
 
 /// The interactive-resume form `harness` declares, or `None` when it declares

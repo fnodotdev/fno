@@ -22,7 +22,13 @@ jobs:
     if: vars.CODEQL_ADVANCED_SETUP == 'true'
     name: analyze ${{ matrix.language }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # Measured 2026-11-11: the rust leg completes in 20:38-26:10 when it
+    # finishes at all, and four runs died at exactly 30:00-30:14 mid-analysis.
+    # GitHub marks a job killed by its own timeout "cancelled", so a too-tight
+    # bound here read as an outside actor cancelling CodeQL on main, and the
+    # merge gate then held every PR on main_red. 90 gives three times the
+    # worst observed completion.
+    timeout-minutes: 90
     permissions:
       security-events: write
       contents: read

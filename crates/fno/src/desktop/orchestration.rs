@@ -160,7 +160,7 @@ fn options(q: &crate::needs_overlay::QuestionItem, root: &Root, cx: &mut Context
             option: o.n,
         };
         let (border, mark) = if recommended == Some(o.n) {
-            (p.ok, "recommended")
+            (p.recommend, "recommended")
         } else {
             (p.border, "")
         };
@@ -180,7 +180,7 @@ fn options(q: &crate::needs_overlay::QuestionItem, root: &Root, cx: &mut Context
                 .on_click(cx.listener(move |root, _, _, cx| root.act(action.clone(), cx)))
                 .child(format!("{}. {}", o.n, o.text))
                 .when(!mark.is_empty(), |d| {
-                    d.child(div().text_xs().text_color(rgb(p.ok)).child(mark))
+                    d.child(div().text_xs().text_color(rgb(p.recommend)).child(mark))
                 }),
         );
     }

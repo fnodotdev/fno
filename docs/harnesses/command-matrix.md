@@ -43,6 +43,7 @@ A cell is a projection, never a fresh measurement. The rule, in order:
 | triage | subagent_dispatch | native | native | `absent` | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | using-fno | - | native | native | `absent` | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | verify-footnotes | - | native | native | `absent` | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
+| visual-log-reader | claude | native | absent | `absent` | absent | absent | absent | `unmeasured` | `unmeasured` | absent | absent | absent | absent | absent |
 
 The loop refusals the matrix quotes:
 
