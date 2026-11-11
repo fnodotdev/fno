@@ -213,20 +213,19 @@ pub(crate) fn latest_release_tag() -> Result<String, String> {
         "https://github.com/{}/releases/latest",
         update_prebuilt::release_repo()
     );
-    let out = crate::process_admission::std_command("curl")
-        .args([
-            "-fsSL",
-            "--max-time",
-            "20",
-            "-o",
-            "/dev/null",
-            "-w",
-            "%{url_effective}",
-        ])
-        .arg(&url)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| format!("curl: {e}"))?;
+    let args = [
+        "-fsSL".to_string(),
+        "--max-time".to_string(),
+        "20".to_string(),
+        "-o".to_string(),
+        "/dev/null".to_string(),
+        "-w".to_string(),
+        "%{url_effective}".to_string(),
+        "-K".to_string(),
+        "-".to_string(),
+    ];
+    let out =
+        update_prebuilt::spawn_authed_curl(&args, &[url.clone()]).map_err(|e| e.to_string())?;
     let effective = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if !out.status.success() {
         return Err(format!(
@@ -836,11 +835,15 @@ pub(crate) fn release_metadata() -> Result<(String, String), String> {
         "https://github.com/{}/releases/latest/download/fno-release.json",
         update_prebuilt::release_repo()
     );
-    let out = crate::process_admission::std_command("curl")
-        .args(["-fsSL", "--max-time", "20", &url])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| format!("curl: {e}"))?;
+    let args = [
+        "-fsSL".to_string(),
+        "--max-time".to_string(),
+        "20".to_string(),
+        "-K".to_string(),
+        "-".to_string(),
+    ];
+    let out =
+        update_prebuilt::spawn_authed_curl(&args, &[url.clone()]).map_err(|e| e.to_string())?;
     if !out.status.success() {
         return Err(format!(
             "curl exited {} for {url}",

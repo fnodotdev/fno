@@ -756,12 +756,25 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      - name: Cache the ripgrep tarball
+        # Bump the key with scripts/ci/install-ripgrep.sh's version=. A
+        # cache hit skips the GitHub release download entirely; the script
+        # still sha256-verifies whatever it installs.
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/rg-cache
+          key: ripgrep-15.2.0-x86_64-unknown-linux-musl
+
       - name: Install ripgrep (gather_context's sibling-caller grep)
         # blueprint_judge::gather_context shells `rg` and degrades to an empty
         # context when the tool is missing; the sibling_callers test pins that
         # wiring with a real grep over a temp tree, so the runner needs the
-        # tool on PATH. The ubuntu image does not ship it.
+        # tool on PATH. The ubuntu image does not ship it. GITHUB_TOKEN
+        # authenticates the download, so an anonymous-CDN surge cannot 504 it.
         timeout-minutes: 6
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RG_TARBALL_CACHE: ${{ runner.temp }}/rg-cache
         run: bash scripts/ci/install-ripgrep.sh
 
       - name: Set up Python (for flock_interop.rs cross-language test)
@@ -1003,8 +1016,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-itest-
 
+      - name: Cache the ripgrep tarball
+        # Bump the key with scripts/ci/install-ripgrep.sh's version=.
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/rg-cache
+          key: ripgrep-15.2.0-x86_64-unknown-linux-musl
+
       - name: Install ripgrep (gather_context's sibling-caller grep)
+        # GITHUB_TOKEN authenticates the download, so an anonymous-CDN surge
+        # cannot 504 it.
         timeout-minutes: 6
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RG_TARBALL_CACHE: ${{ runner.temp }}/rg-cache
         run: bash scripts/ci/install-ripgrep.sh
 
       - name: Set up Python (for flock_interop.rs cross-language test)
