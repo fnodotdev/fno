@@ -65,10 +65,14 @@ pub fn run(_args: &[String]) -> i32 {
     if !crate::agents_config::guard_enabled(&cwd, "recursive-grep") {
         return super::emit_allow();
     }
-    let refusal = judge(&payload);
-    super::emit_guard_decision(&cwd, "recursive-grep-guard", "Bash", refusal.is_some());
-    match refusal {
-        Some(reason) => super::emit_block(&reason),
+    // A nudge: the search runs, and the note says how to run it cheaper.
+    let note = judge(&payload);
+    let decision = if note.is_some() { "nudge" } else { "allow" };
+    super::emit_guard_row(&cwd, "recursive-grep-guard", "Bash", decision);
+    match note {
+        Some(reason) => {
+            super::emit_warn(&super::refusal::Refusal::new("recursive-grep guard", reason).render())
+        }
         None => super::emit_allow(),
     }
 }

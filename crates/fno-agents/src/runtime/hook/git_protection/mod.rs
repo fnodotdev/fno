@@ -58,7 +58,9 @@ pub fn run(_args: &[String]) -> i32 {
     let payload: Value = serde_json::from_str(raw.trim()).unwrap_or(Value::Null);
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     match judge(&payload, &cwd) {
-        Verdict::Block(reason) => super::emit_block(&reason),
+        Verdict::Block(reason) => {
+            super::refusal::emit_one(super::refusal::Refusal::new("git-protection", reason))
+        }
         Verdict::Warn(reason) => super::emit_warn(&reason),
         Verdict::Allow => super::emit_allow(),
     }

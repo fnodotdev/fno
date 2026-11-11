@@ -204,7 +204,7 @@ pub fn run(_args: &[String]) -> i32 {
     }
     let text = wire::deny_text(&denied, &repo_root);
     eprint!("{text}");
-    super::emit_block(&text)
+    super::refusal::emit_one(super::refusal::Refusal::new("lead guard", text))
 }
 
 // ── Shell write classification (the tokenizer port) ──────────────────────────

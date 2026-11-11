@@ -136,7 +136,10 @@ pub fn run(_args: &[String]) -> i32 {
     let Some(value) = parsed else {
         if raw_tokens_hint_graph(&raw) {
             mark(&cwd, "graph-write-protect", &row_tool, true);
-            return super::emit_block(FAILCLOSED_MALFORMED);
+            return super::refusal::emit_one(super::refusal::Refusal::new(
+                "graph-write-protect",
+                FAILCLOSED_MALFORMED,
+            ));
         }
         mark(&cwd, "graph-write-protect", &row_tool, false);
         mark(&cwd, "claude-config-write-guard", &row_tool, false);
@@ -211,7 +214,7 @@ pub fn run(_args: &[String]) -> i32 {
     // silent exactly as when the harness denied before their siblings ran.
     // A warn lets the write land and rides the allow.
     let mut warnings: Vec<String> = Vec::new();
-    let sections: [(&str, fn(&Payload, &Path) -> Sec); 3] = [
+    let sections: [(&'static str, fn(&Payload, &Path) -> Sec); 3] = [
         ("graph-write-protect", graph_section),
         ("claude-config-write-guard", config_section),
         ("generated-write-guard", generated_section),
@@ -220,7 +223,7 @@ pub fn run(_args: &[String]) -> i32 {
         match section(&p, &cwd) {
             Sec::Block(reason) => {
                 mark(&cwd, guard, &row_tool, true);
-                return super::emit_block(&reason);
+                return super::refusal::emit_one(super::refusal::Refusal::new(guard, reason));
             }
             Sec::Warn(note) => {
                 mark(&cwd, guard, &row_tool, false);

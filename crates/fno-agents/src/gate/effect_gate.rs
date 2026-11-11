@@ -577,7 +577,10 @@ pub fn run_hook(_args: &[String]) -> i32 {
         }
         Some(reason) => {
             crate::hook::emit_guard_decision(&cwd, "effect-guard", tool_name, true);
-            crate::hook::emit_block(&reason)
+            crate::hook::refusal::emit_one(crate::hook::refusal::Refusal::new(
+                "effect guard",
+                reason,
+            ))
         }
     }
 }

@@ -70,13 +70,16 @@ pub fn run(_args: &[String]) -> i32 {
                 "SendMessage",
                 true,
             );
-            super::emit_block(&format!(
-                "use fno mail, not SendMessage: `{to}` is an fno-registered session, \
+            super::refusal::emit_one(super::refusal::Refusal::new(
+                "send-message guard",
+                format!(
+                    "use fno mail, not SendMessage: `{to}` is an fno-registered session, \
                  and a native send never reaches the mail journal (feed, Messages tab, \
                  provenance all miss it). Send with: \
                  fno agents mail send \"{to}\" \"<message>\" --subject \"<one line>\" \
                  (the receipt is a JSON {{msg_id, subject, to, status}} line). \
                  SendMessage is the outage fallback only, and fno mail is healthy."
+                ),
             ))
         }
         Decision::AllowFallback(why) => {
