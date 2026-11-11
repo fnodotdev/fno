@@ -206,7 +206,9 @@ impl Root {
 
     fn terminal(&mut self, cx: &mut Context<Self>) -> gpui::Div {
         let (cw, ch) = (self.metrics.cell.width, self.metrics.cell.height);
-        let mut area = div().relative().size_full().overflow_hidden();
+        // flex_1, not size_full: the status line below must not push the
+        // grid's last row out of the window.
+        let mut area = div().relative().flex_1().w_full().overflow_hidden();
         let rects = self.layout.panes.clone();
         for (id, rect) in rects {
             let view = self.pane_view(id, cx);
