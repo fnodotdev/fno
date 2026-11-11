@@ -55,11 +55,28 @@ die()  { printf 'fno: %s\n' "$*" >&2; exit "${2:-1}"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
 # fetch_to <url> <file>: download over HTTPS, preferring curl, else wget.
+# A github.com release download sends a bearer token when GH_TOKEN or
+# GITHUB_TOKEN is set, so GitHub's anonymous-CDN surge cannot 504 the
+# install. The header is github.com-only: FNO_INSTALL_TARBALL may point at
+# a private mirror and the token must not leak there.
 fetch_to() {
+	_token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+	case "$1" in
+	https://github.com/*) ;;
+	*) _token="" ;;
+	esac
 	if have curl; then
-		curl -fsSL --max-time 300 -o "$2" "$1"
+		if [ -n "$_token" ]; then
+			curl -fsSL --max-time 300 -H "Authorization: Bearer $_token" -o "$2" "$1"
+		else
+			curl -fsSL --max-time 300 -o "$2" "$1"
+		fi
 	elif have wget; then
-		wget -qO "$2" "$1"
+		if [ -n "$_token" ]; then
+			wget -qO "$2" --header "Authorization: Bearer $_token" "$1"
+		else
+			wget -qO "$2" "$1"
+		fi
 	else
 		die "neither curl nor wget is available to fetch the release; install one and re-run."
 	fi

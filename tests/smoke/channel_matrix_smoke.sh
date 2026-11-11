@@ -615,7 +615,14 @@ row_fno_sh_nightly() {
     miss "platform" "no release tarball for $(uname -s)/$(uname -m)"
     return 0
   fi
-  release_json="$(curl -fsSL "https://api.github.com/repos/fnodotdev/fno/releases/tags/nightly" 2>/dev/null)"
+  # An authenticated read lifts GitHub's anonymous API throttle; stay
+  # anonymous when no token is set (local runs).
+  nightly_auth=()
+  token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+  if [ -n "$token" ]; then
+    nightly_auth=(-H "Authorization: Bearer $token")
+  fi
+  release_json="$(curl -fsSL ${nightly_auth[@]+"${nightly_auth[@]}"} "https://api.github.com/repos/fnodotdev/fno/releases/tags/nightly" 2>/dev/null)"
   if ! printf '%s' "$release_json" | grep -qF "\"name\": \"fno-agents-$plat.tar.gz\""; then
     miss "nightly" "no fno-agents-$plat.tar.gz on the nightly release (API read failed or unsupported platform)"
     return 0

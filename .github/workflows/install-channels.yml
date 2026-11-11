@@ -166,6 +166,11 @@ jobs:
 
       - name: 'row: ${{ matrix.row.id }}'
         shell: bash
+        env:
+          # The smoke rows download release assets through fno.sh and fno
+          # update; the token lifts GitHub's anonymous-CDN throttle (the
+          # 2026-11-08/09 surge reddened the fno-update-released row).
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -uo pipefail
           set +e

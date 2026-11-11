@@ -186,7 +186,6 @@ pub(crate) fn listing_refusal(code: &str, headers: &str, authed: bool) -> String
 /// spend it together. The token goes through curl's stdin config, never
 /// argv, so `ps` cannot read it.
 pub(crate) fn fetch_release_assets() -> Result<Vec<serde_json::Value>, String> {
-    use std::io::Write;
     let url = format!(
         "https://api.github.com/repos/{}/releases/tags/{}",
         release_repo(),
@@ -197,32 +196,33 @@ pub(crate) fn fetch_release_assets() -> Result<Vec<serde_json::Value>, String> {
     let dest = tmp.join(format!("fno-prebuilt-assets-{pid}.json"));
     let head = tmp.join(format!("fno-prebuilt-assets-{pid}.headers"));
     let token = github_token();
+    let args = [
+        "-sSL".to_string(),
+        "--max-time".to_string(),
+        FETCH_SECS.to_string(),
+        "-K".to_string(),
+        "-".to_string(),
+    ];
+    let tail = [
+        "-w".to_string(),
+        "%{http_code}".to_string(),
+        "-D".to_string(),
+        head.display().to_string(),
+        "-o".to_string(),
+        dest.display().to_string(),
+        url.clone(),
+    ];
     let mut child = crate::process_admission::std_command("curl")
-        .args([
-            "-sSL",
-            "--max-time",
-            FETCH_SECS,
-            "-K",
-            "-",
-            "-w",
-            "%{http_code}",
-            "-D",
-        ])
-        .arg(&head)
-        .arg("-o")
-        .arg(&dest)
-        .arg(&url)
+        .args(&args)
+        .args(&tail)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("curl: {e}"))?;
     if let Some(mut stdin) = child.stdin.take() {
-        let mut config = String::from("header = \"Accept: application/vnd.github+json\"\n");
-        if let Some(t) = &token {
-            config.push_str(&format!("header = \"Authorization: Bearer {t}\"\n"));
-        }
-        let _ = stdin.write_all(config.as_bytes());
+        use std::io::Write;
+        let _ = stdin.write_all(curl_auth_config(github_token().as_deref()).as_bytes());
     }
     let out = child.wait_with_output().map_err(|e| format!("curl: {e}"));
     let body = std::fs::read_to_string(&dest).unwrap_or_default();
@@ -270,14 +270,88 @@ pub(crate) fn parse_sha_line(text: &str) -> Option<String> {
     (hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit())).then_some(hex)
 }
 
+/// The curl stdin config every release fetch sends: the API Accept header,
+/// plus a bearer line when a token exists. The token goes through curl's
+/// stdin config (`curl -K -`), never argv, so `ps` cannot read it.
+pub(crate) fn curl_auth_config(token: Option<&str>) -> String {
+    let mut config = String::from("header = \"Accept: application/vnd.github+json\"\n");
+    let t = token.map(str::trim).filter(|t| !t.is_empty());
+    if let Some(t) = t {
+        config.push_str(&format!("header = \"Authorization: Bearer {t}\"\n"));
+    }
+    config
+}
+
+/// The curl run can fail before a status exists: spawn or wait. Typed so
+/// the error seam stays off the string ratchet (docs/rust-style.md R6).
+#[derive(Debug)]
+pub(crate) enum CurlRunError {
+    Spawn(std::io::Error),
+    Wait(std::io::Error),
+}
+
+impl std::fmt::Display for CurlRunError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CurlRunError::Spawn(e) => write!(f, "curl spawn: {e}"),
+            CurlRunError::Wait(e) => write!(f, "curl wait: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for CurlRunError {}
+
+/// Run curl with the auth config on stdin: `args` are the pre-URL flags
+/// (ending in `-K -`), `tail` the post-config arguments ending in the URL.
+/// GitHub's anonymous-CDN surge (2026-11-08/09) 504'd unauthenticated
+/// release downloads and reddened main; the token lifts the anonymous
+/// throttle. The config rides stdin, so old curls (config files have been
+/// in curl forever) need no new flag.
+pub(crate) fn spawn_authed_curl(
+    args: &[String],
+    tail: &[String],
+) -> Result<std::process::Output, CurlRunError> {
+    use std::io::Write;
+    let mut child = crate::process_admission::std_command("curl")
+        .args(args)
+        .args(tail)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(CurlRunError::Spawn)?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(curl_auth_config(github_token().as_deref()).as_bytes());
+    }
+    child.wait_with_output().map_err(CurlRunError::Wait)
+}
+
 pub(crate) fn curl_to(url: &str, dest: &Path) -> Result<(), String> {
-    let out = crate::process_admission::std_command("curl")
-        .args(["-fsSL", "--max-time", FETCH_SECS, "-o"])
-        .arg(dest)
-        .arg(url)
-        .stdin(Stdio::null())
-        .output()
+    let args = [
+        "-fsSL".to_string(),
+        "--max-time".to_string(),
+        FETCH_SECS.to_string(),
+        "-K".to_string(),
+        "-".to_string(),
+    ];
+    let tail = [
+        "-o".to_string(),
+        dest.display().to_string(),
+        url.to_string(),
+    ];
+    let mut child = crate::process_admission::std_command("curl")
+        .args(&args)
+        .args(&tail)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| format!("curl: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        let _ = stdin.write_all(curl_auth_config(github_token().as_deref()).as_bytes());
+    }
+    let out = child.wait_with_output().map_err(|e| format!("curl: {e}"))?;
     if out.status.success() {
         Ok(())
     } else {
@@ -537,5 +611,26 @@ mod tests {
         // A 403 with reads left is some other refusal, never named the limit.
         let other = listing_refusal("403", "x-ratelimit-remaining: 12\n", false);
         assert_eq!(other, "HTTP 403 for the bin-cache release listing");
+    }
+
+    #[test]
+    fn curl_auth_config_carries_the_bearer_only_with_a_token() {
+        let anon = curl_auth_config(None);
+        assert!(
+            anon.contains("Accept: application/vnd.github+json"),
+            "{anon}"
+        );
+        assert!(!anon.contains("Authorization"), "{anon}");
+
+        let authed = curl_auth_config(Some("tok123"));
+        assert!(authed.contains("Authorization: Bearer tok123"), "{authed}");
+        assert!(
+            authed.contains("Accept: application/vnd.github+json"),
+            "{authed}"
+        );
+
+        // A blank token reads as anonymous, not as a malformed header.
+        let blank = curl_auth_config(Some("   "));
+        assert!(!blank.contains("Authorization"), "{blank}");
     }
 }
