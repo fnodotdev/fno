@@ -9,7 +9,7 @@
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import footnote from "../../../cli/src/fno/setup/assets/pi/footnote.ts"
@@ -30,15 +30,69 @@ case "\$1" in
     if [ -n "\$STUB_LOOPCHECK_SLEEP" ]; then sleep "\$STUB_LOOPCHECK_SLEEP"; fi
     if [ -f "\$STUB_LOOPCHECK_REPLY" ]; then cat "\$STUB_LOOPCHECK_REPLY"; fi
     ;;
+  announce)
+    if [ -n "\$STUB_ANNOUNCE" ]; then echo "\$STUB_ANNOUNCE"; fi
+    ;;
 esac
 exit 0
 `
 
+// Every hook script the extension's carrier chains name. One stub per
+// script: it captures its stdin payload, appends its name to a shared
+// sequence file, and answers one fixture context line.
+const CARRIER_SCRIPTS = [
+  "session-start-using-fno.sh",
+  "context-run.sh",
+  "daemon-liveness-session-start.sh",
+  "bootstrap-session-start.sh",
+  "inject-mail-notify.sh",
+  "node-bind-prompt-submit.sh",
+  "format-on-edit.sh",
+  "edit-integrity.sh",
+  "claim-heartbeat.sh",
+  "merge-capture.sh",
+  "save-session.sh",
+  "precompact-canon-doc.sh",
+]
+
+// A fixture plugin root the extension resolves through FNO_HOME: real
+// .claude-plugin marker, stub hook scripts, nothing else.
+function makeFixtureRoot(baseDir) {
+  const root = join(baseDir, "plugin-root")
+  mkdirSync(join(root, ".claude-plugin"), { recursive: true })
+  writeFileSync(join(root, ".claude-plugin", "plugin.json"), "{}")
+  mkdirSync(join(root, "hooks"), { recursive: true })
+  for (const name of CARRIER_SCRIPTS) {
+    writeFileSync(
+      join(root, "hooks", name),
+      `#!/bin/bash
+cat > "$CAPTURE_DIR/${name}.json"
+echo "${name}" >> "$CAPTURE_DIR/seq.txt"
+echo '{"hookSpecificOutput":{"additionalContext":"[fixture] ${name}"}}'
+`,
+      { mode: 0o755 },
+    )
+  }
+  return root
+}
+
+// The FNO_HOME that pins pluginRoot() to a fixture root (or to an empty
+// dir, which answers null and keeps the no-root worlds deterministic).
+function makeFixtureHome(baseDir, root) {
+  const home = join(baseDir, "home")
+  mkdirSync(join(home, "install"), { recursive: true })
+  if (root) writeFileSync(join(home, "install", "plugin-root"), root)
+  return home
+}
+
 // One isolated world per test: a fixture dir (manifest, reply file, log), the
-// env the extension and stub read, and the fake host.
+// env the extension and stub read, and the fake host. FNO_HOME pins to an
+// empty home by default, so pluginRoot() answers null deterministically;
+// `root: true` builds the fixture plugin root and points FNO_HOME at it.
 function makeWorld({
   reply = { decision: "allow", termination_reason: null },
   manifest = true,
+  root = false,
   env = {},
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "fno-pi-ext-"))
@@ -55,6 +109,9 @@ function makeWorld({
   writeFileSync(logPath, "")
   const stubPath = join(dir, "stub.sh")
   writeFileSync(stubPath, STUB, { mode: 0o755 })
+  const fixtureRoot = root ? makeFixtureRoot(dir) : null
+  const captureDir = join(dir, "capture")
+  mkdirSync(captureDir, { recursive: true })
 
   const saved = new Map()
   const next = {
@@ -62,6 +119,8 @@ function makeWorld({
     STUB_LOG: logPath,
     STUB_STATE_PATH: manifest ? manifestPath : "",
     STUB_LOOPCHECK_REPLY: replyPath,
+    FNO_HOME: makeFixtureHome(dir, fixtureRoot),
+    CAPTURE_DIR: captureDir,
     ...env,
   }
   for (const [k, v] of Object.entries(next)) {
@@ -111,9 +170,25 @@ function makeWorld({
     sent,
     entries,
     notified,
+    captureDir,
+    fixtureRoot,
     log: () => readLog(logPath),
     async settle(eventCtx = ctx) {
       await handlers["agent_settled"]({}, eventCtx)
+    },
+    payload(name) {
+      try {
+        return JSON.parse(readFileSync(join(captureDir, name), "utf8"))
+      } catch {
+        return null
+      }
+    },
+    seq() {
+      try {
+        return readFileSync(join(captureDir, "seq.txt"), "utf8").split("\n").filter(Boolean)
+      } catch {
+        return []
+      }
     },
     cleanup() {
       for (const [k, v] of saved) {
@@ -328,5 +403,226 @@ test("the manifest read rides the command, so a directory with no .fno still gat
     assert.equal(world.sent.length, 1, "the gate still ran")
   } finally {
     world.cleanup()
+  }
+})
+
+test("session_start producers run and their context rides the next prompt boundary once", async () => {
+  const world = makeWorld({ root: true })
+  try {
+    await world.handlers["session_start"]({ reason: "startup" }, {
+      sessionManager: { getSessionId: () => "s-1" },
+    })
+    // All four producers ran, in the claude chain's names, with the claude
+    // SessionStart payload (source mapped from pi's reason).
+    for (const name of [
+      "session-start-using-fno.sh",
+      "context-run.sh",
+      "daemon-liveness-session-start.sh",
+      "bootstrap-session-start.sh",
+    ]) {
+      const p = world.payload(`${name}.json`)
+      assert.ok(p, `${name} must run at session_start`)
+      assert.equal(p.hook_event_name, "SessionStart")
+      assert.equal(p.source, "startup")
+      assert.equal(p.session_id, "s-1")
+    }
+    // The queued text rides the next prompt boundary...
+    const answer = await world.handlers["before_agent_start"]({ prompt: "hi" }, {
+      sessionManager: { getSessionId: () => "s-1" },
+    })
+    const text = answer?.message?.content?.[0]?.text || ""
+    assert.ok(text.includes("[fixture] session-start-using-fno.sh"), text)
+    // ...once: a second boundary does not repeat it.
+    const second = await world.handlers["before_agent_start"]({ prompt: "again" }, {
+      sessionManager: { getSessionId: () => "s-1" },
+    })
+    const secondText = second?.message?.content?.[0]?.text || ""
+    assert.ok(!secondText.includes("[fixture] session-start-using-fno.sh"), secondText)
+  } finally {
+    world.cleanup()
+  }
+})
+
+test("resume maps to the claude resume source at session_start", async () => {
+  const world = makeWorld({ root: true })
+  try {
+    await world.handlers["session_start"]({ reason: "resume" }, {
+      sessionManager: { getSessionId: () => "s-1" },
+    })
+    assert.equal(world.payload("context-run.sh.json").source, "resume")
+  } finally {
+    world.cleanup()
+  }
+})
+
+test("the mail-notify and node-bind carriers ride every prompt with the claude payload", async () => {
+  const world = makeWorld({ root: true })
+  try {
+    const answer = await world.handlers["before_agent_start"](
+      { prompt: "start the bound node" },
+      { sessionManager: { getSessionId: () => "s-1" } },
+    )
+    for (const name of ["inject-mail-notify.sh", "node-bind-prompt-submit.sh"]) {
+      const p = world.payload(`${name}.json`)
+      assert.ok(p, `${name} must run at the prompt boundary`)
+      assert.equal(p.hook_event_name, "UserPromptSubmit")
+      assert.equal(p.prompt, "start the bound node")
+      assert.equal(p.session_id, "s-1")
+    }
+    // Carrier context joins the message; with no announce the message stays
+    // off the transcript (claude's context-only channel).
+    const text = answer?.message?.content?.[0]?.text || ""
+    assert.ok(text.includes("[fixture] inject-mail-notify.sh"), text)
+    assert.equal(answer.message.display, false)
+    assert.equal(answer.message.customType, "fno-role")
+  } finally {
+    world.cleanup()
+  }
+})
+
+test("tool_result maps pi tool names, promotes file_path, and runs the PostToolUse chain in order", async () => {
+  const world = makeWorld({ root: true })
+  try {
+    await world.handlers["tool_result"](
+      {
+        toolName: "edit",
+        input: { path: "/tmp/a.rs" },
+        content: [{ type: "text", text: "edited" }],
+        isError: false,
+      },
+      { sessionManager: { getSessionId: () => "s-1" } },
+    )
+    assert.deepEqual(world.seq(), [
+      "format-on-edit.sh",
+      "edit-integrity.sh",
+      "claim-heartbeat.sh",
+      "merge-capture.sh",
+    ])
+    const fmt = world.payload("format-on-edit.sh.json")
+    assert.equal(fmt.tool_name, "Edit")
+    assert.equal(fmt.tool_input.file_path, "/tmp/a.rs")
+    assert.equal(fmt.hook_event_name, "PostToolUse")
+    const integrity = world.payload("edit-integrity.sh.json")
+    assert.equal(integrity.tool_response.output, "edited")
+    assert.equal(integrity.tool_response.is_error, false)
+  } finally {
+    world.cleanup()
+  }
+})
+
+test("session_before_compact maps the trigger, never cancels, and queues the pointer text", async () => {
+  const world = makeWorld({ root: true })
+  try {
+    const sm = {
+      getSessionId: () => "s-1",
+      getSessionFile: () => "/tmp/pi-session.jsonl",
+    }
+    const answer = await world.handlers["session_before_compact"](
+      { reason: "threshold", customInstructions: "keep the plan" },
+      { sessionManager: sm },
+    )
+    assert.equal(answer, undefined, "the handler must not cancel the compaction")
+    const save = world.payload("save-session.sh.json")
+    assert.equal(save.hook_event_name, "PreCompact")
+    assert.equal(save.trigger, "auto")
+    assert.equal(save.transcript_path, "/tmp/pi-session.jsonl")
+    assert.equal(save.custom_instructions, "keep the plan")
+    const canon = world.payload("precompact-canon-doc.sh.json")
+    assert.equal(canon.trigger, "auto")
+    // The pointer text rides the next prompt boundary.
+    const next = await world.handlers["before_agent_start"]({ prompt: "go on" }, {
+      sessionManager: { getSessionId: () => "s-1" },
+    })
+    const text = next?.message?.content?.[0]?.text || ""
+    assert.ok(text.includes("[fixture] precompact-canon-doc.sh"), text)
+  } finally {
+    world.cleanup()
+  }
+})
+
+test("a manual compaction maps the trigger to manual", async () => {
+  const world = makeWorld({ root: true })
+  try {
+    await world.handlers["session_before_compact"](
+      { reason: "manual" },
+      { sessionManager: { getSessionId: () => "s-1" } },
+    )
+    assert.equal(world.payload("save-session.sh.json").trigger, "manual")
+  } finally {
+    world.cleanup()
+  }
+})
+
+// The real-host leg: pi fires the events for real and the extension runs the
+// real chain against fixture hooks. Skipped wherever pi is not installed
+// (CI); the provider call after the prompt 401s on a bogus key, which is
+// fine - the carriers run before it, and the child is killed at the bound.
+const hasPi = (() => {
+  for (const dir of (process.env.PATH || "").split(":")) {
+    try {
+      if (dir && existsSync(join(dir, "pi"))) return true
+    } catch {
+      // a PATH entry that is not a directory
+    }
+  }
+  return false
+})()
+
+test("a real pi host fires session_start producers and prompt carriers through the extension", { skip: !hasPi }, async () => {
+  const { spawn } = await import("node:child_process")
+  const dir = mkdtempSync(join(tmpdir(), "fno-pi-real-"))
+  const captureDir = join(dir, "capture")
+  mkdirSync(captureDir, { recursive: true })
+  const agentDir = join(dir, "agent")
+  mkdirSync(join(agentDir, "extensions"), { recursive: true })
+  const fixtureRoot = makeFixtureRoot(dir)
+  const stubPath = join(dir, "stub.sh")
+  writeFileSync(stubPath, STUB, { mode: 0o755 })
+  const saved = new Map()
+  const next = {
+    FNO_AGENTS_BIN: stubPath,
+    STUB_LOG: join(dir, "stub.log"),
+    FNO_HOME: makeFixtureHome(dir, fixtureRoot),
+    CAPTURE_DIR: captureDir,
+    PI_CODING_AGENT_DIR: agentDir,
+    // A bogus key: the provider call 401s fast, after the events under test.
+    ANTHROPIC_API_KEY: "sk-fno-test-bogus",
+  }
+  for (const [k, v] of Object.entries(next)) {
+    saved.set(k, process.env[k])
+    process.env[k] = v
+  }
+  const extPath = new URL("../../../cli/src/fno/setup/assets/pi/footnote.ts", import.meta.url).pathname
+  const child = spawn(
+    "pi",
+    ["-e", extPath, "--no-session", "-p", "hello from the fno test", "--provider", "anthropic", "--model", "claude-haiku"],
+    { stdio: "ignore", timeout: 30000, killSignal: "SIGKILL" },
+  )
+  try {
+    // The carriers write at session_start and the prompt boundary, both
+    // before the provider call; poll past a wedged start, then read.
+    const want = ["session-start-using-fno.sh.json", "inject-mail-notify.sh.json"]
+    const end = Date.now() + 25000
+    while (Date.now() < end && !want.every((f) => existsSync(join(captureDir, f)))) {
+      await new Promise((r) => setTimeout(r, 200))
+    }
+    for (const f of want) {
+      assert.ok(existsSync(join(captureDir, f)), `${f} must land from a real pi run`)
+    }
+    const mail = JSON.parse(readFileSync(join(captureDir, "inject-mail-notify.sh.json"), "utf8"))
+    assert.equal(mail.hook_event_name, "UserPromptSubmit")
+    assert.equal(mail.prompt, "hello from the fno test")
+    assert.ok(mail.session_id, "the real host names a session id")
+  } finally {
+    try {
+      child.kill("SIGKILL")
+    } catch {
+      // already gone
+    }
+    for (const [k, v] of saved) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+    rmSync(dir, { recursive: true, force: true })
   }
 })
