@@ -370,23 +370,31 @@ fn parse_label_reply(out: &str) -> Result<(String, String), String> {
 /// One zai flash one-shot with read tools: the golden drafter's bounded
 /// spawn shape plus the account flag. A hang dies at the kill bound, not
 /// at the child's own timeout.
-fn spawn_judge(name: &str, prompt: &str) -> Result<(String, String), String> {
-    let cwd = crate::evals::canonical_repo_root();
-    let argv: Vec<String> = [
+/// The label judge's spawn line. Every spawn-owned flag rides before the
+/// prompt and the prompt sits directly before the fence: the positional
+/// boundary refuses a spawn-owned flag after the prompt (law d-3244), the
+/// exit-2 the old mid-argv prompt answered.
+fn labels_spawn_argv(name: &str, prompt: &str, cwd_display: &str) -> Vec<String> {
+    let mut argv: Vec<String> = [
         "agents",
         "spawn",
         "--name",
         name,
-        prompt,
         "--harness",
         "claude",
         "--account",
         ACCOUNT,
         "--once",
         "--cwd",
-        &cwd.display().to_string(),
+        cwd_display,
         "--timeout",
         &JUDGE_TIMEOUT_S.to_string(),
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    argv.push(prompt.to_string());
+    argv.extend([
         "--",
         "--model",
         MODEL,
@@ -400,10 +408,13 @@ fn spawn_judge(name: &str, prompt: &str) -> Result<(String, String), String> {
         "--disable-slash-commands",
         "--no-chrome",
         "--no-session-persistence",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect();
+    ]);
+    argv
+}
+
+fn spawn_judge(name: &str, prompt: &str) -> Result<(String, String), String> {
+    let cwd = crate::evals::canonical_repo_root();
+    let argv = labels_spawn_argv(name, prompt, &cwd.display().to_string());
     let (code, out, err) = crate::blueprint_judge::headless_spawn(&argv, JUDGE_TIMEOUT_S + 30)?;
     if code != 0 {
         return Err(format!("spawn exit {code}: {}", err.trim()));
@@ -1168,6 +1179,25 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_label_judge_spawn_line_respects_the_positional_boundary() {
+        let argv = labels_spawn_argv("labels-arm", "grade it", "/tmp");
+        let prompt_at = argv
+            .iter()
+            .position(|a| a == "grade it")
+            .expect("prompt rides");
+        assert_eq!(
+            argv.get(prompt_at + 1),
+            Some(&"--".to_string()),
+            "the prompt sits directly before the fence: {argv:?}"
+        );
+        assert_eq!(
+            crate::spawn_bare::boundary_rewrite(&argv[2..]),
+            crate::spawn_bare::Boundary::Keep,
+            "the seam must admit the judge's own line (law d-3244): {argv:?}"
+        );
+    }
 
     fn trace_file(state: &Path, sid: &str, kind: &str, created: &str, trigger: &str) -> String {
         let id = blake3::hash(format!("t|{sid}|{kind}|{created}|{trigger}").as_bytes()).to_hex()

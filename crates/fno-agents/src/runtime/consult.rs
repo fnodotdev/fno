@@ -265,19 +265,7 @@ fn ask(deps: &Deps, harness: &str, session: &str, ask: &Ask) -> i32 {
         .replace("{DIGEST_PATH}", &digest_path.display().to_string());
     // ── chunk: spawn ──
     let model = config_str(&deps.cwd, "model", DEFAULT_MODEL);
-    let mut argv = vec!["agents".to_string(), "spawn".to_string(), prompt];
-    argv.extend([
-        "--harness".to_string(),
-        "claude".to_string(),
-        "--once".to_string(),
-    ]);
-    argv.extend(["--cwd".to_string(), deps.cwd.display().to_string()]);
-    argv.extend([
-        "--timeout".to_string(),
-        SPAWN_TIMEOUT_SECS.to_string(),
-        "--".to_string(),
-    ]);
-    argv.extend(argv_tail(&model));
+    let argv = consult_spawn_argv(prompt, &deps.cwd.display().to_string(), &model);
     let spawned = (deps.spawner)(&argv, SPAWN_TIMEOUT_SECS + 60);
     drop(digest_file);
     let _ = std::fs::remove_file(&digest_path);
@@ -342,6 +330,25 @@ fn ask(deps: &Deps, harness: &str, session: &str, ask: &Ask) -> i32 {
 }
 
 // ── chunk: tail-fns ──
+/// The consult one-shot's spawn line. Every spawn-owned flag rides before
+/// the prompt and the prompt sits directly before the fence: the positional
+/// boundary refuses a spawn-owned flag after the prompt (law d-3244), which
+/// is the exit-2 the old inline shape answered.
+fn consult_spawn_argv(prompt: &str, cwd_display: &str, model: &str) -> Vec<String> {
+    let mut argv = vec!["agents".to_string(), "spawn".to_string()];
+    argv.extend([
+        "--harness".to_string(),
+        "claude".to_string(),
+        "--once".to_string(),
+    ]);
+    argv.extend(["--cwd".to_string(), cwd_display.to_string()]);
+    argv.extend(["--timeout".to_string(), SPAWN_TIMEOUT_SECS.to_string()]);
+    argv.push(prompt.to_string());
+    argv.push("--".to_string());
+    argv.extend(argv_tail(model));
+    argv
+}
+
 fn argv_tail(model: &str) -> Vec<String> {
     [
         "--model",
@@ -756,6 +763,25 @@ mod tests {
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+
+    #[test]
+    fn the_consult_spawn_line_respects_the_positional_boundary() {
+        let argv = consult_spawn_argv("consult me", "/tmp", "m");
+        let prompt_at = argv
+            .iter()
+            .position(|a| a == "consult me")
+            .expect("prompt rides");
+        assert_eq!(
+            argv.get(prompt_at + 1),
+            Some(&"--".to_string()),
+            "the prompt sits directly before the fence: {argv:?}"
+        );
+        assert_eq!(
+            crate::spawn_bare::boundary_rewrite(&argv[2..]),
+            crate::spawn_bare::Boundary::Keep,
+            "the seam must admit the consult's own line (law d-3244): {argv:?}"
+        );
+    }
 
     fn deps<'a>(
         dir: &Path,

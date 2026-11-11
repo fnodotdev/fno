@@ -53,10 +53,9 @@ fn spawn(
 /// is the eval dir, so Read needs no extra directory grant. No `--name`: the
 /// spawn names the one-shot from the prompt.
 fn spawn_argv(prompt: &str, cwd: &Path, timeout_secs: u64, model: &str) -> Vec<String> {
-    [
+    let mut argv: Vec<String> = [
         "agents",
         "spawn",
-        prompt,
         "--harness",
         "claude",
         "--once",
@@ -64,6 +63,14 @@ fn spawn_argv(prompt: &str, cwd: &Path, timeout_secs: u64, model: &str) -> Vec<S
         &cwd.display().to_string(),
         "--timeout",
         &timeout_secs.to_string(),
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    // The prompt rides before the fence: the positional boundary refuses a
+    // spawn-owned flag after the prompt (law d-3244).
+    argv.push(prompt.to_string());
+    argv.extend([
         "--",
         "--model",
         model,
@@ -75,10 +82,8 @@ fn spawn_argv(prompt: &str, cwd: &Path, timeout_secs: u64, model: &str) -> Vec<S
         "--disable-slash-commands",
         "--no-chrome",
         "--no-session-persistence",
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect()
+    ]);
+    argv
 }
 
 fn grade_with(dir: &Path, value: &Value, model: &str, spawn: Spawn) -> Result<(), String> {
@@ -405,6 +410,25 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::sync::Mutex;
+
+    #[test]
+    fn the_grader_spawn_line_respects_the_positional_boundary() {
+        let argv = spawn_argv("grade it", Path::new("/tmp"), 60, "m");
+        let prompt_at = argv
+            .iter()
+            .position(|a| a == "grade it")
+            .expect("prompt rides");
+        assert_eq!(
+            argv.get(prompt_at + 1),
+            Some(&"--".to_string()),
+            "the prompt sits directly before the fence: {argv:?}"
+        );
+        assert_eq!(
+            crate::spawn_bare::boundary_rewrite(&argv[2..]),
+            crate::spawn_bare::Boundary::Keep,
+            "the seam must admit the grader's own line (law d-3244): {argv:?}"
+        );
+    }
 
     const REPLY: &str = "=== part3-failures.md ===\nCause: stale claims (window 1, 10:00 UTC)\n=== part4-reforms.md ===\nReform one\n=== part5-leadership.md ===\nWait for CI\n=== PENDING-NODES.md ===\n# Pending\n- [ ] Reform one - skills/lead - (window 1)\n";
 

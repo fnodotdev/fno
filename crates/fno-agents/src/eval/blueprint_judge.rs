@@ -384,7 +384,7 @@ pub(crate) fn default_spawn(
     model: &str,
 ) -> Result<(i32, String, String), String> {
     headless_spawn(
-        &reader_argv(name, prompt, cwd, timeout_secs, model),
+        &reader_argv(name, prompt, cwd, timeout_secs, model, &[]),
         timeout_secs,
     )
 }
@@ -395,6 +395,12 @@ pub(crate) fn default_spawn(
 /// inside the bound instead of running out the full session load. The model
 /// rides the fence too: the spawn's own --model axis is retired, and claude
 /// takes its own spelling.
+///
+/// Every spawn-owned flag rides BEFORE the prompt and the prompt sits
+/// directly before the explicit fence: the positional boundary refuses a
+/// spawn-owned flag after the prompt (law d-3244), and a builder line is
+/// judged at the seam on the raw spelling it emits. `extra_owned` carries a
+/// caller's own pre-prompt spawn flags, already ordered as flag/value pairs.
 ///
 /// The reader pins its own machine and names its arm. Both flags ride the
 /// pre-fence spawn axis: a fleet-load placement once relayed the bounded
@@ -408,8 +414,9 @@ pub(crate) fn reader_argv(
     cwd: &Path,
     timeout_secs: u64,
     model: &str,
+    extra_owned: &[String],
 ) -> Vec<String> {
-    [
+    let mut argv: Vec<String> = [
         "agents",
         "spawn",
         "--name",
@@ -418,7 +425,6 @@ pub(crate) fn reader_argv(
         &crate::name_ledger::local_bus_host(),
         "--from-name",
         &format!("fno/{name}"),
-        prompt,
         "--harness",
         "claude",
         "--once",
@@ -426,6 +432,13 @@ pub(crate) fn reader_argv(
         &cwd.display().to_string(),
         "--timeout",
         &timeout_secs.to_string(),
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    argv.extend(extra_owned.iter().cloned());
+    argv.push(prompt.to_string());
+    argv.extend([
         "--",
         "--model",
         model,
@@ -437,10 +450,8 @@ pub(crate) fn reader_argv(
         "--disable-slash-commands",
         "--no-chrome",
         "--no-session-persistence",
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect()
+    ]);
+    argv
 }
 
 type Spawn<'a> = &'a dyn Fn(&str, &str, &Path, u64, &str) -> Result<(i32, String, String), String>;
@@ -1716,7 +1727,7 @@ mod tests {
 
     #[test]
     fn reader_argv_names_its_arm_and_pins_the_local_machine() {
-        let argv = reader_argv("question-judge", "grade it", Path::new("."), 60, "m");
+        let argv = reader_argv("question-judge", "grade it", Path::new("."), 60, "m", &[]);
         let flag_value = |flag: &str| -> Option<String> {
             argv.iter()
                 .position(|w| w == flag)
@@ -1736,5 +1747,42 @@ mod tests {
             Some(crate::name_ledger::local_bus_host().as_str()),
             "a bounded one-shot reader runs on the local machine; the fleet relay leg lands on a remote lane that may be dead: {argv:?}"
         );
+    }
+
+    #[test]
+    fn reader_argv_respects_the_spawn_positional_boundary() {
+        // Law d-3244: the seam judges the raw emitted spelling, so the
+        // builder's own shape must pass it - owned flags before the prompt,
+        // prompt directly before the explicit fence. The merge-architect
+        // reader (x-7d53) exited 2 on exactly this violation.
+        for extra in [
+            &[][..],
+            &[
+                "--role".to_string(),
+                "review-verdict".to_string(),
+                "--route".to_string(),
+                "zai/glm-5.3-flash".to_string(),
+                "--account".to_string(),
+                "a".to_string(),
+                "--effort".to_string(),
+                "high".to_string(),
+            ][..],
+        ] {
+            let argv = reader_argv("arm", "grade it", Path::new("."), 60, "m", extra);
+            let prompt_at = argv
+                .iter()
+                .position(|a| a == "grade it")
+                .expect("prompt rides");
+            assert_eq!(
+                argv.get(prompt_at + 1),
+                Some(&"--".to_string()),
+                "the prompt sits directly before the fence: {argv:?}"
+            );
+            assert_eq!(
+                crate::spawn_bare::boundary_rewrite(&argv[2..]),
+                crate::spawn_bare::Boundary::Keep,
+                "the seam must admit the reader's own line: {argv:?}"
+            );
+        }
     }
 }
