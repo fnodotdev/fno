@@ -190,6 +190,7 @@ impl Core {
             rows,
             cols,
             cwd: cwd.clone(),
+            env: Vec::new(),
             permit,
             keeper,
         };

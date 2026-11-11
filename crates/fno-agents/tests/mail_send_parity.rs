@@ -242,6 +242,16 @@ fn row_self() -> serde_json::Value {
     row("self-row-1", "claude", Some(SID))
 }
 
+/// A spelling neighbor of the unknown token: the refusal names its short id.
+fn row_near() -> serde_json::Value {
+    let mut v = row("ghost-writer", "claude", Some(OTHER_SID));
+    if let Some(o) = v.as_object_mut() {
+        o.insert("short_id".into(), serde_json::json!("b2c3d4e5"));
+        o.insert("harness_title".into(), serde_json::json!("ghost-writer"));
+    }
+    v
+}
+
 fn row_codex() -> serde_json::Value {
     row("codework-1", "codex", Some(CODEX_SID))
 }
@@ -270,7 +280,7 @@ fn cases() -> Vec<Case> {
         Case {
             label: "unknown name refused",
             argv: &["ghost-name", "hello there"],
-            rows: Vec::new(),
+            rows: vec![row_near()],
             style_on: false,
             no_identity: false,
         },

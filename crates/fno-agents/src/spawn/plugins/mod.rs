@@ -17,8 +17,12 @@
 
 pub mod activate;
 pub mod cli;
+pub mod gallery;
+pub mod install;
 pub mod manifest;
+pub mod open;
 pub mod registry;
+pub mod ui;
 pub mod verify;
 pub mod version;
 
@@ -82,3 +86,6 @@ pub(crate) fn random_hex(n: usize) -> String {
     }
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
+
+#[cfg(test)]
+mod mods_tests;

@@ -1016,6 +1016,7 @@ mod project_demotion_tests {
             to_harness: None,
             to_session: None,
             state: DeliveryState::Queued,
+            fallback_receipt: None,
         };
         let door = demotion_door_args(&result, "projA", None);
         let pos = door
@@ -1389,7 +1390,6 @@ pub(super) fn run_name_lane_force(
     subject: Option<&str>,
 ) -> i32 {
     let reach = resolve_reachable(token);
-    let suggestions: Vec<String> = Vec::new();
     let lane_args = NameLaneArgs {
         message: body,
         from_name,
@@ -1409,9 +1409,11 @@ pub(super) fn run_name_lane_force(
     };
     match name_lane_send(lane_args) {
         Ok(NameLane::Done) => 0,
-        Ok(NameLane::UnreachableToken) => {
-            unreachable_token_exit(token, &suggestions, UNKNOWN_AGENT_EXIT)
-        }
+        Ok(NameLane::UnreachableToken) => unreachable_token_exit(
+            token,
+            &format_near(&near_sessions(token)),
+            UNKNOWN_AGENT_EXIT,
+        ),
         Ok(NameLane::AmbiguousToken(candidates)) => ambiguous_token_exit(token, &candidates),
         Ok(NameLane::UnavailableToken { failed, candidates }) => {
             unavailable_token_exit(token, &failed, &candidates)
@@ -1458,7 +1460,7 @@ pub(super) fn run_dispatch_then_name_lane(
                         &result.msg_id,
                         subject,
                         token,
-                        &fno_mail::state::receipt(&result.state, ""),
+                        &result.receipt(""),
                     )
                 );
                 return 0;
@@ -1537,7 +1539,6 @@ pub(super) fn run_dispatch_then_name_lane(
             // Discovery is a liveness-gated LISTING, so unknown means "not
             // listed", not "not reachable": fall into the name lane.
             let live = live_discovery_hit(token);
-            let suggestions: Vec<String> = Vec::new();
             let lane_args = NameLaneArgs {
                 message: body,
                 from_name,
@@ -1553,7 +1554,9 @@ pub(super) fn run_dispatch_then_name_lane(
             };
             match name_lane_send(lane_args) {
                 Ok(NameLane::Done) => 0,
-                Ok(NameLane::UnreachableToken) => unreachable_token_exit(token, &suggestions, code),
+                Ok(NameLane::UnreachableToken) => {
+                    unreachable_token_exit(token, &format_near(&near_sessions(token)), code)
+                }
                 Ok(NameLane::AmbiguousToken(candidates)) => {
                     ambiguous_token_exit(token, &candidates)
                 }

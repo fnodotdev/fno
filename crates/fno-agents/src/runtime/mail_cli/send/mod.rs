@@ -562,6 +562,7 @@ struct SendArgs {
     /// the harness queue parks until a turn boundary.
     steer: bool,
     cwd: Option<PathBuf>,
+    subject: Option<String>,
 }
 
 fn parse_args(args: &[String]) -> Result<SendArgs, i32> {
@@ -589,6 +590,7 @@ fn parse_args(args: &[String]) -> Result<SendArgs, i32> {
         style_exception: None,
         steer: false,
         cwd: None,
+        subject: None,
     };
     let mut positionals: Vec<String> = Vec::new();
     let mut fenced = false;
@@ -642,6 +644,17 @@ fn parse_args(args: &[String]) -> Result<SendArgs, i32> {
             "--style-exception" => {
                 out.style_exception = Some(take_arg(args, &mut index, "--style-exception")?)
             }
+            "--subject" => {
+                let value = take_arg(args, &mut index, "--subject")?;
+                if value.len() > 200 {
+                    eprintln!(
+                        "error: --subject is {} characters (cap 200); put the detail in the body",
+                        value.len()
+                    );
+                    return Err(2);
+                }
+                out.subject = Some(value);
+            }
             other => {
                 if other.starts_with('-') && other.len() > 1 {
                     eprintln!("fno agents mail send: unknown argument {:?}", other);
@@ -652,10 +665,16 @@ fn parse_args(args: &[String]) -> Result<SendArgs, i32> {
         }
         index += 1;
     }
+    if out.raw && out.subject.is_some() {
+        eprintln!(
+            "error: --raw strips the envelope, so a subject (--subject) has nothing to ride; drop one of the two"
+        );
+        return Err(2);
+    }
     // Typer accepted at most two positionals; extra ones died in its parser.
     if positionals.len() > 2 {
         eprintln!(
-            "usage: fno agents mail send <name> <message>  (or --to-project <project> <message>)"
+            "usage: fno agents mail send <session-id> <message>  (or --to-project <project> <message>)"
         );
         return Err(2);
     }
@@ -1378,19 +1397,23 @@ pub fn run(args: &[String]) -> i32 {
         );
         return 2;
     }
-    let subject = (std::env::var("FNO_MAIL_SUBJECT").unwrap_or_default().trim()).to_string();
-    let subject = if subject.is_empty() {
-        None
-    } else {
-        if subject.len() > 200 {
-            eprintln!(
-                "error: FNO_MAIL_SUBJECT is {} characters (cap 200); put the detail in the body",
-                subject.len()
-            );
-            return 2;
-        }
-        Some(subject)
-    };
+    let subject = args.subject.clone().or_else(|| {
+        let from_env = std::env::var("FNO_MAIL_SUBJECT")
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        (!from_env.is_empty()).then_some(from_env)
+    });
+    // The cap holds whichever way the subject arrived: the flag path already
+    // refused over 200 at parse, and the env path (the old guard's post) is
+    // checked here, before anything rides the envelope.
+    if subject.as_ref().is_some_and(|s| s.len() > 200) {
+        eprintln!(
+            "error: FNO_MAIL_SUBJECT is {} characters (cap 200); put the detail in the body",
+            subject.as_ref().map_or(0, |s| s.len())
+        );
+        return 2;
+    }
     let body_text = match resolve_body_text(&args) {
         Ok(text) => text,
         Err((msg, code)) => {
@@ -1651,10 +1674,7 @@ pub fn run(args: &[String]) -> i32 {
                             &result.msg_id,
                             subject.as_deref(),
                             &to,
-                            &fno_mail::state::receipt(
-                                &result.state,
-                                &format!("[project {project}]"),
-                            ),
+                            &result.receipt(&format!("[project {project}]")),
                         )
                     );
                 } else {
@@ -1670,7 +1690,7 @@ pub fn run(args: &[String]) -> i32 {
     } else if let Some(token) = name.as_deref() {
         if token.is_empty() {
             eprintln!(
-                "usage: fno agents mail send <name> <message>  (or --to-project <project> <message>)"
+                "usage: fno agents mail send <session-id> <message>  (or --to-project <project> <message>)"
             );
             return 2;
         }
@@ -1699,13 +1719,13 @@ pub fn run(args: &[String]) -> i32 {
         }
         let Some(body) = message.clone() else {
             eprintln!(
-                "usage: fno agents mail send <name> <message>  (or --to-project <project> <message>)"
+                "usage: fno agents mail send <session-id> <message>  (or --to-project <project> <message>)"
             );
             return 2;
         };
         if body.trim().is_empty() {
             eprintln!(
-                "usage: fno agents mail send <name> <message>  (or --to-project <project> <message>)"
+                "usage: fno agents mail send <session-id> <message>  (or --to-project <project> <message>)"
             );
             return 2;
         }
@@ -1732,7 +1752,7 @@ pub fn run(args: &[String]) -> i32 {
         );
     } else {
         eprintln!(
-            "usage: fno agents mail send <name> <message>  (or --to-project <project> <message>)"
+            "usage: fno agents mail send <session-id> <message>  (or --to-project <project> <message>)"
         );
         return 2;
     }
@@ -2001,5 +2021,46 @@ mod system_arm_inbox_tests {
         for bad in ["a/b/c", "/arm", "fno/", "a/..", "../x", "./x", "a\\b"] {
             assert!(validate_recipient(bad).is_err(), "{bad} must stay refused");
         }
+    }
+}
+
+#[cfg(test)]
+mod subject_arg_tests {
+    use super::*;
+
+    #[test]
+    fn mail_send_parses_subject() {
+        // The lead skill documents the flag (skills/lead/SKILL.md); the
+        // parser had no arm, so it died in the unknown-argument catch-all.
+        let args = parse_args(&[
+            "peer-name".to_string(),
+            "hello".to_string(),
+            "--subject".to_string(),
+            "the headline".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(args.subject.as_deref(), Some("the headline"));
+        // --raw strips the envelope, so a subject has nothing to ride: the
+        // same refusal the env path already answers.
+        let refused = parse_args(&[
+            "peer-name".to_string(),
+            "hi".to_string(),
+            "--raw".to_string(),
+            "--subject".to_string(),
+            "s".to_string(),
+        ]);
+        assert!(refused.is_err(), "--raw and --subject refuse together");
+        // No flag, no subject: the env path stays the only fallback.
+        let plain = parse_args(&["peer-name".to_string(), "hello".to_string()]).unwrap();
+        assert_eq!(plain.subject, None);
+        // The 200-character cap fires at parse, before any send machinery.
+        let long = "x".repeat(201);
+        let capped = parse_args(&[
+            "peer-name".to_string(),
+            "hello".to_string(),
+            "--subject".to_string(),
+            long,
+        ]);
+        assert!(capped.is_err(), "a 201-char subject refuses");
     }
 }

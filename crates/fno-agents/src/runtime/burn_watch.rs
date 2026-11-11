@@ -4,7 +4,9 @@
 //! branch sit flat; nothing else in the fleet reads cost against progress.
 //! This arm samples every live session carrying an open execute phase: ledger
 //! spend, branch head, commit count and newest commit time (`git` in the
-//! row's own cwd), and the node's `touched_at` beside its newest thread row
+//! worker's own checkout: the node's target manifest names its worktree, and
+//! a checkout the arm cannot resolve leaves the pass unmeasured, never
+//! main's), and the node's `touched_at` beside its newest thread row
 //! (graph; a note resets the untouched clock without standing the ladder
 //! down as progress). Progress on any axis
 //! resets the ladder; a flat sample where spend grew, or where BOTH the node
@@ -31,6 +33,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::paths::AgentsHome;
+use crate::spawn_gate::LiveRead;
 
 pub const BURN_WATCH_INTERVAL_S: u64 = 900;
 pub const DEFAULT_IDLE_S: i64 = 7200;
@@ -144,10 +147,15 @@ pub struct BurnState {
 /// unread counter never trips.
 #[derive(Debug, Clone, Default, PartialEq)]
 struct Counters {
-    red: Option<(String, u32)>,
+    /// Workflows red at the node's PR head, sorted. `Some(empty)` is a
+    /// measured green at that head; `None` is an unread read and never trips.
+    red: Option<Vec<String>>,
     conflict_merges: Option<u32>,
     diff_lines: Option<u64>,
     hours: Option<i64>,
+    /// Context only, never trips: the node's age from its earliest execute
+    /// start, labeled in the notice beside the worker's own hours.
+    node_hours: Option<i64>,
     slot_wait_min: Option<i64>,
 }
 
@@ -534,65 +542,59 @@ fn first_line(stdout: &str) -> Option<String> {
         .map(|l| l.trim().to_string())
 }
 
-/// The workflow with the most distinct failed heads on a branch, from a
-/// GitHub Actions failure listing. A run whose latest attempt passed left
-/// the failure listing before this fold saw it, and the bucket check drops
-/// it again should a caller pass a mixed listing; nothing failed reads None.
-fn red_rounds(runs: &[Value]) -> Option<(String, u32)> {
-    let mut heads: BTreeMap<&str, std::collections::BTreeSet<&str>> = BTreeMap::new();
-    for run in runs {
-        if crate::pr_push::rest_bucket(run) != "fail" {
-            continue;
-        }
-        if let (Some(name), Some(sha)) = (
-            run.get("name").and_then(Value::as_str),
-            run.get("head_sha").and_then(Value::as_str),
-        ) {
-            heads.entry(name).or_default().insert(sha);
-        }
-    }
-    heads
-        .into_iter()
-        .max_by_key(|(_, shas)| shas.len())
-        .map(|(name, shas)| (name.to_string(), shas.len() as u32))
-}
-
-/// Red rounds for the row's PR branch, when the branch has a PR and the gh
-/// budget allows the read. A failed read is None and trips nothing.
-fn red_rounds_for(cwd: &str, runner: Runner, now_ms: i64) -> Option<(String, u32)> {
+/// The workflows red at the node's own PR head, sorted. The read pins the
+/// listing to `branch` + `head_sha` of the PR head, so main's history or
+/// the branch's own earlier failed pushes never answer for the worker. The
+/// jq fold keeps only `conclusion == "failure"` rows at that head, so a
+/// cancelled run reads cleared, never red. `None` only when a read could
+/// not answer (no PR, unparsable answer, gh budget in backoff); an empty
+/// vec is a measured green.
+fn red_at_pr_head(pr: u64, cwd: &str, runner: Runner, now_ms: i64) -> Option<Vec<String>> {
     if crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now_ms).backoff_remaining_s != 0
     {
         return None;
     }
-    let branch = first_line(
-        &runner(
-            &[
-                "git".into(),
-                "rev-parse".into(),
-                "--abbrev-ref".into(),
-                "HEAD".into(),
-            ],
-            cwd,
-        )
-        .1,
-    )?;
     let (code, out, _) = runner(
         &[
             "gh".into(),
             "api".into(),
-            format!(
-                "repos/{{owner}}/{{repo}}/actions/runs?branch={branch}&status=failure&per_page=100"
-            ),
+            format!("repos/{{owner}}/{{repo}}/pulls/{pr}"),
+            "--jq".into(),
+            PR_HEAD_JQ.into(),
         ],
         cwd,
     );
     if code != 0 {
         return None;
     }
-    let page: Value = serde_json::from_str(&out).ok()?;
-    let runs = page.get("workflow_runs")?.as_array()?;
-    red_rounds(runs)
+    let line = first_line(&out)?;
+    let mut parts = line.split_whitespace();
+    let sha = parts.next()?.to_string();
+    if sha.chars().count() < 7 {
+        return None;
+    }
+    let branch = parts.next()?.to_string();
+    let (code, out, _) = runner(&[
+        "gh".into(),
+        "api".into(),
+        format!(
+            "repos/{{owner}}/{{repo}}/actions/runs?branch={branch}&head_sha={sha}&status=failure&per_page=100"
+        ),
+        "--jq".into(),
+        RUNS_AT_HEAD_JQ.into(),
+    ], cwd);
+    if code != 0 {
+        return None;
+    }
+    serde_json::from_str::<Vec<String>>(out.trim()).ok()
 }
+
+/// The two jq programs the read above runs, as consts so a reader sees the
+/// shape without the argv noise. `RUNS_AT_HEAD_JQ` re-checks `conclusion`
+/// in the fold, so a cancelled or skipped row can never enter the answer.
+const PR_HEAD_JQ: &str = ".head.sha + \" \" + .head.ref";
+const RUNS_AT_HEAD_JQ: &str =
+    "[.workflow_runs[] | select(.conclusion == \"failure\") | .name] | unique";
 
 /// Merges of `base` into the branch whose `git show --remerge-diff` answer is
 /// non-empty: each is one merge that needed a resolution. At most the newest
@@ -669,7 +671,13 @@ fn diff_lines(cwd: &str, base: &str, runner: Runner) -> Option<u64> {
 
 /// The five counters for one in-scope worker's checkout. `base` unset, a
 /// probe that dies, an unreadable listing: each reads None and never trips.
-fn sample_counters(cwd: &str, facts: &NodeFacts, runner: Runner, now_epoch: i64) -> Counters {
+fn sample_counters(
+    cwd: &str,
+    facts: &NodeFacts,
+    worker_started_at: Option<i64>,
+    runner: Runner,
+    now_epoch: i64,
+) -> Counters {
     let base = first_line(
         &runner(
             &[
@@ -687,12 +695,17 @@ fn sample_counters(cwd: &str, facts: &NodeFacts, runner: Runner, now_epoch: i64)
         red: facts
             .pr_number
             .filter(|pr| *pr > 0)
-            .and_then(|_| red_rounds_for(cwd, runner, now_ms)),
+            .and_then(|pr| red_at_pr_head(pr, cwd, runner, now_ms)),
         conflict_merges: base
             .as_deref()
             .and_then(|b| conflict_merges(cwd, b, runner)),
         diff_lines: base.as_deref().and_then(|b| diff_lines(cwd, b, runner)),
-        hours: facts.first_execute_at.map(|t| (now_epoch - t) / 3600),
+        // The burn clock reads THIS worker's own session start, never the
+        // node's earliest execute row: a node's age across a handoff or
+        // repo cutover says nothing about the live worker (lead ruling).
+        // The node's age rides the notice as a labeled context line.
+        hours: worker_started_at.map(|t| (now_epoch - t) / 3600),
+        node_hours: facts.first_execute_at.map(|t| (now_epoch - t) / 3600),
         slot_wait_min: crate::test_run::build_wait_since_ms(Path::new(cwd))
             .map(|since| (now_ms - since) / 60_000),
     }
@@ -862,14 +875,18 @@ fn escalation_text(node: &str, sid: &str, reason: &str, attempts: u32) -> String
 }
 
 /// One evidence phrase per counter at or past its non-zero threshold.
-fn escalation_trips(counters: &Counters, t: &Thresholds) -> Vec<String> {
+fn escalation_trips(counters: &Counters, t: &Thresholds) -> Vec<(&'static str, String)> {
     let mut trips = Vec::new();
     if t.red_rounds > 0 {
-        if let Some((workflow, heads)) = &counters.red {
-            if *heads >= t.red_rounds {
-                trips.push(format!(
-                    "{workflow} red on {heads} heads (threshold {})",
-                    t.red_rounds
+        if let Some(names) = &counters.red {
+            if names.len() as u32 >= t.red_rounds {
+                trips.push((
+                    "red-at-pr-head",
+                    format!(
+                        "{} red at the PR head (threshold {})",
+                        names.join(", "),
+                        t.red_rounds
+                    ),
                 ));
             }
         }
@@ -877,9 +894,12 @@ fn escalation_trips(counters: &Counters, t: &Thresholds) -> Vec<String> {
     if t.conflict_merges > 0 {
         if let Some(n) = counters.conflict_merges {
             if n >= t.conflict_merges {
-                trips.push(format!(
-                    "{n} merges of the base needed a resolution (threshold {})",
-                    t.conflict_merges
+                trips.push((
+                    "conflict-merges",
+                    format!(
+                        "{n} merges of the base needed a resolution (threshold {})",
+                        t.conflict_merges
+                    ),
                 ));
             }
         }
@@ -887,9 +907,12 @@ fn escalation_trips(counters: &Counters, t: &Thresholds) -> Vec<String> {
     if t.diff_lines > 0 {
         if let Some(n) = counters.diff_lines {
             if n >= t.diff_lines {
-                trips.push(format!(
-                    "{n} changed lines against the base (threshold {})",
-                    t.diff_lines
+                trips.push((
+                    "diff-lines",
+                    format!(
+                        "{n} changed lines against the base (threshold {})",
+                        t.diff_lines
+                    ),
                 ));
             }
         }
@@ -897,16 +920,22 @@ fn escalation_trips(counters: &Counters, t: &Thresholds) -> Vec<String> {
     if t.hours > 0 {
         if let Some(h) = counters.hours {
             if h >= t.hours {
-                trips.push(format!("{h}h on the node (threshold {}h)", t.hours));
+                trips.push((
+                    "worker-hours",
+                    format!("{h}h on this worker (threshold {}h)", t.hours),
+                ));
             }
         }
     }
     if t.slot_wait_minutes > 0 {
         if let Some(m) = counters.slot_wait_min {
             if m >= t.slot_wait_minutes {
-                trips.push(format!(
-                    "{m}m waiting at the cargo build door (threshold {}m)",
-                    t.slot_wait_minutes
+                trips.push((
+                    "slot-wait",
+                    format!(
+                        "{m}m waiting at the cargo build door (threshold {}m)",
+                        t.slot_wait_minutes
+                    ),
                 ));
             }
         }
@@ -932,15 +961,18 @@ fn escalation_note_text(
     };
     let mut untripped: Vec<String> = Vec::new();
     match &counters.red {
-        Some((workflow, heads)) => {
-            if let Some(text) = reading(
-                tripped.iter().any(|t| t.contains(workflow)),
-                format!("{workflow} red on {heads} heads"),
-            ) {
-                untripped.push(text);
+        Some(names) if !names.is_empty() => {
+            for name in names {
+                if let Some(text) = reading(
+                    tripped.iter().any(|t| t.contains(name.as_str())),
+                    format!("{name} red at the PR head"),
+                ) {
+                    untripped.push(text);
+                }
             }
         }
-        None => untripped.push("red rounds unread".into()),
+        Some(_) => untripped.push("no workflow red at the PR head".into()),
+        None => untripped.push("PR-head CI unread".into()),
     }
     if let Some(n) = counters.conflict_merges {
         if let Some(text) = reading(
@@ -960,8 +992,8 @@ fn escalation_note_text(
     }
     if let Some(h) = counters.hours {
         if let Some(text) = reading(
-            tripped.iter().any(|t| t.contains("h on the node")),
-            format!("{h}h on the node"),
+            tripped.iter().any(|t| t.contains("h on this worker")),
+            format!("{h}h on this worker"),
         ) {
             untripped.push(text);
         }
@@ -979,9 +1011,13 @@ fn escalation_note_text(
     } else {
         untripped.join("; ")
     };
+    let node_age = counters
+        .node_hours
+        .map(|h| format!(" Node age: {h}h."))
+        .unwrap_or_default();
     format!(
         "{SENDER_LINE} node {node}, session {sid} on {harness} / {model}: {}. \
-         Other readings: {untripped_word}. The team chooses the destination: \
+         Other readings: {untripped_word}.{node_age} The team chooses the destination: \
          `skills/target/scripts/handoff.sh --harness <harness> --model <model>` \
          (docs/architecture/target-self-handoff.md). Nothing was moved. \
          This note is sent once per worker.",
@@ -1093,6 +1129,122 @@ pub(crate) fn session_cost_exact(otel_db: &Path, ledger: &Path, sid: &str) -> Op
     crate::team_spend::session_meter(otel_db, ledger, None, Some(sid)).usd()
 }
 
+/// One worktree manifest's checkout answer: where the worker sits, and the
+/// session id that owns the manifest, when it names one.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ManifestCwd {
+    pub cwd: String,
+    pub sid: String,
+}
+
+/// The node-to-worktree map for the project's space: one read of each
+/// worktree's target manifest. A manifest without an `owner_cwd`, or a
+/// worktrees dir that does not exist, contributes nothing. Several
+/// manifests can name one node across re-runs; the session id each names
+/// is what lets the resolver pick the live one.
+pub(crate) fn manifest_cwds(space: &Path) -> HashMap<String, Vec<ManifestCwd>> {
+    let mut out: HashMap<String, Vec<ManifestCwd>> = HashMap::new();
+    let Ok(entries) = std::fs::read_dir(space.join("worktrees")) else {
+        return out;
+    };
+    let mut names: Vec<_> = entries.flatten().map(|e| e.file_name()).collect();
+    names.sort();
+    for name in names {
+        let path = space.join("worktrees").join(&name).join("target-state.md");
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some(node) =
+            crate::backlog::birth::scan_md_field(&text, "graph_node_id").filter(|n| !n.is_empty())
+        else {
+            continue;
+        };
+        let Some(cwd) =
+            crate::backlog::birth::scan_md_field(&text, "owner_cwd").filter(|c| !c.is_empty())
+        else {
+            continue;
+        };
+        let sid = ["harness_session_id", "codex_thread_id", "claude_session_id"]
+            .iter()
+            .find_map(|k| crate::backlog::birth::scan_md_field(&text, k))
+            .unwrap_or_default();
+        out.entry(node).or_default().push(ManifestCwd { cwd, sid });
+    }
+    out
+}
+
+/// The checkout this worker's git and CI reads must run in. The session-
+/// matching manifest wins: re-runs of one node leave older manifests
+/// behind, and a sorted first-pick could sample a stale, merged tree. No
+/// match among several manifests is ambiguous: unmeasured, never the wrong
+/// tree. One manifest, or none, resolves as before (the row's own cwd as
+/// the fallback). None never fires anything: unmeasured, never red.
+pub(crate) fn resolve_worker_cwd(
+    cwds: &HashMap<String, Vec<ManifestCwd>>,
+    sid: &str,
+    node: &str,
+    entry_cwd: &str,
+) -> Option<String> {
+    let pick =
+        |m: &ManifestCwd| (!m.cwd.is_empty() && Path::new(&m.cwd).exists()).then(|| m.cwd.clone());
+    match cwds.get(node) {
+        Some(list) => {
+            if let Some(mine) = list.iter().find(|m| !m.sid.is_empty() && m.sid == sid) {
+                return pick(mine);
+            }
+            if list.len() == 1 {
+                return list.first().and_then(pick);
+            }
+            None
+        }
+        None => (!entry_cwd.is_empty()).then(|| entry_cwd.to_string()),
+    }
+}
+
+/// The once-per-worker note markers, durable across scope exit: the state
+/// file's flags die in the scope sweep, so a note that must be sent once
+/// per worker consults this marker file before sending and writes it
+/// after. The sweep never touches it. Files: `burn-watch/noted/<sid>.json`.
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
+struct Noted {
+    /// The escalation CAUSES already sent for this worker, one send per
+    /// cause: a repeat of the same cause stays silent, a new cause notifies.
+    #[serde(default)]
+    escalation: Vec<String>,
+    first_edit: bool,
+}
+
+fn noted_path(home: &AgentsHome, sid: &str) -> Option<std::path::PathBuf> {
+    if sid.is_empty() || sid.len() > 64 || !sid.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
+    {
+        return None;
+    }
+    Some(
+        home.burn_watch_dir()
+            .join("noted")
+            .join(format!("{sid}.json")),
+    )
+}
+
+fn load_noted(home: &AgentsHome, sid: &str) -> Noted {
+    noted_path(home, sid)
+        .and_then(|p| std::fs::read(&p).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+fn save_noted(home: &AgentsHome, sid: &str, sent: &Noted) {
+    let Some(path) = noted_path(home, sid) else {
+        return;
+    };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(bytes) = serde_json::to_vec(sent) {
+        let _ = std::fs::write(path, bytes);
+    }
+}
+
 /// The pass body, behind `maybe_tick`'s cadence gate. `runner` and
 /// `busy_for` are injected so tests stage the world.
 fn run_pass(
@@ -1142,8 +1294,34 @@ fn run_pass(
     let scope = scope_sessions(&rows);
     let facts = node_facts(&rows);
     let mut warnings = Vec::new();
+    let cwds = manifest_cwds(&crate::paths::space_dir(config_cwd));
+    let journal = crate::loop_runtime::Journal::new_raw(
+        home.events_jsonl(),
+        crate::daemon::global_events_path(home),
+    );
+    let live_entries =
+        match crate::spawn_gate::live_rows_checked(&home.registry_json(), &mut warnings) {
+            LiveRead::Rows(rows) => rows,
+            LiveRead::RegistryUnreadable(e) => {
+                // A degraded read must not erase what it failed to see: hold
+                // the sweep so ladders and once-notes survive the glitch.
+                crate::tick_ledger::emit_tick(
+                    &journal,
+                    "burn_watch",
+                    crate::tick_ledger::SCHED_DAEMON,
+                    0,
+                    Some("registry unreadable; sweep held"),
+                    Some(&format!(
+                        "scope {} sessions; registry read: {e}",
+                        scope.len()
+                    )),
+                    BURN_WATCH_INTERVAL_S,
+                );
+                return;
+            }
+        };
     let mut live: BTreeMap<String, crate::state::RegistryEntry> = BTreeMap::new();
-    for entry in crate::spawn_gate::live_rows(&home.registry_json(), &mut warnings) {
+    for entry in live_entries {
         if let Some(sid) = entry
             .harness_session_id
             .clone()
@@ -1160,7 +1338,8 @@ fn run_pass(
     for (sid, scoped) in &scope {
         let node = scoped.node.as_str();
         let Some(entry) = live.get(sid) else { continue };
-        let Some(cwd) = (!entry.cwd.is_empty()).then_some(entry.cwd.as_str()) else {
+        let resolved = resolve_worker_cwd(&cwds, sid, node, &entry.cwd);
+        let Some(cwd) = resolved.as_deref() else {
             continue;
         };
         // A node that left the open set is the reaper's question, not ours.
@@ -1235,43 +1414,56 @@ fn run_pass(
             }
             Decision::Hold => skip = Some("holding".into()),
         }
-        // The capability note rides its own flag, copied from prev because
-        // decide rebuilds the state and a stand-down must not clear it.
-        next.escalation_noted = prev.as_ref().map(|p| p.escalation_noted).unwrap_or(false);
-        if !next.escalation_noted {
-            let counters = sample_counters(
-                cwd,
-                facts.get(node).unwrap_or(&NodeFacts::default()),
+        // The capability note rides per-cause once markers: a cause sends
+        // once per worker, and a NEW cause still notifies. The counters are
+        // sampled every pass for that check; the markers survive the scope
+        // sweep, and the state flag stays a cheap "any sent" summary.
+        let mut noted = load_noted(home, sid);
+        next.escalation_noted = prev.as_ref().map(|p| p.escalation_noted).unwrap_or(false)
+            || !noted.escalation.is_empty();
+        let counters = sample_counters(
+            cwd,
+            facts.get(node).unwrap_or(&NodeFacts::default()),
+            scoped.started_at,
+            runner,
+            now_epoch,
+        );
+        let tripped_pairs = escalation_trips(&counters, thresholds);
+        let tripped: Vec<String> = tripped_pairs.iter().map(|(_, p)| p.clone()).collect();
+        let new_causes: Vec<&str> = tripped_pairs
+            .iter()
+            .map(|(s, _)| *s)
+            .filter(|s| !noted.escalation.iter().any(|c| c == *s))
+            .collect();
+        if !new_causes.is_empty() {
+            let harness = entry.harness.as_deref().unwrap_or("unknown");
+            let model = scoped
+                .observed_model
+                .as_deref()
+                .or(entry.model.as_deref())
+                .or(entry.requested_model.as_deref())
+                .unwrap_or("unknown");
+            let text = escalation_note_text(node, sid, harness, model, &counters, &tripped);
+            let owner = node_owner(config_cwd, &home.registry_json(), &rows, &mut owners, node);
+            note_owner(
+                home,
                 runner,
-                now_epoch,
+                owner,
+                &text,
+                cwd,
+                node,
+                &format!("capability escalation for {node}"),
+                "skills/target/scripts/handoff.sh",
             );
-            let tripped = escalation_trips(&counters, thresholds);
-            if !tripped.is_empty() {
-                let harness = entry.harness.as_deref().unwrap_or("unknown");
-                let model = scoped
-                    .observed_model
-                    .as_deref()
-                    .or(entry.model.as_deref())
-                    .or(entry.requested_model.as_deref())
-                    .unwrap_or("unknown");
-                let text = escalation_note_text(node, sid, harness, model, &counters, &tripped);
-                let owner = node_owner(config_cwd, &home.registry_json(), &rows, &mut owners, node);
-                note_owner(
-                    home,
-                    runner,
-                    owner,
-                    &text,
-                    cwd,
-                    node,
-                    &format!("capability escalation for {node}"),
-                    "skills/target/scripts/handoff.sh",
-                );
-                next.escalation_noted = true;
-                notes += 1;
-            }
+            noted
+                .escalation
+                .extend(new_causes.iter().map(|s| s.to_string()));
+            next.escalation_noted = true;
+            notes += 1;
         }
-        // The first-edit note rides its own flag for the same reason.
-        next.first_edit_noted = prev.as_ref().map(|p| p.first_edit_noted).unwrap_or(false);
+        // The first-edit note rides its own marker flag for the same reason.
+        next.first_edit_noted =
+            prev.as_ref().map(|p| p.first_edit_noted).unwrap_or(false) || noted.first_edit;
         if !next.first_edit_noted {
             let harness = entry.harness.as_deref().unwrap_or("unknown");
             if let Some(text) = first_edit_overdue(
@@ -1300,6 +1492,14 @@ fn run_pass(
             }
         }
         save_state(home, sid, &next);
+        save_noted(
+            home,
+            sid,
+            &Noted {
+                escalation: noted.escalation,
+                first_edit: next.first_edit_noted,
+            },
+        );
     }
     // A session that left the scope loses its ladder and its filed task,
     // exactly as the pr-nudge ladder drops state beside its rows.
@@ -1333,10 +1533,6 @@ fn run_pass(
             let _ = std::fs::remove_file(entry.path());
         }
     }
-    let journal = crate::loop_runtime::Journal::new_raw(
-        home.events_jsonl(),
-        crate::daemon::global_events_path(home),
-    );
     crate::tick_ledger::emit_tick(
         &journal,
         "burn_watch",
@@ -1929,5 +2125,217 @@ mod tests {
             "registry read failure must surface"
         );
         assert!(claims_error.is_err(), "claim read failure must surface");
+    }
+    #[test]
+    fn the_cwd_join_reads_the_nodes_manifest() {
+        let temp = tempfile::tempdir().unwrap();
+        let space = temp.path().join("space");
+        for name in ["w1", "w2", "w3"] {
+            std::fs::create_dir_all(space.join("worktrees").join(name)).unwrap();
+        }
+        std::fs::create_dir_all(temp.path().join("never/w1")).unwrap();
+        std::fs::create_dir_all(temp.path().join("never/w2")).unwrap();
+        let manifest = |name: &str, body: String| {
+            std::fs::write(
+                space.join("worktrees").join(name).join("target-state.md"),
+                body,
+            )
+            .unwrap()
+        };
+        manifest(
+            "w1",
+            format!(
+                "graph_node_id: x-1\nharness_session_id: sess-1\nowner_cwd: {}\n",
+                temp.path().join("never/w1").display()
+            ),
+        );
+        manifest(
+            "w2",
+            format!(
+                "graph_node_id: x-1\nharness_session_id: sess-2\nowner_cwd: {}\n",
+                temp.path().join("never/w2").display()
+            ),
+        );
+        manifest(
+            "w3",
+            format!(
+                "graph_node_id: x-2\nowner_cwd: {}\n",
+                temp.path().join("never/w1").display()
+            ),
+        );
+        let map = manifest_cwds(&space);
+        // The session-matching manifest wins over the sorted first pick.
+        assert_eq!(
+            resolve_worker_cwd(&map, "sess-2", "x-1", "/canonical"),
+            Some(temp.path().join("never/w2").to_str().unwrap().to_string())
+        );
+        assert_eq!(
+            resolve_worker_cwd(&map, "sess-1", "x-1", "/canonical"),
+            Some(temp.path().join("never/w1").to_str().unwrap().to_string())
+        );
+        // An unmatched sid among several manifests is ambiguous: unmeasured.
+        assert_eq!(resolve_worker_cwd(&map, "other", "x-1", "/canonical"), None);
+        // One manifest resolves without a sid match.
+        assert_eq!(
+            resolve_worker_cwd(&map, "nope", "x-2", "/canonical"),
+            Some(temp.path().join("never/w1").to_str().unwrap().to_string())
+        );
+        // No manifest: the row's own cwd answers; an empty one does not.
+        assert_eq!(
+            resolve_worker_cwd(&map, "s", "x-9", "/canonical"),
+            Some("/canonical".to_string())
+        );
+        assert_eq!(resolve_worker_cwd(&map, "s", "x-9", ""), None);
+    }
+
+    #[test]
+    fn the_red_read_is_pinned_to_the_pr_head() {
+        let mut calls: Vec<Vec<String>> = Vec::new();
+        let mut runner: Runner = &mut |argv: &[String], _cwd: &str| {
+            calls.push(argv.to_vec());
+            let path = argv.get(2).map(String::as_str).unwrap_or("");
+            if path.contains("pulls/") {
+                (
+                    0,
+                    "1111111111111111111111111111111111111111 feature/x\n".into(),
+                    String::new(),
+                )
+            } else {
+                (0, "[\"cli-ci\",\"CodeQL\"]".into(), String::new())
+            }
+        };
+        let red = red_at_pr_head(42, "/w", &mut runner, 1);
+        assert_eq!(red, Some(vec!["cli-ci".to_string(), "CodeQL".to_string()]));
+        let listing = calls
+            .iter()
+            .find(|a| a.get(2).is_some_and(|p| p.contains("actions/runs?")))
+            .expect("two gh reads");
+        assert!(
+            listing
+                .get(2)
+                .is_some_and(|p| p.contains("branch=feature/x")),
+            "{listing:?}"
+        );
+        assert!(
+            listing
+                .get(2)
+                .is_some_and(|p| p.contains("head_sha=1111111111111111111111111111111111111111")),
+            "{listing:?}"
+        );
+        assert!(
+            listing.get(2).is_some_and(|p| p.contains("status=failure")),
+            "{listing:?}"
+        );
+        assert_eq!(listing.get(4), Some(&RUNS_AT_HEAD_JQ.to_string()));
+        assert_eq!(
+            calls.first().and_then(|a| a.get(4)),
+            Some(&PR_HEAD_JQ.to_string())
+        );
+    }
+
+    #[test]
+    fn an_unanswered_red_read_stays_unmeasured() {
+        for (pr_code, runs_code, pr_out, runs_out, expect) in [
+            (1, 0, "", "[]", None),
+            (
+                0,
+                1,
+                "1111111111111111111111111111111111111111 feature/x\n",
+                "[]",
+                None,
+            ),
+            (0, 0, "", "[]", None),
+            (0, 0, "short feature/x\n", "[]", None),
+            (
+                0,
+                0,
+                "1111111111111111111111111111111111111111 feature/x\n",
+                "not-json",
+                None,
+            ),
+            (
+                0,
+                0,
+                "1111111111111111111111111111111111111111 feature/x\n",
+                "[]",
+                Some(Vec::new()),
+            ),
+        ] {
+            let mut runner: Runner = &mut |argv: &[String], _cwd: &str| {
+                if argv.get(2).is_some_and(|p| p.contains("pulls/")) {
+                    (pr_code, pr_out.into(), String::new())
+                } else {
+                    (runs_code, runs_out.into(), String::new())
+                }
+            };
+            assert_eq!(red_at_pr_head(42, "/w", &mut runner, 1), expect);
+        }
+    }
+
+    #[test]
+    fn red_trips_name_the_workflows_and_note_marks_a_measured_green() {
+        let t = Thresholds::default();
+        let trip = Counters {
+            red: Some(vec![
+                "cli-ci".into(),
+                "guards".into(),
+                "main-binaries".into(),
+            ]),
+            ..Default::default()
+        };
+        let trips = escalation_trips(&trip, &t);
+        assert_eq!(trips.len(), 1, "{trips:?}");
+        assert_eq!(trips.first().map(|(s, _)| *s), Some("red-at-pr-head"));
+        assert!(
+            trips
+                .first()
+                .is_some_and(|(_, p)| p.contains("cli-ci, guards, main-binaries")),
+            "{trips:?}"
+        );
+        assert!(
+            trips
+                .first()
+                .is_some_and(|(_, p)| p.contains("threshold 3")),
+            "{trips:?}"
+        );
+        let clean = Counters {
+            red: Some(Vec::new()),
+            ..Default::default()
+        };
+        assert!(escalation_trips(&clean, &t).is_empty());
+        let unread = Counters {
+            red: None,
+            ..Default::default()
+        };
+        assert!(escalation_trips(&unread, &t).is_empty());
+        let note = escalation_note_text("x-1", "s-1", "claude", "m", &clean, &[]);
+        assert!(note.contains("no workflow red at the PR head"), "{note}");
+        let note = escalation_note_text("x-1", "s-1", "claude", "m", &unread, &[]);
+        assert!(note.contains("PR-head CI unread"), "{note}");
+    }
+
+    #[test]
+    fn the_once_note_outlives_a_scope_exit() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = crate::paths::AgentsHome::at(temp.path().join("agents"));
+        std::fs::create_dir_all(home.root()).unwrap();
+        save_noted(
+            &home,
+            "aabb",
+            &Noted {
+                escalation: vec!["red-at-pr-head".to_string()],
+                first_edit: false,
+            },
+        );
+        assert_eq!(
+            load_noted(&home, "aabb"),
+            Noted {
+                escalation: vec!["red-at-pr-head".to_string()],
+                first_edit: false
+            }
+        );
+        // A sid that fails validation stores nothing and reads default.
+        assert_eq!(load_noted(&home, ""), Noted::default());
+        assert_eq!(load_noted(&home, "../escape"), Noted::default());
     }
 }
