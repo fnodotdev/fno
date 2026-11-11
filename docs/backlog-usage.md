@@ -515,7 +515,7 @@ An open do row wedges its node `in_progress`. The in-progress status hides the r
 
 The maintain pass carries a repo-rename sweep. An open node's PR url recorded under the repo's former name rewrites in place, primary or additional. The alias comes from config `[repo_aliases]` or GitHub's own redirect answer, cached in gh-facts. Closed rows keep their history.
 
-That sweep answers a true rename, where GitHub keeps redirecting. A cutover that hands the old name to a new repo kills the redirects. The alias probe then answers the new repo's own name, so the sweep cannot see the move. That shape has its own one-shot pass. Run it before the new repo binds its first PR; past that point pass `--min-number N`, with N one above the new repo's highest PR (measure with `gh pr list --repo <new> --state all --limit 500 --json number`), so the pass leaves the new repo's own rows alone:
+That sweep answers a true rename, where GitHub keeps redirecting. A cutover that hands the old name to a new repo kills the redirects. The alias probe then answers the new repo's own name, so the sweep cannot see the move. That shape has its own one-shot pass. Run it before the new repo binds its first PR. Past that point the number separates old rows from new rows: pass `--min-number` set one above the new repo's highest PR. Measure it with `gh pr list --repo <new> --state all --limit 500 --json number`. The pass then leaves the new repo's own rows alone:
 
 ```bash
 fno backlog maintain --repo-moved fnodotdev/fno=fnodotdev/fno-workshop --apply
