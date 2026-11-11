@@ -186,26 +186,18 @@ pub fn project_root(project: &str) -> Option<String> {
     None
 }
 
-/// The configured checkout for `project` when it exists on disk, else None.
-/// Dispatch prefers the live work map over a node row's stored cwd: a
-/// stored cwd predates config changes (the 2026-11-11 cutover left open
-/// rows pointing at a retired checkout). A path off disk answers None so
-/// callers keep the stored cwd instead of failing at launch.
-pub fn live_project_root(project: &str) -> Option<PathBuf> {
-    project_root(project)
-        .map(PathBuf::from)
-        .filter(|p| p.is_dir())
-}
-
 /// The checkout a dispatch resolves for a node row: the live configured root
-/// of the row's project first, then the served row's `_resolved_cwd`
-/// annotation, then the stored `cwd`. The field keys live at this one
-/// boundary (R1: a typed row struct replaces the whole site).
+/// of the row's project first (on disk, or the stored cwd would fail at
+/// launch), then the served row's `_resolved_cwd` annotation, then the
+/// stored `cwd`. The field keys live at this one boundary (R1: a typed row
+/// struct replaces the whole site).
 pub fn node_row_checkout(row: &Value) -> Option<String> {
     if let Some(root) = row
         .get("project")
         .and_then(Value::as_str)
-        .and_then(live_project_root)
+        .and_then(project_root)
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
     {
         return Some(root.to_string_lossy().into_owned());
     }
