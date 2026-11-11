@@ -327,19 +327,14 @@ pub fn promote(home: &AgentsHome, handle: &str, scopes: &[String]) -> Result<Val
         .map_or(grantor_name.clone(), str::to_string);
     let same =
         |a: Option<&str>, b: &str| crate::loop_lead::same_territory(a.unwrap_or(""), b, &projects);
-    if let Some(c) = &caller {
-        if same(c.role_scope.as_deref(), &scope) {
-            return Err(format!(
-                "refusing to role {}: {} is your OWN scope, and this command only stamps the \
-                 target, so it cannot hand a role over. Succession runs through `fno agents spawn \
-                 --promote <scope> --hand-off` instead, which vacates you and stamps the new \
-                 holder in a single registry write, so the scope is never doubly ruled and never \
-                 briefly unruled.",
-                py_repr_str(handle),
-                py_repr_str(&scope)
-            ));
-        }
-    }
+    // A same-scope caller IS the succession intent: the door vacates the
+    // caller and stamps the target in the single registry write below, so
+    // the scope is never doubly ruled and never briefly unruled. The old
+    // refusal sent this shape to `spawn --promote --hand-off`; the widened
+    // acceptance makes the direct door perform it.
+    let succession = caller
+        .as_ref()
+        .is_some_and(|c| same(c.role_scope.as_deref(), &scope));
     let granting_scope = caller.as_ref().and_then(|c| c.role_scope.clone());
 
     let mut receipt = Map::new();
@@ -437,6 +432,34 @@ pub fn promote(home: &AgentsHome, handle: &str, scopes: &[String]) -> Result<Val
             row.role_scope = Some(scope.clone());
             row.role_grantor = Some(recorded_grantor.clone());
         }
+        // The succession half of the same write: the caller's own row
+        // vacates as the target arms, so the scope never has two rulers.
+        if succession {
+            if let Some(c) = &caller {
+                let row = reg
+                    .entries
+                    .iter_mut()
+                    .find(|r| r.name == c.name)
+                    .ok_or_else(|| {
+                        format!(
+                            "refusing to role {}: the calling row disappeared before the \
+                             succession committed.",
+                            py_repr_str(handle)
+                        )
+                    })?;
+                if holder_session(row).is_none() {
+                    return Err(format!(
+                        "refusing to role {}: the calling row carries no session, so the \
+                         succession cannot prove its holder.",
+                        py_repr_str(handle)
+                    ));
+                }
+                row.role_level = None;
+                row.role_scope = None;
+                row.role_grantor = None;
+                receipt.insert("succession_vacated".into(), c.name.clone().into());
+            }
+        }
         receipt.insert("promoted".into(), target.name.clone().into());
         receipt.insert("level".into(), level.into());
         receipt.insert("scope".into(), scope.clone().into());
@@ -449,6 +472,21 @@ pub fn promote(home: &AgentsHome, handle: &str, scopes: &[String]) -> Result<Val
     .map_err(|e| format!("the registry write failed: {e}"))??;
     if let Some(session) = resolved_target.harness_session_id.as_deref() {
         crate::retired_lead::clear(home, session);
+    }
+    if let Some(vacated_name) = receipt.get("succession_vacated").and_then(Value::as_str) {
+        let events = crate::events::EventEmitter::new(home.events_jsonl(), "agents");
+        let _ = events.emit(
+            "agent_role_vacated",
+            &json!({
+                "scope": scope,
+                "level": Value::Null,
+                "holder": vacated_name,
+                "holder_session": caller.as_ref().and_then(holder_session),
+                "grantor": Value::Null,
+                "cause": "succession",
+                "successor": target_name,
+            }),
+        );
     }
 
     // Clear the vacated manifest BEFORE arming missions: a role killed between
@@ -882,6 +920,69 @@ mod tests {
         };
         assert_eq!(verdict(0), None);
         assert!(verdict(1).unwrap().contains("neither contains nor equals"));
+    }
+
+    #[test]
+    fn a_holder_promote_over_own_scope_succeeds() {
+        // Specimen 4 of the widened acceptance: the holder handing its own
+        // scope over is a succession, not a refusal. One registry write
+        // vacates the caller and stamps the target, so the scope is never
+        // doubly ruled and never briefly unruled.
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let agents = tmp.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        crate::registry_store::seed_raw(
+            agents.join("registry.json"),
+            json!({"schema_version": 4, "agents": [
+                {"name": "valentina", "status": "live", "role_scope": "x-own", "role_level": 2,
+                 "cwd": tmp.path().display().to_string(), "harness": "claude",
+                 "harness_session_id": "s-v", "created_at": "2026-11-11T00:00:00Z"},
+                {"name": "lucia", "status": "live",
+                 "cwd": tmp.path().display().to_string(), "harness": "claude",
+                 "harness_session_id": "s-l", "created_at": "2026-11-11T00:00:00Z"}
+            ]})
+            .to_string(),
+        );
+        let _home = crate::claims::EnvVarGuard::set(
+            crate::paths::HOME_ENV,
+            agents.display().to_string().as_str(),
+        );
+        let _hn = crate::claims::EnvVarGuard::set("FNO_HARNESS_NAME", "claude");
+        let _hsid = crate::claims::EnvVarGuard::set("FNO_HARNESS_SESSION_ID", "s-v");
+        let _attest = crate::claims::EnvVarGuard::set("CLAUDE_CODE_SESSION_ID", "s-v");
+        let _spid = crate::claims::EnvVarGuard::set(
+            "FNO_SESSION_PID",
+            std::process::id().to_string().as_str(),
+        );
+        let _sharness = crate::claims::EnvVarGuard::set("FNO_SESSION_HARNESS", "claude");
+        let ppid: u32 = unsafe { libc::getppid() } as u32;
+        let _table = crate::claims::proof_tests::CensusGuard::chain(&[
+            (
+                std::process::id(),
+                ppid,
+                "fno-agents org promote lucia --scope x-own",
+            ),
+            (ppid, 1, "claude --resume /t/lead.jsonl --name lead"),
+            (1, 0, "launchd"),
+        ]);
+        let home = crate::paths::AgentsHome::from_env();
+        let receipt = promote(&home, "lucia", &["x-own".to_string()])
+            .expect("the holder hands its own scope over");
+        assert_eq!(
+            receipt["succession_vacated"].as_str(),
+            Some("valentina"),
+            "{receipt}"
+        );
+        let rows = crate::state::load_registry(&home.registry_json()).unwrap();
+        let caller = rows.entries.iter().find(|r| r.name == "valentina").unwrap();
+        assert_eq!(caller.role_level, None, "the caller is vacated");
+        assert_eq!(caller.role_scope.as_deref(), None);
+        let target = rows.entries.iter().find(|r| r.name == "lucia").unwrap();
+        assert_eq!(target.role_level, Some(1), "{receipt}");
+        assert_eq!(target.role_scope.as_deref(), Some("x-own"));
     }
 
     #[test]
