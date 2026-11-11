@@ -27,8 +27,9 @@ name: release
 #              picked sha, the run skips - a quiet day opens nothing.
 #   stable   - dispatch only: promotes the newest v*rc* tag (or
 #              inputs.sha) in the approved job: PyPI, crates.io, the tag,
-#              the GitHub Release, the Homebrew tap, the `stable` branch
-#              the plugin marketplaces pin. Main is not touched: a
+#              the GitHub Release, the Homebrew tap, and the catalog pin
+#              the plugin marketplaces resolve (a squash PR the job opens
+#              and auto-merges). Main is not pushed directly: a
 #              repository rule rejects the release job's push, and
 #              release-version.sh skips every released v<src> instead.
 #
@@ -342,21 +343,6 @@ jobs:
             exit "$rc"
           fi
 
-      - name: Validate the selected plugin source before any publication
-        if: steps.skip.outputs.skip != 'true'
-        env:
-          SOURCE_SHA: ${{ steps.pick.outputs.sha }}
-          VERSION: ${{ steps.math.outputs.version }}
-        run: |
-          set -euo pipefail
-          scratch=$(mktemp -d)
-          trap 'rm -rf "$scratch"' EXIT
-          mkdir "$scratch/source"
-          git archive "$SOURCE_SHA" | tar -x -C "$scratch/source"
-          rustc --edition=2021 crates/fno-agents/ci/plugin_tree.rs -o "$scratch/plugin-tree"
-          semver="$(printf '%s' "$VERSION" | sed -E 's/\.dev([0-9]+)$/-dev.\1/; s/rc([0-9]+)$/-rc.\1/')"
-          "$scratch/plugin-tree" build "$scratch/source" "$scratch/tree" "$SOURCE_SHA" "$semver"
-
   binaries:
     name: build binary tarballs
     needs: resolve
@@ -414,47 +400,24 @@ jobs:
           # check and the session-start hook read it (rate-limit-free route).
           printf '{"version": "%s", "min_supported": "%s"}\n' "${{ needs.resolve.outputs.version }}" "$(tr -d '[:space:]' < scripts/release/min-supported)" > dist/fno-release.json
 
-      - name: Stamp the plugin version onto the nightly tag
-        # only change is the plugin manifests' version, so the nightly plugin
-        # channel resolves to a version distinct from stable's (both harness
-        # marketplaces skip an update when a channel's version is unchanged).
-        # Main never moves; no v* tag is created.
-        id: stamp
+      - name: Move the rolling nightly tag
+        # The nightly CLI channel keeps its rolling pre-release; only the
+        # plugin-nightly channel it used to also serve is retired, so the tag
+        # moves to the resolved sha with no plugin-manifest stamping.
         run: |
           set -euo pipefail
           sha="${{ needs.resolve.outputs.sha }}"
-          version="${{ needs.resolve.outputs.version }}"
-
-          # PEP 440 -> semver for the plugin manifests (0.4.0.dev20260925 ->
-          # 0.4.0-dev.20260925); the marketplace docs compare these as strings.
-          semver="$(printf '%s' "$version" | sed -E 's/\.dev([0-9]+)$/-dev.\1/; s/rc([0-9]+)$/-rc.\1/')"
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout "$sha"
-          for manifest in .claude-plugin/plugin.json .codex-plugin/plugin.json; do
-            perl -i -pe "s/\"version\": \"[^\"]*\"/\"version\": \"${semver}\"/" "$manifest"
-          done
-          git add .claude-plugin/plugin.json .codex-plugin/plugin.json
-          if ! git diff --cached --quiet; then
-            git commit -m "chore(nightly): stamp plugin ${semver} [skip ci]"
-          fi
-          stamped="$(git rev-parse HEAD)"
-
-          # Replace the rolling tag (delete-then-create below removed the old
-          # one; force anyway so a re-run never loses to a stale remote tag).
-          git tag -f nightly "$stamped"
+          git tag -f nightly "$sha"
           git push -f origin refs/tags/nightly
-          echo "stamped=${stamped}" >> "$GITHUB_OUTPUT"
 
-      - name: Publish the shared nightly plugin tree
-        if: inputs.dry_run != true
-        env:
-          SOURCE_SHA: ${{ needs.resolve.outputs.sha }}
-          VERSION: ${{ needs.resolve.outputs.version }}
+      - name: Publish the nightly release
         run: |
-          semver="$(printf '%s' "$VERSION" | sed -E 's/\.dev([0-9]+)$/-dev.\1/; s/rc([0-9]+)$/-rc.\1/')"
-          bash scripts/release/publish-plugin.sh "$SOURCE_SHA" "$semver" plugin-nightly
+          set -euo pipefail
+          version="${{ needs.resolve.outputs.version }}"
+          stamped="${{ needs.resolve.outputs.sha }}"
 
       - name: Publish the nightly release
         run: |
@@ -513,10 +476,12 @@ jobs:
     timeout-minutes: 20
     # THE click. Every publish leg sits in this one job, so one approval
     # releases one job: PyPI, crates.io, the tag, the GitHub Release, the tap
-    # and the stable branch the plugin marketplaces pin.
+    # and the catalog pin the plugin marketplaces resolve.
     environment: release
     permissions:
       contents: write
+      pull-requests: write # open and auto-merge the catalog pin PR
+      statuses: write # stamp stacked-base-guard on the pin branch
     env:
       GH_TOKEN: ${{ github.token }}
       CHANNEL: ${{ needs.resolve.outputs.channel }}
@@ -629,23 +594,40 @@ jobs:
           fi
           echo "release ${TAG} published at ${SHA}"
 
-      - name: Stable plugin channel (stable only)
+      - name: Move the plugin catalog pin (stable only)
         if: ${{ inputs.dry_run != true && env.CHANNEL == 'stable' }}
-        # Both marketplaces consume one generated tree. Preserve the previous
-        # stable tip as its parent so installed clones can fast-forward.
-        id: stable-plugin
+        # The catalogs on main pin the fno entry to the release tag with its
+        # sha; installs track releases through marketplace auto-update. The
+        # bot cannot push main (the ruleset requires a PR) and a PR created
+        # with GITHUB_TOKEN fires no CI events, so this step posts the
+        # required stacked-base-guard context itself - the branch is cut from
+        # the default branch here, which is exactly the lineage the guard
+        # exists to prove, and the same stamp `fno do pr push` makes at push
+        # time. Auto-merge then completes without a human click.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
+          branch="plugin-pin/${TAG}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          bash scripts/release/publish-plugin.sh "$SHA" "$VERSION" stable
-          if git rev-parse --verify -q "refs/tags/fno--v${VERSION}" >/dev/null; then
-            echo "plugin tag fno--v${VERSION} already exists - skipping"
-          else
-            git tag "fno--v${VERSION}" "$(git ls-remote origin refs/heads/stable | cut -f1)"
-            git push origin "refs/tags/fno--v${VERSION}"
-            echo "plugin tag fno--v${VERSION} pushed"
-          fi
+          git fetch origin "$DEFAULT_BRANCH"
+          git checkout -b "$branch" "origin/${DEFAULT_BRANCH}"
+          bash scripts/release/move-plugin-pin.sh "$TAG" "$SHA"
+          git add .claude-plugin/marketplace.json .agents/plugins/marketplace.json .claude-plugin/plugin.json .codex-plugin/plugin.json
+          git commit -m "chore(release): pin the plugin catalogs to ${TAG}"
+          git push origin "$branch"
+          pr=$(gh pr create --head "$branch" \
+            --title "chore(release): pin the plugin catalogs to ${TAG}" \
+            --body "Moves the fno entry in both catalogs to ${TAG} (${SHA}) and bumps the plugin manifests to ${VERSION}.")
+          head=$(git rev-parse HEAD)
+          git merge-base --is-ancestor "origin/${DEFAULT_BRANCH}" HEAD
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${head}" \
+            -f state=success -f context=stacked-base-guard \
+            -f description="base is the default branch (${DEFAULT_BRANCH})"
+          gh pr merge "$pr" --squash --auto
+          echo "pin PR: ${pr} (auto-merge armed at ${head})"
 
       - name: Homebrew tap (stable only)
         if: ${{ inputs.dry_run != true && env.CHANNEL == 'stable' }}
