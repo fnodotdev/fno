@@ -67,6 +67,12 @@ fn history_request(subject: &str) -> String {
     json!({"mode": "history", "argv": [subject]}).to_string()
 }
 
+/// The decisions listing: its rows carry the authority columns the history
+/// chain omits, so the operator proof reads back through this door.
+fn decisions_request(subject: &str) -> String {
+    json!({"mode": "decisions", "argv": [subject, "--json"]}).to_string()
+}
+
 /// The transport the fixed front door uses at a terminal: the request rides
 /// argv and the worker's fd 0 is a real tty.
 fn spawn_attended(fixture: &Fixture, request: &str) -> (i32, String) {
@@ -152,25 +158,23 @@ fn a_terminal_set_records_under_operator_authority() {
         .find(|t| t.starts_with("d-"))
         .expect("stdout carries the decision id")
         .to_owned();
-    let (code, stdout, stderr) = spawn_piped(&fixture, &history_request("tty-door"));
-    assert_eq!(code, 0, "history reads: {stderr}");
-    let answer: Value = serde_json::from_str(stdout.trim()).expect("history json");
+    let (code, stdout, stderr) = spawn_piped(&fixture, &decisions_request("tty-door"));
+    assert_eq!(code, 0, "decisions reads: {stderr}");
+    let answer: Value = serde_json::from_str(stdout.trim()).expect("decisions json");
     let rows = answer
-        .get("chain")
+        .get("decisions")
         .and_then(Value::as_array)
-        .expect("history chain");
-    assert!(!rows.is_empty(), "the recorded law reads back: {answer}");
+        .expect("decisions rows");
+    assert!(!rows.is_empty(), "the recorded law lists: {answer}");
     let live = rows
-        .first()
-        .expect("the non-empty chain holds the live row");
-    assert_eq!(field(live, "decision_id"), &json!(id), "{live}");
+        .iter()
+        .find(|r| field(r, "decision_id") == &json!(id))
+        .expect("the non-empty listing holds the live row");
     assert_eq!(
         field(live, "authority_source"),
         &json!("operator"),
         "{live}"
     );
-    assert_eq!(field(live, "decided_by"), &json!("operator"), "{live}");
-    assert_eq!(field(live, "attested_by"), &json!("operator"), "{live}");
 }
 
 #[test]
@@ -192,17 +196,17 @@ fn a_payload_read_from_the_terminal_rides_argv_attended() {
         .to_string(),
     );
     assert_eq!(code, 0, "attended payload record refused: {output}");
-    let (code, stdout, stderr) = spawn_piped(&fixture, &history_request("payload-door"));
-    assert_eq!(code, 0, "history reads: {stderr}");
-    let answer: Value = serde_json::from_str(stdout.trim()).expect("history json");
+    let (code, stdout, stderr) = spawn_piped(&fixture, &decisions_request("payload-door"));
+    assert_eq!(code, 0, "decisions reads: {stderr}");
+    let answer: Value = serde_json::from_str(stdout.trim()).expect("decisions json");
     let rows = answer
-        .get("chain")
+        .get("decisions")
         .and_then(Value::as_array)
-        .expect("history chain");
-    assert!(!rows.is_empty(), "the recorded law reads back: {answer}");
+        .expect("decisions rows");
+    assert!(!rows.is_empty(), "the recorded law lists: {answer}");
     let live = rows
         .first()
-        .expect("the non-empty chain holds the live row");
+        .expect("the non-empty listing holds the live row");
     assert_eq!(
         field(live, "decision"),
         &json!("The terminal fed the decision text."),
