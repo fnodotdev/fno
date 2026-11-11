@@ -388,3 +388,140 @@ fn repo_moved_refuses_a_malformed_spec() {
     assert_eq!(err, 2);
     assert_eq!(fx.rows().len(), 1);
 }
+
+#[test]
+fn repo_moved_floor_keeps_rows_below_min_number() {
+    let fx = Fixture::new(&[
+        // New-repo rows: the numbers a cutover must leave alone.
+        node(
+            "ab-mov1001",
+            json!({"pr_number": 4, "pr_url": "https://github.com/fnodotdev/fno/pull/4"}),
+        ),
+        node(
+            "ab-mov1002",
+            json!({"pr_number": 26, "pr_url": "https://github.com/fnodotdev/fno/pull/26"}),
+        ),
+        // Old-repo rows: at or above the floor, they move.
+        node(
+            "ab-mov1003",
+            json!({"pr_number": 4038, "pr_url": "https://github.com/fnodotdev/fno/pull/4038"}),
+        ),
+        node(
+            "ab-mov1004",
+            json!({"pr_url": "https://github.com/fnodotdev/fno/pull/4800", "pr_number": 4800,
+                   "additional_prs": [
+                       {"number": 4789, "url": "https://github.com/fnodotdev/fno/pull/4789", "history": true},
+                       {"number": 4, "url": "https://github.com/fnodotdev/fno/pull/4"}]}),
+        ),
+        // Url-less fills respect the floor in both directions.
+        node("ab-mov1005", json!({"pr_number": 9, "cwd": "/repo/a"})),
+        node("ab-mov1006", json!({"pr_number": 4801, "cwd": "/repo/a"})),
+    ]);
+    let run = Run {
+        slugs: [("/repo/a".to_string(), "fnodotdev/fno".to_string())].into(),
+        ..Run::default()
+    };
+
+    // Dry run: the count and payload name the floor, nothing writes.
+    let (code, out) = run.go(
+        &fx,
+        &[
+            "--repo-moved",
+            "fnodotdev/fno=fnodotdev/fno-workshop",
+            "--min-number",
+            "27",
+            "--json",
+            "--no-validity",
+        ],
+    );
+    assert_eq!(code, 0, "{}", out.stderr);
+    let payload: Value = serde_json::from_str(&out.stdout).unwrap();
+    let moved = payload.get("repo_moved").expect("repo_moved block");
+    assert_eq!(moved.get("min_number"), Some(&json!(27)));
+    assert_eq!(moved.get("candidates"), Some(&json!(3)));
+    assert_eq!(
+        fx.row("ab-mov1003").get("pr_url").and_then(Value::as_str),
+        Some("https://github.com/fnodotdev/fno/pull/4038"),
+        "a dry run writes nothing"
+    );
+
+    // Apply: rows at or above the floor move in every leg; the new-repo
+    // rows stay.
+    let (code, out) = run.go(
+        &fx,
+        &[
+            "--apply",
+            "--repo-moved",
+            "fnodotdev/fno=fnodotdev/fno-workshop",
+            "--min-number",
+            "27",
+            "--no-validity",
+        ],
+    );
+    assert_eq!(code, 0, "{}", out.stderr);
+    assert_eq!(
+        fx.row("ab-mov1001").get("pr_url").and_then(Value::as_str),
+        Some("https://github.com/fnodotdev/fno/pull/4"),
+        "a row under the floor stays"
+    );
+    assert_eq!(
+        fx.row("ab-mov1002").get("pr_url").and_then(Value::as_str),
+        Some("https://github.com/fnodotdev/fno/pull/26"),
+        "a row under the floor stays"
+    );
+    assert_eq!(
+        fx.row("ab-mov1003").get("pr_url").and_then(Value::as_str),
+        Some("https://github.com/fnodotdev/fno-workshop/pull/4038")
+    );
+    let moved4 = fx.row("ab-mov1004");
+    let extras = moved4
+        .get("additional_prs")
+        .and_then(Value::as_array)
+        .unwrap();
+    assert_eq!(
+        extras
+            .first()
+            .and_then(|e| e.get("url"))
+            .and_then(Value::as_str),
+        Some("https://github.com/fnodotdev/fno-workshop/pull/4789"),
+        "an additional row at or above the floor moves"
+    );
+    assert_eq!(
+        extras
+            .get(1)
+            .and_then(|e| e.get("url"))
+            .and_then(Value::as_str),
+        Some("https://github.com/fnodotdev/fno/pull/4"),
+        "an additional row under the floor stays"
+    );
+    assert_eq!(
+        fx.row("ab-mov1005").get("pr_url").and_then(Value::as_str),
+        None,
+        "a url-less fill under the floor stays url-less"
+    );
+    assert_eq!(
+        fx.row("ab-mov1006").get("pr_url").and_then(Value::as_str),
+        Some("https://github.com/fnodotdev/fno-workshop/pull/4801"),
+        "a url-less fill at or above the floor fills"
+    );
+    assert!(out.stdout.contains("floor 27"), "{}", out.stdout);
+}
+
+#[test]
+fn repo_moved_floor_needs_repo_moved_and_a_positive_number() {
+    for tail in [
+        vec!["--min-number", "27"],
+        vec!["--min-number", "abc"],
+        vec!["--min-number", "0"],
+        vec!["--min-number"],
+    ] {
+        let tail: Vec<String> = tail.into_iter().map(str::to_string).collect();
+        assert_eq!(parse_flags(&tail).unwrap_err(), 2, "{tail:?}");
+    }
+    let ok: Vec<String> = ["--repo-moved", "a/b=c/d", "--min-number", "27"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let flags = parse_flags(&ok).unwrap();
+    assert_eq!(flags.min_number, Some(27));
+}
