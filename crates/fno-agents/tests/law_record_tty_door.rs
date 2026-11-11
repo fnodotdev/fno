@@ -227,10 +227,17 @@ fn a_piped_set_refuses_and_records_nothing() {
         stderr.contains("no session identity and no terminal"),
         "the refusal names what is missing: {stderr}"
     );
+    // Nothing was recorded, so not even the decision store exists: the
+    // history read reports the missing store (exit 1) rather than an empty
+    // chain. Exit 3 ("no decision under") is reachable only once some
+    // record has created the store.
     let (code, _stdout, stderr) = spawn_piped(&fixture, &history_request("piped-door"));
-    assert_eq!(code, 3, "nothing recorded under the refused subject");
+    assert_eq!(
+        code, 1,
+        "nothing recorded under the refused subject: {stderr}"
+    );
     assert!(
-        stderr.contains("no decision under"),
-        "history is empty: {stderr}"
+        stderr.contains("no decision store"),
+        "history names the missing store: {stderr}"
     );
 }
