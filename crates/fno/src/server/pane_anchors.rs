@@ -18,7 +18,6 @@
 //! the session transcript, which never goes stale.
 
 use super::*;
-use std::collections::VecDeque;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// One submitted prompt's landing row.

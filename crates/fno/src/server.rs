@@ -3713,7 +3713,7 @@ impl Core {
                             return Err((
                                 err_code::NOT_FOUND,
                                 format!("no tab at ordinal {n} and no tab with id {n}"),
-                            ))
+                            ));
                         }
                         1 => distinct,
                         _ => {
@@ -10171,7 +10171,7 @@ impl Core {
                         self.remove_agent_action(client_id, owned);
                     }
                     Ok(lifecycle_target::LifecycleTarget::Pane(pid)) => {
-                        return self.remove_pane_row(client_id, pid, &name)
+                        return self.remove_pane_row(client_id, pid, &name);
                     }
                 }
                 Flow::Continue

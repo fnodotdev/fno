@@ -2713,7 +2713,7 @@ pub fn read_msg_sync<R: Read, T: DeserializeOwned>(r: &mut R) -> Result<T, Proto
     match read_fill(r, &mut len_buf, false) {
         Ok(_) => {}
         Err(ProtoError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-            return Err(ProtoError::Closed)
+            return Err(ProtoError::Closed);
         }
         Err(e) => return Err(e),
     }
@@ -2722,7 +2722,7 @@ pub fn read_msg_sync<R: Read, T: DeserializeOwned>(r: &mut R) -> Result<T, Proto
     match read_fill(r, &mut body, true) {
         Ok(_) => {}
         Err(ProtoError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-            return Err(ProtoError::Closed)
+            return Err(ProtoError::Closed);
         }
         Err(e) => return Err(e),
     }
@@ -3590,7 +3590,7 @@ pub(crate) fn probe_status(path: &Path) -> ProbeOutcome {
                     std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
                 ) =>
             {
-                continue
+                continue;
             }
             Err(_) => {
                 uncertain = true;
@@ -3637,7 +3637,7 @@ fn reclaim_unresponsive_holder(path: &Path) -> std::io::Result<()> {
                     "cannot take over unresponsive socket: read {}: {e}",
                     pid_path.display()
                 ),
-            ))
+            ));
         }
     };
     let (pid, recorded_start) = parse_pid_sidecar(&raw).ok_or_else(|| {

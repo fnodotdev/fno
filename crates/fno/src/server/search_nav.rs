@@ -13,7 +13,7 @@ impl Core {
     /// (idempotent) drops the highlight for all. A missing pane, or a step with no
     /// active search, gets a one-line notice to the requester, never a silent
     /// no-op or a panic. Only match counts + coordinates ever leave the server.
-    fn search_nav(&mut self, client_id: u64, pane: u64, op: SearchOp) {
+    pub(super) fn search_nav(&mut self, client_id: u64, pane: u64, op: SearchOp) {
         match op {
             SearchOp::Open(query) => {
                 match self.panes.get_mut(&pane).map(|e| e.vt.search_open(&query)) {

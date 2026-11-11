@@ -24,7 +24,7 @@ use rio_vt::event::{VoidListener, WindowId};
 use rio_vt::performer::handler::Processor;
 use rio_vt::selection::{Selection, SelectionType};
 
-use crate::proto::{BlockDir, BlockMeta, BlockSel, Cell, Color, Frame, cell_flags};
+use crate::proto::{cell_flags, BlockDir, BlockMeta, BlockSel, Cell, Color, Frame};
 use serde::{Deserialize, Serialize};
 
 /// What the pane's own OSC 133 evidence says about its shell: a
@@ -1212,8 +1212,8 @@ impl Pane {
     /// clear) refuses instead of landing on a row that no longer holds the
     /// prompt.
     pub fn row_text(&self, abs_row: i64) -> Option<String> {
-        let grid = self.term.grid();
-        let hist = grid.history_size() as i64;
+        let grid = &self.term.grid;
+        let hist = self.term.history_size() as i64;
         let top = grid.topmost_line().0 as i64;
         let bot = grid.bottommost_line().0 as i64;
         let ln = (abs_row - hist).clamp(top, bot);
@@ -1224,17 +1224,11 @@ impl Pane {
         let cols = self.cols as usize;
         let mut out = String::with_capacity(cols);
         for c in 0..cols {
-            let cell = &row[Column(c)];
-            if cell.flags.contains(Flags::WIDE_CHAR_SPACER)
-                || cell.flags.contains(Flags::LEADING_WIDE_CHAR_SPACER)
-            {
+            let square = &row[Column(c)];
+            if matches!(square.wide(), Wide::Spacer | Wide::LeadingSpacer) {
                 continue;
             }
-            out.push(if cell.flags.contains(Flags::HIDDEN) {
-                ' '
-            } else {
-                cell.c
-            });
+            out.push(square_text_char(square, grid.styles()));
         }
         Some(out.trim_end().to_string())
     }
@@ -1246,7 +1240,7 @@ impl Pane {
     /// frozen `abs_row` lie. Returns `false` for a dead anchor; the caller
     /// falls back to the transcript instead of a wrong-row jump.
     pub fn anchor_jump(&mut self, abs_row: i64, text: &str) -> bool {
-        if abs_row < self.term.grid().history_size() as i64 {
+        if abs_row < self.term.history_size() as i64 {
             return false; // evicted past the scrollback cap
         }
         // The row must still exist in the live window: a shrunken pane puts
@@ -1266,16 +1260,14 @@ impl Pane {
         }
         // Highlight the row (the search path's shared selection) and scroll
         // it to the viewport top, mirroring `apply_current_match`.
-        let grid = self.term.grid();
-        let hist = grid.history_size() as i64;
-        let line = (abs_row - hist) as i32;
+        let line = (abs_row - self.term.history_size() as i64) as i32;
         let last_col = Column(self.cols.saturating_sub(1) as usize);
         let mut sel = Selection::new(
             SelectionType::Simple,
-            Point::new(Line(line), Column(0)),
+            Pos::new(Line(line), Column(0)),
             Side::Left,
         );
-        sel.update(Point::new(Line(line), last_col), Side::Right);
+        sel.update(Pos::new(Line(line), last_col), Side::Right);
         self.term.selection = Some(sel);
         self.selected_block = None;
         self.search = None; // the anchor now owns the shared selection
@@ -1820,7 +1812,11 @@ fn square_text_char(square: &Square, styles: &[Style]) -> char {
     let hidden = styles
         .get(square.style_id() as usize)
         .is_some_and(|s| s.flags.contains(StyleFlags::HIDDEN));
-    if hidden { ' ' } else { ch }
+    if hidden {
+        ' '
+    } else {
+        ch
+    }
 }
 
 /// Same folding as the fno-agents compositor: concrete indices and true-color

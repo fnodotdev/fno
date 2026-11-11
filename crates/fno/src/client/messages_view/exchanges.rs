@@ -177,7 +177,7 @@ impl MessagesBoard {
         // the picker reads newest first, so sort before the rank pass.
         let mut rows = rows;
         rows.sort_by(|a, b| b.ts_ms.cmp(&a.ts_ms));
-        let mut scored: Vec<(Option<u8>, ExchangeRow)> = rows
+        let mut scored: Vec<(u8, ExchangeRow)> = rows
             .into_iter()
             .filter_map(|r| r.score(&q).map(|s| (s, r)))
             .collect();
@@ -291,13 +291,12 @@ pub(crate) async fn picker_keys(
 
 /// Move the picker cursor one step, clamped into the filtered rows.
 fn picker_move(view: &mut View, dir: isize) {
-    let (Some(b), len) = (
-        view.messages_board.as_mut(),
-        view.messages_board
-            .as_ref()
-            .map(|b| b.exchange_rows().len())
-            .unwrap_or(0),
-    ) else {
+    let len = view
+        .messages_board
+        .as_ref()
+        .map(|b| b.exchange_rows().len())
+        .unwrap_or(0);
+    let Some(b) = view.messages_board.as_mut() else {
         return;
     };
     let Some(p) = b.picker.as_mut() else {

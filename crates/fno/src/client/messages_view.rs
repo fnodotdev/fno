@@ -1239,7 +1239,7 @@ impl MessagesBoard {
     pub(crate) fn thread_lines(&self, w: usize) -> (Vec<TLine>, Vec<Option<usize>>) {
         let title = self.thread_title();
         if self.picker.is_some() {
-            return exchanges::picker_lines(self, w);
+            return self.picker_lines(w);
         }
         if self.sel_thread.as_deref() == Some("asks") {
             return self.asks_lines(w);
