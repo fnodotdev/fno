@@ -118,16 +118,19 @@ fn basic_auth(user: &str, password: &str) -> String {
     let bytes = input.as_bytes();
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
-        let b = [
-            chunk[0],
-            *chunk.get(1).unwrap_or(&0),
-            *chunk.get(2).unwrap_or(&0),
-        ];
-        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | (b[2] as u32);
-        out.push(TABLE[(n >> 18) as usize & 63] as char);
-        out.push(TABLE[(n >> 12) as usize & 63] as char);
-        out.push(TABLE[(n >> 6) as usize & 63] as char);
-        out.push(TABLE[n as usize & 63] as char);
+        let mut b = [0u8; 3];
+        for (slot, byte) in b.iter_mut().zip(chunk) {
+            *slot = *byte;
+        }
+        let [b0, b1, b2] = b;
+        let n = u32::from_be_bytes([0, b0, b1, b2]);
+        for shift in [18, 12, 6, 0] {
+            out.extend(
+                TABLE
+                    .get((n >> shift) as usize & 63)
+                    .map(|&c| char::from(c)),
+            );
+        }
     }
     let pad = (3 - bytes.len() % 3) % 3;
     let len = out.len() - pad;
