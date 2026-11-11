@@ -387,7 +387,7 @@ fn reconcile_locked(home: &AgentsHome, path: &Path) -> Result<Outcome, String> {
         outcome.lifted = true;
         announce(
             &mut outcome,
-            "All clear: the test hold is lifted. Tests may run again.",
+            "All clear: the test hold is lifted. The user's tests may run again. Agent sessions still ride CI unless a lead grants a checkout test:priority.",
         );
         std::fs::remove_file(path).map_err(|e| format!("{}: {e}", path.display()))?;
         return Ok(outcome);
