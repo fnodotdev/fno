@@ -78,15 +78,15 @@ After a host restart the harness relaunches only some sessions. fno covers the r
 
 ## Permission asks on the opencode serve lane
 
-A thread worker has no person at its terminal, so somebody else must answer its permission asks. On the opencode serve lane that is fno. The user's own opencode rules decide first: fno writes no permission config into the serve, so an act the user allows never asks and an act the user denies never runs. Before 2026-11-11 the serve booted with an `OPENCODE_CONFIG` file holding `{"permission":{"*":"allow"}}`. That `*` merged last and beat the user's own denies.
+A thread worker has no person at its terminal, so somebody else must answer its permission asks. On the opencode serve lane that is fno. The user's own opencode rules decide first. fno writes no permission config into the serve. So an act the user allows never asks, and an act the user denies never runs. Before 2026-11-11 the serve booted with an `OPENCODE_CONFIG` file holding `{"permission":{"*":"allow"}}`. That `*` merged last and beat the user's own denies.
 
 fno creates each worker session with `POST /session?directory=<cwd>`. The create body carries the worker rules. `question`, `plan_enter` and `plan_exit` are denied, because no person answers them. `external_directory` is allowed for the worktree and for every `FNO_WORKER_ADD_DIRS` root, which is the state-root grant.
 
-Each turn runs under `fno-agents-worker --opencode-turn <spec>` (`crates/fno-agents/src/runtime/opencode_turn.rs`). Prose rides `prompt_async`. A slash command rides `POST /session/{id}/command`, which expands the template in the serve and answers only when the turn ends. The driver polls the pending asks once a second and stops when the session goes idle.
+Each turn runs under `fno-agents-worker --opencode-turn <spec>` (`crates/fno-agents/src/runtime/opencode_turn.rs`). Prose rides `prompt_async`. A slash command rides `POST /session/{id}/command`. That route expands the template in the serve, and its answer comes at the end of the turn. The driver polls the pending asks once a second. It stops once the session goes idle.
 
 Each ask goes through one ladder, `crates/fno-agents/src/runtime/thread_permission.rs`. fnod gets one choice question (`routine`, `unsure`, `irreversible`). A sure `routine` answer allows the call once. An unsure, untrained, slow or absent fnod refuses the call with a note, which the model reads as the tool's refusal. A sure irreversible act, or one the user's own `ask` rule raised, is filed as an outstanding ask and held. fnod down never allows. No corpus head is trained on the question yet, so today every ask goes to the model. Each answer journals one `thread_permission_answered` event.
 
-A held ask waits on the serve itself. `fno agents ask <name> --answer allow_once|deny` replies to the oldest pending ask of the row's session, and exits 2 when none is pending. After `agents.thread_permission.hold_minutes` (default 30) the driver refuses the call with a note naming the question id. The serve never times an ask out on its own: an unanswered ask stayed pending for 742 seconds in the measurement.
+A held ask waits on the serve itself. `fno agents ask <name> --answer allow_once|deny` replies to the oldest pending ask of the row's session. With no ask pending, it exits 2. After `agents.thread_permission.hold_minutes` (default 30) the driver refuses the call with a note naming the question id. The serve never times an ask out on its own: an unanswered ask stayed pending for 742 seconds in the measurement.
 
 The V1 frames, measured on opencode 1.18.33 on 2026-11-11:
 
