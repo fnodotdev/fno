@@ -1055,7 +1055,6 @@ mod tests {
             role_level: Some(2),
             ..Default::default()
         };
-        let calling = Calling::Agent(Box::new(holder.clone()), "s-t".into());
         let projects: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         let grant = |succession: bool| {
             crate::territory::role_grant_kind(&json!({

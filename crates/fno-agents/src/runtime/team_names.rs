@@ -2396,7 +2396,7 @@ mod tests {
             name_team(&store, &registry, "x-bbbb", "wren").unwrap();
             history_append(
                 &store,
-                &NameHistoryEntry::here("esther", "x-aaaa", Some("sess-v".into()), "bound"),
+                NameHistoryEntry::here("esther", "x-aaaa", Some("sess-v".into()), "bound"),
             )
             .unwrap();
             let renamed = rename_team(&store, &registry, "sess-v", "esther", true).unwrap();
@@ -2416,7 +2416,7 @@ mod tests {
             let registry = registry_path(tmp.path());
             history_append(
                 &store,
-                &NameHistoryEntry::here("atticus", "fno", Some("sess-a".into()), "bound"),
+                NameHistoryEntry::here("atticus", "fno", Some("sess-a".into()), "bound"),
             )
             .unwrap();
             apply_team_naming(
@@ -2691,6 +2691,9 @@ mod tests {
 
         an_org_promote_rescope_carries_the_record_and_the_carry_names_an_unnamed_team();
         a_resumed_lead_rebinds_the_name_its_own_session_held();
+        a_refused_checkin_binds_nothing();
+        binder_reclaims_own_name_through_the_rename_door();
+        binder_rebinds_own_name_on_checkin();
         an_unnamed_live_team_cannot_complete_checkin();
         a_successor_checkin_keeps_the_label_and_the_record_mirrors_it();
         a_duplicate_live_name_refuses_naming_and_names_the_holder();
@@ -2930,8 +2933,5 @@ mod tests {
         a_redraw_on_a_named_team_refuses_without_burning_a_draw();
         a_refused_theme_leaves_no_freshly_bound_name();
         the_record_mirrors_the_label_and_the_ceremony_stays_reachable();
-        a_refused_checkin_binds_nothing();
-        binder_reclaims_own_name_through_the_rename_door();
-        binder_rebinds_own_name_on_checkin();
     }
 }
