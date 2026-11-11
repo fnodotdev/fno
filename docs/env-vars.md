@@ -20,6 +20,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `CLAUDECODE` | rs | unclear: crates/fno-agents/src/runtime/hook/stop.rs:440 |
 | `CLAUDECODE_SESSION_ID` | rs | unclear: crates/fno-agents/src/backlog/workflows.rs |
 | `CLAUDE_CLI` | rs | unclear: crates/fno-agents/src/spawn/loop_dispatch.rs:186 |
+| `CLAUDE_CODE_ENTRYPOINT` | rs | Claude Code's entrypoint. `sdk-cli` marks a `claude -p` or SDK run. The session report mints no row for such a run unless fno spawned it. |
 | `CLAUDE_CODE_SESSION_ATTENDED` | rs | The Claude Code attended flag: `0` marks an unattended session, the second agent-cargo marker at the cargo admission doors. |
 | `CLAUDE_CODE_SESSION_ID` | rs | unclear: crates/fno-agents/src/runtime/claims.rs |
 | `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` | rs | Consecutive Stop-hook block cap the harness enforces before it force-ends the turn (Claude Code default 9). The run records whether the env override or the default bound. |

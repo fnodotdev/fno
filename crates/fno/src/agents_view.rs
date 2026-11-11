@@ -3525,6 +3525,19 @@ unheard_of_field = true
         assert!(!gone[0].external);
     }
     #[test]
+    fn reader_hides_headless_rows() {
+        let mut st = ReaderState::default();
+        let reg = reg(concat!(
+            r#"{"name":"lead","cwd":"/w","status":"live","substrate":"thread"},"#,
+            r#"{"name":"eval-once","cwd":"/w","status":"live","substrate":"headless"}"#
+        ));
+        let rows = st
+            .tick(stamp(1), || Some(reg), None, || None, Vec::new(), NOW)
+            .unwrap();
+        let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["lead"], "a headless one-shot never paints a row");
+    }
+    #[test]
     fn reader_roster_only_change_republishes() {
         let mut st = ReaderState::default();
         let reg = reg(r#"{"name":"r","cwd":"/w","status":"live"}"#);

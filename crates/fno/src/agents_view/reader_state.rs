@@ -163,13 +163,17 @@ impl ReaderState {
                 .unwrap_or_default(),
             None => Vec::new(),
         };
+        // A headless one-shot (an eval run, a footnote `--once`) has no
+        // pane, thread or resume form, so a row for it is an entry nothing
+        // can open.
+        reg_rows.retain(|r| r.substrate.as_deref() != Some("headless"));
         // fno-truth junior badge: fill the no-badge/Idle gap for a
         // bg /target worker between turns from its claim + loop_check recency.
         if let Some(raw) = &self.reg_raw {
             overlay_truth_badges(&mut reg_rows, &build_truth_badges(raw, now_secs));
             // Stamp machine-armed holds after the badges; a hold
             // mark is orthogonal to the badge, like `dnd` itself.
-            overlay_hold_marks(&mut reg_rows, now_secs);
+            overlay_hold_marks(&mut reg_rows);
             // The cargo build mark: same read-time stamping as the holds,
             // from the db/build-marks sidecars the daemon arm rewrites.
             overlay_build_marks(&mut reg_rows, now_secs);

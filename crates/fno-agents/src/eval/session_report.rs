@@ -62,6 +62,18 @@ pub const SESSION_REPORT_COMMAND: &str = "session-report";
 /// inherits it under a new name still mints.
 pub const NO_ROW_ENV: &str = "FNO_AGENT_NO_ROW";
 
+/// A `claude -p` or SDK run nobody spawned through fno: an eval, a script.
+/// Claude marks print mode with `CLAUDE_CODE_ENTRYPOINT=sdk-cli`. Such a run
+/// has no thread to resume, so it mints no row. An fno spawn carries its
+/// own `FNO_AGENT_SELF` and keeps its row whatever the entrypoint reads.
+fn print_mode_run(
+    agent_self: Option<&str>,
+    harness: Option<&str>,
+    entrypoint: Option<&str>,
+) -> bool {
+    agent_self.is_none() && harness == Some("claude") && entrypoint == Some("sdk-cli")
+}
+
 fn session_report_request(params: Value) -> Request {
     Request::new(1, format!("agent.{SESSION_REPORT_COMMAND}"), params)
 }
@@ -1347,10 +1359,23 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
     }
     let agent_self = params.get("agent_self").and_then(Value::as_str);
     let no_row = agent_self.is_some() && std::env::var(NO_ROW_ENV).ok().as_deref() == agent_self;
+    let print_mode = print_mode_run(
+        agent_self,
+        params
+            .as_object()
+            .and_then(|p| str_field(p, "harness"))
+            .as_deref(),
+        std::env::var("CLAUDE_CODE_ENTRYPOINT").ok().as_deref(),
+    );
     if no_row {
         params["no_row"] = Value::Bool(true);
     }
     let (record, child_name) = claim_launch(&params, home);
+    // A claimed launch record makes this an fno child even without an
+    // FNO_AGENT_SELF, so only an unclaimed print-mode run drops its row.
+    if record.is_none() && print_mode {
+        params["no_row"] = Value::Bool(true);
+    }
     record_origin(&params);
     if let Some(record) = &record {
         // A claimed record rides the request: the daemon adopts this session
@@ -1520,6 +1545,21 @@ fn branch_question_journal(home: &AgentsHome) -> std::path::PathBuf {
 mod tests {
     use super::*;
     use crate::paths::AgentsHome;
+
+    #[test]
+    fn an_unspawned_print_mode_run_mints_no_row() {
+        let claude = Some("claude");
+        assert!(print_mode_run(None, claude, Some("sdk-cli")));
+        assert!(
+            !print_mode_run(Some("w1"), claude, Some("sdk-cli")),
+            "an fno spawn keeps its row"
+        );
+        assert!(
+            !print_mode_run(None, claude, Some("cli")),
+            "an interactive session keeps its row"
+        );
+        assert!(!print_mode_run(None, Some("codex"), Some("sdk-cli")));
+    }
 
     fn temp_home(tag: &str) -> (tempfile::TempDir, AgentsHome) {
         let dir = tempfile::tempdir().expect("tempdir");

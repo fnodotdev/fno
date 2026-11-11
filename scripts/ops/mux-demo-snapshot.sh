@@ -4,7 +4,7 @@
 #   scripts/ops/mux-demo-snapshot.sh --out shot.svg [--theme light] [--format png] [--size 200x60]
 #       [--window-size smallest|latest|largest] [--peer 120x40] [--no-fit]
 #       [--hold] [--group <axis>] [--remote-pane] [--web [--web-port <port>]]
-#       [--hold] [--group <axis>] [--remote-pane] [--flat-pins] [--sort <col:dir>] [--layout list] [--lead-nesting]
+#       [--hold] [--group <axis>] [--remote-pane] [--flat-pins] [--sort <col:dir>] [--layout list] [--lead-nesting] [--holds]
 #
 # Builds a throwaway server in a temp state root: its own config, graph,
 # agent registry, view prefs and socket dir. It seeds invented backlog nodes,
@@ -65,6 +65,7 @@ REMOTE_PANE=""
 WEB=""
 WEB_PORT=8722
 FNO_DEMO_FLATPINS=""
+FNO_DEMO_HOLDS=""
 FNO_DEMO_SORT=""
 FNO_DEMO_LAYOUT=""
 FNO_DEMO_LEAD_NESTING=""
@@ -88,6 +89,8 @@ for a in "$@"; do
     FNO_DEMO_LEAD_NESTING=1
   elif [ "$a" = "--flat-pins" ]; then
     FNO_DEMO_FLATPINS=1
+  elif [ "$a" = "--holds" ]; then
+    FNO_DEMO_HOLDS=1
   elif [ "$a" = "--hold" ]; then
     HOLD=1
   elif [ "$a" = "--remote-pane" ]; then
@@ -101,7 +104,7 @@ for a in "$@"; do
   fi
   PREV="$a"
 done
-export FNO_DEMO_FLATPINS FNO_DEMO_SORT FNO_DEMO_LAYOUT FNO_DEMO_LEAD_NESTING
+export FNO_DEMO_FLATPINS FNO_DEMO_SORT FNO_DEMO_LAYOUT FNO_DEMO_LEAD_NESTING FNO_DEMO_HOLDS
 # bash 3.2 (stock macOS) reads an empty array under set -u as unbound.
 set -- ${ARGS[@]+"${ARGS[@]}"}
 
@@ -617,6 +620,29 @@ if os.environ.get("FNO_DEMO_FLATPINS"):
         worker("orion-w2", "demo-sid-orion", "demo-sid-orion-w2"),
         lead("vega", "demo-sid-vega"),
         worker("vega-w1", "demo-sid-vega", "demo-sid-vega-w1"),
+    ]
+# --holds adds the hold fixture: keeper's conversation hold has lapsed but
+# its bus-only stamp still waits on release, sentry carries a hold someone
+# set by hand, and eval-once is a headless one-shot that paints no row.
+if os.environ.get("FNO_DEMO_HOLDS"):
+    live = {"inside_leg": {"state": "working", "seq": 1, "received_at": now}}
+    hold_dir = os.path.join(os.path.dirname(db), "mail", "mail-hold")
+    os.makedirs(hold_dir, exist_ok=True)
+    lapsed = datetime.datetime.fromtimestamp(
+        int(os.environ["FNO_DEMO_EPOCH"]) - 60, datetime.timezone.utc
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for sid, source in (("demo-sid-keeper", "conversation"), ("demo-sid-sentry", None)):
+        clock = {"until": lapsed, "window_s": 600, "clock_kind": "wall", "ceiling": None}
+        if source:
+            clock["source"] = source
+        with open(os.path.join(hold_dir, sid + ".json"), "w") as f:
+            json.dump(clock, f)
+    agents += [
+        thread("keeper", "claude", "idle", attach="demo-keeper") | live | {
+            "delivery_policy": "bus-only", "harness_session_id": "demo-sid-keeper"},
+        thread("sentry", "codex", "idle", attach="demo-sentry") | live | {
+            "delivery_policy": "bus-only", "harness_session_id": "demo-sid-sentry"},
+        thread("eval-once", "claude", "idle") | live | {"substrate": "headless"},
     ]
 import sqlite3
 conn = sqlite3.connect(db)
