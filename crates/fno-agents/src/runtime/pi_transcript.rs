@@ -17,15 +17,10 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-/// `~/.pi/agent/sessions`, pi's per-project session dirs.
+/// `<pi agent dir>/sessions`, pi's per-project session dirs. The agent dir is
+/// the one the spawn lanes use, so `PI_CODING_AGENT_DIR` moves both.
 fn default_sessions_dir() -> PathBuf {
-    match std::env::var_os("HOME") {
-        Some(home) => PathBuf::from(home)
-            .join(".pi")
-            .join("agent")
-            .join("sessions"),
-        None => PathBuf::from("."),
-    }
+    crate::pi::pi_agent_dir().join("sessions")
 }
 
 /// The pi transcript store: one JSONL file per session under one level of

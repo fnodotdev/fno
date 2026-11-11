@@ -35,14 +35,21 @@ pub fn sessions_dir() -> PathBuf {
 }
 
 fn sessions_dir_from(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> PathBuf {
+    agent_dir_from(get).join("sessions")
+}
+
+/// omp's agent dir: `$PI_CODING_AGENT_DIR`, else `~/.omp/agent`. Extensions
+/// load from `<agent dir>/extensions` (discovery/builtin.ts).
+pub fn agent_dir() -> PathBuf {
+    agent_dir_from(|key| std::env::var_os(key))
+}
+
+fn agent_dir_from(get: impl Fn(&str) -> Option<std::ffi::OsString>) -> PathBuf {
     if let Some(dir) = get("PI_CODING_AGENT_DIR").filter(|d| !d.is_empty()) {
-        return PathBuf::from(dir).join("sessions");
+        return PathBuf::from(dir);
     }
     match get("HOME") {
-        Some(home) => PathBuf::from(home)
-            .join(".omp")
-            .join("agent")
-            .join("sessions"),
+        Some(home) => PathBuf::from(home).join(".omp").join("agent"),
         None => PathBuf::from("."),
     }
 }

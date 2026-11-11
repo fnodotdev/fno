@@ -276,7 +276,9 @@ fn pi_extension_src() -> Option<String> {
     path.is_file().then(|| path.display().to_string())
 }
 
-fn pi_wire(agents: &Path, src: Option<&str>, run: Run) -> Outcome {
+/// Wire the pi extension into `harness` (pi, or omp, which loads the same
+/// file from its own agent dir).
+fn pi_wire(harness: &str, agents: &Path, src: Option<&str>, run: Run) -> Outcome {
     let Some(src) = src else {
         return Outcome::Failed(format!(
             "no plugin tree carries {PI_EXTENSION_REL}; cannot locate the pi extension source"
@@ -285,7 +287,7 @@ fn pi_wire(agents: &Path, src: Option<&str>, run: Run) -> Outcome {
     if let Ok(out) = run(&[
         agents_str(agents),
         "plugin-install",
-        "pi",
+        harness,
         "--status",
         "--extension-src",
         src,
@@ -300,7 +302,7 @@ fn pi_wire(agents: &Path, src: Option<&str>, run: Run) -> Outcome {
     match run(&[
         agents_str(agents),
         "plugin-install",
-        "pi",
+        harness,
         "--extension-src",
         src,
         "--json",
@@ -455,6 +457,10 @@ pub(crate) const HARNESS_LIST: [Harness; 7] = [
         label: "pi",
     },
     Harness {
+        name: "omp",
+        label: "oh-my-pi",
+    },
+    Harness {
         name: "agy",
         label: "Antigravity CLI",
     },
@@ -502,14 +508,14 @@ pub fn run() -> i32 {
                     )
                 }
             }
-            "pi" => {
+            "pi" | "omp" => {
                 if !agents_ok {
                     Outcome::Failed(
                         "the fno-agents binary is missing; run `fno doctor update`".into(),
                     )
                 } else {
                     let src = pi_extension_src();
-                    pi_wire(&agents, src.as_deref(), &real_run)
+                    pi_wire(h.name, &agents, src.as_deref(), &real_run)
                 }
             }
             "footnote" if home_missing => no_home(),
