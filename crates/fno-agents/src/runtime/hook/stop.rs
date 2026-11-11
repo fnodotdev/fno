@@ -25,6 +25,8 @@ use goal_arbitration::{
     GoalArbitration,
 };
 
+mod cannot_claim;
+
 /// Consecutive checker-unavailable fires tolerated for an active session
 /// before a loud give-up allow (the shim's `MAX_UNAVAIL_RETRIES`).
 const MAX_UNAVAIL_RETRIES: u64 = 3;
@@ -341,6 +343,18 @@ fn run_owned(
             &manifest,
         );
         return 0;
+    }
+
+    // ── Cannot gate (verify-footnotes section 2 at the turn end) ─────────────
+    // A final report that claims cannot and names no route tried goes back to
+    // its author once, with the remedy in the reason. Owned sessions only:
+    // workers and leads, the reports the mesh re-reads. Steps mode allows
+    // above, so a step-driven run is never held. The detector is rule 12's
+    // (backlog::style_check), so the mail lint and this gate cannot drift.
+    if let Some(message) = fire.last_assistant_message.as_deref() {
+        if let Some(reason) = cannot_claim::gate(message) {
+            return emit_block_for_harness(&fire.session_id, &reason);
+        }
     }
 
     // ── An active owner with no transcript file: unavailable bounded block ────
