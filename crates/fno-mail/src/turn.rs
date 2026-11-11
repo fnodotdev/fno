@@ -275,7 +275,8 @@ mod tests {
         let turn = TurnText::compose(&header(), "line one\nline two");
         assert_eq!(turn.as_str(), "`@zenobia · fmail-1a2b`\nline one\nline two");
         assert_eq!(TurnText::parse(turn.as_str()), Ok(turn));
-        let plain = TurnHeader::new(HeaderForm::Plain, "zenobia", "fmail-1a2b", Some("ping")).unwrap();
+        let plain =
+            TurnHeader::new(HeaderForm::Plain, "zenobia", "fmail-1a2b", Some("ping")).unwrap();
         let header_only = TurnText::compose(&plain, "");
         assert_eq!(header_only.as_str(), "`zenobia · fmail-1a2b · ping`");
         assert_eq!(TurnText::parse(header_only.as_str()), Ok(header_only));

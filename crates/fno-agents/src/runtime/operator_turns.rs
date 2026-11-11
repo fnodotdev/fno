@@ -25,9 +25,9 @@ use sha2::Sha256;
 // The classifier is the promoted `provenance` module: same functions, same
 // reason names, so the queue's skip counters and its 17 regression tests are
 // unchanged by the move.
+use super::turn_witness::{headerless, record, WITNESS_WINDOW_S};
 use crate::correction_detect::detect_user;
 use crate::provenance::{classify, is_user_turn, turn_text, turn_ts_epoch};
-use super::turn_witness::{headerless, record, WITNESS_WINDOW_S};
 
 /// A held turn in the scan cursor; the payload adds the rendered excerpt.
 #[derive(Debug, Clone, Serialize)]
@@ -423,7 +423,9 @@ impl<'a> TurnWitness<'a> {
         };
         let bus = self.bus.get_or_insert_with(|| {
             crate::mail_paths::state_bus_dir_opt()
-                .map(|dir| crate::provenance::BusIndex::load_segments(&dir.join("messages.jsonl"), 1))
+                .map(|dir| {
+                    crate::provenance::BusIndex::load_segments(&dir.join("messages.jsonl"), 1)
+                })
                 .unwrap_or_else(crate::provenance::BusIndex::empty)
         });
         let at_ms = (ts * 1000.0) as i64;
