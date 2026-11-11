@@ -337,7 +337,6 @@ fn bounded_remediation(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> i32 {
-    let strategy = crate::agents_config::auto_merge_strategy(cwd);
     // The head THIS command's gate covered, never whatever the local checkout
     // points at; the state read carried it beside the rollup.
     let mut payload = json!({
@@ -427,30 +426,6 @@ fn bounded_remediation(
     }
 
     if outcome == "failed" {
-        let lowered = detail.to_lowercase();
-        let freshness_hit = [
-            "freshness",
-            "stale state",
-            "state file",
-            "state-file mtime",
-            "git-protection",
-        ]
-        .iter()
-        .any(|tok| lowered.contains(tok));
-        if freshness_hit {
-            emit_audit(
-                journal,
-                state_file,
-                pr,
-                "merge_blocked_by_freshness_cap",
-                Some(json!({ "stderr_token": "freshness_cap" })),
-            );
-            let _ = writeln!(
-                out,
-                "merge_blocked_by_freshness_cap: the git-protection hook blocked the merge (state-file mtime > 1h). Bypass it from a shell with gh pr merge {pr} --{strategy}."
-            );
-            return 1;
-        }
         emit_audit(
             journal,
             state_file,

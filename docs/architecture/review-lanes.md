@@ -537,7 +537,7 @@ The producer is now reachable from every path that can reach the gate.
 | target stop hook `decide()` -> `run_done` | yes, unchanged | streak-gated |
 | `fno do pr merge <n>` | yes | with no usable row it recomputes once, before the staleness comparison, pinned to the PR head |
 | `fno do pr status <n>` | yes | reads through the same recompute-then-read helper |
-| `fno do pr coverage-check <n>` without `--recompute` (and the git-protection hook through it) | no by default; `--recompute` yes | the hook path must not recompute: a PreToolUse hook has a 60s budget and the Rust producer takes minutes. `--recompute` shells the producer, same as `fno do pr merge`. One-directional: on a missing or stale row this denies where `fno do pr merge` may yet allow |
+| `fno do pr coverage-check <n>` without `--recompute` | no by default; `--recompute` yes | the row is read as-is, never added to; `--recompute` shells the producer, same as `fno do pr merge` |
 | `finalize`'s auto-merge arm | not added, by decision | reached only from a terminal-allow, which implies `run_done` already ran this fire, and a failed arm leaves a green reviewed PR for a human |
 | a human running the command by hand | yes | `fno-agents review-coverage --cwd <dir> [--pr <n>] [--head <sha>]` |
 
@@ -547,7 +547,7 @@ The command cannot assert coverage without performing the reads. There is no `--
 
 That pre-empts the aggregate-that-overstates-its-inputs shape at the field that becomes a bypass on the day anything enforces it.
 
-A bare `gh pr merge` from an agent tool call is a fourth reader of the same predicate. The merge hook in `crates/fno-agents/src/runtime/hook/git_protection/merge_gate.rs` starts the hidden `fno do pr coverage-check` command. That command evaluates the guard's coverage check (the native `review-coverage check` operand) without the recompute. A PreToolUse hook has a 60s harness budget and the Rust producer is budgeted in minutes. The invariant between the two surfaces is one-directional by design. The hook never allows what the guard refuses. When the row is missing or stale the hook denies where `fno do pr merge` can still allow after recomputing. Absence denies. A named instrument failure (exit 4) fails open. Both surfaces refuse with one sentence, pinned character for character by the coverage_gate parity goldens.
+A bare `gh pr merge` from an agent tool call used to be a fourth reader of the same predicate: the merge hook in `crates/fno-agents/src/runtime/hook/git_protection/merge_gate.rs` ran the `fno do pr coverage-check` operand from the PreToolUse hook and denied on a missing or stale row. That hook gate was removed on 2026-11-10 (the guard-diet ruling): a PreToolUse budget cannot host a minutes-budgeted producer, and agents routed around the gate instead of through it. The coverage predicate's readers are now `fno do pr merge` in process and, once the ruleset is applied, the server itself.
 
 ### The GitHub status is a projection, not a latch
 

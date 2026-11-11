@@ -13,6 +13,7 @@ use regex::Regex;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::time::{Duration, SystemTime};
 
 pub(super) const PROTECTED_BRANCHES: &[&str] = &["main", "master", "develop", "dev"];
 /// Subcommands this gate never judges, matched by position (argv[1]), so a
@@ -43,6 +44,36 @@ fn flag_re() -> &'static Regex {
 
 pub(super) fn approval_flag(home: &Path) -> PathBuf {
     home.join("approve_no_verify.flag")
+}
+
+/// The approval marker expires: a forgotten sentinel must not hold a gate open.
+const MARKER_TTL: Duration = Duration::from_secs(300);
+
+fn marker_age(path: &Path) -> Option<Duration> {
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    Some(
+        SystemTime::now()
+            .duration_since(modified)
+            .unwrap_or_default(),
+    )
+}
+
+/// True if `path` is younger than the TTL. An expired marker is removed.
+pub(super) fn fresh_marker(path: &Path) -> bool {
+    match marker_age(path) {
+        Some(a) if a < MARKER_TTL => true,
+        Some(_) => {
+            let _ = std::fs::remove_file(path);
+            false
+        }
+        None => false,
+    }
+}
+
+/// The unlink IS the claim: of two hooks that both saw a fresh marker, only
+/// the one that removes it is authorized.
+pub(super) fn claim_marker(path: &Path) -> bool {
+    std::fs::remove_file(path).is_ok()
 }
 
 fn state_file(home: &Path) -> PathBuf {
@@ -93,6 +124,16 @@ pub(super) fn find_git_segments(segs: &[Segment]) -> Vec<String> {
 pub(super) fn mentions_git(command: &str) -> bool {
     static R: OnceLock<Regex> = OnceLock::new();
     re(&R, r"(?i)\bgit\b").is_match(command)
+}
+
+/// A shell runner's `-c` argument is one segment however many commands it
+/// holds, so an approval never rides inside one.
+pub(super) fn shell_wrapped(command: &str) -> bool {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"\b(sh|bash|zsh|dash|ksh)\b[^|;&]*\s-\w*c\b").expect("static regex")
+    })
+    .is_match(command)
 }
 
 /// The destination branch a push names, or None. Flags with an attached
@@ -303,6 +344,38 @@ const RULE: &str = "════════════════════
 const BOX_TOP: &str = "╔════════════════════════════════════════════════════════════════╗";
 const BOX_BOTTOM: &str = "╚════════════════════════════════════════════════════════════════╝";
 
+pub(super) fn compound_deny_message(command: &str) -> String {
+    format!(
+        "{BOX_TOP}
+║  🚫 BLOCKED: one approval cannot authorize several actions
+{BOX_BOTTOM}
+
+Command: {command}
+
+An approval here authorizes exactly ONE action, and a PreToolUse allow
+applies to the WHOLE Bash call - so the approved action && <anything> would
+approve the anything too. This command carries more than the one action:
+
+  • several `--no-verify` segments
+  • another command joined by && / ; / | (a leading `cd` counts too)
+  • a command substitution: $(...), `...`, <(...) or >(...)
+    A substitution IS a second command, so it disqualifies the
+    approval even though it sits inside one segment.
+  • an output redirection (>, >>) or an unquoted heredoc (<<EOF),
+    which would ride the approval into a file write or an expansion
+
+Run the approved action as its own substitution-free command. To pass a
+long commit message without $(cat ...), use stdin instead:
+
+  git commit --no-verify -F - <<'EOF'
+  your message
+  EOF
+
+{RULE}
+"
+    )
+}
+
 pub(super) fn no_verify_deny_message(command: &str, home: &Path) -> String {
     let flag = approval_flag(home);
     format!(
@@ -339,7 +412,6 @@ Approval expires after 5 minutes and is single-use.
 There is no marker that turns this gate off. --no-verify skips
 .git/hooks/pre-push, and that hook is the protected-branch guard, so
 this gate and the branch gate are one protection with two doors.
-The merge-gate override does not reach either of them.
 
 {RULE}
 ",
@@ -410,10 +482,9 @@ The proper workflow:
 
 {RULE}
 
-No marker turns this gate off, and the merge-gate override does not
-apply here. For an agent session there is deliberately no bypass: push
-a branch and open a PR. A human pushing from their own shell is not
-gated by this hook at all.
+No marker turns this gate off. For an agent session there is
+deliberately no bypass: push a branch and open a PR. A human pushing
+from their own shell is not gated by this hook at all.
 
 {RULE}
 ",

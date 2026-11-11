@@ -321,8 +321,6 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_WORKTREE_POLICY` | rs | Overrides the resolved worktree policy from env, above every config layer; the dispatcher sets it to never for a spawn into an undeclared repo. |
 | `GEMINI_SANDBOX` | rs | unclear: crates/fno-agents/src/spawn/gemini_ask.rs:103 |
 | `GEMINI_SESSION_ID` | rs | Gemini's provider session id, used by exact-session loop readiness. |
-| `GH_HOST` | rs | The GitHub host supplied to a raw merge command. The merge hook uses it to identify the target repository and pins scoped child reads to github.com. |
-| `GH_REPO` | rs | The repository supplied to a raw merge command. The merge hook uses it to identify the target and pins scoped child reads to the checkout's canonical repository. |
 | `GH_TOKEN` | rs | A token env in the process: gh_login reads None so nothing keys a shared row on a token that may be some other account entirely. |
 | `GITHUB_ACTIONS` | rs | Folds the smoke step headers into ::group:: in CI: crates/fno-agents/src/gate/test_smoke.rs |
 | `GITHUB_EVENT_BEFORE` | rs | The hook-tombstones deletion range on a push to main: crates/fno/src/repo_lint.rs. |
