@@ -244,12 +244,14 @@ use gh_read::cause_for_silent_exit;
 use gh_read::is_no_pr_stderr;
 pub(crate) use gh_read::read_pr_view_fields;
 #[cfg(test)]
+use gh_read::read_pr_view_in;
+#[cfg(test)]
 pub(crate) use gh_read::PR_INFO_FALLBACK_FIELDS;
 use gh_read::{
     attestation_in_scope, failed_read_tail, git_head_branch, git_head_sha,
     graphql_exhausted_reason, head_is_shipped, pr_head_oid, primary_exhaustion_park_s,
-    probe_graphql_quota, read_pr_head_oid, read_pr_view_in, refusal_is_secondary,
-    stderr_is_unauthenticated, stderr_smells_rate_limit, GraphqlQuota,
+    probe_graphql_quota, read_pr_head_oid, refusal_is_secondary, stderr_is_unauthenticated,
+    stderr_smells_rate_limit, GraphqlQuota,
 };
 pub(crate) use gh_read::{coverage_adapter, internal_gh_adapter, is_graphql_read};
 pub(crate) use holds::{node_is_done, scan_open_holds};

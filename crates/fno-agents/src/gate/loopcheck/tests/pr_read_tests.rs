@@ -187,7 +187,10 @@ fn manifest_node_selector_reads_the_primary_pr_and_fails_open() {
     assert_eq!(row_selector(&cwd, Some("x-multi")).as_deref(), Some("940"));
     // A reopened node's history row: the older unstamped row predates the
     // stamp, so the merged current pr_number pins the gate.
-    assert_eq!(row_selector(&cwd, Some("x-reolder")).as_deref(), Some("960"));
+    assert_eq!(
+        row_selector(&cwd, Some("x-reolder")).as_deref(),
+        Some("960")
+    );
     // A marked history row sinks even newer than the stamp: state beats
     // number order.
     assert_eq!(row_selector(&cwd, Some("x-marked")).as_deref(), Some("900"));
