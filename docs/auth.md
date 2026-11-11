@@ -32,10 +32,10 @@ If any of these are misconfigured, the run will fail with a clear error in the r
 
 - No footnote-internal credentials. There is no footnote cloud service.
 - No credentials sent to third-party services other than the agent runtime you have configured.
-- No telemetry on by default, beyond what Anthropic and GitHub already collect for their products. The opt-in arms PRIVACY.md describes ship off and send identifiers and counts only.
+- No telemetry unless you opt in, beyond what Anthropic and GitHub already collect for their products. The daily usage report and the fleet arms PRIVACY.md describes ship off and send identifiers and counts only. See `docs/telemetry.md`.
 - Local cost telemetry stays local. fno can ingest Claude Code's OpenTelemetry records into a receiver on 127.0.0.1 and store exact per-request cost in `~/.fno/agents/otel/otel.db`. Nothing leaves this machine. Turn it off with `[telemetry] claude_otel = false` in config.toml. See `docs/architecture/cost-accuracy.md`.
 - Feed rows export nowhere by default. With `[telemetry.otlp] enabled = true`, row ids, kinds and refs go to the endpoint you name. Free text only goes with `log_content = true`. See `docs/architecture/activity-feed.md`.
 - Eval runs export nowhere by default. With `[telemetry.eval_events] enabled = true`, identifiers and grades go to PostHog, and no free text goes with them. See `docs/evals.md`.
-- The install count sends one event per machine per day, default on (opt out with `[telemetry.install_count] enabled = false`). The event (`fno_install_seen`) carries five properties and nothing else. They are: the fno version, the channel (wheel, binary, or other), OS, arch, and a random install id. The 0.4.7 upgrade path reads it before the wheel stops publishing. It goes to the same PostHog project as eval events. See `evals/posthog-views.json`.
+- The daily usage report sends nothing until you say yes at a terminal (`fno doctor telemetry on`) or in the setup wizard. `fno doctor telemetry show` prints the exact report first. Only official release builds carry its key, and `CI` or `DO_NOT_TRACK=1` holds it. See `docs/telemetry.md`.
 
 See `docs/security-posture.md` for the broader trust model.
