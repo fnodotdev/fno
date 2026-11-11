@@ -618,7 +618,11 @@ fn client_agent_row_renders_dnd_as_presence_not_liveness() {
         );
         store.put(&hold).unwrap();
     };
-    put("aaaa1111-2222-3333-4444-555566667777", now, SetBy::Conversation);
+    put(
+        "aaaa1111-2222-3333-4444-555566667777",
+        now,
+        SetBy::Conversation,
+    );
     put("bbbb2222-2222-3333-4444-555566667777", now, SetBy::User);
     put(
         "cccc3333-2222-3333-4444-555566667777",
@@ -643,8 +647,14 @@ fn client_agent_row_renders_dnd_as_presence_not_liveness() {
         },
     ];
     crate::agents_view::overlay_hold_marks_at(&mut rows, &dir);
-    assert!(rows[0].dnd && rows[0].held_conversation, "a conversation hold reads HELD");
-    assert!(rows[1].dnd && !rows[1].held_conversation, "a user hold stays DND");
+    assert!(
+        rows[0].dnd && rows[0].held_conversation,
+        "a conversation hold reads HELD"
+    );
+    assert!(
+        rows[1].dnd && !rows[1].held_conversation,
+        "a user hold stays DND"
+    );
     assert!(!rows[2].dnd, "an ended hold marks nothing");
     let _ = std::fs::remove_dir_all(&dir);
     let held: AgentRow = serde_json::from_str(

@@ -92,7 +92,12 @@ pub fn run_hold(args: &[String]) -> i32 {
             }
         }
     }
-    if [minutes.is_some(), for_minutes.is_some(), on].iter().filter(|x| **x).count() > 1 {
+    if [minutes.is_some(), for_minutes.is_some(), on]
+        .iter()
+        .filter(|x| **x)
+        .count()
+        > 1
+    {
         eprintln!("error: --on, --minutes and --for are mutually exclusive");
         return 2;
     }
@@ -165,7 +170,11 @@ pub fn run_hold(args: &[String]) -> i32 {
         }
     };
     crate::mail_hold::spawn_release_timer(&session_id);
-    let minutes = (hold.until() - chrono::Utc::now()).num_seconds().div_euclid(60).max(0) + 1;
+    let minutes = (hold.until() - chrono::Utc::now())
+        .num_seconds()
+        .div_euclid(60)
+        .max(0)
+        + 1;
     println!(
         "do-not-disturb on for {handle}: {}, holds until {} ({minutes}m), then delivers itself.",
         clock_description(&hold),
@@ -176,7 +185,11 @@ pub fn run_hold(args: &[String]) -> i32 {
 
 /// The `--status` line. A hold is live with an end, or there is none; a
 /// mail-only row says so, because it holds typed text but is not a hold.
-pub(crate) fn status_line(session_id: &str, handle: &str, now: chrono::DateTime<chrono::Utc>) -> String {
+pub(crate) fn status_line(
+    session_id: &str,
+    handle: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> String {
     if let Some(hold) = live_hold(session_id, now) {
         if hold.set_by() == SetBy::Conversation {
             return format!(
@@ -190,9 +203,14 @@ pub(crate) fn status_line(session_id: &str, handle: &str, now: chrono::DateTime<
         } else {
             format!("~{}m", (ms + 59_999) / 60_000)
         };
-        return format!("{handle}: holding mail, {}, lifts in {label}", clock_description(&hold));
+        return format!(
+            "{handle}: holding mail, {}, lifts in {label}",
+            clock_description(&hold)
+        );
     }
-    let mail_only = entry_for(session_id).and_then(|e| e.delivery_policy).as_deref()
+    let mail_only = entry_for(session_id)
+        .and_then(|e| e.delivery_policy)
+        .as_deref()
         == Some(crate::mail_hold::MAIL_ONLY);
     if mail_only {
         format!("{handle}: no hold - this session takes mail only, never typed text")
