@@ -2161,16 +2161,16 @@ mod tests {
         assert_eq!(red, Some(vec!["cli-ci".to_string(), "CodeQL".to_string()]));
         let listing = calls
             .iter()
-            .find(|a| a[2].contains("actions/runs?"))
+            .find(|a| a.get(2).is_some_and(|p| p.contains("actions/runs?")))
             .expect("two gh reads");
-        assert!(listing[2].contains("branch=feature/x"), "{listing:?}");
+        assert!(listing.get(2).is_some_and(|p| p.contains("branch=feature/x")), "{listing:?}");
         assert!(
-            listing[2].contains("head_sha=1111111111111111111111111111111111111111"),
+            listing.get(2).is_some_and(|p| p.contains("head_sha=1111111111111111111111111111111111111111")),
             "{listing:?}"
         );
-        assert!(listing[2].contains("status=failure"), "{listing:?}");
-        assert_eq!(listing[4], RUNS_AT_HEAD_JQ);
-        assert_eq!(calls[0][4], PR_HEAD_JQ);
+        assert!(listing.get(2).is_some_and(|p| p.contains("status=failure")), "{listing:?}");
+        assert_eq!(listing.get(4), Some(&RUNS_AT_HEAD_JQ.to_string()));
+        assert_eq!(calls.first().and_then(|a| a.get(4)), Some(&PR_HEAD_JQ.to_string()));
     }
 
     #[test]
@@ -2226,10 +2226,10 @@ mod tests {
         let trips = escalation_trips(&trip, &t);
         assert_eq!(trips.len(), 1, "{trips:?}");
         assert!(
-            trips[0].contains("cli-ci, guards, main-binaries"),
+            trips.first().is_some_and(|t| t.contains("cli-ci, guards, main-binaries")),
             "{trips:?}"
         );
-        assert!(trips[0].contains("threshold 3"), "{trips:?}");
+        assert!(trips.first().is_some_and(|t| t.contains("threshold 3")), "{trips:?}");
         let clean = Counters {
             red: Some(Vec::new()),
             ..Default::default()
