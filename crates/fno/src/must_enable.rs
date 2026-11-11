@@ -235,21 +235,23 @@ fn starts_with(words: &[&str], prefix: &[String]) -> bool {
 pub(crate) fn load(text: &str) -> Result<List, MustEnableError> {
     let table: Table = toml::from_str(text).map_err(|e| MustEnableError::Table(e.to_string()))?;
     let corpus = table.corpus;
-    for row in &table.rule {
-        for words in expand(&row.prefix) {
-            let rule = words.join(" ");
-            if let Some(&hit) = FILTER_A.iter().find(|f| overlaps(&words, f)) {
-                return Err(MustEnableError::FilterA { rule, hit });
-            }
-            if let Some(&hit) = NEVER.iter().find(|f| overlaps(&words, f)) {
-                return Err(MustEnableError::Never { rule, hit });
-            }
-            let witnessed = corpus
-                .iter()
-                .any(|c| segments(c).iter().any(|seg| starts_with(seg, &words)));
-            if !witnessed {
-                return Err(MustEnableError::NoWitness(rule));
-            }
+    let all: Vec<Vec<String>> = table.rule.iter().flat_map(|r| expand(&r.prefix)).collect();
+    // A dangerous rule is named before a merely unwitnessed one.
+    for words in &all {
+        let rule = words.join(" ");
+        if let Some(&hit) = FILTER_A.iter().find(|f| overlaps(words, f)) {
+            return Err(MustEnableError::FilterA { rule, hit });
+        }
+        if let Some(&hit) = NEVER.iter().find(|f| overlaps(words, f)) {
+            return Err(MustEnableError::Never { rule, hit });
+        }
+    }
+    for words in &all {
+        let witnessed = corpus
+            .iter()
+            .any(|c| segments(c).iter().any(|seg| starts_with(seg, words)));
+        if !witnessed {
+            return Err(MustEnableError::NoWitness(words.join(" ")));
         }
     }
     Ok(List {
