@@ -28,9 +28,27 @@ struct FakeGh {
     graphql_fail: Option<String>,
     /// Every probe call's args, oldest first, for asked-path assertions.
     calls: std::sync::Mutex<Vec<Vec<String>>>,
+    /// Set by `refusing`: `rate_limit` serves this payload and every other
+    /// call refuses with a 403 rate-limit stderr.
+    rate_limit: Option<&'static str>,
 }
 
 impl FakeGh {
+    /// A keyless-gh double: the rate_limit probe answers `payload`, and any
+    /// other call is a 403 rate-limit refusal.
+    fn refusing(payload: &'static str) -> Self {
+        FakeGh {
+            raw: Value::Null,
+            log_reads: AtomicUsize::new(0),
+            log_args: std::sync::Mutex::new(Vec::new()),
+            pulls_fail: None,
+            graphql_answer: None,
+            graphql_fail: None,
+            calls: std::sync::Mutex::new(Vec::new()),
+            rate_limit: Some(payload),
+        }
+    }
+
     fn from_fixture(name: &str) -> Self {
         let fixture = load_fixture(name);
         FakeGh {
@@ -41,6 +59,7 @@ impl FakeGh {
             graphql_answer: None,
             graphql_fail: None,
             calls: std::sync::Mutex::new(Vec::new()),
+            rate_limit: None,
         }
     }
 }
@@ -49,6 +68,16 @@ impl GhProbe for FakeGh {
     fn run_gh(&self, _cwd: &Path, args: &[String]) -> Result<(bool, String, String), String> {
         let cmd = args.join(" ");
         self.calls.lock().unwrap().push(args.to_vec());
+        if let Some(payload) = self.rate_limit {
+            if cmd.contains("rate_limit") {
+                return Ok((true, payload.to_string(), String::new()));
+            }
+            return Ok((
+                false,
+                String::new(),
+                "gh: API rate limit exceeded (HTTP 403)".into(),
+            ));
+        }
         let serve = |v: &Value| (true, v.to_string(), String::new());
         // A forced failure wins over serving: the reviews path also contains
         // "/pulls/", so this arm is checked first.
@@ -333,6 +362,7 @@ fn job_log_caches_one_attempt_and_never_a_failure() {
         graphql_answer: None,
         graphql_fail: None,
         calls: std::sync::Mutex::new(Vec::new()),
+        rate_limit: None,
     };
     let stripped = job_log(&colored_fake, cwd, "Owner--Repo", "Owner", "Repo", "3001").unwrap();
     assert!(!stripped.contains('\u{1b}'), "escape-free: {stripped:?}");
@@ -372,6 +402,7 @@ fn job_log_caches_one_attempt_and_never_a_failure() {
         graphql_answer: None,
         graphql_fail: None,
         calls: std::sync::Mutex::new(Vec::new()),
+        rate_limit: None,
     };
     let from_legacy = job_log(&empty_fake, cwd, "Owner--Repo", "Owner", "Repo", "4001").unwrap();
     assert!(
@@ -578,6 +609,26 @@ fn a_traceback_refusal_names_its_cause_line() {
     assert_eq!(reason.text, "ModuleNotFoundError: No module named 'fno.pr'");
 }
 
+/// The 2026-11-09 iMac refusal: a keyless `gh` reads GitHub's anonymous
+/// 60-request bucket. It must classify as a local auth fault with no
+/// rate-limit class, so no caller writes the shared fleet hold.
+#[test]
+fn a_keyless_refusal_is_an_auth_fault_not_a_fleet_hold() {
+    let _env = crate::claims::test_env_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let state = tempfile::tempdir().unwrap();
+    std::env::set_var("FNO_STATE_DIR", state.path());
+    let probe = FakeGh::refusing(
+        r#"{"resources":{"core":{"limit":60,"remaining":59,"reset":1794300000}}}"#,
+    );
+    let stderr = "gh: API rate limit exceeded for 203.0.113.7. (HTTP 403)";
+    let reason = crate::pr_status::rest_reason(&probe, Path::new("/tmp"), stderr);
+    std::env::remove_var("FNO_STATE_DIR");
+    assert_eq!(reason.rate_limit_class, "", "no class, so no hold");
+    assert!(reason.text.contains("no token here"), "{}", reason.text);
+}
+
 /// The stranded tier fact rides a cancelled-only payload: the field carries
 /// the rerun remedy and one stderr note names it. A null fact adds neither,
 /// so the golden replay stays byte-identical.
@@ -650,6 +701,7 @@ fn optional_reviews_list_reads_rest_pages_and_keys_on_user_login() {
         graphql_answer: None,
         graphql_fail: None,
         calls: std::sync::Mutex::new(Vec::new()),
+        rate_limit: None,
     };
     let rows =
         reviews::fetch_reviews(&fake, cwd, "octocat/wordplay", 7).expect("both REST pages read");
@@ -690,6 +742,7 @@ fn optional_reviews_list_reads_rest_pages_and_keys_on_user_login() {
         graphql_answer: None,
         graphql_fail: None,
         calls: std::sync::Mutex::new(Vec::new()),
+        rate_limit: None,
     };
     assert!(reviews::fetch_reviews(&failed, cwd, "octocat/wordplay", 7).is_none());
     let out = reviews::optional_reviews(&failed, cwd, 7, "octocat/wordplay");
