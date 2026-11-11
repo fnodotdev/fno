@@ -379,7 +379,7 @@ pub(crate) fn send_if_due(
     }
     let _ = std::fs::write(&stamp, &payload);
     prune_sent(home);
-    let verb = if result.delivered() {
+    let outcome = if result.delivered() {
         "sent"
     } else {
         "rejected permanently"
@@ -387,7 +387,7 @@ pub(crate) fn send_if_due(
     otlp_export::BeatReport {
         acted: 1,
         skip: None,
-        detail: vec![format!("usage report: {day} {verb}")],
+        detail: vec![format!("usage report: {day} {outcome}")],
     }
 }
 
