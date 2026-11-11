@@ -16,6 +16,55 @@
 
 use crate::opencode_install::OpencodeContract;
 
+/// Why one serve exchange could not be judged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServeError {
+    /// The request never got an answer, or a non-HTTP seam refused.
+    Transport(String),
+    /// The serve answered a status the route does not accept.
+    Http {
+        route: String,
+        status: u16,
+        reason: String,
+    },
+    /// The body was not JSON.
+    Parse(String),
+    /// The JSON lacked the envelope or field the contract names.
+    Shape(&'static str),
+    /// A model id the 2.x ref cannot carry.
+    Model(String),
+    /// The recorded serve state is missing or unreadable.
+    State(String),
+}
+
+impl std::fmt::Display for ServeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ServeError::Transport(why) | ServeError::State(why) => f.write_str(why),
+            ServeError::Http {
+                route,
+                status,
+                reason,
+            } => write!(f, "{route} answered {status}: {reason}"),
+            ServeError::Parse(why) => write!(f, "body parse: {why}"),
+            ServeError::Shape(what) => f.write_str(what),
+            ServeError::Model(model) => write!(f, "opencode model {model:?} is not provider/model"),
+        }
+    }
+}
+
+impl From<String> for ServeError {
+    fn from(why: String) -> Self {
+        ServeError::Transport(why)
+    }
+}
+
+impl From<ServeError> for String {
+    fn from(error: ServeError) -> Self {
+        error.to_string()
+    }
+}
+
 /// One stored message, parsed once from either contract's readback.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServeMessage {
@@ -82,15 +131,15 @@ pub(super) fn messages_path(contract: OpencodeContract, session_id: &str) -> Str
 pub(super) fn session_from_body(
     contract: OpencodeContract,
     body: &str,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, ServeError> {
     let value: serde_json::Value =
-        serde_json::from_str(body).map_err(|e| format!("session body parse: {e}"))?;
+        serde_json::from_str(body).map_err(|e| ServeError::Parse(e.to_string()))?;
     match contract {
         OpencodeContract::V1 => Ok(value),
         OpencodeContract::V2 => value
             .get("data")
             .cloned()
-            .ok_or_else(|| "session body has no data envelope".to_string()),
+            .ok_or(ServeError::Shape("session body has no data envelope")),
     }
 }
 
@@ -114,21 +163,21 @@ pub(super) fn archive_body(contract: OpencodeContract, now_ms: u64) -> serde_jso
 pub(super) fn messages_from_body(
     contract: OpencodeContract,
     body: &str,
-) -> Result<Vec<ServeMessage>, String> {
+) -> Result<Vec<ServeMessage>, ServeError> {
     let value: serde_json::Value =
-        serde_json::from_str(body).map_err(|e| format!("messages body parse: {e}"))?;
+        serde_json::from_str(body).map_err(|e| ServeError::Parse(e.to_string()))?;
     match contract {
         OpencodeContract::V1 => {
             let rows = value
                 .as_array()
-                .ok_or_else(|| "1.x message readback is not an array".to_string())?;
+                .ok_or(ServeError::Shape("1.x message readback is not an array"))?;
             Ok(rows.iter().filter_map(v1_message).collect())
         }
         OpencodeContract::V2 => {
             let rows = value
                 .get("data")
                 .and_then(|data| data.as_array())
-                .ok_or_else(|| "2.x message readback has no data array".to_string())?;
+                .ok_or(ServeError::Shape("2.x message readback has no data array"))?;
             // The route answers newest first; the lane reads oldest first.
             Ok(rows.iter().rev().filter_map(v2_message).collect())
         }
@@ -189,16 +238,18 @@ fn v2_message(row: &serde_json::Value) -> Option<ServeMessage> {
 /// The 2.x `Model.Ref` for a `provider/model` id: `{providerID, id,
 /// variant?}`. Effort rides as the variant, the same value 1.x persists in
 /// its model state file.
-pub(super) fn model_ref(model: &str, variant: Option<&str>) -> Result<serde_json::Value, String> {
+pub(super) fn model_ref(
+    model: &str,
+    variant: Option<&str>,
+) -> Result<serde_json::Value, ServeError> {
     let (provider, id) = model
         .split_once('/')
         .filter(|(p, m)| !p.is_empty() && !m.is_empty())
-        .ok_or_else(|| format!("opencode model {model:?} is not provider/model"))?;
-    let mut value = serde_json::json!({"providerID": provider, "id": id});
-    if let Some(variant) = variant.filter(|v| !v.is_empty()) {
-        value["variant"] = serde_json::Value::String(variant.to_string());
-    }
-    Ok(value)
+        .ok_or_else(|| ServeError::Model(model.to_string()))?;
+    Ok(match variant.filter(|v| !v.is_empty()) {
+        Some(variant) => serde_json::json!({"providerID": provider, "id": id, "variant": variant}),
+        None => serde_json::json!({"providerID": provider, "id": id}),
+    })
 }
 
 /// The 2.x session-create body: the title names the worker (the plugin claims
@@ -244,7 +295,7 @@ pub(super) fn turn_request(session_id: &str, message: &str) -> (String, serde_js
 pub(super) fn model_switch(
     session: &serde_json::Value,
     model: &str,
-) -> Result<Option<serde_json::Value>, String> {
+) -> Result<Option<serde_json::Value>, ServeError> {
     let current = session.get("model");
     let variant = current
         .and_then(|m| m.get("variant"))
@@ -292,11 +343,14 @@ mod tests {
         let messages = messages_from_body(V2, body).unwrap();
         let ids: Vec<&str> = messages.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(ids, ["msg_1", "msg_2", "msg_3"]);
-        assert_eq!(messages[1].text.as_deref(), Some("journey-ok"));
-        assert_eq!(messages[1].model.as_deref(), Some("glm-5.3"));
-        assert!(messages[1].complete);
-        assert!(!messages[2].complete, "a streaming reply is not an answer");
-        assert_eq!(messages[2].text, None, "reasoning is not reply text");
+        let [_, reply, streaming] = messages.as_slice() else {
+            panic!("three messages: {messages:?}");
+        };
+        assert_eq!(reply.text.as_deref(), Some("journey-ok"));
+        assert_eq!(reply.model.as_deref(), Some("glm-5.3"));
+        assert!(reply.complete);
+        assert!(!streaming.complete, "a streaming reply is not an answer");
+        assert_eq!(streaming.text, None, "reasoning is not reply text");
     }
 
     #[test]

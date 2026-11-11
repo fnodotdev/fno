@@ -63,7 +63,11 @@ fn wait_for_reply(serve: &ServeHandle, session_id: &str, needle: &str) -> Option
 /// The session id the launch produced. 2.x names it in the receipt. 1.x
 /// leaves it to the worker's session report, so the registry row is read.
 fn launched_session_id(home: &AgentsHome, receipt: &serde_json::Value) -> String {
-    if let Some(id) = receipt["session_id"].as_str().filter(|id| !id.is_empty()) {
+    if let Some(id) = receipt
+        .pointer("/session_id")
+        .and_then(|v| v.as_str())
+        .filter(|id| !id.is_empty())
+    {
         return id.to_string();
     }
     let deadline = Instant::now() + Duration::from_secs(60);
@@ -137,7 +141,10 @@ fn opencode_bg_worker_completes_unattended_over_serve() {
     );
     assert_eq!(outcome.exit_code, 0, "dispatch failed: {}", outcome.stderr);
     let receipt: serde_json::Value = serde_json::from_str(outcome.stdout.trim()).unwrap();
-    assert_eq!(receipt["contract"], serve.contract.label());
+    assert_eq!(
+        receipt.pointer("/contract").and_then(|v| v.as_str()),
+        Some(serve.contract.label())
+    );
     let session_id = launched_session_id(&home, &receipt);
     assert!(
         session_id.starts_with("ses_"),
@@ -187,7 +194,10 @@ fn opencode_bg_worker_completes_unattended_over_serve() {
 
     // The serve session remains addressable after the turn.
     let session = fetch_session(&serve, &session_id).expect("session liveness readback");
-    assert_eq!(session["id"], session_id.as_str());
+    assert_eq!(
+        session.pointer("/id").and_then(|v| v.as_str()),
+        Some(session_id.as_str())
+    );
 
     // Cleanup: session deleted; the reaper drops the serve pid on exit.
     delete_session(&serve, &session_id).expect("session teardown");

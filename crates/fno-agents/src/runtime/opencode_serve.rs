@@ -57,7 +57,7 @@ use std::time::Duration;
 
 #[path = "opencode_serve_api.rs"]
 mod api;
-pub use api::ServeMessage;
+pub use api::{ServeError, ServeMessage};
 
 use crate::claude_ask::{emit_event, validate_spawn_inputs};
 use crate::opencode_ask::{
@@ -92,18 +92,18 @@ fn contract_from_record(record: &serde_json::Value) -> OpencodeContract {
 
 /// The recorded serve as a handle, without probing it. `Err` names what the
 /// state file lacks.
-fn recorded_serve(home: &AgentsHome) -> Result<ServeHandle, String> {
+fn recorded_serve(home: &AgentsHome) -> Result<ServeHandle, ServeError> {
     let raw = std::fs::read_to_string(serve_state_path(home))
-        .map_err(|e| format!("serve state unreadable: {e}"))?;
-    let state: serde_json::Value =
-        serde_json::from_str(&raw).map_err(|e| format!("serve state parse: {e}"))?;
+        .map_err(|e| ServeError::State(format!("serve state unreadable: {e}")))?;
+    let state: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| ServeError::State(format!("serve state parse: {e}")))?;
     let field = |key: &str| {
         state
             .get(key)
             .and_then(|value| value.as_str())
             .filter(|value| !value.is_empty())
             .map(str::to_string)
-            .ok_or_else(|| format!("serve state has no {key}"))
+            .ok_or_else(|| ServeError::State(format!("serve state has no {key}")))
     };
     Ok(ServeHandle {
         base_url: field("base_url")?,
@@ -831,7 +831,7 @@ fn v1_launch_argv(
     model_value: &str,
     serve: &ServeHandle,
     opencode_bin: &str,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, ServeError> {
     let template = crate::spawn_compose::resolve_template("opencode", None, None)?;
     let ask = serde_json::json!({
         "name": name,
@@ -842,7 +842,7 @@ fn v1_launch_argv(
     let values = crate::spawn_compose::fill_values(&ask);
     let mut argv = crate::spawn_compose::fill_launch(&template, &values)?;
     if argv.is_empty() {
-        return Err("the filled argv is empty".to_string());
+        return Err(ServeError::Shape("the filled argv is empty"));
     }
     // {payload} expands through opencode_run_tail, not the plain hole fill: a
     // slash seed rides --command with args split, prose stays positional. The
@@ -923,7 +923,7 @@ fn launch_over_http(
     model: &str,
     effort: Option<&str>,
     prompt: &str,
-) -> Result<String, String> {
+) -> Result<String, ServeError> {
     let model_ref = api::model_ref(model, effort)?;
     let body = api::create_body(name, &cwd.to_string_lossy(), &model_ref);
     let (status, text) = http_json(
@@ -935,22 +935,14 @@ fn launch_over_http(
         HTTP_CALL_TIMEOUT,
     )?;
     if status != 200 {
-        return Err(format!(
-            "POST session answered {status}: {}",
-            tail_reason(&text, status)
-        ));
+        return Err(http_refusal("POST /api/session", status, &text));
     }
     let session = api::session_from_body(OpencodeContract::V2, &text)?;
     let session_id = session
         .get("id")
         .and_then(|id| id.as_str())
         .filter(|id| crate::provider::is_opencode_session_id(id))
-        .ok_or_else(|| {
-            format!(
-                "POST session minted no ses_ id: {}",
-                tail_reason(&text, status)
-            )
-        })?
+        .ok_or(ServeError::Shape("POST /api/session minted no ses_ id"))?
         .to_string();
     send_turn_v2(serve, &session_id, prompt)?;
     Ok(session_id)
@@ -958,7 +950,7 @@ fn launch_over_http(
 
 /// Start one 2.x turn on an existing session. The answer is acceptance only;
 /// delivery proof stays the readback's new message id.
-fn send_turn_v2(serve: &ServeHandle, session_id: &str, message: &str) -> Result<(), String> {
+fn send_turn_v2(serve: &ServeHandle, session_id: &str, message: &str) -> Result<(), ServeError> {
     let (path, body) = api::turn_request(session_id, message);
     let (status, text) = http_json(
         &serve.base_url,
@@ -971,10 +963,16 @@ fn send_turn_v2(serve: &ServeHandle, session_id: &str, message: &str) -> Result<
     if status == 200 || status == 204 {
         Ok(())
     } else {
-        Err(format!(
-            "POST {path} answered {status}: {}",
-            tail_reason(&text, status)
-        ))
+        Err(http_refusal(format!("POST {path}"), status, &text))
+    }
+}
+
+/// A non-2xx answer as a typed refusal naming the route.
+fn http_refusal(route: impl Into<String>, status: u16, body: &str) -> ServeError {
+    ServeError::Http {
+        route: route.into(),
+        status,
+        reason: tail_reason(body, status),
     }
 }
 
@@ -997,7 +995,10 @@ fn tail_reason(body: &str, code: u16) -> String {
 /// The session object as parsed JSON, unwrapped from the contract's envelope.
 /// A 1.x session carries its merged `permission` rules; a 2.x session carries
 /// `permissions`, `location.directory` and `title`.
-pub fn fetch_session(serve: &ServeHandle, session_id: &str) -> Result<serde_json::Value, String> {
+pub fn fetch_session(
+    serve: &ServeHandle,
+    session_id: &str,
+) -> Result<serde_json::Value, ServeError> {
     let (status, body) = http_json(
         &serve.base_url,
         "GET",
@@ -1007,10 +1008,7 @@ pub fn fetch_session(serve: &ServeHandle, session_id: &str) -> Result<serde_json
         HTTP_CALL_TIMEOUT,
     )?;
     if status != 200 {
-        return Err(format!(
-            "GET session answered {status}: {}",
-            tail_reason(&body, status)
-        ));
+        return Err(http_refusal("GET session", status, &body));
     }
     api::session_from_body(serve.contract, &body)
 }
@@ -1058,7 +1056,10 @@ fn serve_session_reachable_in(
 
 /// The session's stored messages, oldest first (structured capture readback).
 /// 2.x reads its newest page, which is all a high-water diff needs.
-pub fn fetch_messages(serve: &ServeHandle, session_id: &str) -> Result<Vec<ServeMessage>, String> {
+pub fn fetch_messages(
+    serve: &ServeHandle,
+    session_id: &str,
+) -> Result<Vec<ServeMessage>, ServeError> {
     let (status, body) = http_json(
         &serve.base_url,
         "GET",
@@ -1068,10 +1069,7 @@ pub fn fetch_messages(serve: &ServeHandle, session_id: &str) -> Result<Vec<Serve
         HTTP_CALL_TIMEOUT,
     )?;
     if status != 200 {
-        return Err(format!(
-            "GET messages answered {status}: {}",
-            tail_reason(&body, status)
-        ));
+        return Err(http_refusal("GET messages", status, &body));
     }
     api::messages_from_body(serve.contract, &body)
 }
@@ -1165,7 +1163,7 @@ fn steer_existing_session_with_binary(
 /// Move a 2.x session onto `model` before a steer, keeping its variant. The
 /// 2.x prompt carries no model field, so a steer that names a model the
 /// session does not run would otherwise drop it.
-fn switch_model_v2(serve: &ServeHandle, session_id: &str, model: &str) -> Result<(), String> {
+fn switch_model_v2(serve: &ServeHandle, session_id: &str, model: &str) -> Result<(), ServeError> {
     let session = fetch_session(serve, session_id)?;
     let Some(body) = api::model_switch(&session, model)? else {
         return Ok(());
@@ -1182,10 +1180,7 @@ fn switch_model_v2(serve: &ServeHandle, session_id: &str, model: &str) -> Result
     if status == 200 || status == 204 {
         Ok(())
     } else {
-        Err(format!(
-            "POST {path} answered {status}: {}",
-            tail_reason(&text, status)
-        ))
+        Err(http_refusal(format!("POST {path}"), status, &text))
     }
 }
 
@@ -1465,7 +1460,7 @@ pub fn archive_capable_serve(home: &AgentsHome) -> Option<ServeHandle> {
 /// [`ArchiveOutcome::Survived`].
 pub fn archive_session(serve: &ServeHandle, session_id: &str) -> Result<ArchiveOutcome, String> {
     let path = api::session_path(serve.contract, session_id);
-    let read = || -> Result<Option<serde_json::Value>, String> {
+    let read = || -> Result<Option<serde_json::Value>, ServeError> {
         let (status, body) = http_json(
             &serve.base_url,
             "GET",
@@ -1477,10 +1472,7 @@ pub fn archive_session(serve: &ServeHandle, session_id: &str) -> Result<ArchiveO
         match status {
             404 => Ok(None),
             200 => api::session_from_body(serve.contract, &body).map(Some),
-            _ => Err(format!(
-                "GET session answered {status}: {}",
-                tail_reason(&body, status)
-            )),
+            _ => Err(http_refusal("GET session", status, &body)),
         }
     };
     let Some(session) = read()? else {
@@ -1918,9 +1910,9 @@ mod tests {
 
         assert_eq!(outcome.exit_code, 0, "stderr: {}", outcome.stderr);
         let receipt: serde_json::Value = serde_json::from_str(outcome.stdout.trim()).unwrap();
-        assert_eq!(receipt["session_id"], "ses_v2launch1");
-        assert_eq!(receipt["contract"], "2.x");
-        assert_eq!(receipt["effort"], "high");
+        assert_eq!(receipt.pointer("/session_id").unwrap(), "ses_v2launch1");
+        assert_eq!(receipt.pointer("/contract").unwrap(), "2.x");
+        assert_eq!(receipt.pointer("/effort").unwrap(), "high");
         let requests = fake.requests.lock().unwrap().clone();
         let create = requests
             .iter()
@@ -1928,14 +1920,18 @@ mod tests {
             .unwrap_or_else(|| panic!("no session create: {requests:?}"));
         let create: serde_json::Value =
             serde_json::from_str(create.split_once('\t').unwrap().1).unwrap();
-        assert_eq!(create["title"], "wk-v2", "the plugin claims by title");
         assert_eq!(
-            create["location"]["directory"],
-            cwd.to_string_lossy().as_ref()
+            create.pointer("/title").unwrap(),
+            "wk-v2",
+            "the plugin claims by title"
         );
         assert_eq!(
-            create["model"],
-            serde_json::json!({"providerID": "zai-coding-plan", "id": "glm-5.3-flash", "variant": "high"})
+            create.pointer("/location/directory").unwrap(),
+            &*cwd.to_string_lossy()
+        );
+        assert_eq!(
+            create.pointer("/model").unwrap(),
+            &serde_json::json!({"providerID": "zai-coding-plan", "id": "glm-5.3-flash", "variant": "high"})
         );
         assert!(
             requests
