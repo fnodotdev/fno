@@ -411,12 +411,12 @@ fn default_true() -> bool {
 /// v125: `PaneMeta.host` + `cwd` (serde default), the pane frame's machine
 /// and working directory; floor stays 58.
 /// v126: `ControlCommand::PaneKillChecked` binds removal to the observed child.
-/// v127: `ClientMsg::AnchorJump` + `ServerMsg::AnchorJumped`: the exchange
-/// picker's jump lands a pane on the row where a submitted prompt was
-/// echoed, keyed by the prompt's submit stamp.
 /// v127: `ClientMsg::ChatTail` and `ServerMsg::ChatEvents`, the chat event
 /// stream; floor stays 58.
-pub const PROTO_VERSION: u32 = 127;
+/// v128: `ClientMsg::AnchorJump` + `ServerMsg::AnchorJumped`: the exchange
+/// picker's jump lands a pane on the row where a submitted prompt was
+/// echoed, keyed by the prompt's submit stamp.
+pub const PROTO_VERSION: u32 = 128;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
