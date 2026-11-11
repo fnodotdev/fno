@@ -699,8 +699,12 @@ mod tests {
         );
         assert_eq!(report.channel, "binary");
         let payload = body("phc_k", &report);
-        let props = &serde_json::from_str::<Value>(&payload).unwrap()["batch"][0]["properties"];
-        let keys: Vec<&String> = props.as_object().unwrap().keys().collect();
+        let parsed: Value = serde_json::from_str(&payload).unwrap();
+        let props = parsed
+            .pointer("/batch/0/properties")
+            .and_then(Value::as_object)
+            .expect("one event with properties");
+        let keys: Vec<&String> = props.keys().collect();
         assert_eq!(
             keys,
             [

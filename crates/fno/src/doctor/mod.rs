@@ -79,7 +79,7 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
                 OsString::from("events"),
                 OsString::from("--report"),
             ];
-            argv.extend(args[2..].iter().cloned());
+            argv.extend(args.get(2..).unwrap_or(&[]).iter().cloned());
             Some(Claim::AgentsExec("fno doctor telemetry", argv))
         }
         Some("intel") => Some(Claim::AgentsExec(
