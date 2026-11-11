@@ -674,6 +674,34 @@ fn client_agent_row_renders_dnd_as_presence_not_liveness() {
 }
 
 #[test]
+fn the_held_mail_badge_reads_queued_on_the_list_row() {
+    // The same rename the card carries (user, 2026-11-10): the busy-queue
+    // count reads [N queued \u{b7} dnd] whole, or the compact [Nq] when the
+    // name leaves no room - never the hold word the agent's own state uses.
+    let row_json = r#"{"squad":1,"name":"mailer","pane_id":10,
+                "badge":"working","reason":null,"exited":false,
+                "mail_held":2}"#;
+    let mut view = two_pane_view();
+    view.sideline_width = 60;
+    view.layout.agents = vec![serde_json::from_str(row_json).unwrap()];
+    let text = frame_text(&view.compose());
+    let line = text.lines().find(|line| line.contains("mailer")).unwrap();
+    assert!(
+        line.contains("[2 queued \u{b7} dnd]") && !line.contains("held"),
+        "the list badge reads queued: {line:?}"
+    );
+    let mut narrow = two_pane_view();
+    narrow.sideline_width = 26;
+    narrow.layout.agents = vec![serde_json::from_str(row_json).unwrap()];
+    let text = frame_text(&narrow.compose());
+    let line = text.lines().find(|line| line.contains("mailer")).unwrap();
+    assert!(
+        line.contains("[2q]") && !line.contains("held"),
+        "the compact token renames with the badge: {line:?}"
+    );
+}
+
+#[test]
 fn a_marked_row_paints_the_build_glyph_in_place_of_the_working_one() {
     // The mark's paint contract (user ruling 2026-10-09): compiling swaps
     // the working glyph for the BRAILLE_SIX rest frame, waiting swaps the

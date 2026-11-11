@@ -411,7 +411,9 @@ fn default_true() -> bool {
 /// v125: `PaneMeta.host` + `cwd` (serde default), the pane frame's machine
 /// and working directory; floor stays 58.
 /// v126: `ControlCommand::PaneKillChecked` binds removal to the observed child.
-pub const PROTO_VERSION: u32 = 126;
+/// v127: `AgentRow.mail_held_since` (serde default), the wall stamp of the
+/// oldest held submission; floor stays 58.
+pub const PROTO_VERSION: u32 = 127;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -1228,6 +1230,13 @@ pub struct AgentRow {
     /// field wire-tolerant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mail_held: Option<u32>,
+    /// (v127) The wall stamp of the OLDEST submission the harness still
+    /// holds (epoch seconds, parsed from the registry row), so the badge
+    /// can age the wait: `[1 queued 12m]`. `None` = nothing held or no
+    /// stamp read; never a fabricated zero. `#[serde(default)]` keeps a
+    /// v126 reader wire-tolerant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mail_held_since: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node: Option<String>,
 

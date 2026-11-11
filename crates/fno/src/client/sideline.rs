@@ -1386,10 +1386,11 @@ impl View {
                         " [DND]"
                     });
                 }
-                // The recipient harness is holding this row's submitted mail
+                // The recipient harness is queueing this row's submitted mail
                 // in its own busy queue: the count plus a do-not-disturb
                 // mark, both gone the moment the harness's release rows
-                // land. The marker itself is chosen at composition time,
+                // land. The word names the queue, never the agent hold,
+                // and the marker is chosen at composition time,
                 // where the label's room is known.
                 let held_badge = a.mail_held.filter(|n| *n > 0);
                 // A card names its model on line 2; the token is the list's.
@@ -1452,17 +1453,23 @@ impl View {
                     }
                     None => label,
                 };
-                // The held-mail marker renders whole or not at all: the full
-                // `[N held · dnd]` when the label keeps its room beside it,
-                // else the compact closed `[Nh]` - an unclosed ` [8` clip
-                // reads as broken paint, and a head-cut name misreads who
-                // holds the mail. A card row's line 1 lies about its width
-                // (the frame re-clips at the true cell), so the card carries
-                // the marker on its detail line instead; lists decide here.
+                // The queued-mail marker renders whole or not at all: the full
+                // `[N queued · dnd]` (the oldest wait rides the count when
+                // the transcript carried a stamp) when the label keeps its
+                // room beside it, else the compact closed `[Nq]` - an
+                // unclosed ` [8` clip reads as broken paint, and a head-cut
+                // name misreads who holds the mail. A card row's line 1
+                // lies about its width (the frame re-clips at the true
+                // cell), so the card carries the marker on its detail line
+                // instead; lists decide here.
                 let suffix = match held_badge.filter(|_| !card) {
                     Some(held) => {
-                        let full = format!(" [{held} held \u{b7} dnd]");
-                        let compact = format!(" [{held}h]");
+                        let age = a
+                            .mail_held_since
+                            .map(|s| format!(" {}", row_meter::up_cell(Some(s), now)))
+                            .unwrap_or_default();
+                        let full = format!(" [{held} queued{age} \u{b7} dnd]");
+                        let compact = format!(" [{held}q]");
                         let fits = |badge: &str| {
                             crate::chrome::str_cols(&label)
                                 + crate::chrome::str_cols(badge)
@@ -1920,11 +1927,19 @@ impl View {
     /// unserved cost renders nothing rather than a placeholder.
     pub(super) fn card_detail_text(&self, a: &AgentRow, now: u64, text_w: usize) -> String {
         let mut segments: Vec<String> = Vec::new();
-        // The card's detail line carries the held-mail marker, first so
+        // The card's detail line carries the queued-mail marker, first so
         // the line's own ellipsis never cuts it: line 1's name cell
-        // re-clips at its true width, so a marker there renders broken.
+        // re-clips at its true width, so a marker there renders broken. The
+        // count names the busy queue, not the agent hold, and the oldest
+        // wait rides it when the transcript carried a stamp.
         if let Some(held) = a.mail_held.filter(|n| *n > 0) {
-            segments.push(format!("[{held} held]"));
+            match a.mail_held_since {
+                Some(since) => segments.push(format!(
+                    "[{held} queued {}]",
+                    row_meter::up_cell(Some(since), now)
+                )),
+                None => segments.push(format!("[{held} queued]")),
+            }
         }
         if let Some(model) = card_line::model_label(a) {
             segments.push(model);

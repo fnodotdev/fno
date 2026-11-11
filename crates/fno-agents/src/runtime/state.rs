@@ -857,6 +857,12 @@ pub struct RegistryEntry {
     /// mark while it is nonzero, and the release rows themselves clear it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mail_held: Option<u32>,
+    /// The wall stamp of the OLDEST submission still held (the enqueue
+    /// row's own `timestamp`, second precision), written by the same scan
+    /// as `mail_held` so the sideline's badge can age the wait. `None`
+    /// when nothing is held or no row carried a readable stamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mail_held_since: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_measured_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

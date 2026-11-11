@@ -212,6 +212,9 @@ pub struct RegistryAgent {
     /// (the registry row's `mail_held` from the incremental transcript
     /// scan). `None` = not measured or not a harness with a held queue.
     pub mail_held: Option<u32>,
+    /// The wall stamp of the oldest held submission (the registry row's
+    /// `mail_held_since`), parsed to epoch seconds for the wire.
+    pub mail_held_since: Option<u64>,
     pub node: Option<String>,
 
     /// The LAST title the harness reported for this session
@@ -2195,6 +2198,10 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
                 .get("mail_held")
                 .and_then(|v| v.as_u64())
                 .and_then(|n| u32::try_from(n).ok()),
+            mail_held_since: row
+                .get("mail_held_since")
+                .and_then(|v| v.as_str())
+                .and_then(rfc3339_like_to_secs),
             node: row
                 .get("node")
                 .and_then(|v| v.as_str())

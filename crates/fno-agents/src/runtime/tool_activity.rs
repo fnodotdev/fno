@@ -14,7 +14,7 @@
 //! flag, so the refusal buckets that price `refusal_rate` read the output
 //! text - the same read the lead check-in uses.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -34,6 +34,12 @@ pub(crate) struct ToolFold {
     /// second writer. Saturating so a fold that starts mid-history (daemon
     /// restart past the enqueues) floors at zero instead of wrapping.
     pub(crate) held: u32,
+    /// Per still-held enqueue, `(content hash, the row's own wall stamp)`,
+    /// oldest first: the front is the oldest wait the sideline's badge
+    /// ages. `dequeue` pops the front, `remove` takes the entry its
+    /// content names (front when no entry matches, the same floor a fold
+    /// started mid-history gives the count). Clears with the fold.
+    pub(crate) held_stamps: VecDeque<(u64, Option<String>)>,
     /// The last pass that counted this fold: the prune's clock.
     last_seen: Option<Instant>,
     /// The transcript this fold counts, kept so a pass never walks the
@@ -100,8 +106,35 @@ impl ToolFold {
     fn claude_row(&mut self, row: &serde_json::Value) {
         if row.get("type").and_then(|v| v.as_str()) == Some("queue-operation") {
             match row.get("operation").and_then(|v| v.as_str()) {
-                Some("enqueue") => self.held = self.held.saturating_add(1),
-                Some("dequeue") | Some("remove") => self.held = self.held.saturating_sub(1),
+                Some("enqueue") => {
+                    self.held = self.held.saturating_add(1);
+                    let hash = row
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                        .map(content_hash)
+                        .unwrap_or(0);
+                    self.held_stamps.push_back((hash, wall_stamp(row)));
+                }
+                Some("dequeue") => {
+                    self.held = self.held.saturating_sub(1);
+                    self.held_stamps.pop_front();
+                }
+                Some("remove") => {
+                    self.held = self.held.saturating_sub(1);
+                    let hash = row
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                        .map(content_hash);
+                    let at = hash.and_then(|h| self.held_stamps.iter().position(|(k, _)| *k == h));
+                    match at {
+                        Some(i) => {
+                            self.held_stamps.remove(i);
+                        }
+                        None => {
+                            self.held_stamps.pop_front();
+                        }
+                    }
+                }
                 _ => {}
             }
             return;
@@ -143,6 +176,31 @@ impl ToolFold {
 
 static FOLDS: OnceLock<Mutex<HashMap<String, ToolFold>>> = OnceLock::new();
 
+/// Content identity for a queue row: the body's hash, so a `remove` finds
+/// its own enqueue. A row with no content hashes to 0, matching only
+/// other content-less entries.
+fn content_hash(content: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    content.hash(&mut h);
+    h.finish()
+}
+
+/// The row's wall stamp at second precision: the registry's own
+/// `YYYY-MM-DDTHH:MM:SSZ` shape, with the transcript's millis truncated.
+/// `None` when the row carries no readable stamp.
+fn wall_stamp(row: &serde_json::Value) -> Option<String> {
+    let ts = row.get("timestamp").and_then(|v| v.as_str())?;
+    let b = ts.as_bytes();
+    if b.len() >= 20 && b[19] == b'.' {
+        Some(format!("{}Z", &ts[..19]))
+    } else if b.len() == 20 && b[19] == b'Z' {
+        Some(ts.to_string())
+    } else {
+        None
+    }
+}
+
 /// Scan every counted row once: absorb appends, write the cumulative pair
 /// onto the registry row. Runs off the daemon loop on the blocking pool.
 /// The store walk and the reads run against a snapshot; the write lock is
@@ -175,10 +233,11 @@ fn scan_pass(home: &crate::paths::AgentsHome) {
             let Some(sid) = entry.harness_session_id.as_deref() else {
                 continue;
             };
-            if let Some((calls, errors, held)) = counts.get(sid) {
+            if let Some((calls, errors, held, oldest)) = counts.get(sid) {
                 entry.tool_calls = Some(*calls);
                 entry.tool_errors = Some(*errors);
                 entry.mail_held = Some(*held);
+                entry.mail_held_since = oldest.clone().filter(|_| *held > 0);
             }
         }
     });
@@ -191,7 +250,7 @@ fn count_rows(
     rows: &[(String, String)],
     folds: &mut HashMap<String, ToolFold>,
     find: &mut dyn FnMut(&str, &str) -> Option<PathBuf>,
-) -> HashMap<String, (u64, u64, u32)> {
+) -> HashMap<String, (u64, u64, u32, Option<String>)> {
     let now = Instant::now();
     let mut counts = HashMap::new();
     for (sid, harness) in rows {
@@ -213,7 +272,8 @@ fn count_rows(
         };
         fold.absorb(&path, harness);
         fold.last_seen = Some(now);
-        counts.insert(sid.clone(), (fold.calls, fold.errors, fold.held));
+        let oldest = fold.held_stamps.iter().find_map(|(_, ts)| ts.clone());
+        counts.insert(sid.clone(), (fold.calls, fold.errors, fold.held, oldest));
     }
     // A fold whose row stopped counting (exited, reaped, transcript gone)
     // prunes after a day, the same retention the cost folds keep.
@@ -278,14 +338,14 @@ mod tests {
         count_rows(&rows(), &mut folds, &mut find);
         let counts = count_rows(&rows(), &mut folds, &mut find);
         assert_eq!(finds, 1, "the second pass reuses the path");
-        assert_eq!(counts.get("s1"), Some(&(1, 0, 0)));
+        assert_eq!(counts.get("s1"), Some(&(1, 0, 0, None)));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The fold counts the harness's own held-mail queue from the
     /// transcript: an `enqueue` parks one, a `dequeue`/`remove` releases it,
     /// and the net is what the sideline paints. A release past a fold reset
-    /// floors at zero, never negative.
+    /// floors at zero, never negative, and carries no oldest-wait stamp.
     #[test]
     fn the_fold_nets_enqueue_against_release_for_the_held_count() {
         let dir = std::env::temp_dir().join(format!("tool-scan-held-{}", std::process::id()));
@@ -298,7 +358,11 @@ mod tests {
         let mut folds = HashMap::new();
         let mut find = |_: &str, _: &str| Some(path.clone());
         let counts = count_rows(&rows(), &mut folds, &mut find);
-        assert_eq!(counts.get("s1"), Some(&(1, 0, 2)), "two held submissions");
+        assert_eq!(
+            counts.get("s1"),
+            Some(&(1, 0, 2, None)),
+            "two held submissions"
+        );
         std::fs::write(
             &path,
             format!("{CALL}\n{enqueue}\n{enqueue}\n{dequeue}\n{remove}\n"),
@@ -309,7 +373,7 @@ mod tests {
         let counts = count_rows(&rows(), &mut folds, &mut find);
         assert_eq!(
             counts.get("s1"),
-            Some(&(1, 0, 0)),
+            Some(&(1, 0, 0, None)),
             "releases clear the count"
         );
         // Release-only history (the enqueue aged out of the fold): floors 0.
@@ -318,10 +382,63 @@ mod tests {
         let counts = count_rows(&rows(), &mut folds, &mut find);
         assert_eq!(
             counts.get("s1"),
-            Some(&(0, 0, 0)),
+            Some(&(0, 0, 0, None)),
             "a release past the fold never goes negative"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The oldest held submission's wall stamp rides the count: the front
+    /// enqueue's own `timestamp` at second precision, held until its own
+    /// release. A `dequeue` pops the front; a `remove` takes the entry its
+    /// content names, so the stamp clears when the queue empties.
+    #[test]
+    fn the_oldest_held_stamp_survives_until_its_release() {
+        let dir = std::env::temp_dir().join(format!("tool-scan-stamp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s1.jsonl");
+        let row = |op: &str, content: &str, ts: &str| {
+            serde_json::to_string(&serde_json::json!({
+                "type": "queue-operation",
+                "operation": op,
+                "content": content,
+                "timestamp": ts,
+            }))
+            .unwrap()
+        };
+        std::fs::write(
+            &path,
+            [
+                row("enqueue", "m1", "2026-11-10T10:00:00.500Z"),
+                row("enqueue", "m2", "2026-11-10T10:05:00Z"),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let mut folds = HashMap::new();
+        let mut find = |_: &str, _: &str| Some(path.clone());
+        let counts = count_rows(&rows(), &mut folds, &mut find);
+        assert_eq!(
+            counts.get("s1"),
+            Some(&(0, 0, 2, Some("2026-11-10T10:00:00Z".to_string()))),
+            "the front enqueue's stamp, millis truncated"
+        );
+        std::fs::write(
+            &path,
+            [
+                row("enqueue", "m1", "2026-11-10T10:00:00.500Z"),
+                row("enqueue", "m2", "2026-11-10T10:05:00Z"),
+                row("dequeue", "m1", "2026-11-10T10:06:00Z"),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let counts = count_rows(&rows(), &mut folds, &mut find);
+        assert_eq!(
+            counts.get("s1"),
+            Some(&(0, 0, 1, Some("2026-11-10T10:05:00Z".to_string()))),
+            "the stamp moves to the next entry on a front release"
+        );
     }
 
     /// AC4: a cached path that was removed resolves again, and the counts
@@ -340,11 +457,11 @@ mod tests {
             Some(if finds == 1 { old.clone() } else { new.clone() })
         };
         let counts = count_rows(&rows(), &mut folds, &mut find);
-        assert_eq!(counts.get("s1"), Some(&(2, 0, 0)));
+        assert_eq!(counts.get("s1"), Some(&(2, 0, 0, None)));
         std::fs::remove_file(&old).unwrap();
         std::fs::write(&new, format!("{CALL}\n")).unwrap();
         let counts = count_rows(&rows(), &mut folds, &mut find);
-        assert_eq!(counts.get("s1"), Some(&(1, 0, 0)));
+        assert_eq!(counts.get("s1"), Some(&(1, 0, 0, None)));
         assert_eq!(finds, 2);
         let _ = std::fs::remove_dir_all(&dir);
     }

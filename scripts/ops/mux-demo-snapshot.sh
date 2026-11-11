@@ -585,8 +585,15 @@ def thread(name, harness, how, attach=None):
         "mux": None,
     } | ({} if attach is None else {"attach_id": attach})
 agents = [
-    # archer holds submitted mail mid-turn, so the sideline paints its held badge.
-    row("archer", "codex", "gpt-6-sol", ids[0 + off], "working", sids[1]) | {"mail_held": 8},
+    # archer holds submitted mail mid-turn, so the sideline paints its held
+    # badge; the oldest wait is 12 minutes before the demo epoch.
+    row("archer", "codex", "gpt-6-sol", ids[0 + off], "working", sids[1])
+    | {
+        "mail_held": 8,
+        "mail_held_since": datetime.datetime.fromtimestamp(
+            int(os.environ["FNO_DEMO_EPOCH"]) - 12 * 60, datetime.timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    },
     row("scout", "claude", "opus", ids[1 + off], "done", sids[0]),
     row("reviewer", "opencode", "zen", ids[2 + off], "working", sids[2]),
     # Blocked, so the strip's need-input count and the Input word render.
