@@ -570,8 +570,8 @@ pub fn load_experimental(name: &str) -> bool {
 /// Read one experimental toggle with an explicit absent default. The stored
 /// value always wins; absent or corrupt reads `default`. The store keeps
 /// [`load_experimental`]'s off-until-touched contract, so the ship policy
-/// lives at the call site: the org board passes `true` (x-d3b3), every other
-/// feature keeps the off bias.
+/// lives at the call site: the org board passes `true` so a fresh install
+/// starts with it on, every other feature keeps the off bias.
 pub fn load_experimental_or(name: &str, default: bool) -> bool {
     #[cfg(test)]
     if TEST_PATH.with(|c| c.borrow().is_none()) {
