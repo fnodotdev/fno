@@ -125,7 +125,6 @@ docs/architecture/path-census.md	contribute	internal	keep	-	0	working manifest o
 docs/architecture/plan-claims.md	contribute	contributor	keep	-	0	design note for contributors
 docs/architecture/plan-completion-stamp.md	daily-driver	reference	keep	-	1	plan frontmatter stamp schema
 docs/architecture/plan-fidelity-gate.md	contribute	contributor	keep	-	0	design note for contributors
-docs/architecture/plugin-marketplace-tree.md	contribute	contributor	keep	-	0	design note for contributors
 docs/architecture/portals.md	fleet	concept	keep	-	2	the portal and pane model
 docs/architecture/pr-heal.md	contribute	contributor	keep	-	1	design note for contributors
 docs/architecture/pr-state-watcher.md	contribute	contributor	keep	-	0	design note for contributors
@@ -263,7 +262,6 @@ docs/test-audit/k2-campaign.md	contribute	contributor	keep	-	0	test-cut campaign
 docs/test-audit/k8-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger
 docs/test-audit/k9-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger
 docs/test-audit/k9b-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger
-docs/test-audit/plugin-marketplace-tree.md	contribute	contributor	keep	-	0	test-cut campaign ledger
 docs/test-audit/stress-e2e-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger
 docs/test-audit/thread-promotion.md	contribute	contributor	keep	-	0	test-cut campaign ledger
 docs/test-audit/unit-a-l-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger

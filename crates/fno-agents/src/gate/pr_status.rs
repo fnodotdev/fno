@@ -349,6 +349,22 @@ is already live, so the exempt classify probe is skipped)"
         let core_reset = probe_read
             .as_ref()
             .and_then(|v| v.pointer("/resources/core/reset").and_then(Value::as_i64));
+        // No token on this machine: the refusal is this keychain's, not the
+        // account's. Classed "" so no caller opens a shared hold, and the
+        // keyless reading never reaches the shared core bucket.
+        if probe_read
+            .as_ref()
+            .is_some_and(crate::gh_budget::is_anonymous_core)
+        {
+            return RestReason::new(
+                format!(
+                    "{base} | gh has no token here (keychain locked?): this is GitHub's \
+anonymous 60-request bucket, not the account budget. Log gh in on this machine; no fleet \
+hold is written."
+                ),
+                "",
+            );
+        }
         if remaining == Some(0) {
             crate::gh_budget::record_core_observation(0, core_reset.unwrap_or(0));
             return RestReason::new(
@@ -1237,6 +1253,7 @@ pub(crate) fn status_payload<P: GhProbe>(
             "op": "status-merge-blocker",
             "cwd": cwd.to_string_lossy(),
             "pr": pr,
+            "ci_verdict": verdict,
             "mergeStateStatus": pr_json.get("mergeStateStatus").cloned().unwrap_or(Value::Null),
             "baseRefName": pr_json.get("baseRefName").cloned().unwrap_or(Value::Null),
             "mergeable": pr_json.get("mergeable").cloned().unwrap_or(Value::Null),

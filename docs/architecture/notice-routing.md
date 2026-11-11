@@ -23,7 +23,7 @@ The producer declaration carries two optional keys. `audience` lists the roles a
 One module answers "who owns this" (`owner_ladder.rs`):
 
 1. **NodeLead**: the deepest live team whose compiled territory holds the node (`territory::node_owners`).
-2. **HigherUp**: the live teams one level above that lead. This is the level-minus-one rule `lead_wake` uses, now one shared `rung_up`.
+2. **HigherUp**: the live teams one level above that lead. This is the level-minus-one rule the ladder itself owns as the shared `rung_up`. The lead-wake arm stopped consulting it: a missed beat wakes only the idle lead.
 3. **LeastLoaded**: among live leads with a beat inside 7,200 s, the fewest held nodes plus open notices. A tie goes to the newest beat. Each pick records an `authority-router` decision.
 4. **User**: no live lead qualifies. The caller files the question page.
 

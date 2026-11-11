@@ -1,10 +1,13 @@
 //! The lead-wake arm: a lead whose journaled check-in beat is one minute
 //! past overdue gets woken by the daemon (the mail lane; a codex thread
-//! receives it as turn/start), and the lead one rung up is told. The arm
-//! writes the `lead_wake` tick rows the status table read UNOBSERVED before,
-//! and a `lead_wake` journal event receipts each wake, so one lapse gets
-//! one wake: every attempt receipts, and a receipt newer than the beat row
-//! holds the next plan until a fresh check-in moves the beat.
+//! receives it as turn/start). No other lead is told: a subordinate cannot
+//! run its superior's check-in, so a cross-lead notice only costs the
+//! recipient a turn. The operator lane carries a lapse that repeats - the
+//! same lead missing a second beat in a row. The arm writes the `lead_wake`
+//! tick rows the status table read UNOBSERVED before, and a `lead_wake`
+//! journal event receipts each wake, so one lapse gets one wake: every
+//! attempt receipts, and a receipt newer than the beat row holds the next
+//! plan until a fresh check-in moves the beat.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -24,18 +27,16 @@ pub const LEAD_WAKE_INTERVAL_S: u64 = 300;
 /// `lead.checkin_interval` (default 55m) plus this.
 pub const WAKE_AFTER_SECS: i64 = 60;
 
-/// The mail sender name the wake and the rung-up notices carry.
+/// The mail sender name the wake and the operator notice carry.
 const SENDER: &str = "fno-lead-wake";
 
 /// How much of a team scope a notice shows before it elides.
 const SCOPE_CAP: usize = 48;
 
-/// One overdue lead and the rungs told beside it.
+/// One overdue lead and whether the operator lane rides this wake.
 pub(crate) struct WakePlan<'a> {
     pub lead: &'a Team,
     pub idle_secs: i64,
-    pub up: Vec<&'a Team>,
-    pub down: Vec<&'a Team>,
     pub operator: bool,
 }
 
@@ -43,24 +44,16 @@ fn scope_members(scope: &str) -> impl Iterator<Item = &str> {
     scope.split(',').map(str::trim).filter(|s| !s.is_empty())
 }
 
-/// The project a team roots: an L2 territory's graph project rides in
-/// `projects` (scope -> project); every other rung roots at its own first
-/// scope member.
-pub(crate) fn team_project(team: &Team, projects: &BTreeMap<String, String>) -> Option<String> {
-    if team.level == 2 {
-        projects.get(&team.scope).cloned()
-    } else {
-        scope_members(&team.scope).next().map(str::to_string)
-    }
-}
-
-/// The overdue set and who is told. A lead with no journaled beat has no
-/// baseline, so it is skipped, never invented. One wake per lapse: a receipt
-/// newer than the beat row names the same missed beat, so it waits; a fresh
-/// check-in moves the beat forward and re-arms the wake for the next miss.
+/// The overdue set and who hears about it. A lead with no journaled beat
+/// has no baseline, so it is skipped, never invented. Only the idle lead
+/// itself is planned; nobody one rung away is. One wake per lapse: a
+/// receipt newer than the beat row names the same missed beat, so it waits;
+/// a fresh check-in moves the beat forward and re-arms the wake for the
+/// next miss. A receipt newer than the beat with a whole further beat gone
+/// by is the second missed beat in a row: the plan re-arms once, with the
+/// operator lane riding it.
 pub(crate) fn plan_wakes<'a>(
     teams: &'a [Team],
-    projects: &BTreeMap<String, String>,
     beats: &BTreeMap<String, Option<i64>>,
     wakes: &BTreeMap<String, i64>,
     beat_secs: i64,
@@ -76,28 +69,30 @@ pub(crate) fn plan_wakes<'a>(
         if idle_secs < wake_line {
             continue;
         }
-        if wakes.get(&team.scope).is_some_and(|w| *w > last) {
+        let second_line = last + 2 * beat_secs + WAKE_AFTER_SECS;
+        let receipt = wakes.get(&team.scope).copied();
+        let operator;
+        if receipt.is_none_or(|w| w <= last) {
+            // First lapse of this beat: the lead is woken alone. The
+            // operator lane never fires on a first lapse, and no other
+            // lead hears about it - a subordinate cannot run its
+            // superior's check-in.
+            operator = false;
+        } else if receipt.is_some_and(|w| w < second_line) {
+            // Woken once for this beat. The second beat is missed only
+            // past its own grace minute; escalate exactly once, and the
+            // receipt this pass writes holds every later pass.
+            if now < second_line {
+                continue;
+            }
+            operator = true;
+        } else {
+            // The escalation for this lapse is already out.
             continue;
         }
-        let level = team.level as i64;
-        let up: Vec<&Team> = crate::owner_ladder::rung_up(teams, team);
-        let down: Vec<&Team> = teams
-            .iter()
-            .filter(|t| {
-                t.level as i64 == level + 1
-                    && team_project(t, projects)
-                        .is_some_and(|p| scope_members(&team.scope).any(|m| m == p))
-            })
-            .collect();
-        // One rung up: a live lead session one level above; when none
-        // exists the rung above is the unteamed human, so the operator
-        // lane carries it at every level.
-        let operator = up.is_empty();
         out.push(WakePlan {
             lead: team,
             idle_secs,
-            up,
-            down,
             operator,
         });
     }
@@ -116,24 +111,23 @@ fn short_scope(scope: &str) -> String {
     text
 }
 
-pub(crate) fn wake_text(idle_secs: i64, beat_secs: i64, told: usize) -> String {
+pub(crate) fn wake_text(idle_secs: i64, beat_secs: i64) -> String {
     format!(
         "Automatic lead-wake from the fno daemon: no check-in beat journaled for {}m \
-         (the beat is {}m). Run your check-in now: fno agents org checkin. {}",
+         (the beat is {}m). Run your check-in now: fno agents org checkin. \
+         A second missed beat in a row tells the operator.",
         mins(idle_secs),
         mins(beat_secs),
-        if told > 0 {
-            format!("{told} lead(s) one rung away were told.")
-        } else {
-            "No other lead was told.".to_string()
-        },
     )
 }
 
-pub(crate) fn told_text(lead: &Team, idle_secs: i64, beat_secs: i64) -> String {
+/// The body of the operator notice, which only rides a second consecutive
+/// missed beat: which lead, how idle, and that the daemon already woke it
+/// once for the first lapse.
+pub(crate) fn operator_text(lead: &Team, idle_secs: i64, beat_secs: i64) -> String {
     format!(
         "Lead wake: {} (L{} {}) journaled no check-in for {}m; the beat is {}m. \
-         The daemon woke it. No action needed unless it stays quiet.",
+         The daemon woke it on the first missed beat; this is the second in a row.",
         lead.holder,
         lead.level,
         short_scope(&lead.scope),
@@ -196,20 +190,6 @@ pub(crate) fn wake_receipts(
         }
     }
     out
-}
-
-/// The rung-2 scope -> graph project map the down-relation reads: one
-/// territory resolve, degraded to an empty map when the graph is
-/// unreadable (the down notices then match nothing, never invent).
-fn junior_projects(config_cwd: &Path, registry: &Path) -> BTreeMap<String, String> {
-    crate::territory::resolve_territories(config_cwd, registry)
-        .map(|rows| {
-            rows.into_iter()
-                .filter(|t| t.rung == 2 && !t.project.is_empty())
-                .map(|t| (t.key, t.project))
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 /// One delivery over the shared runner: mail first, resume fallback only
@@ -281,8 +261,9 @@ fn beat_resume_target(
     Some(manifest)
 }
 
-/// One wake: deliver to the lead, tell the rungs, receipt the episode.
-/// `beat_journal` names where the beat was read, riding the receipt.
+/// One wake: deliver to the lead, escalate to the operator on the second
+/// consecutive missed beat, receipt the episode. `beat_journal` names where
+/// the beat was read, riding the receipt.
 fn act_on_plan(
     home: &AgentsHome,
     plan: WakePlan,
@@ -290,13 +271,10 @@ fn act_on_plan(
     beat_journal: Option<&str>,
     roots: &BTreeMap<String, String>,
 ) -> (u64, String) {
-    let told = plan.up.len() + plan.down.len();
     let mut acted = 0u64;
     let mut notes: Vec<String> = Vec::new();
     let lead_session = plan.lead.holder_session.clone().unwrap_or_default();
-    if !lead_session.is_empty()
-        && deliver(&lead_session, &wake_text(plan.idle_secs, beat_secs, told))
-    {
+    if !lead_session.is_empty() && deliver(&lead_session, &wake_text(plan.idle_secs, beat_secs)) {
         acted += 1;
         notes.push(format!("woke {}", plan.lead.holder));
         if let Some(note) = resume_resting_goal(home, &plan, &lead_session, roots) {
@@ -304,17 +282,12 @@ fn act_on_plan(
             acted += 1;
         }
     }
-    let text = told_text(plan.lead, plan.idle_secs, beat_secs);
-    for team in plan.up.iter().chain(plan.down.iter()) {
-        let Some(sid) = team.holder_session.as_deref().filter(|s| !s.is_empty()) else {
-            continue;
-        };
-        if deliver(sid, &text) {
-            acted += 1;
-            notes.push(format!("told {}", team.holder));
-        }
-    }
-    if plan.operator && notify_operator("lead beat missed", &text) {
+    if plan.operator
+        && notify_operator(
+            "lead beat missed",
+            &operator_text(plan.lead, plan.idle_secs, beat_secs),
+        )
+    {
         acted += 1;
         notes.push("told operator".to_string());
     }
@@ -420,8 +393,7 @@ pub(crate) fn run_pass(home: &AgentsHome, config_cwd: &Path) -> Result<Outcome, 
         );
     }
     let wakes = wake_receipts(&crate::tick_ledger::journals(home), &teams);
-    let projects = junior_projects(config_cwd, &registry);
-    let plans = plan_wakes(&teams, &projects, &beats, &wakes, beat_secs, now);
+    let plans = plan_wakes(&teams, &beats, &wakes, beat_secs, now);
     let mut acted = 0u64;
     let mut notes: Vec<String> = Vec::new();
     let mut skip_reason: Option<String> = None;
@@ -728,15 +700,11 @@ mod tests {
         }
     }
 
-    fn projects() -> BTreeMap<String, String> {
-        BTreeMap::from([
-            ("x-aaa".to_string(), "fno".to_string()),
-            ("x-bbb".to_string(), "fno".to_string()),
-        ])
-    }
-
     #[test]
-    fn plan_wakes_reads_the_line_rungs_and_dedupe() {
+    fn one_lapse_wakes_only_the_lead_and_tells_no_other_lead() {
+        // An L1 miss reaches no L0 and no L2; an L0 miss reaches no L1.
+        // The idle lead itself is the only addressee beside the escalated
+        // operator lane.
         let teams = vec![
             team("fno", 1, "vellum", "s-head"),
             team("x-aaa", 2, "candor", "s-l2a"),
@@ -748,27 +716,75 @@ mod tests {
             ("x-aaa".to_string(), Some(now - 600)),
             ("x-bbb".to_string(), Some(now - 600)),
         ]);
-        let plans = plan_wakes(&teams, &projects(), &beats, &BTreeMap::new(), 55 * 60, now);
-        assert_eq!(plans.len(), 1, "only the L1 head is past the line");
-        let plan = &plans[0];
+        let plans = plan_wakes(&teams, &beats, &BTreeMap::new(), 55 * 60, now);
+        assert_eq!(plans.len(), 1, "only the missed lead itself is planned");
+        let plan = plans.first().expect("one plan for the missed lead");
         assert_eq!(plan.lead.holder, "vellum");
-        assert!(plan.operator, "no L0 team: the operator lane carries it");
-        assert!(plan.up.is_empty());
-        assert_eq!(
-            plan.down
-                .iter()
-                .map(|t| t.holder.as_str())
-                .collect::<Vec<_>>(),
-            vec!["candor", "finch"],
-            "both project L2s are one rung down"
+        assert!(!plan.operator, "one lapse never tells the operator");
+        let top_rung = vec![
+            team("root", 0, "esther", "s-root"),
+            team("fno", 1, "vellum", "s-head"),
+        ];
+        let beats = BTreeMap::from([
+            ("root".to_string(), Some(now - 4000)),
+            ("fno".to_string(), Some(now - 600)),
+        ]);
+        let plans = plan_wakes(&top_rung, &beats, &BTreeMap::new(), 55 * 60, now);
+        assert_eq!(plans.len(), 1, "an L0 miss plans the L0 alone");
+        let plan = plans.first().expect("one plan for the L0 miss");
+        assert_eq!(plan.lead.holder, "esther");
+        assert!(!plan.operator, "one lapse never tells the operator");
+        plan_wakes_fold_contract();
+    }
+
+    #[test]
+    fn the_operator_lane_waits_for_a_second_missed_beat_in_a_row() {
+        let teams = vec![team("x-aaa", 2, "candor", "s-l2a")];
+        let beat = 3300;
+        let now = 1_000_000_000;
+        let last = now - 4000;
+        let second_line = last + 2 * beat + 60;
+        let beats = BTreeMap::from([("x-aaa".to_string(), Some(last))]);
+        // First lapse: no receipt yet, the lead is woken alone.
+        let plans = plan_wakes(&teams, &beats, &BTreeMap::new(), beat, now);
+        assert_eq!(plans.len(), 1);
+        assert!(
+            !plans.first().expect("the first lapse plans").operator,
+            "a first lapse never rides the operator lane"
         );
-        plan_wakes_sections_two();
+        // Woken once, still inside the second beat's grace: suppressed.
+        let wakes = BTreeMap::from([("x-aaa".to_string(), last + 400)]);
+        let plans = plan_wakes(&teams, &beats, &wakes, beat, last + 4000);
+        assert!(
+            plans.is_empty(),
+            "the second beat is not missed before its own grace passes"
+        );
+        // A full further beat with no fresh check-in: the second missed
+        // beat in a row. The plan re-arms once and carries the operator.
+        let later = second_line + 300;
+        let plans = plan_wakes(&teams, &beats, &wakes, beat, later);
+        assert_eq!(
+            plans.len(),
+            1,
+            "the second missed beat in a row re-arms the plan"
+        );
+        assert!(
+            plans.first().expect("the second lapse plans").operator,
+            "the operator lane rides the second lapse"
+        );
+        // The escalation's own receipt holds every later pass.
+        let wakes = BTreeMap::from([("x-aaa".to_string(), later)]);
+        let plans = plan_wakes(&teams, &beats, &wakes, beat, later + 9000);
+        assert!(
+            plans.is_empty(),
+            "one operator notice per lapse; a fresh check-in re-arms"
+        );
     }
 
     // The fold side of the same planning contract: no baseline is skipped,
-    // one wake per lapse (a receipt newer than the beat waits, held or
-    // delivered), a fresh beat re-arms, and a fresh lead never plans.
-    fn plan_wakes_sections_two() {
+    // a stale receipt never suppresses a new lapse, and a fresh check-in
+    // re-arms.
+    fn plan_wakes_fold_contract() {
         let teams = vec![
             team("fno", 1, "vellum", "s-head"),
             team("x-aaa", 2, "candor", "s-l2a"),
@@ -776,49 +792,26 @@ mod tests {
         ];
         let now = 1_000_000_000;
         // No baseline: skipped, never invented.
-        let plans = plan_wakes(
-            &teams,
-            &projects(),
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            3300,
-            now,
-        );
+        let plans = plan_wakes(&teams, &BTreeMap::new(), &BTreeMap::new(), 3300, now);
         assert!(plans.is_empty());
-        // The receipt is newer than the beat: same lapse, one wake is out
-        // already, and a held delivery waits for the drain like a delivered
-        // one.
-        let beats = BTreeMap::from([
-            ("x-aaa".to_string(), Some(now - 4000)),
-            ("x-bbb".to_string(), Some(now - 4000)),
-        ]);
-        let wakes = BTreeMap::from([("x-aaa".to_string(), now - 600)]);
-        let plans = plan_wakes(&teams, &projects(), &beats, &wakes, 3300, now);
-        assert_eq!(plans.len(), 1);
-        assert_eq!(plans[0].lead.holder, "finch");
-        assert_eq!(
-            plans[0]
-                .up
-                .iter()
-                .map(|t| t.holder.as_str())
-                .collect::<Vec<_>>(),
-            vec!["vellum"],
-            "the L1 head is one rung up"
-        );
-        // A fresh check-in moved the beat past the receipt: the next miss is
-        // a new lapse and the wake re-arms.
-        let beats = BTreeMap::from([("x-aaa".to_string(), Some(now - 200))]);
-        let wakes = BTreeMap::from([("x-aaa".to_string(), now - 600)]);
-        let plans = plan_wakes(&teams, &projects(), &beats, &wakes, 3300, now);
-        assert!(plans.is_empty(), "past the fresh beat, not yet overdue");
+        // A receipt older than the beat is a previous lapse's memory: the
+        // new lapse plans at first-lapse posture.
         let beats = BTreeMap::from([("x-aaa".to_string(), Some(now - 4000))]);
         let wakes = BTreeMap::from([("x-aaa".to_string(), now - 5000)]);
-        let plans = plan_wakes(&teams, &projects(), &beats, &wakes, 3300, now);
+        let plans = plan_wakes(&teams, &beats, &wakes, 3300, now);
         assert_eq!(
             plans.len(),
             1,
             "a receipt older than the beat never suppresses the new lapse"
         );
+        assert!(
+            !plans.first().expect("the new lapse plans").operator,
+            "the operator lane never carries over from the previous lapse"
+        );
+        // A fresh check-in moved the beat past the receipt: not yet overdue.
+        let beats = BTreeMap::from([("x-aaa".to_string(), Some(now - 200))]);
+        let plans = plan_wakes(&teams, &beats, &wakes, 3300, now);
+        assert!(plans.is_empty(), "past the fresh beat, not yet overdue");
     }
 
     fn write_beat_manifest(path: &Path, scope: &str, harness: &str, session: &str) {
