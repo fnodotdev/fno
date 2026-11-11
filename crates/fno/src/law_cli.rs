@@ -84,6 +84,10 @@ pub fn run(args: &[OsString]) -> i32 {
                 .iter()
                 .filter_map(|a| a.to_str().map(str::to_owned))
                 .collect();
+            if let Some(refusal) = freeze_law_refusal(&argv) {
+                eprintln!("{refusal}");
+                return 3;
+            }
             // A piped stdin rides the request ONLY for `--decision-file -`:
             // every other call never touches stdin, so a daemon whose stdin
             // is an open pipe cannot block the command.
@@ -147,6 +151,23 @@ pub fn run(args: &[OsString]) -> i32 {
             2
         }
     }
+}
+
+/// A `merge-freeze:` law writes no freeze record, so the merge owner read it
+/// as no freeze at all. The law door refuses and names the command that does
+/// set one. A subject with `@` is a pinned freeze's lift row and stays legal.
+fn freeze_law_refusal(argv: &[String]) -> Option<String> {
+    let subject = argv.first()?;
+    if !subject.to_ascii_lowercase().starts_with("merge-freeze:") || subject.contains('@') {
+        return None;
+    }
+    Some(format!(
+        "refused: law '{subject}' would not stop a merge, because the merge gate reads the freeze \
+         record and not a law. Set the freeze instead: fno-agents authorized-merge '{{\"op\": \
+         \"freeze-set\", \"subject\": \"<name>\", \"set_by\": \"<who>\", \"repo\": \"owner/repo\", \
+         \"prs\": [<allowed PR numbers>]}}' (add \"sha\": \"<40 hex>\" to pin a commit). The user \
+         lifts it with a law at merge-freeze:<repo>@<pin>."
+    ))
 }
 
 /// The `fno inbox decisions` entry: the listing ride through the worker's
@@ -289,6 +310,16 @@ mod tests {
             "--decision-file=plan.md".to_string()
         ]));
         assert!(!stdin_requested(&[]));
+    }
+
+    #[test]
+    fn a_merge_freeze_law_is_refused_and_names_freeze_set() {
+        let law = |s: &str| vec![s.to_string(), "Freeze merges".to_string()];
+        let refusal = freeze_law_refusal(&law("merge-freeze:0.4.8-cut")).expect("refused");
+        assert!(refusal.contains("freeze-set"), "{refusal}");
+        // A pinned freeze's lift row, and any other subject, stay legal.
+        assert!(freeze_law_refusal(&law("merge-freeze:o/r@prs:1")).is_none());
+        assert!(freeze_law_refusal(&law("merge-grant:o/r")).is_none());
     }
 
     #[test]
