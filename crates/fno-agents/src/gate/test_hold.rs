@@ -664,6 +664,17 @@ mod tests {
             );
         }
 
+        // The hold announcement scopes the all-clear's reach like the lift
+        // does: an agent told to wait for the all-clear must read there what
+        // the all-clear does and does not restore.
+        let dot_fno = home.root().parent().unwrap_or(home.root()).to_path_buf();
+        let bus = std::fs::read_to_string(crate::mail_paths::bus_log_path(&dot_fno))
+            .expect("the hold announcement lands on the bus");
+        assert!(
+            bus.contains("test:priority"),
+            "the hold announcement must name the standing agent refusal and its lift lever: {bus}"
+        );
+
         let _ = std::fs::remove_dir_all(&root);
     }
 
