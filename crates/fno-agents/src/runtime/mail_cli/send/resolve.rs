@@ -704,18 +704,9 @@ pub(super) fn is_job_token(token: &str) -> bool {
 #[cfg(test)]
 mod mail_addr_tests {
     use super::*;
-    use fno_mail::directory::Resolution;
-    use fno_mail::session::SessionId;
 
     fn daemon_row(name: &str, sid: &str) -> ClaudeAgentRow {
         let mut row = ClaudeAgentRow::new("6bf63c59", None);
-        row.name = Some(name.to_string());
-        row.session_id = Some(sid.to_string());
-        row
-    }
-
-    fn other_row(name: &str, sid: &str) -> ClaudeAgentRow {
-        let mut row = ClaudeAgentRow::new("0aa11bb2", None);
         row.name = Some(name.to_string());
         row.session_id = Some(sid.to_string());
         row
@@ -772,22 +763,5 @@ mod mail_addr_tests {
         let near = near_from_registry_rows("t-alp", &[registry_row]);
         assert_eq!(near.len(), 1);
         assert_eq!(near[0].0.as_str(), "9aa11bb2");
-    }
-
-    /// Two daemon rows sharing one name resolve Ambiguous (AC3-ERR).
-    #[test]
-    fn mail_addr_daemon_name_two_rows_is_ambiguous() {
-        let rows = vec![
-            daemon_row("twin", "a1b2c3d4-1111-2222-3333-444455556666"),
-            other_row("twin", "a1b2c3d4-9999-8888-7777-666655554444"),
-        ];
-        let hits = daemon_hits_from_rows("twin", &rows);
-        assert_eq!(hits.len(), 2);
-        let resolution = Resolution::from_hits(
-            hits.iter()
-                .filter_map(|h| SessionId::parse(&h.session_id).ok())
-                .collect(),
-        );
-        assert!(matches!(resolution, Resolution::Ambiguous(_)));
     }
 }

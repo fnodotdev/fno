@@ -1651,10 +1651,7 @@ pub fn run(args: &[String]) -> i32 {
                             &result.msg_id,
                             subject.as_deref(),
                             &to,
-                            &fno_mail::state::receipt(
-                                &result.state,
-                                &format!("[project {project}]"),
-                            ),
+                            &result.receipt(&format!("[project {project}]")),
                         )
                     );
                 } else {

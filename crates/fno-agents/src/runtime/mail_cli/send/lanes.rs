@@ -1460,10 +1460,7 @@ pub(super) fn run_dispatch_then_name_lane(
                         &result.msg_id,
                         subject,
                         token,
-                        &result
-                            .fallback_receipt
-                            .clone()
-                            .unwrap_or_else(|| fno_mail::state::receipt(&result.state, "")),
+                        &result.receipt(""),
                     )
                 );
                 return 0;

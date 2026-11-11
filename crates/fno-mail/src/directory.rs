@@ -22,14 +22,13 @@ impl Resolution {
     /// are Ambiguous, zero is None with no near rows (the caller that knows
     /// the neighborhood fills those in).
     pub fn from_hits(mut hits: Vec<SessionId>) -> Resolution {
+        // Two sources naming one session are one hit, not an ambiguity.
+        hits.sort();
+        hits.dedup();
         match hits.len() {
             0 => Resolution::None { near: Vec::new() },
             1 => Resolution::One(hits.swap_remove(0)),
-            _ => {
-                hits.sort();
-                hits.dedup();
-                Resolution::Ambiguous(hits)
-            }
+            _ => Resolution::Ambiguous(hits),
         }
     }
 }
@@ -59,9 +58,9 @@ mod tests {
         assert_eq!(ids.len(), 2);
         assert!(ids.contains(&id("444455556666")));
         assert!(ids.contains(&id("999988887777")));
-        // One hit reads One; zero reads None.
+        // One hit, or one session named by two sources, reads One.
         assert_eq!(
-            Resolution::from_hits(vec![id("444455556666")]),
+            Resolution::from_hits(vec![id("444455556666"), id("444455556666")]),
             Resolution::One(id("444455556666"))
         );
         assert_eq!(

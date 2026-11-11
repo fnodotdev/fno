@@ -1307,6 +1307,18 @@ pub(super) struct DispatchSendResult {
     pub(super) fallback_receipt: Option<String>,
 }
 
+impl DispatchSendResult {
+    /// The printed receipt. The raw door's own words stand when it carried
+    /// the send, so a fallback never reads as the mail lane's verdict.
+    pub(super) fn receipt(&self, lane: &str) -> String {
+        match (&self.fallback_receipt, lane.trim()) {
+            (Some(typed), "") => typed.clone(),
+            (Some(typed), lane) => format!("{typed} {lane}"),
+            (None, _) => fno_mail::state::receipt(&self.state, lane),
+        }
+    }
+}
+
 /// Python `_recipient_identity_key`: every field that can select or replace a
 /// live recipient, as one fingerprint string.
 pub(super) fn recipient_identity(row: &Value) -> String {
