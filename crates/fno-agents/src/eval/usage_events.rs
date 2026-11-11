@@ -73,7 +73,7 @@ pub struct Config {
 }
 
 pub fn enabled(cwd: &Path) -> bool {
-    crate::agents_config::config_lookup(cwd, &["telemetry", "usage_events"])
+    crate::agents_config::config_lookup(cwd, &["telemetry", "usage_events", "enabled"])
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
 }
