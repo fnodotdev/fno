@@ -60,6 +60,11 @@ const NEVER: &[&str] = &[
     "fno do pr push",
     "fno do target",
     "fno config accounts use",
+    "fno agents session stop",
+    "fno agents session rm",
+    "fno agents session resume",
+    "fno agents session recover",
+    "fno agents session move",
 ];
 
 const CODEX_HEADER: &str = "# Written by fno (`fno config setup run --only permission-rules`).\n# fno reads an edit here as drift and never reverts it. Delete the file and\n# run the step again to take the current list.\n";
@@ -378,13 +383,26 @@ fn install_codex(list: &List, path: &Path) -> Outcome {
     }
 }
 
-/// The installed opencode's major version, when it answers.
+/// The installed opencode's major version, when it answers within 5s.
 fn opencode_major() -> Option<u32> {
-    let out = std::process::Command::new("opencode")
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("opencode")
         .arg("--version")
-        .stdin(std::process::Stdio::null())
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .ok()?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while child.try_wait().ok()?.is_none() {
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let out = child.wait_with_output().ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
     text.trim().split('.').next()?.parse().ok()
 }
