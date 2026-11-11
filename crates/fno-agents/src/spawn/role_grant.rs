@@ -956,10 +956,12 @@ mod tests {
             json!({"schema_version": 4, "agents": [
                 {"name": "valentina", "status": "live", "role_scope": "x-own", "role_level": 2,
                  "cwd": tmp.path().display().to_string(), "harness": "claude",
-                 "harness_session_id": "s-v", "created_at": "2026-11-11T00:00:00Z"},
+                 "harness_session_id": "s-v", "log_path": "s-v.jsonl",
+                 "created_at": "2026-11-11T00:00:00Z"},
                 {"name": "lucia", "status": "live",
                  "cwd": tmp.path().display().to_string(), "harness": "claude",
-                 "harness_session_id": "s-l", "created_at": "2026-11-11T00:00:00Z"}
+                 "harness_session_id": "s-l", "log_path": "s-l.jsonl",
+                 "created_at": "2026-11-11T00:00:00Z"}
             ]})
             .to_string(),
         );
