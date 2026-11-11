@@ -11,18 +11,18 @@ id: my-panels
 version: 0.1.0
 footnote_compat: {minimum: "0.3.0"}
 mods:
-  - id: open-prs
-    title: Open PRs
-    summary: Every open PR and its CI verdict.
-    preview: mods/open-prs/preview.png
-    recipe: mods/open-prs/RECIPE.md
+  - id: verdicts
+    title: Review verdicts
+    summary: The newest review verdict on each branch.
+    preview: mods/verdicts/preview.png
+    recipe: mods/verdicts/RECIPE.md
     place: split            # split (default), popup or sideline
     feed:
-      argv: [fno, do, pr, list, --json]
-      rows: /prs            # JSON pointer to the row array; omit when the output is the array
+      argv: [fno-agents, review-summary, --ledger]
+      rows: ""              # JSON pointer to the row array; empty when the output is the array
       columns:
-        - {key: /number, title: pr}
-        - {key: /title, title: title}
+        - {key: /branch, title: branch}
+        - {key: /verdict, title: verdict}
 layouts:
   - id: review-desk
     title: Review desk
@@ -32,18 +32,18 @@ layouts:
     tree: {split: {axis: Horizontal, children: [{weight: 2, tree: {slot: main}}, {weight: 1, tree: {slot: side}}]}}
     slots:
       - {name: main, binding: anchor}
-      - {name: side, binding: {mod: open-prs}}
+      - {name: side, binding: {mod: verdicts}}
 ```
 
 A mod declares exactly one render path:
 
 | Path | What runs | Starts |
 |---|---|---|
-| `feed` | One `fno` or `fno-agents` read. `fno config plugins open` draws its JSON rows as a table. No pack program runs. | on |
+| `feed` | One fno read from a fixed list. `fno config plugins open` draws its JSON rows as a table. No pack program runs. | on |
 | `run` | The pack's own argv, from the pack directory. | off, until switched on |
 | `native` | Nothing. It names a view the mux paints itself, such as `backlog-board`. | on, and stays on |
 
-Verify checks each mod and layout. The id is one safe path component, and the mod has one render path. A feed starts with `fno` or `fno-agents`. The `preview` is a PNG under 2 MiB and 4096 pixels a side. The `recipe` exists. Both files sit inside the pack directory. A layout binds exactly one `anchor` slot, every tree leaf names a slot, and every `mod` binding names a mod of the same pack.
+Verify checks each mod and layout. The id is one safe path component, and the mod has one render path. A feed starts with a listed read, such as `fno backlog board` or `fno-agents review-summary`, and carries no `--output` or `--fix` flag. The list is `FEED_READS` in `crates/fno-agents/src/spawn/plugins/ui.rs`. A feed that starts on must not write state on every redraw, so a command outside the list belongs in a `run` mod, which starts off. Mod and layout ids share one id space, because a switch is keyed by id. The `preview` is a PNG under 2 MiB and 4096 pixels a side. The `recipe` exists. Both files sit inside the pack directory. A layout binds exactly one `anchor` slot, every tree leaf names a slot, and every `mod` binding names a mod of the same pack.
 
 A pack that declares no mods or layouts keeps the digest it had before these fields existed.
 
@@ -59,7 +59,7 @@ A pack that declares no mods or layouts keeps the digest it had before these fie
 | `fno config plugins open <pack>/<mod>` | Show one mod in this terminal. |
 | `fno config plugins gallery [--json]` | Published packs from GitHub topics. Installs nothing. |
 
-The mux settings modal has an Extensions tab. It reads the same `ls --json` and `gallery --json` feeds, so the GPUI app shows the same list. Each mod row carries its switch, its preview and recipe (they open in the file viewer), and an `open in a pane` row. `install from URL` runs the install in a new pane, so the consent card and its prompt reach a real terminal.
+The mux settings modal has an Extensions tab. It reads the same `ls --json` feed as the GPUI app, so both show one list. Each mod row carries its switch, its preview and recipe (they open in the file viewer), and an `open in a pane` row. `install from URL` runs the install in a new pane, so the consent card and its prompt reach a real terminal. `browse published packs` opens the gallery in a pane too, so a slow network read never holds the mux.
 
 ## The trust boundary
 
@@ -69,7 +69,7 @@ A URL install runs third-party content, so no step before consent lets that cont
 2. Measure. The manifest parses and verify passes on the staged tree. A sha256 covers every file: path and bytes, sorted, `.git` left out. A symlink refuses. Roles, skills, agents, adapters, workflows and evaluators reach agents. A URL pack that declares one refuses, so those install from a local path only.
 3. Show. The consent card prints the URL, the commit and the content digest. It names every argv a mod runs or reads and every declared effect. It ends with "not reviewed by fno".
 4. Consent. An attended terminal answers yes. Otherwise install files a `local.plugin-install` effect request bound to the content digest. It prints `fno inbox approvals decide <digest> --as <principal> --approve` and exits 2. A principal that config names for that class approves it, and the next install of the same commit proceeds. An agent can stage. Only the operator consents.
-5. Commit. The tree moves to `<role root>/.packs/<pack>/`. The registry records the URL, the commit, the digest, the consenting principal and the time. Before `open` runs a command mod, it hashes the pack again and refuses on any change. A new commit is a new digest, so a new consent. Nothing updates on its own.
+5. Commit. A URL pack never replaces a pack id installed from a local path or another URL. The tree moves to `<role root>/.packs/<pack>/`. The registry records the URL, the commit, the digest, the consenting principal and the time. Before `open` runs a command mod, it hashes the pack again and refuses on any change. A new commit is a new digest, so a new consent. Nothing updates on its own.
 
 ## Publish a pack
 

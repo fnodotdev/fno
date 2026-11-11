@@ -82,6 +82,21 @@ fn a_mods_pack_verifies_and_an_escaping_preview_fails() {
         .contains("../outside.png"));
     assert!(!report.ok());
 
+    // A feed starts on, so only a listed read with no writing flag passes.
+    let argv = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert!(super::ui::feed_is_read(&argv(&[
+        "fno", "backlog", "board", "--json"
+    ])));
+    assert!(!super::ui::feed_is_read(&argv(&[
+        "fno", "backlog", "done", "x-1"
+    ])));
+    assert!(!super::ui::feed_is_read(&argv(&[
+        "fno",
+        "backlog",
+        "board",
+        "--output=/x"
+    ])));
+
     // A pack with no UI components hashes exactly as it did before them.
     let manifest = load_manifest(tmp.path()).unwrap();
     let plain = PackManifest {
@@ -193,6 +208,22 @@ fn a_url_install_waits_for_consent_records_it_and_refuses_an_edited_tree() {
         install::launch_check(&root, "demo"),
         Err(InstallError::Refused(_))
     ));
+
+    // Another URL never takes over an installed id; its staging is cleared.
+    let other = repo(&tmp.path().join("other"), "");
+    let taken = install::install_with(&other, &root, |_| Ok(Some("test".into())));
+    assert!(matches!(taken, Err(InstallError::Refused(m)) if m.contains("already installed from")));
+    let staged = std::fs::read_dir(install::packs_dir(&root))
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".staging")
+        })
+        .count();
+    assert_eq!(staged, 0);
 
     let agent = tmp.path().join("agent");
     std::fs::create_dir_all(agent.join("s")).unwrap();

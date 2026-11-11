@@ -2,18 +2,18 @@
 //! packs declare, each with its switch, its preview and its recipe, plus an
 //! install row and the published gallery.
 //!
-//! The rows come from `fno config plugins ls --json` and the gallery from
-//! `fno config plugins gallery --json`: the same feeds the GPUI app reads,
-//! so both hosts show one list. Each read runs once when the tab opens and
-//! after a switch, never per frame. A failed read paints one notice row
-//! naming the command and no mod rows.
+//! The rows come from `fno config plugins ls --json`, the same feed the GPUI
+//! app reads, so both hosts show one list. The read is local and runs once
+//! when the tab opens and after a switch, never per frame. A failed read
+//! paints one notice row naming the command and no mod rows. The gallery
+//! and an install are network work, so each opens in a pane and never holds
+//! the input loop.
 
 use super::input_field::{back_row, InputField};
 use super::*;
 use serde::Deserialize;
 
 const LS: [&str; 4] = ["config", "plugins", "ls", "--json"];
-const GALLERY: [&str; 4] = ["config", "plugins", "gallery", "--json"];
 const MAX_URL: usize = 512;
 const PLACEHOLDER: &str = "https://github.com/owner/repo";
 
@@ -48,21 +48,6 @@ struct Listing {
     packs: Vec<PackRow>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-pub(crate) struct Published {
-    pub(crate) name: String,
-    #[serde(default)]
-    pub(crate) description: String,
-    #[serde(default)]
-    pub(crate) stars: u64,
-    pub(crate) install: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct Gallery {
-    repos: Vec<Published>,
-}
-
 /// A row action on the Extensions page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Act {
@@ -72,10 +57,8 @@ pub(crate) enum Act {
     Open(String),
     /// Open the URL field.
     Install,
-    /// Read the gallery.
+    /// Open the published gallery in a pane.
     Browse,
-    /// A gallery row: open the URL field holding its install command's URL.
-    Pick(String),
     /// Show `pack/mod` in a pane on the right through `fno config plugins open`.
     Show(String),
 }
@@ -95,7 +78,6 @@ impl std::fmt::Display for ReadFailed {
 pub(crate) struct Extensions {
     /// `(pack id, component)` pairs, or the failed read's notice.
     pub(crate) installed: Option<Result<Vec<(String, Component)>, ReadFailed>>,
-    pub(crate) gallery: Option<Result<Vec<Published>, ReadFailed>>,
     pub(crate) url: Option<InputField>,
 }
 
@@ -206,24 +188,8 @@ pub(super) fn rows(view: &View) -> (Vec<PopupRow>, Vec<AuxAction>) {
     rows.push(entry("+", "install from URL".into(), true));
     actions.push(AuxAction::Extension(Act::Install));
     rows.push(PopupRow::Header("gallery · not reviewed by fno".into()));
-    match &page.gallery {
-        None => {
-            rows.push(entry("›", "browse published packs".into(), true));
-            actions.push(AuxAction::Extension(Act::Browse));
-        }
-        Some(Err(notice)) => rows.push(inert(notice.0.clone())),
-        Some(Ok(list)) if list.is_empty() => rows.push(inert("no published packs yet".into())),
-        Some(Ok(list)) => {
-            for p in list {
-                rows.push(entry(
-                    "·",
-                    format!("{} · {} stars · {}", p.name, p.stars, p.description),
-                    true,
-                ));
-                actions.push(AuxAction::Extension(Act::Pick(p.install.clone())));
-            }
-        }
-    }
+    rows.push(entry("›", "browse published packs in a pane".into(), true));
+    actions.push(AuxAction::Extension(Act::Browse));
     (rows, actions)
 }
 
@@ -261,7 +227,11 @@ fn in_pane(args: &[&str], what: &str) -> String {
         .stderr(std::process::Stdio::null())
         .spawn();
     match spawned {
-        Ok(_) => format!("{what}: opened in a pane on the right"),
+        Ok(mut child) => {
+            // `pane run` returns once the pane exists; reap it off the loop.
+            std::thread::spawn(move || child.wait());
+            format!("{what}: opened in a pane on the right")
+        }
         Err(e) => format!("{what}: cannot open a pane: {e}"),
     }
 }
@@ -284,10 +254,6 @@ pub(super) fn act(view: &mut View, act: Act) {
             view.set_notice(notice);
             refresh(view);
         }
-        Act::Pick(install) => {
-            let url = install.rsplit(' ').next().unwrap_or_default();
-            view.extensions.url = Some(InputField::new(PLACEHOLDER, MAX_URL).with_text(url));
-        }
         Act::Open(_) => {}
         Act::Show(target) => {
             let notice = in_pane(&["open", target.as_str()], &target);
@@ -299,16 +265,8 @@ pub(super) fn act(view: &mut View, act: Act) {
             }
         }
         Act::Browse => {
-            view.extensions.gallery = Some(fno_json(&GALLERY).and_then(|bytes| {
-                serde_json::from_slice::<Gallery>(&bytes)
-                    .map(|g| g.repos)
-                    .map_err(|e| {
-                        ReadFailed(format!(
-                            "`fno {}` printed no gallery: {e}",
-                            GALLERY.join(" ")
-                        ))
-                    })
-            }));
+            let notice = in_pane(&["gallery"], "gallery");
+            view.set_notice(notice);
         }
     }
     view.reopen_settings_keeping_sel();

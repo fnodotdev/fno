@@ -1036,35 +1036,36 @@ fn recipe_condition(kind: &str, id: &str, rel: &str, base: &Path) -> Condition {
 }
 
 fn ui_conditions(manifest: &PackManifest, base: &Path) -> Vec<Condition> {
-    use super::ui::{Binding, Render, FEED_PROGRAMS};
+    use super::ui::{feed_is_read, Binding, Render, FEED_READS};
     let mut out = Vec::new();
     for m in &manifest.mods {
+        let safe = is_safe_component(&m.id);
         out.push(cond(
             UI,
             format!("mod-id:{}", m.id),
-            verdict(is_safe_component(&m.id), "failed"),
-            Some(format!(
-                "{} must be a single path component",
-                py_repr_str(&m.id)
-            )),
+            verdict(safe, "failed"),
+            (!safe).then(|| format!("{} must be a single path component", py_repr_str(&m.id))),
         ));
         let (result, detail) = match m.render() {
             None => (
                 "failed",
                 "declare exactly one of run, feed or native".to_string(),
             ),
-            Some(Render::Feed(feed)) => match feed.argv.first() {
-                Some(program) if FEED_PROGRAMS.contains(&program.as_str()) => {
-                    ("passed", format!("feed {}", feed.argv.join(" ")))
-                }
-                _ => (
-                    "failed",
-                    format!(
-                        "a feed argv starts with one of {}",
-                        FEED_PROGRAMS.join(", ")
-                    ),
+            Some(Render::Feed(feed)) if feed_is_read(&feed.argv) => {
+                ("passed", format!("feed {}", feed.argv.join(" ")))
+            }
+            Some(Render::Feed(feed)) => (
+                "failed",
+                format!(
+                    "feed `{}` is not a known read; a feed starts with one of: {}",
+                    feed.argv.join(" "),
+                    FEED_READS
+                        .iter()
+                        .map(|r| r.join(" "))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ),
-            },
+            ),
             Some(Render::Run(argv)) => ("passed", format!("runs code: {}", argv.join(" "))),
             Some(Render::Native(view)) => ("passed", format!("native view {view}")),
         };

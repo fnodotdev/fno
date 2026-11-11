@@ -2,7 +2,7 @@
 //!
 //! A mod is one panel the mux draws. It declares exactly one render path: a
 //! `run` argv (a command mod, which runs the pack's own program), a `feed`
-//! (an `fno` read argv whose JSON rows `fno config plugins render` draws as
+//! (an `fno` read argv whose JSON rows `fno config plugins open` draws as
 //! a table, so no pack program runs), or `native` (the id of a view the mux
 //! already paints). A layout is a whole-window tree in the mux's anchored
 //! layout shape, whose slots bind the anchor pane, a shell, or a mod of the
@@ -13,8 +13,36 @@
 
 use serde::{Deserialize, Serialize};
 
-/// The binaries a feed may call: a feed reads fno, it never runs pack code.
-pub const FEED_PROGRAMS: [&str; 2] = ["fno", "fno-agents"];
+/// The reads a feed may run. A feed mod starts on and does not count as
+/// code, so its argv must be a known read: an allowlist of command prefixes,
+/// never "any fno command", which would let a data-only mod write state on
+/// every redraw.
+pub const FEED_READS: [&[&str]; 8] = [
+    &["fno", "backlog", "board"],
+    &["fno", "backlog", "list"],
+    &["fno", "backlog", "get"],
+    &["fno", "backlog", "find"],
+    &["fno", "do", "pr", "status"],
+    &["fno", "config", "plugins", "ls"],
+    &["fno", "config", "plugins", "gallery"],
+    &["fno-agents", "review-summary"],
+];
+
+/// Flags that turn a listed read into a write.
+const FEED_WRITE_FLAGS: [&str; 2] = ["--output", "--fix"];
+
+/// The argv starts with a listed read and carries no flag that writes.
+pub fn feed_is_read(argv: &[String]) -> bool {
+    let listed = FEED_READS
+        .iter()
+        .any(|read| argv.len() >= read.len() && argv.iter().zip(read.iter()).all(|(a, r)| a == r));
+    listed
+        && !argv.iter().any(|a| {
+            FEED_WRITE_FLAGS
+                .iter()
+                .any(|f| a == f || a.starts_with(&format!("{f}=")))
+        })
+}
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

@@ -254,6 +254,18 @@ pub fn commit(
     let store = Store::at_root(root);
     let _held = store.lock().map_err(io)?;
     let mut registry = store.load().map_err(|e| InstallError::Io(e.0))?;
+    // An outside repo never takes over an id installed from somewhere else:
+    // that would serve its tree under a first-party or local pack's name.
+    if let Some(installed) = registry.pack_by_id(&card.manifest.id) {
+        let from = installed.source.as_ref().map(|s| s.url.as_str());
+        if from != Some(card.url.as_str()) {
+            return Err(InstallError::Refused(format!(
+                "pack id {} is already installed from {}; a URL pack cannot replace it",
+                card.manifest.id,
+                from.unwrap_or("a local path")
+            )));
+        }
+    }
     let dest = packs_dir(root).join(&card.manifest.id);
     if dest.exists() {
         std::fs::remove_dir_all(&dest).map_err(io)?;
@@ -371,8 +383,13 @@ pub fn install_with(
             return Err(e);
         }
     };
-    let dest = commit(root, &staging, &card, &consented_by)?;
-    Ok((card, dest))
+    match commit(root, &staging, &card, &consented_by) {
+        Ok(dest) => Ok((card, dest)),
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            Err(e)
+        }
+    }
 }
 
 pub fn run(json: bool, root: &Path, url: &str) -> i32 {

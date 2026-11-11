@@ -370,10 +370,15 @@ impl PackManifest {
             "assets",
             &ids(manifest.assets.iter().map(|s| &s.id).collect()),
         )?;
-        unique("mods", &ids(manifest.mods.iter().map(|m| &m.id).collect()))?;
+        // One id space: a switch is keyed by id alone.
         unique(
-            "layouts",
-            &ids(manifest.layouts.iter().map(|l| &l.id).collect()),
+            "mods and layouts",
+            &ids(manifest
+                .mods
+                .iter()
+                .map(|m| &m.id)
+                .chain(manifest.layouts.iter().map(|l| &l.id))
+                .collect()),
         )?;
         unique(
             "scenarios",
