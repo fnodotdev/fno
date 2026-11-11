@@ -7,8 +7,8 @@
 # scutil --dns names no DNS configuration (a bootstrap that died after
 # birth). Healthy: silence and exit 0.
 #
-# Isolation: stub `launchctl` and `scutil` first on PATH answer from env
-# vars; the real ones never run.
+# Isolation: stub `uname`, `launchctl` and `scutil` first on PATH answer
+# from env vars; the real ones never run.
 #
 # Run: bash tests/hooks/test_bootstrap_session_start.sh
 
@@ -49,7 +49,13 @@ if [[ "${1:-}" == "--dns" ]]; then
 fi
 exit 0
 FAKE
-chmod +x "$FAKEBIN/launchctl" "$FAKEBIN/scutil"
+cat > "$FAKEBIN/uname" <<'FAKE'
+#!/usr/bin/env bash
+# The hook is Darwin-only; this suite also runs on ubuntu in CI.
+printf '%s\n' "${FAKE_UNAME:-Darwin}"
+exit 0
+FAKE
+chmod +x "$FAKEBIN/launchctl" "$FAKEBIN/scutil" "$FAKEBIN/uname"
 
 run_hook() {
     (export PATH="$FAKEBIN:$PATH"; bash "$HOOK")
