@@ -144,7 +144,9 @@ fn main() {
         if let Some(cwd) = spec_cwd(&spec) {
             fno_agents::cargo_build_dirs::fill_pane_env(&cwd);
         }
-        std::process::exit(fno_agents::opencode_turn::run(PathBuf::from(spec).as_path()));
+        std::process::exit(fno_agents::opencode_turn::run(
+            PathBuf::from(spec).as_path(),
+        ));
     }
     if let Some(idx) = args.iter().position(|a| a == "--muse-host") {
         let [spec, socket, name] =
