@@ -28,6 +28,9 @@ use std::process::Command;
 
 pub const EFFECT_CLASS: &str = "local.plugin-install";
 
+/// A clone or a git read past this bound is killed and reads as a fetch failure.
+const GIT_SECONDS: u64 = 300;
+
 /// Components that reach agents rather than the UI install from a local
 /// path only.
 const AGENT_FACING: [&str; 6] = [
@@ -155,10 +158,9 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<(), InstallErr
 }
 
 fn git(args: &[&str]) -> Result<String, InstallError> {
-    let output = Command::new("git")
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
+    let mut cmd = Command::new("git");
+    cmd.args(args).env("GIT_TERMINAL_PROMPT", "0");
+    let output = crate::bounded_cmd::output_with_timeout_result(cmd, GIT_SECONDS)
         .map_err(|e| InstallError::Fetch(format!("git: {e}")))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

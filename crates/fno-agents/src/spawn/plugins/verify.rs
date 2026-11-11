@@ -971,11 +971,15 @@ pub fn verify_pack(path: &Path, installed: &BTreeMap<String, String>) -> Report 
 /// The width and height a PNG header declares, read from the first 24 bytes.
 fn png_size(head: &[u8]) -> Option<(u32, u32)> {
     const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
-    if head.len() < 24 || head[..8] != SIGNATURE || &head[12..16] != b"IHDR" {
+    if head.get(..8)? != SIGNATURE || head.get(12..16)? != *b"IHDR" {
         return None;
     }
-    let side = |at: usize| u32::from_be_bytes([head[at], head[at + 1], head[at + 2], head[at + 3]]);
-    Some((side(16), side(20)))
+    let side = |at: usize| {
+        head.get(at..at + 4)
+            .and_then(|b| <[u8; 4]>::try_from(b).ok())
+            .map(u32::from_be_bytes)
+    };
+    Some((side(16)?, side(20)?))
 }
 
 /// A pack-relative file that must exist under the pack root.

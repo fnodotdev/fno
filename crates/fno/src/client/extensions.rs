@@ -246,8 +246,8 @@ pub(super) fn load(path: String) -> file_viewer::Loaded {
 pub(super) fn act(view: &mut View, act: Act) {
     match act {
         Act::Switch(target, on) => {
-            let verb = if on { "enable" } else { "disable" };
-            let notice = match fno_json(&["config", "plugins", verb, &target]) {
+            let command = if on { "enable" } else { "disable" };
+            let notice = match fno_json(&["config", "plugins", command, &target]) {
                 Ok(_) => format!("{target} {}", if on { "on" } else { "off" }),
                 Err(e) => e.0,
             };

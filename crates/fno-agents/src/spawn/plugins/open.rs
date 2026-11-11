@@ -19,6 +19,8 @@ use std::path::Path;
 use std::process::Command;
 
 const REFRESH_SECONDS: u64 = 5;
+/// A feed read past this bound is killed and the panel names it.
+const FEED_SECONDS: u64 = 30;
 
 #[derive(Debug)]
 pub enum OpenError {
@@ -62,7 +64,7 @@ pub fn table(feed: &Feed, output: &Value) -> Vec<String> {
         .enumerate()
         .map(|(i, c)| {
             grid.iter()
-                .map(|r| r[i].chars().count())
+                .map(|r| r.get(i).map_or(0, |c| c.chars().count()))
                 .chain([c.title.chars().count()])
                 .max()
                 .unwrap_or(0)
@@ -96,9 +98,9 @@ fn feed_output(feed: &Feed) -> Result<Value, OpenError> {
         .argv
         .split_first()
         .ok_or_else(|| OpenError::Feed("the feed declares no command".into()))?;
-    let output = Command::new(program)
-        .args(args)
-        .output()
+    let mut cmd = Command::new(program);
+    cmd.args(args);
+    let output = crate::bounded_cmd::output_with_timeout_result(cmd, FEED_SECONDS)
         .map_err(|e| OpenError::Feed(format!("feed `{shown}` did not start: {e}")))?;
     if !output.status.success() {
         return Err(OpenError::Feed(format!(

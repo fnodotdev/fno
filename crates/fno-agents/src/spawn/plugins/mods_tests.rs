@@ -64,7 +64,7 @@ fn a_mods_pack_verifies_and_an_escaping_preview_fails() {
     assert!(report.ok(), "{failing:?}");
     let ids: Vec<_> = report.mods.iter().map(|m| m["id"].clone()).collect();
     assert_eq!(ids, ["table", "tool"]);
-    assert_eq!(report.mods[1]["runs_code"], true);
+    assert_eq!(report.mods.get(1).expect("two mods")["runs_code"], true);
 
     let bad = tempfile::tempdir().unwrap();
     write_pack(bad.path(), "", "../outside.png");
@@ -127,10 +127,13 @@ fn switches_default_by_kind_persist_and_an_unknown_pack_exits_2() {
     let mut registry: Registry = store.load().unwrap();
     registry.install(&load_manifest(&pack).unwrap(), &pack.join("plugin.yaml"));
     store.save(&registry).unwrap();
-    let installed = &store.load().unwrap().packs[0];
+    let loaded = store.load().unwrap();
+    let installed = loaded.packs.first().expect("one pack");
     assert!(installed.enabled("table", false));
     assert!(!installed.enabled("tool", true), "code starts off");
-    assert!(!registry.to_json()["packs"][0]
+    assert!(!registry.to_json()["packs"]
+        .get(0)
+        .expect("one pack")
         .as_object()
         .unwrap()
         .contains_key("toggles"));
@@ -144,7 +147,11 @@ fn switches_default_by_kind_persist_and_an_unknown_pack_exits_2() {
     };
     assert_eq!(super::cli::run(&args(&["disable", "demo/table"])), 0);
     let reloaded = store.load().unwrap();
-    assert!(!reloaded.packs[0].enabled("table", false));
+    assert!(!reloaded
+        .packs
+        .first()
+        .expect("one pack")
+        .enabled("table", false));
     assert_eq!(super::cli::run(&args(&["enable", "nope/x"])), 2);
     assert_eq!(super::cli::run(&args(&["enable", "demo/missing"])), 2);
 }
@@ -154,9 +161,10 @@ fn git(dir: &Path, args: &[&str]) {
         .args(["-c", "user.name=t", "-c", "user.email=t@t", "-C"])
         .arg(dir)
         .args(args)
-        .output()
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
         .unwrap()
-        .status
         .success();
     assert!(ok, "git {args:?}");
 }
@@ -196,7 +204,13 @@ fn a_url_install_waits_for_consent_records_it_and_refuses_an_edited_tree() {
         Ok(Some("test".into()))
     })
     .unwrap();
-    let pack = Store::at_root(&root).load().unwrap().packs[0].clone();
+    let pack = Store::at_root(&root)
+        .load()
+        .unwrap()
+        .packs
+        .first()
+        .expect("one pack")
+        .clone();
     let source = pack.source.clone().expect("source recorded");
     assert_eq!(source.content_digest, card.content_digest);
     assert_eq!(source.commit.len(), 40);
@@ -250,9 +264,10 @@ fn the_gallery_merges_topics_and_a_failed_gh_read_is_an_error() {
     );
     let rows = super::gallery::read(&ok).unwrap();
     assert_eq!(rows.len(), 2, "one row per repo across the three topics");
-    assert_eq!(rows[0].name, "a/one");
+    let first = rows.first().expect("a row");
+    assert_eq!(first.name, "a/one");
     assert_eq!(
-        rows[0].install,
+        first.install,
         "fno config plugins install https://github.com/a/one.git"
     );
     let bad = stub("gh-bad", "echo 'HTTP 403: rate limited' >&2; exit 1");
@@ -282,13 +297,14 @@ fn the_review_ledger_feed_draws_newest_first_as_a_table() {
         .and_then(|m| m.feed.as_ref())
         .expect("review-ledger is a feed mod");
     let lines = super::open::table(ledger, &rows);
-    assert!(lines[0].starts_with("when"), "{lines:?}");
+    let line = |i: usize| lines.get(i).map(String::as_str).unwrap_or("");
+    assert!(line(0).starts_with("when"), "{lines:?}");
     assert!(
-        lines[1].contains("feature/b") && lines[1].contains("pass"),
+        line(1).contains("feature/b") && line(1).contains("pass"),
         "{lines:?}"
     );
     assert!(
-        lines[2].contains("feature/a") && lines[2].contains("cccccccccccc"),
+        line(2).contains("feature/a") && line(2).contains("cccccccccccc"),
         "{lines:?}"
     );
     assert_eq!(lines.len(), 3, "the newest row per branch only");

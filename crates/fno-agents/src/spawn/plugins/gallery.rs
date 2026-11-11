@@ -13,6 +13,9 @@ use std::process::Command;
 /// The topics an author tags a repo with, one per component kind.
 pub const TOPICS: [&str; 3] = ["fno-mod", "fno-layout", "fno-pack"];
 
+/// One topic search; past it the read fails rather than hangs.
+const GH_SECONDS: u64 = 60;
+
 #[derive(Debug, Deserialize)]
 struct Search {
     items: Vec<Repo>,
@@ -68,18 +71,18 @@ impl std::fmt::Display for GalleryError {
 pub fn read(gh: &str) -> Result<Vec<Row>, GalleryError> {
     let mut rows: BTreeMap<String, Row> = BTreeMap::new();
     for topic in TOPICS {
-        let output = Command::new(gh)
-            .args([
-                "api",
-                "-X",
-                "GET",
-                "search/repositories",
-                "-f",
-                &format!("q=topic:{topic}"),
-                "-f",
-                "per_page=100",
-            ])
-            .output()
+        let mut cmd = Command::new(gh);
+        cmd.args([
+            "api",
+            "-X",
+            "GET",
+            "search/repositories",
+            "-f",
+            &format!("q=topic:{topic}"),
+            "-f",
+            "per_page=100",
+        ]);
+        let output = crate::bounded_cmd::output_with_timeout_result(cmd, GH_SECONDS)
             .map_err(|e| GalleryError::Gh(format!("{gh}: {e}")))?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
