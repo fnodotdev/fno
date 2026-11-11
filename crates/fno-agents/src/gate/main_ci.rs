@@ -81,12 +81,13 @@ const STALE_REPORT_WINDOW_DAYS: i64 = 14;
 /// cli-ci at <sha>, <1h old)`) so a coalescing burst reads as a queue with
 /// a known floor rather than an open wedge; a cancel is no verdict and
 /// never answers. Per workflow with head rows the
-/// newest COMPLETED run decides - red on fail or cancel, naming the
-/// workflow and the sha it ran on - except that a cancelled run whose
-/// workflow already has a newer in-flight run on the same sha reduces to
-/// that newer run's verdict, pending included: the rerun is the live one,
-/// and a red read on the cancelled predecessor holds every merge for the
-/// length of the rerun. A workflow whose newest head run is
+/// newest COMPLETED run decides - red on fail only, naming the
+/// workflow and the sha it ran on. A cancelled head run measures nothing
+/// and reads pending, whatever its successors: a job killed by its own
+/// timeout, a hand cancel and a concurrency supersede all stamp
+/// `cancelled`, and on a fixed head sha only a rerun re-tests the head, so
+/// a red read on a cancelled run held every merge for the length of a
+/// rerun nobody ran. A workflow whose newest head run is
 /// still in flight reads pending; no head rows at all reads pending, never
 /// green. The stale list reports within a bounded window (`now` minus
 /// [`STALE_REPORT_WINDOW_DAYS`]): the branch page is one un-paginated read,
@@ -97,7 +98,7 @@ fn main_ci_token_from_pages<'a>(
     at_sha: &'a [Value],
     on_main: &'a [Value],
     now: chrono::DateTime<chrono::Utc>,
-) -> (Value, Option<&'a Value>) {
+) -> Value {
     let at_head = |run: &Value| run.get("head_sha").and_then(Value::as_str) == Some(head_sha);
     // The verdict is main's push CI at the head. A schedule-event nightly
     // release failing at the head is a release-engineering concern, never
@@ -221,47 +222,28 @@ fn main_ci_token_from_pages<'a>(
             })
         })
         .collect();
+    // A cancel is never a verdict, only a fail is: a timed-out, hand- or
+    // concurrency-cancelled head run measures nothing, and on a fixed head
+    // sha nothing re-runs it but a rerun, so reading it red would hold every
+    // merge until a human reruns by hand (specimen 2026-11-11: four CodeQL
+    // runs on main died at their own 30-minute job timeout, GitHub stamped
+    // the jobs "cancelled", and every merge held on main_red). The
+    // unmeasured shape reads pending, and the pending fallback below names
+    // the newest settled run as the floor. A workflow still awaiting its
+    // rerun stays pending through the inflight check: the successor run is
+    // the fold's newest for that workflow.
     let red = head
         .iter()
         .filter_map(|(_, _, completed)| *completed)
-        .filter(|run| matches!(crate::pr_push::rest_bucket(run), "fail" | "cancel"))
+        .filter(|run| crate::pr_push::rest_bucket(run) == "fail")
         .max_by_key(|run| run.get("created_at").and_then(Value::as_str).unwrap_or(""));
-    // A cancelled red pick whose workflow already has a newer in-flight run
-    // on the same sha is a rerun victim, not a verdict: it reduces to that
-    // newer run's verdict, pending included. Only a cancel demotes - a
-    // failure stays red no matter what queues behind it - and the newer run
-    // must match the stable `workflow_id`, never the display `name` alone:
-    // two workflow files can share a name. Push rows ride the fold's
-    // `newest` pointer; a rerun from another trigger lands on the branch
-    // page outside the fold, so it is scanned directly.
-    let red_superseded_inflight = red
-        .filter(|run| crate::pr_push::rest_bucket(run) == "cancel")
-        .is_some_and(|run| {
-            let name = run.get("name").and_then(Value::as_str).unwrap_or("");
-            let Some(wf_id) = run.get("workflow_id").and_then(Value::as_u64) else {
-                return false;
-            };
-            let created = run.get("created_at").and_then(Value::as_str).unwrap_or("");
-            let newer_inflight = |other: &Value| {
-                other.get("status").and_then(Value::as_str) != Some("completed")
-                    && other.get("name").and_then(Value::as_str).unwrap_or("") == name
-                    && other.get("workflow_id").and_then(Value::as_u64) == Some(wf_id)
-                    && other
-                        .get("created_at")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        > created
-            };
-            head.iter().any(|(_, newest, _)| newer_inflight(newest))
-                || on_main
-                    .iter()
-                    .any(|other| at_head(other) && !is_push(other) && newer_inflight(other))
-        });
-    let red = if red_superseded_inflight { None } else { red };
-    let inflight = red_superseded_inflight
-        || head.iter().any(|(_, newest, _)| {
-            newest.get("status").and_then(Value::as_str) != Some("completed")
-        });
+    let inflight = head
+        .iter()
+        .any(|(_, newest, _)| newest.get("status").and_then(Value::as_str) != Some("completed"));
+    let cancelled_unmeasured = head
+        .iter()
+        .filter_map(|(_, _, completed)| *completed)
+        .any(|run| crate::pr_push::rest_bucket(run) == "cancel");
     let mut token = match red {
         Some(run) => json!({
             "verdict": "red",
@@ -269,7 +251,8 @@ fn main_ci_token_from_pages<'a>(
             "sha": run.get("head_sha").and_then(Value::as_str).unwrap_or("unknown"),
         }),
         None => {
-            json!({ "verdict": if head.is_empty() || inflight { "pending" } else { "green" } })
+            json!({ "verdict": if head.is_empty() || inflight || cancelled_unmeasured
+                { "pending" } else { "green" } })
         }
     };
     // While the head's own run is still in flight the newest stale failure
@@ -335,47 +318,7 @@ fn main_ci_token_from_pages<'a>(
             .expect("token is built as an object")
             .insert("stale".into(), Value::Array(stale));
     }
-    (token, red)
-}
-
-/// The incident attachment: a red verdict whose run ended `cancel` reads the
-/// run's jobs for the never-got-a-runner shape, then confirms against the
-/// shared status-page seam before the explanation rides the token. Every
-/// read is fail-open - a jobs or status-site failure leaves the token
-/// exactly as the fold built it.
-fn attach_incident(cwd: &Path, token: &mut Value, red: Option<&Value>) {
-    let Some(run) = red else {
-        return;
-    };
-    if run.get("conclusion").and_then(Value::as_str) != Some("cancel") {
-        return;
-    }
-    let Some(id) = run.get("id").and_then(Value::as_u64) else {
-        return;
-    };
-    let Ok(raw) = crate::pr_push::gh_api(
-        "gh",
-        cwd,
-        &format!("repos/{{owner}}/{{repo}}/actions/runs/{id}/jobs?per_page=100"),
-        &[],
-    ) else {
-        return;
-    };
-    let Ok(jobs_page) = serde_json::from_str::<Value>(&raw) else {
-        return;
-    };
-    let jobs = jobs_page.get("jobs").and_then(Value::as_array);
-    let Some(true) = jobs.map(|jobs| crate::gh_incident::cancelled_no_runner(jobs)) else {
-        return;
-    };
-    let incidents = crate::pr_status::seams::platform_incident();
-    if incidents.is_null() {
-        return;
-    }
     token
-        .as_object_mut()
-        .expect("token is built as an object")
-        .insert("platform_incident".into(), incidents);
 }
 
 /// The `main ci:` line body: a red verdict names the workflow and sha, a
@@ -533,9 +476,7 @@ pub(crate) fn main_ci_reading(cwd: &Path) -> Result<Value, String> {
             "repos/{owner}/{repo}/actions/runs?branch=main&per_page=100&page=2",
         )?);
     }
-    let (mut token, red) =
-        main_ci_token_from_pages(&head_sha, &at_sha, &on_main, chrono::Utc::now());
-    attach_incident(cwd, &mut token, red);
+    let token = main_ci_token_from_pages(&head_sha, &at_sha, &on_main, chrono::Utc::now());
     // Best effort: a store fault must never fail the CI read it rides on.
     if let Some(repo) = crate::finalize::slug_from_git_remote(cwd) {
         let _ = crate::main_ci_transition::record(
@@ -701,7 +642,6 @@ mod tests {
                 .unwrap()
                 .with_timezone(&chrono::Utc),
         )
-        .0
     }
 
     /// The filed bug's shape: the branch page led with a stale green from
@@ -782,10 +722,10 @@ mod tests {
         );
     }
 
-    /// The pending-rerun case the completed-supersede pass never covered:
-    /// cli-ci's newest completed run at the head is a cancel and its newer
-    /// rerun on the same sha is still queued. The verdict rides the rerun -
-    /// pending - never red on the cancelled predecessor.
+    /// The pending-rerun case: cli-ci's newest completed run at the head is
+    /// a cancel and its newer rerun on the same sha is still queued. The
+    /// cancel is no verdict on its own and the queued rerun holds the
+    /// verdict pending besides - never red on the cancelled predecessor.
     #[test]
     fn a_cancelled_run_with_a_pending_rerun_on_the_same_sha_reads_pending() {
         let at_sha = vec![
@@ -853,6 +793,53 @@ mod tests {
             token_at("head", &at_sha, &on_main),
             serde_json::json!({"verdict": "green"})
         );
+    }
+
+    /// The timeout specimen 2026-11-11: CodeQL's rust leg died at its own
+    /// 30-minute job timeout, GitHub stamped the job "cancelled", and the
+    /// run read cancelled at a head nothing re-tests. A cancelled head run
+    /// is unmeasured, never red and never green: the verdict reads pending
+    /// and names the newest settled run as the floor, and the merge gate's
+    /// accessor reads no red.
+    #[test]
+    fn a_cancelled_head_run_is_unmeasured_and_falls_back_to_the_newest_settled() {
+        let at_sha = vec![
+            wf_run(
+                "CodeQL",
+                "head",
+                "completed",
+                "cancelled",
+                "2026-09-30T10:30:00Z",
+            ),
+            wf_run(
+                "guards",
+                "head",
+                "completed",
+                "success",
+                "2026-09-30T10:31:00Z",
+            ),
+        ];
+        let on_main = vec![wf_run(
+            "CodeQL",
+            "prev",
+            "completed",
+            "success",
+            "2026-09-30T10:00:00Z",
+        )];
+        let token = token_at("head", &at_sha, &on_main);
+        // The floor is the newest settled run, here the green sibling at the
+        // head itself (10:31), not the older sha's green (10:00).
+        assert_eq!(
+            token,
+            serde_json::json!({
+                "verdict": "pending",
+                "last_settled": {
+                    "verdict": "green", "workflow": "guards", "sha": "head",
+                    "created_at": "2026-09-30T10:31:00Z", "age": "1h old",
+                },
+            })
+        );
+        assert_eq!(main_ci_red_run(&token), None);
     }
 
     /// The guard direction: a non-push cancel is no verdict, so it never
