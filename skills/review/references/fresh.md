@@ -35,10 +35,10 @@ Dispatch exactly ONE fresh subagent through the Agent/Task tool (a general-purpo
 
 ## Phase F3 - the three outcomes
 
-**A report with findings.** The reviewer returns the report and a findings JSON array (the shape single-lane.md's Report section defines). Write the array to a temp file and emit from THIS session, with the fresh context stamps in the positional slots:
+**A report with findings.** The reviewer returns the report and a findings JSON array (the shape single-lane.md's Report section defines). Write the array to a temp file with the Write tool, and emit from THIS session with the fresh context stamps in the positional slots. Run from the worktree root. The Bash guard reads the script path literally: a variable such as `${SKILL_DIR}` names no file, so the call refuses.
 
 ```bash
-bash "${SKILL_DIR}/scripts/emit-attestation.sh" code-review pass fresh fork --findings-file "$FINDINGS"
+bash skills/review/scripts/emit-attestation.sh code-review pass fresh fork --findings-file "$FINDINGS"
 ```
 
 `reviewer_context=fresh`, `execution_context=fork`. The typed `pass` is ignored on this path: the classifier measures the verdict from the findings record. Then fix the findings HERE, in this session, and run `--verify-fixes` here. A scoped fix-verification is not a round.
@@ -48,7 +48,7 @@ bash "${SKILL_DIR}/scripts/emit-attestation.sh" code-review pass fresh fork --fi
 **Silence.** No return, an error, an empty message, or prose with no findings array is NOT a review, never a pass. Emit no attestation. Journal the terminal attempt with the emitter's refusal mode, as a plain argv call:
 
 ```bash
-bash "${SKILL_DIR}/scripts/emit-attestation.sh" --refuse fresh_reviewer_silent
+bash skills/review/scripts/emit-attestation.sh --refuse fresh_reviewer_silent
 ```
 
 The writer resolves the invocation id, head, and branch itself, journals one refused `review_invocation` row, and exits 1. The exit is the refusal. The row is the record, so the attempt reads as attempted-and-refused, never as never-attempted. Print `fresh review did not return; not reviewed` and stop the fresh attempt. Re-run bare only as a user decision. That round records the level as self.

@@ -262,7 +262,7 @@ The canonical round budget and termination rule is the [review-cap gate](../SKIL
 Pass the verbatim provider output to the strict consumer:
 
 ```bash
-bash "${SKILL_DIR}/scripts/consume-peer-verdict.sh" "$REVIEW_FILE"
+bash skills/review/scripts/consume-peer-verdict.sh "$REVIEW_FILE"
 ```
 
 The consumer requires the exact terminal JSON record, counts the syntactically declared P1/P2 finding lines, and rejects empty, malformed, contradictory, or count-mismatched output.

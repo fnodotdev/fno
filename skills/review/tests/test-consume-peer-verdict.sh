@@ -9,6 +9,11 @@ trap 'rm -rf "$TMP"' EXIT
 REPO="$TMP/repo"
 BIN="$TMP/bin"
 mkdir -p "$REPO" "$BIN"
+# The wrapper names its emit script by the literal worktree-relative path the
+# Bash guard requires, so the fixture carries the real script at that path
+# the way a real repo root does.
+mkdir -p "$REPO/skills/review/scripts"
+cp "$REVIEW_DIR/scripts/emit-attestation.sh" "$REPO/skills/review/scripts/emit-attestation.sh"
 git -C "$REPO" init -q
 git -C "$REPO" config user.email test@example.com
 git -C "$REPO" config user.name Test

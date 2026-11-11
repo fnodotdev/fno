@@ -138,9 +138,25 @@ pub(super) fn shlex_tokens(text: &str) -> Option<Vec<String>> {
     )
 }
 
+/// bash starts a comment at an unquoted `#` that begins a word: after the
+/// line start, whitespace, or a separator (bash itself errors on `>#foo`
+/// and `|#foo`, so those read as comments). A mid-word `#` is word text
+/// (`foo#bar`, `$#`), and the walks that predict comment extents share the
+/// one rule.
+pub(super) fn starts_a_comment(prev: Option<char>) -> bool {
+    match prev {
+        None => true,
+        Some(c) => matches!(
+            c,
+            ' ' | '\t' | '\n' | ';' | '|' | '&' | '(' | ')' | '<' | '>'
+        ),
+    }
+}
+
 /// The two `shlex` knobs the guards disagree on. `punct: false` is
 /// `shlex.split` (a newline is whitespace, operators stay inside words);
-/// `comments: true` makes an unquoted `#` drop the rest of the line.
+/// `comments: true` makes an unquoted word-start `#` drop the rest of the
+/// line.
 #[derive(Clone, Copy)]
 pub(super) struct Lex {
     pub punct: bool,
@@ -195,10 +211,6 @@ pub(super) fn shlex_lex(text: &str, opts: Lex) -> Option<Vec<String>> {
                     None => break,
                     Some(ch) if is_space(ch) => {
                         i += 1;
-                        break;
-                    }
-                    Some('#') if opts.comments => {
-                        i = skip_comment(i);
                         break;
                     }
                     Some(ch) if is_punct(ch) => break,

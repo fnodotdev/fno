@@ -14,7 +14,6 @@
 set -euo pipefail
 
 review_file="${1:?usage: consume-peer-verdict.sh <review-file>}"
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 payload_file="$(mktemp -t consume-peer-verdict.XXXXXX)"
 trap 'rm -f "$payload_file"' EXIT
@@ -25,10 +24,14 @@ emit() {
   # verdict from the classified record on the findings path; the typed
   # verdict matters only on the legacy-shape refusal, which carries no
   # findings.
+  # The emit script is named by its literal worktree-relative path. A
+  # variable path names no file the Bash guard can read, so the runner line
+  # refuses; the literal relative path resolves the same way at the gate
+  # and at runtime, because the lane runs from the worktree root.
   if [[ -n "${2:-}" ]]; then
-    bash "$script_dir/emit-attestation.sh" peer "$1" --findings-file "$2"
+    bash skills/review/scripts/emit-attestation.sh peer "$1" --findings-file "$2"
   else
-    bash "$script_dir/emit-attestation.sh" peer "$1"
+    bash skills/review/scripts/emit-attestation.sh peer "$1"
   fi
 }
 
