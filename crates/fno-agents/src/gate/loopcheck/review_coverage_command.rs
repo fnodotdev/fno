@@ -325,7 +325,13 @@ pub(super) fn decide_review_coverage(args: &[String]) -> (i32, String) {
             inputs.author_harness_pinned_none,
         )
     {
-        let payload = classify_payload_for_floor(&gh_bin, &git_bin, &cwd, pr.as_deref());
+        let payload = classify_payload_for_floor(
+            &gh_bin,
+            &git_bin,
+            &cwd,
+            pr.as_deref(),
+            session_pr_repo.as_deref(),
+        );
         if let Some(floored) = floor_self_review(&required_reviewers, false, payload.0, true) {
             required_reviewers.push(floored);
         }

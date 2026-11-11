@@ -1606,8 +1606,23 @@ pub(crate) fn decide_with_payload(
         // those harnesses' path and is deferred.
         let floor_applies =
             self_review_floor_applies(author_harness.as_deref(), inputs.author_harness_pinned_none);
+        // The manifest node's own PR pins the terminal read (merged, deleted
+        // and detached heads stay readable); an absent node or PR keeps the
+        // branch-resolved read exactly as before. The chosen row's url also
+        // pins the repo every PR read answers against - the floor's consult
+        // read below included, so it resolves before the floor.
+        let (node_pr_selector, node_pr_repo) =
+            pr_read::manifest_node_pr_target(&cwd, node_id.as_deref())
+                .map(|(selector, repo)| (Some(selector), repo))
+                .unwrap_or((None, None));
         let self_review_floor = if !lane_configured && self_review_required && floor_applies {
-            let payload = classify_payload_for_floor(&parsed.gh_bin, &parsed.git_bin, &cwd, None);
+            let payload = classify_payload_for_floor(
+                &parsed.gh_bin,
+                &parsed.git_bin,
+                &cwd,
+                None,
+                node_pr_repo.as_deref(),
+            );
             floor_self_review(&required_reviewers, false, payload.0, true)
         } else {
             None
@@ -1627,14 +1642,6 @@ pub(crate) fn decide_with_payload(
         } else {
             gh_bin.to_string()
         };
-        // The manifest node's own PR pins the terminal read (merged, deleted
-        // and detached heads stay readable); an absent node or PR keeps the
-        // branch-resolved read exactly as before. The chosen row's url also
-        // pins the repo every PR read answers against.
-        let (node_pr_selector, node_pr_repo) =
-            pr_read::manifest_node_pr_target(&cwd, node_id.as_deref())
-                .map(|(selector, repo)| (Some(selector), repo))
-                .unwrap_or((None, None));
         let done_result = run_done(
             &done_gh_bin,
             git_bin,

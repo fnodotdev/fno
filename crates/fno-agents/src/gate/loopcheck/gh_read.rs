@@ -292,13 +292,25 @@ fn read_pr_view_once(
 /// The gate's `pr view` read: the metadata field set over REST, with the
 /// earned broker-field-set fallback when the core bucket is spent. `pub(crate)`
 /// because the ported review-hold read (review_hold.rs) rides the same argv.
+/// `repo` pins the repository (the node PR's own repo) over the ambient origin.
 pub(crate) fn read_pr_view(
     gh_bin: &str,
     cwd: &Path,
     selector: Option<&str>,
     timeout: std::time::Duration,
 ) -> Result<Option<Value>, GhReadError> {
-    read_pr_view_fields(gh_bin, cwd, selector, PR_VIEW_FIELDS_GRAPHQL, None, timeout)
+    read_pr_view_in(gh_bin, cwd, selector, None, timeout)
+}
+
+/// [`read_pr_view`] with the repository pinned.
+pub(crate) fn read_pr_view_in(
+    gh_bin: &str,
+    cwd: &Path,
+    selector: Option<&str>,
+    repo: Option<&str>,
+    timeout: std::time::Duration,
+) -> Result<Option<Value>, GhReadError> {
+    read_pr_view_fields(gh_bin, cwd, selector, PR_VIEW_FIELDS_GRAPHQL, repo, timeout)
 }
 
 /// The earned-fallback read, parametrized for callers whose payload needs

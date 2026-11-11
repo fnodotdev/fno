@@ -249,14 +249,21 @@ fn verify_merged(
 
     // Same posture as the merge command: the checks precondition applies only
     // when require_checks_pass is on, and PENDING is not failing - a
-    // still-running check flows into the bounded remediation.
+    // still-running check flows into the bounded remediation. The session
+    // node's PR repo pins the read, the same pin the status door applies.
     if crate::agents_config::auto_merge_require_checks_pass(cwd) {
-        let payload = json!({
+        let mut payload = json!({
             "op": "status-ci",
             "cwd": cwd.to_string_lossy(),
             "pr": number,
             "drop_coverage": true,
         });
+        if let Some(repo) = crate::gate::loopcheck::pr_read::session_node_pr_target(cwd)
+            .1
+            .filter(|s| !s.is_empty())
+        {
+            payload["repo"] = json!(repo);
+        }
         let (code, stdout, _stderr) = crate::pr_status::status_ci(&payload);
         if code != 0 {
             let _ = writeln!(err, "verify-pr-merged: required checks unreadable");
