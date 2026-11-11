@@ -1524,7 +1524,7 @@ pub(crate) fn status_ci(payload: &Value) -> (i32, String, String) {
     // ambient origin: a caller that pinned the repository must never be
     // answered from the checkout's own same-number PR.
     let Some(slug) = payload
-        .get("repo")
+        .pointer("/repo")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
