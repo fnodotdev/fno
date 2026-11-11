@@ -365,7 +365,7 @@ pub struct Chat {
 
 /// The pause between the pasted text and the Enter that submits it, the
 /// same settle `fno mux pane send --submit` uses.
-pub const SUBMIT_SETTLE: Duration = Duration::from_millis(crate::mux_cli::CR_SETTLE_MS);
+pub const SUBMIT_SETTLE: Duration = Duration::from_millis(crate::mux_cli::pane_submit::CR_SETTLE_MS);
 
 fn styled(block: &Block, root: &Root) -> StyledText {
     let code_bg = rgb(root.palette.panel).into();

@@ -31,7 +31,7 @@ The `codesign -s -` step gives the binary an ad-hoc signature. No developer acco
 
 `--probe` attaches as an observer, so it never resizes a pane. It waits up to 5 seconds for the layout and one frame per pane. Then it prints `attached session=<s> panes=<n> frames=<m>`. Next it reads the fleet, the open questions and the backlog the way the window does, and prints `agents=<n> questions=<m> seats=<k>`. After a good attach it exits 0. With no server it prints the socket path it tried and exits 1. A failed fleet or question read prints its reason on stderr.
 
-`--probe --chat <id>` asks the server for that claude session's chat stream. It counts the events until no batch comes for 2 seconds, prints `chat_events=<n> session=<id>`, and exits 0 when n is at least 1. A session the server cannot find prints the server's reason and exits 1.
+`--probe --chat <id>` asks the server for that claude session's chat stream. It counts the events until 2 seconds pass with no new batch. Then it prints `chat_events=<n> session=<id>`. If n is at least 1, it exits 0. A session the server cannot find prints the server's reason and exits 1.
 
 ## The window
 
@@ -41,11 +41,11 @@ The strip above the grid shows the active session's tabs. A tab without a chosen
 
 ## Chat mode
 
-cmd-1 or Chat shows the conversation of the agent in the focused pane. The app reads it from the mux server's chat stream, which serves claude, codex and opencode sessions in one event shape. Your turns sit on the right. The agent's text renders as markdown: headings, lists, bold, italic, inline code and code blocks. Tables and images show as plain text. Thinking and each tool call take one line. A click opens one to show its text, or the call's input and output. A mark shows each call's state: … while it runs, ✓ when it succeeded, ✗ when it failed. A kind the app does not know shows as one plain line. New turns append as the agent writes them. The view follows them while it is scrolled to the bottom.
+cmd-1 or Chat shows the conversation of the agent in the focused pane. The app reads it from the mux server's chat stream, which serves claude, codex and opencode sessions in one event shape. Your turns sit on the right. The agent's text renders as markdown: headings, lists, bold, italic, inline code and code blocks. Tables and images show as plain text. Thinking and each tool call take one line. A click opens one to show its text, or the call's input and output. A mark shows each call's state: … for a call that runs, ✓ for a success, ✗ for a failure. A kind the app does not know shows as one plain line. New turns append as the agent writes them. The view follows them while it is scrolled to the bottom.
 
 Focus another pane to read its agent. A pane with no agent session says so.
 
-The composer at the bottom takes your message. Enter sends it, Shift-Enter adds a line, and cmd-v pastes into it. The app types the text into the agent's pane as a paste, waits 800 ms, then presses Enter: the same path `fno mux pane send --submit` takes. Your turn shows up in the view when the agent's transcript records it.
+The composer at the bottom takes your message. Enter sends it, Shift-Enter adds a line, and cmd-v pastes into it. The app types the text into the agent's pane as a paste, waits 800 ms, then presses Enter: the same path `fno mux pane send --submit` takes. After the agent's transcript records your turn, it shows up in the view.
 
 cmd-2 or Board opens orchestration mode, the command center board. TABLE lists every seat with its node and status. With more than one host in the fleet, a MACHINE column shows too. FEED lists each open question with its options, and the recommended option is marked. A click on an option answers it through the same door the TUI uses. The question then shows "sending", then "answered", until the next read drops it. A refused answer shows its reason and keeps the options. cmd-3 or Terminal goes to the terminal.
 
