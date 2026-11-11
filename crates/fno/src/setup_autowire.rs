@@ -435,7 +435,7 @@ pub(crate) struct Harness {
     pub(crate) label: &'static str,
 }
 
-pub(crate) const HARNESS_LIST: [Harness; 7] = [
+pub(crate) const HARNESS_LIST: [Harness; 8] = [
     Harness {
         name: "claude",
         label: "Claude Code",

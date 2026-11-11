@@ -71,6 +71,7 @@ fn build_omp_argv(
 ) -> Vec<String> {
     let mut argv = crate::harness_capabilities::render_session_argv("omp", "headless_create", None)
         .expect("embedded omp headless-create capability");
+    argv.push("--no-session".to_string());
     for (flag, value) in [("--model", model), ("--thinking", effort)] {
         if let Some(value) = value.map(str::trim).filter(|v| !v.is_empty()) {
             argv.push(flag.to_string());

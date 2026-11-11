@@ -1263,11 +1263,13 @@ tokens = ["omp", "--resume", "{session_id}"]
 kind = "unsupported"
 tokens = []
 
-# The wired lane (spawn/pi_ask.rs dispatch_omp_once): one stateless
-# `--print --mode json --no-session` turn, the shape pi's headless lane runs.
+# A persisted create: the json stream's first line is the session header,
+# whose id the resume form below opens. The wired one-shot lane
+# (spawn/pi_ask.rs dispatch_pi_once) adds `--no-session` itself, the stateless
+# shape pi's headless lane runs.
 [harness.omp.resume_strategy.forms.headless_create]
 kind = "flag"
-tokens = ["omp", "--print", "--mode", "json", "--no-session"]
+tokens = ["omp", "--print", "--mode", "json"]
 
 [harness.omp.resume_strategy.forms.headless_resume]
 kind = "session_flag"
