@@ -489,18 +489,21 @@ mod tests {
     /// that reaches the bus names the standing refusal and its lever.
     #[test]
     fn the_lift_announcement_does_not_promise_agent_test_runs() {
-        let root = std::env::temp_dir().join(format!("fno-test-hold-lift-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        let _home = crate::AgentsHomeEnvGuard::set(&root);
-        let home = crate::paths::AgentsHome::from_env();
+        // The home sits at <dir>/agents, the incident_claim fixture's
+        // shape: a home pinned directly at a temp subdir resolves its bus
+        // to the SHARED temp-dir-root bus, where every from_env-pinned
+        // test's fleet-incident sends collect and the rolling-hour limit
+        // then refuses the send under test.
+        let dir = tempfile::TempDir::new().unwrap();
+        let home = crate::paths::AgentsHome::at(dir.path().join("agents"));
+        std::fs::create_dir_all(home.root()).unwrap();
+        let _home = crate::AgentsHomeEnvGuard::set(home.root());
         let path = home.test_pause_json();
         // The announce send writes the bus row and reads the registry
-        // store: mirror the incident_claim fixture, which pre-creates the
-        // bus directory and seats a registry, or the send fails and the
-        // assertion would measure the fixture, not the announcement.
-        let dot_fno = home.root().parent().unwrap_or(home.root()).to_path_buf();
-        std::fs::create_dir_all(dot_fno.join("db/mail/bus")).unwrap();
+        // store: pre-create the bus directory and seat a registry, or the
+        // send fails and the assertion would measure the fixture, not the
+        // announcement.
+        std::fs::create_dir_all(dir.path().join("db/mail/bus")).unwrap();
         crate::state::update_registry(&home.registry_json(), |_r| ()).unwrap();
         // A pause record an older build wrote is what makes this pass a
         // lift rather than a first hold.
@@ -515,9 +518,11 @@ mod tests {
         .unwrap();
         let outcome = reconcile(&home).unwrap();
         assert!(outcome.lifted, "the hold must read as lifted: {outcome:?}");
-        outcome.announced.as_ref().expect("the lift announces");
-        let dot_fno = home.root().parent().unwrap_or(home.root()).to_path_buf();
-        let bus = std::fs::read_to_string(crate::mail_paths::bus_log_path(&dot_fno))
+        outcome
+            .announced
+            .as_ref()
+            .unwrap_or_else(|| panic!("the lift announces: {outcome:?}"));
+        let bus = std::fs::read_to_string(crate::mail_paths::bus_log_path(dir.path()))
             .expect("the announcement lands on the bus");
         assert!(
             bus.contains("test:priority"),
@@ -562,6 +567,13 @@ mod tests {
         let root = std::env::temp_dir().join(format!("fno-test-hold-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("bin")).unwrap();
+        // The home sits at <root>/agents so the hold's bus lands under
+        // <root>, isolated from every other test's fleet-incident sends on
+        // the shared temp-dir-root bus (the incident_claim fixture's
+        // shape). Pre-create the bus directory the send writes.
+        let home = crate::paths::AgentsHome::at(root.join("agents"));
+        std::fs::create_dir_all(home.root()).unwrap();
+        std::fs::create_dir_all(root.join("db/mail/bus")).unwrap();
         // A real binary named `cargo` that naps. A shebang script will not
         // do: the process table shows the interpreter's argv (`/bin/sh
         // <path>/cargo test ...`), which `is_test_root` never matches.
@@ -591,12 +603,7 @@ mod tests {
             .unwrap();
         let pid = child.id();
 
-        let _home = crate::AgentsHomeEnvGuard::set(&root);
-        let home = crate::paths::AgentsHome::from_env();
-        // The hold's first pass announces; the bus send needs the bus
-        // directory (the incident_claim fixture pre-creates it).
-        let dot_fno = home.root().parent().unwrap_or(home.root()).to_path_buf();
-        std::fs::create_dir_all(dot_fno.join("db/mail/bus")).unwrap();
+        let _home = crate::AgentsHomeEnvGuard::set(home.root());
         let mut visible = false;
         for _ in 0..50 {
             let (table, _) = crate::census::process_table();
