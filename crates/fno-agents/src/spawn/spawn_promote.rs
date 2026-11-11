@@ -623,6 +623,47 @@ mod tests {
         }
     }
 
+    /// The granted-row staging the caller-seam tests share: a temp agents
+    /// home seeded with the granted esther row (level 0 over fnh,fno,
+    /// session s-granted), `HOME_ENV` pinned to it. The seed guard and the
+    /// temp dir stay alive in the caller's bindings, and the parent pid
+    /// seeds the census chain.
+    fn granted_home_stage() -> (tempfile::TempDir, crate::claims::EnvVarGuard, u32) {
+        let tmp = tempfile::tempdir().unwrap();
+        let agents = tmp.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        crate::registry_store::seed_raw(
+            agents.join("registry.json"),
+            json!({"schema_version": 4, "agents": [
+                {"name": "esther", "status": "live", "role_scope": "fnh,fno", "role_level": 0,
+                 "cwd": std::env::current_dir().unwrap().display().to_string(), "harness": "claude",
+                 "harness_session_id": "s-granted",
+                 "created_at": "2026-11-10T06:21:00Z"}
+            ]})
+            .to_string(),
+        );
+        let ppid: u32 = unsafe { libc::getppid() } as u32;
+        let home_root = crate::claims::EnvVarGuard::set(
+            crate::paths::HOME_ENV,
+            agents.display().to_string().as_str(),
+        );
+        (tmp, home_root, ppid)
+    }
+
+    /// The harness-ancestry census the granted-row caller proves: the Bash
+    /// tool invocation sits under the lead's claude process, under launchd.
+    fn granted_census_stage(ppid: u32) -> crate::claims::proof_tests::CensusGuard {
+        crate::claims::proof_tests::CensusGuard::chain(&[
+            (
+                std::process::id(),
+                ppid,
+                "fno-agents spawn --role-level 0 --role-scope fnh,fno",
+            ),
+            (ppid, 1, "claude --resume /t/lead.jsonl --name lead"),
+            (1, 0, "launchd"),
+        ])
+    }
+
     /// The bare command (`spawn --promote <scope> --hand-off`, no `--name`)
     /// draws the successor's name at plan. The seam mints no name for a
     /// hand-off, so the settle draw is the only name source; an empty one
@@ -941,23 +982,7 @@ mod tests {
         // and the registry row grants that session level 0.
         let guard = PlanEnvGuard::take();
         guard.clear_identity();
-        let tmp = tempfile::tempdir().unwrap();
-        let agents = tmp.path().join("agents");
-        std::fs::create_dir_all(&agents).unwrap();
-        crate::registry_store::seed_raw(
-            agents.join("registry.json"),
-            json!({"schema_version": 4, "agents": [
-                {"name": "esther", "status": "live", "role_scope": "fnh,fno", "role_level": 0,
-                 "cwd": std::env::current_dir().unwrap().display().to_string(), "harness": "claude",
-                 "harness_session_id": "s-granted",
-                 "created_at": "2026-11-10T06:21:00Z"}
-            ]})
-            .to_string(),
-        );
-        let _home_root = crate::claims::EnvVarGuard::set(
-            crate::paths::HOME_ENV,
-            agents.display().to_string().as_str(),
-        );
+        let (_tmp, _home_root, ppid) = granted_home_stage();
         let _self = crate::claims::EnvVarGuard::set("FNO_AGENT_SELF", "esther");
         let _session = crate::claims::EnvVarGuard::set("FNO_AGENT_SESSION", "s-granted");
         let _agent_harness = crate::claims::EnvVarGuard::set("FNO_AGENT_HARNESS", "claude");
@@ -973,16 +998,7 @@ mod tests {
             std::process::id().to_string().as_str(),
         );
         let _sharness = crate::claims::EnvVarGuard::set("FNO_SESSION_HARNESS", "claude");
-        let ppid: u32 = unsafe { libc::getppid() } as u32;
-        let _table = crate::claims::proof_tests::CensusGuard::chain(&[
-            (
-                std::process::id(),
-                ppid,
-                "fno-agents spawn --role-level 0 --role-scope fnh,fno",
-            ),
-            (ppid, 1, "claude --resume /t/lead.jsonl --name lead"),
-            (1, 0, "launchd"),
-        ]);
+        let _census = granted_census_stage(ppid);
         let home = crate::paths::AgentsHome::from_env();
         let calling = calling_row(&home);
         let Calling::Agent(row, sid) = &calling else {
@@ -1008,35 +1024,10 @@ mod tests {
         // sign the neighbour's mail. The unproven refusal stays verbatim.
         let guard = PlanEnvGuard::take();
         guard.clear_identity();
-        let tmp = tempfile::tempdir().unwrap();
-        let agents = tmp.path().join("agents");
-        std::fs::create_dir_all(&agents).unwrap();
-        crate::registry_store::seed_raw(
-            agents.join("registry.json"),
-            json!({"schema_version": 4, "agents": [
-                {"name": "esther", "status": "live", "role_scope": "fnh,fno", "role_level": 0,
-                 "cwd": std::env::current_dir().unwrap().display().to_string(), "harness": "claude",
-                 "harness_session_id": "s-granted",
-                 "created_at": "2026-11-10T06:21:00Z"}
-            ]})
-            .to_string(),
-        );
-        let _home_root = crate::claims::EnvVarGuard::set(
-            crate::paths::HOME_ENV,
-            agents.display().to_string().as_str(),
-        );
+        let (_tmp, _home_root, ppid) = granted_home_stage();
         let _pid = crate::claims::EnvVarGuard::unset("FNO_SESSION_PID");
         let _walk_harness = crate::claims::EnvVarGuard::unset("FNO_SESSION_HARNESS");
-        let ppid: u32 = unsafe { libc::getppid() } as u32;
-        let _table = crate::claims::proof_tests::CensusGuard::chain(&[
-            (
-                std::process::id(),
-                ppid,
-                "fno-agents spawn --role-level 0 --role-scope fnh,fno",
-            ),
-            (ppid, 1, "claude --resume /t/lead.jsonl --name lead"),
-            (1, 0, "launchd"),
-        ]);
+        let _census = granted_census_stage(ppid);
         let home = crate::paths::AgentsHome::from_env();
         let calling = calling_row(&home);
         match &calling {
