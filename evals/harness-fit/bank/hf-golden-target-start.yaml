@@ -1,0 +1,12 @@
+# Re-based harness-fit golden (grade-only): the target front door the lanes
+# must drive still answers. No worker, so a head run costs nothing. Copied
+# from the live bank's golden-cli-target-start; the fixture is HEAD, so it
+# grades current Rust and never a deleted tree.
+id: hf-golden-target-start
+tier: capability
+grade:
+  - kind: exit
+    command: "fno do target start 2>&1 | grep -Fq 'fno do target start <node>'"
+    expect: 0
+timeout_minutes: 5
+tags: [harness-fit, golden]
