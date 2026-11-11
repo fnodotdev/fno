@@ -162,13 +162,17 @@ pub(crate) fn coverage_gate<P: Probes>(
         }
         GateState::Refused => {
             let line = refusal_line(&v.refusal, &v.note);
+            // Advisory evidence, never a refusal: both walks demote this
+            // blocker to a warning (law d-3173 - process conditions never
+            // stop a merge; the architect pass is the guard), so the detail
+            // must not claim a refusal that never happened.
             (
                 Some(Blocker::held(
                     "review_coverage_uncovered",
                     if line.is_empty() {
-                        "unreviewed merge refused".to_string()
+                        "no review coverage at this head".to_string()
                     } else {
-                        format!("unreviewed merge refused: {line}")
+                        format!("no review coverage at this head: {line}")
                     },
                 )),
                 None,
@@ -178,9 +182,9 @@ pub(crate) fn coverage_gate<P: Probes>(
             Some(Blocker::unknown(
                 "review_coverage_unknown",
                 if v.note.is_empty() {
-                    "coverage probe failed, merge refused".to_string()
+                    "coverage probe failed".to_string()
                 } else {
-                    format!("coverage probe failed, merge refused: {}", v.note)
+                    format!("coverage probe failed: {}", v.note)
                 },
             )),
             None,

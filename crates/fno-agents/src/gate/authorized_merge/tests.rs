@@ -1355,6 +1355,73 @@ fn an_unreadable_body_or_graph_refuses_to_assume_bound() {
 }
 
 #[test]
+fn coverage_rows_are_advisory_never_say_refused_and_read_one_verdict() {
+    // x-7d53: PR 37 merged while the coverage warning read "unreviewed merge
+    // refused" - a refusal word on a row that never refuses (law d-3173), so
+    // `pr status` ready=true and the merge's own output contradicted each
+    // other. The row stays advisory in both walks, and the words say so.
+    for coverage_exit in [None, Some(0), Some(3), Some(4)] {
+        let fake = Fake {
+            coverage_exit,
+            ..clean()
+        };
+        let req = request(Effect::Merge);
+        let outcome = run(&fake, &req);
+        assert_eq!(
+            outcome.word(),
+            "merged",
+            "every coverage answer is advisory; exit={coverage_exit:?}: {outcome:?}"
+        );
+        let wanted = match coverage_exit {
+            None | Some(0) => None,
+            Some(3) => Some("review_coverage_uncovered"),
+            _ => Some("review_coverage_unknown"),
+        };
+        for warning in outcome.warnings() {
+            assert!(
+                !warning.detail.contains("refused"),
+                "an advisory row must not say refused: {}",
+                warning.detail
+            );
+        }
+        assert_eq!(
+            outcome
+                .warnings()
+                .iter()
+                .any(|w| w.code.starts_with("review_coverage")),
+            wanted.is_some(),
+            "exit={coverage_exit:?}: {outcome:?}"
+        );
+        if let Some(code) = wanted {
+            let row = outcome
+                .warnings()
+                .iter()
+                .find(|w| w.code == code)
+                .expect("the coverage row rides");
+            let prefix = match code {
+                "review_coverage_uncovered" => "no review coverage at this head",
+                _ => "coverage probe failed",
+            };
+            assert!(row.detail.starts_with(prefix), "{code}: {}", row.detail);
+        }
+        let preview = preview_walk(
+            &fake,
+            &Request {
+                effect: Effect::Preview,
+                ..req
+            },
+            &open_facts(),
+        );
+        assert!(matches!(preview, PreviewVerdict::Go { .. }), "{preview:?}");
+        assert_eq!(
+            preview.warnings(),
+            outcome.warnings(),
+            "one verdict: status and merge read the same rows (x-7d53)"
+        );
+    }
+}
+
+#[test]
 fn process_conditions_warn_on_merge_arm_and_preview() {
     for code in [
         "review_in_flight",
