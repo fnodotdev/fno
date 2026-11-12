@@ -16,11 +16,9 @@ use fno::app_api::web_hq::Board;
 use fno::proto::{AgentRow, Command};
 
 pub const WIDTH: f32 = 260.0;
-/// A row's text width: the pane less the row's margins, padding and bar.
-const LABEL_WIDTH: f32 = WIDTH - 8.0 - 6.0 - 8.0 - 2.0;
 /// The agents shown before a "+N more" row, so the sections below stay above
-/// the fold.
-pub const AGENTS_SHOWN: usize = 8;
+/// the fold. Six keeps every section header in the default 1360x800 window.
+pub const AGENTS_SHOWN: usize = 6;
 
 /// What a row says about "where I am". Only the focused agent carries the
 /// cursor; the active session and the local machine carry a quiet word.
@@ -66,15 +64,20 @@ pub enum Row {
 /// the width each layout pass offers, and a min-content pass inside the
 /// scrolling pane offered a few pixels, so labels showed three characters.
 fn clamp(text: String, color: u32, small: bool) -> Div {
+    // The inner line follows the box it lands in, so the line clamp
+    // ellipsizes at the width the row actually gives it: a fixed inner width
+    // is wider than the flex item once the identity box takes its share, and
+    // the outer overflow_hidden then clips mid-glyph before the ellipsis can
+    // render. The ellipsis rides the line clamp, the same pair the identity
+    // tail uses.
     let line = div()
-        .w(px(LABEL_WIDTH))
-        .whitespace_nowrap()
-        .overflow_hidden()
+        .w_full()
+        .line_clamp(1)
         .text_ellipsis()
         .text_color(rgb(color))
         .child(text);
     div()
-        .w(px(LABEL_WIDTH))
+        .min_w_0()
         .overflow_hidden()
         .child(if small { line.text_xs() } else { line })
 }
@@ -355,17 +358,24 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
                             .child(word),
                     );
                 }
-                let mut meta = div()
-                    .w_full()
-                    .flex()
-                    .flex_row()
-                    .gap_2()
-                    .child(clamp(detail, p.muted, true).flex_1());
+                // The meta line budgets by role: the state word never
+                // truncates (it is the row's key fact), and the node and PR
+                // tail takes the leftover width - it shrinks before anything
+                // else, the node id ellipsizes first, and the whole tail drops
+                // when even that cannot fit.
+                let mut meta = div().w_full().flex().flex_row().gap_2().child(
+                    div()
+                        .flex_none()
+                        .whitespace_nowrap()
+                        .text_xs()
+                        .text_color(rgb(p.muted))
+                        .child(detail),
+                );
                 if let Some(identity) = identity {
                     meta = meta.child(
                         div()
-                            .flex_none()
-                            .max_w(px(112.0))
+                            .flex_1()
+                            .min_w_0()
                             .overflow_hidden()
                             .line_clamp(1)
                             .text_ellipsis()
