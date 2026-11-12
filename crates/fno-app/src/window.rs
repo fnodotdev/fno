@@ -26,10 +26,10 @@ use super::link::{Event, Layout, Link};
 use super::mouse::{self, Hit};
 use super::palette::Palette;
 use super::{extensions, left_pane, orchestration, tabs};
-use crate::proto::chat_event::SessionKey;
-use crate::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};
-use crate::tree::Rect;
-use crate::web_hq::Board;
+use fno::proto::chat_event::SessionKey;
+use fno::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};
+use fno::tree::Rect;
+use fno::app_api::web_hq::Board;
 
 /// What fills the main area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -578,7 +578,7 @@ impl Root {
                     self.say(format!("copied {n} characters"), cx);
                 }
                 Event::OpenLink(url) => {
-                    if crate::link::is_openable(&url) {
+                    if fno::link::is_openable(&url) {
                         cx.open_url(&url);
                     }
                 }
@@ -1144,7 +1144,7 @@ impl Render for Root {
                 .text_sm()
                 .into_any_element(),
         };
-        let now = crate::digest_overlay::now_secs();
+        let now = fno::app_api::digest_overlay::now_secs();
         let left = left_pane::render(self, now, cx)
             .font_family(".SystemUIFont")
             .text_sm();
@@ -1252,7 +1252,7 @@ pub fn run(
             },
         );
         if let Err(e) = opened {
-            eprintln!("fno-desktop: cannot open a window: {e}");
+            eprintln!("fno-app: cannot open a window: {e}");
             cx.quit();
             return;
         }

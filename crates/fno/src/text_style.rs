@@ -87,10 +87,10 @@ pub struct TSeg {
 /// sideline wears (a real fg/bg pair, zero DIM inside the band).
 #[derive(Clone, Debug)]
 pub struct TLine {
-    pub(crate) text: String,
-    pub(crate) roles: Vec<TextStyle>,
+    pub text: String,
+    pub roles: Vec<TextStyle>,
     /// The role for chars past the role walk (whole-line constructors).
-    pub(crate) default_role: TextStyle,
+    pub default_role: TextStyle,
     pub(crate) band: bool,
     /// How this line follows the one above; a wrapped line joins back on copy.
     pub(crate) join: Join,

@@ -11,7 +11,7 @@ use gpui::{
 
 use super::boxdraw;
 use super::palette::Palette;
-use crate::proto::{cell_flags, Cell, Frame};
+use fno::proto::{cell_flags, Cell, Frame};
 
 /// The font and cell metrics every pane paints with.
 #[derive(Clone)]

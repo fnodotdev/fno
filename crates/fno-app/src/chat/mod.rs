@@ -18,16 +18,16 @@ use gpui::{px, Bounds, ListAlignment, ListState, Pixels};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
 use super::window::Root;
-use crate::chat_events::{tail_sync, ChatReadError, ChatTail};
-use crate::proto::chat_event::{ChatEvent, SessionKey};
-use crate::proto::ProtoError;
+use fno::chat_events::{tail_sync, ChatReadError, ChatTail};
+use fno::proto::chat_event::{ChatEvent, SessionKey};
+use fno::proto::ProtoError;
 pub use model::Conversation;
 pub(super) use view::render;
 
 /// The pause between the pasted text and the Enter that submits it, the
 /// same settle `fno mux pane send --submit` uses.
 pub const SUBMIT_SETTLE: Duration =
-    Duration::from_millis(crate::mux_cli::pane_submit::CR_SETTLE_MS);
+    Duration::from_millis(fno::app_api::CR_SETTLE_MS);
 
 /// How long a stream may send nothing before the view says it is empty.
 pub const EMPTY_AFTER: Duration = Duration::from_secs(2);
@@ -62,7 +62,7 @@ pub enum OpenError {
 }
 
 fn connect(session: &str, key: SessionKey, from_seq: u64) -> Result<ChatTail, OpenError> {
-    let socket = crate::proto::socket_path(session).map_err(OpenError::Session)?;
+    let socket = fno::proto::socket_path(session).map_err(OpenError::Session)?;
     Ok(tail_sync(&socket, key, from_seq)?)
 }
 
@@ -76,7 +76,7 @@ pub fn open(
     let closer = tail.closer()?;
     let (tx, rx) = unbounded_channel();
     std::thread::Builder::new()
-        .name("fno-desktop-chat".into())
+        .name("fno-app-chat".into())
         .spawn(move || {
             for batch in tail {
                 let msg = match batch {
@@ -232,7 +232,7 @@ impl Chat {
 
 /// The session id of the most recently written claude transcript.
 fn newest_claude_session() -> Option<String> {
-    let projects = std::fs::read_dir(crate::transcript_tail::claude_projects_dir()).ok()?;
+    let projects = std::fs::read_dir(fno::app_api::transcript_tail::claude_projects_dir()).ok()?;
     let files = projects
         .flatten()
         .filter_map(|d| std::fs::read_dir(d.path()).ok())
@@ -242,7 +242,7 @@ fn newest_claude_session() -> Option<String> {
             let path = f.path();
             let id = path.file_stem()?.to_str()?.to_string();
             let transcript = path.extension().is_some_and(|e| e == "jsonl")
-                && crate::transcript_tail::transcript_uuid_shaped(&id);
+                && fno::app_api::transcript_tail::transcript_uuid_shaped(&id);
             if !transcript {
                 return None;
             }
@@ -272,7 +272,7 @@ pub fn probe(session: &str, key: SessionKey, idle: Duration) -> i32 {
     let tail = match connect(session, key, 0) {
         Ok(tail) => tail,
         Err(e) => {
-            eprintln!("fno-desktop: {e}");
+            eprintln!("fno-app: {e}");
             return 1;
         }
     };
@@ -297,7 +297,7 @@ pub fn probe(session: &str, key: SessionKey, idle: Duration) -> i32 {
     println!("chat_events={n} session={id}");
     match failure {
         Some(why) => {
-            eprintln!("fno-desktop: {why}");
+            eprintln!("fno-app: {why}");
             1
         }
         None if n == 0 => 1,

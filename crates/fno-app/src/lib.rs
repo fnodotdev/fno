@@ -1,4 +1,4 @@
-//! `fno-desktop`: the macOS app. A thin client of the mux server: it draws
+//! `fno-app`: the macOS app. A thin client of the mux server: it draws
 //! the `Frame` cells the server sends over the session socket and runs no
 //! terminal emulator of its own.
 
@@ -18,8 +18,8 @@ mod window;
 
 use std::time::Duration;
 
-use crate::mux_cli::{env_server, resolve_session};
-use crate::web_hq::Board;
+use fno::mux_cli::{env_server, resolve_session};
+use fno::app_api::web_hq::Board;
 pub use window::MainView;
 
 /// How long `--probe` waits for a layout and a frame per pane.
@@ -45,7 +45,7 @@ pub fn run(opts: Options) -> i32 {
     let session = resolve_session(opts.session.as_deref(), env_server().as_deref());
     let pinned = match opts.chat.as_deref().map(chat::claude_key) {
         Some(None) => {
-            eprintln!("fno-desktop: no claude transcript to read");
+            eprintln!("fno-app: no claude transcript to read");
             return 1;
         }
         Some(key) => key,
@@ -70,7 +70,7 @@ fn probe(session: &str) -> i32 {
     {
         Ok(rt) => rt,
         Err(e) => {
-            eprintln!("fno-desktop: cannot start the board read: {e}");
+            eprintln!("fno-app: cannot start the board read: {e}");
             return 1;
         }
     };
@@ -86,7 +86,7 @@ fn probe(session: &str) -> i32 {
         .into_iter()
         .flatten()
     {
-        eprintln!("fno-desktop: {e}");
+        eprintln!("fno-app: {e}");
     }
     code
 }
