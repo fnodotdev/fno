@@ -40,6 +40,7 @@ function makeWorld({
   reply = { decision: "allow", termination_reason: null },
   manifest = true,
   env = {},
+  omp = false,
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "fno-pi-ext-"))
   const manifestPath = join(dir, "target-state.md")
@@ -80,6 +81,8 @@ function makeWorld({
   const entries = []
   const notified = []
   const host = {
+    // omp's API carries an arktype builder; pi's does not.
+    ...(omp ? { arktype: {} } : {}),
     on(event, handler) {
       handlers[event] = handler
     },
@@ -114,6 +117,9 @@ function makeWorld({
     log: () => readLog(logPath),
     async settle(eventCtx = ctx) {
       await handlers["agent_settled"]({}, eventCtx)
+    },
+    async stop(eventCtx = ctx) {
+      return handlers["session_stop"]({}, eventCtx)
     },
     cleanup() {
       for (const [k, v] of saved) {
@@ -161,6 +167,22 @@ test("AC12-HP: a bound settle runs the gate and sends the gate's continuation", 
       triggerTurn: true,
       expandPromptTemplates: true,
     })
+  } finally {
+    world.cleanup()
+  }
+})
+
+test("an omp host answers session_stop with the gate's continuation as a block", async () => {
+  const world = makeWorld({
+    omp: true,
+    reply: { decision: "block", termination_reason: null, continuation: "/skill:target resume" },
+  })
+  try {
+    const result = await world.stop()
+    const loopLine = world.log().split("\n").find((l) => l.startsWith("loop-check "))
+    assert.ok(loopLine?.includes("--harness omp"), loopLine)
+    assert.deepEqual(result, { decision: "block", reason: "/skill:target resume" })
+    assert.equal(world.sent.length, 0)
   } finally {
     world.cleanup()
   }
