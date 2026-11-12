@@ -5,10 +5,13 @@
 //! non-draft one through the status door, so a read rides the shared status
 //! cache and the account poller instead of new GitHub calls. The status
 //! `ready` verdict is the merge gate's own answer, so a held, uncovered or
-//! visual-approval PR never reads ready. The first ready sighting of a head
-//! starts the clock under `pr-idle/<repo>-<pr>.json`. At 2 hours every live
-//! lead gets mail and the operator gets a phone notice; at 6 hours both are
-//! raised again. A new head, a not-ready read or a closed PR resets it.
+//! visual-approval PR never reads ready; `green` keeps an unmeasured head
+//! out, because ready stays true while CI sits queued (unmeasured CI warns,
+//! never blocks). The first ready-and-green sighting of a head starts the
+//! clock under `pr-idle/<repo>-<pr>.json`. At 2 hours every live lead gets
+//! mail and the operator gets a phone notice; at 6 hours both are raised
+//! again. A new head, a not-ready or not-green read, or a closed PR resets
+//! it.
 //! Contract: docs/architecture/pr-heal.md, "The idle-PR alarm".
 
 use crate::paths::AgentsHome;
@@ -49,6 +52,7 @@ pub(crate) struct Read {
     pub pr: u64,
     pub head: String,
     pub ready: bool,
+    pub green: bool,
 }
 
 fn dir(home: &AgentsHome) -> PathBuf {
@@ -118,7 +122,7 @@ pub(crate) fn run_repo(
     let mut first_error = None;
     for read in reads {
         let path = file(home, slug, read.pr);
-        if !read.ready {
+        if !read.ready || !read.green {
             let _ = std::fs::remove_file(&path);
             continue;
         }
@@ -194,11 +198,18 @@ fn status_read(root: &Path, pr: u64) -> Option<Read> {
     if code > 3 {
         return None;
     }
-    let answer: Value = serde_json::from_str(stdout.trim()).ok()?;
+    #[derive(Deserialize)]
+    struct Answer {
+        head: String,
+        ready: bool,
+        green: bool,
+    }
+    let answer: Answer = serde_json::from_str(stdout.trim()).ok()?;
     Some(Read {
         pr,
-        head: answer.get("head").and_then(Value::as_str)?.to_string(),
-        ready: answer.get("ready").and_then(Value::as_bool)?,
+        head: answer.head,
+        ready: answer.ready,
+        green: answer.green,
     })
 }
 
@@ -296,6 +307,7 @@ mod tests {
             pr,
             head: head.into(),
             ready: true,
+            green: true,
         }
     }
 
@@ -351,6 +363,45 @@ mod tests {
         assert_eq!(mail.borrow().len(), 4, "each lead once more at 6h");
         assert!(mail.borrow()[3].1.contains("second alarm"));
         assert_eq!(phoned.borrow().len(), 2);
+    }
+
+    #[test]
+    fn a_ready_but_not_green_read_starts_no_clock_and_never_alarms() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = AgentsHome::at(temp.path().join("agents"));
+        let mut quiet = |_: &[String], _: &str| (0, "accepted-new-turn".into(), String::new());
+        let phones: RefCell<u32> = Default::default();
+        let mut phone = |_: &str, _: &str, _: Option<&str>| {
+            *phones.borrow_mut() += 1;
+            true
+        };
+        let open: HashSet<u64> = [7].into();
+        // CI never measured this head: the status door reads ready, not green.
+        let queued = [Read {
+            green: false,
+            ..ready(7, "abc")
+        }];
+        let mut pass = |now: i64| {
+            run_repo(
+                &home,
+                now,
+                "o/r",
+                Some(&open),
+                &queued,
+                &["lead-a".to_string()],
+                &mut quiet,
+                &mut phone,
+            )
+            .unwrap()
+        };
+        pass(1_000_000);
+        pass(1_000_000 + RAISE_AFTER_MS);
+        pass(1_000_000 + RAISE_AFTER_MS + 60_000);
+        assert!(
+            !file(&home, "o/r", 7).exists(),
+            "no clock starts on an unmeasured head"
+        );
+        assert_eq!(*phones.borrow(), 0, "no alarm without green");
     }
 
     #[test]
