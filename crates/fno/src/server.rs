@@ -559,7 +559,7 @@ pub(crate) enum CoreMsg {
         pane: u64,
         top: bool,
     },
-    /// (v128) Land the exchange picker's jump on the pane's stamped
+    /// (v129) Land the exchange picker's jump on the pane's stamped
     /// prompt anchor nearest `ts_ms`. Shared scroll + highlight like Search;
     /// `id` alone learns the verdict ([`ServerMsg::AnchorJumped`]) so a miss
     /// falls back to the transcript only for the operator who asked.
@@ -1518,7 +1518,7 @@ pub(crate) struct Core {
     /// fact and squad assignment are joined at layout time, where the live
     /// pane set and the squad catalog live.
     input_echo: HashMap<u64, input_echo::EchoWatch>,
-    /// (v128) Per-pane stamped prompt anchors, oldest first, written
+    /// (v129) Per-pane stamped prompt anchors, oldest first, written
     /// when a pane input burst submits. The exchange picker's jump joins a
     /// transcript turn to its on-screen row through the anchor's submit
     /// stamp. A dead pane's ring is dropped at removal; a live pane's ring
@@ -8502,7 +8502,7 @@ impl Core {
             Ok(()) => {
                 // Stamp before the child drains the write: the grid still
                 // shows the echoed prompt under the cursor, which is what
-                // the anchor freezes (v128). The entry borrow ends here.
+                // the anchor freezes (v129). The entry borrow ends here.
                 self.stamp_anchor(pane, bytes);
                 ServerMsg::Ok
             }

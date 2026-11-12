@@ -1,4 +1,4 @@
-//! The exchange picker (v128): an fzf-style find over the You exchanges.
+//! The exchange picker (v129): an fzf-style find over the You exchanges.
 //!
 //! The pairing already exists server-side: `you_threads` pairs each typed
 //! turn with its reply in the `mail-threads` projection `you[].items[]`,

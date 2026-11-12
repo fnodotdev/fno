@@ -1,4 +1,4 @@
-//! Per-pane prompt anchors (v128): where a submitted prompt sits on the
+//! Per-pane prompt anchors (v129): where a submitted prompt sits on the
 //! pane's row space, stamped at submit time so the exchange picker can land
 //! the pane on the exact row the prompt echoed on.
 //!
