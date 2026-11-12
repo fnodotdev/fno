@@ -105,6 +105,18 @@ fn observe_claude_no_transcript_reads_unverified_with_null_usage() {
     );
     assert_eq!(out["usage"], Value::Null);
     // A harness with no reader reads the same way.
+    let lane = json!({"name": "x", "harness": "phantom", "model": "m", "effort": "high"});
+    let out = observe(&observe_payload(lane, json!({})));
+    assert_eq!(out["lane_status"], "unverified");
+    assert!(
+        out["lane_reason"]
+            .as_str()
+            .unwrap()
+            .contains("no transcript reader for harness 'phantom'"),
+        "out: {out}"
+    );
+    assert_eq!(out["usage"], Value::Null);
+    // pi reads its own store now: an empty store is unverified with a pi reason.
     let lane = json!({"name": "x", "harness": "pi", "model": "m", "effort": "high"});
     let out = observe(&observe_payload(lane, json!({})));
     assert_eq!(out["lane_status"], "unverified");
@@ -112,7 +124,7 @@ fn observe_claude_no_transcript_reads_unverified_with_null_usage() {
         out["lane_reason"]
             .as_str()
             .unwrap()
-            .contains("no transcript reader for harness 'pi'"),
+            .contains("no readable pi session"),
         "out: {out}"
     );
     assert_eq!(out["usage"], Value::Null);
