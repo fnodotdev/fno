@@ -271,3 +271,4 @@ docs/troubleshooting.md	first-target	guide	move	guides/troubleshooting.md	1	the 
 docs/vision.md	discover	concept	keep	-	0	what fno is, who it serves, its pillars and the PR test; the judges read it
 docs/workflows.md	daily-driver	entry	keep	-	0	Stage 4 entry: daily commands plus execution-modes.md and utilities.md
 docs/rust-style.md	contribute	contributor	keep	-	2	the Rust rules the value-reads gate cites
+docs/guides/external-tracker.md	daily-driver	guide	keep	-	0	bring GitHub Issues or Linear as the backlog; the guide the quickstart links
