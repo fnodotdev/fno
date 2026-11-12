@@ -39,4 +39,4 @@ grade:
   - kind: exit
     command: "git checkout cf072030af1b14eaef6ce850872afcdedb182b8e -- cli/tests/agents/test_dsh_acp.py && cd cli && uv run pytest tests/agents/test_dsh_acp.py -q"
 timeout_minutes: 45
-tags: [harness-fit]
+tags: [harness-fit, demoted]

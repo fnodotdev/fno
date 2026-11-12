@@ -77,6 +77,48 @@ fn norm(s: &str) -> String {
     out.replace("/./", "/")
 }
 
+/// The part of a Bash command the shell parses as redirects. Two spans are
+/// not: an fd duplication (`2>&1`, `>&-`), whose `1` the relative-path arm
+/// read as the file `<cwd>/1`, and the body of a QUOTED heredoc
+/// (`<<'EOF'`), which is literal data. An unquoted body still expands
+/// `$(...)`, and a body fed to a shell runs, so both stay.
+fn shell_surface(cmd: &str) -> String {
+    let heredoc =
+        regex::Regex::new(r#"<<-?[[:space:]]*(['"])([A-Za-z_][A-Za-z0-9_]*)(['"])"#).unwrap();
+    let shell = regex::Regex::new(
+        r"(^|[[:space:];|&(])(bash|sh|zsh|dash|ksh|eval|source|ssh)([[:space:]]|$)",
+    )
+    .unwrap();
+    let mut kept: Vec<&str> = Vec::new();
+    let mut close: Vec<(String, bool)> = Vec::new();
+    for line in cmd.lines() {
+        if let Some((word, dash)) = close.first() {
+            let probe = if *dash {
+                line.trim_start_matches('\t')
+            } else {
+                line
+            };
+            if probe == word {
+                close.remove(0);
+            }
+            continue;
+        }
+        for caps in heredoc.captures_iter(line) {
+            // `bash <<'EOF'` runs its body as shell, so that body stays.
+            let text = |n: usize| caps.get(n).map_or("", |m| m.as_str());
+            let start = caps.get(0).map_or(0, |m| m.start());
+            let before = line.get(..start).unwrap_or("");
+            if text(1) == text(3) && !shell.is_match(before) {
+                let dash = text(0).starts_with("<<-");
+                close.push((text(2).to_string(), dash));
+            }
+        }
+        kept.push(line);
+    }
+    let fd_dup = regex::Regex::new(r"[0-9]*[<>]&([0-9]+|-)").unwrap();
+    fd_dup.replace_all(&kept.join("\n"), "").into_owned()
+}
+
 /// Entry: read the payload once, run the three sections in order, print, and
 /// always exit 0 (the verdict rides stdout JSON, never the exit code).
 pub fn run(_args: &[String]) -> i32 {
@@ -102,7 +144,10 @@ pub fn run(_args: &[String]) -> i32 {
     let Some(value) = parsed else {
         if raw_tokens_hint_graph(&raw) {
             mark(&cwd, "graph-write-protect", &row_tool, true);
-            return super::emit_block(FAILCLOSED_MALFORMED);
+            return super::refusal::emit_one(super::refusal::Refusal::new(
+                super::refusal::Guard::GraphWrite,
+                FAILCLOSED_MALFORMED,
+            ));
         }
         mark(&cwd, "graph-write-protect", &row_tool, false);
         mark(&cwd, "claude-config-write-guard", &row_tool, false);
@@ -147,11 +192,13 @@ pub fn run(_args: &[String]) -> i32 {
                 .unwrap_or(""),
         ),
         cmd_norm: norm(
-            &value
-                .pointer("/tool_input/command")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .replace('\n', " "),
+            &shell_surface(
+                value
+                    .pointer("/tool_input/command")
+                    .and_then(Value::as_str)
+                    .unwrap_or(""),
+            )
+            .replace('\n', " "),
         ),
     };
 
@@ -175,16 +222,25 @@ pub fn run(_args: &[String]) -> i32 {
     // silent exactly as when the harness denied before their siblings ran.
     // A warn lets the write land and rides the allow.
     let mut warnings: Vec<String> = Vec::new();
-    let sections: [(&str, fn(&Payload, &Path) -> Sec); 3] = [
-        ("graph-write-protect", graph_section),
-        ("claude-config-write-guard", config_section),
-        ("generated-write-guard", generated_section),
+    use super::refusal::Guard;
+    let sections: [(&str, Guard, fn(&Payload, &Path) -> Sec); 3] = [
+        ("graph-write-protect", Guard::GraphWrite, graph_section),
+        (
+            "claude-config-write-guard",
+            Guard::ConfigWrite,
+            config_section,
+        ),
+        (
+            "generated-write-guard",
+            Guard::GeneratedWrite,
+            generated_section,
+        ),
     ];
-    for (guard, section) in sections {
+    for (guard, tag, section) in sections {
         match section(&p, &cwd) {
             Sec::Block(reason) => {
                 mark(&cwd, guard, &row_tool, true);
-                return super::emit_block(&reason);
+                return super::refusal::emit_one(super::refusal::Refusal::new(tag, reason));
             }
             Sec::Warn(note) => {
                 mark(&cwd, guard, &row_tool, false);
@@ -1367,6 +1423,39 @@ mod tests {
             .expect("a write under a missing top-level folder must refuse");
         assert!(r2.contains("newdir"), "refusal text: {r2}");
         assert!(r2.contains("job dir"), "refusal text: {r2}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_fd_dup_and_a_quoted_heredoc_body_are_not_writes() {
+        let dir = std::env::temp_dir().join(format!("fno-write-gate-dup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("db")).unwrap();
+        let state = Root {
+            spelled: dir.to_string_lossy().into_owned(),
+            physical: physicalize(&dir),
+        };
+        let cwd = dir.to_string_lossy().into_owned();
+        let judge = |cmd: &str| {
+            let flat = norm(&shell_surface(cmd).replace('\n', " "));
+            config_bash_arm(&flat, &cwd, &[], &state, "")
+        };
+        let newtop = dir.join("newtop");
+        let newtop = newtop.display();
+        let dup = "ls -la db/events.db* 2>&1; for db in a b; do echo \"== $db\"; done";
+        assert!(matches!(judge(dup), Sec::Allow), "2>&1 is an fd dup");
+        let body = format!("python3 - <<'EOF'\nprint('echo x > {newtop}')\nEOF\necho done");
+        assert!(matches!(judge(&body), Sec::Allow), "a quoted body is data");
+        // The real write still warns, and so does one after the body closes.
+        assert!(matches!(judge(&format!("echo x > {newtop}")), Sec::Warn(_)));
+        let after = format!("cat <<'EOF'\nhi\nEOF\necho x > {newtop}");
+        assert!(matches!(judge(&after), Sec::Warn(_)));
+        // An unquoted body expands $(...), so it is still scanned.
+        let live = format!("cat <<EOF\n$(echo x > {newtop})\nEOF");
+        assert!(matches!(judge(&live), Sec::Warn(_)));
+        // A quoted body fed to a shell runs, so it is still scanned too.
+        let run = format!("bash <<'EOF'\necho x > {newtop}\nEOF");
+        assert!(matches!(judge(&run), Sec::Warn(_)));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

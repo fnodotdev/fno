@@ -1,0 +1,27 @@
+# Capability tier: can a session run the reader liveness probe and read its
+# verdict contract? The probe is the one mechanical check for the fleet-owned
+# Visual Log tap reader: exit 0 present and fresh, exit 1 absent or stale with
+# the repair named. Graded on the three verdicts and the two repair lines.
+id: capability-ensure-probe-verdicts
+tier: capability
+prompt: |
+  Work from the repository root. Build three status fixtures in /tmp and run
+  the probe against each. Write ensure-probe-answers.md at the repo root,
+  three lines, one per case, in this order:
+  1. A fixture file whose JSON is {"agents": [{"name": "visual-log-reader",
+     "last_activity_age_s": 120}]} passed to
+     skills/visual-log-reader/scripts/ensure-reader.sh check --status-file:
+     write the exit code.
+  2. A fixture whose JSON is {"agents": [{"name": "visual-log-reader",
+     "last_activity_age_s": 3600}]} run the same way: write the exit code
+     and the repair command the output names.
+  3. A fixture whose JSON is {"agents": [{"name": "other-worker",
+     "last_activity_age_s": 10}]} run the same way: write the exit code
+     and the repair command the output names.
+grade:
+  - kind: file-exists
+    path: ensure-probe-answers.md
+  - kind: exit
+    command: "python3 -c \"a = open('ensure-probe-answers.md').read(); assert '0' in a.splitlines()[0], 'line 1 misses the fresh exit code'; assert 'fno agents session resume visual-log-reader' in a.splitlines()[1], 'line 2 misses the resume repair'; assert 'fno agents spawn --as thread --name visual-log-reader' in a.splitlines()[2], 'line 3 misses the spawn repair'\""
+timeout_minutes: 10
+tags: [capability, visual-log-reader]

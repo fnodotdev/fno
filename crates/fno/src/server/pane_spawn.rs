@@ -21,6 +21,10 @@ pub(super) struct SpawnOrder {
     pub(super) rows: u16,
     pub(super) cols: u16,
     pub(super) cwd: String,
+    /// Child env pairs beyond `base_command`'s stated set: empty for every
+    /// spawn but the serve seat, whose Basic-auth password rides child env,
+    /// never argv (the mail-attach ruling).
+    pub(super) env: Vec<(String, String)>,
     pub(super) permit: crate::process_admission::AdmissionPermit,
     /// `true` routes through a `fno-agents-worker --pane` keeper; the inline
     /// pty is then only the named fallback for a keeper that cannot start.
@@ -91,13 +95,14 @@ pub(crate) fn walk_shell_candidates(
             out_tx.clone(),
             exit_tx.clone(),
             permit,
+            &[],
         ) {
             Ok((shell, ring)) => {
                 return Ok(ShellWalk::Kept {
                     shell,
                     ring,
                     rc_dir,
-                })
+                });
             }
             Err(e) => {
                 last = e.to_string();
@@ -259,13 +264,14 @@ impl SpawnJob {
             rows,
             cols,
             cwd,
+            env,
             permit,
             keeper,
         } = order;
         let dir = Some(std::path::Path::new(&cwd)).filter(|_| !cwd.is_empty());
         if !keeper {
             return PtyShell::spawn_cmd_with_permit(
-                &argv, rows, cols, dir, &session, id, out_tx, exit_tx, permit,
+                &argv, rows, cols, dir, &session, id, out_tx, exit_tx, permit, &env,
             )
             .map(|shell| SpawnedPane {
                 shell,
@@ -286,6 +292,7 @@ impl SpawnJob {
             out_tx.clone(),
             exit_tx.clone(),
             permit,
+            &env,
         ) {
             Ok((shell, ring)) => Ok(SpawnedPane {
                 shell,
@@ -309,6 +316,7 @@ impl SpawnJob {
                     out_tx,
                     exit_tx,
                     fallback_permit,
+                    &env,
                 )
                 .map_err(|e| e.to_string())?;
                 Ok(SpawnedPane {
@@ -375,6 +383,7 @@ impl Core {
             rows,
             cols,
             cwd: cwd.to_string(),
+            env: Vec::new(),
             permit,
             keeper,
         };

@@ -165,6 +165,17 @@ pub enum ClientMsg {
         pane: u64,
         top: bool,
     },
+    /// (v129) Land the exchange picker's jump: the server picks the
+    /// pane's stamped prompt anchor nearest `ts_ms` (the transcript row's
+    /// submit stamp, epoch milliseconds), verifies the anchor's row still
+    /// carries its text, then highlights + scrolls to it. The reply is one
+    /// [`ServerMsg::AnchorJumped`] to the initiator; a miss (`jumped == false`)
+    /// means the anchor aged out or the pane's row space was rebuilt, and the
+    /// client falls back to the session transcript instead of a wrong-row jump.
+    AnchorJump {
+        pane: u64,
+        ts_ms: u64,
+    },
     /// (v83, ) The sideline new-agent popup submits one typed launch
     /// request. The server validates pre-birth, shells canonical
     /// `fno agents spawn` OFF the core loop, and answers this client with
@@ -180,6 +191,16 @@ pub enum ClientMsg {
     /// (v121) A passive client takes the link role: it drives the one pane
     /// the hello names. Ignored from a non-passive client.
     Link(crate::proto::link::LinkHello),
+    /// (v127) A pre-Attach first message, versioned like `Control`: stream
+    /// one session's chat events from `from_seq` on. The server answers
+    /// [`ServerMsg::ChatEvents`] batches until the client closes. Never
+    /// registers a client and never reaches the core loop.
+    ChatTail {
+        proto: u32,
+        build: String,
+        session: crate::proto::chat_event::SessionKey,
+        from_seq: u64,
+    },
 }
 
 /// Server -> client.
@@ -407,6 +428,15 @@ pub enum ServerMsg {
         total: u32,
         current: u32,
     },
+    /// (v129) The initiator-only result of an
+    /// [`ClientMsg::AnchorJump`]: `true` means the anchor's row still carried
+    /// its stamped text and the pane now shows it highlighted; `false` means
+    /// the anchor aged out or the pane redrew, and no scroll happened - the
+    /// client falls back to the session transcript. Reliable.
+    AnchorJumped {
+        pane_id: u64,
+        jumped: bool,
+    },
     /// (v29) The transcript body for a [`Command::PeekAgent`], sent only
     /// to the requesting client. `seq` echoes the request's counter so the client
     /// drops a stale reply; `name` is the peeked row (for a defensive header
@@ -547,5 +577,10 @@ pub enum ServerMsg {
     /// back (osascript). A wedged reliable channel counts as undelivered.
     NoticeSent {
         clients: u32,
+    },
+    /// (v127) One batch of a [`ClientMsg::ChatTail`] stream, in `seq` order.
+    ChatEvents {
+        session: crate::proto::chat_event::SessionKey,
+        events: Vec<crate::proto::chat_event::ChatEvent>,
     },
 }

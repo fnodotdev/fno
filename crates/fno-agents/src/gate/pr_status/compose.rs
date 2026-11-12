@@ -30,6 +30,11 @@ pub(crate) struct ComposeInputs {
     pub review_lane: bool,
     pub platform_incident: Value,
     pub ci_tier_keeper: Value,
+    /// The unmeasured reason when the head's runs listing names no
+    /// completed run; null when the head is measured (or the listing was
+    /// never read). The note names the wait command; the merge walk
+    /// warns by name under require_checks.
+    pub ci_unmeasured: Value,
 }
 
 /// One status read: the exit code, the stdout JSON payload, the stderr lines
@@ -160,7 +165,7 @@ pub(crate) fn compose_payload(inputs: &ComposeInputs) -> (i32, Value, Vec<String
     // ONE merge decision: the preview receipt rides the ask, so the owner
     // never spawns a second status read.
     let receipt = inputs.receipt.clone();
-    let blocker_words: Vec<String> = receipt
+    let mut blocker_words: Vec<String> = receipt
         .get("blockers")
         .and_then(Value::as_array)
         .map(|blockers| {
@@ -171,6 +176,23 @@ pub(crate) fn compose_payload(inputs: &ComposeInputs) -> (i32, Value, Vec<String
                 .collect()
         })
         .unwrap_or_default();
+    // The receipt's doors say clear; the head's own CI verdict must agree
+    // before ready reads true. An attempt in flight or a settled failure
+    // holds ready even in the window where GitHub has not computed
+    // mergeStateStatus (the merge-blocker op never runs there, so no
+    // supplied blocker names the hold). unknown, the no-CI-configured
+    // answer, stays ready-capable. The codes are `ci_blocker_word`'s and the
+    // golden receipts', so one word names the hold on every path.
+    let ci_code = match verdict.as_str() {
+        "red" => Some("ci_red"),
+        "pending" => Some("ci_pending"),
+        _ => None,
+    };
+    if let Some(code) = ci_code {
+        if !blocker_words.iter().any(|b| b == code) {
+            blocker_words.push(code.to_string());
+        }
+    }
 
     let mut payload = Map::new();
     payload.insert("pr".into(), json!(inputs.pr));
@@ -218,6 +240,12 @@ pub(crate) fn compose_payload(inputs: &ComposeInputs) -> (i32, Value, Vec<String
     // holds, an absent one names the rerun as the remedy.
     if !inputs.ci_tier_keeper.is_null() {
         payload.insert("ci_tier_keeper".into(), inputs.ci_tier_keeper.clone());
+    }
+    // The unmeasured fact rides beside the verdict: present only
+    // when the runs listing named no completed run, so golden payloads for
+    // measured heads stay byte-identical.
+    if !inputs.ci_unmeasured.is_null() {
+        payload.insert("ci_unmeasured".into(), inputs.ci_unmeasured.clone());
     }
     payload.insert("optional_reviews".into(), reviews_list);
     payload.insert(
@@ -300,6 +328,16 @@ pub(crate) fn compose_payload(inputs: &ComposeInputs) -> (i32, Value, Vec<String
     stderr.push(verdict_line(&Value::Object(payload.clone())));
     // The notes, in the Python leg's print order.
     merge_warning_notes(&Value::Object(payload.clone()), &mut stderr);
+    // The unmeasured note: the reason plus the way out, one line,
+    // beside the verdict notes. The ready word rides the receipt's blocker.
+    if let Some(reason) = inputs.ci_unmeasured.as_str() {
+        if !reason.is_empty() {
+            stderr.push(format!(
+                "note: {reason}; the way out is fno do pr wait {}",
+                inputs.pr
+            ));
+        }
+    }
     rerun_recovery_note(&payload, &mut stderr);
     let _ = review_lane; // coverage-status repost is a live-half write, never a golden arm
                          // The note reads the deduped rows: a cancelled attempt that lost its slot

@@ -23,7 +23,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--keys-footer] [--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
-[--view report|report-preview|bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|backlog-graph|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|needs|dock|machines]";
+[--view report|report-preview|bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|mods|mods-gallery|mods-confirm|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|backlog-graph|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|needs|dock|machines]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -99,6 +99,12 @@ pub enum ViewKind {
     /// Settings on the Remote hosts tab, two seeded hosts showing both
     /// state words.
     RemoteHosts,
+    /// Settings on the Mods tab: a first-party pack and a URL pack.
+    Mods,
+    /// The Mods tab with the published gallery drawn under it.
+    ModsGallery,
+    /// The second press that turns on a mod that runs code.
+    ModsConfirm,
     /// The which-key table, opened FROM settings: the printed key labels
     /// (`ctrl+b`) live here.
     Keys,
@@ -330,6 +336,9 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "split-menu" => Some(ViewKind::SplitMenu),
         "settings" => Some(ViewKind::Settings),
         "remote-hosts" => Some(ViewKind::RemoteHosts),
+        "mods" => Some(ViewKind::Mods),
+        "mods-gallery" => Some(ViewKind::ModsGallery),
+        "mods-confirm" => Some(ViewKind::ModsConfirm),
         "report" => Some(ViewKind::Report),
         "report-preview" => Some(ViewKind::ReportPreview),
         "keys" => Some(ViewKind::Keys),
@@ -1256,6 +1265,15 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
             // the live page re-opens itself on every probe, so nothing else
             // to gather here.
         }
+        Some(kind @ (ViewKind::Mods | ViewKind::ModsGallery | ViewKind::ModsConfirm)) => {
+            super::mods::snapshot_seam(
+                &mut view,
+                matches!(kind, ViewKind::ModsGallery),
+                matches!(kind, ViewKind::ModsConfirm),
+            );
+            view.aux = Some(view.build_settings_modal());
+            view.aux_esc.clear();
+        }
         Some(ViewKind::Report) => runtime.block_on(super::report::snapshot(&mut view, false))?,
         Some(ViewKind::ReportPreview) => {
             runtime.block_on(super::report::snapshot(&mut view, true))?
@@ -1899,6 +1917,9 @@ mod tests {
             ("split-menu", ViewKind::SplitMenu),
             ("settings", ViewKind::Settings),
             ("remote-hosts", ViewKind::RemoteHosts),
+            ("mods", ViewKind::Mods),
+            ("mods-gallery", ViewKind::ModsGallery),
+            ("mods-confirm", ViewKind::ModsConfirm),
             ("report", ViewKind::Report),
             ("report-preview", ViewKind::ReportPreview),
             ("keys", ViewKind::Keys),

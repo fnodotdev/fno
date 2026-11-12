@@ -40,7 +40,7 @@ A session with no role over the scope does not lead. It runs no check-in, spawns
 
 - Read: `fno backlog get <scope>` and `fno backlog find "<words>"`. `fno agents org --json` lists the roles on this machine only.
 - Report: `fno backlog note <scope> "<what you saw>" --quiet`. With a shared backlog, the note reaches every machine at the next sync.
-- Mail a named peer: `fno agents mail send <name> "<text>"` on this machine. Use `fno agents mail send <name>@<host> "<text>"` for a peer on another machine. Run `fno agents registry register` first, so the peer can answer.
+- Mail a named peer: `fno agents mail send <session-id> "<text>"` on this machine. Use `fno agents mail send <session-id>@<host> "<text>"` for a peer on another machine. Run `fno agents registry register` first, so the peer can answer.
 
 An empty org chart on a machine that shares its backlog means no role on this machine. Roles, the registry, mail and questions stay on one machine. A lead on another machine cannot grant a role here. The grant comes from a lead on this machine. Mail that lead, and never hand the user a grant line.
 
@@ -96,6 +96,8 @@ Run `fno agents org refresh-canon` to refresh the doc's auto sections on this be
 Role mail delivers live between beats. Peers, other leads included, message through `fno agents mail send <handle> "<body>" --subject "<one line>"`, and the send receipt is one JSON line `{msg_id, subject, to, status}`. The native SendMessage is the outage fallback only. A native send never reaches the mail journal, so the feed, the Messages tab, check-in counts and provenance all miss it. When mail is healthy, the send-message-guard refuses a SendMessage aimed at an fno-registered session and redirects to fno mail. When mail itself is down, the guard allows the native send and journals the fallback as a mail event. A peer on another machine takes a target of `<handle>@<host>`. With the shared primary set, the send writes a bus row the peer's daemon pulls and injects through its own local send ([multiplayer](../../docs/architecture/multiplayer.md)). With no store configured, send and peek relay over ssh. `--from-self` refuses on that lane. Pass `--from-name` instead.
 
 Every status update to the user is the `lineup:` table `fno agents org checkin` prints. Paste it as printed. Seated workers come first, then the on-deck queue in seat order. Do not rebuild the table by hand from per-node reads. Record the seat order with `fno agents org checkin --queue <ids>`. The ids are a comma list, on-deck first to last. Never use `fno backlog rank`: it orders dispatch, not the lineup.
+
+State only facts this beat verified. Every claim in the beat report carries its footnote: the reading line, a command result you read this turn, or a file:line. A done claim needs fresh output read this turn. A previous beat proves nothing. Before a cannot claim, try the other routes, then name each one tried. A refusal from one tool is a fact about that tool, never about the task. The full rule is `skills/verify-footnotes/SKILL.md` sections 2 and 3.
 
 Then run `fno agents org checkin` (bare from the titled session, or `--scope <scope>` elsewhere). The board read inside it defaults to this role's manifest, so its rows are your scope. It prints, one line each, and this is the command's documented output contract:
 
@@ -155,7 +157,7 @@ A `WAITING ON APPROVAL` line is an action item, not a status line. Answer it the
 
 Never answer blind: the check-in line is evidence a prompt is up, never proof of what it asks. If the pane read shows text the line did not capture (a question you cannot judge from the head), read the pane before sending keys.
 
-To pause or redirect a running worker, use `fno agents mail ask <name> "<instruction>"` (or mail). Never steer with `fno agents session stop`: on claude it ends the session, and the worker reads Done.
+To pause or redirect a running worker, use `fno agents mail ask <session-id> "<instruction>"` (or mail). Never steer with `fno agents session stop`: on claude it ends the session, and the worker reads Done.
 
 ### A finding starts a new epic
 
@@ -182,7 +184,7 @@ A titled lead answers the open questions in its scope, and escalates only what t
 - **Escalate the deny classes only.** The default `questions.rules.deny` holds five classes. They are `irreversible`, `money-security`, `outside-reach`, `taste` and `law-change`. A lead rules the `ask` classes itself: `public-surface` and `gate-override`. Everything else, decide and log. The escalation is one note in the escalations directory, at `fno-agents state path escalations`. It has five sections. They are what is being decided, why it matters now, the options, the recommendation, and what happens on silence. State a deadline. No bare ids.
 - **Silence has a default.** Past the deadline the check-in names the default: take the recommended option and record it with `fno inbox decide`, or wait when the call is irreversible.
 - **When the superuser answers in chat, record it.** `fno inbox law set` for a law change, else `fno inbox decide <node> "<answer>" --authority role --rationale "superuser in chat: <their words>"`, and set the note's `status`. A harness with a push notification tool also sends one that names the note.
-- **Read Visual Log taps every 15 minutes.** The user approves a look with a tap on the Visual Log page. Arm the reader and record each tap: [references/visual-log-taps.md](references/visual-log-taps.md).
+- **The fleet reads Visual Log taps.** The user approves a look with a tap on the Visual Log page. A dedicated fleet session runs the reader (skills/visual-log-reader/). Never arm a per-session reader cron, because two readers double-record approvals and a lead's cron dies with the lead. When the probe in [references/visual-log-taps.md](references/visual-log-taps.md) exits 1, run the named repair.
 
 A titled lead is not the superuser: the `operator` authority is refused on an agent session, and law stays superuser tier. The lead's channels:
 

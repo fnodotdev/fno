@@ -58,6 +58,7 @@ use sweep_scope::{begin_sweep_apply, build_sweep_modal, run_sweep_command, Sweep
 
 // Pickers, the launch moment and the snapshot action live in their own
 // modules: client.rs is shrink-only under the file-budget gate.
+mod anchor_jump;
 pub(crate) mod attach_handshake;
 mod health;
 mod keys_reload;
@@ -65,6 +66,7 @@ mod launch;
 mod panic_log;
 mod placement_pickers;
 mod report;
+mod search_reply;
 pub mod snapshot;
 
 use self::placement_pickers::{
@@ -713,6 +715,7 @@ pub(crate) struct View {
     agent_group: AgentGroup,
     machine_tree: machine_tree::MachineTree,
     remote_hosts: remote_hosts::RemoteHosts,
+    mods: mods::Mods,
     /// The card's `node · PR` header row switch (prefix+Y), persisted.
     show_card_head: bool,
     /// Nest workers under their lead in the card layout (prefix+t),
@@ -1708,6 +1711,7 @@ pub(crate) enum AuxAction {
     /// names, so this carries one of them.
     ApplyTheme(String),
     RemoteHost(remote_hosts::Act),
+    Mod(mods::Act),
     ThemeImportOpen,
     ThemeImportSave,
     ThemeImportCancel,
@@ -1736,7 +1740,8 @@ use sideline_rows::{row_is_inert, ChromeHit, DisplayRow};
 mod config_set;
 mod experimental;
 mod lane_entry;
-mod node_detail;
+mod mods;
+pub(crate) mod node_detail;
 mod share_flow;
 pub(crate) use node_detail::{wrap_line, wrap_line_joined};
 mod editor;
@@ -1775,6 +1780,7 @@ pub(crate) mod input_field;
 mod input_folds;
 mod mail_input;
 mod overlay_keys;
+use overlay_keys::aux_execute_selected;
 mod reply_dock;
 mod terminal_cursor;
 // The overlay key state machines live in the module; the re-import keeps
@@ -1846,6 +1852,7 @@ impl View {
             agent_group,
             machine_tree: machine_tree::MachineTree::load(),
             remote_hosts: remote_hosts::RemoteHosts::load(),
+            mods: Default::default(),
             show_card_head,
             group_by_lead,
             manual_order,
@@ -1937,8 +1944,9 @@ impl View {
             org_generation: 0,
             sideline_view: crate::view_store::load_sideline_view(),
             board_full: view_store::load_board_full(),
-            experimental_org_board: view_store::load_experimental(
+            experimental_org_board: view_store::load_experimental_or(
                 view_store::EXPERIMENTAL_ORG_BOARD,
+                true,
             ),
             experimental_pane_share: view_store::load_experimental(
                 view_store::EXPERIMENTAL_PANE_SHARE,
@@ -6047,7 +6055,7 @@ fn nav_agent_state(a: &AgentRow) -> PaneState {
 /// as the nav/tab rollups do: a Done pane the operator has already viewed
 /// folds to `Idle` (`○`) instead of holding a stale bold `✓` needs-attention
 /// marker - one system across every surface.
-fn agent_lattice_state(a: &AgentRow) -> LatticeState {
+pub fn agent_lattice_state(a: &AgentRow) -> LatticeState {
     if a.exited {
         if a.unmeasured {
             LatticeState::Unmeasured
@@ -6097,7 +6105,7 @@ fn brand_label(name: &str) -> String {
     }
 }
 
-fn tab_label_text(name: &str, i: usize, named: bool) -> String {
+pub fn tab_label_text(name: &str, i: usize, named: bool) -> String {
     let ordinal = (i + 1).to_string();
     // Collapse (AC7): a name equal to its own ordinal renders as
     // the bare digit, byte-identical to an unnamed ordinal - even a chosen one.
@@ -6279,8 +6287,7 @@ async fn attach_and_run(
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
     let mut view = View::new((rows, cols), session, LayoutView::default());
-    // A fresh launch opens on Agents whatever sideline view was last persisted.
-    backlog_board::set_sideline_view(&mut view, crate::view_store::SidelineView::Agents);
+    org_board::boot_sideline(&mut view);
     // Latch the focus-follows-mouse off-switch once; a direct
     // config.toml read (fail-open to on), the digest_overlay idiom.
     view.hover_focus = crate::digest_overlay::hover_focus_enabled(Path::new(&cwd));
@@ -6869,7 +6876,7 @@ async fn attach_and_run(
                     | ServerMsg::LayoutApplied { .. }
                     | ServerMsg::LayoutGrafted { .. }
                     | ServerMsg::TabLocation { .. }
-                    | ServerMsg::TabClosed { .. }
+                    | ServerMsg::TabClosed { .. } | ServerMsg::ChatEvents { .. }
                     | ServerMsg::WorkspaceRestored { .. } | ServerMsg::SquadReloaded { .. }
                     | ServerMsg::SessionRetired { .. } | ServerMsg::AgentRowsReceipt { .. }
                     | ServerMsg::ServerStats { .. } | ServerMsg::NoticeSent { .. }) => {}
@@ -6919,34 +6926,26 @@ async fn attach_and_run(
                         }
                     }
                 }
-                Ok(ServerMsg::SearchResult {
-                    pane_id,
-                    total,
-                    current,
-                }) => {
-                    // Land the counter on the active search line. A lost reply
-                    // never wedges the client (Esc exits locally); a reply for a
-                    // search we already closed is simply dropped. Total 0 = no
-                    // matches: a BEL makes the empty result audible (AC1-ERR).
-                    // Filter on pane_id AND submitted: results only answer a
-                    // submit/step, so a stale reply from a superseded search must
-                    // not paint its counter (or a zero-match BEL) onto a different
-                    // pane's search, nor onto a new query still being typed.
-                    if let Some(sv) = view
-                        .search
-                        .as_mut()
-                        .filter(|sv| sv.pane == pane_id && sv.submitted)
+                Ok(ServerMsg::SearchResult { pane_id, total, current }) => {
+                    // The counter landing, the BEL and the pane
+                    // filter live in client/search_reply.rs;
+                    // this arm draws when a match lands.
+                    if search_reply::result(&mut view, pane_id,
+                        total, current)
                     {
-                        sv.result = Some((total, current));
-                        // BEL only while the search is still open: a late
-                        // zero-result reply arriving after a local Esc must not
-                        // sound a confusing bell.
-                        if total == 0 {
-                            let _ = raw_out(b"\x07");
+                        if let Err(e) = compositor.draw(&view.compose()) {
+                            break Err(format!("draw: {e}"));
                         }
                     }
-                    if let Err(e) = compositor.draw(&view.compose()) {
-                        break Err(format!("draw: {e}"));
+                }
+                Ok(ServerMsg::AnchorJumped { pane_id, jumped }) => {
+                    // Filtering, the transcript-peek fallback and
+                    // the notices live in client/anchor_jump.rs;
+                    // this arm draws when the reply matched a jump.
+                    if anchor_jump::reply(&mut view, pane_id, jumped) {
+                        if let Err(e) = compositor.draw(&view.compose()) {
+                            break Err(format!("draw: {e}"));
+                        }
                     }
                 }
                 Ok(ServerMsg::PeekBody { seq, lines, .. }) => {
@@ -8437,6 +8436,7 @@ async fn execute_aux_action(
         | AuxAction::ToggleSidelineLayout
         | AuxAction::ApplyTheme(_)
         | AuxAction::RemoteHost(_)
+        | AuxAction::Mod(_)
         | AuxAction::ThemeImportOpen
         | AuxAction::ThemeImportSave
         | AuxAction::ThemeImportCancel
@@ -8448,24 +8448,6 @@ async fn execute_aux_action(
         | AuxAction::LaneColorSet(..) => settings_modal::run_action(view, action, sock_w).await?,
     }
     Ok(DispatchFlow::Continue)
-}
-
-/// Run the aux popup's selected row (Enter/click), propagating a detach.
-async fn aux_execute_selected(
-    view: &mut View,
-    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
-) -> Result<DispatchFlow, String> {
-    let picked = view
-        .aux
-        .as_ref()
-        .and_then(|m| m.actions.get(m.popup.sel).cloned());
-    match picked {
-        Some(a) => execute_aux_action(view, a, sock_w).await,
-        None => {
-            let _ = raw_out(b"\x07");
-            Ok(DispatchFlow::Continue)
-        }
-    }
 }
 
 /// Aux-popup keys (US4/US5): arrows select (scrolling to keep the selection
@@ -9392,7 +9374,7 @@ mod org_block;
 #[path = "client/glyph_legend.rs"]
 mod glyph_legend;
 
-mod card_line;
+pub(crate) mod card_line;
 pub(crate) use card_line::CardGraph;
 mod sideline_footer;
 
@@ -9404,9 +9386,9 @@ mod row_meter;
 mod sideline;
 
 #[path = "client/agent_group.rs"]
-mod agent_group;
+pub(crate) mod agent_group;
 #[path = "client/agent_sort.rs"]
-mod agent_sort;
+pub(crate) mod agent_sort;
 use agent_group::agent_hit;
 mod hold;
 #[path = "client/machine_tree.rs"]
@@ -9421,4 +9403,4 @@ mod needs_queue;
 mod remote_hosts;
 
 #[path = "client/header_band.rs"]
-mod header_band;
+pub(crate) mod header_band;

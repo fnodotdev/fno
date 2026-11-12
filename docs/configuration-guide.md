@@ -366,7 +366,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `questions.judge.enabled` | bool | `false` | never | Arm the question judge: when true, judge runs read the question board and decide open questions against the law record. |
 | `questions.judge.model` | str | `sonnet` | never | Model the judge dispatches verdicts with. |
 | `schema_version` | int | `1` | never | Settings schema version; managed by fno, not hand-set. |
-| `telemetry.install_count.enabled` | bool | `true` | advanced | Send one install-count event per machine per day (version, channel, OS, arch, a random install id; no free text). Opt out to send nothing. |
+| `telemetry.usage_report.enabled` | bool | `true` | advanced | Set false to force the opt-in daily usage report off, whatever consent says. Consent itself is recorded only by fno doctor telemetry on or the setup wizard. |
 | `merge.architect.enabled` | bool | `true` | advanced | Run the final architect judgment at merge time. False skips it. |
 | `merge.architect.timeout_secs` | int | `900` | advanced | Maximum seconds for the architect reader and per-head claim wait. Unavailable judgments warn. |
 | `merge.architect.diff_chars` | int | `80000` | advanced | Maximum diff characters included with the complete changed-file list. |

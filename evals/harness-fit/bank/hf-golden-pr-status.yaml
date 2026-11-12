@@ -1,0 +1,12 @@
+# Re-based harness-fit golden (grade-only): the PR read the loop's CI wait
+# runs through still answers. No worker, so a head run costs nothing. Copied
+# from the live bank's golden-cli-pr-status; the fixture is HEAD, so it
+# grades current Rust and never a deleted tree.
+id: hf-golden-pr-status
+tier: capability
+grade:
+  - kind: exit
+    command: "fno do pr --help 2>&1 | grep -Fq 'status <pr>|main'"
+    expect: 0
+timeout_minutes: 5
+tags: [harness-fit, golden]

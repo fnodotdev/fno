@@ -134,16 +134,13 @@ assert_clean_machine() {
   fi
 }
 
-# newest_pypi_version: highest fno version on PyPI, pre-releases included, so
-# the pinned rows follow the newest rc with no edit here.
-newest_pypi_version() {
-  curl -fsSL https://pypi.org/pypi/fno/json | python3 -c '
-import json, re, sys
-data = json.load(sys.stdin)
-def key(v):
-    return tuple((0, int(t)) if t.isdigit() else (1, t) for t in re.findall(r"\d+|\D+", v))
-print(sorted(data["releases"], key=key)[-1])
-'
+# newest_release_version: the newest stable release tag on fnodotdev/fno, v
+# stripped. PyPI is a frozen bridge whose newest entry (an rc with no release
+# here) would route every pinned row at a tag that carries no assets.
+newest_release_version() {
+  git ls-remote --tags --refs https://github.com/fnodotdev/fno 'refs/tags/v*' \
+    | awk -F'refs/tags/' '{print $2}' \
+    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 | sed 's/^v//'
 }
 
 # --- shared smoke ------------------------------------------------------------
@@ -317,7 +314,7 @@ row_claude_marketplace() {
   # The plugin install clones the marketplace repo through git; a fresh
   # machine has no SSH keys, so rewrite the remote to HTTPS for this row.
   git config --global url."https://github.com/".insteadOf "git@github.com:"
-  run_capture claude plugin marketplace add fnodotdev/fno#stable
+  run_capture claude plugin marketplace add fnodotdev/fno
   if [ "$RC" -ne 0 ]; then
     miss "marketplace-add" "rc=$RC: $(printf '%s' "$OUT" | tail -1)"
     return 0
@@ -326,10 +323,6 @@ row_claude_marketplace() {
   run_capture claude plugin install fno@fno
   if [ "$RC" -eq 0 ]; then
     pass "install" "plugin installed"
-  elif run_capture claude plugin install fno@footnote && [ "$RC" -eq 0 ]; then
-    # The stable branch serves the marketplace under its old name until the
-    # next stable promotion carries the rename to fno.
-    pass "install" "plugin installed as fno@footnote (stable predates the fno rename)"
   else
     miss "install" "rc=$RC: $(printf '%s' "$OUT" | tail -1)"
   fi
@@ -349,7 +342,7 @@ row_claude_plugin_session() {
   local tree="$BASE/tree"
   copy_tree_to_scratch "$tree"
   local version
-  version="$(newest_pypi_version)" || { miss "pypi" "could not read the newest PyPI version"; return 0; }
+  version="$(newest_release_version)" || { miss "release" "could not read the newest release version"; return 0; }
   awk -v v="$version" '{
     gsub(/"version"[[:space:]]*:[[:space:]]*"[^"]*"/, "\"version\": \"" v "\"")
     print
@@ -389,7 +382,7 @@ row_codex_plugin_session() {
     "$tree/.agents/plugins/marketplace.json" > "$tree/.agents/plugins/marketplace.json.new"
   mv "$tree/.agents/plugins/marketplace.json.new" "$tree/.agents/plugins/marketplace.json"
   local version
-  version="$(newest_pypi_version)" || { miss "pypi" "could not read the newest PyPI version"; return 0; }
+  version="$(newest_release_version)" || { miss "release" "could not read the newest release version"; return 0; }
   awk -v v="$version" '{
     gsub(/"version"[[:space:]]*:[[:space:]]*"[^"]*"/, "\"version\": \"" v "\"")
     print
@@ -425,9 +418,11 @@ row_codex_plugin_session() {
   score_plugin_session "$HOME/.local/state/fno/plugin-install/postinstall.log" "$HOME/.local/bin"
 }
 
+# Every fetch of fno.sh here sends x-fno-probe, so the Worker leaves it out of
+# the install count. A CI matrix is not a user.
 row_fno_sh_served() {
   assert_clean_machine
-  run_capture sh -c 'curl -fsSL https://fno.sh | sh'
+  run_capture sh -c 'curl -fsSL -H x-fno-probe:1 https://fno.sh | sh'
   if [ "$RC" -ne 0 ]; then
     miss "install" "curl | sh rc=$RC: $(printf '%s' "$OUT" | tail -1)"
     return 0
@@ -439,7 +434,7 @@ row_fno_sh_served() {
 # types. Expected to fail until a release carries the upgrade path.
 row_fno_update_released() {
   assert_clean_machine
-  run_capture sh -c 'curl -fsSL https://fno.sh | sh'
+  run_capture sh -c 'curl -fsSL -H x-fno-probe:1 https://fno.sh | sh'
   if [ "$RC" -ne 0 ]; then
     miss "install" "curl | sh rc=$RC: $(printf '%s' "$OUT" | tail -1)"
     return 0
@@ -456,7 +451,7 @@ row_fno_update_released() {
 row_fno_sh_head() {
   assert_clean_machine
   local version
-  version="$(newest_pypi_version)" || { miss "pypi" "could not read the newest PyPI version"; return 0; }
+  version="$(newest_release_version)" || { miss "release" "could not read the newest release version"; return 0; }
   run_capture env FNO_VERSION="$version" sh "$REPO_ROOT/scripts/install/fno.sh"
   if [ "$RC" -ne 0 ]; then
     miss "install" "fno.sh rc=$RC: $(printf '%s' "$OUT" | tail -2 | tr '\n' ' ')"
@@ -477,7 +472,7 @@ row_fno_sh_fresh() {
     miss "fresh" "could not read the newest stable tag from fnodotdev/fno"
     return 0
   fi
-  curl -fsSL https://fno.sh > "$BASE/served.out" 2>/dev/null
+  curl -fsSL -H x-fno-probe:1 https://fno.sh > "$BASE/served.out" 2>/dev/null
   _served_rc=$?
   curl -fsSL "https://raw.githubusercontent.com/fnodotdev/fno/$tag/scripts/install/fno.sh" > "$BASE/released.out" 2>/dev/null
   _released_rc=$?
@@ -498,8 +493,8 @@ row_fno_sh_fresh() {
 
 row_install_sh_alias() {
   assert_clean_machine
-  curl -fsSL https://fno.sh > "$BASE/root.out" 2>/dev/null
-  curl -fsSL https://fno.sh/install.sh > "$BASE/alias.out" 2>/dev/null
+  curl -fsSL -H x-fno-probe:1 https://fno.sh > "$BASE/root.out" 2>/dev/null
+  curl -fsSL -H x-fno-probe:1 https://fno.sh/install.sh > "$BASE/alias.out" 2>/dev/null
   if cmp -s "$BASE/root.out" "$BASE/alias.out" && [ -s "$BASE/root.out" ]; then
     pass "alias" "install.sh serves the same bytes as the domain root"
   else
@@ -522,7 +517,7 @@ row_pypi_uv_pinned() {
   assert_clean_machine
   install_uv_astral || return 0
   local version
-  version="$(newest_pypi_version)" || { miss "pypi" "could not read the newest PyPI version"; return 0; }
+  version="$(newest_release_version)" || { miss "release" "could not read the newest release version"; return 0; }
   run_capture uv tool install "fno==$version"
   if [ "$RC" -ne 0 ]; then
     miss "uv-tool-install" "rc=$RC: $(printf '%s' "$OUT" | tail -1)"
@@ -538,7 +533,7 @@ row_brew() {
   # 900s: a cold brew install (auto-update + bottles) fits well under
   # it, and it stays 600s clear of the 1500s row watchdog, so a stalled fetch
   # scores as an honest fail here instead of a row hang.
-  run_capture_bounded 900 brew install bllshttng/fno/fno
+  run_capture_bounded 900 brew install fnodotdev/fno/fno
   if [ "$RC" -ne 0 ]; then
     miss "brew-install" "rc=$RC: $(printf '%s' "$OUT" | tail -2 | tr '\n' ' ')"
     return 0

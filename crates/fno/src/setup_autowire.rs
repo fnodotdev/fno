@@ -18,11 +18,10 @@ use serde_json::Value;
 
 use crate::process_admission::{std_command, std_spawn};
 
-/// The marketplace / repo the integrations install from. `#stable` pins the
-/// add to the `stable` branch (781 files, ~4s); the bare repo clones `main`
-/// (7,949 files, 80s+) and can exceed Claude Desktop's 120s "Add marketplace"
-/// timeout.
-const MARKETPLACE: &str = "fnodotdev/fno#stable";
+/// The marketplace the integrations install from. The catalog on main pins
+/// the fno entry to the release tag with its sha, so the bare add serves
+/// release-pinned content; see the catalog pins in .claude-plugin/marketplace.json.
+const MARKETPLACE: &str = "fnodotdev/fno";
 const REPO_URL: &str = "https://github.com/fnodotdev/fno";
 /// The skills-dir fallback drop's directory name under ~/.claude/skills.
 /// A named constant rather than a literal: the seam-crossings ratchet reads
@@ -277,7 +276,9 @@ fn pi_extension_src() -> Option<String> {
     path.is_file().then(|| path.display().to_string())
 }
 
-fn pi_wire(agents: &Path, src: Option<&str>, run: Run) -> Outcome {
+/// Wire the pi extension into `harness` (pi, or omp, which loads the same
+/// file from its own agent dir).
+fn pi_wire(harness: &str, agents: &Path, src: Option<&str>, run: Run) -> Outcome {
     let Some(src) = src else {
         return Outcome::Failed(format!(
             "no plugin tree carries {PI_EXTENSION_REL}; cannot locate the pi extension source"
@@ -286,7 +287,7 @@ fn pi_wire(agents: &Path, src: Option<&str>, run: Run) -> Outcome {
     if let Ok(out) = run(&[
         agents_str(agents),
         "plugin-install",
-        "pi",
+        harness,
         "--status",
         "--extension-src",
         src,
@@ -301,7 +302,7 @@ fn pi_wire(agents: &Path, src: Option<&str>, run: Run) -> Outcome {
     match run(&[
         agents_str(agents),
         "plugin-install",
-        "pi",
+        harness,
         "--extension-src",
         src,
         "--json",
@@ -434,7 +435,7 @@ pub(crate) struct Harness {
     pub(crate) label: &'static str,
 }
 
-pub(crate) const HARNESS_LIST: [Harness; 7] = [
+pub(crate) const HARNESS_LIST: [Harness; 8] = [
     Harness {
         name: "claude",
         label: "Claude Code",
@@ -454,6 +455,10 @@ pub(crate) const HARNESS_LIST: [Harness; 7] = [
     Harness {
         name: "pi",
         label: "pi",
+    },
+    Harness {
+        name: "omp",
+        label: "oh-my-pi",
     },
     Harness {
         name: "agy",
@@ -503,14 +508,14 @@ pub fn run() -> i32 {
                     )
                 }
             }
-            "pi" => {
+            "pi" | "omp" => {
                 if !agents_ok {
                     Outcome::Failed(
                         "the fno-agents binary is missing; run `fno doctor update`".into(),
                     )
                 } else {
                     let src = pi_extension_src();
-                    pi_wire(&agents, src.as_deref(), &real_run)
+                    pi_wire(h.name, &agents, src.as_deref(), &real_run)
                 }
             }
             "footnote" if home_missing => no_home(),

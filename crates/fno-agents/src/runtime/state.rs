@@ -444,6 +444,21 @@ impl Registry {
             .iter()
             .find(|entry| entry.name == token || session_handle_tier_any(entry, token))
     }
+
+    /// [`Self::find_name_or_full_session_id`], then the 8-hex short id a
+    /// notice prints: the transport short or the session id's head. The short
+    /// form resolves only when exactly one row answers it, so a shared head
+    /// refuses instead of picking a row.
+    pub fn find_name_session_or_short_id(&self, token: &str) -> Option<&RegistryEntry> {
+        self.find_name_or_full_session_id(token).or_else(|| {
+            let mut hits = self.entries.iter().filter(|e| {
+                e.transport_short() == Some(token)
+                    || entry_session_ids(e).any(|sid| session_handle_tier(token, sid) == Some(1))
+            });
+            let first = hits.next()?;
+            hits.next().is_none().then_some(first)
+        })
+    }
 }
 
 /// True when `token` resolves the row at the full-id session tier.
@@ -857,6 +872,12 @@ pub struct RegistryEntry {
     /// mark while it is nonzero, and the release rows themselves clear it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mail_held: Option<u32>,
+    /// The wall stamp of the OLDEST submission still held (the enqueue
+    /// row's own `timestamp`, second precision), written by the same scan
+    /// as `mail_held` so the sideline's badge can age the wait. `None`
+    /// when nothing is held or no row carried a readable stamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mail_held_since: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_measured_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1209,8 +1230,9 @@ pub struct RegistryEntry {
     /// that renamed `NOT_INJECTABLE` off "not-live" (`mail_inject.rs`): a
     /// bus-only session may be alive and mid-turn, it just belongs on the bus.
     /// Stamped by the session itself via `fno agents register
-    /// --delivery-policy bus-only`; the Python-side send path is the reader and
-    /// the gate. Same X3 passthrough as `fno_id`: without this mirror the
+    /// --delivery-policy bus-only`; the delivery gate (`mail_hold::gate`)
+    /// reads it. It is a lane capability with no end, never a do-not-disturb
+    /// hold: holds live in the fno-mail hold store. Same X3 passthrough as `fno_id`: without this mirror the
     /// daemon's read-modify-write would drop a Python-stamped policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery_policy: Option<String>,

@@ -151,6 +151,28 @@ pub(super) fn enter_placement() -> PanePlacement {
     }
 }
 
+/// What a click on an agent row does: send a command, or say why it sends
+/// none.
+pub enum RowClick {
+    Send(Command),
+    Notice(String),
+}
+
+/// The one command a click on an agent row sends: the sideline click's own
+/// [`agent_hit`].
+pub fn click_command(a: &AgentRow) -> RowClick {
+    let none = || RowClick::Notice(format!("{}: no action", a.name));
+    match agent_hit(a, 0) {
+        ChromeHit::Cmds(cmds) => cmds.into_iter().next().map_or_else(none, RowClick::Send),
+        ChromeHit::OpenRemote(remote) => RowClick::Send(Command::ReachRemote {
+            remote,
+            placement: enter_placement(),
+        }),
+        ChromeHit::Notice(notice) => RowClick::Notice(notice),
+        _ => none(),
+    }
+}
+
 type Bucket<'a> = (String, Vec<&'a AgentRow>);
 
 fn push<'a>(buckets: &mut Vec<Bucket<'a>>, key: String, a: &'a AgentRow) {

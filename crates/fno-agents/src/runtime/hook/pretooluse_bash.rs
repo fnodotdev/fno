@@ -5,6 +5,7 @@
 //! decision. The guardrail preset owns whether a guard runs at all: a
 //! preset-disabled guard answers nothing and emits no row.
 
+use super::refusal::Refusal;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -19,7 +20,7 @@ pub fn run(_args: &[String]) -> i32 {
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."));
     let process_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let mut refusals = Vec::new();
+    let mut refusals: Vec<Refusal> = Vec::new();
     let mut notices = Vec::new();
 
     // One config resolution for the whole chain: guard_enabled re-walks the
@@ -29,13 +30,13 @@ pub fn run(_args: &[String]) -> i32 {
     if crate::agents_config::preset_runs(preset, "bg-process") {
         let bg_refusal = super::bg_process_guard::judge(&payload);
         super::emit_guard_decision(&cwd, "bg-process-guard", "Bash", bg_refusal.is_some());
-        refusals.extend(bg_refusal);
+        refusals.extend(bg_refusal.map(|r| Refusal::new(super::refusal::Guard::BgProcess, r)));
     }
 
     if crate::agents_config::preset_runs(preset, "bin-install") {
         let bin_refusal = super::bin_install_guard::judge(&payload);
         super::emit_guard_decision(&cwd, "bin-install-guard", "Bash", bin_refusal.is_some());
-        refusals.extend(bin_refusal);
+        refusals.extend(bin_refusal.map(|r| Refusal::new(super::refusal::Guard::BinInstall, r)));
     }
 
     if crate::agents_config::preset_runs(preset, "git-protection") {
@@ -45,7 +46,7 @@ pub fn run(_args: &[String]) -> i32 {
         match super::git_protection::judge(&payload, &process_cwd) {
             super::git_protection::Verdict::Block(reason) => {
                 super::emit_guard_decision(&cwd, "git-protection", "Bash", true);
-                refusals.push(reason);
+                refusals.push(Refusal::new(super::refusal::Guard::GitProtection, reason));
             }
             super::git_protection::Verdict::Warn(reason) => {
                 super::emit_guard_decision(&cwd, "git-protection", "Bash", false);
@@ -65,13 +66,23 @@ pub fn run(_args: &[String]) -> i32 {
             "Bash",
             impostor_refusal.is_some(),
         );
-        refusals.extend(impostor_refusal);
+        refusals.extend(
+            impostor_refusal.map(|r| Refusal::new(super::refusal::Guard::BacklogImpostor, r)),
+        );
     }
 
     if crate::agents_config::preset_runs(preset, "recursive-grep") {
-        let grep_refusal = super::recursive_grep_guard::judge(&payload);
-        super::emit_guard_decision(&cwd, "recursive-grep-guard", "Bash", grep_refusal.is_some());
-        refusals.extend(grep_refusal);
+        // A nudge: the search runs, and the note says how to run it cheaper.
+        let grep_note = super::recursive_grep_guard::judge(&payload);
+        let decision = if grep_note.is_some() {
+            "nudge"
+        } else {
+            "allow"
+        };
+        super::emit_guard_row(&cwd, "recursive-grep-guard", "Bash", decision);
+        notices.extend(
+            grep_note.map(|n| Refusal::new(super::refusal::Guard::RecursiveGrep, n).render()),
+        );
     }
 
     let test = if crate::agents_config::preset_runs(preset, "test-run") {
@@ -91,18 +102,22 @@ pub fn run(_args: &[String]) -> i32 {
             test.refusal.is_some(),
         );
     }
-    refusals.extend(test.refusal);
+    refusals.extend(
+        test.refusal
+            .map(|r| Refusal::new(super::refusal::Guard::TestRun, r)),
+    );
 
     if crate::agents_config::preset_runs(preset, "effect") {
         let effect_refusal = crate::effect_gate::judge(&payload, &cwd);
         super::emit_guard_decision(&cwd, "effect-guard", "Bash", effect_refusal.is_some());
-        refusals.extend(effect_refusal);
+        refusals.extend(effect_refusal.map(|r| Refusal::new(super::refusal::Guard::Effect, r)));
     }
 
     if crate::agents_config::preset_runs(preset, "refusal-streak") {
         let streak_refusal = super::refusal_streak::judge_pre(&payload);
         super::emit_guard_decision(&cwd, "refusal-streak", "Bash", streak_refusal.is_some());
-        refusals.extend(streak_refusal);
+        refusals
+            .extend(streak_refusal.map(|r| Refusal::new(super::refusal::Guard::RefusalStreak, r)));
     }
 
     let mut renamed = false;
@@ -112,13 +127,17 @@ pub fn run(_args: &[String]) -> i32 {
             renamed = rewrote;
         }
         if let Some(reason) = gate_native_launch(&payload, &cwd) {
-            refusals.push(reason);
+            refusals.push(Refusal::new(super::refusal::Guard::SpawnGate, reason));
         }
     }
     if !refusals.is_empty() {
         // A notice rides a refusal so the operator reads one sentence.
-        refusals.extend(notices);
-        return super::emit_block(&refusals.join("\n\n"));
+        let (code, asked) = super::refusal::emit(&refusals, &notices);
+        if asked {
+            let guards: Vec<&str> = refusals.iter().map(Refusal::guard).collect();
+            super::refusal_streak::note_asked(&payload, &guards);
+        }
+        return code;
     }
     record_launch(&payload, &cwd);
     if renamed {
@@ -197,7 +216,7 @@ fn gate_native_launch(payload: &Value, cwd: &Path) -> Option<String> {
         .get("session_id")
         .and_then(Value::as_str)
         .map(str::to_string);
-    for launch in launches {
+    for launch in launches.iter().filter(|l| gated(l)) {
         let input = crate::spawn_gate::GateInput {
             name: launch.name.clone().unwrap_or_default(),
             substrate: crate::launch_record::native_substrate_word(&launch.harness).into(),
@@ -241,6 +260,15 @@ fn gate_native_launch(payload: &Value, cwd: &Path) -> Option<String> {
         }
     }
     None
+}
+
+/// Law D1521: a revival re-seats a row that already held a seat, so the
+/// gate never sees it. The resume of a session that still runs, the one
+/// real revival harm, is refused earlier, by `claude_bg_refusal`.
+/// `claude respawn <job>` is the other revival form: it parses as no
+/// launch at all, so it never reaches this loop either.
+fn gated(launch: &crate::launch_record::Launch) -> bool {
+    launch.resume.is_none()
 }
 
 /// A live process holds `id`: its argv names it, or claude's own listing
@@ -332,5 +360,46 @@ mod floor_setter_tests {
         // A quoted payload string is payload, never the setter.
         assert!(refuse_floor_setter("fno agents spawn w1 \"use --floor N\"").is_none());
         assert!(refuse_floor_setter("fno agents spawn w1 \"say \\\"hi\\\" --floor x\"").is_none());
+    }
+}
+
+#[cfg(test)]
+mod native_launch_tests {
+    use super::gated;
+    use crate::launch_record::parse_command;
+
+    /// Law D1521: a revival re-seats a row that already held a seat, so the
+    /// gate never sees it. The rule is `gated`: a launch that carries a
+    /// resume id is not gated, a fresh launch is. The resume of a RUNNING
+    /// session is refused earlier, by claude_bg_refusal, which launch_record
+    /// tests already pin. `claude respawn <job>` and `claude respawn --all`,
+    /// the other revival form, parse as no launch at all, so they never
+    /// reach the gate either. The full gate stays integration-tested in CI,
+    /// which runs on a machine whose real CPU answers the axis.
+    #[test]
+    fn a_revival_launch_is_never_gated_a_fresh_launch_is() {
+        let fresh = parse_command("claude --bg --name w1 \"go\"", "/repo");
+        assert!(
+            !fresh.is_empty(),
+            "premise: a fresh line parses as a launch"
+        );
+        assert!(fresh.iter().all(gated), "a fresh launch is gated");
+
+        let revival = parse_command(
+            "claude --bg --name Linnea --resume 8bb54c80-a111-4a1b-839a-14ee77c0f52d \"Lead Linnea: revival\"",
+            "/repo",
+        );
+        assert_eq!(revival.len(), 1, "premise: the revival line parses once");
+        assert!(
+            revival.iter().all(|l| !gated(l)),
+            "a revival is never gated"
+        );
+
+        for line in ["claude respawn t-linnea", "claude respawn --all"] {
+            assert!(
+                parse_command(line, "/repo").is_empty(),
+                "{line} parses as no launch, so the gate never sees it"
+            );
+        }
     }
 }

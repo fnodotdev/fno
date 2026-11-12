@@ -196,7 +196,7 @@ pub(crate) fn acquire_startup_guard(socket: &Path) -> std::io::Result<StartupGua
                                 "cannot read mux startup marker {}: {read}",
                                 marker.display()
                             ),
-                        ))
+                        ));
                     }
                 };
                 let Some((pid, recorded_start)) = parse_pid_sidecar(&raw) else {

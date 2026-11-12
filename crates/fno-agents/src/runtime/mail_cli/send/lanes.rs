@@ -827,20 +827,30 @@ pub(super) fn resolve_to_lead_address(
     message: Option<String>,
     conflict: Option<&str>,
 ) -> Result<(String, String), i32> {
-    if conflict.is_some() || message.is_some() {
-        let clash = conflict
-            .map(str::to_string)
-            .unwrap_or_else(|| "a second positional (the message is the only one)".to_string());
+    if let Some(flag) = conflict {
         eprintln!(
-            "error: --to-lead and {clash} are mutually exclusive. Run `fno agents team` and address that handle for the other lane."
+            "error: --to-lead and {flag} are mutually exclusive. Run `fno agents team` and address that handle for the other lane."
         );
         return Err(2);
     }
-    let Some(name) = name else {
-        eprintln!("usage: fno agents mail send --to-lead <scope> <message>");
-        return Err(2);
+    // The lead lane carries the body in the single positional slot (`name`
+    // above, per the usage line); `message` holds a -b/--body-file body the
+    // caller folded in when no second positional filled it. Only a second
+    // positional clashes: the lane has no name slot.
+    let body = match (name, message) {
+        (Some(body), None) | (None, Some(body)) => body,
+        (Some(_), Some(_)) => {
+            eprintln!(
+                "error: --to-lead and a second positional (the message is the only one) are mutually exclusive. Run `fno agents team` and address that handle for the other lane."
+            );
+            return Err(2);
+        }
+        (None, None) => {
+            eprintln!("usage: fno agents mail send --to-lead <scope> <message>");
+            return Err(2);
+        }
     };
-    let holders = resolve_to_lead(scope).map_err(|(msg, code)| {
+    let mut holders = resolve_to_lead(scope).map_err(|(msg, code)| {
         eprintln!("{msg}");
         code
     })?;
@@ -860,8 +870,9 @@ pub(super) fn resolve_to_lead_address(
         );
         return Err(17);
     }
-    eprintln!("--to-lead {scope}: resolved to {}", holders[0]);
-    Ok((holders[0].clone(), name))
+    let holder = holders.swap_remove(0);
+    eprintln!("--to-lead {scope}: resolved to {holder}");
+    Ok((holder, body))
 }
 
 // ---------------------------------------------------------------------------
@@ -1016,6 +1027,7 @@ mod project_demotion_tests {
             to_harness: None,
             to_session: None,
             state: DeliveryState::Queued,
+            fallback_receipt: None,
         };
         let door = demotion_door_args(&result, "projA", None);
         let pos = door
@@ -1389,7 +1401,6 @@ pub(super) fn run_name_lane_force(
     subject: Option<&str>,
 ) -> i32 {
     let reach = resolve_reachable(token);
-    let suggestions: Vec<String> = Vec::new();
     let lane_args = NameLaneArgs {
         message: body,
         from_name,
@@ -1409,9 +1420,11 @@ pub(super) fn run_name_lane_force(
     };
     match name_lane_send(lane_args) {
         Ok(NameLane::Done) => 0,
-        Ok(NameLane::UnreachableToken) => {
-            unreachable_token_exit(token, &suggestions, UNKNOWN_AGENT_EXIT)
-        }
+        Ok(NameLane::UnreachableToken) => unreachable_token_exit(
+            token,
+            &format_near(&near_sessions(token)),
+            UNKNOWN_AGENT_EXIT,
+        ),
         Ok(NameLane::AmbiguousToken(candidates)) => ambiguous_token_exit(token, &candidates),
         Ok(NameLane::UnavailableToken { failed, candidates }) => {
             unavailable_token_exit(token, &failed, &candidates)
@@ -1458,7 +1471,7 @@ pub(super) fn run_dispatch_then_name_lane(
                         &result.msg_id,
                         subject,
                         token,
-                        &fno_mail::state::receipt(&result.state, ""),
+                        &result.receipt(""),
                     )
                 );
                 return 0;
@@ -1537,7 +1550,6 @@ pub(super) fn run_dispatch_then_name_lane(
             // Discovery is a liveness-gated LISTING, so unknown means "not
             // listed", not "not reachable": fall into the name lane.
             let live = live_discovery_hit(token);
-            let suggestions: Vec<String> = Vec::new();
             let lane_args = NameLaneArgs {
                 message: body,
                 from_name,
@@ -1553,7 +1565,9 @@ pub(super) fn run_dispatch_then_name_lane(
             };
             match name_lane_send(lane_args) {
                 Ok(NameLane::Done) => 0,
-                Ok(NameLane::UnreachableToken) => unreachable_token_exit(token, &suggestions, code),
+                Ok(NameLane::UnreachableToken) => {
+                    unreachable_token_exit(token, &format_near(&near_sessions(token)), code)
+                }
                 Ok(NameLane::AmbiguousToken(candidates)) => {
                     ambiguous_token_exit(token, &candidates)
                 }

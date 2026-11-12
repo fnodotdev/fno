@@ -21,4 +21,4 @@ grade:
   - kind: exit
     command: "git checkout 7ca0d256f35186b6ea25719c9f199bb24d5edd3e -- cli/tests/unit/test_shim_check.py && cd cli && uv run pytest tests/unit/test_shim_check.py -q"
 timeout_minutes: 45
-tags: [harness-fit]
+tags: [harness-fit, demoted]

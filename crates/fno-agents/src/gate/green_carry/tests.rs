@@ -121,6 +121,7 @@ fn pending(_head: &str) -> ChecksRead {
         rerun_recovered: None,
         rerun_failures: None,
         evals_gate_row: None,
+        unmeasured: None,
     }
 }
 

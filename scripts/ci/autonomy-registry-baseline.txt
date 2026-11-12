@@ -20,3 +20,4 @@ skills/agent/scripts/spawn.sh::  # explicit operator command wrapper (`/fno:agen
 skills/target/scripts/dispatch-node.sh::  # advance / dispatch_lanes family (config.auto_continue.enabled) - the shell side of the same autonomous continuation
 skills/target/scripts/handoff.sh::  # target-self-handoff (config.autonomy.enabled master switch, checked before target.handoff.enabled). See docs/architecture/target-self-handoff.md.
 scripts/ops/install-journey.sh::  # explicit operator command: the attended run's step-12 spawn probe; a human drives the journey from the fno-clean tmux session, so no autonomy decision is made here
+skills/visual-log-reader/scripts/ensure-reader.sh::  # explicit operator repair command: ensure-reader.sh spawn is the documented liveness repair a session runs by hand against a dead reader; no autonomy decision is made here

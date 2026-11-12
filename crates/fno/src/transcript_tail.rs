@@ -65,7 +65,7 @@ fn set_test_projects_dir(dir: Option<&Path>) {
 /// The claude projects (transcript) base dir. Mirrors fno-agents'
 /// `claude_drive::claude_projects_dir` - mirrored, not imported: the crates
 /// share no types and the FILE is the contract (same rule as `roster_path`).
-pub(crate) fn claude_projects_dir() -> PathBuf {
+pub fn claude_projects_dir() -> PathBuf {
     #[cfg(test)]
     if let Some(p) = TEST_PROJECTS_DIR.with(|c| c.borrow().clone()) {
         return p;
@@ -144,7 +144,7 @@ pub fn transcript_store_root(store: &str) -> Option<PathBuf> {
 /// A uuid safe to use as a path component. Registry content is untrusted and
 /// lands in a path join, so anything but the transcript filename shape is
 /// refused before it can escape the projects dir.
-pub(crate) fn transcript_uuid_shaped(uuid: &str) -> bool {
+pub fn transcript_uuid_shaped(uuid: &str) -> bool {
     !uuid.is_empty() && uuid.len() <= 64 && uuid.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
 }
 
@@ -165,6 +165,11 @@ pub(crate) fn transcript_uuid_shaped(uuid: &str) -> bool {
 /// width makes the suffix window exact, so a longer hex tail cannot read as a
 /// uuid match.
 pub(crate) fn find_transcripts(uuids: &[&str]) -> HashMap<String, PathBuf> {
+    find_transcripts_in(&transcript_roots(), uuids)
+}
+
+/// [`find_transcripts`] over explicit roots.
+pub(crate) fn find_transcripts_in(roots: &[PathBuf], uuids: &[&str]) -> HashMap<String, PathBuf> {
     let wanted: HashSet<&str> = uuids
         .iter()
         .filter(|u| transcript_uuid_shaped(u))
@@ -174,8 +179,8 @@ pub(crate) fn find_transcripts(uuids: &[&str]) -> HashMap<String, PathBuf> {
     if wanted.is_empty() {
         return out;
     }
-    for root in transcript_roots() {
-        scan_transcript_dir(&root, 0, &wanted, &mut out);
+    for root in roots {
+        scan_transcript_dir(root, 0, &wanted, &mut out);
         if out.len() == wanted.len() {
             break; // every wanted transcript found; skip the rest
         }
@@ -250,7 +255,7 @@ fn scan_transcript_dir(
 /// below checks readability per root).
 ///
 /// A test override replaces the whole list: a scratch dir is the only root.
-fn transcript_roots() -> Vec<PathBuf> {
+pub(crate) fn transcript_roots() -> Vec<PathBuf> {
     #[cfg(test)]
     {
         if let Some(p) = TEST_PROJECTS_DIR.with(|c| c.borrow().clone()) {

@@ -3363,8 +3363,11 @@
      "eval_events": {
       "$ref": "#/$defs/TelemetryEvalEventsBlock"
      },
-     "install_count": {
-      "$ref": "#/$defs/TelemetryInstallCountBlock"
+     "usage_report": {
+      "$ref": "#/$defs/TelemetryUsageReportBlock"
+     },
+     "usage_events": {
+      "$ref": "#/$defs/TelemetryUsageEventsBlock"
      }
     },
     "title": "TelemetryBlock",
@@ -3711,7 +3714,7 @@
     "title": "WorktreeBlock",
     "type": "object"
    },
-   "TelemetryInstallCountBlock": {
+   "TelemetryUsageReportBlock": {
     "properties": {
      "enabled": {
       "default": true,
@@ -3719,7 +3722,7 @@
       "type": "boolean"
      }
     },
-    "title": "TelemetryInstallCountBlock",
+    "title": "TelemetryUsageReportBlock",
     "type": "object"
    },
    "MergeArchitectBlock": {
@@ -3814,6 +3817,33 @@
      }
     },
     "title": "MergeBlock",
+    "type": "object"
+   },
+   "TelemetryUsageEventsBlock": {
+    "description": "Usage analytics: allowlisted journal rows (event kind, command, refusal code, harness, model, duration, exit, machine) ship to PostHog as events, identifiers only. ``token_env`` names the env var holding the project token; ``token_file`` names a mode-0600 file holding it, read at each beat.",
+    "properties": {
+     "enabled": {
+      "default": false,
+      "title": "Enabled",
+      "type": "boolean"
+     },
+     "host": {
+      "default": "https://us.i.posthog.com",
+      "title": "Host",
+      "type": "string"
+     },
+     "token_env": {
+      "default": "FNO_POSTHOG_PROJECT_TOKEN",
+      "title": "Token Env",
+      "type": "string"
+     },
+     "token_file": {
+      "default": "~/.fno/secrets/posthog-project-token",
+      "title": "Token File",
+      "type": "string"
+     }
+    },
+    "title": "TelemetryUsageEventsBlock",
     "type": "object"
    }
   },
@@ -4684,6 +4714,42 @@
   },
   {
    "path": "telemetry.eval_events.token_file",
+   "type": "str",
+   "default": "~/.fno/secrets/posthog-project-token",
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "Path to the PostHog project token file (mode 0600); token_env wins when set; a leading ~ expands against $HOME."
+  },
+  {
+   "path": "telemetry.usage_events.enabled",
+   "type": "bool",
+   "default": false,
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "Send allowlisted fleet journal rows (spawns, refusals, merges, latency) to PostHog as events, identifiers only (default off)."
+  },
+  {
+   "path": "telemetry.usage_events.host",
+   "type": "str",
+   "default": "https://us.i.posthog.com",
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "PostHog ingest host, https only."
+  },
+  {
+   "path": "telemetry.usage_events.token_env",
+   "type": "str",
+   "default": "FNO_POSTHOG_PROJECT_TOKEN",
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "",
+   "doc": "Env var holding the PostHog project token."
+  },
+  {
+   "path": "telemetry.usage_events.token_file",
    "type": "str",
    "default": "~/.fno/secrets/posthog-project-token",
    "wizard": "advanced",
@@ -7306,13 +7372,13 @@
    "doc": "Settings schema version; managed by fno, not hand-set."
   },
   {
-   "path": "telemetry.install_count.enabled",
+   "path": "telemetry.usage_report.enabled",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
    "question": "",
    "default_source": "",
-   "doc": "Send one install-count event per machine per day (version, channel, OS, arch, a random install id; no free text). Opt out to send nothing."
+   "doc": "Set false to force the opt-in daily usage report off, whatever consent says. Consent itself is recorded only by fno doctor telemetry on or the setup wizard."
   },
   {
    "path": "merge.architect.enabled",
@@ -7370,7 +7436,7 @@
    "wizard": "advanced",
    "question": "",
    "default_source": "",
-   "doc": "Paint paths used for optional look evidence. Explicit head-scoped user declines retain authority."
+   "doc": "Render-surface paths whose PRs warn when no look is recorded at their head; the merge proceeds and the look request routes to the lead for the Visual Log page after it lands. Explicit head-scoped user declines retain authority."
   },
   {
    "path": "merge.visual_shot_workflows",

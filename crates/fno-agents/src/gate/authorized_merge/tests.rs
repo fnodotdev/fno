@@ -10,6 +10,9 @@ struct Fake {
     late_checks: Option<String>,
     late_pr_hold: Option<ProbeOutcome>,
     late_decline: Option<PathBuf>,
+    /// Every look request the gate routed, as (pr, detail): a paint PR that
+    /// merged with no recorded look must owe the lead exactly one.
+    look_requests: RefCell<Vec<(u64, String)>>,
     facts: Option<PrFacts>,
     facts_after_effect: Option<PrFacts>,
     facts_error: Option<String>,
@@ -422,6 +425,12 @@ impl Probes for Fake {
             *self.slot_retested.borrow_mut() = false;
         }
     }
+    fn look_request(&self, _cwd: &Path, facts: &PrFacts, detail: &str) -> bool {
+        self.look_requests
+            .borrow_mut()
+            .push((facts.number, detail.to_string()));
+        true
+    }
     fn slot_retested(&self, _cwd: &Path, _base_ref: &str, pr: u64) -> bool {
         *self.slot.borrow() == Some(pr) && *self.slot_retested.borrow()
     }
@@ -462,6 +471,7 @@ impl Probes for Fake {
             } else {
                 None
             },
+            unmeasured: None,
         }
     }
 
@@ -579,6 +589,7 @@ fn request(effect: Effect) -> Request {
         supplied_review_hold: None,
         supplied_facts: None,
         supplied_evals_gate: None,
+        supplied_unmeasured: None,
     }
 }
 
@@ -734,6 +745,57 @@ fn parse_checks_read_reads_the_evals_gate_fact() {
     assert!(queued.evals_gate_pending(), "{:?}", queued.evals_gate_row);
     assert!(!fine.evals_gate_pending());
     assert!(!absent.evals_gate_pending());
+}
+
+/// The unmeasured warning (lead ruling 2026-11-12 02:06Z, under D3173): a head
+/// whose runs listing names no completed run warns BY NAME on a
+/// require_checks ask and never blocks - PR 82 merged ready there. The
+/// parse lift covers the walk's own read path; require_checks=false keeps
+/// the no-CI-gate posture with no warning either.
+#[test]
+fn the_unmeasured_head_warns_by_name_and_never_blocks() {
+    let fake = Fake { ..clean() };
+    let reason = "ci unmeasured: 7 runs queued, none completed at abc123";
+    let req = Request {
+        require_checks: true,
+        // The real pairing: the verdict word and the unmeasured fact ride the
+        // same ask from the same status read.
+        supplied_verdict: Some("unknown".to_string()),
+        supplied_unmeasured: Some(reason.to_string()),
+        ..request(Effect::Preview)
+    };
+    let preview = preview_walk(&fake, &req, &open_facts());
+    assert!(
+        matches!(preview, PreviewVerdict::Go { .. }),
+        "D3173: queued CI never blocks: {preview:?}"
+    );
+    let warned = preview
+        .warnings()
+        .iter()
+        .any(|w| w.code == "ci_unmeasured" && w.detail.contains("7 runs queued"));
+    assert!(warned, "the warning names the unmeasured fact: {preview:?}");
+
+    // The walk's own read path lifts the fact off the status payload.
+    let lifted = parse_checks_read(
+        br#"{"verdict": "unknown", "ci_unmeasured": "ci unmeasured: no runs at abc123"}"#,
+    );
+    assert_eq!(
+        lifted.unmeasured.as_deref(),
+        Some("ci unmeasured: no runs at abc123")
+    );
+
+    // No CI gate, no warning: require_checks=false keeps today's posture.
+    let ungated = Request {
+        require_checks: false,
+        ..req
+    };
+    let preview = preview_walk(&fake, &ungated, &open_facts());
+    assert!(matches!(preview, PreviewVerdict::Go { .. }));
+    let warned = preview.warnings().iter().any(|w| w.code == "ci_unmeasured");
+    assert!(
+        !warned,
+        "an ungated ask carries no unmeasured warning: {preview:?}"
+    );
 }
 
 // ── the head-scoped operator merge grant ──────────────────────────────
@@ -997,8 +1059,11 @@ fn slot_holder_error_fails_open_to_the_stale_hold_without_taking_a_slot() {
     assert!(fake.take_slot_calls.borrow().is_empty());
 }
 
+/// A stale-base green retests (one update-branch), then waits out the new
+/// head's own CI: under the 2026-11-10 pending-hold law the pending read on the retested head holds,
+/// so the settle after the retest is the CI settle, not the merge itself.
 #[test]
-fn a_green_pr_whose_ci_predates_main_retests_without_a_pending_ci_veto() {
+fn a_green_pr_whose_ci_predates_main_retests_then_waits_out_the_pending_new_head() {
     let mut fake = Fake {
         ci_base: Some(ProbeOutcome::Refused(
             "ci_base_stale: run predates base".to_string(),
@@ -1030,8 +1095,61 @@ fn a_green_pr_whose_ci_predates_main_retests_without_a_pending_ci_veto() {
     fake.checks = Some("pending".to_string());
     fake.ci_base = Some(ProbeOutcome::Clear);
     let outcome = run(&fake, &req);
-    assert_eq!(outcome.word(), "merged");
-    assert!(outcome.warnings().iter().any(|w| w.code == "ci_pending"));
+    assert_eq!(outcome.word(), "held", "{outcome:?}");
+    assert!(outcome.detail().contains("pending"), "{outcome:?}");
+
+    // The settle after the retest's CI lands is the merge.
+    fake.checks = None;
+    let outcome = run(&fake, &req);
+    assert_eq!(outcome.word(), "merged", "{outcome:?}");
+}
+
+/// A 2026-11-10 incident merged a PR while its cli-ci rerun was still in
+/// flight. The pending verdict fell through `require_checks_pass` with only
+/// an advisory warning, and main went red on the merged head. The newest
+/// attempt's settled green is the merge precondition; pending is a hold.
+/// Arm keeps its fall-through: it hands the PR to GitHub's queue, which
+/// waits out requirements that are required.
+#[test]
+fn a_pending_ci_read_holds_the_merge_until_the_newest_attempt_settles() {
+    let mut fake = Fake {
+        checks: Some("pending".to_string()),
+        ..clean()
+    };
+    let mut req = request(Effect::Merge);
+    req.require_checks = true;
+    let outcome = run(&fake, &req);
+    assert_eq!(outcome.word(), "held", "{outcome:?}");
+    assert!(
+        outcome
+            .detail()
+            .contains("checks are pending; require_checks_pass"),
+        "{outcome:?}"
+    );
+
+    // Preview still answers, and arm still hands off: neither lands a merge.
+    let preview = run(
+        &fake,
+        &Request {
+            require_checks: true,
+            ..request(Effect::Preview)
+        },
+    );
+    assert_eq!(preview.word(), "authorized", "{preview:?}");
+    let armed = run(
+        &fake,
+        &Request {
+            require_checks: true,
+            ..request(Effect::Arm)
+        },
+    );
+    assert_eq!(armed.word(), "armed", "{armed:?}");
+
+    // The unknown verdict stays fall-through: a PR with no check-run CI at
+    // all (docs-only) must keep its merge door.
+    fake.checks = Some("unknown".to_string());
+    let outcome = run(&fake, &req);
+    assert_eq!(outcome.word(), "merged", "{outcome:?}");
 }
 
 #[test]
@@ -1218,7 +1336,9 @@ fn ci_base_freshness_gates_the_chain() {
         .warnings()
         .iter()
         .any(|w| w.code == "ci_base_unreadable" && w.detail.contains("gh unavailable")));
-    assert!(!fake.gh_calls.borrow().is_empty());
+    // No paint surface in play: the warning never rides, so the merge owes
+    // the lead no look request.
+    assert!(fake.look_requests.borrow().is_empty());
     assert!(fake.take_slot_calls.borrow().is_empty());
     assert!(preview_blockers(&fake, &preview_request(7)).is_empty());
     assert_eq!(
@@ -1355,7 +1475,74 @@ fn an_unreadable_body_or_graph_refuses_to_assume_bound() {
 }
 
 #[test]
-fn process_conditions_warn_on_merge_arm_and_preview() {
+fn coverage_rows_are_advisory_never_say_refused_and_read_one_verdict() {
+    // A PR merged while the coverage warning read "unreviewed merge
+    // refused" - a refusal word on a row that never refuses (law d-3173), so
+    // `pr status` ready=true and the merge's own output contradicted each
+    // other. The row stays advisory in both walks, and the words say so.
+    for coverage_exit in [None, Some(0), Some(3), Some(4)] {
+        let fake = Fake {
+            coverage_exit,
+            ..clean()
+        };
+        let req = request(Effect::Merge);
+        let outcome = run(&fake, &req);
+        assert_eq!(
+            outcome.word(),
+            "merged",
+            "every coverage answer is advisory; exit={coverage_exit:?}: {outcome:?}"
+        );
+        let wanted = match coverage_exit {
+            None | Some(0) => None,
+            Some(3) => Some("review_coverage_uncovered"),
+            _ => Some("review_coverage_unknown"),
+        };
+        for warning in outcome.warnings() {
+            assert!(
+                !warning.detail.contains("refused"),
+                "an advisory row must not say refused: {}",
+                warning.detail
+            );
+        }
+        assert_eq!(
+            outcome
+                .warnings()
+                .iter()
+                .any(|w| w.code.starts_with("review_coverage")),
+            wanted.is_some(),
+            "exit={coverage_exit:?}: {outcome:?}"
+        );
+        if let Some(code) = wanted {
+            let row = outcome
+                .warnings()
+                .iter()
+                .find(|w| w.code == code)
+                .expect("the coverage row rides");
+            let prefix = match code {
+                "review_coverage_uncovered" => "no review coverage at this head",
+                _ => "coverage probe failed",
+            };
+            assert!(row.detail.starts_with(prefix), "{code}: {}", row.detail);
+        }
+        let preview = preview_walk(
+            &fake,
+            &Request {
+                effect: Effect::Preview,
+                ..req
+            },
+            &open_facts(),
+        );
+        assert!(matches!(preview, PreviewVerdict::Go { .. }), "{preview:?}");
+        assert_eq!(
+            preview.warnings(),
+            outcome.warnings(),
+            "one verdict: status and merge read the same rows"
+        );
+    }
+}
+
+#[test]
+fn process_conditions_warn_on_merge_arm_and_preview_pending_holds() {
     for code in [
         "review_in_flight",
         "review_coverage_uncovered",
@@ -1389,6 +1576,18 @@ fn process_conditions_warn_on_merge_arm_and_preview() {
                 ..request(effect)
             };
             let outcome = run(&fake, &req);
+            if code == "ci_pending" && effect == Effect::Merge {
+                // The one cell the warning does not cover: a pending read
+                // holds the merge door until the newest attempt settles.
+                assert_eq!(outcome.word(), "held", "{code}: {outcome:?}");
+                assert!(
+                    outcome
+                        .detail()
+                        .contains("checks are pending; require_checks_pass"),
+                    "{outcome:?}"
+                );
+                continue;
+            }
             assert_eq!(outcome.word(), word, "{code}: {outcome:?}");
             assert!(outcome.warnings().iter().any(|w| w.code == code));
         }
@@ -2507,7 +2706,7 @@ fn a_url_less_row_never_steals_a_bind_and_bare_ties_refuse() {
 }
 
 #[test]
-fn a_paint_pr_holds_until_an_answered_page_names_it() {
+fn a_paint_pr_merges_on_a_missing_look_and_holds_on_a_declined_page() {
     let tmp = std::env::temp_dir().join(format!("xc129-gate-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(tmp.join(".fno")).unwrap();
@@ -2555,6 +2754,33 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
         "{}",
         held.detail
     );
+    // The verdict is warning evidence: no look record anywhere, so the
+    // merge lands and the warning routes to the lead as a look request.
+    {
+        fake.facts = Some(PrFacts {
+            head_sha: head.clone(),
+            ..open_facts()
+        });
+        let req = Request {
+            cwd: tmp.clone(),
+            covered_head: Some(head.clone()),
+            ..request(Effect::Merge)
+        };
+        let outcome = run(&fake, &req);
+        assert_eq!(outcome.word(), "merged", "{outcome:?}");
+        assert!(outcome
+            .warnings()
+            .iter()
+            .any(|w| w.code == "visual_approval" && w.detail.contains("no recorded look")));
+        let requests = fake.look_requests.borrow();
+        assert_eq!(requests.len(), 1, "{requests:?}");
+        drop(requests);
+        // Reset the stage: the declined-page section below asserts that no
+        // merge and no look request happen while a decline names the head.
+        fake.look_requests.borrow_mut().clear();
+        fake.gh_calls.borrow_mut().clear();
+        fake.facts = None;
+    }
     // An OPEN page naming the PR never clears the hold.
     let qdir = crate::escalation::questions_dir(&tmp);
     std::fs::create_dir_all(&qdir).unwrap();
@@ -2597,12 +2823,24 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
         ..open_facts()
     });
     req.covered_head = Some(next_head);
+    // The declined look was withdrawn with the page and no look names the
+    // new head, so the outcome rides the paint warning and merges; the
+    // warning routes to the lead as exactly one look request.
     let outcome = run(&fake, &req);
     assert_eq!(outcome.word(), "merged", "{outcome:?}");
     assert!(outcome
         .warnings()
         .iter()
-        .any(|warning| warning.code == "visual_approval"));
+        .any(|w| w.code == "visual_approval" && w.detail.contains("no recorded look")));
+    let requests = fake.look_requests.borrow();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    let (requested_pr, requested_detail) = requests.first().expect("one look request");
+    assert_eq!(*requested_pr, 7);
+    assert!(
+        requested_detail.contains("no recorded look"),
+        "{requested_detail}"
+    );
+    drop(requests);
     fake.facts = None;
     std::fs::write(
         &page,

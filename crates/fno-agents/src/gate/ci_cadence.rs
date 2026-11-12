@@ -323,10 +323,22 @@ fn check_one(
         }
     };
     fields.insert("pr".into(), json!(pr));
-    let (head, _) = crate::pr_status::cache::head_read(cwd, pr);
+    // The session node's PR repo pins the reads, the same pin the wait
+    // applies: a push row from a cutover worktree must not watch the ambient
+    // origin's same-number PR.
+    let node_repo = crate::gate::loopcheck::pr_read::session_node_pr_target(cwd)
+        .1
+        .filter(|s| !s.is_empty());
+    let (head, _) = crate::pr_status::cache::head_read_in(cwd, pr, node_repo.as_deref());
     let block = head.unwrap_or_else(|| json!({"head_sha": ""}));
-    let (_, payload, _, _) =
-        crate::pr_status::cache::cached_status(&push.cwd, pr, false, Some(&block));
+    let (_, payload, _, _) = crate::pr_status::cache::cached_status_in(
+        &push.cwd,
+        pr,
+        false,
+        Some(&block),
+        true,
+        node_repo.as_deref(),
+    );
     let (mut failing, mut in_flight) = (Vec::new(), false);
     if payload.get("verdict").and_then(Value::as_str) == Some("red") {
         match crate::pr_push::read_checks_rows("gh", cwd, &push.sha) {

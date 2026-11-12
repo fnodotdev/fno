@@ -155,9 +155,9 @@ fn keeper_readopt_adopts_the_surviving_child_and_binds_it_to_its_member() {
 fn keeper_readopt_adopts_at_a_fresh_unreconciled_id_when_the_birth_id_is_taken() {
     let Some(bin) = keeper_test_bin() else {
         eprintln!(
-                "SKIPPING keeper_readopt_adopts_at_a_fresh_unreconciled_id_when_the_birth_id_is_taken: \
+            "SKIPPING keeper_readopt_adopts_at_a_fresh_unreconciled_id_when_the_birth_id_is_taken: \
                  build crates/fno-agents first (no sibling fno-agents-worker binary)"
-            );
+        );
         return;
     };
     let dir = crate::proto::mux_dir().join("panes");
@@ -313,6 +313,7 @@ fn keeper_handshake_is_bounded_and_names_the_keepers_death() {
         tx2,
         exit_tx2,
         permit,
+        &[],
     )
     .err()
     .expect("the keeper died mid-handshake; spawn must fail");

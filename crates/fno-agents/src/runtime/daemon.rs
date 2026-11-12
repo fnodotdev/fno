@@ -1668,7 +1668,7 @@ pub(crate) mod sandbox_host;
 mod status;
 mod thread_row_status;
 pub(crate) mod transcript_push;
-use codex_thread_lane::spawn_codex_thread_lane;
+use codex_thread_lane::{lane_name_collision_verdict, spawn_codex_thread_lane};
 use codex_thread_resume::{ensure_codex_thread_handle, schedule_codex_thread_recovery};
 pub(crate) use report::{find_uuid_backfill_row, UuidBackfill};
 use report::{flush_buffered_inside_leg, handle_report};
@@ -2298,15 +2298,8 @@ async fn spawn_claude_stream_lane(
         Ok(r) => r,
         Err(e) => return registry_read_failed(req.id, e),
     };
-    if let Some(existing) = registry.find(name) {
-        return Response::err(
-            req.id,
-            ErrorCode::AgentExists,
-            format!(
-                "agent {name} already exists (short_id={}); use `fno agents rm` first",
-                existing.short_id
-            ),
-        );
+    if let Some(refusal) = lane_name_collision_verdict(&ctx.home, &registry, name, req.id).await {
+        return refusal;
     }
     // Single-writer one-host pre-check: refuse a second adopt of the same session
     // (AC1-EDGE). Matches a LIVE claude row already carrying this UUID; an

@@ -469,8 +469,7 @@ fn run_mux_retire_session(
 /// recorded serve and the archive PATCH.
 fn apply_opencode_archive(e: &RegistryEntry) -> CascadeOutcome {
     let serve = crate::paths::AgentsHome::from_env_opt()
-        .and_then(|home| crate::opencode_serve::archive_capable_serve(&home))
-        .map(|handle| (handle.base_url, handle.token));
+        .and_then(|home| crate::opencode_serve::archive_capable_serve(&home));
     opencode_archive_outcome(
         e.harness_session_id.as_deref(),
         serve,
@@ -495,16 +494,16 @@ fn apply_opencode_archive(e: &RegistryEntry) -> CascadeOutcome {
 /// measured absence for a session this code never addressed.
 pub(crate) fn opencode_archive_outcome(
     session_id: Option<&str>,
-    serve: Option<(String, String)>,
-    archive: &dyn Fn(&str, &str, &str) -> Result<ArchiveOutcome, String>,
+    serve: Option<crate::opencode_serve::ServeHandle>,
+    archive: &dyn Fn(&crate::opencode_serve::ServeHandle, &str) -> Result<ArchiveOutcome, String>,
 ) -> CascadeOutcome {
     let Some(sid) = session_id.filter(|s| crate::provider::is_opencode_session_id(s)) else {
         return CascadeOutcome::NotApplicable;
     };
-    let Some((base_url, token)) = serve else {
+    let Some(serve) = serve else {
         return CascadeOutcome::NotApplicable;
     };
-    match archive(&base_url, &token, sid) {
+    match archive(&serve, sid) {
         Ok(ArchiveOutcome::Archived) => CascadeOutcome::Removed,
         Ok(ArchiveOutcome::AlreadyArchived) => {
             CascadeOutcome::AlreadyAbsent(format!("opencode session {sid} was already archived"))

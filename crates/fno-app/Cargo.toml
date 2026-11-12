@@ -1,0 +1,42 @@
+[package]
+name = "fno-app"
+# Versions in lockstep with fno: sync-version.sh stamps it on every release.
+# Wire compatibility is checked at attach from the server .ver sidecar,
+# never from this version.
+version = "0.4.5"
+edition = "2021"
+rust-version = "1.92"
+description = "The fno desktop app: a native GPUI window over a running fno mux server."
+license = "Apache-2.0"
+repository = "https://github.com/fnodotdev/fno"
+homepage = "https://github.com/fnodotdev/fno"
+# gpui is a pinned release and fno is a path dependency, so this crate ships
+# as a release tarball, never to crates.io.
+publish = false
+
+[lib]
+name = "fno_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "fno-app"
+path = "src/main.rs"
+
+# The app links fno through `fno::app_api` and the modules fno already
+# exports. fno never depends on this crate.
+[dependencies]
+fno = { path = "../fno" }
+clap = { version = "4", features = ["derive"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+serde_json = "1"
+# The window, text and input layer (Zed's UI framework). `font-kit` is the one
+# feature the macOS text system needs.
+gpui = { version = "0.2.2", default-features = false, features = ["font-kit"] }
+# Chat mode's markdown: gpui 0.2.2 ships no markdown element.
+pulldown-cmark = { version = "0.13", default-features = false }
+# The chat composer deletes by grapheme.
+unicode-segmentation = "1"
+# The grid and chat measure glyph widths.
+unicode-width = "0.2"
+thiserror = "2"
+tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }

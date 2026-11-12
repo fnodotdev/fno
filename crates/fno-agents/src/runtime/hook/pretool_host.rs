@@ -48,14 +48,14 @@ pub fn run(args: &[String]) -> i32 {
             "--plugin-root" => root = PathBuf::from(it.next().cloned().unwrap_or_default()),
             other => {
                 eprintln!(
-                    "fno-agents hook pretool: unknown flag {other:?}; usage: hook pretool --wire agy|pi --plugin-root <dir>"
+                    "fno-agents hook pretool: unknown flag {other:?}; usage: hook pretool --wire agy|pi|omp --plugin-root <dir>"
                 );
                 return 2;
             }
         }
     }
-    if wire != "agy" && wire != "pi" {
-        eprintln!("fno-agents hook pretool: --wire must be agy or pi");
+    if !matches!(wire.as_str(), "agy" | "pi" | "omp") {
+        eprintln!("fno-agents hook pretool: --wire must be agy, pi or omp");
         return 2;
     }
     let stdin = super::read_stdin();
@@ -295,7 +295,8 @@ fn stdout_deny(stdout: &str) -> Option<String> {
         .get("hookSpecificOutput")
         .and_then(|h| h.get("permissionDecision"))
         .and_then(Value::as_str);
-    if permission == Some("deny") {
+    // These wires have no prompt to show an `ask` on, so it relays as a deny.
+    if matches!(permission, Some("deny") | Some("ask")) {
         return Some(
             v.get("hookSpecificOutput")
                 .and_then(|h| h.get("permissionDecisionReason"))

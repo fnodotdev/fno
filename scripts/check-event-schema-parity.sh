@@ -369,6 +369,10 @@ dual_owner_kinds = {
     # and the single-row mutation path emits the per-write rows (Rust) with
     # the Python schema declaring both sources.
     "graph_write_gate",
+    # spawn_gate_refused: the spawn gate's refusal row. The schema documented
+    # it for the deleted Python transport's seam; the Rust gate now emits it
+    # (spawn_gate.rs emit_refusal_event), so both halves declare the name.
+    "spawn_gate_refused",
     "registry_row_removed",
     "registry_rows_lost",
     "agent_removed",

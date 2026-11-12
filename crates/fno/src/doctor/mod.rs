@@ -71,6 +71,17 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
             argv.extend(args[2..].iter().cloned());
             Some(Claim::AgentsExec("fno doctor evals", argv))
         }
+        // The opt-in usage report rides the evals events preview door, so
+        // it adds no fno-agents command.
+        Some("telemetry") => {
+            let mut argv = vec![
+                OsString::from("evals"),
+                OsString::from("events"),
+                OsString::from("--report"),
+            ];
+            argv.extend(args.get(2..).unwrap_or(&[]).iter().cloned());
+            Some(Claim::AgentsExec("fno doctor telemetry", argv))
+        }
         Some("intel") => Some(Claim::AgentsExec(
             "fno doctor intel",
             vec![OsString::from("intel")],
@@ -678,11 +689,16 @@ fn run_home(args: &[String]) -> i32 {
     }
 
     let auto_mode_settings = crate::cli_hooks::user_claude_settings_path();
+    let must_enable = crate::must_enable::doctor_report();
     let mut rep = Report::build(source.as_deref());
     if let Value::Object(report) = &mut rep.value {
         report.insert(
             "auto_mode_rules".into(),
             report::auto_mode_rules(&auto_mode_settings),
+        );
+        report.insert(
+            "must_enable_rules".into(),
+            serde_json::to_value(&must_enable).unwrap_or(Value::Null),
         );
     }
     let blockers = Blockers::of(&rep.value);
@@ -728,6 +744,9 @@ fn run_home(args: &[String]) -> i32 {
                 auto_mode_settings.display()
             )),
             _ => {}
+        }
+        for line in crate::must_enable::doctor_lines(&must_enable) {
+            echo_stdout(&line);
         }
         if !fix {
             if let Some(line) = report::preamble_budget_line(src.as_ref().and_then(|p| p.to_str()))

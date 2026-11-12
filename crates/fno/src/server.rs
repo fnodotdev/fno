@@ -69,11 +69,13 @@ pub(crate) mod agent_launch;
 mod agent_rows_apply;
 mod agent_rows_join;
 mod attach_argv;
+mod chat_stream;
 mod client_input;
 mod client_read;
 mod client_writer;
 mod drift_retire;
 mod first_attach;
+mod first_message;
 mod focus_recall;
 mod fresh_attach;
 mod grid_reconcile;
@@ -82,9 +84,14 @@ mod input_echo;
 mod keeper_adopt;
 pub(crate) mod lifecycle_target;
 mod mouse_route;
+mod pane_anchors;
 mod pane_scroll;
+mod search_nav;
+mod serve_attach;
 use pane_scroll::{wheel_gate, WheelGateState};
 pub(crate) mod links;
+mod mod_slot;
+pub(crate) use mod_slot::target_ok as mod_target_ok;
 mod notice;
 pub(crate) mod observers;
 mod open_link;
@@ -552,6 +559,15 @@ pub(crate) enum CoreMsg {
         pane: u64,
         top: bool,
     },
+    /// (v129) Land the exchange picker's jump on the pane's stamped
+    /// prompt anchor nearest `ts_ms`. Shared scroll + highlight like Search;
+    /// `id` alone learns the verdict ([`ServerMsg::AnchorJumped`]) so a miss
+    /// falls back to the transcript only for the operator who asked.
+    AnchorJump {
+        id: u64,
+        pane: u64,
+        ts_ms: u64,
+    },
     /// (v9) Answer a blocked prompt: re-verify the region fingerprint
     /// against the live grid, then inject the daemon-pinned `keystroke`. `id`
     /// is the requesting client (for the stale/busy/closed notice).
@@ -903,6 +919,7 @@ pub(crate) enum CoreMsg {
         squad: PaneTarget,
         anchor: u64,
         spec: AnchoredLayoutSpec,
+        mods: mod_slot::ModVerdicts,
         focus: bool,
         reply: ControlReply,
     },
@@ -1501,6 +1518,12 @@ pub(crate) struct Core {
     /// fact and squad assignment are joined at layout time, where the live
     /// pane set and the squad catalog live.
     input_echo: HashMap<u64, input_echo::EchoWatch>,
+    /// (v129) Per-pane stamped prompt anchors, oldest first, written
+    /// when a pane input burst submits. The exchange picker's jump joins a
+    /// transcript turn to its on-screen row through the anchor's submit
+    /// stamp. A dead pane's ring is dropped at removal; a live pane's ring
+    /// is bounded (`pane_anchors::MAX_PER_PANE`).
+    anchors: HashMap<u64, std::collections::VecDeque<pane_anchors::PaneAnchor>>,
     agents: Vec<RegistryAgent>,
     /// The last `AgentRows` reader's registry+roster read succeeded.
     /// Starts false (no read yet = unknown), so the registry-absence death
@@ -3696,7 +3719,7 @@ impl Core {
                             return Err((
                                 err_code::NOT_FOUND,
                                 format!("no tab at ordinal {n} and no tab with id {n}"),
-                            ))
+                            ));
                         }
                         1 => distinct,
                         _ => {
@@ -4013,10 +4036,11 @@ impl Core {
         squad: &PaneTarget,
         anchor: u64,
         spec: &AnchoredLayoutSpec,
+        mods: &mod_slot::ModVerdicts,
         _focus: bool,
     ) -> Result<ServerMsg, (u32, String)> {
-        use crate::proto::{GraftOutcome, GraftSlotResult, LayoutBinding};
-        use std::collections::HashMap;
+        use crate::proto::LayoutBinding;
+        use mod_slot::Bound;
 
         // 1. Pure topology + slot-integrity validation, pre-mutation.
         crate::templates::validate_anchored_spec(spec)
@@ -4044,49 +4068,16 @@ impl Core {
         let tid = self.session.squad(sid).expect("find_pane live").tabs[ti].id;
         let vp = self.tab_rect(tid);
 
-        // 3. Resolve Anchor + Fno bindings to live pane ids; collect Shell slots.
-        //    An unavailable Fno is REFUSED, never degraded to a shell. Duplicates
-        //    (two bindings -> one pane, or Fno -> the anchor) are refused.
-        let mut resolved: HashMap<String, u64> = HashMap::new();
-        let mut shell_slots: Vec<String> = Vec::new();
-        let mut results: Vec<GraftSlotResult> = Vec::new();
-        for slot in &spec.slots {
-            let (pid, outcome) = match &slot.binding {
-                LayoutBinding::Anchor => (anchor, GraftOutcome::Anchor),
-                LayoutBinding::Fno(id) => {
-                    let p = self.resolve_local_pane(id).ok_or_else(|| {
-                        (
-                            err_code::BAD_REQUEST,
-                            format!("fno binding {:?} has no live pane", slot.name),
-                        )
-                    })?;
-                    (p, GraftOutcome::Fno)
-                }
-                LayoutBinding::Shell => {
-                    shell_slots.push(slot.name.clone());
-                    continue;
-                }
-            };
-            if resolved.values().any(|&v| v == pid) {
-                return Err((
-                    err_code::BAD_REQUEST,
-                    format!("two graft slots resolve to the same pane {pid}"),
-                ));
-            }
-            resolved.insert(slot.name.clone(), pid);
-            results.push(GraftSlotResult {
-                slot: slot.name.clone(),
-                pane_id: pid,
-                outcome,
-            });
-        }
+        // 3. Resolve Anchor + Fno bindings to live pane ids; collect the slots to
+        //    spawn (shell and mod). See `mod_slot` for the refusal rules.
+        let mut bound = self.bind_graft_slots(anchor, spec, mods)?;
 
         // 4. Pre-spawn fit probe: realize the subtree with placeholder shell ids
         //    and confirm the candidate fits, so a too-small graft refuses BEFORE
         //    any shell spawns (AC4-EDGE-MINIMUM-FIT).
-        let mut fit_map = resolved.clone();
-        for (i, name) in shell_slots.iter().enumerate() {
-            fit_map.insert(name.clone(), u64::MAX - i as u64);
+        let mut fit_map = bound.resolved.clone();
+        for (i, name) in bound.pending().enumerate() {
+            fit_map.insert(name.to_string(), u64::MAX - i as u64);
         }
         let probe_tab = self.session.squad(sid).expect("live").tabs[ti].clone();
         let probe_subtree = crate::templates::realize_spec_tree(&spec.tree, &fit_map);
@@ -4097,37 +4088,18 @@ impl Core {
             ));
         }
 
-        // 5. Spawn Shell slots AFTER pure validation. All-or-nothing: a failed
-        //    spawn reaps every shell spawned so far (no detach happened yet, so
-        //    rollback is shell-only - AC4-EDGE-SHELL-ROLLBACK).
+        // 5. Spawn shell + mod slots AFTER pure validation, all-or-nothing.
         let cwd = self
             .session
             .squad(sid)
             .map(|s| s.canonical_cwd().to_string())
             .unwrap_or_default();
-        let mut spawned: Vec<u64> = Vec::new();
-        for name in &shell_slots {
-            match self.spawn_pane(vt::DEFAULT_ROWS, vt::DEFAULT_COLS, &cwd) {
-                Ok(p) => {
-                    spawned.push(p);
-                    resolved.insert(name.clone(), p);
-                    results.push(GraftSlotResult {
-                        slot: name.clone(),
-                        pane_id: p,
-                        outcome: GraftOutcome::Shell,
-                    });
-                }
-                Err(_) => {
-                    for p in &spawned {
-                        self.reap_pane(*p);
-                    }
-                    return Err((
-                        err_code::SPAWN_FAILED,
-                        format!("graft shell slot {name:?} failed to spawn; rolled back"),
-                    ));
-                }
-            }
-        }
+        let spawned = self.spawn_graft_slots(&mut bound, &cwd)?;
+        let Bound {
+            resolved,
+            mut results,
+            ..
+        } = bound;
 
         // 6. Detach reused Fno panes from their current leaves (PTY kept) so the
         //    candidate's substitution is their only occurrence. The anchor stays;
@@ -6808,7 +6780,9 @@ impl Core {
                                     None
                                 }
                             },
-                            LayoutBinding::Shell | LayoutBinding::Anchor => None,
+                            LayoutBinding::Shell
+                            | LayoutBinding::Anchor
+                            | LayoutBinding::Mod(_) => None,
                         };
                         match pane {
                             Some(p) => {
@@ -8375,68 +8349,6 @@ impl Core {
         }
     }
 
-    /// Apply one in-scrollback search op to `pane` (v12). Open/step mutate
-    /// the shared scroll + highlight (broadcast so every co-viewer tracks, tmux
-    /// precedent) and reply a `SearchResult` counter to the initiator ONLY; clear
-    /// (idempotent) drops the highlight for all. A missing pane, or a step with no
-    /// active search, gets a one-line notice to the requester, never a silent
-    /// no-op or a panic. Only match counts + coordinates ever leave the server.
-    fn search_nav(&mut self, client_id: u64, pane: u64, op: SearchOp) {
-        match op {
-            SearchOp::Open(query) => {
-                match self.panes.get_mut(&pane).map(|e| e.vt.search_open(&query)) {
-                    Some((total, current)) => {
-                        self.broadcast_pane(pane);
-                        self.send_search_result(client_id, pane, total, current);
-                    }
-                    None => self.notice(client_id, "pane not found"),
-                }
-            }
-            SearchOp::Step(dir) => match self.panes.get_mut(&pane).map(|e| e.vt.search_step(dir)) {
-                Some(Some((total, current))) => {
-                    self.broadcast_pane(pane);
-                    self.send_search_result(client_id, pane, total, current);
-                }
-                Some(None) => self.notice(client_id, "no active search"),
-                None => self.notice(client_id, "pane not found"),
-            },
-            // Idempotent: a no-match search_open already dropped the state while
-            // the client still sends Clear on Esc, so guarding on has_search here
-            // would misfire "no active search" on the common no-match-then-Esc.
-            SearchOp::Clear => match self.panes.get_mut(&pane) {
-                Some(e) => {
-                    e.vt.search_clear();
-                    self.broadcast_pane(pane);
-                }
-                None => self.notice(client_id, "pane not found"),
-            },
-        }
-    }
-
-    /// Reply the initiator-only `SearchResult` counter (v12). Reliable, like a
-    /// `Copy`: the `[i/n]` chrome is the only signal the search landed, and a
-    /// wedged reliable channel is a dead client (same teardown policy as
-    /// [`Core::send_copy`]).
-    fn send_search_result(&mut self, client_id: u64, pane_id: u64, total: u32, current: u32) {
-        let Some(c) = self.clients.iter().find(|c| c.id == client_id) else {
-            return;
-        };
-        if c.reliable_tx
-            .try_send(ServerMsg::SearchResult {
-                pane_id,
-                total,
-                current,
-            })
-            .is_err()
-        {
-            crate::mux_log!(error;
-                "fno mux: client {client_id} reliable channel wedged on SearchResult; dropping it"
-            );
-            self.clients.retain(|c| c.id != client_id);
-            self.push_layout(true);
-        }
-    }
-
     /// Whether a rerun may write to `pane` (idle guard); see
     /// [`rerun_allowed`].
     fn pane_rerun_allowed(&self, pane: u64) -> Result<(), &'static str> {
@@ -8587,7 +8499,13 @@ impl Core {
             }
         }
         match entry.pty.write_input(bytes) {
-            Ok(()) => ServerMsg::Ok,
+            Ok(()) => {
+                // Stamp before the child drains the write: the grid still
+                // shows the echoed prompt under the cursor, which is what
+                // the anchor freezes (v129). The entry borrow ends here.
+                self.stamp_anchor(pane, bytes);
+                ServerMsg::Ok
+            }
             // A dead/wedged pane fails closed: the child exited (BrokenPipe) or
             // stopped reading (WouldBlock). The send did not land - never a
             // silent Ok.
@@ -9500,6 +9418,7 @@ impl Core {
                         cwd: spawn_cwd,
                         permit,
                         keeper: KEEPER_ROAD,
+                        env: Vec::new(),
                     };
                     return self.spawn_then(order, Some(client_id), move |core, spawned| {
                         core.release_row_spawn(&id);
@@ -9653,6 +9572,7 @@ impl Core {
                     cwd: spawn_cwd.clone(),
                     permit,
                     keeper: KEEPER_ROAD,
+                    env: Vec::new(),
                 };
                 self.spawn_then(order, Some(client_id), move |core, spawned| {
                     core.release_row_spawn(&id);
@@ -10210,7 +10130,7 @@ impl Core {
                         self.remove_agent_action(client_id, owned);
                     }
                     Ok(lifecycle_target::LifecycleTarget::Pane(pid)) => {
-                        return self.remove_pane_row(client_id, pid, &name)
+                        return self.remove_pane_row(client_id, pid, &name);
                     }
                 }
                 Flow::Continue
@@ -10464,6 +10384,9 @@ impl Core {
             | CoreMsg::Search { id, .. }
             | CoreMsg::PaneScroll { id, .. }
             | CoreMsg::PaneScrollEdge { id, .. }
+            // AnchorJump moves the shared scroll + selection exactly like
+            // Search does; same read-only gate.
+            | CoreMsg::AnchorJump { id, .. }
             // PaneAnswer injects a keystroke into a pane PTY; a
             // read-only observer must never reach it (same class as Input).
             | CoreMsg::PaneAnswer { id, .. }
@@ -10571,6 +10494,10 @@ impl Core {
             }
             CoreMsg::Search { id, pane, op } => {
                 self.search_nav(id, pane, op);
+                Flow::Continue
+            }
+            CoreMsg::AnchorJump { id, pane, ts_ms } => {
+                self.anchor_jump(id, pane, ts_ms);
                 Flow::Continue
             }
             CoreMsg::PaneScroll { id, pane, delta } => {
@@ -11308,10 +11235,11 @@ impl Core {
                 squad,
                 anchor,
                 spec,
+                mods,
                 focus,
                 reply,
             } => {
-                let msg = match self.layout_graft(&squad, anchor, &spec, focus) {
+                let msg = match self.layout_graft(&squad, anchor, &spec, &mods, focus) {
                     Ok(msg) => msg,
                     Err((code, msg)) => ServerMsg::Err { code, msg },
                 };
@@ -12128,11 +12056,13 @@ async fn handle_control(
             spec,
             focus,
         } => {
+            let mods = mod_slot::resolve(&spec).await;
             core_tx
                 .send(CoreMsg::LayoutGraft {
                     squad,
                     anchor,
                     spec,
+                    mods,
                     focus,
                     reply: reply_tx,
                 })
@@ -12157,34 +12087,6 @@ async fn handle_control(
     }
 }
 
-/// Recover enough of an undecodable `Control` envelope to answer a newer
-/// floor-compatible client instead of closing silently on an unknown command.
-fn unknown_control_refusal(value: &serde_json::Value) -> Option<ServerMsg> {
-    let control = value.get("Control")?.as_object()?;
-    let proto = u32::try_from(control.get("proto")?.as_u64()?).ok()?;
-    let build = control.get("build")?.as_str()?;
-    if let Err(reason) = check_attach_version(proto, build) {
-        return Some(ServerMsg::Err {
-            code: err_code::VERSION_SKEW,
-            msg: reason,
-        });
-    }
-    let command = control
-        .get("verb")
-        .and_then(serde_json::Value::as_object)
-        .and_then(|object| object.keys().next())
-        .map(String::as_str)
-        .unwrap_or("unknown");
-    Some(ServerMsg::Err {
-        code: err_code::BAD_REQUEST,
-        msg: format!(
-            "unknown control command {command:?}; server {} speaks wire v{}",
-            crate::proto::BUILD_VERSION,
-            crate::proto::PROTO_VERSION
-        ),
-    })
-}
-
 /// Resolve when the control peer closes its half (or sends stray bytes). Used
 /// only to notice a mid-`PaneWait` disconnect; a one-shot client is otherwise
 /// silent until it reads the reply and closes.
@@ -12203,41 +12105,8 @@ async fn handle_client(
     id: u64,
     stats: PaneStats,
 ) {
-    let first = tokio::time::timeout(
-        ATTACH_TIMEOUT,
-        read_msg::<_, serde_json::Value>(&mut stream),
-    )
-    .await;
-    let first = match first {
-        Ok(Ok(value)) => match <ClientMsg as serde::Deserialize>::deserialize(&value) {
-            Ok(message) => message,
-            Err(error) => {
-                if let Some(reply) = unknown_control_refusal(&value) {
-                    let _ = write_msg(&mut stream, &reply).await;
-                } else {
-                    crate::mux_log!(error; "fno mux: initial client message failed to decode: {error}");
-                    // The refusal above recovers every envelope shape this
-                    // build knows. An envelope it cannot interpret at all
-                    // must not restore the silent close this branch removed:
-                    // even a hopeless decode gets a loud refusal, so drift
-                    // surfaces as a client-side error, never a dead socket.
-                    let _ = write_msg(
-                        &mut stream,
-                        &ServerMsg::Err {
-                            code: err_code::BAD_REQUEST,
-                            msg: format!(
-                                "undecodable first message; server {} speaks wire v{}",
-                                crate::proto::BUILD_VERSION,
-                                crate::proto::PROTO_VERSION
-                            ),
-                        },
-                    )
-                    .await;
-                }
-                return;
-            }
-        },
-        _ => return,
+    let Some(first) = first_message::read_first(&mut stream).await else {
+        return;
     };
     let (rows, cols, cwd) = match first {
         ClientMsg::Attach {
@@ -12280,6 +12149,16 @@ async fn handle_client(
             command,
         } => {
             handle_control(stream, core_tx, resolver, proto, build, command).await;
+            return;
+        }
+        ClientMsg::ChatTail {
+            proto,
+            build,
+            session,
+            from_seq,
+        } => {
+            let roots = crate::chat_events::ChatRoots::host();
+            chat_stream::serve(stream, roots, proto, build, session, from_seq).await;
             return;
         }
         // Liveness probes connect and vanish; malformed first messages and

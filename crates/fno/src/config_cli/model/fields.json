@@ -158,7 +158,7 @@
        "host": "https://us.i.posthog.com",
        "token_env": "FNO_POSTHOG_PROJECT_TOKEN"
       },
-      "install_count": {
+      "usage_report": {
        "enabled": true
       }
      }
@@ -1085,7 +1085,16 @@
      }
     },
     {
-     "name": "install_count",
+     "name": "usage_events",
+     "default": {
+      "enabled": false,
+      "host": "https://us.i.posthog.com",
+      "token_env": "FNO_POSTHOG_PROJECT_TOKEN",
+      "token_file": "~/.fno/secrets/posthog-project-token"
+     }
+    },
+    {
+     "name": "usage_report",
      "default": {
       "enabled": true
      }
@@ -2481,7 +2490,7 @@
     }
    ]
   },
-  "TelemetryInstallCountBlock": {
+  "TelemetryUsageReportBlock": {
    "extra": "ignore",
    "fields": [
     {
@@ -3305,7 +3314,11 @@
   "telemetry.eval_events.host",
   "telemetry.eval_events.token_env",
   "telemetry.eval_events.token_file",
-  "telemetry.install_count.enabled",
+  "telemetry.usage_events.enabled",
+  "telemetry.usage_events.host",
+  "telemetry.usage_events.token_env",
+  "telemetry.usage_events.token_file",
+  "telemetry.usage_report.enabled",
   "attention.enabled",
   "attention.sinks",
   "research.output_dir",

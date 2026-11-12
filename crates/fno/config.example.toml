@@ -198,8 +198,18 @@ token_env = "FNO_POSTHOG_PROJECT_TOKEN"
 # Path to the PostHog project token file (mode 0600); token_env wins when set; a leading ~ expands against $HOME.
 token_file = "~/.fno/secrets/posthog-project-token"
 
-[telemetry.install_count]
-# Send one install-count event per machine per day (version, channel, OS, arch, a random install id; no free text). Opt out to send nothing.
+[telemetry.usage_events]
+# Send allowlisted fleet journal rows (spawns, refusals, merges, latency) to PostHog as events, identifiers only (default off).
+enabled = false
+# PostHog ingest host, https only.
+host = "https://us.i.posthog.com"
+# Env var holding the PostHog project token.
+token_env = "FNO_POSTHOG_PROJECT_TOKEN"
+# Path to the PostHog project token file (mode 0600); token_env wins when set; a leading ~ expands against $HOME.
+token_file = "~/.fno/secrets/posthog-project-token"
+
+[telemetry.usage_report]
+# Set false to force the opt-in daily usage report off, whatever consent says. Consent itself is recorded only by fno doctor telemetry on or the setup wizard.
 enabled = true
 
 [attention]
@@ -911,7 +921,7 @@ enabled = false
 model = "sonnet"
 
 [merge]
-# Paint paths used for optional look evidence. Explicit head-scoped user declines retain authority.
+# Render-surface paths whose PRs warn when no look is recorded at their head; the merge proceeds and the look request routes to the lead for the Visual Log page after it lands. Explicit head-scoped user declines retain authority.
 # visual_paint_paths = <unset>   # optional; no default
 # Legacy look workflow setting. Missing looks no longer cancel CI.
 # visual_shot_workflows = <unset>   # optional; no default

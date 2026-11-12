@@ -131,6 +131,11 @@ pub enum AskError {
     /// (`fno.agents.harnesses.claude`), which is a separate producer this
     /// Rust ask/BG8 path never calls through.
     ForgedEnvelope { message: String },
+    /// No supervisor serves the dir and this process may not birth one (a
+    /// non-Aqua session or an fno launchd job): the string names the session
+    /// type and the cure. The spawn lane maps it to exit 13 and the printed
+    /// refusal line; the claude process never starts.
+    BirthRefused { reason: String },
 }
 
 impl std::fmt::Display for AskError {
@@ -154,6 +159,9 @@ impl std::fmt::Display for AskError {
             AskError::Socket { message } => write!(f, "{}", message),
             AskError::Io { message } => write!(f, "{}", message),
             AskError::ForgedEnvelope { message } => write!(f, "{}", message),
+            AskError::BirthRefused { reason } => {
+                write!(f, "fno: no claude supervisor born: {reason}")
+            }
             AskError::Timeout {
                 elapsed_sec,
                 short_id,
@@ -1698,7 +1706,11 @@ pub fn bg_create(
     // make sure a clean one is up first. The client drops its route keys in
     // case it wins a birth race anyway; the route rides --settings.
     crate::claude_supervisor::strip_route_carriers(&mut cmd);
-    crate::claude_supervisor::guard_birth(extra_env.iter().copied());
+    if let crate::claude_supervisor::BirthVerdict::Refuse(reason) =
+        crate::claude_supervisor::guard_birth(extra_env.iter().copied())
+    {
+        return Err(AskError::BirthRefused { reason });
+    }
 
     let start = std::time::Instant::now();
     // Name the not-found candidate before exec: a missing cwd and a missing
@@ -2083,6 +2095,8 @@ use crate::state::{
 };
 use crate::AgentStatus;
 
+use super::name_collision::{self as spawn_collision, Resolution};
+
 /// `_NAME_MAX_LEN` / `_FROM_NAME_MAX_LEN`.
 const NAME_MAX_LEN: usize = 128;
 const FROM_NAME_MAX_LEN: usize = 128;
@@ -2367,7 +2381,7 @@ fn answer_thread_prompt(home: &AgentsHome, name: &str, answer: &str) -> Option<A
         }
     };
     let registry = load_registry(&home.registry_json()).ok()?;
-    let entry = registry.find_name_or_full_session_id(name)?;
+    let entry = registry.find_name_session_or_short_id(name)?;
     if entry.harness_name() != "claude" {
         return Some(AskOutcome::err("ask --answer reaches only a claude row", 2));
     }
@@ -2488,7 +2502,7 @@ pub fn dispatch_claude_ask(
         .ok()
         .and_then(|registry| {
             registry
-                .find_name_or_full_session_id(name)
+                .find_name_session_or_short_id(name)
                 .map(|entry| entry.name.clone())
         })
         .unwrap_or_else(|| name.to_string());
@@ -2538,7 +2552,7 @@ pub fn dispatch_claude_ask(
             return AskOutcome::err(format!("registry read failed: {}", e), 12);
         }
     };
-    let existing = registry.find_name_or_full_session_id(name).cloned();
+    let existing = registry.find_name_session_or_short_id(name).cloned();
 
     match existing {
         Some(entry) => {
@@ -2650,16 +2664,10 @@ pub fn dispatch_claude_spawn(
             return AskOutcome::err(format!("registry read failed: {}", e), 12);
         }
     };
-    if registry.find(name).is_some() {
-        // Python: f"agent {name!r} already exists; ..." -> py_repr, not {:?}.
-        return AskOutcome::err(
-            format!(
-                "agent {} already exists; use 'fno agents rm {}' first or pick another name",
-                py_repr(name),
-                name
-            ),
-            2,
-        );
+    match spawn_collision::resolve(home, &registry, name) {
+        Resolution::Refuse(line) => return AskOutcome::err(line, 2),
+        Resolution::Registry(line) => return AskOutcome::err(line, 12),
+        _ => {}
     }
 
     // --yolo now maps to bypassPermissions for claude (was a no-op); an
@@ -3420,6 +3428,22 @@ fn create(
                     pre_stderr, stdout_head
                 ),
                 exit_code: 1,
+            };
+        }
+        Err(AskError::BirthRefused { reason }) => {
+            emit_event(
+                events,
+                "agent_ask_failed",
+                &[
+                    ("stage", "birth-refused".into()),
+                    ("name", name.into()),
+                    ("provider", "claude".into()),
+                ],
+            );
+            return AskOutcome {
+                stdout: String::new(),
+                stderr: format!("{pre_stderr}fno: no claude supervisor born: {reason}\n"),
+                exit_code: crate::claude_supervisor::BIRTH_REFUSED_EXIT,
             };
         }
         Err(other) => {

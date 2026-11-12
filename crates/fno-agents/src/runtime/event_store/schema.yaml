@@ -3984,6 +3984,17 @@ event_types:
         reason:
           type: string
 
+  - name: agent_name_reclaimed
+    description: "A spawn collision door removed a registry row whose pid had returned to claude's idle bg-spare pool (pool argv, claim socket still on disk): the row held a worker name while serving no work. The reclaim runs under the spawn's per-agent lock and stamps a session tombstone."
+    sources: [agents]
+    data:
+      required: [name]
+      properties:
+        name:
+          type: string
+        pid:
+          type: integer
+
   - name: codex_thread_resumed_without_state_grant
     description: "A codex thread was auto-resumed with no reconstructible state-root grant. The roots reach a spawn as an RPC param from the Python seam, and daemon-side recovery has no such param, so this worker may be unable to claim or mail. Emitted so the loss is readable instead of silent; bounded threads only, since a full-access thread needs no grant."
     sources: [daemon]
@@ -4603,8 +4614,8 @@ event_types:
           description: "Guard name: graph-write-protect, worktree-write-protect, generated-write-guard, join-partition-write-guard, plan-location-guard, git-protection, or bg-process-guard."
         decision:
           type: string
-          enum: [allow, block]
-          description: "One vocabulary across languages: a refusal is 'block' whether the guard's own output says block (bash) or deny (python permissionDecision)."
+          enum: [allow, block, nudge, override]
+          description: "One vocabulary across languages: a refusal is 'block' whether the guard's own output says block (bash) or deny (python permissionDecision). 'nudge' is an allow that carried a guard note. 'override' is a call that ran after its guard returned ask, so the person approved it."
         tool:
           type: string
           description: "Tool name from the payload; 'unknown' when the guard approved before parsing."
@@ -8633,6 +8644,16 @@ event_types:
   - name: agent_ask_started
     description: "An fno-agents ask RPC started."
     sources: [daemon, agents]
+    data:
+      required: []
+  - name: thread_permission_answered
+    description: "fno answered a thread worker's permission ask through the fnod ladder (allow, model_note or hold_for_user)."
+    sources: [agents]
+    data:
+      required: []
+  - name: thread_permission_reply_failed
+    description: "A thread permission reply did not land on the harness; the ask stays pending."
+    sources: [agents]
     data:
       required: []
   - name: agent_ask_failed

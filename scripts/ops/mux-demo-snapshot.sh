@@ -5,6 +5,7 @@
 #       [--window-size smallest|latest|largest] [--peer 120x40] [--no-fit]
 #       [--hold] [--group <axis>] [--remote-pane] [--web [--web-port <port>]]
 #       [--hold] [--group <axis>] [--remote-pane] [--flat-pins] [--sort <col:dir>] [--layout list] [--lead-nesting] [--holds]
+#       [--install-card data|code]
 #
 # Builds a throwaway server in a temp state root: its own config, graph,
 # agent registry, view prefs and socket dir. It seeds invented backlog nodes,
@@ -15,6 +16,8 @@
 set -euo pipefail
 
 FNO="${FNO_BIN:-fno}"
+# Resolved before any cd: the shoot runs from inside the throwaway root.
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
 # Backlog commands exec the fno-agents binary, not this front door. A branch
 # build drives its own tree's agents sibling, so the seeded mint (which reads
 # FNO_DEMO_ID_SEED there) is the one under test, never the deployed binary.
@@ -69,6 +72,9 @@ FNO_DEMO_HOLDS=""
 FNO_DEMO_SORT=""
 FNO_DEMO_LAYOUT=""
 FNO_DEMO_LEAD_NESTING=""
+# --install-card data|code runs a real `fno config plugins install` of a
+# throwaway local pack in the first pane, so the shot shows its consent card.
+INSTALL_CARD=""
 for a in "$@"; do
   if [ "$PREV" = "--out" ]; then
     mkdir -p -- "$(dirname -- "$a")"
@@ -83,7 +89,9 @@ for a in "$@"; do
     FNO_DEMO_SORT="$a"
   elif [ "$PREV" = "--layout" ]; then
     FNO_DEMO_LAYOUT="$a"
-  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--web-port" ] || [ "$a" = "--sort" ] || [ "$a" = "--layout" ]; then
+  elif [ "$PREV" = "--install-card" ]; then
+    INSTALL_CARD="$a"
+  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--web-port" ] || [ "$a" = "--sort" ] || [ "$a" = "--layout" ] || [ "$a" = "--install-card" ]; then
     :
   elif [ "$a" = "--lead-nesting" ]; then
     FNO_DEMO_LEAD_NESTING=1
@@ -526,7 +534,46 @@ W=(--workspace checkout)
 # is the session's name@host address. With --remote-pane it spawns first, so
 # the shot's focus lands on the seat and the chosen band lands on the remote
 # row the seat folds into.
-if [ -n "$REMOTE_PANE" ]; then
+if [ -n "$INSTALL_CARD" ]; then
+  PACK="$ROOT/packsrc/demo-$INSTALL_CARD"
+  PANELS="$REPO_ROOT/plugins/fno-panels/mods"
+  mkdir -p "$PACK/mods/one"
+  cp "$PANELS/review-ledger/preview.png" "$PACK/mods/one/preview.png"
+  printf '# Recipe\n\nOpen it from Settings, Mods.\n' > "$PACK/mods/one/RECIPE.md"
+  if [ "$INSTALL_CARD" = code ]; then
+    RENDER='    run: [sh, -c, "while :; do date; sleep 1; done"]'
+    TITLE="Clock"
+  else
+    RENDER='    feed:
+      argv: [fno, backlog, list, --json]
+      columns:
+        - {key: /id, title: id}
+        - {key: /title, title: title}'
+    TITLE="Open work"
+  fi
+  cat > "$PACK/plugin.yaml" <<YAML
+id: demo-$INSTALL_CARD
+version: 0.1.0
+footnote_compat:
+  minimum: "0.3.0"
+mods:
+  - id: one
+    title: $TITLE
+    summary: A demo mod for the consent card shot.
+    preview: mods/one/preview.png
+    recipe: mods/one/RECIPE.md
+$RENDER
+YAML
+  git -C "$PACK" init --quiet
+  git -C "$PACK" add -A
+  git -C "$PACK" -c user.name=demo -c user.email=demo@example.invalid -c commit.gpgsign=false \
+    commit --quiet -m "demo pack"
+  run --cwd "$ROOT/code/checkout" -- \
+    sh -c "'$FNO' config plugins install 'file://$PACK'; while :; do sleep 1; done"
+  run --cwd "$ROOT/code/checkout" --tab 1 --at "${PANES[0]}" --split right -- \
+    sh -c "$(show codex)"
+  RUN_AT="${PANES[1]}"
+elif [ -n "$REMOTE_PANE" ]; then
   run --cwd "$ROOT/code/checkout" -- \
     env FNO_AGENT_SELF=kestrel@mac2 sh -c "$(show remote)"
   run --cwd "$ROOT/code/checkout" --tab 1 --at "${PANES[0]}" --split right -- \
@@ -543,7 +590,7 @@ run --cwd "$ROOT/code/checkout" -- sh -c "$(show pi)"
 run --cwd "$ROOT/code/checkout" -- sh -c "$(show docs)"
 # The registry seed skips the seat pane: its row count shifts by one.
 SEED_OFF=0
-if [ -n "$REMOTE_PANE" ]; then
+if [ -n "$REMOTE_PANE" ] || [ -n "$INSTALL_CARD" ]; then
   SEED_OFF=1
 fi
 "$FNO" mux tab rename --server "$SERVER" "${W[@]}" --tab 1 --name agents >/dev/null
@@ -585,8 +632,15 @@ def thread(name, harness, how, attach=None):
         "mux": None,
     } | ({} if attach is None else {"attach_id": attach})
 agents = [
-    # archer holds submitted mail mid-turn, so the sideline paints its held badge.
-    row("archer", "codex", "gpt-6-sol", ids[0 + off], "working", sids[1]) | {"mail_held": 8},
+    # archer holds submitted mail mid-turn, so the sideline paints its held
+    # badge; the oldest wait is 12 minutes before the demo epoch.
+    row("archer", "codex", "gpt-6-sol", ids[0 + off], "working", sids[1])
+    | {
+        "mail_held": 8,
+        "mail_held_since": datetime.datetime.fromtimestamp(
+            int(os.environ["FNO_DEMO_EPOCH"]) - 12 * 60, datetime.timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    },
     row("scout", "claude", "opus", ids[1 + off], "done", sids[0]),
     row("reviewer", "opencode", "zen", ids[2 + off], "working", sids[2]),
     # Blocked, so the strip's need-input count and the Input word render.
@@ -622,25 +676,24 @@ if os.environ.get("FNO_DEMO_FLATPINS"):
         lead("vega", "demo-sid-vega"),
         worker("vega-w1", "demo-sid-vega", "demo-sid-vega-w1"),
     ]
-# --holds adds the hold fixture: keeper's conversation hold has lapsed but
-# its bus-only stamp still waits on release, sentry carries a hold someone
-# set by hand, and eval-once is a headless one-shot that paints no row.
+# --holds adds the hold fixture: keeper carries a live conversation hold
+# (the fno-mail hold record), sentry takes mail only (the register door's
+# bus-only capability), and eval-once is a headless one-shot that paints no
+# row.
 if os.environ.get("FNO_DEMO_HOLDS"):
     live = {"inside_leg": {"state": "working", "seq": 1, "received_at": now}}
     hold_dir = os.path.join(os.path.dirname(db), "mail", "mail-hold")
     os.makedirs(hold_dir, exist_ok=True)
-    lapsed = datetime.datetime.fromtimestamp(
-        int(os.environ["FNO_DEMO_EPOCH"]) - 60, datetime.timezone.utc
+    until = datetime.datetime.fromtimestamp(
+        int(os.environ["FNO_DEMO_EPOCH"]) + 600, datetime.timezone.utc
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
-    for sid, source in (("demo-sid-keeper", "conversation"), ("demo-sid-sentry", None)):
-        clock = {"until": lapsed, "window_s": 600, "clock_kind": "wall", "ceiling": None}
-        if source:
-            clock["source"] = source
-        with open(os.path.join(hold_dir, sid + ".json"), "w") as f:
-            json.dump(clock, f)
+    keeper_sid = "6b65e7e1-0000-4000-8000-00000000d3e0"
+    with open(os.path.join(hold_dir, keeper_sid + ".json"), "w") as f:
+        json.dump({"session": keeper_sid, "until": until, "set_by": "conversation",
+                   "reason": "conversation", "clock": {"kind": "wall"}}, f)
     agents += [
         thread("keeper", "claude", "idle", attach="demo-keeper") | live | {
-            "delivery_policy": "bus-only", "harness_session_id": "demo-sid-keeper"},
+            "harness_session_id": keeper_sid},
         thread("sentry", "codex", "idle", attach="demo-sentry") | live | {
             "delivery_policy": "bus-only", "harness_session_id": "demo-sid-sentry"},
         thread("eval-once", "claude", "idle") | live | {"substrate": "headless"},

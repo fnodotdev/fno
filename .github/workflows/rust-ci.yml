@@ -77,6 +77,10 @@ jobs:
         working-directory: crates/fno-mail
         run: cargo "+$RUSTFMT_TOOLCHAIN" fmt --all --check
 
+      - name: cargo fmt --check (fno-app)
+        working-directory: crates/fno-app
+        run: cargo "+$RUSTFMT_TOOLCHAIN" fmt --all --check
+
   warnings:
     name: cargo check --all-targets (deny warnings)
     # The ratchet the node asked for: rustc warnings fail CI, so the count can
@@ -143,9 +147,12 @@ jobs:
     # Command::output, configured in each crate's clippy.toml) held by the
     # tests/ci/clippy-baseline.txt ratchet. A hit is keyed by its line's
     # text, so editing a flagged line fails even though the hit itself is
-    # baselined - deny-on-changed-lines with no merge-base diff. All four
-    # lints run as WARN through clippy, because a deny-level lint stops the
-    # compile and hides every later diagnostic; the baseline verdict is what
+    # baselined - deny-on-changed-lines with no merge-base diff. Four
+    # more lints (unwrap_used, let_underscore_must_use,
+    # undocumented_unsafe_blocks, too_many_lines: rust-style R8/R9/R14/R15)
+    # ride the same ratchet from a second `--lib --bins` pass, so test code
+    # never counts. All lints run as WARN through clippy, because a
+    # deny-level lint stops the compile and hides every later diagnostic; the baseline verdict is what
     # denies. The toolchain is PINNED to the one that wrote the baseline: a
     # newer clippy can flag untouched lines, which would red as new hits.
     # Bump the pin and re-run `clippy-check.sh --write-baseline` together,
@@ -246,7 +253,7 @@ jobs:
         run: |
           files="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')"
           case "$files" in
-            *src/client.rs*|*client/sideline.rs*|*client/card_line.rs*|*client/bell.rs*|*client/backlog_panes.rs*|*client/messages_view.rs*|*client/snapshot.rs*|*client/keys_modal.rs*|*modal_select.rs*|*client/feed_detail.rs*|*client/questions.rs*|*client/pane_paint.rs*|*client/terminal_cursor.rs*|*client/org_*|*client/pr_review.rs*|*client/file_viewer.rs*|*client/node_detail.rs*|*pr_diff.rs*|*fleet_beacon.rs*|*server/window_size.rs*|*mux-demo-snapshot.sh*)
+            *src/client.rs*|*client/sideline.rs*|*client/card_line.rs*|*client/bell.rs*|*client/backlog_panes.rs*|*client/messages_view.rs*|*client/snapshot.rs*|*client/mods.rs*|*client/settings_modal.rs*|*client/keys_modal.rs*|*modal_select.rs*|*client/feed_detail.rs*|*client/questions.rs*|*client/pane_paint.rs*|*client/terminal_cursor.rs*|*client/org_*|*client/pr_review.rs*|*client/file_viewer.rs*|*client/node_detail.rs*|*pr_diff.rs*|*fleet_beacon.rs*|*server/window_size.rs*|*mux-demo-snapshot.sh*)
               echo "shoot=1" >> "$GITHUB_ENV"
               echo "the bell surface changed: shooting"
               ;;
@@ -337,6 +344,16 @@ jobs:
             bash scripts/ops/mux-demo-snapshot.sh --out "shots/machines-${group}.png" --format png --view machines --group "$group" --remote-pane --size 200x72 --fit
             bash scripts/ops/mux-demo-snapshot.sh --out "shots/machines-${group}-light.png" --format png --view machines --group "$group" --remote-pane --theme light --size 200x72 --fit
           done
+          # Settings > Mods: the tab, the gallery under it, the second
+          # press on a code mod, and the consent card of each install kind.
+          for theme in dark light; do
+            for view in mods mods-gallery mods-confirm; do
+              bash scripts/ops/mux-demo-snapshot.sh --out "shots/${view}-${theme}.png" --format png --view "$view" --theme "$theme" --size 200x56 --fit
+            done
+            for kind in data code; do
+              bash scripts/ops/mux-demo-snapshot.sh --out "shots/install-card-${kind}-${theme}.png" --format png --install-card "$kind" --theme "$theme" --size 200x56 --fit
+            done
+          done
           # Two windows on one tab: the active big window fills, the same
           # window under the smallest policy letterboxes, and a small
           # observer crops a tab the big peer sized.
@@ -351,6 +368,63 @@ jobs:
           name: bell-panel-shots
           path: shots/*.png
           if-no-files-found: error
+
+  desktop:
+    name: cargo check fno-app (macOS)
+    # The desktop app builds on macOS only, so no Linux job compiles it. A
+    # macOS runner costs ten Linux minutes per minute, so the job checks only
+    # when the app's own crate, the fno manifest or a file behind
+    # `fno::app_api` changes.
+    if: github.event_name == 'pull_request'
+    runs-on: macos-15
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Check only when the desktop surface changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')"
+          if printf '%s\n' "$files" | grep -qE '^crates/fno-app/|^crates/fno/Cargo\.(toml|lock)$|^crates/fno/src/(app_api|client|lattice|plugins_feed|web_hq|digest_overlay|transcript_tail|text_style|needs_overlay|backlog_model|backlog_view|chat_events|tree|theme|link|mux_cli/pane_submit)(\.rs|/)|^crates/fno/src/proto/'; then
+            echo "check=1" >> "$GITHUB_ENV"
+            echo "the desktop surface changed: checking"
+          else
+            echo "check=" >> "$GITHUB_ENV"
+            echo "the desktop surface is untouched: no check this run"
+          fi
+
+      - name: Install stable Rust toolchain
+        if: env.check == '1'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry + build artifacts
+        if: env.check == '1'
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/fno-app/target
+          key: ${{ runner.os }}-app-${{ hashFiles('crates/fno-app/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-app-
+
+      - name: cargo check (fno-app)
+        if: env.check == '1'
+        run: cargo check --locked --manifest-path crates/fno-app/Cargo.toml --all-targets
+
+      - name: cargo test (fno-app)
+        if: env.check == '1'
+        run: cargo test --locked --manifest-path crates/fno-app/Cargo.toml
+
+      - name: clippy gate (fno-app)
+        if: env.check == '1'
+        run: bash scripts/ci/clippy-check.sh crates/fno-app
 
   release-version-math:
     name: release version math (sync-version + release-version)
@@ -441,6 +515,14 @@ jobs:
     # binaries across two jobs; do not raise it.
     runs-on: ubuntu-24.04
     timeout-minutes: 35
+    # The same measured cut the smoke-rest and cargo-test-shard jobs carry:
+    # this job builds the same three test binaries with full debug info, and
+    # its runner has no disk-freeing step, so the same ENOSPC death that hit
+    # the smoke shards would land here and render green under
+    # continue-on-error. Line tables keep file:line in a panic backtrace.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
     # REPORTS, does not gate. The step publishes its trial count to the run
     # summary and always exits 0; graduate by making it assert failures=0, and
     # only once the comparison below says something. `continue-on-error` stays

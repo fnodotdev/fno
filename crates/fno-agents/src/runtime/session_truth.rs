@@ -514,6 +514,69 @@ fn parse_codex_record(v: &Value) -> Option<TruthRecord> {
     })
 }
 
+/// The 2.x SSE envelope and payload, typed once at the parse boundary.
+#[derive(serde::Deserialize)]
+struct OpendeSseEnvelope {
+    #[serde(rename = "type")]
+    etype: String,
+    data: OpendeSseData,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct OpendeSseData {
+    #[serde(rename = "sessionID", default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// The session an SSE event belongs to, typed the same way.
+pub(crate) fn opencode_event_session(v: &Value) -> Option<String> {
+    let Ok(envelope) = serde_json::from_value::<OpendeSseEnvelope>(v.clone()) else {
+        return None;
+    };
+    envelope.data.session_id
+}
+
+pub(crate) fn parse_opencode_event(v: &Value) -> Option<TruthRecord> {
+    let Ok(envelope) = serde_json::from_value::<OpendeSseEnvelope>(v.clone()) else {
+        return None;
+    };
+    let data = envelope.data;
+    match envelope.etype.as_str() {
+        "session.text.ended" => {
+            let text = data.text.as_deref()?.trim();
+            if text.is_empty() {
+                return None;
+            }
+            Some(TruthRecord {
+                role: "assistant".into(),
+                text: text.to_string(),
+                timestamp: None,
+            })
+        }
+        "session.tool.input.ended" => {
+            let name = data.name.as_deref().unwrap_or("?");
+            Some(TruthRecord {
+                role: "assistant".into(),
+                text: format!("[tool_use: {name}]"),
+                timestamp: None,
+            })
+        }
+        "session.synthetic" => {
+            let text = data.text.as_deref()?;
+            Some(TruthRecord {
+                role: "user".into(),
+                text: text.trim().to_string(),
+                timestamp: None,
+            })
+        }
+        _ => None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The opencode arm: the shared SQLite store, read-only
 // ---------------------------------------------------------------------------
@@ -544,8 +607,12 @@ fn ambient_opencode_db() -> PathBuf {
 fn opencode_activity_epoch(db: &Path, session_id: &str) -> Option<f64> {
     let conn = crate::graph_store::open_read_only_wal_safe(db)?;
     conn.busy_timeout(std::time::Duration::from_secs(2)).ok()?;
+    let table = match super::opencode_transcript::store_family(&conn) {
+        Some(true) => "session_message",
+        _ => "message",
+    };
     conn.query_row(
-        "SELECT MAX(time_updated) FROM message WHERE session_id = ?1",
+        &format!("SELECT MAX(time_updated) FROM {table} WHERE session_id = ?1"),
         [session_id],
         |row| row.get::<_, Option<f64>>(0),
     )
@@ -563,6 +630,9 @@ fn opencode_records_db(db: &Path, session_id: &str, n: usize) -> Vec<TruthRecord
         return Vec::new();
     };
     let _ = conn.busy_timeout(std::time::Duration::from_secs(2));
+    if super::opencode_transcript::store_family(&conn) == Some(true) {
+        return opencode_records_db_v2(&conn, session_id, n);
+    }
     let Ok(mut stmt) = conn.prepare(
         "SELECT id, data FROM message WHERE session_id = ?1 \
              ORDER BY time_created DESC, id DESC",
@@ -627,6 +697,140 @@ fn per_msg_parts(conn: &rusqlite::Connection, message_id: &str) -> Vec<Value> {
     rows.flatten()
         .filter_map(|raw| serde_json::from_str(&raw).ok())
         .collect()
+}
+
+/// The last `n` renderable turns from a 2.x store, chronologically. The
+/// stream walks newest-first; a compaction message closes the window the
+/// same way a 1.x compaction part does: it and everything older drop.
+fn opencode_records_db_v2(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    n: usize,
+) -> Vec<TruthRecord> {
+    let sql = "SELECT m.id, m.type, m.data, p.type, p.data \
+         FROM session_message m LEFT JOIN session_part p ON p.message_id = m.id \
+         WHERE m.session_id = ?1 ORDER BY m.seq DESC, p.ordinal DESC";
+    let Ok(mut stmt) = conn.prepare(sql) else {
+        return Vec::new();
+    };
+    let Ok(rows) = stmt
+        .query_map([session_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        })
+        .map_err(|_| ())
+    else {
+        return Vec::new();
+    };
+    let mut records: Vec<TruthRecord> = Vec::new();
+    let mut current: Option<(String, String, String, Vec<Value>)> = None;
+    for row in rows.flatten() {
+        let (mid, mtype, mdata, ptype, pdata) = row;
+        match &mut current {
+            Some((cur_id, _, _, parts)) if *cur_id == mid => {
+                if let (Some(_pt), Some(pd)) = (ptype, pdata) {
+                    parts.push(serde_json::from_str(&pd).unwrap_or(Value::Null));
+                }
+            }
+            _ => {
+                if let Some((_, mtype, mdata, parts)) = current.take() {
+                    if mtype == "compaction" {
+                        break;
+                    }
+                    let text = join_v2_parts(&mtype, &mdata, &parts);
+                    if !text.is_empty() {
+                        let role = if mtype == "assistant" {
+                            "assistant"
+                        } else {
+                            "user"
+                        };
+                        records.push(TruthRecord {
+                            role: role.to_string(),
+                            text,
+                            timestamp: None,
+                        });
+                    }
+                }
+                if records.len() >= n {
+                    break;
+                }
+                current = Some((mid, mtype, mdata, vec![]));
+            }
+        }
+    }
+    records.reverse();
+    records
+}
+/// The 2.x assistant message's inline content list, typed at the boundary.
+#[derive(serde::Deserialize)]
+struct V2AssistantContent {
+    #[serde(default)]
+    content: Vec<Value>,
+}
+
+/// The 2.x part shapes the records view renders, typed at the boundary.
+#[derive(serde::Deserialize)]
+struct V2UserishText {
+    #[serde(default)]
+    text: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub(crate) enum V2AssistantPart {
+    Text {
+        #[serde(default)]
+        text: String,
+    },
+    Tool {
+        #[serde(default)]
+        name: String,
+    },
+    #[serde(other)]
+    Other,
+}
+
+/// The 2.x part-rendering policy: a user or synthetic message speaks its
+/// own `text`; an assistant message joins its text parts and renders each
+/// tool part as a compact marker (the `name` field, not 1.x's `tool`).
+fn join_v2_parts(mtype: &str, mdata: &str, parts: &[Value]) -> String {
+    match mtype {
+        "user" | "synthetic" => serde_json::from_str::<V2UserishText>(mdata)
+            .map(|t| t.text)
+            .unwrap_or_default(),
+        "assistant" => {
+            // Real stores keep the content items inline in the message row;
+            // part rows are the alternative shape. Prefer part rows and fall
+            // back to the inline list.
+            let inline: Vec<Value>;
+            let parts = if parts.is_empty() {
+                inline = serde_json::from_str::<V2AssistantContent>(mdata)
+                    .map(|c| c.content)
+                    .unwrap_or_default();
+                &inline
+            } else {
+                parts
+            };
+            let mut out: Vec<String> = Vec::new();
+            for p in parts {
+                let Ok(part) = serde_json::from_value::<V2AssistantPart>(p.clone()) else {
+                    continue;
+                };
+                match part {
+                    V2AssistantPart::Text { text } => out.push(text),
+                    V2AssistantPart::Tool { name } => out.push(format!("[tool_use: {name}]")),
+                    V2AssistantPart::Other => {}
+                }
+            }
+            out.join(" ")
+        }
+        _ => String::new(),
+    }
 }
 
 /// The part-rendering policy shared by the opencode arms, mirroring peek's
@@ -1344,6 +1548,7 @@ pub(crate) fn record_parser(agent: &str) -> Option<fn(&Value) -> Option<TruthRec
     match agent {
         "claude" => Some(parse_claude_record),
         "codex" => Some(parse_codex_record),
+        "opencode" => Some(parse_opencode_event),
         _ => None,
     }
 }
@@ -1493,9 +1698,13 @@ fn opencode_summary<C: CursorAccess>(
 fn opencode_version(db: &Path, session_id: &str) -> Option<i64> {
     let conn = crate::graph_store::open_read_only_wal_safe(db)?;
     conn.busy_timeout(std::time::Duration::from_secs(2)).ok()?;
+    let table = match super::opencode_transcript::store_family(&conn) {
+        Some(true) => "session_part",
+        _ => "part",
+    };
     let (newest, count): (Option<i64>, i64) = conn
         .query_row(
-            "SELECT MAX(time_updated), COUNT(*) FROM part WHERE session_id = ?1",
+            &format!("SELECT MAX(time_updated), COUNT(*) FROM {table} WHERE session_id = ?1"),
             [session_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )

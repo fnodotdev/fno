@@ -94,16 +94,8 @@ run_hook() {
   rm -f "$SBX/.fno/state/latches"/.context-nudge-* 2>/dev/null
   OUT=$(printf '%s' "$1" | bash "$HOOK" 2>/dev/null); RC=$?
 }
-ROWS_BIN="${FNO_BIN:-}"
-if [[ -z "$ROWS_BIN" ]]; then
-  for _profile in debug release; do
-    if [[ -x "$REPO_ROOT/crates/fno/target/$_profile/fno" ]]; then
-      ROWS_BIN="$REPO_ROOT/crates/fno/target/$_profile/fno"
-      break
-    fi
-  done
-fi
-[[ -n "$ROWS_BIN" ]] || ROWS_BIN=$(command -v fno 2>/dev/null)
+# shellcheck source=scripts/lib/store-bin.sh
+source "$REPO_ROOT/scripts/lib/store-bin.sh"
 events_has() { "$ROWS_BIN" doctor event rows --events "$SBX/.fno/events.jsonl" 2>/dev/null | jq -r '.[]' 2>/dev/null | grep -q "\"type\":\"$1\""; }
 reset_events() {
   local store root

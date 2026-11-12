@@ -371,6 +371,11 @@ pub struct Request {
     /// GitHub's own merge-hold words, as status computed them (`github_blocked`,
     /// `github_behind`, ...). Absent: the walk derives them from `checks_read`.
     pub supplied_github_blockers: Option<Vec<String>>,
+    /// The unmeasured reason the caller (the status read) already computed
+    /// from the runs listing: present only when no run on the head
+    /// has completed. Absent = measured (or the listing was never read: the
+    /// GraphQL route), the walk probes instead.
+    pub supplied_unmeasured: Option<String>,
     /// The dispatch-hold answer the caller (the status read) already probed.
     /// `Some(None)` = probed clear; `Some(Some(reason))` = held; `None` = not
     /// supplied (the walk probes, and a real merge NEVER sees a supplied
@@ -466,6 +471,9 @@ pub struct ChecksRead {
     /// alone (a red gate can no longer turn the verdict red and cancel the
     /// head's runs), and the merge holds on this row instead.
     pub evals_gate_row: Option<EvalsGateRead>,
+    /// The unmeasured reason from the same status payload: present
+    /// only when no run on the head has completed.
+    pub unmeasured: Option<String>,
 }
 
 /// One evals/gate commit status, as the rollup carried it. `state` is
@@ -540,6 +548,10 @@ pub trait Probes {
     /// Release the merge slot if `pr` still holds it. Errors are ignored:
     /// release is best-effort, and the TTL is the backstop.
     fn release_slot(&self, cwd: &Path, base_ref: &str, pr: u64);
+    /// A paint PR merged with no recorded look at its head: route the look
+    /// request to the territory lead so the shots reach the project's Visual
+    /// Log page. Best-effort: the merge already landed either way.
+    fn look_request(&self, cwd: &Path, facts: &PrFacts, detail: &str) -> bool;
     /// Has `pr` already had one base-retest this slot hold? `false` on a
     /// fresh or unreadable claim - every miss re-tries rather than
     /// wrongly skipping to a merge.
@@ -1066,6 +1078,19 @@ fn decide_with_warnings<P: Probes>(
                     },
                 })
             }
+            // A pending read fell through with only an advisory warning, a
+            // PR merged while its rerun was still in flight, and main went
+            // red (2026-11-10). Pending holds; arm and unknown keep their
+            // fall-through (GitHub's queue waits out required things; a
+            // docs-only PR with no check-run CI keeps its merge door).
+            "pending" if request.effect == Effect::Merge => {
+                return Err(Outcome::Held {
+                    reason: "checks are pending; require_checks_pass merges only the \
+                             newest attempt's settled green"
+                        .to_string(),
+                    warnings: Vec::new(),
+                })
+            }
             _ => {}
         }
     }
@@ -1323,6 +1348,7 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
             rerun_recovered: request.supplied_rerun_recovered,
             rerun_failures: None,
             evals_gate_row: request.supplied_evals_gate.clone().unwrap_or(None),
+            unmeasured: request.supplied_unmeasured.clone(),
         },
         None => probes.checks_read(cwd, facts.number),
     });
@@ -1489,6 +1515,9 @@ fn process_warnings<P: Probes>(
     if let Some(warning) = carry_warning {
         warnings.push(warning);
     }
+    // A user decline is authority and holds its named head. A missing look is
+    // a process condition: it warns and never holds; after the merge the
+    // warning routes to the lead as a look request.
     let (visual_warning, visual_hold) = match visual {
         Some(blocker) if blocker.code == "visual_declined" => (None, Some(blocker)),
         other => (other, None),
@@ -1515,6 +1544,16 @@ fn process_warnings<P: Probes>(
                 checks.verdict
             ),
         ));
+    }
+    // The unmeasured warning (lead ruling 2026-11-12 02:06Z): law D3173 keeps
+    // pending runs off the merge decision, so an unmeasured head warns by
+    // name and never reads ready:false - PR 82 merged ready with all 7 head
+    // runs queued. The loop's done() owns the hard half: it never reports
+    // DonePRGreen on a head where no run completed.
+    if request.require_checks {
+        if let Some(reason) = &checks.unmeasured {
+            warnings.push(Warning::new("ci_unmeasured", reason.clone()));
+        }
     }
     if optional == Some(None) {
         warnings.push(Warning::new(
@@ -1843,6 +1882,20 @@ fn run_observed<P: Probes>(
                     &authorized.facts.base_ref,
                     authorized.facts.number,
                 );
+                // The look is a process condition, never a hold: a paint PR
+                // that merged with no recorded look still owes the user its
+                // shots, so the warning routes to the territory lead as a
+                // look request for the Visual Log page.
+                if outcome.word() == "merged" {
+                    if let Some(detail) = outcome
+                        .warnings()
+                        .iter()
+                        .find(|w| w.code == "visual_approval")
+                        .map(|w| w.detail.clone())
+                    {
+                        probes.look_request(request.cwd.as_path(), &authorized.facts, &detail);
+                    }
+                }
             }
             outcome
         }
@@ -2472,6 +2525,38 @@ refusing to assume no review is running"
         }
     }
 
+    fn look_request(&self, cwd: &Path, facts: &PrFacts, detail: &str) -> bool {
+        let _step = step_timer::step("look_request");
+        // The territory lead resolves from the bound node: a team whose scope
+        // answers the node's territory holds it, resolved at send time.
+        #[derive(serde::Deserialize)]
+        struct BoundNode {
+            id: String,
+        }
+        let bound = pr_bound_entry(cwd, facts.number)
+            .and_then(|node| serde_json::from_value::<BoundNode>(node).ok());
+        let Some(bound) = bound else {
+            eprintln!("look request not mailed: PR {} binds no node", facts.number);
+            return false;
+        };
+        let text = format!(
+            "look request: PR {} merged at {} with no recorded look at that head. Publish its shots on the project's Visual Log page (laws D2511 and D3268). {}",
+            facts.number,
+            &facts.head_sha[..8],
+            detail
+        );
+        match crate::runtime::lead_mail::send("merge-gate", &bound.id, &text) {
+            Ok(holders) => {
+                eprintln!("look request mailed to {}", holders.join(", "));
+                true
+            }
+            Err(error) => {
+                eprintln!("look request not mailed: {error}");
+                false
+            }
+        }
+    }
+
     fn slot_retested(&self, cwd: &Path, base_ref: &str, pr: u64) -> bool {
         let _step = step_timer::step("slot_retested");
         // The migration window can hold the live slot in the legacy
@@ -2673,6 +2758,7 @@ fn parse_checks_read(stdout: &[u8]) -> ChecksRead {
         rerun_recovered: None,
         rerun_failures: None,
         evals_gate_row: None,
+        unmeasured: None,
     };
     let Ok(v) = serde_json::from_slice::<Value>(stdout) else {
         return unknown;
@@ -2749,6 +2835,12 @@ fn parse_checks_read(stdout: &[u8]) -> ChecksRead {
         rerun_recovered,
         rerun_failures,
         evals_gate_row,
+        // The unmeasured fact, from the same payload the verdict
+        // came off: the walk warns on it under require_checks.
+        unmeasured: v
+            .pointer("/ci_unmeasured")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
     }
 }
 

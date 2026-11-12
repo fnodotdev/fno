@@ -109,7 +109,8 @@ fn is_test_program(program: &str) -> bool {
 /// an agent session started. The user's cargo and `fno doctor update`'s
 /// install build run their tests, and a checkout holding a live
 /// `test:priority` grant does too. An eval grader does as well: its refusal
-/// would record a grade for a suite that never ran.
+/// would record a grade for a suite that never ran. A fleet test-hold
+/// all-clear lifts only the incident hold, never this refusal.
 fn refuses_agent_tests(program: &str, worktree: &Path) -> bool {
     if program.is_empty()
         || !is_test_program(program)
@@ -123,7 +124,7 @@ fn refuses_agent_tests(program: &str, worktree: &Path) -> bool {
     !priority_lane(None).is_some_and(|p| p.worktree == worktree)
 }
 
-const TESTS_REFUSED_LINE: &str = "[cargo test] an agent session runs no tests on this machine: commit, push with `fno do pr push`, and CI runs the tests. A lead can grant one checkout local tests for a while: fno agents claim acquire test:priority --holder worktree:<checkout> --ttl 30m --pid-unavailable -R \"<why>\"";
+const TESTS_REFUSED_LINE: &str = "[cargo test] an agent session runs no tests on this machine: commit, push with `fno do pr push`, and CI runs the tests. A fleet test-hold all-clear lifts only the hold, never this refusal; a lead can grant one checkout local tests for a while: fno agents claim acquire test:priority --holder worktree:<checkout> --ttl 30m --pid-unavailable -R \"<why>\"";
 /// How often a held build or a queued suite run repeats its waiting line on
 /// stderr.
 const BUILD_HOLD_NOTICE: Duration = Duration::from_secs(30);

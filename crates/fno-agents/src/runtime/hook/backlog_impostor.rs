@@ -42,7 +42,10 @@ pub fn run(_args: &[String]) -> i32 {
     let refusal = judge(&payload);
     super::emit_guard_decision(&cwd, "backlog-impostor-guard", "Bash", refusal.is_some());
     match refusal {
-        Some(reason) => super::emit_block(&reason),
+        Some(reason) => super::refusal::emit_one(super::refusal::Refusal::new(
+            super::refusal::Guard::BacklogImpostor,
+            reason,
+        )),
         None => super::emit_allow(),
     }
 }

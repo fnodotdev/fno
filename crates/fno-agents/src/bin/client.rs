@@ -2294,17 +2294,19 @@ fn maybe_run_spawn(
     // dispatch_claude_spawn / dispatch_*_once, which surface a corrupt
     // registry as exit 12.
     let registry = load_registry(&home.registry_json()).unwrap_or_default();
-    let existing_provider = registry.find(name).map(|e| e.harness_name().to_string());
 
-    // Collision check: name already exists -> error.
-    // Python: f"agent {name!r} already exists; ..." -> py_repr, not {:?}.
-    if existing_provider.is_some() {
-        eprintln!(
-            "agent {} already exists; use 'fno agents rm {}' first or pick another name",
-            py_repr(name),
-            name
-        );
-        return Some(2);
+    // Collision check: name already exists -> error. An idle spare behind the
+    // row does not refuse here: the dispatch lane reclaims the name under its
+    // own lock, and a refusal in the client would preempt it. This pre-check
+    // is advisory; the dispatch lane re-checks under the per-agent lock.
+    if let Some(row) = registry.find(name) {
+        if fno_agents::spawn::name_collision::idle_spare_holder_pid(row).is_none() {
+            eprintln!(
+                "{}",
+                fno_agents::spawn::name_collision::refusal_line(name, row)
+            );
+            return Some(2);
+        }
     }
 
     // Resolve provider: explicit --provider > invoking-harness inference >
@@ -2408,6 +2410,17 @@ fn maybe_run_spawn(
         if let Err(refusal) =
             fno_agents::spawn_gate::state_root_grant_gate(provider, declared_substrate, &roots)
         {
+            fno_agents::spawn_gate::emit_refusal_event(
+                &refusal,
+                // R1: the shrink-only read counter bars a new .get on Value;
+                // a JSON pointer is the total read (None on non-object too).
+                params
+                    .pointer("/name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+                declared_substrate,
+                None,
+            );
             return Some(refusal.exit_code);
         }
     }
@@ -2820,8 +2833,9 @@ fn maybe_run_spawn(
             &harness_args,
         )),
 
-        // pi headless: one `pi --print --mode json` turn (pi_ask.rs).
-        ("pi", "headless") => emit!(fno_agents::pi_ask::dispatch_pi_once(
+        // pi and omp headless: one `--print --mode json` turn (pi_ask.rs).
+        (harness @ ("pi" | "omp"), "headless") => emit!(fno_agents::pi_ask::dispatch_pi_once(
+            harness,
             home,
             name,
             &message,
@@ -2861,7 +2875,7 @@ fn maybe_run_spawn(
                 from_name,
                 &cwd,
                 model,
-                None,
+                route.as_ref().and_then(|r| r.effort.as_deref()),
                 params.get("node").and_then(|v| v.as_str()),
             ))
         }

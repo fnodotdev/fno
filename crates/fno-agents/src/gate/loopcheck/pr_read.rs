@@ -71,6 +71,20 @@ impl CiConclusion {
     }
 }
 
+/// The CI word a human reads: the conclusion, with the unmeasured reason
+/// named beside it. PENDING alone on PR 82 hid why nothing had
+/// run; the ruling names the state. The fingerprint keeps the plain render,
+/// so the vocabulary stays stable. Takes the fields, not the struct, so a
+/// closure capturing them stays a disjoint field capture.
+pub(super) fn ci_named(conclusion: &CiConclusion, unmeasured: Option<&str>) -> String {
+    match unmeasured {
+        Some(reason) if !reason.is_empty() => {
+            format!("{} ({reason})", conclusion.render())
+        }
+        _ => conclusion.render(),
+    }
+}
+
 #[derive(Debug, Default)]
 pub(super) struct PrInfo {
     pub(super) state: PrState,
@@ -100,6 +114,11 @@ pub(super) struct PrInfo {
     /// while others run, so the DoneAwaitingMerge terminal must consult this to
     /// avoid firing while the session's own in-flight job could still turn red.
     pub(super) ci_has_pending: bool,
+    /// The unmeasured reason when the checks read answered green
+    /// but the head's Actions runs listing names no completed run: the fold
+    /// flips the conclusion to Pending so DonePRGreen cannot fire on a head
+    /// CI never measured. None = measured, skipped, or no evidence.
+    pub(super) ci_unmeasured: Option<String>,
     /// GitHub mergeable state ("MERGEABLE" | "CONFLICTING" | "UNKNOWN"). The
     /// DoneAwaitingMerge terminal must not fire on a "CONFLICTING" PR: the human
     /// cannot merge past main-red until the branch is rebased, and the terminal
@@ -173,10 +192,12 @@ pub(super) struct PrInfo {
     pub(super) range_tiling: RangeTiling,
 }
 
-/// The node's numbered PR rows: (number, merge_status, history-marked). The
-/// one collection every store-side PR row rule reads, so the live/terminal
+/// The node's numbered PR rows: (number, merge_status, history-marked, url).
+/// The one collection every store-side PR row rule reads, so the live/terminal
 /// and reopen-age rules cannot drift between them.
-fn numbered_pr_rows(node: &crate::backlog::model::Node) -> Vec<(i64, Option<&str>, bool)> {
+fn numbered_pr_rows(
+    node: &crate::backlog::model::Node,
+) -> Vec<(i64, Option<&str>, bool, Option<&str>)> {
     node.primary_pr
         .iter()
         .chain(node.additional_prs.iter().flatten())
@@ -186,6 +207,7 @@ fn numbered_pr_rows(node: &crate::backlog::model::Node) -> Vec<(i64, Option<&str
                     n,
                     pr.merge_status.as_deref(),
                     pr.extras.get("history").and_then(Value::as_bool) == Some(true),
+                    pr.url.as_deref(),
                 )
             })
         })
@@ -222,7 +244,17 @@ fn terminal_stamp(status: &Option<&str>) -> bool {
 /// reopen history, never live work. Rows the reopen demotion writes carry
 /// the explicit `history: true` mark and sink whatever their number; the
 /// age rule remains for rows written before the mark existed.
-pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Option<String> {
+///
+/// The manifest node's live PR row: (number selector, the row url's
+/// `owner/repo`). The slug is the repo the PR READS answer against: a node
+/// whose PR lives in another repo (the 2026-11-11 cutover moved workers to
+/// fnodotdev/fno while their worktrees still originated fno-workshop) must
+/// never have the gate read the ambient origin's same-number PR instead.
+/// None on every fail-open shape the selector documents.
+pub(super) fn manifest_node_pr_target(
+    cwd: &Path,
+    node_id: Option<&str>,
+) -> Option<(String, Option<String>)> {
     let node_id = node_id?;
     let store = crate::backlog::api::Store::new(&crate::graph_get::graph_path_for(cwd));
     let node = match crate::backlog::api::node(&store, node_id) {
@@ -241,14 +273,14 @@ pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Op
     let terminal = terminal_stamp;
     let max_terminal = rows
         .iter()
-        .filter(|(_, status, _)| terminal(status))
-        .map(|(number, _, _)| *number)
+        .filter(|(_, status, _, _)| terminal(status))
+        .map(|(number, _, _, _)| *number)
         .max();
     rows.sort_by(|a, b| b.0.cmp(&a.0));
     // Key 0 = live, 1 = settled (stamped, or age-gated history), 2 = an
     // explicitly marked history row. A marked row sinks below even the
     // stamped rows: state, not number order, decides for it.
-    rows.sort_by_key(|(number, status, history)| {
+    rows.sort_by_key(|(number, status, history, _)| {
         if *history {
             2
         } else if terminal(status) || max_terminal.is_some_and(|bound| *number <= bound) {
@@ -257,7 +289,53 @@ pub(super) fn manifest_node_pr_selector(cwd: &Path, node_id: Option<&str>) -> Op
             0
         }
     });
-    rows.first().map(|(number, _, _)| number.to_string())
+    rows.first()
+        .map(|(number, _, _, url)| (number.to_string(), repo_slug_from_row_url(*url)))
+}
+
+/// The PR row url's `owner/repo`, the slug every PR read must pin. A bare
+/// number or a non-GitHub url answers None and keeps the ambient origin.
+fn repo_slug_from_row_url(url: Option<&str>) -> Option<String> {
+    crate::backlog::pr_link::repo_slug_from_url(url)
+}
+
+/// The target-session manifest's node id for the checkout at `cwd`: the
+/// space-dir manifest first, then the legacy in-worktree copy;
+/// `graph_node_id` first, the claim key's bare node id second. The same
+/// resolution `decide()` performs on its `--state` manifest, for callers that
+/// hold only the cwd (`pr wait`, the standalone review-coverage command).
+pub(crate) fn session_node_id(cwd: &Path) -> Option<String> {
+    let mut texts: Vec<String> = Vec::new();
+    if let Some(space) = crate::paths::worktree_space_dir_opt(cwd) {
+        if let Ok(text) = std::fs::read_to_string(space.join("target-state.md")) {
+            texts.push(text);
+        }
+    }
+    if let Ok(text) = std::fs::read_to_string(cwd.join(".fno").join("target-state.md")) {
+        texts.push(text);
+    }
+    for text in &texts {
+        if let Some(node) = super::settings::scan_manifest_field(text, "graph_node_id") {
+            return Some(node);
+        }
+        if let Some(key) = super::settings::scan_manifest_field(text, "target_claim_key") {
+            if let Some(node) = key.strip_prefix("node:") {
+                return Some(node.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// The live PR target of the session node bound to `cwd`: (selector, repo
+/// slug). The slug pins every PR read's repository - a node whose pr_url
+/// names another repo must never fall back to the ambient origin's
+/// same-number PR. Both halves None on every fail-open shape.
+pub(crate) fn session_node_pr_target(cwd: &Path) -> (Option<String>, Option<String>) {
+    session_node_id(cwd)
+        .and_then(|node| manifest_node_pr_target(cwd, Some(&node)))
+        .map(|(selector, repo)| (Some(selector), repo))
+        .unwrap_or((None, None))
 }
 
 /// The manifest node's completion shape read from the graph store: a done or
@@ -305,18 +383,18 @@ pub(super) fn node_done_terminal(cwd: &Path, node_id: Option<&str>) -> Option<Do
     let terminal = terminal_stamp;
     let max_terminal = rows
         .iter()
-        .filter(|(_, status, _)| terminal(status))
-        .map(|(number, _, _)| *number)
+        .filter(|(_, status, _, _)| terminal(status))
+        .map(|(number, _, _, _)| *number)
         .max();
-    let has_live = rows.iter().any(|(number, status, history)| {
+    let has_live = rows.iter().any(|(number, status, history, _)| {
         !history && !terminal(status) && !max_terminal.is_some_and(|bound| *number <= bound)
     });
     if has_live {
         return None;
     }
     rows.iter()
-        .filter(|(_, status, _)| status.is_some_and(|s| s.eq_ignore_ascii_case("merged")))
-        .map(|(number, _, _)| *number)
+        .filter(|(_, status, _, _)| status.is_some_and(|s| s.eq_ignore_ascii_case("merged")))
+        .map(|(number, _, _, _)| *number)
         .max()
         .map(DoneNodeTerminal::Merged)
 }
@@ -412,6 +490,10 @@ pub(super) fn read_pr_info(
     // The local reviewer names allowed to satisfy the peer posture component
     // (the cross-model-resolved set; the same-model sentinel never matches).
     peer_reviewers: &[String],
+    // The node's live PR row url's `owner/repo` (`manifest_node_pr_target`):
+    // every PR read below pins the repository to it, so a node whose PR lives
+    // in another repo never reads the ambient origin's same-number PR.
+    node_pr_repo: Option<&str>,
 ) -> Result<PrInfo, GhReadError> {
     let rest_adapter = internal_gh_adapter(gh_bin);
     let checks_read = if rest_adapter {
@@ -424,6 +506,12 @@ pub(super) fn read_pr_info(
     } else {
         "pr_checks_parse"
     };
+    // The node PR's repo pins every PR read below; a node row without a url
+    // keeps the ambient origin, the pre-existing behavior and the only
+    // correct one before the PR's url is stored at all.
+    let repo_pin: Option<(&str, [&str; 2])> = node_pr_repo
+        .filter(|s| !s.is_empty())
+        .map(|slug| (slug, ["--repo", slug]));
     // Read 1: PR state + number + head OID + mergeability. Reuse the caller's
     // read when it already resolved this exact selector (e.g. review-coverage
     // pinning --pr N via read_pr_head_oid) instead of asking gh again. The
@@ -434,7 +522,14 @@ pub(super) fn read_pr_info(
         // read and retires the fire, so it keeps the floored bound (an
         // ordinary bound on a spent fire budget refuses or kills it, and a
         // merged session then never terminates).
-        None => read_pr_view(gh_bin, cwd, pr_selector, stopgate_pr_meta_timeout())?,
+        None => read_pr_view_fields(
+            gh_bin,
+            cwd,
+            pr_selector,
+            super::gh_read::PR_VIEW_FIELDS_GRAPHQL,
+            node_pr_repo,
+            stopgate_pr_meta_timeout(),
+        )?,
     }) else {
         // No PR yet: world-state, not an error. done() is simply false, and
         // the backstop can resolve a stuck no-PR session as NoProgress. Every
@@ -563,11 +658,15 @@ pub(super) fn read_pr_info(
     // it never fires on partial CI).
     let no_hosted_ci =
         crate::verify_evidence::hosted_ci_not_configured(ci_declared_none, cwd, head_sha);
-    let (ci_conclusion, failing_checks, ci_has_pending, outside_hold_only) = if no_hosted_ci {
+    let (mut ci_conclusion, failing_checks, mut ci_has_pending, outside_hold_only) = if no_hosted_ci
+    {
         (CiConclusion::Skipped, Vec::new(), false, false)
     } else {
         let mut checks_args = vec!["pr", "checks"];
         checks_args.extend(sel.iter().copied());
+        if let Some((_, flag)) = repo_pin {
+            checks_args.extend(flag);
+        }
         checks_args.extend(["--json", "name,state,bucket,startedAt,workflow"]);
         let checks_out = bounded_read(
             gh_bin.as_ref(),
@@ -600,6 +699,48 @@ pub(super) fn read_pr_info(
             outside_hold_only,
         )
     };
+
+    // The unmeasured fold: a green read over a head whose Actions
+    // runs listing names no completed run is unmeasured, never green - PR 82
+    // merged ready with all 7 head runs queued and the loop still said
+    // DonePRGreen for a head CI never measured. Only a green read spends the
+    // extra listing read: red and pending already hold. no_hosted_ci has
+    // nothing to measure with, and a failed or malformed read has no
+    // evidence either way, so it keeps today's answer. The listing read
+    // rides the same gh door as the checks read; the etag layer serves an
+    // unchanged head without spending core quota.
+    let mut ci_unmeasured: Option<String> = None;
+    if ci_conclusion == CiConclusion::Success && !no_hosted_ci && !head_oid.is_empty() {
+        let runs_slug = node_pr_repo.filter(|s| !s.is_empty()).unwrap_or(repo_slug);
+        if !runs_slug.is_empty() {
+            let path = format!("repos/{runs_slug}/actions/runs?head_sha={head_oid}&per_page=100");
+            let runs_args = vec!["api", &path];
+            let read = bounded_read(
+                gh_bin.as_ref(),
+                &runs_args,
+                cwd,
+                "runs_unmeasured",
+                stopgate_read_timeout(),
+            );
+            if let Ok(out) = read {
+                if out.status.success() {
+                    let parsed: Result<Value, _> = serde_json::from_slice(&out.stdout);
+                    if let Ok(v) = parsed {
+                        if let Some(rows) = v.pointer("/workflow_runs").and_then(Value::as_array) {
+                            ci_unmeasured = crate::pr_status_facts::ci_unmeasured_reason(
+                                &Value::Array(rows.clone()),
+                                &head_oid,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if ci_unmeasured.is_some() && ci_conclusion == CiConclusion::Success {
+        ci_conclusion = CiConclusion::Pending;
+        ci_has_pending = true;
+    }
 
     // Reads 3+4: reviews + inline findings. Skipped when the session declares
     // no_external OR the repo declares `required_bots: []` (the no-review-gate
@@ -714,6 +855,9 @@ pub(super) fn read_pr_info(
         if !no_external && (!coverage.coverage.is_covered() || !blockers.is_empty()) {
             let mut reviews_args = vec!["pr", "view"];
             reviews_args.extend(sel.iter().copied());
+            if let Some((_, flag)) = repo_pin {
+                reviews_args.extend(flag);
+            }
             reviews_args.extend(["--json", "reviews"]);
             match bounded_read(
                 gh_bin.as_ref(),
@@ -782,6 +926,9 @@ pub(super) fn read_pr_info(
         // Read 3: top-level reviews + issue comments
         let mut reviews_args = vec!["pr", "view"];
         reviews_args.extend(sel.iter().copied());
+        if let Some((_, flag)) = repo_pin {
+            reviews_args.extend(flag);
+        }
         reviews_args.extend(["--json", "reviews,comments"]);
         let reviews_out = bounded_read(
             gh_bin.as_ref(),
@@ -859,7 +1006,13 @@ pub(super) fn read_pr_info(
         // the /pulls/N/comments REST endpoint, which `gh pr view --json
         // comments` does NOT return (verified on PR #447). --paginate may
         // emit CONCATENATED JSON arrays (one per page), so parse as a stream.
-        let pulls_target = format!("repos/{{owner}}/{{repo}}/pulls/{number}/comments");
+        // The node repo pins the path when known: the `{owner}/{repo}`
+        // template is gh's own ambient-repo substitution, exactly the
+        // wrong-repo read this fix removes.
+        let pulls_target = match repo_pin {
+            Some((slug, _)) => format!("repos/{slug}/pulls/{number}/comments"),
+            None => format!("repos/{{owner}}/{{repo}}/pulls/{number}/comments"),
+        };
         let comments_out = bounded_read(
             gh_bin.as_ref(),
             &["api", &pulls_target, "--paginate"],
@@ -894,6 +1047,9 @@ pub(super) fn read_pr_info(
         let commit_dates: Vec<String> = if has_blocking_candidate {
             let mut commits_args = vec!["pr", "view"];
             commits_args.extend(sel.iter().copied());
+            if let Some((_, flag)) = repo_pin {
+                commits_args.extend(flag);
+            }
             commits_args.extend(["--json", "commits"]);
             let commits_out = bounded_read(
                 gh_bin.as_ref(),
@@ -1104,7 +1260,7 @@ pub(super) fn read_pr_info(
             crate::merge_freeze::holds_pr_line(
                 &home,
                 number.unsigned_abs(),
-                Some(repo_slug).filter(|s| !s.is_empty()),
+                node_pr_repo.or(Some(repo_slug)).filter(|s| !s.is_empty()),
             )
         })
     } else {
@@ -1119,6 +1275,7 @@ pub(super) fn read_pr_info(
         failing_checks,
         outside_hold_only,
         ci_has_pending,
+        ci_unmeasured,
         mergeable,
         merge_slot_holder,
         merge_hold,

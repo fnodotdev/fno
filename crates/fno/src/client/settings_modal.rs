@@ -13,11 +13,12 @@ pub(crate) enum SettingsTab {
     Colors,
     Experimental,
     RemoteHosts,
+    Mods,
 }
 
 impl SettingsTab {
     /// Tab's section cycle: General -> Theme -> Colors -> Experimental ->
-    /// Remote hosts -> General, the order the tab strip draws (user ruling 2026-10-09: tab
+    /// Remote hosts -> Mods -> General, the order the tab strip draws (user ruling 2026-10-09: tab
     /// reaches every section the header lists). Keybindings is no section
     /// here: it opened a different modal, so a tab landing on it left
     /// settings and every section after it was reachable only by click.
@@ -27,17 +28,19 @@ impl SettingsTab {
             SettingsTab::Theme => SettingsTab::Colors,
             SettingsTab::Colors => SettingsTab::Experimental,
             SettingsTab::Experimental => SettingsTab::RemoteHosts,
-            SettingsTab::RemoteHosts => SettingsTab::General,
+            SettingsTab::RemoteHosts => SettingsTab::Mods,
+            SettingsTab::Mods => SettingsTab::General,
         }
     }
 }
 
-pub(crate) const ALL: [SettingsTab; 5] = [
+pub(crate) const ALL: [SettingsTab; 6] = [
     SettingsTab::General,
     SettingsTab::Theme,
     SettingsTab::Colors,
     SettingsTab::Experimental,
     SettingsTab::RemoteHosts,
+    SettingsTab::Mods,
 ];
 
 impl View {
@@ -124,6 +127,7 @@ impl View {
                 );
             }
             SettingsTab::RemoteHosts => (rows, actions) = remote_hosts::rows(self),
+            SettingsTab::Mods => (rows, actions) = mods::rows(self),
             SettingsTab::Experimental => {
                 // Features still in progress, each off until turned on.
                 let flags = experimental::flags(self);
@@ -173,6 +177,7 @@ impl View {
                 ("colors".to_string(), tab == SettingsTab::Colors),
                 ("experimental".to_string(), tab == SettingsTab::Experimental),
                 ("remote hosts".to_string(), tab == SettingsTab::RemoteHosts),
+                ("mods".to_string(), tab == SettingsTab::Mods),
             ])
             .footer(if self.settings_drilled() {
                 "esc back"
@@ -180,6 +185,9 @@ impl View {
                 "tab or click a section · esc close"
             })
             .min_width(widest.max(crate::popup::WIDTH_CAP))
+            // The six-label strip is wider than the default cap; without
+            // this the clamp cut the box short of the strip's right air.
+            .width_cap(crate::popup::WIDTH_CAP + 20)
             .plain_body();
         AuxPopup { popup, actions }
     }
@@ -210,11 +218,12 @@ impl View {
             || lane.pick.is_some()
             || lane.is_entry()
             || self.remote_hosts.add.is_some()
+            || self.mods.url.is_some()
     }
 }
 
 /// Whether the open aux popup is the settings modal (the one with tabs).
-fn is_settings(view: &View) -> bool {
+pub(super) fn is_settings(view: &View) -> bool {
     view.aux
         .as_ref()
         .is_some_and(|m| !m.popup.chrome.tabs.is_empty())
@@ -226,6 +235,10 @@ pub(super) fn switch_tab(view: &mut View, tab: SettingsTab) {
     view.lane.reset();
     theme_import_ui::reset(view);
     remote_hosts::cancel_add(view);
+    mods::reset(view);
+    if tab == SettingsTab::Mods {
+        mods::refresh(view);
+    }
     view.reopen_settings_keeping_sel();
 }
 
@@ -251,7 +264,8 @@ pub(super) fn tap_tab(view: &mut View, row: u16, col: u16) -> bool {
 pub(super) fn row_tap_allowed(view: &View, target: usize) -> bool {
     let typing = view.lane.is_entry()
         || theme_import_ui::is_entry(&view.theme_import)
-        || view.remote_hosts.add.is_some();
+        || view.remote_hosts.add.is_some()
+        || view.mods.url.is_some();
     if !typing {
         return true;
     }
@@ -275,7 +289,8 @@ pub(super) fn back(view: &mut View) -> bool {
         theme_import_ui::reset(view);
         true
     }) || lane_step(&mut view.lane)
-        || remote_hosts::cancel_add(view);
+        || remote_hosts::cancel_add(view)
+        || mods::cancel_url(view);
     if !stepped {
         return false;
     }
@@ -299,7 +314,8 @@ pub(super) fn space_toggle(view: &View) -> Option<AuxAction> {
         | AuxAction::ToggleConfirmLifecycle
         | AuxAction::ToggleSidelineLayout
         | AuxAction::ToggleReserveAuto
-        | AuxAction::ToggleExperimental(_)) => Some(a.clone()),
+        | AuxAction::ToggleExperimental(_)
+        | AuxAction::Mod(mods::Act::Switch(..))) => Some(a.clone()),
         _ => None,
     }
 }
@@ -323,6 +339,8 @@ pub(super) async fn field_keys(
         f.feed(bytes)
     } else if let Some(f) = view.remote_hosts.add.as_mut() {
         f.feed(bytes)
+    } else if let Some(f) = view.mods.url.as_mut() {
+        f.feed(bytes)
     } else {
         return Ok(None);
     };
@@ -338,6 +356,8 @@ pub(super) async fn field_keys(
                     lane_entry::submit(view, text).await?
                 } else if view.remote_hosts.add.is_some() {
                     remote_hosts::submit(view, text).await
+                } else if view.mods.url.is_some() {
+                    mods::submit(view, text)
                 } else {
                     theme_import_ui::submit(view, text)
                 };
@@ -374,6 +394,11 @@ pub(super) async fn run_action(
         }
         AuxAction::ApplyTheme(name) => theme_ground::apply(view, &name).await?,
         AuxAction::RemoteHost(act) => remote_hosts::act(view, act).await,
+        AuxAction::Mod(mods::Act::Open(path)) => {
+            view.aux = None;
+            file_viewer::open(view, mods::load(path), sock_w).await?;
+        }
+        AuxAction::Mod(act) => mods::act(view, act),
         AuxAction::ThemeImportOpen => theme_import_ui::open(view),
         AuxAction::ThemeImportSave => theme_import_ui::save(view).await?,
         AuxAction::ThemeImportCancel => theme_import_ui::cancel(view),

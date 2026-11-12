@@ -279,6 +279,26 @@ fn lane_fold(rows: &[&Row], prices: Option<&Value>) -> Value {
 fn add_lanes(view: &mut Value, rows: &[Row], a: &str, b: &str, prices: Option<&Value>) {
     view["a"]["lane"] = lane_fold(&side_rows(rows, a), prices);
     view["b"]["lane"] = lane_fold(&side_rows(rows, b), prices);
+    // The compare isolates the harness only when both sides ran the same
+    // route. A route mismatch never fails the fold; it names itself in the
+    // view and in the printed lines so a reader can discount the verdict.
+    let routes_of = |lane: &str| -> Vec<String> {
+        let mut seen: Vec<String> = Vec::new();
+        for row in side_rows(rows, lane) {
+            let model = row
+                .raw_str("requested_model")
+                .unwrap_or_default()
+                .to_string();
+            if !model.is_empty() && !seen.contains(&model) {
+                seen.push(model);
+            }
+        }
+        seen
+    };
+    let (ra, rb) = (routes_of(a), routes_of(b));
+    if !ra.is_empty() && !rb.is_empty() && ra != rb {
+        view["route_note"] = serde_json::json!({"a": ra, "b": rb});
+    }
 }
 
 fn lane_lines(view: &Value) -> Vec<String> {
@@ -395,6 +415,23 @@ fn render(view: &Value) -> String {
         }
     }
     out.extend(lane_lines(view));
+    if let Some(note) = view["route_note"].as_object() {
+        let list = |side: &serde_json::Value| -> String {
+            side.as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default()
+        };
+        out.push(format!(
+            "Route note: lanes ran different routes (a: {}; b: {}); the compare does not isolate the harness",
+            list(&note["a"]), list(&note["b"]),
+        ));
+    }
     out.join("\n")
 }
 

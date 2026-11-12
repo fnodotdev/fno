@@ -10,13 +10,13 @@
 
 use crate::client_commands::py_repr_str;
 use crate::session_truth::{
-    record_parser, resolve_session, row_falsified, session_records, session_transcript,
-    RecordsError, Stores, TruthRecord, TruthSession,
+    parse_opencode_event, record_parser, resolve_session, row_falsified, session_records,
+    session_transcript, RecordsError, Stores, TruthRecord, TruthSession,
 };
 use crate::state::{MuxRef, RegistryEntry};
 use crate::wake_read::python_json_default;
 use serde_json::{json, Value};
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -590,13 +590,16 @@ fn peek_one(
         );
         return EXIT_OK;
     }
+    if agent == "opencode" {
+        if follow_opencode_events(&session, args.json, out) {
+            return EXIT_OK;
+        }
+        eprintln!("--follow not supported for opencode; showed the tail only");
+        return EXIT_OK;
+    }
     let (Some(parse), Some(path)) = (record_parser(agent), session_transcript(&session, stores))
     else {
-        if agent == "opencode" {
-            eprintln!("--follow not supported for opencode; showed the tail only");
-        } else {
-            eprintln!("could not resolve a transcript to follow for {agent}");
-        }
+        eprintln!("could not resolve a transcript to follow for {agent}");
         return EXIT_OK;
     };
     let _ = out.flush();
@@ -666,6 +669,141 @@ fn follow_records(
         }
         std::thread::sleep(Duration::from_millis(500));
     }
+}
+
+/// Follow one opencode session over the 2.x serve's SSE stream, resolved
+/// through the same gate the archive op rides (a healthy serve reporting a
+/// 2.x version). Returns false when no such serve resolves, so the caller
+/// prints the tail-only notice; a store has no tailable file to fall back
+/// to.
+fn follow_opencode_events(session: &TruthSession, json_out: bool, out: &mut impl Write) -> bool {
+    if let Some(serve) =
+        crate::opencode_serve::archive_capable_serve(&crate::paths::AgentsHome::from_env())
+    {
+        if follow_opencode_sse(&serve, &session.session_id, json_out, out) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Stream `/api/event` SSE frames for one session and emit records.
+/// Returns true when the stream ran (ending on Ctrl-C, sustained silence,
+/// or the serve closing it); false when it could not open at all. The
+/// stream is volatile by contract: events during a reconnect gap are
+/// missed, which a records view tolerates.
+fn follow_opencode_sse(
+    serve: &crate::opencode_serve::ServeHandle,
+    session_id: &str,
+    json_out: bool,
+    out: &mut impl Write,
+) -> bool {
+    let mut attempts = 0usize;
+    let mut reader = loop {
+        if INTERRUPTED.load(Ordering::SeqCst) {
+            return true;
+        }
+        match open_sse_stream(serve) {
+            Some(r) => {
+                attempts = 0;
+                break r;
+            }
+            None => {
+                attempts += 1;
+                if attempts >= 8 {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(500));
+            }
+        }
+    };
+    loop {
+        if INTERRUPTED.load(Ordering::SeqCst) {
+            return true;
+        }
+        let mut frame = String::new();
+        match reader.read_line(&mut frame) {
+            Ok(0) | Err(_) => {
+                if INTERRUPTED.load(Ordering::SeqCst) {
+                    return true;
+                }
+                attempts += 1;
+                if attempts >= 8 {
+                    eprintln!("opencode serve stream quiet; ended follow");
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(500));
+                match open_sse_stream(serve) {
+                    Some(r) => {
+                        attempts = 0;
+                        reader = r;
+                    }
+                    None => continue,
+                }
+            }
+            Ok(_) => {
+                let payload = frame.trim();
+                if let Some(data) = payload.strip_prefix("data:") {
+                    if let Ok(v) = serde_json::from_str::<Value>(data.trim()) {
+                        if crate::session_truth::opencode_event_session(&v).as_deref()
+                            == Some(session_id)
+                        {
+                            if let Some(rec) = parse_opencode_event(&v) {
+                                emit_record(out, &rec, json_out);
+                                let _ = out.flush();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+fn open_sse_stream(
+    serve: &crate::opencode_serve::ServeHandle,
+) -> Option<std::io::BufReader<std::net::TcpStream>> {
+    let after_scheme = serve.base_url.strip_prefix("http://")?;
+    let authority = after_scheme.trim_end_matches('/');
+    let mut stream = None;
+    for addr in std::net::ToSocketAddrs::to_socket_addrs(authority)
+        .ok()?
+        .take(4)
+    {
+        if let Ok(s) = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(3)) {
+            stream = Some(s);
+            break;
+        }
+    }
+    let mut stream = stream?;
+    // HTTP/1.0 + Connection: close: an SSE stream that never completes
+    // cannot arrive chunked-framed, which a raw line reader cannot parse.
+    let request = format!(
+        "GET /api/event HTTP/1.0\r\nHost: {authority}\r\nAuthorization: Bearer {}\r\nAccept: text/event-stream\r\nConnection: close\r\n\r\n",
+        serve.token
+    );
+    if std::io::Write::write_all(&mut stream, request.as_bytes()).is_err() {
+        return None;
+    }
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(15)));
+    let mut reader = std::io::BufReader::new(stream);
+    // The status line answers before any frame does; a non-200 stream
+    // would drip an error body into the reconnect loop.
+    let mut status = String::new();
+    if reader.read_line(&mut status).ok()? == 0 {
+        return None;
+    }
+    if !status.contains(" 200") {
+        return None;
+    }
+    let mut header = String::new();
+    loop {
+        let n = reader.read_line(&mut header).ok()?;
+        if n == 0 || header.trim().is_empty() {
+            break;
+        }
+        header.clear();
+    }
+    Some(reader)
 }
 
 /// `--all`: the tail (and `--grep`) over every registry session with a

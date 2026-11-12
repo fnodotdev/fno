@@ -242,8 +242,29 @@ fn row_self() -> serde_json::Value {
     row("self-row-1", "claude", Some(SID))
 }
 
+/// A spelling neighbor of the unknown token: the refusal names its short id.
+fn row_near() -> serde_json::Value {
+    let mut v = row("ghost-writer", "claude", Some(OTHER_SID));
+    if let Some(o) = v.as_object_mut() {
+        o.insert("short_id".into(), serde_json::json!("b2c3d4e5"));
+        o.insert("harness_title".into(), serde_json::json!("ghost-writer"));
+    }
+    v
+}
+
 fn row_codex() -> serde_json::Value {
     row("codework-1", "codex", Some(CODEX_SID))
+}
+
+/// The role row the lead lane resolves: role_level + role_scope name the
+/// holder the same way the Python lead rows did.
+fn row_lead() -> serde_json::Value {
+    let mut v = row("lead-holder", "claude", Some(OTHER_SID));
+    if let Some(o) = v.as_object_mut() {
+        o.insert("role_level".into(), serde_json::json!(1));
+        o.insert("role_scope".into(), serde_json::json!("lead"));
+    }
+    v
 }
 
 /// One sentence, well over the 25-word cap: the length rule's cleanest
@@ -270,7 +291,7 @@ fn cases() -> Vec<Case> {
         Case {
             label: "unknown name refused",
             argv: &["ghost-name", "hello there"],
-            rows: Vec::new(),
+            rows: vec![row_near()],
             style_on: false,
             no_identity: false,
         },
@@ -312,6 +333,34 @@ fn cases() -> Vec<Case> {
         Case {
             label: "to lead vacant",
             argv: &["--to-lead", "lead", "hello"],
+            rows: Vec::new(),
+            style_on: false,
+            no_identity: false,
+        },
+        Case {
+            label: "to lead body flag vacant",
+            argv: &["--to-lead", "lead", "-b", "hello"],
+            rows: Vec::new(),
+            style_on: false,
+            no_identity: false,
+        },
+        Case {
+            label: "to lead body file vacant",
+            argv: &["--to-lead", "lead", "--body-file", "<ROOT>/body.txt"],
+            rows: Vec::new(),
+            style_on: false,
+            no_identity: false,
+        },
+        Case {
+            label: "to lead body flag durable floor",
+            argv: &["--to-lead", "lead", "-b", BODY],
+            rows: vec![row_lead()],
+            style_on: false,
+            no_identity: false,
+        },
+        Case {
+            label: "to lead second positional refused",
+            argv: &["--to-lead", "lead", "msg one", "msg two"],
             rows: Vec::new(),
             style_on: false,
             no_identity: false,
@@ -436,6 +485,9 @@ fn mail_send_matches_captured_goldens() {
             let argv = body_cap_argv();
             let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
             run_case(&root, case.style_on, case.no_identity, &refs)
+        } else if case.label == "to lead body file vacant" {
+            std::fs::write(root.join("body.txt"), "hello there team").unwrap();
+            run_case(&root, case.style_on, case.no_identity, case.argv)
         } else {
             run_case(&root, case.style_on, case.no_identity, case.argv)
         };

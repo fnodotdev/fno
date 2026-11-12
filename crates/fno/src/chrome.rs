@@ -267,7 +267,7 @@ impl Chrome {
         let sub_w = widest(&self.subtitle).map_or(0, |w| w + 4);
         let foot_w = widest(&self.footer).map_or(0, |w| w + 4);
         // Strip: two cells of side pad, then per tab `● label` with two
-        // spaces between tabs - matching `tab_row`'s assembly.
+        // spaces between tabs, then two cells of right air.
         let tabs_w = if self.tabs.is_empty() {
             0
         } else {
@@ -277,6 +277,7 @@ impl Chrome {
                 .map(|(l, _)| 2 + str_cols(l))
                 .sum::<usize>()
                 + 2 * (self.tabs.len() - 1)
+                + 2
         };
         title_w.max(sub_w).max(foot_w).max(tabs_w)
     }
@@ -1163,6 +1164,30 @@ mod tests {
         );
         assert!(strip.hits.iter().all(|(t, _, _)| !is_row_hit(*t)));
         assert!(!is_row_hit(ESC_CLOSE_HIT) && is_row_hit(0));
+    }
+
+    #[test]
+    fn the_last_tab_keeps_two_cells_of_right_air() {
+        let chrome = Chrome::new("settings", Anchor::Center)
+            .tabs(vec![("general".into(), true), ("mods".into(), false)])
+            .footer("esc");
+        let framed = frame(&[bl("row")], &chrome, 3, None);
+        let strip = framed
+            .lines
+            .iter()
+            .find(|l| l.text.contains("mods") && l.text.contains('│'))
+            .expect("the strip row");
+        let after: String = strip
+            .text
+            .split("mods")
+            .nth(1)
+            .expect("text after the last label")
+            .to_string();
+        assert_eq!(
+            after, "  │",
+            "two cells of air, then the border: {:?}",
+            strip.text
+        );
     }
 
     #[test]

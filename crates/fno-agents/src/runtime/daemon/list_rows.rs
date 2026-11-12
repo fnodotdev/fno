@@ -382,6 +382,10 @@ where
                     // harness holds no submission, so the key is always on
                     // the row the way mail_unread above is.
                     "mail_held": e.mail_held,
+                    // The wall stamp of the oldest held submission, null
+                    // when nothing is held or no stamp was read, the same
+                    // always-on-key shape as the count.
+                    "mail_held_since": e.mail_held_since,
                     // The harness's own title for the session, served
                     // from the probe's fresh reading; a probe that ANSWERED
                     // None is trusted (the harness carries no title now, e.g.
@@ -468,14 +472,10 @@ where
                     // installed binary is present, so a Python-only key would be
                     // missing from the path nearly every reader takes.
                     "origin": e.origin,
-                    // the row's mail delivery policy ("bus-only" holds
-                    // mail on the durable bus, null is the injectable default).
-                    // Stored since v14, read by every injector gate, and until
-                    // now never rendered anywhere a human or a lead could see
-                    // it. The remaining time on a timed hold is Python-only
-                    // (`dnd` in schemas/agents-list-row.json): its clock lives
-                    // under fno's config-resolved state dir, which the daemon
-                    // does not load.
+                    // the row's mail-only capability ("bus-only": mail waits
+                    // on the durable bus, never typed text; null is the
+                    // injectable default). A timed hold is not here: it lives
+                    // in the fno-mail hold store, which readers open directly.
                     "delivery_policy": e.delivery_policy,
                     "project_root": e.project_root,
                 });

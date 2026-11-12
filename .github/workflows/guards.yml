@@ -73,17 +73,15 @@ permissions:
   contents: read
 
 jobs:
-  plugin-tree:
+  plugin-hooks:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Install marketplace CLIs for artifact validation
-        run: npm install --global @openai/codex @anthropic-ai/claude-code
-      - name: Prove minimal tree, count refusal and fast-forward publication
-        run: bash scripts/ci/check-plugin-tree.sh
+      - name: Prove the packaged hooks relay and warn on a raw archive
+        run: bash scripts/ci/check-plugin-hooks.sh
 
   # The OpenCode plugin suites: the repo-local orchestration plugin and the
   # shipped stop bridge. Both files speak two OpenCode contracts (the 1.x
@@ -161,6 +159,13 @@ jobs:
         if: ${{ !cancelled() && steps.bun.outcome == 'success' }}
         timeout-minutes: 5
         run: bun test tests/js/opencode/footnote.plugin.test.js
+
+      - name: Pi bridge suite (tests/js/pi)
+        if: ${{ !cancelled() && steps.bun.outcome == 'success' }}
+        timeout-minutes: 5
+        # The real-host leg skips where pi is not installed; the fake-host
+        # contract tests run everywhere bun runs.
+        run: bun test tests/js/pi/footnote.extension.test.mjs
 
   main-python-static:
     name: Python static correctness (495 sources)
@@ -419,6 +424,11 @@ jobs:
         run: |
           bash scripts/ci/check-state-root-rows.sh --self-test
           bash scripts/ci/check-state-root-rows.sh
+
+      - name: every spawn-gate refusal emits
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-gate-refusals-emit.sh
 
       - name: PR node closure
         id: closure

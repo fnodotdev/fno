@@ -61,6 +61,12 @@ cd "$repo_root" || exit 2
 # the main disk; the smoke shards pin the same way for their journey builds.
 export CARGO_BUILD_BUILD_DIR="$repo_root/target"
 
+# The stress tail builds on whatever the shard's earlier steps left on the
+# root disk. A 2026-11-10 shard died in this build's rlib archive step at
+# ENOSPC, and a dead runner's df never uploads, so name the free space before
+# the first build starts: the next death gets a number, not a guess.
+echo "stress_setup=disk avail_mb=$(df -m / | awk 'NR==2{print $4}')"
+
 # A dirty tree cannot be pinned to a sha, so the trials would measure something
 # nobody can name. That is a reason to stand down, NOT a reason to go red: this
 # file is auto-discovered by `fno doctor test smoke` (the scripts/tests/*.sh
@@ -138,7 +144,15 @@ build_test_binary workspace_persistence_e2e crates/fno/Cargo.toml workspace_pers
 # fno-agents-daemon is a FINAL binary that still lands in the checkout's
 # crates/fno-agents/target/<profile> - the path the e2e itself resolves and
 # spawns under that layout.
-daemon_bin_path="$(dirname "$(dirname "$daemon_bin")")/fno-agents-daemon"
+# Cargo's own build messages name the daemon executable first: cargo test
+# builds the crate's bins for its integration tests, so the daemon_e2e build log
+# holds a compiler-artifact line for fno-agents-daemon with its real path. Rust
+# 1.100 moved test binaries under a hashed build-dir, which broke the
+# sibling-of-deps guesses below; they stay as the fallback for older cargo.
+daemon_bin_path="$(jq -Rr 'fromjson? | select(.reason == "compiler-artifact" and .target.name == "fno-agents-daemon" and (.executable // null) != null) | .executable' "$log_root/build-daemon_e2e.log" | tail -1)"
+if [[ ! -x "$daemon_bin_path" ]]; then
+    daemon_bin_path="$(dirname "$(dirname "$daemon_bin")")/fno-agents-daemon"
+fi
 if [[ ! -x "$daemon_bin_path" ]]; then
     profile="$(basename "$(dirname "$(dirname "$daemon_bin")")")"
     daemon_bin_path="$repo_root/crates/fno-agents/target/${profile}/fno-agents-daemon"

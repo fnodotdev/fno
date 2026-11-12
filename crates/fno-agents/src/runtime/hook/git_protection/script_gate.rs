@@ -5,7 +5,7 @@
 //! script the guard cannot read fully refuses: the guard never bets on what
 //! it cannot see.
 
-use super::git_gate::mentions_git;
+use super::git_gate::is_a_push;
 use super::segments::{self, base_lower, Segment};
 use super::Ctx;
 use std::path::Path;
@@ -16,9 +16,18 @@ const MAX_SCRIPT_BYTES: u64 = 1 << 20;
 /// A chain deeper than this is adversarial: refuse, never follow.
 const MAX_DEPTH: usize = 3;
 
+/// Which fail-closed rule produced a refusal. Read failures soften at
+/// nested levels to the push-pair fallback; the piped-runner refusal
+/// always propagates, because the piped text never appears in any command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RefusalKind {
+    Read,
+    Piped,
+}
+
 /// The refusal text a script door blocks with, newtyped so this module adds
 /// no string-error surface (R6: that pattern is shrink-only per crate).
-pub(super) struct Refusal(pub String);
+pub(super) struct Refusal(pub String, pub RefusalKind);
 
 impl From<Refusal> for String {
     fn from(r: Refusal) -> String {
@@ -47,16 +56,35 @@ fn visit(
     out: &mut Vec<Segment>,
 ) -> Result<(), Refusal> {
     if depth > MAX_DEPTH {
-        return Err(Refusal(format!(
-            "🚫 BLOCKED: script chain nests more than {MAX_DEPTH} shells deep\n\n\
-             Command: {command}\n\nA script the guard cannot follow to the bottom refuses."
-        )));
+        return Err(Refusal(
+            format!(
+                "🚫 BLOCKED: script chain nests more than {MAX_DEPTH} shells deep\n\n\
+                 Command: {command}\n\nA script the guard cannot follow to the bottom refuses."
+            ),
+            RefusalKind::Read,
+        ));
     }
     for seg in segs {
-        let Some(text) = runner_script(command, seg, ctx)? else {
-            continue;
+        let (text, label) = match runner_script(command, seg, ctx) {
+            Ok(Some(pair)) => pair,
+            Ok(None) => continue,
+            // A nested helper the door cannot read (a variable script
+            // path, or a file absent beside the script) carries no
+            // readable text. Judge it by the same fallback as an
+            // unparsable body: a push pair in the surrounding script
+            // refuses, otherwise the runner skips. `bash missing.sh` at
+            // the top level still refuses fail-closed, and the
+            // piped-runner refusal always propagates: the piped text
+            // never appears in any command.
+            Err(inner) if depth > 0 && inner.1 == RefusalKind::Read => {
+                if could_push(command) {
+                    return Err(inner);
+                }
+                continue;
+            }
+            Err(inner) => return Err(inner),
         };
-        let inner = parse_script_text(&text)?;
+        let inner = parse_script_text(command, &label, &text)?;
         out.extend(inner.iter().cloned());
         if !inner.is_empty() {
             visit(&text, &inner, ctx, depth + 1, out)?;
@@ -65,10 +93,15 @@ fn visit(
     Ok(())
 }
 
-/// The script text a runner segment will execute, or None. `bash -c` strings
-/// are excluded: effective_argv already re-tokenizes them, so argv[0] is the
+/// The script text a runner segment will execute with the label the refusal
+/// names it by (its path, or a stdin form), or None. `bash -c` strings are
+/// excluded: effective_argv already re-tokenizes them, so argv[0] is the
 /// inner command, never the runner.
-fn runner_script(command: &str, seg: &Segment, ctx: &Ctx) -> Result<Option<String>, Refusal> {
+fn runner_script(
+    command: &str,
+    seg: &Segment,
+    ctx: &Ctx,
+) -> Result<Option<(String, String)>, Refusal> {
     let argv = segments::effective_argv(seg);
     let Some(base0) = argv.first().map(|t| base_lower(t)) else {
         return Ok(None);
@@ -111,13 +144,13 @@ fn runner_script(command: &str, seg: &Segment, ctx: &Ctx) -> Result<Option<Strin
         break;
     }
     if let Some(body) = herestring {
-        return Ok(Some(body.clone()));
+        return Ok(Some((body.clone(), "<herestring>".to_string())));
     }
     let Some(path) = file else {
         // Bare runner: a heredoc stdin is its script. `-c` never lands here.
         let bodies = segments::heredoc_bodies(command);
         if !bodies.is_empty() {
-            return Ok(Some(bodies.join("\n")));
+            return Ok(Some((bodies.join("\n"), "<heredoc>".to_string())));
         }
         // No heredoc: a piped stdin is the only remaining script source,
         // and its text never appears in the command. Refuse fail-closed.
@@ -129,7 +162,7 @@ fn runner_script(command: &str, seg: &Segment, ctx: &Ctx) -> Result<Option<Strin
         }
         return Ok(None);
     };
-    read_script(&ctx.cwd.join(path), command, path).map(Some)
+    read_script(&ctx.cwd.join(path), command, path).map(|text| Some((text, path.to_string())))
 }
 
 /// Read the script file. Any read the guard cannot complete is a refusal.
@@ -161,17 +194,16 @@ fn read_why(e: &std::io::Error) -> String {
 }
 
 /// Parse script text as command segments. Text that parses as unbalanced is
-/// judged by the fallback: any `git` word refuses, otherwise allow.
-fn parse_script_text(text: &str) -> Result<Vec<Segment>, Refusal> {
+/// judged by the fallback: a `git push` word pair refuses, otherwise allow -
+/// the guard exists for the protected-branch push, and a script whose only
+/// git lines are read-only (`git rev-parse`) must pass. The refusal names
+/// the real command and the script location, never the raw body.
+fn parse_script_text(command: &str, label: &str, text: &str) -> Result<Vec<Segment>, Refusal> {
     match segments::command_segments(text) {
         Ok(inner) => Ok(inner),
         Err(_) => {
-            if mentions_git(text) {
-                Err(refusal(
-                    text,
-                    "the script",
-                    "cannot be parsed as shell text",
-                ))
+            if could_push(text) {
+                Err(refusal(command, label, "cannot be parsed as shell text"))
             } else {
                 Ok(Vec::new())
             }
@@ -179,24 +211,40 @@ fn parse_script_text(text: &str) -> Result<Vec<Segment>, Refusal> {
     }
 }
 
+/// The fallback's push read at text level. Quote characters drop before the
+/// match, so a spliced spelling (`git 'pu'sh`) in a script the parser cannot
+/// read still refuses: bash joins `'pu'` and `sh` into one word the raw-text
+/// regex never sees. A quoted prose mention refuses too, which is the cheap
+/// direction for an unreadable script.
+fn could_push(text: &str) -> bool {
+    let stripped: String = text.chars().filter(|c| *c != '\'' && *c != '"').collect();
+    is_a_push(&stripped)
+}
+
 fn refusal(command: &str, script: &str, why: &str) -> Refusal {
-    Refusal(format!(
-        "🚫 BLOCKED: the script this command would run cannot be gated\n\nCommand: {command}\n\n\
+    Refusal(
+        format!(
+            "🚫 BLOCKED: the script this command would run cannot be gated\n\nCommand: {command}\n\n\
          Script: {script}\nReason: {why}\n\n\
          A shell runner on a script file must let the guard read the script, so the \
          protected-branch push gate can see every line it executes. No marker opens this \
          door: write the script where the guard can read it, or run the steps as typed commands."
-    ))
+        ),
+        RefusalKind::Read,
+    )
 }
 
 fn piped_refusal(command: &str) -> Refusal {
-    Refusal(format!(
-        "🚫 BLOCKED: a piped shell runner cannot be gated\n\nCommand: {command}\n\n\
+    Refusal(
+        format!(
+            "🚫 BLOCKED: a piped shell runner cannot be gated\n\nCommand: {command}\n\n\
          The script this command pipes into the runner is not in the command text, so the \
          protected-branch push gate can never read the lines it executes. No marker opens \
          this door: write the script to a file, feed it with a quoted heredoc (`bash <<'EOF'`), \
          or run the steps as typed commands."
-    ))
+        ),
+        RefusalKind::Piped,
+    )
 }
 
 #[cfg(test)]
@@ -444,6 +492,151 @@ mod tests {
             judge_with(&bash("bash emit.sh --help"), &c),
             None,
             "the review lane's emit script must pass the script door"
+        );
+        // The live lane invocation runs from a worktree cwd with the
+        // repo-relative path and the lane's real argument.
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let fake = feature(&repo);
+        let c = ctx(&repo, &fake);
+        assert_eq!(
+            judge_with(
+                &bash("bash skills/review/scripts/emit-attestation.sh code-review"),
+                &c
+            ),
+            None,
+            "the worktree emit invocation must pass the script door"
+        );
+    }
+
+    #[test]
+    fn an_unparsable_script_with_only_readonly_git_allows() {
+        // The fallback refuses a push pair only: a script whose parse breaks
+        // while its only git line is read-only must pass the door. A git
+        // mention alone once refused it wholesale.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("ro.sh"),
+            "#!/bin/bash\nset -e\necho 'unterminated\ngit rev-parse HEAD\n",
+        )
+        .unwrap();
+        let fake = feature(dir.path());
+        let c = ctx(dir.path(), &fake);
+        assert_eq!(
+            judge_with(&bash("bash ro.sh"), &c),
+            None,
+            "read-only git in an unparsable script must not refuse"
+        );
+    }
+
+    #[test]
+    fn an_unparsable_script_carrying_a_push_refuses_and_names_the_real_command() {
+        // An unparsable script whose text carries a push pair refuses, and
+        // the refusal prints the real command and script path: the swapped
+        // refusal args once printed the whole body as Command: and the
+        // literal "the script" as Script:.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("bad.sh"),
+            "#!/bin/bash\necho 'unterminated\ngit push origin main\n",
+        )
+        .unwrap();
+        let fake = feature(dir.path());
+        let c = ctx(dir.path(), &fake);
+        let refusal = judge_with(&bash("bash bad.sh"), &c).unwrap();
+        assert!(
+            refusal.contains("cannot be gated")
+                && refusal.contains("Command: bash bad.sh")
+                && refusal.contains("Script: bad.sh"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_quote_spliced_push_in_an_unparsable_script_refuses() {
+        // `$''` quoting is valid bash the parser cannot read, and quote
+        // splicing (`git 'pu'sh`) hid the push pair from the text match:
+        // bash joins `'pu'` and `sh` into one word. The fallback strips
+        // quote characters before matching.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("splice.sh"),
+            "mode=$'don\\'t'\ngit 'pu'sh origin main\n",
+        )
+        .unwrap();
+        let fake = feature(dir.path());
+        let c = ctx(dir.path(), &fake);
+        let refusal = judge_with(&bash("bash splice.sh"), &c).unwrap();
+        assert!(refusal.contains("cannot be gated"), "{refusal}");
+    }
+
+    #[test]
+    fn a_nested_runner_on_an_absent_helper_skips_when_the_script_could_not_push() {
+        // `$(bash "$helper" ...)` with a variable path reads no file: the
+        // runtime resolves it (or skips it), and no hidden text exists.
+        // The nested read failure once refused the whole enclosing
+        // script, which broke every producer script that nests a helper.
+        // The fallback applies: no push pair in the enclosing script
+        // skips the helper.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("nest.sh"),
+            "#!/bin/bash\nrepo=$(git rev-parse --show-toplevel 2>/dev/null || true)\nout=$(bash \"$helper\" \"$repo\" 2>/dev/null)\necho \"$out\"\n",
+        )
+        .unwrap();
+        let fake = feature(dir.path());
+        let c = ctx(dir.path(), &fake);
+        assert_eq!(
+            judge_with(&bash("bash nest.sh"), &c),
+            None,
+            "an absent nested helper must not refuse a push-free script"
+        );
+    }
+
+    #[test]
+    fn a_nested_runner_on_an_absent_helper_refuses_when_the_script_could_push() {
+        // The same shape with a push pair in the enclosing script keeps
+        // the fail-closed refusal: the unreadable helper stays unread.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("nest-push.sh"),
+            "#!/bin/bash\ngit push origin main\nout=$(bash \"$helper\" x 2>/dev/null)\n",
+        )
+        .unwrap();
+        let fake = feature(dir.path());
+        let c = ctx(dir.path(), &fake);
+        let refusal = judge_with(&bash("bash nest-push.sh"), &c).unwrap();
+        assert!(refusal.contains("cannot be gated"), "{refusal}");
+    }
+
+    #[test]
+    fn the_blueprint_plan_validator_script_is_gateable() {
+        // skills/blueprint/scripts/validate-plan.sh runs on every blueprint,
+        // so the script door must read it. Its prose comments and
+        // herestrings once broke the parse, and the fallback refused it for
+        // its `git rev-parse` lines. The real script must pass the door.
+        let src = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../skills/blueprint/scripts/validate-plan.sh");
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::copy(&src, dir.path().join("validate-plan.sh")).unwrap();
+        let fake = feature(dir.path());
+        let c = ctx(dir.path(), &fake);
+        assert_eq!(
+            judge_with(&bash("bash validate-plan.sh --help"), &c),
+            None,
+            "the blueprint validator must pass the script door"
+        );
+        // The live blueprint invocation runs from a worktree cwd with the
+        // repo-relative path and a plan argument.
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let fake = feature(&repo);
+        let c = ctx(&repo, &fake);
+        assert_eq!(
+            judge_with(
+                &bash("bash skills/blueprint/scripts/validate-plan.sh internal/plans/demo"),
+                &c
+            ),
+            None,
+            "the worktree validator invocation must pass the script door"
         );
     }
 

@@ -411,7 +411,16 @@ fn default_true() -> bool {
 /// v125: `PaneMeta.host` + `cwd` (serde default), the pane frame's machine
 /// and working directory; floor stays 58.
 /// v126: `ControlCommand::PaneKillChecked` binds removal to the observed child.
-pub const PROTO_VERSION: u32 = 126;
+/// v127: `ClientMsg::ChatTail` and `ServerMsg::ChatEvents`, the chat event
+/// stream; floor stays 58.
+/// v128: `LayoutBinding::Mod`, `GraftOutcome::Mod` and `GraftSlotResult.reason`,
+/// a layout slot that holds a mod; floor stays 58.
+/// v129: `ClientMsg::AnchorJump` + `ServerMsg::AnchorJumped`: the exchange
+/// picker's jump lands a pane on the row where a submitted prompt was
+/// echoed, keyed by the prompt's submit stamp.
+/// v130: `AgentRow.mail_held_since` (serde default), the wall stamp of the
+/// oldest held submission; floor stays 58.
+pub const PROTO_VERSION: u32 = 130;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -439,6 +448,7 @@ pub use limits::{BUILD_VERSION, MAX_MAIL_TEXT, MAX_SQUAD_NAME, MAX_TAB_NAME};
 pub mod err_code;
 
 pub mod agent_launch;
+pub mod chat_event;
 pub use agent_launch::{AgentLaunchRequest, AgentLaunchUpdate, LaunchState};
 
 pub mod link;
@@ -1228,6 +1238,13 @@ pub struct AgentRow {
     /// field wire-tolerant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mail_held: Option<u32>,
+    /// (v128) The wall stamp of the OLDEST submission the harness still
+    /// holds (epoch seconds, parsed from the registry row), so the badge
+    /// can age the wait: `[1 queued 12m]`. `None` = nothing held or no
+    /// stamp read; never a fabricated zero. `#[serde(default)]` keeps a
+    /// v126 reader wire-tolerant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mail_held_since: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node: Option<String>,
 
@@ -2316,6 +2333,9 @@ pub struct GraftSlotResult {
     pub slot: String,
     pub pane_id: u64,
     pub outcome: GraftOutcome,
+    /// Why a slot fell back to a shell (v128), e.g. `mod off`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// How a graft slot was filled (v44).
@@ -2328,6 +2348,8 @@ pub enum GraftOutcome {
     Fno,
     /// A freshly spawned shell.
     Shell,
+    /// A pane running `fno config plugins open <pack>/<mod>` (v128).
+    Mod,
 }
 
 /// One tab in a [`ServerMsg::TabList`] (v41, layout-api). `pane_ids` are the
@@ -2710,7 +2732,7 @@ pub fn read_msg_sync<R: Read, T: DeserializeOwned>(r: &mut R) -> Result<T, Proto
     match read_fill(r, &mut len_buf, false) {
         Ok(_) => {}
         Err(ProtoError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-            return Err(ProtoError::Closed)
+            return Err(ProtoError::Closed);
         }
         Err(e) => return Err(e),
     }
@@ -2719,7 +2741,7 @@ pub fn read_msg_sync<R: Read, T: DeserializeOwned>(r: &mut R) -> Result<T, Proto
     match read_fill(r, &mut body, true) {
         Ok(_) => {}
         Err(ProtoError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-            return Err(ProtoError::Closed)
+            return Err(ProtoError::Closed);
         }
         Err(e) => return Err(e),
     }
@@ -3587,7 +3609,7 @@ pub(crate) fn probe_status(path: &Path) -> ProbeOutcome {
                     std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
                 ) =>
             {
-                continue
+                continue;
             }
             Err(_) => {
                 uncertain = true;
@@ -3634,7 +3656,7 @@ fn reclaim_unresponsive_holder(path: &Path) -> std::io::Result<()> {
                     "cannot take over unresponsive socket: read {}: {e}",
                     pid_path.display()
                 ),
-            ))
+            ));
         }
     };
     let (pid, recorded_start) = parse_pid_sidecar(&raw).ok_or_else(|| {
@@ -4251,7 +4273,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 126);
+        assert_eq!(PROTO_VERSION, 130);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the
@@ -4889,5 +4911,30 @@ mod tests {
         };
         let bytes = serde_json::to_vec(&closed).unwrap();
         assert_eq!(closed, serde_json::from_slice::<ServerMsg>(&bytes).unwrap());
+    }
+
+    #[test]
+    fn mod_slot_wire_shapes_round_trip() {
+        let spec: AnchoredLayoutSpec = toml::from_str(
+            r#"
+version = 1
+[tree]
+slot = "panel"
+[[slots]]
+name = "panel"
+binding = { mod = "fno-panels/review-ledger" }
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            spec.slots.first().map(|slot| &slot.binding),
+            Some(&LayoutBinding::Mod("fno-panels/review-ledger".into()))
+        );
+
+        // A v127 receipt has no `reason`; it decodes to None and stays absent.
+        let old = r#"{"slot":"a","pane_id":3,"outcome":"shell"}"#;
+        let got: GraftSlotResult = serde_json::from_str(old).unwrap();
+        assert_eq!(got.reason, None);
+        assert!(!serde_json::to_string(&got).unwrap().contains("reason"));
     }
 }

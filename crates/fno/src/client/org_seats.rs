@@ -8,71 +8,71 @@ use serde_json::Value;
 
 /// The status words on the wire, in the order a lead lists its seats. A
 /// blocked seat cannot work at all, so it lists first.
-pub(crate) const STATUS_ORDER: [&str; 5] = ["blocked", "writing", "parked", "quiet", "unknown"];
+pub const STATUS_ORDER: [&str; 5] = ["blocked", "writing", "parked", "quiet", "unknown"];
 
-pub(crate) struct FleetInputs {
-    pub(crate) fleet: Result<Value, String>,
-    pub(crate) backlog: Inputs,
-    pub(crate) measured_at: u64,
+pub struct FleetInputs {
+    pub fleet: Result<Value, String>,
+    pub backlog: Inputs,
+    pub measured_at: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
-pub(crate) struct Work {
-    pub(crate) id: String,
-    pub(crate) title: Option<String>,
-    pub(crate) status: Option<String>,
-    pub(crate) priority: Option<String>,
-    pub(crate) difficulty: Option<String>,
-    pub(crate) plan: Option<String>,
-    pub(crate) pr: Option<u64>,
-    pub(crate) pr_url: Option<String>,
-    pub(crate) epic: Option<(String, Option<String>)>,
+pub struct Work {
+    pub id: String,
+    pub title: Option<String>,
+    pub status: Option<String>,
+    pub priority: Option<String>,
+    pub difficulty: Option<String>,
+    pub plan: Option<String>,
+    pub pr: Option<u64>,
+    pub pr_url: Option<String>,
+    pub epic: Option<(String, Option<String>)>,
     /// The node's description, when it is plain text.
-    pub(crate) details: Option<String>,
+    pub details: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
-pub(crate) struct Seat {
-    pub(crate) name: String,
+pub struct Seat {
+    pub name: String,
     /// The short handle `fno agents session attach` takes.
-    pub(crate) short: String,
-    pub(crate) session_id: Option<String>,
-    pub(crate) harness: Option<String>,
-    pub(crate) model: Option<String>,
-    pub(crate) model_basis: Option<String>,
-    pub(crate) started_at: Option<String>,
-    pub(crate) last_message_at: Option<String>,
-    pub(crate) cwd: Option<String>,
-    pub(crate) role: Option<String>,
+    pub short: String,
+    pub session_id: Option<String>,
+    pub harness: Option<String>,
+    pub model: Option<String>,
+    pub model_basis: Option<String>,
+    pub started_at: Option<String>,
+    pub last_message_at: Option<String>,
+    pub cwd: Option<String>,
+    pub role: Option<String>,
     /// The published project, else the node's graph project.
-    pub(crate) project: Option<String>,
-    pub(crate) context_pct: Option<i64>,
-    pub(crate) rss_mb: Option<f64>,
+    pub project: Option<String>,
+    pub context_pct: Option<i64>,
+    pub rss_mb: Option<f64>,
     /// The turn facts. Null when the seat's machine publishes none or its
     /// harness has no transcript reader.
-    pub(crate) last_message: Option<String>,
-    pub(crate) last_prompt: Option<String>,
-    pub(crate) user_turns: Option<i64>,
-    pub(crate) progress: Option<String>,
-    pub(crate) status: &'static str,
-    pub(crate) status_age_s: Option<i64>,
-    pub(crate) work: Option<Work>,
+    pub last_message: Option<String>,
+    pub last_prompt: Option<String>,
+    pub user_turns: Option<i64>,
+    pub progress: Option<String>,
+    pub status: &'static str,
+    pub status_age_s: Option<i64>,
+    pub work: Option<Work>,
     /// This mux's registry row, joined by full session id only. Only a
     /// joined seat takes action keys.
     #[serde(skip)]
-    pub(crate) local: Option<AgentRow>,
+    pub local: Option<AgentRow>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
 /// The seats on one machine that report to one lead. `name` is the lead's
 /// seat name, or [`NO_LEAD`].
-pub(crate) struct Lead {
-    pub(crate) name: String,
-    pub(crate) seats: Vec<Seat>,
+pub struct Lead {
+    pub name: String,
+    pub seats: Vec<Seat>,
 }
 
 /// The group of seats whose spawner chain reaches no seat with a role.
-pub(crate) const NO_LEAD: &str = "no lead";
+pub const NO_LEAD: &str = "no lead";
 
 /// One fleet session, as the lead walk reads it.
 struct Link {
@@ -105,47 +105,47 @@ fn lead_of(s: &Value, links: &[Link]) -> Option<String> {
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
-pub(crate) struct Machine {
-    pub(crate) id: String,
-    pub(crate) host: String,
-    pub(crate) local: bool,
-    pub(crate) fresh: bool,
-    pub(crate) age_s: i64,
-    pub(crate) verdict: Option<String>,
-    pub(crate) cpu: Option<f64>,
-    pub(crate) mem_used: Option<f64>,
-    pub(crate) cap: Option<i64>,
-    pub(crate) takes_work: bool,
+pub struct Machine {
+    pub id: String,
+    pub host: String,
+    pub local: bool,
+    pub fresh: bool,
+    pub age_s: i64,
+    pub verdict: Option<String>,
+    pub cpu: Option<f64>,
+    pub mem_used: Option<f64>,
+    pub cap: Option<i64>,
+    pub takes_work: bool,
     /// The person the machine's beat names: a stated display name, never
     /// proof.
-    pub(crate) owner: Option<String>,
+    pub owner: Option<String>,
     /// The machine's configured name. Null means the page shows the host.
-    pub(crate) display_name: Option<String>,
-    pub(crate) lanes: Vec<Lane>,
-    pub(crate) leads: Vec<Lead>,
+    pub display_name: Option<String>,
+    pub lanes: Vec<Lane>,
+    pub leads: Vec<Lead>,
 }
 
 /// One provider lane as the spawn gate counts it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub(crate) struct Lane {
-    pub(crate) provider: String,
-    pub(crate) cap: Option<i64>,
-    pub(crate) count: Option<i64>,
+pub struct Lane {
+    pub provider: String,
+    pub cap: Option<i64>,
+    pub count: Option<i64>,
     #[serde(default)]
-    pub(crate) full: bool,
+    pub full: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
-pub(crate) struct Fleet {
-    pub(crate) machines: Vec<Machine>,
+pub struct Fleet {
+    pub machines: Vec<Machine>,
     /// fleet top's own notice (no `store.remote_url`) or its primary error.
-    pub(crate) notice: Option<String>,
-    pub(crate) seat_error: Option<String>,
-    pub(crate) measured_at: u64,
+    pub notice: Option<String>,
+    pub seat_error: Option<String>,
+    pub measured_at: u64,
 }
 
 impl Fleet {
-    pub(crate) fn seats(&self) -> impl Iterator<Item = &Seat> {
+    pub fn seats(&self) -> impl Iterator<Item = &Seat> {
         self.machines
             .iter()
             .flat_map(|m| &m.leads)
@@ -155,7 +155,7 @@ impl Fleet {
 
 /// `fno agents fleet top --machines --json` beside the backlog read, each
 /// with its own failure, on the same 30 s bound the org fold had.
-pub(crate) async fn gather(graph: &std::path::Path, agents: Vec<AgentRow>) -> FleetInputs {
+pub async fn gather(graph: &std::path::Path, agents: Vec<AgentRow>) -> FleetInputs {
     let (backlog, fleet) = tokio::join!(crate::backlog_model::gather(graph, agents), read_fleet());
     FleetInputs {
         fleet,
@@ -165,7 +165,7 @@ pub(crate) async fn gather(graph: &std::path::Path, agents: Vec<AgentRow>) -> Fl
 }
 
 /// The fleet top read, with each failure named.
-pub(crate) async fn read_fleet() -> Result<Value, String> {
+pub async fn read_fleet() -> Result<Value, String> {
     match crate::org_model::tab_read(crate::org_model::FLEET_TOP_ARGV, Vec::new()).await {
         None => Err("fleet top timed out after 30s".into()),
         Some(Err(error)) => Err(format!("fleet top could not run: {error}")),
@@ -222,7 +222,7 @@ fn work_of(backlog: &Inputs, id: &str) -> Work {
 
 /// The pure fold. A seat sits under the lead it reports to, on its own
 /// machine; a lead on another machine still names the group.
-pub(crate) fn fold(map: &Value, backlog: &Inputs, agents: &[AgentRow], measured_at: u64) -> Fleet {
+pub fn fold(map: &Value, backlog: &Inputs, agents: &[AgentRow], measured_at: u64) -> Fleet {
     let links: Vec<Link> = map["machines"]
         .as_array()
         .into_iter()
@@ -345,4 +345,4 @@ pub(crate) fn fold(map: &Value, backlog: &Inputs, agents: &[AgentRow], measured_
 
 #[cfg(test)]
 #[path = "tests/org_seats_tests.rs"]
-pub(crate) mod tests;
+pub mod tests;

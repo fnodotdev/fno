@@ -10,7 +10,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::graph_keeper::{err_reply, handle_request, StoreState, MAX_FRAME_BYTES};
+use crate::graph_keeper::{err_reply, handle_parsed, parse_request, StoreState, MAX_FRAME_BYTES};
+use crate::keeper_wire::{ErrorKind, KeeperMethod, KeeperReply, KeeperRequest};
 
 /// Parsed `--store-exec` lane argv: `--store-exec --graph <path>
 /// [--canonical] [--events <path>] [--lock-timeout-secs N]`. No socket and
@@ -147,24 +148,31 @@ pub(crate) fn handle_keeper_scan(
     Ok(json!({"keepers": keepers}))
 }
 
-/// The serving half of the lane, split from stdin/stdout so it stays
-/// testable without a process. No render pass here, deliberately: the write
-/// path renders nothing after a landed publish - the keeper's settled
-/// trigger and the daemon's board_render arm own the views, so an exec
-/// render would run the pass twice for every CLI write - and a synchronous
-/// `fno backlog render-views` inside the child re-enters the store client,
-/// which wedges under the test sandbox. The resident trigger's remaining
-/// job (native mux writes rendering the views) rides with the resident
-/// keeper itself.
-pub(crate) fn exec_reply(cfg: &ExecConfig, payload: &[u8]) -> Value {
+/// The lane's one request parse, under the frame cap. The refusal is the
+/// reply to send.
+fn parse_exec_payload(payload: &[u8]) -> Result<KeeperRequest, KeeperReply> {
     if payload.len() > MAX_FRAME_BYTES {
-        return err_reply(
+        return Err(err_reply(
             0,
-            "malformed_frame",
+            ErrorKind::MalformedFrame,
             format!("request of {} bytes exceeds the cap", payload.len()),
-        );
+        ));
     }
-    if let Some(reply) = fno_home_write_fence(payload, &cfg.graph) {
+    parse_request(payload)
+}
+
+/// The serving half of the lane, split from stdin/stdout so it stays
+/// testable without a process; the in-process callers build a
+/// [`KeeperRequest`] and call it directly. No render pass here,
+/// deliberately: the write path renders nothing after a landed publish -
+/// the keeper's settled trigger and the daemon's board_render arm own the
+/// views, so an exec render would run the pass twice for every CLI write -
+/// and a synchronous `fno backlog render-views` inside the child re-enters
+/// the store client, which wedges under the test sandbox. The resident
+/// trigger's remaining job (native mux writes rendering the views) rides
+/// with the resident keeper itself.
+pub(crate) fn exec_request(cfg: &ExecConfig, req: &KeeperRequest) -> KeeperReply {
+    if let Some(reply) = fno_home_write_fence(req, &cfg.graph) {
         return reply;
     }
     let state = fresh_store_state(
@@ -175,7 +183,7 @@ pub(crate) fn exec_reply(cfg: &ExecConfig, payload: &[u8]) -> Value {
         None,
         None,
     );
-    handle_request(&state, payload)
+    handle_parsed(&state, req)
 }
 
 /// The FNO_HOME write fence. FNO_HOME relocates fno's sidecars; it never
@@ -183,18 +191,13 @@ pub(crate) fn exec_reply(cfg: &ExecConfig, payload: &[u8]) -> Value {
 /// HOME-default store while FNO_HOME points elsewhere is the sandbox leak
 /// this lane refuses. Reads stay allowed, a graph inside FNO_HOME is
 /// unambiguous sandbox intent, and explicit graph paths (repo tests,
-/// FNO_CONFIG state_dir targets) are deliberate and never refused. A payload
-/// that does not parse returns None here and falls through to
-/// `handle_request`, which answers `malformed_frame`.
-fn fno_home_write_fence(payload: &[u8], graph: &Path) -> Option<Value> {
-    let req: Value = serde_json::from_slice(payload).ok()?;
-    let method = req.get("method").and_then(Value::as_str).unwrap_or("");
-    if !crate::graph_keeper::is_write_method(method) {
+/// FNO_CONFIG state_dir targets) are deliberate and never refused.
+fn fno_home_write_fence(req: &KeeperRequest, graph: &Path) -> Option<KeeperReply> {
+    if !req.method.is_write() {
         return None;
     }
-    let id = req.get("id").and_then(Value::as_u64).unwrap_or(0);
     fno_home_escape(graph, std::env::var_os("FNO_HOME"))
-        .map(|message| err_reply(id, "invalid", message))
+        .map(|message| err_reply(req.id, ErrorKind::Invalid, message))
 }
 
 /// True when `dir` is `root` or beneath it, in raw or canonical form on both
@@ -255,16 +258,19 @@ pub const REQUEST_LOG_ENV: &str = "FNO_STORE_EXEC_LOG";
 /// write, outcome, rows in the reply, reply bytes, and serve time. `rows` is
 /// the result's `entries` array when it has one (so a by-id read never counts
 /// its `missing` tokens), else the sum of its top-level arrays.
-fn request_log_row(payload: &[u8], reply: &Value, reply_bytes: usize, wall: Duration) -> Value {
-    let req: Value = serde_json::from_slice(payload).unwrap_or(Value::Null);
-    let method = req.get("method").and_then(Value::as_str).unwrap_or("");
-    let params = req.get("params");
-    let op = params
-        .and_then(|p| p.get("name").or_else(|| p.get("op")))
+fn request_log_row(
+    req: Option<&KeeperRequest>,
+    reply: &KeeperReply,
+    reply_bytes: usize,
+    wall: Duration,
+) -> Value {
+    let method = req.map(|r| &r.method);
+    let op = req
+        .and_then(|r| r.params.get("name").or_else(|| r.params.get("op")))
         .and_then(Value::as_str);
-    let rows: usize = match reply.get("result") {
-        Some(Value::Array(a)) => a.len(),
-        Some(Value::Object(o)) => match o.get("entries").and_then(Value::as_array) {
+    let rows: usize = match &reply.outcome {
+        Ok(Value::Array(a)) => a.len(),
+        Ok(Value::Object(o)) => match o.get("entries").and_then(Value::as_array) {
             Some(entries) => entries.len(),
             None => o.values().filter_map(Value::as_array).map(Vec::len).sum(),
         },
@@ -274,13 +280,15 @@ fn request_log_row(payload: &[u8], reply: &Value, reply_bytes: usize, wall: Dura
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
+    let write = method.is_some_and(KeeperMethod::is_write)
+        && !(method == Some(&KeeperMethod::Api)
+            && op.is_some_and(crate::graph_keeper::api_is_read_op));
     json!({
         "ts_ms": ts_ms,
-        "method": method,
+        "method": method.map_or("", KeeperMethod::as_str),
         "op": op,
-        "kind": if crate::graph_keeper::is_write_method(method)
-            && !(method == "api" && op.is_some_and(crate::graph_keeper::api_is_read_op)) { "write" } else { "read" },
-        "ok": reply.get("ok").and_then(Value::as_bool) == Some(true),
+        "kind": if write { "write" } else { "read" },
+        "ok": reply.is_ok(),
         "rows": rows,
         "reply_bytes": reply_bytes,
         "wall_us": wall.as_micros().min(u64::MAX as u128) as u64,
@@ -315,11 +323,15 @@ pub fn run_exec(cfg: ExecConfig) -> Result<(), String> {
         .read_to_end(&mut payload)
         .map_err(|e| format!("cannot read request from stdin: {e}"))?;
     let started = std::time::Instant::now();
-    let reply = exec_reply(&cfg, &payload);
-    let ok = reply.get("ok").and_then(Value::as_bool) == Some(true);
-    let text = reply.to_string();
+    let req = parse_exec_payload(&payload);
+    let reply = match &req {
+        Ok(req) => exec_request(&cfg, req),
+        Err(refusal) => refusal.clone(),
+    };
+    let ok = reply.is_ok();
+    let text = String::from_utf8(crate::graph_keeper::reply_bytes(&reply)).unwrap_or_default();
     if let Some(log) = std::env::var_os(REQUEST_LOG_ENV).filter(|v| !v.is_empty()) {
-        let row = request_log_row(&payload, &reply, text.len(), started.elapsed());
+        let row = request_log_row(req.as_ref().ok(), &reply, text.len(), started.elapsed());
         append_request_log(Path::new(&log), &row);
     }
     println!("{text}");

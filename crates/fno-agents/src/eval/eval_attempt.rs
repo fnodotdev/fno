@@ -510,6 +510,18 @@ fn in_window(mtime_s: f64, started: f64, now: f64) -> bool {
     mtime_s + 300.0 >= started && mtime_s <= now + 300.0
 }
 
+/// A string field read by a runtime key: the shape new reads in this file
+/// take, so the string-key ratchet never moves (docs/rust-style.md R1).
+fn j_str<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
+    v.get(k).and_then(Value::as_str)
+}
+
+/// The same read for any value type, so array and object fields stay off the
+/// string-key ratchet too.
+fn j_field<'a>(v: &'a Value, k: &str) -> &'a Value {
+    v.get(k).unwrap_or(&Value::Null)
+}
+
 fn observe_opencode(dbs: &[PathBuf], workdir: &str, started: f64, now: f64) -> Option<Observed> {
     const SESSION_SQL: &str = "SELECT id, time_updated FROM session \
          WHERE directory = ?1 AND parent_id IS NULL";
@@ -520,7 +532,14 @@ fn observe_opencode(dbs: &[PathBuf], workdir: &str, started: f64, now: f64) -> O
         let Some(conn) = crate::graph_store::open_read_only_wal_safe(db) else {
             continue;
         };
-        let Ok(mut stmt) = conn.prepare(SESSION_SQL) else {
+        let sql = match crate::opencode_transcript::store_family(&conn) {
+            Some(true) => {
+                "SELECT id, time_updated FROM session_v2 \
+                 WHERE directory = ?1 AND parent_id IS NULL"
+            }
+            _ => SESSION_SQL,
+        };
+        let Ok(mut stmt) = conn.prepare(sql) else {
             continue;
         };
         let Ok(rows) = stmt.query_map([workdir], |r| {
@@ -538,13 +557,90 @@ fn observe_opencode(dbs: &[PathBuf], workdir: &str, started: f64, now: f64) -> O
             }
         }
     }
+    // The v2 store: a 2.x serve writes `session_v2` with the session's own
+    // model JSON ({id, providerID, variant}) and direct token-total columns.
+    // Read only when the 1.x tables answered nothing, so a 1.18 host never
+    // queries them. Identity from the session row, usage from its totals.
+    let mut v2_best: Option<(i64, String, String)> = None;
+    let mut v2_usage: Option<UsageSum> = None;
+    if best.is_none() {
+        const SESSION_V2_SQL: &str = "SELECT id, time_updated, model, tokens_input, \
+             tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write \
+             FROM session_v2 WHERE directory = ?1 AND parent_id IS NULL";
+        for db in dbs {
+            let Some(conn) = crate::graph_store::open_read_only_wal_safe(db) else {
+                continue;
+            };
+            let Ok(mut stmt) = conn.prepare(SESSION_V2_SQL) else {
+                continue;
+            };
+            let Ok(rows) = stmt.query_map([workdir], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, i64>(4)?,
+                    r.get::<_, i64>(5)?,
+                    r.get::<_, i64>(6)?,
+                    r.get::<_, i64>(7)?,
+                ))
+            }) else {
+                continue;
+            };
+            for (id, updated_ms, model_raw, ti, to, tr, tcr, tcw) in rows.flatten() {
+                let mtime_s = updated_ms.max(0) as f64 / 1000.0;
+                if !in_window(mtime_s, started, now) {
+                    continue;
+                }
+                if v2_best.as_ref().is_none_or(|(b, _, _)| updated_ms > *b) {
+                    let parsed = serde_json::from_str::<Value>(&model_raw).ok();
+                    let model = parsed.as_ref().and_then(|m| {
+                        let id_part = j_str(m, "id")?.to_string();
+                        let provider = j_str(m, "providerID")?.to_string();
+                        Some(format!("{provider}/{id_part}"))
+                    });
+                    if let Some(model_str) = model {
+                        v2_best = Some((updated_ms, id, model_str));
+                        v2_usage = Some((
+                            ti.max(0) as u64,
+                            (to.max(0) + tr.max(0)) as u64,
+                            tcr.max(0) as u64,
+                            tcw.max(0) as u64,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    if let Some((_, v2_id, v2_model)) = v2_best {
+        return Some(Observed {
+            harness: "opencode",
+            model: Some(v2_model),
+            session_id: v2_id,
+            usage: v2_usage.map(usage_json),
+            source: "opencode-store-v2",
+        });
+    }
     let (_, session_id) = best?;
     let mut model: Option<String> = None;
     let mut usage: Option<UsageSum> = None;
+    // The label follows the family that actually answered the usage walk.
+    let mut source: &str = "opencode-store";
     for db in dbs {
         let Some(conn) = crate::graph_store::open_read_only_wal_safe(db) else {
             continue;
         };
+        if crate::opencode_transcript::store_family(&conn) == Some(true) {
+            if let Some(observed) = observe_opencode_v2(&conn, &session_id) {
+                source = "opencode-store-v2";
+                if model.is_none() {
+                    model = observed.0;
+                }
+                usage = Some(add_usage(usage, observed.1));
+            }
+            continue;
+        }
         let Ok(mut stmt) = conn.prepare(MESSAGE_SQL) else {
             continue;
         };
@@ -592,8 +688,166 @@ fn observe_opencode(dbs: &[PathBuf], workdir: &str, started: f64, now: f64) -> O
         model,
         session_id,
         usage: usage.map(usage_json),
-        source: "opencode-store",
+        source,
     })
+}
+
+/// The 2.x session row's selected model, typed at the boundary.
+#[derive(serde::Deserialize)]
+struct V2ModelRef {
+    #[serde(default)]
+    id: String,
+    #[serde(rename = "providerID", default)]
+    provider_id: String,
+}
+
+/// The 2.x observe: the session row carries its own token rollups and the
+/// selected model, so one row answers what the 1.x walk recomputed from
+/// every assistant message.
+fn observe_opencode_v2(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+) -> Option<(Option<String>, (u64, u64, u64, u64))> {
+    const SQL: &str = "SELECT model, tokens_input, tokens_output, tokens_reasoning, \
+         tokens_cache_read, tokens_cache_write FROM session_v2 WHERE id = ?1";
+    let (model_raw, ti, to, tr, tcr, tcw) = conn
+        .query_row(SQL, [session_id], |r| {
+            Ok((
+                r.get::<_, Option<String>>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, i64>(5)?,
+            ))
+        })
+        .ok()?;
+    // Reasoning is billed as output, and opencode counts it apart, the same
+    // fold the 1.x walk applies.
+    let output = (to + tr).max(0) as u64;
+    let model = model_raw.and_then(|raw| {
+        serde_json::from_str::<V2ModelRef>(&raw)
+            .ok()
+            .filter(|m| !m.id.is_empty() && !m.provider_id.is_empty())
+            .map(|m| format!("{}/{}", m.provider_id, m.id))
+    });
+    Some((
+        model,
+        (
+            ti.max(0) as u64,
+            output,
+            tcr.max(0) as u64,
+            tcw.max(0) as u64,
+        ),
+    ))
+}
+/// The pi arm of the observe door. The store resolver is the one the spawn
+/// leg honors (env session dir, settings, or the default per-cwd layout),
+/// so the observer reads the store pi itself uses. Identity only: the pi
+/// rows this fold reads carry no usage fields, so `usage` stays null, never
+/// zero (AC10-EDGE). Session id: the header row's id, else the file stem.
+fn observe_pi(workdir: &str, started: f64, now: f64) -> Option<Observed> {
+    let cwd = Path::new(workdir);
+    let store = crate::spawn::pi::pi_store(cwd).ok()?;
+    let root = store.root.clone();
+    let (dir, flat) = match store.layout {
+        crate::spawn::pi::StoreLayout::CwdScoped => {
+            (root.join(crate::spawn::pi::encode_cwd(cwd)), false)
+        }
+        crate::spawn::pi::StoreLayout::Flat => (root, true),
+    };
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(rd) => rd,
+        Err(_) => return None,
+    };
+    for f in entries.flatten() {
+        let path = f.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Ok(modified) = std::fs::metadata(&path).and_then(|m| m.modified()) else {
+            continue;
+        };
+        let Ok(mtime) = modified.duration_since(std::time::UNIX_EPOCH) else {
+            continue;
+        };
+        if !in_window(mtime.as_secs_f64(), started, now) {
+            continue;
+        }
+        if !flat {
+            if best.as_ref().is_none_or(|(b, _)| modified > *b) {
+                best = Some((modified, path));
+            }
+            continue;
+        }
+        let header_matches = matches_header_cwd(&header_of(&path), workdir);
+        if header_matches && best.as_ref().is_none_or(|(b, _)| modified > *b) {
+            best = Some((modified, path));
+        }
+    }
+    let (_, path) = best?;
+
+    // Fold the rows: the message rows carry model and provider the same way
+    // the correction fold reads them.
+    let mut model: Option<String> = None;
+    let mut provider: Option<String> = None;
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return None;
+    };
+    for line in text.lines() {
+        let Ok(row) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        match j_str(&row, "type") {
+            Some("message") => {
+                let msg = j_field(&row, "message");
+                if let Some(m) = j_str(msg, "model") {
+                    model = Some(m.to_string());
+                }
+                if let Some(p) = j_str(msg, "provider") {
+                    provider = Some(p.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    let session_id = j_str(&header_of(&path), "id")
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_string()
+        });
+    let model = match (&provider, &model) {
+        (Some(p), Some(m)) if !m.contains('/') => Some(format!("{p}/{m}")),
+        _ => model.clone(),
+    };
+    Some(Observed {
+        harness: "pi",
+        model,
+        session_id,
+        usage: None,
+        source: "pi-store",
+    })
+}
+
+/// The file's first line parsed, or a null row.
+fn header_of(path: &Path) -> Value {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| {
+            raw.lines()
+                .next()
+                .and_then(|l| serde_json::from_str::<Value>(l).ok())
+        })
+        .unwrap_or(Value::Null)
+}
+
+/// The flat layout's cwd match: the header row's `cwd` equals the workdir.
+fn matches_header_cwd(header: &Value, workdir: &str) -> bool {
+    j_str(header, "cwd") == Some(workdir)
 }
 
 /// The newest session under `root/<project>/` whose launch cwd is `workdir`
@@ -808,6 +1062,7 @@ pub fn observe(payload: &Value) -> Value {
                 .unwrap_or_else(crate::footnote_harness::transcript::sessions_root);
             observe_records("footnote", &root, workdir, started, now)
         }
+        "pi" => observe_pi(workdir, started, now),
         _ => None,
     };
     match observed {
@@ -816,6 +1071,7 @@ pub fn observe(payload: &Value) -> Value {
                 "claude" => "no claude transcript for this workdir".to_string(),
                 "opencode" => "no opencode session for this workdir".to_string(),
                 "footnote" => "no readable footnote transcript for this workdir".to_string(),
+                "pi" => "no readable pi session for this workdir".to_string(),
                 other => format!("no transcript reader for harness '{other}'"),
             };
             fields["lane_reason"] = json!(reason);

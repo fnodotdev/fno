@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
 # clippy-check.sh - the crates/ clippy gate (rust-ci.yml `clippy` job).
 #
-# Four surfaces, one mechanism:
+# Nine surfaces, one mechanism:
 #   clippy::correctness        any new hit fails (denied)
 #   clippy::invalid_regex      ratcheted: an untouched flagged line passes,
 #   clippy::indexing_slicing   an edited flagged line fails
 #   clippy::disallowed_methods same; bare Command::output via clippy.toml
+# Four more are ratcheted on product code only (a second `--lib --bins` pass,
+# so #[cfg(test)] code and tests/ never count; rust-style.md says tests may
+# unwrap):
+#   clippy::unwrap_used                R8   no unwrap in product code
+#   clippy::let_underscore_must_use    R9   never drop an error in silence
+#   clippy::undocumented_unsafe_blocks R14  no unsafe without a SAFETY comment
+#   clippy::too_many_lines             R15  split a long function (clippy's
+#                                           default threshold, 100 lines)
 #
 # A hit is keyed `<crate>/<path><TAB><lint><TAB>trimmed primary-line text`.
 # Because the key carries the line's text, editing a flagged line produces a
@@ -20,6 +28,15 @@
 # --write-baseline after a fix or a toolchain bump. CLIPPY_TOOLCHAIN in
 # rust-ci.yml names the toolchain that wrote the baseline; bump them
 # together, never apart (same contract as the fmt job's RUSTFMT_TOOLCHAIN).
+#
+# Platform: CI runs on Linux. A baseline written on macOS misses cfg(linux)
+# code (and --write-baseline there drops the Linux-only rows as stale), so
+# union a macOS write with the rows the Linux job reports, never replace.
+#
+# Known limit: keys are unique lines, so a new flagged line whose trimmed text
+# equals an already-baselined line in the same file passes (common for
+# `let _ = tx.send(..)` and `.lock().unwrap()`). The gate sees the first
+# occurrence only; a duplicate is review's to catch.
 #
 # Escape hatch: a targeted `#[allow(clippy::indexing_slicing)]` silences a
 # site for good; the diagnostic and its key disappear together.
@@ -50,12 +67,15 @@ while [[ $# -gt 0 ]]; do
         --write-baseline) WRITE=1; shift ;;
         --extract) EXTRACT_SRC="$2"; EXTRACT_CRATE="$3"; shift 3 ;;
         --hits-file) HITS_FILE="$2"; shift 2 ;;
-        -h|--help) sed -n '2,36p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,50p' "$0"; exit 0 ;;
         *) CRATES+=("$1"); shift ;;
     esac
 done
 
 LINT_FLAGS=(-W clippy::correctness -W clippy::invalid_regex -W clippy::indexing_slicing -W clippy::disallowed_methods)
+PRODUCT_LINT_FLAGS=(-W clippy::unwrap_used -W clippy::let_underscore_must_use -W clippy::undocumented_unsafe_blocks -W clippy::too_many_lines)
+# The one list extract_keys filters on: every lint either pass can emit.
+RATCHET_LINTS='["clippy::correctness", "clippy::invalid_regex", "clippy::indexing_slicing", "clippy::disallowed_methods", "clippy::unwrap_used", "clippy::let_underscore_must_use", "clippy::undocumented_unsafe_blocks", "clippy::too_many_lines"]'
 
 # One clippy JSON stream -> sorted unique TSV hit keys for one crate. Paths
 # outside the crate (macro-expanded registry sources, /rustc shims) are not
@@ -63,10 +83,9 @@ LINT_FLAGS=(-W clippy::correctness -W clippy::invalid_regex -W clippy::indexing_
 # rustc's own and stay with the `warnings` job.
 extract_keys() {
     local jsonl="$1" crate="$2"
-    jq -r --arg crate "$crate" '
+    jq -r --arg crate "$crate" --argjson lints "$RATCHET_LINTS" '
         select(.reason == "compiler-message")
-        | select(.message.code.code as $c |
-            ["clippy::correctness", "clippy::invalid_regex", "clippy::indexing_slicing", "clippy::disallowed_methods"] | index($c))
+        | select(.message.code.code as $c | $lints | index($c))
         | (.message.spans // [] | map(select(.is_primary == true)) | .[0] // .message.spans[0]) as $s
         | select($s != null)
         | select(($s.file_name | startswith("/") or startswith("..")) | not)
@@ -111,6 +130,17 @@ else
             exit 1
         fi
         extract_keys "$local_tmp" "$crate" >>"$CURRENT"
+        # Product-only pass: --lib --bins leaves #[cfg(test)] and tests/ out.
+        # A crate with neither target (cargo exits non-zero) has no product
+        # code to ratchet.
+        if ( cd "$REPO_ROOT/$crate" && cargo clippy --lib --bins --locked --message-format=json -- "${PRODUCT_LINT_FLAGS[@]}" ) >"$local_tmp" 2>"$err_tmp"; then
+            extract_keys "$local_tmp" "$crate" >>"$CURRENT"
+        elif ! grep -q "no library targets found" "$err_tmp"; then
+            echo "clippy-check: cargo clippy (product pass) failed in $crate; stderr tail:" >&2
+            tail -30 "$err_tmp" >&2
+            rm -f "$local_tmp" "$err_tmp"
+            exit 1
+        fi
         rm -f "$local_tmp" "$err_tmp"
     done
     sort -u -o "$CURRENT" "$CURRENT"
@@ -157,6 +187,7 @@ if [[ -n "$new" ]]; then
     done <<<"$new"
     echo "The rendered diagnostics are in the clippy job log above. Locally:" >&2
     echo "  cargo clippy --all-targets -- -W clippy::correctness -W clippy::invalid_regex -W clippy::indexing_slicing -W clippy::disallowed_methods" >&2
+    echo "  cargo clippy --lib --bins -- -W clippy::unwrap_used -W clippy::let_underscore_must_use -W clippy::undocumented_unsafe_blocks -W clippy::too_many_lines" >&2
     exit 1
 fi
 

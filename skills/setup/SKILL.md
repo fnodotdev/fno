@@ -45,6 +45,12 @@ Apply nothing of kind `approve`. An approve needs a person.
 
 The `claude-auto-mode` approve step adds Footnote's narrow state and role rules to the active Claude Code user settings file. If the user sets `CLAUDE_CONFIG_DIR`, setup uses its `settings.json` file. Otherwise, setup uses `~/.claude/settings.json`. A person must approve the step. An unattended run can show the proposal. It does not change Claude Code settings, credentials, or sandbox options.
 
+The `permission-rules` approve step writes fno's must-enable list. The list is fno's own record commands and the common reads, such as `fno backlog`, `git status` and `gh pr view`. It never holds an interpreter, a shell, a runner, or a command that spawns, merges or pushes. The list lives in `crates/fno/src/must_enable.toml`. The step writes only for a harness whose config home exists. Run it with `fno config setup run --only permission-rules`. A second run changes no byte.
+
+Each harness gets one file. Claude Code gets `Bash(fno backlog *)` style entries appended to `permissions.allow` in the user settings file, after the user's own entries. Codex gets `~/.codex/rules/fno.rules`, and codex reads rules only at startup, so restart codex after the step. opencode gets rules at the head of the global `opencode.json` or `opencode.jsonc`. opencode uses the last rule that matches, so a rule of the user's own later in the file wins. A v1 opencode gets `permission.bash` keys, and a v2 opencode gets `permissions` rows. pi and agy have no rule syntax, so they get nothing.
+
+The step refuses a file it cannot merge safely, such as an opencode file with comments. It then names the file and leaves it byte-identical. To undo the rules, delete the entries from `permissions.allow`, delete `fno.rules`, or delete the fno rows from the opencode file. `fno doctor` reports each harness as present, missing or drift. It never adds back a rule that the user removed, and `fno doctor --fix` does not write these rules.
+
 ## Read the report
 
 The run writes `<state_dir>/sidecar/wizard-report.json`. It prints the path as `wizard-report: <path>`. Check that `run_id` is newer than your launch. Also check that `status` is not `running`. The run writes a `running` stub before the final report. Then report the red rows and their fixes, the files it wrote, and `next_action`.

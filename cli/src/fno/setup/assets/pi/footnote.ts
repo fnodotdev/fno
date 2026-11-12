@@ -4,6 +4,13 @@
 // (pi auto-discovers *.ts there; no package publish required). Plain
 // TypeScript against node builtins only, so pi loads it with no install step.
 //
+// The same file serves oh-my-pi (`omp`), installed into
+// ~/.omp/agent/extensions. The two hosts share this API shape but settle on
+// different events: earendil pi fires `agent_settled` and has no
+// `session_stop`; omp fires `session_stop` (whose result takes a claude-shaped
+// {decision: "block", reason}) and has no `agent_settled`. omp's API carries
+// an `arktype` builder pi's does not, which is how the file names its host.
+//
 // This extension is a TRANSPORT and nothing else. Every decision belongs to
 // Rust: the gate (`fno-agents loop-check`) decides, the store commands answer,
 // and this file moves bytes. Concretely it carries four abilities:
@@ -21,6 +28,27 @@
 //      gate named, with prompt expansion enabled so a skill command reaches
 //      the skill. A block without a continuation sends nothing.
 //
+// Beside the gate it runs the claude hook CARRIERS pi had no wire for, in
+// the claude chain order hooks.json declares (the same reference the pretool
+// host reads for the block guards):
+//
+//   - `session_start` runs the SessionStart producers. pi's handler cannot
+//     return context, so their text queues and the next `before_agent_start`
+//     delivers it - the same boundary that already carries the announce and
+//     the post-compact role re-inject.
+//   - `before_agent_start` is pi's UserPromptSubmit: the inject-mail-notify
+//     and node-bind prompt carriers ride every prompt.
+//   - `tool_result` is pi's PostToolUse: format-on-edit, edit-integrity,
+//     claim-heartbeat and merge-capture run in claude order (format before
+//     integrity). pi hands back no pre-edit text, so edit-integrity's
+//     originalFile leg degrades to its git fallback; and pi's tool_result
+//     can return content only, never context, so a carrier finding lands in
+//     the session transcript via appendEntry instead of the model's turn -
+//     the one parity gap, shared with the opencode wire.
+//   - `session_before_compact` is pi's PreCompact: save-session and
+//     precompact-canon-doc run, the trigger maps manual|auto, and the
+//     handler never cancels the compaction.
+//
 // Every call is bounded: a wedged child is killed and the settle records one
 // `unavailable` entry instead of hanging or fabricating a termination.
 // loop-check stays the SOLE completion authority: the extension never
@@ -33,11 +61,21 @@ import { tmpdir } from "node:os"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
+// The host this file runs in, set once when the host loads it. Every fno
+// command it calls names this harness.
+let HARNESS: "pi" | "omp" = "pi"
+
+// What one settle hands its host to deliver: the text, and whether it is a
+// command the host should expand (a gate continuation) or plain prose (an
+// event rule's reason).
+type Relay = { text: string; expand: boolean }
+
 type Ctx = {
   sessionManager?: {
     getSessionId?: () => string
     buildContextEntries?: () => unknown[]
     getBranch?: () => unknown[]
+    getSessionFile?: () => string | undefined
   }
   model?: { id?: string; provider?: string }
   isIdle?: () => boolean
@@ -71,15 +109,107 @@ function pretoolTimeoutMs(): number {
   return Number.isFinite(raw) && raw > 0 ? raw : 10000
 }
 
+// Per-script bound for the carrier chains. A carrier blocks its boundary
+// (a prompt, a tool result, a compaction), so a wedged script dies here
+// instead of holding the session; each script also carries its own internal
+// hook budget, making this the outer backstop.
+function carrierTimeoutMs(): number {
+  const raw = Number(process.env.FNO_PI_CARRIER_TIMEOUT_MS || "")
+  return Number.isFinite(raw) && raw > 0 ? raw : 15000
+}
+
+// The claude hook chains this extension runs, one `[script, ...argv]` entry
+// per claude hooks.json row, in claude order. The chain is the reference;
+// a script added to hooks.json reaches pi when its name lands here.
+const SESSION_START_CHAIN: string[][] = [
+  ["session-start-using-fno.sh"],
+  ["context-run.sh", "claude-session-start"],
+  ["daemon-liveness-session-start.sh"],
+  ["bootstrap-session-start.sh"],
+]
+const PROMPT_CARRIERS: string[][] = [
+  ["inject-mail-notify.sh"],
+  ["node-bind-prompt-submit.sh"],
+]
+const POSTTOOL_CARRIERS: string[][] = [
+  ["format-on-edit.sh"],
+  ["edit-integrity.sh"],
+  ["claim-heartbeat.sh"],
+  ["merge-capture.sh"],
+]
+const PRECOMPACT_CARRIERS: string[][] = [
+  ["save-session.sh"],
+  ["precompact-canon-doc.sh"],
+]
+
+// Run one carrier chain and return the context text each script printed
+// (additionalContext when the stdout carries claude hook JSON, else the raw
+// stdout). Sequential by default: PostToolUse order is load-bearing
+// (format-on-edit runs before edit-integrity reads the file it formatted);
+// SessionStart producers are independent and run in parallel.
+async function runCarrierChain(
+  root: string,
+  chains: string[][],
+  payload: string,
+  timeoutMs: number,
+  parallel = false,
+): Promise<string[]> {
+  const run = (chain: string[]): Promise<string> =>
+    runBounded(
+      "bash",
+      [join(root, "hooks", chain[0] || ""), ...chain.slice(1)],
+      timeoutMs,
+      payload,
+      { FNO_HOOK_HARNESS: HARNESS },
+    ).then(contextCarrierText)
+  const outs = parallel
+    ? Promise.all(chains.map(run))
+    : (async () => {
+        const acc: string[] = []
+        for (const chain of chains) acc.push(await run(chain))
+        return acc
+      })()
+  return (await outs).filter(Boolean)
+}
+
+// pi tool names to the claude names the carriers match on (the same three
+// mappings the Rust pretool adapter makes; everything else rides verbatim,
+// unjudged by name).
+function claudeToolName(name: string): string {
+  if (name === "bash") return "Bash"
+  if (name === "edit") return "Edit"
+  if (name === "write") return "Write"
+  return name
+}
+
+// The text part of a pi tool result, joined: the shape the PostToolUse
+// payload's tool_response.output carries so claim-heartbeat's error read
+// and merge-capture's provenance door see the same strings claude sends.
+function contentText(content: unknown): string {
+  if (!Array.isArray(content)) return ""
+  return content
+    .filter(
+      (p): p is { type: "text"; text: string } =>
+        !!p &&
+        typeof p === "object" &&
+        (p as { type?: string }).type === "text" &&
+        typeof (p as { text?: unknown }).text === "string",
+    )
+    .map((p) => p.text)
+    .join("")
+}
+
 // One bounded child run. Resolves "" when the child failed for any reason
 // (spawn error, nonzero exit, timeout) - the caller records why it could not
 // read an answer rather than guessing one. An optional stdin payload rides
-// to the child (the hook commands read a claude-shaped payload on stdin).
+// to the child (the hook commands read a claude-shaped payload on stdin),
+// and optional extra env rides beside the shared FNO_HOOK_CONTEXT stamp.
 function runBounded(
   bin: string,
   args: string[],
   timeoutMs: number,
   stdin?: string,
+  extraEnv?: Record<string, string>,
 ): Promise<string> {
   return new Promise((resolve) => {
     try {
@@ -90,7 +220,7 @@ function runBounded(
           timeout: timeoutMs,
           killSignal: "SIGKILL",
           // Hook context: a child's fno call never joins the session.
-          env: { ...process.env, FNO_HOOK_CONTEXT: "1" },
+          env: { ...process.env, FNO_HOOK_CONTEXT: "1", ...(extraEnv || {}) },
           maxBuffer: 10 * 1024 * 1024,
         },
         (err, stdout) => resolve(err ? "" : String(stdout)),
@@ -134,7 +264,7 @@ function pushState(
       ...extra,
     })
     const bin = process.env.FNO_AGENTS_BIN || "fno-agents"
-    void runBounded(bin, ["hook", "session-state", "--harness", "pi", event], 3000, payload)
+    void runBounded(bin, ["hook", "session-state", "--harness", HARNESS, event], 3000, payload)
   } catch {
     // best-effort
   }
@@ -258,20 +388,66 @@ export default function (pi: {
   ) => void
   appendEntry?: (type: string, data: unknown) => void
 }): void {
+  HARNESS = "arktype" in (pi as object) ? "omp" : "pi"
   // Per-session in-flight guard. This is scheduling, never authority: one
   // loop-check at a time per pi session, and the binding gate still answers
   // who owns the target.
   const busy = new Map<string, boolean>()
 
+  // Context text queued for the next prompt boundary: the SessionStart
+  // producers run where pi cannot deliver (its session_start handler has no
+  // context return), and the PreCompact carriers run before the compaction
+  // their text should survive. Drained, then cleared, at the next
+  // before_agent_start.
+  const pendingContext = new Map<string, string[]>()
+
   pi.on("session_shutdown", (_event: unknown, ctx: unknown) => {
     const sid = (ctx as Ctx)?.sessionManager?.getSessionId?.()
-    if (sid) busy.delete(sid)
+    if (sid) {
+      busy.delete(sid)
+      pendingContext.delete(sid)
+    }
   })
 
   // DISCOVERY: put the Footnote commands in pi's own catalog as skills.
   pi.on("resources_discover", () => {
     const skills = skillsRoot()
     return skills ? { skillPaths: [skills] } : {}
+  })
+
+  // SESSIONSTART PRODUCERS: the claude SessionStart chain, run at pi's own
+  // session start (startup, new, reload, resume, fork) and queued for the
+  // next prompt boundary. Fail-open: no root or a failed producer costs its
+  // text, never the session. The claude payload's source maps from pi's
+  // reason (resume and fork are resumptions; everything else is a startup).
+  pi.on("session_start", async (event: unknown, ctx: unknown) => {
+    try {
+      const sid = (ctx as Ctx)?.sessionManager?.getSessionId?.() || ""
+      const root = pluginRoot()
+      if (!sid || !root) return
+      const reason = (event as { reason?: string })?.reason || "startup"
+      const source = reason === "resume" || reason === "fork" ? "resume" : "startup"
+      const payload = JSON.stringify({
+        hook_event_name: "SessionStart",
+        source,
+        cwd: process.cwd(),
+        session_id: sid,
+      })
+      const texts = await runCarrierChain(
+        root,
+        SESSION_START_CHAIN,
+        payload,
+        carrierTimeoutMs(),
+        true,
+      )
+      if (texts.length) {
+        const q = pendingContext.get(sid) || []
+        q.push(...texts)
+        pendingContext.set(sid, q)
+      }
+    } catch {
+      // best-effort: a failed producer chain never blocks session start
+    }
   })
 
   // Fleet announcements at the pre-turn boundary.
@@ -292,50 +468,103 @@ export default function (pi: {
     if (sid) rolePending.add(sid)
   })
 
-  pi.on("before_agent_start", async (_event: unknown, ctx: unknown) => {
+  // PRECOMPACT CARRIERS: pi's session_before_compact is claude's PreCompact.
+  // save-session snapshots the transcript (the real pi session file when the
+  // manager names one) and canon-doc writes the handoff doc; their pointer
+  // text queues for the next prompt boundary, where the post-compact role
+  // re-inject lands too. The trigger maps manual|auto from pi's reason
+  // (threshold and overflow are the automatic pair). The handler returns
+  // nothing, so it can never cancel the compaction.
+  pi.on("session_before_compact", async (event: unknown, ctx: unknown) => {
+    try {
+      const ev = event as { reason?: string; customInstructions?: string }
+      const sid = (ctx as Ctx)?.sessionManager?.getSessionId?.() || ""
+      const root = pluginRoot()
+      if (!root) return
+      const transcript = (ctx as Ctx)?.sessionManager?.getSessionFile?.() || ""
+      const payload = JSON.stringify({
+        hook_event_name: "PreCompact",
+        trigger: ev?.reason === "manual" ? "manual" : "auto",
+        custom_instructions: ev?.customInstructions || "",
+        cwd: process.cwd(),
+        session_id: sid,
+        ...(transcript ? { transcript_path: transcript } : {}),
+      })
+      const texts = await runCarrierChain(root, PRECOMPACT_CARRIERS, payload, carrierTimeoutMs())
+      if (sid && texts.length) {
+        const q = pendingContext.get(sid) || []
+        q.push(...texts)
+        pendingContext.set(sid, q)
+      }
+    } catch {
+      // best-effort: a failed carrier chain never blocks the compaction
+    }
+  })
+
+  // PROMPT BOUNDARY: every before_agent_start is pi's UserPromptSubmit.
+  // One message returns, and pi's display flag is per-message, so the
+  // boundary keeps two classes apart instead of joining them: context text
+  // (the post-compact role re-inject, the queued SessionStart/PreCompact
+  // carrier context, the prompt carriers) always answers alone and stays
+  // off the transcript, exactly the claude context-only channel; the fleet
+  // announce answers alone and renders. The announce read advances its
+  // per-session cursor, so when context answers, the announce is not read
+  // at all - it delivers, unread, at the next boundary.
+  pi.on("before_agent_start", async (event: unknown, ctx: unknown) => {
     pushState("UserPromptSubmit", ctx)
     try {
       const sid = (ctx as Ctx)?.sessionManager?.getSessionId?.() || ""
-      const sessionKey = process.env.FNO_AGENT_SESSION_ID || sid || `pi:${process.cwd()}`
+      const sessionKey = process.env.FNO_AGENT_SESSION_ID || sid || `${HARNESS}:${process.cwd()}`
       const bin = process.env.FNO_AGENTS_BIN || "fno-agents"
+      const root = pluginRoot()
+      const texts: string[] = []
       // Role re-inject first: fresh operating rules outrank an announce.
       // Fail-open: no root, a failed run, or an empty payload injects
       // nothing and drops the mark.
-      if (sid && rolePending.delete(sid)) {
-        const root = pluginRoot()
-        if (root) {
-          const payload = JSON.stringify({
-            hook_event_name: "SessionStart",
-            source: "compact",
-            cwd: process.cwd(),
-            session_id: sid,
-          })
-          const out = await runBounded(
-            "bash",
-            [join(root, "hooks", "lead-postcompact-reinject.sh")],
-            5000,
-            payload,
-          )
-          // The using-fno carrier answers only for a session that joined fno.
-          const preamble = await runBounded(
-            "env",
-            ["FNO_HOOK_HARNESS=pi", "bash", join(root, "hooks", "session-start-using-fno.sh")],
-            5000,
-            payload,
-          )
-          const text = [contextCarrierText(out), contextCarrierText(preamble)]
-            .filter(Boolean)
-            .join("\n\n")
-          if (text) {
-            return {
-              message: {
-                customType: "fno-role",
-                content: [{ type: "text", text }],
-                display: false,
-              },
-            }
-          }
+      if (sid && rolePending.delete(sid) && root) {
+        const payload = JSON.stringify({
+          hook_event_name: "SessionStart",
+          source: "compact",
+          cwd: process.cwd(),
+          session_id: sid,
+        })
+        const out = await runBounded(
+          "bash",
+          [join(root, "hooks", "lead-postcompact-reinject.sh")],
+          5000,
+          payload,
+        )
+        // The using-fno carrier answers only for a session that joined fno.
+        const preamble = await runBounded(
+          "env",
+          [`FNO_HOOK_HARNESS=${HARNESS}`, "bash", join(root, "hooks", "session-start-using-fno.sh")],
+          5000,
+          payload,
+        )
+        const text = [contextCarrierText(out), contextCarrierText(preamble)]
+          .filter(Boolean)
+          .join("\n\n")
+        if (text) texts.push(text)
+      }
+      // Queued session-start and compact-carrier context: delivered once,
+      // then dropped (a failed delivery drops the text, never re-arms).
+      if (sid) {
+        const queued = pendingContext.get(sid)
+        if (queued?.length) {
+          texts.push(...queued)
+          pendingContext.delete(sid)
         }
+      }
+      // Prompt carriers: mail delivery and the first-turn node bind, with
+      // the claude UserPromptSubmit payload (prompt text included).
+      if (root && sid) {
+        const payload = JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          prompt: (event as { prompt?: string })?.prompt || "",
+          cwd: process.cwd(),
+          session_id: sid,
+        })
+        texts.push(...(await runCarrierChain(root, PROMPT_CARRIERS, payload, carrierTimeoutMs())))
       }
       // Session-start report: the registry holds this session's id (mail and
       // liveness stop guessing). Fire-and-forget, best-effort; a spawned
@@ -343,7 +572,7 @@ export default function (pi: {
       if (sid) {
         const reportArgs = [
           "report", "--kind", "session",
-          "--harness", "pi",
+          "--harness", HARNESS,
           "--session-id", sid,
         ]
         if (process.env.FNO_AGENT_SELF) {
@@ -351,17 +580,29 @@ export default function (pi: {
         }
         runBounded(bin, reportArgs, 2000).catch(() => {})
       }
+      // Context text answers alone, off the transcript; the announce read
+      // waits for a boundary with no context, so its cursor never consumes
+      // an announcement this boundary cannot show.
+      if (texts.length) {
+        return {
+          message: {
+            customType: "fno-role",
+            content: [{ type: "text", text: texts.join("\n\n") }],
+            display: false,
+          },
+        }
+      }
       const out = await runBounded(
         bin,
-        ["announce", "read", "--session-id", sessionKey, "--harness", "pi", "--boundary", "prompt"],
+        ["announce", "read", "--session-id", sessionKey, "--harness", HARNESS, "--boundary", "prompt"],
         2000,
       )
-      const text = out.trim()
-      if (!text) return
+      const announce = out.trim()
+      if (!announce) return
       return {
         message: {
           customType: "fno-announce",
-          content: [{ type: "text", text }],
+          content: [{ type: "text", text: announce }],
           display: true,
         },
       }
@@ -394,7 +635,7 @@ export default function (pi: {
       const bin = process.env.FNO_AGENTS_BIN || "fno-agents"
       const out = await runBounded(
         bin,
-        ["hook", "pretool", "--wire", "pi", "--plugin-root", root],
+        ["hook", "pretool", "--wire", HARNESS, "--plugin-root", root],
         pretoolTimeoutMs(),
         payload,
       )
@@ -416,7 +657,58 @@ export default function (pi: {
     }
   })
 
-  pi.on("agent_settled", async (_event: unknown, ctx: unknown) => {
+  // POSTTOOL CARRIERS: pi's tool_result is claude's PostToolUse. The four
+  // claude wait-class carriers run in claude order - format-on-edit before
+  // edit-integrity, so integrity reads the file the formatter just wrote.
+  // The payload is the claude shape: tool_name mapped, input.path promoted
+  // to tool_input.file_path (the same promotion the Rust pretool adapter
+  // makes), and a tool_response carrying pi's isError and text output - pi
+  // exposes no pre-edit text, so edit-integrity's originalFile leg falls
+  // back to git. pi's tool_result can return content only, never context,
+  // so a carrier finding lands in the session transcript (appendEntry),
+  // not the model's turn - the same channel limit the opencode wire has.
+  // Awaited so a carrier never races the next tool call.
+  pi.on("tool_result", async (event: unknown, ctx: unknown) => {
+    try {
+      const ev = event as {
+        toolName?: string
+        input?: Record<string, unknown>
+        content?: unknown
+        isError?: boolean
+      }
+      const root = pluginRoot()
+      if (!root) return
+      const input: Record<string, unknown> = { ...(ev?.input || {}) }
+      if (!("file_path" in input)) {
+        const p = (input as { path?: unknown }).path
+        if (typeof p === "string") input.file_path = p
+      }
+      const payload = JSON.stringify({
+        hook_event_name: "PostToolUse",
+        tool_name: claudeToolName(ev?.toolName || ""),
+        tool_input: input,
+        tool_response: { is_error: ev?.isError === true, output: contentText(ev?.content) },
+        cwd: process.cwd(),
+        session_id: (ctx as Ctx)?.sessionManager?.getSessionId?.() || "",
+      })
+      const texts = await runCarrierChain(root, POSTTOOL_CARRIERS, payload, carrierTimeoutMs())
+      if (texts.length) {
+        try {
+          pi.appendEntry?.("fno-carriers", { event: "PostToolUse", context: texts })
+        } catch {
+          // an appendEntry that throws is the host's problem
+        }
+      }
+    } catch {
+      // fire-and-forget: a failed carrier chain never fails the tool result
+    }
+  })
+
+  // One settle pass: the gate's answer as the text to relay, or nothing. Each
+  // host delivers the relay its own way (see the two stop arms below).
+  // `requireIdle` is pi's: agent_settled can fire while another extension
+  // runs. omp's session_stop IS the settle pass, so it skips the check.
+  const settle = async (ctx: unknown, requireIdle: boolean): Promise<Relay | undefined> => {
     pushState("Stop", ctx)
     const dir = process.cwd()
     const sm = (ctx as Ctx)?.sessionManager
@@ -448,7 +740,7 @@ export default function (pi: {
             "--run",
             String(process.env.FNO_AGENT_SESSION_ID),
             "--harness",
-            "pi",
+            HARNESS,
             "--cwd",
             dir,
           ],
@@ -468,7 +760,7 @@ export default function (pi: {
 
     // ctx.isIdle() is true at agent_settled unless another extension started
     // a run; a busy pi is mid-re-drive or mid-tool and the next settle comes.
-    if ((ctx as Ctx)?.isIdle?.() === false) return
+    if (requireIdle && (ctx as Ctx)?.isIdle?.() === false) return
     if (!sid || busy.get(sid)) return
     busy.set(sid, true)
 
@@ -514,15 +806,7 @@ export default function (pi: {
             } catch {
               // best-effort record
             }
-            try {
-              pi.sendUserMessage(ruled.reason || "an event rule blocked this stop", {
-                deliverAs: "followUp",
-                triggerTurn: true,
-              })
-            } catch (e: unknown) {
-              console.error(`[footnote] rules relay failed: ${e}`)
-            }
-            return
+            return { text: ruled.reason || "an event rule blocked this stop", expand: false }
           }
         } catch (parseErr: unknown) {
           console.error(`[footnote] hook rules unparseable: ${parseErr}`)
@@ -540,7 +824,7 @@ export default function (pi: {
           "--cwd",
           dir,
           "--harness",
-          "pi",
+          HARNESS,
           "--harness-session",
           sid,
         ],
@@ -604,12 +888,9 @@ export default function (pi: {
     // Terminal: loop-check already emitted `termination` - let the session
     // end and emit nothing extra (no duplicate termination event).
     if (decision.termination_reason) return
-    // Non-terminal block: send EXACTLY the continuation the gate named, with
-    // prompt expansion so a skill command reaches the skill. followUp +
-    // triggerTurn covers both an idle pi (sends immediately, triggers a turn)
-    // and a still-settling one (queues behind the current run). Fire-and-
-    // forget; the next turn's agent_settled runs the gate again. loop-check's
-    // NoProgress backstop bounds a stuck loop.
+    // Non-terminal block: relay EXACTLY the continuation the gate named. The
+    // next settle runs the gate again; loop-check's NoProgress backstop bounds
+    // a stuck loop.
     if (decision.decision === "block") {
       const continuation = decision.continuation
       if (!continuation) {
@@ -623,15 +904,33 @@ export default function (pi: {
         }
         return
       }
-      try {
-        pi.sendUserMessage(continuation, {
-          deliverAs: "followUp",
-          triggerTurn: true,
-          expandPromptTemplates: true,
-        })
-      } catch (e: unknown) {
-        console.error(`[footnote] re-drive sendUserMessage threw: ${e}`)
-      }
+      return { text: continuation, expand: true }
     }
+    return
+  }
+
+  // pi: relay through sendUserMessage. followUp + triggerTurn covers an idle
+  // pi and a still-settling one; prompt expansion lets a skill command reach
+  // the skill.
+  pi.on("agent_settled", async (_event: unknown, ctx: unknown) => {
+    const relay = await settle(ctx, true)
+    if (!relay) return
+    try {
+      pi.sendUserMessage(relay.text, {
+        deliverAs: "followUp",
+        triggerTurn: true,
+        ...(relay.expand ? { expandPromptTemplates: true } : {}),
+      })
+    } catch (e: unknown) {
+      console.error(`[footnote] re-drive sendUserMessage threw: ${e}`)
+    }
+  })
+
+  // omp: answer the stop itself. A block decision continues the same session
+  // with the reason as model-visible context (shared-events.ts
+  // SessionStopEventResult), so nothing is queued behind the settle.
+  pi.on("session_stop", async (_event: unknown, ctx: unknown) => {
+    const relay = await settle(ctx, false)
+    return relay ? { decision: "block", reason: relay.text } : undefined
   })
 }

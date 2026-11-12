@@ -12,6 +12,7 @@ use serde_json::Value;
 
 use super::TAG_RESPONSE;
 use super::{begin_versions, read_graph_gated, GraphRead, StoreState};
+use crate::keeper_wire::{KeeperMethod, KeeperRequest};
 
 /// The full-graph read replies spliced from the cache's serialized views.
 /// `read`, `begin` and api `rows` are the replies whose bodies are one
@@ -127,43 +128,33 @@ impl SplicedReply {
 /// returns None and the caller falls through to handle_request, so error
 /// shapes and odd methods keep their exact reply. A spliced `begin` carries
 /// the same per-row version map as handle_begin, read before the entries.
-pub(super) fn splice_reply(state: &StoreState, payload: &[u8]) -> Option<SplicedReply> {
-    let req: Value = serde_json::from_slice(payload).ok()?;
-    let id = req.get("id").and_then(Value::as_u64).unwrap_or(0);
-    let method = req.get("method").and_then(Value::as_str)?;
-    if matches!(method, "read" | "api")
-        && req.get("params").is_some_and(|params| {
-            params.get("filter").is_some()
-                || params.get("fields").is_some()
-                || params.get("include_archived").and_then(Value::as_bool) == Some(false)
-        })
+pub(super) fn splice_reply(state: &StoreState, req: &KeeperRequest) -> Option<SplicedReply> {
+    let id = req.id;
+    let params = &req.params;
+    let method = &req.method;
+    if matches!(method, KeeperMethod::Read | KeeperMethod::Api)
+        && (params.get("filter").is_some()
+            || params.get("fields").is_some()
+            || params.get("include_archived").and_then(Value::as_bool) == Some(false))
     {
         return None;
     }
     let mut rows_op = false;
     match method {
-        "read" => {
-            if req
-                .get("params")
-                .map(|p| {
-                    p.get("keep_malformed")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                })
+        KeeperMethod::Read => {
+            if params
+                .get("keep_malformed")
+                .and_then(Value::as_bool)
                 .unwrap_or(false)
             {
                 return None;
             }
         }
-        "begin" => {}
-        "api" => {
+        KeeperMethod::Begin => {}
+        KeeperMethod::Api => {
             // Only the plain rows op: it is the one api reply whose body is
             // the whole cached byte run.
-            if req
-                .get("params")
-                .map(|p| p.get("op").and_then(Value::as_str) == Some("rows"))
-                .unwrap_or(false)
-            {
+            if params.get("op").and_then(Value::as_str) == Some("rows") {
                 rows_op = true;
             } else {
                 return None;
@@ -171,7 +162,7 @@ pub(super) fn splice_reply(state: &StoreState, payload: &[u8]) -> Option<Spliced
         }
         _ => return None,
     }
-    let base_digests = if method == "begin" {
+    let base_digests = if *method == KeeperMethod::Begin {
         begin_versions(state)
             .ok()?
             .map(|versions| serde_json::to_vec(&versions).unwrap_or_default())
@@ -199,7 +190,7 @@ pub(super) fn splice_reply(state: &StoreState, payload: &[u8]) -> Option<Spliced
                     version,
                 });
             }
-            if method == "read" {
+            if *method == KeeperMethod::Read {
                 return Some(SplicedReply::Read { id, entries });
             }
             Some(SplicedReply::Begin {
