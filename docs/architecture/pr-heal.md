@@ -106,7 +106,7 @@ The approval carry preserves the approved head for audit. It compares rendered f
 
 On 2026-10-16 the user found 37 open PRs. Several were green and mergeable for days, and nothing raised an alarm. The owning worker merges its own PR. The daemon's `pr_idle` arm is the backstop for a worker that left. Every 15 minutes it lists the open PRs of each registry repo. It reads each non-draft PR through the status door, so the read rides the shared status cache and the account poller. It reads the merge gate's `ready` verdict. A retained code, authority or architect hold prevents ready. Missing coverage or looks produce warning evidence.
 
-The first ready read of a head starts a clock in `<agents home>/pr-idle/`. After 2 hours every live lead gets one mail, and the phone sink gets one `operator_notice`. Each one names the PR, its age and `fno do pr merge <n>`. After 6 hours both go out once more. A new head, a not-ready read or a closed PR resets the clock. A failed send retries the next pass, and only to the recipients it missed.
+The first ready-and-green read of a head starts a clock in `<agents home>/pr-idle/`. After 2 hours every live lead gets one mail, and the phone sink gets one `operator_notice`. Each one names the PR, its age and `fno do pr merge <n>`. After 6 hours both go out once more. A new head, a not-ready or not-green read, or a closed PR resets the clock. A failed send retries the next pass, and only to the recipients it missed.
 
 ## How to add a signature
 
