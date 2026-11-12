@@ -6,6 +6,7 @@
 
 use super::*;
 
+#[derive(Debug)]
 pub(crate) enum ServeSeat {
     Attach {
         argv: Vec<String>,
@@ -16,6 +17,7 @@ pub(crate) enum ServeSeat {
     Outside,
 }
 
+#[derive(Debug)]
 pub(crate) struct ServeHonest {
     pub why: String,
     pub facts: Vec<String>,
@@ -261,6 +263,13 @@ fn tui_candidates(primary: (String, Option<String>)) -> Vec<(String, Option<Stri
 /// measured false.
 
 pub(crate) fn serve_seat(row: &RegistryAgent) -> ServeSeat {
+    let seat = serve_seat_inner(row);
+    #[cfg(test)]
+    eprintln!("serve-seat verdict for {}: {seat:?}", row.name);
+    seat
+}
+
+fn serve_seat_inner(row: &RegistryAgent) -> ServeSeat {
     let Some(harness) = row.harness.as_deref() else {
         return ServeSeat::Outside;
     };
