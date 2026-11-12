@@ -136,6 +136,8 @@ pub mod team_spawn;
 pub mod terminal_route;
 pub mod terminal_run;
 pub mod terminal_vocab;
+#[cfg(test)]
+pub(crate) mod test_spare;
 pub mod thread_host;
 pub mod usage;
 pub mod usage_refresh;

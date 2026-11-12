@@ -57,6 +57,7 @@ use crate::opencode_ask::{
 use crate::opencode_install::OpencodeContract;
 use crate::opencode_permission::LaneError;
 use crate::paths::AgentsHome;
+use crate::spawn::name_collision::{self as spawn_collision, Resolution};
 use crate::state::load_registry;
 
 /// Everything the spawn needs from a live serve: the loopback base URL, the
@@ -769,13 +770,17 @@ fn dispatch_opencode_serve_inner(
             return AskOutcome::err(format!("registry read failed: {e}"), 12);
         }
     };
-    if registry.find(name).is_some() {
-        return AskOutcome::err(
-            format!(
-                "agent {name:?} already exists; use 'fno agents rm {name}' first or pick another name"
-            ),
-            2,
-        );
+    // The shared spare verdict: a name held only by an idle spare is
+    // reclaimed (this lane's row binds at the worker's session report, so
+    // nothing re-checks the name at a later write); every other holder
+    // refuses with the shared line (holder pid + way out). The pidless
+    // text is the shared line's form, whose quoting differs from this
+    // gate's old Debug-format name; consumers match the "already exists"
+    // substring, which both forms keep.
+    match spawn_collision::resolve(home, &registry, name) {
+        Resolution::Refuse(line) => return AskOutcome::err(line, 2),
+        Resolution::Registry(line) => return AskOutcome::err(line, 12),
+        _ => {}
     }
 
     if effort.is_some_and(str::is_empty) {

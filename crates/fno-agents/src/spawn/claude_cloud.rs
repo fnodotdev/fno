@@ -20,6 +20,7 @@ use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
 use crate::claude_ask::AskOutcome;
 use crate::paths::AgentsHome;
+use crate::spawn::name_collision::{self as spawn_collision, Resolution};
 use crate::state::{load_registry, update_registry, RegistryEntry};
 use crate::AgentStatus;
 
@@ -199,6 +200,41 @@ fn strip_ansi(line: &str) -> String {
 /// lanes hold serializes two creates before either runs one.
 const LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The cloud door's collision check, run inside the per-agent lock BEFORE
+/// the create. The create is not free: a name held while its process sits
+/// in claude's idle spare pool would burn a real cloud session the
+/// registry write then refuses. The shared spare verdict reclaims exactly
+/// that holder and refuses every other one with the shared line (holder
+/// pid + way out; a pidless row keeps the byte-exact pidless form this
+/// door's write-time insert has always printed). `Some` ends the spawn
+/// before anything launches; the write-time insert below stays the race
+/// backstop for a row minted mid-create.
+fn collision_gate(home: &AgentsHome, name: &str) -> Option<AskOutcome> {
+    let registry = match load_registry(&home.registry_json()) {
+        Ok(r) => r,
+        Err(e) => {
+            return Some(AskOutcome {
+                stdout: String::new(),
+                stderr: format!("registry read failed: {e}\n"),
+                exit_code: 12,
+            });
+        }
+    };
+    match spawn_collision::resolve(home, &registry, name) {
+        Resolution::Refuse(line) => Some(AskOutcome {
+            stdout: String::new(),
+            stderr: format!("{line}\n"),
+            exit_code: 2,
+        }),
+        Resolution::Registry(line) => Some(AskOutcome {
+            stdout: String::new(),
+            stderr: format!("{line}\n"),
+            exit_code: 12,
+        }),
+        Resolution::Clear | Resolution::Reclaimed { .. } => None,
+    }
+}
+
 /// The cloud spawn: validate, preflight the contract row, run the create on a
 /// pty, parse the id, mint the row, and print the receipt. Mirror of
 /// `dispatch_claude_spawn` for a lane with no local process: no daemon
@@ -233,6 +269,10 @@ pub fn dispatch_claude_cloud(
             };
         }
     };
+    let registry_path = home.registry_json();
+    if let Some(outcome) = collision_gate(home, name) {
+        return outcome;
+    }
     let contract = match crate::harness_capabilities::HarnessContract::packaged() {
         Ok(c) => c,
         Err(error) => {
@@ -265,7 +305,6 @@ pub fn dispatch_claude_cloud(
     let argv = render_holes(&arm.launch, &[("payload", message)]);
 
     let events = home.events_jsonl();
-    let registry_path = home.registry_json();
     let output = match run_create(&argv, cwd) {
         Ok(text) => text,
         Err((code, stderr)) => {
@@ -720,5 +759,79 @@ mod tests {
                 "session_z".to_string(),
             ]
         );
+    }
+
+    // The collision gate's contracts, over the shared idle-spare fixture.
+
+    use crate::spawn::test_spare::{fake_spare_process as spawn_fake_spare, spare_row};
+
+    /// A name held only by an idle spare passes the gate, and the gate has
+    /// already reclaimed the row: the create that follows never burns a
+    /// cloud session on a refusal.
+    #[cfg(unix)]
+    #[test]
+    fn a_spare_held_name_passes_the_gate_and_reclaims_before_the_create() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = AgentsHome::at(temp.path().join("agents"));
+        let sock = temp.path().join("pool").join("c.claim.sock");
+        std::fs::create_dir_all(sock.parent().unwrap()).unwrap();
+        std::fs::write(&sock, b"").unwrap();
+        let mut spare = spawn_fake_spare(&sock);
+        let mut row = spare_row("t-cloud-spare", spare.id());
+        row.harness_session_id = Some("session_SYNTH0009".into());
+        update_registry(&home.registry_json(), |reg| reg.entries.push(row)).unwrap();
+        assert!(
+            collision_gate(&home, "t-cloud-spare").is_none(),
+            "the door must proceed over a spare-held name"
+        );
+        assert!(
+            load_registry(&home.registry_json())
+                .unwrap()
+                .find("t-cloud-spare")
+                .is_none(),
+            "the spare's row must be reclaimed before the create runs"
+        );
+        spare.kill().unwrap();
+        spare.wait().unwrap();
+    }
+
+    /// A live working holder refuses at the gate with the shared line:
+    /// holder pid and the way out, the row kept, nothing launched.
+    #[cfg(unix)]
+    #[test]
+    fn a_live_holder_refuses_at_the_gate_before_any_create() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = AgentsHome::at(temp.path().join("agents"));
+        let mut worker = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        update_registry(&home.registry_json(), |reg| {
+            reg.entries.push(spare_row("t-cloud-live", worker.id()))
+        })
+        .unwrap();
+        let outcome = collision_gate(&home, "t-cloud-live").expect("the door must refuse");
+        assert_eq!(outcome.exit_code, 2);
+        assert!(
+            outcome
+                .stderr
+                .contains(&format!("holder pid {}", worker.id())),
+            "{}",
+            outcome.stderr
+        );
+        assert!(
+            outcome.stderr.contains("fno agents rm t-cloud-live"),
+            "{}",
+            outcome.stderr
+        );
+        assert!(
+            load_registry(&home.registry_json())
+                .unwrap()
+                .find("t-cloud-live")
+                .is_some(),
+            "the refusal keeps the holder's row"
+        );
+        worker.kill().unwrap();
+        worker.wait().unwrap();
     }
 }
