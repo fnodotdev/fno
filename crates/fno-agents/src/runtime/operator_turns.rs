@@ -404,6 +404,7 @@ struct TurnWitness<'a> {
     session: &'a str,
     store: PathBuf,
     now_epoch: f64,
+    watched: bool,
     bus: Option<crate::provenance::BusIndex>,
 }
 
@@ -413,11 +414,15 @@ impl<'a> TurnWitness<'a> {
             session,
             store: capture_dir.join("headerless-turns.json"),
             now_epoch,
+            watched: spawned_without_a_terminal(session),
             bus: None,
         }
     }
 
     fn see(&mut self, text: &str, ts_epoch: Option<f64>) {
+        if !self.watched {
+            return;
+        }
         let Some(ts) = ts_epoch.filter(|ts| self.now_epoch - ts < WITNESS_WINDOW_S) else {
             return;
         };
@@ -442,6 +447,22 @@ impl<'a> TurnWitness<'a> {
             record(&found, &self.store);
         }
     }
+}
+
+/// Whether fno spawned `session` as a claude thread or headless worker. Only
+/// such a session has no terminal of its own: a person types into a pane, a
+/// plain terminal, an IDE or the desktop app, and only the pane leaves a mux
+/// submit, so witnessing any other session would flag a person's every turn.
+fn spawned_without_a_terminal(session: &str) -> bool {
+    let registry =
+        crate::state::try_load_registry(&crate::paths::AgentsHome::shared_registry_json())
+            .ok()
+            .flatten();
+    registry
+        .as_ref()
+        .and_then(|rows| rows.find_by_session("claude", session))
+        .and_then(|row| row.substrate.as_deref())
+        .is_some_and(|substrate| matches!(substrate, "thread" | "headless"))
 }
 
 pub(crate) fn pending_stand_down(
