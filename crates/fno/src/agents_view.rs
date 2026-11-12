@@ -3077,7 +3077,9 @@ mod tests {
             );
         }
         assert_eq!(reach("agy-row"), Reach::Locate);
-        assert_eq!(reach("oc-row"), Reach::Locate);
+        // opencode follows its 2.x serve's /api/event stream (PEEK_READER_
+        // HARNESSES doc); no attach form resolves, so the tier is Follow.
+        assert_eq!(reach("oc-row"), Reach::Follow);
         assert_eq!(reach("gm-row"), Reach::Locate);
     }
     /// AC14-HP, AC16-EDGE: the viewport renders codex's
