@@ -850,7 +850,7 @@ pub(super) fn resolve_to_lead_address(
             return Err(2);
         }
     };
-    let holders = resolve_to_lead(scope).map_err(|(msg, code)| {
+    let mut holders = resolve_to_lead(scope).map_err(|(msg, code)| {
         eprintln!("{msg}");
         code
     })?;
