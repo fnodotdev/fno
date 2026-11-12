@@ -144,8 +144,11 @@ build_test_binary workspace_persistence_e2e crates/fno/Cargo.toml workspace_pers
 # fno-agents-daemon is a FINAL binary that still lands in the checkout's
 # crates/fno-agents/target/<profile> - the path the e2e itself resolves and
 # spawns under that layout.
-# Cargo's own build log names the daemon it built for the e2e, whatever the
-# build-dir layout; the path guesses below are the fallback for an old cargo.
+# Cargo's own build messages name the daemon executable first: cargo test
+# builds the crate's bins for its integration tests, so the daemon_e2e build log
+# holds a compiler-artifact line for fno-agents-daemon with its real path. Rust
+# 1.100 moved test binaries under a hashed build-dir, which broke the
+# sibling-of-deps guesses below; they stay as the fallback for older cargo.
 daemon_bin_path="$(jq -Rr 'fromjson? | select(.reason == "compiler-artifact" and .target.name == "fno-agents-daemon" and (.executable // null) != null) | .executable' "$log_root/build-daemon_e2e.log" | tail -1)"
 if [[ ! -x "$daemon_bin_path" ]]; then
     daemon_bin_path="$(dirname "$(dirname "$daemon_bin")")/fno-agents-daemon"
