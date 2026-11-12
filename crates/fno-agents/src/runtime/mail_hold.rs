@@ -1395,6 +1395,7 @@ pub(crate) mod tests {
             let (outcome, _) = arm_conversation(SID);
             assert!(matches!(outcome, ArmOutcome::Armed));
             let registry = crate::state::load_registry(&dir.join("registry.json")).unwrap();
+            assert_eq!(registry.entries.len(), 1);
             assert_eq!(
                 registry
                     .entries
