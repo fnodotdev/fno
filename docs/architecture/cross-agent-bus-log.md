@@ -94,7 +94,7 @@ Project/cwd is demoted from address to resolver. `fno agents send --to-project X
 
 ## Role-destination addressing (anycast over the role)
 
-`fno agents mail send --to-lead <scope> <msg>` addresses the ROLE, not the session. The holder is resolved from the registry at SEND time. The resolver is `resolve_to_lead` in `cli/src/fno/agents/role.py`. It uses `role_scope_matches`, the same territory rule the row-keyed lead readers use.
+`fno agents mail send --to-lead <scope> <msg>` addresses the ROLE, not the session. The holder is resolved from the registry at SEND time. The resolver is `resolve_to_lead` in `crates/fno-agents/src/runtime/mail_cli/send/lanes.rs`. It matches `role_scope` by trimmed equality. The Python alias widening was a documented simplification dropped in the port. The message rides the single positional, `-b`, or `--body-file`. A second positional is the only refused form.
 
 Succession moves the role row. It does not move the mail handle a peer learned while that handle was titled. So a handle send after an departure reaches the wrong session. Both failures are silent: the message was delivered, a session woke, and it answered.
 
