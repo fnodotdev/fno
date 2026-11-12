@@ -201,7 +201,7 @@ grep -q '^tag=v0.4.0rc11$' "$work/o"
 check "rc after v0.4.0rc10 prints v0.4.0rc11" $?
 
 # A released v<src> moves nightly and rc to the next unreleased patch, so a
-# shipped stable never wedges them while main's __version__ lags.
+# shipped stable never wedges them while main's version lags.
 git -C "$rv" tag v0.4.0
 run "$work/o" "$work/e" rver nightly 0.4.0 20260925
 rc=$?

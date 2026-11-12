@@ -62,6 +62,16 @@ JSON_MANIFESTS=(
   plugins/openclaw/promise-tag-reader/package.json
 )
 
+# The crate manifests the stamp moves: their [package] version, their
+# lockfile's own entry, and the fno-mail pins in fno and fno-agents all
+# read from this one list.
+CRATE_MANIFESTS=(
+  crates/fno/Cargo.toml
+  crates/fno-agents/Cargo.toml
+  crates/fno-mail/Cargo.toml
+  crates/fno-app/Cargo.toml
+)
+
 # --check: fail (exit 1) if any surface disagrees with the wheel version. The
 # drift guard that would have caught the plugins stranded at 0.2.x. Read-only.
 # The anchor is packaging/pypi/VERSION: since the Python deletion it is the
@@ -76,7 +86,7 @@ if [[ "$arg" == "--check" ]]; then
   want_semver="$(pep_to_semver "$want_pep")"
   bad=0
   # Cargo carries the semver spelling; everything else carries the PEP 440 one.
-  for cf in crates/fno/Cargo.toml crates/fno-agents/Cargo.toml crates/fno-mail/Cargo.toml crates/fno-app/Cargo.toml; do
+  for cf in "${CRATE_MANIFESTS[@]}"; do
     got="$(perl -ne 'if(/^version = "(.*)"/){print $1; exit}' "$cf")"
     [[ "$got" == "$want_semver" ]] || { echo "drift: $cf = $got (want $want_semver)"; bad=1; }
   done
@@ -84,7 +94,7 @@ if [[ "$arg" == "--check" ]]; then
   # `cargo update` that moves it runs || true, so a silent failure (a
   # resolution conflict, for example) would strand the lock a --locked build
   # refuses. fno-app's lock once stayed behind its manifest exactly this way.
-  for cf in crates/fno/Cargo.toml crates/fno-agents/Cargo.toml crates/fno-mail/Cargo.toml crates/fno-app/Cargo.toml; do
+  for cf in "${CRATE_MANIFESTS[@]}"; do
     c="$(basename "$(dirname "$cf")")"
     lock="$(dirname "$cf")/Cargo.lock"
     got="$(awk -v pkg="$c" '$0 == "name = \"" pkg "\"" { seen = 1; next } seen && /^version = / { sub(/^version = "/, ""); sub(/"$/, ""); print; exit }' "$lock" 2>/dev/null)"
@@ -126,7 +136,7 @@ printf '%s\n' "$ver" > packaging/pypi/VERSION
 #    only the [package] version (rust-version and dependency lines never start
 #    with `version `). Manifest text only: the lockfile pass below runs after
 #    every manifest edit, never interleaved.
-for cf in crates/fno/Cargo.toml crates/fno-agents/Cargo.toml crates/fno-mail/Cargo.toml crates/fno-app/Cargo.toml; do
+for cf in "${CRATE_MANIFESTS[@]}"; do
   perl -i -pe "s/^version = \".*\"/version = \"${semver}\"/" "$cf"
 done
 
@@ -146,7 +156,7 @@ done
 #     the failure hides under || true, stranding the lock. --check's lock
 #     drift guard catches a stranded lock; this ordering is what keeps it
 #     from firing on every stamp.
-for cf in crates/fno/Cargo.toml crates/fno-agents/Cargo.toml crates/fno-mail/Cargo.toml crates/fno-app/Cargo.toml; do
+for cf in "${CRATE_MANIFESTS[@]}"; do
   c="$(basename "$(dirname "$cf")")"
   cargo update --manifest-path "$cf" -p "$c" --precise "${semver}" >/dev/null 2>&1 || true
   cargo update --manifest-path "$cf" -p fno-mail >/dev/null 2>&1 || true
@@ -163,8 +173,8 @@ for j in "${JSON_MANIFESTS[@]}"; do
   perl -i -pe "s/\"version\"\s*:\s*\"[^\"]*\"/\"version\": \"${ver}\"/g" "$j"
   # Verify the bump actually landed. A missing/renamed version key - or a format
   # this regex somehow still missed - would otherwise no-op SILENTLY and ship a
-  # stale plugin version behind a bumped CLI (the exact drift this guards, and
-  # the nightly only re-verifies __version__). Fail loud instead.
+  # stale plugin version behind a bumped CLI (the exact drift this guards;
+  # installers resolve the plugin through these manifests). Fail loud instead.
   grep -q "\"version\": \"${ver}\"" "$j" \
     || { echo "sync-version: no \"version\" field set to ${ver} in $j (missing or unrecognized key?)" >&2; exit 1; }
 done
