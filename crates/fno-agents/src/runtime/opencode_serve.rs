@@ -773,8 +773,10 @@ fn dispatch_opencode_serve_inner(
     // The shared spare verdict: a name held only by an idle spare is
     // reclaimed (this lane's row binds at the worker's session report, so
     // nothing re-checks the name at a later write); every other holder
-    // refuses with the shared line (holder pid + way out; a pidless row
-    // keeps the byte-exact pidless form this gate always printed).
+    // refuses with the shared line (holder pid + way out). The pidless
+    // text is the shared line's form, whose quoting differs from this
+    // gate's old Debug-format name; consumers match the "already exists"
+    // substring, which both forms keep.
     match spawn_collision::resolve(home, &registry, name) {
         Resolution::Refuse(line) => return AskOutcome::err(line, 2),
         Resolution::Registry(line) => return AskOutcome::err(line, 12),
