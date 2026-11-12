@@ -422,7 +422,7 @@ fn judge(
     if age < DEADLINE_MS || watch.notified {
         return Ok(());
     }
-    let (stage, evidence) = stage(watch, row, transcript.is_some());
+    let (stage, evidence) = stage(watch, row, transcript.as_deref());
     crate::first_check::send_notice(
         runner,
         SENDER,
@@ -441,11 +441,17 @@ fn judge(
 fn stage(
     watch: &Watch,
     row: Option<&RegistryEntry>,
-    has_transcript: bool,
+    transcript: Option<&Path>,
 ) -> (&'static str, String) {
     if let Some(sid) = watch.child_session.as_deref() {
         let short: String = sid.chars().take(8).collect();
-        let seen = if has_transcript {
+        if let Some(error) = transcript.and_then(synthetic_error) {
+            return (
+                "first prompt",
+                format!("session {short} started, but its assistant rows since the call are synthetic: {error}"),
+            );
+        }
+        let seen = if transcript.is_some() {
             "Its transcript holds no assistant line yet"
         } else {
             "No transcript is found for it yet"
@@ -478,10 +484,9 @@ fn stage(
     )
 }
 
-/// The first assistant row stamped at or after the call; a row with no stamp
-/// reads as now. A resumed transcript holds the prior run's turns, and its
-/// new rows sit at the end, so the read takes the file's tail.
-fn first_turn(path: &Path, since: i64, now: i64) -> Option<i64> {
+/// The transcript's tail as lossy UTF-8. A resumed transcript holds the prior
+/// run's turns, and its new rows sit at the end, so every read takes the tail.
+fn tail_text(path: &Path) -> Option<String> {
     use std::io::{Seek, SeekFrom};
     const TAIL: u64 = 16 * 1024 * 1024;
     let mut file = std::fs::File::open(path).ok()?;
@@ -489,10 +494,50 @@ fn first_turn(path: &Path, since: i64, now: i64) -> Option<i64> {
     file.seek(SeekFrom::Start(len.saturating_sub(TAIL))).ok()?;
     let mut bytes = Vec::new();
     file.take(TAIL).read_to_end(&mut bytes).ok()?;
-    String::from_utf8_lossy(&bytes)
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// A turn a model produced. A synthetic assistant row is the harness's own
+/// error text (a model it cannot serve), never a turn; counting one closed
+/// the watch on a spawn that died at its first prompt.
+fn is_model_turn(row: &Value) -> bool {
+    crate::first_check::is_assistant(row)
+        && row.pointer("/message/model").and_then(Value::as_str) != Some("<synthetic>")
+}
+
+/// The text of the last synthetic assistant row, with semicolons folded to
+/// periods so the notice door accepts it: the model error a first-prompt
+/// death leaves behind.
+fn synthetic_error(path: &Path) -> Option<String> {
+    let last = tail_text(path)?
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(crate::first_check::is_assistant)
+        .filter(|row| {
+            crate::first_check::is_assistant(row)
+                && row.pointer("/message/model").and_then(Value::as_str) == Some("<synthetic>")
+        })
+        .next_back()?;
+    let content = last.pointer("/message/content")?;
+    let text = match content {
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter_map(|b| b.pointer("/text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join(" "),
+        Value::String(text) => text.clone(),
+        _ => String::new(),
+    };
+    let text = text.trim().replace(';', ".");
+    (!text.is_empty()).then(|| text.chars().take(240).collect())
+}
+
+/// The first model turn stamped at or after the call; a row with no stamp
+/// reads as now.
+fn first_turn(path: &Path, since: i64, now: i64) -> Option<i64> {
+    tail_text(path)?
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|row| is_model_turn(row))
         .map(|row| {
             row.get("timestamp")
                 .and_then(Value::as_str)

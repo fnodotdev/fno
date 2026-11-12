@@ -29,7 +29,7 @@ The gate answers inside the same bound. Its queue gives up after 240 seconds wit
 
 ## The measurement
 
-The first assistant line stamped at or after the call closes the watch. A resumed transcript's older turns do not count. The watch records `first_turn_at_ms` and `latency_ms` from the call, and emits one `spawn_first_turn` event. The event carries the name, harness, substrate, the machine hash, `latency_ms`, and `row_ms`, the time from the call to the worker row. Read it per substrate:
+The first model turn stamped at or after the call closes the watch. A synthetic assistant row is the harness's own error text (a model it cannot serve), never a turn. On 2026-11-12 two opus-route workers died at their first prompt with one synthetic row each, and each synthetic row closed its watch as a healthy 11-second first turn, so the caller never heard about the death. A resumed transcript's older turns do not count. The watch records `first_turn_at_ms` and `latency_ms` from the call, and emits one `spawn_first_turn` event. The event carries the name, harness, substrate, the machine hash, `latency_ms`, and `row_ms`, the time from the call to the worker row. Read it per substrate:
 
 ```bash
 fno doctor event find spawn_first_turn --field substrate=thread --since 7d
