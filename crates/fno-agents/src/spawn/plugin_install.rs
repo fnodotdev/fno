@@ -2470,8 +2470,13 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
                         "plugin stage: restaged {files} files from {} at {head12}",
                         root.display()
                     );
-                    let full = stage_parent.join(Profile::Full.stage_dir());
-                    if local_stage_holds_public_name(&claude_config_dir()) && full.exists() {
+                    let full = std::iter::once(stage_parent.clone())
+                        .chain(legacy_stage_parent())
+                        .map(|parent| parent.join(Profile::Full.stage_dir()))
+                        .find(|stage| stage.exists());
+                    if let Some(full) =
+                        full.filter(|_| local_stage_holds_public_name(&claude_config_dir()))
+                    {
                         // The restaged manifest now names fno-dev, so the old
                         // `fno` registration moves with it.
                         match install_claude(&full, false) {
