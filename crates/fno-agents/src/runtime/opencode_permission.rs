@@ -301,51 +301,93 @@ pub(crate) fn answer(
     sent
 }
 
-/// The merged `permission` config the serve reads for `cwd`. With fno
-/// writing no permission key, this is the user's own rules.
+/// The user's permission rules the serve reads for `cwd`. With fno writing
+/// no permission key, these are the user's own. 1.x answers one merged
+/// `permission` map. 2.x answers the config documents in load order, each
+/// with its own `permissions` rule list; their concatenation is the order
+/// the rules evaluate in.
 pub(crate) fn user_rules(serve: &Serve, cwd: &Path) -> Value {
-    let path = format!("/config?{}", dir_query(cwd));
+    let path = match serve.contract {
+        Contract::V1 => format!("/config?{}", dir_query(cwd)),
+        Contract::V2 => format!("/api/config?{}", dir_query(cwd)),
+    };
     #[derive(Deserialize)]
     struct Config {
         #[serde(default)]
         permission: Value,
     }
-    match call(
+    #[derive(Deserialize)]
+    struct Info {
+        #[serde(default)]
+        permissions: Vec<Value>,
+    }
+    #[derive(Deserialize)]
+    struct Document {
+        info: Option<Info>,
+    }
+    let Ok((200, body)) = call(
         serve.base_url,
         "GET",
         &path,
         None,
         serve.token,
         CALL_TIMEOUT,
-    ) {
-        Ok((200, body)) => serde_json::from_str::<Config>(&body)
+    ) else {
+        return Value::Null;
+    };
+    match serve.contract {
+        Contract::V1 => serde_json::from_str::<Config>(&body)
             .map(|c| c.permission)
             .unwrap_or(Value::Null),
-        _ => Value::Null,
+        Contract::V2 => serde_json::from_str::<Vec<Document>>(&body)
+            .map(|docs| {
+                Value::Array(
+                    docs.into_iter()
+                        .filter_map(|d| d.info)
+                        .flat_map(|i| i.permissions)
+                        .collect(),
+                )
+            })
+            .unwrap_or(Value::Null),
     }
 }
 
-/// The user's V1 rules evaluate `action` on some resource to `ask`. The map
-/// flattens in order (`"bash": "ask"` is pattern `*`), the last matching rule
-/// wins, and no match is no user rule (opencode's own defaults are not
-/// in the map).
+/// The user's rules evaluate `action` on some resource to `ask`. A 1.x map
+/// flattens in order (`"bash": "ask"` is pattern `*`); a 2.x list is already
+/// flat (`{action, resource, effect}`). The last matching rule wins, and no
+/// match is no user rule (opencode's own defaults are not in the config).
 pub(crate) fn user_rule_asks(rules: &Value, action: &str, resources: &[String]) -> bool {
-    let Some(map) = rules.as_object() else {
-        return false;
-    };
     let mut flat: Vec<(&str, &str, &str)> = Vec::new();
-    for (perm, v) in map {
-        match v {
-            Value::String(a) => flat.push((perm.as_str(), "*", a.as_str())),
-            Value::Object(patterns) => {
-                for (pat, a) in patterns {
-                    if let Some(a) = a.as_str() {
-                        flat.push((perm.as_str(), pat.as_str(), a));
+    match rules {
+        Value::Object(map) => {
+            for (perm, v) in map {
+                match v {
+                    Value::String(a) => flat.push((perm.as_str(), "*", a.as_str())),
+                    Value::Object(patterns) => {
+                        for (pat, a) in patterns {
+                            if let Some(a) = a.as_str() {
+                                flat.push((perm.as_str(), pat.as_str(), a));
+                            }
+                        }
                     }
+                    _ => {}
                 }
             }
-            _ => {}
         }
+        Value::Array(list) => {
+            #[derive(Deserialize)]
+            struct Rule<'a> {
+                action: &'a str,
+                resource: &'a str,
+                effect: &'a str,
+            }
+            flat.extend(
+                list.iter()
+                    .filter_map(|v| Rule::deserialize(v).ok())
+                    .map(|r| (r.action, r.resource, r.effect)),
+            );
+        }
+        _ => return false,
     }
     let glob = crate::state_root_drift::glob_match;
     resources.iter().any(|res| {
@@ -561,5 +603,12 @@ pub(crate) mod tests {
             &r("/tmp/*")
         ));
         assert!(!user_rule_asks(&Value::Null, "bash", &r("ls")));
+        // The 2.x rule list reads the same way.
+        let list = json!([
+            {"action": "shell", "resource": "*", "effect": "allow"},
+            {"action": "shell", "resource": "touch *", "effect": "ask"},
+        ]);
+        assert!(user_rule_asks(&list, "shell", &r("touch /tmp/x")));
+        assert!(!user_rule_asks(&list, "shell", &r("ls")));
     }
 }

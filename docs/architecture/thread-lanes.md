@@ -95,7 +95,7 @@ The V1 frames, measured on opencode 1.18.33 on 2026-11-11:
 | List pending | `GET /permission?directory=<cwd>` answers `[{id, sessionID, permission, patterns, metadata, always, tool}]`. With no `directory` it reads `[]` while an ask waits. | `GET /api/session/{sid}/permission` answers `{data: [{id, sessionID, action, resources}]}` |
 | Reply | `POST /permission/{id}/reply?directory=<cwd>` with `{reply: once|reject, message?}` | `POST /api/session/{sid}/permission/{id}/reply` with `{decision: once|reject, message?}` |
 
-1.18.33 also serves the `/api` routes, but its asks never show there. fno never replies `always`, because that saves a rule and fno owns no permission layer. A 2.x serve still boots with the allow-all rule list. Its launch goes over `/api/session`, and no driver answers its asks yet, because no 2.x idle signal is measured.
+1.18.33 also serves the `/api` routes, but its asks never show there. fno never replies `always`, because that saves a rule and fno owns no permission layer. A 2.x serve boots with no fno permission config, the same as 1.x. Its launch goes over `/api/session` with the worker rules in the 2.x `permissions` shape (`{action, resource, effect}`). The driver then answers its asks. On opencode 2.2.2 the idle signal is `GET /api/session/{sid}`: `time.busy` stamps a turn's start and `time.idle` its end. The user's rules come from `GET /api/config?directory=<cwd>`, a list of config documents, each with its own `permissions` list. 2.2.7 is unmeasured.
 
 ## The keeper arm table
 

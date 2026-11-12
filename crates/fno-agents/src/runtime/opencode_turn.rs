@@ -53,6 +53,10 @@ pub struct TurnSpec {
     /// `provider/model`, or none for the session's own.
     pub model: Option<String>,
     pub events: PathBuf,
+    /// A 2.x serve: the lane already started the turn over `/api/session`,
+    /// so the driver only answers its asks and reads idle from the session.
+    #[serde(default)]
+    pub v2: bool,
 }
 
 /// The worker lane's entry: read the spec, drive the turn, exit 0 when the
@@ -71,7 +75,11 @@ pub fn run(spec_path: &Path) -> i32 {
     // The spec carries the serve token; it is read once.
     let _ = std::fs::remove_file(spec_path);
     let lock = spec_path.with_file_name(format!("{}.lock", spec.session_id));
-    let contract = serve_contract(&spec.base_url, &spec.token);
+    let contract = if spec.v2 {
+        Contract::V2
+    } else {
+        serve_contract(&spec.base_url, &spec.token)
+    };
     match drive(
         &spec,
         contract,
@@ -145,6 +153,8 @@ pub(crate) fn drive(
     );
     let command_done = Arc::new(AtomicBool::new(false));
     let is_command = match command_of(&spec.message) {
+        // 2.x: the lane sent the turn before it started this driver.
+        _ if contract == Contract::V2 => false,
         Some((command, arguments)) => {
             let body = with_model(
                 json!({"command": command, "arguments": arguments}),
@@ -279,7 +289,10 @@ pub(crate) fn drive(
                 published = now;
             }
         }
-        let busy = session_busy(&spec.base_url, &spec.token, &dir, sid);
+        let busy = match contract {
+            Contract::V1 => session_busy(&spec.base_url, &spec.token, &dir, sid),
+            Contract::V2 => session_busy_v2(&spec.base_url, &spec.token, sid),
+        };
         seen_busy |= busy == Some(true);
         let ended = if is_command {
             command_done.load(Ordering::SeqCst) && busy != Some(true)
@@ -361,6 +374,43 @@ fn session_busy(base_url: &str, token: &str, dir: &str, sid: &str) -> Option<boo
     Some(matches!(kind, Some("busy" | "retry")))
 }
 
+/// 2.x: `GET /api/session/:id` stamps `time.busy` when a turn starts and
+/// `time.idle` when it ends (measured on 2.2.2), so the session is busy
+/// while no idle stamp follows the busy one.
+fn session_busy_v2(base_url: &str, token: &str, sid: &str) -> Option<bool> {
+    let (status, body) = http_json(
+        base_url,
+        "GET",
+        &format!("/api/session/{sid}"),
+        None,
+        Some(token),
+        CALL_TIMEOUT,
+    )
+    .ok()?;
+    if status != 200 {
+        return None;
+    }
+    #[derive(Deserialize)]
+    struct Times {
+        busy: Option<u64>,
+        idle: Option<u64>,
+    }
+    #[derive(Deserialize)]
+    struct Session {
+        time: Times,
+    }
+    #[derive(Deserialize)]
+    struct Envelope {
+        data: Session,
+    }
+    let time = serde_json::from_str::<Envelope>(&body).ok()?.data.time;
+    Some(match (time.busy, time.idle) {
+        (Some(busy), Some(idle)) => idle < busy,
+        (Some(_), None) => true,
+        (None, _) => false,
+    })
+}
+
 /// The held ask ids a driver publishes for `session_id` under `turns`.
 pub(crate) fn held_ids(turns: &Path, session_id: &str) -> Vec<String> {
     std::fs::read_to_string(turns.join(format!("{session_id}.held")))
@@ -380,6 +430,7 @@ pub(crate) fn answer_for_user(
     session_id: &str,
     choice: &str,
     held: &[String],
+    contract: Contract,
 ) -> Result<String, LaneError> {
     let reply = match choice {
         "allow_once" => Reply::Once,
@@ -389,7 +440,7 @@ pub(crate) fn answer_for_user(
     let serve = Serve {
         base_url,
         token,
-        contract: serve_contract(base_url, token),
+        contract,
     };
     let pending = perm::list_pending(&serve, cwd, session_id)?;
     let target = pending
@@ -420,6 +471,7 @@ mod tests {
             message: message.into(),
             model: Some("zai-coding-plan/glm-5.3".into()),
             events: dir.join("events.jsonl"),
+            v2: false,
         }
     }
 
@@ -489,6 +541,59 @@ mod tests {
     }
 
     #[test]
+    fn a_2x_driver_sends_nothing_reads_the_user_rule_list_and_ends_on_the_idle_stamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = Fake::start(vec![
+            (
+                "GET /api/session/ses_a/permission",
+                "200 OK",
+                r#"{"data":[{"id":"per_1","sessionID":"ses_a","action":"shell","resources":["touch /tmp/x"]}]}"#.into(),
+            ),
+            ("POST /api/session/ses_a/permission/per_1/reply", "204 No Content", String::new()),
+            (
+                "GET /api/config",
+                "200 OK",
+                r#"[{"type":"directory","path":"/u"},{"type":"document","path":"/u/c.json","info":{"permissions":[{"action":"shell","resource":"touch *","effect":"ask"}]}}]"#.into(),
+            ),
+            (
+                "GET /api/session/ses_a HTTP",
+                "200 OK",
+                r#"{"data":{"id":"ses_a","time":{"busy":10,"idle":20}}}"#.into(),
+            ),
+        ]);
+        let decide = |a: &ThreadAsk, _: &Path| {
+            assert_eq!((a.action.as_str(), a.user_rule), ("shell", true));
+            Answer::ModelNote("held".into())
+        };
+        let mut s = spec(&fake.url, "/fno:target x-1", dir.path());
+        s.v2 = true;
+        drive(
+            &s,
+            Contract::V2,
+            Duration::from_secs(60),
+            Duration::ZERO,
+            None,
+            &decide,
+        )
+        .unwrap();
+        let seen = fake.seen.lock().unwrap();
+        assert!(
+            !seen
+                .iter()
+                .any(|(l, _)| l.contains("/command") || l.contains("/prompt")),
+            "the lane already sent the turn: {seen:?}"
+        );
+        let reply = seen
+            .iter()
+            .find(|(l, _)| l.starts_with("POST /api/session/ses_a/permission/per_1/reply"))
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&reply.1).unwrap(),
+            json!({"decision": "reject", "message": "held"})
+        );
+    }
+
+    #[test]
     fn the_user_answers_a_held_ask_and_an_empty_queue_says_so() {
         let fake = Fake::start(vec![
             (
@@ -499,7 +604,16 @@ mod tests {
             ("GET /permission?directory=/w", "200 OK", ONE_ASK.into()),
             ("POST /permission/per_1/reply", "200 OK", "true".into()),
         ]);
-        let id = answer_for_user(&fake.url, "t", Path::new("/w"), "ses_a", "deny", &[]).unwrap();
+        let id = answer_for_user(
+            &fake.url,
+            "t",
+            Path::new("/w"),
+            "ses_a",
+            "deny",
+            &[],
+            Contract::V1,
+        )
+        .unwrap();
         assert_eq!(id, "per_1");
         let seen = fake.seen.lock().unwrap();
         let body: Value = serde_json::from_str(&seen.last().unwrap().1).unwrap();
@@ -512,6 +626,7 @@ mod tests {
             "ses_other",
             "allow_once",
             &[],
+            Contract::V1,
         )
         .unwrap_err();
         assert!(
@@ -519,7 +634,15 @@ mod tests {
             "{err}"
         );
         assert!(matches!(
-            answer_for_user(&fake.url, "t", Path::new("/w"), "ses_a", "always", &[]),
+            answer_for_user(
+                &fake.url,
+                "t",
+                Path::new("/w"),
+                "ses_a",
+                "always",
+                &[],
+                Contract::V1
+            ),
             Err(LaneError::BadChoice(_))
         ));
 
@@ -538,8 +661,16 @@ mod tests {
         let turns = tempfile::tempdir().unwrap();
         std::fs::write(turns.path().join("ses_a.held"), "per_2").unwrap();
         let held = held_ids(turns.path(), "ses_a");
-        let id =
-            answer_for_user(&two.url, "t", Path::new("/w"), "ses_a", "allow_once", &held).unwrap();
+        let id = answer_for_user(
+            &two.url,
+            "t",
+            Path::new("/w"),
+            "ses_a",
+            "allow_once",
+            &held,
+            Contract::V1,
+        )
+        .unwrap();
         assert_eq!(id, "per_2");
     }
 }

@@ -3,7 +3,7 @@
 
 Plain opencode is opencode 2.x on every fleet machine. The `opencodev2` wrapper and its side-by-side `~/.opencode-v2` tree are retired. One binary reads the default XDG roots. 2.x keeps its credentials in the data root's `opencode.db` (`credential` table), not `auth.json`. Pick the host by who watches.
 
-An unattended teammate runs on fno's opencode serve lane. Spawn starts one shared `opencode serve`. On 2.x it mints the session with `POST /api/session` and starts the turn with `POST /api/session/:id/command` or `/prompt`, and the receipt names the session id. On 1.x fno mints the session with `POST /session` and the worker rules, and the turn driver (`fno-agents-worker --opencode-turn`) sends each turn and answers its permission asks after the user's own opencode rules. A 2.x serve still boots with the allow-all config, because no 2.x driver answers asks yet:
+An unattended teammate runs on fno's opencode serve lane. Spawn starts one shared `opencode serve`. fno writes no permission config into the serve, so the user's own opencode rules bind on both contracts. On 2.x fno mints the session with `POST /api/session` and the worker rules, starts the turn with `POST /api/session/:id/command` or `/prompt`, and the receipt names the session id. On 1.x fno mints the session with `POST /session` and the worker rules. On both, the turn driver (`fno-agents-worker --opencode-turn`) answers each permission ask the user's rules leave open. On 1.x it also sends the turn:
 
 ```bash
 fno agents spawn -H opencode -m zai-coding-plan/glm-5.3-flash --name <name> --node <node> '/fno:target <node>'

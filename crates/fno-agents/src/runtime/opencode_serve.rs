@@ -10,10 +10,10 @@
 //! HTTP API, verified against opencode v1.14.50 (live probes 2026-08-23):
 //!
 //! - `opencode serve --port 0 --print-logs` prints `listening on
-//!   http://127.0.0.1:<port>`. On 1.x fno writes no permission config into
-//!   it: the serve reads the user's own opencode config, so the user's grants
-//!   bind (an `OPENCODE_CONFIG` allow-all landed last in the merged map and
-//!   beat the user's denies; measured 2026-11-11).
+//!   http://127.0.0.1:<port>`. fno writes no permission config into it on
+//!   any contract: the serve reads the user's own opencode config, so the
+//!   user's grants bind (an `OPENCODE_CONFIG` allow-all landed last in the
+//!   merged map and beat the user's denies; measured 2026-11-11).
 //! - `POST /session?directory=<abs>` mints a session bound to that directory,
 //!   so ONE shared serve hosts workers across worktrees (a payload `directory`
 //!   field is ignored - only the query param binds; probed both ways). The
@@ -35,10 +35,11 @@
 //! `run --attach` and `run --command`. The boot records the contract it
 //! classified, and `opencode_serve_api.rs` holds the per-contract routes and
 //! envelopes. On 2.x the launch and every steer go over HTTP: `POST
-//! /api/session` mints the session (so the receipt names its id), and `POST
-//! /prompt` or `/command` starts each turn. 2.x still boots with the
-//! allow-all serve config: no 2.x idle signal is measured, so no driver can
-//! answer its asks yet.
+//! /api/session` mints the session with the same worker rules in the 2.x
+//! `permissions` shape, and `POST /prompt` or `/command` starts each turn.
+//! The turn driver then runs answer-only: it reads asks from `GET
+//! /api/session/:id/permission`, replies through `/reply`, and reads idle
+//! from the session's `time.busy` / `time.idle` stamps (measured on 2.2.2).
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -108,25 +109,6 @@ fn recorded_serve(home: &AgentsHome) -> Result<ServeHandle, ServeError> {
     })
 }
 
-/// The 2.x serve config: an ordered `permissions` RULE LIST (Config.md
-/// "Permissions", rule shape `{action, resource, effect}`). 2.x keeps the
-/// allow-all posture because no 2.x driver answers its asks yet; an
-/// unanswered ask is a hang, not a refusal. 1.x boots with none: the user's
-/// own rules bind, and the turn driver answers what they leave open.
-const SERVE_CONFIG_JSON_V2: &str =
-    r#"{"permissions":[{"action":"*","resource":"*","effect":"allow"}]}"#;
-
-/// The serve config a contract boots with, if any. The boot classifies the
-/// binary once (`--version`; an unknown version reads 2.x, matching the
-/// installer's v2-default) and renders the config and the route set from
-/// that one answer.
-fn serve_config_json(contract: OpencodeContract) -> Option<&'static str> {
-    match contract {
-        OpencodeContract::V2 => Some(SERVE_CONFIG_JSON_V2),
-        OpencodeContract::V1 => None,
-    }
-}
-
 /// Budgets: how long to wait for a fresh serve to print its port, and the
 /// per-call HTTP timeouts. A serve boot is a node CLI start (~1-2s idle) that
 /// reached a healthy port at ~40s wall on a machine pinned at 98.9% CPU, so
@@ -145,7 +127,7 @@ const STEER_POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// health), and the fno-agents spawn path is synchronous - a full HTTP stack
 /// would be a dependency bought for nothing. `auth_token` rides every request
 /// as Basic auth: the serve is booted with `OPENCODE_SERVER_PASSWORD`, so a
-/// loopback listener with an allow-all permission posture is not reachable by
+/// loopback listener that answers permission replies is not reachable by
 /// arbitrary local processes.
 pub(crate) fn http_json(
     base_url: &str,
@@ -277,10 +259,6 @@ fn serve_healthy(base_url: &str, token: &str, contract: OpencodeContract) -> boo
 
 fn serve_state_path(home: &AgentsHome) -> std::path::PathBuf {
     home.root().join("opencode-serve.json")
-}
-
-fn serve_config_path(home: &AgentsHome) -> std::path::PathBuf {
-    home.root().join("opencode-serve-config.json")
 }
 
 fn serve_log_path(home: &AgentsHome) -> std::path::PathBuf {
@@ -434,15 +412,6 @@ impl crate::harness_daemon::HarnessDaemonAdapter for OpenCodeDaemonAdapter<'_> {
 
     fn boot(&self) -> Result<crate::harness_daemon::DaemonState, String> {
         let (contract, _) = crate::opencode_install::classify_contract("opencode");
-        let config = serve_config_path(self.home);
-        if let Some(json) = serve_config_json(contract) {
-            if let Some(parent) = config.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("mkdir for serve config: {e}"))?;
-            }
-            std::fs::write(&config, json)
-                .map_err(|e| format!("write serve config {:?}: {e}", config))?;
-        }
         // Fresh token per serve: Basic-auth material for every request (the serve
         // is booted with OPENCODE_SERVER_PASSWORD), generated from /dev/urandom.
         let token = new_serve_token()?;
@@ -474,11 +443,10 @@ impl crate::harness_daemon::HarnessDaemonAdapter for OpenCodeDaemonAdapter<'_> {
         };
         // 2.x reads OPENCODE_PASSWORD first and falls back to the 1.x name,
         // so an inherited OPENCODE_PASSWORD would beat the token: set both.
-        match serve_config_json(contract) {
-            Some(_) => cmd.env("OPENCODE_CONFIG", &config),
-            None => cmd.env_remove("OPENCODE_CONFIG"),
-        };
-        cmd.env("OPENCODE_SERVER_PASSWORD", &token)
+        // An inherited OPENCODE_CONFIG would put a foreign rule set over the
+        // user's own, so the serve boots without one.
+        cmd.env_remove("OPENCODE_CONFIG")
+            .env("OPENCODE_SERVER_PASSWORD", &token)
             .env("OPENCODE_PASSWORD", &token)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log))
@@ -557,21 +525,30 @@ impl crate::harness_daemon::HarnessDaemonAdapter for OpenCodeDaemonAdapter<'_> {
 /// `plan_enter` and `plan_exit` deny: no person answers them on a thread.
 /// `external_directory` allows the worktree and each granted root, the
 /// state-root grant the serve lane owes (the user's own rules decide every
-/// other call).
-fn session_rules(cwd: &Path, state_dirs: &[String]) -> serde_json::Value {
+/// other call). 1.x spells a rule `{permission, pattern, action}`, 2.x
+/// `{action, resource, effect}`.
+fn session_rules(
+    contract: OpencodeContract,
+    cwd: &Path,
+    state_dirs: &[String],
+) -> serde_json::Value {
+    let rule = |name: &str, pattern: &str, verdict: &str| match contract {
+        OpencodeContract::V1 => {
+            serde_json::json!({"permission": name, "pattern": pattern, "action": verdict})
+        }
+        OpencodeContract::V2 => {
+            serde_json::json!({"action": name, "resource": pattern, "effect": verdict})
+        }
+    };
     let mut rules: Vec<serde_json::Value> = ["question", "plan_enter", "plan_exit"]
         .iter()
-        .map(|p| serde_json::json!({"permission": p, "pattern": "*", "action": "deny"}))
+        .map(|name| rule(name, "*", "deny"))
         .collect();
     let cwd = cwd.to_string_lossy().into_owned();
     for dir in std::iter::once(&cwd).chain(state_dirs) {
         let dir = dir.trim_end_matches('/');
         for pattern in [dir.to_string(), format!("{dir}/*")] {
-            rules.push(serde_json::json!({
-                "permission": "external_directory",
-                "pattern": pattern,
-                "action": "allow",
-            }));
+            rules.push(rule("external_directory", &pattern, "allow"));
         }
     }
     serde_json::Value::Array(rules)
@@ -589,7 +566,10 @@ fn create_session(
         "/session?directory={}",
         crate::opencode_permission::encode_query_path(&cwd.to_string_lossy())
     );
-    let body = serde_json::json!({"title": name, "permission": session_rules(cwd, state_dirs)});
+    let body = serde_json::json!({
+        "title": name,
+        "permission": session_rules(OpencodeContract::V1, cwd, state_dirs),
+    });
     let (status, text) = http_json(
         &serve.base_url,
         "POST",
@@ -647,6 +627,7 @@ fn spawn_turn_driver(
         message: message.to_string(),
         model: model.filter(|m| !m.is_empty()).map(str::to_string),
         events: home.events_jsonl(),
+        v2: serve.contract == OpencodeContract::V2,
     };
     let dir = home.root().join("agents").join("turns");
     std::fs::create_dir_all(&dir).map_err(|e| format!("turn spec dir: {e}"))?;
@@ -886,28 +867,38 @@ fn dispatch_opencode_serve_inner(
                     return AskOutcome::err(format!("opencode launch: {error}"), 13);
                 }
             };
-            if let Err(error) = spawn_turn_driver(
-                home,
-                &serve,
-                &session_id,
-                &full_prompt,
-                Some(model_value),
-                cwd,
-                &log_path,
-                driver_bin,
-                Some(name),
-            ) {
-                return AskOutcome::err(format!("opencode turn driver: {error}"), 2);
-            }
             session_id
         }
         OpencodeContract::V2 => {
-            match launch_over_http(&serve, name, cwd, model_value, effort, &full_prompt) {
+            match launch_over_http(
+                &serve,
+                name,
+                cwd,
+                model_value,
+                effort,
+                &full_prompt,
+                state_dirs,
+            ) {
                 Ok(session_id) => session_id,
                 Err(error) => return AskOutcome::err(format!("opencode launch: {error}"), 2),
             }
         }
     };
+    // 1.x: the driver sends the turn. 2.x: the launch sent it, and the
+    // driver answers its asks until the session goes idle.
+    if let Err(error) = spawn_turn_driver(
+        home,
+        &serve,
+        &session_id,
+        &full_prompt,
+        Some(model_value),
+        cwd,
+        &log_path,
+        driver_bin,
+        Some(name),
+    ) {
+        return AskOutcome::err(format!("opencode turn driver: {error}"), 2);
+    }
 
     AskOutcome::ok_reply(
         serde_json::json!({
@@ -917,10 +908,7 @@ fn dispatch_opencode_serve_inner(
             "session_id": session_id,
             "short_id": "",
             // The receipt NAMES the posture instead of leaving it unnamed.
-            "permission_posture": match serve.contract {
-                OpencodeContract::V1 => "user grants; fno answers asks (thread_permission)",
-                OpencodeContract::V2 => "explicit allow-all (serve config permissions [*:*=allow])",
-            },
+            "permission_posture": "user grants; fno answers asks (thread_permission)",
             "contract": serve.contract.label(),
             "durability": "daemon-owned",
             "incarnation": format!("{}:{}", serve.pid, serve.pid_start.unwrap_or_default()),
@@ -954,9 +942,15 @@ fn launch_over_http(
     model: &str,
     effort: Option<&str>,
     prompt: &str,
+    state_dirs: &[String],
 ) -> Result<String, ServeError> {
     let model_ref = api::model_ref(model, effort)?;
-    let body = api::create_body(name, &cwd.to_string_lossy(), &model_ref);
+    let body = api::create_body(
+        name,
+        &cwd.to_string_lossy(),
+        &model_ref,
+        session_rules(OpencodeContract::V2, cwd, state_dirs),
+    );
     let (status, text) = http_json(
         &serve.base_url,
         "POST",
@@ -1134,35 +1128,28 @@ fn steer_existing_session_with_binary(
     }
     let serve = ensure_serve(home)?;
     let before = fetch_messages(&serve, session_id)?;
-    match serve.contract {
-        OpencodeContract::V1 => {
-            let log_path = home
-                .root()
-                .join("agents")
-                .join("logs")
-                .join(format!("steer-{session_id}.jsonl"));
-            if let Some(parent) = log_path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("steering log directory: {e}"))?;
-            }
-            spawn_turn_driver(
-                home, &serve, session_id, message, model, cwd, &log_path, driver_bin, None,
-            )
-            .map_err(|error| {
-                format!(
-                    "opencode serve steering driver launch failed for session {session_id}: {error}"
-                )
-            })?;
+    if serve.contract == OpencodeContract::V2 {
+        if let Some(model) = model.filter(|m| !m.is_empty()) {
+            switch_model_v2(&serve, session_id, model)?;
         }
-        OpencodeContract::V2 => {
-            if let Some(model) = model.filter(|m| !m.is_empty()) {
-                switch_model_v2(&serve, session_id, model)?;
-            }
-            send_turn_v2(&serve, session_id, message).map_err(|error| {
-                format!("opencode serve steering refused for session {session_id}: {error}")
-            })?;
-        }
+        send_turn_v2(&serve, session_id, message).map_err(|error| {
+            format!("opencode serve steering refused for session {session_id}: {error}")
+        })?;
     }
+    let log_path = home
+        .root()
+        .join("agents")
+        .join("logs")
+        .join(format!("steer-{session_id}.jsonl"));
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("steering log directory: {e}"))?;
+    }
+    spawn_turn_driver(
+        home, &serve, session_id, message, model, cwd, &log_path, driver_bin, None,
+    )
+    .map_err(|error| {
+        format!("opencode serve steering driver launch failed for session {session_id}: {error}")
+    })?;
 
     let deadline = std::time::Instant::now() + timeout;
     let mut last_seen = latest_message_id(&before);
@@ -1278,6 +1265,10 @@ pub fn answer_registered_session(home: &AgentsHome, name: &str, choice: &str) ->
         session_id,
         choice,
         &crate::opencode_turn::held_ids(&home.root().join("agents").join("turns"), session_id),
+        match serve.contract {
+            OpencodeContract::V1 => crate::opencode_permission::Contract::V1,
+            OpencodeContract::V2 => crate::opencode_permission::Contract::V2,
+        },
     ) {
         Ok(request_id) => AskOutcome::ok_reply(
             serde_json::json!({"ok": true, "answered": request_id, "answer": choice}).to_string(),
@@ -1632,23 +1623,24 @@ mod tests {
     }
 
     #[test]
-    fn serve_config_follows_the_contract() {
-        let base =
-            std::env::temp_dir().join(format!("fno-ocserve-contract-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).unwrap();
-        let stub = |name: &str, version: &str| {
-            crate::write_exec_stub(&base, name, &format!("#!/bin/sh\necho '{version}'\n"))
-        };
-        let v1 = stub("oc-v1", "1.18.33");
-        let v2 = stub("oc-v2", "2.0.19");
-        // 1.x boots with no config, so the user's grants bind; 2.x keeps the
-        // allow-all rule list until a 2.x driver answers its asks.
-        let config_for = |bin: &Path| {
-            serve_config_json(crate::opencode_install::classify_contract(bin.to_str().unwrap()).0)
-        };
-        assert_eq!(config_for(&v1), None);
-        assert_eq!(config_for(&v2), Some(SERVE_CONFIG_JSON_V2));
+    fn session_rules_speak_each_contract() {
+        let v1 = session_rules(OpencodeContract::V1, Path::new("/w"), &[]);
+        let v2 = session_rules(OpencodeContract::V2, Path::new("/w"), &[]);
+        assert_eq!(
+            v1[0],
+            serde_json::json!({"permission": "question", "pattern": "*", "action": "deny"})
+        );
+        assert_eq!(
+            v2[0],
+            serde_json::json!({"action": "question", "resource": "*", "effect": "deny"})
+        );
+        assert_eq!(
+            v2.as_array().unwrap().last().unwrap(),
+            &serde_json::json!({"action": "external_directory", "resource": "/w/*", "effect": "allow"})
+        );
+        assert!(!v2
+            .to_string()
+            .contains(r#""resource":"*","effect":"allow""#));
     }
 
     #[test]
@@ -1899,9 +1891,12 @@ mod tests {
             "api": "2.x",
         });
         std::fs::write(serve_state_path(&h), record.to_string()).unwrap();
-        // A driver exec would be a 1.x launch on a 2.x serve: the stub
-        // leaves a mark if anything runs it.
-        let stub = crate::write_exec_stub(dir.path(), "opencode-stub", "#!/bin/sh\ntouch ran\n");
+        // The launch sends the turn itself; the driver only answers asks.
+        let stub = crate::write_exec_stub(
+            dir.path(),
+            "driver-stub",
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > argv.txt\n",
+        );
         let cwd = dir.path().join("w");
         std::fs::create_dir_all(&cwd).unwrap();
 
@@ -1914,13 +1909,17 @@ mod tests {
             Some("zai-coding-plan/glm-5.3-flash"),
             Some("high"),
             Some("x-aaaa"),
-            &[],
+            &["/state/root".to_string()],
             &stub.to_string_lossy(),
         );
 
         assert_eq!(outcome.exit_code, 0, "stderr: {}", outcome.stderr);
         let receipt: serde_json::Value = serde_json::from_str(outcome.stdout.trim()).unwrap();
         assert_eq!(receipt.pointer("/session_id").unwrap(), "ses_v2launch1");
+        assert_eq!(
+            receipt["permission_posture"],
+            "user grants; fno answers asks (thread_permission)"
+        );
         assert_eq!(receipt.pointer("/contract").unwrap(), "2.x");
         assert_eq!(receipt.pointer("/effort").unwrap(), "high");
         let requests = fake.requests.lock().unwrap().clone();
@@ -1943,6 +1942,13 @@ mod tests {
             create.pointer("/model").unwrap(),
             &serde_json::json!({"providerID": "zai-coding-plan", "id": "glm-5.3-flash", "variant": "high"})
         );
+        let rules = create["permissions"].as_array().unwrap();
+        assert!(
+            rules.contains(&serde_json::json!(
+                {"action": "external_directory", "resource": "/state/root/*", "effect": "allow"}
+            )),
+            "{rules:?}"
+        );
         assert!(
             requests
                 .iter()
@@ -1955,7 +1961,18 @@ mod tests {
                 .any(|r| r.contains("/global/health") || r.starts_with("GET /session")),
             "no 1.x route reaches a 2.x serve: {requests:?}"
         );
-        assert!(!cwd.join("ran").exists() && !dir.path().join("ran").exists());
+        let argv_path = cwd.join("argv.txt");
+        for _ in 0..100 {
+            if std::fs::metadata(&argv_path).is_ok_and(|m| m.len() > 0) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let launched = std::fs::read_to_string(&argv_path).unwrap();
+        let spec_path = launched.lines().nth(1).unwrap();
+        let spec: crate::opencode_turn::TurnSpec =
+            serde_json::from_str(&std::fs::read_to_string(spec_path).unwrap()).unwrap();
+        assert!(spec.v2, "the 2.x driver answers only");
     }
 
     #[test]

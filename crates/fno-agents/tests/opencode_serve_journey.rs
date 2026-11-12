@@ -127,13 +127,12 @@ fn opencode_bg_worker_completes_unattended_over_serve() {
             "the serve on PATH speaks the other contract"
         );
     }
-    // Boot proof: 1.x boots with no permission config, so the user's grants
-    // bind; 2.x keeps its allow-all rule list until a 2.x driver exists.
+    // Boot proof: no contract boots with an fno permission config, so the
+    // user's grants bind.
     let v1 = serve.contract.label() == "1.x";
-    assert_eq!(
-        home.root().join("opencode-serve-config.json").exists(),
-        !v1,
-        "the serve config follows the contract"
+    assert!(
+        !home.root().join("opencode-serve-config.json").exists(),
+        "fno writes no serve permission config"
     );
 
     // The dispatch under test: the public entry, so the env-read dirs path is
@@ -183,37 +182,40 @@ fn opencode_bg_worker_completes_unattended_over_serve() {
         "structured message id on the readback: {assistant:?}"
     );
 
-    if v1 {
-        // The writable-dirs grant is ON the session: a scoped
-        // external_directory allow rule for the granted root.
-        let session = fetch_session(&serve, &session_id).expect("session readback");
-        let rules = session
-            .get("permission")
-            .and_then(|p| p.as_array())
-            .cloned()
-            .unwrap_or_default();
-        let granted = rules.iter().any(|r| {
-            r.get("permission").and_then(|p| p.as_str()) == Some("external_directory")
-                && r.get("action").and_then(|a| a.as_str()) == Some("allow")
-                && r.get("pattern")
-                    .and_then(|p| p.as_str())
-                    .is_some_and(|p| p.starts_with(state_dir.to_string_lossy().as_ref()))
-        });
-        assert!(
-            granted,
-            "no external_directory allow for the state root: {rules:?}"
-        );
-        // The driver's log is the diagnostics trail. Existence is the claim;
-        // a quiet run writes nothing.
-        assert!(
-            home.root()
-                .join("agents")
-                .join("logs")
-                .join("wk-journey.jsonl")
-                .exists(),
-            "driver log file missing"
-        );
-    }
+    // The writable-dirs grant is ON the session: a scoped external_directory
+    // allow rule for the granted root, in each contract's rule shape.
+    let (list, name, pattern, verdict) = if v1 {
+        ("permission", "permission", "pattern", "action")
+    } else {
+        ("permissions", "action", "resource", "effect")
+    };
+    let session = fetch_session(&serve, &session_id).expect("session readback");
+    let rules = session
+        .get(list)
+        .and_then(|p| p.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let granted = rules.iter().any(|r| {
+        r.get(name).and_then(|p| p.as_str()) == Some("external_directory")
+            && r.get(verdict).and_then(|a| a.as_str()) == Some("allow")
+            && r.get(pattern)
+                .and_then(|p| p.as_str())
+                .is_some_and(|p| p.starts_with(state_dir.to_string_lossy().as_ref()))
+    });
+    assert!(
+        granted,
+        "no external_directory allow for the state root: {rules:?}"
+    );
+    // The driver's log is the diagnostics trail. Existence is the claim;
+    // a quiet run writes nothing.
+    assert!(
+        home.root()
+            .join("agents")
+            .join("logs")
+            .join("wk-journey.jsonl")
+            .exists(),
+        "driver log file missing"
+    );
 
     // Steering confirms a new serve message by id. The recalled token is the
     // positive session marker for the second turn; a merely non-empty reply

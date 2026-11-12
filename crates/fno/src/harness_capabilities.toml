@@ -837,11 +837,11 @@ headless = "unmeasured"
 # variant: dispatch_opencode_serve calls apply_opencode_variant(selected_model,
 # effort), writing ~/.local/state/opencode/model.json (live row read
 # 2026-10-05: "zai-coding-plan/glm-5.3-flash": "high"). On 2.x it rides the
-# session's model ref as its variant. On 1.x the state-root grant rides
-# FNO_WORKER_ADD_DIRS -> per-session external_directory rules, and fno drives
-# each turn over HTTP (`fno-agents-worker --opencode-turn`), answering its
-# permission asks through the fnod ladder after the user's own opencode rules.
-# 2.x keeps the serve-level allow-all until a 2.x driver exists. The operator
+# session's model ref as its variant. On both contracts the state-root grant
+# rides FNO_WORKER_ADD_DIRS -> per-session external_directory rules, and the
+# turn driver (`fno-agents-worker --opencode-turn`) answers each permission
+# ask through the fnod ladder after the user's own opencode rules. fno writes
+# no serve permission config on either contract. The operator
 # --add-dir axis refuses on this lane (client.rs fail-closed matrix). Every
 # other flag still demotes to the pane. The journey names the evidence.
 [harness.opencode.thread]
