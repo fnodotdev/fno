@@ -2446,7 +2446,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn the_red_read_is_pinned_to_the_pr_head() {
         let mut calls: Vec<Vec<String>> = Vec::new();
         let mut runner: Runner = &mut |argv: &[String], _cwd: &str| {
