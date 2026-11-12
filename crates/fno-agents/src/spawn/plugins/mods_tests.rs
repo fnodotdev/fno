@@ -56,6 +56,35 @@ layouts:
 }
 
 #[test]
+fn the_first_party_pack_verifies_with_every_preview_passing() {
+    let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/fno-panels");
+    let report = verify_pack(&pack, &Default::default());
+    let failing: Vec<_> = report.conditions.iter().filter(|c| !c.ok()).collect();
+    assert!(report.ok(), "{failing:?}");
+    let previews = report
+        .conditions
+        .iter()
+        .filter(|c| c.name.starts_with("preview:mod:"))
+        .count();
+    assert!(previews >= 3, "every shipped mod's preview is checked");
+}
+
+#[test]
+fn card_lines_wrap_at_spaces_and_never_split_a_word() {
+    let line = "this pack runs code on your machine. Its command mods stay off until you switch each one on.";
+    let rows = install::wrap_words(line, 40);
+    assert!(rows.len() > 1);
+    assert!(rows.iter().all(|r| r.chars().count() <= 40), "{rows:?}");
+    assert_eq!(rows.join(" "), line);
+    assert_eq!(install::wrap_words(line, 0), [line]);
+    let long = install::wrap_words("url      https://example.com/averyveryverylongpath", 20);
+    assert_eq!(
+        long.last().map(String::as_str),
+        Some("https://example.com/averyveryverylongpath")
+    );
+}
+
+#[test]
 fn a_mods_pack_verifies_and_an_escaping_preview_fails() {
     let tmp = tempfile::tempdir().unwrap();
     write_pack(tmp.path(), "", "m/p.png");

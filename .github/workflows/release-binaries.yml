@@ -32,14 +32,20 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - { name: macos-arm64, runs-on: macos-15, rust-target: aarch64-apple-darwin }
+          - { name: macos-arm64, runs-on: macos-15, rust-target: aarch64-apple-darwin, cargo: cargo build }
           # macos-x64 is cross-compiled on the Apple Silicon runner (the native
           # Intel macos-13 image is retired). rustup adds the x86_64 target and
           # the universal macOS SDK links it; packaging only archives the files,
           # so nothing here executes the x86_64 binaries.
-          - { name: macos-x64, runs-on: macos-15, rust-target: x86_64-apple-darwin }
-          - { name: linux-x64, runs-on: ubuntu-24.04, rust-target: x86_64-unknown-linux-musl }
-          - { name: linux-arm64, runs-on: ubuntu-24.04-arm, rust-target: aarch64-unknown-linux-musl }
+          - { name: macos-x64, runs-on: macos-15, rust-target: x86_64-apple-darwin, cargo: cargo build }
+          # The linux legs build the front door with cargo-zigbuild: rio-vt (the
+          # mux VT engine) pulls simdutf, whose build script compiles C++ through
+          # cc-rs, and musl-tools ships a C wrapper only, so cc-rs finds no
+          # x86_64-linux-musl-g++ / aarch64-linux-musl-g++. Zig bundles a libc++
+          # toolchain for every musl target and cargo-zigbuild writes the cc/cxx
+          # wrappers cc-rs then finds.
+          - { name: linux-x64, runs-on: ubuntu-24.04, rust-target: x86_64-unknown-linux-musl, cargo: cargo zigbuild }
+          - { name: linux-arm64, runs-on: ubuntu-24.04-arm, rust-target: aarch64-unknown-linux-musl, cargo: cargo zigbuild }
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -90,13 +96,19 @@ jobs:
         if: startsWith(matrix.target.name, 'linux')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
+      - name: Install cargo-zigbuild (linux)
+        if: startsWith(matrix.target.name, 'linux')
+        # The pip package carries the ziglang wheel, so one install covers
+        # both tools; cargo-zigbuild locates zig through `python -m ziglang`.
+        run: python3 -m pip install --quiet cargo-zigbuild
+
       - name: Build the fno-agents binaries
         working-directory: crates/fno-agents
         run: cargo build --release --target ${{ matrix.target.rust-target }} --bins
 
       - name: Build the fno front-door binary
         working-directory: crates/fno
-        run: cargo build --release --target ${{ matrix.target.rust-target }} --bin fno
+        run: ${{ matrix.target.cargo }} --release --target ${{ matrix.target.rust-target }} --bin fno
 
       - name: Check macOS signing secrets
         id: signing

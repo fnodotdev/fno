@@ -359,12 +359,49 @@ fn approval(card: &Card) -> Result<Option<String>, InstallError> {
     Err(InstallError::AwaitingConsent { request_digest })
 }
 
+/// Columns of the terminal on stderr, or `None` when stderr is not a tty.
+fn stderr_cols() -> Option<usize> {
+    let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+    // SAFETY: TIOCGWINSZ fills a `winsize` we own; a non-tty fd just errors.
+    let rc = unsafe { libc::ioctl(libc::STDERR_FILENO, libc::TIOCGWINSZ, &mut ws) };
+    (rc == 0 && ws.ws_col > 0).then_some(usize::from(ws.ws_col))
+}
+
+/// Break `line` at spaces so no row passes `width`. One token longer than the
+/// width stays whole on its own row. Width 0 means no wrap.
+pub(crate) fn wrap_words(line: &str, width: usize) -> Vec<String> {
+    if width == 0 || line.chars().count() <= width {
+        return vec![line.to_string()];
+    }
+    let mut rows = Vec::new();
+    let mut row = String::new();
+    for word in line.split(' ') {
+        if !row.is_empty() && row.chars().count() + 1 + word.chars().count() > width {
+            rows.push(std::mem::take(&mut row));
+        }
+        if !row.is_empty() {
+            row.push(' ');
+        }
+        row.push_str(word);
+    }
+    rows.push(row);
+    rows
+}
+
+fn print_wrapped(line: &str) {
+    for row in wrap_words(line, stderr_cols().unwrap_or(0)) {
+        eprintln!("{row}");
+    }
+}
+
 fn attended_yes(runs_code: bool) -> bool {
     if !crate::backlog::law_match::attended_terminal() {
         return false;
     }
     if runs_code {
-        eprintln!("this pack runs code on your machine. Its command mods stay off until you switch each one on.");
+        print_wrapped(
+            "this pack runs code on your machine. Its command mods stay off until you switch each one on.",
+        );
     }
     eprint!("install this pack? [y/N] ");
     let mut answer = String::new();
@@ -402,7 +439,7 @@ pub fn install_with(
 pub fn run(json: bool, root: &Path, url: &str) -> i32 {
     let outcome = install_with(url, root, |card| {
         for line in card.lines() {
-            eprintln!("{line}");
+            print_wrapped(&line);
         }
         if crate::backlog::law_match::attended_terminal() {
             let user = std::env::var("USER").unwrap_or_else(|_| "operator".into());
