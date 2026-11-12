@@ -77,7 +77,13 @@ mod tests {
         );
         // A mail turn, and a turn the mux saw a person submit, are not flagged.
         assert_eq!(
-            headerless("s-1", "`@zenobia · fmail-1a2b`\nbody", 1, &bus, || false),
+            headerless(
+                "s-1",
+                "`@zenobia · fmail-1a2b3c4d5e6f`\nbody",
+                1,
+                &bus,
+                || false
+            ),
             None
         );
         assert_eq!(
