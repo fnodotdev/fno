@@ -4914,10 +4914,9 @@ binding = { mod = "fno-panels/review-ledger" }
 "#,
         )
         .unwrap();
-        let slot = spec.slots.first().expect("toml declares one slot");
         assert_eq!(
-            slot.binding,
-            LayoutBinding::Mod("fno-panels/review-ledger".into())
+            spec.slots.first().map(|slot| &slot.binding),
+            Some(&LayoutBinding::Mod("fno-panels/review-ledger".into()))
         );
 
         // A v127 receipt has no `reason`; it decodes to None and stays absent.
