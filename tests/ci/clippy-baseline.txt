@@ -12615,3 +12615,5 @@ crates/fno-agents/src/gate/pr_status/tests.rs	clippy::indexing_slicing	assert_eq
 crates/fno-agents/src/gate/pr_status/tests.rs	clippy::indexing_slicing	assert_eq!(payload["verdict"].as_str(), Some("pending"));
 crates/fno-agents/src/gate/pr_status_facts/tests.rs	clippy::indexing_slicing	assert_eq!(out["blockers"], json!(["ci_pending"]));
 crates/fno-agents/src/gate/pr_status_facts/tests.rs	clippy::indexing_slicing	assert_eq!(out["blockers"], json!(["ci_red"]));
+crates/fno/src/proto.rs	clippy::indexing_slicing	spec.slots[0].binding,
+crates/fno/src/server/mod_slot.rs	clippy::indexing_slicing	assert_eq!(&argv[1..], ["config", "plugins", "open", "p/m"]);
