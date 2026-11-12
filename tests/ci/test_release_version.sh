@@ -42,14 +42,18 @@ run() { # run <outfile> <errfile> <cmd...>
 
 # ---------------------------------------------------------------- sync-version
 sync="$work/sync"
-mkdir -p "$sync/scripts/release" "$sync/cli/src/fno" "$sync/crates/fno/src" "$sync/crates/fno-agents/src" "$sync/crates/fno-mail/src" "$sync/crates/fno-app/src" "$sync/packaging/pypi"
+mkdir -p "$sync/scripts/release" "$sync/crates/fno/src" "$sync/crates/fno-agents/src" "$sync/crates/fno-mail/src" "$sync/crates/fno-app/src" "$sync/packaging/pypi"
 cp scripts/release/sync-version.sh "$sync/scripts/release/"
-printf '# test skeleton\n__version__ = "0.3.2"\n' > "$sync/cli/src/fno/__init__.py"
 printf '0.3.2\n' > "$sync/packaging/pypi/VERSION"
-printf '[package]\nname = "fno"\nversion = "0.3.2"\nedition = "2021"\n' > "$sync/crates/fno/Cargo.toml"
+printf '[package]\nname = "fno"\nversion = "0.3.2"\nedition = "2021"\nfno-mail = { path = "../fno-mail", version = "=0.3.2" }\n' > "$sync/crates/fno/Cargo.toml"
 printf '[package]\nname = "fno-mail"\nversion = "0.3.2"\nedition = "2021"\n' > "$sync/crates/fno-mail/Cargo.toml"
 printf '[package]\nname = "fno-app"\nversion = "0.3.2"\nedition = "2021"\n' > "$sync/crates/fno-app/Cargo.toml"
 printf '[package]\nname = "fno-agents"\nversion = "0.3.2"\nedition = "2021"\nfno-mail = { path = "../fno-mail", version = "=0.3.2" }\n' > "$sync/crates/fno-agents/Cargo.toml"
+# Seed each crate's lockfile so --check's lock drift guard has an entry to
+# read; the stamp's cargo update rewrites it in place.
+for c in fno fno-agents fno-mail fno-app; do
+  printf 'version = 3\n\n[[package]]\nname = "%s"\nversion = "0.3.2"\n' "$c" > "$sync/crates/$c/Cargo.lock"
+done
 # cargo metadata refuses a manifest with no targets; give each crate one so
 # the metadata parse below tests the VERSION, not the skeleton's shape.
 printf 'fn main() {}\n' > "$sync/crates/fno/src/main.rs"
@@ -73,15 +77,23 @@ check_rc "sync-version 0.4.0-rc.1 exits 2" "$rc" "2"
 run "$work/o" "$work/e" sv 0.4
 rc=$?
 check_rc "sync-version 0.4 exits 2" "$rc" "2"
-grep -q '__version__ = "0.3.2"' "$sync/cli/src/fno/__init__.py"
-check "refused shapes leave __init__.py untouched" $?
+grep -qx '0.3.2' "$sync/packaging/pypi/VERSION"
+check "refused shapes leave packaging/pypi/VERSION untouched" $?
 
-# AC3: an rc shape lands as PEP 440 in Python/JSON and semver in Cargo.
+# The anchor itself is guarded: a corrupt VERSION refuses loudly instead of
+# drifting every surface against a garbage wanted version.
+printf 'not-a-version\n' > "$sync/packaging/pypi/VERSION"
+run "$work/o" "$work/e" sv --check
+rc=$?
+check_rc "--check with a corrupt VERSION anchor exits 1" "$rc" "1"
+grep -q "packaging/pypi/VERSION does not hold" "$work/e"
+check "the corrupt-anchor refusal names the file" $?
+printf '0.3.2\n' > "$sync/packaging/pypi/VERSION"
+
+# AC3: an rc shape lands as PEP 440 in VERSION/JSON and semver in Cargo.
 run "$work/o" "$work/e" sv 0.4.0rc1
 rc=$?
 check_rc "sync-version 0.4.0rc1 exits 0" "$rc" "0"
-grep -q '__version__ = "0.4.0rc1"' "$sync/cli/src/fno/__init__.py"
-check "__init__.py reads 0.4.0rc1" $?
 grep -q '^version = "0.4.0-rc.1"' "$sync/crates/fno/Cargo.toml"
 check "crates/fno/Cargo.toml reads 0.4.0-rc.1" $?
 grep -q '^version = "0.4.0-rc.1"' "$sync/crates/fno-agents/Cargo.toml"
@@ -92,6 +104,12 @@ grep -q '^version = "0.4.0-rc.1"' "$sync/crates/fno-app/Cargo.toml"
 check "crates/fno-app/Cargo.toml reads 0.4.0-rc.1" $?
 grep -q 'version = "=0.4.0-rc.1"' "$sync/crates/fno-agents/Cargo.toml"
 check "the fno-mail pin in fno-agents reads =0.4.0-rc.1" $?
+grep -q 'version = "=0.4.0-rc.1"' "$sync/crates/fno/Cargo.toml"
+check "the fno-mail pin in fno reads =0.4.0-rc.1" $?
+for c in fno fno-agents fno-mail fno-app; do
+  awk -v pkg="$c" '$0 == "name = \"" pkg "\"" { seen = 1; next } seen && /^version = / { print; exit }' "$sync/crates/$c/Cargo.lock" | grep -q '"0.4.0-rc.1"'
+  check "the $c lockfile entry reads 0.4.0-rc.1" $?
+done
 grep -q '"version": "0.4.0rc1"' "$sync/.claude-plugin/plugin.json"
 check "plugin.json reads 0.4.0rc1" $?
 grep -qx '0.4.0rc1' "$sync/packaging/pypi/VERSION"
@@ -183,7 +201,7 @@ grep -q '^tag=v0.4.0rc11$' "$work/o"
 check "rc after v0.4.0rc10 prints v0.4.0rc11" $?
 
 # A released v<src> moves nightly and rc to the next unreleased patch, so a
-# shipped stable never wedges them while main's __version__ lags.
+# shipped stable never wedges them while main's version lags.
 git -C "$rv" tag v0.4.0
 run "$work/o" "$work/e" rver nightly 0.4.0 20260925
 rc=$?
