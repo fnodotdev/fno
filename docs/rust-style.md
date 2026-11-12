@@ -117,6 +117,10 @@ The source skills ask for three more things that this repo does not adopt. They 
 |---|---|
 | R1 | `scripts/ci/check-value-reads.sh`: per crate, `.get("field")` reads are shrink-only against the merge base |
 | R6 | `scripts/ci/check-value-reads.sh`: per crate, `Result<_, String>` is shrink-only against the merge base |
+| R8 | `scripts/ci/clippy-check.sh`: `clippy::unwrap_used` on product code (`--lib --bins`), ratcheted against `tests/ci/clippy-baseline.txt` |
+| R9 | the same ratchet: `clippy::let_underscore_must_use`. It sees a dropped `Result`; the comment is still review |
+| R14 | the same ratchet: `clippy::undocumented_unsafe_blocks` |
+| R15 | the same ratchet: `clippy::too_many_lines`, at clippy's default of 100 lines |
 | R17 | CI `cargo fmt --check` and `cargo clippy` |
 | the rest | review |
 

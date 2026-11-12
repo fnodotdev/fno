@@ -147,9 +147,12 @@ jobs:
     # Command::output, configured in each crate's clippy.toml) held by the
     # tests/ci/clippy-baseline.txt ratchet. A hit is keyed by its line's
     # text, so editing a flagged line fails even though the hit itself is
-    # baselined - deny-on-changed-lines with no merge-base diff. All four
-    # lints run as WARN through clippy, because a deny-level lint stops the
-    # compile and hides every later diagnostic; the baseline verdict is what
+    # baselined - deny-on-changed-lines with no merge-base diff. Four
+    # more lints (unwrap_used, let_underscore_must_use,
+    # undocumented_unsafe_blocks, too_many_lines: rust-style R8/R9/R14/R15)
+    # ride the same ratchet from a second `--lib --bins` pass, so test code
+    # never counts. All lints run as WARN through clippy, because a
+    # deny-level lint stops the compile and hides every later diagnostic; the baseline verdict is what
     # denies. The toolchain is PINNED to the one that wrote the baseline: a
     # newer clippy can flag untouched lines, which would red as new hits.
     # Bump the pin and re-run `clippy-check.sh --write-baseline` together,
