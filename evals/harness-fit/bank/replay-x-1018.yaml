@@ -9,4 +9,4 @@ grade:
   - kind: exit
     command: "git checkout 8b0dd9cf6bca43449d91c716dfae44182a3ae0d1 -- cli/tests/unit/test_workflow_authority_contract.py && (cd cli && uv run pytest tests/unit/test_workflow_authority_contract.py -q)"
 timeout_minutes: 45
-tags: [harness-fit]
+tags: [harness-fit, demoted]

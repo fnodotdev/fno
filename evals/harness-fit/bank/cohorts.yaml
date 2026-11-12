@@ -1,0 +1,21 @@
+# The harness-fit lane split, declared for the re-based bank. Every lane
+# cohort names the same five members: the two grade-only goldens (HEAD
+# fixture, live grades) and the three replay tasks whose grades still run
+# (pure Rust restore + cargo test). The seven replay tasks whose grades ran
+# the deleted Python runtime carry the demoted tag and sit in no cohort.
+#
+# bank_rev pins 88701326e2ee1df325d3e2202c289d03ab069e8f, the origin/main
+# sha this rebase branched from. The pin's diff pathspec covers evals/bank,
+# so it proves the repo's bank tree, not this directory; re-pin on the next
+# harness-fit bank edit that must count.
+
+train:
+  - hf-golden-target-start
+  - hf-golden-pr-status
+  - replay-x-5baf
+  - replay-x-861c
+  - replay-x-f188
+
+validation: []
+
+qualification: []

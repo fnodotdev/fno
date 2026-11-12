@@ -435,6 +435,7 @@ fn run_inner(args: &Args) -> Result<i32, Fail> {
             dispatch_node.as_ref(),
             derived,
         );
+        record_started_row(&cwd);
         if args.beastmode {
             warn_if_authority_not_granted(&cwd);
         }
@@ -738,6 +739,19 @@ pub(crate) fn git_toplevel(cwd: &Path) -> Option<PathBuf> {
 fn print_orientation_report(cwd: &Path) {
     let root = repo_root_of(cwd).unwrap_or_else(|| cwd.to_path_buf());
     println!("{}", crate::target_orient::report(&root));
+}
+
+/// The started-row journal: one ledger row per successful init, so a
+/// per-harness completion rate gets its denominator (finished/started).
+/// Strictly non-fatal: a recording failure never affects the run.
+fn record_started_row(cwd: &Path) {
+    let root = repo_root_of(cwd).unwrap_or_else(|| cwd.to_path_buf());
+    let Some(manifest) = crate::target_orient::manifest_path(&root) else {
+        return;
+    };
+    if crate::ledger_register::register_target_started(cwd, &manifest) {
+        eprintln!("target: started row recorded in the ledger");
+    }
 }
 
 /// Bind a parallel-mode lane slot to THIS worker's lifecycle (LD#8). The

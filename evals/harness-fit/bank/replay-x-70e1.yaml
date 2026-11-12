@@ -34,6 +34,6 @@ prompt: |
   FINDINGS DOC from the audit that established this: /home/u/vault/internal/fno/plans/20260902-watchdog-shipped-work-retire-lane-does-not-fire-x-2188.md
 grade:
   - kind: exit
-    command: "git checkout fa00bdc7dcf9d398805f86d55ab1e35bde6b0585 -- cli/tests/unit/test_spawn_phase.py crates/fno-agents/tests/retirement_e2e.rs && (cd cli && uv run pytest tests/unit/test_spawn_phase.py -q) && (cd crates/fno-agents && cargo test --test retirement_e2e)"
+    command: "git checkout fa00bdc7dcf9d398805f86d55ab1e35bde6b0585 -- crates/fno-agents/tests/retirement_e2e.rs && (cd crates/fno-agents && cargo test --test retirement_e2e)"
 timeout_minutes: 45
 tags: [harness-fit]

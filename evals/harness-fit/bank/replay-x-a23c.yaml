@@ -9,4 +9,4 @@ grade:
   - kind: exit
     command: "git checkout f5af0c1580666c1e99d5e82eb06711e9589eb605 -- cli/tests/lint/test_agent_skill_loading.py && cd cli && uv run pytest tests/lint/test_agent_skill_loading.py -q"
 timeout_minutes: 45
-tags: [harness-fit]
+tags: [harness-fit, demoted]
