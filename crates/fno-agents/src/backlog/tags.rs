@@ -185,58 +185,51 @@ fn guess_area(
     e: &Value,
     title: &BTreeSet<String>,
     details: &BTreeSet<String>,
-) -> Option<(Guess, String)> {
+) -> Option<(Guess, &'static Area)> {
     let project = text_of(e, "project");
-    let mut scored: Vec<(usize, &Area, Vec<&str>)> = Vec::new();
-    for area in &vocabulary().areas {
-        let mut score = 0;
-        let mut hits = Vec::new();
-        if area.projects.iter().any(|p| *p == project) {
-            score += 3;
-            hits.push("project");
-        }
-        for k in &area.keywords {
-            if title.contains(k) {
-                score += 2;
-                hits.push(k.as_str());
-            } else if details.contains(k) {
-                score += 1;
-            }
-        }
-        if score > 0 {
-            scored.push((score, area, hits));
-        }
-    }
+    let mut scored: Vec<(usize, &Area)> = vocabulary()
+        .areas
+        .iter()
+        .map(|area| {
+            let mapped = 3 * usize::from(area.projects.contains(&project));
+            let words: usize = area
+                .keywords
+                .iter()
+                .map(|k| {
+                    2 * usize::from(title.contains(k))
+                        + usize::from(!title.contains(k) && details.contains(k))
+                })
+                .sum();
+            (mapped + words, area)
+        })
+        .filter(|(score, _)| *score > 0)
+        .collect();
     scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.name.cmp(&b.1.name)));
-    let (top, area, hits) = scored.first()?;
+    let &(top, area) = scored.first()?;
     let runner_up = scored.get(1).map_or(0, |s| s.0);
-    let confidence = if *top >= 2 && top - runner_up >= 2 {
+    let confidence = if top >= runner_up + 2 {
         Confidence::High
     } else {
         Confidence::Low
     };
-    let why = if hits.is_empty() {
-        format!("details words, score {top} vs {runner_up}")
-    } else {
-        format!("{} (score {top} vs {runner_up})", hits.join(", "))
-    };
+    let why = format!("keyword score {top} vs {runner_up}");
     Some((
         Guess {
             tag: format!("area:{}", area.name),
             confidence,
             why,
         },
-        area.audience.clone(),
+        area,
     ))
 }
 
-/// Audience words decide when one list wins in the title; else the area's
-/// default audience stands, high only when the area guess is high and no
+/// A clear audience-word lead in the title decides. Otherwise the area's
+/// default audience stands, high only when the area is sure and no
 /// audience word disagrees.
 fn guess_audience(
     title: &BTreeSet<String>,
     details: &BTreeSet<String>,
-    area: Option<&(Guess, String)>,
+    area: Option<(Confidence, &str)>,
 ) -> Option<Guess> {
     let mut votes: Vec<(usize, &str)> = vocabulary()
         .audience_keywords
@@ -251,72 +244,57 @@ fn guess_audience(
         .filter(|(n, _)| *n > 0)
         .collect();
     votes.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)));
-    let default = area.map(|(g, aud)| (g.confidence, aud.as_str()));
-    match (votes.first(), default) {
-        (Some(&(top, aud)), _) if top >= 2 && top >= votes.get(1).map_or(0, |v| v.0) + 2 => {
-            let agrees = default.is_some_and(|(_, d)| d == aud);
-            Some(Guess {
-                tag: format!("audience:{aud}"),
-                confidence: Confidence::High,
-                why: if agrees {
-                    "audience words and area agree".into()
-                } else {
-                    "audience words".into()
-                },
-            })
-        }
-        (votes_top, Some((area_conf, aud))) => {
-            let disagrees = votes_top.is_some_and(|&(_, v)| v != aud);
-            Some(Guess {
-                tag: format!("audience:{aud}"),
-                confidence: if area_conf == Confidence::High && !disagrees {
+    let lead = votes
+        .first()
+        .filter(|&&(top, _)| top >= 2 + votes.get(1).map_or(0, |v| v.0));
+    let (aud, confidence, why) = match (lead, area, votes.first()) {
+        (Some(&(_, aud)), _, _) => (aud, Confidence::High, "audience words"),
+        (None, Some((conf, aud)), top) => {
+            let agrees = conf == Confidence::High && top.is_none_or(|&(_, v)| v == aud);
+            (
+                aud,
+                if agrees {
                     Confidence::High
                 } else {
                     Confidence::Low
                 },
-                why: "the area's default audience".into(),
-            })
+                "the area's default audience",
+            )
         }
-        (Some(&(_, aud)), None) => Some(Guess {
-            tag: format!("audience:{aud}"),
-            confidence: Confidence::Low,
-            why: "weak audience words".into(),
-        }),
-        (None, None) => None,
-    }
+        (None, None, Some(&(_, aud))) => (aud, Confidence::Low, "weak audience words"),
+        (None, None, None) => return None,
+    };
+    Some(Guess {
+        tag: format!("audience:{aud}"),
+        confidence,
+        why: why.into(),
+    })
 }
 
 /// Guess the required facets a row lacks. A facet the row already carries
-/// is never guessed, so a human tag always stands.
+/// is never guessed, so a human tag always stands; a human area also sets
+/// the default audience.
 pub fn classify(e: &Value) -> Vec<Guess> {
     let title = words(&format!("{} {}", text_of(e, "title"), text_of(e, "slug")));
     let details = words(&text_of(e, "details"));
-    let area = guess_area(e, &title, &details);
+    let guessed = guess_area(e, &title, &details);
+    let human_area = row_tags(e)
+        .iter()
+        .find_map(|t| t.strip_prefix("area:"))
+        .and_then(|name| vocabulary().areas.iter().find(|a| a.name == name));
     let mut out = Vec::new();
-    if !has_facet(e, "area") {
-        if let Some((g, _)) = &area {
-            out.push(g.clone());
+    let area = match (human_area, &guessed) {
+        (Some(a), _) => Some((Confidence::High, a.audience.as_str())),
+        (None, Some((g, a))) => {
+            if !has_facet(e, "area") {
+                out.push(g.clone());
+            }
+            Some((g.confidence, a.audience.as_str()))
         }
-    }
+        (None, None) => None,
+    };
     if !has_facet(e, "audience") {
-        // A human-set area drives the default audience too.
-        let human_area = row_tags(e)
-            .iter()
-            .find_map(|t| t.strip_prefix("area:"))
-            .and_then(|name| vocabulary().areas.iter().find(|a| a.name == name))
-            .map(|a| {
-                (
-                    Guess {
-                        tag: format!("area:{}", a.name),
-                        confidence: Confidence::High,
-                        why: String::new(),
-                    },
-                    a.audience.clone(),
-                )
-            });
-        if let Some(g) = guess_audience(&title, &details, human_area.as_ref().or(area.as_ref())) {
-            out.push(g);
-        }
+        out.extend(guess_audience(&title, &details, area));
     }
     out
 }
