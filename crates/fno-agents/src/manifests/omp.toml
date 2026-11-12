@@ -1,0 +1,9 @@
+# omp (oh-my-pi) readiness manifest - deliberately rule-free.
+#
+# The validator requires every capability-row harness to bundle a manifest;
+# the ROW carries `ready_marker = "unsupported"` because no omp TUI screen was
+# ever sampled. omp's TUI has diverged from pi's by thousands of commits, so
+# pi.toml's spinner and status-bar rules are not evidence for it. Pin rules
+# here only from a live omp TUI capture, the way pi.toml was pinned.
+#
+# State vocabulary + arbitration: see codex.toml.

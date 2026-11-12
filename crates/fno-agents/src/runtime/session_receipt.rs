@@ -54,10 +54,11 @@ pub(crate) fn locate(harness: &str, session_id: &str) -> Result<Store, String> {
         "codex" => crate::lead_history::hygiene_transcript_for_holder("codex", session_id)
             .map(Store::File)
             .ok_or_else(|| format!("no codex rollout for session {session_id}")),
-        "pi" => {
+        "pi" | "omp" => {
             let src = crate::pi_transcript::PiSource {
                 sessions_dir: None,
                 roots: None,
+                omp: harness == "omp",
             };
             src.probe()?;
             rendered(&src, session_id)

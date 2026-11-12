@@ -1,6 +1,7 @@
 //! The pi transcript source: `~/.pi/agent/sessions/<cwd-slug>/*.jsonl`
 //! rendered as claude-shaped JSONL, so the shared classifier reads it with
-//! no new rule.
+//! no new rule. The same reader serves omp (`~/.omp/agent/sessions`), whose
+//! message rows share pi's shape and whose header sits behind a title slot.
 //!
 //! pi rows carry no marker separating operator-typed text from text the mux
 //! typed into the pane, so every turn reads the classifier's residual
@@ -16,15 +17,10 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-/// `~/.pi/agent/sessions`, pi's per-project session dirs.
+/// `<pi agent dir>/sessions`, pi's per-project session dirs. The agent dir is
+/// the one the spawn lanes use, so `PI_CODING_AGENT_DIR` moves both.
 fn default_sessions_dir() -> PathBuf {
-    match std::env::var_os("HOME") {
-        Some(home) => PathBuf::from(home)
-            .join(".pi")
-            .join("agent")
-            .join("sessions"),
-        None => PathBuf::from("."),
-    }
+    crate::pi::pi_agent_dir().join("sessions")
 }
 
 /// The pi transcript store: one JSONL file per session under one level of
@@ -34,24 +30,24 @@ fn default_sessions_dir() -> PathBuf {
 pub(crate) struct PiSource {
     pub(crate) sessions_dir: Option<PathBuf>,
     pub(crate) roots: Option<Vec<PathBuf>>,
+    /// Read omp's store and label its sessions `omp`.
+    pub(crate) omp: bool,
 }
 
 impl PiSource {
     fn dir(&self) -> PathBuf {
-        self.sessions_dir
-            .clone()
-            .unwrap_or_else(default_sessions_dir)
+        match (&self.sessions_dir, self.omp) {
+            (Some(dir), _) => dir.clone(),
+            (None, true) => crate::omp::sessions_dir(),
+            (None, false) => default_sessions_dir(),
+        }
     }
 
     /// The header row's session id; the file stem when the header is
-    /// missing or malformed.
+    /// missing or malformed. The header is found by its `session` type, since
+    /// omp writes a title slot ahead of it.
     fn session_id(path: &Path) -> String {
-        let from_header = std::fs::read_to_string(path)
-            .ok()
-            .and_then(|raw| raw.lines().next().map(str::to_string))
-            .and_then(|first| serde_json::from_str::<Value>(&first).ok())
-            .and_then(|row| row.get("id").and_then(|v| v.as_str()).map(str::to_string));
-        from_header.unwrap_or_else(|| {
+        crate::omp::header_id(path).unwrap_or_else(|| {
             path.file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or_default()
@@ -65,14 +61,22 @@ impl PiSource {
         if dir.is_dir() {
             Ok(())
         } else {
-            Err(format!("no pi session dir at {}", dir.display()))
+            Err(format!(
+                "no {} session dir at {}",
+                self.harness(),
+                dir.display()
+            ))
         }
     }
 }
 
 impl TranscriptSource for PiSource {
     fn harness(&self) -> &'static str {
-        "pi"
+        if self.omp {
+            "omp"
+        } else {
+            "pi"
+        }
     }
 
     fn sessions(&self, days: u64) -> Vec<SessionFile> {
