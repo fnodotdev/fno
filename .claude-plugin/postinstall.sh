@@ -192,7 +192,7 @@ if try_binary_install; then
   log "binary install adopted."
   shim_sweep || exit 1
   wire_and_setup "$FNO_BINARY_DIR/fno"
-  log "restart your shell (or source your env) to pick up PATH."
+  log "call it as $FNO_LINK_DIR/fno until your PATH carries $FNO_LINK_DIR (no shell profile was edited)."
   finish_success
   next_steps
   exit 0
