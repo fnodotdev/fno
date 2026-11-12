@@ -325,13 +325,13 @@ pub(crate) fn serve_seat(row: &RegistryAgent) -> ServeSeat {
     let env = vec![(form.password_env.clone(), state.token.clone())];
     #[cfg(test)]
     {
-        capture_serve_env(&env);
-        capture_serve_argv(&argv);
         if let Some(bin) = BIN_OVERRIDE.with(|p| p.borrow().clone()) {
             if let Some(first) = argv.first_mut() {
                 *first = bin;
             }
         }
+        capture_serve_env(&env);
+        capture_serve_argv(&argv);
     }
     ServeSeat::Attach { argv, env }
 }
