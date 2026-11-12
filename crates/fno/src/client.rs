@@ -6053,7 +6053,7 @@ fn nav_agent_state(a: &AgentRow) -> PaneState {
 /// as the nav/tab rollups do: a Done pane the operator has already viewed
 /// folds to `Idle` (`○`) instead of holding a stale bold `✓` needs-attention
 /// marker - one system across every surface.
-fn agent_lattice_state(a: &AgentRow) -> LatticeState {
+pub(crate) fn agent_lattice_state(a: &AgentRow) -> LatticeState {
     if a.exited {
         if a.unmeasured {
             LatticeState::Unmeasured
@@ -9380,7 +9380,7 @@ mod org_block;
 #[path = "client/glyph_legend.rs"]
 mod glyph_legend;
 
-mod card_line;
+pub(crate) mod card_line;
 pub(crate) use card_line::CardGraph;
 mod sideline_footer;
 
@@ -9409,4 +9409,4 @@ mod needs_queue;
 mod remote_hosts;
 
 #[path = "client/header_band.rs"]
-mod header_band;
+pub(crate) mod header_band;
