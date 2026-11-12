@@ -103,7 +103,7 @@ pub struct Root {
     notice: Option<String>,
     /// Bumped by each notice, so only the newest one's timer clears it.
     notice_gen: u64,
-    closed: Option<String>,
+    pub(super) closed: Option<String>,
     pub(super) metrics: Metrics,
     pub(super) palette: Palette,
     focus: FocusHandle,
@@ -1132,9 +1132,12 @@ impl Render for Root {
             .text_sm();
         // A closed link stays in the error color; a notice is muted and
         // expires. Neither takes a row: the toast floats over the corner.
+        // In chat mode a closed stream's bar already carries the exit
+        // reason, so the corner toast would repeat it.
+        let bar_shows_reason = self.main == MainView::Chat && self.chat.closed.is_some();
         let (status, status_color) = match (&self.closed, &self.notice) {
-            (Some(c), _) => (Some(c.clone()), self.palette.error),
-            (None, n) => (n.clone(), self.palette.muted),
+            (Some(c), _) if !bar_shows_reason => (Some(c.clone()), self.palette.error),
+            (_, n) => (n.clone(), self.palette.muted),
         };
         let toast = status.map(|text| {
             div()

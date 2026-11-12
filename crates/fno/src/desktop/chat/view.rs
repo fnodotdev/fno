@@ -527,7 +527,12 @@ fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div>
     root.chat.key.as_ref()?;
     if let Some(closed) = &root.chat.closed {
         let (text, color) = match closed {
-            Closed::Ended => ("The session's chat stream ended.".to_string(), p.muted),
+            // The link's own exit reason folds in here; the corner toast
+            // for it is suppressed while this bar stands (window render).
+            Closed::Ended => match &root.closed {
+                Some(reason) => (format!("The chat stream ended: {reason}."), p.error),
+                None => ("The session's chat stream ended.".to_string(), p.muted),
+            },
             Closed::Failed(why) => (why.clone(), p.error),
         };
         let bar = div()
