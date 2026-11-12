@@ -249,6 +249,14 @@ pub fn tail_sync(
     })
 }
 
+impl ChatTail {
+    /// A second handle on the socket. Shutting it down ends a `next` that
+    /// waits on an idle session, so a reader thread can be stopped.
+    pub fn closer(&self) -> std::io::Result<std::os::unix::net::UnixStream> {
+        self.stream.try_clone()
+    }
+}
+
 impl Iterator for ChatTail {
     type Item = Result<Vec<ChatEvent>, ChatReadError>;
 

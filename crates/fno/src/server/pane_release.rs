@@ -61,6 +61,9 @@ impl Core {
         self.claim_eligible.remove(&pid);
         self.touch_last_emit.remove(&pid);
         self.wheel_gate.remove(&pid);
+        // The anchors ring dies with its pane: a removed pane's row space is
+        // gone, so no jump can ever land there again (v127).
+        self.anchors.remove(&pid);
         // A claimed click pair on the dead pane can never see its release.
         self.fno_token_claims.remove(&pid);
         self.link_click_claims.remove(&pid);

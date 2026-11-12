@@ -36,7 +36,7 @@ pub use crate::shell_init::shell_init;
 mod graft_slot;
 mod harness_command;
 mod pane_prepare;
-mod pane_submit;
+pub(crate) mod pane_submit;
 mod restore;
 mod workspace_origin;
 
