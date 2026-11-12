@@ -29,6 +29,10 @@ pub mod client {
     }
 }
 
+pub mod proto {
+    pub use crate::mux_rows::server_wire;
+}
+
 pub mod digest_overlay {
     pub use crate::digest_overlay::{now_secs, theme_resolved};
 }

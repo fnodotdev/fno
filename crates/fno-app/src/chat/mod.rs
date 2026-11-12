@@ -58,10 +58,20 @@ pub enum OpenError {
     Read(#[from] ChatReadError),
     #[error("chat stream: {0}")]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    TooOld(#[from] crate::link::ServerTooOld),
 }
 
 fn connect(session: &str, key: SessionKey, from_seq: u64) -> Result<ChatTail, OpenError> {
     let socket = fno::proto::socket_path(session).map_err(OpenError::Session)?;
+    // A throwaway connect: only a live server's missing stamp reads as old.
+    if fno::proto::connect_unix_timeout(&socket, Duration::from_secs(3)).is_ok() {
+        crate::link::check_server_wire(
+            session,
+            fno::app_api::proto::server_wire(session),
+            crate::link::MIN_SERVER_PROTO,
+        )?;
+    }
     Ok(tail_sync(&socket, key, from_seq)?)
 }
 
