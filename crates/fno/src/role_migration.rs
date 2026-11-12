@@ -729,9 +729,9 @@ pub fn retired_verb(verb: &str) -> Option<&'static str> {
         "king-history" => Some("fno agents hq history"),
         "crown" => Some("fno agents hq promote <session> --scope <scope>"),
         "court" => Some("fno agents hq"),
-        "court-fold" => Some("fno agents hq fold"),
-        "court-orphans" => Some("fno agents hq vacancies"),
-        "reign-ledger" => Some("fno agents hq rundown"),
+        "court-fold" => Some("fno agents hq chart fold"),
+        "court-orphans" => Some("fno agents hq chart vacancies"),
+        "reign-ledger" => Some("fno agents hq chart rundown"),
         _ => None,
     }
 }

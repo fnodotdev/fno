@@ -111,10 +111,14 @@ reset_events() {
 space_leads() {  # space_leads <dir> - the leads dir of <dir>'s space
   # The space resolver's rule: the canonical repo root (the first `git
   # worktree list` row), else the dir itself, with every / swapped for -,
-  # under <state_dir>/spaces.
+  # under <state_dir>/spaces. The resolver canonicalizes before it slugs
+  # (paths.rs), and darwin's mktemp lands under the /var symlink, so the
+  # fixture canonicalizes the same way or the hook reads a leads dir the
+  # fixture never wrote.
   local root
   root="$(git -C "$1" worktree list --porcelain 2>/dev/null | awk 'NR==1{sub(/^worktree /,"");print}')"
   [ -n "$root" ] || root="$1"
+  root="$(cd "$root" && pwd -P)"
   printf '%s/.fno/spaces/%s/leads\n' "$SBX" "${root//\//-}"
 }
 LEADS_DIR="$(space_leads "$SBX")"
