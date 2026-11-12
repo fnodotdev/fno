@@ -92,6 +92,21 @@ fn rgb_or(c: Color, fallback: u32) -> u32 {
     }
 }
 
+/// The user's own turns in chat mode: `base` walked toward `stamp` until the
+/// fill separates from the base ground at 3:1 and keeps `stamp` text at
+/// 4.5:1 (the bubble paints on `bg`, its text is `fg`). A theme whose twins
+/// never satisfy both bars keeps the gentle 12% mix.
+fn bubble_fill(base: u32, stamp: u32) -> u32 {
+    for step in 3..=23 {
+        let t = step as f32 / 25.0; // 0.12 ..= 0.92
+        let c = mix(base, stamp, t);
+        if contrast(c, base) >= 3.0 && contrast(c, stamp) >= 4.5 {
+            return c;
+        }
+    }
+    mix(base, stamp, 0.12)
+}
+
 /// Slots 16-231 are the 6x6x6 cube, 232-255 the 24-step gray ramp.
 fn xterm256(i: u8) -> u32 {
     if i >= 232 {
@@ -179,7 +194,7 @@ impl Palette {
             hover,
             row_fill,
             pressed,
-            bubble: mix(bg, fg, 0.12),
+            bubble: bubble_fill(bg, fg),
             ansi,
         }
     }
@@ -330,6 +345,15 @@ mod tests {
                     assert!(c >= 4.5, "{name}: {text} on {what} is {c:.2}:1");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn bubble_separates_from_the_ground_and_keeps_fg_text_readable() {
+        for light in [false, true] {
+            let p = Palette::from_theme(&Theme::default_for(light));
+            assert!(contrast(p.bubble, p.bg) >= 3.0, "light={light}");
+            assert!(contrast(p.bubble, p.fg) >= 4.5, "light={light}");
         }
     }
 }
