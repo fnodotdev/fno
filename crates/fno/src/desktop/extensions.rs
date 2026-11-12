@@ -862,6 +862,7 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
                     img(PathBuf::from(&c.preview))
                         .w(px(PREVIEW_MAX))
                         .max_w_full()
+                        .bg(rgb(ground))
                         .object_fit(ObjectFit::Contain)
                         .with_fallback(move || {
                             div()
