@@ -1320,6 +1320,15 @@
     }
    ]
   },
+  "TrackerBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "backend",
+     "default": "graph"
+    }
+   ]
+  },
   "GuardsBlock": {
    "extra": "ignore",
    "fields": [
@@ -3368,6 +3377,7 @@
   "target.loop_skills",
   "test.timeout_seconds",
   "test.max_net_new",
+  "tracker.backend",
   "agents.a2a.auto",
   "agents.a2a.turn_ceiling",
   "agents.confirm",
