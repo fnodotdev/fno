@@ -539,7 +539,7 @@ if [ -n "$INSTALL_CARD" ]; then
   PANELS="$REPO_ROOT/plugins/fno-panels/mods"
   mkdir -p "$PACK/mods/one"
   cp "$PANELS/review-ledger/preview.png" "$PACK/mods/one/preview.png"
-  printf '# Recipe\n\nOpen it from Settings, Extensions.\n' > "$PACK/mods/one/RECIPE.md"
+  printf '# Recipe\n\nOpen it from Settings, Mods.\n' > "$PACK/mods/one/RECIPE.md"
   if [ "$INSTALL_CARD" = code ]; then
     RENDER='    run: [sh, -c, "while :; do date; sleep 1; done"]'
     TITLE="Clock"
