@@ -761,7 +761,16 @@ fn keeps_query(
     if !in_set(&q.kind, card.kind.as_deref()) {
         return false;
     }
-    if !q.tag.is_empty() && !q.tag.iter().any(|t| card.tags.iter().any(|have| have == t)) {
+    // Tags of one facet (`area:mail`, `area:mux`) widen; facets narrow, so
+    // `area:mail` + `audience:user` keeps only cards carrying both.
+    let facet = |t: &str| t.split_once(':').map_or("", |(f, _)| f).to_string();
+    let facets: std::collections::BTreeSet<String> = q.tag.iter().map(|t| facet(t)).collect();
+    if !facets.iter().all(|f| {
+        q.tag
+            .iter()
+            .filter(|t| facet(t) == *f)
+            .any(|t| card.tags.contains(t))
+    }) {
         return false;
     }
     if !q.lead.is_empty()

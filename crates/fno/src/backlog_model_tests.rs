@@ -646,6 +646,32 @@ fn project_and_priority_filters_narrow_cards_and_totals() {
         vec!["x-1"],
         "the in-range card stays, the stampless one drops"
     );
+    // Tags: one facet widens, two facets narrow.
+    let rows3 = vec![
+        json!({"id": "x-1", "status": "ready", "tags": ["area:mail", "audience:user"]}),
+        json!({"id": "x-2", "status": "ready", "tags": ["area:mux", "audience:internal"]}),
+        json!({"id": "x-3", "status": "ready", "tags": ["area:mux", "audience:user"]}),
+    ];
+    let inp3 = fixture(rows3);
+    let tagged = |pairs: &[(&str, &str)]| -> Vec<String> {
+        let p: Vec<(String, String)> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let b = board(&inp3, &Query::from_pairs(&p).unwrap());
+        b.lanes
+            .iter()
+            .flat_map(|l| l.cells.iter())
+            .flat_map(|c| c.cards.iter())
+            .map(|c| c.id.clone())
+            .collect()
+    };
+    let mut wide = tagged(&[("tag", "area:mail"), ("tag", "area:mux")]);
+    wide.sort();
+    assert_eq!(wide, ["x-1", "x-2", "x-3"]);
+    let mut narrow = tagged(&[("tag", "area:mux"), ("tag", "audience:user")]);
+    narrow.sort();
+    assert_eq!(narrow, ["x-3"]);
 }
 
 #[test]
