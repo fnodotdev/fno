@@ -264,6 +264,10 @@ impl Root {
             Err(e) => root.notice = Some(format!("the board poll did not start: {e}")),
         }
         root.start_plugins(cx);
+        // `--mode mods` opens on the view without a switch, so read here.
+        if root.main == MainView::Mods {
+            root.ext.read();
+        }
         root
     }
 
