@@ -316,6 +316,7 @@ fn observe_pi_reads_a_flat_store_header() {
         .unwrap_or_else(|e| e.into_inner());
     let previous = std::env::var_os("PI_CODING_AGENT_SESSION_DIR");
     let tmp = tempfile::TempDir::new().unwrap();
+    std::env::set_var("PI_CODING_AGENT_SESSION_DIR", tmp.path());
     let body = format!(
         "{}\n{}\n",
         json!({"id": "p1", "cwd": WD}),
