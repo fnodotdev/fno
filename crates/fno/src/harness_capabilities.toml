@@ -1303,6 +1303,10 @@ tokens = ["cursor-agent", "--resume", "{session_id}", "--trust"]
 kind = "unsupported"
 tokens = []
 
+[harness.cursor-agent.resume_strategy.forms.interactive_serve_attach]
+kind = "unsupported"
+tokens = []
+
 [harness.cursor-agent.resume_strategy.forms.headless_create]
 kind = "unsupported"
 tokens = []
