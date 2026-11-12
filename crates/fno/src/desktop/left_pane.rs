@@ -440,11 +440,11 @@ mod tests {
         let a: AgentRow = serde_json::from_value(serde_json::json!({
             "squad": null, "name": "gone", "pane_id": 1, "badge": null,
             "reason": null, "exited": true, "unmeasured": true,
-            "node": "x-35bd", "pr": 84,
+            "node": "x-abcd", "pr": 84,
         }))
         .unwrap();
         assert_eq!(agent_lattice_state(&a), LatticeState::Unmeasured);
-        assert_eq!(agent_identity(&a).as_deref(), Some("#84 · x-35bd"));
+        assert_eq!(agent_identity(&a).as_deref(), Some("#84 · x-abcd"));
         let layout = Layout {
             agents: vec![a],
             ..Layout::default()

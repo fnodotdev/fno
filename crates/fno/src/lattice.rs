@@ -140,6 +140,7 @@ pub(crate) fn status_word(s: LatticeState) -> &'static str {
 
 /// The state as a whole word, for surfaces with room for it (the desktop
 /// pane). [`status_word`] stays the 5-cell form.
+#[allow(dead_code)] // the desktop build alone reads it; fno-agents compiles this file without it
 pub(crate) fn status_long(s: LatticeState) -> &'static str {
     match s {
         LatticeState::Working => "working",
