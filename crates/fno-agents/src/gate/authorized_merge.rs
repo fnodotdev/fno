@@ -2510,11 +2510,14 @@ refusing to assume no review is running"
         let _step = step_timer::step("look_request");
         // The territory lead resolves from the bound node: a team whose scope
         // answers the node's territory holds it, resolved at send time.
-        let Some(node) = pr_bound_entry(cwd, facts.number) else {
+        #[derive(serde::Deserialize)]
+        struct BoundNode {
+            id: String,
+        }
+        let bound = pr_bound_entry(cwd, facts.number)
+            .and_then(|node| serde_json::from_value::<BoundNode>(node).ok());
+        let Some(bound) = bound else {
             eprintln!("look request not mailed: PR {} binds no node", facts.number);
-            return false;
-        };
-        let Some(node_id) = node.get("id").and_then(Value::as_str) else {
             return false;
         };
         let text = format!(
@@ -2523,7 +2526,7 @@ refusing to assume no review is running"
             &facts.head_sha[..8],
             detail
         );
-        match crate::runtime::lead_mail::send("merge-gate", node_id, &text) {
+        match crate::runtime::lead_mail::send("merge-gate", &bound.id, &text) {
             Ok(holders) => {
                 eprintln!("look request mailed to {}", holders.join(", "));
                 true
