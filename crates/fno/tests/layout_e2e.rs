@@ -1132,7 +1132,7 @@ fn mod_stub(scratch: &Scratch) -> (PathBuf, PathBuf) {
     use std::os::unix::fs::PermissionsExt;
     let log = scratch.0.join("open.argv");
     let bin = scratch.0.join("fno-stub");
-    let listing = r#"{"packs":[{"pack_id":"fno-panels","mods":[{"id":"feed","title":"Feed","enabled":true},{"id":"quiet","title":"Quiet","enabled":false}]}]}"#;
+    let listing = r#"{"packs":[{"pack_id":"fno-panels","mods":[{"id":"feed","title":"Feed","kind":"run","enabled":true},{"id":"quiet","title":"Quiet","kind":"run","enabled":false}]}]}"#;
     let script = format!(
         "#!/bin/sh\ncase \"$*\" in\n\"config plugins ls --json\") echo '{listing}' ;;\n\"config plugins open\"*) echo \"$*\" > '{}'; sleep 30 ;;\nesac\n",
         log.display()

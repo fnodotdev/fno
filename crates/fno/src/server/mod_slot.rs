@@ -76,12 +76,11 @@ fn read_switches(targets: &[&str]) -> ModVerdicts {
     targets
         .iter()
         .map(|t| {
-            // The feed lists each pack's mods before its layouts, so a mod
-            // wins an id it shares with a layout.
+            // Only mod rows carry a kind; a layout row never answers a mod.
             let on = t.split_once('/').and_then(|(pack, id)| {
                 installed
                     .iter()
-                    .find(|(p, c)| p == pack && c.id == id)
+                    .find(|(p, c)| p == pack && c.id == id && !c.kind.is_empty())
                     .map(|(_, c)| c.enabled)
             });
             let verdict = match on {
