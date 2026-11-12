@@ -294,7 +294,7 @@ fn ci_verdict_fact_blocks_ready_on_red_and_pending() {
     );
 }
 
-/// The unmeasured read (x-734e): PR 82 merged ready with all 7 Actions runs
+/// The unmeasured read: PR 82 merged ready with all 7 Actions runs
 /// on its head still queued and none started - the check-run rollup carried
 /// only fno's own passing statuses, so the verdict read unknown and unknown
 /// added no blocker. The runs listing the reader already holds is the

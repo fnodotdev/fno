@@ -317,7 +317,7 @@ exit 1
     assert!(checks_pinned, "the checks read ran: {recorded}");
 }
 
-/// The unmeasured fold (x-734e): a green checks read over a head whose
+/// The unmeasured fold: a green checks read over a head whose
 /// Actions runs listing names no completed run reads PENDING, not SUCCESS -
 /// PR 82 merged ready with all 7 head runs queued and the loop said
 /// DonePRGreen for a head CI never measured.

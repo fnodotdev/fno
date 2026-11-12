@@ -372,7 +372,7 @@ pub struct Request {
     /// `github_behind`, ...). Absent: the walk derives them from `checks_read`.
     pub supplied_github_blockers: Option<Vec<String>>,
     /// The unmeasured reason the caller (the status read) already computed
-    /// from the runs listing (x-734e): present only when no run on the head
+    /// from the runs listing: present only when no run on the head
     /// has completed. Absent = measured (or the listing was never read: the
     /// GraphQL route), the walk probes instead.
     pub supplied_unmeasured: Option<String>,
@@ -471,7 +471,7 @@ pub struct ChecksRead {
     /// alone (a red gate can no longer turn the verdict red and cancel the
     /// head's runs), and the merge holds on this row instead.
     pub evals_gate_row: Option<EvalsGateRead>,
-    /// The unmeasured reason from the same status payload (x-734e): present
+    /// The unmeasured reason from the same status payload: present
     /// only when no run on the head has completed.
     pub unmeasured: Option<String>,
 }
@@ -1538,7 +1538,7 @@ fn process_warnings<P: Probes>(
             ),
         ));
     }
-    // The unmeasured warning (x-734e, lead ruling 02:06Z): law D3173 keeps
+    // The unmeasured warning (lead ruling 2026-11-12 02:06Z): law D3173 keeps
     // pending runs off the merge decision, so an unmeasured head warns by
     // name and never reads ready:false - PR 82 merged ready with all 7 head
     // runs queued. The loop's done() owns the hard half: it never reports
@@ -2782,8 +2782,8 @@ fn parse_checks_read(stdout: &[u8]) -> ChecksRead {
         rerun_recovered,
         rerun_failures,
         evals_gate_row,
-        // The unmeasured fact (x-734e), from the same payload the verdict
-        // came off: the walk holds on it under require_checks.
+        // The unmeasured fact, from the same payload the verdict
+        // came off: the walk warns on it under require_checks.
         unmeasured: v
             .get("ci_unmeasured")
             .and_then(Value::as_str)

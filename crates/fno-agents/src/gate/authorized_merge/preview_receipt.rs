@@ -124,7 +124,7 @@ pub(crate) fn parse_request(payload: &Value) -> Result<Request, String> {
                     .map(str::to_owned)
                     .collect()
             }),
-        // The unmeasured reason the caller already computed (x-734e): absent
+        // The unmeasured reason the caller already computed: absent
         // or null = no fact, the walk probes or adds nothing.
         supplied_unmeasured: payload
             .get("ci_unmeasured")

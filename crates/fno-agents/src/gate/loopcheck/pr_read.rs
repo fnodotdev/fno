@@ -71,6 +71,20 @@ impl CiConclusion {
     }
 }
 
+/// The CI word a human reads: the conclusion, with the unmeasured reason
+/// named beside it. PENDING alone on PR 82 hid why nothing had
+/// run; the ruling names the state. The fingerprint keeps the plain render,
+/// so the vocabulary stays stable. Takes the fields, not the struct, so a
+/// closure capturing them stays a disjoint field capture.
+pub(super) fn ci_named(conclusion: &CiConclusion, unmeasured: Option<&str>) -> String {
+    match unmeasured {
+        Some(reason) if !reason.is_empty() => {
+            format!("{} ({reason})", conclusion.render())
+        }
+        _ => conclusion.render(),
+    }
+}
+
 #[derive(Debug, Default)]
 pub(super) struct PrInfo {
     pub(super) state: PrState,
@@ -100,7 +114,7 @@ pub(super) struct PrInfo {
     /// while others run, so the DoneAwaitingMerge terminal must consult this to
     /// avoid firing while the session's own in-flight job could still turn red.
     pub(super) ci_has_pending: bool,
-    /// The unmeasured reason (x-734e) when the checks read answered green
+    /// The unmeasured reason when the checks read answered green
     /// but the head's Actions runs listing names no completed run: the fold
     /// flips the conclusion to Pending so DonePRGreen cannot fire on a head
     /// CI never measured. None = measured, skipped, or no evidence.
@@ -181,20 +195,6 @@ pub(super) struct PrInfo {
 /// The node's numbered PR rows: (number, merge_status, history-marked, url).
 /// The one collection every store-side PR row rule reads, so the live/terminal
 /// and reopen-age rules cannot drift between them.
-/// The CI word a human reads: the conclusion, with the unmeasured reason
-/// named beside it (x-734e). PENDING alone on PR 82 hid why nothing had
-/// run; the ruling names the state. The fingerprint keeps the plain render,
-/// so the vocabulary stays stable. Takes the fields, not the struct, so a
-/// closure capturing them stays a disjoint field capture.
-pub(super) fn ci_named(conclusion: &CiConclusion, unmeasured: Option<&str>) -> String {
-    match unmeasured {
-        Some(reason) if !reason.is_empty() => {
-            format!("{} ({reason})", conclusion.render())
-        }
-        _ => conclusion.render(),
-    }
-}
-
 fn numbered_pr_rows(
     node: &crate::backlog::model::Node,
 ) -> Vec<(i64, Option<&str>, bool, Option<&str>)> {
@@ -700,7 +700,7 @@ pub(super) fn read_pr_info(
         )
     };
 
-    // The unmeasured fold (x-734e): a green read over a head whose Actions
+    // The unmeasured fold: a green read over a head whose Actions
     // runs listing names no completed run is unmeasured, never green - PR 82
     // merged ready with all 7 head runs queued and the loop still said
     // DonePRGreen for a head CI never measured. Only a green read spends the

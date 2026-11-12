@@ -738,7 +738,7 @@ fn parse_checks_read_reads_the_evals_gate_fact() {
     assert!(!absent.evals_gate_pending());
 }
 
-/// The unmeasured warning (x-734e, lead ruling 02:06Z under D3173): a head
+/// The unmeasured warning (lead ruling 2026-11-12 02:06Z, under D3173): a head
 /// whose runs listing names no completed run warns BY NAME on a
 /// require_checks ask and never blocks - PR 82 merged ready there. The
 /// parse lift covers the walk's own read path; require_checks=false keeps

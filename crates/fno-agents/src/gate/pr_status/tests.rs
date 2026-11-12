@@ -569,7 +569,7 @@ fn an_in_flight_rerun_reads_ready_false_even_before_the_merge_state_arrives() {
     assert_eq!(payload["verdict"].as_str(), Some("pending"));
 }
 
-/// The unmeasured read (x-734e, lead ruling 02:06Z under D3173): the head
+/// The unmeasured read (lead ruling 2026-11-12 02:06Z, under D3173): the head
 /// stays ready (queued CI never blocks) and the read names the state - the
 /// receipt warning rides as `warn:` and the payload notes the way out.
 /// PR 82 merged ready in exactly this shape, silently.

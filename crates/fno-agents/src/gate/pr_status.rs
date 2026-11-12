@@ -1270,11 +1270,11 @@ pub(crate) fn status_payload<P: GhProbe>(
         )
     };
 
-    // The unmeasured read (x-734e): a head whose Actions runs listing names
+    // The unmeasured read: a head whose Actions runs listing names
     // no completed run is unmeasured, never green. PR 82 merged ready with
     // all 7 head runs queued; the rollup held only fno's own passing
     // statuses, so the verdict read unknown and unknown added no blocker.
-    // The fact rides the receipt ask (the walk holds on it under
+    // The fact rides the receipt ask (the walk warns on it under
     // require_checks) and the compose inputs (the note names the way out).
     // Terminal PRs have no would-merge left: a merged PR's queued runs say
     // nothing.
@@ -1394,9 +1394,8 @@ pub(crate) fn status_payload<P: GhProbe>(
     if let Some(seams::HoldVerdict::Clear | seams::HoldVerdict::Held(_)) = hold_state.as_ref() {
         receipt_ask["dispatch_hold_reason"] = hold.clone();
     }
-    // The unmeasured fact rides the ask too (x-734e): the walk holds on it
-    // under require_checks, so a receipt ask from this read can never call
-    // an unmeasured head ready.
+    // The unmeasured fact rides the ask too: the walk warns on it under
+    // require_checks, so the read names the fact the merge decision sees.
     if let Some(reason) = &ci_unmeasured {
         receipt_ask["ci_unmeasured"] = json!(reason);
     }

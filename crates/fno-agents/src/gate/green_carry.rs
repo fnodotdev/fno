@@ -134,7 +134,7 @@ pub(crate) fn carried_checks(
             // The carry overrides the CI verdict only. The eval fact stays
             // the live read's: a gate red, pending or missing-expected at
             // this head holds the merge even when a prior green carries the
-            // CI verdict. The unmeasured fact (x-734e) stays the current
+            // CI verdict. The unmeasured fact stays the current
             // payload's too: a carried green never masks an unmeasured head.
             evals_gate_row: checks.evals_gate_row,
             unmeasured: checks.unmeasured,

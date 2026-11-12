@@ -445,7 +445,7 @@ pub(crate) fn merge_blocker<P: GhProbe>(probes: &P, payload: &Value) -> Value {
 
 /// The unmeasured read over the raw Actions runs listing the status reader
 /// already holds (`workflowRuns`, from `zero_job_scan`'s paginated read).
-/// PR 82 (x-734e) merged ready with all 7 runs on its head still queued:
+/// PR 82 merged ready with all 7 runs on its head still queued:
 /// the check-run rollup carried only fno's own passing statuses, so the
 /// verdict read unknown and unknown added no blocker. The listing is the
 /// evidence. `None` = measured (at least one run completed), or the listing
