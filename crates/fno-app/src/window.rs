@@ -14,8 +14,8 @@ use gpui::{
     canvas, div, font, point, prelude::*, px, rgb, size, AnyView, App, Application, Bounds,
     ClipboardItem, Context, ElementInputHandler, Entity, EntityInputHandler, FocusHandle,
     InputHandler, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, ScrollHandle, ScrollWheelEvent, Size, Subscription, Task, TitlebarOptions,
-    UTF16Selection, Window, WindowBounds, WindowOptions,
+    Point, ScrollWheelEvent, Size, Subscription, Task, TitlebarOptions, UTF16Selection, Window,
+    WindowBounds, WindowOptions,
 };
 
 use super::chat::{self, Chat};
@@ -125,9 +125,6 @@ pub struct Root {
     wheel: f32,
     /// The pane the wheel remainder belongs to.
     wheel_pane: Option<u64>,
-    /// The left pane's scroll position; gpui wires wheel deltas to this
-    /// handle, it does not scroll an `overflow_y_scroll` div on its own.
-    pub(super) pane_scroll: ScrollHandle,
     pub(super) answers: HashMap<String, AnswerState>,
     pub(super) agents_open: bool,
     pub(super) chat: Chat,
@@ -202,7 +199,6 @@ impl Root {
             drag: None,
             wheel: 0.0,
             wheel_pane: None,
-            pane_scroll: ScrollHandle::new(),
             answers: HashMap::new(),
             agents_open: false,
             light,

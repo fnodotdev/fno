@@ -3,7 +3,7 @@
 //! command the sideline click sends. A section whose read failed shows the
 //! error and keeps its last good rows.
 
-use gpui::{div, point, prelude::*, px, rgb, Context, Div, FontWeight, ScrollWheelEvent, Stateful};
+use gpui::{div, prelude::*, px, rgb, Context, Div, FontWeight, Stateful};
 
 use super::link::Layout;
 use super::palette::Palette;
@@ -249,18 +249,6 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
         .w(px(WIDTH))
         .h_full()
         .overflow_y_scroll()
-        .track_scroll(&root.pane_scroll)
-        .on_scroll_wheel(cx.listener(|root, ev: &ScrollWheelEvent, _, _| {
-            // gpui does not route wheel deltas into an overflow_y_scroll div
-            // on its own; this handle is the only thing that moves the pane.
-            // The offset and the event delta both grow more negative going
-            // down, so they add, clamped to the pane's scrollable range.
-            let dy = f32::from(ev.delta.pixel_delta(px(16.)).y);
-            let off = root.pane_scroll.offset();
-            let max = f32::from(root.pane_scroll.max_offset().height);
-            let y = (off.y + px(dy)).max(px(-max)).min(px(0.0));
-            root.pane_scroll.set_offset(point(off.x, y));
-        }))
         .pt(px(28.0))
         .pb_2()
         .bg(rgb(p.panel))
