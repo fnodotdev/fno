@@ -383,6 +383,7 @@ pub fn tick_answers(
                         state.evidence = format!(
                             "no live team over {item_id} and the mail did not confirm landing"
                         );
+                        acted += 1;
                         emit_delivery(state);
                     }
                 }
