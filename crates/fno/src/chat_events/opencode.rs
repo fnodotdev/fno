@@ -928,19 +928,39 @@ impl StoreTail {
             };
             // The session names its own family: `session_v2` first, then the
             // 1.x `session` table, so a migrated store carrying both serves
-            // a session from whichever family actually holds it.
-            let in_v2 = conn
+            // a session from whichever family actually holds it. The sqlite
+            // master probes keep a single-family store from erroring on the
+            // other family's table.
+            let has_v2 = conn
                 .query_row(
-                    "SELECT 1 FROM session_v2 WHERE id = ?1",
-                    params![session_id],
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_v2'",
+                    [],
                     |_| Ok(()),
                 )
                 .optional()
                 .map_err(|e| store_error(path, e))?;
-            let (found, family) = if in_v2.is_some() {
-                (in_v2, StoreFamily::V2)
-            } else {
-                let in_v1 = conn
+            let has_v1 = conn
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session'",
+                    [],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(|e| store_error(path, e))?;
+            let mut in_v2: Option<()> = None;
+            if has_v2.is_some() {
+                in_v2 = conn
+                    .query_row(
+                        "SELECT 1 FROM session_v2 WHERE id = ?1",
+                        params![session_id],
+                        |_| Ok(()),
+                    )
+                    .optional()
+                    .map_err(|e| store_error(path, e))?;
+            }
+            let mut in_v1: Option<()> = None;
+            if in_v2.is_none() && has_v1.is_some() {
+                in_v1 = conn
                     .query_row(
                         "SELECT 1 FROM session WHERE id = ?1",
                         params![session_id],
@@ -948,6 +968,10 @@ impl StoreTail {
                     )
                     .optional()
                     .map_err(|e| store_error(path, e))?;
+            }
+            let (found, family) = if in_v2.is_some() {
+                (in_v2, StoreFamily::V2)
+            } else {
                 (in_v1, StoreFamily::V1)
             };
             if found.is_some() {
