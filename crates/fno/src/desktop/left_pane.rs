@@ -3,7 +3,7 @@
 //! command the sideline click sends. A section whose read failed shows the
 //! error and keeps its last good rows.
 
-use gpui::{div, prelude::*, px, rgb, Context, Div, FontWeight, Stateful};
+use gpui::{div, point, prelude::*, px, rgb, Context, Div, FontWeight, ScrollWheelEvent, Stateful};
 
 use super::link::Layout;
 use super::palette::Palette;
@@ -249,6 +249,18 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
         .w(px(WIDTH))
         .h_full()
         .overflow_y_scroll()
+        .track_scroll(&root.pane_scroll)
+        .on_scroll_wheel(cx.listener(|root, ev: &ScrollWheelEvent, _, _| {
+            // gpui does not route wheel deltas into an overflow_y_scroll div
+            // on its own; this handle is the only thing that moves the pane.
+            // The offset and the event delta both grow more negative going
+            // down, so they add, clamped to the pane's scrollable range.
+            let dy = f32::from(ev.delta.pixel_delta(px(16.)).y);
+            let off = root.pane_scroll.offset();
+            let max = f32::from(root.pane_scroll.max_offset().height);
+            let y = (off.y + px(dy)).max(px(-max)).min(px(0.0));
+            root.pane_scroll.set_offset(point(off.x, y));
+        }))
         .pt(px(28.0))
         .pb_2()
         .bg(rgb(p.panel))
@@ -358,17 +370,24 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
                             .child(word),
                     );
                 }
-                let mut meta = div()
-                    .w_full()
-                    .flex()
-                    .flex_row()
-                    .gap_2()
-                    .child(clamp(detail, p.muted, true).flex_1());
+                // The meta line budgets by role: the state word never
+                // truncates (it is the row's key fact), and the node and PR
+                // tail takes the leftover width - it shrinks before anything
+                // else, the node id ellipsizes first, and the whole tail drops
+                // when even that cannot fit.
+                let mut meta = div().w_full().flex().flex_row().gap_2().child(
+                    div()
+                        .flex_none()
+                        .whitespace_nowrap()
+                        .text_xs()
+                        .text_color(rgb(p.muted))
+                        .child(detail),
+                );
                 if let Some(identity) = identity {
                     meta = meta.child(
                         div()
-                            .flex_none()
-                            .max_w(px(112.0))
+                            .flex_1()
+                            .min_w_0()
                             .overflow_hidden()
                             .line_clamp(1)
                             .text_ellipsis()
