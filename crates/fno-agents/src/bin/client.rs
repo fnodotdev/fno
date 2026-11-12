@@ -2410,7 +2410,12 @@ fn maybe_run_spawn(
         {
             fno_agents::spawn_gate::emit_refusal_event(
                 &refusal,
-                params.get("name").and_then(|v| v.as_str()).unwrap_or(""),
+                // R1: the shrink-only read counter bars a new .get on Value;
+                // a JSON pointer is the total read (None on non-object too).
+                params
+                    .pointer("/name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
                 declared_substrate,
                 None,
             );
