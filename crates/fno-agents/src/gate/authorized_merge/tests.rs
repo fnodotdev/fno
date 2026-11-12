@@ -749,6 +749,9 @@ fn the_unmeasured_head_warns_by_name_and_never_blocks() {
     let reason = "ci unmeasured: 7 runs queued, none completed at abc123";
     let req = Request {
         require_checks: true,
+        // The real pairing: the verdict word and the unmeasured fact ride the
+        // same ask from the same status read.
+        supplied_verdict: Some("unknown".to_string()),
         supplied_unmeasured: Some(reason.to_string()),
         ..request(Effect::Preview)
     };
