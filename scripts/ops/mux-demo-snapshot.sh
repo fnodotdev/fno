@@ -669,25 +669,24 @@ if os.environ.get("FNO_DEMO_FLATPINS"):
         lead("vega", "demo-sid-vega"),
         worker("vega-w1", "demo-sid-vega", "demo-sid-vega-w1"),
     ]
-# --holds adds the hold fixture: keeper's conversation hold has lapsed but
-# its bus-only stamp still waits on release, sentry carries a hold someone
-# set by hand, and eval-once is a headless one-shot that paints no row.
+# --holds adds the hold fixture: keeper carries a live conversation hold
+# (the fno-mail hold record), sentry takes mail only (the register door's
+# bus-only capability), and eval-once is a headless one-shot that paints no
+# row.
 if os.environ.get("FNO_DEMO_HOLDS"):
     live = {"inside_leg": {"state": "working", "seq": 1, "received_at": now}}
     hold_dir = os.path.join(os.path.dirname(db), "mail", "mail-hold")
     os.makedirs(hold_dir, exist_ok=True)
-    lapsed = datetime.datetime.fromtimestamp(
-        int(os.environ["FNO_DEMO_EPOCH"]) - 60, datetime.timezone.utc
+    until = datetime.datetime.fromtimestamp(
+        int(os.environ["FNO_DEMO_EPOCH"]) + 600, datetime.timezone.utc
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
-    for sid, source in (("demo-sid-keeper", "conversation"), ("demo-sid-sentry", None)):
-        clock = {"until": lapsed, "window_s": 600, "clock_kind": "wall", "ceiling": None}
-        if source:
-            clock["source"] = source
-        with open(os.path.join(hold_dir, sid + ".json"), "w") as f:
-            json.dump(clock, f)
+    keeper_sid = "6b65e7e1-0000-4000-8000-00000000d3e0"
+    with open(os.path.join(hold_dir, keeper_sid + ".json"), "w") as f:
+        json.dump({"session": keeper_sid, "until": until, "set_by": "conversation",
+                   "reason": "conversation", "clock": {"kind": "wall"}}, f)
     agents += [
         thread("keeper", "claude", "idle", attach="demo-keeper") | live | {
-            "delivery_policy": "bus-only", "harness_session_id": "demo-sid-keeper"},
+            "harness_session_id": keeper_sid},
         thread("sentry", "codex", "idle", attach="demo-sentry") | live | {
             "delivery_policy": "bus-only", "harness_session_id": "demo-sid-sentry"},
         thread("eval-once", "claude", "idle") | live | {"substrate": "headless"},

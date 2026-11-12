@@ -42,6 +42,7 @@ jobs:
             extra: --config 'patch.crates-io.fno-mail.path="crates/fno-mail"'
           - crate: fno
             dir: crates/fno
+            extra: --config 'patch.crates-io.fno-mail.path="crates/fno-mail"'
     steps:
       - name: Checkout
         uses: actions/checkout@v4

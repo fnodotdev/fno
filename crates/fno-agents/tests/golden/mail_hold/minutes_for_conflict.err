@@ -1,1 +1,1 @@
-error: --minutes and --for are mutually exclusive
+error: --on, --minutes and --for are mutually exclusive

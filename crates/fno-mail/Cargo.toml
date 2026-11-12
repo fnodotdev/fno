@@ -24,5 +24,8 @@ serde = { version = "1", features = ["derive"] }
 # conformance test pins.
 serde_json = { version = "1", features = ["preserve_order"] }
 
+# The hold record's end time: std and clock only, the build fno-agents uses.
+chrono = { version = "0.4", default-features = false, features = ["std", "alloc", "clock", "serde"] }
+
 [dev-dependencies]
 tempfile = "3"

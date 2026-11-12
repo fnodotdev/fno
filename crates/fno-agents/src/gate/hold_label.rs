@@ -9,8 +9,9 @@ use serde_json::Value;
 
 /// The attention line a live hold earns, or None when no hold shows. A
 /// conversation-sourced clock (the machine armed it when the user started
-/// talking) reads as its own state; any other live clock or bus-only stamp
-/// is the lead's own DND.
+/// talking) reads as its own state; any other live hold, or the mail-only
+/// capability (`bus-only`, set by the register command), keeps typed mail
+/// away the same way and reads as the lead's own DND.
 pub(crate) fn hold_attention(hold: &Value) -> Option<String> {
     if hold
         .get("conversation")

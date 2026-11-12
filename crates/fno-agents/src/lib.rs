@@ -109,7 +109,7 @@ pub use eval::{
     otel_ingest, otel_read, otlp_export, prove_it_verdicts, reader_cost, refusal_fold,
     refusal_rate, refusal_trend, research, retro, scoreboard, scoreboard_escalation,
     scoreboard_provider, session_cost, session_report, skill_diff, skill_drift, stability_report,
-    test_census, tick_ledger, usage_events, wake_meter,
+    test_census, tick_ledger, usage_events, usage_report, wake_meter,
 };
 pub use gate::{
     acceptance_evidence, approvals, attest, authorized_merge, autonomy_policy, autonomy_status,
@@ -1221,7 +1221,7 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // Quiet-recovery's revival-rule skip: a deliberately stopped worker on a
     // delivered node, recorded instead of revived (codex_watch/quiet.rs).
     "quiet_worker_skip",
-    // Who stamped a row bus-only (mail_hold.rs record_stamp).
+    // Who wrote a hold record or the mail-only capability (mail_hold.rs record_stamp).
     "mail_hold_stamped",
     "quiet_worker_error",
     // Blueprint-stall lane (codex_watch/stall.rs): stall evidence observed,

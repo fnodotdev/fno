@@ -235,7 +235,7 @@ pub(super) fn switch_tab(view: &mut View, tab: SettingsTab) {
     view.lane.reset();
     theme_import_ui::reset(view);
     remote_hosts::cancel_add(view);
-    extensions::cancel_url(view);
+    extensions::reset(view);
     if tab == SettingsTab::Extensions {
         extensions::refresh(view);
     }

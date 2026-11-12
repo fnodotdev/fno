@@ -71,6 +71,17 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
             argv.extend(args[2..].iter().cloned());
             Some(Claim::AgentsExec("fno doctor evals", argv))
         }
+        // The opt-in usage report rides the evals events preview door, so
+        // it adds no fno-agents command.
+        Some("telemetry") => {
+            let mut argv = vec![
+                OsString::from("evals"),
+                OsString::from("events"),
+                OsString::from("--report"),
+            ];
+            argv.extend(args.get(2..).unwrap_or(&[]).iter().cloned());
+            Some(Claim::AgentsExec("fno doctor telemetry", argv))
+        }
         Some("intel") => Some(Claim::AgentsExec(
             "fno doctor intel",
             vec![OsString::from("intel")],

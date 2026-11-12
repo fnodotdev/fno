@@ -77,10 +77,6 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `telemetry.eval_events.host` | str | `https://us.i.posthog.com` | advanced | PostHog ingest host, https only. |
 | `telemetry.eval_events.token_env` | str | `FNO_POSTHOG_PROJECT_TOKEN` | advanced | Env var holding the PostHog project token. |
 | `telemetry.eval_events.token_file` | str | `~/.fno/secrets/posthog-project-token` | advanced | Path to the PostHog project token file (mode 0600); token_env wins when set; a leading ~ expands against $HOME. |
-| `telemetry.usage_events.enabled` | bool | `false` | advanced | Send allowlisted fleet journal rows (spawns, refusals, merges, latency) to PostHog as events, identifiers only (default off). |
-| `telemetry.usage_events.host` | str | `https://us.i.posthog.com` | advanced | PostHog ingest host, https only. |
-| `telemetry.usage_events.token_env` | str | `FNO_POSTHOG_PROJECT_TOKEN` | advanced | Env var holding the PostHog project token. |
-| `telemetry.usage_events.token_file` | str | `~/.fno/secrets/posthog-project-token` | advanced | Path to the PostHog project token file (mode 0600); token_env wins when set; a leading ~ expands against $HOME. |
 | `attention.enabled` | bool | `true` | advanced | Kill switch for the attention arm (question pages and sinks; default on). |
 | `attention.sinks` | list[dict[str, Any]] | `[]` | advanced | Push sinks for open questions: a list of tables with name, type (ntfy or webhook), url, topic, token_env, answer_base_url and body (title-only or full). |
 | `research.output_dir` | str (optional) | _(none)_ | advanced | Landing dir for the `fno do research` doc deliverable (brief + sources sidecar); vault area, not repo-relative. Unset => ship fails loud (never guesses). |
@@ -370,7 +366,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `questions.judge.enabled` | bool | `false` | never | Arm the question judge: when true, judge runs read the question board and decide open questions against the law record. |
 | `questions.judge.model` | str | `sonnet` | never | Model the judge dispatches verdicts with. |
 | `schema_version` | int | `1` | never | Settings schema version; managed by fno, not hand-set. |
-| `telemetry.install_count.enabled` | bool | `true` | advanced | Send one install-count event per machine per day (version, channel, OS, arch, a random install id; no free text). Opt out to send nothing. |
+| `telemetry.usage_report.enabled` | bool | `true` | advanced | Set false to force the opt-in daily usage report off, whatever consent says. Consent itself is recorded only by fno doctor telemetry on or the setup wizard. |
 | `merge.architect.enabled` | bool | `true` | advanced | Run the final architect judgment at merge time. False skips it. |
 | `merge.architect.timeout_secs` | int | `900` | advanced | Maximum seconds for the architect reader and per-head claim wait. Unavailable judgments warn. |
 | `merge.architect.diff_chars` | int | `80000` | advanced | Maximum diff characters included with the complete changed-file list. |
