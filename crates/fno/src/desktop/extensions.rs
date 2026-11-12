@@ -834,33 +834,41 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
         )));
     }
     if !c.preview.is_empty() {
-        let (path, error, muted) = (c.preview.clone(), p.error, p.muted);
-        // gpui paints no loading element for the first 200 ms, so the box
-        // holds the preview's space itself: the recipe never jumps up.
+        let (path, error, muted, ground) = (c.preview.clone(), p.error, p.muted, p.bg);
+        // The box holds the preview's space and paints its own loading word
+        // under the image, so the recipe never jumps up and the wait reads
+        // from the first frame: gpui shows no loading element for 200 ms.
         out = out.child(
-            div().min_h(px(PREVIEW_RESERVE)).child(
-                img(PathBuf::from(&c.preview))
-                    .w_full()
-                    .max_w(px(PREVIEW_MAX))
-                    .object_fit(ObjectFit::Contain)
-                    .with_loading(move || {
-                        div()
-                            .w_full()
-                            .h(px(PREVIEW_RESERVE))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_color(rgb(muted))
-                            .child("Loading preview...")
-                            .into_any_element()
-                    })
-                    .with_fallback(move || {
-                        div()
-                            .text_color(rgb(error))
-                            .child(format!("Cannot draw {path}"))
-                            .into_any_element()
-                    }),
-            ),
+            div()
+                .relative()
+                .w(px(PREVIEW_MAX))
+                .max_w_full()
+                .min_h(px(PREVIEW_RESERVE))
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_color(rgb(muted))
+                        .child("Loading preview..."),
+                )
+                .child(
+                    img(PathBuf::from(&c.preview))
+                        .w(px(PREVIEW_MAX))
+                        .max_w_full()
+                        .object_fit(ObjectFit::Contain)
+                        .with_fallback(move || {
+                            div()
+                                .w_full()
+                                .h(px(PREVIEW_RESERVE))
+                                .bg(rgb(ground))
+                                .text_color(rgb(error))
+                                .child(format!("Cannot draw {path}"))
+                                .into_any_element()
+                        }),
+                ),
         );
     }
     if !c.recipe.is_empty() {
