@@ -206,10 +206,6 @@ tokens = ["claude", "--resume", "{session_id}"]
 kind = "subcommand"
 tokens = ["claude", "attach", "{short_id}"]
 
-[harness.claude.resume_strategy.forms.interactive_serve_attach]
-kind = "unsupported"
-tokens = []
-
 [harness.claude.resume_strategy.forms.headless_create]
 kind = "flag"
 tokens = ["claude"]
@@ -435,10 +431,6 @@ kind = "subcommand"
 pre_exec = ["codex", "app-server", "daemon", "start"]
 tokens = ["codex", "resume", "{session_id}", "--remote", "unix://"]
 
-[harness.codex.resume_strategy.forms.interactive_serve_attach]
-kind = "unsupported"
-tokens = []
-
 [harness.codex.resume_strategy.forms.headless_create]
 kind = "subcommand"
 tokens = ["codex", "exec"]
@@ -545,10 +537,6 @@ kind = "flag"
 tokens = ["gemini", "--resume", "{session_id}"]
 
 [harness.gemini.resume_strategy.forms.interactive_attach]
-kind = "unsupported"
-tokens = []
-
-[harness.gemini.resume_strategy.forms.interactive_serve_attach]
 kind = "unsupported"
 tokens = []
 
@@ -705,10 +693,6 @@ tokens = ["agy", "--conversation", "{session_id}"]
 # (`history.jsonl`) still gives keeper mail a real receipt; see the agy arm in
 # mail_inject's resolve_confirm.
 [harness.agy.resume_strategy.forms.interactive_attach]
-kind = "unsupported"
-tokens = []
-
-[harness.agy.resume_strategy.forms.interactive_serve_attach]
 kind = "unsupported"
 tokens = []
 
@@ -1154,10 +1138,6 @@ tokens = ["pi", "--session-id", "{session_id}"]
 kind = "unsupported"
 tokens = []
 
-[harness.pi.resume_strategy.forms.interactive_serve_attach]
-kind = "unsupported"
-tokens = []
-
 [harness.pi.resume_strategy.forms.headless_create]
 kind = "session_flag"
 tokens = ["pi", "--session-id", "{session_id}"]
@@ -1300,10 +1280,6 @@ tokens = ["cursor-agent", "--resume", "{session_id}", "--trust"]
 # keeper's child. The pane re-entry argv (the same --resume form) lives in
 # the harness module, never in this seam.
 [harness.cursor-agent.resume_strategy.forms.interactive_attach]
-kind = "unsupported"
-tokens = []
-
-[harness.cursor-agent.resume_strategy.forms.interactive_serve_attach]
 kind = "unsupported"
 tokens = []
 
@@ -1637,10 +1613,6 @@ tokens = []
 
 # `grok -p` runs one prompt and prints (exercised once on 2026-09-02), but the
 # live create-and-resume journey is unavailable until operator auth is present.
-[harness.grok.resume_strategy.forms.interactive_serve_attach]
-kind = "unsupported"
-tokens = []
-
 [harness.grok.resume_strategy.forms.headless_create]
 kind = "unsupported"
 tokens = []
@@ -1768,10 +1740,6 @@ tokens = []
 # The measured lane. The prompt rides -p's value in the runner (zcode takes
 # no prompt positional), so the form carries the fixed flags; the runner in
 # zcode_ask.rs composes the argv.
-[harness.zcode.resume_strategy.forms.interactive_serve_attach]
-kind = "unsupported"
-tokens = []
-
 [harness.zcode.resume_strategy.forms.headless_create]
 kind = "flag"
 tokens = ["zcode", "--mode", "yolo", "--output-format", "stream-json"]
@@ -1869,10 +1837,6 @@ kind = "unsupported"
 tokens = []
 
 # The verbs a user types; the client turns each into a footnote child.
-[harness.footnote.resume_strategy.forms.interactive_serve_attach]
-kind = "unsupported"
-tokens = []
-
 [harness.footnote.resume_strategy.forms.headless_create]
 kind = "flag"
 tokens = ["fno-agents", "spawn", "-H", "footnote", "--once"]
@@ -1971,10 +1935,6 @@ tokens = []
 
 # Measured: the first call with an id creates the session, the second
 # continues it (session/read turnCount 2).
-[harness.muse.resume_strategy.forms.interactive_serve_attach]
-kind = "unsupported"
-tokens = []
-
 [harness.muse.resume_strategy.forms.headless_create]
 kind = "flag"
 tokens = ["muse", "exec", "--json", "--session-id", "{session_id}"]
