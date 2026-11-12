@@ -833,7 +833,9 @@ mod tests {
         let rows =
             rows_from_toml(crate::harness_capabilities::CAPABILITY_TOML).expect("canon table");
         let report = sweep(&rows, None);
-        assert_eq!(rows.len(), 11);
+        // Floor, not an exact pin: harness rows are added over time (omp, muse),
+        // and only a shrink below the rows this guard shipped against is a defect.
+        assert!(rows.len() >= 11, "rows={}", rows.len());
         assert!(report.fields > 30, "fields={}", report.fields);
         let uniform: Vec<_> = report
             .uniform
