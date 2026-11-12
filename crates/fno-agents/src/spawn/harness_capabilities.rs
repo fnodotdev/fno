@@ -2059,6 +2059,7 @@ mod tests {
                 "gemini",
                 "grok",
                 "muse",
+                "omp",
                 "opencode",
                 "pi",
                 "zcode"

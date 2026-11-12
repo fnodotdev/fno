@@ -801,6 +801,8 @@ pub fn bundled_manifest(agent: &str) -> Option<&'static str> {
         "kimi" => Some(include_str!("../manifests/kimi.toml")),
         "kiro" => Some(include_str!("../manifests/kiro.toml")),
         "pi" => Some(include_str!("../manifests/pi.toml")),
+        // omp: no sampled TUI screen yet, so no rules; see manifests/omp.toml.
+        "omp" => Some(include_str!("../manifests/omp.toml")),
         "qodercli" => Some(include_str!("../manifests/qodercli.toml")),
         // zcode: pane-less (the headless lane is the measured one), so the
         // manifest is deliberately rule-free; see manifests/zcode.toml.

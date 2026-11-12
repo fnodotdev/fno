@@ -11,8 +11,9 @@ use std::time::{Duration, Instant};
 use common::{connect_with_retry, spawn_server, FakeClient};
 use fno::proto::{
     read_msg_sync, write_msg_sync, AnchoredLayoutSpec, ClientMsg, Command, ControlCommand,
-    LayoutBinding, LayoutSlot, LayoutTreeChild, LayoutTreeSpec, PanePlacement, PaneTarget,
-    PlacementFallback, ResolvedPlacement, ServerMsg, BUILD_VERSION, PROTO_VERSION,
+    GraftOutcome, GraftSlotResult, LayoutBinding, LayoutSlot, LayoutTreeChild, LayoutTreeSpec,
+    PanePlacement, PaneTarget, PlacementFallback, ResolvedPlacement, ServerMsg, BUILD_VERSION,
+    PROTO_VERSION,
 };
 use fno::tree::{Axis, Dir};
 
@@ -955,6 +956,16 @@ fn graft_at(
     anchor: u64,
     spec: AnchoredLayoutSpec,
 ) -> Result<Vec<(String, u64)>, String> {
+    graft_receipt(scratch, anchor, spec)
+        .map(|rs| rs.into_iter().map(|r| (r.slot, r.pane_id)).collect())
+}
+
+/// Like [`graft_at`], with each slot's full receipt (outcome and reason).
+fn graft_receipt(
+    scratch: &Scratch,
+    anchor: u64,
+    spec: AnchoredLayoutSpec,
+) -> Result<Vec<GraftSlotResult>, String> {
     let mut stream = connect_with_retry(&scratch.sock());
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
@@ -974,9 +985,7 @@ fn graft_at(
     )
     .unwrap();
     match read_msg_sync(&mut stream).unwrap() {
-        ServerMsg::LayoutGrafted { results, .. } => {
-            Ok(results.into_iter().map(|r| (r.slot, r.pane_id)).collect())
-        }
+        ServerMsg::LayoutGrafted { results, .. } => Ok(results),
         ServerMsg::Err { msg, .. } => Err(msg),
         other => panic!("unexpected graft reply: {other:?}"),
     }
@@ -1113,4 +1122,95 @@ fn layout_graft_refuses_unavailable_fno_and_duplicate_binding() {
     };
     let err = graft_at(&scratch, pane1, spec).expect_err("unavailable fno refused");
     assert!(err.contains("no live pane"), "{err}");
+}
+
+// -- a layout slot that holds a mod ------------------------------------------
+
+/// An `FNO_BIN` stand-in: `config plugins -J ls` lists one enabled and one
+/// switched-off mod, and `config plugins open` records its argv then idles.
+fn mod_stub(scratch: &Scratch) -> (PathBuf, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let log = scratch.0.join("open.argv");
+    let bin = scratch.0.join("fno-stub");
+    let listing = r#"{"packs":[{"pack_id":"fno-panels","mods":[{"id":"feed","enabled":true},{"id":"quiet","enabled":false}]}]}"#;
+    let script = format!(
+        "#!/bin/sh\ncase \"$*\" in\n\"config plugins -J ls\") echo '{listing}' ;;\n\"config plugins open\"*) echo \"$*\" > '{}'; sleep 30 ;;\nesac\n",
+        log.display()
+    );
+    std::fs::write(&bin, script).unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    (bin, log)
+}
+
+fn mod_spec(target: &str) -> AnchoredLayoutSpec {
+    let slot = |name: &str, binding| LayoutSlot {
+        name: name.into(),
+        binding,
+        cwd: None,
+        portal: None,
+        pane_id: None,
+    };
+    AnchoredLayoutSpec {
+        version: 1,
+        tree: LayoutTreeSpec::Split {
+            axis: Axis::Vertical,
+            children: vec![
+                LayoutTreeChild {
+                    weight: 0.5,
+                    tree: LayoutTreeSpec::Slot("anchor".into()),
+                },
+                LayoutTreeChild {
+                    weight: 0.5,
+                    tree: LayoutTreeSpec::Slot("panel".into()),
+                },
+            ],
+        },
+        slots: vec![
+            slot("anchor", LayoutBinding::Anchor),
+            slot("panel", LayoutBinding::Mod(target.into())),
+        ],
+    }
+}
+
+#[test]
+fn graft_mod_slot_enabled_mod_runs_the_fixed_open_argv() {
+    let scratch = Scratch::new("graft-mod-on");
+    let (stub, log) = mod_stub(&scratch);
+    let _server = spawn_server(
+        &scratch.sock(),
+        &[("SHELL", "/bin/sh"), ("FNO_BIN", stub.to_str().unwrap())],
+    );
+    let (_c, pane1) = attach_settled(&scratch, &scratch.dir("w"));
+    let results = graft_receipt(&scratch, pane1, mod_spec("fno-panels/feed")).expect("graft");
+    let panel = results.iter().find(|r| r.slot == "panel").unwrap();
+    assert_eq!(panel.outcome, GraftOutcome::Mod);
+    assert_eq!(panel.reason, None);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let argv = loop {
+        if let Ok(raw) = std::fs::read_to_string(&log) {
+            break raw;
+        }
+        assert!(Instant::now() < deadline, "the open command never ran");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(argv.trim(), "config plugins open fno-panels/feed");
+}
+
+#[test]
+fn graft_mod_slot_switched_off_mod_fills_a_shell_with_reason() {
+    let scratch = Scratch::new("graft-mod-off");
+    let (stub, log) = mod_stub(&scratch);
+    let _server = spawn_server(
+        &scratch.sock(),
+        &[("SHELL", "/bin/sh"), ("FNO_BIN", stub.to_str().unwrap())],
+    );
+    let (_c, pane1) = attach_settled(&scratch, &scratch.dir("w"));
+    let results = graft_receipt(&scratch, pane1, mod_spec("fno-panels/quiet")).expect("graft");
+    let anchor = results.iter().find(|r| r.slot == "anchor").unwrap();
+    assert_eq!(anchor.outcome, GraftOutcome::Anchor);
+    assert_eq!(anchor.reason, None);
+    let panel = results.iter().find(|r| r.slot == "panel").unwrap();
+    assert_eq!(panel.outcome, GraftOutcome::Shell);
+    assert_eq!(panel.reason.as_deref(), Some("mod off"));
+    assert!(!log.exists(), "a switched-off mod must not be opened");
 }

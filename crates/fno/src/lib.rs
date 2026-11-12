@@ -166,6 +166,8 @@ pub mod model_catalog;
 #[cfg(feature = "full")]
 pub mod mouse;
 #[cfg(feature = "full")]
+pub mod must_enable;
+#[cfg(feature = "full")]
 pub mod mux_cli;
 #[cfg(feature = "full")]
 pub mod mux_link;
