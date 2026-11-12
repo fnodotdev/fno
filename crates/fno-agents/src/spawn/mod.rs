@@ -59,8 +59,6 @@ pub mod model_env_scrub;
 pub mod model_family;
 pub mod model_price;
 pub mod name_collision;
-#[cfg(test)]
-mod test_spare;
 pub mod name_draw;
 pub mod name_ledger;
 pub mod naming;
@@ -138,6 +136,8 @@ pub mod team_spawn;
 pub mod terminal_route;
 pub mod terminal_run;
 pub mod terminal_vocab;
+#[cfg(test)]
+pub(crate) mod test_spare;
 pub mod thread_host;
 pub mod usage;
 pub mod usage_refresh;
