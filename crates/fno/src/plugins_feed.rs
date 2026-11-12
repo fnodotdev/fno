@@ -105,6 +105,19 @@ fn fno_door() -> std::path::PathBuf {
     crate::server::fno_bin()
 }
 
+/// The argv of `fno config plugins <args>` through the one door, for a host
+/// that execs it as a pane's own command.
+pub(crate) fn door_argv(args: &[&str]) -> Vec<String> {
+    let mut argv = vec![fno_door().to_string_lossy().into_owned()];
+    argv.extend(
+        ["config", "plugins"]
+            .iter()
+            .chain(args)
+            .map(|a| a.to_string()),
+    );
+    argv
+}
+
 pub(crate) fn fno_json(args: &[&str]) -> Result<Vec<u8>, ReadFailed> {
     let shown = format!("fno {}", args.join(" "));
     let mut cmd = crate::process_admission::std_command(fno_door());
