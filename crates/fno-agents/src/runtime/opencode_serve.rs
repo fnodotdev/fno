@@ -1858,6 +1858,7 @@ mod tests {
     // session over HTTP, starts the turn on the native command route, and
     // names the minted id. Effort rides the model ref as its variant.
     #[test]
+    #[allow(clippy::indexing_slicing)] // asserts index the receipt and the create body
     fn a_2x_dispatch_launches_over_http_and_names_the_session() {
         let dir = tempfile::tempdir().unwrap();
         let h = home(dir.path());
