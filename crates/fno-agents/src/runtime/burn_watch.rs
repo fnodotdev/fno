@@ -4,9 +4,10 @@
 //! branch sit flat; nothing else in the fleet reads cost against progress.
 //! This arm samples every live session carrying an open execute phase: ledger
 //! spend, branch head, commit count and newest commit time (`git` in the
-//! worker's own checkout: the node's target manifest names its worktree, and
-//! a checkout the arm cannot resolve leaves the pass unmeasured, never
-//! main's), and the node's `touched_at` beside its newest thread row
+//! worker's own checkout: the node's target manifest and the session's live
+//! node claim name its worktree, and a checkout the arm cannot resolve
+//! leaves the pass unmeasured, never main's), and the node's `touched_at`
+//! beside its newest thread row
 //! (graph; a note resets the untouched clock without standing the ladder
 //! down as progress). Progress on any axis
 //! resets the ladder; a flat sample where spend grew, or where BOTH the node
@@ -1173,31 +1174,104 @@ pub(crate) fn manifest_cwds(space: &Path) -> HashMap<String, Vec<ManifestCwd>> {
     out
 }
 
+/// One live node claim's checkout answer: the session that holds the claim
+/// and the worktree (or cwd) its metadata names, when that path exists.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ClaimCwd {
+    pub sid: String,
+    pub cwd: String,
+}
+
+/// The checkout each node claim names, keyed by the session that holds it.
+/// `fno do target init` writes the claim with `metadata.worktree`, so this
+/// is the session-to-worktree binding that answers even when the scope's
+/// node string does not match a manifest's node key. A claim without
+/// worktree/cwd metadata, one naming a path that does not exist, and a
+/// read failure each contribute nothing; the resolver's sid join sorts out
+/// two claims naming one session.
+pub(crate) fn node_claim_cwds(root: Option<&Path>) -> Vec<ClaimCwd> {
+    let Ok(records) = crate::claim_store::records_db(Some("node:"), true, root) else {
+        return Vec::new();
+    };
+    let mut out: Vec<ClaimCwd> = Vec::new();
+    for record in records {
+        let Some(sid) = record.session_id.clone().filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        let named = |key: &str| {
+            record
+                .metadata
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+        };
+        let Some(cwd) = named("worktree").or_else(|| named("cwd")) else {
+            continue;
+        };
+        if !Path::new(cwd).exists() {
+            continue;
+        }
+        out.push(ClaimCwd {
+            sid,
+            cwd: cwd.to_string(),
+        });
+    }
+    out
+}
+
+/// The checkout the sid's node claims name. `None`: no claim names the
+/// sid, so the row's own cwd may answer (the legacy fallback). `Some(None)`:
+/// claims exist but name two different trees - ambiguous, unmeasured, and
+/// the row's own cwd never answers for a claimed session.
+fn claim_answer(claims: &[ClaimCwd], sid: &str) -> Option<Option<String>> {
+    let mut named: Vec<&str> = claims
+        .iter()
+        .filter(|c| c.sid == sid)
+        .map(|c| c.cwd.as_str())
+        .collect();
+    named.sort_unstable();
+    named.dedup();
+    match named.as_slice() {
+        [] => None,
+        [one] => Some(Some((*one).to_string())),
+        _ => Some(None),
+    }
+}
+
 /// The checkout this worker's git and CI reads must run in. The session-
 /// matching manifest wins: re-runs of one node leave older manifests
-/// behind, and a sorted first-pick could sample a stale, merged tree. No
-/// match among several manifests is ambiguous: unmeasured, never the wrong
-/// tree. One manifest, or none, resolves as before (the row's own cwd as
-/// the fallback). None never fires anything: unmeasured, never red.
+/// behind, and a sorted first-pick could sample a stale, merged tree. The
+/// session's node claim is the second answer: it names the worktree even
+/// when the scope's node string does not match a manifest's node key, and
+/// it disambiguates several manifest picks the way a sid match would. A
+/// claim naming two different trees for one sid is ambiguous: unmeasured,
+/// and the row's own cwd never answers for a claimed session. One
+/// manifest, or none, resolves as before (the row's own cwd as the
+/// fallback). None never fires anything: unmeasured, never red.
 pub(crate) fn resolve_worker_cwd(
     cwds: &HashMap<String, Vec<ManifestCwd>>,
+    claims: &[ClaimCwd],
     sid: &str,
     node: &str,
     entry_cwd: &str,
 ) -> Option<String> {
     let pick =
         |m: &ManifestCwd| (!m.cwd.is_empty() && Path::new(&m.cwd).exists()).then(|| m.cwd.clone());
+    let claim_pick = || claim_answer(claims, sid).flatten();
     match cwds.get(node) {
         Some(list) => {
             if let Some(mine) = list.iter().find(|m| !m.sid.is_empty() && m.sid == sid) {
-                return pick(mine);
+                return pick(mine).or_else(claim_pick);
             }
             if list.len() == 1 {
-                return list.first().and_then(pick);
+                return list.first().and_then(pick).or_else(claim_pick);
             }
-            None
+            claim_pick()
         }
-        None => (!entry_cwd.is_empty()).then(|| entry_cwd.to_string()),
+        None => match claim_answer(claims, sid) {
+            Some(answer) => answer,
+            None => (!entry_cwd.is_empty()).then(|| entry_cwd.to_string()),
+        },
     }
 }
 
@@ -1246,7 +1320,8 @@ fn save_noted(home: &AgentsHome, sid: &str, sent: &Noted) {
 }
 
 /// The pass body, behind `maybe_tick`'s cadence gate. `runner` and
-/// `busy_for` are injected so tests stage the world.
+/// `busy_for` are injected so tests stage the world; `claims_root` injects
+/// the claims store the pass folds, `None` for the machine default.
 fn run_pass(
     home: &AgentsHome,
     emitter: &crate::events::EventEmitter,
@@ -1257,6 +1332,7 @@ fn run_pass(
     spend_min: f64,
     config_cwd: &Path,
     thresholds: &Thresholds,
+    claims_root: Option<&Path>,
 ) {
     let graph = crate::gc_sweep::graph_path(home);
     let store = crate::backlog::api::Store::new(&graph);
@@ -1295,6 +1371,7 @@ fn run_pass(
     let facts = node_facts(&rows);
     let mut warnings = Vec::new();
     let cwds = manifest_cwds(&crate::paths::space_dir(config_cwd));
+    let claims = node_claim_cwds(claims_root);
     let journal = crate::loop_runtime::Journal::new_raw(
         home.events_jsonl(),
         crate::daemon::global_events_path(home),
@@ -1338,7 +1415,7 @@ fn run_pass(
     for (sid, scoped) in &scope {
         let node = scoped.node.as_str();
         let Some(entry) = live.get(sid) else { continue };
-        let resolved = resolve_worker_cwd(&cwds, sid, node, &entry.cwd);
+        let resolved = resolve_worker_cwd(&cwds, &claims, sid, node, &entry.cwd);
         let Some(cwd) = resolved.as_deref() else {
             continue;
         };
@@ -1606,6 +1683,7 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
             spend_min,
             &cwd,
             &thresholds,
+            None,
         );
     });
 }
@@ -2166,26 +2244,205 @@ mod tests {
         let map = manifest_cwds(&space);
         // The session-matching manifest wins over the sorted first pick.
         assert_eq!(
-            resolve_worker_cwd(&map, "sess-2", "x-1", "/canonical"),
+            resolve_worker_cwd(&map, &[], "sess-2", "x-1", "/canonical"),
             Some(temp.path().join("never/w2").to_str().unwrap().to_string())
         );
         assert_eq!(
-            resolve_worker_cwd(&map, "sess-1", "x-1", "/canonical"),
+            resolve_worker_cwd(&map, &[], "sess-1", "x-1", "/canonical"),
             Some(temp.path().join("never/w1").to_str().unwrap().to_string())
         );
         // An unmatched sid among several manifests is ambiguous: unmeasured.
-        assert_eq!(resolve_worker_cwd(&map, "other", "x-1", "/canonical"), None);
+        assert_eq!(
+            resolve_worker_cwd(&map, &[], "other", "x-1", "/canonical"),
+            None
+        );
         // One manifest resolves without a sid match.
         assert_eq!(
-            resolve_worker_cwd(&map, "nope", "x-2", "/canonical"),
+            resolve_worker_cwd(&map, &[], "nope", "x-2", "/canonical"),
             Some(temp.path().join("never/w1").to_str().unwrap().to_string())
         );
         // No manifest: the row's own cwd answers; an empty one does not.
         assert_eq!(
-            resolve_worker_cwd(&map, "s", "x-9", "/canonical"),
+            resolve_worker_cwd(&map, &[], "s", "x-9", "/canonical"),
             Some("/canonical".to_string())
         );
-        assert_eq!(resolve_worker_cwd(&map, "s", "x-9", ""), None);
+        assert_eq!(resolve_worker_cwd(&map, &[], "s", "x-9", ""), None);
+    }
+
+    #[test]
+    fn the_claim_names_the_worktree_when_the_node_key_misses() {
+        // 2026-11-12 specimen: the scope row's node string matched no
+        // manifest's node key, the pre-fix resolver fell back to the row's
+        // own cwd (the canonical checkout), and the pass mailed a clean
+        // canonical tree for a worker whose worktree held 29 commits and
+        // an open PR. The claim names the worktree, keyed by sid.
+        let temp = tempfile::tempdir().unwrap();
+        let worktree = temp.path().join("wt");
+        std::fs::create_dir_all(&worktree).unwrap();
+        let claims = vec![ClaimCwd {
+            sid: "sess-1".to_string(),
+            cwd: worktree.to_str().unwrap().to_string(),
+        }];
+        let map: HashMap<String, Vec<ManifestCwd>> = HashMap::new();
+        assert_eq!(
+            resolve_worker_cwd(&map, &claims, "sess-1", "x-9", "/canonical"),
+            Some(worktree.to_str().unwrap().to_string())
+        );
+        // An unclaimed sid keeps the row-cwd fallback for rows that have
+        // no manifest either.
+        assert_eq!(
+            resolve_worker_cwd(&map, &claims, "sess-2", "x-9", "/canonical"),
+            Some("/canonical".to_string())
+        );
+    }
+
+    #[test]
+    fn the_claim_disambiguates_manifests_the_sid_join_cannot() {
+        let temp = tempfile::tempdir().unwrap();
+        let space = temp.path().join("space");
+        for name in ["w1", "w2"] {
+            std::fs::create_dir_all(space.join("worktrees").join(name)).unwrap();
+        }
+        std::fs::create_dir_all(temp.path().join("never/w1")).unwrap();
+        std::fs::create_dir_all(temp.path().join("never/w2")).unwrap();
+        let manifest = |name: &str, body: String| {
+            std::fs::write(
+                space.join("worktrees").join(name).join("target-state.md"),
+                body,
+            )
+            .unwrap()
+        };
+        manifest(
+            "w1",
+            format!(
+                "graph_node_id: x-1\nharness_session_id: sess-2\nowner_cwd: {}\n",
+                temp.path().join("never/w1").display()
+            ),
+        );
+        manifest(
+            "w2",
+            format!(
+                "graph_node_id: x-1\nharness_session_id: sess-3\nowner_cwd: {}\n",
+                temp.path().join("never/w2").display()
+            ),
+        );
+        let map = manifest_cwds(&space);
+        let claim_tree = temp.path().join("never/w2");
+        let claims = vec![ClaimCwd {
+            sid: "sess-1".to_string(),
+            cwd: claim_tree.to_str().unwrap().to_string(),
+        }];
+        // Two manifests for one node, neither names the sid: the claim
+        // picks the live tree; without it the pick stays unmeasured.
+        assert_eq!(
+            resolve_worker_cwd(&map, &claims, "sess-1", "x-1", "/canonical"),
+            Some(claim_tree.to_str().unwrap().to_string())
+        );
+        assert_eq!(
+            resolve_worker_cwd(&map, &[], "sess-1", "x-1", "/canonical"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_sid_named_by_two_trees_stays_unmeasured() {
+        let temp = tempfile::tempdir().unwrap();
+        let tree_a = temp.path().join("a");
+        let tree_b = temp.path().join("b");
+        std::fs::create_dir_all(&tree_a).unwrap();
+        std::fs::create_dir_all(&tree_b).unwrap();
+        let claims = vec![
+            ClaimCwd {
+                sid: "sess-1".to_string(),
+                cwd: tree_a.to_str().unwrap().to_string(),
+            },
+            ClaimCwd {
+                sid: "sess-1".to_string(),
+                cwd: tree_b.to_str().unwrap().to_string(),
+            },
+        ];
+        let map: HashMap<String, Vec<ManifestCwd>> = HashMap::new();
+        // The row's own cwd never answers for a claimed session.
+        assert_eq!(
+            resolve_worker_cwd(&map, &claims, "sess-1", "x-9", "/canonical"),
+            None
+        );
+    }
+
+    #[test]
+    fn the_manifest_sid_match_beats_the_claim() {
+        let temp = tempfile::tempdir().unwrap();
+        let space = temp.path().join("space");
+        std::fs::create_dir_all(space.join("worktrees").join("w1")).unwrap();
+        std::fs::create_dir_all(temp.path().join("never/w1")).unwrap();
+        std::fs::create_dir_all(temp.path().join("never/w2")).unwrap();
+        std::fs::write(
+            space.join("worktrees").join("w1").join("target-state.md"),
+            format!(
+                "graph_node_id: x-1\nharness_session_id: sess-1\nowner_cwd: {}\n",
+                temp.path().join("never/w1").display()
+            ),
+        )
+        .unwrap();
+        let map = manifest_cwds(&space);
+        let claims = vec![ClaimCwd {
+            sid: "sess-1".to_string(),
+            cwd: temp.path().join("never/w2").to_str().unwrap().to_string(),
+        }];
+        // The sid-matched manifest is the first answer; the claim only
+        // fills gaps the manifest leaves.
+        assert_eq!(
+            resolve_worker_cwd(&map, &claims, "sess-1", "x-1", "/canonical"),
+            Some(temp.path().join("never/w1").to_str().unwrap().to_string())
+        );
+    }
+
+    #[test]
+    fn the_claim_fold_reads_the_session_worktree_binding() {
+        use crate::claims::ClaimRecord;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let wt = root.join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let record = |key: &str, sid: Option<&str>, tree: Option<String>| ClaimRecord {
+            schema_version: 2,
+            key: key.to_string(),
+            holder: format!("target-session:{}", sid.unwrap_or("")),
+            acquired_at: 1,
+            pid: None,
+            host: "t".into(),
+            pid_unavailable: true,
+            expires_at: Some(1),
+            reason: Some("target dispatch".into()),
+            harness: Some("claude".into()),
+            session_id: sid.map(str::to_string),
+            pid_provenance: None,
+            machine_id: None,
+            metadata: {
+                let mut m = serde_json::Map::new();
+                if let Some(tree) = tree {
+                    m.insert("worktree".to_string(), Value::String(tree));
+                }
+                m
+            },
+        };
+        for (key, sid, tree) in [
+            ("node:x-1", Some("sess-1"), Some(wt.display().to_string())),
+            ("node:x-2", Some("sess-2"), None),
+        ] {
+            crate::claim_store::seed_at_path(
+                &crate::claims::claim_path(key, Some(root)).unwrap(),
+                &record(key, sid, tree),
+            );
+        }
+        let got = node_claim_cwds(Some(root));
+        assert_eq!(
+            got,
+            vec![ClaimCwd {
+                sid: "sess-1".to_string(),
+                cwd: wt.to_str().unwrap().to_string()
+            }]
+        );
     }
 
     #[test]
