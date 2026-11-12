@@ -83,7 +83,8 @@ fn header(title: &'static str) -> Row {
 
 fn agent_identity(a: &AgentRow) -> Option<String> {
     let mut out = match (a.node.as_deref(), a.pr) {
-        (Some(n), Some(pr)) => format!("{n} · #{pr}"),
+        // The PR leads, so a narrow box cuts the node id and keeps the number.
+        (Some(n), Some(pr)) => format!("#{pr} · {n}"),
         (Some(n), None) => n.to_string(),
         (None, Some(pr)) => format!("#{pr}"),
         (None, None) => return None,
@@ -320,10 +321,11 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
                 let blocked = state == Some(LatticeState::Blocked);
                 let label_color = if question { p.warn } else { p.fg };
                 // Shape carries the state: a triangle for blocked, a circle for
-                // work. A question leads with `?`, so none leans on color.
+                // work. A question leads with a diamond, never the `?` an
+                // unmeasured agent wears, so none leans on color.
                 let (glyph, glyph_color) = match (state, question) {
                     (Some(s), _) => (lattice_glyph(s).0.to_string(), state_color(&p, s)),
-                    (None, true) => ("?".to_string(), p.warn),
+                    (None, true) => ("◇".to_string(), p.warn),
                     (None, false) => (String::new(), p.muted),
                 };
                 let mut title = div()
@@ -442,7 +444,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(agent_lattice_state(&a), LatticeState::Unmeasured);
-        assert_eq!(agent_identity(&a).as_deref(), Some("x-35bd · #84"));
+        assert_eq!(agent_identity(&a).as_deref(), Some("#84 · x-35bd"));
         let layout = Layout {
             agents: vec![a],
             ..Layout::default()
