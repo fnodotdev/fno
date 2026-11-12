@@ -159,7 +159,7 @@ const ORG: &[Node] = &[
     command("promote", &["role"], "Grant a role to a live session: <session> --scope <scope>."),
     command("faq", &["lead", "faq"], "Durable answers a promoted session leaves behind."),
     command("roles", &["roles"], "Bounded business-role definitions and resolutions."),
-    group("chart", "The org chart's folds, pages and term records.", ORG_CHART),
+    group("chart", "The HQ chart's folds, pages and term records.", ORG_CHART),
 ];
 
 #[rustfmt::skip]
@@ -297,10 +297,11 @@ const ENTRIES: &[Node] = &[
     Node {
         bare: true,
         strict: true,
+        old: &[&["org"]],
         ..kept(
-            "org",
+            "hq",
             &["team"],
-            "The org chart of roles and their lifecycle.",
+            "The HQ chart of roles and their lifecycle.",
             ORG,
         )
     },
@@ -506,8 +507,20 @@ fn resolve(args: &[OsString]) -> Option<(Agents, Option<String>)> {
                         spelled(&words[..len]),
                         spelled(&new_path)
                     );
-                    let argv = forward(hit, &args[len..], rundown_out_arg());
-                    return Some((Agents::Run(argv), Some(notice)));
+                    // The rewritten prefix is the node's own path, so the
+                    // tail re-walks the table exactly as the new spelling
+                    // would: an old GROUP spelling composes with every
+                    // newer sub-spelling. The direct legacy forward stays
+                    // as the fallback for a tail the table does not claim.
+                    let mut rewritten: Vec<OsString> = new_path.iter().map(|w| os(w)).collect();
+                    rewritten.extend(args[len..].iter().cloned());
+                    match resolve(&rewritten) {
+                        Some((outcome, _)) => return Some((outcome, Some(notice))),
+                        None => {
+                            let argv = forward(hit, &args[len..], rundown_out_arg());
+                            return Some((Agents::Run(argv), Some(notice)));
+                        }
+                    }
                 }
                 if node.strict {
                     return Some((Agents::Refuse(unknown(path, node, word)), None));
@@ -529,10 +542,27 @@ fn help(args: &[OsString]) -> Option<Agents> {
         .filter(|w| !w.starts_with('-'))
         .collect();
     let mut node: &'static Node = &ROOT;
-    for (depth, word) in words.iter().enumerate() {
-        match node.children.iter().find(|c| c.name == *word) {
-            Some(child) => node = child,
-            None => return Some(Agents::Refuse(unknown(&words[..depth], node, word))),
+    let mut words = words;
+    let mut depth = 0usize;
+    while depth < words.len() {
+        let word = words[depth];
+        match node.children.iter().find(|c| c.name == word) {
+            Some(child) => {
+                node = child;
+                depth += 1;
+            }
+            None => match old_hit(&words[..=depth]) {
+                // A deprecated spelling walks under its new path, so
+                // `help agents org` reads as `help agents hq`.
+                Some((new_path, _, len)) if len == depth + 1 => {
+                    let mut rewritten: Vec<&str> = new_path.clone();
+                    rewritten.extend(words[depth + 1..].iter().copied());
+                    words = rewritten;
+                    node = &ROOT;
+                    depth = 0;
+                }
+                _ => return Some(Agents::Refuse(unknown(&words[..depth], node, word))),
+            },
         }
     }
     if node.children.is_empty() {
@@ -563,7 +593,7 @@ pub fn classify(args: &[OsString]) -> Option<Agents> {
         }
         if command == "promote" {
             return Some(Agents::Refuse(
-                "fno agents promote is now fno agents org promote <session> --scope <scope>".into(),
+                "fno agents promote is now fno agents hq promote <session> --scope <scope>".into(),
             ));
         }
     }
@@ -659,17 +689,17 @@ mod tests {
             (
                 &["lead", "checkin"][..],
                 &["agents", "lead", "checkin"][..],
-                "fno agents org checkin",
+                "fno agents hq checkin",
             ),
             (
                 &["team", "-J"][..],
                 &["agents", "team", "-J"][..],
-                "fno agents org",
+                "fno agents hq",
             ),
             (
                 &["org", "fold", "fno"][..],
                 &["agents", "org-fold", "fno"][..],
-                "fno agents org chart fold",
+                "fno agents hq chart fold",
             ),
             (
                 &["fleet-incident"][..],
@@ -686,24 +716,64 @@ mod tests {
                 other => panic!("{old:?}: expected a noticed Run, got {other:?}"),
             }
         }
-        // The org group keeps its shapes: bare and flag-led forward the
+        // The deprecated group spelling composes with every sub-spelling:
+        // a leaf under `org` rewrites to the same argv as under `hq`, and
+        // the notice names the group once.
+        for (old, argv) in [
+            (&["org", "checkin"][..], &["agents", "lead", "checkin"][..]),
+            (
+                &["org", "chart", "fold", "fno"][..],
+                &["agents", "org-fold", "fno"][..],
+            ),
+            (
+                &["org", "promote", "s", "--scope", "x"][..],
+                &["agents", "role", "promote", "s", "--scope", "x"][..],
+            ),
+        ] {
+            match run(old) {
+                Some((Agents::Run(got), Some(notice))) => {
+                    assert_eq!(got, osv(argv), "{old:?}");
+                    assert!(notice.contains("fno agents hq"), "{notice}");
+                }
+                other => panic!("{old:?}: expected a noticed Run, got {other:?}"),
+            }
+        }
+        // The hq group keeps its shapes: bare and flag-led forward the
         // team argv, rundown adds the default out only when absent.
-        assert_eq!(
-            run(&["org"]),
-            Some((Agents::Run(osv(&["agents", "team"])), None))
-        );
-        assert_eq!(
-            run(&["org", "-J"]),
-            Some((Agents::Run(osv(&["agents", "team", "-J"])), None))
-        );
-        // The canon-refresh row forwards to its lead-family door.
-        assert_eq!(
-            run(&["org", "refresh-canon"]),
-            Some((Agents::Run(osv(&["agents", "lead", "refresh-canon"])), None))
-        );
+        match run(&["hq"]) {
+            Some((Agents::Run(argv), None)) => assert_eq!(argv, osv(&["agents", "team"])),
+            other => panic!("bare hq: expected an unnoticed Run, got {other:?}"),
+        }
+        match run(&["hq", "-J"]) {
+            Some((Agents::Run(argv), None)) => assert_eq!(argv, osv(&["agents", "team", "-J"])),
+            other => panic!("flag-led hq: expected an unnoticed Run, got {other:?}"),
+        }
+        // The deprecated group spelling keeps those shapes too, noticed.
+        match run(&["org"]) {
+            Some((Agents::Run(argv), Some(notice))) => {
+                assert_eq!(argv, osv(&["agents", "team"]));
+                assert!(notice.contains("fno agents hq"), "{notice}");
+            }
+            other => panic!("bare org: expected a noticed Run, got {other:?}"),
+        }
+        // The canon-refresh row forwards to its lead-family door, spelled
+        // either way.
+        match run(&["hq", "refresh-canon"]) {
+            Some((Agents::Run(argv), None)) => {
+                assert_eq!(argv, osv(&["agents", "lead", "refresh-canon"]))
+            }
+            other => panic!("hq refresh-canon: expected an unnoticed Run, got {other:?}"),
+        }
+        match run(&["org", "refresh-canon"]) {
+            Some((Agents::Run(argv), Some(notice))) => {
+                assert_eq!(argv, osv(&["agents", "lead", "refresh-canon"]));
+                assert!(notice.contains("fno agents hq"), "{notice}");
+            }
+            other => panic!("org refresh-canon: expected a noticed Run, got {other:?}"),
+        }
         let rundown = walk(&ROOT)
             .into_iter()
-            .find(|(p, _)| p == &["org", "chart", "rundown"])
+            .find(|(p, _)| p == &["hq", "chart", "rundown"])
             .unwrap()
             .1;
         let out = Some(OsString::from("/s/pages/rundown.html"));
@@ -747,10 +817,15 @@ mod tests {
             help(&osv(&["fleet", "census"])),
             Some(Agents::Run(osv(&["agents", "census", "--help"])))
         );
+        // A deprecated group spelling reads as its new path in help too.
+        match help(&osv(&["org"])) {
+            Some(Agents::Help(text)) => assert!(text.contains("hq - The HQ chart"), "{text}"),
+            other => panic!("help org: expected the hq menu, got {other:?}"),
+        }
         assert_eq!(classify(&osv(&["mux", "ls"])), None);
         assert!(matches!(
             classify(&osv(&["agents", "promote", "x"])),
-            Some(Agents::Refuse(m)) if m.contains("fno agents org promote")
+            Some(Agents::Refuse(m)) if m.contains("fno agents hq promote")
         ));
     }
 

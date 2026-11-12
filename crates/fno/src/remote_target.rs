@@ -110,9 +110,10 @@ pub fn is_plain_name_target(token: &str) -> bool {
     true
 }
 
-/// The cross-machine hand-off claim: `agents org promote <name>@<host> ...`
+/// The cross-machine hand-off claim: `agents hq promote <name>@<host> ...`
 /// execs the sibling `org-remote` command (the same relay pattern as mail).
-/// Targets without `@` forward to the local command, today's behavior.
+/// `agents org promote ...` still claims, one release into its deprecation
+/// window. Targets without `@` forward to the local command, today's behavior.
 pub fn classify_org(args: &[OsString]) -> Option<Vec<OsString>> {
     if args.first()?.to_str()? != "agents" {
         return None;
@@ -122,7 +123,8 @@ pub fn classify_org(args: &[OsString]) -> Option<Vec<OsString>> {
     if args.get(1)?.to_str()? == "org-remote" {
         return Some(args[2..].to_vec());
     }
-    if args.get(1)?.to_str()? != "org" || args.get(2)?.to_str()? != "promote" {
+    let group = args.get(1)?.to_str()?;
+    if !matches!(group, "hq" | "org") || args.get(2)?.to_str()? != "promote" {
         return None;
     }
     let target = args.get(3)?.to_str()?;
@@ -207,6 +209,17 @@ mod tests {
         // carries the tail WITHOUT the group word (the command routes on
         // `promote` first). The ssh hop's remote leg execs `agents
         // org-remote ...` directly.
+        let argv = classify_org(&os(&[
+            "agents",
+            "hq",
+            "promote",
+            "quinlan@mac2",
+            "--scope",
+            "fno",
+        ]))
+        .expect("hq promote @host is claimed");
+        assert_eq!(argv, os(&["promote", "quinlan@mac2", "--scope", "fno"]));
+        // The deprecated group spelling claims the same tail in its window.
         let argv = classify_org(&os(&[
             "agents",
             "org",
