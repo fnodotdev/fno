@@ -185,6 +185,9 @@ impl View {
                 "tab or click a section · esc close"
             })
             .min_width(widest.max(crate::popup::WIDTH_CAP))
+            // The six-label strip is wider than the default cap; without
+            // this the clamp cut the box short of the strip's right air.
+            .width_cap(crate::popup::WIDTH_CAP + 20)
             .plain_body();
         AuxPopup { popup, actions }
     }
@@ -232,7 +235,7 @@ pub(super) fn switch_tab(view: &mut View, tab: SettingsTab) {
     view.lane.reset();
     theme_import_ui::reset(view);
     remote_hosts::cancel_add(view);
-    extensions::cancel_url(view);
+    extensions::reset(view);
     if tab == SettingsTab::Extensions {
         extensions::refresh(view);
     }

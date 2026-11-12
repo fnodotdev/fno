@@ -109,7 +109,7 @@ pub use eval::{
     otel_ingest, otel_read, otlp_export, prove_it_verdicts, reader_cost, refusal_fold,
     refusal_rate, refusal_trend, research, retro, scoreboard, scoreboard_escalation,
     scoreboard_provider, session_cost, session_report, skill_diff, skill_drift, stability_report,
-    test_census, tick_ledger, usage_events, wake_meter,
+    test_census, tick_ledger, usage_events, usage_report, wake_meter,
 };
 pub use gate::{
     acceptance_evidence, approvals, attest, authorized_merge, autonomy_policy, autonomy_status,
@@ -157,30 +157,31 @@ pub use runtime::{
     mail_carrier, mail_cli, mail_control_drain, mail_envelope, mail_header, mail_hold, mail_inject,
     mail_notify_self, mail_paths, mail_receipt, mail_remote, mail_teach, mail_threads, manifest,
     manifest_lookup, mcp, native_adopt, notice_route, notify_dispatch, nudge, observer,
-    opencode_serve, opencode_transcript, operator_notice, operator_turns, operator_witness,
-    org_board, org_fold, org_remote, org_rivals, orphan_reap, orphans, osc, page_relief,
-    pane_claim, pane_identity, pane_keeper, pane_loop, pane_rebind, pane_relaunch, pane_stop, peek,
-    pending_session_row, pi_transcript, process_owner, process_probe, project, provenance,
-    quiet_retire, readiness, reap_release, reap_render, receipt, reclaim, recovery_sweep, reentry,
-    register, registry_commands, registry_commit, registry_guard, registry_json, registry_read,
-    registry_store, removals, rename, reserve, restart_run, resume_args, resume_gate, resume_pin,
-    resume_receipt, resume_wake, rev_front, revival_check, revive_proof, rm_receipt, rm_tombstone,
-    roles, roster_reap, run_import, run_outcome, run_state, scrape, scratch, screen,
-    session_activity, session_backfill, session_join, session_names_fold, session_start_bytes,
-    session_truth, silence_sweep, slot_cutover, source_pin, stale_spaces, stalls, state,
-    state_layout, state_layout_sqlite, state_path, state_root_drift, status_fanout, status_render,
-    status_sinks, stream_worker, stuck_work, subscribe, succession_txn, supervisor, sync_canonical,
-    system_sender, task_context, team_alarm, team_identity, team_names, team_read, team_reap,
-    team_rescope, team_settle, team_spend, team_split, team_widen, terminal_stop, territory,
-    tool_activity, tracker, transcript_activity, transcript_resolve, transcript_turns, truth_cli,
-    truth_probe, update_journal, visual_screen, wait, wake_name, wake_read, watch, watch_expiry,
-    watchdog, whoami, worker_wake, worktree, worktree_reapable, write_queue,
+    opencode_serve, opencode_transcript, opencode_turn, operator_notice, operator_turns,
+    operator_witness, org_board, org_fold, org_remote, org_rivals, orphan_reap, orphans, osc,
+    page_relief, pane_claim, pane_identity, pane_keeper, pane_loop, pane_rebind, pane_relaunch,
+    pane_stop, peek, pending_session_row, pi_transcript, process_owner, process_probe, project,
+    provenance, quiet_retire, readiness, reap_release, reap_render, receipt, reclaim,
+    recovery_sweep, reentry, register, registry_commands, registry_commit, registry_guard,
+    registry_json, registry_read, registry_store, removals, rename, reserve, restart_run,
+    resume_args, resume_gate, resume_pin, resume_receipt, resume_wake, rev_front, revival_check,
+    revive_proof, rm_receipt, rm_tombstone, roles, roster_reap, run_import, run_outcome, run_state,
+    scrape, scratch, screen, session_activity, session_backfill, session_join, session_names_fold,
+    session_start_bytes, session_truth, silence_sweep, slot_cutover, source_pin, stale_spaces,
+    stalls, state, state_layout, state_layout_sqlite, state_path, state_root_drift, status_fanout,
+    status_render, status_sinks, stream_worker, stuck_work, subscribe, succession_txn, supervisor,
+    sync_canonical, system_sender, task_context, team_alarm, team_identity, team_names, team_read,
+    team_reap, team_rescope, team_settle, team_spend, team_split, team_widen, terminal_stop,
+    territory, tool_activity, tracker, transcript_activity, transcript_resolve, transcript_turns,
+    truth_cli, truth_probe, update_journal, visual_screen, wait, wake_name, wake_read, watch,
+    watch_expiry, watchdog, whoami, worker_wake, worktree, worktree_reapable, write_queue,
 };
 pub(crate) use runtime::{
     adopt_carry, adopt_identity, agents_event, attended, cargo_builds, cargo_orphans,
     claude_restart_watch, fnod, footprint_cache, keeper_revival, lead_checkin_beat_budget,
-    ledger_register, ledger_workers, prompt_wait, reap_evidence, resume_reroute, resume_route,
-    retired_lead, served_liveness, session_receipt, thread_dialog,
+    ledger_register, ledger_workers, opencode_permission, prompt_wait, reap_evidence,
+    resume_reroute, resume_route, retired_lead, served_liveness, session_receipt, thread_dialog,
+    thread_permission,
 };
 use runtime::{agent_lock, boot_revival, codex_thread_entry, repo_identity, state_layout_merge};
 pub use spawn::{
@@ -192,7 +193,7 @@ pub use spawn::{
     harness_capabilities, harness_commands, harness_matrix, harness_roster, keeper_spawn,
     lane_heal, lanes, launch_exec, launch_flags, launch_record, launch_workdir, launchd_labels,
     loop_dispatch, loops_config, machine_key, model_env_scrub, model_family, model_price,
-    name_draw, name_ledger, naming, native_bg_mint, occupancy_classify, occupancy_login,
+    name_draw, name_ledger, naming, native_bg_mint, occupancy_classify, occupancy_login, omp,
     opencode_ask, opencode_config, opencode_install, pack_profile, pane_spawn, pi, pi_ask,
     plugin_install, plugins, project_sandbox, provider, provider_cap, provider_cap_commands,
     provider_key, provider_route, retask, role_cwd, role_grant, role_migration, route_capacity,
@@ -1220,7 +1221,7 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // Quiet-recovery's revival-rule skip: a deliberately stopped worker on a
     // delivered node, recorded instead of revived (codex_watch/quiet.rs).
     "quiet_worker_skip",
-    // Who stamped a row bus-only (mail_hold.rs record_stamp).
+    // Who wrote a hold record or the mail-only capability (mail_hold.rs record_stamp).
     "mail_hold_stamped",
     "quiet_worker_error",
     // Blueprint-stall lane (codex_watch/stall.rs): stall evidence observed,

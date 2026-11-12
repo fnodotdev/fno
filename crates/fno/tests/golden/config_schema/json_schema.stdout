@@ -3453,8 +3453,8 @@
         "eval_events": {
           "$ref": "#/$defs/TelemetryEvalEventsBlock"
         },
-        "install_count": {
-          "$ref": "#/$defs/TelemetryInstallCountBlock"
+        "usage_report": {
+          "$ref": "#/$defs/TelemetryUsageReportBlock"
         },
         "otlp": {
           "$ref": "#/$defs/TelemetryOtlpBlock"
@@ -3490,7 +3490,7 @@
       "title": "TelemetryEvalEventsBlock",
       "type": "object"
     },
-    "TelemetryInstallCountBlock": {
+    "TelemetryUsageReportBlock": {
       "properties": {
         "enabled": {
           "default": true,
@@ -3498,7 +3498,7 @@
           "type": "boolean"
         }
       },
-      "title": "TelemetryInstallCountBlock",
+      "title": "TelemetryUsageReportBlock",
       "type": "object"
     },
     "TelemetryOtlpBlock": {

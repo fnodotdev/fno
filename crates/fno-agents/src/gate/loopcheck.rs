@@ -1735,7 +1735,7 @@ pub(crate) fn decide_with_payload(
                         "intent": name, "intent_source": intent_source,
                         "fp_read_failed": fp_bad,
                         "pr_state": pr_info.state.as_str(),
-                        "ci": pr_info.ci_conclusion.render(),
+                        "ci": pr_read::ci_named(&pr_info.ci_conclusion, pr_info.ci_unmeasured.as_deref()),
                         "reviewed": pr_info.reviewed,
                         "review_skipped": pr_info.review_skipped,
                         "unaddressed_blocking": pr_info.unaddressed_findings.len()
@@ -2363,7 +2363,7 @@ pub(crate) fn decide_with_payload(
                         &noprogress_msg,
                         serde_json::json!({
                             "pr_state": pr_info.state.as_str(),
-                            "ci": pr_info.ci_conclusion.render(),
+                            "ci": pr_read::ci_named(&pr_info.ci_conclusion, pr_info.ci_unmeasured.as_deref()),
                             "red_check": pr_info.failing_checks.first(),
                         }),
                     );
@@ -2383,7 +2383,7 @@ pub(crate) fn decide_with_payload(
                             streak_window / 60,
                             short_sha(&head_sha),
                             pr_info.state.as_str(),
-                            pr_info.ci_conclusion.render(),
+                            pr_read::ci_named(&pr_info.ci_conclusion, pr_info.ci_unmeasured.as_deref()),
                             pr_info.reviewed
                         ),
                     };

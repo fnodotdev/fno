@@ -748,6 +748,7 @@ checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
  "num-traits",
+ "serde",
  "windows-link",
 ]
 
@@ -1340,6 +1341,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "crossterm",
+ "fno-mail",
  "futures-util",
  "hayro",
  "image",
@@ -1413,6 +1415,7 @@ dependencies = [
 name = "fno-mail"
 version = "0.4.5"
 dependencies = [
+ "chrono",
  "serde",
  "serde_json",
 ]

@@ -19,7 +19,7 @@
 set -euo pipefail
 
 READER_NAME="visual-log-reader"
-SPAWN_LINE="fno agents spawn ${READER_NAME} \"/fno:visual-log-reader\" --as thread"
+SPAWN_LINE="fno agents spawn --as thread --name ${READER_NAME} \"/fno:visual-log-reader\""
 RESUME_LINE="fno agents session resume ${READER_NAME}"
 FRESH_SECONDS=1200
 
@@ -95,7 +95,7 @@ fi
 # spawn mode: check first, fire the thread spawn only on an absent row.
 OUT="$(do_check)" && { echo "$OUT"; echo "already present; nothing to spawn"; exit 0; }
 if grep -q "absent" <<< "$OUT"; then
-    fno agents spawn "$READER_NAME" "/fno:visual-log-reader" --as thread
+    fno agents spawn --as thread --name "$READER_NAME" "/fno:visual-log-reader"
     echo "spawned visual-log-reader; re-check in a few minutes for the first beat"
     exit 0
 fi

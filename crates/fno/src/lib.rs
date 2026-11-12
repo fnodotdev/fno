@@ -21,6 +21,8 @@ pub mod agents_menu;
 #[cfg(feature = "full")]
 pub mod agents_view;
 #[cfg(feature = "full")]
+pub mod app_api;
+#[cfg(feature = "full")]
 pub mod argv_witness;
 #[cfg(feature = "full")]
 pub mod attention_api;
@@ -88,8 +90,6 @@ pub mod cursor;
 pub mod decisions_overlay;
 #[cfg(feature = "full")]
 pub mod decisions_table;
-#[cfg(feature = "desktop")]
-pub mod desktop;
 #[cfg(feature = "full")]
 pub mod digest_overlay;
 #[cfg(feature = "full")]
@@ -165,6 +165,8 @@ pub mod modal_select;
 pub mod model_catalog;
 #[cfg(feature = "full")]
 pub mod mouse;
+#[cfg(feature = "full")]
+pub mod must_enable;
 #[cfg(feature = "full")]
 pub mod mux_cli;
 #[cfg(feature = "full")]

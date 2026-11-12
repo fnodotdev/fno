@@ -2258,9 +2258,9 @@ fn resume_agent_rows() {
         RowResumeDisposition::NoPane(AgentNoPaneReason::LivePaneless)
     );
     assert!(
-            !Core::row_resumable(&live_codex),
-            "a live codex row has a process writing its rollout: resuming under it opens a second writer"
-        );
+        !Core::row_resumable(&live_codex),
+        "a live codex row has a process writing its rollout: resuming under it opens a second writer"
+    );
     let mut not_exited = base();
     not_exited.exited = false;
     not_exited.liveness = agents_view::Liveness::Unmeasured;

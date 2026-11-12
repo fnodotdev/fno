@@ -7,13 +7,16 @@
 //! prove nothing.
 
 use super::*;
+use crate::opencode_permission::encode_query_path;
 use std::sync::{Arc, Mutex};
 
 /// How the fake serve behaves for one test.
 #[derive(Clone)]
 struct ServeShape {
-    /// The version reported by `/global/health`.
+    /// The version reported by the health route.
     version: String,
+    /// The route set the fake answers: 1.x bare routes or 2.x `/api/*`.
+    contract: OpencodeContract,
     /// False: a PATCH is accepted and the stamp is never stored (the
     /// survives-a-successful-write shape).
     persist: bool,
@@ -23,6 +26,7 @@ impl Default for ServeShape {
     fn default() -> Self {
         ServeShape {
             version: "1.14.50".to_string(),
+            contract: OpencodeContract::V1,
             persist: true,
         }
     }
@@ -63,7 +67,23 @@ impl ArchiveServe {
                     };
                     format!(r#"{{"id":"ses_probe","time":{time}}}"#)
                 };
-                let (status, body) = if line.starts_with("GET /global/health") {
+                let v2 = shape.contract == OpencodeContract::V2;
+                let (status, body) = if v2 && line.starts_with("GET /api/info") {
+                    (
+                        "200 OK",
+                        format!(r#"{{"version":"{}","pid":1,"urls":[]}}"#, shape.version),
+                    )
+                } else if v2 && line.starts_with("PATCH /api/session/") {
+                    // 2.x: the body is a boolean and the answer carries none.
+                    if shape.persist && req.contains(r#""archived":true"#) {
+                        *stored.lock().unwrap() = Some(1_788_909_086_102);
+                    }
+                    ("204 No Content", String::new())
+                } else if v2 && line.starts_with("GET /api/session/") {
+                    ("200 OK", format!(r#"{{"data":{}}}"#, session_body()))
+                } else if v2 {
+                    ("404 Not Found", "{}".to_string())
+                } else if line.starts_with("GET /global/health") {
                     (
                         "200 OK",
                         format!(
@@ -133,7 +153,11 @@ fn an_accepted_write_the_store_did_not_keep_answers_survived() {
         persist: false,
         ..Default::default()
     });
-    let outcome = archive_session(&serve.base_url(), "tok", "ses_probe").unwrap();
+    let outcome = archive_session(
+        &handle(&serve.base_url(), OpencodeContract::V1),
+        "ses_probe",
+    )
+    .unwrap();
     assert_eq!(
         outcome,
         ArchiveOutcome::Survived,
@@ -142,21 +166,33 @@ fn an_accepted_write_the_store_did_not_keep_answers_survived() {
     assert_eq!(serve.patches(), 1);
 }
 
+fn handle(base_url: &str, contract: OpencodeContract) -> ServeHandle {
+    ServeHandle {
+        base_url: base_url.to_string(),
+        token: "tok".to_string(),
+        pid: 4242,
+        pid_start: Some(7),
+        contract,
+    }
+}
+
 // --- the capability gate ----------------------------------------------------
 
-fn write_serve_state(home: &AgentsHome, base_url: &str) {
+fn write_serve_state(home: &AgentsHome, base_url: &str, api: Option<&str>) {
     std::fs::create_dir_all(home.root()).unwrap();
+    let api = api.map(|a| format!(r#","api":"{a}""#)).unwrap_or_default();
     std::fs::write(
         serve_state_path(home),
-        format!(r#"{{"base_url":"{base_url}","token":"tok","pid":4242,"pid_start":7}}"#),
+        format!(r#"{{"base_url":"{base_url}","token":"tok","pid":4242,"pid_start":7{api}}}"#),
     )
     .unwrap();
 }
 
 #[test]
-fn a_serve_at_or_above_opencode_2_is_not_archive_capable() {
-    // 2.0.0 is the boundary itself: at the ceiling means above the measured
-    // range, never inside it.
+fn a_1x_record_reporting_opencode_2_is_not_archive_capable() {
+    // A record without the api field came from a 1.x boot. A serve behind
+    // it that now reports 2.x (2.0.0 is the boundary itself) must not take
+    // the 1.x-shaped PATCH.
     for version in ["2.0.0", "2.0.12"] {
         let serve = ArchiveServe::start(ServeShape {
             version: version.to_string(),
@@ -164,24 +200,53 @@ fn a_serve_at_or_above_opencode_2_is_not_archive_capable() {
         });
         let dir = tempfile::tempdir().unwrap();
         let home = AgentsHome::at(dir.path());
-        write_serve_state(&home, &serve.base_url());
+        write_serve_state(&home, &serve.base_url(), None);
         assert!(
             archive_capable_serve(&home).is_none(),
-            "{version} sits above the measured range; the 1.x-shaped PATCH must not reach it"
+            "{version} behind a 1.x record must not take the 1.x PATCH"
         );
     }
 }
 
+#[test]
+fn a_2x_serve_archives_over_its_own_routes_and_judges_by_readback() {
+    let serve = ArchiveServe::start(ServeShape {
+        version: "2.2.7".to_string(),
+        contract: OpencodeContract::V2,
+        ..Default::default()
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let home = AgentsHome::at(dir.path());
+    write_serve_state(&home, &serve.base_url(), Some("2.x"));
+    let capable = archive_capable_serve(&home).expect("a healthy 2.x serve is archive-capable");
+    assert_eq!(capable.contract, OpencodeContract::V2);
+    assert_eq!(
+        archive_session(&capable, "ses_probe").unwrap(),
+        ArchiveOutcome::Archived
+    );
+    assert_eq!(
+        archive_session(&capable, "ses_probe").unwrap(),
+        ArchiveOutcome::AlreadyArchived
+    );
+    let requests = serve.requests.lock().unwrap();
+    assert!(
+        requests.iter().all(|line| line.contains(" /api/")),
+        "a 2.x serve sees only /api/* routes: {requests:?}"
+    );
+    drop(requests);
+    assert_eq!(serve.patches(), 1, "the second archive reads, never writes");
+}
+
 // --- the retirement-lane arm ------------------------------------------------
 
-fn never_called(_: &str, _: &str, _: &str) -> Result<ArchiveOutcome, String> {
+fn never_called(_: &ServeHandle, _: &str) -> Result<ArchiveOutcome, String> {
     panic!("the archive op must not be reached on a skip");
 }
 
 #[test]
 fn an_id_of_another_harnesss_shape_never_reaches_the_serve() {
     use crate::gc_native::opencode_archive_outcome;
-    let serve = Some(("http://127.0.0.1:1".to_string(), "tok".to_string()));
+    let serve = Some(handle("http://127.0.0.1:1", OpencodeContract::V1));
     // A claude row's uuid on an opencode row would 404 and read as a measured
     // absence for a session this code never addressed.
     for wrong in [
@@ -203,23 +268,6 @@ fn an_id_of_another_harnesss_shape_never_reaches_the_serve() {
 /// Re-measure [`ARCHIVE_MIN_VERSION`] against a real opencode serve. The
 /// version bound is a claim about a vendor binary, and only a live run can
 /// renew it. Ignored by default because it needs a serve:
-
-/// Percent-encode a directory path for the `?directory=` query value: every
-/// byte outside the RFC 3986 unreserved set plus `/` becomes `%XX`, so `&`
-/// cannot split the param and a stray `%` cannot decode into another byte.
-fn encode_query_path(path: &str) -> String {
-    let mut out = String::with_capacity(path.len());
-    for byte in path.bytes() {
-        let keep = byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/');
-        if keep {
-            out.push(byte as char);
-        } else {
-            out.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    out
-}
-
 ///
 /// ```text
 /// OPENCODE_SERVER_PASSWORD=tok opencode serve --port 45999 --hostname 127.0.0.1 &
@@ -267,12 +315,16 @@ fn live_opencode_serve_carries_the_archive_op() {
     let session: serde_json::Value = serde_json::from_str(&body).unwrap();
     let sid = session["id"].as_str().expect("created session id");
 
+    let live = ServeHandle {
+        token: token.clone(),
+        ..handle(&base_url, OpencodeContract::V1)
+    };
     assert_eq!(
-        archive_session(&base_url, &token, sid).expect("archive"),
+        archive_session(&live, sid).expect("archive"),
         ArchiveOutcome::Archived
     );
     assert_eq!(
-        archive_session(&base_url, &token, sid).expect("second archive"),
+        archive_session(&live, sid).expect("second archive"),
         ArchiveOutcome::AlreadyArchived,
         "the archive op is idempotent"
     );

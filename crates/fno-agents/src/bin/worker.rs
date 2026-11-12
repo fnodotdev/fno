@@ -39,6 +39,10 @@
 //!   over ACP stdio for a `-H footnote --substrate thread` row and serves it
 //!   on a unix socket (footnote_harness/thread.rs). Callers build this argv;
 //!   humans never type it.
+//! - `--opencode-turn <spec>`: drives one opencode serve-thread turn over
+//!   HTTP and answers its permission asks through the fnod ladder until the
+//!   session goes idle (opencode_turn.rs). Callers build this argv; humans
+//!   never type it.
 //! - `--muse-host <spec> <socket> <name>`: the same for one Muse session
 //!   over MSP (`muse serve`) for a `-H muse --substrate thread` row
 //!   (muse/host.rs).
@@ -133,6 +137,15 @@ fn main() {
             PathBuf::from(spec).as_path(),
             PathBuf::from(socket).as_path(),
             &name,
+        ));
+    }
+    if let Some(idx) = args.iter().position(|a| a == "--opencode-turn") {
+        let spec = args.get(idx + 1).cloned().unwrap_or_default();
+        if let Some(cwd) = spec_cwd(&spec) {
+            fno_agents::cargo_build_dirs::fill_pane_env(&cwd);
+        }
+        std::process::exit(fno_agents::opencode_turn::run(
+            PathBuf::from(spec).as_path(),
         ));
     }
     if let Some(idx) = args.iter().position(|a| a == "--muse-host") {

@@ -70,7 +70,7 @@ expect "fresh reader exits 0" 0 "" \
     bash "$SCRIPT" check --status-file "$FRESH_FIXTURE"
 expect "stale reader exits 1 with resume repair" 1 "resume visual-log-reader" \
     bash "$SCRIPT" check --status-file "$STALE_FIXTURE"
-expect "absent reader exits 1 with spawn repair" 1 "fno agents spawn visual-log-reader" \
+expect "absent reader exits 1 with spawn repair" 1 "fno agents spawn --as thread --name visual-log-reader" \
     bash "$SCRIPT" check --status-file "$ABSENT_FIXTURE"
 expect "absent repair names the thread lane" 1 "\\-\\-as thread" \
     bash "$SCRIPT" check --status-file "$ABSENT_FIXTURE"
@@ -103,11 +103,11 @@ if ! grep -q -- "--as thread" "$STUB_LOG"; then
 else
     echo "ok: spawn argv carries --as thread"
 fi
-if ! grep -q "visual-log-reader" "$STUB_LOG"; then
-    echo "FAIL: spawn argv lost the reader name"
+if ! grep -q -- "--name visual-log-reader" "$STUB_LOG"; then
+    echo "FAIL: spawn argv lost the --name form (the parser takes one positional, the prompt)"
     fail_count=$((fail_count + 1))
 else
-    echo "ok: spawn argv carries the reader name"
+    echo "ok: spawn argv carries --name visual-log-reader"
 fi
 
 # spawn mode on a fresh reader must not spawn again.

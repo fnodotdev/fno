@@ -199,6 +199,16 @@ Run 1 gains a fifth lane, `harness-fit-footnote`, and the observe door learns to
 - Spend. Before the lane, spent dollars plus the smoke cost per attempt times 30 must stay under the $200 ceiling. That is 10 tasks times 3 repeats, Amendment 1's stop rule. One approval covers the smoke and the full lane. The operator still rules on the spend.
 - Scorer. `score_run1.py` now excludes unverified identity rows, counted by reason, as Scope and limits already said. The published Run 1 record holds no unverified rows, so no earlier number moves.
 
+## Amendment 15 (2026-11-11, the bank rebase, before any new Run 1 result)
+
+The replay bank graded a dead runtime. The Python `cli/tests` tree is gone. The seven replay tasks whose grades ran `uv run pytest` cannot grade. The 2026-10-02/03 Run 1 rows prove it: 16 ran, 0 passed against those grades. This rebase lands before any new Run 1 result and changes no recorded row.
+
+- The five replay tasks whose grade was Python-only (`replay-x-1018`, `replay-x-71e9`, `replay-x-a23c`, `replay-x-a8f3`, `replay-x-c911`) carry the `demoted` tag. Selection never picks a demoted task unless a person names it with `--task`.
+- The two mixed tasks keep their surviving Rust half. `replay-x-5978` grades the restored `provider_cap_transcript_bridge` target only. `replay-x-70e1` grades the restored `retirement_e2e` target only. Their prompts still narrate the whole node.
+- Two grade-only goldens re-based on the live bank join the bank: `hf-golden-target-start` and `hf-golden-pr-status`. Their fixture is HEAD, so they grade current Rust on every future run and never a deleted tree. They carry the `golden` tag. The PR gate excludes them, and a lane run does not.
+- `bank/cohorts.yaml` is new. Each lane cohort (`harness-fit-<lane>`) declares the same five members. The members are the two goldens plus the three pure-Rust replay tasks (`replay-x-5baf`, `replay-x-861c`, `replay-x-f188`). Those three stay gradeable by inspection. Their sha-restore plus `cargo test` mechanic is unchanged. A re-run waits for the test freeze to lift.
+- The lane command is unchanged: `run1.sh` still passes `--cohort harness-fit-<lane>`, now validated against the new split.
+
 ## Scope and limits
 
 One machine, one model, 10 replay tasks, 3 repeats: n is small. Bootstrap intervals at this n are wide, and a difference inside the interval is noise. An arm under 20 graded attempts is underpowered and fires no rule alone. Run 0 and Run 1 grade different task distributions (Terminal-Bench 2 is generic, the replay bank is footnote's own), so arms can differ across runs. The Terminus 2 reference tells a harness effect from a model effect. It does not measure footnote's own loop. The collector is the runner's own history rows. The observe door reads the attempt's own transcript for identity and usage. When the transcript is unreadable, `usage` is null, never zero. A row whose identity reads `unverified` still counts toward attempts but never toward a rule.

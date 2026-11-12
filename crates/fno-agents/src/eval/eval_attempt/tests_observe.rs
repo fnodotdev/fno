@@ -5,6 +5,10 @@ use super::observe;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
+fn fld<'a>(v: &'a Value, k: &str) -> &'a Value {
+    v.get(k).unwrap_or(&Value::Null)
+}
+
 fn observe_payload(lane: Value, extra: Value) -> Value {
     let mut p = json!({
         "lane": lane,
@@ -101,6 +105,18 @@ fn observe_claude_no_transcript_reads_unverified_with_null_usage() {
     );
     assert_eq!(out["usage"], Value::Null);
     // A harness with no reader reads the same way.
+    let lane = json!({"name": "x", "harness": "phantom", "model": "m", "effort": "high"});
+    let out = observe(&observe_payload(lane, json!({})));
+    assert_eq!(out["lane_status"], "unverified");
+    assert!(
+        out["lane_reason"]
+            .as_str()
+            .unwrap()
+            .contains("no transcript reader for harness 'phantom'"),
+        "out: {out}"
+    );
+    assert_eq!(out["usage"], Value::Null);
+    // pi reads its own store now: an empty store is unverified with a pi reason.
     let lane = json!({"name": "x", "harness": "pi", "model": "m", "effort": "high"});
     let out = observe(&observe_payload(lane, json!({})));
     assert_eq!(out["lane_status"], "unverified");
@@ -108,7 +124,7 @@ fn observe_claude_no_transcript_reads_unverified_with_null_usage() {
         out["lane_reason"]
             .as_str()
             .unwrap()
-            .contains("no transcript reader for harness 'pi'"),
+            .contains("no readable pi session"),
         "out: {out}"
     );
     assert_eq!(out["usage"], Value::Null);
@@ -294,6 +310,68 @@ fn observe_footnote_without_provider_stays_bare_and_substituted() {
     assert_eq!(out["lane_status"], "substituted", "out: {out}");
 }
 
+fn observe_pi_reads_a_flat_store_header() {
+    let lock = crate::claims::test_env_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous = std::env::var_os("PI_CODING_AGENT_SESSION_DIR");
+    let tmp = tempfile::TempDir::new().unwrap();
+    std::env::set_var("PI_CODING_AGENT_SESSION_DIR", tmp.path());
+    let body = format!(
+        "{}\n{}\n",
+        json!({"id": "p1", "cwd": WD}),
+        json!({"type": "message", "message": {"role": "assistant", "model": "glm-5.3-flash", "provider": "zai"}}),
+    );
+    plant_jsonl(tmp.path(), "", "p1.jsonl", &body, 1_700_000_050);
+    let lane = json!({"name": "glm", "harness": "pi", "model": "glm-5.3-flash", "effort": "high"});
+    let out = observe(&observe_payload(lane, json!({})));
+    assert_eq!(out["lane_status"], "ok", "out: {out}");
+    assert_eq!(
+        fld(&out, "observed_model"),
+        &json!("zai/glm-5.3-flash"),
+        "out: {out}"
+    );
+    assert_eq!(fld(&out, "observed_session_id"), &json!("p1"));
+    assert_eq!(out["usage"], Value::Null);
+    match previous {
+        Some(v) => std::env::set_var("PI_CODING_AGENT_SESSION_DIR", v),
+        None => std::env::remove_var("PI_CODING_AGENT_SESSION_DIR"),
+    }
+    drop(lock);
+}
+
+fn observe_opencode_v2_fallback_reads_the_session_row() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let db = dir.path().join("oc2.db");
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT, \
+         time_updated INTEGER, model TEXT, tokens_input INTEGER, tokens_output INTEGER, \
+         tokens_reasoning INTEGER, tokens_cache_read INTEGER, tokens_cache_write INTEGER);",
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO session_v2 VALUES ('s2', NULL, '/tmp/attempt-wd', 1700000050000, ?1, 20, 8, 4, 2, 1)",
+        [r#"{"id":"glm-5.3-flash","providerID":"zai"}"#],
+    )
+    .unwrap();
+    let lane = json!({"name": "glm", "harness": "opencode", "model": "zai/glm-5.3-flash", "effort": "high"});
+    let out = observe(&observe_payload(
+        lane,
+        json!({"opencode_dbs": [db.to_str().unwrap()]}),
+    ));
+    assert_eq!(out["lane_status"], "ok", "out: {out}");
+    assert_eq!(
+        fld(&out, "observed_model"),
+        &json!("zai/glm-5.3-flash"),
+        "out: {out}"
+    );
+    assert_eq!(fld(&out, "observed_session_id"), &json!("s2"));
+    assert_eq!(fld(fld(&out, "usage"), "input"), &json!(20));
+    assert_eq!(fld(fld(&out, "usage"), "output"), &json!(12));
+    assert_eq!(fld(&out, "usage_source"), &json!("opencode-store-v2"));
+}
+
 #[test]
 fn all_contracts_in_one_declaration() {
     observe_claude_finds_transcript_by_workdir_and_sums_usage();
@@ -301,6 +379,8 @@ fn all_contracts_in_one_declaration() {
     observe_claude_model_mismatch_is_substituted();
     observe_statuses_before_any_worker();
     observe_opencode_reads_session_and_sums_tokens();
+    observe_pi_reads_a_flat_store_header();
+    observe_opencode_v2_fallback_reads_the_session_row();
     observe_footnote_joins_provider_with_reported_model();
     observe_footnote_without_provider_stays_bare_and_substituted();
 }

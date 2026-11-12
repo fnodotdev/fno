@@ -323,9 +323,13 @@ pub(crate) fn status_cache_key(payload: &Value) -> Value {
 /// -> `not_mergeable_unknown`, `unstable` -> the CI conjunct, `has_hooks`
 /// and `clean` -> GitHub will merge); the states only this read sees do
 /// block. `blocked` is the ruleset / protection / required-review hold, and
-/// on it - and only it - the live rules read names what is missing. A rules
-/// read that fails or explains nothing answers `missing_required_checks:
-/// null` and says so in `source`; the blocker is never dropped.
+/// on it - and only it - the live rules read runs. The read's three answers
+/// decide the hold: a named unmet requirement holds (the names land in
+/// `missing_required_checks`); a successful read that names nothing
+/// unsatisfied drops the block, because a hold the gate cannot name must
+/// not strand a green PR and GitHub re-enforces its own rules at merge
+/// time; a failed read has no evidence either way, keeps the block, and
+/// says so in `source`.
 pub(crate) fn merge_blocker<P: GhProbe>(probes: &P, payload: &Value) -> Value {
     // The Python transport spreads the whole pr_json into the payload, so
     // keys arrive under their REST names; the flat spellings are accepted
@@ -357,18 +361,25 @@ pub(crate) fn merge_blocker<P: GhProbe>(probes: &P, payload: &Value) -> Value {
         ),
         "blocked" => {
             let pr = payload.get("pr").and_then(Value::as_u64).unwrap_or(0);
-            let missing = blocked_missing(probes, &cwd, base, payload.get("rollup"), pr);
-            match missing {
-                Some(missing) => (
+            match blocked_rules_read(probes, &cwd, base, payload.get("rollup"), pr) {
+                RulesRead::Missing(missing) => (
                     vec!["github_blocked".to_string()],
                     json!(missing),
                     format!("rules/branches/{base}"),
                 ),
-                None => (
+                RulesRead::NamesNothing => (
+                    Vec::new(),
+                    Value::Null,
+                    format!(
+                        "rules/branches/{base} names no unsatisfied requirement; \
+                         the blocked state is stale or held outside the read's \
+                         model, and GitHub enforces its own rules at merge time"
+                    ),
+                ),
+                RulesRead::Unreadable => (
                     vec!["github_blocked".to_string()],
                     Value::Null,
-                    "the rules read failed or names no unsatisfied rule; the block stands"
-                        .to_string(),
+                    "the rules read failed; the block stands".to_string(),
                 ),
             }
         }
@@ -432,29 +443,77 @@ pub(crate) fn merge_blocker<P: GhProbe>(probes: &P, payload: &Value) -> Value {
     })
 }
 
+/// The unmeasured read over the raw Actions runs listing the status reader
+/// already holds (`workflowRuns`, from `zero_job_scan`'s paginated read).
+/// PR 82 merged ready with all 7 runs on its head still queued:
+/// the check-run rollup carried only fno's own passing statuses, so the
+/// verdict read unknown and unknown added no blocker. The listing is the
+/// evidence. `None` = measured (at least one run completed), or the listing
+/// was never read (`Value::Null`: the GraphQL route, a legacy payload) and
+/// has no evidence either way. A readable listing with no run at all is
+/// unmeasured too: absent runs block with a named reason.
+pub(crate) fn ci_unmeasured_reason(runs: &Value, head: &str) -> Option<String> {
+    let rows = runs.as_array()?;
+    let total = rows.len();
+    let completed = rows
+        .iter()
+        .filter(|r| row_text(r, &["status"]) == "completed")
+        .count();
+    if completed > 0 {
+        return None;
+    }
+    let reason = if total > 0 {
+        format!("ci unmeasured: {total} runs queued, none completed at {head}")
+    } else {
+        format!("ci unmeasured: no runs at {head}")
+    };
+    Some(reason)
+}
+
+/// What the live rules read answers for a PR whose `mergeable_state` reads
+/// `blocked`. Three answers, never two: a successful read that names no
+/// unsatisfied requirement is positive evidence there is nothing to hold
+/// on (the blocked state is GitHub's lag or a mechanism the read does not
+/// model), while an unreadable read is no evidence and still fails closed.
+enum RulesRead {
+    /// At least one modeled requirement is unmet; the names go to the hold.
+    Missing(Vec<String>),
+    /// The read succeeded and names no unsatisfied requirement.
+    NamesNothing,
+    /// The read itself failed: no evidence either way.
+    Unreadable,
+}
+
 /// Which required checks or reviews the live rules read holds unmet, for a
-/// PR whose `mergeable_state` reads `blocked`. `None` when the read failed
-/// or no rule in it explains the hold.
-fn blocked_missing<P: GhProbe>(
+/// PR whose `mergeable_state` reads `blocked`.
+fn blocked_rules_read<P: GhProbe>(
     probes: &P,
     cwd: &Path,
     base: &str,
     rollup: Option<&Value>,
     pr: u64,
-) -> Option<Vec<String>> {
+) -> RulesRead {
     if base.is_empty() {
-        return None;
+        return RulesRead::Unreadable;
     }
     let args = vec![
         "api".to_string(),
         format!("repos/{{owner}}/{{repo}}/rules/branches/{base}"),
     ];
-    let (ok, stdout, _stderr) = probes.run_gh(cwd, &args).ok()?;
+    let (ok, stdout, _stderr) = match probes.run_gh(cwd, &args) {
+        Ok(answer) => answer,
+        Err(_) => return RulesRead::Unreadable,
+    };
     if !ok {
-        return None;
+        return RulesRead::Unreadable;
     }
-    let rules: Value = serde_json::from_str(&stdout).ok()?;
-    let rules = rules.as_array()?;
+    let rules: Value = match serde_json::from_str(&stdout) {
+        Ok(v) => v,
+        Err(_) => return RulesRead::Unreadable,
+    };
+    let Some(rules) = rules.as_array() else {
+        return RulesRead::Unreadable;
+    };
     let rows = rollup.and_then(Value::as_array);
     let mut missing: Vec<String> = Vec::new();
     let mut explained = false;
@@ -494,13 +553,13 @@ fn blocked_missing<P: GhProbe>(
         }
     }
     if !explained || missing.is_empty() {
-        // No rule, or every named requirement already passes: the read
-        // explains nothing about the hold, and null says so honestly.
-        return None;
+        // No modeled rule, or every named requirement already passes: the
+        // read succeeded and proves the gate has no hold to name.
+        return RulesRead::NamesNothing;
     }
     missing.sort();
     missing.dedup();
-    Some(missing)
+    RulesRead::Missing(missing)
 }
 
 /// GitHub's own review decision for the PR: `APPROVED` only when the

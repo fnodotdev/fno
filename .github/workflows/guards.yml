@@ -160,6 +160,13 @@ jobs:
         timeout-minutes: 5
         run: bun test tests/js/opencode/footnote.plugin.test.js
 
+      - name: Pi bridge suite (tests/js/pi)
+        if: ${{ !cancelled() && steps.bun.outcome == 'success' }}
+        timeout-minutes: 5
+        # The real-host leg skips where pi is not installed; the fake-host
+        # contract tests run everywhere bun runs.
+        run: bun test tests/js/pi/footnote.extension.test.mjs
+
   main-python-static:
     name: Python static correctness (495 sources)
     runs-on: ubuntu-24.04

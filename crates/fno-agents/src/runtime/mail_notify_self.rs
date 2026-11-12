@@ -41,29 +41,12 @@ pub fn notify(bus_dir: &Path, session: &str) -> i32 {
 /// rendered envelope bytes.
 pub(crate) fn notify_to(bus_dir: &Path, session: &str, out: &mut impl std::io::Write) -> i32 {
     let handle = crate::identity::canonical_handle(session);
-    let clock_key = crate::mail_hold::identity_key(session);
 
-    // Busy mode: the hook fires on every prompt - an idle hold re-arms, a
-    // wall hold keeps its policy live. Both calls WRITE, so a hold failure
-    // degrades to rendering, never swallowing the turn.
-    if crate::mail_hold::extend_clock(&clock_key)
-        .ok()
-        .flatten()
-        .is_some()
-    {
+    // Busy mode: the hook fires on every prompt, and a live idle hold
+    // re-arms on it. An ended record is removed by the read.
+    if crate::mail_hold::extend_hold(session) {
         return 0;
     }
-    // The first-eight key is the pre-migration clock: extend it so an old
-    // hold keeps its idle re-arm, and tidy whichever form has lapsed.
-    if crate::mail_hold::extend_clock(&handle)
-        .ok()
-        .flatten()
-        .is_some()
-    {
-        return 0;
-    }
-    crate::mail_hold::tidy_lapsed(&clock_key);
-    crate::mail_hold::tidy_lapsed(&handle);
 
     let msgs = read_bus(bus_dir);
     let mut pending = pending(
@@ -95,20 +78,10 @@ pub(crate) fn notify_to(bus_dir: &Path, session: &str, out: &mut impl std::io::W
 }
 
 /// Whether a mail hold is live for `session`, read without re-arming it.
-/// The prompt boundary re-arms through `extend_clock`; a tool call is not a
+/// The prompt boundary re-arms through `extend_hold`; a tool call is not a
 /// prompt, so it only reads.
 pub(crate) fn held(session: &str) -> bool {
-    let now = chrono::Utc::now();
-    [
-        crate::mail_hold::identity_key(session),
-        crate::identity::canonical_handle(session),
-    ]
-    .iter()
-    .any(|k| {
-        crate::mail_hold::read_clock(k)
-            .and_then(|c| c.until)
-            .is_some_and(|u| u > now)
-    })
+    crate::mail_hold::live_hold(session, chrono::Utc::now()).is_some()
 }
 
 /// Every parseable row of the bus log, oldest first.
@@ -450,16 +423,13 @@ mod tests {
         crate::mail_hold::tests::with_hold_env(|home| {
             let (_dir, bus) = bus_fixture("busy");
             append(&bus, "lead", &handle, "hello");
-            let clock_dir = crate::state_layout::place_dir(home, "mail-hold").unwrap();
-            std::fs::create_dir_all(&clock_dir).unwrap();
-            let clock = json!({
-                "until": "2099-01-01T00:00:00Z",
-                "window_s": 300,
-                "clock_kind": "idle",
-            });
-            std::fs::write(
-                clock_dir.join(format!("{session}.json")),
-                format!("{clock}\n"),
+            let _ = home;
+            crate::mail_hold::put_hold(
+                session,
+                chrono::Duration::minutes(5),
+                true,
+                fno_mail::hold::SetBy::User,
+                "test",
             )
             .unwrap();
             assert_eq!(notify(&bus, session), 0);
