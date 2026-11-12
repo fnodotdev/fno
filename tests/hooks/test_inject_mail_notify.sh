@@ -373,7 +373,7 @@ fi
 JB="$TMP/j-busy"
 mkdir -p "$JB/bus" "$JB/mail-hold"
 printf '%s\n' "$msg1" > "$JB/bus/messages.jsonl"
-printf '{"until":"2099-01-01T00:00:00Z","window_s":300,"clock_kind":"idle"}\n' > "$JB/mail-hold/$SID.json"
+printf '{"session":"%s","until":"2099-01-01T00:00:00Z","set_by":"user","reason":"busy","clock":{"kind":"wall"}}\n' "$SID" > "$JB/mail-hold/$SID.json"
 out="$(journey_run "$JB" "$STDIN_OK")" && jb_rc=0 || jb_rc=$?
 if [[ "$jb_rc" -eq 0 && -z "$out" && ! -f "$JB/bus/cursors/$HANDLE.json" ]]; then
     ok "journey busy hold: no render, no ack while the clock is live"
