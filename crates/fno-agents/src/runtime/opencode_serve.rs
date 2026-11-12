@@ -50,11 +50,11 @@ mod api;
 pub use api::{ServeError, ServeMessage};
 
 use crate::claude_ask::{emit_event, validate_spawn_inputs};
-use crate::opencode_permission::LaneError;
 use crate::opencode_ask::{
     apply_opencode_variant, require_qualified_model, AskOutcome, OPENCODE_DEFAULT_MODEL,
 };
 use crate::opencode_install::OpencodeContract;
+use crate::opencode_permission::LaneError;
 use crate::paths::AgentsHome;
 use crate::state::load_registry;
 
