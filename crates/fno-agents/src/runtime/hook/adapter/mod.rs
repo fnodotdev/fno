@@ -47,7 +47,7 @@ pub fn normalize(harness: &str, event: &str, payload: &serde_json::Value) -> Hoo
         "claude" => claude::normalize(event, payload),
         "codex" => codex::normalize(event, payload),
         "opencode" => opencode::normalize(event, payload),
-        "pi" => pi::normalize(event, payload),
+        "pi" | "omp" => pi::normalize(event, payload),
         _ => HookEvent {
             harness: harness.to_string(),
             event: event.to_string(),

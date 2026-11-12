@@ -1071,7 +1071,8 @@ pub fn run_intel(args: &[String]) -> i32 {
                 for part in v.split(',') {
                     match part.trim() {
                         "" => {}
-                        "claude" | "codex" | "opencode" | "footnote" | "pi" | "agy" | "all" => {
+                        "claude" | "codex" | "opencode" | "footnote" | "pi" | "omp" | "agy"
+                        | "all" => {
                             let part = part.trim();
                             if !harness_spec.iter().any(|s| s == part) {
                                 harness_spec.push(part.to_string());
@@ -1079,7 +1080,7 @@ pub fn run_intel(args: &[String]) -> i32 {
                         }
                         other => {
                             eprintln!(
-                                "fno-agents intel: unknown harness {other} (known: claude, codex, opencode, footnote, pi, agy, all)"
+                                "fno-agents intel: unknown harness {other} (known: claude, codex, opencode, footnote, pi, omp, agy, all)"
                             );
                             return 2;
                         }
@@ -1293,7 +1294,9 @@ pub fn run_intel(args: &[String]) -> i32 {
 
 /// The selected harnesses in canonical order: `all` (or nothing named) expands to every harness, otherwise the named values intersect the canonical order.
 pub(crate) fn selected_harnesses(spec: &[String]) -> Vec<&'static str> {
-    const ALL: [&str; 6] = ["claude", "codex", "opencode", "footnote", "pi", "agy"];
+    const ALL: [&str; 7] = [
+        "claude", "codex", "opencode", "footnote", "pi", "omp", "agy",
+    ];
     if spec.iter().any(|s| s == "all") || spec.is_empty() {
         return ALL.to_vec();
     }
@@ -1434,13 +1437,17 @@ fn fold_all(
             sources.push(Box::new(source));
         }
     }
-    if selected.contains(&"pi") {
+    for harness in ["pi", "omp"] {
+        if !selected.contains(&harness) {
+            continue;
+        }
         let source = crate::pi_transcript::PiSource {
             sessions_dir: None,
             roots: roots.clone(),
+            omp: harness == "omp",
         };
         if let Err(why) = source.probe() {
-            skipped.insert("pi".to_string(), why);
+            skipped.insert(harness.to_string(), why);
         } else {
             sources.push(Box::new(source));
         }
