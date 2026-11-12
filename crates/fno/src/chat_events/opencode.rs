@@ -1327,7 +1327,7 @@ mod tests {
             [],
         ).unwrap();
         conn.execute(
-            "INSERT INTO session_part (message_id, session_id, type, data, time_created) VALUES \
+            "INSERT INTO session_part (message_id, session_id, ordinal, type, data, time_created) VALUES \
              ('m2', 'ses_v2a', 2, 'text', '{\"type\":\"text\",\"text\":\"partial\"}', 2)",
             [],
         )
