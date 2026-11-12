@@ -362,7 +362,6 @@ fn read_v2(conn: &rusqlite::Connection, sid: &str) -> String {
                 r.get::<_, Option<i64>>(5)?,
                 r.get::<_, Option<String>>(7)?,
                 r.get::<_, i64>(8)?,
-                r.get::<_, Option<i64>>(6)?,
             ))
         })
         .map_err(|e| e.to_string())
@@ -374,7 +373,7 @@ fn read_v2(conn: &rusqlite::Connection, sid: &str) -> String {
     let mut current: Option<(String, String, String, Vec<(String, String, i64)>)> = None;
     let mut out = String::new();
     for row in rows.flatten() {
-        let (_k, mid, mtype, mdata, ordinal, pdata, created, _ptype) = row;
+        let (_k, mid, mtype, mdata, ordinal, pdata, created) = row;
         match &mut current {
             Some((cur_id, _, _, parts)) if *cur_id == mid => {
                 if let (Some(ordinal), Some(pdata)) = (ordinal, pdata) {
@@ -718,7 +717,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT NOT NULL, time_updated INTEGER NOT NULL);
              CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL, seq INTEGER NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
-             CREATE TABLE session_part (message_id TEXT NOT NULL, session_id TEXT NOT NULL, ordinal INTEGER NOT NULL, type TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (message_id, ordinal));",
+             CREATE TABLE session_part (message_id TEXT NOT NULL, session_id TEXT NOT NULL, ordinal INTEGER NOT NULL, type TEXT NOT NULL, call_id TEXT, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY (message_id, ordinal));",
         )
         .unwrap();
         // A live clock: the 1-day window in v2_real_schema_window_and_read
@@ -751,9 +750,10 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO session_part (message_id, session_id, ordinal, type, data) VALUES \
-             ('vm2', 'ses_fresh', 0, 'tool', ?1)",
+            "INSERT INTO session_part (message_id, session_id, ordinal, type, call_id, time_created, time_updated, data) VALUES \
+             ('vm2', 'ses_fresh', 0, 'tool', 'c1', ?1, ?1, ?2)",
             rusqlite::params![
+                now_ms,
                 r#"{"type":"tool","name":"bash","state":{"status":"completed","input":{}}}"#
             ],
         )
