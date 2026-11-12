@@ -77,7 +77,10 @@ fn store(method: &str, params: Value) -> Result<Value, String> {
     let request = crate::keeper_wire::KeeperRequest::new(1, method, params);
     crate::store_exec::exec_request(&cfg, &request)
         .outcome
-        .map_err(|error| error.message)
+        .map_err(|error| match error.message.is_empty() {
+            true => format!("store refused ({})", error.kind.as_str()),
+            false => error.message,
+        })
 }
 
 /// The plan-docs call every writer leaf shares: warnings print, an

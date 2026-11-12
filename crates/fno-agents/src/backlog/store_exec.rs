@@ -148,31 +148,29 @@ pub(crate) fn handle_keeper_scan(
     Ok(json!({"keepers": keepers}))
 }
 
-/// The serving half of the lane, split from stdin/stdout so it stays
-/// testable without a process. No render pass here, deliberately: the write
-/// path renders nothing after a landed publish - the keeper's settled
-/// trigger and the daemon's board_render arm own the views, so an exec
-/// render would run the pass twice for every CLI write - and a synchronous
-/// `fno backlog render-views` inside the child re-enters the store client,
-/// which wedges under the test sandbox. The resident trigger's remaining
-/// job (native mux writes rendering the views) rides with the resident
-/// keeper itself.
-pub(crate) fn exec_reply(cfg: &ExecConfig, payload: &[u8]) -> KeeperReply {
+/// The lane's one request parse, under the frame cap. The refusal is the
+/// reply to send.
+fn parse_exec_payload(payload: &[u8]) -> Result<KeeperRequest, KeeperReply> {
     if payload.len() > MAX_FRAME_BYTES {
-        return err_reply(
+        return Err(err_reply(
             0,
             ErrorKind::MalformedFrame,
             format!("request of {} bytes exceeds the cap", payload.len()),
-        );
+        ));
     }
-    match parse_request(payload) {
-        Ok(req) => exec_request(cfg, &req),
-        Err(reply) => reply,
-    }
+    parse_request(payload)
 }
 
-/// [`exec_reply`] for a request already parsed: the in-process callers
-/// build a [`KeeperRequest`] and skip the bytes.
+/// The serving half of the lane, split from stdin/stdout so it stays
+/// testable without a process; the in-process callers build a
+/// [`KeeperRequest`] and call it directly. No render pass here,
+/// deliberately: the write path renders nothing after a landed publish -
+/// the keeper's settled trigger and the daemon's board_render arm own the
+/// views, so an exec render would run the pass twice for every CLI write -
+/// and a synchronous `fno backlog render-views` inside the child re-enters
+/// the store client, which wedges under the test sandbox. The resident
+/// trigger's remaining job (native mux writes rendering the views) rides
+/// with the resident keeper itself.
 pub(crate) fn exec_request(cfg: &ExecConfig, req: &KeeperRequest) -> KeeperReply {
     if let Some(reply) = fno_home_write_fence(req, &cfg.graph) {
         return reply;
@@ -261,15 +259,13 @@ pub const REQUEST_LOG_ENV: &str = "FNO_STORE_EXEC_LOG";
 /// the result's `entries` array when it has one (so a by-id read never counts
 /// its `missing` tokens), else the sum of its top-level arrays.
 fn request_log_row(
-    payload: &[u8],
+    req: Option<&KeeperRequest>,
     reply: &KeeperReply,
     reply_bytes: usize,
     wall: Duration,
 ) -> Value {
-    let req = parse_request(payload).ok();
-    let method = req.as_ref().map(|r| &r.method);
+    let method = req.map(|r| &r.method);
     let op = req
-        .as_ref()
         .and_then(|r| r.params.get("name").or_else(|| r.params.get("op")))
         .and_then(Value::as_str);
     let rows: usize = match &reply.outcome {
@@ -327,11 +323,15 @@ pub fn run_exec(cfg: ExecConfig) -> Result<(), String> {
         .read_to_end(&mut payload)
         .map_err(|e| format!("cannot read request from stdin: {e}"))?;
     let started = std::time::Instant::now();
-    let reply = exec_reply(&cfg, &payload);
+    let req = parse_exec_payload(&payload);
+    let reply = match &req {
+        Ok(req) => exec_request(&cfg, req),
+        Err(refusal) => refusal.clone(),
+    };
     let ok = reply.is_ok();
     let text = String::from_utf8(crate::graph_keeper::reply_bytes(&reply)).unwrap_or_default();
     if let Some(log) = std::env::var_os(REQUEST_LOG_ENV).filter(|v| !v.is_empty()) {
-        let row = request_log_row(&payload, &reply, text.len(), started.elapsed());
+        let row = request_log_row(req.as_ref().ok(), &reply, text.len(), started.elapsed());
         append_request_log(Path::new(&log), &row);
     }
     println!("{text}");

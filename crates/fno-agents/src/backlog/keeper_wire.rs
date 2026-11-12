@@ -227,28 +227,29 @@ impl Serialize for KeeperReply {
     }
 }
 
-/// A reply without `ok: true` is a refusal, whatever else it carries; a
-/// refusal with no `error` object reads as a default (empty) one.
+/// Lenient field by field, like the request read: `ok: true` returns the
+/// result whatever the other fields hold, anything else is a refusal, and
+/// an absent or off-type `error` reads as a default (empty) one.
 impl<'de> Deserialize<'de> for KeeperReply {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
         struct Raw {
             #[serde(default)]
-            id: u64,
+            id: Value,
             #[serde(default)]
-            ok: bool,
+            ok: Value,
             #[serde(default)]
             result: Value,
             #[serde(default)]
-            error: Option<KeeperError>,
+            error: Value,
         }
         let raw = Raw::deserialize(deserializer)?;
         Ok(Self {
-            id: raw.id,
-            outcome: if raw.ok {
+            id: raw.id.as_u64().unwrap_or(0),
+            outcome: if raw.ok.as_bool() == Some(true) {
                 Ok(raw.result)
             } else {
-                Err(raw.error.unwrap_or_default())
+                Err(KeeperError::deserialize(raw.error).unwrap_or_default())
             },
         })
     }
@@ -291,6 +292,10 @@ mod tests {
             let back: KeeperReply = serde_json::from_slice(&bytes).unwrap();
             assert_eq!(back, reply);
         }
+        let odd: KeeperReply =
+            serde_json::from_value(json!({"id": -1, "ok": true, "result": 1, "error": "x"}))
+                .unwrap();
+        assert_eq!(odd, KeeperReply::ok(0, json!(1)));
     }
 
     #[test]
