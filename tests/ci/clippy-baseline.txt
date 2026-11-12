@@ -12622,3 +12622,6 @@ crates/fno-agents/src/runtime/mail_hold.rs	clippy::indexing_slicing	let until = 
 crates/fno-agents/src/runtime/mail_hold.rs	clippy::indexing_slicing	r["delivery_policy"] = serde_json::Value::String(MAIL_ONLY.into());
 crates/fno-agents/src/runtime/mail_hold.rs	clippy::indexing_slicing	row["delivery_policy"] = serde_json::Value::String(MAIL_ONLY.into());
 crates/fno-agents/src/runtime/mail_hold.rs	clippy::indexing_slicing	row["origin"] = serde_json::Value::String("operator".into());
+crates/fno/src/client/tests/sideline_table_tests.rs	clippy::indexing_slicing	assert!(!rows[2].dnd, "an ended hold marks nothing");
+crates/fno/src/client/tests/sideline_table_tests.rs	clippy::indexing_slicing	rows[0].dnd && rows[0].held_conversation,
+crates/fno/src/client/tests/sideline_table_tests.rs	clippy::indexing_slicing	rows[1].dnd && !rows[1].held_conversation,
