@@ -22,6 +22,6 @@ grade:
   - kind: file-exists
     path: ensure-probe-answers.md
   - kind: exit
-    command: "python3 -c \"a = open('ensure-probe-answers.md').read(); assert '0' in a.splitlines()[0], 'line 1 misses the fresh exit code'; assert 'fno agents session resume visual-log-reader' in a.splitlines()[1], 'line 2 misses the resume repair'; assert 'fno agents spawn visual-log-reader' in a.splitlines()[2], 'line 3 misses the spawn repair'\""
+    command: "python3 -c \"a = open('ensure-probe-answers.md').read(); assert '0' in a.splitlines()[0], 'line 1 misses the fresh exit code'; assert 'fno agents session resume visual-log-reader' in a.splitlines()[1], 'line 2 misses the resume repair'; assert 'fno agents spawn --as thread --name visual-log-reader' in a.splitlines()[2], 'line 3 misses the spawn repair'\""
 timeout_minutes: 10
 tags: [capability, visual-log-reader]
