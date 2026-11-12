@@ -29,6 +29,10 @@
 # rust-ci.yml names the toolchain that wrote the baseline; bump them
 # together, never apart (same contract as the fmt job's RUSTFMT_TOOLCHAIN).
 #
+# Platform: CI runs on Linux. A baseline written on macOS misses cfg(linux)
+# code (and --write-baseline there drops the Linux-only rows as stale), so
+# union a macOS write with the rows the Linux job reports, never replace.
+#
 # Known limit: keys are unique lines, so a new flagged line whose trimmed text
 # equals an already-baselined line in the same file passes (common for
 # `let _ = tx.send(..)` and `.lock().unwrap()`). The gate sees the first
@@ -63,7 +67,7 @@ while [[ $# -gt 0 ]]; do
         --write-baseline) WRITE=1; shift ;;
         --extract) EXTRACT_SRC="$2"; EXTRACT_CRATE="$3"; shift 3 ;;
         --hits-file) HITS_FILE="$2"; shift 2 ;;
-        -h|--help) sed -n '2,46p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,50p' "$0"; exit 0 ;;
         *) CRATES+=("$1"); shift ;;
     esac
 done
