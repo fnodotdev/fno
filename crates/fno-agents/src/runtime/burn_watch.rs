@@ -2411,7 +2411,7 @@ mod tests {
             acquired_at: 1,
             pid: None,
             host: "t".into(),
-            pid_unavailable: false,
+            pid_unavailable: true,
             expires_at: None,
             reason: Some("target dispatch".into()),
             harness: Some("claude".into()),
