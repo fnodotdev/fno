@@ -3459,14 +3459,15 @@ fn opencode_serve_seat_refuses_a_version_skew_with_no_pane() {
         Some(vec![row]),
         tx,
     );
+    // No portal lands, so the control door answers with its refusal shape.
     match rxq.blocking_recv().expect("reply") {
-        ServerMsg::Notice { text } => {
+        ServerMsg::Err { msg, .. } => {
             assert!(
-                text.contains("1.18.33") && text.contains("2.2.2"),
-                "names both versions: {text}"
+                msg.contains("1.18.33") && msg.contains("2.2.2"),
+                "names both versions: {msg}"
             );
         }
-        other => panic!("expected a Notice landing, got {other:?}"),
+        other => panic!("expected the skew refusal, got {other:?}"),
     }
     let _ = rx.try_recv();
     assert_eq!(core.panes.len(), panes_before, "no pane spawns on skew");
