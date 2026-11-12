@@ -2,8 +2,8 @@
 //! app keeps for itself. Pure: the window turns a gpui keystroke into a
 //! [`Key`] and sends whatever comes back.
 
-use crate::proto::Command;
-use crate::tree::Dir;
+use fno::proto::Command;
+use fno::tree::Dir;
 
 /// The focused pane's input modes, tracked from `ModeSync` bytes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use gpui::{Image, ImageFormat};
 
 use super::markdown::{blocks, Block};
-use crate::proto::chat_event::{
+use fno::proto::chat_event::{
     decode_base64, ChatBody, ChatEvent, ContentPart, ImageRef, ToolInput, TurnOutcome, UserOrigin,
 };
 

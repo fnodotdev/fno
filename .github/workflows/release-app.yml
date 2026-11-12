@@ -1,0 +1,86 @@
+name: release-app
+
+# Build the macOS desktop app (`fno-app`) into one tarball. Build-only: this
+# workflow publishes nothing. It runs on manual dispatch (an inspection
+# build) or as a reusable workflow called from release.yml, which owns every
+# publish leg behind the `release` environment approval. The binary is ad hoc
+# signed; a Developer ID signature and notarization belong to the app's own
+# signing work.
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: "Release version to stamp (PEP 440); empty builds the checked-out source version"
+        type: string
+        default: ""
+      ref:
+        description: "Commit to build; empty builds the caller's ref"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: app macos-arm64
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        # No `ref:` argument: the pin step below applies inputs.ref through
+        # plain git, as release-binaries.yml does.
+        with:
+          fetch-depth: 0
+
+      - name: Pin build ref
+        if: inputs.ref != ''
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$REF"
+          git checkout --detach FETCH_HEAD
+
+      - name: Stamp release version
+        if: inputs.version != ''
+        # Workspace-only stamp, never committed. The script comes from THIS
+        # workflow's commit, as in release-binaries.yml.
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin "${{ github.sha }}"
+          git show "${{ github.sha }}:scripts/release/sync-version.sh" > scripts/release/sync-version.sh
+          bash scripts/release/sync-version.sh "$VERSION"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build fno-app
+        run: cargo build --release --manifest-path crates/fno-app/Cargo.toml --bin fno-app
+
+      - name: Ad hoc sign
+        run: codesign --force -s - crates/fno-app/target/release/fno-app
+
+      - name: Package tarball
+        run: tar -czf fno-app-macos-arm64.tar.gz -C "$PWD/crates/fno-app/target/release" fno-app
+
+      - name: Smoke (the binary starts and names itself)
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -xzf fno-app-macos-arm64.tar.gz -C "$RUNNER_TEMP"
+          out="$("$RUNNER_TEMP/fno-app" --version)"
+          echo "$out"
+          case "$out" in fno-app*) ;; *) echo "::error::--version did not start with fno-app"; exit 1 ;; esac
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-macos-arm64
+          path: fno-app-macos-arm64.tar.gz

@@ -6055,7 +6055,7 @@ fn nav_agent_state(a: &AgentRow) -> PaneState {
 /// as the nav/tab rollups do: a Done pane the operator has already viewed
 /// folds to `Idle` (`○`) instead of holding a stale bold `✓` needs-attention
 /// marker - one system across every surface.
-pub(crate) fn agent_lattice_state(a: &AgentRow) -> LatticeState {
+pub fn agent_lattice_state(a: &AgentRow) -> LatticeState {
     if a.exited {
         if a.unmeasured {
             LatticeState::Unmeasured
@@ -6105,7 +6105,7 @@ fn brand_label(name: &str) -> String {
     }
 }
 
-pub(crate) fn tab_label_text(name: &str, i: usize, named: bool) -> String {
+pub fn tab_label_text(name: &str, i: usize, named: bool) -> String {
     let ordinal = (i + 1).to_string();
     // Collapse (AC7): a name equal to its own ordinal renders as
     // the bare digit, byte-identical to an unnamed ordinal - even a chosen one.

@@ -12,21 +12,21 @@ use crate::digest_overlay::ObsidianCfg;
 use crate::link::{plan_link, PlanLink};
 use crate::needs_overlay::{QuestionItem, QuestionsFold};
 
-pub(crate) const REFRESH_AFTER: Duration = Duration::from_secs(60);
+pub const REFRESH_AFTER: Duration = Duration::from_secs(60);
 
 #[derive(Default)]
-pub(crate) struct HqCache {
+pub struct HqCache {
     state: tokio::sync::Mutex<Board>,
     /// The first read: every request before it waits on the same one.
-    pub(crate) first: tokio::sync::OnceCell<()>,
+    pub first: tokio::sync::OnceCell<()>,
 }
 
 /// One open question as the board shows it: the fold's item plus the live
 /// pane the asker runs in, when one joins.
 #[derive(Debug, Clone)]
-pub(crate) struct OpenQuestion {
-    pub(crate) item: QuestionItem,
-    pub(crate) watch_pane: Option<u64>,
+pub struct OpenQuestion {
+    pub item: QuestionItem,
+    pub watch_pane: Option<u64>,
     node_origin: Option<crate::backlog_model::OriginSession>,
 }
 
@@ -34,7 +34,7 @@ pub(crate) struct OpenQuestion {
 /// PRs. The bridge's `/hq/model.json` and the desktop app both build it here,
 /// so the two never show different seats or questions.
 #[derive(Default, Clone)]
-pub(crate) struct Board {
+pub struct Board {
     /// The fold, its machines as JSON, and when it was read.
     good: Option<(Fleet, Value, Instant)>,
     failure: Option<(String, Instant)>,
@@ -51,7 +51,7 @@ pub(crate) struct Board {
 impl HqCache {
     /// True when the caller should start a refresh. Claiming stamps the
     /// attempt, so a burst of reads starts one and a lost refresh retries.
-    pub(crate) async fn claim_refresh(&self) -> bool {
+    pub async fn claim_refresh(&self) -> bool {
         let mut st = self.state.lock().await;
         if st.read_at.is_some_and(|at| at.elapsed() < REFRESH_AFTER) {
             return false;
@@ -61,13 +61,13 @@ impl HqCache {
     }
 
     /// The board, locked. A refresh records into it.
-    pub(crate) async fn board(&self) -> tokio::sync::MutexGuard<'_, Board> {
+    pub async fn board(&self) -> tokio::sync::MutexGuard<'_, Board> {
         self.state.lock().await
     }
 
     /// The node of a question the page already shows, from the last read. `None`
     /// means the question is not in the cache; `Some(None)` means it has no node.
-    pub(crate) async fn question_node(&self, id: &str) -> Option<Option<String>> {
+    pub async fn question_node(&self, id: &str) -> Option<Option<String>> {
         let st = self.state.lock().await;
         if st.questions_error().is_some() {
             return None;
@@ -76,7 +76,7 @@ impl HqCache {
         Some(q.item.node.clone())
     }
 
-    pub(crate) async fn model(&self) -> Value {
+    pub async fn model(&self) -> Value {
         self.state.lock().await.model()
     }
 }
@@ -86,7 +86,7 @@ impl Board {
     /// failed question read keeps the last good questions. The local roster
     /// joins the asker's session to a pane, so a question card can link to
     /// the live session.
-    pub(crate) fn record(
+    pub fn record(
         &mut self,
         fleet: Result<Value, String>,
         questions: Result<QuestionsFold, String>,
@@ -121,13 +121,12 @@ impl Board {
     }
 
     /// The last good fleet fold, if any read has succeeded.
-    pub(crate) fn fleet(&self) -> Option<&Fleet> {
+    pub fn fleet(&self) -> Option<&Fleet> {
         self.good.as_ref().map(|(f, _, _)| f)
     }
 
     /// Why the newest fleet read failed, or that none has run.
-    #[cfg(feature = "desktop")]
-    pub(crate) fn fleet_error(&self) -> Option<&str> {
+    pub fn fleet_error(&self) -> Option<&str> {
         match (&self.failure, &self.good) {
             (Some((reason, _)), _) => Some(reason),
             (None, None) => Some("fleet not read yet"),
@@ -137,27 +136,24 @@ impl Board {
 
     /// False until the first refresh lands: the errors then name "not read
     /// yet", which a view shows as waiting, never as a failure.
-    #[cfg(feature = "desktop")]
-    pub(crate) fn read_yet(&self) -> bool {
+    pub fn read_yet(&self) -> bool {
         self.questions_read
     }
 
     /// The last good open questions, in fold order.
-    #[cfg(feature = "desktop")]
-    pub(crate) fn questions(&self) -> &[OpenQuestion] {
+    pub fn questions(&self) -> &[OpenQuestion] {
         &self.questions
     }
 
     /// The same questions newest first, the order the desktop views show.
-    #[cfg(feature = "desktop")]
-    pub(crate) fn questions_newest_first(&self) -> Vec<&OpenQuestion> {
+    pub fn questions_newest_first(&self) -> Vec<&OpenQuestion> {
         let mut out: Vec<&OpenQuestion> = self.questions.iter().collect();
         out.sort_by(|a, b| b.item.created_at.cmp(&a.item.created_at));
         out
     }
 
     /// Why the newest question read failed, or that none has run.
-    pub(crate) fn questions_error(&self) -> Option<&str> {
+    pub fn questions_error(&self) -> Option<&str> {
         match (&self.questions_error, self.questions_read) {
             (Some(reason), _) => Some(reason),
             (None, false) => Some("not read yet"),
@@ -165,7 +161,7 @@ impl Board {
         }
     }
 
-    pub(crate) fn model(&self) -> Value {
+    pub fn model(&self) -> Value {
         let mut waiting = serde_json::Map::new();
         waiting.insert("prs".into(), json!(self.prs));
         waiting.insert("prs_error".into(), json!(self.prs_error));

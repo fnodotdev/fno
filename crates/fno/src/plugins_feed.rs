@@ -5,32 +5,32 @@
 
 use serde::Deserialize;
 
-pub(crate) const LS: [&str; 4] = ["config", "plugins", "ls", "--json"];
-pub(crate) const GALLERY: [&str; 4] = ["config", "plugins", "gallery", "--json"];
+pub const LS: [&str; 4] = ["config", "plugins", "ls", "--json"];
+pub const GALLERY: [&str; 4] = ["config", "plugins", "gallery", "--json"];
 
 /// One mod or layout row of `ls --json`, with its pack's install commit.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
-pub(crate) struct Component {
-    pub(crate) id: String,
-    pub(crate) title: String,
+pub struct Component {
+    pub id: String,
+    pub title: String,
     #[serde(default)]
-    pub(crate) summary: String,
+    pub summary: String,
     #[serde(default)]
-    pub(crate) preview: String,
+    pub preview: String,
     #[serde(default)]
-    pub(crate) recipe: String,
-    pub(crate) enabled: bool,
+    pub recipe: String,
+    pub enabled: bool,
     #[serde(default)]
-    pub(crate) runs_code: bool,
+    pub runs_code: bool,
     /// `run`, `feed` or `native`; a layout carries none.
     #[serde(default)]
-    pub(crate) kind: String,
+    pub kind: String,
     /// A command mod's argv.
     #[serde(default)]
-    pub(crate) run: Option<Vec<String>>,
+    pub run: Option<Vec<String>>,
     /// The commit a URL install recorded; empty for a local pack.
     #[serde(skip)]
-    pub(crate) commit: String,
+    pub commit: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -55,15 +55,15 @@ struct Listing {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
-pub(crate) struct Published {
-    pub(crate) name: String,
+pub struct Published {
+    pub name: String,
     #[serde(default)]
-    pub(crate) description: String,
+    pub description: String,
     #[serde(default)]
-    pub(crate) stars: u64,
-    pub(crate) install: String,
+    pub stars: u64,
+    pub install: String,
     #[serde(default)]
-    pub(crate) reviewed: bool,
+    pub reviewed: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,7 +73,7 @@ struct GalleryRead {
 
 /// A failed `fno config plugins` read, as the one line a page paints.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ReadFailed(pub(crate) String);
+pub struct ReadFailed(pub String);
 
 impl std::fmt::Display for ReadFailed {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -83,7 +83,7 @@ impl std::fmt::Display for ReadFailed {
 
 /// One argv shown so a reader can paste it: plain words bare, anything
 /// else single-quoted.
-pub(crate) fn shell_words(argv: &[String]) -> String {
+pub fn shell_words(argv: &[String]) -> String {
     argv.iter()
         .map(|a| {
             let plain = !a.is_empty()
@@ -108,7 +108,7 @@ fn fno_door() -> std::path::PathBuf {
 /// The desktop app is its own executable, which does not speak `config
 /// plugins`: take the `fno` beside it, else the one on PATH.
 fn door_for(exe: std::path::PathBuf) -> std::path::PathBuf {
-    if exe.file_stem().is_some_and(|s| s == "fno-desktop") {
+    if exe.file_stem().is_some_and(|s| s == "fno-app") {
         let sibling = exe.with_file_name("fno");
         return if sibling.exists() {
             sibling
@@ -121,7 +121,7 @@ fn door_for(exe: std::path::PathBuf) -> std::path::PathBuf {
 
 /// The argv of `fno config plugins <args>` through the one door, for a host
 /// that execs it as a pane's own command.
-pub(crate) fn door_argv(args: &[&str]) -> Vec<String> {
+pub fn door_argv(args: &[&str]) -> Vec<String> {
     let mut argv = vec![fno_door().to_string_lossy().into_owned()];
     argv.extend(
         ["config", "plugins"]
@@ -132,7 +132,7 @@ pub(crate) fn door_argv(args: &[&str]) -> Vec<String> {
     argv
 }
 
-pub(crate) fn fno_json(args: &[&str]) -> Result<Vec<u8>, ReadFailed> {
+pub fn fno_json(args: &[&str]) -> Result<Vec<u8>, ReadFailed> {
     let shown = format!("fno {}", args.join(" "));
     let mut cmd = crate::process_admission::std_command(fno_door());
     cmd.args(args).stdin(std::process::Stdio::null());
@@ -152,7 +152,7 @@ pub(crate) fn fno_json(args: &[&str]) -> Result<Vec<u8>, ReadFailed> {
 
 /// Parse `ls --json` into `(pack id, component)` rows, mods before layouts
 /// per pack.
-pub(crate) fn parse_installed(
+pub fn parse_installed(
     read: Result<Vec<u8>, ReadFailed>,
 ) -> Result<Vec<(String, Component)>, ReadFailed> {
     let bytes = read?;
@@ -173,18 +173,18 @@ pub(crate) fn parse_installed(
 }
 
 /// Read and parse `gallery --json`.
-pub(crate) fn read_gallery() -> Result<Vec<Published>, ReadFailed> {
+pub fn read_gallery() -> Result<Vec<Published>, ReadFailed> {
     fno_json(&GALLERY).and_then(|bytes| parse_gallery(&bytes))
 }
 
-pub(crate) fn parse_gallery(bytes: &[u8]) -> Result<Vec<Published>, ReadFailed> {
+pub fn parse_gallery(bytes: &[u8]) -> Result<Vec<Published>, ReadFailed> {
     serde_json::from_slice::<GalleryRead>(bytes)
         .map(|g| g.repos)
         .map_err(|e| ReadFailed(format!("fno {} printed no gallery: {e}", GALLERY.join(" "))))
 }
 
 /// Turn `pack/id` on or off through `config plugins enable|disable`.
-pub(crate) fn switch(target: &str, on: bool) -> Result<(), ReadFailed> {
+pub fn switch(target: &str, on: bool) -> Result<(), ReadFailed> {
     let command = if on { "enable" } else { "disable" };
     fno_json(&["config", "plugins", command, target]).map(|_| ())
 }
@@ -195,12 +195,7 @@ pub(crate) fn switch(target: &str, on: bool) -> Result<(), ReadFailed> {
 /// word of it is shell-parsed. A split needs an anchor: neither host is a
 /// pane, so FNO_PANE is unset and the focused pane rides as `--at`. `server`
 /// names the mux server the pane opens on.
-pub(crate) fn pane_argv(
-    fno_text: &str,
-    args: &[&str],
-    anchor: u64,
-    server: Option<&str>,
-) -> Vec<String> {
+pub fn pane_argv(fno_text: &str, args: &[&str], anchor: u64, server: Option<&str>) -> Vec<String> {
     let script = r#"fno="$1"; shift; "$fno" config plugins "$@"; printf '\n[exit %s] press enter to close\n' "$?"; read -r _"#;
     let mut argv: Vec<String> = ["mux", "pane", "run"].map(String::from).into();
     if let Some(server) = server {
@@ -217,7 +212,7 @@ pub(crate) fn pane_argv(
 /// Run `fno config plugins <args>` in a new pane beside `anchor` and wait for
 /// `pane run` to answer, so the caller reports the real result. Blocks: run it
 /// off the UI loop.
-pub(crate) fn run_in_pane(
+pub fn run_in_pane(
     args: &[&str],
     what: &str,
     anchor: u64,
@@ -280,7 +275,7 @@ mod tests {
             std::path::PathBuf::from("/opt/x/fno")
         );
         assert_eq!(
-            door_for("/nonexistent/fno-desktop".into()),
+            door_for("/nonexistent/fno-app".into()),
             std::path::PathBuf::from("fno"),
             "the app's own executable is never the door"
         );
