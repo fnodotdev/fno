@@ -22,6 +22,8 @@ use serde_json::Value;
 
 use crate::opencode_ask::{AskOutcome, DEFAULT_ONE_SHOT_TIMEOUT};
 
+use super::name_collision::{self as spawn_collision, Resolution};
+
 /// A footnote command seed (`/fno:command`, either sigil) is a command, so it rides
 /// bare; a prose message keeps the `[from:]` envelope.
 fn pi_prompt(message: &str, from_name: &str, harness: &str) -> String {
@@ -154,7 +156,7 @@ pub fn dispatch_pi_once(
     effort: Option<&str>,
     harness_args: &[String],
 ) -> AskOutcome {
-    use crate::claude_ask::{emit_event, py_repr, validate_spawn_inputs};
+    use crate::claude_ask::{emit_event, validate_spawn_inputs};
 
     if let Err(msg) = validate_spawn_inputs(name, from_name) {
         return AskOutcome::err(msg, 2);
@@ -176,14 +178,10 @@ pub fn dispatch_pi_once(
             return AskOutcome::err(format!("registry read failed: {e}"), 12);
         }
     };
-    if registry.find(name).is_some() {
-        return AskOutcome::err(
-            format!(
-                "agent {} already exists; use 'fno agents rm {name}' first or pick another name",
-                py_repr(name)
-            ),
-            2,
-        );
+    match spawn_collision::resolve(home, &registry, name) {
+        Resolution::Refuse(line) => return AskOutcome::err(line, 2),
+        Resolution::Registry(line) => return AskOutcome::err(line, 12),
+        _ => {}
     }
 
     let prompt = pi_prompt(message, from_name, harness);

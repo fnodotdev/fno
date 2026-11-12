@@ -47,6 +47,8 @@ use std::time::{Duration, Instant};
 use crate::claude_ask::{emit_event, validate_inputs};
 use crate::paths::AgentsHome;
 use crate::state::{find_keyed_mut, load_registry, update_registry, RegistryEntry};
+
+use super::name_collision::{self as spawn_collision, Resolution};
 use crate::AgentStatus;
 
 /// Lock-acquisition ceiling (mirror of codex/claude `LOCK_ACQUIRE_TIMEOUT`).
@@ -932,16 +934,10 @@ pub fn dispatch_gemini_once(
             return AskOutcome::err(format!("registry read failed: {}", e), 12);
         }
     };
-    if registry.find(name).is_some() {
-        // Python: f"agent {name!r} already exists; ..." -> py_repr, not {:?}.
-        return AskOutcome::err(
-            format!(
-                "agent {} already exists; use 'fno agents rm {}' first or pick another name",
-                py_repr(name),
-                name
-            ),
-            2,
-        );
+    match spawn_collision::resolve(home, &registry, name) {
+        Resolution::Refuse(line) => return AskOutcome::err(line, 2),
+        Resolution::Registry(line) => return AskOutcome::err(line, 12),
+        _ => {}
     }
 
     // Create + exchange using the retained dispatch_create machinery.

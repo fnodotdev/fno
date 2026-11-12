@@ -445,7 +445,9 @@ pub fn dispatch_opencode_once(
     effort: Option<&str>,
     harness_args: &[String],
 ) -> AskOutcome {
-    use crate::claude_ask::{emit_event, py_repr, validate_spawn_inputs};
+    use crate::claude_ask::{emit_event, validate_spawn_inputs};
+
+    use super::name_collision::{self as spawn_collision, Resolution};
 
     if let Err(msg) = validate_spawn_inputs(name, from_name) {
         return AskOutcome::err(msg, 2);
@@ -473,15 +475,10 @@ pub fn dispatch_opencode_once(
             return AskOutcome::err(format!("registry read failed: {}", e), 12);
         }
     };
-    if registry.find(name).is_some() {
-        return AskOutcome::err(
-            format!(
-                "agent {} already exists; use 'fno agents rm {}' first or pick another name",
-                py_repr(name),
-                name
-            ),
-            2,
-        );
+    match spawn_collision::resolve(home, &registry, name) {
+        Resolution::Refuse(line) => return AskOutcome::err(line, 2),
+        Resolution::Registry(line) => return AskOutcome::err(line, 12),
+        _ => {}
     }
 
     // spawn allows an empty initial message; default to "hello" (Python parity -

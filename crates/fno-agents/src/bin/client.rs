@@ -2294,17 +2294,19 @@ fn maybe_run_spawn(
     // dispatch_claude_spawn / dispatch_*_once, which surface a corrupt
     // registry as exit 12.
     let registry = load_registry(&home.registry_json()).unwrap_or_default();
-    let existing_provider = registry.find(name).map(|e| e.harness_name().to_string());
 
-    // Collision check: name already exists -> error.
-    // Python: f"agent {name!r} already exists; ..." -> py_repr, not {:?}.
-    if existing_provider.is_some() {
-        eprintln!(
-            "agent {} already exists; use 'fno agents rm {}' first or pick another name",
-            py_repr(name),
-            name
-        );
-        return Some(2);
+    // Collision check: name already exists -> error. An idle spare behind the
+    // row does not refuse here: the dispatch lane reclaims the name under its
+    // own lock, and a refusal in the client would preempt it. This pre-check
+    // is advisory; the dispatch lane re-checks under the per-agent lock.
+    if let Some(row) = registry.find(name) {
+        if fno_agents::spawn::name_collision::idle_spare_holder_pid(row).is_none() {
+            eprintln!(
+                "{}",
+                fno_agents::spawn::name_collision::refusal_line(name, row)
+            );
+            return Some(2);
+        }
     }
 
     // Resolve provider: explicit --provider > invoking-harness inference >

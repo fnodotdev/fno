@@ -46,6 +46,8 @@ use crate::scrape::fno_bin;
 use crate::state::{self, Lineage, MuxRef, RegistryEntry};
 use crate::AgentStatus;
 
+use super::name_collision::{self as spawn_collision, idle_spare_holder_pid};
+
 /// `DispatchAskError(..., exit_code=2)`: named refusals - a held placement
 /// lease, an existing agent name, an arm's own pre-spawn refusal.
 pub const EXIT_REFUSAL: i32 = 2;
@@ -517,17 +519,18 @@ fn spawn_pane(home: &AgentsHome, ctx: &PaneContext, name: &str, arm: &dyn PaneAr
     };
     // Exact-name clash, Python's `next((e for e in entries if e.name == name))`
     // - not the alias/session-resolving `find`. A PROVED-DEAD row does not own
-    // the name (`_RECLAIMABLE_STATUSES`): the write transaction drops the
-    // corpse and appends the replacement, so a dispatcher's retry under the
-    // same deterministic worker name recovers instead of deadlocking on `rm`.
+    // the name (`_RECLAIMABLE_STATUSES`), and neither does a row whose pid has
+    // gone back to claude's idle spare pool (pool argv, claim socket on disk):
+    // the write transaction drops the corpse and appends the replacement, so a
+    // dispatcher's retry under the same deterministic worker name recovers
+    // instead of deadlocking on `rm`.
     let replacing = match registry.entries.iter().find(|e| e.name == name) {
-        Some(clash) if is_reclaimable(clash.status) => true,
-        Some(_) => {
+        Some(clash) if is_reclaimable(clash.status) || idle_spare_holder_pid(clash).is_some() => {
+            true
+        }
+        Some(clash) => {
             return refuse(&PaneRefusal {
-                line: format!(
-                    "agent {} already exists; use 'fno agents rm {name}' first or pick another name",
-                    py_repr(name)
-                ),
+                line: spawn_collision::refusal_line(name, clash),
                 exit_code: EXIT_REFUSAL,
                 after_pane: None,
             });
@@ -1332,16 +1335,15 @@ fn race_checked_append(
     registry: &mut state::Registry,
 ) -> Result<bool, String> {
     if replacing {
-        let revived = registry
-            .entries
-            .iter()
-            .any(|e| e.name == name && !is_reclaimable(e.status));
+        let revived = registry.entries.iter().any(|e| {
+            e.name == name && !is_reclaimable(e.status) && idle_spare_holder_pid(e).is_none()
+        });
         if revived {
             return Err(race_refusal_line(name));
         }
-        registry
-            .entries
-            .retain(|e| !(e.name == name && is_reclaimable(e.status)));
+        registry.entries.retain(|e| {
+            !(e.name == name && (is_reclaimable(e.status) || idle_spare_holder_pid(e).is_some()))
+        });
     }
     let entry = drop_claimed_bind_id(entry, registry);
     registry.entries.push(entry);
@@ -1351,7 +1353,7 @@ fn race_checked_append(
 fn race_refusal_line(name: &str) -> String {
     format!(
         "agent {} was reclaimable when checked but is not now (a concurrent writer changed its \
-         status); nothing was written - re-run, or 'fno agents rm {name}' first",
+         status or claimed the spare); nothing was updated - re-run, or 'fno agents rm {name}' first",
         py_repr(name)
     )
 }

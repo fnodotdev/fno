@@ -58,6 +58,7 @@ pub mod machine_key;
 pub mod model_env_scrub;
 pub mod model_family;
 pub mod model_price;
+pub mod name_collision;
 pub mod name_draw;
 pub mod name_ledger;
 pub mod naming;

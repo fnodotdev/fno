@@ -16,6 +16,8 @@ use crate::claude_ask::AskOutcome;
 use crate::daemon::KeeperProbe;
 use crate::keeper_revival::{launch_and_identify, IdentifyOutcome, LaunchSpec};
 use crate::state::RegistryEntry;
+
+use super::name_collision::{self as spawn_collision, Resolution};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -285,17 +287,15 @@ pub(crate) fn dispatch_with(
     };
     let registry_path = home.registry_json();
     match crate::state::load_registry(&registry_path) {
-        Ok(registry) => {
-            if registry.entries.iter().any(|e| e.name == name) {
-                return refused(SpawnRefusal::err(
-                    format!(
-                        "agent {name:?} already exists; \
-                         use 'fno agents rm {name}' first or pick another name"
-                    ),
-                    2,
-                ));
+        Ok(registry) => match spawn_collision::resolve(home, &registry, name) {
+            Resolution::Refuse(line) => {
+                return refused(SpawnRefusal::err(line, 2));
             }
-        }
+            Resolution::Registry(line) => {
+                return refused(SpawnRefusal::err(line, 12));
+            }
+            _ => {}
+        },
         Err(e) => {
             return refused(SpawnRefusal::err(format!("registry read failed: {e}"), 12));
         }
