@@ -52,22 +52,18 @@ const SESSION_LANES: [&str; 5] = [
     "headless_create",
     "headless_resume",
 ];
-/// Lanes a harness MAY declare beside the required five: opencode's serve
-/// attach drives a session through a shared serve, which no other harness has.
-const OPTIONAL_SESSION_LANES: [&str; 1] = ["interactive_serve_attach"];
+/// The one lane a harness may carry beyond [`SESSION_LANES`]: a seat that
+/// attaches a TUI to a shared serve. Only opencode declares it, so it is not
+/// a session lane every row must carry. Its kind is `serve_attach`, which no
+/// other lane may use, and its token lists ride `tokens_v1`/`tokens_v2`.
+const SERVE_ATTACH_LANE: &str = "interactive_serve_attach";
 const RESPONSE_ACTIONS: [&str; 3] = ["allow_once", "allow_always", "deny"];
 /// The rule states a capability row may DECLARE. A readiness manifest carries
 /// more (`working`, and rules that hold the current state), but only these two
 /// are part of the row's contract, and the Python validator enforces the same
 /// pair.
 const DECLARABLE_RULE_STATES: [&str; 2] = ["idle", "blocked"];
-const RESUME_KINDS: [&str; 5] = [
-    "flag",
-    "subcommand",
-    "session_flag",
-    "unsupported",
-    "serve_attach",
-];
+const RESUME_KINDS: [&str; 4] = ["flag", "subcommand", "session_flag", "unsupported"];
 const MODEL_SWITCH_KINDS: [&str; 3] = ["direct", "menu_walk", "unsupported"];
 const MODEL_SWITCH_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 const STOP_STRATEGIES: [&str; 2] = ["claude-short-id", "registry-noop"];
@@ -1696,13 +1692,9 @@ fn validate_row(harness: &str, caps: &HarnessCapabilities) -> Result<(), Contrac
         .forms
         .keys()
         .map(String::as_str)
+        .filter(|lane| *lane != SERVE_ATTACH_LANE)
         .collect();
-    let required: BTreeSet<&str> = SESSION_LANES.into_iter().collect();
-    if !required.is_subset(&lanes)
-        || lanes
-            .iter()
-            .any(|lane| !required.contains(lane) && !OPTIONAL_SESSION_LANES.contains(lane))
-    {
+    if lanes != SESSION_LANES.into_iter().collect() {
         return Err(field_error(
             harness,
             "resume_strategy",
@@ -1710,8 +1702,28 @@ fn validate_row(harness: &str, caps: &HarnessCapabilities) -> Result<(), Contrac
         ));
     }
     for (lane, form) in &caps.resume_strategy.forms {
+        if lane == SERVE_ATTACH_LANE {
+            let generation = |tokens: &[String]| {
+                !tokens.iter().any(String::is_empty)
+                    && tokens.iter().any(|t| t == "{serve_url}")
+                    && tokens.iter().any(|t| t == "{session_id}")
+            };
+            if form.kind != "serve_attach"
+                || !form.tokens.is_empty()
+                || !generation(&form.tokens_v1)
+                || !generation(&form.tokens_v2)
+                || form.boundary_major.is_none_or(|major| major == 0)
+                || form.password_env.as_deref().is_none_or(str::is_empty)
+            {
+                return Err(field_error(
+                    harness,
+                    "resume_strategy",
+                    &format!("malformed {lane}"),
+                ));
+            }
+            continue;
+        }
         if !RESUME_KINDS.contains(&form.kind.as_str())
-            || (form.kind == "serve_attach") != (lane == "interactive_serve_attach")
             || form.tokens.iter().any(String::is_empty)
             || (form.kind == "unsupported" && !form.tokens.is_empty())
             || (lane.ends_with("resume")
@@ -2047,6 +2059,7 @@ mod tests {
                 "gemini",
                 "grok",
                 "muse",
+                "omp",
                 "opencode",
                 "pi",
                 "zcode"
@@ -2062,13 +2075,13 @@ mod tests {
                 assert_eq!(caps.permission_response.len(), 3, "{name}");
                 assert!(!caps.submit_keys.is_empty(), "{name}");
             }
-            let required = caps
+            let session_forms = caps
                 .resume_strategy
                 .forms
                 .keys()
-                .filter(|lane| SESSION_LANES.contains(&lane.as_str()))
+                .filter(|lane| *lane != SERVE_ATTACH_LANE)
                 .count();
-            assert_eq!(required, SESSION_LANES.len(), "{name}");
+            assert_eq!(session_forms, 5, "{name}");
             assert!(!caps.model_switch_strategy.kind.is_empty(), "{name}");
             assert!(
                 LOOP_PARTICIPATION.contains(&caps.loop_participation.as_str()),
@@ -2105,6 +2118,18 @@ mod tests {
         let codex = contract.harness.get_mut("codex").unwrap();
         codex.provider_actions.get_mut("compact").unwrap().transport = "pane".into();
         assert!(validate_row("codex", codex).is_err());
+
+        // The serve-attach lane is optional and keeps its own shape: a form
+        // that cannot address the serve and the session refuses.
+        let opencode = contract.harness.get_mut("opencode").unwrap();
+        assert!(validate_row("opencode", opencode).is_ok());
+        let serve = opencode
+            .resume_strategy
+            .forms
+            .get_mut(SERVE_ATTACH_LANE)
+            .unwrap();
+        serve.tokens_v2.retain(|t| t != "{session_id}");
+        assert!(validate_row("opencode", opencode).is_err());
 
         // Hook jobs: every bundled row declares every job; a supported job's
         // via paths exist under the repo root; the gate refuses a `missing`

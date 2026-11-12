@@ -3459,7 +3459,7 @@ fn opencode_serve_seat_refuses_a_version_skew_with_no_pane() {
         Some(vec![row]),
         tx,
     );
-    // No pane landed, so the reply is the refusal carrying the notice.
+    // No portal lands, so the control door answers with its refusal shape.
     match rxq.blocking_recv().expect("reply") {
         ServerMsg::Err { msg, .. } => {
             assert!(

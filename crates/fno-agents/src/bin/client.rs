@@ -2820,8 +2820,9 @@ fn maybe_run_spawn(
             &harness_args,
         )),
 
-        // pi headless: one `pi --print --mode json` turn (pi_ask.rs).
-        ("pi", "headless") => emit!(fno_agents::pi_ask::dispatch_pi_once(
+        // pi and omp headless: one `--print --mode json` turn (pi_ask.rs).
+        (harness @ ("pi" | "omp"), "headless") => emit!(fno_agents::pi_ask::dispatch_pi_once(
+            harness,
             home,
             name,
             &message,

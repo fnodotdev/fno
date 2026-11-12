@@ -136,12 +136,19 @@ fn basic_auth(user: &str, password: &str) -> String {
     let input = format!("{user}:{password}");
     let bytes = input.as_bytes();
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
-    let byte = |chunk: &[u8], i: usize| u32::from(chunk.get(i).copied().unwrap_or(0));
     for chunk in bytes.chunks(3) {
-        let n = (byte(chunk, 0) << 16) | (byte(chunk, 1) << 8) | byte(chunk, 2);
+        let mut b = [0u8; 3];
+        for (slot, byte) in b.iter_mut().zip(chunk) {
+            *slot = *byte;
+        }
+        let [b0, b1, b2] = b;
+        let n = u32::from_be_bytes([0, b0, b1, b2]);
         for shift in [18, 12, 6, 0] {
-            let sextet = ((n >> shift) & 63) as usize;
-            out.push(char::from(TABLE.get(sextet).copied().unwrap_or(b'=')));
+            out.extend(
+                TABLE
+                    .get((n >> shift) as usize & 63)
+                    .map(|&c| char::from(c)),
+            );
         }
     }
     let pad = (3 - bytes.len() % 3) % 3;
@@ -191,9 +198,10 @@ fn tui_version(bin: &str) -> Option<String> {
 
 /// Parse a `major.minor.patch` (or `v`-prefixed) version line to its major.
 fn parse_major(version: &str) -> Option<u32> {
+    let version = version.trim();
     version
-        .trim()
-        .trim_start_matches('v')
+        .strip_prefix('v')
+        .unwrap_or(version)
         .split('.')
         .next()?
         .parse()
