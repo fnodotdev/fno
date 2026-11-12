@@ -2408,6 +2408,12 @@ fn maybe_run_spawn(
         if let Err(refusal) =
             fno_agents::spawn_gate::state_root_grant_gate(provider, declared_substrate, &roots)
         {
+            fno_agents::spawn_gate::emit_refusal_event(
+                &refusal,
+                params.get("name").and_then(|v| v.as_str()).unwrap_or(""),
+                declared_substrate,
+                None,
+            );
             return Some(refusal.exit_code);
         }
     }
