@@ -78,7 +78,7 @@ After a host restart the harness relaunches only some sessions. fno covers the r
 
 ## Permission asks on the opencode serve lane
 
-A thread worker has no person at its terminal, so somebody else must answer its permission asks. On the opencode serve lane that is fno. The user's own opencode rules decide first. fno writes no permission config into the serve. So an act the user allows never asks, and an act the user denies never runs. Before 2026-11-11 the serve booted with an `OPENCODE_CONFIG` file holding `{"permission":{"*":"allow"}}`. That `*` merged last and beat the user's own denies.
+A thread worker has no person at its terminal, so somebody else must answer its permission asks. On the opencode 1.x serve lane that is fno. The user's own opencode rules decide first. fno writes no permission config into a 1.x serve. So an act the user allows never asks, and an act the user denies never runs. Before 2026-11-11 the serve booted with an `OPENCODE_CONFIG` file holding `{"permission":{"*":"allow"}}`. That `*` merged last and beat the user's own denies.
 
 fno creates each worker session with `POST /session?directory=<cwd>`. The create body carries the worker rules. `question`, `plan_enter` and `plan_exit` are denied, because no person answers them. `external_directory` is allowed for the worktree and for every `FNO_WORKER_ADD_DIRS` root, which is the state-root grant.
 
@@ -95,7 +95,7 @@ The V1 frames, measured on opencode 1.18.33 on 2026-11-11:
 | List pending | `GET /permission?directory=<cwd>` answers `[{id, sessionID, permission, patterns, metadata, always, tool}]`. With no `directory` it reads `[]` while an ask waits. | `GET /api/session/{sid}/permission` answers `{data: [{id, sessionID, action, resources}]}` |
 | Reply | `POST /permission/{id}/reply?directory=<cwd>` with `{reply: once|reject, message?}` | `POST /api/session/{sid}/permission/{id}/reply` with `{decision: once|reject, message?}` |
 
-1.18.33 also serves the `/api` routes, but its asks never show there. fno never replies `always`, because that saves a rule and fno owns no permission layer. The V2 launch is not built: opencode 2.2.2's `run` has no `--attach`, and the serve binary choice belongs to the opencode v2 thread work.
+1.18.33 also serves the `/api` routes, but its asks never show there. fno never replies `always`, because that saves a rule and fno owns no permission layer. A 2.x serve still boots with the allow-all rule list. Its launch goes over `/api/session`, and no driver answers its asks yet, because no 2.x idle signal is measured.
 
 ## The keeper arm table
 

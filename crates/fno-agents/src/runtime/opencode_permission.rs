@@ -49,9 +49,6 @@ pub(crate) enum LaneError {
         #[source]
         source: serde_json::Error,
     },
-    /// A session create answered 200 with no `ses_` id.
-    #[error("session create returned no ses_ id: {body}")]
-    NoSessionId { body: String },
     /// The serve stayed unreachable past the driver's limit.
     #[error("serve unreachable for {secs}s: {last}")]
     Unreachable { secs: u64, last: Box<LaneError> },
