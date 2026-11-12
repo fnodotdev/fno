@@ -87,6 +87,8 @@ pub struct Root {
     panes: HashMap<u64, Entity<PaneView>>,
     modes: Modes,
     notice: Option<String>,
+    /// The notice reports a failure: it paints in the error color.
+    notice_failed: bool,
     /// Bumped by each notice, so only the newest one's timer clears it.
     notice_gen: u64,
     closed: Option<String>,
@@ -157,6 +159,7 @@ impl Root {
             panes: HashMap::new(),
             modes: Modes::default(),
             notice: theme_warning,
+            notice_failed: false,
             notice_gen: 0,
             closed: None,
             metrics,
@@ -247,7 +250,7 @@ impl Root {
                                 root.main = MainView::Terminal;
                             }
                             if let Some(text) = did.notice {
-                                root.say(text, cx);
+                                root.say_as(text, did.failed, cx);
                             }
                             cx.notify();
                         });
@@ -272,7 +275,13 @@ impl Root {
 
     /// Show `text` in the corner for [`NOTICE_FOR`].
     pub(super) fn say(&mut self, text: String, cx: &mut Context<Self>) {
+        self.say_as(text, false, cx);
+    }
+
+    /// [`Self::say`], in the error color when `failed`.
+    fn say_as(&mut self, text: String, failed: bool, cx: &mut Context<Self>) {
         self.notice = Some(text);
+        self.notice_failed = failed;
         self.notice_gen += 1;
         let gen = self.notice_gen;
         self._notice = Some(cx.spawn(async move |this, cx| {
@@ -909,10 +918,11 @@ impl Render for Root {
             .items_center()
             .font_family(".SystemUIFont")
             .text_sm();
-        // A closed link stays in the error color; a notice is muted and
-        // expires. Neither takes a row: the toast floats over the corner.
+        // A closed link and a failed notice use the error color; a notice
+        // is muted and expires. Neither takes a row: the toast floats over the corner.
         let (status, status_color) = match (&self.closed, &self.notice) {
             (Some(c), _) => (Some(c.clone()), self.palette.error),
+            (None, n) if self.notice_failed => (n.clone(), self.palette.error),
             (None, n) => (n.clone(), self.palette.muted),
         };
         let toast = status.map(|text| {

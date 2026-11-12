@@ -127,7 +127,10 @@ fn table(root: &Root) -> Div {
             );
         }
     }
-    if machines.is_empty() && root.board.fleet_error().is_none() {
+    let any_seat = machines
+        .iter()
+        .any(|m| m.leads.iter().any(|l| !l.seats.is_empty()));
+    if !any_seat && root.board.fleet_error().is_none() {
         out = out.child(quiet("no seats", root));
     }
     out

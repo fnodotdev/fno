@@ -63,6 +63,8 @@ pub(super) enum Reply {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct Landed {
     pub(super) notice: Option<String>,
+    /// The notice reports a failure: it paints in the error color.
+    pub(super) failed: bool,
     pub(super) terminal: bool,
 }
 
@@ -231,6 +233,7 @@ impl Page {
             Reply::Switched(target, on, done) => {
                 self.pending.remove(&target);
                 self.read();
+                landed.failed = done.is_err();
                 landed.notice = Some(match done {
                     Ok(()) => format!("{target} is {}", if on { "on" } else { "off" }),
                     Err(e) => e.0,
@@ -242,6 +245,7 @@ impl Page {
             }
             Reply::Paned(_, Err(e)) => {
                 self.watch = Watch::Idle;
+                landed.failed = true;
                 landed.notice = Some(e.0);
             }
         }
@@ -1060,7 +1064,7 @@ mod tests {
                 "Install x did not open a pane: exit 2: no anchor".into(),
             )),
         ));
-        assert!(!landed.terminal);
+        assert!(!landed.terminal && landed.failed);
         assert!(landed.notice.is_some_and(|n| n.contains("exit 2")));
     }
 
