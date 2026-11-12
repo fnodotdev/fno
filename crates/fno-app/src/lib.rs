@@ -4,12 +4,12 @@
 
 mod boxdraw;
 mod chat;
-mod extensions;
 mod grid;
 mod hq;
 pub mod keys;
 mod left_pane;
 pub mod link;
+mod mods;
 mod mouse;
 mod orchestration;
 pub mod palette;

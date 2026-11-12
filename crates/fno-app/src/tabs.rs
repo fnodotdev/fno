@@ -107,7 +107,7 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
     let views = [
         ("Chat", MainView::Chat),
         ("Board", MainView::Orchestration),
-        ("Extensions", MainView::Extensions),
+        ("Mods", MainView::Mods),
         ("Terminal", MainView::Terminal),
     ];
     for (i, (name, view)) in views.into_iter().enumerate() {

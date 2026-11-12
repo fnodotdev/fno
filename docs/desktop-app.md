@@ -33,7 +33,7 @@ The app never reads that version to judge compatibility. It reads the wire versi
 | `--session <name>` | `FNO_SERVER`, then `default` | The mux session to attach to. |
 | `--font <family>` | `Menlo` | The terminal font family. |
 | `--font-size <pt>` | `13` | The terminal font size. |
-| `--mode <view>` | `chat` | The view the window opens on: `chat`, `terminal`, `orchestration` or `extensions`. |
+| `--mode <view>` | `chat` | The view the window opens on: `chat`, `terminal`, `orchestration` or `mods`. |
 | `--probe` | off | Attach with no window, print two lines, and exit. |
 | `--chat <id>` | none | Show one claude session's chat instead of the focused agent's. `newest` picks the most recently written transcript. With `--probe`, count its events instead of attaching. |
 
@@ -45,7 +45,7 @@ The app never reads that version to judge compatibility. It reads the wire versi
 
 The left pane has four sections. Agents come in the order the TUI sideline uses. The pane shows the first 6, and a "+N more" row shows the rest. The pane scrolls when the window is too short for every section. Each agent card shows a state glyph, its name, its harness and state word. A bound agent also shows its node and PR. The Agents header counts the agents per state, so a blocked agent below the fold still shows. Only the agent you are on wears the cursor. A click focuses the agent's pane, or opens a paneless agent in portal 0. Sessions are the mux squads. A click switches to one. Questions are the open questions that wait on you, newest first. Machines are the fleet's hosts with their seat counts. A section whose read failed shows the error above its last good rows. While the window is active, the fleet and the questions refresh every 60 seconds. They also refresh at once after an answer, and on your return to the window. The backlog behind seat titles refreshes every 5 minutes.
 
-The strip above the grid shows the active session's tabs. A tab without a chosen name shows its pane's title. A click selects a tab. The Chat, Board, Extensions and Terminal buttons at the right of the strip switch the main view.
+The strip above the grid shows the active session's tabs. A tab without a chosen name shows its pane's title. A click selects a tab. The Chat, Board, Mods and Terminal buttons at the right of the strip switch the main view.
 
 ## Chat mode
 
@@ -63,7 +63,7 @@ If the chat stream ends, the composer gives way to the reason and a Reconnect bu
 
 cmd-2 or Board opens orchestration mode, the command center board. TABLE lists every seat with its node and status. With more than one host in the fleet, a MACHINE column shows too. FEED lists each open question with its options, and the recommended option is marked. A click on an option answers it through the same door the TUI uses. The question then shows "sending", then "answered", until the next read drops it. A refused answer shows its reason and keeps the options. cmd-4 or Terminal goes to the terminal.
 
-cmd-3 or Extensions lists the mods and layouts from `fno config plugins ls --json`, the feed the mux settings tab reads. A row shows its title, its `pack/id` and its summary. An On or Off button switches it. A built-in mod shows "Built in" and has no switch. A click on a name shows its preview image and its rendered recipe on the right. A mod that runs code asks first: the first switch-on shows the command and the commit, and nothing runs until you press "Turn it on and let it run". The list reads when the view shows, after a switch, and when an install pane closes. A failed read shows its error above the last good rows. A switch shows "..." until the CLI answers, and takes no second press meanwhile. A code mod's row says "Runs code". Up and down move the selection, Space switches the selected mod, `o` opens it, `i` opens the URL field and Enter confirms an armed code mod. "Install from URL" and "Open in a pane" run `fno config plugins install` or `open` in a pane split to the right of the focused pane, and switch to the terminal once that pane exists. When the pane cannot open, the notice names the exit code and the first line the launcher printed, and the view stays. The app never installs by itself: the pane shows what the pack runs and asks you, as the CLI does. "Browse published packs" reads `fno config plugins gallery --json`, and a click on a row fills the URL field. Typed text and cmd-v go to the URL field while it is open. Escape closes it, and an armed code-mod confirm stays.
+cmd-3 or Mods lists the mods and layouts from `fno config plugins ls --json`, the feed the mux settings tab reads. A row shows its title, its `pack/id` and its summary. An On or Off button switches it. A built-in mod shows "Built in" and has no switch. A click on a name shows its preview image and its rendered recipe on the right. A mod that runs code asks first: the first switch-on shows the command and the commit, and nothing runs until you press "Turn it on and let it run". The list reads when the view shows, after a switch, and when an install pane closes. A failed read shows its error above the last good rows. A switch shows "..." until the CLI answers, and takes no second press meanwhile. A code mod's row says "Runs code". Up and down move the selection, Space switches the selected mod, `o` opens it, `i` opens the URL field and Enter confirms an armed code mod. "Install from URL" and "Open in a pane" run `fno config plugins install` or `open` in a pane split to the right of the focused pane, and switch to the terminal once that pane exists. When the pane cannot open, the notice names the exit code and the first line the launcher printed, and the view stays. The app never installs by itself: the pane shows what the pack runs and asks you, as the CLI does. "Browse published packs" reads `fno config plugins gallery --json`, and a click on a row fills the URL field. Typed text and cmd-v go to the URL field while it is open. Escape closes it, and an armed code-mod confirm stays.
 
 The window follows the macOS appearance. A Mac in dark mode gets footnote-superscript. A Mac in light mode gets footnote-paper. When the system switches, the window repaints with no restart. A `mux.theme` pin in your config wins over the appearance, as it does in the TUI, so a pinned dark theme stays dark. Programs inside panes keep the colors the mux server gave them. A pane that paints its own dark ground stays dark in a light window.
 
@@ -82,7 +82,7 @@ In the terminal view, keys go to the focused pane as a terminal sends them. The 
 | cmd-w | Close pane |
 | cmd-c | Copy the focused pane's selection |
 | cmd-v | Paste (bracketed when the pane asks for it) |
-| cmd-1 / cmd-2 / cmd-3 / cmd-4 | Chat / orchestration board / extensions / terminal |
+| cmd-1 / cmd-2 / cmd-3 / cmd-4 | Chat / orchestration board / mods / terminal |
 | cmd-q | Detach and quit |
 
 Typed text goes through the macOS input system, so dead keys, option-compose and IME input work. Option on a letter types the composed character, as in Terminal.app. Option on an arrow or backspace still sends the meta form.

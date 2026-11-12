@@ -12615,14 +12615,24 @@ crates/fno-agents/src/gate/pr_status/tests.rs	clippy::indexing_slicing	assert_eq
 crates/fno-agents/src/gate/pr_status/tests.rs	clippy::indexing_slicing	assert_eq!(payload["verdict"].as_str(), Some("pending"));
 crates/fno-agents/src/gate/pr_status_facts/tests.rs	clippy::indexing_slicing	assert_eq!(out["blockers"], json!(["ci_pending"]));
 crates/fno-agents/src/gate/pr_status_facts/tests.rs	clippy::indexing_slicing	assert_eq!(out["blockers"], json!(["ci_red"]));
+crates/fno-agents/src/runtime/mail_hold.rs	clippy::indexing_slicing	assert!(status["delivery_policy"].is_null());
+crates/fno-agents/src/runtime/mail_hold.rs	clippy::indexing_slicing	assert_eq!(registry.entries[0].delivery_policy, None);
+crates/fno-agents/src/runtime/mail_hold.rs	clippy::indexing_slicing	let set_by = if legacy["source"] == "conversation" {
+crates/fno-agents/src/runtime/mail_hold.rs	clippy::indexing_slicing	let until = legacy["until"]
+crates/fno-agents/src/runtime/mail_hold.rs	clippy::indexing_slicing	r["delivery_policy"] = serde_json::Value::String(MAIL_ONLY.into());
+crates/fno-agents/src/runtime/mail_hold.rs	clippy::indexing_slicing	row["delivery_policy"] = serde_json::Value::String(MAIL_ONLY.into());
+crates/fno-agents/src/runtime/mail_hold.rs	clippy::indexing_slicing	row["origin"] = serde_json::Value::String("operator".into());
+crates/fno/src/client/tests/sideline_table_tests.rs	clippy::indexing_slicing	assert!(!rows[2].dnd, "an ended hold marks nothing");
+crates/fno/src/client/tests/sideline_table_tests.rs	clippy::indexing_slicing	rows[0].dnd && rows[0].held_conversation,
+crates/fno/src/client/tests/sideline_table_tests.rs	clippy::indexing_slicing	rows[1].dnd && !rows[1].held_conversation,
 crates/fno-app/src/boxdraw.rs	clippy::indexing_slicing	0x2500..=0x257f => lines(ARMS[(code - 0x2500) as usize], w, h, light),
 crates/fno-app/src/boxdraw.rs	clippy::indexing_slicing	assert_eq!(quads('━', w, h, 1.0).unwrap()[0].h, 2.0);
 crates/fno-app/src/boxdraw.rs	clippy::indexing_slicing	assert_eq!(quads('▒', w, h, 1.0).unwrap()[0].alpha, 0.5);
 crates/fno-app/src/boxdraw.rs	clippy::indexing_slicing	let (hlo, hhi) = span(weights[1], weights[3]);
 crates/fno-app/src/boxdraw.rs	clippy::indexing_slicing	let (vlo, vhi) = span(weights[0], weights[2]);
 crates/fno-app/src/chat/view.rs	clippy::indexing_slicing	let (a, b) = (w[0], w[1]);
-crates/fno-app/src/extensions.rs	clippy::indexing_slicing	assert_eq!(shown[0], ("fno-panels/backlog-board".to_string(), true));
-crates/fno-app/src/extensions.rs	clippy::indexing_slicing	assert_eq!(shown[3].0, "demo-clock/clock");
+crates/fno-app/src/mods.rs	clippy::indexing_slicing	assert_eq!(shown[0], ("fno-panels/backlog-board".to_string(), true));
+crates/fno-app/src/mods.rs	clippy::indexing_slicing	assert_eq!(shown[3].0, "demo-clock/clock");
 crates/fno-app/src/keys.rs	clippy::indexing_slicing	if &bytes[i..i + 3] != b"\\x1b[?" {
 crates/fno-app/src/keys.rs	clippy::indexing_slicing	match &bytes[start..end] {
 crates/fno-app/src/keys.rs	clippy::indexing_slicing	s if s.len() == 1 && s.as_bytes()[0].is_ascii_alphabetic() => {

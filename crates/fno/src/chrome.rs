@@ -1169,17 +1169,17 @@ mod tests {
     #[test]
     fn the_last_tab_keeps_two_cells_of_right_air() {
         let chrome = Chrome::new("settings", Anchor::Center)
-            .tabs(vec![("general".into(), true), ("extensions".into(), false)])
+            .tabs(vec![("general".into(), true), ("mods".into(), false)])
             .footer("esc");
         let framed = frame(&[bl("row")], &chrome, 3, None);
         let strip = framed
             .lines
             .iter()
-            .find(|l| l.text.contains("extensions") && l.text.contains('│'))
+            .find(|l| l.text.contains("mods") && l.text.contains('│'))
             .expect("the strip row");
         let after: String = strip
             .text
-            .split("extensions")
+            .split("mods")
             .nth(1)
             .expect("text after the last label")
             .to_string();

@@ -67,7 +67,7 @@ pub enum Shortcut {
     Paste,
     Quit,
     /// cmd-1 shows the chat, cmd-2 the orchestration board, cmd-3 the
-    /// extensions, cmd-4 the terminal.
+    /// mods, cmd-4 the terminal.
     View(u8),
 }
 
@@ -247,7 +247,7 @@ mod tests {
             Some(Shortcut::View(n)) => MainView::for_shortcut(n),
             other => panic!("cmd-{k} is {other:?}"),
         };
-        assert_eq!(shown("3"), MainView::Extensions);
+        assert_eq!(shown("3"), MainView::Mods);
         assert_eq!(shown("2"), MainView::Orchestration);
         assert_eq!(shown("1"), MainView::Chat);
         assert_eq!(shown("4"), MainView::Terminal);

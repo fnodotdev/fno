@@ -25,7 +25,7 @@ use super::keys::{self, Key, Modes, Shortcut};
 use super::link::{Event, Layout, Link};
 use super::mouse::{self, Hit};
 use super::palette::Palette;
-use super::{extensions, left_pane, orchestration, tabs};
+use super::{left_pane, mods, orchestration, tabs};
 use fno::app_api::web_hq::Board;
 use fno::proto::chat_event::SessionKey;
 use fno::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};
@@ -41,7 +41,7 @@ pub enum MainView {
     /// The command center board (cmd-2).
     Orchestration,
     /// The mods and layouts from `fno config plugins ls` (cmd-3).
-    Extensions,
+    Mods,
 }
 
 impl MainView {
@@ -50,7 +50,7 @@ impl MainView {
         match n {
             1 => MainView::Chat,
             2 => MainView::Orchestration,
-            3 => MainView::Extensions,
+            3 => MainView::Mods,
             _ => MainView::Terminal,
         }
     }
@@ -132,7 +132,7 @@ pub struct Root {
     pub(super) pinned: Option<SessionKey>,
     /// The mux session this window attached to; panes open on it.
     pub(super) session: String,
-    pub(super) ext: extensions::Page,
+    pub(super) ext: mods::Page,
     /// The input handler's uncommitted text.
     preedit: Option<String>,
     _reader: Option<Task<()>>,
@@ -204,7 +204,7 @@ impl Root {
             light,
             theme_cwd: theme_cwd.clone(),
             session: session.clone(),
-            ext: extensions::Page::default(),
+            ext: mods::Page::default(),
             chat: Chat::default(),
             pinned,
             preedit: None,
@@ -264,15 +264,19 @@ impl Root {
             Err(e) => root.notice = Some(format!("the board poll did not start: {e}")),
         }
         root.start_plugins(cx);
+        // `--mode mods` opens on the view without a switch, so read here.
+        if root.main == MainView::Mods {
+            root.ext.read();
+        }
         root
     }
 
     /// Start the plugins thread and its reply reader. The list reads when
     /// the view shows, after a switch and when an install pane closes.
     fn start_plugins(&mut self, cx: &mut Context<Self>) {
-        match extensions::start() {
+        match mods::start() {
             Ok((asks, mut rx)) => {
-                self.ext = extensions::Page::new(asks);
+                self.ext = mods::Page::new(asks);
                 self._plugins = Some(cx.spawn(async move |this, cx| {
                     while let Some(reply) = rx.recv().await {
                         let landed = this.update(cx, |root, cx| {
@@ -370,7 +374,7 @@ impl Root {
 
     fn show(&mut self, view: MainView, cx: &mut Context<Self>) {
         self.main = view;
-        if view == MainView::Extensions {
+        if view == MainView::Mods {
             self.ext.read();
         }
         self.sync_chat(cx);
@@ -643,8 +647,8 @@ impl Root {
                 Shortcut::Paste => {
                     if let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) {
                         match self.main {
-                            MainView::Extensions => {
-                                extensions::paste(self, &text, cx);
+                            MainView::Mods => {
+                                mods::paste(self, &text, cx);
                                 return;
                             }
                             MainView::Chat => {
@@ -698,7 +702,7 @@ impl Root {
             cx.notify();
             return;
         }
-        if self.main == MainView::Extensions && extensions::key(self, &key, cx) {
+        if self.main == MainView::Mods && mods::key(self, &key, cx) {
             cx.stop_propagation();
             return;
         }
@@ -1139,7 +1143,7 @@ impl Render for Root {
                 .font_family(".SystemUIFont")
                 .text_sm()
                 .into_any_element(),
-            MainView::Extensions => extensions::render(self, cx)
+            MainView::Mods => mods::render(self, cx)
                 .font_family(".SystemUIFont")
                 .text_sm()
                 .into_any_element(),
