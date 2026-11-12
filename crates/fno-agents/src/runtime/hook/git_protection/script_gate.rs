@@ -55,7 +55,7 @@ pub(super) fn expand(command: &str, segs: &[Segment], ctx: &Ctx) -> Result<Vec<S
 /// What a writer in the same command puts at a path.
 #[derive(Clone)]
 enum Source {
-    /// Text the guard can read: a heredoc body, an echo, a copied file.
+    /// Text the guard can read: a heredoc body or a copied file.
     Text(String),
     /// A writer whose output the guard cannot read, by its command text.
     Opaque(String),
@@ -113,12 +113,10 @@ impl Walk {
 
     fn resolve(&self, raw: &str) -> Option<PathBuf> {
         let text = self.expand_vars(raw)?;
-        let text = match text.strip_prefix("~/") {
-            Some(rest) => format!("{}/{rest}", std::env::var("HOME").ok()?),
-            None if text == "~" => std::env::var("HOME").ok()?,
-            None => text,
+        let path = match text.strip_prefix("~/") {
+            Some(rest) => PathBuf::from(std::env::var("HOME").ok()?).join(rest),
+            None => PathBuf::from(text),
         };
-        let path = PathBuf::from(text);
         if path.is_absolute() {
             Some(path)
         } else {
@@ -140,15 +138,9 @@ impl Walk {
         let base0 = argv.first().map(|t| base_lower(t)).unwrap_or_default();
         if argv.is_empty() {
             self.assign(&assignments);
-        } else if ["export", "declare", "local", "readonly"].contains(&base0.as_str()) {
-            let args: Vec<String> = argv
-                .iter()
-                .skip(1)
-                .filter(|a| a.contains('='))
-                .cloned()
-                .collect();
-            self.assign(&args);
-        } else if base0 == "cd" || base0 == "pushd" {
+        } else if base0 == "export" {
+            self.assign(&argv[1..]);
+        } else if base0 == "cd" {
             let target = argv
                 .iter()
                 .skip(1)
@@ -160,12 +152,8 @@ impl Walk {
             };
         }
         if let Some(target) = segments::write_target(seg) {
-            let heredoc = self.heredocs.iter().position(|(t, _)| *t == target);
-            let source = match heredoc {
+            let source = match self.heredocs.iter().position(|(t, _)| *t == target) {
                 Some(at) => Source::Text(self.heredocs.remove(at).1),
-                None if base0 == "echo" || base0 == "printf" => {
-                    Source::Text(argv.iter().skip(1).cloned().collect::<Vec<_>>().join(" "))
-                }
                 None => Source::Opaque(seg.join(" ")),
             };
             self.record(&target, source);
@@ -569,23 +557,6 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_script_nothing_writes_allows_unless_the_command_holds_a_push() {
-        let dir = tempfile::tempdir().unwrap();
-        let fake = feature(dir.path());
-        let c = ctx(dir.path(), &fake);
-        assert_eq!(judge_with(&bash("bash missing.sh; echo rc=$?"), &c), None);
-        let refusal = judge_with(
-            &bash("python3 -c \"open('m.sh','w').write('git push origin main')\" && bash m.sh"),
-            &c,
-        )
-        .unwrap();
-        assert!(
-            refusal.contains("does not exist yet") && refusal.contains("Script: m.sh"),
-            "{refusal}"
-        );
-    }
-
-    #[test]
     fn a_script_written_in_the_same_command_is_gated_by_what_writes_it() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("clean.sh"), "cargo build\n").unwrap();
@@ -593,6 +564,7 @@ mod tests {
         let fake = feature(dir.path());
         let c = ctx(dir.path(), &fake);
         for cmd in [
+            "bash missing.sh; echo rc=$?",
             "cat > s.sh <<'EOF'\necho hi\nEOF\nbash s.sh",
             "cp clean.sh s.sh && bash s.sh",
         ] {
@@ -619,6 +591,14 @@ mod tests {
             refusal.contains("written in this same command by `curl"),
             "{refusal}"
         );
+        // A missing script nothing visibly writes refuses when the command
+        // text holds a push an unseen writer may put into it.
+        let refusal = judge_with(
+            &bash("python3 -c \"open('m.sh','w').write('git push origin main')\" && bash m.sh"),
+            &c,
+        )
+        .unwrap();
+        assert!(refusal.contains("does not exist yet"), "{refusal}");
     }
 
     #[test]

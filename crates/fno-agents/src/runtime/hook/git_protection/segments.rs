@@ -577,6 +577,15 @@ pub(super) fn writes_a_file(tokens: &[String]) -> bool {
 /// matter here: a body fed to a shell runner executes either way, so the
 /// script door gates quoted bodies too (`bash <<'EOF'`).
 pub(super) fn heredoc_bodies(command: &str) -> Vec<String> {
+    heredocs(command)
+        .into_iter()
+        .map(|(_, body)| body)
+        .filter(|body| !body.is_empty())
+        .collect()
+}
+
+/// Each heredoc as `(opener line, body)`, in command order.
+fn heredocs(command: &str) -> Vec<(String, String)> {
     let lines = split_lines_outside_quotes(command);
     let mut out = Vec::new();
     let mut i = 0;
@@ -585,6 +594,7 @@ pub(super) fn heredoc_bodies(command: &str) -> Vec<String> {
             i += 1;
             continue;
         };
+        let opener = lines[i].clone();
         let mut body: Vec<&str> = Vec::new();
         i += 1;
         while i < lines.len() {
@@ -599,9 +609,7 @@ pub(super) fn heredoc_bodies(command: &str) -> Vec<String> {
                 break;
             }
         }
-        if !body.is_empty() {
-            out.push(body.join("\n"));
-        }
+        out.push((opener, body.join("\n")));
     }
     out
 }
@@ -611,36 +619,17 @@ pub(super) fn heredoc_bodies(command: &str) -> Vec<String> {
 /// target token is the lexer's spelling, so it equals the token in the
 /// writer's segment.
 pub(super) fn heredoc_writes(command: &str) -> Vec<(String, String)> {
-    let lines = split_lines_outside_quotes(command);
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < lines.len() {
-        let Some((delim, dash)) = find_heredoc_opener(&lines[i]) else {
-            i += 1;
-            continue;
-        };
-        let target = shlex_lex(
-            &lines[i],
-            Lex {
-                punct: true,
-                comments: true,
-            },
-        )
-        .and_then(|toks| write_target(&toks));
-        let mut body: Vec<&str> = Vec::new();
-        i += 1;
-        while let Some(line) = lines.get(i) {
-            i += 1;
-            if heredoc_ends(line, &delim, dash) {
-                break;
-            }
-            body.push(line);
-        }
-        if let Some(target) = target {
-            out.push((target, body.join("\n")));
-        }
-    }
-    out
+    let lex = Lex {
+        punct: true,
+        comments: true,
+    };
+    heredocs(command)
+        .into_iter()
+        .filter_map(|(opener, body)| {
+            let target = shlex_lex(&opener, lex).and_then(|toks| write_target(&toks))?;
+            Some((target, body))
+        })
+        .collect()
 }
 
 /// The file a token run writes through `>`/`>>` or `tee`, if any.
