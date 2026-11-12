@@ -597,54 +597,65 @@ fn sideline_marks_active_squad_and_focused_agent_row() {
 
 #[test]
 fn client_agent_row_renders_dnd_as_presence_not_liveness() {
-    // The hold-badge vertical (sidecar -> overlay -> wire -> render): a
-    // conversation-sourced sidecar marks the row, and the render reads
-    // [HELD] for the machine-armed hold while a hold you set keeps [DND]. The
-    // conversation clock has lapsed: its stamp still waits on the release
-    // timer, and that window must not read as a hold the user set.
-    let stamp = |t: chrono::DateTime<chrono::Utc>| t.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    // The hold-badge vertical (hold store -> overlay -> wire -> render): a
+    // live conversation hold marks the row [HELD], a live hold you set marks
+    // it [DND], and an ended record marks nothing.
+    use fno_mail::hold::{Hold, HoldStore, SetBy};
+    use fno_mail::session::SessionId;
     let dir = std::env::temp_dir().join(format!("hold-badge-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("aaaa1111-2222-3333-4444-555566667777.json"),
-        format!(
-            "{{\"until\": \"{}\", \"window_s\": 3600, \"clock_kind\": \"wall\", \"ceiling\": null, \"source\": \"conversation\"}}\n",
-            stamp(chrono::Utc::now() - chrono::Duration::seconds(30))
-        ),
-    )
-    .unwrap();
-    std::fs::write(
-        dir.join("bbbb2222-2222-3333-4444-555566667777.json"),
-        format!(
-            "{{\"until\": \"{}\", \"window_s\": 3600, \"clock_kind\": \"wall\", \"ceiling\": null}}\n",
-            stamp(chrono::Utc::now() + chrono::Duration::seconds(600))
-        ),
-    )
-    .unwrap();
+    let store = HoldStore::new(&dir);
+    let now = chrono::Utc::now();
+    let put = |sid: &str, start: chrono::DateTime<chrono::Utc>, set_by| {
+        let hold = Hold::new(
+            SessionId::parse(sid).unwrap(),
+            chrono::Duration::minutes(10),
+            false,
+            start,
+            chrono::Duration::hours(8),
+            set_by,
+            "test",
+        );
+        store.put(&hold).unwrap();
+    };
+    put(
+        "aaaa1111-2222-3333-4444-555566667777",
+        now,
+        SetBy::Conversation,
+    );
+    put("bbbb2222-2222-3333-4444-555566667777", now, SetBy::User);
+    put(
+        "cccc3333-2222-3333-4444-555566667777",
+        now - chrono::Duration::minutes(11),
+        SetBy::User,
+    );
     let mut rows = vec![
         crate::agents_view::RegistryAgent {
             name: "auto".into(),
-            dnd: true,
             harness_session_id: Some("AAAA1111-2222-3333-4444-555566667777".into()),
             ..Default::default()
         },
         crate::agents_view::RegistryAgent {
             name: "manual".into(),
-            dnd: true,
             harness_session_id: Some("bbbb2222-2222-3333-4444-555566667777".into()),
+            ..Default::default()
+        },
+        crate::agents_view::RegistryAgent {
+            name: "ended".into(),
+            harness_session_id: Some("cccc3333-2222-3333-4444-555566667777".into()),
             ..Default::default()
         },
     ];
     crate::agents_view::overlay_hold_marks_at(&mut rows, &dir);
     assert!(
-        rows[0].held_conversation,
-        "conversation sidecar marks the row"
+        rows[0].dnd && rows[0].held_conversation,
+        "a conversation hold reads HELD"
     );
     assert!(
-        !rows[1].held_conversation,
-        "a sourceless sidecar stays manual"
+        rows[1].dnd && !rows[1].held_conversation,
+        "a user hold stays DND"
     );
+    assert!(!rows[2].dnd, "an ended hold marks nothing");
     let _ = std::fs::remove_dir_all(&dir);
     let held: AgentRow = serde_json::from_str(
         r#"{"squad":1,"name":"held","pane_id":10,

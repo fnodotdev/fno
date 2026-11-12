@@ -88,6 +88,9 @@ full = [
 desktop = ["full", "dep:gpui", "dep:pulldown-cmark", "dep:unicode-segmentation"]
 
 [dependencies]
+# The mail protocol core: the hold store the sideline marks read. Exact pin,
+# as fno-agents pins it: both crates are 0.x.
+fno-mail = { path = "../fno-mail", version = "=0.4.5" }
 # `fno mux serve --web`: the read-only web bridge's HTTP + WebSocket
 # surface. axum handles the untrusted-input HTTP parsing and WS handshake so
 # the web-facing bridge does not hand-roll that security-sensitive code.

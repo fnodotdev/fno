@@ -8,7 +8,7 @@ A zero population on a snapshot is a point-in-time fact, not a verdict. The sche
 
 - `forked_from_session_id`, `predecessor_session_ids`: conditional, after succession or branch classification.
 - `live_status`, `live_status_basis`: conditional, from Claude supervisor enrichment and fired falsifiers.
-- `delivery_policy`: transient, only while a busy-mode hold is active.
+- `delivery_policy`: transient, only on a row whose session took the register command's mail-only capability (`bus-only`). Do-not-disturb holds live in the fno-mail hold store, not here.
 
 Each entry carries the mode, the measured surface, the writer, and the behavior test. The live evaluator partitions contract-covered zeroes into `conditional_zero` and `transient_zero` reports with their measured counts, and keeps them out of both `dead_fields` lists. A field absent from the contract stays a dead-field finding. An entry with malformed or incomplete metadata becomes a contract error. A contract never silently accepts a zero. Do not synthesize values into rows to move a count.
 
