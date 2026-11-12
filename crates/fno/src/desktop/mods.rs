@@ -607,7 +607,7 @@ fn row(i: usize, pack: &str, c: &Component, root: &Root, cx: &mut Context<Root>)
 fn list(root: &Root, cx: &mut Context<Root>) -> Div {
     let p = root.palette;
     let page = &root.ext;
-    let mut out = div().flex().flex_col().child(section("INSTALLED", root));
+    let mut out = div().flex().flex_col().child(section("Installed", root));
     if let Some(e) = &page.error {
         out = out.child(div().py_1().text_color(rgb(p.error)).child(e.0.clone()));
     }
@@ -661,7 +661,7 @@ fn list(root: &Root, cx: &mut Context<Root>) -> Div {
     for (i, (pack, c)) in page.rows.iter().enumerate() {
         out = out.child(row(i, pack, c, root, cx));
     }
-    out = out.child(section("INSTALL", root));
+    out = out.child(section("Install", root));
     out = match &page.url {
         None => out.child(button(
             "ext-install".into(),
@@ -710,7 +710,7 @@ fn list(root: &Root, cx: &mut Context<Root>) -> Div {
                     )),
             ),
     };
-    out = out.child(section("GALLERY", root));
+    out = out.child(section("Gallery", root));
     match &page.gallery {
         Gallery::Idle => out.child(button(
             "ext-browse".into(),
