@@ -1,4 +1,4 @@
-//! Extensions mode (cmd-3): the mods and layouts `fno config plugins ls --json`
+//! Mods mode (cmd-3): the mods and layouts `fno config plugins ls --json`
 //! lists, each with its switch, preview image and rendered recipe, plus an
 //! install row and the published gallery. The mux settings tab reads the
 //! same feed through `plugins_feed`, so both hosts show one list.
