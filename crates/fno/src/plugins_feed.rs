@@ -249,14 +249,19 @@ mod tests {
     fn the_pane_argv_anchors_the_split_on_the_focused_pane() {
         let argv = pane_argv("/bin/fno", &["install", "https://x/y"], 7, Some("work"));
         let cut = argv.iter().position(|a| a == "--").unwrap();
+        let (head, _) = argv.split_at(cut);
         assert_eq!(
-            argv[..cut],
+            head,
             ["mux", "pane", "run", "--server", "work", "--split", "right", "--at", "7"]
         );
-        assert_eq!(
-            argv[argv.len() - 3..],
-            ["/bin/fno", "install", "https://x/y"]
-        );
+        let tail: Vec<&str> = argv
+            .iter()
+            .rev()
+            .take(3)
+            .rev()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(tail, ["/bin/fno", "install", "https://x/y"]);
         assert_eq!(
             door_for("/opt/x/fno".into()),
             std::path::PathBuf::from("/opt/x/fno")
