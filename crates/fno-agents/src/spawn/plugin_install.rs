@@ -1765,7 +1765,41 @@ fn install_claude(stage: &Path, force: bool) -> Result<String, String> {
     for argv in claude_dev_migration(&claude_dir) {
         let _ = run_checked(&argv, None);
     }
-    let installed = install_claude_dev(stage, force)?;
+    run_checked(
+        &[
+            "claude".into(),
+            "plugin".into(),
+            "marketplace".into(),
+            "add".into(),
+            stage.display().to_string(),
+        ],
+        None,
+    )?;
+    let plugin = |action: &str| -> Vec<String> {
+        vec![
+            "claude".into(),
+            "plugin".into(),
+            action.into(),
+            DEV_PLUGIN_ID.into(),
+        ]
+    };
+    let installed = if force {
+        // update keeps same-version files; force means delete and reinstall,
+        // and also covers not-yet-installed, so uninstall failure is fine.
+        let _ = run_checked(&plugin("uninstall"), None);
+        run_checked(&plugin("install"), None)?;
+        "reinstalled"
+    } else {
+        match run_checked(&plugin("install"), None) {
+            Ok(_) => "installed",
+            Err(e) if e.contains("already installed") => {
+                run_checked(&plugin("update"), None)?;
+                "updated"
+            }
+            Err(e) => return Err(e),
+        }
+    };
+    let installed = format!("{installed} {DEV_PLUGIN_ID} from {}", stage.display());
     Ok(match disable_claude_release(&claude_dir) {
         Some(note) => format!("{installed}; {note}"),
         None => installed,
@@ -1791,48 +1825,6 @@ fn disable_claude_release(claude_dir: &Path) -> Option<String> {
         Err(e) if e.contains("already disabled") => format!("the release {PLUGIN_ID} stays disabled ({swap_back})"),
         Err(e) => format!("the release {PLUGIN_ID} is still enabled, so both copies load: disable it with claude plugin disable {PLUGIN_ID} ({e})"),
     })
-}
-
-fn install_claude_dev(stage: &Path, force: bool) -> Result<String, String> {
-    run_checked(
-        &[
-            "claude".into(),
-            "plugin".into(),
-            "marketplace".into(),
-            "add".into(),
-            stage.display().to_string(),
-        ],
-        None,
-    )?;
-    let plugin = |action: &str| -> Vec<String> {
-        vec![
-            "claude".into(),
-            "plugin".into(),
-            action.into(),
-            DEV_PLUGIN_ID.into(),
-        ]
-    };
-    if force {
-        // update keeps same-version files; force means delete and reinstall,
-        // and also covers not-yet-installed, so uninstall failure is fine.
-        let _ = run_checked(&plugin("uninstall"), None);
-        run_checked(&plugin("install"), None)?;
-        return Ok(format!(
-            "reinstalled {DEV_PLUGIN_ID} from {}",
-            stage.display()
-        ));
-    }
-    match run_checked(&plugin("install"), None) {
-        Ok(_) => Ok(format!(
-            "installed {DEV_PLUGIN_ID} from {}",
-            stage.display()
-        )),
-        Err(e) if e.contains("already installed") => {
-            run_checked(&plugin("update"), None)?;
-            Ok(format!("updated {DEV_PLUGIN_ID} from {}", stage.display()))
-        }
-        Err(e) => Err(e),
-    }
 }
 
 /// A value fno wrote: under a `.fno` state dir, or the exact value this
