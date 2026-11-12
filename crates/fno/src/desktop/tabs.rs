@@ -105,9 +105,10 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
         .border_1()
         .border_color(rgb(p.border));
     let views = [
-        ("Terminal", MainView::Terminal),
+        ("Chat", MainView::Chat),
         ("Board", MainView::Orchestration),
         ("Extensions", MainView::Extensions),
+        ("Terminal", MainView::Terminal),
     ];
     for (i, (name, view)) in views.into_iter().enumerate() {
         let id = ElementId::NamedInteger("mode".into(), i as u64);

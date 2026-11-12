@@ -45,6 +45,8 @@ pub struct Palette {
     /// The fill under a press: a step above `row_fill`. Every label color is
     /// held at 4.5:1 on this, the strongest fill, so it holds on the rest.
     pub pressed: u32,
+    /// The user's own turns in chat mode.
+    pub bubble: u32,
     ansi: [u32; 16],
 }
 
@@ -177,6 +179,7 @@ impl Palette {
             hover,
             row_fill,
             pressed,
+            bubble: mix(bg, fg, 0.12),
             ansi,
         }
     }

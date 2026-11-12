@@ -74,6 +74,10 @@ fn to_event(msg: ServerMsg) -> Option<Event> {
         }
         ServerMsg::ModeSync { bytes } => Some(Event::Modes(bytes)),
         ServerMsg::Notice { text } => Some(Event::Notice(text)),
+        ServerMsg::PaneInputResult(r) => r
+            .result
+            .err()
+            .map(|why| Event::Notice(format!("send to pane {} failed: {why}", r.pane_id))),
         ServerMsg::Bye { reason } => Some(Event::Closed(reason)),
         _ => None,
     }

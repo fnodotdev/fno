@@ -213,7 +213,7 @@ pub enum TurnOutcome {
 }
 
 /// Standard base64 with optional padding; `None` on any other byte.
-fn decode_base64(text: &str) -> Option<Vec<u8>> {
+pub(crate) fn decode_base64(text: &str) -> Option<Vec<u8>> {
     fn sextet(byte: u8) -> Option<u32> {
         Some(match byte {
             b'A'..=b'Z' => byte - b'A',
