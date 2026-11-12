@@ -13,7 +13,6 @@
 
 use super::*;
 use crate::proto::{AnchoredLayoutSpec, GraftOutcome, GraftSlotResult, LayoutBinding};
-use serde::Deserialize;
 
 /// The reason a switched-off mod's slot fills with a shell.
 pub(super) const MOD_OFF: &str = "mod off";
@@ -28,34 +27,9 @@ pub(crate) enum ModVerdict {
 
 pub(crate) type ModVerdicts = HashMap<String, ModVerdict>;
 
-#[derive(Debug, Deserialize)]
-struct Listing {
-    packs: Vec<PackRow>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PackRow {
-    pack_id: String,
-    #[serde(default)]
-    mods: Vec<ModRow>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ModRow {
-    id: String,
-    #[serde(default)]
-    enabled: bool,
-}
-
-/// The one argv a mod slot runs.
+/// The one argv a mod slot runs, through the plugins feed's door.
 pub(super) fn open_argv(target: &str) -> Vec<String> {
-    vec![
-        fno_bin().to_string_lossy().into_owned(),
-        "config".into(),
-        "plugins".into(),
-        "open".into(),
-        target.into(),
-    ]
+    crate::plugins_feed::door_argv(&["open", target])
 }
 
 /// `<safe>/<safe>`: one slash, ids made of word characters, `.` and `-`.
@@ -79,47 +53,35 @@ fn mod_targets(spec: &AnchoredLayoutSpec) -> Vec<&str> {
         .collect()
 }
 
-/// Read the installed mods' switches once, when the spec binds any mod.
-/// Blocking subprocess: call from `spawn_blocking`.
+/// Read the installed mods' switches once, when the spec binds any mod,
+/// through the plugins feed's one read. Blocking subprocess: call from
+/// `spawn_blocking`.
 fn read_switches(targets: &[&str]) -> ModVerdicts {
-    let mut cmd = crate::process_admission::std_command(fno_bin());
-    cmd.args(["config", "plugins", "-J", "ls"])
-        .stdin(std::process::Stdio::null());
-    let failed = |why: String| -> ModVerdicts {
-        targets
-            .iter()
-            .map(|t| {
-                (
-                    t.to_string(),
-                    ModVerdict::Off(format!("plugins read failed: {why}")),
-                )
-            })
-            .collect()
-    };
-    let out = match crate::process_admission::std_output(&mut cmd) {
-        Ok(o) => o,
-        Err(e) => return failed(first_line_or(&e.to_string(), "did not start")),
-    };
-    if !out.status.success() {
-        return failed(first_line_or(
-            &String::from_utf8_lossy(&out.stderr),
-            "nonzero exit",
-        ));
-    }
-    let listing: Listing = match serde_json::from_slice(&out.stdout) {
-        Ok(l) => l,
-        Err(e) => return failed(first_line_or(&e.to_string(), "unreadable listing")),
+    use crate::plugins_feed::{fno_json, parse_installed, LS};
+    let installed = match parse_installed(fno_json(&LS)) {
+        Ok(rows) => rows,
+        Err(e) => {
+            let why = first_line_or(&e.to_string(), "unreadable listing");
+            return targets
+                .iter()
+                .map(|t| {
+                    (
+                        t.to_string(),
+                        ModVerdict::Off(format!("plugins read failed: {why}")),
+                    )
+                })
+                .collect();
+        }
     };
     targets
         .iter()
         .map(|t| {
+            // Only mod rows carry a kind; a layout row never answers a mod.
             let on = t.split_once('/').and_then(|(pack, id)| {
-                listing
-                    .packs
+                installed
                     .iter()
-                    .find(|p| p.pack_id == pack)
-                    .and_then(|p| p.mods.iter().find(|m| m.id == id))
-                    .map(|m| m.enabled)
+                    .find(|(p, c)| p == pack && c.id == id && !c.kind.is_empty())
+                    .map(|(_, c)| c.enabled)
             });
             let verdict = match on {
                 Some(true) => ModVerdict::On,
@@ -311,6 +273,9 @@ mod tests {
     #[test]
     fn open_argv_is_the_one_fixed_command() {
         let argv = open_argv("p/m");
-        assert_eq!(argv.get(1..).unwrap(), ["config", "plugins", "open", "p/m"]);
+        assert_eq!(
+            argv.get(1..).unwrap_or_default(),
+            ["config", "plugins", "open", "p/m"]
+        );
     }
 }

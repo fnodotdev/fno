@@ -1126,15 +1126,15 @@ fn layout_graft_refuses_unavailable_fno_and_duplicate_binding() {
 
 // -- a layout slot that holds a mod ------------------------------------------
 
-/// An `FNO_BIN` stand-in: `config plugins -J ls` lists one enabled and one
+/// An `FNO_BIN` stand-in: `config plugins ls --json` lists one enabled and one
 /// switched-off mod, and `config plugins open` records its argv then idles.
 fn mod_stub(scratch: &Scratch) -> (PathBuf, PathBuf) {
     use std::os::unix::fs::PermissionsExt;
     let log = scratch.0.join("open.argv");
     let bin = scratch.0.join("fno-stub");
-    let listing = r#"{"packs":[{"pack_id":"fno-panels","mods":[{"id":"feed","enabled":true},{"id":"quiet","enabled":false}]}]}"#;
+    let listing = r#"{"packs":[{"pack_id":"fno-panels","mods":[{"id":"feed","title":"Feed","kind":"run","enabled":true},{"id":"quiet","title":"Quiet","kind":"run","enabled":false}]}]}"#;
     let script = format!(
-        "#!/bin/sh\ncase \"$*\" in\n\"config plugins -J ls\") echo '{listing}' ;;\n\"config plugins open\"*) echo \"$*\" > '{}'; sleep 30 ;;\nesac\n",
+        "#!/bin/sh\ncase \"$*\" in\n\"config plugins ls --json\") echo '{listing}' ;;\n\"config plugins open\"*) echo \"$*\" > '{}'; sleep 30 ;;\nesac\n",
         log.display()
     );
     std::fs::write(&bin, script).unwrap();
