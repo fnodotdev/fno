@@ -216,7 +216,7 @@ fn gate_reading_and_message(reading: &TermReading, scope: &str) -> Option<(Strin
     let scope = if scope.is_empty() { "<scope>" } else { scope };
     let handoff = format!(
         "Hand off: fno agents spawn --promote {scope} --hand-off. Or extend with a written \
-         reason: fno agents org term <spec> --reason \"...\"."
+         reason: fno agents hq term <spec> --reason \"...\"."
     );
     match &reading.state {
         TermState::Within { .. } => None,

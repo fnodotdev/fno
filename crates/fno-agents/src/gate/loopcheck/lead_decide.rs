@@ -240,7 +240,7 @@ pub(super) fn lead_decide(
                     lead_output(
                         "allow",
                         None,
-                        &format!("lead already terminal ({reason} at {ts}); re-arm with fno agents org init"),
+                        &format!("lead already terminal ({reason} at {ts}); re-arm with fno agents hq init"),
                         0,
                         history.total,
                     ),
@@ -778,7 +778,7 @@ fn stale_doc_block(
     (
         crate::lead_escalation::reading_stale_team_doc(),
         format!(
-            "the team's handoff doc for {scope} is {age} and this lead is past its compaction ceiling ({boundaries} > {ceiling}); refresh it: fno agents org refresh-canon (runs the precompact-canon-doc.sh hook)"
+            "the team's handoff doc for {scope} is {age} and this lead is past its compaction ceiling ({boundaries} > {ceiling}); refresh it: fno agents hq refresh-canon (runs the precompact-canon-doc.sh hook)"
         ),
     )
 }

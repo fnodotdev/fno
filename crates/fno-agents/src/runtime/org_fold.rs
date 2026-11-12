@@ -1,4 +1,4 @@
-//! `org-fold`: the team scope fold for `fno agents org --nodes`.
+//! `org-fold`: the team scope fold for `fno agents hq --nodes`.
 //!
 //! Python passes the teams `gather_org` already adjudicated; this command
 //! reads the graph store (in-process, `backlog::api::rows`) and the claims

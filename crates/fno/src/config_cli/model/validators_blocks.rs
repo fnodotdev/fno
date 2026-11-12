@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 use std::sync::OnceLock;
 
 const LEAD_CHECKIN_TEXT: &str = concat!(
-    "lead check-in. Run fno agents org checkin: it gathers the check-in ",
+    "lead check-in. Run fno agents hq checkin: it gathers the check-in ",
     "readings, prints them, diffs the last beat, and journals lead_checkin. ",
     "Then act on the printout per the lead skill. When nothing changed and ",
     "coverage is full, print 'no change' and stop. This beat is a heartbeat. ",

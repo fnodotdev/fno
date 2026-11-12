@@ -195,7 +195,7 @@ fn sentinel_refusal_records_cause_path_and_age() {
         cause: "sentinel",
         path: Some(sentinel.clone()),
         age_secs: Some(2 * 60 * 60),
-        clear_hint: "fno agents org cancel --scope k --clear".to_string(),
+        clear_hint: "fno agents hq cancel --scope k --clear".to_string(),
         author: None,
         reason: None,
     };
@@ -237,7 +237,7 @@ fn attributed_sentinel_refusal_records_author_and_reason() {
         cause: "sentinel",
         path: Some(sentinel.clone()),
         age_secs: Some(60),
-        clear_hint: "fno agents org cancel --scope k --clear".to_string(),
+        clear_hint: "fno agents hq cancel --scope k --clear".to_string(),
         author: Some("operator".to_string()),
         reason: Some("wrong direction".to_string()),
     };
@@ -343,7 +343,7 @@ fn lead_cancel_refusal_names_its_file_age_and_clear_command() {
     );
     assert!(stderr.contains("age:"), "stderr: {stderr}");
     assert!(
-        stderr.contains("fno agents org cancel --scope k --clear"),
+        stderr.contains("fno agents hq cancel --scope k --clear"),
         "stderr: {stderr}"
     );
     let refusal = read_events(&events)

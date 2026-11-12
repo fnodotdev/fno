@@ -1,4 +1,4 @@
-//! The lead commands, all answered natively: `fno agents org` history,
+//! The lead commands, all answered natively: `fno agents hq` history,
 //! verdict, faq, init, checkin, cancel, term, done, escalate, drain, `chart
 //! shape`, `chart manifest-path`, `chart ledger`, and `fno inbox board`.
 //!
@@ -22,39 +22,39 @@ const ROUTES: &[Route] = &[
     Route {
         name: "history",
         native: &["lead-history"],
-        help: "Usage: fno agents org history [--scope SCOPE] [--json|-J]\n\n\
+        help: "Usage: fno agents hq history [--scope SCOPE] [--json|-J]\n\n\
                Read this role's recorded term: its check-ins, newest first, verbatim.\n",
     },
     Route {
         name: "verdict",
         native: &["lead-history", "--verdict", "--user-command"],
-        help: "Usage: fno agents org verdict [SCOPE]\n\n\
+        help: "Usage: fno agents hq verdict [SCOPE]\n\n\
                Read the term tenure verdict. SCOPE defaults to this session's own role.\n",
     },
     Route {
         name: "faq",
         native: &["lead-state", "--faq"],
-        help: "Usage: fno agents org faq list --scope SCOPE [--max-entries N] [--paths]\n       \
-               fno agents org faq add --question Q --answer A --specimen S --exit E [--scope SCOPE]\n\n\
+        help: "Usage: fno agents hq faq list --scope SCOPE [--max-entries N] [--paths]\n       \
+               fno agents hq faq add --question Q --answer A --specimen S --exit E [--scope SCOPE]\n\n\
                Durable answers a promoted session leaves behind.\n",
     },
     Route {
         name: "shape",
         native: &["lead-shape", "--user-command"],
-        help: "Usage: fno agents org chart shape pass|team [--scope SCOPE]\n\n\
+        help: "Usage: fno agents hq chart shape pass|team [--scope SCOPE]\n\n\
                Declare this term's shape: a pure pass, or a team holding workers.\n",
     },
     Route {
         name: "manifest-path",
         native: &["lead-state", "--manifest-path"],
-        help: "Usage: fno agents org chart manifest-path --harness-session-id ID \
+        help: "Usage: fno agents hq chart manifest-path --harness-session-id ID \
                [--harness H] [--state-root DIR]\n\n\
                Print this live promoted session's existing scope manifest path.\n",
     },
     Route {
         name: "init",
         native: &["lead-state", "--init"],
-        help: "Usage: fno agents org init --scope SCOPE [--scope SCOPE...] \
+        help: "Usage: fno agents hq init --scope SCOPE [--scope SCOPE...] \
                --harness-session-id ID [--max-iterations N] [--respawn-ceiling N] [--force] \
                [--rebind-from OLD-ID]\n\n\
                Write this role scope's manifest, which the lead loop arms read.\n\
@@ -64,7 +64,7 @@ const ROUTES: &[Route] = &[
     Route {
         name: "checkin",
         native: &["lead-checkin", "--user-command"],
-        help: "Usage: fno agents org checkin [--scope SCOPE] [--name NAME] [--theme THEME] \
+        help: "Usage: fno agents hq checkin [--scope SCOPE] [--name NAME] [--theme THEME] \
                [--change TEXT] [--recall WORD] [--no-emit] [--json]\n\n\
                Run the term check-in: gather, print, diff against the last beat, journal.\n\
                After a compaction it refuses until --recall names the canon doc's last-line word.\n",
@@ -72,13 +72,13 @@ const ROUTES: &[Route] = &[
     Route {
         name: "cancel",
         native: &["lead-state", "--cancel"],
-        help: "Usage: fno agents org cancel --scope SCOPE [--clear]\n\n\
+        help: "Usage: fno agents hq cancel --scope SCOPE [--clear]\n\n\
                Set or clear the cancel signal beside a role's manifest.\n",
     },
     Route {
         name: "term",
         native: &["lead-state", "--term"],
-        help: "Usage: fno agents org term span:<N>[smhd]|compactions:<N> [--reason TEXT] \
+        help: "Usage: fno agents hq term span:<N>[smhd]|compactions:<N> [--reason TEXT] \
                [--scope SCOPE]\n\n\
                Declare or extend this term: the bound past which the Stop hook asks \
                for a handoff or a reason.\n",
@@ -86,26 +86,26 @@ const ROUTES: &[Route] = &[
     Route {
         name: "done",
         native: &["lead-state", "--done"],
-        help: "Usage: fno agents org done [--scope SCOPE]\n\n\
+        help: "Usage: fno agents hq done [--scope SCOPE]\n\n\
                Expire this role: vacate the row and clear the scope manifest. \
                SCOPE defaults to this session's own role.\n",
     },
     Route {
         name: "escalate",
         native: &["lead-state", "--escalate"],
-        help: "Usage: fno agents org escalate [SCOPE] [--stalled ID]... [--reason R]\n\n\
+        help: "Usage: fno agents hq escalate [SCOPE] [--stalled ID]... [--reason R]\n\n\
                Escalate to the presiding role or operator with work pending.\n",
     },
     Route {
         name: "drain",
         native: &["lead-state", "--drain"],
-        help: "Usage: fno agents org drain SCOPE\n\n\
+        help: "Usage: fno agents hq drain SCOPE\n\n\
                Is the role drained: how many scope nodes are not done or superseded.\n",
     },
     Route {
         name: "ledger",
         native: &["lead-rundown", "--ledger"],
-        help: "Usage: fno agents org ledger [--out PATH]\n\n\
+        help: "Usage: fno agents hq ledger [--out PATH]\n\n\
                Render the term ledger page: every role, its territory, its nodes.\n",
     },
 ];

@@ -1,4 +1,4 @@
-//! `fno agents org refresh-canon`: the lead beat's canon-doc refresh, run in
+//! `fno agents hq refresh-canon`: the lead beat's canon-doc refresh, run in
 //! process behind the [`crate::agents_history`] classification pattern.
 //!
 //! The beat used to run the hook through a caller-resolved `$PLUGIN_ROOT`,

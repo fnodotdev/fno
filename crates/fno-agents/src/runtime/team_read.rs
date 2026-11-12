@@ -1,4 +1,4 @@
-//! `fno agents team` (the bare `fno agents org`): one read of every role,
+//! `fno agents team` (the bare `fno agents hq`): one read of every role,
 //! its scope, its holder, and whether the registry and the graph agree. A
 //! read leaf with no action of its own: the router rewrites it into
 //! `status --team`, because the binary's action list is shrink-only.
@@ -83,7 +83,7 @@ fn registry_statuses() -> Option<HashMap<String, String>> {
     })
 }
 
-/// The in-process org read behind `fno agents org --nodes`: the `--nodes`
+/// The in-process org read behind `fno agents hq --nodes`: the `--nodes`
 /// JSON payload as a Value, built in this process and anchored at `cwd`.
 /// The daemon's team alarm and the settle pass read this instead of
 /// spawning the front binary; the child's stdout was the old transport.

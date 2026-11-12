@@ -1,5 +1,5 @@
 //! `lead-history`: the team-scope `lead_checkin` readback behind
-//! `fno agents org history`.
+//! `fno agents hq history`.
 //!
 //! The front door execs this for the command. The caller's team scope comes
 //! from the registry and, with no `--events-path`, the journals from
@@ -528,7 +528,7 @@ pub(crate) fn default_journals(cwd: &Path) -> Vec<PathBuf> {
 /// With no `--scope`, the caller's team scope is resolved natively from the
 /// registry. With no `--events-path`,
 /// the read takes [`default_journals`] for the cwd: this is the
-/// `fno agents org history` command.
+/// `fno agents hq history` command.
 ///
 /// rc 0 read (any match count), 1 a store that cannot be opened or synced
 /// (the message names the store path), 2 usage failure.
@@ -973,7 +973,7 @@ fn scan_readings(
 /// `--cwd` defaults to the process cwd and the journals to
 /// [`default_journals`]. rc 0 verdict read (any verdict), 1 refused or
 /// unreadable input (the message names the failed reading), 2 usage failure.
-/// `--user-command` is `fno agents org verdict [scope]`: the scope may ride
+/// `--user-command` is `fno agents hq verdict [scope]`: the scope may ride
 /// positionally, a failed reading refuses as `lead verdict unreadable: ...`
 /// at rc 2, and the harness note stays off stderr, as the Python command
 /// printed them. The read assembles
@@ -2290,7 +2290,7 @@ mod tests {
                     "content": [{"type": "text", "text": "crates/fno-agents/src/runtime/lead_history.rs:40 owns the reading."}]
                 }
             }),
-            claude_tool("Bash", json!({"command":"fno agents org --json"})),
+            claude_tool("Bash", json!({"command":"fno agents hq --json"})),
             claude_tool("Bash", json!({"command":"fno do pr watch status"})),
             claude_tool("Bash", json!({"command":"fno whoami context"})),
             claude_tool("Bash", json!({"command":"fno agents spawn worker"})),

@@ -257,7 +257,7 @@ fn cache_store(cwd: &Path, scope: &str, ident: &str, undelivered: i64) {
     }
 }
 
-/// The drain read behind `fno agents org drain` and the walk's in-process
+/// The drain read behind `fno agents hq drain` and the walk's in-process
 /// readers: `(undelivered, cached)`. The cache answers only while the store
 /// version it recorded is still current; the count is stored only when the
 /// version did not move across the read.
@@ -283,14 +283,14 @@ pub(crate) fn drain(scope: &str, cwd: &Path) -> Result<(i64, bool), String> {
     Ok((undelivered, false))
 }
 
-/// `fno agents org drain SCOPE`: how many scope nodes are not done. An
+/// `fno agents hq drain SCOPE`: how many scope nodes are not done. An
 /// unreadable graph exits 1 on purpose: a walk that cannot see the scope
 /// must not read the failure as drained.
 pub fn run_drain(args: &[String]) -> i32 {
     let scope = match args {
         [scope] if !scope.starts_with('-') => scope.clone(),
         _ => {
-            eprintln!("Usage: fno agents org drain SCOPE");
+            eprintln!("Usage: fno agents hq drain SCOPE");
             return 2;
         }
     };
@@ -691,7 +691,7 @@ fn refuse(code: i32, text: &str) -> i32 {
     code
 }
 
-/// `fno agents org done [--scope SCOPE]`: vacate the role's row, then clear
+/// `fno agents hq done [--scope SCOPE]`: vacate the role's row, then clear
 /// its manifest. The departure half of the lifecycle: a lead ending its term
 /// calls it so a successor arms without --force.
 pub fn run_done(args: &[String]) -> i32 {
@@ -699,7 +699,7 @@ pub fn run_done(args: &[String]) -> i32 {
     match args {
         [] => {}
         [flag, value] if flag == "--scope" => scope = value.clone(),
-        _ => return refuse(2, "Usage: fno agents org done [--scope SCOPE]"),
+        _ => return refuse(2, "Usage: fno agents hq done [--scope SCOPE]"),
     }
     let here = cwd();
     let projects: HashMap<String, String> =
@@ -769,7 +769,7 @@ pub fn run_done(args: &[String]) -> i32 {
                         &format!(
                             "lead: refusing to expire {}: it is one member of {}'s role over {}. \
                              Expire the whole role with --scope {held}, or narrow it with fno \
-                             agents org promote {} --scope <the remaining epics>.",
+                             agents hq promote {} --scope <the remaining epics>.",
                             py_repr(&scope),
                             row.name,
                             py_repr(held),
@@ -1115,7 +1115,7 @@ fn parse_escalate_args(args: &[String]) -> Result<(String, Vec<String>, String),
             }
             (other, _) => {
                 return Err(format!(
-                    "fno agents org escalate: unknown argument {other}\nUsage: fno agents org \
+                    "fno agents hq escalate: unknown argument {other}\nUsage: fno agents hq \
                      escalate [SCOPE] [--stalled ID]... [--reason R]"
                 ))
             }
@@ -1125,7 +1125,7 @@ fn parse_escalate_args(args: &[String]) -> Result<(String, Vec<String>, String),
     Ok((scope_arg, ids, reason))
 }
 
-/// `fno agents org escalate [SCOPE] [--stalled ID]... [--reason R]`: record one
+/// `fno agents hq escalate [SCOPE] [--stalled ID]... [--reason R]`: record one
 /// operator question for the stalled set, and mail the presiding role when
 /// one holds the territory above.
 pub fn run_escalate(args: &[String]) -> i32 {

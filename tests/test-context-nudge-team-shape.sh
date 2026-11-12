@@ -134,7 +134,7 @@ reset_events
 write_shape pass
 run_hook "$(payload)"
 assert_contains "AC9: orphan nudge fires on shape: pass" "$OUT" "2 worker(s) you spawned are still alive"
-assert_contains "AC9: option 1 names the shape command" "$OUT" "fno agents org chart shape team"
+assert_contains "AC9: option 1 names the shape command" "$OUT" "fno agents hq chart shape team"
 events_has lead_orphan_block && ok "AC9: lead_orphan_block event written" || bad "AC9: no lead_orphan_block event"
 
 # === AC10: no manifest -> the nudge fires (read failure never clears) =========

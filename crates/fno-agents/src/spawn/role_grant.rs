@@ -1,4 +1,4 @@
-//! `fno agents role` (`fno agents org promote`): grant, re-scope or reclaim a
+//! `fno agents role` (`fno agents hq promote`): grant, re-scope or reclaim a
 //! role on an existing registered session. A leaf with no action of its own:
 //! the router rewrites it into `status --role`, because the binary's action
 //! list is shrink-only.
@@ -411,7 +411,7 @@ pub fn promote(home: &AgentsHome, handle: &str, scopes: &[String]) -> Result<Val
         if let Some(holder) = holder {
             return Err(format!(
                 "refusing to role {}: scope {} is already held by live row {} (holding {}). \
-                 Three ways out, cheapest first:\n  re-scope the holder   fno agents org promote \
+                 Three ways out, cheapest first:\n  re-scope the holder   fno agents hq promote \
                  {} --scope <other territory>   (both sessions stay live; retry this command \
                  after)\n  holder looks dead     fno agents reconcile   (a row whose harness \
                  session is gone flips to orphaned, which frees the scope)\n  end the holder        \
