@@ -3,14 +3,15 @@
 //! install row and the published gallery. The mux settings tab reads the
 //! same feed through `plugins_feed`, so both hosts show one list.
 //!
-//! Reads and switches run on one `fno-desktop-plugins` thread and land
-//! through a reply channel, like the board poll. Install and open run in a
-//! mux pane on the attached session, so the consent card and its prompt stay
-//! the CLI's: the app never installs on its own.
+//! Reads, switches and pane launches run on one `fno-desktop-plugins` thread
+//! and land through a reply channel, like the board poll. Install and open
+//! run in a mux pane split beside the focused pane of the attached session,
+//! so the consent card and its prompt stay the CLI's: the app never installs
+//! on its own.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Sender};
-use std::time::Duration;
 
 use gpui::{
     div, img, prelude::*, px, rgb, Context, Div, ElementId, FontWeight, ObjectFit, Stateful,
@@ -18,16 +19,17 @@ use gpui::{
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
 use super::keys::Key;
-use super::window::{MainView, Root};
+use super::window::Root;
 use crate::client::node_detail::backlog_md::md_lines;
 use crate::plugins_feed::{self as feed, Component, Published, ReadFailed};
 use crate::text_style::TextStyle;
 
-/// How often the open view re-reads, so an install that finishes in its pane
-/// shows up without a key.
-pub(super) const REREAD: Duration = Duration::from_secs(3);
 const MAX_URL: usize = 512;
-const RECIPE_COLS: usize = 80;
+const URL_HINT: &str = "https://github.com/owner/repo";
+/// The height held for a preview that is still decoding: 16:9 at the widest.
+const PREVIEW_RESERVE: f32 = 270.0;
+/// The widest the preview draws, in logical pixels.
+const PREVIEW_MAX: f32 = 480.0;
 
 type Rows = Vec<(String, Component)>;
 
@@ -37,6 +39,14 @@ pub(super) enum Ask {
     Gallery,
     Recipe(String),
     Switch(String, bool),
+    /// Run `fno config plugins <args>` in a pane split beside `anchor` on
+    /// `server`, and wait for the launcher to answer.
+    Pane {
+        args: Vec<String>,
+        what: String,
+        anchor: u64,
+        server: String,
+    },
 }
 
 /// What the plugins thread read or did.
@@ -45,6 +55,17 @@ pub(super) enum Reply {
     Gallery(Result<Vec<Published>, ReadFailed>),
     Recipe(String, Result<String, ReadFailed>),
     Switched(String, bool, Result<(), ReadFailed>),
+    Paned(String, Result<(), ReadFailed>),
+}
+
+/// What a reply asks of the window: a notice, and whether to show the
+/// terminal where a new pane opened.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct Landed {
+    pub(super) notice: Option<String>,
+    /// The notice reports a failure: it paints in the error color.
+    pub(super) failed: bool,
+    pub(super) terminal: bool,
 }
 
 /// Start the plugins thread. It ends when the page drops its sender.
@@ -68,6 +89,16 @@ pub(super) fn start() -> std::io::Result<(Sender<Ask>, UnboundedReceiver<Reply>)
                     Ask::Switch(target, on) => {
                         let done = feed::switch(&target, on);
                         Reply::Switched(target, on, done)
+                    }
+                    Ask::Pane {
+                        args,
+                        what,
+                        anchor,
+                        server,
+                    } => {
+                        let words: Vec<&str> = args.iter().map(String::as_str).collect();
+                        let done = feed::run_in_pane(&words, &what, anchor, Some(&server));
+                        Reply::Paned(what, done)
                     }
                 };
                 if out.send(reply).is_err() {
@@ -100,7 +131,10 @@ pub(super) enum Act {
     Select(String),
     Switch(String, bool),
     Confirm,
-    Cancel,
+    /// Close the URL field; an armed confirm stays.
+    CancelUrl,
+    /// Drop the armed confirm; the URL field stays.
+    CancelConfirm,
     /// Show `pack/mod` in a pane through `fno config plugins open`.
     Open(String),
     Install,
@@ -111,7 +145,8 @@ pub(super) enum Act {
 }
 
 /// The page state: the last good rows, the last failed read, the selection
-/// and its recipe, the open URL field and an armed code-mod confirm.
+/// and its recipe, the open URL field, an armed code-mod confirm, the
+/// switches still out and the install pane being watched.
 #[derive(Default)]
 pub(super) struct Page {
     rows: Rows,
@@ -123,7 +158,21 @@ pub(super) struct Page {
     recipe: Option<(String, Result<String, ReadFailed>)>,
     confirm: Option<String>,
     url: Option<String>,
+    /// Targets whose switch the plugins thread has not answered yet.
+    pending: HashSet<String>,
+    watch: Watch,
     asks: Option<Sender<Ask>>,
+}
+
+/// The install pane, followed so the list re-reads when it closes.
+#[derive(Debug, Default, PartialEq, Eq)]
+enum Watch {
+    #[default]
+    Idle,
+    /// An install was asked for; the panes the layout held before it.
+    Awaiting(Vec<u64>),
+    /// The install pane appeared; the list reads when it leaves the layout.
+    Watching(u64),
 }
 
 fn target(pack: &str, c: &Component) -> String {
@@ -132,6 +181,11 @@ fn target(pack: &str, c: &Component) -> String {
 
 fn native(c: &Component) -> bool {
     c.kind == "native"
+}
+
+/// An enabled feed or command mod has a pane to show.
+fn can_open(c: &Component) -> bool {
+    c.enabled && (c.kind == "feed" || c.kind == "run")
 }
 
 impl Page {
@@ -153,8 +207,9 @@ impl Page {
         }
     }
 
-    /// Store what the plugins thread sent. The text is the notice to show.
-    pub(super) fn apply(&mut self, reply: Reply) -> Option<String> {
+    /// Store what the plugins thread sent.
+    pub(super) fn apply(&mut self, reply: Reply) -> Landed {
+        let mut landed = Landed::default();
         match reply {
             Reply::Installed(read) => {
                 self.reading = false;
@@ -167,25 +222,85 @@ impl Page {
                     // The last good rows stay under the failed read's line.
                     Err(e) => self.error = Some(e),
                 }
-                None
             }
-            Reply::Gallery(read) => {
-                self.gallery = Gallery::Done(read);
-                None
-            }
+            Reply::Gallery(read) => self.gallery = Gallery::Done(read),
             Reply::Recipe(path, text) => {
                 // A reply for a row the user already left is dropped.
                 if self.selected_component().is_some_and(|c| c.recipe == path) {
                     self.recipe = Some((path, text));
                 }
-                None
             }
             Reply::Switched(target, on, done) => {
+                self.pending.remove(&target);
                 self.read();
-                Some(match done {
-                    Ok(()) => format!("{target} {}", if on { "on" } else { "off" }),
+                landed.failed = done.is_err();
+                landed.notice = Some(match done {
+                    Ok(()) => format!("{target} is {}", if on { "on" } else { "off" }),
                     Err(e) => e.0,
-                })
+                });
+            }
+            Reply::Paned(what, Ok(())) => {
+                landed.notice = Some(format!("{what} opened in a pane"));
+                landed.terminal = true;
+            }
+            Reply::Paned(_, Err(e)) => {
+                self.watch = Watch::Idle;
+                landed.failed = true;
+                landed.notice = Some(e.0);
+            }
+        }
+        landed
+    }
+
+    /// The layout's panes changed: follow an install pane from its first
+    /// frame to its exit, and read the list once when it leaves.
+    pub(super) fn layout(&mut self, panes: &[u64]) {
+        match &self.watch {
+            Watch::Awaiting(before) => {
+                if let Some(new) = panes.iter().find(|p| !before.contains(p)) {
+                    self.watch = Watch::Watching(*new);
+                }
+            }
+            Watch::Watching(id) if !panes.contains(id) => {
+                self.watch = Watch::Idle;
+                self.read();
+            }
+            _ => {}
+        }
+    }
+
+    fn row_target(&self, i: usize) -> Option<String> {
+        self.rows.get(i).map(|(p, c)| target(p, c))
+    }
+
+    /// The selected row's target and the state a Space press would set, for
+    /// a row that has a switch.
+    fn selected_switch(&self) -> Option<(String, bool)> {
+        let c = self.selected_component().filter(|c| !native(c))?;
+        Some((self.selected.clone()?, !c.enabled))
+    }
+
+    /// The selected row's target when it can show a pane.
+    fn selected_open(&self) -> Option<String> {
+        self.selected_component().filter(|c| can_open(c))?;
+        self.selected.clone()
+    }
+
+    /// Move the selection one row, stopping at either end, and fetch its
+    /// recipe.
+    fn step(&mut self, down: bool) {
+        let at = self
+            .selected
+            .as_deref()
+            .and_then(|want| self.rows.iter().position(|(p, c)| target(p, c) == want));
+        let to = match (at, down) {
+            (None, _) => 0,
+            (Some(i), true) => (i + 1).min(self.rows.len().saturating_sub(1)),
+            (Some(i), false) => i.saturating_sub(1),
+        };
+        if let Some(want) = self.row_target(to) {
+            if self.selected.as_deref() != Some(want.as_str()) {
+                self.select(want);
             }
         }
     }
@@ -209,8 +324,11 @@ impl Page {
     }
 
     /// A switch press. A code mod's first switch-on arms a confirm and runs
-    /// nothing.
+    /// nothing. A press on a switch whose answer is still out does nothing.
     fn toggle(&mut self, want: String, on: bool) {
+        if self.pending.contains(&want) {
+            return;
+        }
         let code = self
             .rows
             .iter()
@@ -218,7 +336,13 @@ impl Page {
         if on && code {
             self.confirm = Some(want);
         } else {
-            self.ask(Ask::Switch(want, on));
+            self.switch(want, on);
+        }
+    }
+
+    fn switch(&mut self, want: String, on: bool) {
+        if self.ask(Ask::Switch(want.clone(), on)) {
+            self.pending.insert(want);
         }
     }
 
@@ -267,57 +391,55 @@ impl Page {
 }
 
 /// A click: switch, select, ask for a read, or run an install or open in a
-/// pane on the attached session and show that pane.
+/// pane beside the focused one. The window shows that pane once the launcher
+/// says it exists.
 pub(super) fn act(root: &mut Root, act: Act, cx: &mut Context<Root>) {
-    let page = &mut root.ext;
     match act {
-        Act::Select(t) => page.select(t),
-        Act::Switch(t, on) => page.toggle(t, on),
+        Act::Select(t) => root.ext.select(t),
+        Act::Switch(t, on) => root.ext.toggle(t, on),
         Act::Confirm => {
-            if let Some(t) = page.confirm.take() {
-                page.ask(Ask::Switch(t, true));
+            if let Some(t) = root.ext.confirm.take() {
+                root.ext.switch(t, true);
             }
         }
-        Act::Cancel => {
-            page.confirm = None;
-            page.url = None;
-        }
-        Act::Open(t) => {
-            let notice = feed::in_pane(&["open", &t], &t, Some(&root.session));
-            return in_terminal(root, notice, cx);
-        }
-        Act::Install => page.url.get_or_insert_with(String::new).clear(),
+        Act::CancelUrl => root.ext.url = None,
+        Act::CancelConfirm => root.ext.confirm = None,
+        Act::Open(t) => pane(root, vec!["open".into(), t.clone()], t, false),
+        Act::Install => root.ext.url.get_or_insert_with(String::new).clear(),
         Act::Browse => {
-            if page.ask(Ask::Gallery) {
-                page.gallery = Gallery::Reading;
+            if root.ext.ask(Ask::Gallery) {
+                root.ext.gallery = Gallery::Reading;
             }
         }
         Act::Pick(install) => {
             let url = install.rsplit(' ').next().unwrap_or_default();
-            page.url = Some(url.to_string());
+            root.ext.url = Some(url.to_string());
         }
-        Act::Submit => match page.url_to_install() {
+        Act::Submit => match root.ext.url_to_install() {
             Some(url) => {
-                page.url = None;
-                let notice = feed::in_pane(
-                    &["install", &url],
-                    &format!("install {url}"),
-                    Some(&root.session),
-                );
-                return in_terminal(root, notice, cx);
+                root.ext.url = None;
+                let what = format!("Install {url}");
+                pane(root, vec!["install".into(), url], what, true);
             }
-            None => root.say("type a git URL".into(), cx),
+            None => return root.say("Type a git URL".into(), cx),
         },
     }
     cx.notify();
 }
 
-/// The pane opens on the server, so the window flips to the terminal where
-/// it is in sight.
-fn in_terminal(root: &mut Root, notice: String, cx: &mut Context<Root>) {
-    root.main = MainView::Terminal;
-    root.say(notice, cx);
-    cx.notify();
+/// Ask the plugins thread for a pane beside the focused one. An install
+/// also arms the watch that re-reads the list when its pane closes.
+fn pane(root: &mut Root, args: Vec<String>, what: String, install: bool) {
+    let before: Vec<u64> = root.layout.panes.iter().map(|(id, _)| *id).collect();
+    let ask = Ask::Pane {
+        args,
+        what,
+        anchor: root.layout.focus,
+        server: root.session.clone(),
+    };
+    if root.ext.ask(ask) && install {
+        root.ext.watch = Watch::Awaiting(before);
+    }
 }
 
 /// A key in the view. True when the page took it.
@@ -325,17 +447,35 @@ pub(super) fn key(root: &mut Root, key: &Key, cx: &mut Context<Root>) -> bool {
     if root.ext.url.is_some() {
         let text = key.key_char.filter(|_| !key.ctrl && !key.cmd);
         match root.ext.edit(key.key, text) {
-            Edit::Close => act(root, Act::Cancel, cx),
+            Edit::Close => act(root, Act::CancelUrl, cx),
             Edit::Submit => act(root, Act::Submit, cx),
             Edit::Typed => cx.notify(),
         }
         return true;
     }
-    if key.key == "escape" && root.ext.confirm.is_some() {
-        act(root, Act::Cancel, cx);
-        return true;
+    if key.ctrl || key.cmd {
+        return false;
     }
-    false
+    let page = &mut root.ext;
+    match key.key {
+        "escape" if page.confirm.is_some() => act(root, Act::CancelConfirm, cx),
+        "enter" if page.confirm.is_some() => act(root, Act::Confirm, cx),
+        "up" | "down" => {
+            page.step(key.key == "down");
+            cx.notify();
+        }
+        "space" => match page.selected_switch() {
+            Some((want, on)) => act(root, Act::Switch(want, on), cx),
+            None => return false,
+        },
+        "o" => match page.selected_open() {
+            Some(want) => act(root, Act::Open(want), cx),
+            None => return false,
+        },
+        "i" => act(root, Act::Install, cx),
+        _ => return false,
+    }
+    true
 }
 
 /// A paste while the view shows goes to the URL field, or nowhere.
@@ -363,8 +503,8 @@ fn button(
         .border_color(rgb(p.border))
         .text_color(rgb(p.fg))
         .cursor_pointer()
-        .hover(move |s| s.bg(rgb(p.border)))
-        .active(move |s| s.bg(rgb(p.focus)))
+        .hover(move |s| s.bg(rgb(p.hover)))
+        .active(move |s| s.bg(rgb(p.pressed)))
         .on_click(cx.listener(move |root, _, _, cx| act(root, on.clone(), cx)))
         .child(label)
 }
@@ -398,14 +538,17 @@ fn row(i: usize, pack: &str, c: &Component, root: &Root, cx: &mut Context<Root>)
         div()
             .w(px(56.0))
             .flex_none()
+            .px_2()
+            .pt(px(3.0))
             .text_xs()
             .text_color(rgb(p.muted))
             .child("Built in")
     } else {
-        let (label, color) = if c.enabled {
-            ("On", p.ok)
-        } else {
-            ("Off", p.muted)
+        let pending = root.ext.pending.contains(&want);
+        let (label, color) = match (pending, c.enabled) {
+            (true, _) => ("...", p.muted),
+            (false, true) => ("On", p.ok),
+            (false, false) => ("Off", p.muted),
         };
         let on = !c.enabled;
         let t = want.clone();
@@ -413,12 +556,16 @@ fn row(i: usize, pack: &str, c: &Component, root: &Root, cx: &mut Context<Root>)
             div()
                 .id(named("ext-switch", i))
                 .px_2()
+                .py(px(2.0))
                 .rounded_md()
                 .border_1()
                 .border_color(rgb(p.border))
                 .text_color(rgb(color))
-                .cursor_pointer()
-                .hover(move |s| s.bg(rgb(p.border)))
+                .when(!pending, |d| {
+                    d.cursor_pointer()
+                        .hover(move |s| s.bg(rgb(p.hover)))
+                        .active(move |s| s.bg(rgb(p.pressed)))
+                })
                 .on_click(
                     cx.listener(move |root, _, _, cx| act(root, Act::Switch(t.clone(), on), cx)),
                 )
@@ -432,13 +579,18 @@ fn row(i: usize, pack: &str, c: &Component, root: &Root, cx: &mut Context<Root>)
         .flex_1()
         .min_w_0()
         .px_2()
-        .py_1()
+        .py(px(3.0))
         .rounded_md()
-        .when(chosen, |d| d.bg(rgb(p.panel)))
+        .when(chosen, |d| d.bg(rgb(p.row_fill)))
         .cursor_pointer()
+        .hover(move |s| s.bg(rgb(p.hover)))
+        .active(move |s| s.bg(rgb(p.pressed)))
         .on_click(cx.listener(move |root, _, _, cx| act(root, Act::Select(t.clone()), cx)))
         .child(div().font_weight(FontWeight::BOLD).child(c.title.clone()))
         .child(div().text_xs().text_color(rgb(p.muted)).child(want))
+        .when(c.runs_code, |d| {
+            d.child(div().text_xs().text_color(rgb(p.warn)).child("Runs code"))
+        })
         .when(!c.summary.is_empty(), |d| {
             d.child(div().text_color(rgb(p.muted)).child(c.summary.clone()))
         });
@@ -495,14 +647,14 @@ fn list(root: &Root, cx: &mut Context<Root>) -> Div {
                         "ext-cancel".into(),
                         "Cancel".into(),
                         root,
-                        Act::Cancel,
+                        Act::CancelConfirm,
                         cx,
                     )),
             ),
         );
     }
     if !page.read {
-        out = out.child(quiet("reading…", root));
+        out = out.child(quiet("Reading...", root));
     } else if page.rows.is_empty() && page.error.is_none() {
         out = out.child(quiet("No mods or layouts installed", root));
     }
@@ -527,7 +679,7 @@ fn list(root: &Root, cx: &mut Context<Root>) -> Div {
                     .border_1()
                     .border_color(rgb(p.focus))
                     .child(if url.is_empty() {
-                        "https://github.com/owner/repo".to_string()
+                        format!("\u{258f}{URL_HINT}")
                     } else {
                         format!("{url}\u{258f}")
                     })
@@ -553,7 +705,7 @@ fn list(root: &Root, cx: &mut Context<Root>) -> Div {
                         "ext-cancel-url".into(),
                         "Cancel".into(),
                         root,
-                        Act::Cancel,
+                        Act::CancelUrl,
                         cx,
                     )),
             ),
@@ -567,7 +719,7 @@ fn list(root: &Root, cx: &mut Context<Root>) -> Div {
             Act::Browse,
             cx,
         )),
-        Gallery::Reading => out.child(quiet("Reading the gallery…", root)),
+        Gallery::Reading => out.child(quiet("Reading the gallery...", root)),
         Gallery::Done(Err(e)) => {
             out.child(div().py_1().text_color(rgb(p.error)).child(e.0.clone()))
         }
@@ -577,11 +729,7 @@ fn list(root: &Root, cx: &mut Context<Root>) -> Div {
         Gallery::Done(Ok(repos)) => {
             for (i, g) in repos.iter().enumerate() {
                 let install = g.install.clone();
-                let note = if g.reviewed {
-                    ""
-                } else {
-                    " · Not reviewed by fno"
-                };
+                let reviewed = g.reviewed;
                 out = out.child(
                     div()
                         .id(named("ext-pick", i))
@@ -589,11 +737,20 @@ fn list(root: &Root, cx: &mut Context<Root>) -> Div {
                         .py_1()
                         .rounded_md()
                         .cursor_pointer()
-                        .hover(move |s| s.bg(rgb(p.panel)))
+                        .hover(move |s| s.bg(rgb(p.hover)))
+                        .active(move |s| s.bg(rgb(p.pressed)))
                         .on_click(cx.listener(move |root, _, _, cx| {
                             act(root, Act::Pick(install.clone()), cx)
                         }))
-                        .child(format!("{} · {} stars{note}", g.name, g.stars))
+                        .child(format!("{} · {} stars", g.name, g.stars))
+                        .when(!reviewed, |d| {
+                            d.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(rgb(p.warn))
+                                    .child("Not reviewed by fno"),
+                            )
+                        })
                         .child(div().text_color(rgb(p.muted)).child(g.description.clone())),
                 );
             }
@@ -602,18 +759,54 @@ fn list(root: &Root, cx: &mut Context<Root>) -> Div {
     }
 }
 
+/// A recipe split at its fence lines: prose the view wraps and code it draws
+/// in the terminal font.
+#[derive(Debug, PartialEq, Eq)]
+enum Block {
+    Prose(String),
+    Code(Vec<String>),
+}
+
+fn recipe_blocks(text: &str) -> Vec<Block> {
+    let mut blocks = Vec::new();
+    let mut prose: Vec<&str> = Vec::new();
+    let mut code: Option<Vec<String>> = None;
+    for line in text.lines() {
+        let fence = line.trim_start().starts_with("```");
+        match (&mut code, fence) {
+            (Some(_), true) => blocks.extend(code.take().map(Block::Code)),
+            (Some(lines), false) => lines.push(line.to_string()),
+            (None, true) => {
+                if !prose.is_empty() {
+                    blocks.push(Block::Prose(prose.join("\n")));
+                    prose.clear();
+                }
+                code = Some(Vec::new());
+            }
+            (None, false) => prose.push(line),
+        }
+    }
+    blocks.extend(code.map(Block::Code));
+    if !prose.is_empty() {
+        blocks.push(Block::Prose(prose.join("\n")));
+    }
+    blocks
+}
+
 /// The selected row: its preview image, its summary and its recipe.
 fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
     let p = root.palette;
     let page = &root.ext;
     let Some(want) = page.selected.as_deref() else {
-        return div().child(quiet(
+        return div().pt_4().child(quiet(
             "Select a mod or layout to see its preview and recipe",
             root,
         ));
     };
     let Some(c) = page.selected_component() else {
-        return div().child(quiet(format!("{want} is no longer installed"), root));
+        return div()
+            .pt_4()
+            .child(quiet(format!("{want} is no longer installed"), root));
     };
     let mut out = div()
         .flex()
@@ -635,7 +828,7 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
     if !c.summary.is_empty() {
         out = out.child(div().child(c.summary.clone()));
     }
-    if c.enabled && (c.kind == "feed" || c.kind == "run") {
+    if can_open(c) {
         out = out.child(div().flex().child(button(
             "ext-open".into(),
             "Open in a pane".into(),
@@ -645,46 +838,88 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
         )));
     }
     if !c.preview.is_empty() {
-        let (path, error) = (c.preview.clone(), p.error);
+        let (path, error, muted, ground) = (c.preview.clone(), p.error, p.muted, p.bg);
+        // The box holds the preview's space and paints its own loading word
+        // under the image, so the recipe never jumps up and the wait reads
+        // from the first frame: gpui shows no loading element for 200 ms.
         out = out.child(
-            img(PathBuf::from(&c.preview))
-                .w(px(480.0))
-                .h(px(300.0))
-                .object_fit(ObjectFit::Contain)
-                .with_fallback(move || {
+            div()
+                .relative()
+                .w(px(PREVIEW_MAX))
+                .max_w_full()
+                .min_h(px(PREVIEW_RESERVE))
+                .child(
                     div()
-                        .text_color(rgb(error))
-                        .child(format!("cannot draw {path}"))
-                        .into_any_element()
-                }),
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_color(rgb(muted))
+                        .child("Loading preview..."),
+                )
+                .child(
+                    img(PathBuf::from(&c.preview))
+                        .w(px(PREVIEW_MAX))
+                        .max_w_full()
+                        .bg(rgb(ground))
+                        .object_fit(ObjectFit::Contain)
+                        .with_fallback(move || {
+                            div()
+                                .w_full()
+                                .h(px(PREVIEW_RESERVE))
+                                .bg(rgb(ground))
+                                .text_color(rgb(error))
+                                .child(format!("Cannot draw {path}"))
+                                .into_any_element()
+                        }),
+                ),
         );
     }
     if !c.recipe.is_empty() {
         out = match &page.recipe {
             Some((_, Ok(text))) => {
                 let mut body = div().flex().flex_col().pt_2();
-                for line in md_lines(text, RECIPE_COLS) {
-                    let (color, bold) = match line.default_role {
-                        TextStyle::Title => (p.fg, true),
-                        TextStyle::Meta | TextStyle::Hint => (p.muted, false),
-                        _ => (p.fg, false),
-                    };
-                    body = body.child(
-                        div()
-                            .min_h(px(8.0))
-                            .text_color(rgb(color))
-                            .when(bold, |d| d.font_weight(FontWeight::BOLD))
-                            .child(line.text.clone()),
-                    );
+                for block in recipe_blocks(text) {
+                    match block {
+                        Block::Prose(segment) => {
+                            // The column wraps the text; no pre-wrap column.
+                            for line in md_lines(&segment, usize::MAX) {
+                                let (color, bold) = match line.default_role {
+                                    TextStyle::Title => (p.fg, true),
+                                    TextStyle::Meta | TextStyle::Hint => (p.muted, false),
+                                    _ => (p.fg, false),
+                                };
+                                body = body.child(
+                                    div()
+                                        .min_h(px(8.0))
+                                        .text_color(rgb(color))
+                                        .when(bold, |d| d.font_weight(FontWeight::BOLD))
+                                        .child(line.text.clone()),
+                                );
+                            }
+                        }
+                        Block::Code(lines) => {
+                            for line in lines {
+                                body = body.child(
+                                    div()
+                                        .min_h(px(8.0))
+                                        .font_family(root.metrics.font.family.clone())
+                                        .text_color(rgb(p.fg))
+                                        .child(line),
+                                );
+                            }
+                        }
+                    }
                 }
                 out.child(body)
             }
             Some((path, Err(e))) => out.child(
                 div()
                     .text_color(rgb(p.error))
-                    .child(format!("cannot read {path}: {e}")),
+                    .child(format!("Cannot read {path}: {e}")),
             ),
-            None => out.child(quiet("reading the recipe…", root)),
+            None => out.child(quiet("Reading the recipe...", root)),
         };
     }
     out
@@ -775,6 +1010,78 @@ mod tests {
         );
         page.toggle("demo-clock/ci-feed".into(), false);
         assert!(matches!(rx.try_recv(), Ok(Ask::Switch(t, false)) if t == "demo-clock/ci-feed"));
+    }
+
+    #[test]
+    fn a_pending_switch_takes_no_second_press_and_the_keys_stop_at_the_ends() {
+        let (mut page, rx) = page();
+        page.toggle("demo-clock/ci-feed".into(), false);
+        page.toggle("demo-clock/ci-feed".into(), false);
+        assert!(matches!(rx.try_recv(), Ok(Ask::Switch(..))));
+        assert!(
+            rx.try_recv().is_err(),
+            "a second press sent a second switch"
+        );
+        page.apply(Reply::Switched("demo-clock/ci-feed".into(), false, Ok(())));
+        assert!(page.pending.is_empty());
+
+        for _ in 0..9 {
+            page.step(true);
+        }
+        assert_eq!(page.selected.as_deref(), Some("demo-clock/focus"));
+        for _ in 0..9 {
+            page.step(false);
+        }
+        assert_eq!(page.selected.as_deref(), Some("fno-panels/backlog-board"));
+        assert_eq!(page.selected_switch(), None, "a built-in mod has no switch");
+        page.select("demo-clock/clock".into());
+        assert_eq!(
+            page.selected_switch(),
+            Some(("demo-clock/clock".into(), true))
+        );
+        assert_eq!(page.selected_open(), None, "a disabled mod has no pane");
+        page.select("demo-clock/ci-feed".into());
+        assert_eq!(page.selected_open().as_deref(), Some("demo-clock/ci-feed"));
+    }
+
+    #[test]
+    fn an_install_pane_reads_the_list_once_when_it_closes() {
+        let (mut page, rx) = page();
+        page.layout(&[1, 2]);
+        assert!(rx.try_recv().is_err(), "an idle view asked for a read");
+        page.watch = Watch::Awaiting(vec![1, 2]);
+        page.layout(&[1, 2]);
+        page.layout(&[1, 2, 9]);
+        assert_eq!(page.watch, Watch::Watching(9));
+        assert!(rx.try_recv().is_err());
+        page.layout(&[1, 2]);
+        assert!(matches!(rx.try_recv(), Ok(Ask::Installed)));
+        page.layout(&[1]);
+        assert!(rx.try_recv().is_err(), "the read ran twice");
+
+        let landed = page.apply(Reply::Paned(
+            "Install x".into(),
+            Err(ReadFailed(
+                "Install x did not open a pane: exit 2: no anchor".into(),
+            )),
+        ));
+        assert!(!landed.terminal && landed.failed);
+        assert!(landed.notice.is_some_and(|n| n.contains("exit 2")));
+    }
+
+    #[test]
+    fn a_recipe_splits_at_its_fences_and_prose_stays_on_one_line() {
+        let text = "Intro one. Intro two.\n```sh\nfno mux layout graft  a  b\n```\nAfter.";
+        assert_eq!(
+            recipe_blocks(text),
+            [
+                Block::Prose("Intro one. Intro two.".into()),
+                Block::Code(vec!["fno mux layout graft  a  b".into()]),
+                Block::Prose("After.".into()),
+            ]
+        );
+        let lines = md_lines("Intro one. Intro two.", usize::MAX);
+        assert_eq!(lines.len(), 1, "a paragraph wrapped with no width cap");
     }
 
     #[test]
