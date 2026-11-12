@@ -30,11 +30,14 @@ pub(crate) fn retry_message(id: &str) -> Result<DeliveryState, String> {
         ));
     }
     let (to, from, wrapped) = (field(row, "to"), field(row, "from"), field(row, "body"));
+    // A stored body with no header would land headerless, so it is no turn.
+    let turn = fno_mail::turn::TurnText::parse(&wrapped)
+        .map_err(|e| format!("{id} has no delivered-mail header to retype: {e}"))?;
     let (_, entry) = load_and_resolve_target(&to).map_err(|(message, _)| message)?;
     let mut reasons = Vec::new();
     let state = deliver_live(
         &entry,
-        &wrapped,
+        &turn,
         &from,
         None,
         &mut reasons,

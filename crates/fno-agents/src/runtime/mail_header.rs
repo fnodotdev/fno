@@ -22,18 +22,9 @@ use serde_json::Value;
 /// The summary cut: at most this many words of the body's first sentence.
 pub const SUMMARY_MAX_WORDS: usize = 12;
 
-/// Which spelling a delivered header's sender takes. One data field per
-/// harness row in the capability contract (the composer check sets it), so
-/// the renderer branches on data, never on a harness name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HeaderForm {
-    /// `` `@candor · msg-f7aa93 · ...` `` - the default; `@` sits inside
-    /// inline code so harness mention pickers never fire.
-    Mention,
-    /// `` `candor · msg-f7aa93 · ...` `` - the fallback for a harness whose
-    /// composer check failed on the `@` form.
-    Plain,
-}
+/// Which spelling a delivered header's sender takes: fno-mail owns the type,
+/// since only fno-mail builds a live turn.
+pub use fno_mail::turn::HeaderForm;
 
 /// The body's summary: its first sentence, cut to at most 12 words. A body
 /// with no sentence end, or one that opens with a code fence or a bare URL,

@@ -300,6 +300,7 @@ pub mod transcript_resolve;
 pub mod transcript_turns;
 pub mod truth_cli;
 pub mod truth_probe;
+pub(crate) mod turn_witness;
 pub mod update_journal;
 pub mod visual_screen;
 pub mod wait;

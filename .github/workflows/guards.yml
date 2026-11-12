@@ -559,11 +559,12 @@ jobs:
         timeout-minutes: 5
         run: bash scripts/doctor.sh
 
-      # From mail-inject-callers.yml.
-      - name: mail-inject caller ratchet
+      - name: one control.sock writer
         if: ${{ !cancelled() }}
         timeout-minutes: 5
-        run: bash scripts/ci/check-mail-inject-callers.sh
+        run: |
+          bash scripts/ci/check-control-sock-writers.sh --self-test
+          bash scripts/ci/check-control-sock-writers.sh
 
       - name: dispatch-observability test journals stay hermetic
         if: ${{ !cancelled() }}

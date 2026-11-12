@@ -367,11 +367,19 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
         })
     };
     let registry_path = AgentsHome::shared_registry_json();
-    let wrap = |to_session: Option<&str>| -> String {
-        crate::mail_envelope::render_at(&envelope_input(to_session), &registry_path)
-            .unwrap_or_else(|_| args.message.to_string())
+    // A render refusal refuses the send: typing the bare body instead would
+    // land a turn with no header.
+    let wrapped = match crate::mail_envelope::render_turn_at(
+        &envelope_input(recipient_session.as_deref()),
+        &registry_path,
+    ) {
+        Ok(turn) => turn.as_str().to_string(),
+        Err(why) => {
+            release_budget(&reservation);
+            eprintln!("error: {why}");
+            return Err(2);
+        }
     };
-    let wrapped = wrap(recipient_session.as_deref());
 
     if args.force {
         if self_send {
@@ -664,7 +672,9 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
         self_send || (args.resolved.is_some() && family1_probe_reachable(&recipient));
     let owner = classify_durable_owner(recipient_live, !recipient_live);
     let bus_only = live_reason.as_deref() == Some(BUS_ONLY_POLICY);
-    let durable_body = wrap(None);
+    let durable_body = crate::mail_envelope::render_turn_at(&envelope_input(None), &registry_path)
+        .map(|turn| turn.as_str().to_string())
+        .unwrap_or_else(|_| wrapped.clone());
     let reply_thread = args.reply_to.and_then(reply_parent).map(|p| p.thread);
     let write = write_durable_thread(
         &recipient,
@@ -1257,7 +1267,7 @@ pub(super) fn job_lane_send(
     let sender_session = reply_session_for(from_name);
     let registry_path = AgentsHome::shared_registry_json();
     let envelope = |to_session: Option<&str>| {
-        crate::mail_envelope::render_at(
+        crate::mail_envelope::render_turn_at(
             &json!({
                 "mode": "wrap",
                 "body": payload,
@@ -1273,15 +1283,25 @@ pub(super) fn job_lane_send(
             }),
             &registry_path,
         )
-        .unwrap_or_else(|_| payload.to_string())
     };
-    let wrapped = envelope(Some(session_id.as_str()));
+    let turn = match envelope(Some(session_id.as_str())) {
+        Ok(turn) => turn,
+        Err(why) => {
+            release_budget(&reservation);
+            eprintln!("error: {why}");
+            return Err(2);
+        }
+    };
+    let wrapped = turn.as_str();
     let provider = job.harness.clone().unwrap_or_else(|| "claude".to_string());
     let mut reasons: Vec<String> = Vec::new();
+    // A job holder's claude lane is control.sock, which parks on a new line,
+    // so the child types the one-line turn a running session absorbs.
     let state = if provider == "codex" {
-        mail_inject_codex(&session_id, &wrapped, Some(&mut reasons), None)
+        mail_inject_codex(&session_id, wrapped, Some(&mut reasons), None)
     } else {
-        mail_inject_claude(&session_id, &wrapped, Some(&mut reasons), None, false)
+        // `--steer`: the child types the whole turn as one line.
+        mail_inject_claude(&session_id, wrapped, Some(&mut reasons), None, true)
     };
     crate::mail_receipt::record(&msg_id, &state, &sender, &recipient);
     let injected = state.reached();
@@ -1329,7 +1349,9 @@ pub(super) fn job_lane_send(
         &recipient,
         &stamp_from(from_name),
         "send",
-        &envelope(None),
+        envelope(None)
+            .as_ref()
+            .map_or(wrapped, fno_mail::turn::TurnText::as_str),
         &msg_id,
         Some("node"),
         Some(&provider),

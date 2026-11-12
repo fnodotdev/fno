@@ -1,3 +1,4 @@
+use fno_mail::turn::{TurnHeader, TurnText};
 use serde_json::Value;
 use std::io::Read;
 use std::path::Path;
@@ -140,9 +141,35 @@ fn fence_for(body: &str) -> String {
     "`".repeat(longest)
 }
 
-fn render(input: &Value, registry_path: &Path) -> Result<String, String> {
+/// Why the envelope refused to build a live turn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderRefused(String);
+
+impl std::fmt::Display for RenderRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<String> for RenderRefused {
+    fn from(why: String) -> Self {
+        RenderRefused(why)
+    }
+}
+
+impl From<&str> for RenderRefused {
+    fn from(why: &str) -> Self {
+        RenderRefused(why.to_string())
+    }
+}
+
+fn mode_and_body(input: &Value) -> (&str, Option<&str>) {
     let mode = input.get("mode").and_then(Value::as_str).unwrap_or("wrap");
-    let wrapping = input.get("body").and_then(Value::as_str);
+    (mode, input.get("body").and_then(Value::as_str))
+}
+
+fn render(input: &Value, registry_path: &Path) -> Result<String, String> {
+    let (mode, wrapping) = mode_and_body(input);
     if !matches!(mode, "wrap" | "tag" | "header" | "held-release") {
         return Err(format!("mail envelope: unknown render mode {mode:?}"));
     }
@@ -159,6 +186,22 @@ fn render(input: &Value, registry_path: &Path) -> Result<String, String> {
         }
         return Ok(body.to_string());
     }
+    render_turn(input, mode, wrapping, registry_path)
+        .map(|turn| turn.as_str().to_string())
+        .map_err(|why| why.0)
+}
+
+/// The live turn for every mode but held-release: a checked header, then the
+/// body. A held-release fold is not one message, so it never builds a turn.
+fn render_turn(
+    input: &Value,
+    mode: &str,
+    wrapping: Option<&str>,
+    registry_path: &Path,
+) -> Result<TurnText, RenderRefused> {
+    if !matches!(mode, "wrap" | "tag" | "header") {
+        return Err(format!("mail envelope: render mode {mode:?} builds no live turn").into());
+    }
     if let Some(body) = wrapping {
         if crate::mail_inject::contains_fno_mail_tag_anywhere(body) {
             return Err("mail body contains an <fno_mail> tag. The envelope frames peer mail; a body cannot contain one.".into());
@@ -174,9 +217,7 @@ fn render(input: &Value, registry_path: &Path) -> Result<String, String> {
     let annotated = wrapping.map(crate::numbers::annotate);
     let wrapping = annotated.as_deref();
     if (mode != "tag") != wrapping.is_some() {
-        return Err(format!(
-            "mail envelope: render mode {mode:?} has the wrong body shape"
-        ));
+        return Err(format!("mail envelope: render mode {mode:?} has the wrong body shape").into());
     }
     let from_input = attr(input, "from").unwrap_or("");
     let harness_hint = attr(input, "harness");
@@ -258,7 +299,8 @@ fn render(input: &Value, registry_path: &Path) -> Result<String, String> {
         if !["operator", "peer", "scheduler", "recovery"].contains(&origin) {
             return Err(format!(
                 "mail envelope origin {origin:?} is not one of (\"operator\", \"peer\", \"scheduler\", \"recovery\")"
-            ));
+            )
+            .into());
         }
     }
     let attrs = [
@@ -310,7 +352,7 @@ fn render(input: &Value, registry_path: &Path) -> Result<String, String> {
             if s.contains('`') || s.contains(" · ") || s.contains('\n') {
                 return Err(
                     "mail envelope: subject must not hold a backtick, a separator or a newline"
-                        .to_string(),
+                        .into(),
                 );
             }
         }
@@ -331,24 +373,32 @@ fn render(input: &Value, registry_path: &Path) -> Result<String, String> {
         }
     };
     let third = crate::mail_header::header_third_field(subject, body_text);
-    let header = crate::mail_header::render_header(form, sender, msg_id, third.as_deref());
+    let header = TurnHeader::new(form, sender, msg_id, third.as_deref())
+        .map_err(|e| format!("mail envelope: {e}"))?;
     // The law form: the body rides whole under the two-field header; the
     // sentence-drop at delivery died with the third field.
     let delivered = body_text;
     Ok(match wrapping {
         Some(_) if fence_requested(input) => {
-            let fence = fence_for(&delivered);
+            let fence = fence_for(delivered);
             // The open fence carries the fno-pane marker so a reader can
             // strip exactly this fence and never a body's own code fence.
-            format!("{header}\n{fence}fno-pane\n{delivered}\n{fence}")
+            TurnText::compose(&header, &format!("{fence}fno-pane\n{delivered}\n{fence}"))
         }
-        Some(_) => format!("{header}\n{delivered}"),
-        None => header,
+        Some(_) => TurnText::compose(&header, delivered),
+        None => TurnText::compose(&header, ""),
     })
 }
 
 pub fn render_at(input: &Value, registry_path: &Path) -> Result<String, String> {
     render(input, registry_path)
+}
+
+/// The live turn a lane types. A render refusal is an error, never the bare
+/// body: a lane that cannot get a turn delivers nothing live.
+pub fn render_turn_at(input: &Value, registry_path: &Path) -> Result<TurnText, RenderRefused> {
+    let (mode, wrapping) = mode_and_body(input);
+    render_turn(input, mode, wrapping, registry_path)
 }
 
 pub fn run(args: &[String]) -> i32 {

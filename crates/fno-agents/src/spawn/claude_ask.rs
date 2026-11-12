@@ -620,19 +620,7 @@ impl crate::harness_daemon::HarnessDaemonAdapter for ClaudeDaemonAdapter {
             .get("shortId")
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default();
-        let Ok(mut transport) =
-            crate::claude_attach::UnixControlTransport::connect(Path::new(&state.endpoint))
-        else {
-            return false;
-        };
-        crate::claude_attach::perform_attach(
-            &mut transport,
-            &crate::claude_attach::AttachRequest::for_frame_stream(
-                short_id,
-                crate::claude_roster::read_control_key(),
-            ),
-        )
-        .is_ok()
+        crate::mail_inject::claude_control::attach_answers(Path::new(&state.endpoint), short_id)
     }
 
     fn healthy_state(

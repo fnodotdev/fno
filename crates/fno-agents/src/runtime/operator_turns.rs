@@ -25,6 +25,7 @@ use sha2::Sha256;
 // The classifier is the promoted `provenance` module: same functions, same
 // reason names, so the queue's skip counters and its 17 regression tests are
 // unchanged by the move.
+use super::turn_witness::{headerless, record, WITNESS_WINDOW_S};
 use crate::correction_detect::detect_user;
 use crate::provenance::{classify, is_user_turn, turn_text, turn_ts_epoch};
 
@@ -344,6 +345,7 @@ pub(crate) fn read_queue(
         let kept = &raw[..cut + 1];
         let rows: Vec<&[u8]> = kept[..cut].split(|&b| b == b'\n').collect();
         let known: HashSet<String> = state.turns.iter().map(|t| t.turn_id.clone()).collect();
+        let mut witness = TurnWitness::new(session, capture_dir, now_epoch);
         for (i, row) in rows.iter().enumerate() {
             let Ok(obj) = serde_json::from_str::<Value>(&String::from_utf8_lossy(row)) else {
                 continue;
@@ -362,9 +364,11 @@ pub(crate) fn read_queue(
             if known.contains(&id) {
                 continue;
             }
+            let ts_epoch = turn_ts_epoch(&obj);
+            witness.see(&text, ts_epoch);
             state.turns.push(StoredTurn {
                 turn_id: id,
-                ts_epoch: turn_ts_epoch(&obj),
+                ts_epoch,
                 text,
             });
         }
@@ -390,6 +394,75 @@ pub(crate) fn read_queue(
         payload: build_payload(state, now_epoch, cursor_error, seen_total),
         warnings,
     })
+}
+
+/// The recipient witness over one queue read: the live bus segment loads
+/// once, on the first recent turn (a rotation is about a week old, past the
+/// witness window), and each turn the witness flags is recorded once in the
+/// capture dir.
+struct TurnWitness<'a> {
+    session: &'a str,
+    store: PathBuf,
+    now_epoch: f64,
+    watched: bool,
+    bus: Option<crate::provenance::BusIndex>,
+}
+
+impl<'a> TurnWitness<'a> {
+    fn new(session: &'a str, capture_dir: &Path, now_epoch: f64) -> Self {
+        TurnWitness {
+            session,
+            store: capture_dir.join("headerless-turns.json"),
+            now_epoch,
+            watched: spawned_without_a_terminal(session),
+            bus: None,
+        }
+    }
+
+    fn see(&mut self, text: &str, ts_epoch: Option<f64>) {
+        if !self.watched {
+            return;
+        }
+        let Some(ts) = ts_epoch.filter(|ts| self.now_epoch - ts < WITNESS_WINDOW_S) else {
+            return;
+        };
+        let bus = self.bus.get_or_insert_with(|| {
+            crate::mail_paths::state_bus_dir_opt()
+                .map(|dir| {
+                    crate::provenance::BusIndex::load_segments(&dir.join("messages.jsonl"), 1)
+                })
+                .unwrap_or_else(crate::provenance::BusIndex::empty)
+        });
+        let at_ms = (ts * 1000.0) as i64;
+        let journal = crate::paths::AgentsHome::from_env().events_jsonl();
+        let found = headerless(self.session, text, at_ms, bus, || {
+            crate::operator_witness::submitted_since(
+                &journal,
+                self.session,
+                at_ms - crate::operator_witness::SUBMIT_WINDOW_AFTER_MS,
+                at_ms,
+            )
+        });
+        if let Some(found) = found {
+            record(&found, &self.store);
+        }
+    }
+}
+
+/// Whether fno spawned `session` as a claude thread or headless worker. Only
+/// such a session has no terminal of its own: a person types into a pane, a
+/// plain terminal, an IDE or the desktop app, and only the pane leaves a mux
+/// submit, so witnessing any other session would flag a person's every turn.
+fn spawned_without_a_terminal(session: &str) -> bool {
+    let registry =
+        crate::state::try_load_registry(&crate::paths::AgentsHome::shared_registry_json())
+            .ok()
+            .flatten();
+    registry
+        .as_ref()
+        .and_then(|rows| rows.find_by_session("claude", session))
+        .and_then(|row| row.substrate.as_deref())
+        .is_some_and(|substrate| matches!(substrate, "thread" | "headless"))
 }
 
 pub(crate) fn pending_stand_down(

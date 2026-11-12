@@ -30,7 +30,7 @@ trap 'rm -f "$FOUND" "$BASE"' EXIT
 # Python: a spawn-shaped call site builds an `"agents", "spawn"` argv, often
 # spread one item per line, so the match is a windowed "spawn" within a few
 # lines of "agents" rather than a single-line regex. Resolved to its
-# outermost enclosing function, like check-mail-inject-callers.sh.
+# outermost enclosing function.
 python3 - "$REPO_ROOT" <<'PY' | sort -u > "$FOUND"
 import re
 import sys

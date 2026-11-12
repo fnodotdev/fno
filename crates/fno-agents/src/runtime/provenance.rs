@@ -494,9 +494,18 @@ impl BusIndex {
     /// window must not vanish because the bus rotated it out. Segments are
     /// read until one is missing, ten names max.
     pub(crate) fn load(path: &Path) -> Self {
+        Self::load_segments(path, 10)
+    }
+
+    /// The live log plus at most `segments - 1` rotations: a reader that
+    /// only joins recent turns reads the live segment alone.
+    pub(crate) fn load_segments(path: &Path, segments: usize) -> Self {
         let mut raw = String::new();
         let mut missing = false;
-        for suffix in ["", ".1", ".2", ".3", ".4", ".5", ".6", ".7", ".8", ".9"] {
+        for suffix in ["", ".1", ".2", ".3", ".4", ".5", ".6", ".7", ".8", ".9"]
+            .into_iter()
+            .take(segments)
+        {
             if missing {
                 break;
             }

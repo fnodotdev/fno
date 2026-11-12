@@ -3,6 +3,7 @@ use super::lanes::*;
 use super::resolve::*;
 use super::*;
 use fno_mail::lane::{first_applicable, Lane, LaneKind, Target, LADDER};
+use fno_mail::turn::{NewlineRule, TurnText};
 
 // ---------------------------------------------------------------------------
 // The per-agent registry lock (agents/lock.py hold_agent_lock)
@@ -795,10 +796,10 @@ fn registered_family1_probe(row: &Value) -> Option<crate::truth_probe::TruthProb
 
 /// One fire-and-forget live attempt over the row's
 /// ref. The caller stages the body row and writes the durable fallback when
-/// this returns false. `wrapped` arrives already enveloped.
+/// this returns false. `turn` arrives already enveloped.
 pub(super) fn deliver_live(
     row: &Value,
-    wrapped: &str,
+    turn: &TurnText,
     from_name: &str,
     sender_entry: Option<&Value>,
     reason_out: &mut Vec<String>,
@@ -806,7 +807,7 @@ pub(super) fn deliver_live(
 ) -> DeliveryState {
     deliver_live_lane(
         row,
-        wrapped,
+        turn,
         from_name,
         sender_entry,
         reason_out,
@@ -851,7 +852,7 @@ pub(super) fn pane_fallback(
     )
 }
 
-fn pane_raw_send(row: &Value, wrapped: &str) -> bool {
+fn pane_raw_send(row: &Value, turn: &TurnText) -> bool {
     let session = row
         .pointer("/mux/session")
         .and_then(Value::as_str)
@@ -882,14 +883,15 @@ fn pane_raw_send(row: &Value, wrapped: &str) -> bool {
     .iter()
     .map(|s| s.to_string())
     .collect();
-    run_captured(&argv, wrapped, false, 30.0).status == Some(0)
+    let typed = turn.render(NewlineRule::NonSubmittingKey);
+    run_captured(&argv, &typed, false, 30.0).status == Some(0)
 }
 
 /// `deliver_live` plus the fallback receipt status (empty when the chosen
 /// lane answered alone).
 pub(super) fn deliver_live_lane(
     row: &Value,
-    wrapped: &str,
+    turn: &TurnText,
     from_name: &str,
     sender_entry: Option<&Value>,
     reason_out: &mut Vec<String>,
@@ -898,7 +900,7 @@ pub(super) fn deliver_live_lane(
     // Bus-only bounds EVERY live transport below, this fn's first gate.
     let policy = crate::mail_hold::gate(
         &opt_str_field(row, "name").unwrap_or_default(),
-        Some(wrapped),
+        Some(turn.as_str()),
         chrono::Utc::now(),
     );
     if !policy.deliver {
@@ -927,12 +929,12 @@ pub(super) fn deliver_live_lane(
     let Some(lane) = first_applicable(&lanes, &target) else {
         return (DeliveryState::failed("no-lane"), String::new());
     };
-    let state = lane.deliver(wrapped, &target, reason_out);
+    let state = lane.deliver(turn, &target, reason_out);
     let pane = row
         .pointer("/mux/pane_id")
         .and_then(Value::as_i64)
         .unwrap_or(-1);
-    pane_fallback(lane.kind(), state, pane, || pane_raw_send(row, wrapped))
+    pane_fallback(lane.kind(), state, pane, || pane_raw_send(row, turn))
 }
 
 /// What a lane needs from the send beside the wrapped text.
@@ -972,9 +974,14 @@ impl Lane for PaneLane<'_> {
         LaneKind::Pane
     }
 
-    fn deliver(&self, wrapped: &str, _t: &Target, reason_out: &mut Vec<String>) -> DeliveryState {
+    fn newline_rule(&self) -> NewlineRule {
+        NewlineRule::NonSubmittingKey
+    }
+
+    fn deliver(&self, turn: &TurnText, _t: &Target, reason_out: &mut Vec<String>) -> DeliveryState {
         let row = self.0.row;
-        let state = mail_inject_pane(row, wrapped, Some(reason_out));
+        let typed = turn.render(self.newline_rule());
+        let state = mail_inject_pane(row, &typed, Some(reason_out));
         if state.reached() {
             return state;
         }
@@ -992,7 +999,12 @@ impl Lane for PaneLane<'_> {
                         });
                         if let Some(rebound) = rebound {
                             let fresh = opt_str_field(rebound, "harness_session_id").unwrap_or(sid);
-                            return mail_inject_codex(&fresh, wrapped, Some(reason_out), None);
+                            return mail_inject_codex(
+                                &fresh,
+                                turn.as_str(),
+                                Some(reason_out),
+                                None,
+                            );
                         }
                     }
                 }
@@ -1009,7 +1021,12 @@ impl Lane for CodexThreadLane<'_> {
         LaneKind::CodexThread
     }
 
-    fn deliver(&self, wrapped: &str, _t: &Target, reason_out: &mut Vec<String>) -> DeliveryState {
+    fn newline_rule(&self) -> NewlineRule {
+        NewlineRule::Verbatim
+    }
+
+    fn deliver(&self, turn: &TurnText, _t: &Target, reason_out: &mut Vec<String>) -> DeliveryState {
+        let wrapped = &turn.render(self.newline_rule());
         let LiveCtx {
             row,
             from_name,
@@ -1044,10 +1061,15 @@ impl Lane for KeeperLane {
         LaneKind::Keeper
     }
 
-    fn deliver(&self, wrapped: &str, t: &Target, reason_out: &mut Vec<String>) -> DeliveryState {
+    fn newline_rule(&self) -> NewlineRule {
+        NewlineRule::NonSubmittingKey
+    }
+
+    fn deliver(&self, turn: &TurnText, t: &Target, reason_out: &mut Vec<String>) -> DeliveryState {
         // `applies` holds a session id for this lane.
         let sid = t.session_id.as_deref().unwrap_or_default();
-        mail_inject_keeper(sid, wrapped, &t.harness, Some(reason_out))
+        let typed = turn.render(self.newline_rule());
+        mail_inject_keeper(sid, &typed, &t.harness, Some(reason_out))
     }
 }
 
@@ -1058,8 +1080,13 @@ impl Lane for DaemonDeliverLane<'_> {
         LaneKind::DaemonDeliver
     }
 
-    fn deliver(&self, wrapped: &str, _t: &Target, reason_out: &mut Vec<String>) -> DeliveryState {
+    fn newline_rule(&self) -> NewlineRule {
+        NewlineRule::Verbatim
+    }
+
+    fn deliver(&self, turn: &TurnText, _t: &Target, reason_out: &mut Vec<String>) -> DeliveryState {
         let LiveCtx { row, from_name, .. } = self.0;
+        let wrapped = turn.render(self.newline_rule());
         let result = daemon_rpc(
             "agent.deliver",
             json!({
@@ -1088,7 +1115,15 @@ impl Lane for ClaudeSwitchboardLane<'_> {
         LaneKind::ClaudeSwitchboard
     }
 
-    fn deliver(&self, wrapped: &str, t: &Target, reason_out: &mut Vec<String>) -> DeliveryState {
+    /// The control.sock rung parks a turn on any new line, and every row
+    /// this lane serves has no pane (the pane lane runs first), so the
+    /// paneless law's one line rules (d-5641722b).
+    fn newline_rule(&self) -> NewlineRule {
+        NewlineRule::OneLine
+    }
+
+    fn deliver(&self, turn: &TurnText, t: &Target, reason_out: &mut Vec<String>) -> DeliveryState {
+        let wrapped = turn.as_str();
         let LiveCtx {
             row,
             from_name,
@@ -1123,10 +1158,13 @@ impl Lane for ClaudeSwitchboardLane<'_> {
             }
             Some(recipient) => mail_inject_claude(
                 &recipient,
-                wrapped,
+                // The child's framing guards read the header line, so the
+                // turn crosses whole; `--steer` makes the child type it as
+                // this lane's one line.
+                turn.as_str(),
                 Some(reason_out),
                 Some(t.harness.as_str()),
-                false,
+                self.newline_rule() == NewlineRule::OneLine,
             ),
         }
     }
@@ -1202,8 +1240,10 @@ pub(super) fn queue_durable_fallback(
         "subject": subject,
     });
     let registry_path = AgentsHome::shared_registry_json();
+    // A refused render refuses the durable copy too: the drain would type
+    // the bare body, header-less, the same as the live lane would have.
     let durable_body = crate::mail_envelope::render_at(&input, &registry_path)
-        .unwrap_or_else(|_| message.to_string());
+        .map_err(|why| (format!("error: {why}"), 2))?;
     let words = crate::backlog::style_check::word_count(message) as i64;
     let write = write_durable_thread(
         &durable_recipient,
@@ -1688,7 +1728,9 @@ pub(super) fn dispatch_send_locked(
             .clone()
             .or_else(|| opt_str_field(&existing, "short_id"))
             .unwrap_or_default();
-        let wrapped = crate::mail_envelope::render_at(
+        // A render refusal leaves no turn: the send goes durable and never
+        // types the bare body, which would land with no header.
+        let turn = crate::mail_envelope::render_turn_at(
             &json!({
                 "mode": "wrap",
                 "body": message,
@@ -1703,16 +1745,26 @@ pub(super) fn dispatch_send_locked(
                 "subject": mail_ctx.subject,
             }),
             &AgentsHome::shared_registry_json(),
-        )
-        .unwrap_or_else(|_| message.to_string());
-        let stage_ok = if recipient_for_row.is_empty() {
+        );
+        let turn = match turn {
+            Ok(turn) => Some(turn),
+            Err(why) => {
+                eprintln!("live delivery skipped: {why}");
+                live_miss_reason = Some("render-refused".to_string());
+                None
+            }
+        };
+        let wrapped = turn.as_ref().map(TurnText::as_str).unwrap_or(message);
+        let stage_ok = if turn.is_none() {
+            false
+        } else if recipient_for_row.is_empty() {
             true
         } else {
             match stage_before_live(
                 &msg_id,
                 &mail_ctx.from_,
                 &recipient_for_row,
-                &wrapped,
+                wrapped,
                 from_harness.as_deref(),
                 Some(str_field(&existing, "harness")),
                 None,
@@ -1730,11 +1782,11 @@ pub(super) fn dispatch_send_locked(
                 }
             }
         };
-        if stage_ok {
+        if let (true, Some(turn)) = (stage_ok, turn.as_ref()) {
             live_attempted = true;
             let (state, fallback) = deliver_live_lane(
                 &existing,
-                &wrapped,
+                turn,
                 from_name,
                 sender_row.as_ref(),
                 &mut live_reasons,
@@ -1754,7 +1806,7 @@ pub(super) fn dispatch_send_locked(
                     &mail_ctx.from_,
                     &recipient_for_row,
                     "send",
-                    &wrapped,
+                    wrapped,
                     &now_iso(),
                     None,
                     json!({}),
