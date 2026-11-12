@@ -360,7 +360,7 @@ fn read_v2(conn: &rusqlite::Connection, sid: &str) -> String {
                 r.get::<_, String>(3)?,
                 r.get::<_, String>(4)?,
                 r.get::<_, Option<i64>>(5)?,
-                r.get::<_, Option<String>>(7)?,
+                r.get::<_, Option<String>>(6)?,
                 r.get::<_, i64>(8)?,
             ))
         })
@@ -373,11 +373,11 @@ fn read_v2(conn: &rusqlite::Connection, sid: &str) -> String {
     let mut current: Option<(String, String, String, Vec<(String, String, i64)>)> = None;
     let mut out = String::new();
     for row in rows.flatten() {
-        let (_k, mid, mtype, mdata, ordinal, pdata, created) = row;
+        let (_k, mid, mtype, mdata, ordinal, ptype, created) = row;
         match &mut current {
             Some((cur_id, _, _, parts)) if *cur_id == mid => {
-                if let (Some(ordinal), Some(pdata)) = (ordinal, pdata) {
-                    parts.push((ordinal.to_string(), pdata, created));
+                if let (Some(ordinal), Some(ptype)) = (ordinal, ptype) {
+                    parts.push((ordinal.to_string(), ptype, created));
                 }
             }
             _ => {
