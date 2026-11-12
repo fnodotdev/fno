@@ -962,6 +962,23 @@ pub fn build_argv(
         argv.push("--model".to_string());
         argv.push(m.to_string());
     }
+    // The route's model pins on argv ahead of the settings env (pane-parity
+    // with inject_route_model_argv): the harness resolves an argv model
+    // itself, while a model that reaches the forked session only through the
+    // settings file goes to the API verbatim, and a bare tier alias delivered
+    // there dies on the first turn. A caller model already on argv is intent
+    // and wins.
+    if let Some(route) = flags.route.as_ref() {
+        let route_model = route.model.trim();
+        if !route_model.is_empty()
+            && !argv
+                .iter()
+                .any(|t| t == "--model" || t == "-m" || t.starts_with("--model="))
+        {
+            argv.push("--model".to_string());
+            argv.push(route_model.to_string());
+        }
+    }
     if !use_stdin {
         // Behind `--` so a leading-flag seed is the prompt positional, not a
         // claude flag; same fence as the Python `_build_argv` (parity).
@@ -4089,6 +4106,62 @@ mod tests {
                 "--",
                 "hi"
             ]
+        );
+    }
+
+    #[test]
+    fn a_route_model_pins_on_argv_and_a_caller_model_wins() {
+        let route = RouteStamp {
+            provider: "anthropic",
+            model: "opus",
+            settings: "/tmp/route-settings.json",
+        };
+        let argv = build_argv(
+            "a",
+            "hi",
+            false,
+            None,
+            None,
+            None,
+            HarnessFlags {
+                route: Some(route),
+                ..Default::default()
+            },
+        );
+        let at = argv
+            .iter()
+            .position(|t| t == "--model")
+            .expect("route model lands on argv");
+        assert_eq!(argv[at + 1], "opus");
+        let fence = argv.iter().position(|t| t == "--").unwrap();
+        assert!(at < fence, "the pin sits flags-first, never in the seed");
+
+        // A caller model is intent and wins; the pin does not stack.
+        let caller = build_argv(
+            "a",
+            "hi",
+            false,
+            Some("claude-opus-5-5"),
+            None,
+            None,
+            HarnessFlags {
+                route: Some(route),
+                ..Default::default()
+            },
+        );
+        let models: Vec<&String> = caller
+            .iter()
+            .zip(caller.iter().skip(1))
+            .filter(|(f, _)| f.as_str() == "--model")
+            .map(|(_, v)| v)
+            .collect();
+        assert_eq!(models, [&"claude-opus-5-5".to_string()]);
+
+        // Unrouted spawns keep today's argv byte-for-byte.
+        assert!(
+            !build_argv("a", "hi", false, None, None, None, HarnessFlags::default())
+                .iter()
+                .any(|t| t == "--model")
         );
     }
 
