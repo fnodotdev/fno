@@ -91,6 +91,7 @@
       "compaction_count",
       "mail_unread",
       "mail_held",
+      "mail_held_since",
       "harness_title",
       "liveness",
       "liveness_basis",
