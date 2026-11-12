@@ -1712,7 +1712,7 @@ fn validate_row(harness: &str, caps: &HarnessCapabilities) -> Result<(), Contrac
                 || !form.tokens.is_empty()
                 || !generation(&form.tokens_v1)
                 || !generation(&form.tokens_v2)
-                || form.boundary_major.is_none()
+                || form.boundary_major.is_none_or(|major| major == 0)
                 || form.password_env.as_deref().is_none_or(str::is_empty)
             {
                 return Err(field_error(
