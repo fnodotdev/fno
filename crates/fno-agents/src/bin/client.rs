@@ -2408,6 +2408,17 @@ fn maybe_run_spawn(
         if let Err(refusal) =
             fno_agents::spawn_gate::state_root_grant_gate(provider, declared_substrate, &roots)
         {
+            fno_agents::spawn_gate::emit_refusal_event(
+                &refusal,
+                // R1: the shrink-only read counter bars a new .get on Value;
+                // a JSON pointer is the total read (None on non-object too).
+                params
+                    .pointer("/name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+                declared_substrate,
+                None,
+            );
             return Some(refusal.exit_code);
         }
     }

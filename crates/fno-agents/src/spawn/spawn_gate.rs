@@ -107,10 +107,10 @@ pub(crate) const NOTE: &str = "spawn-gate note:";
 
 /// A refusal as data: the exit code the caller's arm returns, the stdout
 /// receipt it prints (byte-shape unchanged from when `run_gate` printed it
-/// itself), and the event fields the Python transport emits through `_refuse`
-/// for spawns that enter Python (locked decision 5 - refusal events stay
-/// Python-emitted; the native arm itself still emits nothing, owns a
-/// Rust emit). The eprintln prose stays at the refusal site either way.
+/// itself), and the event fields [`emit_refusal_event`] writes into the one
+/// `spawn_gate_refused` row at the `run_gate` crossing (the Python
+/// transport's `_refuse` seam that once did this job is deleted with its
+/// leg). The eprintln prose stays at the refusal site either way.
 #[derive(Debug, Clone)]
 pub struct Refusal {
     pub exit_code: i32,
@@ -1266,7 +1266,14 @@ fn state_root_grant_gate_decide(
             eprintln!(
                 "  a state root resolves for this spawn and no lane can be verified to carry it."
             );
-            return Err(Refusal::code(EXIT_STATE_ROOT_UNGRANTED));
+            return Err(Refusal::code(EXIT_STATE_ROOT_UNGRANTED)
+                .ev(
+                    "reason",
+                    serde_json::json!("state-root-contract-unreadable"),
+                )
+                .ev("harness", serde_json::json!(harness))
+                .ev("substrate", serde_json::json!(substrate))
+                .ev("detail", serde_json::json!(error.to_string())));
         }
     };
     let stance = contract.state_root_stance(harness, substrate);
@@ -1283,7 +1290,16 @@ fn state_root_grant_gate_decide(
             "  start the daemon, or mount/forward it and point \
              FNO_SUPERVISOR_SOCKET at the mounted path."
         );
-        return Err(Refusal::code(EXIT_STATE_ROOT_UNGRANTED));
+        return Err(Refusal::code(EXIT_STATE_ROOT_UNGRANTED)
+            .ev("reason", serde_json::json!("state-root-carrier-muted"))
+            .ev("harness", serde_json::json!(harness))
+            .ev("substrate", serde_json::json!(substrate))
+            .ev(
+                "remedy",
+                serde_json::json!(
+                    "start the daemon, or mount/forward it and point FNO_SUPERVISOR_SOCKET at the mounted path"
+                ),
+            ));
     }
     if stance.is_some() {
         return Ok(());
@@ -1306,7 +1322,17 @@ fn state_root_grant_gate_decide(
          (`socket` when the lane rides the daemon socket), \
          \"unsandboxed\" when measured to need none, or \"unmeasured\"."
     );
-    Err(Refusal::code(EXIT_STATE_ROOT_UNGRANTED))
+    Err(Refusal::code(EXIT_STATE_ROOT_UNGRANTED)
+        .ev("reason", serde_json::json!("state-root-undeclared"))
+        .ev("harness", serde_json::json!(harness))
+        .ev("substrate", serde_json::json!(substrate))
+        .ev("roots", serde_json::json!(roots))
+        .ev(
+            "remedy",
+            serde_json::json!(format!(
+                "add {substrate} to [harness.{harness}.state_root_grant]: socket | unsandboxed | unmeasured"
+            )),
+        ))
 }
 
 /// Everything the gate needs to decide one spawn. The Python transport
@@ -1425,6 +1451,8 @@ pub fn run_gate(
     input: GateInput,
 ) -> Result<GateGuard, Refusal> {
     let node = input.node.clone();
+    let name = input.name.clone();
+    let substrate = input.substrate.clone();
     decide_gate(config_cwd, registry_path, input)
         .map_err(|r| {
             let home = crate::paths::AgentsHome::from_env();
@@ -1453,9 +1481,36 @@ pub fn run_gate(
                     "reason": verdict_line(&r),
                 }),
             );
-            crate::machine_sample::stamp_refusal(r, &home.events_jsonl(), chrono::Utc::now())
+            let r =
+                crate::machine_sample::stamp_refusal(r, &home.events_jsonl(), chrono::Utc::now());
+            emit_refusal_event(&r, &name, &substrate, node.as_deref());
+            r
         })
         .inspect_err(|r| eprintln!("{}", verdict_line(r)))
+}
+
+/// The one emitter of the `spawn_gate_refused` kind. Every gate refusal
+/// crosses here exactly once: `run_gate`'s `map_err` for the decide body,
+/// and bin/client.rs's state-root pre-gate door for the early refusal. The
+/// cause fields (axis, measured value vs cap, remedy) are built at the
+/// refusal site into `Refusal.event`; this adds the identity the feed row
+/// reads (`reason`, `name`) and the emitting leg. Best-effort like the
+/// neighboring refusal traces: a broken events dir must never turn a
+/// refusal into a crash. Guard: scripts/ci/check-gate-refusals-emit.sh
+/// holds the kind to this one construction site.
+pub fn emit_refusal_event(refusal: &Refusal, name: &str, substrate: &str, node: Option<&str>) {
+    let mut fields = refusal.event.clone();
+    fields.insert("reason".into(), serde_json::json!(refusal_reason(refusal)));
+    fields.insert("name".into(), serde_json::json!(name));
+    fields.insert("substrate".into(), serde_json::json!(substrate));
+    if let Some(node) = node {
+        fields.insert("node".into(), serde_json::json!(node));
+    }
+    fields.insert("exit_code".into(), serde_json::json!(refusal.exit_code));
+    fields.insert("gate".into(), serde_json::json!("rust"));
+    let home = crate::paths::AgentsHome::from_env();
+    let _ = crate::events::EventEmitter::new(home.events_jsonl(), "daemon")
+        .emit_fields("spawn_gate_refused", fields);
 }
 
 /// The gate's decision body, split from [`run_gate`] so the wrapper can
