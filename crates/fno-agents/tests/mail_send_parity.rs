@@ -260,8 +260,10 @@ fn row_codex() -> serde_json::Value {
 /// holder the same way the Python lead rows did.
 fn row_lead() -> serde_json::Value {
     let mut v = row("lead-holder", "claude", Some(OTHER_SID));
-    v["role_level"] = serde_json::json!(1);
-    v["role_scope"] = serde_json::json!("lead");
+    if let Some(o) = v.as_object_mut() {
+        o.insert("role_level".into(), serde_json::json!(1));
+        o.insert("role_scope".into(), serde_json::json!("lead"));
+    }
     v
 }
 

@@ -870,8 +870,9 @@ pub(super) fn resolve_to_lead_address(
         );
         return Err(17);
     }
-    eprintln!("--to-lead {scope}: resolved to {}", holders[0]);
-    Ok((holders[0].clone(), body))
+    let holder = holders.swap_remove(0);
+    eprintln!("--to-lead {scope}: resolved to {holder}");
+    Ok((holder, body))
 }
 
 // ---------------------------------------------------------------------------
