@@ -193,7 +193,7 @@ pub fn theme_for(
 /// answered so the `COLORFGBG` ladder decides. The server's spawn path calls
 /// [`theme_for`], which never asks a terminal - the server may have none,
 /// and a pane spawn must not pause on a query.
-pub(crate) fn theme_resolved(
+pub fn theme_resolved(
     cwd: &Path,
     osc_light: Option<bool>,
 ) -> (

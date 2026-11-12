@@ -71,6 +71,20 @@ impl CiConclusion {
     }
 }
 
+/// The CI word a human reads: the conclusion, with the unmeasured reason
+/// named beside it. PENDING alone on PR 82 hid why nothing had
+/// run; the ruling names the state. The fingerprint keeps the plain render,
+/// so the vocabulary stays stable. Takes the fields, not the struct, so a
+/// closure capturing them stays a disjoint field capture.
+pub(super) fn ci_named(conclusion: &CiConclusion, unmeasured: Option<&str>) -> String {
+    match unmeasured {
+        Some(reason) if !reason.is_empty() => {
+            format!("{} ({reason})", conclusion.render())
+        }
+        _ => conclusion.render(),
+    }
+}
+
 #[derive(Debug, Default)]
 pub(super) struct PrInfo {
     pub(super) state: PrState,
@@ -100,6 +114,11 @@ pub(super) struct PrInfo {
     /// while others run, so the DoneAwaitingMerge terminal must consult this to
     /// avoid firing while the session's own in-flight job could still turn red.
     pub(super) ci_has_pending: bool,
+    /// The unmeasured reason when the checks read answered green
+    /// but the head's Actions runs listing names no completed run: the fold
+    /// flips the conclusion to Pending so DonePRGreen cannot fire on a head
+    /// CI never measured. None = measured, skipped, or no evidence.
+    pub(super) ci_unmeasured: Option<String>,
     /// GitHub mergeable state ("MERGEABLE" | "CONFLICTING" | "UNKNOWN"). The
     /// DoneAwaitingMerge terminal must not fire on a "CONFLICTING" PR: the human
     /// cannot merge past main-red until the branch is rebased, and the terminal
@@ -639,7 +658,8 @@ pub(super) fn read_pr_info(
     // it never fires on partial CI).
     let no_hosted_ci =
         crate::verify_evidence::hosted_ci_not_configured(ci_declared_none, cwd, head_sha);
-    let (ci_conclusion, failing_checks, ci_has_pending, outside_hold_only) = if no_hosted_ci {
+    let (mut ci_conclusion, failing_checks, mut ci_has_pending, outside_hold_only) = if no_hosted_ci
+    {
         (CiConclusion::Skipped, Vec::new(), false, false)
     } else {
         let mut checks_args = vec!["pr", "checks"];
@@ -679,6 +699,48 @@ pub(super) fn read_pr_info(
             outside_hold_only,
         )
     };
+
+    // The unmeasured fold: a green read over a head whose Actions
+    // runs listing names no completed run is unmeasured, never green - PR 82
+    // merged ready with all 7 head runs queued and the loop still said
+    // DonePRGreen for a head CI never measured. Only a green read spends the
+    // extra listing read: red and pending already hold. no_hosted_ci has
+    // nothing to measure with, and a failed or malformed read has no
+    // evidence either way, so it keeps today's answer. The listing read
+    // rides the same gh door as the checks read; the etag layer serves an
+    // unchanged head without spending core quota.
+    let mut ci_unmeasured: Option<String> = None;
+    if ci_conclusion == CiConclusion::Success && !no_hosted_ci && !head_oid.is_empty() {
+        let runs_slug = node_pr_repo.filter(|s| !s.is_empty()).unwrap_or(repo_slug);
+        if !runs_slug.is_empty() {
+            let path = format!("repos/{runs_slug}/actions/runs?head_sha={head_oid}&per_page=100");
+            let runs_args = vec!["api", &path];
+            let read = bounded_read(
+                gh_bin.as_ref(),
+                &runs_args,
+                cwd,
+                "runs_unmeasured",
+                stopgate_read_timeout(),
+            );
+            if let Ok(out) = read {
+                if out.status.success() {
+                    let parsed: Result<Value, _> = serde_json::from_slice(&out.stdout);
+                    if let Ok(v) = parsed {
+                        if let Some(rows) = v.pointer("/workflow_runs").and_then(Value::as_array) {
+                            ci_unmeasured = crate::pr_status_facts::ci_unmeasured_reason(
+                                &Value::Array(rows.clone()),
+                                &head_oid,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if ci_unmeasured.is_some() && ci_conclusion == CiConclusion::Success {
+        ci_conclusion = CiConclusion::Pending;
+        ci_has_pending = true;
+    }
 
     // Reads 3+4: reviews + inline findings. Skipped when the session declares
     // no_external OR the repo declares `required_bots: []` (the no-review-gate
@@ -1213,6 +1275,7 @@ pub(super) fn read_pr_info(
         failing_checks,
         outside_hold_only,
         ci_has_pending,
+        ci_unmeasured,
         mergeable,
         merge_slot_holder,
         merge_hold,

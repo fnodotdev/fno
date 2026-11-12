@@ -3,6 +3,8 @@
 //!
 //! Characterization harness for the `mail hold` / `mail hold-release` front port. The goldens were captured from the Python hold front while it still ran its own body: the arm receipts (explicit minutes, wall deadline), the argument refusals (a bare call now prints usage and arms nothing), both status lines, the three hold-off outcomes (cleared with no mail waiting, failed stamp, delivery missed), and both release endings (quiet without a clock, expired on a planted clock). Captured with `FNO_CAPTURE_GOLDEN=1` through an `fno` shim while the oracle existed; in normal mode the frozen bytes are the contract and the Python leg never runs.
 //!
+//! The move to the fno-mail hold record rewrote six goldens by hand, on purpose. `status after arm` once read "no expiry (hand-stamped bus-only)" right after a 5-minute arm: the status read the short handle while the arm wrote the full id. It now names the clock. `on gets the ceiling` is new. `off unreadable registry` (was `off failed policy`) clears a record, not a registry stamp, so a broken registry no longer blocks it. `release no record drains` (was `release quiet no clock`) drains, because a gone record means the wait is over. `release expired empty` plants a record. The usage and the conflict refusal name `--on`.
+//!
 //! One sanctioned divergence: the Rust receipt names do-not-disturb where the oracle said "busy mode on for" (the port's rename). The arm cases assert the DND wording on the raw stdout first, then translate it back so the frozen oracle bytes stay the compare contract; the DND wording itself is pinned by that assertion and by the help text in mail_cli.
 //!
 //! Every case runs the client binary on its own temp root under the freeze capture's env block. Normalization mirrors the freeze pipeline (drop setup noise, rstrip, the rename translate, a sorted-compact JSON re-dump, then the time / held_for_s / root scrubs) so a matching leg freezes to the same bytes the oracle froze to.
@@ -168,8 +170,8 @@ const BUS_LOG: &str = r#"{"id":"holdmsg-1","thread":"t","from":"lead","to":"a1b2
 {"id":"holdmsg-2","thread":"t","from":"lead","to":"a1b2c3d4","kind":"send","body":"held two","ts":"2026-10-12T09:05:00Z"}
 "#;
 
-const CLOCK_FILE: &str =
-    "{\"until\":\"2020-01-01T00:00:00Z\",\"window_s\":540,\"clock_kind\":\"wall\"}\n";
+/// An ended hold record, as the fno-mail hold store writes it.
+const CLOCK_FILE: &str = "{\"session\":\"a1b2c3d4-1111-2222-3333-444455556666\",\"until\":\"2020-01-01T00:00:00Z\",\"set_by\":\"user\",\"reason\":\"test\",\"clock\":{\"kind\":\"wall\"}}\n";
 
 enum Setup {
     /// Arm a real hold through the same client binary, the way the freeze capture's `fno` shim did. The detached release timer it spawns holds no pipes and self-exits after its root drops.
@@ -200,7 +202,8 @@ fn apply_setup(root: &Path, setup: &Setup) {
             std::fs::write(dir.join("messages.jsonl"), BUS_LOG).unwrap();
         }
         Setup::Clock => {
-            let dir = root.join("mail-hold");
+            // The hold store reads only the state layout's own dir.
+            let dir = root.join("db/mail/mail-hold");
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join(format!("{SID}.json")), CLOCK_FILE).unwrap();
         }
@@ -231,6 +234,12 @@ const CASES: &[Case] = &[
     Case {
         label: "wall for 30",
         args: &["hold", "--for", "30"],
+        setups: &[],
+        dnd_receipt: true,
+    },
+    Case {
+        label: "on gets the ceiling",
+        args: &["hold", "--on"],
         setups: &[],
         dnd_receipt: true,
     },
@@ -271,7 +280,7 @@ const CASES: &[Case] = &[
         dnd_receipt: false,
     },
     Case {
-        label: "off failed policy",
+        label: "off unreadable registry",
         args: &["hold", "--off"],
         setups: &[Setup::CorruptRegistry],
         dnd_receipt: false,
@@ -283,7 +292,7 @@ const CASES: &[Case] = &[
         dnd_receipt: false,
     },
     Case {
-        label: "release quiet no clock",
+        label: "release no record drains",
         args: &["hold-release", "--handle", SID],
         setups: &[],
         dnd_receipt: false,

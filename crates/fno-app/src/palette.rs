@@ -4,8 +4,8 @@
 use std::path::{Path, PathBuf};
 
 use super::link::Layout;
-use crate::proto::Color;
-use crate::theme::{terminal16_slot, Theme};
+use fno::proto::Color;
+use fno::theme::{terminal16_slot, Theme};
 
 /// xterm's own ANSI 16, for a theme that defines no terminal palette.
 const XTERM16: [u32; 16] = [
@@ -130,7 +130,7 @@ pub fn appearance_is_light(a: gpui::WindowAppearance) -> bool {
 /// `mux.theme` pin and the user's own themes win over `light`, as in the TUI.
 /// The second value is the ladder's warning text, if any.
 pub fn for_appearance(light: bool, cwd: &Path) -> (Palette, Option<String>) {
-    let (theme, warn, _) = crate::digest_overlay::theme_resolved(cwd, Some(light));
+    let (theme, warn, _) = fno::app_api::digest_overlay::theme_resolved(cwd, Some(light));
     (Palette::from_theme(&theme), warn.map(|w| w.0))
 }
 
@@ -283,7 +283,7 @@ mod tests {
         assert_eq!(live.bg, pinned.bg);
 
         // The pin's directory is the active squad's, never the process cwd.
-        let squad = |id, cwd: &str| crate::proto::SquadMeta {
+        let squad = |id, cwd: &str| fno::proto::SquadMeta {
             id,
             name: String::new(),
             canonical_cwd: cwd.into(),

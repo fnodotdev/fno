@@ -116,39 +116,6 @@
      ]
     }
    }
-  },
-  {
-   "name": "Wheel installs by version",
-   "description": "Distinct install ids per week by fno version where the channel is wheel. Read before the wheel retires; the count starts when this ships.",
-   "query": {
-    "kind": "InsightVizNode",
-    "source": {
-     "kind": "TrendsQuery",
-     "interval": "week",
-     "dateRange": {
-      "date_from": "-90d"
-     },
-     "series": [
-      {
-       "kind": "EventsNode",
-       "event": "fno_install_seen",
-       "math": "dau",
-       "properties": [
-        {
-         "key": "channel",
-         "value": "wheel",
-         "operator": "exact",
-         "type": "event"
-        }
-       ]
-      }
-     ],
-     "breakdownFilter": {
-      "breakdown": "fno_version",
-      "breakdown_type": "event"
-     }
-    }
-   }
   }
  ],
  "alerts": [
