@@ -1160,6 +1160,10 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The first-turn watch saw a launch's first assistant line; carries the
     // latency from the call per harness, substrate and machine.
     "spawn_first_turn",
+    // A spawn-gate refusal landed its row (spawn_gate.rs emit_refusal_event,
+    // at the run_gate crossing and the client.rs state-root door; the routing
+    // door's own emitter is route_slot.rs).
+    "spawn_gate_refused",
     // A reaped session came back (client-emitted): one event per revive
     // naming the command, the actor session, the prior name and the session id.
     "agent_revived",

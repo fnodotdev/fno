@@ -370,18 +370,31 @@ fn a_fleet_stop_refusal_emits_spawn_gate_refused() {
 
     let refusal = got.expect_err("a fleet stop refuses the spawn");
     assert_eq!(refusal.exit_code, crate::spawn_gate::EXIT_FLEET_STOP);
-    let left = std::fs::read_to_string(dir.join("events.jsonl")).unwrap();
+    // The store commit is the acknowledgement boundary: rows live in the
+    // SQLite store beside the journal anchor, never a plain file, so the
+    // read goes through query_events.
+    let rows = crate::event_store::query_events(
+        &dir.join("events.jsonl"),
+        &crate::event_store::EventQuery {
+            types: vec!["spawn_gate_refused".into()],
+            ..Default::default()
+        },
+    )
+    .expect("read the event store");
+    assert_eq!(
+        rows.len(),
+        1,
+        "exactly one spawn_gate_refused row: {:?}",
+        rows.iter().map(|r| &r.line).collect::<Vec<_>>()
+    );
+    let line = &rows[0].line;
     assert!(
-        left.contains("\"type\":\"spawn_gate_refused\""),
-        "the refusal must land a spawn_gate_refused row: {left}"
+        line.contains("\"gate\":\"rust\"") && line.contains("\"reason\":\"fleet-stop\""),
+        "the row must name the leg and cause: {line}"
     );
     assert!(
-        left.contains("\"gate\":\"rust\"") && left.contains("\"reason\":\"fleet-stop\""),
-        "the row must name the leg and cause: {left}"
-    );
-    assert!(
-        left.contains("\"name\":\"t-gate-emit\""),
-        "the row must carry the worker name: {left}"
+        line.contains("\"name\":\"t-gate-emit\""),
+        "the row must carry the worker name: {line}"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

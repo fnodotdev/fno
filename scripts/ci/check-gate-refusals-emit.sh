@@ -26,9 +26,11 @@ note() {
 }
 
 # 1. One emitter per door. Readers (feed, fleet_load, schema) and tests are
-#    not emitters; route_slot.rs is the routing door's own guarded emitter
-#    (gate:"routing"), separate by contract. The spawn gate keeps ONE.
-sites=$(git grep -n '"spawn_gate_refused"' -- crates/ | grep -v 'feed\.rs\|fleet_load\.rs\|events_schema\.json\|tests/\|fixtures/\|_tests\.rs\|assert' || true)
+#    not emitters; lib.rs carries the hand-maintained KNOWN_EVENT_KINDS
+#    registry, definitionally non-emitting; route_slot.rs is the routing
+#    door's own guarded emitter (gate:"routing"), separate by contract. The
+#    spawn gate keeps ONE.
+sites=$(git grep -n '"spawn_gate_refused"' -- crates/ | grep -v 'feed\.rs\|fleet_load\.rs\|events_schema\.json\|tests/\|fixtures/\|_tests\.rs\|lib\.rs\|assert' || true)
 count=$(printf '%s\n' "$sites" | grep -c '"spawn_gate_refused"' || true)
 if [[ $count -ne 2 ]]; then
   print_sites() { printf '%s\n' "$sites" >&2; }
