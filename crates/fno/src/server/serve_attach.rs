@@ -108,34 +108,12 @@ fn serve_health(base_url: &str, token: &str) -> Option<ServeHealth> {
 /// The connect/read bound for the health probe.
 const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 
-/// RFC 4648 standard base64, hand-rolled: one dependency for one encode of
-/// a 41-byte credential is not a trade this file makes. The runtime's copy
-/// (opencode_serve.rs) uses the crate; the mux mirrors the AUTH SHAPE, not
-/// the implementation.
+/// RFC 4648 standard base64 through the crate: the same one-line encode
+/// opencode_serve.rs runs for its serve, so the workspace carries one
+/// base64 implementation instead of two hand-rolled copies.
 fn basic_auth(user: &str, password: &str) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let input = format!("{user}:{password}");
-    let bytes = input.as_bytes();
-    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let b = [
-            chunk[0],
-            *chunk.get(1).unwrap_or(&0),
-            *chunk.get(2).unwrap_or(&0),
-        ];
-        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | (b[2] as u32);
-        out.push(TABLE[(n >> 18) as usize & 63] as char);
-        out.push(TABLE[(n >> 12) as usize & 63] as char);
-        out.push(TABLE[(n >> 6) as usize & 63] as char);
-        out.push(TABLE[n as usize & 63] as char);
-    }
-    let pad = (3 - bytes.len() % 3) % 3;
-    let len = out.len() - pad;
-    out.truncate(len);
-    for _ in 0..pad {
-        out.push('=');
-    }
-    out
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(format!("{user}:{password}"))
 }
 
 /// The TUI binary's self-reported major version, measured with one bounded

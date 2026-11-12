@@ -88,6 +88,10 @@ full = [
 desktop = ["full", "dep:gpui"]
 
 [dependencies]
+# The serve-attach health probe's Basic-auth encode: the same 0.22 line
+# fno-agents already builds for its serve, so the workspace compiles one
+# base64 implementation, not two.
+base64 = "0.22"
 # `fno mux serve --web`: the read-only web bridge's HTTP + WebSocket
 # surface. axum handles the untrusted-input HTTP parsing and WS handshake so
 # the web-facing bridge does not hand-roll that security-sensitive code.
