@@ -48,14 +48,14 @@ pub fn run(args: &[String]) -> i32 {
             "--plugin-root" => root = PathBuf::from(it.next().cloned().unwrap_or_default()),
             other => {
                 eprintln!(
-                    "fno-agents hook pretool: unknown flag {other:?}; usage: hook pretool --wire agy|pi --plugin-root <dir>"
+                    "fno-agents hook pretool: unknown flag {other:?}; usage: hook pretool --wire agy|pi|omp --plugin-root <dir>"
                 );
                 return 2;
             }
         }
     }
-    if wire != "agy" && wire != "pi" {
-        eprintln!("fno-agents hook pretool: --wire must be agy or pi");
+    if !matches!(wire.as_str(), "agy" | "pi" | "omp") {
+        eprintln!("fno-agents hook pretool: --wire must be agy, pi or omp");
         return 2;
     }
     let stdin = super::read_stdin();

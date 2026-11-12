@@ -33,6 +33,7 @@
 pub(crate) mod completion;
 
 pub use crate::shell_init::shell_init;
+mod graft_slot;
 mod harness_command;
 mod pane_prepare;
 pub(crate) mod pane_submit;
@@ -2710,20 +2711,6 @@ fn load_anchored_spec_file(path: &str) -> Result<crate::proto::AnchoredLayoutSpe
         .map_err(|e| format!("parsing {path} (tried TOML then JSON): {e}"))
 }
 
-/// A graft `--slot` binding: `anchor` -> Anchor, `fno:<id>` -> Fno, `-`/`shell`
-/// -> Shell.
-fn parse_graft_slot(s: &str) -> Result<crate::proto::LayoutBinding, String> {
-    use crate::proto::LayoutBinding;
-    match s {
-        "anchor" | "a" => Ok(LayoutBinding::Anchor),
-        "-" | "shell" => Ok(LayoutBinding::Shell),
-        other if other.starts_with("fno:") => Ok(LayoutBinding::Fno(other[4..].to_string())),
-        other => Err(format!(
-            "graft --slot must be anchor|fno:<id>|- (shell), got {other:?}"
-        )),
-    }
-}
-
 /// `fno mux layout graft --at current|<pane> (--spec <file> | --template <name>
 /// --slot <b>...) [--workspace <name>] [--focus]` (v44).
 fn layout_graft_cli(
@@ -2753,7 +2740,7 @@ fn layout_graft_cli(
             match rest[i].as_str() {
                 "--at" => at_raw = Some(val(&mut i)?),
                 "--template" | "-t" => template = Some(parse_template_name(&val(&mut i)?)?),
-                "--slot" => slot_bindings.push(parse_graft_slot(&val(&mut i)?)?),
+                "--slot" => slot_bindings.push(graft_slot::parse_graft_slot(&val(&mut i)?)?),
                 "--spec" => spec_file = Some(val(&mut i)?),
                 "--workspace" | "--squad" | "-s" => squad = Some(val(&mut i)?),
                 "--focus" => focus = true,

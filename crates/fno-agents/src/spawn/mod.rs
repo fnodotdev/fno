@@ -64,6 +64,7 @@ pub mod naming;
 pub mod native_bg_mint;
 pub mod occupancy_classify;
 pub mod occupancy_login;
+pub mod omp;
 pub mod opencode_ask;
 pub mod opencode_config;
 pub mod opencode_install;

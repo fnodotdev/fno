@@ -1,9 +1,8 @@
 # CANONICAL at crates/fno-agents/src/harness_capabilities.toml. crates/fno-agents/build.rs
-# regenerates both copies on every build: cli/src/fno/agents/harness_capabilities.toml
-# (Python package data) and crates/fno/src/harness_capabilities.toml (include_str!ed by
-# the fno mux). Edit the canonical and rebuild; the rust-ci generated-copies dirty-tree
-# step fails on a hand-edited copy.
-map_version = 25
+# regenerates the one copy on every build: crates/fno/src/harness_capabilities.toml
+# (include_str!ed by the fno mux). Edit the canonical and rebuild; the
+# rust-ci generated-copies dirty-tree step fails on a hand-edited copy.
+map_version = 26
 
 [harness.claude]
 # THE DELIVERED-MAIL HEADER FORM. Every delivered mail opens with one
@@ -880,6 +879,24 @@ tokens = ["opencode", "--session", "{session_id}"]
 kind = "unsupported"
 tokens = []
 
+# THE SERVE SEAT. opencode's interactive attach names a SERVER,
+# not just a session: the pane execs the TUI pointed at the shared serve
+# with the row's session id, the Basic-auth password riding child env
+# (never argv - the measured mail-attach ruling). Two CLI generations, selected by the
+# TUI's own major against boundary_major: 1.x execs `opencode attach
+# <serve-url> --session <id>`; 2.x execs `opencode --server <serve-url>
+# --session <id>`. A TUI whose generation does not match the live serve's
+# dies UnsupportedContentType (measured 2026-11-10), so the seat gates on
+# the pair before it spawns anything. The generic interactive_attach lane
+# above stays honest: no session-only attach form exists.
+[harness.opencode.resume_strategy.forms.interactive_serve_attach]
+kind = "serve_attach"
+tokens = []
+tokens_v1 = ["opencode", "attach", "{serve_url}", "--session", "{session_id}"]
+tokens_v2 = ["opencode", "--server", "{serve_url}", "--session", "{session_id}"]
+boundary_major = 2
+password_env = "OPENCODE_SERVER_PASSWORD"
+
 [harness.opencode.resume_strategy.forms.headless_create]
 kind = "subcommand"
 tokens = ["opencode", "run"]
@@ -977,17 +994,18 @@ launch_flags = [
   "--verbose",
 ]
 resume = "native-session"
-# TRUE, and the seven-step restart journey is the evidence
-# (cli/tests/agents/test_thread_keeper_journey.py, journey wk-x61bc, first
-# green 2026-09-01 on pi 0.84.2): with the mux server AND fno-agents-daemon
+# TRUE, and the seven-step restart journey is the evidence (the retired
+# Python thread keeper journey, first green 2026-09-01 on pi 0.84.2; its
+# Rust successor is crates/fno-agents/tests/keeper_revival.rs): with the mux
+# server AND fno-agents-daemon
 # both SIGKILLed, the keeper-hosted child stayed alive under launchd with cwd
 # and session id unchanged, the restart sweep re-bound the same row (same
 # child pid, same socket, same session id), ~/.pi/agent/sessions gained no
 # file across the restart, and a second prompt answered from the first turn's
 # memory. The bit covers the lane dispatch resolves onto, which the lane-B
-# driver spawns and a keeper process hosts. The spawn arm shipped:
-# pi is in SPAWN_HARNESSES, dispatch_spawn has a pi branch, and the public
-# surface brings its own journey (cli/tests/agents/test_pi_spawn_journey.py).
+# driver spawns and a keeper process hosts. The spawn arm shipped: pi is in
+# the derived spawn roster (spawn/harness_roster.rs) and keeper_spawn.rs
+# carries its thread arm.
 autonomous_pane = false
 route_on_pane = false
 # pi, measured 2026-08-28, replacing the inherited value this row refused to
@@ -1158,11 +1176,121 @@ measured_by = { reader = "thread keeper journey", version = "0.84.2", date = "20
 # owner (pi_route) carries the user's model, effort and tool axes onto the
 # thread lane the same way the pane arm does.
 [harness.pi.keeper]
-once_refusal = "--once is not supported on the pi thread lane (it is persistent); pi has no one-shot lane - its headless stance is unmeasured"
+once_refusal = "--once is not supported on the pi thread lane (it is persistent); its one-shot lane is --substrate headless"
 carries = ["model", "effort", "tools", "deny_tools"]
 passthrough = ["*"]
 ready_marker = "(sub)"
 resume_refusal = "is not supported on the pi thread lane yet; the keeper row resumes by name (fno agents ask/resume <name>). Refusing rather than silently spawning a fresh session."
+
+# oh-my-pi (`omp`, npm @oh-my-pi/pi-coding-agent), a fork of earendil pi that
+# is now its own harness. Every value below is READ FROM SOURCE at
+# can1357/oh-my-pi origin/main d210c30657 (18.18.9, 2026-11-11), not from a
+# live run: no omp binary was on the measuring machine (omp needs bun
+# >= 1.4.4). Where omp differs from pi, the row says so:
+#   binary   `omp` (packages/coding-agent/package.json bin)
+#   store    ~/.omp/agent/sessions/<encoded cwd>/<ts>_<uuidv7>.jsonl
+#            (utils/src/dirs.ts CONFIG_DIR_NAME, session/session-paths.ts);
+#            line 1 is a fixed-width title slot, line 2 the session header
+#   identity omp mints a UUIDv7 (session-manager.ts mintSessionId) and takes
+#            none on the command line: there is no --session-id, and an
+#            unknown flag is a hard error (cli/args.ts reportUnrecognizedFlags)
+#   resume   `--resume <id-prefix|path>` (cli/flag-tables.ts OPTIONAL_FLAGS);
+#            a miss is "Session not found", never a create
+#   stop     the extension event `session_stop`, whose result takes the
+#            claude-shaped {decision: "block", reason} (shared-events.ts
+#            SessionStopEventResult). omp has no `agent_settled`.
+[harness.omp]
+mail_header_at = true
+# `--auto-approve`/`--yolo` and `--approval-mode always-ask|always-ask-cached|
+# write|yolo` (cli/args.ts, cli/flag-tables.ts). Unlike pi, omp ships an
+# approval surface, but `tools.approvalMode` defaults to yolo
+# (tools/settings.ts), so the headless lane passes no bypass of its own.
+permission_bypass = ["--auto-approve"]
+permission_modes = ["always-ask", "always-ask-cached", "write", "yolo"]
+# No efforts key: `--thinking` validates against a level list omp imports from
+# its ai package, which the measured tree does not carry.
+resume = "native-session"
+autonomous_pane = false
+route_on_pane = false
+# The shared footnote extension (cli/src/fno/setup/assets/pi/footnote.ts)
+# carries an omp arm: it answers `session_stop` with the gate's continuation
+# as {decision: "block", reason}. Installed by `fno config plugin install omp`
+# into ~/.omp/agent/extensions (discovery/builtin.ts reads <agent dir>/
+# extensions). No live session has fired it yet.
+loop_participation = "extension"
+loop_extension = "cli/src/fno/setup/assets/pi/footnote.ts"
+command_surface = "slash"
+slash_prefix = "skill:"
+native_verbs = []
+# No pane lane: omp's TUI has diverged from pi's by thousands of commits and
+# no screen was sampled, so no readiness rule is honest yet. zcode's row is
+# the precedent for a pane-less harness.
+ready_marker = "unsupported"
+ready_rule_ids = []
+manifest_rules = []
+send_keys_enter_delay_ms = 0
+submit_keys = ["enter"]
+stop_strategy = "registry-noop"
+remove_strategy = "registry-only"
+# omp mints the id and the `--print --mode json` stream prints the session
+# header first (modes/print-mode.ts), so a create turn reads its own id back.
+session_binding = { strategy = "callee-minted-read-back", required = true, timeout_ms = 60000 }
+
+[harness.omp.permission_response.allow_once]
+supported = false
+rule_ids = []
+keys = []
+
+[harness.omp.permission_response.allow_always]
+supported = false
+rule_ids = []
+keys = []
+
+[harness.omp.permission_response.deny]
+supported = false
+rule_ids = []
+keys = []
+
+[harness.omp.resume_strategy.forms.interactive_create]
+kind = "flag"
+tokens = ["omp"]
+
+[harness.omp.resume_strategy.forms.interactive_resume]
+kind = "session_flag"
+tokens = ["omp", "--resume", "{session_id}"]
+
+[harness.omp.resume_strategy.forms.interactive_attach]
+kind = "unsupported"
+tokens = []
+
+# A persisted create: the json stream's first line is the session header,
+# whose id the resume form below opens. The wired one-shot lane
+# (spawn/pi_ask.rs dispatch_pi_once) adds `--no-session` itself, the stateless
+# shape pi's headless lane runs.
+[harness.omp.resume_strategy.forms.headless_create]
+kind = "flag"
+tokens = ["omp", "--print", "--mode", "json"]
+
+[harness.omp.resume_strategy.forms.headless_resume]
+kind = "session_flag"
+tokens = ["omp", "--print", "--mode", "json", "--resume", "{session_id}"]
+
+[harness.omp.model_switch_strategy]
+kind = "unsupported"
+tokens = []
+effort_labels = {}
+status_command = ""
+status_pattern = ""
+
+[harness.omp.state_root_grant]
+pane = "unmeasured"
+thread = "unmeasured"
+headless = "unmeasured"
+
+# Wired (headless) but never run live, so the claim stays out of the derived
+# spawn roster until a measured turn earns `native`.
+[harness.omp.features.spawn]
+state = "unmeasured"
 
 [harness.cursor-agent]
 mail_header_at = true
@@ -2090,6 +2218,16 @@ via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agents/src/runtime
 state = "supported"
 via = ["cli/src/fno/setup/assets/pi/footnote.ts", "hooks/lead-postcompact-reinject.sh"]
 
+# omp loads the same extension (its omp arm, set by host detection). Wired in
+# code from omp's source event list; no live omp session has fired them yet.
+[harness.omp.hooks.lead_guard]
+state = "supported"
+via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agents/src/runtime/hook/lead_guard.rs"]
+
+[harness.omp.hooks.lead_reinject]
+state = "supported"
+via = ["cli/src/fno/setup/assets/pi/footnote.ts", "hooks/lead-postcompact-reinject.sh"]
+
 [harness.footnote.hooks.lead_guard]
 state = "supported"
 via = ["hooks/hooks.json", "hooks/lead-delegation-guard.sh", "crates/fno-agents/src/runtime/footnote_harness/mod.rs"]
@@ -2155,6 +2293,10 @@ state = "supported"
 via = ["cli/src/fno/setup/assets/opencode/footnote.js", "hooks/hooks.json"]
 
 [harness.pi.hooks.pretool_guards]
+state = "supported"
+via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agents/src/runtime/hook/pretool_host.rs"]
+
+[harness.omp.hooks.pretool_guards]
 state = "supported"
 via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agents/src/runtime/hook/pretool_host.rs"]
 
@@ -2251,6 +2393,16 @@ via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agents/src/runtime
 events = { UserPromptSubmit = "working", PreToolUse = "working", Stop = "done" }
 blocked = "none"
 
+[harness.omp.hooks.session_state]
+state = "supported"
+via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agents/src/runtime/hook/adapter/pi.rs", "crates/fno-agents/src/runtime/hook/session_state.rs"]
+
+# omp has a `tool_approval_requested` event, but the extension does not push
+# it yet, so blocked stays "none" as on pi.
+[harness.omp.hooks.session_state.wiring]
+events = { UserPromptSubmit = "working", PreToolUse = "working", Stop = "done" }
+blocked = "none"
+
 [harness.gemini.hooks.session_state]
 state = "missing"
 reason = "no session-state push for gemini (no fno hook registration; the per-harness report adapters land with the session-state push work)"
@@ -2294,6 +2446,10 @@ state = "supported"
 via = ["cli/src/fno/setup/assets/opencode/footnote.js", "crates/fno-agents/src/runtime/event_rules.rs"]
 
 [harness.pi.hooks.event_rules]
+state = "supported"
+via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agents/src/runtime/event_rules.rs"]
+
+[harness.omp.hooks.event_rules]
 state = "supported"
 via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agents/src/runtime/event_rules.rs"]
 
