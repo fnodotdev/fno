@@ -460,18 +460,19 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         let stripped = apply_tracker_backend_flag(&owned);
-        assert_eq!(stripped, ["get", "x-abc".to_string()]);
+        assert_eq!(stripped, vec!["get", "x-abc"]);
         assert_eq!(
             std::env::var("FNO_TRACKER_BACKEND").as_deref(),
             Ok("github")
         );
-        // graph pins the default: an inherited external env is removed.
+        // graph lands in the env tier too, so it pins the built-in store
+        // over an inherited env value or a config key.
         let owned: Vec<String> = ["--tracker-backend", "graph", "get", "x-abc"]
             .iter()
             .map(|s| s.to_string())
             .collect();
         let stripped = apply_tracker_backend_flag(&owned);
-        assert_eq!(stripped, ["get", "x-abc".to_string()]);
+        assert_eq!(stripped, vec!["get", "x-abc"]);
         assert_eq!(std::env::var("FNO_TRACKER_BACKEND").as_deref(), Ok("graph"));
         std::env::remove_var("FNO_TRACKER_BACKEND");
     }
