@@ -63,7 +63,7 @@ while [[ $# -gt 0 ]]; do
         --write-baseline) WRITE=1; shift ;;
         --extract) EXTRACT_SRC="$2"; EXTRACT_CRATE="$3"; shift 3 ;;
         --hits-file) HITS_FILE="$2"; shift 2 ;;
-        -h|--help) sed -n '2,45p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,46p' "$0"; exit 0 ;;
         *) CRATES+=("$1"); shift ;;
     esac
 done
