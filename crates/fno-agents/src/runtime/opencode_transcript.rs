@@ -789,7 +789,12 @@ mod tests {
             .map(|s| s.session_id.clone())
             .collect();
         assert_eq!(ids, vec!["ses_fresh".to_string()]);
-        let raw = src.read(&src.sessions(1)[0]);
+        let fresh = src
+            .sessions(1)
+            .into_iter()
+            .next()
+            .expect("the fresh session lists");
+        let raw = src.read(&fresh);
         assert!(
             raw.contains("v2 real-schema control"),
             "user text renders: {raw}"
