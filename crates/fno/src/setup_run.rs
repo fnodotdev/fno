@@ -382,9 +382,9 @@ pub const STEPS: &[Step] = &[
     Step {
         id: "permission-rules",
         layer: Layer::Global,
-        kind: Kind::Report,
-        question: "Show the narrow allow rules to add by hand?",
-        effect: "prints the Bash(fno:*) permissions.allow example; never edits a harness settings file",
+        kind: Kind::Approve,
+        question: "Write fno's must-enable allow rules into each harness found?",
+        effect: "appends fno's narrow Bash allow rules to Claude Code permissions.allow, writes ~/.codex/rules/fno.rules (restart codex), and puts fno's rules first in the global opencode config so your own rules win; never touches autoMode, deny or ask",
     },
     Step {
         id: "claude-auto-mode",
@@ -1340,13 +1340,48 @@ fn step_machine_tools(rep: &mut Report) {
     }
 }
 
-/// The narrow harness allow rules, printed never written: a settings file
-/// belongs to its harness and its person.
+/// fno's must-enable rules, written into each harness whose config home
+/// exists. The approve gate means this runs only on an explicit --only.
 fn step_permission_rules(rep: &mut Report) {
-    rep.skipped.push(
-        "permission-rules: add \"Bash(fno:*)\" to permissions.allow in your harness settings by hand"
-            .into(),
-    );
+    use crate::must_enable::{install, shipped, target, Harness, Outcome};
+    let list = shipped();
+    let mut found = false;
+    for h in [Harness::Claude, Harness::Codex, Harness::Opencode] {
+        let Some(path) = target(h) else { continue };
+        found = true;
+        let name = h.name();
+        match install(h, &list, &path) {
+            Outcome::Wrote => {
+                rep.done.push(format!(
+                    "permission-rules: wrote {name} rules to {}",
+                    path.display()
+                ));
+                rep.paths.push(path.display().to_string());
+                if h == Harness::Codex {
+                    rep.done
+                        .push("permission-rules: restart codex; it reads rules at startup".into());
+                    rep.restart_needed = true;
+                }
+            }
+            Outcome::AlreadyPresent => rep
+                .skipped
+                .push(format!("permission-rules: {name} rules already present")),
+            Outcome::KeptEdit => rep.skipped.push(format!(
+                "permission-rules: {} differs from the shipped list; your edit stays",
+                path.display()
+            )),
+            Outcome::Refused(why) => {
+                let message = format!("permission-rules: {}: {why}", path.display());
+                rep.rows
+                    .push(row("needs_human", "config_set_refused", message.clone()));
+                rep.needs_human.push(message);
+            }
+        }
+    }
+    if !found {
+        rep.skipped
+            .push("permission-rules: no Claude Code, codex or opencode config home found".into());
+    }
 }
 
 fn step_claude_auto_mode(rep: &mut Report) {
@@ -1646,6 +1681,27 @@ fn compute_proposals(
                     crate::cli_hooks::claude_auto_mode_allow_status(settings),
                     Ok(false)
                 ) {
+                    proposed.push(Proposal {
+                        id: step.id,
+                        key: String::new(),
+                        value: String::new(),
+                        scope: layer_name(step.layer),
+                        reason: format!(
+                            "{}; apply with `fno config setup run --only {}` after explicit approval",
+                            step.effect, step.id
+                        ),
+                        source: "default",
+                    });
+                }
+            }
+            "permission-rules" => {
+                use crate::must_enable::{shipped, status, target, Harness};
+                let list = shipped();
+                let owed = [Harness::Claude, Harness::Codex, Harness::Opencode]
+                    .into_iter()
+                    .filter_map(|h| target(h).map(|p| status(h, &list, Some(p.as_path()))))
+                    .any(|s| s.status == "missing");
+                if owed {
                     proposed.push(Proposal {
                         id: step.id,
                         key: String::new(),
