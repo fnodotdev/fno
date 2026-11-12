@@ -17,8 +17,8 @@ use fno::proto::{AgentRow, Command};
 
 pub const WIDTH: f32 = 260.0;
 /// The agents shown before a "+N more" row, so the sections below stay above
-/// the fold.
-pub const AGENTS_SHOWN: usize = 8;
+/// the fold. Six keeps every section header in the default 1360x800 window.
+pub const AGENTS_SHOWN: usize = 6;
 
 /// What a row says about "where I am". Only the focused agent carries the
 /// cursor; the active session and the local machine carry a quiet word.
