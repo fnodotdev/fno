@@ -10,6 +10,9 @@ struct Fake {
     late_checks: Option<String>,
     late_pr_hold: Option<ProbeOutcome>,
     late_decline: Option<PathBuf>,
+    /// Every look request the gate routed, as (pr, detail): a paint PR that
+    /// merged with no recorded look must owe the lead exactly one.
+    look_requests: RefCell<Vec<(u64, String)>>,
     facts: Option<PrFacts>,
     facts_after_effect: Option<PrFacts>,
     facts_error: Option<String>,
@@ -421,6 +424,12 @@ impl Probes for Fake {
             *held = None;
             *self.slot_retested.borrow_mut() = false;
         }
+    }
+    fn look_request(&self, _cwd: &Path, facts: &PrFacts, detail: &str) -> bool {
+        self.look_requests
+            .borrow_mut()
+            .push((facts.number, detail.to_string()));
+        true
     }
     fn slot_retested(&self, _cwd: &Path, _base_ref: &str, pr: u64) -> bool {
         *self.slot.borrow() == Some(pr) && *self.slot_retested.borrow()
@@ -1274,7 +1283,9 @@ fn ci_base_freshness_gates_the_chain() {
         .warnings()
         .iter()
         .any(|w| w.code == "ci_base_unreadable" && w.detail.contains("gh unavailable")));
-    assert!(!fake.gh_calls.borrow().is_empty());
+    // No paint surface in play: the warning never rides, so the merge owes
+    // the lead no look request.
+    assert!(fake.look_requests.borrow().is_empty());
     assert!(fake.take_slot_calls.borrow().is_empty());
     assert!(preview_blockers(&fake, &preview_request(7)).is_empty());
     assert_eq!(
@@ -2642,7 +2653,7 @@ fn a_url_less_row_never_steals_a_bind_and_bare_ties_refuse() {
 }
 
 #[test]
-fn a_paint_pr_holds_until_an_answered_page_names_it() {
+fn a_paint_pr_merges_on_a_missing_look_and_holds_on_a_declined_page() {
     let tmp = std::env::temp_dir().join(format!("xc129-gate-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(tmp.join(".fno")).unwrap();
@@ -2690,6 +2701,33 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
         "{}",
         held.detail
     );
+    // The verdict is warning evidence: no look record anywhere, so the
+    // merge lands and the warning routes to the lead as a look request.
+    {
+        fake.facts = Some(PrFacts {
+            head_sha: head.clone(),
+            ..open_facts()
+        });
+        let req = Request {
+            cwd: tmp.clone(),
+            covered_head: Some(head.clone()),
+            ..request(Effect::Merge)
+        };
+        let outcome = run(&fake, &req);
+        assert_eq!(outcome.word(), "merged", "{outcome:?}");
+        assert!(outcome
+            .warnings()
+            .iter()
+            .any(|w| w.code == "visual_approval" && w.detail.contains("no recorded look")));
+        let requests = fake.look_requests.borrow();
+        assert_eq!(requests.len(), 1, "{requests:?}");
+        drop(requests);
+        // Reset the stage: the declined-page section below asserts that no
+        // merge and no look request happen while a decline names the head.
+        fake.look_requests.borrow_mut().clear();
+        fake.gh_calls.borrow_mut().clear();
+        fake.facts = None;
+    }
     // An OPEN page naming the PR never clears the hold.
     let qdir = crate::escalation::questions_dir(&tmp);
     std::fs::create_dir_all(&qdir).unwrap();
@@ -2732,12 +2770,24 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
         ..open_facts()
     });
     req.covered_head = Some(next_head);
+    // The declined look was withdrawn with the page and no look names the
+    // new head, so the outcome rides the paint warning and merges; the
+    // warning routes to the lead as exactly one look request.
     let outcome = run(&fake, &req);
     assert_eq!(outcome.word(), "merged", "{outcome:?}");
     assert!(outcome
         .warnings()
         .iter()
-        .any(|warning| warning.code == "visual_approval"));
+        .any(|w| w.code == "visual_approval" && w.detail.contains("no recorded look")));
+    let requests = fake.look_requests.borrow();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    let (requested_pr, requested_detail) = requests.first().expect("one look request");
+    assert_eq!(*requested_pr, 7);
+    assert!(
+        requested_detail.contains("no recorded look"),
+        "{requested_detail}"
+    );
+    drop(requests);
     fake.facts = None;
     std::fs::write(
         &page,
