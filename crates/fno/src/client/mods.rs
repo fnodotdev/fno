@@ -1,4 +1,4 @@
-//! The settings modal's Extensions tab: the mods and layouts installed
+//! The settings modal's Mods tab: the mods and layouts installed
 //! packs declare, each with its switch, its summary, its preview and its
 //! recipe, plus an install row and the published gallery.
 //!
@@ -23,7 +23,7 @@ const MAX_URL: usize = 512;
 const PLACEHOLDER: &str = "https://github.com/owner/repo";
 const REREAD: Duration = Duration::from_secs(3);
 
-/// A row action on the Extensions page.
+/// A row action on the Mods page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Act {
     /// Switch `pack/id` to the carried state.
@@ -70,7 +70,7 @@ pub(crate) enum GalleryState {
 
 /// The page state: the last reads, the open URL field and an armed confirm.
 #[derive(Debug, Default)]
-pub(crate) struct Extensions {
+pub(crate) struct Mods {
     /// `(pack id, component)` pairs, or the failed read's notice.
     pub(crate) installed: Option<Result<Vec<(String, Component)>, ReadFailed>>,
     pub(crate) gallery: GalleryState,
@@ -101,7 +101,7 @@ pub(super) fn snapshot_seam(view: &mut View, gallery: bool, confirm: bool) {
              "summary": "Open PR checks"}],
          "layouts": [{"id": "focus", "title": "Focus", "enabled": false,
              "summary": "Board left, one agent right"}]}]}"#;
-    let page = &mut view.extensions;
+    let page = &mut view.mods;
     page.installed = Some(parse_installed(Ok(listing.to_vec())));
     page.last_read = Some(Instant::now());
     page.gallery = if gallery {
@@ -128,24 +128,24 @@ pub(super) fn snapshot_seam(view: &mut View, gallery: bool, confirm: bool) {
         GalleryState::Idle
     };
     page.confirm = confirm.then(|| "demo-clock/clock".to_string());
-    view.settings_tab = SettingsTab::Extensions;
+    view.settings_tab = SettingsTab::Mods;
 }
 
 /// The tab came into focus: the next tick reads the installed rows off the
 /// loop, and the last rows stay painted until that read lands.
 pub(super) fn refresh(view: &mut View) {
-    view.extensions.last_read = None;
+    view.mods.last_read = None;
 }
 
 fn tab_open(view: &View) -> bool {
-    settings_modal::is_settings(view) && view.settings_tab == SettingsTab::Extensions
+    settings_modal::is_settings(view) && view.settings_tab == SettingsTab::Mods
 }
 
 /// Start the reads the page owes, off the loop: the installed list while
 /// the tab is open, and the gallery once it is asked for.
 pub(super) fn kick(view: &mut View, tx: &OrgTx) {
     let open = tab_open(view);
-    let page = &mut view.extensions;
+    let page = &mut view.mods;
     let due = page.last_read.is_none_or(|at| at.elapsed() >= REREAD);
     if open && due && !page.reading {
         page.reading = true;
@@ -155,7 +155,7 @@ pub(super) fn kick(view: &mut View, tx: &OrgTx) {
             let read = tokio::task::spawn_blocking(|| feed::fno_json(&feed::LS))
                 .await
                 .unwrap_or_else(|e| Err(ReadFailed(e.to_string())));
-            let _ = tx.send((0, OrgMsg::Extensions(Landed::Installed(read))));
+            let _ = tx.send((0, OrgMsg::Mods(Landed::Installed(read))));
         });
     }
     if let Some(ask) = page.pane.take() {
@@ -168,7 +168,7 @@ pub(super) fn kick(view: &mut View, tx: &OrgTx) {
             })
             .await
             .unwrap_or_else(|e| Err(ReadFailed(e.to_string())));
-            let _ = tx.send((0, OrgMsg::Extensions(Landed::Paned(what, done))));
+            let _ = tx.send((0, OrgMsg::Mods(Landed::Paned(what, done))));
         });
     }
     if page.gallery == GalleryState::Wanted {
@@ -178,7 +178,7 @@ pub(super) fn kick(view: &mut View, tx: &OrgTx) {
             let read = tokio::task::spawn_blocking(feed::read_gallery)
                 .await
                 .unwrap_or_else(|e| Err(ReadFailed(e.to_string())));
-            let _ = tx.send((0, OrgMsg::Extensions(Landed::Gallery(read))));
+            let _ = tx.send((0, OrgMsg::Mods(Landed::Gallery(read))));
         });
     }
 }
@@ -187,10 +187,10 @@ pub(super) fn kick(view: &mut View, tx: &OrgTx) {
 pub(super) fn apply(view: &mut View, landed: Landed) {
     match landed {
         Landed::Installed(read) => {
-            view.extensions.reading = false;
-            view.extensions.installed = Some(parse_installed(read));
+            view.mods.reading = false;
+            view.mods.installed = Some(parse_installed(read));
         }
-        Landed::Gallery(read) => view.extensions.gallery = GalleryState::Done(read),
+        Landed::Gallery(read) => view.mods.gallery = GalleryState::Done(read),
         Landed::Paned(what, done) => view.set_notice(match done {
             Ok(()) => format!("{what} opened in a pane"),
             Err(e) => e.0,
@@ -213,7 +213,7 @@ fn entry(glyph: &str, label: String, hint: &str, enabled: bool) -> PopupRow {
 /// The page rows and their actions. Only enabled entries take an action:
 /// the popup selects among targets, so inert rows carry none.
 pub(super) fn rows(view: &View) -> (Vec<PopupRow>, Vec<AuxAction>) {
-    let page = &view.extensions;
+    let page = &view.mods;
     let mut rows = Vec::new();
     let mut actions = Vec::new();
     let inert = |label: String| entry(" ", label, "", false);
@@ -248,7 +248,7 @@ pub(super) fn rows(view: &View) -> (Vec<PopupRow>, Vec<AuxAction>) {
                 rows.push(inert(format!("From commit {short}")));
             }
             rows.push(entry("!", "Turn it on and let it run".into(), "", true));
-            actions.push(AuxAction::Extension(Act::Confirm(target.clone())));
+            actions.push(AuxAction::Mod(Act::Confirm(target.clone())));
             return (rows, actions);
         }
     }
@@ -277,34 +277,31 @@ pub(super) fn rows(view: &View) -> (Vec<PopupRow>, Vec<AuxAction>) {
                         hint,
                         true,
                     ));
-                    actions.push(AuxAction::Extension(Act::Switch(
-                        target.clone(),
-                        !c.enabled,
-                    )));
+                    actions.push(AuxAction::Mod(Act::Switch(target.clone(), !c.enabled)));
                 }
                 if !c.summary.is_empty() {
                     rows.push(inert(format!("  {}", c.summary)));
                 }
                 if c.enabled && (c.kind == "feed" || c.kind == "run") {
                     rows.push(entry(" ", "  Open in a pane".into(), "", true));
-                    actions.push(AuxAction::Extension(Act::Show(target)));
+                    actions.push(AuxAction::Mod(Act::Show(target)));
                 }
                 for (word, path) in [("Preview", &c.preview), ("Recipe", &c.recipe)] {
                     if !path.is_empty() {
                         rows.push(entry(" ", format!("  {word}"), "", true));
-                        actions.push(AuxAction::Extension(Act::Open(path.clone())));
+                        actions.push(AuxAction::Mod(Act::Open(path.clone())));
                     }
                 }
             }
         }
     }
     rows.push(entry("+", "Install from URL".into(), "", true));
-    actions.push(AuxAction::Extension(Act::Install));
+    actions.push(AuxAction::Mod(Act::Install));
     rows.push(PopupRow::Header("gallery".into()));
     match &page.gallery {
         GalleryState::Idle => {
             rows.push(entry("›", "Browse published packs".into(), "", true));
-            actions.push(AuxAction::Extension(Act::Browse));
+            actions.push(AuxAction::Mod(Act::Browse));
         }
         GalleryState::Wanted | GalleryState::Reading => {
             rows.push(inert("Reading the gallery".into()))
@@ -326,7 +323,7 @@ pub(super) fn rows(view: &View) -> (Vec<PopupRow>, Vec<AuxAction>) {
                     hint,
                     true,
                 ));
-                actions.push(AuxAction::Extension(Act::Pick(p.install.clone())));
+                actions.push(AuxAction::Mod(Act::Pick(p.install.clone())));
                 if !p.description.is_empty() {
                     rows.push(inert(format!("  {}", p.description)));
                 }
@@ -339,20 +336,20 @@ pub(super) fn rows(view: &View) -> (Vec<PopupRow>, Vec<AuxAction>) {
 /// Escape: close the URL field first. An armed confirm stays until a second
 /// Escape. True when one was open.
 pub(super) fn cancel_url(view: &mut View) -> bool {
-    let page = &mut view.extensions;
+    let page = &mut view.mods;
     page.url.take().is_some() || page.confirm.take().is_some()
 }
 
 /// Leaving the tab drops the URL field and the armed confirm together.
 pub(super) fn reset(view: &mut View) {
-    let page = &mut view.extensions;
+    let page = &mut view.mods;
     page.url = None;
     page.confirm = None;
 }
 
 /// Queue a pane beside the focused one; `kick` runs it off the loop.
 fn queue_pane(view: &mut View, args: Vec<String>, what: String) {
-    view.extensions.pane = Some(PaneAsk {
+    view.mods.pane = Some(PaneAsk {
         args,
         what,
         anchor: view.layout.focus,
@@ -368,7 +365,7 @@ pub(super) fn submit(view: &mut View, url: String) -> bool {
         view.set_notice("Type a git URL".into());
         return false;
     }
-    view.extensions.url = None;
+    view.mods.url = None;
     queue_pane(
         view,
         vec!["install".into(), url.clone()],
@@ -396,32 +393,32 @@ fn switch(view: &mut View, target: &str, on: bool) {
 pub(crate) fn act(view: &mut View, act: Act) {
     match act {
         Act::Switch(target, on) => {
-            let code = matches!(&view.extensions.installed, Some(Ok(list))
+            let code = matches!(&view.mods.installed, Some(Ok(list))
                 if list.iter().any(|(p, c)| format!("{p}/{}", c.id) == target && c.runs_code));
             if on && code {
-                view.extensions.confirm = Some(target);
+                view.mods.confirm = Some(target);
             } else {
                 switch(view, &target, on);
             }
         }
         Act::Confirm(target) => {
-            view.extensions.confirm = None;
+            view.mods.confirm = None;
             switch(view, &target, true);
         }
         Act::Pick(install) => {
             let url = install.rsplit(' ').next().unwrap_or_default();
-            view.extensions.url = Some(InputField::new(PLACEHOLDER, MAX_URL).with_text(url));
+            view.mods.url = Some(InputField::new(PLACEHOLDER, MAX_URL).with_text(url));
         }
         Act::Open(_) => {}
         Act::Show(target) => {
             queue_pane(view, vec!["open".into(), target.clone()], target);
         }
         Act::Install => {
-            if view.extensions.url.is_none() {
-                view.extensions.url = Some(InputField::new(PLACEHOLDER, MAX_URL));
+            if view.mods.url.is_none() {
+                view.mods.url = Some(InputField::new(PLACEHOLDER, MAX_URL));
             }
         }
-        Act::Browse => view.extensions.gallery = GalleryState::Wanted,
+        Act::Browse => view.mods.gallery = GalleryState::Wanted,
     }
     view.reopen_settings_keeping_sel();
 }

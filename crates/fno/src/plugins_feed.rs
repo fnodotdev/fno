@@ -1,5 +1,5 @@
 //! The `fno config plugins` feeds both hosts read: the mux settings tab and
-//! the desktop app's Extensions view. One parser, one door to the `fno`
+//! the desktop app's Mods view. One parser, one door to the `fno`
 //! front door, one pane launcher, so the two hosts show one list and the
 //! consent prompt stays the CLI's.
 
