@@ -66,16 +66,17 @@ jobs:
 
       - name: Assemble fno-app.app
         shell: bash
-        env:
-          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          version="${VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' crates/fno/Cargo.toml | head -1)}"
+          # Read the cargo-form version sync-version.sh stamped, never the
+          # PEP 440 input: 0.4.0rc1 in the plist would not equal 0.4.0-rc.1.
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' crates/fno/Cargo.toml | head -1)"
           git fetch --depth=1 origin "${{ github.sha }}"
-          for f in scripts/release/build-app-bundle.sh crates/fno-app/macos/Info.plist.in; do
+          for f in scripts/release/build-app-bundle.sh crates/fno-app/macos/Info.plist.in tests/test_build_app_bundle.sh; do
             mkdir -p "$(dirname "$f")"
             git show "${{ github.sha }}:$f" > "$f"
           done
+          bash tests/test_build_app_bundle.sh
           bash scripts/release/build-app-bundle.sh crates/fno-app/target/release/fno-app "$version" "$PWD"
 
       - name: Check macOS signing secrets
