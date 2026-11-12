@@ -195,9 +195,33 @@ fn block_rows() {
         ],
     });
     let out = merge_blocker(&probes, &payload);
-    assert_eq!(out["blockers"], json!(["github_blocked"]));
-    // Every required context passed, so the rules read explains nothing.
+    // Every required context passed, so the rules read explains nothing and
+    // names no unsatisfied rule. A hold the gate's own successful read
+    // cannot name must not stand: GitHub enforces its own rules at merge
+    // time, and the block only stranded a green PR beside a CLEAN state
+    // (2026-11-11: three merge holds, 51 of 51 checks passing).
+    assert_eq!(out["blockers"], json!([]));
     assert!(out["missing_required_checks"].is_null());
+    assert!(out["source"]
+        .as_str()
+        .map(|s| s.contains("no unsatisfied"))
+        .unwrap_or(false));
+
+    // A satisfied review requirement reads the same way: APPROVED beside a
+    // blocked state is the same stale-or-unmodeled story, never a hold.
+    let probes = FakeGh {
+        ok: true,
+        output: rules_output(json!([
+            {"type": "pull_request", "parameters": {"required_approving_review_count": 1}},
+        ])),
+        review_decision: "APPROVED".to_string(),
+        calls: RefCell::new(Vec::new()),
+    };
+    let out = merge_blocker(
+        &probes,
+        &json!({"merge_state": "blocked", "base_ref": "main", "cwd": "/repo", "pr": 1}),
+    );
+    assert_eq!(out["blockers"], json!([]));
 
     let probes = FakeGh {
         ok: true,
