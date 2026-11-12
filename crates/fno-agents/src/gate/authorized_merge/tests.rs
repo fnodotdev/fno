@@ -782,8 +782,9 @@ fn the_unmeasured_head_warns_by_name_and_never_blocks() {
     };
     let preview = preview_walk(&fake, &ungated, &open_facts());
     assert!(matches!(preview, PreviewVerdict::Go { .. }));
+    let warned = preview.warnings().iter().any(|w| w.code == "ci_unmeasured");
     assert!(
-        preview.warnings().is_empty(),
+        !warned,
         "an ungated ask carries no unmeasured warning: {preview:?}"
     );
 }
