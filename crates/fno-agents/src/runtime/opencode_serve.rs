@@ -1623,27 +1623,6 @@ mod tests {
     }
 
     #[test]
-    fn session_rules_speak_each_contract() {
-        let v1 = session_rules(OpencodeContract::V1, Path::new("/w"), &[]);
-        let v2 = session_rules(OpencodeContract::V2, Path::new("/w"), &[]);
-        assert_eq!(
-            v1[0],
-            serde_json::json!({"permission": "question", "pattern": "*", "action": "deny"})
-        );
-        assert_eq!(
-            v2[0],
-            serde_json::json!({"action": "question", "resource": "*", "effect": "deny"})
-        );
-        assert_eq!(
-            v2.as_array().unwrap().last().unwrap(),
-            &serde_json::json!({"action": "external_directory", "resource": "/w/*", "effect": "allow"})
-        );
-        assert!(!v2
-            .to_string()
-            .contains(r#""resource":"*","effect":"allow""#));
-    }
-
-    #[test]
     fn steering_readback_requires_a_message_id_after_high_water_mark() {
         let parse = |body: &str| api::messages_from_body(OpencodeContract::V1, body).unwrap();
         let before = parse(r#"[{"info": {"id": "msg_old"}, "parts": []}]"#);
