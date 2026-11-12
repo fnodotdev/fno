@@ -11,6 +11,7 @@ use crate::provenance::{
     claude_shaped_tool_uses, claude_shaped_turns, in_roots, within_window, SessionFile,
     TranscriptSource, Turn,
 };
+use crate::session_truth::V2AssistantPart;
 use rusqlite::{OpenFlags, OptionalExtension};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -401,6 +402,8 @@ struct V2RenderMsg {
     time: V2RenderTime,
     #[serde(default)]
     text: Option<String>,
+    #[serde(default)]
+    content: Vec<Value>,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -436,16 +439,33 @@ fn render_v2_message(
         }
     }
     if mtype == "assistant" {
-        for (_ordinal, ptype, _pdata) in &parts {
-            if ptype == "tool" {
-                let row = serde_json::json!({
-                    "type": "assistant",
-                    "message": {"content": [{"type": "tool_use"}]},
-                });
-                push_row(out, &row);
+        // Real stores keep the content items inline in the message row;
+        // part rows are the alternative shape. Prefer part rows.
+        if parts.iter().any(|(_, ptype, _)| ptype == "tool") {
+            for (_, ptype, _) in &parts {
+                if ptype == "tool" {
+                    push_v2_tool_row(out);
+                }
+            }
+        } else {
+            for item in &msg.content {
+                if let Ok(V2AssistantPart::Tool { .. }) =
+                    serde_json::from_value::<V2AssistantPart>(item.clone())
+                {
+                    push_v2_tool_row(out);
+                }
             }
         }
     }
+}
+
+/// The coarse assistant tool row the peek window renders per tool item.
+fn push_v2_tool_row(out: &mut String) {
+    let row = serde_json::json!({
+        "type": "assistant",
+        "message": {"content": [{"type": "tool_use"}]},
+    });
+    push_row(out, &row);
 }
 
 pub(crate) fn push_row(out: &mut String, row: &Value) {
@@ -689,7 +709,8 @@ mod tests {
     /// real-schema control, against a store whose reader-touched columns
     /// mirror upstream's `session_v2` family DDL.
     fn v2_store(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("fno-opencode-v2-{tag}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("fno-opencode-v2-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let db = dir.join("opencode.db");
@@ -730,6 +751,28 @@ mod tests {
             ],
         )
         .unwrap();
+        // The inline shape: real stores keep the tool items on the message
+        // row and never write session_part.
+        conn.execute(
+            "INSERT INTO session_v2 (id, parent_id, directory, time_updated) VALUES ('ses_v2b', NULL, '/fixture/v2', ?1)",
+            rusqlite::params![NOW_MS - 1000],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES \
+             ('vm1b', 'ses_v2b', 'user', 1, ?1, ?1, ?2)",
+            rusqlite::params![NOW_MS - 1000, r#"{"text":"v2 inline control"}"#],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES \
+             ('vm2b', 'ses_v2b', 'assistant', 2, ?1, ?1, ?2)",
+            rusqlite::params![
+                NOW_MS - 1000,
+                r#"{"time":{"created":2,"completed":3},"content":[{"type":"tool","name":"bash","state":{"status":"completed","input":{}}},{"type":"text","text":"done"}]}"#
+            ],
+        )
+        .unwrap();
         db
     }
 
@@ -752,10 +795,28 @@ mod tests {
             "user text renders: {raw}"
         );
         assert_eq!(src.tool_uses(&raw), 1, "tool part renders");
+        let inline = src
+            .sessions(2)
+            .into_iter()
+            .find(|s| s.session_id == "ses_v2b")
+            .expect("the inline session lists");
+        let raw_inline = src.read(&inline);
+        assert!(
+            raw_inline.contains("v2 inline control"),
+            "inline user text renders: {raw_inline}"
+        );
+        assert_eq!(
+            src.tool_uses(&raw_inline),
+            1,
+            "inline content renders the tool"
+        );
         {
             let conn = Connection::open(&db).unwrap();
-            conn.execute("DELETE FROM session_v2 WHERE id = 'ses_fresh'", [])
-                .unwrap();
+            conn.execute(
+                "DELETE FROM session_v2 WHERE id IN ('ses_fresh', 'ses_v2b')",
+                [],
+            )
+            .unwrap();
         }
         assert!(src.sessions(1).is_empty());
         let _ = std::fs::remove_dir_all(db.parent().unwrap());

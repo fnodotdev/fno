@@ -302,8 +302,12 @@ pub(crate) fn opencode_readings(db: &Path, session_id: &str) -> HarnessReadings 
         out.harness_version = Reading::unmeasured(reason);
         return out;
     };
+    let is_v2 = crate::opencode_transcript::store_family(&conn) == Some(true);
     let session = conn.query_row(
-        "SELECT model, version, time_updated FROM session WHERE id = ?1",
+        &format!(
+            "SELECT model, version, time_updated FROM {} WHERE id = ?1",
+            if is_v2 { "session_v2" } else { "session" }
+        ),
         [session_id],
         |row| {
             Ok((
@@ -314,12 +318,27 @@ pub(crate) fn opencode_readings(db: &Path, session_id: &str) -> HarnessReadings 
         },
     );
     if let Ok((model, version, updated)) = session {
-        if let Some(model) = model.filter(|m| !m.is_empty()) {
+        let model = model
+            .filter(|m| !m.is_empty())
+            .map(|m| {
+                if !is_v2 {
+                    return m;
+                }
+                serde_json::from_str::<V2SessionModel>(&m)
+                    .ok()
+                    .filter(|r| !r.id.is_empty() && !r.provider_id.is_empty())
+                    .map(|r| format!("{}/{}", r.provider_id, r.id))
+                    .unwrap_or(m)
+            });
+        if let Some(model) = model {
             out.model = Reading::observed(model, ms_stamp(updated));
         }
         if let Some(version) = version.filter(|v| !v.is_empty()) {
             out.harness_version = Reading::observed(version, ms_stamp(updated));
         }
+    }
+    if is_v2 {
+        return opencode_readings_v2(&conn, session_id, out);
     }
     let Ok(mut stmt) = conn.prepare(
         "SELECT data, time_created FROM message WHERE session_id = ?1 AND data LIKE '%assistant%' ORDER BY time_created DESC LIMIT 20",
@@ -347,6 +366,73 @@ pub(crate) fn opencode_readings(db: &Path, session_id: &str) -> HarnessReadings 
             }
             break;
         }
+    }
+    out
+}
+
+/// The 2.x session row's model column, typed at the boundary.
+#[derive(serde::Deserialize)]
+struct V2SessionModel {
+    #[serde(default)]
+    id: String,
+    #[serde(rename = "providerID", default)]
+    provider_id: String,
+}
+
+/// The 2.x assistant message's model fields, typed at the boundary.
+#[derive(serde::Deserialize)]
+struct V2AssistantModel {
+    #[serde(default)]
+    model: Option<V2ModelId>,
+}
+
+#[derive(serde::Deserialize)]
+struct V2ModelId {
+    #[serde(default)]
+    id: String,
+    #[serde(rename = "providerID", default)]
+    provider_id: String,
+    #[serde(default)]
+    variant: Option<String>,
+}
+
+/// The 2.x facts: the newest assistant messages carry a model object with
+/// the id, the provider and the variant.
+fn opencode_readings_v2(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    mut out: HarnessReadings,
+) -> HarnessReadings {
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT data, time_created FROM session_message \
+         WHERE session_id = ?1 AND type = 'assistant' ORDER BY seq DESC LIMIT 20",
+    ) else {
+        return out;
+    };
+    let Ok(rows) = stmt.query_map([session_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+    }) else {
+        return out;
+    };
+    for (row, created) in rows.into_iter().flatten() {
+        let Ok(msg) = serde_json::from_str::<V2AssistantModel>(&row) else {
+            continue;
+        };
+        let Some(m) = msg.model else {
+            continue;
+        };
+        if m.id.is_empty() {
+            continue;
+        }
+        let at = ms_stamp(created);
+        out.model = Reading::observed(m.id.clone(), at.clone());
+        if !m.provider_id.is_empty() {
+            out.provider = Reading::observed(m.provider_id.clone(), at.clone());
+        }
+        if let Some(variant) = m.variant.filter(|v| !v.is_empty()) {
+            out.effort = Reading::observed(variant, at);
+        }
+        break;
     }
     out
 }

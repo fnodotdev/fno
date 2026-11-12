@@ -196,10 +196,16 @@ struct V2TextData {
     text: String,
 }
 
+/// The 2.x assistant message: its completion time gates its text, and its
+/// content list carries the reasoning/text/tool items. Real stores keep the
+/// items inline in the message row; the session_part leg exists for the
+/// schema shape.
 #[derive(Deserialize)]
-struct V2AssistantData {
+struct V2AssistantMsg {
     #[serde(default)]
     time: Option<V2MsgTime>,
+    #[serde(default)]
+    content: Vec<Value>,
 }
 
 #[derive(Deserialize)]
@@ -535,15 +541,62 @@ fn map_v2_row(row: &V2Row) -> (Vec<ChatBody>, bool) {
     ) else {
         return (Vec::new(), true);
     };
-    let part_ref = format!("{}:{ordinal}", row.message_id);
     let Ok(part) = serde_json::from_str::<V2Part>(part_data) else {
         return (vec![unknown_part(part_data)], true);
     };
+    let parent_done = parent_completed(row);
+    map_v2_part(&row.message_id, ordinal, part, parent_done)
+}
+
+/// Map one parsed 2.x content item (a session_part row's data, or an entry
+/// of an assistant message's inline content list) to bodies plus finality,
+/// mirroring `map_part`'s contract: a part that is not final maps to a
+/// prefix of what it maps to once final. `parent_done` gates text, whose
+/// own row never carries a completion, and closes out a tool the parent
+/// outlived: the turn ended, so a tool still streaming or running ended
+/// with it, as an error with whatever output it had.
+fn map_v2_part(
+    message_id: &str,
+    ordinal: i64,
+    part: V2Part,
+    parent_done: bool,
+) -> (Vec<ChatBody>, bool) {
+    let part = match part {
+        V2Part::Tool {
+            id,
+            name,
+            state: V2ToolState::Streaming { input },
+        } if parent_done => V2Part::Tool {
+            id,
+            name,
+            state: V2ToolState::Error {
+                input,
+                error: Value::Null,
+                content: Vec::new(),
+                metadata: None,
+            },
+        },
+        V2Part::Tool {
+            id,
+            name,
+            state: V2ToolState::Running { input, metadata },
+        } if parent_done => V2Part::Tool {
+            id,
+            name,
+            state: V2ToolState::Error {
+                input,
+                error: Value::Null,
+                content: Vec::new(),
+                metadata,
+            },
+        },
+        other => other,
+    };
+    let part_ref = format!("{message_id}:{ordinal}");
     match part {
         V2Part::Text { text } => {
             // A text part has no time of its own; the parent assistant
             // message completing is the write that ends it.
-            let done = parent_completed(row);
             let bodies = vec![
                 ChatBody::TextStarted {
                     part: part_ref.clone(),
@@ -554,7 +607,7 @@ fn map_v2_row(row: &V2Row) -> (Vec<ChatBody>, bool) {
                 },
                 ChatBody::TextEnded { part: part_ref },
             ];
-            (if done { bodies } else { Vec::new() }, done)
+            (if parent_done { bodies } else { Vec::new() }, parent_done)
         }
         V2Part::Reasoning { text, time } => {
             let done = time.as_ref().is_none_or(|t| t.completed.is_some());
@@ -576,7 +629,7 @@ fn map_v2_row(row: &V2Row) -> (Vec<ChatBody>, bool) {
 }
 
 fn parent_completed(row: &V2Row) -> bool {
-    serde_json::from_str::<V2AssistantData>(&row.message_data)
+    serde_json::from_str::<V2AssistantMsg>(&row.message_data)
         .ok()
         .and_then(|d| d.time)
         .is_some_and(|t| t.completed.is_some())
@@ -756,12 +809,33 @@ fn map_v2_message(row: &V2Row) -> (Vec<ChatBody>, bool) {
                 true,
             )
         }
-        "assistant" => (
-            vec![ChatBody::TurnStarted {
+        "assistant" => {
+            let Ok(msg) = serde_json::from_str::<V2AssistantMsg>(&row.message_data) else {
+                return (
+                    vec![ChatBody::TurnStarted {
+                        turn_id: Some(row.message_id.clone()),
+                    }],
+                    true,
+                );
+            };
+            let done = msg.time.as_ref().is_some_and(|t| t.completed.is_some());
+            let mut bodies = vec![ChatBody::TurnStarted {
                 turn_id: Some(row.message_id.clone()),
-            }],
-            true,
-        ),
+            }];
+            // The message row carries the whole turn: map each content item
+            // in order and hold there while the newest item is still open.
+            for (i, item) in msg.content.iter().enumerate() {
+                let Ok(part) = serde_json::from_value::<V2Part>(item.clone()) else {
+                    continue;
+                };
+                let (part_bodies, part_done) = map_v2_part(&row.message_id, i as i64, part, done);
+                bodies.extend(part_bodies);
+                if !part_done {
+                    return (bodies, false);
+                }
+            }
+            (bodies, true)
+        }
         "compaction" => {
             let Ok(data) = serde_json::from_str::<V2CompactionData>(&row.message_data) else {
                 return (Vec::new(), true);
@@ -1286,6 +1360,120 @@ mod tests {
             .execute(
                 "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES \
                  ('m3', 'ses_v2a', 'idle', 3, 3, 3, '{\"outcome\":\"succeeded\"}')",
+                [],
+            )
+            .unwrap();
+        let third = reader.poll().unwrap();
+        assert_eq!(kinds(&third), ["turn_end"]);
+        let replay = SessionReader::open(&key, &roots, 0)
+            .unwrap()
+            .poll()
+            .unwrap();
+        let bodies = |events: Vec<crate::proto::chat_event::ChatEvent>| {
+            events
+                .into_iter()
+                .map(|e| (e.seq, e.body))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            bodies(replay),
+            bodies([first, second, third].concat()),
+            "the live tail and a fresh replay agree"
+        );
+    }
+
+    /// The 2.x inline-content positive control: real stores keep an
+    /// assistant turn's reasoning, tool and text items on the message row
+    /// itself. The same hold, completion and replay contract as the
+    /// session_part control above.
+    #[test]
+    fn chat_events_opencode_v2_inline_content_holds_until_parent_completes() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("opencode.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT);
+             CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, time_created INTEGER, time_updated INTEGER, data TEXT);
+             CREATE TABLE session_part (message_id TEXT, session_id TEXT, ordinal INTEGER, type TEXT, data TEXT, time_created INTEGER, PRIMARY KEY (message_id, ordinal));",
+        )
+        .unwrap();
+        conn.execute("INSERT INTO session_v2 VALUES ('ses_v2b', NULL)", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES \
+             ('m1', 'ses_v2b', 'user', 1, 1, 1, '{\"text\":\"run it\"}')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES \
+             ('m2', 'ses_v2b', 'assistant', 2, 2, 2, ?1)",
+            params![
+                r#"{"time":{"created":2},"content":[
+                     {"type":"reasoning","text":"think","time":{"created":2,"completed":3}},
+                     {"type":"tool","id":"c1","name":"read","state":{"status":"completed","input":{"filePath":"/a"},"content":[{"type":"text","text":"body"}]}},
+                     {"type":"text","text":"partial"}]}"#
+            ],
+        )
+        .unwrap();
+        let roots = ChatRoots {
+            transcripts: Vec::new(),
+            opencode_stores: vec![db.clone()],
+        };
+        let key = SessionKey {
+            harness: "opencode".into(),
+            session_id: "ses_v2b".into(),
+            subagent: None,
+        };
+        let mut reader = SessionReader::open(&key, &roots, 0).unwrap();
+        let first = reader.poll().unwrap();
+        let kinds = |events: &[crate::proto::chat_event::ChatEvent]| {
+            events
+                .iter()
+                .map(|e| match &e.body {
+                    ChatBody::UserMessage { .. } => "user",
+                    ChatBody::TurnStarted { .. } => "turn",
+                    ChatBody::TurnEnded { .. } => "turn_end",
+                    ChatBody::ThinkingStarted { .. }
+                    | ChatBody::ThinkingDelta { .. }
+                    | ChatBody::ThinkingEnded { .. } => "think",
+                    ChatBody::TextStarted { .. }
+                    | ChatBody::TextDelta { .. }
+                    | ChatBody::TextEnded { .. } => "text",
+                    ChatBody::ToolCalled { .. } => "call",
+                    ChatBody::ToolFinished { .. } => "finish",
+                    ChatBody::Compacted { .. } => "compacted",
+                    other => panic!("unexpected {other:?}"),
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            kinds(&first),
+            ["user", "turn", "think", "think", "think", "call", "finish"],
+            "the finished items emit and the open text holds"
+        );
+        assert!(
+            reader.poll().unwrap().is_empty(),
+            "an unchanged store emits nothing"
+        );
+        let writer = Connection::open(&db).unwrap();
+        writer
+            .execute(
+                "UPDATE session_message SET time_updated = 9, data = ?1 WHERE id = 'm2'",
+                params![
+                    r#"{"time":{"created":2,"completed":8},"content":[
+                         {"type":"reasoning","text":"think","time":{"created":2,"completed":3}},
+                         {"type":"tool","id":"c1","name":"read","state":{"status":"completed","input":{"filePath":"/a"},"content":[{"type":"text","text":"body"}]}},
+                         {"type":"text","text":"full"}]}"#
+                ],
+            )
+            .unwrap();
+        let second = reader.poll().unwrap();
+        assert_eq!(kinds(&second), ["text", "text", "text"]);
+        writer
+            .execute(
+                "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES \
+                 ('m3', 'ses_v2b', 'idle', 3, 3, 3, '{\"outcome\":\"succeeded\"}')",
                 [],
             )
             .unwrap();

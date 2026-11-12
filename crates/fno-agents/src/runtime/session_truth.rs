@@ -766,6 +766,13 @@ fn opencode_records_db_v2(
     records.reverse();
     records
 }
+/// The 2.x assistant message's inline content list, typed at the boundary.
+#[derive(serde::Deserialize)]
+struct V2AssistantContent {
+    #[serde(default)]
+    content: Vec<Value>,
+}
+
 /// The 2.x part shapes the records view renders, typed at the boundary.
 #[derive(serde::Deserialize)]
 struct V2UserishText {
@@ -775,7 +782,7 @@ struct V2UserishText {
 
 #[derive(serde::Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
-enum V2AssistantPart {
+pub(crate) enum V2AssistantPart {
     Text {
         #[serde(default)]
         text: String,
@@ -797,6 +804,18 @@ fn join_v2_parts(mtype: &str, mdata: &str, parts: &[Value]) -> String {
             .map(|t| t.text)
             .unwrap_or_default(),
         "assistant" => {
+            // Real stores keep the content items inline in the message row;
+            // part rows are the alternative shape. Prefer part rows and fall
+            // back to the inline list.
+            let inline: Vec<Value>;
+            let parts = if parts.is_empty() {
+                inline = serde_json::from_str::<V2AssistantContent>(mdata)
+                    .map(|c| c.content)
+                    .unwrap_or_default();
+                &inline
+            } else {
+                parts
+            };
             let mut out: Vec<String> = Vec::new();
             for p in parts {
                 let Ok(part) = serde_json::from_value::<V2AssistantPart>(p.clone()) else {
