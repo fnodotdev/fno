@@ -279,6 +279,7 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
     let cwds = crate::burn_watch::manifest_cwds(&crate::paths::space_dir(
         &std::env::current_dir().unwrap_or_default(),
     ));
+    let claims = crate::burn_watch::node_claim_cwds(None);
     let mut owners = None;
     for entry in &registry.entries {
         let result = (|| -> Result<(), String> {
@@ -358,8 +359,10 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
                 let (span, commits) = match path.and_then(|p| tail_text(Path::new(p))) {
                     Some((text, skip)) => (
                         verify_span(&text, skip),
-                        crate::burn_watch::resolve_worker_cwd(&cwds, sid, node, &entry.cwd)
-                            .and_then(|cwd| commits_past_base(&cwd)),
+                        crate::burn_watch::resolve_worker_cwd(
+                            &cwds, &claims, sid, node, &entry.cwd,
+                        )
+                        .and_then(|cwd| commits_past_base(&cwd)),
                     ),
                     None => (None, None),
                 };
