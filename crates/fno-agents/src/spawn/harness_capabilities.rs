@@ -58,7 +58,13 @@ const RESPONSE_ACTIONS: [&str; 3] = ["allow_once", "allow_always", "deny"];
 /// are part of the row's contract, and the Python validator enforces the same
 /// pair.
 const DECLARABLE_RULE_STATES: [&str; 2] = ["idle", "blocked"];
-const RESUME_KINDS: [&str; 4] = ["flag", "subcommand", "session_flag", "unsupported"];
+const RESUME_KINDS: [&str; 5] = [
+    "flag",
+    "subcommand",
+    "session_flag",
+    "serve_attach",
+    "unsupported",
+];
 const MODEL_SWITCH_KINDS: [&str; 3] = ["direct", "menu_walk", "unsupported"];
 const MODEL_SWITCH_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 const STOP_STRATEGIES: [&str; 2] = ["claude-short-id", "registry-noop"];
