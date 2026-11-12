@@ -311,6 +311,9 @@ mod tests {
     #[test]
     fn open_argv_is_the_one_fixed_command() {
         let argv = open_argv("p/m");
-        assert_eq!(&argv[1..], ["config", "plugins", "open", "p/m"]);
+        let tail = argv
+            .get(1..)
+            .expect("open_argv names a program plus its arguments");
+        assert_eq!(tail, ["config", "plugins", "open", "p/m"]);
     }
 }
