@@ -99,7 +99,7 @@ wire_words! {
         ScoreboardPlanFidelity => "scoreboard_plan_fidelity",
         ScoreboardEscalation => "scoreboard_escalation",
         EffectiveCommand => "effective_command",
-        EffectiveVerb => "effective_verb",
+        LegacyEffectiveCommand => "effective_verb",
         PureOp => "pure_op",
     }
 }

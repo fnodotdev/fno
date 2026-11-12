@@ -1281,7 +1281,7 @@ pub(crate) fn handle_parsed(state: &StoreState, req: &KeeperRequest) -> KeeperRe
         // The lifecycle command decision (backlog_ready::serve_effective_command):
         // one answer per shipped row; a refusal rides its own row. The old
         // method name stays served so a client of an older build still reads.
-        KeeperMethod::EffectiveCommand | KeeperMethod::EffectiveVerb => {
+        KeeperMethod::EffectiveCommand | KeeperMethod::LegacyEffectiveCommand => {
             crate::backlog_ready::serve_effective_command(params).map_err(StoreError::Invalid)
         }
         // One named op applied over client-shipped rows, no file I/O and no
