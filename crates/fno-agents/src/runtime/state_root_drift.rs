@@ -124,7 +124,7 @@ fn placeholder_star(s: &str) -> String {
 }
 
 /// `*` is the only wildcard a doc pattern can carry.
-fn glob_match(pattern: &str, name: &str) -> bool {
+pub(crate) fn glob_match(pattern: &str, name: &str) -> bool {
     let parts: Vec<&str> = pattern.split('*').collect();
     if parts.len() == 1 {
         return pattern == name;

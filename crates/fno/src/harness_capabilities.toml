@@ -2,7 +2,7 @@
 # regenerates the one copy on every build: crates/fno/src/harness_capabilities.toml
 # (include_str!ed by the fno mux). Edit the canonical and rebuild; the
 # rust-ci generated-copies dirty-tree step fails on a hand-edited copy.
-map_version = 26
+map_version = 27
 
 [harness.claude]
 # THE DELIVERED-MAIL HEADER FORM. Every delivered mail opens with one
@@ -801,7 +801,8 @@ native_verbs = ["/help", "/init", "/redo", "/share", "/undo"]
 # custom override is invisible to this table by construction.
 native_verb_meta = { "/help" = { use_when = "show help and built-in commands", risk = "safe", built_in = true }, "/init" = { use_when = "write the project AGENTS.md guide", risk = "safe", built_in = true }, "/redo" = { use_when = "re-apply the last undone change", risk = "safe", built_in = true }, "/share" = { use_when = "create a share link for this session", risk = "safe", built_in = true }, "/undo" = { use_when = "undo the agent's last file change", risk = "safe", built_in = true } }
 # opencode submits on two lanes. A serve thread takes the turn over HTTP
-# (`opencode_serve::steer_registered_session`) and reads no key. A pane takes a
+# (`opencode_serve::steer_registered_session`, driven by `fno-agents-worker
+# --opencode-turn`) and reads no key. A pane takes a
 # CR. Measured on a live 1.18.33 TUI, 2026-10-31: a CR after a typed line starts
 # the turn, on the home screen and in a session, and a line typed during a busy
 # turn queues as the next turn. A zero settle worked twice, so the 800 is the
@@ -818,8 +819,8 @@ session_binding = { strategy = "store-lookup", required = false, timeout_ms = 20
 [harness.opencode.state_root_grant]
 # opencode maps no additive dir flag (`--dir` SETS cwd, verified against
 # v1.14.50), so its argv lanes carry nothing. The serve-HTTP thread lane does:
-# `opencode_serve.rs` turns FNO_WORKER_ADD_DIRS into per-session
-# `external_directory` allow rules.
+# `opencode_serve.rs` creates each worker session with `external_directory`
+# allow rules for the worktree and every FNO_WORKER_ADD_DIRS root.
 #
 # pane is MEASURED unsandboxed, 2026-08-28: an opencode pane worker with no
 # grant acquired `session:probe-<nonce>` and delivered mail carrying the same
@@ -836,25 +837,17 @@ headless = "unmeasured"
 # variant: dispatch_opencode_serve calls apply_opencode_variant(selected_model,
 # effort), writing ~/.local/state/opencode/model.json (live row read
 # 2026-10-05: "zai-coding-plan/glm-5.3-flash": "high"). On 2.x it rides the
-# session's model ref as its variant. The serve-level allow-all is the whole
-# directory grant; no per-session external_directory rules are written. The
-# operator --add-dir axis refuses on this lane (client.rs fail-closed matrix).
-# Every other flag still demotes to the pane. Steering and readback run on the
-# 1.x attach writer or the 2.x /api/session routes, and the journey names the
-# evidence for this seat.
+# session's model ref as its variant. On both contracts the state-root grant
+# rides FNO_WORKER_ADD_DIRS -> per-session external_directory rules, and the
+# turn driver (`fno-agents-worker --opencode-turn`) answers each permission
+# ask through the fnod ladder after the user's own opencode rules. fno writes
+# no serve permission config on either contract. The operator
+# --add-dir axis refuses on this lane (client.rs fail-closed matrix). Every
+# other flag still demotes to the pane. The journey names the evidence.
 [harness.opencode.thread]
 carries = ["model", "effort"]
 passthrough = ["-m", "--model"]
 
-# THE NATIVE BG LINE for the serve lane: opencode creates its own session
-# (the title names it), the turn runs on the shared serve, and the row binds
-# at the worker's session report - the same posture the claude native lane
-# holds. The {payload} hole marks the slot; the tail owns the tokens
-# (opencode_run_tail at dispatch). {serve_url} never drops. This line is the
-# 1.x launch. 2.x `run` has no --attach and no --command, so a 2.x serve mints
-# the session and starts its turn over POST /api/session and /command|/prompt.
-[harness.opencode.launch]
-argv = ["opencode", "run", "--attach", "{serve_url}", "--title", "{name}", "--dangerously-skip-permissions", "-m", "{model}", "{payload}"]
 [harness.opencode.permission_response.allow_once]
 supported = false
 rule_ids = ["permission_required"]

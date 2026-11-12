@@ -4,7 +4,7 @@
      and skills/*/SKILL.md frontmatter. -->
 # Command x harness matrix
 
-Which fno command runs on which harness, rendered from the capability table (map_version 26) and each skill's `metadata.requires.harness` frontmatter. One row per skills/*/SKILL.md, one column per supported harness. The states are the features vocabulary in [capability-matrix.md](capability-matrix.md).
+Which fno command runs on which harness, rendered from the capability table (map_version 27) and each skill's `metadata.requires.harness` frontmatter. One row per skills/*/SKILL.md, one column per supported harness. The states are the features vocabulary in [capability-matrix.md](capability-matrix.md).
 
 A cell is a projection, never a fresh measurement. The rule, in order:
 
