@@ -1592,7 +1592,7 @@ shoot a root whose fleet map has seats \
             };
             if matches!(kind, Some(ViewKind::BacklogSearch)) {
                 // `/` mid-typing: the input open on a half-typed qualifier.
-                super::backlog_board::seed_find(b, "s:ready p:p");
+                super::backlog_board::seed_find(b, "p:p1 que");
             }
             if b.query.view == crate::backlog_model::View::Graph {
                 b.query.focus = focus.clone();
