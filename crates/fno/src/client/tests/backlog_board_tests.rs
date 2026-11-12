@@ -177,6 +177,52 @@ fn board_render_rows() {
     );
 }
 
+// `/` opens a visible input: the bar echoes each key, the board filters as
+// the text grows, a second `/` never stacks, and Esc restores the old filter.
+#[test]
+fn find_input_echoes_filters_live_and_never_stacks_slashes() {
+    let total = |b: &BoardView| -> usize {
+        b.body
+            .as_ref()
+            .unwrap()
+            .lanes
+            .iter()
+            .map(|l| l.cells.iter().map(|c| c.total).sum::<usize>())
+            .sum()
+    };
+    let mut v = key_view(board_with(board_inputs()));
+    open_find(&mut v);
+    input_keys(&mut v, b"//");
+    input_keys(&mut v, b"s:ready");
+    let b = v.backlog_board.as_ref().expect("board open");
+    assert_eq!(find_input(b).map(|(t, _)| t), Some("s:ready"));
+    assert_eq!(total(b), 2, "the board filtered before Enter");
+    let bar = filter_bar_lines(b, b.body.as_ref().unwrap(), 120);
+    assert!(
+        bar.iter().any(|l| l.text.contains("s:ready\u{2588}")),
+        "the Search cell echoes the typed text: {bar:?}"
+    );
+
+    input_keys(&mut v, b"//");
+    let b = v.backlog_board.as_ref().expect("board open");
+    assert_eq!(find_input(b).map(|(t, _)| t), Some("s:ready/"));
+
+    // A half-typed key holds the last good filter and names the error.
+    input_keys(&mut v, &[0x15]);
+    input_keys(&mut v, b"s:ready stauts:x");
+    let b = v.backlog_board.as_ref().expect("board open");
+    assert_eq!(total(b), 2, "a bad query keeps the last good filter");
+    assert!(find_input(b).is_some_and(|(_, err)| err.is_some()));
+
+    // Esc puts back the filter that was in force when `/` opened.
+    input_keys(&mut v, b"\x1b");
+    input_keys(&mut v, b"");
+    let b = v.backlog_board.as_ref().expect("board open");
+    assert!(b.input.is_none());
+    assert_eq!(b.query.q, None);
+    assert_eq!(total(b), 3);
+}
+
 // AC4-HP: the stats line counts every column and renders the flow line.
 
 // AC5-HP: `L` cycles project -> epic -> none and keeps the cursor on the

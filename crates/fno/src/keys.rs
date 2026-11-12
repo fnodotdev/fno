@@ -1331,11 +1331,11 @@ pub(crate) fn default_bindings() -> Vec<KeyBinding> {
             "focus right",
         ),
         b(
-            b'H',
+            0,
             "resize-left",
             Cmd(C::ResizeDir(Dir::Left)),
             Panes,
-            "resize left",
+            "resize left (Ctrl+Left, or bind a key)",
         ),
         b(
             b'J',
@@ -1569,11 +1569,18 @@ pub(crate) fn default_bindings() -> Vec<KeyBinding> {
             "the org modal (load, census, lanes)",
         ),
         b(
-            b'G',
+            b'H',
             "org-view",
             OpenOrgView,
             Global,
-            "HQ: org view (fleet, machines, leads, seats)",
+            "HQ (fleet, machines, leads, seats)",
+        ),
+        b(
+            b'G',
+            "org-view-old-key",
+            OpenOrgView,
+            Global,
+            "HQ, the old key (goes away next release)",
         ),
         b(
             b'q',
@@ -1583,11 +1590,18 @@ pub(crate) fn default_bindings() -> Vec<KeyBinding> {
             "open notifications for questions and announcements",
         ),
         b(
-            b'O',
+            b'B',
             "open-backlog-board",
             OpenBacklogBoard,
             Global,
             "open the backlog board",
+        ),
+        b(
+            b'O',
+            "open-backlog-board-old-key",
+            OpenBacklogBoard,
+            Global,
+            "open the backlog board, the old key (goes away next release)",
         ),
         b(
             b'V',
@@ -1618,7 +1632,7 @@ pub(crate) fn default_bindings() -> Vec<KeyBinding> {
             "full-screen sideline",
         ),
         b(
-            b'B',
+            b'=',
             "cycle-density",
             CycleDensity,
             Global,
@@ -2120,7 +2134,11 @@ pub fn meta_rows() -> Vec<(String, String, KeySection)> {
     // door; each row leaves this table once a rebind materializes the action
     // in `key_bindings` (no double row).
     let mut rows = rows;
-    for (action, label) in [("split-up", "split up"), ("split-left", "split left")] {
+    for (action, label) in [
+        ("split-up", "split up"),
+        ("split-left", "split left"),
+        ("resize-left", "resize left"),
+    ] {
         if key_for(action).is_none() {
             rows.push((
                 "-".into(),
@@ -2397,8 +2415,13 @@ mod tests {
         assert_eq!(scan_all(&[b"\x02a"]), vec![Event::OpenAnswers]);
         assert_eq!(scan_all(&[b"\x02b"]), vec![Event::TogglePanel]);
         assert_eq!(scan_all(&[b"\x02i"]), vec![Event::ToggleComposer]);
-        // prefix+O opens the backlog board.
+        // prefix+B opens the backlog board; O stays one release as an alias.
+        assert_eq!(scan_all(&[b"\x02B"]), vec![Event::OpenBacklogBoard]);
         assert_eq!(scan_all(&[b"\x02O"]), vec![Event::OpenBacklogBoard]);
+        // prefix+H opens HQ; G stays one release as an alias.
+        assert_eq!(scan_all(&[b"\x02H"]), vec![Event::OpenOrgView]);
+        assert_eq!(scan_all(&[b"\x02G"]), vec![Event::OpenOrgView]);
+        assert_eq!(scan_all(&[b"\x02="]), vec![Event::CycleDensity]);
         assert_eq!(scan_all(&[b"\x02F"]), vec![Event::ToggleFullSideline]);
         assert_eq!(scan_all(&[b"\x02s"]), vec![Event::ToggleStatus]);
         assert_eq!(scan_all(&[b"\x02?"]), vec![Event::ShowKeys]);

@@ -14,7 +14,7 @@ Each row is one action id. Put the id in `~/.fno/keybindings.json` with a key st
 | `focus-down` | `j` | `j` | `j` | focus down |
 | `focus-up` | `k` | `k` | `k` | focus up |
 | `focus-right` | `l` | `_` | `l` | focus right |
-| `resize-left` | `H` | `H` | `H` | resize left |
+| `resize-left` | unbound | unbound | unbound | resize left (Ctrl+Left, or bind a key) |
 | `resize-down` | `J` | `J` | `J` | resize down |
 | `resize-up` | `K` | `K` | `K` | resize up |
 | `resize-right` | `L` | `L` | `L` | resize right |
@@ -56,14 +56,16 @@ Each row is one action id. Put the id in `~/.fno/keybindings.json` with a key st
 | `sideline-menu` | `P` | `P` | `P` | sideline menu (palette) |
 | `add-remote-host` | `+` | `+` | `+` | add a remote host |
 | `org` | `C` | `C` | `C` | the org modal (load, census, lanes) |
-| `org-view` | `G` | `G` | `G` | HQ: org view (fleet, machines, leads, seats) |
+| `org-view` | `H` | `H` | `H` | HQ (fleet, machines, leads, seats) |
+| `org-view-old-key` | `G` | `G` | `G` | HQ, the old key (goes away next release) |
 | `notifications-bell` | `q` | `q` | `q` | open notifications for questions and announcements |
-| `open-backlog-board` | `O` | `O` | `O` | open the backlog board |
+| `open-backlog-board` | `B` | `B` | `B` | open the backlog board |
+| `open-backlog-board-old-key` | `O` | `O` | `O` | open the backlog board, the old key (goes away next release) |
 | `cycle-sideline-view` | `V` | `V` | `V` | cycle sideline view (agents, backlog, org) |
 | `toggle-sideline` | `b` | `b` | `b` | toggle sideline |
 | `toggle-composer` | `i` | `i` | `i` | draft card in the focused workspace (reveals a hidden sideline) |
 | `full-sideline` | `F` | `F` | `F` | full-screen sideline |
-| `cycle-density` | `B` | `B` | `B` | cycle sideline density |
+| `cycle-density` | `=` | `=` | `=` | cycle sideline density |
 | `sort-agents` | `o` | `Q` | `o` | sort table columns |
 | `cycle-agent-group` | `W` | `W` | `W` | group agents by workspace, lead, cwd, status, harness, or none |
 | `toggle-card-head` | `Y` | `Y` | `Y` | show or hide the card header row |

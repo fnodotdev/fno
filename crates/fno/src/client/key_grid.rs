@@ -7,7 +7,7 @@ use super::{Cell, StdinFlow, View};
 use crate::text_style::TLine;
 
 /// One cell of the grid: a key and what it does.
-pub(crate) type KeyHint = (&'static str, &'static str);
+pub(crate) type KeyHint = (String, String);
 
 /// The view whose keys the footer names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,21 +19,49 @@ pub(crate) enum KeyView {
     Org,
 }
 
+/// The agents footer, in reading order: each cell is a prefix-chord action id
+/// and its label. The key comes off the live binding table, so a rebind or a
+/// changed default moves the footer with it; a cell whose action holds no
+/// chord drops out.
+pub(crate) const AGENTS_ACTIONS: &[(&str, &str)] = &[
+    ("toggle-composer", "new session"),
+    ("new-workspace", "new workspace"),
+    ("sideline-menu", "menu"),
+    ("cycle-sideline-view", "cycle views"),
+    ("open-backlog-board", "backlog"),
+    ("open-messages", "messages"),
+    ("org-view", "HQ"),
+    ("detach", "detach"),
+];
+
+fn fixed(rows: &[(&str, &str)]) -> Vec<KeyHint> {
+    rows.iter()
+        .map(|(k, l)| (k.to_string(), l.to_string()))
+        .collect()
+}
+
+/// The agents cells for `bindings`, each key written as the prefix then the
+/// chord (`^B H`).
+fn agents_hints(bindings: &[crate::keys::KeyBinding]) -> Vec<KeyHint> {
+    let prefix = match crate::keys::prefix_display().strip_prefix("ctrl+") {
+        Some(letter) => format!("^{}", letter.to_ascii_uppercase()),
+        None => crate::keys::prefix_display(),
+    };
+    AGENTS_ACTIONS
+        .iter()
+        .filter_map(|(action, label)| {
+            let kb = bindings.iter().find(|kb| kb.action == *action)?;
+            Some((format!("{prefix} {}", kb.disp), label.to_string()))
+        })
+        .collect()
+}
+
 /// The keys of one view, in reading order. The closing `* all keys` cell is
 /// the builder's, not the view's.
-pub(crate) fn hints(view: KeyView) -> &'static [KeyHint] {
+pub(crate) fn hints(view: KeyView) -> Vec<KeyHint> {
     match view {
-        KeyView::Agents => &[
-            ("^B i", "new session"),
-            ("^B N", "new workspace"),
-            ("^B P", "menu"),
-            ("^B V", "cycle views"),
-            ("^B B", "backlog"),
-            ("^B M", "messages"),
-            ("^B O", "org"),
-            ("^B d", "detach"),
-        ],
-        KeyView::Backlog => &[
+        KeyView::Agents => agents_hints(&crate::keys::key_bindings()),
+        KeyView::Backlog => fixed(&[
             ("hjkl", "move"),
             ("[ ]", "lane"),
             ("L", "lanes"),
@@ -48,8 +76,8 @@ pub(crate) fn hints(view: KeyView) -> &'static [KeyHint] {
             ("T/K/J", "rank"),
             ("F", "full screen"),
             ("esc", "close"),
-        ],
-        KeyView::Detail => &[
+        ]),
+        KeyView::Detail => fixed(&[
             ("j/k", "scroll"),
             ("tab", "next link"),
             ("enter", "open"),
@@ -60,8 +88,8 @@ pub(crate) fn hints(view: KeyView) -> &'static [KeyHint] {
             ("A", "lead"),
             ("c", "comment"),
             ("esc", "board"),
-        ],
-        KeyView::Messages => &[
+        ]),
+        KeyView::Messages => fixed(&[
             ("h/l", "columns"),
             ("j/k", "move"),
             ("enter", "open"),
@@ -74,8 +102,8 @@ pub(crate) fn hints(view: KeyView) -> &'static [KeyHint] {
             ("m", "id"),
             ("y", "copy"),
             ("q", "close"),
-        ],
-        KeyView::Org => &[
+        ]),
+        KeyView::Org => fixed(&[
             ("j/k", "move"),
             ("h/l", "tab"),
             ("u", "go up"),
@@ -87,7 +115,7 @@ pub(crate) fn hints(view: KeyView) -> &'static [KeyHint] {
             ("F", "full screen"),
             ("V", "cycle views"),
             ("esc", "close"),
-        ],
+        ]),
     }
 }
 
@@ -111,16 +139,16 @@ fn columns(w: usize) -> usize {
 /// wider than its column is cut at the column edge.
 pub(crate) fn grid_rows(view: KeyView, w: usize) -> Vec<TLine> {
     let cols = columns(w);
-    let mut cells: Vec<KeyHint> = hints(view).to_vec();
+    let mut cells: Vec<KeyHint> = hints(view);
     cells.truncate(cols * MAX_ROWS - 1);
-    cells.push(("*", "all keys"));
+    cells.push(("*".to_string(), "all keys".to_string()));
     let col_w = (w / cols).max(1);
     cells
         .chunks(cols)
         .map(|chunk| {
             let mut row = TLine::plain(String::new());
             for (key, label) in chunk {
-                let mut cell = TLine::head(*key);
+                let mut cell = TLine::head(key.as_str());
                 cell.push_line(TLine::plain(format!(" {label}")));
                 row.push_line(cell.trunc(col_w.saturating_sub(1)).pad_to(col_w));
             }
@@ -231,6 +259,40 @@ pub(super) fn footer_keys(view: &mut View, bytes: &[u8]) -> Option<Result<StdinF
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_agents_footer_action_holds_a_chord() {
+        let bindings = crate::keys::default_bindings();
+        for (action, _) in AGENTS_ACTIONS {
+            let kb = bindings
+                .iter()
+                .find(|kb| kb.action == *action)
+                .unwrap_or_else(|| panic!("footer action {action:?} is not in the key table"));
+            assert_ne!(kb.key, 0, "footer action {action:?} has no default chord");
+        }
+        assert_eq!(agents_hints(&bindings).len(), AGENTS_ACTIONS.len());
+    }
+
+    #[test]
+    fn agents_footer_names_the_live_keys() {
+        let mut bindings = crate::keys::default_bindings();
+        let cells = agents_hints(&bindings);
+        let cell = |label: &str| {
+            cells
+                .iter()
+                .find(|(_, l)| l == label)
+                .map(|(k, _)| k.clone())
+        };
+        assert_eq!(cell("backlog").as_deref(), Some("^B B"));
+        assert_eq!(cell("HQ").as_deref(), Some("^B H"));
+        bindings
+            .iter_mut()
+            .find(|kb| kb.action == "org-view")
+            .unwrap()
+            .disp = "Z".into();
+        let cells = agents_hints(&bindings);
+        assert!(cells.iter().any(|(k, l)| k == "^B Z" && l == "HQ"));
+    }
 
     #[test]
     fn grid_is_four_wide_and_ends_in_the_full_overlay_cell() {
