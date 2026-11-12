@@ -1354,7 +1354,12 @@ pub(crate) mod tests {
                 serde_json::Value::String(MAIL_ONLY.into()),
             );
         }
-        row["origin"] = serde_json::Value::String("operator".into());
+        if let Some(fields) = row.as_object_mut() {
+            fields.insert(
+                "origin".into(),
+                serde_json::Value::String("operator".into()),
+            );
+        }
         row
     }
 
