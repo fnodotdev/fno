@@ -4,6 +4,13 @@
 // (pi auto-discovers *.ts there; no package publish required). Plain
 // TypeScript against node builtins only, so pi loads it with no install step.
 //
+// The same file serves oh-my-pi (`omp`), installed into
+// ~/.omp/agent/extensions. The two hosts share this API shape but settle on
+// different events: earendil pi fires `agent_settled` and has no
+// `session_stop`; omp fires `session_stop` (whose result takes a claude-shaped
+// {decision: "block", reason}) and has no `agent_settled`. omp's API carries
+// an `arktype` builder pi's does not, which is how the file names its host.
+//
 // This extension is a TRANSPORT and nothing else. Every decision belongs to
 // Rust: the gate (`fno-agents loop-check`) decides, the store commands answer,
 // and this file moves bytes. Concretely it carries four abilities:
@@ -53,6 +60,15 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { homedir } from "node:os"
 import { join } from "node:path"
+
+// The host this file runs in, set once when the host loads it. Every fno
+// command it calls names this harness.
+let HARNESS: "pi" | "omp" = "pi"
+
+// What one settle hands its host to deliver: the text, and whether it is a
+// command the host should expand (a gate continuation) or plain prose (an
+// event rule's reason).
+type Relay = { text: string; expand: boolean }
 
 type Ctx = {
   sessionManager?: {
@@ -144,7 +160,7 @@ async function runCarrierChain(
       [join(root, "hooks", chain[0] || ""), ...chain.slice(1)],
       timeoutMs,
       payload,
-      { FNO_HOOK_HARNESS: "pi" },
+      { FNO_HOOK_HARNESS: HARNESS },
     ).then(contextCarrierText)
   const outs = parallel
     ? Promise.all(chains.map(run))
@@ -248,7 +264,7 @@ function pushState(
       ...extra,
     })
     const bin = process.env.FNO_AGENTS_BIN || "fno-agents"
-    void runBounded(bin, ["hook", "session-state", "--harness", "pi", event], 3000, payload)
+    void runBounded(bin, ["hook", "session-state", "--harness", HARNESS, event], 3000, payload)
   } catch {
     // best-effort
   }
@@ -372,6 +388,7 @@ export default function (pi: {
   ) => void
   appendEntry?: (type: string, data: unknown) => void
 }): void {
+  HARNESS = "arktype" in (pi as object) ? "omp" : "pi"
   // Per-session in-flight guard. This is scheduling, never authority: one
   // loop-check at a time per pi session, and the binding gate still answers
   // who owns the target.
@@ -497,7 +514,7 @@ export default function (pi: {
     pushState("UserPromptSubmit", ctx)
     try {
       const sid = (ctx as Ctx)?.sessionManager?.getSessionId?.() || ""
-      const sessionKey = process.env.FNO_AGENT_SESSION_ID || sid || `pi:${process.cwd()}`
+      const sessionKey = process.env.FNO_AGENT_SESSION_ID || sid || `${HARNESS}:${process.cwd()}`
       const bin = process.env.FNO_AGENTS_BIN || "fno-agents"
       const root = pluginRoot()
       const texts: string[] = []
@@ -520,7 +537,7 @@ export default function (pi: {
         // The using-fno carrier answers only for a session that joined fno.
         const preamble = await runBounded(
           "env",
-          ["FNO_HOOK_HARNESS=pi", "bash", join(root, "hooks", "session-start-using-fno.sh")],
+          [`FNO_HOOK_HARNESS=${HARNESS}`, "bash", join(root, "hooks", "session-start-using-fno.sh")],
           5000,
           payload,
         )
@@ -555,7 +572,7 @@ export default function (pi: {
       if (sid) {
         const reportArgs = [
           "report", "--kind", "session",
-          "--harness", "pi",
+          "--harness", HARNESS,
           "--session-id", sid,
         ]
         if (process.env.FNO_AGENT_SELF) {
@@ -577,7 +594,7 @@ export default function (pi: {
       }
       const out = await runBounded(
         bin,
-        ["announce", "read", "--session-id", sessionKey, "--harness", "pi", "--boundary", "prompt"],
+        ["announce", "read", "--session-id", sessionKey, "--harness", HARNESS, "--boundary", "prompt"],
         2000,
       )
       const announce = out.trim()
@@ -618,7 +635,7 @@ export default function (pi: {
       const bin = process.env.FNO_AGENTS_BIN || "fno-agents"
       const out = await runBounded(
         bin,
-        ["hook", "pretool", "--wire", "pi", "--plugin-root", root],
+        ["hook", "pretool", "--wire", HARNESS, "--plugin-root", root],
         pretoolTimeoutMs(),
         payload,
       )
@@ -687,7 +704,11 @@ export default function (pi: {
     }
   })
 
-  pi.on("agent_settled", async (_event: unknown, ctx: unknown) => {
+  // One settle pass: the gate's answer as the text to relay, or nothing. Each
+  // host delivers the relay its own way (see the two stop arms below).
+  // `requireIdle` is pi's: agent_settled can fire while another extension
+  // runs. omp's session_stop IS the settle pass, so it skips the check.
+  const settle = async (ctx: unknown, requireIdle: boolean): Promise<Relay | undefined> => {
     pushState("Stop", ctx)
     const dir = process.cwd()
     const sm = (ctx as Ctx)?.sessionManager
@@ -719,7 +740,7 @@ export default function (pi: {
             "--run",
             String(process.env.FNO_AGENT_SESSION_ID),
             "--harness",
-            "pi",
+            HARNESS,
             "--cwd",
             dir,
           ],
@@ -739,7 +760,7 @@ export default function (pi: {
 
     // ctx.isIdle() is true at agent_settled unless another extension started
     // a run; a busy pi is mid-re-drive or mid-tool and the next settle comes.
-    if ((ctx as Ctx)?.isIdle?.() === false) return
+    if (requireIdle && (ctx as Ctx)?.isIdle?.() === false) return
     if (!sid || busy.get(sid)) return
     busy.set(sid, true)
 
@@ -785,15 +806,7 @@ export default function (pi: {
             } catch {
               // best-effort record
             }
-            try {
-              pi.sendUserMessage(ruled.reason || "an event rule blocked this stop", {
-                deliverAs: "followUp",
-                triggerTurn: true,
-              })
-            } catch (e: unknown) {
-              console.error(`[footnote] rules relay failed: ${e}`)
-            }
-            return
+            return { text: ruled.reason || "an event rule blocked this stop", expand: false }
           }
         } catch (parseErr: unknown) {
           console.error(`[footnote] hook rules unparseable: ${parseErr}`)
@@ -811,7 +824,7 @@ export default function (pi: {
           "--cwd",
           dir,
           "--harness",
-          "pi",
+          HARNESS,
           "--harness-session",
           sid,
         ],
@@ -875,12 +888,9 @@ export default function (pi: {
     // Terminal: loop-check already emitted `termination` - let the session
     // end and emit nothing extra (no duplicate termination event).
     if (decision.termination_reason) return
-    // Non-terminal block: send EXACTLY the continuation the gate named, with
-    // prompt expansion so a skill command reaches the skill. followUp +
-    // triggerTurn covers both an idle pi (sends immediately, triggers a turn)
-    // and a still-settling one (queues behind the current run). Fire-and-
-    // forget; the next turn's agent_settled runs the gate again. loop-check's
-    // NoProgress backstop bounds a stuck loop.
+    // Non-terminal block: relay EXACTLY the continuation the gate named. The
+    // next settle runs the gate again; loop-check's NoProgress backstop bounds
+    // a stuck loop.
     if (decision.decision === "block") {
       const continuation = decision.continuation
       if (!continuation) {
@@ -894,15 +904,33 @@ export default function (pi: {
         }
         return
       }
-      try {
-        pi.sendUserMessage(continuation, {
-          deliverAs: "followUp",
-          triggerTurn: true,
-          expandPromptTemplates: true,
-        })
-      } catch (e: unknown) {
-        console.error(`[footnote] re-drive sendUserMessage threw: ${e}`)
-      }
+      return { text: continuation, expand: true }
     }
+    return
+  }
+
+  // pi: relay through sendUserMessage. followUp + triggerTurn covers an idle
+  // pi and a still-settling one; prompt expansion lets a skill command reach
+  // the skill.
+  pi.on("agent_settled", async (_event: unknown, ctx: unknown) => {
+    const relay = await settle(ctx, true)
+    if (!relay) return
+    try {
+      pi.sendUserMessage(relay.text, {
+        deliverAs: "followUp",
+        triggerTurn: true,
+        ...(relay.expand ? { expandPromptTemplates: true } : {}),
+      })
+    } catch (e: unknown) {
+      console.error(`[footnote] re-drive sendUserMessage threw: ${e}`)
+    }
+  })
+
+  // omp: answer the stop itself. A block decision continues the same session
+  // with the reason as model-visible context (shared-events.ts
+  // SessionStopEventResult), so nothing is queued behind the settle.
+  pi.on("session_stop", async (_event: unknown, ctx: unknown) => {
+    const relay = await settle(ctx, false)
+    return relay ? { decision: "block", reason: relay.text } : undefined
   })
 }

@@ -557,9 +557,18 @@ fn discover() -> Vec<Item> {
             add(format!("build-dir export in ~/{rc}"), Action::StripRc(path));
         }
     }
-    let pi = env_dir("PI_CODING_AGENT_DIR", ".pi/agent").join("extensions/footnote.ts");
-    if pi.is_file() {
-        add("pi extension footnote.ts".into(), Action::RemovePath(pi));
+    // pi and omp both honor PI_CODING_AGENT_DIR, so when it is set the two
+    // names resolve to one file, removed once.
+    let mut extensions: Vec<PathBuf> = Vec::new();
+    for (harness, default) in [("pi", ".pi/agent"), ("omp", ".omp/agent")] {
+        let ext = env_dir("PI_CODING_AGENT_DIR", default).join("extensions/footnote.ts");
+        if ext.is_file() && !extensions.contains(&ext) {
+            extensions.push(ext.clone());
+            add(
+                format!("{harness} extension footnote.ts"),
+                Action::RemovePath(ext),
+            );
+        }
     }
 
     if on_path("uv").is_some() {

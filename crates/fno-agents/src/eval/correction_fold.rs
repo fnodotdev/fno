@@ -1479,6 +1479,12 @@ fn all_sources() -> Vec<Box<dyn TranscriptSource>> {
         Box::new(crate::pi_transcript::PiSource {
             sessions_dir: None,
             roots: None,
+            omp: false,
+        }),
+        Box::new(crate::pi_transcript::PiSource {
+            sessions_dir: None,
+            roots: None,
+            omp: true,
         }),
         Box::new(crate::opencode_transcript::OpencodeSource {
             dbs: crate::opencode_transcript::opencode_stores(),
