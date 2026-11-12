@@ -1400,7 +1400,7 @@ async fn submit(
         };
         return Ok(());
     }
-    if request.host.is_some() && !wire_at_least(&view.session, 122) {
+    if request.host.is_some() && !crate::mux_rows::wire_at_least(&view.session, 122) {
         l.phase = Phase::Refused {
             request_id,
             reason: "the mux server does not support remote launches; reconnect to current fno"
@@ -1408,7 +1408,7 @@ async fn submit(
         };
         return Ok(());
     }
-    if request.worktree && !wire_at_least(&view.session, LAUNCH_WORKTREE_PROTO) {
+    if request.worktree && !crate::mux_rows::wire_at_least(&view.session, LAUNCH_WORKTREE_PROTO) {
         l.phase = Phase::Refused {
             request_id,
             reason: "the connected mux server does not support worktree launches; reconnect to a server running current fno".to_string(),
@@ -1437,19 +1437,8 @@ async fn submit(
         })
 }
 
-pub(crate) fn version_at_least(version: Option<u32>, min: u32) -> bool {
-    version.is_some_and(|version| version >= min)
-}
-
-fn wire_at_least(session: &str, min: u32) -> bool {
-    let version = crate::proto::socket_path(session)
-        .ok()
-        .and_then(|socket| crate::mux_rows::read_wire_version(&socket));
-    version_at_least(version, min)
-}
-
 fn supports_launch_extra_axes(session: &str) -> bool {
-    wire_at_least(session, LAUNCH_EXTRA_AXES_PROTO)
+    crate::mux_rows::wire_at_least(session, LAUNCH_EXTRA_AXES_PROTO)
 }
 
 // -- input folding -----------------------------------------------------------

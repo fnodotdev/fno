@@ -14,6 +14,8 @@
 //! never an empty answer: the commands surface the failure as the card's
 //! notice line.
 
+use crate::keeper_wire::{ErrorKind, KeeperError, KeeperReply, KeeperRequest};
+use crate::keeper_wire::{TAG_REQUEST, TAG_RESPONSE};
 #[cfg(feature = "full")]
 use crate::node_row::KanbanColumn;
 use crate::node_row::NodeRow;
@@ -38,8 +40,8 @@ pub enum StoreClientError {
     /// The reply broke the protocol: a bad frame, bad JSON, or a missing
     /// field the request promises.
     Protocol(String),
-    /// The keeper answered and refused; the keeper's own message.
-    Refused(String),
+    /// The keeper answered and refused, with its own kind and message.
+    Refused { kind: ErrorKind, message: String },
     /// The store holds no node the request names.
     Missing(String),
     /// The one-shot worker ran past its deadline. A write may have landed.
@@ -52,7 +54,7 @@ impl std::fmt::Display for StoreClientError {
             Self::Unreachable(m)
             | Self::Io(m)
             | Self::Protocol(m)
-            | Self::Refused(m)
+            | Self::Refused { message: m, .. }
             | Self::Missing(m) => f.write_str(m),
             Self::TimedOut { secs } => write!(
                 f,
@@ -80,8 +82,6 @@ enum ConnectError {
     Other(String),
 }
 
-const TAG_REQUEST: u8 = 1;
-const TAG_RESPONSE: u8 = 4;
 const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
 const SOCK_PATH_LIMIT: usize = 96;
 
@@ -178,34 +178,33 @@ fn connect(sock: &Path) -> Result<UnixStream, ConnectError> {
 }
 
 /// The keeper's reply envelope: `result` on `ok`, the refusal otherwise.
-fn open_reply(reply: Value) -> Reply {
-    // Each field stays JSON, so an off-type `error` still reads as a
-    // refusal rather than a protocol fault.
-    #[derive(Default, Deserialize)]
-    #[serde(default)]
-    struct Envelope {
-        ok: Value,
-        result: Value,
-        error: Value,
-    }
-    #[derive(Default, Deserialize)]
-    #[serde(default)]
-    struct Refusal {
-        message: Value,
-    }
-    let envelope = Envelope::deserialize(reply).unwrap_or_default();
-    if envelope.ok.as_bool() == Some(true) {
-        return Ok(envelope.result);
-    }
-    let refusal = Refusal::deserialize(&envelope.error).unwrap_or_default();
-    let message = refusal.message.as_str().unwrap_or("store refused");
-    Err(StoreClientError::Refused(message.to_string()))
+/// Bytes that are not JSON are a protocol fault, prefixed `not_json`; JSON
+/// that does not read as an envelope, or a refusal with no message, still
+/// reads as a refusal.
+fn open_reply(body: &[u8], not_json: &str) -> Reply {
+    let outcome = match serde_json::from_slice::<KeeperReply>(body) {
+        Ok(reply) => reply.outcome,
+        Err(e) if e.is_data() => Err(KeeperError::default()),
+        Err(e) => return Err(StoreClientError::Protocol(format!("{not_json}{e}"))),
+    };
+    outcome.map_err(|KeeperError { kind, message }| StoreClientError::Refused {
+        kind,
+        message: if message.is_empty() {
+            "store refused".to_string()
+        } else {
+            message
+        },
+    })
+}
+
+fn request_bytes(method: &str, params: Value) -> Result<Vec<u8>, StoreClientError> {
+    serde_json::to_vec(&KeeperRequest::new(1, method, params))
+        .map_err(|e| StoreClientError::Protocol(e.to_string()))
 }
 
 fn round_trip(stream: &mut UnixStream, method: &str, params: Value) -> Reply {
     let io = |e: std::io::Error| StoreClientError::Io(e.to_string());
-    let payload = serde_json::to_vec(&json!({"id": 1, "method": method, "params": params}))
-        .map_err(|e| StoreClientError::Protocol(e.to_string()))?;
+    let payload = request_bytes(method, params)?;
     if payload.len() > MAX_FRAME_BYTES {
         return Err(StoreClientError::Protocol(format!(
             "request frame of {} bytes exceeds the cap",
@@ -240,9 +239,7 @@ fn round_trip(stream: &mut UnixStream, method: &str, params: Value) -> Reply {
     }
     let mut body = vec![0u8; len];
     read_exact(stream, &mut body)?;
-    let reply: Value =
-        serde_json::from_slice(&body).map_err(|e| StoreClientError::Protocol(e.to_string()))?;
-    open_reply(reply)
+    open_reply(&body, "")
 }
 
 fn read_exact(stream: &mut UnixStream, buf: &mut [u8]) -> Result<(), StoreClientError> {
@@ -295,7 +292,7 @@ fn exec_call_within(graph: &Path, method: &str, params: Value, deadline: Duratio
 
     let binary = worker_binary()
         .ok_or_else(|| Unreachable(crate::product_boundary::graph_worker_missing_error()))?;
-    let request = json!({"id": 1, "method": method, "params": params});
+    let request = request_bytes(method, params)?;
     let mut child = std::process::Command::new(&binary)
         .args([
             "--store-exec",
@@ -319,7 +316,7 @@ fn exec_call_within(graph: &Path, method: &str, params: Value, deadline: Duratio
         .stdin
         .take()
         .ok_or_else(|| Io("cannot open the store-exec stdin".into()))?
-        .write_all(request.to_string().as_bytes())
+        .write_all(&request)
         .map_err(|e| {
             // The child died mid-write: reap it, or a long-lived mux server
             // accumulates one zombie per failed send.
@@ -382,9 +379,7 @@ fn exec_call_within(graph: &Path, method: &str, params: Value, deadline: Duratio
             status.code().unwrap_or(-1)
         )));
     }
-    let reply: Value = serde_json::from_slice(&buf)
-        .map_err(|e| Protocol(format!("store-exec reply is not JSON: {e}")))?;
-    open_reply(reply)
+    open_reply(&buf, "store-exec reply is not JSON: ")
 }
 
 /// One store request against `graph`: a live keeper's socket is preferred;
@@ -478,13 +473,12 @@ pub fn rank_top(graph: &Path, node_id: &str) -> Result<String, StoreClientError>
                     new_rank = format_rank(new_rank)
                 ))
             }
-            // The keeper's Conflict message; a stable prefix from
-            // graph_store::StoreError. Anything else is a real failure.
-            Err(StoreClientError::Refused(m))
-                if m.starts_with("version conflict") && attempt + 1 < ATTEMPTS =>
-            {
-                continue
-            }
+            // A concurrent reorder moved the graph; anything else is a real
+            // failure.
+            Err(StoreClientError::Refused {
+                kind: ErrorKind::Conflict,
+                ..
+            }) if attempt + 1 < ATTEMPTS => continue,
             Err(e) => return Err(e),
         }
     }
@@ -771,6 +765,40 @@ mod tests {
         );
         std::env::remove_var("FNO_AGENTS_WORKER");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A refusal keeps the keeper's kind, so rank_top's retry keys on
+    /// `conflict` and survives any rewording of the message.
+    #[test]
+    fn a_refusal_keeps_the_keeper_kind_and_message() {
+        let refusal = |kind: &str, message: &str| {
+            let body = json!({"id": 1, "ok": false, "error": {"kind": kind, "message": message}});
+            open_reply(body.to_string().as_bytes(), "")
+        };
+        assert_eq!(
+            refusal("conflict", "the graph moved under you"),
+            Err(StoreClientError::Refused {
+                kind: ErrorKind::Conflict,
+                message: "the graph moved under you".into()
+            })
+        );
+        let lock = refusal("lock_timeout", "lock busy").unwrap_err();
+        assert_eq!(lock.to_string(), "lock busy");
+        assert!(matches!(
+            lock,
+            StoreClientError::Refused {
+                kind: ErrorKind::LockTimeout,
+                ..
+            }
+        ));
+        assert_eq!(
+            open_reply(br#"{"ok":false}"#, "").unwrap_err().to_string(),
+            "store refused"
+        );
+        assert!(matches!(
+            open_reply(b"not json", "x: "),
+            Err(StoreClientError::Protocol(m)) if m.starts_with("x: ")
+        ));
     }
     /// The deadline bounds a slow child and never costs a healthy one: a
     /// stub past the deadline dies with a `timed out` error inside the

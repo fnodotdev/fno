@@ -837,20 +837,30 @@ pub(super) fn resolve_to_lead_address(
     message: Option<String>,
     conflict: Option<&str>,
 ) -> Result<(String, String), i32> {
-    if conflict.is_some() || message.is_some() {
-        let clash = conflict
-            .map(str::to_string)
-            .unwrap_or_else(|| "a second positional (the message is the only one)".to_string());
+    if let Some(flag) = conflict {
         eprintln!(
-            "error: --to-lead and {clash} are mutually exclusive. Run `fno agents team` and address that handle for the other lane."
+            "error: --to-lead and {flag} are mutually exclusive. Run `fno agents team` and address that handle for the other lane."
         );
         return Err(2);
     }
-    let Some(name) = name else {
-        eprintln!("usage: fno agents mail send --to-lead <scope> <message>");
-        return Err(2);
+    // The lead lane carries the body in the single positional slot (`name`
+    // above, per the usage line); `message` holds a -b/--body-file body the
+    // caller folded in when no second positional filled it. Only a second
+    // positional clashes: the lane has no name slot.
+    let body = match (name, message) {
+        (Some(body), None) | (None, Some(body)) => body,
+        (Some(_), Some(_)) => {
+            eprintln!(
+                "error: --to-lead and a second positional (the message is the only one) are mutually exclusive. Run `fno agents team` and address that handle for the other lane."
+            );
+            return Err(2);
+        }
+        (None, None) => {
+            eprintln!("usage: fno agents mail send --to-lead <scope> <message>");
+            return Err(2);
+        }
     };
-    let holders = resolve_to_lead(scope).map_err(|(msg, code)| {
+    let mut holders = resolve_to_lead(scope).map_err(|(msg, code)| {
         eprintln!("{msg}");
         code
     })?;
@@ -870,8 +880,9 @@ pub(super) fn resolve_to_lead_address(
         );
         return Err(17);
     }
-    eprintln!("--to-lead {scope}: resolved to {}", holders[0]);
-    Ok((holders[0].clone(), name))
+    let holder = holders.swap_remove(0);
+    eprintln!("--to-lead {scope}: resolved to {holder}");
+    Ok((holder, body))
 }
 
 // ---------------------------------------------------------------------------

@@ -26,3 +26,7 @@ x-632f drew the first sample of 10 by the preregistered rule. x-272d ran a grade
 | replay-x-1f09 | the node is not in the graph; the prompt was one invented sentence | replay-x-70e1 | none |
 
 Every Rust grade also changed: the repo has no Cargo workspace manifest, so each grade now runs `cargo test` inside its crate. The dry-run log is `/home/u/evals-workspace/harness-fit/logs/dryrun*.jsonl` and `dryrun-*.out` in the run workspace.
+
+## Rebased after the Python deletion (2026-11-11)
+
+The Python `cli/tests` runtime is gone, so seven replay grades cannot run. The five Python-only tasks (`replay-x-1018`, `replay-x-71e9`, `replay-x-a23c`, `replay-x-a8f3`, `replay-x-c911`) are demoted. The two mixed tasks (`replay-x-5978`, `replay-x-70e1`) keep their surviving Rust half only. Two grade-only goldens re-based on the live bank joined (`hf-golden-target-start`, `hf-golden-pr-status`), and `bank/cohorts.yaml` now declares each lane cohort over the five members that still grade. Details: README Amendment 15.

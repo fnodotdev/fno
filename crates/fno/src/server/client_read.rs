@@ -171,6 +171,15 @@ pub(super) async fn client_reader(mut r: OwnedReadHalf, core_tx: mpsc::Sender<Co
                     break;
                 }
             }
+            Ok(ClientMsg::AnchorJump { pane, ts_ms }) => {
+                if core_tx
+                    .send(CoreMsg::AnchorJump { id, pane, ts_ms })
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
             Ok(ClientMsg::PaneAnswer {
                 pane,
                 fingerprint,

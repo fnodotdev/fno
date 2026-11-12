@@ -347,9 +347,14 @@ fn opencode_db_rows(
     let Some(conn) = crate::graph_store::open_read_only_wal_safe(db_path) else {
         return Vec::new();
     };
-    let Ok(mut statement) =
-        conn.prepare("SELECT id, directory FROM session ORDER BY time_updated DESC, id DESC")
-    else {
+    let table = if crate::opencode_transcript::store_family(&conn) == Some(true) {
+        "session_v2"
+    } else {
+        "session"
+    };
+    let Ok(mut statement) = conn.prepare(&format!(
+        "SELECT id, directory FROM {table} ORDER BY time_updated DESC, id DESC"
+    )) else {
         return Vec::new();
     };
     let Ok(mapped) = statement.query_map([], |row| {

@@ -54,6 +54,7 @@ pub(super) async fn serve(
         exit_tx,
         self_tx: core_tx.clone(),
         input_echo: HashMap::new(),
+        anchors: HashMap::new(),
         agents: Vec::new(),
         agents_read_ok: false,
         journal: crate::spawn_journal::JournalCache::load(),

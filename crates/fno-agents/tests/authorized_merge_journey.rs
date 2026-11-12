@@ -95,6 +95,9 @@ impl Probes for FakeGitHub {
         Ok(())
     }
     fn release_slot(&self, _cwd: &Path, _base_ref: &str, _pr: u64) {}
+    fn look_request(&self, _cwd: &Path, _facts: &PrFacts, _detail: &str) -> bool {
+        false
+    }
     fn slot_retested(&self, _cwd: &Path, _base_ref: &str, _pr: u64) -> bool {
         false
     }
@@ -107,6 +110,7 @@ impl Probes for FakeGitHub {
             rerun_recovered: None,
             rerun_failures: None,
             evals_gate_row: None,
+            unmeasured: None,
         }
     }
     fn fno_shell(
@@ -170,6 +174,7 @@ fn ask(effect: Effect) -> Request {
         supplied_review_hold: None,
         supplied_facts: None,
         supplied_evals_gate: None,
+        supplied_unmeasured: None,
     }
 }
 

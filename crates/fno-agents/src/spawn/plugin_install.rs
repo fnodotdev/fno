@@ -2401,7 +2401,7 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
             }
         }
         Some(harness) => {
-            if pack && (matches!(harness, "opencode" | "pi") || release || status) {
+            if pack && (matches!(harness, "opencode" | "pi" | "omp") || release || status) {
                 eprintln!(
                     "plugin install: --pack filters the staged tree; the opencode and pi \
                      adapters and the codex --release/--status forms have no pack profile"
@@ -2427,8 +2427,8 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
                 println!("{receipt}");
                 return if receipt.starts_with("unknown") { 1 } else { 0 };
             }
-            if harness == "pi" {
-                return run_pi_arm(status, json, extension_src.as_deref());
+            if harness == "pi" || harness == "omp" {
+                return run_pi_arm(harness, status, json, extension_src.as_deref());
             }
             if yes || dry_run {
                 eprintln!("plugin install: --yes/--dry-run apply to the opencode arm only");
@@ -2762,8 +2762,10 @@ fn print_status_prose(value: &serde_json::Value) {
     }
 }
 
-/// The pi arm: install the loop extension into pi's agent dir (honoring
-/// `PI_CODING_AGENT_DIR`), or read the install status. Neither path builds
+/// The pi arm, which omp shares: install the loop extension into the
+/// harness's agent dir (`~/.pi/agent` or `~/.omp/agent`, each honoring
+/// `PI_CODING_AGENT_DIR`), or read the install status. The file is the same
+/// for both; it names its host when the host loads it. Neither path builds
 /// the plugin stage or needs a repo checkout, so a relocated pi install
 /// works from the binary alone.
 ///
@@ -2774,10 +2776,8 @@ fn print_status_prose(value: &serde_json::Value) {
 ///   `installed` means the dest exists and, when a source was named, is
 ///   byte-equal to it. `skills` reads the same plugin-root pointer the command
 ///   renderer reads.
-fn run_pi_arm(status: bool, json: bool, extension_src: Option<&str>) -> i32 {
-    let dest = crate::pi::pi_agent_dir()
-        .join("extensions")
-        .join("footnote.ts");
+fn run_pi_arm(harness: &str, status: bool, json: bool, extension_src: Option<&str>) -> i32 {
+    let dest = pi_family_extension_dest(harness);
     let agent_dir_source = match std::env::var("PI_CODING_AGENT_DIR") {
         Ok(v) if !v.trim().is_empty() => "env",
         _ => "default",
@@ -2797,7 +2797,7 @@ fn run_pi_arm(status: bool, json: bool, extension_src: Option<&str>) -> i32 {
                 installed = files_byte_equal(&src, &dest).unwrap_or(false);
             }
         }
-        print_pi_receipt(installed, &dest, agent_dir_source, &skills, json);
+        print_pi_receipt(harness, installed, &dest, agent_dir_source, &skills, json);
         return 0;
     }
     let Some(src) = extension_src
@@ -2805,41 +2805,58 @@ fn run_pi_arm(status: bool, json: bool, extension_src: Option<&str>) -> i32 {
         .or_else(default_pi_extension_src)
     else {
         eprintln!(
-            "plugin install pi: no plugin tree carries the pi extension; pass --extension-src <path> (or --status)"
+            "plugin install {harness}: no plugin tree carries the pi extension; pass --extension-src <path> (or --status)"
         );
         return 2;
     };
     let src_path = src.as_path();
     if !src_path.is_file() {
         eprintln!(
-            "plugin install pi: extension source {} is not a file",
+            "plugin install {harness}: extension source {} is not a file",
             src_path.display()
         );
         return 1;
     }
     let dir = dest.parent().unwrap_or_else(|| Path::new("/"));
     if let Err(e) = std::fs::create_dir_all(dir) {
-        eprintln!("plugin install pi: cannot create {}: {e}", dir.display());
+        eprintln!(
+            "plugin install {harness}: cannot create {}: {e}",
+            dir.display()
+        );
         return 1;
     }
     // Same-directory temp + rename: a reader (pi loading its extensions)
     // never sees a partial copy.
     let tmp = dir.join(format!(".footnote.ts.{}.tmp", std::process::id()));
     if let Err(e) = std::fs::copy(src_path, &tmp) {
-        eprintln!("plugin install pi: cannot stage the copy: {e}");
+        eprintln!("plugin install {harness}: cannot stage the copy: {e}");
         let _ = std::fs::remove_file(&tmp);
         return 1;
     }
     if let Err(e) = std::fs::rename(&tmp, &dest) {
-        eprintln!("plugin install pi: cannot finalize {}: {e}", dest.display());
+        eprintln!(
+            "plugin install {harness}: cannot finalize {}: {e}",
+            dest.display()
+        );
         let _ = std::fs::remove_file(&tmp);
         return 1;
     }
-    print_pi_receipt(true, &dest, agent_dir_source, &skills, json);
+    print_pi_receipt(harness, true, &dest, agent_dir_source, &skills, json);
     0
 }
 
+/// `<agent dir>/extensions/footnote.ts` for pi or omp.
+fn pi_family_extension_dest(harness: &str) -> PathBuf {
+    let agent_dir = if harness == "omp" {
+        crate::omp::agent_dir()
+    } else {
+        crate::pi::pi_agent_dir()
+    };
+    agent_dir.join("extensions").join("footnote.ts")
+}
+
 fn print_pi_receipt(
+    harness: &str,
     installed: bool,
     dest: &Path,
     agent_dir_source: &str,
@@ -2851,8 +2868,8 @@ fn print_pi_receipt(
         // the Python door relays the answer instead of translating it.
         let answer = serde_json::json!({
             "installed": installed,
-            "cli": "pi",
-            "label": "pi",
+            "cli": harness,
+            "label": harness,
             "status": if installed { "installed" } else { "failed" },
             "note": format!(
                 "extension -> {} (agent dir from {}, skills: {})",
@@ -2867,7 +2884,7 @@ fn print_pi_receipt(
         println!("{answer}");
     } else {
         println!(
-            "pi extension {}: {} (agent dir from {}, skills: {})",
+            "{harness} extension {}: {} (agent dir from {}, skills: {})",
             if installed { "installed" } else { "absent" },
             dest.display(),
             agent_dir_source,
@@ -3514,10 +3531,8 @@ pub(crate) fn loop_install_probe(
                 ))
             })
         }
-        "pi" => {
-            let dest = crate::pi::pi_agent_dir()
-                .join("extensions")
-                .join("footnote.ts");
+        "pi" | "omp" => {
+            let dest = pi_family_extension_dest(harness);
             let src = extension_src
                 .map(Path::to_path_buf)
                 .or_else(default_pi_extension_src);
@@ -3531,7 +3546,7 @@ pub(crate) fn loop_install_probe(
                 Ok(())
             } else {
                 Err(format!(
-                    "pi extension {} is absent or stale",
+                    "{harness} extension {} is absent or stale",
                     dest.display()
                 ))
             })

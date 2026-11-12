@@ -166,8 +166,8 @@ check((release_dispatch.get("dry_run") or {}).get("type") == "boolean",
 publish_job = release_jobs.get("publish") or {}
 check(publish_job.get("environment") == "release",
       "release.yml's publish job sits behind the release approval environment")
-check((publish_job.get("needs") or []) == ["resolve", "binaries", "wheels"],
-      "release.yml's publish job runs after resolve and both build workflows")
+check((publish_job.get("needs") or []) == ["resolve", "binaries", "app", "wheels"],
+      "release.yml's publish job runs after resolve and the binaries, app and wheels build workflows")
 # Channel routing resolved through the resolve job's outputs; the group is
 # per channel and the nightly-dispatched rc cancels the parked candidate.
 publish_if = str(publish_job.get("if", ""))

@@ -195,9 +195,33 @@ fn block_rows() {
         ],
     });
     let out = merge_blocker(&probes, &payload);
-    assert_eq!(out["blockers"], json!(["github_blocked"]));
-    // Every required context passed, so the rules read explains nothing.
+    // Every required context passed, so the rules read explains nothing and
+    // names no unsatisfied rule. A hold the gate's own successful read
+    // cannot name must not stand: GitHub enforces its own rules at merge
+    // time, and the block only stranded a green PR beside a CLEAN state
+    // (2026-11-11: three merge holds, 51 of 51 checks passing).
+    assert_eq!(out["blockers"], json!([]));
     assert!(out["missing_required_checks"].is_null());
+    assert!(out["source"]
+        .as_str()
+        .map(|s| s.contains("no unsatisfied"))
+        .unwrap_or(false));
+
+    // A satisfied review requirement reads the same way: APPROVED beside a
+    // blocked state is the same stale-or-unmodeled story, never a hold.
+    let probes = FakeGh {
+        ok: true,
+        output: rules_output(json!([
+            {"type": "pull_request", "parameters": {"required_approving_review_count": 1}},
+        ])),
+        review_decision: "APPROVED".to_string(),
+        calls: RefCell::new(Vec::new()),
+    };
+    let out = merge_blocker(
+        &probes,
+        &json!({"merge_state": "blocked", "base_ref": "main", "cwd": "/repo", "pr": 1}),
+    );
+    assert_eq!(out["blockers"], json!([]));
 
     let probes = FakeGh {
         ok: true,
@@ -268,6 +292,54 @@ fn ci_verdict_fact_blocks_ready_on_red_and_pending() {
         out["blockers"],
         json!(["ci_pending", "not_mergeable_conflicting"])
     );
+}
+
+/// The unmeasured read: PR 82 merged ready with all 7 Actions runs
+/// on its head still queued and none started - the check-run rollup carried
+/// only fno's own passing statuses, so the verdict read unknown and unknown
+/// added no blocker. The runs listing the reader already holds is the
+/// evidence: zero completed runs on the head is unmeasured, never green.
+#[test]
+fn ci_unmeasured_reads_the_runs_listing() {
+    let head = "11a2fc423508de47db4b5669f06cf3a2c229f7ac";
+    // The specimen: 7 runs queued, none started.
+    let queued: Vec<Value> = [
+        "cli-ci",
+        "rust-ci",
+        "guards",
+        "crates-publish",
+        "review-coverage-gate",
+        "multiplayer-attestation",
+        "stacked-base-guard",
+    ]
+    .iter()
+    .map(|name| json!({"name": name, "status": "queued", "conclusion": null}))
+    .collect();
+    let out = ci_unmeasured_reason(&json!(queued), head);
+    assert_eq!(
+        out.as_deref(),
+        Some(format!("ci unmeasured: 7 runs queued, none completed at {head}").as_str())
+    );
+
+    // A head with completed runs plus some still running is measured:
+    // today's D3173 behavior keeps it.
+    let mixed = json!([
+        {"name": "cli-ci", "status": "completed", "conclusion": "success"},
+        {"name": "rust-ci", "status": "queued", "conclusion": null},
+    ]);
+    assert_eq!(ci_unmeasured_reason(&mixed, head), None);
+
+    // A listing that read and names no run blocks too: absent runs are
+    // unmeasured (the node's own words), not ready.
+    let out = ci_unmeasured_reason(&json!([]), head);
+    assert_eq!(
+        out.as_deref(),
+        Some(format!("ci unmeasured: no runs at {head}").as_str())
+    );
+
+    // A listing that was never read (the GraphQL route, a legacy payload)
+    // has no evidence either way and adds nothing.
+    assert_eq!(ci_unmeasured_reason(&Value::Null, head), None);
 }
 
 // --- AC5-HP .. AC9-HP: failure_cause ----------------------------------------

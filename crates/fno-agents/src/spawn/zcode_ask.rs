@@ -13,10 +13,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use crate::claude_ask::py_repr;
 use crate::claude_ask::AskOutcome;
 use crate::paths::AgentsHome;
 use crate::state::{load_registry, update_registry, RegistryEntry};
+
+use super::name_collision::{self as spawn_collision, Resolution};
 
 /// The ask/create turn's ceiling when the caller passes none. A seed turn of
 /// a real task outlives this only when the caller names a longer --timeout.
@@ -251,15 +252,10 @@ pub fn dispatch_zcode_once(
         Ok(registry) => registry,
         Err(error) => return AskOutcome::error(format!("registry read failed: {error}"), 12),
     };
-    if registry.find(name).is_some() {
-        return AskOutcome::error(
-            format!(
-                "agent {} already exists; use 'fno agents rm {}' first or pick another name",
-                py_repr(name),
-                name
-            ),
-            2,
-        );
+    match spawn_collision::resolve(home, &registry, name) {
+        Resolution::Refuse(line) => return AskOutcome::error(line, 2),
+        Resolution::Registry(line) => return AskOutcome::error(line, 12),
+        _ => {}
     }
 
     let prompt = if message.is_empty() { "hello" } else { message };

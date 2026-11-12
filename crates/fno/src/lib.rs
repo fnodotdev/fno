@@ -21,6 +21,8 @@ pub mod agents_menu;
 #[cfg(feature = "full")]
 pub mod agents_view;
 #[cfg(feature = "full")]
+pub mod app_api;
+#[cfg(feature = "full")]
 pub mod argv_witness;
 #[cfg(feature = "full")]
 pub mod attention_api;
@@ -88,8 +90,6 @@ pub mod cursor;
 pub mod decisions_overlay;
 #[cfg(feature = "full")]
 pub mod decisions_table;
-#[cfg(feature = "desktop")]
-pub mod desktop;
 #[cfg(feature = "full")]
 pub mod digest_overlay;
 #[cfg(feature = "full")]
@@ -133,6 +133,7 @@ pub mod group_help;
 pub mod inbox_user;
 #[cfg(feature = "full")]
 pub mod join_marker;
+pub mod keeper_wire;
 #[cfg(feature = "full")]
 pub mod keybindings_file;
 #[cfg(feature = "full")]
@@ -165,6 +166,8 @@ pub mod modal_select;
 pub mod model_catalog;
 #[cfg(feature = "full")]
 pub mod mouse;
+#[cfg(feature = "full")]
+pub mod must_enable;
 #[cfg(feature = "full")]
 pub mod mux_cli;
 #[cfg(feature = "full")]
@@ -210,6 +213,8 @@ pub mod path_migration;
 mod path_migration_tests;
 #[cfg(feature = "full")]
 pub mod paths_route;
+#[cfg(feature = "full")]
+pub(crate) mod plugins_feed;
 #[cfg(feature = "full")]
 pub mod popup;
 #[cfg(feature = "full")]

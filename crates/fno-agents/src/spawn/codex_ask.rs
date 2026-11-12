@@ -41,6 +41,8 @@ use crate::provider::render_command_seed;
 use crate::state::{find_keyed_mut, load_registry, update_registry};
 use crate::AgentStatus;
 
+use super::name_collision::{self as spawn_collision, Resolution};
+
 // ===========================================================================
 // Constants (pinned from codex 0.130.0 JSONL capture)
 // ===========================================================================
@@ -1183,16 +1185,10 @@ pub fn dispatch_codex_once(
             return AskOutcome::err(format!("registry read failed: {}", e), 12);
         }
     };
-    if registry.find(name).is_some() {
-        // Python: f"agent {name!r} already exists; ..." -> py_repr, not {:?}.
-        return AskOutcome::err(
-            format!(
-                "agent {} already exists; use 'fno agents rm {}' first or pick another name",
-                py_repr(name),
-                name
-            ),
-            2,
-        );
+    match spawn_collision::resolve(home, &registry, name) {
+        Resolution::Refuse(line) => return AskOutcome::err(line, 2),
+        Resolution::Registry(line) => return AskOutcome::err(line, 12),
+        _ => {}
     }
 
     // Create + exchange using the retained dispatch_create machinery.

@@ -539,7 +539,7 @@ if [ -n "$INSTALL_CARD" ]; then
   PANELS="$REPO_ROOT/plugins/fno-panels/mods"
   mkdir -p "$PACK/mods/one"
   cp "$PANELS/review-ledger/preview.png" "$PACK/mods/one/preview.png"
-  printf '# Recipe\n\nOpen it from Settings, Extensions.\n' > "$PACK/mods/one/RECIPE.md"
+  printf '# Recipe\n\nOpen it from Settings, Mods.\n' > "$PACK/mods/one/RECIPE.md"
   if [ "$INSTALL_CARD" = code ]; then
     RENDER='    run: [sh, -c, "while :; do date; sleep 1; done"]'
     TITLE="Clock"
@@ -632,8 +632,15 @@ def thread(name, harness, how, attach=None):
         "mux": None,
     } | ({} if attach is None else {"attach_id": attach})
 agents = [
-    # archer holds submitted mail mid-turn, so the sideline paints its held badge.
-    row("archer", "codex", "gpt-6-sol", ids[0 + off], "working", sids[1]) | {"mail_held": 8},
+    # archer holds submitted mail mid-turn, so the sideline paints its held
+    # badge; the oldest wait is 12 minutes before the demo epoch.
+    row("archer", "codex", "gpt-6-sol", ids[0 + off], "working", sids[1])
+    | {
+        "mail_held": 8,
+        "mail_held_since": datetime.datetime.fromtimestamp(
+            int(os.environ["FNO_DEMO_EPOCH"]) - 12 * 60, datetime.timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    },
     row("scout", "claude", "opus", ids[1 + off], "done", sids[0]),
     row("reviewer", "opencode", "zen", ids[2 + off], "working", sids[2]),
     # Blocked, so the strip's need-input count and the Input word render.
@@ -669,25 +676,24 @@ if os.environ.get("FNO_DEMO_FLATPINS"):
         lead("vega", "demo-sid-vega"),
         worker("vega-w1", "demo-sid-vega", "demo-sid-vega-w1"),
     ]
-# --holds adds the hold fixture: keeper's conversation hold has lapsed but
-# its bus-only stamp still waits on release, sentry carries a hold someone
-# set by hand, and eval-once is a headless one-shot that paints no row.
+# --holds adds the hold fixture: keeper carries a live conversation hold
+# (the fno-mail hold record), sentry takes mail only (the register door's
+# bus-only capability), and eval-once is a headless one-shot that paints no
+# row.
 if os.environ.get("FNO_DEMO_HOLDS"):
     live = {"inside_leg": {"state": "working", "seq": 1, "received_at": now}}
     hold_dir = os.path.join(os.path.dirname(db), "mail", "mail-hold")
     os.makedirs(hold_dir, exist_ok=True)
-    lapsed = datetime.datetime.fromtimestamp(
-        int(os.environ["FNO_DEMO_EPOCH"]) - 60, datetime.timezone.utc
+    until = datetime.datetime.fromtimestamp(
+        int(os.environ["FNO_DEMO_EPOCH"]) + 600, datetime.timezone.utc
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
-    for sid, source in (("demo-sid-keeper", "conversation"), ("demo-sid-sentry", None)):
-        clock = {"until": lapsed, "window_s": 600, "clock_kind": "wall", "ceiling": None}
-        if source:
-            clock["source"] = source
-        with open(os.path.join(hold_dir, sid + ".json"), "w") as f:
-            json.dump(clock, f)
+    keeper_sid = "6b65e7e1-0000-4000-8000-00000000d3e0"
+    with open(os.path.join(hold_dir, keeper_sid + ".json"), "w") as f:
+        json.dump({"session": keeper_sid, "until": until, "set_by": "conversation",
+                   "reason": "conversation", "clock": {"kind": "wall"}}, f)
     agents += [
         thread("keeper", "claude", "idle", attach="demo-keeper") | live | {
-            "delivery_policy": "bus-only", "harness_session_id": "demo-sid-keeper"},
+            "harness_session_id": keeper_sid},
         thread("sentry", "codex", "idle", attach="demo-sentry") | live | {
             "delivery_policy": "bus-only", "harness_session_id": "demo-sid-sentry"},
         thread("eval-once", "claude", "idle") | live | {"substrate": "headless"},

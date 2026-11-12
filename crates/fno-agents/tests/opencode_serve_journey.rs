@@ -1,19 +1,24 @@
 //! The unattended journey for opencode's serve lane. It covers launch,
-//! attach-writer steering, structured readback, and session liveness after the
-//! writer exits. Cleanup deletes the session and stops the private serve.
+//! steering, structured readback, and session liveness after the turn. Cleanup
+//! deletes the session and stops the private serve.
+//!
+//! It runs against whichever `opencode` is on PATH and follows the contract
+//! the boot classified: 1.x mints the session with the worker rules and runs
+//! each turn under the turn driver, 2.x goes over the `/api/*` routes. Set
+//! `FNO_JOURNEY_OPENCODE_CONTRACT=2.x` (or `1.x`) to refuse a run on the
+//! other contract, which is how a 2.x run proves the 2.x lane and not a 1.x
+//! fallback.
 //!
 //! Server-kill survival, review-lane selection, and viewport materialisation
 //! remain separate environment checks. They must not be inferred from a
 //! successful launch or a non-empty reply.
 //!
 //! Opt-in: runs only when `FNO_JOURNEY_OPENCODE=1` AND an `opencode` binary is
-//! on PATH (CI has neither - x-9a96). The live run against opencode 1.14.50 +
-//! the machine's default agent config is the recorded evidence for the flip;
-//! commit-time evidence lives in the x-d9f9 decision record.
+//! on PATH (CI has neither).
 
 use fno_agents::opencode_serve::{
     delete_session, dispatch_opencode_serve, ensure_serve, fetch_messages, fetch_session,
-    steer_existing_session,
+    steer_existing_session, ServeHandle, ServeMessage,
 };
 use fno_agents::paths::AgentsHome;
 use fno_agents::state::load_registry;
@@ -24,7 +29,6 @@ fn journey_enabled() -> bool {
     if std::env::var("FNO_JOURNEY_OPENCODE").ok().as_deref() != Some("1") {
         return false;
     }
-    // PATH probe, not a version pin (x-9a96 covers the pin question).
     std::process::Command::new("opencode")
         .arg("--version")
         .stdout(std::process::Stdio::null())
@@ -34,30 +38,52 @@ fn journey_enabled() -> bool {
         .unwrap_or(false)
 }
 
-/// The last assistant text part in the message readback, if any. Entries
-/// without an `info` object are SKIPPED, not propagated: one odd row must not
-/// make the poll read the whole turn as incomplete.
-fn last_assistant_text(messages: &serde_json::Value) -> Option<String> {
-    let arr = messages.as_array()?;
-    let mut out = None;
-    for msg in arr {
-        let Some(info) = msg.get("info") else {
-            continue;
-        };
-        if info.get("role").and_then(|r| r.as_str()) != Some("assistant") {
-            continue;
-        }
-        if let Some(parts) = msg.get("parts").and_then(|p| p.as_array()) {
-            for part in parts {
-                if part.get("type").and_then(|t| t.as_str()) == Some("text") {
-                    if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
-                        out = Some(text.to_string());
-                    }
-                }
+/// The last finished assistant text in the readback, if any.
+fn last_assistant_text(messages: &[ServeMessage]) -> Option<String> {
+    messages
+        .iter()
+        .filter(|m| m.role == "assistant" && m.complete)
+        .filter_map(|m| m.text.clone())
+        .last()
+}
+
+/// Poll the readback until a finished assistant reply contains `needle`.
+fn wait_for_reply(serve: &ServeHandle, session_id: &str, needle: &str) -> Option<String> {
+    let deadline = Instant::now() + Duration::from_secs(180);
+    while Instant::now() < deadline {
+        if let Ok(messages) = fetch_messages(serve, session_id) {
+            if let Some(text) = last_assistant_text(&messages).filter(|t| t.contains(needle)) {
+                return Some(text);
             }
         }
+        std::thread::sleep(Duration::from_secs(3));
     }
-    out
+    None
+}
+
+/// The session id the launch produced. 2.x names it in the receipt. 1.x
+/// leaves it to the worker's session report, so the registry row is read.
+fn launched_session_id(home: &AgentsHome, receipt: &serde_json::Value) -> String {
+    if let Some(id) = receipt
+        .pointer("/session_id")
+        .and_then(|v| v.as_str())
+        .filter(|id| !id.is_empty())
+    {
+        return id.to_string();
+    }
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while Instant::now() < deadline {
+        if let Ok(reg) = load_registry(&home.registry_json()) {
+            if let Some(id) = reg
+                .find("wk-journey")
+                .and_then(|row| row.harness_session_id.clone())
+            {
+                return id;
+            }
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    panic!("no session id: the receipt names none and no session report bound the row");
 }
 
 /// Kills the private serve pid on drop, so a FAILED assertion (which panics
@@ -66,8 +92,8 @@ fn last_assistant_text(messages: &serde_json::Value) -> Option<String> {
 struct ServeReaper(u32);
 impl Drop for ServeReaper {
     fn drop(&mut self) {
-        // Group TERM then group KILL, the fn-47ea driver pattern: `opencode
-        // serve` spawns children, and a pid TERM leaves them running.
+        // Group TERM then group KILL: `opencode serve` spawns children, and a
+        // pid TERM leaves them running.
         unsafe { libc::killpg(self.0 as libc::pid_t, libc::SIGTERM) };
         std::thread::sleep(std::time::Duration::from_millis(300));
         unsafe { libc::killpg(self.0 as libc::pid_t, libc::SIGKILL) };
@@ -87,17 +113,26 @@ fn opencode_bg_worker_completes_unattended_over_serve() {
     let cwd = dir.path().join("worktree");
     std::fs::create_dir_all(&cwd).unwrap();
     // A granted state dir, so the journey also proves the writable-dirs grant
-    // lands on the session (the double-writer blocker's fix).
+    // lands on the session.
     let state_dir = dir.path().join("state-root");
     std::fs::create_dir_all(&state_dir).unwrap();
 
     let serve = ensure_serve(&home).expect("serve boots unattended");
     let _reaper = ServeReaper(serve.pid);
-    // Boot proof: the generated config carries the unattended permission posture.
-    let config = std::fs::read_to_string(home.root().join("opencode-serve-config.json")).unwrap();
+    eprintln!("journey contract: {}", serve.contract.label());
+    if let Ok(wanted) = std::env::var("FNO_JOURNEY_OPENCODE_CONTRACT") {
+        assert_eq!(
+            serve.contract.label(),
+            wanted,
+            "the serve on PATH speaks the other contract"
+        );
+    }
+    // Boot proof: no contract boots with an fno permission config, so the
+    // user's grants bind.
+    let v1 = serve.contract.label() == "1.x";
     assert!(
-        config.contains("allow") && config.contains("*"),
-        "config: {config}"
+        !home.root().join("opencode-serve-config.json").exists(),
+        "fno writes no serve permission config"
     );
 
     // The dispatch under test: the public entry, so the env-read dirs path is
@@ -116,113 +151,80 @@ fn opencode_bg_worker_completes_unattended_over_serve() {
     std::env::remove_var("FNO_WORKER_ADD_DIRS");
     assert_eq!(outcome.exit_code, 0, "dispatch failed: {}", outcome.stderr);
     let receipt: serde_json::Value = serde_json::from_str(outcome.stdout.trim()).unwrap();
-    let session_id = receipt["session_id"].as_str().unwrap().to_string();
+    assert_eq!(
+        receipt.pointer("/contract").and_then(|v| v.as_str()),
+        Some(serve.contract.label())
+    );
+    let session_id = launched_session_id(&home, &receipt);
     assert!(
         session_id.starts_with("ses_"),
         "session id shape: {session_id}"
     );
 
     // Fire-and-forget proof: the spawn returned; the TURN runs on the serve.
-    // Wait for the assistant reply by polling the structured readback.
-    let deadline = Instant::now() + Duration::from_secs(180);
-    let mut reply = None;
-    while Instant::now() < deadline {
-        if let Ok(messages) = fetch_messages(&serve.base_url, &serve.token, &session_id) {
-            if let Some(text) = last_assistant_text(&messages) {
-                reply = Some(text);
-                break;
-            }
-        }
-        std::thread::sleep(Duration::from_secs(3));
-    }
-    let reply = reply.expect("no assistant reply within 180s");
+    let reply = wait_for_reply(&serve, &session_id, "journey-ok")
+        .expect("no journey-ok assistant reply within 180s");
+    eprintln!("first reply: {reply:?}");
+
+    // Structured capture is the SERVE's message readback: model identity and
+    // message ids a pane scrape could never give.
+    let messages = fetch_messages(&serve, &session_id).expect("readback for capture");
+    let assistant = messages
+        .iter()
+        .find(|m| m.role == "assistant")
+        .expect("assistant message in readback");
     assert!(
-        reply.contains("journey-ok"),
-        "worker answered {reply:?}, expected journey-ok"
+        assistant.model.as_deref().is_some_and(|m| !m.is_empty()),
+        "structured model identity on the readback: {assistant:?}"
+    );
+    assert!(
+        assistant.id.starts_with("msg_"),
+        "structured message id on the readback: {assistant:?}"
     );
 
-    // The writable-dirs grant is ON the session (scoped external_directory
-    // allow rule for the granted root).
-    let session =
-        fetch_session(&serve.base_url, &serve.token, &session_id).expect("session readback");
+    // The writable-dirs grant is ON the session: a scoped external_directory
+    // allow rule for the granted root, in each contract's rule shape.
+    let (list, name, pattern, verdict) = if v1 {
+        ("permission", "permission", "pattern", "action")
+    } else {
+        ("permissions", "action", "resource", "effect")
+    };
+    let session = fetch_session(&serve, &session_id).expect("session readback");
     let rules = session
-        .get("permission")
+        .get(list)
         .and_then(|p| p.as_array())
         .cloned()
         .unwrap_or_default();
     let granted = rules.iter().any(|r| {
-        r.get("permission").and_then(|p| p.as_str()) == Some("external_directory")
-            && r.get("action").and_then(|a| a.as_str()) == Some("allow")
-            && r.get("pattern")
+        r.get(name).and_then(|p| p.as_str()) == Some("external_directory")
+            && r.get(verdict).and_then(|a| a.as_str()) == Some("allow")
+            && r.get(pattern)
                 .and_then(|p| p.as_str())
-                .map(|p| p.starts_with(state_dir.to_string_lossy().as_ref()))
-                .unwrap_or(false)
+                .is_some_and(|p| p.starts_with(state_dir.to_string_lossy().as_ref()))
     });
     assert!(
         granted,
         "no external_directory allow for the state root: {rules:?}"
     );
-
-    // The registry row binds harness + session.
-    let reg = load_registry(&home.registry_json()).unwrap();
-    let row = reg.find("wk-journey").expect("registry row");
-    assert_eq!(row.harness.as_deref(), Some("opencode"));
-    assert_eq!(row.harness_session_id.as_deref(), Some(session_id.as_str()));
-    assert_eq!(row.substrate.as_deref(), Some("thread"));
-    assert!(row.pid.is_none(), "writer pid is not session liveness");
-
-    // Structured capture is the SERVE's message readback, not the writer's
-    // stdout (the attach writer prints nothing - verified live). The readback
-    // above already proved role/text; pin the structured fields a pane scrape
-    // could never give: model identity and message ids.
-    {
-        let messages = fetch_messages(&serve.base_url, &serve.token, &session_id)
-            .expect("readback for capture");
-        let arr = messages.as_array().expect("messages array");
-        let assistant = arr
-            .iter()
-            .find(|m| {
-                m.get("info")
-                    .and_then(|i| i.get("role"))
-                    .and_then(|r| r.as_str())
-                    == Some("assistant")
-            })
-            .expect("assistant message in readback");
-        let info = assistant.get("info").unwrap();
-        assert!(
-            info.get("modelID")
-                .and_then(|m| m.as_str())
-                .is_some_and(|m| !m.is_empty()),
-            "structured model identity on the readback: {info}"
-        );
-        assert!(
-            info.get("id")
-                .and_then(|i| i.as_str())
-                .is_some_and(|i| i.starts_with("msg_")),
-            "structured message id on the readback: {info}"
-        );
-    }
-
-    // The writer's log is the diagnostics trail (its stderr; stdout is empty
-    // on the attach path). Existence is the claim - non-emptiness is not,
-    // because a quiet run writes nothing.
+    // The driver's log is the diagnostics trail. Existence is the claim;
+    // a quiet run writes nothing.
     assert!(
         home.root()
             .join("agents")
             .join("logs")
             .join("wk-journey.jsonl")
             .exists(),
-        "writer log file missing"
+        "driver log file missing"
     );
 
-    // Steering reuses the launch writer and confirms a new serve message by
-    // id. The recalled token is the positive session marker for the second
-    // turn; a merely non-empty reply would only prove transport.
+    // Steering confirms a new serve message by id. The recalled token is the
+    // positive session marker for the second turn; a merely non-empty reply
+    // would only prove transport.
     let recalled = "serve-session-recall-efa4";
     let steer_id = steer_existing_session(
         &home,
         &session_id,
-        &format!("Remember this token exactly: {recalled}"),
+        &format!("Remember this token exactly and repeat it: {recalled}"),
         &cwd,
         None,
         Duration::from_secs(60),
@@ -232,27 +234,16 @@ fn opencode_bg_worker_completes_unattended_over_serve() {
         steer_id.starts_with("msg_"),
         "steering message id: {steer_id}"
     );
-    let deadline = Instant::now() + Duration::from_secs(180);
-    let mut recalled_reply = None;
-    while Instant::now() < deadline {
-        if let Ok(messages) = fetch_messages(&serve.base_url, &serve.token, &session_id) {
-            if last_assistant_text(&messages).is_some_and(|text| text.contains(recalled)) {
-                recalled_reply = Some(());
-                break;
-            }
-        }
-        std::thread::sleep(Duration::from_secs(3));
-    }
-    assert!(
-        recalled_reply.is_some(),
-        "second turn did not recall {recalled}"
+    wait_for_reply(&serve, &session_id, recalled)
+        .unwrap_or_else(|| panic!("second turn did not recall {recalled}"));
+
+    // The serve session remains addressable after the turn.
+    let session = fetch_session(&serve, &session_id).expect("session liveness readback");
+    assert_eq!(
+        session.pointer("/id").and_then(|v| v.as_str()),
+        Some(session_id.as_str())
     );
-    // The serve session remains addressable after the one-turn writer exits.
-    fetch_session(&serve.base_url, &serve.token, &session_id)
-        .expect("session liveness readback after writer exit");
 
     // Cleanup: session deleted; the reaper drops the serve pid on exit.
-    delete_session(&serve.base_url, &serve.token, &session_id).expect("session teardown");
+    delete_session(&serve, &session_id).expect("session teardown");
 }
-
-// tempfile + libc are dev-dependencies of the crate; serde_json is a main dep.

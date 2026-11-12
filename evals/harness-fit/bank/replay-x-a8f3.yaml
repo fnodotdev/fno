@@ -15,4 +15,4 @@ grade:
   - kind: exit
     command: "git checkout 469b2356a62e39f119caba5e6e78032a844e7106 -- cli/tests/test_pr_read_budget.py cli/tests/unit/test_harness_map_roster.py && (cd cli && uv run pytest tests/test_pr_read_budget.py tests/unit/test_harness_map_roster.py -q)"
 timeout_minutes: 45
-tags: [harness-fit]
+tags: [harness-fit, demoted]

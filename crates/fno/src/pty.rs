@@ -487,28 +487,6 @@ impl LocalPty {
         wire(pair, child, pane_id, out_tx, exit_tx, shell_rc)
     }
 
-    /// Spawn an explicit command (`argv[0]` + args) as a pane - the
-    /// `fno mux pane run` / agents-spawn primitive. No shell fallback: an
-    /// unspawnable argv is the caller's error, surfaced verbatim. Env + cwd
-    /// (incl. `FNO_SESSION`) match [`PtyShell::spawn`].
-    #[allow(clippy::too_many_arguments)]
-    pub fn spawn_cmd(
-        argv: &[String],
-        rows: u16,
-        cols: u16,
-        cwd: Option<&std::path::Path>,
-        session: &str,
-        pane_id: u64,
-        out_tx: tokio::sync::mpsc::Sender<(u64, PaneChunk)>,
-        exit_tx: tokio::sync::mpsc::Sender<u64>,
-    ) -> Result<LocalPty, PtyError> {
-        let permit =
-            crate::process_admission::admit_fleet().map_err(|e| PtyError::Spawn(e.to_string()))?;
-        Self::spawn_cmd_with_permit(
-            argv, rows, cols, cwd, session, pane_id, out_tx, exit_tx, permit,
-        )
-    }
-
     /// Spawn an explicit command after a server-owned admission decision.
     #[allow(clippy::too_many_arguments)]
     pub fn spawn_cmd_with_permit(
@@ -521,6 +499,7 @@ impl LocalPty {
         out_tx: tokio::sync::mpsc::Sender<(u64, PaneChunk)>,
         exit_tx: tokio::sync::mpsc::Sender<u64>,
         permit: crate::process_admission::AdmissionPermit,
+        env: &[(String, String)],
     ) -> Result<LocalPty, PtyError> {
         let (program, args) = argv
             .split_first()
@@ -533,6 +512,11 @@ impl LocalPty {
         let shell_rc = apply_shell_integration(&mut cmd, OsStr::new(program), session, pane_id);
         for a in args {
             cmd.arg(a);
+        }
+        // Serve-seat pairs (and any future carrier): child env, stated like
+        // base_command's own set, never argv.
+        for (k, v) in env {
+            cmd.env(k, v);
         }
         let mut child = {
             let _fork = fork_guard();
@@ -686,8 +670,19 @@ impl PtyShell {
         out_tx: tokio::sync::mpsc::Sender<(u64, PaneChunk)>,
         exit_tx: tokio::sync::mpsc::Sender<u64>,
     ) -> Result<PtyShell, PtyError> {
-        LocalPty::spawn_cmd(argv, rows, cols, cwd, session, pane_id, out_tx, exit_tx)
-            .map(PtyShell::Local)
+        LocalPty::spawn_cmd_with_permit(
+            argv,
+            rows,
+            cols,
+            cwd,
+            session,
+            pane_id,
+            out_tx,
+            exit_tx,
+            crate::process_admission::admit_fleet().map_err(|e| PtyError::Spawn(e.to_string()))?,
+            &[],
+        )
+        .map(PtyShell::Local)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -701,9 +696,10 @@ impl PtyShell {
         out_tx: tokio::sync::mpsc::Sender<(u64, PaneChunk)>,
         exit_tx: tokio::sync::mpsc::Sender<u64>,
         permit: crate::process_admission::AdmissionPermit,
+        env: &[(String, String)],
     ) -> Result<PtyShell, PtyError> {
         LocalPty::spawn_cmd_with_permit(
-            argv, rows, cols, cwd, session, pane_id, out_tx, exit_tx, permit,
+            argv, rows, cols, cwd, session, pane_id, out_tx, exit_tx, permit, env,
         )
         .map(PtyShell::Local)
     }
@@ -729,6 +725,7 @@ impl PtyShell {
         out_tx: tokio::sync::mpsc::Sender<(u64, PaneChunk)>,
         exit_tx: tokio::sync::mpsc::Sender<u64>,
         permit: crate::process_admission::AdmissionPermit,
+        env: &[(String, String)],
     ) -> Result<(PtyShell, Vec<u8>), PtyError> {
         if argv.is_empty() {
             return Err(PtyError::Spawn("empty argv".into()));
@@ -746,7 +743,7 @@ impl PtyShell {
             .map_err(|e| PtyError::Spawn(format!("create keeper directory: {e}")))?;
         let sock_path = dir.join(format!("{session}-{pane_id}.sock"));
         let mut keeper_child = launch_keeper(
-            keeper_bin, &sock_path, session, pane_id, rows, cols, cwd, argv,
+            keeper_bin, &sock_path, session, pane_id, rows, cols, cwd, argv, env,
         )?;
         // The failure paths below kill and reap the keeper; a success hands
         // it to a waiter thread that reaps it when it exits.
@@ -1160,6 +1157,7 @@ fn keeper_command(
     cols: u16,
     cwd: Option<&std::path::Path>,
     argv: &[String],
+    env: &[(String, String)],
 ) -> std::process::Command {
     let mut cmd = std::process::Command::new(keeper_bin);
     cmd.args([
@@ -1181,6 +1179,13 @@ fn keeper_command(
         "--",
     ]);
     cmd.args(argv);
+    // The serve seat's pairs ride the KEEPER's env: apply_pane_child_env
+    // (pane_keeper.rs) removes only the fixed host lists, so the child
+    // inherits these - the password crosses one process boundary by env,
+    // never by argv.
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
     // stderr inherits: a keeper startup failure reaches the server's log.
     cmd.stdin(std::process::Stdio::null());
     cmd.stdout(std::process::Stdio::null());
@@ -1205,9 +1210,10 @@ fn launch_keeper(
     cols: u16,
     cwd: Option<&std::path::Path>,
     argv: &[String],
+    env: &[(String, String)],
 ) -> Result<std::process::Child, PtyError> {
     let mut cmd = keeper_command(
-        keeper_bin, sock_path, session, pane_id, rows, cols, cwd, argv,
+        keeper_bin, sock_path, session, pane_id, rows, cols, cwd, argv, env,
     );
     let _fork = fork_guard();
     cmd.spawn().map_err(|e| {
@@ -1350,7 +1356,7 @@ fn keeper_handshake(
                 if e.kind() == std::io::ErrorKind::WouldBlock
                     || e.kind() == std::io::ErrorKind::TimedOut =>
             {
-                return Err(expired())
+                return Err(expired());
             }
             Err(e) => return Err(e.to_string()),
         };
@@ -2357,6 +2363,7 @@ mod tests {
             80,
             None,
             &["/bin/cat".to_string()],
+            &[],
         );
         let envs: std::collections::HashMap<String, String> = cmd
             .get_envs()

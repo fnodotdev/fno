@@ -276,6 +276,10 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
     let dir = home.root().join("blueprint-stall");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let emitter = crate::events::EventEmitter::new(home.events_jsonl(), "daemon");
+    let cwds = crate::burn_watch::manifest_cwds(&crate::paths::space_dir(
+        &std::env::current_dir().unwrap_or_default(),
+    ));
+    let claims = crate::burn_watch::node_claim_cwds(None);
     let mut owners = None;
     for entry in &registry.entries {
         let result = (|| -> Result<(), String> {
@@ -348,8 +352,18 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
                     .transcript_path
                     .as_deref()
                     .filter(|p| Path::new(p).is_file());
+                // The stall evidence reads the worker's own checkout: the
+                // node's target manifest names its worktree, the same join
+                // the burn arm uses. An unresolved checkout is unmeasured,
+                // never the launch tree's answer.
                 let (span, commits) = match path.and_then(|p| tail_text(Path::new(p))) {
-                    Some((text, skip)) => (verify_span(&text, skip), commits_past_base(&entry.cwd)),
+                    Some((text, skip)) => (
+                        verify_span(&text, skip),
+                        crate::burn_watch::resolve_worker_cwd(
+                            &cwds, &claims, sid, node, &entry.cwd,
+                        )
+                        .and_then(|cwd| commits_past_base(&cwd)),
+                    ),
                     None => (None, None),
                 };
                 evidence(span, commits, goal_paused, now)

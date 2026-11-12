@@ -15,7 +15,7 @@ use crate::graph_store::BoundedLock;
 use crate::org_board::queues::parse_lane;
 use serde_json::{json, Value};
 use std::os::unix::fs::MetadataExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Route one `fno inbox outstanding <word>` tail. `None` is not a
 /// subcommand: the caller falls through to the listing parse.
@@ -1151,6 +1151,46 @@ fn run_ask(args: &[String]) -> i32 {
         }
     };
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let filing = AskFiling {
+        text,
+        template,
+        ask,
+        options,
+        blocks,
+        node,
+        subject,
+        images,
+    };
+    file_ask(filing, &cwd).0
+}
+
+/// One parsed `fno inbox outstanding ask`.
+pub(crate) struct AskFiling {
+    pub text: String,
+    pub template: bool,
+    pub ask: Option<String>,
+    pub options: Vec<String>,
+    pub blocks: Vec<String>,
+    pub node: Option<String>,
+    pub subject: Option<String>,
+    pub images: Vec<PathBuf>,
+}
+
+/// File one ask from `cwd` through the intake, the ladder and the notify
+/// table: the door `fno inbox outstanding ask` and in-process askers share.
+/// Returns the exit code and the question id.
+pub(crate) fn file_ask(filing: AskFiling, cwd: &Path) -> (i32, Option<String>) {
+    let AskFiling {
+        text,
+        template,
+        ask,
+        options,
+        blocks,
+        node,
+        subject,
+        images,
+    } = filing;
+    let cwd = cwd.to_path_buf();
     let home = crate::paths::AgentsHome::from_env();
     let ident = crate::spawn_context::resolve_self_identity(
         &|name| std::env::var(name).ok(),
@@ -1210,7 +1250,7 @@ fn run_ask(args: &[String]) -> i32 {
         }
     }
     if answer.exit_code != 0 {
-        return answer.exit_code;
+        return (answer.exit_code, None);
     }
     if let Some(qid) = &answer.qid {
         if !template {
@@ -1258,7 +1298,7 @@ fn run_ask(args: &[String]) -> i32 {
             println!("{}", crate::question_ladder::push_line(qid, &payload));
         }
     }
-    0
+    (0, answer.qid)
 }
 
 #[cfg(test)]

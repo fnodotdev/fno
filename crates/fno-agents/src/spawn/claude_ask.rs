@@ -2083,6 +2083,8 @@ use crate::state::{
 };
 use crate::AgentStatus;
 
+use super::name_collision::{self as spawn_collision, Resolution};
+
 /// `_NAME_MAX_LEN` / `_FROM_NAME_MAX_LEN`.
 const NAME_MAX_LEN: usize = 128;
 const FROM_NAME_MAX_LEN: usize = 128;
@@ -2650,16 +2652,10 @@ pub fn dispatch_claude_spawn(
             return AskOutcome::err(format!("registry read failed: {}", e), 12);
         }
     };
-    if registry.find(name).is_some() {
-        // Python: f"agent {name!r} already exists; ..." -> py_repr, not {:?}.
-        return AskOutcome::err(
-            format!(
-                "agent {} already exists; use 'fno agents rm {}' first or pick another name",
-                py_repr(name),
-                name
-            ),
-            2,
-        );
+    match spawn_collision::resolve(home, &registry, name) {
+        Resolution::Refuse(line) => return AskOutcome::err(line, 2),
+        Resolution::Registry(line) => return AskOutcome::err(line, 12),
+        _ => {}
     }
 
     // --yolo now maps to bypassPermissions for claude (was a no-op); an

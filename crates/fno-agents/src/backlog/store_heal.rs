@@ -302,11 +302,16 @@ fn probe_opencode(token: &str) -> std::io::Result<Vec<StoreHit>> {
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(std::io::Error::other)?;
+    let table = if crate::opencode_transcript::store_family(&connection) == Some(true) {
+        "session_v2"
+    } else {
+        "session"
+    };
     let mut statement = connection
-        .prepare(
-            "SELECT id, directory FROM session \
-             WHERE id = ?1 OR substr(id, -8) = ?1 OR substr(id, 1, 8) = ?1",
-        )
+        .prepare(&format!(
+            "SELECT id, directory FROM {table} \
+             WHERE id = ?1 OR substr(id, -8) = ?1 OR substr(id, 1, 8) = ?1"
+        ))
         .map_err(std::io::Error::other)?;
     let rows = statement
         .query_map([token], |row| {

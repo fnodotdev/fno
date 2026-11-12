@@ -53,6 +53,7 @@ pub(super) struct FleetArms {
     otlp_export: crate::otlp_export::Arm,
     eval_events: crate::eval_events::Arm,
     usage_events: crate::usage_events::Arm,
+    usage_report: crate::usage_report::Arm,
     question_judge: crate::question_judge::Arm,
     burn_watch: crate::burn_watch::Arm,
     watch_expiry: crate::watch_expiry::Arm,
@@ -168,6 +169,7 @@ impl FleetArms {
             otlp_export: crate::otlp_export::Arm::new(opts.agents_config_cwd.clone()),
             eval_events: crate::eval_events::Arm::new(opts.agents_config_cwd.clone()),
             usage_events: crate::usage_events::Arm::new(opts.agents_config_cwd.clone()),
+            usage_report: crate::usage_report::Arm::new(opts.agents_config_cwd.clone()),
             question_judge: crate::question_judge::Arm::new(opts.agents_config_cwd.clone()),
             burn_watch: crate::burn_watch::Arm::default(),
             watch_expiry: crate::watch_expiry::Arm::default(),
@@ -400,6 +402,8 @@ impl FleetArms {
         // Usage analytics: allowlisted journal rows leave as PostHog events
         // only from machines whose config opted in (default off).
         crate::usage_events::maybe_tick(&self.usage_events, ctx.home.clone());
+        // The public daily report: nothing posts without a recorded yes.
+        crate::usage_report::maybe_tick(&self.usage_report, ctx.home.clone());
         crate::question_judge::maybe_tick(&self.question_judge, ctx.home.clone());
         crate::burn_watch::maybe_tick(&self.burn_watch, ctx.home.clone());
         crate::watch_expiry::maybe_tick(&self.watch_expiry, ctx.home.clone());

@@ -40,7 +40,9 @@ pub fn run(args: &[String]) -> i32 {
         "drafts" => crate::evals_drafts::run(rest),
         "gate-retry" => crate::evals_gate::retry(rest),
         "events" => {
-            if rest.iter().any(|a| a == "--usage") {
+            if rest.first().is_some_and(|a| a == "--report") {
+                crate::usage_report::command(rest.get(1..).unwrap_or(&[]))
+            } else if rest.iter().any(|a| a == "--usage") {
                 crate::usage_events::preview_command(rest)
             } else {
                 crate::eval_events::preview_command(rest)

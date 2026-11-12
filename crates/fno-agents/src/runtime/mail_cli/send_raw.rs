@@ -266,7 +266,9 @@ fn raw_send(
         );
     }
 
-    if str_field(&entry, "delivery_policy") == "bus-only" {
+    // Both a hold record and the mail-only capability keep typed text off
+    // the session; the gate reads both.
+    {
         let token = if session_id.is_empty() {
             name.to_string()
         } else {
@@ -274,8 +276,12 @@ fn raw_send(
         };
         let verdict = crate::mail_hold::gate(&token, Some(stripped), chrono::Utc::now());
         if !verdict.deliver {
+            let why = match &verdict.receipt {
+                Some(receipt) => receipt.clone(),
+                None => "delivery-policy bus-only".to_string(),
+            };
             let detail = format!(
-                "{} is DND (delivery-policy bus-only): prompt-line injection is forbidden for this recipient. Send wrapped mail instead - it queues durable and surfaces at their turn boundary",
+                "{} is DND ({why}): prompt-line injection is forbidden for this recipient. Send wrapped mail instead - it queues durable and surfaces at their turn boundary",
                 py_repr(name)
             );
             if check {

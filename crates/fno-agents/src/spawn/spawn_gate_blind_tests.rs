@@ -317,3 +317,87 @@ fn an_unreadable_instrument_admits() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A refusal through `run_gate` leaves one `spawn_gate_refused` row. The
+/// fleet-incident stop is the cheapest deterministic refusal: a stopped
+/// record in the temp agents home holds the `spawns` scope for an
+/// agent-origin caller, `decide_gate` refuses on its first arm, and the
+/// seam emits before the verdict line prints. Guard:
+/// scripts/ci/check-gate-refusals-emit.sh.
+#[test]
+fn a_fleet_stop_refusal_emits_spawn_gate_refused() {
+    let _g = crate::claims::test_env_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _id = AgentSelfFixture::set();
+    let dir = std::env::temp_dir().join(format!("fno-gate-emit-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let prior_home = std::env::var_os("FNO_AGENTS_HOME");
+    std::env::set_var("FNO_AGENTS_HOME", &dir);
+    let prior_spawn_gate = std::env::var_os("FNO_SPAWN_GATE");
+    std::env::remove_var("FNO_SPAWN_GATE");
+    let prior_config = std::env::var_os("FNO_CONFIG");
+    std::env::remove_var("FNO_CONFIG");
+    std::fs::write(
+        crate::paths::AgentsHome::from_env().fleet_stop_json(),
+        r#"{"version":1,"state":"stopped","generation":1,"changed_at":"2026-11-12T00:00:00Z","changed_by":"gate-emit-test","reason":"gate-emit-test","holds":["spawns"]}"#,
+    )
+    .unwrap();
+
+    let got = run_gate(
+        &dir,
+        &dir.join("registry.json"),
+        GateInput {
+            name: "t-gate-emit".into(),
+            substrate: "bg".into(),
+            ..Default::default()
+        },
+    );
+
+    match prior_home {
+        Some(value) => std::env::set_var("FNO_AGENTS_HOME", value),
+        None => std::env::remove_var("FNO_AGENTS_HOME"),
+    }
+    match prior_spawn_gate {
+        Some(value) => std::env::set_var("FNO_SPAWN_GATE", value),
+        None => std::env::remove_var("FNO_SPAWN_GATE"),
+    }
+    match prior_config {
+        Some(value) => std::env::set_var("FNO_CONFIG", value),
+        None => std::env::remove_var("FNO_CONFIG"),
+    }
+
+    let refusal = got.expect_err("a fleet stop refuses the spawn");
+    assert_eq!(refusal.exit_code, crate::spawn_gate::EXIT_FLEET_STOP);
+    // The store commit is the acknowledgement boundary: rows live in the
+    // SQLite store beside the journal anchor, never a plain file, so the
+    // read goes through query_events.
+    let rows = crate::event_store::query_events(
+        &dir.join("events.jsonl"),
+        &crate::event_store::EventQuery {
+            types: vec!["spawn_gate_refused".into()],
+            ..Default::default()
+        },
+    )
+    .expect("read the event store");
+    assert_eq!(
+        rows.len(),
+        1,
+        "exactly one spawn_gate_refused row: {:?}",
+        rows.iter().map(|r| &r.line).collect::<Vec<_>>()
+    );
+    let line = rows
+        .first()
+        .map(|r| r.line.as_str())
+        .expect("query_events returned the refused row");
+    assert!(
+        line.contains("\"gate\":\"rust\"") && line.contains("\"reason\":\"fleet-stop\""),
+        "the row must name the leg and cause: {line}"
+    );
+    assert!(
+        line.contains("\"name\":\"t-gate-emit\""),
+        "the row must carry the worker name: {line}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

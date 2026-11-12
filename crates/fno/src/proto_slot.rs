@@ -6,14 +6,18 @@ use serde::{Deserialize, Serialize};
 
 /// What a layout slot binds to (v44). Exactly one slot binds `Anchor`
 /// (the calling pane the subtree replaces); `Fno` reuses a live session's pane;
-/// `Shell` is an intentional empty pane. Raw commands are out of scope (Locked
-/// Decision 9) - launch stays in the agents subsystem.
+/// `Shell` is an intentional empty pane. `Mod` carries only a `<pack>/<mod>`
+/// target: the server opens it through the one fixed `fno config plugins open`
+/// argv, so no spec can name another command (Locked Decision 9). Other raw
+/// commands stay out of scope - launch stays in the agents subsystem.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum LayoutBinding {
     Anchor,
     Fno(String),
     Shell,
+    /// A plugin mod, as `<pack>/<mod>`.
+    Mod(String),
 }
 
 /// A persisted portal seat: the portal index and the row key it

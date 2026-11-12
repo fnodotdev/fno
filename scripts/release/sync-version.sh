@@ -68,7 +68,7 @@ if [[ "$arg" == "--check" ]]; then
   want_semver="$(pep_to_semver "$want_pep")"
   bad=0
   # Cargo carries the semver spelling; everything else carries the PEP 440 one.
-  for cf in crates/fno/Cargo.toml crates/fno-agents/Cargo.toml crates/fno-mail/Cargo.toml; do
+  for cf in crates/fno/Cargo.toml crates/fno-agents/Cargo.toml crates/fno-mail/Cargo.toml crates/fno-app/Cargo.toml; do
     got="$(perl -ne 'if(/^version = "(.*)"/){print $1; exit}' "$cf")"
     [[ "$got" == "$want_semver" ]] || { echo "drift: $cf = $got (want $want_semver)"; bad=1; }
   done
@@ -121,7 +121,7 @@ perl -i -pe "s/^__version__ = \".*\"/__version__ = \"${ver}\"/" cli/src/fno/__in
 # 2. Rust crates + their lockfiles, in the semver form. `^version = ` matches
 #    only the [package] version (rust-version and dependency lines never start
 #    with `version `).
-for cf in crates/fno/Cargo.toml crates/fno-agents/Cargo.toml crates/fno-mail/Cargo.toml; do
+for cf in crates/fno/Cargo.toml crates/fno-agents/Cargo.toml crates/fno-mail/Cargo.toml crates/fno-app/Cargo.toml; do
   perl -i -pe "s/^version = \".*\"/version = \"${semver}\"/" "$cf"
   cargo update --manifest-path "$cf" -p "$(basename "$(dirname "$cf")")" \
     --precise "${semver}" >/dev/null 2>&1 || true

@@ -24,6 +24,8 @@ cat >"$jsonl" <<'EOF'
 {"reason":"compiler-message","message":{"code":{"code":"clippy::indexing_slicing"},"spans":[{"file_name":"src/spawn_seam.rs","line_start":92,"is_primary":true,"text":[{"text":"    let typed = flag_value(&args[1..], &[\"--name\"]).is_some();"}]}]}}
 {"reason":"compiler-message","message":{"code":{"code":"clippy::indexing_slicing"},"spans":[{"file_name":"src/spawn_seam.rs","line_start":92,"is_primary":true,"text":[{"text":"    let typed = flag_value(&args[1..len], &[\"--name\"]).is_some();"}]}]}}
 {"reason":"compiler-message","message":{"code":{"code":"clippy::disallowed_methods"},"spans":[{"file_name":"src/plugin_install.rs","line_start":303,"is_primary":true,"text":[{"text":"            .output()"}]}]}}
+{"reason":"compiler-message","message":{"code":{"code":"clippy::unwrap_used"},"spans":[{"file_name":"src/daemon.rs","line_start":7,"is_primary":true,"text":[{"text":"    let n = rows.first().unwrap();"}]}]}}
+{"reason":"compiler-message","message":{"code":{"code":"clippy::pedantic"},"spans":[{"file_name":"src/daemon.rs","line_start":9,"is_primary":true,"text":[{"text":"    let m = 1;"}]}]}}
 {"reason":"compiler-message","message":{"code":{"code":"unused_variables"},"spans":[{"file_name":"src/other.rs","line_start":1,"is_primary":true,"text":[{"text":"    let unused = 1;"}]}]}}
 {"reason":"compiler-message","message":{"code":{"code":"clippy::correctness"},"spans":[{"file_name":"/rustc/deadbeef/library/core/src/num.rs","line_start":1,"is_primary":true,"text":[{"text":"panic!()"}]}]}}
 {"reason":"compiler-artifact","target":{"name":"fno-agents"}}
@@ -33,15 +35,18 @@ CRATE=crates/fno-agents
 key_slice="$CRATE/src/spawn_seam.rs	clippy::indexing_slicing	let typed = flag_value(&args[1..], &[\"--name\"]).is_some();"
 key_slice_edited="$CRATE/src/spawn_seam.rs	clippy::indexing_slicing	let typed = flag_value(&args[1..len], &[\"--name\"]).is_some();"
 key_output="$CRATE/src/plugin_install.rs	clippy::disallowed_methods	.output()"
+key_unwrap="$CRATE/src/daemon.rs	clippy::unwrap_used	let n = rows.first().unwrap();"
 
 # 1. Parser: exact keys for the clippy lints, two filters applied.
 # No `grep -q` on a pipe: under pipefail, grep's early exit on a match can
 # SIGPIPE the producer and flip a found match into a false miss.
 keys="$("$GATE" --extract "$jsonl" "$CRATE")"
-[[ "$(printf '%s\n' "$keys" | grep -c .)" -eq 3 ]] || fail "expected 3 keys, got: $keys"
+[[ "$(printf '%s\n' "$keys" | grep -c .)" -eq 4 ]] || fail "expected 4 keys, got: $keys"
 printf '%s\n' "$keys" | grep -Fx "$key_slice" >/dev/null || fail "missing baselined slice key"
 printf '%s\n' "$keys" | grep -Fx "$key_slice_edited" >/dev/null || fail "missing edited-line key"
 printf '%s\n' "$keys" | grep -Fx "$key_output" >/dev/null || fail "missing disallowed_methods key"
+printf '%s\n' "$keys" | grep -Fx "$key_unwrap" >/dev/null || fail "missing product-lint (unwrap_used) key"
+if printf '%s\n' "$keys" | grep -F "clippy::pedantic" >/dev/null; then fail "unratcheted clippy lint leaked into keys"; fi
 if printf '%s\n' "$keys" | grep -F "unused_variables" >/dev/null; then fail "rustc diagnostic leaked into clippy keys"; fi
 if printf '%s\n' "$keys" | grep -F "/rustc/" >/dev/null; then fail "foreign macro path leaked into clippy keys"; fi
 
