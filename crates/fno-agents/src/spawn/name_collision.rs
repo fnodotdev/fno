@@ -105,13 +105,14 @@ pub fn resolve(home: &AgentsHome, registry: &Registry, name: &str) -> Resolution
     // the write would mark a live session removed if the write was refused.
     // A resolver that holds the pre-write row sees row-gone briefly, and the
     // tombstone heals any retry after it.
+    let mut tombstone_error = serde_json::Value::Null;
     if let Some(session_id) = stale
         .harness_session_id
         .as_deref()
         .map(str::trim)
         .filter(|session_id| !session_id.is_empty())
     {
-        let _ = crate::rm_tombstone::record(
+        if let Err(why) = crate::rm_tombstone::record(
             home,
             stale.harness_name(),
             session_id,
@@ -119,13 +120,19 @@ pub fn resolve(home: &AgentsHome, registry: &Registry, name: &str) -> Resolution
             &stale.name,
             &stale.cwd,
             stale.host_mode.as_deref().unwrap_or_default(),
-        );
+        ) {
+            tombstone_error = why.into();
+        }
         let _ = crate::wake_name::stamp_from_row(home, &stale);
     }
     emit_event(
         &home.events_jsonl(),
         "agent_name_reclaimed",
-        &[("name", name.into()), ("pid", pid.into())],
+        &[
+            ("name", name.into()),
+            ("pid", pid.into()),
+            ("tombstone_error", tombstone_error),
+        ],
     );
     Resolution::Reclaimed { pid }
 }

@@ -6748,6 +6748,8 @@ crates/fno-agents/src/runtime/daemon_tests.rs	clippy::indexing_slicing	r.entries
 crates/fno-agents/src/runtime/daemon_tests.rs	clippy::indexing_slicing	r.entries[0].status = AgentStatus::Exited;
 crates/fno-agents/src/runtime/daemon_tests.rs	clippy::indexing_slicing	registry.entries[0].status = AgentStatus::Orphaned;
 crates/fno-agents/src/runtime/daemon_tests.rs	clippy::indexing_slicing	result["fields_omitted"], contract["projection_omissions"],
+crates/fno-agents/src/runtime/delivery/keeper.rs	clippy::let_underscore_must_use	let _ = cs.set_read_timeout(Some(Duration::from_millis(50)));
+crates/fno-agents/src/runtime/delivery/keeper.rs	clippy::too_many_lines	pub fn deliver_via_keeper_socket_in(
 crates/fno-agents/src/runtime/discovered_sessions.rs	clippy::indexing_slicing	assert_eq!(live[0].cwd, "/repo");
 crates/fno-agents/src/runtime/discovered_sessions.rs	clippy::indexing_slicing	assert_eq!(live[0].name.as_deref(), Some("named"));
 crates/fno-agents/src/runtime/discovered_sessions.rs	clippy::indexing_slicing	assert_eq!(live[0].session_id, "ABCDEF01-x");
@@ -8216,7 +8218,7 @@ crates/fno-agents/src/runtime/mail_control_drain.rs	clippy::let_underscore_must_
 crates/fno-agents/src/runtime/mail_envelope.rs	clippy::indexing_slicing	eprintln!("mail-envelope: {} needs a value", args[i]);
 crates/fno-agents/src/runtime/mail_envelope.rs	clippy::indexing_slicing	match args[i].as_str() {
 crates/fno-agents/src/runtime/mail_envelope.rs	clippy::indexing_slicing	println!("{}", out[0]);
-crates/fno-agents/src/runtime/mail_envelope.rs	clippy::too_many_lines	fn render(input: &Value, registry_path: &Path) -> Result<String, String> {
+crates/fno-agents/src/runtime/mail_envelope.rs	clippy::too_many_lines	fn render_turn(
 crates/fno-agents/src/runtime/mail_header.rs	clippy::indexing_slicing	assert_eq!(both[0]["from"], "short");
 crates/fno-agents/src/runtime/mail_header.rs	clippy::indexing_slicing	assert_eq!(both[0]["from_session"], "full");
 crates/fno-agents/src/runtime/mail_header.rs	clippy::indexing_slicing	assert_eq!(tags[0]["from"], "s1");
@@ -8312,11 +8314,9 @@ crates/fno-agents/src/runtime/mail_inject.rs	clippy::indexing_slicing	matches!(&
 crates/fno-agents/src/runtime/mail_inject.rs	clippy::indexing_slicing	v["delivered"] = serde_json::json!(legacy_outcome(Ok(state.clone())).is_ok());
 crates/fno-agents/src/runtime/mail_inject.rs	clippy::indexing_slicing	v["reason"] = serde_json::json!(state.reason().unwrap_or(state.word()));
 crates/fno-agents/src/runtime/mail_inject.rs	clippy::let_underscore_must_use	let _ = crate::events::EventEmitter::new(events_path, "daemon")
-crates/fno-agents/src/runtime/mail_inject.rs	clippy::let_underscore_must_use	let _ = cs.set_read_timeout(Some(Duration::from_millis(50)));
 crates/fno-agents/src/runtime/mail_inject.rs	clippy::let_underscore_must_use	let _ = transport.send_line("\\r");
 crates/fno-agents/src/runtime/mail_inject.rs	clippy::let_underscore_must_use	let _ = transport.send_line(&"\\u{7f}".repeat(typed_chars + 2));
 crates/fno-agents/src/runtime/mail_inject.rs	clippy::too_many_lines	pub async fn run_mail_inject(rest: &[String]) -> i32 {
-crates/fno-agents/src/runtime/mail_inject.rs	clippy::too_many_lines	pub fn deliver_via_keeper_socket_in(
 crates/fno-agents/src/runtime/mail_inject.rs	clippy::too_many_lines	pub fn parse_args(rest: &[String]) -> Result<MailInjectArgs, (i32, String)> {
 crates/fno-agents/src/runtime/mail_notify_self.rs	clippy::indexing_slicing	assert_eq!(v["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit");
 crates/fno-agents/src/runtime/mail_notify_self.rs	clippy::indexing_slicing	let ctx = v["hookSpecificOutput"]["additionalContext"]

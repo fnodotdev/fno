@@ -10,7 +10,7 @@
 //! let s: fno_mail::turn::TurnText = String::from("hello").into();
 //! ```
 //!
-//! A [`RawCommand`] is the other thing a raw door may type: one slash command, or one codex dollar verb (user law d-f6570dc9). A message never rides it.
+//! A [`RawCommand`] is the other thing a raw door may type: one slash command, or one codex dollar command (user law d-f6570dc9). A message never rides it.
 
 use std::fmt;
 
@@ -32,7 +32,7 @@ pub enum TurnError {
     EmptyId,
     /// A field holds a backtick, the ` · ` separator, a new line or another control character, so it could forge a header field.
     Forges { field: &'static str, value: String },
-    /// The raw text is not one slash command or one codex dollar verb.
+    /// The raw text is not one slash command or one codex dollar command.
     NotACommand(String),
 }
 
@@ -47,7 +47,7 @@ impl fmt::Display for TurnError {
             ),
             TurnError::NotACommand(text) => write!(
                 f,
-                "raw text {text:?} is not one slash command or one codex dollar verb; send a message through mail, not the raw door"
+                "raw text {text:?} is not one slash command or one codex dollar command; send a message through mail, not the raw door"
             ),
         }
     }
@@ -214,7 +214,7 @@ pub fn non_submitting(text: &str) -> String {
     out
 }
 
-/// One slash command or one codex dollar verb: the only text a raw door types.
+/// One slash command or one codex dollar command: the only text a raw door types.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawCommand(String);
 
@@ -320,7 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn raw_command_takes_only_a_slash_command_or_a_dollar_verb() {
+    fn raw_command_takes_only_a_slash_command_or_a_dollar_command() {
         assert_eq!(
             RawCommand::parse(" /compact ").unwrap().as_str(),
             "/compact"
