@@ -793,10 +793,11 @@ fn comment_only_on<P: GateReads>(probes: &P, cwd: &Path, pr: u64, touched: &[&st
     })
 }
 
-/// Visual evidence for this head. A paint PR with no recorded look at this
-/// head holds the merge; an explicit user decline holds only its named head.
-/// Paint paths select the evidence, never erase an already recorded user
-/// decline. An unprovable carry or an unreadable read warns and never holds.
+/// Visual evidence for this head. Missing looks warn; an explicit user
+/// decline holds only its named head. Paint paths select optional evidence,
+/// never erase an already recorded user decline. A missing look routes to
+/// the lead as a look request after the merge; an unprovable carry or an
+/// unreadable read warns and never holds.
 pub(crate) fn visual_approval_blocker<P: GateReads>(
     probes: &P,
     cwd: &Path,
@@ -921,13 +922,13 @@ pub(crate) fn visual_approval_verdict<P: GateReads>(
             .collect::<Vec<_>>()
             .join("; ");
         format!(
-            "PR {pr} touches the paint surface ({}); the look approval at {} does not carry: paint moved since ({hunks}); the merge holds until a look at {head} is approved (file the ask with `fno inbox outstanding ask`, naming this PR and head); CI is not held",
+            "PR {pr} touches the paint surface ({}); the look approval at {} does not carry: paint moved since ({hunks}); this is warning evidence and does not hold CI or merging; the look request routes to the lead for the Visual Log page after the merge",
             touched.join(", "),
             ask.approved.get(..8).unwrap_or(&ask.approved),
         )
     } else {
         format!(
-            "PR {pr} touches the paint surface ({}), with no recorded look at {head}; the merge holds until a look at this head is approved (file the ask with `fno inbox outstanding ask`, naming this PR and head); CI is not held",
+            "PR {pr} touches the paint surface ({}), with no recorded look at {head}; this is warning evidence and does not hold CI or merging; the look request routes to the lead for the Visual Log page after the merge",
             touched.join(", ")
         )
     };

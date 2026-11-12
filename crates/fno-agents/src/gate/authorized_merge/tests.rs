@@ -10,6 +10,9 @@ struct Fake {
     late_checks: Option<String>,
     late_pr_hold: Option<ProbeOutcome>,
     late_decline: Option<PathBuf>,
+    /// Every look request the gate routed, as (pr, detail): a paint PR that
+    /// merged with no recorded look must owe the lead exactly one.
+    look_requests: RefCell<Vec<(u64, String)>>,
     facts: Option<PrFacts>,
     facts_after_effect: Option<PrFacts>,
     facts_error: Option<String>,
@@ -421,6 +424,12 @@ impl Probes for Fake {
             *held = None;
             *self.slot_retested.borrow_mut() = false;
         }
+    }
+    fn look_request(&self, _cwd: &Path, facts: &PrFacts, detail: &str) -> bool {
+        self.look_requests
+            .borrow_mut()
+            .push((facts.number, detail.to_string()));
+        true
     }
     fn slot_retested(&self, _cwd: &Path, _base_ref: &str, pr: u64) -> bool {
         *self.slot.borrow() == Some(pr) && *self.slot_retested.borrow()
@@ -1274,7 +1283,9 @@ fn ci_base_freshness_gates_the_chain() {
         .warnings()
         .iter()
         .any(|w| w.code == "ci_base_unreadable" && w.detail.contains("gh unavailable")));
-    assert!(!fake.gh_calls.borrow().is_empty());
+    // No paint surface in play: the warning never rides, so the merge owes
+    // the lead no look request.
+    assert!(fake.look_requests.borrow().is_empty());
     assert!(fake.take_slot_calls.borrow().is_empty());
     assert!(preview_blockers(&fake, &preview_request(7)).is_empty());
     assert_eq!(
@@ -2742,34 +2753,12 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
     fake.late_decline = Some(page.clone());
     let late = run(&fake, &req);
     assert_eq!(late.word(), "held");
-    // The decline page was withdrawn, so the pre-flight holds on the missing
-    // look before any late decline can land; the recheck's own decline leg
-    // is exercised just below, behind a look the pre-flight accepts.
-    assert!(late.detail().contains("no recorded look"));
+    assert!(late.detail().contains("the user declined"));
     assert!(!fake
         .gh_calls
         .borrow()
         .iter()
         .any(|args| args.get(1).map(String::as_str) == Some("merge")));
-    fake.late_decline = None;
-    // A look approved at this head passes the pre-flight; a decline that
-    // lands mid-flow still holds through the post-wait recheck.
-    std::fs::write(
-        &page,
-        format!(
-            "---\nquestion_id: q-xc129\nstatus: answered\ntitle: May PR 7 merge?\n\
-             answer: 1. Merge as painted\n---\nPR 7 at head {head}\n"
-        ),
-    )
-    .unwrap();
-    fake.late_decline = Some(page.clone());
-    let late_decline = run(&fake, &req);
-    assert_eq!(late_decline.word(), "held", "{}", late_decline.detail());
-    assert!(
-        late_decline.detail().contains("the user declined"),
-        "{}",
-        late_decline.detail()
-    );
     fake.late_decline = None;
     let next_head = "b".repeat(40);
     let evidence = crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &next_head).unwrap();
@@ -2780,15 +2769,22 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
         ..open_facts()
     });
     req.covered_head = Some(next_head);
-    // The declined look was withdrawn with the page; no look names the new
-    // head, so the merge holds instead of riding a warning.
+    // The declined look was withdrawn with the page and no look names the
+    // new head, so the outcome rides the paint warning and merges; the
+    // warning routes to the lead as exactly one look request.
     let outcome = run(&fake, &req);
-    assert_eq!(outcome.word(), "held", "{outcome:?}");
-    assert!(
-        outcome.detail().contains("no recorded look"),
-        "{}",
-        outcome.detail()
+    assert_eq!(outcome.word(), "merged", "{outcome:?}");
+    assert!(outcome
+        .warnings()
+        .iter()
+        .any(|w| w.code == "visual_approval" && w.detail.contains("no recorded look")));
+    assert_eq!(
+        fake.look_requests.borrow().as_slice(),
+        [(7u64, fake.look_requests.borrow()[0].1.clone())]
     );
+    assert!(fake.look_requests.borrow()[0]
+        .1
+        .contains("no recorded look"));
     fake.facts = None;
     std::fs::write(
         &page,
@@ -3090,7 +3086,7 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
     assert!(!clears(&fake, &pushed));
     std::fs::remove_file(qdir.join("q-board7.md")).unwrap();
     fake.decisions_stdout = None;
-    let held = crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).expect("held");
+    let held = crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).expect("warning");
     assert!(held.detail.contains("no recorded look"), "{}", held.detail);
     // A split: the node holds PR 6 and lists PR 7 in additional_prs. PR 7
     // binds to it, so the approval recorded on that node clears PR 7. A row

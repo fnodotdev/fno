@@ -540,6 +540,10 @@ pub trait Probes {
     /// Release the merge slot if `pr` still holds it. Errors are ignored:
     /// release is best-effort, and the TTL is the backstop.
     fn release_slot(&self, cwd: &Path, base_ref: &str, pr: u64);
+    /// A paint PR merged with no recorded look at its head: route the look
+    /// request to the territory lead so the shots reach the project's Visual
+    /// Log page. Best-effort: the merge already landed either way.
+    fn look_request(&self, cwd: &Path, facts: &PrFacts, detail: &str) -> bool;
     /// Has `pr` already had one base-retest this slot hold? `false` on a
     /// fresh or unreadable claim - every miss re-tries rather than
     /// wrongly skipping to a merge.
@@ -1116,7 +1120,7 @@ fn decide_with_warnings<P: Probes>(
     }
     if let Some(blocker) =
         crate::merge_gates::visual_approval_blocker(probes, cwd, facts.number, &head)
-            .filter(|b| b.code == "visual_declined" || b.code == "visual_approval")
+            .filter(|b| b.code == "visual_declined")
     {
         return Err(Outcome::Held {
             reason: blocker.detail,
@@ -1502,13 +1506,11 @@ fn process_warnings<P: Probes>(
     if let Some(warning) = carry_warning {
         warnings.push(warning);
     }
-    // Both authority holds bind a head: a decline names the head it refuses,
-    // and a paint PR with no recorded look at this head holds until a look
-    // lands there. The unknown file-list read stays warning evidence.
+    // A user decline is authority and holds its named head. A missing look is
+    // a process condition: it warns and never holds; after the merge the
+    // warning routes to the lead as a look request.
     let (visual_warning, visual_hold) = match visual {
-        Some(blocker) if blocker.code == "visual_declined" || blocker.code == "visual_approval" => {
-            (None, Some(blocker))
-        }
+        Some(blocker) if blocker.code == "visual_declined" => (None, Some(blocker)),
         other => (other, None),
     };
     for evidence in [
@@ -1861,6 +1863,20 @@ fn run_observed<P: Probes>(
                     &authorized.facts.base_ref,
                     authorized.facts.number,
                 );
+                // The look is a process condition, never a hold: a paint PR
+                // that merged with no recorded look still owes the user its
+                // shots, so the warning routes to the territory lead as a
+                // look request for the Visual Log page.
+                if outcome.word() == "merged" {
+                    if let Some(detail) = outcome
+                        .warnings()
+                        .iter()
+                        .find(|w| w.code == "visual_approval")
+                        .map(|w| w.detail.clone())
+                    {
+                        probes.look_request(request.cwd.as_path(), &authorized.facts, &detail);
+                    }
+                }
             }
             outcome
         }
@@ -2487,6 +2503,35 @@ refusing to assume no review is running"
         let _ = crate::claims::release(&key, &holder, None, None);
         if let Some(root) = canonical_repo_root(cwd) {
             let _ = crate::claims::release(&key, &holder, Some(&root), None);
+        }
+    }
+
+    fn look_request(&self, cwd: &Path, facts: &PrFacts, detail: &str) -> bool {
+        let _step = step_timer::step("look_request");
+        // The territory lead resolves from the bound node: a team whose scope
+        // answers the node's territory holds it, resolved at send time.
+        let Some(node) = pr_bound_entry(cwd, facts.number) else {
+            eprintln!("look request not mailed: PR {} binds no node", facts.number);
+            return false;
+        };
+        let Some(node_id) = node.get("id").and_then(Value::as_str) else {
+            return false;
+        };
+        let text = format!(
+            "look request: PR {} merged at {} with no recorded look at that head. Publish its shots on the project's Visual Log page (laws D2511 and D3268). {}",
+            facts.number,
+            &facts.head_sha[..8],
+            detail
+        );
+        match crate::runtime::lead_mail::send("merge-gate", node_id, &text) {
+            Ok(holders) => {
+                eprintln!("look request mailed to {}", holders.join(", "));
+                true
+            }
+            Err(error) => {
+                eprintln!("look request not mailed: {error}");
+                false
+            }
         }
     }
 

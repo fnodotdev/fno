@@ -921,7 +921,7 @@ enabled = false
 model = "sonnet"
 
 [merge]
-# Render-surface paths whose PRs hold the merge until a look at their head is approved. Explicit head-scoped user declines retain authority.
+# Render-surface paths whose PRs warn when no look is recorded at their head; the merge proceeds and the look request routes to the lead for the Visual Log page after it lands. Explicit head-scoped user declines retain authority.
 # visual_paint_paths = <unset>   # optional; no default
 # Legacy look workflow setting. Missing looks no longer cancel CI.
 # visual_shot_workflows = <unset>   # optional; no default

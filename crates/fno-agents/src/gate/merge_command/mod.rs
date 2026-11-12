@@ -223,7 +223,7 @@ fn run_hold_check_operand(args: &[String]) -> i32 {
     if flow.exit_code == 0 {
         if let Some((blocker, repo)) = visual_hold(pr, &cwd) {
             let why = format!("{}: {}", blocker.code, blocker.detail);
-            if blocker.code == "visual_declined" || blocker.code == "visual_approval" {
+            if blocker.code == "visual_declined" {
                 hold_refusal(&mut flow, pr, &cwd, &repo, &why);
             } else {
                 flow.lines.push((true, format!("warn: {why}\n")));
