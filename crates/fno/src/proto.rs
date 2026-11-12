@@ -4924,8 +4924,8 @@ binding = { mod = "fno-panels/review-ledger" }
         )
         .unwrap();
         assert_eq!(
-            spec.slots[0].binding,
-            LayoutBinding::Mod("fno-panels/review-ledger".into())
+            spec.slots.first().map(|s| &s.binding),
+            Some(&LayoutBinding::Mod("fno-panels/review-ledger".into()))
         );
 
         // A v127 receipt has no `reason`; it decodes to None and stays absent.
