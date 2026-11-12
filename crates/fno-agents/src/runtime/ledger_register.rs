@@ -1081,7 +1081,7 @@ fn append_locked(tasks_path: &Path, entry: &Value) -> Result<(), String> {
                 eprintln!("Skipping duplicate started entry for target fno_id: {scalar}");
                 return Ok(());
             }
-            if entries.get(index).is_some_and(|e| is_started_row(e)) {
+            if entries.get(index).is_some_and(is_started_row) {
                 stale_started = true;
                 continue;
             }
