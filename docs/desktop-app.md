@@ -53,7 +53,7 @@ Focus another pane to read its agent. The app keeps each conversation it read, s
 
 The composer at the bottom takes your message. Enter or Send sends it, Shift-Enter adds a line, Backspace deletes one character, and cmd-v pastes into it. While an input method composes, Enter goes to the input method. The app types the text into the session's own pane as a paste. It waits 800 ms, then presses Enter in that same pane, as the TUI reply path does. Your turn shows at once with "sending…". After the transcript records it, the turn moves into the conversation. If no pane on screen hosts the session, the app says so and sends nothing.
 
-If the chat stream ends, the composer gives way to the reason and a Reconnect button. A normal end reads muted. A failure reads in the error colour. Reconnect resumes from the last event the view holds.
+If the chat stream ends, the composer gives way to the reason and a Reconnect button. A normal end with no known cause reads muted. When the connection's own exit reason is known, it folds into that line and reads in the error colour. No corner toast repeats it while no sheet covers the conversation. A failure reads in the error colour. Reconnect resumes from the last event the view holds.
 
 cmd-2 or Board opens orchestration mode, the command center board. TABLE lists every seat with its node and status. With more than one host in the fleet, a MACHINE column shows too. FEED lists each open question with its options, and the recommended option is marked. A click on an option answers it through the same door the TUI uses. The question then shows "sending", then "answered", until the next read drops it. A refused answer shows its reason and keeps the options. cmd-4 or Terminal goes to the terminal.
 

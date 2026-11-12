@@ -382,6 +382,10 @@ where
                     // harness holds no submission, so the key is always on
                     // the row the way mail_unread above is.
                     "mail_held": e.mail_held,
+                    // The wall stamp of the oldest held submission, null
+                    // when nothing is held or no stamp was read, the same
+                    // always-on-key shape as the count.
+                    "mail_held_since": e.mail_held_since,
                     // The harness's own title for the session, served
                     // from the probe's fresh reading; a probe that ANSWERED
                     // None is trusted (the harness carries no title now, e.g.

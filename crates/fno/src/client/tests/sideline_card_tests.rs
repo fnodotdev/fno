@@ -1551,6 +1551,23 @@ fn card_model_names_the_family_alone_only_at_its_newest_version() {
         .starts_with("opus"));
 }
 
+#[test]
+fn the_held_mail_marker_reads_queued_not_held() {
+    // The mail count and the agent hold must not share a word (user,
+    // 2026-11-10): the card's detail line reads [N queued], a different word
+    // from the [HELD]/[DND] hold the agent itself is under.
+    let mut agents = lead_and_worker();
+    let worker = agents.get_mut(1).expect("the fixture carries a worker");
+    worker.mail_held = Some(8);
+    worker.mail_held_since = Some(6480);
+    let v = card_view(agents);
+    let line = v.card_detail_text(v.layout.agents.get(1).expect("worker card row"), 7200, 80);
+    assert!(
+        line.contains("[8 queued, oldest 12m]") && !line.contains("held"),
+        "the card badge names the queue and the oldest wait: {line:?}"
+    );
+}
+
 // ---- x-9b4d: a remote row behaves like a local one ----
 
 /// Two sessions on mac2: orla idle, mercedes writing. One machine beat.

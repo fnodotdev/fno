@@ -106,7 +106,7 @@ pub struct Root {
     notice_failed: bool,
     /// Bumped by each notice, so only the newest one's timer clears it.
     notice_gen: u64,
-    closed: Option<String>,
+    pub(super) closed: Option<String>,
     pub(super) metrics: Metrics,
     pub(super) palette: Palette,
     /// Whether the window appearance is light, and the project directory the
@@ -1159,10 +1159,16 @@ impl Render for Root {
             .text_sm();
         // A closed link and a failed notice use the error color; a notice
         // is muted and expires. Neither takes a row: the toast floats over the corner.
+        // In chat mode a closed stream's bar already carries the exit
+        // reason, so the corner toast would repeat it - unless a sheet
+        // covers that bar, where the toast is the only visible signal.
+        let bar_shows_reason =
+            self.main == MainView::Chat && self.chat.closed.is_some() && self.chat.sheet.is_none();
         let (status, status_color) = match (&self.closed, &self.notice) {
-            (Some(c), _) => (Some(c.clone()), self.palette.error),
-            (None, n) if self.notice_failed => (n.clone(), self.palette.error),
-            (None, n) => (n.clone(), self.palette.muted),
+            (Some(c), _) if !bar_shows_reason => (Some(c.clone()), self.palette.error),
+            (_, n) if bar_shows_reason && !self.notice_failed => (n.clone(), self.palette.muted),
+            (_, n) if self.notice_failed => (n.clone(), self.palette.error),
+            (_, n) => (n.clone(), self.palette.muted),
         };
         let toast = status.map(|text| {
             div()
