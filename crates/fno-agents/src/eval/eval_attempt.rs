@@ -625,12 +625,15 @@ fn observe_opencode(dbs: &[PathBuf], workdir: &str, started: f64, now: f64) -> O
     let (_, session_id) = best?;
     let mut model: Option<String> = None;
     let mut usage: Option<UsageSum> = None;
+    // The label follows the family that actually answered the usage walk.
+    let mut source: &str = "opencode-store";
     for db in dbs {
         let Some(conn) = crate::graph_store::open_read_only_wal_safe(db) else {
             continue;
         };
         if crate::opencode_transcript::store_family(&conn) == Some(true) {
             if let Some(observed) = observe_opencode_v2(&conn, &session_id) {
+                source = "opencode-store-v2";
                 if model.is_none() {
                     model = observed.0;
                 }
@@ -685,13 +688,10 @@ fn observe_opencode(dbs: &[PathBuf], workdir: &str, started: f64, now: f64) -> O
         model,
         session_id,
         usage: usage.map(usage_json),
-        source: "opencode-store",
+        source,
     })
 }
 
-/// The 2.x observe: the session row carries its own token rollups and the
-/// selected model, so one row answers what the 1.x walk recomputed from
-/// every assistant message.
 /// The 2.x session row's selected model, typed at the boundary.
 #[derive(serde::Deserialize)]
 struct V2ModelRef {
@@ -701,6 +701,9 @@ struct V2ModelRef {
     provider_id: String,
 }
 
+/// The 2.x observe: the session row carries its own token rollups and the
+/// selected model, so one row answers what the 1.x walk recomputed from
+/// every assistant message.
 fn observe_opencode_v2(
     conn: &rusqlite::Connection,
     session_id: &str,
