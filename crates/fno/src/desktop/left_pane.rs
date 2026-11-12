@@ -16,8 +16,6 @@ use crate::proto::{AgentRow, Command};
 use crate::web_hq::Board;
 
 pub const WIDTH: f32 = 260.0;
-/// A row's text width: the pane less the row's margins, padding and bar.
-const LABEL_WIDTH: f32 = WIDTH - 8.0 - 6.0 - 8.0 - 2.0;
 /// The agents shown before a "+N more" row, so the sections below stay above
 /// the fold.
 pub const AGENTS_SHOWN: usize = 8;
@@ -66,15 +64,20 @@ pub enum Row {
 /// the width each layout pass offers, and a min-content pass inside the
 /// scrolling pane offered a few pixels, so labels showed three characters.
 fn clamp(text: String, color: u32, small: bool) -> Div {
+    // The inner line follows the box it lands in, so the line clamp
+    // ellipsizes at the width the row actually gives it: a fixed inner width
+    // is wider than the flex item once the identity box takes its share, and
+    // the outer overflow_hidden then clips mid-glyph before the ellipsis can
+    // render. The ellipsis rides the line clamp, the same pair the identity
+    // tail uses.
     let line = div()
-        .w(px(LABEL_WIDTH))
-        .whitespace_nowrap()
-        .overflow_hidden()
+        .w_full()
+        .line_clamp(1)
         .text_ellipsis()
         .text_color(rgb(color))
         .child(text);
     div()
-        .w(px(LABEL_WIDTH))
+        .min_w_0()
         .overflow_hidden()
         .child(if small { line.text_xs() } else { line })
 }
