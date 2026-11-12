@@ -354,8 +354,7 @@ fn opencode_db_rows(
     };
     let Ok(mut statement) = conn.prepare(&format!(
         "SELECT id, directory FROM {table} ORDER BY time_updated DESC, id DESC"
-    ))
-    else {
+    )) else {
         return Vec::new();
     };
     let Ok(mapped) = statement.query_map([], |row| {

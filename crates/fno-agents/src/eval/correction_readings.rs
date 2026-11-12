@@ -318,18 +318,16 @@ pub(crate) fn opencode_readings(db: &Path, session_id: &str) -> HarnessReadings 
         },
     );
     if let Ok((model, version, updated)) = session {
-        let model = model
-            .filter(|m| !m.is_empty())
-            .map(|m| {
-                if !is_v2 {
-                    return m;
-                }
-                serde_json::from_str::<V2SessionModel>(&m)
-                    .ok()
-                    .filter(|r| !r.id.is_empty() && !r.provider_id.is_empty())
-                    .map(|r| format!("{}/{}", r.provider_id, r.id))
-                    .unwrap_or(m)
-            });
+        let model = model.filter(|m| !m.is_empty()).map(|m| {
+            if !is_v2 {
+                return m;
+            }
+            serde_json::from_str::<V2SessionModel>(&m)
+                .ok()
+                .filter(|r| !r.id.is_empty() && !r.provider_id.is_empty())
+                .map(|r| format!("{}/{}", r.provider_id, r.id))
+                .unwrap_or(m)
+        });
         if let Some(model) = model {
             out.model = Reading::observed(model, ms_stamp(updated));
         }
