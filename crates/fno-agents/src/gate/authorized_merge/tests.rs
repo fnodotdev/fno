@@ -2653,7 +2653,7 @@ fn a_url_less_row_never_steals_a_bind_and_bare_ties_refuse() {
 }
 
 #[test]
-fn a_paint_pr_holds_until_an_answered_page_names_it() {
+fn a_paint_pr_merges_on_a_missing_look_and_holds_on_a_declined_page() {
     let tmp = std::env::temp_dir().join(format!("xc129-gate-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(tmp.join(".fno")).unwrap();
@@ -2701,8 +2701,8 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
         "{}",
         held.detail
     );
-    // The verdict hold reaches the merge outcome: no look record anywhere,
-    // so the merge holds and names the way out.
+    // The verdict is warning evidence: no look record anywhere, so the
+    // merge lands and the warning routes to the lead as a look request.
     {
         fake.facts = Some(PrFacts {
             head_sha: head.clone(),
@@ -2714,17 +2714,18 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
             ..request(Effect::Merge)
         };
         let outcome = run(&fake, &req);
-        assert_eq!(outcome.word(), "held", "{outcome:?}");
-        assert!(
-            outcome.detail().contains("no recorded look"),
-            "{}",
-            outcome.detail()
-        );
-        assert!(
-            outcome.detail().contains("fno inbox outstanding ask"),
-            "{}",
-            outcome.detail()
-        );
+        assert_eq!(outcome.word(), "merged", "{outcome:?}");
+        assert!(outcome
+            .warnings()
+            .iter()
+            .any(|w| w.code == "visual_approval" && w.detail.contains("no recorded look")));
+        let requests = fake.look_requests.borrow();
+        assert_eq!(requests.len(), 1, "{requests:?}");
+        drop(requests);
+        // Reset the stage: the declined-page section below asserts that no
+        // merge and no look request happen while a decline names the head.
+        fake.look_requests.borrow_mut().clear();
+        fake.gh_calls.borrow_mut().clear();
         fake.facts = None;
     }
     // An OPEN page naming the PR never clears the hold.
