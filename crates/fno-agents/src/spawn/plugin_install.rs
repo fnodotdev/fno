@@ -4597,7 +4597,8 @@ mod tests {
         let home = fixture_home(&base);
         let stage = base.join("stage");
         fs::create_dir_all(&stage).unwrap();
-        let cache = home.join(".claude/plugins/cache/footnote");
+        // The guard reads the record the cache dir is named for.
+        let cache = home.join(".claude/plugins/cache/fno");
         fs::create_dir_all(&cache).unwrap();
         let live_stage = vec![PluginRoot {
             path: stage.clone(),
