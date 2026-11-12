@@ -647,15 +647,18 @@ fn client_agent_row_renders_dnd_as_presence_not_liveness() {
         },
     ];
     crate::agents_view::overlay_hold_marks_at(&mut rows, &dir);
+    let first = rows.first().expect("three rows");
+    let second = rows.get(1).expect("three rows");
+    let third = rows.get(2).expect("three rows");
     assert!(
-        rows[0].dnd && rows[0].held_conversation,
+        first.dnd && first.held_conversation,
         "a conversation hold reads HELD"
     );
     assert!(
-        rows[1].dnd && !rows[1].held_conversation,
+        second.dnd && !second.held_conversation,
         "a user hold stays DND"
     );
-    assert!(!rows[2].dnd, "an ended hold marks nothing");
+    assert!(!third.dnd, "an ended hold marks nothing");
     let _ = std::fs::remove_dir_all(&dir);
     let held: AgentRow = serde_json::from_str(
         r#"{"squad":1,"name":"held","pane_id":10,
@@ -681,6 +684,43 @@ fn client_agent_row_renders_dnd_as_presence_not_liveness() {
     assert!(
         manual_row.contains("[DND]") && !manual_row.contains("[HELD]"),
         "a manual hold keeps DND, riding identity without liveness: {manual_row:?}"
+    );
+}
+
+#[test]
+fn the_held_mail_badge_reads_queued_on_the_list_row() {
+    // The same rename the card carries (lead look ruling, 2026-11-11): the
+    // busy-queue badge reads [N queued, oldest 12m] whole, or the compact
+    // [Nq 12m] when the name leaves no room - no `· dnd` inside the badge,
+    // and the wait names itself the oldest.
+    let since = crate::digest_overlay::now_secs() - 720;
+    let row_json = format!(
+        r#"{{"squad":1,"name":"mailer","pane_id":10,
+                "badge":"working","reason":null,"exited":false,
+                "mail_held":2,"mail_held_since":{since}}}"#
+    );
+    let mut view = two_pane_view();
+    // The stored width clamps to 60% of the terminal, so the fixture's
+    // 100-col terminal would hold the rail at 60 and the full badge would
+    // never fit. Widen the terminal; the rail's ceiling moves, the panes
+    // keep their geometry.
+    view.term.1 = 340;
+    view.sideline_width = 200;
+    view.layout.agents = vec![serde_json::from_str(&row_json).unwrap()];
+    let text = frame_text(&view.compose());
+    let line = text.lines().find(|line| line.contains("mailer")).unwrap();
+    assert!(
+        line.contains("[2 queued, oldest 12m]") && !line.contains("dnd]"),
+        "the list badge names the queue and the oldest wait: {line:?}"
+    );
+    let mut narrow = two_pane_view();
+    narrow.sideline_width = 26;
+    narrow.layout.agents = vec![serde_json::from_str(&row_json).unwrap()];
+    let text = frame_text(&narrow.compose());
+    let line = text.lines().find(|line| line.contains("mailer")).unwrap();
+    assert!(
+        line.contains("[2q 12m]") && !line.contains("held"),
+        "the compact token keeps the age: {line:?}"
     );
 }
 

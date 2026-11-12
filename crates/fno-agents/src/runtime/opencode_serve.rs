@@ -10,45 +10,36 @@
 //! HTTP API, verified against opencode v1.14.50 (live probes 2026-08-23):
 //!
 //! - `opencode serve --port 0 --print-logs` prints `listening on
-//!   http://127.0.0.1:<port>`; `OPENCODE_CONFIG=<file path>` merges an extra
-//!   config FILE into the server (verified: a file granting
-//!   `permission."*" = "allow"` lands in GET /config), which is how the
-//!   unattended permission posture reaches a server that has no
-//!   `--dangerously-skip-permissions` flag of its own. (Inline JSON would be
-//!   `OPENCODE_CONFIG_CONTENT`; this module writes the file form.)
+//!   http://127.0.0.1:<port>`. fno writes no permission config into it on
+//!   any contract: the serve reads the user's own opencode config, so the
+//!   user's grants bind (an `OPENCODE_CONFIG` allow-all landed last in the
+//!   merged map and beat the user's denies; measured 2026-11-11).
 //! - `POST /session?directory=<abs>` mints a session bound to that directory,
 //!   so ONE shared serve hosts workers across worktrees (a payload `directory`
-//!   field is ignored - only the query param binds; probed both ways).
-//! - `POST /session/:id` merges per-session permission rules
-//!   (`Permission.merge`, handlers/session.ts:186); rule eval is wildcard on
-//!   both name and pattern, findLast wins, unmatched defaults to `ask`
-//!   (permission/evaluate.ts) - which is why tool permission must come from
-//!   the serve config, not from per-session rules alone: an `ask` nobody
-//!   answers is a hang, and a worker has no human.
-//! - `opencode run --attach <url> --session <id> [--command ...]` drives one
-//!   turn on the shared serve with native command-template expansion. The
-//!   spawn launches that as a detached writer and returns immediately: no
-//!   template text is duplicated into this crate (keeps biting anyone
-//!   who routes a slash command as prose). The attach writer prints NOTHING on
-//!   stdout (verified live; `--format json` is dead on this path) - structured
-//!   capture is the serve's own message readback (`GET /session/:id/message`,
-//!   role/model/parts), fetched over HTTP, never scraped from a pane or pipe.
+//!   field is ignored - only the query param binds; probed both ways). The
+//!   1.x create body carries the session rules: `question`, `plan_enter` and
+//!   `plan_exit` deny (no person answers them), and `external_directory`
+//!   allow for the worktree and every `FNO_WORKER_ADD_DIRS` root (the
+//!   state-root grant: opencode has no additive dir flag, `--dir` SETS cwd).
+//! - Each 1.x turn runs under `fno-agents-worker --opencode-turn`
+//!   (`opencode_turn.rs`): it sends the turn over HTTP and answers each
+//!   permission ask through the fnod ladder (`thread_permission.rs`) until
+//!   the session goes idle. Structured capture is the serve's own message
+//!   readback (`GET /session/:id/message`), never scraped from a pane or pipe.
 //!
 //! Serve sessions land in the same global store as every other opencode
 //! session, so the existing reachability probe (`opencode_reachable_with`)
 //! covers serve rows unchanged.
 //!
-//! The writable-dirs grant: opencode has no additive CLI dir flag (`--dir`
-//! SETS cwd). Today the serve-level allow-all is the whole grant, external
-//! directories included; this module writes no per-session
-//! `external_directory` rules, so narrowing that blanket needs them first.
-//!
 //! opencode 2.x replaced every route above with an `/api/*` set and dropped
 //! `run --attach` and `run --command`. The boot records the contract it
 //! classified, and `opencode_serve_api.rs` holds the per-contract routes and
 //! envelopes. On 2.x the launch and every steer go over HTTP: `POST
-//! /api/session` mints the session (so the receipt names its id), and `POST
-//! /prompt` or `/command` starts each turn.
+//! /api/session` mints the session with the same worker rules in the 2.x
+//! `permissions` shape, and `POST /prompt` or `/command` starts each turn.
+//! The turn driver then runs answer-only: it reads asks from `GET
+//! /api/session/:id/permission`, replies through `/reply`, and reads idle
+//! from the session's `time.busy` / `time.idle` stamps (measured on 2.2.2).
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -64,6 +55,7 @@ use crate::opencode_ask::{
     apply_opencode_variant, require_qualified_model, AskOutcome, OPENCODE_DEFAULT_MODEL,
 };
 use crate::opencode_install::OpencodeContract;
+use crate::opencode_permission::LaneError;
 use crate::paths::AgentsHome;
 use crate::state::load_registry;
 
@@ -117,30 +109,6 @@ fn recorded_serve(home: &AgentsHome) -> Result<ServeHandle, ServeError> {
     })
 }
 
-/// The unattended permission posture, written to the generated OPENCODE_CONFIG
-/// before the serve starts. Same stance as `--dangerously-skip-permissions` on
-/// the headless lane and every other fno worker lane; without it every tool
-/// call that opencode does not allow by config evaluates to `ask`, and an
-/// unanswered ask is a hang, not a refusal.
-///
-/// The key is contract-specific: 1.x reads a `permission` MAP; 2.x reads an
-/// ordered `permissions` RULE LIST (Config.md "Permissions", rule shape
-/// `{action, resource, effect}`), so a v2 serve handed the 1.x map reads no
-/// rules and every tool call lands on `ask` - a hang, not a refusal.
-const SERVE_CONFIG_JSON_V1: &str = r#"{"permission":{"*":"allow"}}"#;
-const SERVE_CONFIG_JSON_V2: &str =
-    r#"{"permissions":[{"action":"*","resource":"*","effect":"allow"}]}"#;
-
-/// The serve config for a contract. The boot classifies the binary once
-/// (`--version`; an unknown version reads 2.x, matching the installer's
-/// v2-default) and renders the config and the route set from that one answer.
-fn serve_config_json(contract: OpencodeContract) -> &'static str {
-    match contract {
-        OpencodeContract::V2 => SERVE_CONFIG_JSON_V2,
-        OpencodeContract::V1 => SERVE_CONFIG_JSON_V1,
-    }
-}
-
 /// Budgets: how long to wait for a fresh serve to print its port, and the
 /// per-call HTTP timeouts. A serve boot is a node CLI start (~1-2s idle) that
 /// reached a healthy port at ~40s wall on a machine pinned at 98.9% CPU, so
@@ -159,7 +127,7 @@ const STEER_POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// health), and the fno-agents spawn path is synchronous - a full HTTP stack
 /// would be a dependency bought for nothing. `auth_token` rides every request
 /// as Basic auth: the serve is booted with `OPENCODE_SERVER_PASSWORD`, so a
-/// loopback listener with an allow-all permission posture is not reachable by
+/// loopback listener that answers permission replies is not reachable by
 /// arbitrary local processes.
 pub(crate) fn http_json(
     base_url: &str,
@@ -291,10 +259,6 @@ fn serve_healthy(base_url: &str, token: &str, contract: OpencodeContract) -> boo
 
 fn serve_state_path(home: &AgentsHome) -> std::path::PathBuf {
     home.root().join("opencode-serve.json")
-}
-
-fn serve_config_path(home: &AgentsHome) -> std::path::PathBuf {
-    home.root().join("opencode-serve-config.json")
 }
 
 fn serve_log_path(home: &AgentsHome) -> std::path::PathBuf {
@@ -447,13 +411,7 @@ impl crate::harness_daemon::HarnessDaemonAdapter for OpenCodeDaemonAdapter<'_> {
     }
 
     fn boot(&self) -> Result<crate::harness_daemon::DaemonState, String> {
-        let config = serve_config_path(self.home);
-        if let Some(parent) = config.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("mkdir for serve config: {e}"))?;
-        }
         let (contract, _) = crate::opencode_install::classify_contract("opencode");
-        std::fs::write(&config, serve_config_json(contract))
-            .map_err(|e| format!("write serve config {:?}: {e}", config))?;
         // Fresh token per serve: Basic-auth material for every request (the serve
         // is booted with OPENCODE_SERVER_PASSWORD), generated from /dev/urandom.
         let token = new_serve_token()?;
@@ -485,7 +443,9 @@ impl crate::harness_daemon::HarnessDaemonAdapter for OpenCodeDaemonAdapter<'_> {
         };
         // 2.x reads OPENCODE_PASSWORD first and falls back to the 1.x name,
         // so an inherited OPENCODE_PASSWORD would beat the token: set both.
-        cmd.env("OPENCODE_CONFIG", &config)
+        // An inherited OPENCODE_CONFIG would put a foreign rule set over the
+        // user's own, so the serve boots without one.
+        cmd.env_remove("OPENCODE_CONFIG")
             .env("OPENCODE_SERVER_PASSWORD", &token)
             .env("OPENCODE_PASSWORD", &token)
             .stdin(Stdio::null())
@@ -561,61 +521,166 @@ impl crate::harness_daemon::HarnessDaemonAdapter for OpenCodeDaemonAdapter<'_> {
 // Spawn dispatch
 // ===========================================================================
 
-/// The steering-writer argv: `opencode run --attach <serve> --session <sid>`
-/// with the one-shot lane's own tail builder. Launches ride the contract
-/// template instead (`[harness.opencode.launch]`); this argv stays for the
-/// ask path, which feeds an EXISTING session. No `--format json`: the attach
-/// writer prints NOTHING on stdout (verified live - the flag is dead there);
-/// structured capture is the serve's message readback, which the log path is
-/// not. The log collects the writer's stderr diagnostics.
-fn writer_argv(
-    serve: &ServeHandle,
-    session_id: &str,
-    message: &str,
-    model: Option<&str>,
-) -> Vec<String> {
-    let mut argv = vec![
-        "opencode".to_string(),
-        "run".to_string(),
-        "--attach".to_string(),
-        serve.base_url.clone(),
-        "--session".to_string(),
-        session_id.to_string(),
-        "--dangerously-skip-permissions".to_string(),
-    ];
-    if let Some(m) = model.filter(|m| !m.is_empty()) {
-        argv.push("--model".to_string());
-        argv.push(m.to_string());
+/// The session rules a worker session is created with. `question`,
+/// `plan_enter` and `plan_exit` deny: no person answers them on a thread.
+/// `external_directory` allows the worktree and each granted root, the
+/// state-root grant the serve lane owes (the user's own rules decide every
+/// other call). 1.x spells a rule `{permission, pattern, action}`, 2.x
+/// `{action, resource, effect}`.
+fn session_rules(
+    contract: OpencodeContract,
+    cwd: &Path,
+    state_dirs: &[String],
+) -> serde_json::Value {
+    let rule = |name: &str, pattern: &str, verdict: &str| match contract {
+        OpencodeContract::V1 => {
+            serde_json::json!({"permission": name, "pattern": pattern, "action": verdict})
+        }
+        OpencodeContract::V2 => {
+            serde_json::json!({"action": name, "resource": pattern, "effect": verdict})
+        }
+    };
+    let mut rules: Vec<serde_json::Value> = ["question", "plan_enter", "plan_exit"]
+        .iter()
+        .map(|name| rule(name, "*", "deny"))
+        .collect();
+    let cwd = cwd.to_string_lossy().into_owned();
+    for dir in std::iter::once(&cwd).chain(state_dirs) {
+        let dir = dir.trim_end_matches('/');
+        for pattern in [dir.to_string(), format!("{dir}/*")] {
+            rules.push(rule("external_directory", &pattern, "allow"));
+        }
     }
-    argv.extend(crate::provider::opencode_run_tail(message));
-    argv
+    serde_json::Value::Array(rules)
 }
 
-/// Start one detached attach writer for an existing serve session. Launch and
-/// steering both use this path so command templating, permissions, logging,
-/// and process-group setup cannot drift between the two entry points.
-fn spawn_attach_writer(
+/// `POST /session?directory=<cwd>` titled `name` with the worker rules;
+/// returns the minted `ses_` id.
+fn create_session(
+    serve: &ServeHandle,
+    cwd: &Path,
+    name: &str,
+    state_dirs: &[String],
+) -> Result<String, ServeError> {
+    let path = format!(
+        "/session?directory={}",
+        crate::opencode_permission::encode_query_path(&cwd.to_string_lossy())
+    );
+    let body = serde_json::json!({
+        "title": name,
+        "permission": session_rules(OpencodeContract::V1, cwd, state_dirs),
+    });
+    let (status, text) = http_json(
+        &serve.base_url,
+        "POST",
+        &path,
+        Some(&body),
+        Some(&serve.token),
+        HTTP_CALL_TIMEOUT,
+    )?;
+    if status != 200 {
+        return Err(http_refusal("POST /session", status, &text));
+    }
+    #[derive(serde::Deserialize)]
+    struct Created {
+        id: String,
+    }
+    serde_json::from_str::<Created>(&text)
+        .ok()
+        .map(|c| c.id)
+        .filter(|id| crate::provider::is_opencode_session_id(id))
+        .ok_or(ServeError::Shape("POST /session minted no ses_ id"))
+}
+
+/// The turn driver binary: `fno-agents-worker`, resolved the way the MCP
+/// lazy-start resolves it.
+fn driver_binary() -> Result<String, LaneError> {
+    crate::mcp::client::worker_executable()
+        .map(|p| p.to_string_lossy().into_owned())
+        .ok_or(LaneError::NoDriver)
+}
+
+/// Start one detached turn driver (`<driver_bin> --opencode-turn <spec>`)
+/// for an existing serve session. Launch and steering both use this path, so
+/// turn sending, ask answering and logging cannot drift between the two.
+#[allow(clippy::too_many_arguments)]
+fn spawn_turn_driver(
+    home: &AgentsHome,
     serve: &ServeHandle,
     session_id: &str,
     message: &str,
     model: Option<&str>,
     cwd: &Path,
     log_path: &Path,
-    opencode_bin: &str,
-    name: &str,
+    driver_bin: &str,
+    name: Option<&str>,
 ) -> Result<u32, String> {
-    let mut argv = writer_argv(serve, session_id, message, model);
-    argv[0] = opencode_bin.to_string();
-    let argv = crate::spawn_gate::qos_wrap(cwd, argv);
-    exec_detached(&argv, cwd, name, Some(session_id), log_path, serve)
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let spec = crate::opencode_turn::TurnSpec {
+        base_url: serve.base_url.clone(),
+        token: serve.token.clone(),
+        session_id: session_id.to_string(),
+        cwd: cwd.to_path_buf(),
+        worker: name.map(str::to_string),
+        message: message.to_string(),
+        model: model.filter(|m| !m.is_empty()).map(str::to_string),
+        events: home.events_jsonl(),
+        v2: serve.contract == OpencodeContract::V2,
+    };
+    let dir = home.root().join("agents").join("turns");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("turn spec dir: {e}"))?;
+    let spec_path = dir.join(format!("{session_id}-{}.json", crate::claims::now_ms()));
+    // The spec carries the serve token: owner-only.
+    std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&spec_path)
+        .and_then(|mut f| f.write_all(serde_json::to_string(&spec).unwrap_or_default().as_bytes()))
+        .map_err(|e| format!("turn spec {}: {e}", spec_path.display()))?;
+    let argv = crate::spawn_gate::qos_wrap(
+        cwd,
+        vec![
+            driver_bin.to_string(),
+            "--opencode-turn".to_string(),
+            spec_path.to_string_lossy().into_owned(),
+        ],
+    );
+    let mut cmd = Command::new(&argv[0]);
+    cmd.args(&argv[1..]);
+    cmd.stdin(Stdio::null());
+    let open_log = || {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_path)
+    };
+    if let (Ok(out), Ok(err)) = (open_log(), open_log()) {
+        cmd.stdout(Stdio::from(out));
+        cmd.stderr(Stdio::from(err));
+    }
+    cmd.current_dir(cwd);
+    cmd.env("PWD", cwd);
+    crate::claims::stamp_command_env(&mut cmd, name, "opencode", Some(session_id));
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    cmd.spawn()
+        .map(|child| {
+            let pid = child.id();
+            std::mem::forget(child);
+            crate::orphan_reap::release_child(pid);
+            pid
+        })
+        .map_err(|e| e.to_string())
 }
 
-/// Orchestrate one `spawn --harness opencode --substrate bg`: validate,
-/// fail-closed registry + collision check, ensure the shared serve, then exec
-/// the lane's native line from the contract template. opencode creates its
-/// own session (the title names it); the launch record goes first and the
-/// row binds at the worker's session report. Fire-and-forget by design: the
-/// turn runs on the serve; the launched process only drives it.
 /// The first passthrough token the serve lane cannot carry, else None. It
 /// carries `--model M`, `--model=M` and `-m M`, nothing else.
 pub fn uncarried_flag(tokens: &[String]) -> Option<&str> {
@@ -630,6 +695,12 @@ pub fn uncarried_flag(tokens: &[String]) -> Option<&str> {
     None
 }
 
+/// Orchestrate one `spawn --harness opencode --substrate bg`: validate,
+/// fail-closed registry + collision check, ensure the shared serve, mint the
+/// session with the worker rules, then launch the turn driver. The launch
+/// record goes first and the row binds at the worker's session report.
+/// Fire-and-forget by design: the turn runs on the serve; the driver only
+/// sends it and answers its asks.
 pub fn dispatch_opencode_serve(
     home: &AgentsHome,
     name: &str,
@@ -640,8 +711,21 @@ pub fn dispatch_opencode_serve(
     effort: Option<&str>,
     node: Option<&str>,
 ) -> AskOutcome {
+    let driver = match driver_binary() {
+        Ok(path) => path,
+        Err(error) => return AskOutcome::err(error.to_string(), 13),
+    };
     dispatch_opencode_serve_inner(
-        home, name, message, from_name, cwd, model, effort, node, "opencode",
+        home,
+        name,
+        message,
+        from_name,
+        cwd,
+        model,
+        effort,
+        node,
+        &crate::claude_ask::state_dirs_from_env(),
+        &driver,
     )
 }
 
@@ -658,7 +742,8 @@ fn dispatch_opencode_serve_inner(
     model: Option<&str>,
     effort: Option<&str>,
     node: Option<&str>,
-    opencode_bin: &str,
+    state_dirs: &[String],
+    driver_bin: &str,
 ) -> AskOutcome {
     if let Err(msg) = validate_spawn_inputs(name, from_name) {
         return AskOutcome::err(msg, 2);
@@ -714,10 +799,9 @@ fn dispatch_opencode_serve_inner(
         }
     };
 
-    // The lane's native line, from the contract template: opencode creates
-    // its own session (the title names it) and the turn runs on the serve.
-    // The row binds at the worker's session report, the same posture the
-    // claude native lane holds, so the launch record goes first and the
+    // fno mints the session (the title names it) and the turn runs on the
+    // serve. The row binds at the worker's session report, the same posture
+    // the claude native lane holds, so the launch record goes first and the
     // spawn-side registry write and birth emit stay gone.
     let effective_message = crate::provider::render_command_seed(
         if message.is_empty() { "hello" } else { message },
@@ -731,20 +815,11 @@ fn dispatch_opencode_serve_inner(
         .unwrap_or(OPENCODE_DEFAULT_MODEL);
     // 1.x reads effort from its persisted model state; 2.x reads it only
     // from the session's model ref, which the HTTP launch carries.
-    let argv = match serve.contract {
-        OpencodeContract::V1 => {
-            if let Some(effort) = effort {
-                if let Err(error) = apply_opencode_variant(model_value, effort) {
-                    return AskOutcome::err(error, 2);
-                }
-            }
-            match v1_launch_argv(name, &full_prompt, model_value, &serve, opencode_bin) {
-                Ok(argv) => Some(argv),
-                Err(error) => return AskOutcome::err(error, 2),
-            }
+    if let (OpencodeContract::V1, Some(effort)) = (serve.contract, effort) {
+        if let Err(error) = apply_opencode_variant(model_value, effort) {
+            return AskOutcome::err(error, 2);
         }
-        OpencodeContract::V2 => None,
-    };
+    }
 
     // The record first: the launch reservation and the parent edge the adopt
     // names the worker from, so a session that never reports still holds the
@@ -774,20 +849,56 @@ fn dispatch_opencode_serve_inner(
         .join("agents")
         .join("logs")
         .join(format!("{name}.jsonl"));
-    let session_id = match argv {
-        Some(argv) => {
-            if let Err(error) = exec_detached(&argv, cwd, name, None, &log_path, &serve) {
-                return AskOutcome::err(format!("opencode launch: {error}"), 2);
-            }
-            // 1.x: the writer's opencode mints the id and the worker's
-            // session report binds the row.
-            String::new()
+    let session_id = match serve.contract {
+        OpencodeContract::V1 => {
+            let session_id = match create_session(&serve, cwd, name, state_dirs) {
+                Ok(id) => id,
+                Err(error) => {
+                    emit_event(
+                        &events,
+                        "agent_ask_failed",
+                        &[
+                            ("stage", "opencode-session-create".into()),
+                            ("name", name.into()),
+                            ("provider", "opencode".into()),
+                            ("error", error.to_string().into()),
+                        ],
+                    );
+                    return AskOutcome::err(format!("opencode launch: {error}"), 13);
+                }
+            };
+            session_id
         }
-        None => match launch_over_http(&serve, name, cwd, model_value, effort, &full_prompt) {
-            Ok(session_id) => session_id,
-            Err(error) => return AskOutcome::err(format!("opencode launch: {error}"), 2),
-        },
+        OpencodeContract::V2 => {
+            match launch_over_http(
+                &serve,
+                name,
+                cwd,
+                model_value,
+                effort,
+                &full_prompt,
+                state_dirs,
+            ) {
+                Ok(session_id) => session_id,
+                Err(error) => return AskOutcome::err(format!("opencode launch: {error}"), 2),
+            }
+        }
     };
+    // 1.x: the driver sends the turn. 2.x: the launch sent it, and the
+    // driver answers its asks until the session goes idle.
+    if let Err(error) = spawn_turn_driver(
+        home,
+        &serve,
+        &session_id,
+        &full_prompt,
+        Some(model_value),
+        cwd,
+        &log_path,
+        driver_bin,
+        Some(name),
+    ) {
+        return AskOutcome::err(format!("opencode turn driver: {error}"), 2);
+    }
 
     AskOutcome::ok_reply(
         serde_json::json!({
@@ -796,12 +907,8 @@ fn dispatch_opencode_serve_inner(
             "serve_url": serve.base_url,
             "session_id": session_id,
             "short_id": "",
-            // The generated serve config is the allow-all posture; the
-            // receipt NAMES it instead of leaving it unnamed.
-            "permission_posture": match serve.contract {
-                OpencodeContract::V1 => "explicit allow-all (serve config permission.{*}=allow)",
-                OpencodeContract::V2 => "explicit allow-all (serve config permissions [*:*=allow])",
-            },
+            // The receipt NAMES the posture instead of leaving it unnamed.
+            "permission_posture": "user grants; fno answers asks (thread_permission)",
             "contract": serve.contract.label(),
             "durability": "daemon-owned",
             "incarnation": format!("{}:{}", serve.pid, serve.pid_start.unwrap_or_default()),
@@ -816,100 +923,12 @@ fn dispatch_opencode_serve_inner(
                 "lane-default"
             },
             "effort": effort,
-            // The row binds at the worker's session report on both
-            // contracts; 2.x also names the id it minted over HTTP.
+            // The row binds at the worker's session report; both contracts
+            // name the id fno minted over HTTP.
             "binding": "session-report",
         })
         .to_string(),
     )
-}
-
-/// The 1.x launch argv: the contract template line, filled.
-fn v1_launch_argv(
-    name: &str,
-    full_prompt: &str,
-    model_value: &str,
-    serve: &ServeHandle,
-    opencode_bin: &str,
-) -> Result<Vec<String>, ServeError> {
-    let template = crate::spawn_compose::resolve_template("opencode", None, None)?;
-    let ask = serde_json::json!({
-        "name": name,
-        "payload": full_prompt,
-        "model": model_value,
-        "serve_url": serve.base_url,
-    });
-    let values = crate::spawn_compose::fill_values(&ask);
-    let mut argv = crate::spawn_compose::fill_launch(&template, &values)?;
-    if argv.is_empty() {
-        return Err(ServeError::Shape("the filled argv is empty"));
-    }
-    // {payload} expands through opencode_run_tail, not the plain hole fill: a
-    // slash seed rides --command with args split, prose stays positional. The
-    // fill's trailing run - value, plus the "--" fence - gives way to it.
-    let mut cut = 1;
-    if argv.len() >= 2 && argv[argv.len() - 1] == full_prompt && argv[argv.len() - 2] == "--" {
-        cut = 2;
-    }
-    argv.truncate(argv.len() - cut);
-    argv.extend(crate::provider::opencode_run_tail(full_prompt));
-    argv[0] = opencode_bin.to_string();
-    Ok(argv)
-}
-
-/// One detached 1.x writer: the launch and every steer share these log,
-/// env, and process-group mechanics, so the two entry points cannot drift.
-fn exec_detached(
-    argv: &[String],
-    cwd: &Path,
-    name: &str,
-    session_id: Option<&str>,
-    log_path: &Path,
-    serve: &ServeHandle,
-) -> Result<u32, String> {
-    use std::os::unix::process::CommandExt;
-    use std::process::{Command, Stdio};
-    if let Some(parent) = log_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let mut cmd = Command::new(&argv[0]);
-    cmd.args(&argv[1..]);
-    cmd.stdin(Stdio::null());
-    if let Ok(fh) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)
-    {
-        cmd.stdout(Stdio::from(fh));
-        if let Ok(err_fh) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(log_path)
-        {
-            cmd.stderr(Stdio::from(err_fh));
-        }
-    }
-    cmd.current_dir(cwd);
-    // opencode resolves its project from $PWD, not the process cwd.
-    cmd.env("PWD", cwd);
-    crate::claims::stamp_command_env(&mut cmd, Some(name), "opencode", session_id);
-    cmd.env_remove("NO_COLOR");
-    cmd.env_remove("FORCE_COLOR");
-    cmd.env("OPENCODE_SERVER_PASSWORD", &serve.token);
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
-    }
-    cmd.spawn()
-        .map(|child| {
-            let pid = child.id();
-            std::mem::forget(child);
-            crate::orphan_reap::release_child(pid);
-            pid
-        })
-        .map_err(|e| e.to_string())
 }
 
 /// The 2.x launch: mint the session over HTTP (title = worker name, bound to
@@ -923,9 +942,15 @@ fn launch_over_http(
     model: &str,
     effort: Option<&str>,
     prompt: &str,
+    state_dirs: &[String],
 ) -> Result<String, ServeError> {
     let model_ref = api::model_ref(model, effort)?;
-    let body = api::create_body(name, &cwd.to_string_lossy(), &model_ref);
+    let body = api::create_body(
+        name,
+        &cwd.to_string_lossy(),
+        &model_ref,
+        session_rules(OpencodeContract::V2, cwd, state_dirs),
+    );
     let (status, text) = http_json(
         &serve.base_url,
         "POST",
@@ -1083,7 +1108,8 @@ pub fn steer_existing_session(
     timeout: Duration,
 ) -> Result<String, String> {
     require_qualified_model(model)?;
-    steer_existing_session_with_binary(home, session_id, message, cwd, model, timeout, "opencode")
+    let driver = driver_binary().map_err(|e| e.to_string())?;
+    steer_existing_session_with_binary(home, session_id, message, cwd, model, timeout, &driver)
 }
 
 fn steer_existing_session_with_binary(
@@ -1093,7 +1119,7 @@ fn steer_existing_session_with_binary(
     cwd: &Path,
     model: Option<&str>,
     timeout: Duration,
-    opencode_bin: &str,
+    driver_bin: &str,
 ) -> Result<String, String> {
     if !crate::provider::is_opencode_session_id(session_id) {
         return Err(format!(
@@ -1102,42 +1128,28 @@ fn steer_existing_session_with_binary(
     }
     let serve = ensure_serve(home)?;
     let before = fetch_messages(&serve, session_id)?;
-    match serve.contract {
-        OpencodeContract::V1 => {
-            let log_path = home
-                .root()
-                .join("agents")
-                .join("logs")
-                .join(format!("steer-{session_id}.jsonl"));
-            if let Some(parent) = log_path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("steering log directory: {e}"))?;
-            }
-            spawn_attach_writer(
-                &serve,
-                session_id,
-                message,
-                model,
-                cwd,
-                &log_path,
-                opencode_bin,
-                "fno-opencode-steer",
-            )
-            .map_err(|error| {
-                format!(
-                    "opencode serve steering writer launch failed for session {session_id}: {error}"
-                )
-            })?;
+    if serve.contract == OpencodeContract::V2 {
+        if let Some(model) = model.filter(|m| !m.is_empty()) {
+            switch_model_v2(&serve, session_id, model)?;
         }
-        OpencodeContract::V2 => {
-            if let Some(model) = model.filter(|m| !m.is_empty()) {
-                switch_model_v2(&serve, session_id, model)?;
-            }
-            send_turn_v2(&serve, session_id, message).map_err(|error| {
-                format!("opencode serve steering refused for session {session_id}: {error}")
-            })?;
-        }
+        send_turn_v2(&serve, session_id, message).map_err(|error| {
+            format!("opencode serve steering refused for session {session_id}: {error}")
+        })?;
     }
+    let log_path = home
+        .root()
+        .join("agents")
+        .join("logs")
+        .join(format!("steer-{session_id}.jsonl"));
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("steering log directory: {e}"))?;
+    }
+    spawn_turn_driver(
+        home, &serve, session_id, message, model, cwd, &log_path, driver_bin, None,
+    )
+    .map_err(|error| {
+        format!("opencode serve steering driver launch failed for session {session_id}: {error}")
+    })?;
 
     let deadline = std::time::Instant::now() + timeout;
     let mut last_seen = latest_message_id(&before);
@@ -1222,6 +1234,47 @@ pub fn steer_registered_session(
         entry.model.as_deref(),
         timeout,
     )
+}
+
+/// `fno agents ask <name> --answer allow_once|deny` on a serve row: reply to
+/// the oldest pending permission ask of the row's session. Exit 2 when no
+/// ask is pending, so the user learns nothing was sent.
+pub fn answer_registered_session(home: &AgentsHome, name: &str, choice: &str) -> AskOutcome {
+    let registry = match load_registry(&home.registry_json()) {
+        Ok(registry) => registry,
+        Err(error) => return AskOutcome::err(format!("registry read failed: {error}"), 12),
+    };
+    let Some(entry) = registry.find_name_or_full_session_id(name) else {
+        return AskOutcome::err(format!("agent {name:?} has no registry row"), 13);
+    };
+    let Some(session_id) = entry
+        .harness_session_id
+        .as_deref()
+        .or(entry.session_id.as_deref())
+    else {
+        return AskOutcome::err(format!("agent {name:?} has no full session id"), 2);
+    };
+    let serve = match ensure_serve(home) {
+        Ok(serve) => serve,
+        Err(error) => return AskOutcome::err(error, 13),
+    };
+    match crate::opencode_turn::answer_for_user(
+        &serve.base_url,
+        &serve.token,
+        Path::new(&entry.cwd),
+        session_id,
+        choice,
+        &crate::opencode_turn::held_ids(&home.root().join("agents").join("turns"), session_id),
+        match serve.contract {
+            OpencodeContract::V1 => crate::opencode_permission::Contract::V1,
+            OpencodeContract::V2 => crate::opencode_permission::Contract::V2,
+        },
+    ) {
+        Ok(request_id) => AskOutcome::ok_reply(
+            serde_json::json!({"ok": true, "answered": request_id, "answer": choice}).to_string(),
+        ),
+        Err(error) => AskOutcome::err(format!("fno-agents: {name}: {error}"), 2),
+    }
 }
 
 /// Handle `fno agents ask` for a serve row. Steering confirms the new stored
@@ -1540,7 +1593,8 @@ mod tests {
             Some("glm-5.3-flash"),
             None,
             None,
-            "opencode",
+            &[],
+            "fno-agents-worker",
         );
         assert_eq!(out.exit_code, 2);
         assert!(
@@ -1566,74 +1620,6 @@ mod tests {
         );
         assert_eq!(serve_port_from_log("no port here"), None);
         assert_eq!(serve_port_from_log(""), None);
-    }
-
-    #[test]
-    fn serve_config_follows_the_contract() {
-        let base =
-            std::env::temp_dir().join(format!("fno-ocserve-contract-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).unwrap();
-        let stub = |name: &str, version: &str| {
-            crate::write_exec_stub(&base, name, &format!("#!/bin/sh\necho '{version}'\n"))
-        };
-        let v1 = stub("oc-v1", "1.18.33");
-        let v2 = stub("oc-v2", "2.0.19");
-        // The serve config is byte-identical to the shipped 1.x and 2.x
-        // postures: the allow-all rows ride the config, never a per-session
-        // PATCH (the launch mints no session to patch).
-        let config_for = |bin: &Path| {
-            serve_config_json(crate::opencode_install::classify_contract(bin.to_str().unwrap()).0)
-        };
-        assert_eq!(config_for(&v1), SERVE_CONFIG_JSON_V1);
-        assert_eq!(config_for(&v2), SERVE_CONFIG_JSON_V2);
-    }
-
-    #[test]
-    fn writer_argv_is_attach_session_bypass_then_tail() {
-        let serve = ServeHandle {
-            base_url: "http://127.0.0.1:59971".to_string(),
-            token: "test-token".to_string(),
-            pid: 1,
-            pid_start: None,
-            contract: OpencodeContract::V1,
-        };
-        // Slash command rides --command. No --format json: the attach
-        // writer prints nothing on stdout (verified live), so the flag is dead.
-        assert_eq!(
-            writer_argv(&serve, "ses_abc123", "/fno:target --no-merge x-1", None),
-            vec![
-                "opencode",
-                "run",
-                "--attach",
-                "http://127.0.0.1:59971",
-                "--session",
-                "ses_abc123",
-                "--dangerously-skip-permissions",
-                "--command",
-                "fno:target",
-                "--",
-                "--no-merge",
-                "x-1"
-            ]
-        );
-        // Prose stays one positional; model threads before the tail.
-        assert_eq!(
-            writer_argv(&serve, "ses_abc123", "do the thing", Some("zai/glm-5.3")),
-            vec![
-                "opencode",
-                "run",
-                "--attach",
-                "http://127.0.0.1:59971",
-                "--session",
-                "ses_abc123",
-                "--dangerously-skip-permissions",
-                "--model",
-                "zai/glm-5.3",
-                "--",
-                "do the thing"
-            ]
-        );
     }
 
     #[test]
@@ -1752,7 +1738,8 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_launches_the_template_line_and_writes_the_record() {
+    #[allow(clippy::indexing_slicing)] // asserts index the receipt and the driver argv
+    fn dispatch_mints_the_session_with_rules_and_launches_the_turn_driver() {
         let dir = tempfile::tempdir().unwrap();
         let h = home(dir.path());
         let fake = FakeServe::start("ses_dispatchtest1");
@@ -1768,11 +1755,11 @@ mod tests {
         });
         std::fs::write(serve_state_path(&h), record.to_string()).unwrap();
 
-        // A stub launch binary that records its argv beside the worker cwd:
-        // the seam points argv[0] at it, so no real `opencode` runs.
+        // A stub driver that records its argv beside the worker cwd: the seam
+        // points the launch at it, so no real worker runs.
         let stub = crate::write_exec_stub(
             dir.path(),
-            "opencode-stub",
+            "driver-stub",
             "#!/bin/sh\nprintf '%s\\n' \"$@\" > argv.txt\n",
         );
 
@@ -1787,24 +1774,20 @@ mod tests {
             None,
             None,
             Some("x-aaaa"),
+            &["/state/root".to_string()],
             &stub.to_string_lossy(),
         );
 
         assert_eq!(outcome.exit_code, 0, "stderr: {}", outcome.stderr);
         let receipt: serde_json::Value = serde_json::from_str(outcome.stdout.trim()).unwrap();
-        assert_eq!(receipt["ok"], true);
+        assert_eq!(receipt["session_id"], "ses_dispatchtest1");
         assert_eq!(receipt["binding"], "session-report");
         assert_eq!(
-            receipt["session_id"], "",
-            "opencode mints the id; the report binds it"
+            receipt["permission_posture"],
+            "user grants; fno answers asks (thread_permission)"
         );
-        // No row at launch: the adopt owns it.
         let reg = load_registry(&h.registry_json()).unwrap();
-        assert!(
-            reg.find("wk-serve").is_none(),
-            "the spawn writes no registry row"
-        );
-        // The launch record is the reservation and the adopt's parent edge.
+        assert!(reg.find("wk-serve").is_none(), "the adopt owns the row");
         let pending = crate::launch_record::pending_for_provider(
             h.root(),
             "opencode",
@@ -1815,16 +1798,36 @@ mod tests {
             vec!["wk-serve".to_string()],
             "the record holds the lane"
         );
-        // The exec was the filled contract template line: opencode creates
-        // its own session, so the fake saw no session create and the argv
-        // carries the title, not a pre-minted id.
-        let requests = fake.requests.lock().unwrap();
+
+        // The create body carries the worker rules: three denies and one
+        // external_directory allow pair per writable dir.
+        let requests = fake.requests.lock().unwrap().clone();
+        let create = requests
+            .iter()
+            .find(|r| r.starts_with("POST /session?directory="))
+            .unwrap_or_else(|| panic!("fno mints the session: {requests:?}"));
+        let body: serde_json::Value =
+            serde_json::from_str(create.split_once('\t').unwrap().1).unwrap();
+        assert_eq!(body["title"], "wk-serve");
+        let rules = body["permission"].as_array().unwrap();
+        let denied: Vec<&str> = rules
+            .iter()
+            .filter(|r| r["action"] == "deny" && r["pattern"] == "*")
+            .filter_map(|r| r["permission"].as_str())
+            .collect();
+        assert_eq!(denied, vec!["question", "plan_enter", "plan_exit"]);
         assert!(
-            !requests.iter().any(|r| r.starts_with("POST /session")),
-            "opencode mints its own session; saw {:?}",
-            *requests
+            !body.to_string().contains("\"*\":\"allow\""),
+            "no allow-all rides a session"
         );
-        drop(requests);
+        let allows: Vec<&str> = rules
+            .iter()
+            .filter(|r| r["permission"] == "external_directory")
+            .filter_map(|r| r["pattern"].as_str())
+            .collect();
+        assert!(allows.contains(&"/state/root/*"), "{allows:?}");
+        assert!(allows.iter().any(|p| p.ends_with("/w/*")), "{allows:?}");
+
         // The launch is detached, so the stub may not have written its file yet.
         let argv_path = cwd.join("argv.txt");
         for _ in 0..100 {
@@ -1835,46 +1838,27 @@ mod tests {
         }
         let launched = std::fs::read_to_string(&argv_path).unwrap();
         let lines: Vec<&str> = launched.lines().collect();
-        // `$@` holds the arguments only: argv[0] (the stub) is not printed.
-        assert_eq!(
-            &lines[..5],
-            &[
-                "run",
-                "--attach",
-                fake.base_url().as_str(),
-                "--title",
-                "wk-serve",
-            ][..],
-            "the template line, filled: {launched}"
-        );
+        assert_eq!(lines[0], "--opencode-turn", "the driver lane: {launched}");
         assert!(
-            lines.contains(&"--dangerously-skip-permissions"),
-            "the serve posture rides the line: {launched}"
+            !launched.contains("opencode run") && !launched.contains("dangerously"),
+            "no opencode writer and no skip flag: {launched}"
         );
-        assert!(
-            !lines.iter().any(|t| *t == "--session"),
-            "no pre-minted session rides the launch: {launched}"
-        );
-        assert!(
-            !lines.iter().any(|t| *t == "--command"),
-            "the payload rides the tail, never one --command blob (/ codex P1): {launched}"
-        );
-        // The seed spans several lines, so the fence is found, not indexed
-        // from the end.
-        let fence = lines
-            .iter()
-            .position(|t| *t == "--")
-            .unwrap_or_else(|| panic!("prose stays behind the fence: {launched}"));
-        assert!(
-            lines[fence + 1..].join("\n").contains("hello there"),
-            "the payload fills the tail: {launched}"
-        );
+        let spec: crate::opencode_turn::TurnSpec =
+            serde_json::from_str(&std::fs::read_to_string(lines[1]).unwrap()).unwrap();
+        assert_eq!(spec.session_id, "ses_dispatchtest1");
+        assert_eq!(spec.worker.as_deref(), Some("wk-serve"));
+        assert!(spec.message.contains("hello there"));
+        assert_eq!(spec.model.as_deref(), Some(OPENCODE_DEFAULT_MODEL));
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(lines[1]).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0, "the spec holds the token: owner-only");
     }
 
     // 2.x has no `run --attach` and no `--command`: the launch mints the
     // session over HTTP, starts the turn on the native command route, and
     // names the minted id. Effort rides the model ref as its variant.
     #[test]
+    #[allow(clippy::indexing_slicing)] // asserts index the receipt and the create body
     fn a_2x_dispatch_launches_over_http_and_names_the_session() {
         let dir = tempfile::tempdir().unwrap();
         let h = home(dir.path());
@@ -1887,9 +1871,12 @@ mod tests {
             "api": "2.x",
         });
         std::fs::write(serve_state_path(&h), record.to_string()).unwrap();
-        // A writer exec would be a 1.x launch on a 2.x serve: the stub
-        // leaves a mark if anything runs it.
-        let stub = crate::write_exec_stub(dir.path(), "opencode-stub", "#!/bin/sh\ntouch ran\n");
+        // The launch sends the turn itself; the driver only answers asks.
+        let stub = crate::write_exec_stub(
+            dir.path(),
+            "driver-stub",
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > argv.txt\n",
+        );
         let cwd = dir.path().join("w");
         std::fs::create_dir_all(&cwd).unwrap();
 
@@ -1902,12 +1889,17 @@ mod tests {
             Some("zai-coding-plan/glm-5.3-flash"),
             Some("high"),
             Some("x-aaaa"),
+            &["/state/root".to_string()],
             &stub.to_string_lossy(),
         );
 
         assert_eq!(outcome.exit_code, 0, "stderr: {}", outcome.stderr);
         let receipt: serde_json::Value = serde_json::from_str(outcome.stdout.trim()).unwrap();
         assert_eq!(receipt.pointer("/session_id").unwrap(), "ses_v2launch1");
+        assert_eq!(
+            receipt["permission_posture"],
+            "user grants; fno answers asks (thread_permission)"
+        );
         assert_eq!(receipt.pointer("/contract").unwrap(), "2.x");
         assert_eq!(receipt.pointer("/effort").unwrap(), "high");
         let requests = fake.requests.lock().unwrap().clone();
@@ -1930,6 +1922,13 @@ mod tests {
             create.pointer("/model").unwrap(),
             &serde_json::json!({"providerID": "zai-coding-plan", "id": "glm-5.3-flash", "variant": "high"})
         );
+        let rules = create["permissions"].as_array().unwrap();
+        assert!(
+            rules.contains(&serde_json::json!(
+                {"action": "external_directory", "resource": "/state/root/*", "effect": "allow"}
+            )),
+            "{rules:?}"
+        );
         assert!(
             requests
                 .iter()
@@ -1942,7 +1941,18 @@ mod tests {
                 .any(|r| r.contains("/global/health") || r.starts_with("GET /session")),
             "no 1.x route reaches a 2.x serve: {requests:?}"
         );
-        assert!(!cwd.join("ran").exists() && !dir.path().join("ran").exists());
+        let argv_path = cwd.join("argv.txt");
+        for _ in 0..100 {
+            if std::fs::metadata(&argv_path).is_ok_and(|m| m.len() > 0) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let launched = std::fs::read_to_string(&argv_path).unwrap();
+        let spec_path = launched.lines().nth(1).unwrap();
+        let spec: crate::opencode_turn::TurnSpec =
+            serde_json::from_str(&std::fs::read_to_string(spec_path).unwrap()).unwrap();
+        assert!(spec.v2, "the 2.x driver answers only");
     }
 
     #[test]
@@ -1974,7 +1984,8 @@ mod tests {
             None,
             None,
             None,
-            "opencode",
+            &[],
+            "fno-agents-worker",
         );
         assert_eq!(out.exit_code, 2);
     }

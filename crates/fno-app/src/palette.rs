@@ -4,8 +4,8 @@
 use std::path::{Path, PathBuf};
 
 use super::link::Layout;
-use crate::proto::Color;
-use crate::theme::{terminal16_slot, Theme};
+use fno::proto::Color;
+use fno::theme::{terminal16_slot, Theme};
 
 /// xterm's own ANSI 16, for a theme that defines no terminal palette.
 const XTERM16: [u32; 16] = [
@@ -92,6 +92,21 @@ fn rgb_or(c: Color, fallback: u32) -> u32 {
     }
 }
 
+/// The user's own turns in chat mode: `base` walked toward `stamp` until the
+/// fill separates from the base ground at 3:1 and keeps `stamp` text at
+/// 4.5:1 (the bubble paints on `bg`, its text is `fg`). A theme whose twins
+/// never satisfy both bars keeps the gentle 12% mix.
+fn bubble_fill(base: u32, stamp: u32) -> u32 {
+    for step in 3..=23 {
+        let t = step as f32 / 25.0; // 0.12 ..= 0.92
+        let c = mix(base, stamp, t);
+        if contrast(c, base) >= 3.0 && contrast(c, stamp) >= 4.5 {
+            return c;
+        }
+    }
+    mix(base, stamp, 0.12)
+}
+
 /// Slots 16-231 are the 6x6x6 cube, 232-255 the 24-step gray ramp.
 fn xterm256(i: u8) -> u32 {
     if i >= 232 {
@@ -115,7 +130,7 @@ pub fn appearance_is_light(a: gpui::WindowAppearance) -> bool {
 /// `mux.theme` pin and the user's own themes win over `light`, as in the TUI.
 /// The second value is the ladder's warning text, if any.
 pub fn for_appearance(light: bool, cwd: &Path) -> (Palette, Option<String>) {
-    let (theme, warn, _) = crate::digest_overlay::theme_resolved(cwd, Some(light));
+    let (theme, warn, _) = fno::app_api::digest_overlay::theme_resolved(cwd, Some(light));
     (Palette::from_theme(&theme), warn.map(|w| w.0))
 }
 
@@ -179,7 +194,7 @@ impl Palette {
             hover,
             row_fill,
             pressed,
-            bubble: mix(bg, fg, 0.12),
+            bubble: bubble_fill(bg, fg),
             ansi,
         }
     }
@@ -268,7 +283,7 @@ mod tests {
         assert_eq!(live.bg, pinned.bg);
 
         // The pin's directory is the active squad's, never the process cwd.
-        let squad = |id, cwd: &str| crate::proto::SquadMeta {
+        let squad = |id, cwd: &str| fno::proto::SquadMeta {
             id,
             name: String::new(),
             canonical_cwd: cwd.into(),
@@ -330,6 +345,15 @@ mod tests {
                     assert!(c >= 4.5, "{name}: {text} on {what} is {c:.2}:1");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn bubble_separates_from_the_ground_and_keeps_fg_text_readable() {
+        for light in [false, true] {
+            let p = Palette::from_theme(&Theme::default_for(light));
+            assert!(contrast(p.bubble, p.bg) >= 3.0, "light={light}");
+            assert!(contrast(p.bubble, p.fg) >= 4.5, "light={light}");
         }
     }
 }

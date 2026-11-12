@@ -9,7 +9,7 @@ use crate::proto::{cell_flags, Color};
 
 /// One worker's lattice state: the glyph the whole chrome agrees on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LatticeState {
+pub enum LatticeState {
     Working,
     Idle,
     Blocked,
@@ -70,7 +70,7 @@ pub(crate) fn lattice_style(s: LatticeState, needs_you: Color, ok: Color) -> Lat
 /// The glyph + flags for a state, with no color. For every caller that does not
 /// read `.fg` (i.e. every caller except the one accent-colored span), so they
 /// do not have to thread a theme accent they never use.
-pub(crate) fn lattice_glyph(s: LatticeState) -> (char, u8) {
+pub fn lattice_glyph(s: LatticeState) -> (char, u8) {
     let st = lattice_style(s, Color::Default, Color::Default);
     (st.glyph, st.flags)
 }
@@ -141,7 +141,7 @@ pub(crate) fn status_word(s: LatticeState) -> &'static str {
 /// The state as a whole word, for surfaces with room for it (the desktop
 /// pane). [`status_word`] stays the 5-cell form.
 #[allow(dead_code)] // the desktop build alone reads it; fno-agents compiles this file without it
-pub(crate) fn status_long(s: LatticeState) -> &'static str {
+pub fn status_long(s: LatticeState) -> &'static str {
     match s {
         LatticeState::Working => "working",
         LatticeState::Idle => "idle",

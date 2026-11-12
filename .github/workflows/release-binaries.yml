@@ -149,52 +149,22 @@ jobs:
           RUST_TARGET: ${{ matrix.target.rust-target }}
         run: |
           set -euo pipefail
-          keychain="$RUNNER_TEMP/fno-sign.keychain-db"
-          kpass="$(uuidgen)"
-          security create-keychain -p "$kpass" "$keychain"
-          security set-keychain-settings -lut 3600 "$keychain"
-          security unlock-keychain -p "$kpass" "$keychain"
-          printf '%s' "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          security import "$RUNNER_TEMP/cert.p12" -P "$CERT_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
-          rm -f "$RUNNER_TEMP/cert.p12"
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kpass" "$keychain" >/dev/null
-          security list-keychains -d user -s "$keychain" login.keychain-db
-          identity="$(security find-identity -v -p codesigning "$keychain" | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
-          if [ -z "$identity" ]; then
-            echo "::error::no Developer ID Application identity in MACOS_CERT_P12_BASE64"
-            exit 1
-          fi
-
-          # The identifiers match crates/fno/src/codesign.rs, so permission
-          # grants keyed on them survive the move from local to CI signing.
+          # The script comes from THIS workflow's commit, as the version
+          # stamp does, so a pinned older ref still signs the same way.
+          git fetch --depth=1 origin "${{ github.sha }}"
+          git show "${{ github.sha }}:scripts/release/macos-sign.sh" > "$RUNNER_TEMP/macos-sign.sh"
+          sign="bash $RUNNER_TEMP/macos-sign.sh"
           bins=(
             "crates/fno-agents/target/$RUST_TARGET/release/fno-agents"
             "crates/fno-agents/target/$RUST_TARGET/release/fno-agents-daemon"
             "crates/fno-agents/target/$RUST_TARGET/release/fno-agents-worker"
             "crates/fno/target/$RUST_TARGET/release/fno"
           )
-          mkdir -p "$RUNNER_TEMP/notarize"
-          for b in "${bins[@]}"; do
-            codesign --force --timestamp --options runtime \
-              --sign "$identity" --identifier "dev.fno.$(basename "$b")" "$b"
-            codesign --verify --strict "$b"
-            cp "$b" "$RUNNER_TEMP/notarize/"
-          done
-
-          # notarytool takes a zip, not a tarball. A bare Mach-O cannot carry
-          # a stapled ticket, so Gatekeeper checks the notarization online.
-          (cd "$RUNNER_TEMP/notarize" && ditto -c -k . ../notarize.zip)
-          printf '%s' "$NOTARY_KEY" > "$RUNNER_TEMP/notary-key.p8"
-          # notarytool can exit 0 on an Invalid verdict, so read the status.
-          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" --wait --timeout 30m --output-format json \
-            --key "$RUNNER_TEMP/notary-key.p8" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" \
-            | tee "$RUNNER_TEMP/notary.json"
-          rm -f "$RUNNER_TEMP/notary-key.p8"
-          if [ "$(jq -r '.status' "$RUNNER_TEMP/notary.json")" != "Accepted" ]; then
-            echo "::error::notarization was not accepted; see the notarytool output above"
-            exit 1
-          fi
-          security delete-keychain "$keychain"
+          $sign sign "${bins[@]}"
+          # A bare Mach-O cannot carry a stapled ticket, so Gatekeeper checks
+          # the notarization online.
+          $sign notarize "${bins[@]}"
+          $sign cleanup
 
       - name: Package tarball
         shell: bash

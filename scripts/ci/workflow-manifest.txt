@@ -20,6 +20,7 @@ merge-queue-gate.yml
 multiplayer-attestation.yml
 release.yml
 pitfalls.yml
+release-app.yml
 release-binaries.yml
 release-wheels.yml
 review-coverage-gate.yml

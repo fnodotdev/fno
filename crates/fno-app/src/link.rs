@@ -10,13 +10,40 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
-use crate::proto::{
+use fno::proto::{
     self, AgentRow, ClientMsg, Frame, ProtoError, ServerMsg, SquadMeta, BUILD_VERSION,
     PROTO_VERSION,
 };
-use crate::tree::Rect;
+use fno::tree::Rect;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// The oldest server wire the app drives. `ChatTail` (v127) is the newest
+/// message it sends; the pane commands it binds sit at v124 and below.
+pub const MIN_SERVER_PROTO: u32 = 127;
+
+/// A live server that stamps an older wire than the app needs, or none.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[error("the mux server for session {session} speaks wire {found} (or predates the version stamp); fno-app needs v{need} or newer. Update fno with `fno update`, then restart the server with `fno agents restart --mux`.", found = found.map_or_else(|| "unstamped".to_string(), |v| format!("v{v}")))]
+pub struct ServerTooOld {
+    pub session: String,
+    pub found: Option<u32>,
+    pub need: u32,
+}
+
+/// Refuse a server older than `need`. A missing stamp is an older server:
+/// callers reach this only after a live connect, so it never reads "no
+/// server running" as "too old".
+pub fn check_server_wire(session: &str, found: Option<u32>, need: u32) -> Result<(), ServerTooOld> {
+    match found {
+        Some(v) if v >= need => Ok(()),
+        _ => Err(ServerTooOld {
+            session: session.to_string(),
+            found,
+            need,
+        }),
+    }
+}
 
 /// The parts of a server `Layout` the app draws.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -89,6 +116,8 @@ fn to_event(msg: ServerMsg) -> Option<Event> {
 pub enum LinkError {
     #[error("{0}")]
     Session(String),
+    #[error(transparent)]
+    TooOld(#[from] ServerTooOld),
     #[error("cannot connect to session socket {}: {source}\n  is the mux server running? start one with `fno mux`.", path.display())]
     Connect {
         path: PathBuf,
@@ -115,6 +144,11 @@ fn attach(session: &str, rows: u16, cols: u16) -> Result<UnixStream, LinkError> 
     let path = proto::socket_path(session).map_err(LinkError::Session)?;
     let mut stream = proto::connect_unix_timeout(&path, CONNECT_TIMEOUT)
         .map_err(|source| LinkError::Connect { path, source })?;
+    check_server_wire(
+        session,
+        fno::app_api::proto::server_wire(session),
+        MIN_SERVER_PROTO,
+    )?;
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_default();
@@ -155,7 +189,7 @@ impl Link {
         })?;
         let (tx, rx) = unbounded_channel();
         std::thread::Builder::new()
-            .name("fno-desktop-reader".into())
+            .name("fno-app-reader".into())
             .spawn(move || read_loop(reader, tx))
             .map_err(|source| LinkError::Io {
                 what: "reader thread start",
@@ -202,7 +236,7 @@ pub fn probe(session: &str, budget: Duration) -> (i32, Option<Layout>) {
     let mut stream = match attach(session, 0, 0) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("fno-desktop: {e}");
+            eprintln!("fno-app: {e}");
             return (1, None);
         }
     };
@@ -243,7 +277,7 @@ pub fn probe(session: &str, budget: Duration) -> (i32, Option<Layout>) {
     let _ = proto::write_msg_sync(&mut stream, &ClientMsg::Detach);
     let Some(layout) = layout else {
         eprintln!(
-            "fno-desktop: no layout from session {session}: {}",
+            "fno-app: no layout from session {session}: {}",
             failure.unwrap_or_default()
         );
         return (1, None);
@@ -259,10 +293,49 @@ pub fn probe(session: &str, budget: Duration) -> (i32, Option<Layout>) {
     );
     let code = match failure {
         Some(why) => {
-            eprintln!("fno-desktop: {why}");
+            eprintln!("fno-app: {why}");
             1
         }
         None => 0,
     };
     (code, Some(layout))
+}
+
+#[cfg(test)]
+mod server_wire_tests {
+    use super::*;
+
+    #[test]
+    fn server_wire_below_need_refuses() {
+        let err =
+            check_server_wire("main", Some(MIN_SERVER_PROTO - 1), MIN_SERVER_PROTO).unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains(&format!("v{}", MIN_SERVER_PROTO - 1)),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("v{MIN_SERVER_PROTO} or newer")),
+            "{text}"
+        );
+        assert!(text.contains("fno agents restart --mux"), "{text}");
+    }
+
+    #[test]
+    fn server_wire_missing_refuses() {
+        let err = check_server_wire("main", None, MIN_SERVER_PROTO).unwrap_err();
+        assert!(err.to_string().contains("predates the version stamp"));
+    }
+
+    #[test]
+    fn server_wire_at_need_passes() {
+        assert_eq!(
+            check_server_wire("main", Some(MIN_SERVER_PROTO), MIN_SERVER_PROTO),
+            Ok(())
+        );
+        assert_eq!(
+            check_server_wire("main", Some(MIN_SERVER_PROTO + 5), MIN_SERVER_PROTO),
+            Ok(())
+        );
+    }
 }

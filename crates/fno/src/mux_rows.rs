@@ -16,6 +16,24 @@ pub(crate) fn read_wire_version(sock: &Path) -> Option<u32> {
         .ok()
 }
 
+/// The wire version the `session` server stamped, `None` when the session
+/// path or the sidecar cannot be read (an older server, or no server).
+pub fn server_wire(session: &str) -> Option<u32> {
+    proto::socket_path(session)
+        .ok()
+        .and_then(|socket| read_wire_version(&socket))
+}
+
+pub(crate) fn version_at_least(version: Option<u32>, min: u32) -> bool {
+    version.is_some_and(|version| version >= min)
+}
+
+/// Whether the `session` server speaks at least wire `min`. A missing
+/// sidecar reads as older, so the answer is false.
+pub(crate) fn wire_at_least(session: &str, min: u32) -> bool {
+    version_at_least(server_wire(session), min)
+}
+
 /// The serving pid from the session's pid sidecar (`<pid>:<start>` or
 /// `<pid>`), for the `ls --json` Live row. `None` when the sidecar is
 /// absent or unparseable: a pre-sidecar server is not a fault.

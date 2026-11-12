@@ -12,8 +12,8 @@ use gpui::{
 use super::markdown::{Block, Inline, Runs};
 use super::model::{Content, Item, Picture};
 use super::{Closed, EMPTY_AFTER};
-use crate::desktop::palette::Palette;
-use crate::desktop::window::{Action, Root};
+use crate::palette::Palette;
+use crate::window::{Action, Root};
 
 /// The reading column's width.
 const COLUMN: f32 = 720.0;
@@ -127,7 +127,7 @@ fn rich(
     let urls: Vec<String> = links.into_iter().map(|(_, u)| u).collect();
     InteractiveText::new(id, text)
         .on_click(ranges, move |ix, _, cx| {
-            if let Some(url) = urls.get(ix).filter(|u| crate::link::is_openable(u)) {
+            if let Some(url) = urls.get(ix).filter(|u| fno::link::is_openable(u)) {
                 cx.open_url(url);
             }
         })
@@ -527,7 +527,12 @@ fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div>
     root.chat.key.as_ref()?;
     if let Some(closed) = &root.chat.closed {
         let (text, color) = match closed {
-            Closed::Ended => ("The session's chat stream ended.".to_string(), p.muted),
+            // The link's own exit reason folds in here; the corner toast
+            // for it is suppressed while this bar stands (window render).
+            Closed::Ended => match &root.closed {
+                Some(reason) => (format!("The chat stream ended: {reason}."), p.error),
+                None => ("The session's chat stream ended.".to_string(), p.muted),
+            },
             Closed::Failed(why) => (why.clone(), p.error),
         };
         let bar = div()
@@ -594,7 +599,7 @@ fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div>
     Some(column(bar).pb_3())
 }
 
-pub(in crate::desktop) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> Div {
+pub(crate) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> Div {
     let p = root.palette;
     let rows = list(root.chat.list.clone(), cx.processor(row))
         .flex_1()

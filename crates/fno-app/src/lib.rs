@@ -1,4 +1,4 @@
-//! `fno-desktop`: the macOS app. A thin client of the mux server: it draws
+//! `fno-app`: the macOS app. A thin client of the mux server: it draws
 //! the `Frame` cells the server sends over the session socket and runs no
 //! terminal emulator of its own.
 
@@ -18,8 +18,8 @@ mod window;
 
 use std::time::Duration;
 
-use crate::mux_cli::{env_server, resolve_session};
-use crate::web_hq::Board;
+use fno::app_api::web_hq::Board;
+use fno::mux_cli::{env_server, resolve_session};
 pub use window::MainView;
 
 /// How long `--probe` waits for a layout and a frame per pane.
@@ -40,12 +40,39 @@ pub struct Options {
     pub chat: Option<String>,
 }
 
+/// `path` with the directories fno installs into appended when missing. A
+/// Finder launch hands the app `/usr/bin:/bin:/usr/sbin:/sbin`, which holds
+/// neither `fno` nor `fno-agents`, so the fleet and question reads fail.
+fn widened_path(path: &str, home: &str) -> String {
+    let wanted = [
+        format!("{home}/.local/bin"),
+        format!("{home}/.fno/install/bin"),
+        "/opt/homebrew/bin".to_string(),
+        "/usr/local/bin".to_string(),
+    ];
+    let mut dirs: Vec<String> = path
+        .split(':')
+        .filter(|d| !d.is_empty())
+        .map(str::to_string)
+        .collect();
+    for dir in wanted {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    dirs.join(":")
+}
+
 /// Run the app (or the headless probe) and return the process exit code.
 pub fn run(opts: Options) -> i32 {
+    if let Some(home) = std::env::var_os("HOME").and_then(|h| h.into_string().ok()) {
+        let path = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", widened_path(&path, &home));
+    }
     let session = resolve_session(opts.session.as_deref(), env_server().as_deref());
     let pinned = match opts.chat.as_deref().map(chat::claude_key) {
         Some(None) => {
-            eprintln!("fno-desktop: no claude transcript to read");
+            eprintln!("fno-app: no claude transcript to read");
             return 1;
         }
         Some(key) => key,
@@ -70,7 +97,7 @@ fn probe(session: &str) -> i32 {
     {
         Ok(rt) => rt,
         Err(e) => {
-            eprintln!("fno-desktop: cannot start the board read: {e}");
+            eprintln!("fno-app: cannot start the board read: {e}");
             return 1;
         }
     };
@@ -86,7 +113,22 @@ fn probe(session: &str) -> i32 {
         .into_iter()
         .flatten()
     {
-        eprintln!("fno-desktop: {e}");
+        eprintln!("fno-app: {e}");
     }
     code
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::widened_path;
+
+    #[test]
+    fn widened_path_adds_the_install_dirs_once() {
+        let path = widened_path("/usr/bin:/bin", "/Users/u");
+        assert_eq!(
+            path,
+            "/usr/bin:/bin:/Users/u/.local/bin:/Users/u/.fno/install/bin:/opt/homebrew/bin:/usr/local/bin"
+        );
+        assert_eq!(widened_path(&path, "/Users/u"), path);
+    }
 }

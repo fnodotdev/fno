@@ -1,22 +1,30 @@
 # The fno desktop app
 
-`fno-desktop` is a macOS window onto a running mux session. It opens in chat mode: the focused agent's conversation, drawn as turns. The terminal view draws the frames the mux server sends and types into the focused pane. The app runs no terminal emulator and parses no transcript of its own, so it shows exactly what the mux serves.
+`fno-app` is a macOS window onto a running mux session. It opens in chat mode: the focused agent's conversation, drawn as turns. The terminal view draws the frames the mux server sends and types into the focused pane. The app runs no terminal emulator and parses no transcript of its own, so it shows exactly what the mux serves.
 
 ## Build and run
 
 The app is macOS only and is built from source. It is not part of `cargo install fno`.
 
-The build compiles Metal shaders, so it needs Xcode and its Metal toolchain. If the build stops on `missing Metal Toolchain`, install it once with `xcodebuild -downloadComponent MetalToolchain`. To build without it, add `gpui/runtime_shaders` to `--features`: the app then compiles its shaders at launch.
+The build compiles Metal shaders, so it needs Xcode and its Metal toolchain. If the build stops on `missing Metal Toolchain`, install it once with `xcodebuild -downloadComponent MetalToolchain`. To build without it, add `--features gpui/runtime_shaders`: the app then compiles its shaders at launch.
 
 ```bash
-cargo build --release --manifest-path crates/fno/Cargo.toml --features desktop --bin fno-desktop
-T="$(cargo metadata --format-version 1 --no-deps --manifest-path crates/fno/Cargo.toml | jq -r .target_directory)/release/fno-desktop"
+cargo build --release --manifest-path crates/fno-app/Cargo.toml --bin fno-app
+T="$(cargo metadata --format-version 1 --no-deps --manifest-path crates/fno-app/Cargo.toml | jq -r .target_directory)/release/fno-app"
 codesign -s - "$T"
 fno mux            # in another terminal: the app needs a running mux server
 "$T"
 ```
 
 The `codesign -s -` step gives the binary an ad-hoc signature. No developer account is needed.
+
+Each release also ships `fno-app-macos-arm64.tar.gz` for Apple Silicon. It holds `fno-app.app`, signed with a Developer ID, notarized and stapled, so it opens with no prompt. If the release was built without the signing secrets, the bundle is ad-hoc signed instead. Then Gatekeeper asks once. Clear the prompt with `xattr -d com.apple.quarantine fno-app.app`. The app runs the `fno` and `fno-agents` it finds beside itself, then on `PATH`, so install fno first.
+
+## Versions
+
+The app versions in lockstep with fno. `scripts/release/sync-version.sh` stamps both on every release.
+
+The app never reads that version to judge compatibility. It reads the wire version the mux server stamps in its `.ver` file. The app needs wire v127 or newer. A server below that, or one with no stamp, makes the app stop with one line. The line names both versions. Run `fno update`, then `fno agents restart --mux`.
 
 ## Flags
 
@@ -51,7 +59,7 @@ Focus another pane to read its agent. The app keeps each conversation it read, s
 
 The composer at the bottom takes your message. Enter or Send sends it, Shift-Enter adds a line, Backspace deletes one character, and cmd-v pastes into it. While an input method composes, Enter goes to the input method. The app types the text into the session's own pane as a paste. It waits 800 ms, then presses Enter in that same pane, as the TUI reply path does. Your turn shows at once with "sending…". After the transcript records it, the turn moves into the conversation. If no pane on screen hosts the session, the app says so and sends nothing.
 
-If the chat stream ends, the composer gives way to the reason and a Reconnect button. A normal end reads muted. A failure reads in the error colour. Reconnect resumes from the last event the view holds.
+If the chat stream ends, the composer gives way to the reason and a Reconnect button. A normal end with no known cause reads muted. When the connection's own exit reason is known, it folds into that line and reads in the error colour. No corner toast repeats it while no sheet covers the conversation. A failure reads in the error colour. Reconnect resumes from the last event the view holds.
 
 cmd-2 or Board opens orchestration mode, the command center board. TABLE lists every seat with its node and status. With more than one host in the fleet, a MACHINE column shows too. FEED lists each open question with its options, and the recommended option is marked. A click on an option answers it through the same door the TUI uses. The question then shows "sending", then "answered", until the next read drops it. A refused answer shows its reason and keeps the options. cmd-4 or Terminal goes to the terminal.
 

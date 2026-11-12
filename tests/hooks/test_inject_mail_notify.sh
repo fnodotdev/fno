@@ -369,11 +369,13 @@ else
 fi
 
 # Busy hold: a live clock on the full session id short-circuits before any
-# render or ack, so the busy turn's mail stays pending.
+# render or ack, so the busy turn's mail stays pending. The record is the
+# store's current shape at its folded home (db/mail/mail-hold), the only
+# pair the reader accepts.
 JB="$TMP/j-busy"
-mkdir -p "$JB/bus" "$JB/mail-hold"
+mkdir -p "$JB/bus" "$JB/db/mail/mail-hold"
 printf '%s\n' "$msg1" > "$JB/bus/messages.jsonl"
-printf '{"until":"2099-01-01T00:00:00Z","window_s":300,"clock_kind":"idle"}\n' > "$JB/mail-hold/$SID.json"
+printf '%s\n' "{\"session\":\"$SID\",\"until\":\"2099-01-01T00:00:00Z\",\"set_by\":\"user\",\"reason\":\"journey\",\"clock\":{\"kind\":\"idle\",\"window_s\":300,\"ceiling\":\"2099-01-01T00:00:00Z\"}}" > "$JB/db/mail/mail-hold/$SID.json"
 out="$(journey_run "$JB" "$STDIN_OK")" && jb_rc=0 || jb_rc=$?
 if [[ "$jb_rc" -eq 0 && -z "$out" && ! -f "$JB/bus/cursors/$HANDLE.json" ]]; then
     ok "journey busy hold: no render, no ack while the clock is live"
