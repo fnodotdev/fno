@@ -72,4 +72,5 @@ pub mod stability_report;
 pub mod test_census;
 pub mod tick_ledger;
 pub mod usage_events;
+pub mod usage_report;
 pub mod wake_meter;
