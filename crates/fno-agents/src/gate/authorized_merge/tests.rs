@@ -2742,12 +2742,34 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
     fake.late_decline = Some(page.clone());
     let late = run(&fake, &req);
     assert_eq!(late.word(), "held");
-    assert!(late.detail().contains("the user declined"));
+    // The decline page was withdrawn, so the pre-flight holds on the missing
+    // look before any late decline can land; the recheck's own decline leg
+    // is exercised just below, behind a look the pre-flight accepts.
+    assert!(late.detail().contains("no recorded look"));
     assert!(!fake
         .gh_calls
         .borrow()
         .iter()
         .any(|args| args.get(1).map(String::as_str) == Some("merge")));
+    fake.late_decline = None;
+    // A look approved at this head passes the pre-flight; a decline that
+    // lands mid-flow still holds through the post-wait recheck.
+    std::fs::write(
+        &page,
+        format!(
+            "---\nquestion_id: q-xc129\nstatus: answered\ntitle: May PR 7 merge?\n\
+             answer: 1. Merge as painted\n---\nPR 7 at head {head}\n"
+        ),
+    )
+    .unwrap();
+    fake.late_decline = Some(page.clone());
+    let late_decline = run(&fake, &req);
+    assert_eq!(late_decline.word(), "held", "{}", late_decline.detail());
+    assert!(
+        late_decline.detail().contains("the user declined"),
+        "{}",
+        late_decline.detail()
+    );
     fake.late_decline = None;
     let next_head = "b".repeat(40);
     let evidence = crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &next_head).unwrap();
