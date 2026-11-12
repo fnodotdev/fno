@@ -452,6 +452,7 @@ fn composer_replays_the_goldens() {
             review_lane: fixture["inputs"]["review_lane"].as_bool().unwrap_or(false),
             platform_incident: Value::Null,
             ci_tier_keeper: Value::Null,
+            ci_unmeasured: Value::Null,
         };
         let (code, payload, stderr) = crate::pr_status::compose::compose_payload(&inputs);
         assert_eq!(
@@ -507,6 +508,7 @@ fn a_cancelled_run_never_kicks_a_passing_run_off_the_slot() {
         review_lane: false,
         platform_incident: Value::Null,
         ci_tier_keeper: Value::Null,
+        ci_unmeasured: Value::Null,
     };
     let (code, payload, stderr) = crate::pr_status::compose::compose_payload(&inputs);
     assert_eq!(code, 0);
@@ -558,12 +560,83 @@ fn an_in_flight_rerun_reads_ready_false_even_before_the_merge_state_arrives() {
         review_lane: false,
         platform_incident: Value::Null,
         ci_tier_keeper: Value::Null,
+        ci_unmeasured: Value::Null,
     };
     let (code, payload, _stderr) = crate::pr_status::compose::compose_payload(&inputs);
     assert_eq!(code, 2, "an in-flight rerun reads pending");
     assert_eq!(payload["ready"].as_bool(), Some(false));
     assert_eq!(payload["ready_blockers"], json!(["ci_pending"]));
     assert_eq!(payload["verdict"].as_str(), Some("pending"));
+}
+
+/// The unmeasured read (lead ruling 2026-11-12 02:06Z, under D3173): the head
+/// stays ready (queued CI never blocks) and the read names the state - the
+/// receipt warning rides as `warn:` and the payload notes the way out.
+/// PR 82 merged ready in exactly this shape, silently.
+#[test]
+fn an_unmeasured_head_names_the_state_and_stays_ready() {
+    let reason = "ci unmeasured: 7 runs queued, none completed at 11a2fc42";
+    let inputs = crate::pr_status::compose::ComposeInputs {
+        pr: "82".to_string(),
+        pr_json: json!({
+            "number": 82,
+            "state": "OPEN",
+            "headRefOid": "11a2fc423508de47db4b5669f06cf3a2c229f7ac",
+            "statusCheckRollup": [
+                {"context": "review-coverage", "state": "SUCCESS", "createdAt": "2026-11-11T20:19:44Z"},
+            ],
+            "workflowRuns": [
+                {"name": "cli-ci", "status": "queued", "conclusion": null},
+                {"name": "rust-ci", "status": "queued", "conclusion": null},
+                {"name": "guards", "status": "queued", "conclusion": null},
+                {"name": "crates-publish", "status": "queued", "conclusion": null},
+                {"name": "review-coverage-gate", "status": "queued", "conclusion": null},
+                {"name": "multiplayer-attestation", "status": "queued", "conclusion": null},
+                {"name": "stacked-base-guard", "status": "queued", "conclusion": null},
+            ],
+        }),
+        rerun_recovery: Value::Null,
+        branch_history: Value::Null,
+        optional_reviews: json!({
+            "optional_reviews": [],
+            "optional_reviews_unresolved": 0,
+            "optional_reviews_resolved_unchanged": 0,
+        }),
+        coverage_row: Value::Null,
+        hold_reason: Value::Null,
+        review_activity: Value::Null,
+        receipt: json!({"outcome": "authorized", "blockers": [], "warnings": [
+            {"code": "ci_unmeasured", "detail": reason}
+        ]}),
+        github_merge_blockers: Value::Null,
+        merge_authority: Value::Null,
+        merge_execution: Value::Null,
+        failures: Value::Null,
+        review_lane: false,
+        platform_incident: Value::Null,
+        ci_tier_keeper: Value::Null,
+        ci_unmeasured: json!(reason),
+    };
+    let (_code, payload, stderr) = crate::pr_status::compose::compose_payload(&inputs);
+    assert_eq!(
+        payload.pointer("/ready").and_then(Value::as_bool),
+        Some(true),
+        "D3173: queued CI never reads ready:false"
+    );
+    assert_eq!(
+        payload.pointer("/ci_unmeasured").and_then(Value::as_str),
+        Some(reason)
+    );
+    assert!(
+        stderr
+            .iter()
+            .any(|l| { l.starts_with("warn: ci_unmeasured:") && l.contains("7 runs queued") }),
+        "the receipt warning names the unmeasured fact: {stderr:?}"
+    );
+    assert!(
+        stderr.iter().any(|l| l.contains("fno do pr wait 82")),
+        "the note names the way out: {stderr:?}"
+    );
 }
 
 /// The refused read composes the error payload: exit 4, the reason field,
@@ -653,6 +726,7 @@ fn a_cancelled_only_head_warns_and_proceeds() {
         review_lane: false,
         platform_incident: Value::Null,
         ci_tier_keeper: keeper,
+        ci_unmeasured: Value::Null,
     };
     let stranded = crate::ci_tier::stranded_fact_pure(false, false, &[70, 71], &[], &[]);
     let (code, payload, stderr) = crate::pr_status::compose::compose_payload(&inputs(stranded));

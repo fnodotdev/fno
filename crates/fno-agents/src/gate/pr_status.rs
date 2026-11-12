@@ -670,10 +670,12 @@ __typename \
 }
 
 /// Map the one-rollup-query reply to the pr_json shape. `pull_head_stale`
-/// stays null (the REST-only conflict probe), `workflowRuns` stays empty
-/// (the Actions listing has no GraphQL equivalent in this query), and the
-/// verdict still composes: state, head, mergeable and the rollup are all
-/// present. A rollup larger than the query's 100-node page names the
+/// stays null (the REST-only conflict probe), and `workflowRuns` stays null
+/// too (the Actions listing has no GraphQL equivalent in this query; null =
+/// never read, so the unmeasured fact has no evidence and adds nothing -
+/// an empty array would read as "no runs" and strand every GraphQL-routed
+/// PR). The verdict still composes: state, head, mergeable and the rollup
+/// are all present. A rollup larger than the query's 100-node page names the
 /// truncation in `rollup_truncated` rather than understating silently.
 fn parse_graphql_pr(stdout: &str, pr: u64) -> Result<Value, RestReason> {
     let v: Value = serde_json::from_str(stdout)
@@ -747,7 +749,9 @@ fn parse_graphql_pr(stdout: &str, pr: u64) -> Result<Value, RestReason> {
         "html_url": pull.get("url").cloned().unwrap_or(Value::Null),
         "body": pull.get("body").cloned().unwrap_or(Value::Null),
         "auto_merge": pull.get("autoMergeRequest").cloned().unwrap_or(Value::Null),
-        "workflowRuns": json!([]),
+        // Null = the listing was never read (see the fn doc): the unmeasured
+        // fact reads null as no-evidence, never as "no runs".
+        "workflowRuns": Value::Null,
     });
     if total > nodes.len() {
         if let Some(map) = out.as_object_mut() {
@@ -1266,6 +1270,22 @@ pub(crate) fn status_payload<P: GhProbe>(
         )
     };
 
+    // The unmeasured read: a head whose Actions runs listing names
+    // no completed run is unmeasured, never green. PR 82 merged ready with
+    // all 7 head runs queued; the rollup held only fno's own passing
+    // statuses, so the verdict read unknown and unknown added no blocker.
+    // The fact rides the receipt ask (the walk warns on it under
+    // require_checks) and the compose inputs (the note names the way out).
+    // Terminal PRs have no would-merge left: a merged PR's queued runs say
+    // nothing.
+    let ci_unmeasured: Option<String> = if is_terminal {
+        None
+    } else {
+        crate::pr_status_facts::ci_unmeasured_reason(
+            pr_json.pointer("/workflowRuns").unwrap_or(&Value::Null),
+            &head_sha,
+        )
+    };
     // A cancelled or timed-out latest run has a branch-history story: which
     // run, which attempt, what the re-run shows.
     let mut branch_history = Value::Null;
@@ -1374,6 +1394,13 @@ pub(crate) fn status_payload<P: GhProbe>(
     if let Some(seams::HoldVerdict::Clear | seams::HoldVerdict::Held(_)) = hold_state.as_ref() {
         receipt_ask["dispatch_hold_reason"] = hold.clone();
     }
+    // The unmeasured fact rides the ask too: the walk warns on it under
+    // require_checks, so the read names the fact the merge decision sees.
+    if let Some(reason) = &ci_unmeasured {
+        if let Some(map) = receipt_ask.as_object_mut() {
+            map.insert("ci_unmeasured".into(), json!(reason));
+        }
+    }
     // The read's own PR projection rides the ask: the walk parses facts from
     // it instead of spawning `fno do pr info`. An old cache row without the
     // new fields simply omits the key and the walk spawns as before.
@@ -1472,6 +1499,7 @@ pub(crate) fn status_payload<P: GhProbe>(
         review_lane: lane,
         platform_incident,
         ci_tier_keeper,
+        ci_unmeasured: json!(ci_unmeasured),
     };
     let (code, payload, stderr) = compose::compose_payload(&inputs);
     // A green verdict at a head is a GitHub fact that never changes once

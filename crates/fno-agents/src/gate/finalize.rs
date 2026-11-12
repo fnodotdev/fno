@@ -2118,6 +2118,7 @@ fn arm_auto_merge(cwd: &Path, approved: bool, source: Option<&str>) -> (bool, Op
             supplied_review_hold: None,
             supplied_facts: None,
             supplied_evals_gate: None,
+            supplied_unmeasured: None,
         },
     );
     for warning in outcome.warnings() {
