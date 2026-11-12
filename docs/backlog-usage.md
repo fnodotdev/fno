@@ -115,9 +115,9 @@ fno backlog admin backfill-tags                        # dry run: the guesses an
 fno backlog admin backfill-tags --apply                # write the high-confidence guesses
 ```
 
-`find --related` ranks on shared title and details words, shared `area`, `harness` and `topic` tags, and a shared epic. The board's `tag` filter widens inside one facet and narrows across facets: `area:mail` plus `area:mux` shows both areas, while `area:mail` plus `audience:user` shows only nodes that carry both.
+`find --related` ranks on shared title and details words, shared `area`, `harness` and `topic` tags, and a shared epic. The board's `tag` filter widens inside one facet and narrows across facets. `area:mail` plus `area:mux` shows both areas. `area:mail` plus `audience:user` shows only nodes that carry both.
 
-A new node gets `audience` and `area` at birth when the classifier is sure. `admin backfill-tags` writes only sure guesses on open nodes and never replaces a tag a node already carries. It prints every unsure guess on a review list. Tag those nodes by hand. To add a value, edit the vocabulary file in the same PR as the first node that needs it.
+If the classifier is sure, a new node gets `audience` and `area` at birth. `admin backfill-tags` writes only sure guesses on open nodes and never replaces a tag a node already carries. It prints every unsure guess on a review list. Tag those nodes by hand. To add a value, edit the vocabulary file in the same PR as the first node that needs it.
 
 ## Demand signal: what the agents keep hitting
 
