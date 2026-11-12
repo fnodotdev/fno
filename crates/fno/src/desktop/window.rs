@@ -1164,7 +1164,7 @@ impl Render for Root {
             (Some(c), _) if !bar_shows_reason => (Some(c.clone()), self.palette.error),
             (_, n) if bar_shows_reason && !self.notice_failed => (n.clone(), self.palette.muted),
             (_, n) if self.notice_failed => (n.clone(), self.palette.error),
-            (None, n) => (n.clone(), self.palette.muted),
+            (_, n) => (n.clone(), self.palette.muted),
         };
         let toast = status.map(|text| {
             div()
