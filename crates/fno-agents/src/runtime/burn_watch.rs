@@ -2320,7 +2320,7 @@ mod tests {
             ),
         );
         manifest(
-            "x-w2",
+            "w2",
             format!(
                 "graph_node_id: x-1\nharness_session_id: sess-3\nowner_cwd: {}\n",
                 temp.path().join("never/w2").display()
