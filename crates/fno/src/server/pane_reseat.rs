@@ -48,7 +48,7 @@ impl Core {
                     "pane {pane} has no unique live worker row (matches: {}, session: {})",
                     matches.len(),
                     self.session_name
-                ))
+                ));
             }
         };
         if agent.is_none() && mapped_worker.is_none() {
@@ -204,7 +204,7 @@ impl Core {
                 return ServerMsg::Err {
                     code: err_code::NOT_FOUND,
                     msg: format!("no such pane: {pane}"),
-                }
+                };
             }
         };
         let (rows, cols) = match self.panes.get(&pane) {
@@ -213,13 +213,13 @@ impl Core {
                 return ServerMsg::Err {
                     code: err_code::DEAD_PANE,
                     msg: format!("pane {pane} is no longer live"),
-                }
+                };
             }
             None => {
                 return ServerMsg::Err {
                     code: err_code::NOT_FOUND,
                     msg: format!("no such pane: {pane}"),
-                }
+                };
             }
         };
         // Idempotence: a pane that already seats a portal is answered, not moved.
@@ -248,7 +248,7 @@ impl Core {
                 return ServerMsg::Err {
                     code: err_code::BAD_REQUEST,
                     msg: format!("pane {pane} has no unique live worker row"),
-                }
+                };
             }
             many => {
                 return ServerMsg::Err {
@@ -257,7 +257,7 @@ impl Core {
                         "pane {pane} has no unique live worker row (matches: {})",
                         many.len()
                     ),
-                }
+                };
             }
         };
         let key = row.stored_key();
@@ -279,7 +279,7 @@ impl Core {
                     return ServerMsg::Err {
                         code: err_code::BAD_REQUEST,
                         msg: "all 256 portal indices are live; close one first".to_string(),
-                    }
+                    };
                 }
             },
         };
@@ -315,7 +315,7 @@ impl Core {
                     return ServerMsg::Err {
                         code: err_code::SPAWN_FAILED,
                         msg: format!("reseat failed: {e}"),
-                    }
+                    };
                 }
             }
         } else {
@@ -452,13 +452,13 @@ impl Core {
                 return ServerMsg::Err {
                     code: err_code::NOT_FOUND,
                     msg: format!("no such pane: {pane}"),
-                }
+                };
             }
             Some(entry) if !entry.pty.is_child_alive() => {
                 return ServerMsg::Err {
                     code: err_code::DEAD_PANE,
                     msg: format!("pane {pane} is no longer live; there is nothing to hand off"),
-                }
+                };
             }
             // An inline pane has no keeper: the server itself holds the
             // master, so releasing the entry would orphan the pty and kill
@@ -473,7 +473,7 @@ impl Core {
                              outlive this server; stop and resume the session to relaunch it \
                              keeper-hosted, then convert"
                         ),
-                    }
+                    };
                 }
             },
         };

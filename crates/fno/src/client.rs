@@ -58,6 +58,7 @@ use sweep_scope::{begin_sweep_apply, build_sweep_modal, run_sweep_command, Sweep
 
 // Pickers, the launch moment and the snapshot action live in their own
 // modules: client.rs is shrink-only under the file-budget gate.
+mod anchor_jump;
 pub(crate) mod attach_handshake;
 mod health;
 mod keys_reload;
@@ -65,6 +66,7 @@ mod launch;
 mod panic_log;
 mod placement_pickers;
 mod report;
+mod search_reply;
 pub mod snapshot;
 
 use self::placement_pickers::{
@@ -6053,7 +6055,7 @@ fn nav_agent_state(a: &AgentRow) -> PaneState {
 /// as the nav/tab rollups do: a Done pane the operator has already viewed
 /// folds to `Idle` (`○`) instead of holding a stale bold `✓` needs-attention
 /// marker - one system across every surface.
-fn agent_lattice_state(a: &AgentRow) -> LatticeState {
+pub(crate) fn agent_lattice_state(a: &AgentRow) -> LatticeState {
     if a.exited {
         if a.unmeasured {
             LatticeState::Unmeasured
@@ -6924,34 +6926,26 @@ async fn attach_and_run(
                         }
                     }
                 }
-                Ok(ServerMsg::SearchResult {
-                    pane_id,
-                    total,
-                    current,
-                }) => {
-                    // Land the counter on the active search line. A lost reply
-                    // never wedges the client (Esc exits locally); a reply for a
-                    // search we already closed is simply dropped. Total 0 = no
-                    // matches: a BEL makes the empty result audible (AC1-ERR).
-                    // Filter on pane_id AND submitted: results only answer a
-                    // submit/step, so a stale reply from a superseded search must
-                    // not paint its counter (or a zero-match BEL) onto a different
-                    // pane's search, nor onto a new query still being typed.
-                    if let Some(sv) = view
-                        .search
-                        .as_mut()
-                        .filter(|sv| sv.pane == pane_id && sv.submitted)
+                Ok(ServerMsg::SearchResult { pane_id, total, current }) => {
+                    // The counter landing, the BEL and the pane
+                    // filter live in client/search_reply.rs;
+                    // this arm draws when a match lands.
+                    if search_reply::result(&mut view, pane_id,
+                        total, current)
                     {
-                        sv.result = Some((total, current));
-                        // BEL only while the search is still open: a late
-                        // zero-result reply arriving after a local Esc must not
-                        // sound a confusing bell.
-                        if total == 0 {
-                            let _ = raw_out(b"\x07");
+                        if let Err(e) = compositor.draw(&view.compose()) {
+                            break Err(format!("draw: {e}"));
                         }
                     }
-                    if let Err(e) = compositor.draw(&view.compose()) {
-                        break Err(format!("draw: {e}"));
+                }
+                Ok(ServerMsg::AnchorJumped { pane_id, jumped }) => {
+                    // Filtering, the transcript-peek fallback and
+                    // the notices live in client/anchor_jump.rs;
+                    // this arm draws when the reply matched a jump.
+                    if anchor_jump::reply(&mut view, pane_id, jumped) {
+                        if let Err(e) = compositor.draw(&view.compose()) {
+                            break Err(format!("draw: {e}"));
+                        }
                     }
                 }
                 Ok(ServerMsg::PeekBody { seq, lines, .. }) => {
@@ -9380,7 +9374,7 @@ mod org_block;
 #[path = "client/glyph_legend.rs"]
 mod glyph_legend;
 
-mod card_line;
+pub(crate) mod card_line;
 pub(crate) use card_line::CardGraph;
 mod sideline_footer;
 
@@ -9409,4 +9403,4 @@ mod needs_queue;
 mod remote_hosts;
 
 #[path = "client/header_band.rs"]
-mod header_band;
+pub(crate) mod header_band;

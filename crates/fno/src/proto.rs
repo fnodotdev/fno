@@ -415,9 +415,12 @@ fn default_true() -> bool {
 /// stream; floor stays 58.
 /// v128: `LayoutBinding::Mod`, `GraftOutcome::Mod` and `GraftSlotResult.reason`,
 /// a layout slot that holds a mod; floor stays 58.
-/// v129: `AgentRow.mail_held_since` (serde default), the wall stamp of the
+/// v129: `ClientMsg::AnchorJump` + `ServerMsg::AnchorJumped`: the exchange
+/// picker's jump lands a pane on the row where a submitted prompt was
+/// echoed, keyed by the prompt's submit stamp.
+/// v130: `AgentRow.mail_held_since` (serde default), the wall stamp of the
 /// oldest held submission; floor stays 58.
-pub const PROTO_VERSION: u32 = 129;
+pub const PROTO_VERSION: u32 = 130;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -2729,7 +2732,7 @@ pub fn read_msg_sync<R: Read, T: DeserializeOwned>(r: &mut R) -> Result<T, Proto
     match read_fill(r, &mut len_buf, false) {
         Ok(_) => {}
         Err(ProtoError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-            return Err(ProtoError::Closed)
+            return Err(ProtoError::Closed);
         }
         Err(e) => return Err(e),
     }
@@ -2738,7 +2741,7 @@ pub fn read_msg_sync<R: Read, T: DeserializeOwned>(r: &mut R) -> Result<T, Proto
     match read_fill(r, &mut body, true) {
         Ok(_) => {}
         Err(ProtoError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-            return Err(ProtoError::Closed)
+            return Err(ProtoError::Closed);
         }
         Err(e) => return Err(e),
     }
@@ -3606,7 +3609,7 @@ pub(crate) fn probe_status(path: &Path) -> ProbeOutcome {
                     std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
                 ) =>
             {
-                continue
+                continue;
             }
             Err(_) => {
                 uncertain = true;
@@ -3653,7 +3656,7 @@ fn reclaim_unresponsive_holder(path: &Path) -> std::io::Result<()> {
                     "cannot take over unresponsive socket: read {}: {e}",
                     pid_path.display()
                 ),
-            ))
+            ));
         }
     };
     let (pid, recorded_start) = parse_pid_sidecar(&raw).ok_or_else(|| {
@@ -4270,7 +4273,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 129);
+        assert_eq!(PROTO_VERSION, 130);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the

@@ -92,7 +92,9 @@ pub(super) fn slow_open_notice(
 ) -> Option<String> {
     let total = plan_ms + spawn_ms;
     (mechanism.starts_with("attach") && total > SLOW_OPEN_MS).then(|| {
-        format!("portal {portal}: {row_name} took {total} ms to open (plan {plan_ms}, spawn {spawn_ms})")
+        format!(
+            "portal {portal}: {row_name} took {total} ms to open (plan {plan_ms}, spawn {spawn_ms})"
+        )
     })
 }
 

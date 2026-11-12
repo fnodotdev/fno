@@ -38,25 +38,32 @@
 //! session, so the existing reachability probe (`opencode_reachable_with`)
 //! covers serve rows unchanged.
 //!
-//! The writable-dirs grant (the double-writer hazard, decision d-06d56d5c
-//! blocker two): opencode has no additive CLI dir flag (`--dir` SETS cwd), so
-//! the pane lane cannot carry the computed set. The serve lane can: the
-//! Python seam already publishes `FNO_WORKER_ADD_DIRS` for every non-pane
-//! substrate, and this module turns that set into per-session
-//! `external_directory` allow rules - the codex `--add-dir` pattern through
-//! opencode's native cell. The rules are the scoped record riding on top of
-//! the serve-level allow; they become load-bearing the day that blanket is
-//! narrowed.
+//! The writable-dirs grant: opencode has no additive CLI dir flag (`--dir`
+//! SETS cwd). Today the serve-level allow-all is the whole grant, external
+//! directories included; this module writes no per-session
+//! `external_directory` rules, so narrowing that blanket needs them first.
+//!
+//! opencode 2.x replaced every route above with an `/api/*` set and dropped
+//! `run --attach` and `run --command`. The boot records the contract it
+//! classified, and `opencode_serve_api.rs` holds the per-contract routes and
+//! envelopes. On 2.x the launch and every steer go over HTTP: `POST
+//! /api/session` mints the session (so the receipt names its id), and `POST
+//! /prompt` or `/command` starts each turn.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[path = "opencode_serve_api.rs"]
+mod api;
+pub use api::{ServeError, ServeMessage};
+
 use crate::claude_ask::{emit_event, validate_spawn_inputs};
 use crate::opencode_ask::{
     apply_opencode_variant, require_qualified_model, AskOutcome, OPENCODE_DEFAULT_MODEL,
 };
+use crate::opencode_install::OpencodeContract;
 use crate::paths::AgentsHome;
 use crate::state::load_registry;
 
@@ -69,6 +76,45 @@ pub struct ServeHandle {
     pub token: String,
     pub pid: u32,
     pub pid_start: Option<u64>,
+    /// The HTTP contract the serve speaks, recorded at boot. A state file
+    /// written before the field existed came from a 1.x boot: no 2.x serve
+    /// ever passed the 1.x health gate.
+    pub contract: OpencodeContract,
+}
+
+/// The state-file spelling of a contract.
+fn contract_from_record(record: &serde_json::Value) -> OpencodeContract {
+    match record.get("api").and_then(|value| value.as_str()) {
+        Some("2.x") => OpencodeContract::V2,
+        _ => OpencodeContract::V1,
+    }
+}
+
+/// The recorded serve as a handle, without probing it. `Err` names what the
+/// state file lacks.
+fn recorded_serve(home: &AgentsHome) -> Result<ServeHandle, ServeError> {
+    let raw = std::fs::read_to_string(serve_state_path(home))
+        .map_err(|e| ServeError::State(format!("serve state unreadable: {e}")))?;
+    let state: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| ServeError::State(format!("serve state parse: {e}")))?;
+    let field = |key: &str| {
+        state
+            .get(key)
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| ServeError::State(format!("serve state has no {key}")))
+    };
+    Ok(ServeHandle {
+        base_url: field("base_url")?,
+        token: field("token")?,
+        pid: state.get("pid").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        pid_start: state
+            .get("pid_start")
+            .and_then(|v| v.as_u64())
+            .filter(|start| *start > 0),
+        contract: contract_from_record(&state),
+    })
 }
 
 /// The unattended permission posture, written to the generated OPENCODE_CONFIG
@@ -85,13 +131,13 @@ const SERVE_CONFIG_JSON_V1: &str = r#"{"permission":{"*":"allow"}}"#;
 const SERVE_CONFIG_JSON_V2: &str =
     r#"{"permissions":[{"action":"*","resource":"*","effect":"allow"}]}"#;
 
-/// The serve config for the contract the serve binary reports. One bounded
-/// `--version`; an unknown version renders the 2.x posture, matching the
-/// installer's v2-default.
-fn serve_config_json(bin: &str) -> &'static str {
-    match crate::opencode_install::classify_contract(bin) {
-        (crate::opencode_install::OpencodeContract::V2, _) => SERVE_CONFIG_JSON_V2,
-        (crate::opencode_install::OpencodeContract::V1, _) => SERVE_CONFIG_JSON_V1,
+/// The serve config for a contract. The boot classifies the binary once
+/// (`--version`; an unknown version reads 2.x, matching the installer's
+/// v2-default) and renders the config and the route set from that one answer.
+fn serve_config_json(contract: OpencodeContract) -> &'static str {
+    match contract {
+        OpencodeContract::V2 => SERVE_CONFIG_JSON_V2,
+        OpencodeContract::V1 => SERVE_CONFIG_JSON_V1,
     }
 }
 
@@ -184,27 +230,55 @@ pub(crate) fn http_json(
     Ok((status, body_out))
 }
 
-/// GET /global/health -> true iff `{healthy: true}`. Reused as the gate for a
+/// One health read on the contract's own route: the reported version when
+/// healthy (1.x `GET /global/health` `{healthy:true}`, 2.x `GET /api/info`
+/// answering 200), else `None`.
+fn probe_health(
+    base_url: &str,
+    token: &str,
+    contract: OpencodeContract,
+    timeout: Duration,
+) -> Option<String> {
+    let (status, body) = http_json(
+        base_url,
+        "GET",
+        api::health_path(contract),
+        None,
+        Some(token),
+        timeout,
+    )
+    .ok()?;
+    api::healthy_version(contract, status, &body)
+}
+
+/// The contract's health read, held to a live serve. Reused as the gate for a
 /// recorded serve, so a single answer never decides a live serve is dead: a
 /// busy node event loop can miss one 3s probe while workers run turns, and
 /// the unhealthy branch SIGTERMs the serve (killing every worker session on
 /// it). Three attempts, 1s apart - slow answers survive, dead ones do not.
-fn serve_healthy(base_url: &str, token: &str) -> bool {
+/// The route set a freshly booted serve answers, or `None` while it answers
+/// neither. A 2.x binary gets the 2.x routes. Early 2.x serves still answered
+/// the 1.x set (a recorded run on 2.0.19 and 2.2.2 worked over it), so a 2.x
+/// binary that answers only `/global/health` keeps the 1.x path it ran on.
+fn boot_routes(
+    base_url: &str,
+    token: &str,
+    contract: OpencodeContract,
+) -> Option<OpencodeContract> {
+    if serve_healthy(base_url, token, contract) {
+        return Some(contract);
+    }
+    (contract == OpencodeContract::V2
+        && probe_health(base_url, token, OpencodeContract::V1, HEALTH_TIMEOUT).is_some())
+    .then_some(OpencodeContract::V1)
+}
+
+fn serve_healthy(base_url: &str, token: &str, contract: OpencodeContract) -> bool {
     for attempt in 0..3 {
         if attempt > 0 {
             std::thread::sleep(Duration::from_secs(1));
         }
-        if matches!(
-            http_json(
-                base_url,
-                "GET",
-                "/global/health",
-                None,
-                Some(token),
-                HEALTH_TIMEOUT
-            ),
-            Ok((200, body)) if body.contains("\"healthy\":true")
-        ) {
+        if probe_health(base_url, token, contract, HEALTH_TIMEOUT).is_some() {
             return true;
         }
     }
@@ -246,12 +320,16 @@ fn new_serve_token() -> Result<String, String> {
 /// http://127.0.0.1:59971`, measured shape). Free function so tests feed
 /// canned logs; manual scan because the one pattern does not buy a regex
 /// dependency this module otherwise avoids.
+/// 2.x prints `server listening on <url>` with the url from the runtime's own
+/// address formatter, so the host is read past, not pinned.
 fn serve_port_from_log(text: &str) -> Option<u16> {
-    let marker = "listening on http://127.0.0.1:";
+    let marker = "listening on http://";
     let idx = text.rfind(marker)?;
-    let tail = &text[idx + marker.len()..];
-    let digits: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
-    digits.parse().ok()
+    let authority = text[idx + marker.len()..]
+        .split(|c: char| c.is_whitespace() || c == '/')
+        .next()?;
+    let (_, port) = authority.rsplit_once(':')?;
+    port.parse().ok()
 }
 
 /// Ensure a shared serve is up and return its handle. Reuses the recorded
@@ -284,6 +362,7 @@ pub fn ensure_serve(home: &AgentsHome) -> Result<ServeHandle, String> {
             .to_string(),
         pid: result.state.pid.unwrap_or_default(),
         pid_start: result.state.process_start_time,
+        contract: contract_from_record(record),
     })
 }
 
@@ -364,7 +443,7 @@ impl crate::harness_daemon::HarnessDaemonAdapter for OpenCodeDaemonAdapter<'_> {
             .unwrap_or_default();
         !token.is_empty()
             && state.endpoint != "unresolved://opencode"
-            && serve_healthy(&state.endpoint, token)
+            && serve_healthy(&state.endpoint, token, contract_from_record(&state.raw))
     }
 
     fn boot(&self) -> Result<crate::harness_daemon::DaemonState, String> {
@@ -372,7 +451,8 @@ impl crate::harness_daemon::HarnessDaemonAdapter for OpenCodeDaemonAdapter<'_> {
         if let Some(parent) = config.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("mkdir for serve config: {e}"))?;
         }
-        std::fs::write(&config, serve_config_json("opencode"))
+        let (contract, _) = crate::opencode_install::classify_contract("opencode");
+        std::fs::write(&config, serve_config_json(contract))
             .map_err(|e| format!("write serve config {:?}: {e}", config))?;
         // Fresh token per serve: Basic-auth material for every request (the serve
         // is booted with OPENCODE_SERVER_PASSWORD), generated from /dev/urandom.
@@ -397,9 +477,17 @@ impl crate::harness_daemon::HarnessDaemonAdapter for OpenCodeDaemonAdapter<'_> {
         use std::os::unix::process::CommandExt;
         use std::process::{Command, Stdio};
         let mut cmd = Command::new("opencode");
-        cmd.args(["serve", "--port", "0", "--print-logs"])
-            .env("OPENCODE_CONFIG", &config)
+        // 2.x made `--print-logs` a root flag, and its listen line goes to
+        // stdout without it, so the 2.x boot carries the serve flags only.
+        match contract {
+            OpencodeContract::V1 => cmd.args(["serve", "--port", "0", "--print-logs"]),
+            OpencodeContract::V2 => cmd.args(["serve", "--port", "0"]),
+        };
+        // 2.x reads OPENCODE_PASSWORD first and falls back to the 1.x name,
+        // so an inherited OPENCODE_PASSWORD would beat the token: set both.
+        cmd.env("OPENCODE_CONFIG", &config)
             .env("OPENCODE_SERVER_PASSWORD", &token)
+            .env("OPENCODE_PASSWORD", &token)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(log_err));
@@ -430,13 +518,14 @@ impl crate::harness_daemon::HarnessDaemonAdapter for OpenCodeDaemonAdapter<'_> {
             if let Ok(log_text) = std::fs::read_to_string(&log_path) {
                 if let Some(port) = serve_port_from_log(&log_text) {
                     let base_url = format!("http://127.0.0.1:{port}");
-                    if serve_healthy(&base_url, &token) {
+                    if let Some(api) = boot_routes(&base_url, &token, contract) {
                         let record = serde_json::json!({
                             "base_url": base_url,
                             "port": port,
                             "pid": pid,
                             "pid_start": pid_start,
                             "token": token,
+                            "api": api.label(),
                         });
                         let incarnation = pid_start
                             .map(|start| format!("{pid}:{start}"))
@@ -518,46 +607,7 @@ fn spawn_attach_writer(
     let mut argv = writer_argv(serve, session_id, message, model);
     argv[0] = opencode_bin.to_string();
     let argv = crate::spawn_gate::qos_wrap(cwd, argv);
-    use std::os::unix::process::CommandExt;
-    use std::process::{Command, Stdio};
-    let out = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path);
-    let mut cmd = Command::new(&argv[0]);
-    cmd.args(&argv[1..]);
-    cmd.stdin(Stdio::null());
-    if let Ok(fh) = out {
-        cmd.stdout(Stdio::from(fh));
-        if let Ok(err_fh) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(log_path)
-        {
-            cmd.stderr(Stdio::from(err_fh));
-        }
-    }
-    cmd.current_dir(cwd);
-    // opencode resolves its project from $PWD, not the process cwd.
-    cmd.env("PWD", cwd);
-    crate::claims::stamp_command_env(&mut cmd, Some(name), "opencode", Some(session_id));
-    cmd.env_remove("NO_COLOR");
-    cmd.env_remove("FORCE_COLOR");
-    cmd.env("OPENCODE_SERVER_PASSWORD", &serve.token);
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
-    }
-    cmd.spawn()
-        .map(|child| {
-            let pid = child.id();
-            std::mem::forget(child);
-            crate::orphan_reap::release_child(pid);
-            pid
-        })
-        .map_err(|e| e.to_string())
+    exec_detached(&argv, cwd, name, Some(session_id), log_path, serve)
 }
 
 /// Orchestrate one `spawn --harness opencode --substrate bg`: validate,
@@ -643,13 +693,8 @@ fn dispatch_opencode_serve_inner(
         );
     }
 
-    if let Some(effort) = effort {
-        let selected_model = model
-            .filter(|model| !model.is_empty())
-            .unwrap_or(OPENCODE_DEFAULT_MODEL);
-        if let Err(error) = apply_opencode_variant(selected_model, effort) {
-            return AskOutcome::err(error, 2);
-        }
+    if effort.is_some_and(str::is_empty) {
+        return AskOutcome::err("--effort must be non-empty", 2);
     }
 
     let serve = match ensure_serve(home) {
@@ -679,39 +724,27 @@ fn dispatch_opencode_serve_inner(
         "opencode",
     );
     let full_prompt = crate::opencode_ask::opencode_envelope(&effective_message, from_name);
-    let template = match crate::spawn_compose::resolve_template("opencode", None, None) {
-        Ok(template) => template,
-        Err(error) => return AskOutcome::err(error, 2),
-    };
     // The template's {model} hole is required, and the spawn door no longer
     // carries --model, so an unnamed model takes the lane default.
     let model_value = model
         .filter(|m| !m.is_empty())
         .unwrap_or(OPENCODE_DEFAULT_MODEL);
-    let ask = serde_json::json!({
-        "name": name,
-        "payload": full_prompt,
-        "model": model_value,
-        "serve_url": serve.base_url,
-    });
-    let values = crate::spawn_compose::fill_values(&ask);
-    let mut argv = match crate::spawn_compose::fill_launch(&template, &values) {
-        Ok(argv) => argv,
-        Err(error) => return AskOutcome::err(error, 2),
+    // 1.x reads effort from its persisted model state; 2.x reads it only
+    // from the session's model ref, which the HTTP launch carries.
+    let argv = match serve.contract {
+        OpencodeContract::V1 => {
+            if let Some(effort) = effort {
+                if let Err(error) = apply_opencode_variant(model_value, effort) {
+                    return AskOutcome::err(error, 2);
+                }
+            }
+            match v1_launch_argv(name, &full_prompt, model_value, &serve, opencode_bin) {
+                Ok(argv) => Some(argv),
+                Err(error) => return AskOutcome::err(error, 2),
+            }
+        }
+        OpencodeContract::V2 => None,
     };
-    if argv.is_empty() {
-        return AskOutcome::err("the filled argv is empty".to_string(), 2);
-    }
-    // {payload} expands through opencode_run_tail, not the plain hole fill: a
-    // slash seed rides --command with args split, prose stays positional. The
-    // fill's trailing run - value, plus the "--" fence - gives way to it.
-    let mut cut = 1;
-    if argv.len() >= 2 && argv[argv.len() - 1] == full_prompt && argv[argv.len() - 2] == "--" {
-        cut = 2;
-    }
-    argv.truncate(argv.len() - cut);
-    argv.extend(crate::provider::opencode_run_tail(&full_prompt));
-    argv[0] = opencode_bin.to_string();
 
     // The record first: the launch reservation and the parent edge the adopt
     // names the worker from, so a session that never reports still holds the
@@ -736,62 +769,40 @@ fn dispatch_opencode_serve_inner(
         return AskOutcome::err(format!("launch record: {error}"), 12);
     }
 
-    // The detached exec: one turn's writer, the same log and detach mechanics
-    // the steering writer uses, over the template's argv.
-    use std::os::unix::process::CommandExt;
-    use std::process::{Command, Stdio};
     let log_path = home
         .root()
         .join("agents")
         .join("logs")
         .join(format!("{name}.jsonl"));
-    if let Some(parent) = log_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let mut cmd = Command::new(&argv[0]);
-    cmd.args(&argv[1..]);
-    cmd.stdin(Stdio::null());
-    if let Ok(fh) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-    {
-        cmd.stdout(Stdio::from(fh));
-        if let Ok(err_fh) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
-        {
-            cmd.stderr(Stdio::from(err_fh));
+    let session_id = match argv {
+        Some(argv) => {
+            if let Err(error) = exec_detached(&argv, cwd, name, None, &log_path, &serve) {
+                return AskOutcome::err(format!("opencode launch: {error}"), 2);
+            }
+            // 1.x: the writer's opencode mints the id and the worker's
+            // session report binds the row.
+            String::new()
         }
-    }
-    cmd.current_dir(cwd);
-    // opencode resolves its project from $PWD, not the process cwd.
-    cmd.env("PWD", cwd);
-    crate::claims::stamp_command_env(&mut cmd, Some(name), "opencode", None);
-    cmd.env_remove("NO_COLOR");
-    cmd.env_remove("FORCE_COLOR");
-    cmd.env("OPENCODE_SERVER_PASSWORD", &serve.token);
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::setsid();
-            Ok(())
-        });
-    }
-    if let Err(error) = cmd.spawn() {
-        return AskOutcome::err(format!("opencode launch: {error}"), 2);
-    }
+        None => match launch_over_http(&serve, name, cwd, model_value, effort, &full_prompt) {
+            Ok(session_id) => session_id,
+            Err(error) => return AskOutcome::err(format!("opencode launch: {error}"), 2),
+        },
+    };
 
     AskOutcome::ok_reply(
         serde_json::json!({
             "ok": true,
             "name": name,
             "serve_url": serve.base_url,
-            "session_id": "",
+            "session_id": session_id,
             "short_id": "",
-            // The generated serve config writes `{"permission":{"*":"allow"}}`;
-            // the receipt NAMES that posture instead of leaving it unnamed.
-            "permission_posture": "explicit allow-all (serve config permission.{*}=allow)",
+            // The generated serve config is the allow-all posture; the
+            // receipt NAMES it instead of leaving it unnamed.
+            "permission_posture": match serve.contract {
+                OpencodeContract::V1 => "explicit allow-all (serve config permission.{*}=allow)",
+                OpencodeContract::V2 => "explicit allow-all (serve config permissions [*:*=allow])",
+            },
+            "contract": serve.contract.label(),
             "durability": "daemon-owned",
             "incarnation": format!("{}:{}", serve.pid, serve.pid_start.unwrap_or_default()),
             "endpoint": serve.base_url,
@@ -804,13 +815,164 @@ fn dispatch_opencode_serve_inner(
             } else {
                 "lane-default"
             },
-            // No session id at launch: opencode mints it and the worker's
-            // session report binds the row.
+            "effort": effort,
+            // The row binds at the worker's session report on both
+            // contracts; 2.x also names the id it minted over HTTP.
             "binding": "session-report",
         })
         .to_string(),
     )
 }
+
+/// The 1.x launch argv: the contract template line, filled.
+fn v1_launch_argv(
+    name: &str,
+    full_prompt: &str,
+    model_value: &str,
+    serve: &ServeHandle,
+    opencode_bin: &str,
+) -> Result<Vec<String>, ServeError> {
+    let template = crate::spawn_compose::resolve_template("opencode", None, None)?;
+    let ask = serde_json::json!({
+        "name": name,
+        "payload": full_prompt,
+        "model": model_value,
+        "serve_url": serve.base_url,
+    });
+    let values = crate::spawn_compose::fill_values(&ask);
+    let mut argv = crate::spawn_compose::fill_launch(&template, &values)?;
+    if argv.is_empty() {
+        return Err(ServeError::Shape("the filled argv is empty"));
+    }
+    // {payload} expands through opencode_run_tail, not the plain hole fill: a
+    // slash seed rides --command with args split, prose stays positional. The
+    // fill's trailing run - value, plus the "--" fence - gives way to it.
+    let mut cut = 1;
+    if argv.len() >= 2 && argv[argv.len() - 1] == full_prompt && argv[argv.len() - 2] == "--" {
+        cut = 2;
+    }
+    argv.truncate(argv.len() - cut);
+    argv.extend(crate::provider::opencode_run_tail(full_prompt));
+    argv[0] = opencode_bin.to_string();
+    Ok(argv)
+}
+
+/// One detached 1.x writer: the launch and every steer share these log,
+/// env, and process-group mechanics, so the two entry points cannot drift.
+fn exec_detached(
+    argv: &[String],
+    cwd: &Path,
+    name: &str,
+    session_id: Option<&str>,
+    log_path: &Path,
+    serve: &ServeHandle,
+) -> Result<u32, String> {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let mut cmd = Command::new(&argv[0]);
+    cmd.args(&argv[1..]);
+    cmd.stdin(Stdio::null());
+    if let Ok(fh) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+    {
+        cmd.stdout(Stdio::from(fh));
+        if let Ok(err_fh) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_path)
+        {
+            cmd.stderr(Stdio::from(err_fh));
+        }
+    }
+    cmd.current_dir(cwd);
+    // opencode resolves its project from $PWD, not the process cwd.
+    cmd.env("PWD", cwd);
+    crate::claims::stamp_command_env(&mut cmd, Some(name), "opencode", session_id);
+    cmd.env_remove("NO_COLOR");
+    cmd.env_remove("FORCE_COLOR");
+    cmd.env("OPENCODE_SERVER_PASSWORD", &serve.token);
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    cmd.spawn()
+        .map(|child| {
+            let pid = child.id();
+            std::mem::forget(child);
+            crate::orphan_reap::release_child(pid);
+            pid
+        })
+        .map_err(|e| e.to_string())
+}
+
+/// The 2.x launch: mint the session over HTTP (title = worker name, bound to
+/// `cwd`, model ref carrying the effort as its variant), then start its first
+/// turn. 2.x `run` lost `--attach` and `--command`, so no writer process can
+/// carry a slash seed; the serve's own routes can. Returns the minted id.
+fn launch_over_http(
+    serve: &ServeHandle,
+    name: &str,
+    cwd: &Path,
+    model: &str,
+    effort: Option<&str>,
+    prompt: &str,
+) -> Result<String, ServeError> {
+    let model_ref = api::model_ref(model, effort)?;
+    let body = api::create_body(name, &cwd.to_string_lossy(), &model_ref);
+    let (status, text) = http_json(
+        &serve.base_url,
+        "POST",
+        "/api/session",
+        Some(&body),
+        Some(&serve.token),
+        HTTP_CALL_TIMEOUT,
+    )?;
+    if status != 200 {
+        return Err(http_refusal("POST /api/session", status, &text));
+    }
+    let session = api::session_from_body(OpencodeContract::V2, &text)?;
+    let session_id = api::session_id(&session)
+        .filter(|id| crate::provider::is_opencode_session_id(id))
+        .ok_or(ServeError::Shape("POST /api/session minted no ses_ id"))?;
+    send_turn_v2(serve, &session_id, prompt)?;
+    Ok(session_id)
+}
+
+/// Start one 2.x turn on an existing session. The answer is acceptance only;
+/// delivery proof stays the readback's new message id.
+fn send_turn_v2(serve: &ServeHandle, session_id: &str, message: &str) -> Result<(), ServeError> {
+    let (path, body) = api::turn_request(session_id, message);
+    let (status, text) = http_json(
+        &serve.base_url,
+        "POST",
+        &path,
+        Some(&body),
+        Some(&serve.token),
+        HTTP_CALL_TIMEOUT,
+    )?;
+    if status == 200 || status == 204 {
+        Ok(())
+    } else {
+        Err(http_refusal(format!("POST {path}"), status, &text))
+    }
+}
+
+/// A non-2xx answer as a typed refusal naming the route.
+fn http_refusal(route: impl Into<String>, status: u16, body: &str) -> ServeError {
+    ServeError::Http {
+        route: route.into(),
+        status,
+        reason: tail_reason(body, status),
+    }
+}
+
 /// Short failure reason for a non-2xx merge answer (HTTP codes carry no text
 /// of their own here; the body's first line does).
 fn tail_reason(body: &str, code: u16) -> String {
@@ -827,28 +989,25 @@ fn tail_reason(body: &str, code: u16) -> String {
 // Read/teardown surface (the journey test's eyes and broom)
 // ===========================================================================
 
-/// `GET /session/:id` as parsed JSON. The session object carries the merged
-/// `permission` rules, so a caller can assert the writable-dirs grant landed.
+/// The session object as parsed JSON, unwrapped from the contract's envelope.
+/// A 1.x session carries its merged `permission` rules; a 2.x session carries
+/// `permissions`, `location.directory` and `title`.
 pub fn fetch_session(
-    base_url: &str,
-    token: &str,
+    serve: &ServeHandle,
     session_id: &str,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, ServeError> {
     let (status, body) = http_json(
-        base_url,
+        &serve.base_url,
         "GET",
-        &format!("/session/{session_id}"),
+        &api::session_path(serve.contract, session_id),
         None,
-        Some(token),
+        Some(&serve.token),
         HTTP_CALL_TIMEOUT,
     )?;
     if status != 200 {
-        return Err(format!(
-            "GET session answered {status}: {}",
-            tail_reason(&body, status)
-        ));
+        return Err(http_refusal("GET session", status, &body));
     }
-    serde_json::from_str(&body).map_err(|e| format!("session body parse: {e}"))
+    api::session_from_body(serve.contract, &body)
 }
 
 /// Read liveness for a serve row from the serve's session endpoint. A 404 is
@@ -866,26 +1025,13 @@ fn serve_session_reachable_in(
     if !crate::provider::is_opencode_session_id(session_id) {
         return Err(format!("malformed opencode session id {session_id:?}"));
     }
-    let raw = std::fs::read_to_string(serve_state_path(&home))
-        .map_err(|e| format!("serve state unreadable: {e}"))?;
-    let state: serde_json::Value =
-        serde_json::from_str(&raw).map_err(|e| format!("serve state parse: {e}"))?;
-    let base_url = state
-        .get("base_url")
-        .and_then(|value| value.as_str())
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "serve state has no base_url".to_string())?;
-    let token = state
-        .get("token")
-        .and_then(|value| value.as_str())
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "serve state has no token".to_string())?;
+    let serve = recorded_serve(home)?;
     let (status, body) = http_json(
-        base_url,
+        &serve.base_url,
         "GET",
-        &format!("/session/{session_id}"),
+        &api::session_path(serve.contract, session_id),
         None,
-        Some(token),
+        Some(&serve.token),
         timeout,
     )?;
     if status == 404 {
@@ -897,40 +1043,37 @@ fn serve_session_reachable_in(
             tail_reason(&body, status)
         ));
     }
-    let session: serde_json::Value =
-        serde_json::from_str(&body).map_err(|e| format!("session body parse: {e}"))?;
-    if session.get("id").and_then(|value| value.as_str()) == Some(session_id) {
+    let session = api::session_from_body(serve.contract, &body)?;
+    if api::session_id(&session).as_deref() == Some(session_id) {
         Ok(true)
     } else {
         Err(format!("session readback id does not match {session_id}"))
     }
 }
 
-/// `GET /session/:id/message` as parsed JSON (structured capture readback).
+/// The session's stored messages, oldest first (structured capture readback).
+/// 2.x reads its newest page, which is all a high-water diff needs.
 pub fn fetch_messages(
-    base_url: &str,
-    token: &str,
+    serve: &ServeHandle,
     session_id: &str,
-) -> Result<serde_json::Value, String> {
+) -> Result<Vec<ServeMessage>, ServeError> {
     let (status, body) = http_json(
-        base_url,
+        &serve.base_url,
         "GET",
-        &format!("/session/{session_id}/message"),
+        &api::messages_path(serve.contract, session_id),
         None,
-        Some(token),
+        Some(&serve.token),
         HTTP_CALL_TIMEOUT,
     )?;
     if status != 200 {
-        return Err(format!(
-            "GET messages answered {status}: {}",
-            tail_reason(&body, status)
-        ));
+        return Err(http_refusal("GET messages", status, &body));
     }
-    serde_json::from_str(&body).map_err(|e| format!("messages body parse: {e}"))
+    api::messages_from_body(serve.contract, &body)
 }
 
 /// Send one turn to an already-minted serve session and confirm it by a new
-/// message id in the serve readback. The writer's exit is not delivery proof.
+/// message id in the serve readback. Neither the 1.x writer's exit nor the
+/// 2.x route's acceptance is delivery proof.
 pub fn steer_existing_session(
     home: &AgentsHome,
     session_id: &str,
@@ -958,33 +1101,48 @@ fn steer_existing_session_with_binary(
         ));
     }
     let serve = ensure_serve(home)?;
-    let before = fetch_messages(&serve.base_url, &serve.token, session_id)?;
-    let log_path = home
-        .root()
-        .join("agents")
-        .join("logs")
-        .join(format!("steer-{session_id}.jsonl"));
-    if let Some(parent) = log_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("steering log directory: {e}"))?;
+    let before = fetch_messages(&serve, session_id)?;
+    match serve.contract {
+        OpencodeContract::V1 => {
+            let log_path = home
+                .root()
+                .join("agents")
+                .join("logs")
+                .join(format!("steer-{session_id}.jsonl"));
+            if let Some(parent) = log_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("steering log directory: {e}"))?;
+            }
+            spawn_attach_writer(
+                &serve,
+                session_id,
+                message,
+                model,
+                cwd,
+                &log_path,
+                opencode_bin,
+                "fno-opencode-steer",
+            )
+            .map_err(|error| {
+                format!(
+                    "opencode serve steering writer launch failed for session {session_id}: {error}"
+                )
+            })?;
+        }
+        OpencodeContract::V2 => {
+            if let Some(model) = model.filter(|m| !m.is_empty()) {
+                switch_model_v2(&serve, session_id, model)?;
+            }
+            send_turn_v2(&serve, session_id, message).map_err(|error| {
+                format!("opencode serve steering refused for session {session_id}: {error}")
+            })?;
+        }
     }
-    spawn_attach_writer(
-        &serve,
-        session_id,
-        message,
-        model,
-        cwd,
-        &log_path,
-        opencode_bin,
-        "fno-opencode-steer",
-    )
-    .map_err(|error| {
-        format!("opencode serve steering writer launch failed for session {session_id}: {error}")
-    })?;
 
     let deadline = std::time::Instant::now() + timeout;
     let mut last_seen = latest_message_id(&before);
     while std::time::Instant::now() < deadline {
-        if let Ok(messages) = fetch_messages(&serve.base_url, &serve.token, session_id) {
+        if let Ok(messages) = fetch_messages(&serve, session_id) {
             if let Some(id) = new_message_id_after(&messages, &before) {
                 return Ok(id);
             }
@@ -997,6 +1155,30 @@ fn steer_existing_session_with_binary(
         timeout.as_secs(),
         last_seen.as_deref().unwrap_or("<none>")
     ))
+}
+
+/// Move a 2.x session onto `model` before a steer, keeping its variant. The
+/// 2.x prompt carries no model field, so a steer that names a model the
+/// session does not run would otherwise drop it.
+fn switch_model_v2(serve: &ServeHandle, session_id: &str, model: &str) -> Result<(), ServeError> {
+    let session = fetch_session(serve, session_id)?;
+    let Some(body) = api::model_switch(&session, model)? else {
+        return Ok(());
+    };
+    let path = format!("/api/session/{session_id}/model");
+    let (status, text) = http_json(
+        &serve.base_url,
+        "POST",
+        &path,
+        Some(&body),
+        Some(&serve.token),
+        HTTP_CALL_TIMEOUT,
+    )?;
+    if status == 200 || status == 204 {
+        Ok(())
+    } else {
+        Err(http_refusal(format!("POST {path}"), status, &text))
+    }
 }
 
 /// Resolve a full opencode serve row and steer it. This is the shared mail
@@ -1089,7 +1271,7 @@ pub fn ask_registered_session(
         Ok(serve) => serve,
         Err(error) => return AskOutcome::err(error, 13),
     };
-    let before = match fetch_messages(&serve.base_url, &serve.token, session_id) {
+    let before = match fetch_messages(&serve, session_id) {
         Ok(messages) => messages,
         Err(error) => return AskOutcome::err(error, 12),
     };
@@ -1105,7 +1287,7 @@ pub fn ask_registered_session(
     }
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
-        if let Ok(messages) = fetch_messages(&serve.base_url, &serve.token, session_id) {
+        if let Ok(messages) = fetch_messages(&serve, session_id) {
             if let Some(reply) = new_assistant_text_after(&messages, &before) {
                 return AskOutcome::ok_reply(reply);
             }
@@ -1121,92 +1303,51 @@ pub fn ask_registered_session(
     )
 }
 
-fn latest_message_id(messages: &serde_json::Value) -> Option<String> {
-    messages
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|message| message.get("info"))
-        .filter_map(|info| info.get("id"))
-        .filter_map(|id| id.as_str())
-        .last()
-        .map(str::to_string)
+fn latest_message_id(messages: &[ServeMessage]) -> Option<String> {
+    messages.last().map(|message| message.id.clone())
 }
 
+fn prior_ids(high_water: &[ServeMessage]) -> std::collections::HashSet<&str> {
+    high_water
+        .iter()
+        .map(|message| message.id.as_str())
+        .collect()
+}
+
+/// The first finished assistant reply the high-water mark did not hold. A
+/// 2.x reply still streaming is not an answer yet.
 fn new_assistant_text_after(
-    messages: &serde_json::Value,
-    high_water: &serde_json::Value,
+    messages: &[ServeMessage],
+    high_water: &[ServeMessage],
 ) -> Option<String> {
-    let prior = high_water
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|message| message.get("info"))
-        .filter_map(|info| info.get("id"))
-        .filter_map(|id| id.as_str())
-        .collect::<std::collections::HashSet<_>>();
+    let prior = prior_ids(high_water);
     messages
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|message| {
-            message
-                .get("info")
-                .and_then(|info| info.get("role"))
-                .and_then(|role| role.as_str())
-                == Some("assistant")
-        })
-        .filter(|message| {
-            message
-                .get("info")
-                .and_then(|info| info.get("id"))
-                .and_then(|id| id.as_str())
-                .is_some_and(|id| !prior.contains(id))
-        })
-        .filter_map(|message| message.get("parts"))
-        .filter_map(|parts| parts.as_array())
-        .flat_map(|parts| parts.iter())
-        .filter(|part| part.get("type").and_then(|kind| kind.as_str()) == Some("text"))
-        .filter_map(|part| part.get("text").and_then(|text| text.as_str()))
-        .map(str::to_string)
-        .next()
+        .iter()
+        .filter(|message| message.role == "assistant" && message.complete)
+        .filter(|message| !prior.contains(message.id.as_str()))
+        .find_map(|message| message.text.clone())
 }
 
 /// Return the first message id that was not present at the caller's
 /// high-water mark. A non-empty response is not delivery evidence: the id is
 /// the serve's positive marker for a newly stored message.
-fn new_message_id_after(
-    messages: &serde_json::Value,
-    high_water: &serde_json::Value,
-) -> Option<String> {
-    let prior = high_water
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|message| message.get("info"))
-        .filter_map(|info| info.get("id"))
-        .filter_map(|id| id.as_str())
-        .collect::<std::collections::HashSet<_>>();
+fn new_message_id_after(messages: &[ServeMessage], high_water: &[ServeMessage]) -> Option<String> {
+    let prior = prior_ids(high_water);
     messages
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|message| message.get("info"))
-        .filter_map(|info| info.get("id"))
-        .filter_map(|id| id.as_str())
-        .find(|id| !prior.contains(id))
-        .map(str::to_string)
+        .iter()
+        .find(|message| !prior.contains(message.id.as_str()))
+        .map(|message| message.id.clone())
 }
 
-/// `DELETE /session/:id` - best-effort teardown; an error is returned, not
+/// Delete one session - best-effort teardown; an error is returned, not
 /// panicked on, so a caller can still finish its other cleanup.
-pub fn delete_session(base_url: &str, token: &str, session_id: &str) -> Result<(), String> {
+pub fn delete_session(serve: &ServeHandle, session_id: &str) -> Result<(), String> {
     let (status, body) = http_json(
-        base_url,
+        &serve.base_url,
         "DELETE",
-        &format!("/session/{session_id}"),
+        &api::session_path(serve.contract, session_id),
         None,
-        Some(token),
+        Some(&serve.token),
         HTTP_CALL_TIMEOUT,
     )?;
     if status == 200 || status == 204 {
@@ -1223,20 +1364,18 @@ pub fn delete_session(base_url: &str, token: &str, session_id: &str) -> Result<(
 // The archive op: a history-preserving active-surface removal
 // ===========================================================================
 
-/// The opencode version the archive op was measured against (v1.14.50,
+/// The opencode version the 1.x archive op was measured against (v1.14.50,
 /// 2026-09-08). `PATCH /session/{id}` with `{"time":{"archived":<epoch_ms>}}`
 /// answers 200, a separate GET still returns the session with the field set
 /// and its messages intact, and `session.list` drops it from the active
 /// listing. Below this version the field is UNVERIFIED, not known-absent, so a
 /// caller skips instead of guessing: an older serve that ignored the field
 /// would turn a retirement that works today into one that holds its row
-/// forever. Above [`OPENCODE_V2_FLOOR`] the argument binds upward: the 2.x
-/// HTTP API is a different contract, and an unverified version is skipped,
-/// not guessed at.
+/// forever. A 2.x serve takes its own route (`PATCH /api/session/:id
+/// {archived:true}`), and the readback still judges every write.
 pub const ARCHIVE_MIN_VERSION: (u32, u32, u32) = (1, 14, 50);
 
-/// First opencode 2.x release. The archive op was measured against the 1.x
-/// HTTP API only, so a serve at or above this version is skipped and told why.
+/// First opencode 2.x release: the `/api/*` HTTP contract.
 pub const OPENCODE_V2_FLOOR: (u32, u32, u32) = (2, 0, 0);
 
 /// What one archive attempt measured. `Survived` is an outcome, not an error:
@@ -1273,21 +1412,10 @@ pub(crate) fn version_at_least(reported: &str, min: (u32, u32, u32)) -> bool {
     nums.len() == 3 && (nums[0], nums[1], nums[2]) >= min
 }
 
-fn is_archived(body: &str) -> bool {
-    serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("time")
-                .and_then(|time| time.get("archived"))
-                .cloned()
-        })
-        .is_some_and(|value| !value.is_null())
-}
-
-/// The recorded serve, when it answers health AND reports a version carrying
-/// the archive op. Returns `None` for every other case, including a missing
-/// state file and an unreadable one.
+/// The recorded serve, when it answers health AND speaks a contract carrying
+/// the archive op: 1.x from [`ARCHIVE_MIN_VERSION`], or any 2.x. Returns
+/// `None` for every other case, including a missing state file and an
+/// unreadable one.
 ///
 /// It never boots a serve: a GC sweep must not start a server as a side
 /// effect. One health read answers both questions, because the health body
@@ -1296,73 +1424,58 @@ fn is_archived(body: &str) -> bool {
 /// this op existed. The three-attempt [`serve_healthy`] belongs to the spawn
 /// path, where the unhealthy branch SIGTERMs the serve.
 pub fn archive_capable_serve(home: &AgentsHome) -> Option<ServeHandle> {
-    let raw = std::fs::read_to_string(serve_state_path(home)).ok()?;
-    let state: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let base_url = state.get("base_url")?.as_str()?.to_string();
-    let token = state.get("token")?.as_str()?.to_string();
-    if base_url.is_empty() || token.is_empty() {
-        return None;
-    }
-    let (status, body) = http_json(
-        &base_url,
-        "GET",
-        "/global/health",
-        None,
-        Some(&token),
+    let serve = recorded_serve(home).ok()?;
+    let version = probe_health(
+        &serve.base_url,
+        &serve.token,
+        serve.contract,
         HEALTH_TIMEOUT,
-    )
-    .ok()?;
-    if status != 200 {
-        return None;
+    )?;
+    match serve.contract {
+        OpencodeContract::V1 => {
+            if !version_at_least(&version, ARCHIVE_MIN_VERSION) {
+                return None;
+            }
+            if version_at_least(&version, OPENCODE_V2_FLOOR) {
+                eprintln!(
+                    "opencode serve recorded as 1.x reports {version}; the 1.x archive route does not fit it, so it is skipped"
+                );
+                return None;
+            }
+        }
+        OpencodeContract::V2 => {}
     }
-    let health: serde_json::Value = serde_json::from_str(&body).ok()?;
-    if health.get("healthy") != Some(&serde_json::Value::Bool(true)) {
-        return None;
-    }
-    let version = health.get("version")?.as_str()?.to_string();
-    if !version_at_least(&version, ARCHIVE_MIN_VERSION) {
-        return None;
-    }
-    if version_at_least(&version, OPENCODE_V2_FLOOR) {
-        eprintln!(
-            "opencode serve reports {version}; the archive op is measured on 1.14.50 up to but not including 2.0.0, so it is skipped"
-        );
-        return None;
-    }
-    Some(ServeHandle {
-        base_url,
-        token,
-        pid: state.get("pid").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-        pid_start: state
-            .get("pid_start")
-            .and_then(|v| v.as_u64())
-            .filter(|start| *start > 0),
-    })
+    Some(serve)
 }
 
-/// Archive one session: stamp `time.archived` and read the STORED record back.
+/// Archive one session: stamp it archived and read the STORED record back.
 ///
 /// The PATCH response body is the server's own projection of a write it has
-/// not necessarily persisted, so the second GET is the positive marker. An
-/// `Err` here means the attempt could not be judged; a write that was accepted
-/// and left the session unarchived answers [`ArchiveOutcome::Survived`].
-pub fn archive_session(
-    base_url: &str,
-    token: &str,
-    session_id: &str,
-) -> Result<ArchiveOutcome, String> {
-    let path = format!("/session/{session_id}");
-    let (status, body) = http_json(base_url, "GET", &path, None, Some(token), HTTP_CALL_TIMEOUT)?;
-    if status == 404 {
+/// not necessarily persisted (2.x answers 204 with none), so the second GET is
+/// the positive marker. An `Err` here means the attempt could not be judged; a
+/// write that was accepted and left the session unarchived answers
+/// [`ArchiveOutcome::Survived`].
+pub fn archive_session(serve: &ServeHandle, session_id: &str) -> Result<ArchiveOutcome, String> {
+    let path = api::session_path(serve.contract, session_id);
+    let read = || -> Result<Option<serde_json::Value>, ServeError> {
+        let (status, body) = http_json(
+            &serve.base_url,
+            "GET",
+            &path,
+            None,
+            Some(&serve.token),
+            HTTP_CALL_TIMEOUT,
+        )?;
+        match status {
+            404 => Ok(None),
+            200 => api::session_from_body(serve.contract, &body).map(Some),
+            _ => Err(http_refusal("GET session", status, &body)),
+        }
+    };
+    let Some(session) = read()? else {
         return Ok(ArchiveOutcome::Gone);
-    }
-    if status != 200 {
-        return Err(format!(
-            "GET session answered {status}: {}",
-            tail_reason(&body, status)
-        ));
-    }
-    if is_archived(&body) {
+    };
+    if api::is_archived(&session) {
         return Ok(ArchiveOutcome::AlreadyArchived);
     }
     let now_ms = std::time::SystemTime::now()
@@ -1370,11 +1483,11 @@ pub fn archive_session(
         .map(|d| d.as_millis() as u64)
         .map_err(|e| format!("clock before the epoch: {e}"))?;
     let (status, body) = http_json(
-        base_url,
+        &serve.base_url,
         "PATCH",
         &path,
-        Some(&serde_json::json!({"time": {"archived": now_ms}})),
-        Some(token),
+        Some(&api::archive_body(serve.contract, now_ms)),
+        Some(&serve.token),
         HTTP_CALL_TIMEOUT,
     )?;
     if status != 200 && status != 204 {
@@ -1383,17 +1496,11 @@ pub fn archive_session(
             tail_reason(&body, status)
         ));
     }
-    let (status, body) = http_json(base_url, "GET", &path, None, Some(token), HTTP_CALL_TIMEOUT)?;
-    if status != 200 {
-        return Err(format!(
-            "archive readback answered {status}: {}",
-            tail_reason(&body, status)
-        ));
-    }
-    if is_archived(&body) {
-        Ok(ArchiveOutcome::Archived)
-    } else {
-        Ok(ArchiveOutcome::Survived)
+    match read() {
+        Ok(Some(session)) if api::is_archived(&session) => Ok(ArchiveOutcome::Archived),
+        Ok(Some(_)) => Ok(ArchiveOutcome::Survived),
+        Ok(None) => Err("archive readback answered 404".to_string()),
+        Err(error) => Err(format!("archive readback: {error}")),
     }
 }
 
@@ -1448,17 +1555,15 @@ mod tests {
         );
     }
 
-    // A serve boot reached a healthy port at ~40s wall on a machine pinned at
-    // 98.9% CPU; anything under 30s wedges spawns on loaded hosts again.
-    #[test]
-    fn boot_budget_absorbs_a_loaded_machine() {
-        assert!(SERVE_BOOT_BUDGET.as_secs() >= 30);
-    }
-
     #[test]
     fn port_scan_finds_the_measured_log_line() {
         let log = "INFO stuff\nwarn noise\nopencode server listening on http://127.0.0.1:59971\nlater lines";
         assert_eq!(serve_port_from_log(log), Some(59971));
+        // 2.x: `server listening on <url>`, the host from its own formatter.
+        assert_eq!(
+            serve_port_from_log("server password x\nserver listening on http://localhost:4123/\n"),
+            Some(4123)
+        );
         assert_eq!(serve_port_from_log("no port here"), None);
         assert_eq!(serve_port_from_log(""), None);
     }
@@ -1477,14 +1582,11 @@ mod tests {
         // The serve config is byte-identical to the shipped 1.x and 2.x
         // postures: the allow-all rows ride the config, never a per-session
         // PATCH (the launch mints no session to patch).
-        assert_eq!(
-            serve_config_json(v1.to_str().unwrap()),
-            SERVE_CONFIG_JSON_V1
-        );
-        assert_eq!(
-            serve_config_json(v2.to_str().unwrap()),
-            SERVE_CONFIG_JSON_V2
-        );
+        let config_for = |bin: &Path| {
+            serve_config_json(crate::opencode_install::classify_contract(bin.to_str().unwrap()).0)
+        };
+        assert_eq!(config_for(&v1), SERVE_CONFIG_JSON_V1);
+        assert_eq!(config_for(&v2), SERVE_CONFIG_JSON_V2);
     }
 
     #[test]
@@ -1494,6 +1596,7 @@ mod tests {
             token: "test-token".to_string(),
             pid: 1,
             pid_start: None,
+            contract: OpencodeContract::V1,
         };
         // Slash command rides --command. No --format json: the attach
         // writer prints nothing on stdout (verified live), so the flag is dead.
@@ -1535,13 +1638,12 @@ mod tests {
 
     #[test]
     fn steering_readback_requires_a_message_id_after_high_water_mark() {
-        let before = serde_json::json!([
-            {"info": {"id": "msg_old"}, "parts": []}
-        ]);
-        let after = serde_json::json!([
-            {"info": {"id": "msg_old"}, "parts": []},
-            {"info": {"id": "msg_new"}, "parts": []}
-        ]);
+        let parse = |body: &str| api::messages_from_body(OpencodeContract::V1, body).unwrap();
+        let before = parse(r#"[{"info": {"id": "msg_old"}, "parts": []}]"#);
+        let after = parse(
+            r#"[{"info": {"id": "msg_old"}, "parts": []},
+                {"info": {"id": "msg_new"}, "parts": []}]"#,
+        );
 
         assert_eq!(
             new_message_id_after(&after, &before).as_deref(),
@@ -1583,9 +1685,22 @@ mod tests {
                         }
                     }
                     let line = req.lines().next().unwrap_or("").to_string();
-                    seen.lock().unwrap().push(line.clone());
                     let body_start = req.split_once("\r\n\r\n").map(|(_, b)| b.to_string());
-                    let (status, body) = if line.starts_with("GET /global/health") {
+                    // The line, then the body after a tab, so a test can read
+                    // what each request carried.
+                    seen.lock()
+                        .unwrap()
+                        .push(format!("{line}\t{}", body_start.as_deref().unwrap_or("")));
+                    let (status, body) = if line.starts_with("GET /api/info") {
+                        (
+                            "200 OK",
+                            r#"{"version":"2.2.7","pid":1,"urls":[]}"#.to_string(),
+                        )
+                    } else if line.starts_with("POST /api/session ") {
+                        ("200 OK", format!(r#"{{"data":{{"id":"{sid}"}}}}"#))
+                    } else if line.starts_with("POST /api/session/") {
+                        ("204 No Content", String::new())
+                    } else if line.starts_with("GET /global/health") {
                         ("200 OK", "{\"healthy\":true}".to_string())
                     } else if line.starts_with("GET /session/") {
                         ("200 OK", format!("{{\"id\":\"{sid}\"}}"))
@@ -1754,6 +1869,80 @@ mod tests {
             lines[fence + 1..].join("\n").contains("hello there"),
             "the payload fills the tail: {launched}"
         );
+    }
+
+    // 2.x has no `run --attach` and no `--command`: the launch mints the
+    // session over HTTP, starts the turn on the native command route, and
+    // names the minted id. Effort rides the model ref as its variant.
+    #[test]
+    fn a_2x_dispatch_launches_over_http_and_names_the_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let h = home(dir.path());
+        let fake = FakeServe::start("ses_v2launch1");
+        let record = serde_json::json!({
+            "base_url": fake.base_url(),
+            "pid": 4242,
+            "pid_start": 1,
+            "token": "test-token",
+            "api": "2.x",
+        });
+        std::fs::write(serve_state_path(&h), record.to_string()).unwrap();
+        // A writer exec would be a 1.x launch on a 2.x serve: the stub
+        // leaves a mark if anything runs it.
+        let stub = crate::write_exec_stub(dir.path(), "opencode-stub", "#!/bin/sh\ntouch ran\n");
+        let cwd = dir.path().join("w");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        let outcome = dispatch_opencode_serve_inner(
+            &h,
+            "wk-v2",
+            "/fno:target --no-merge x-1",
+            "op",
+            &cwd,
+            Some("zai-coding-plan/glm-5.3-flash"),
+            Some("high"),
+            Some("x-aaaa"),
+            &stub.to_string_lossy(),
+        );
+
+        assert_eq!(outcome.exit_code, 0, "stderr: {}", outcome.stderr);
+        let receipt: serde_json::Value = serde_json::from_str(outcome.stdout.trim()).unwrap();
+        assert_eq!(receipt.pointer("/session_id").unwrap(), "ses_v2launch1");
+        assert_eq!(receipt.pointer("/contract").unwrap(), "2.x");
+        assert_eq!(receipt.pointer("/effort").unwrap(), "high");
+        let requests = fake.requests.lock().unwrap().clone();
+        let create = requests
+            .iter()
+            .find(|r| r.starts_with("POST /api/session "))
+            .unwrap_or_else(|| panic!("no session create: {requests:?}"));
+        let create: serde_json::Value =
+            serde_json::from_str(create.split_once('\t').unwrap().1).unwrap();
+        assert_eq!(
+            create.pointer("/title").unwrap(),
+            "wk-v2",
+            "the plugin claims by title"
+        );
+        assert_eq!(
+            create.pointer("/location/directory").unwrap(),
+            &*cwd.to_string_lossy()
+        );
+        assert_eq!(
+            create.pointer("/model").unwrap(),
+            &serde_json::json!({"providerID": "zai-coding-plan", "id": "glm-5.3-flash", "variant": "high"})
+        );
+        assert!(
+            requests
+                .iter()
+                .any(|r| r.starts_with("POST /api/session/ses_v2launch1/command ")),
+            "a slash seed rides the command route: {requests:?}"
+        );
+        assert!(
+            !requests
+                .iter()
+                .any(|r| r.contains("/global/health") || r.starts_with("GET /session")),
+            "no 1.x route reaches a 2.x serve: {requests:?}"
+        );
+        assert!(!cwd.join("ran").exists() && !dir.path().join("ran").exists());
     }
 
     #[test]

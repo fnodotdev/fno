@@ -25,7 +25,7 @@ use super::*;
 /// a dead `✗` count and drop live `?` rows. Changing that is a display-policy
 /// decision, not a correctness fix - do not "align" the two lists to make it
 /// go away.
-pub(super) const SEVERITY_ORDER: [LatticeState; 7] = [
+pub(crate) const SEVERITY_ORDER: [LatticeState; 7] = [
     LatticeState::Blocked,
     LatticeState::DoneUnseen,
     LatticeState::Working,
@@ -38,7 +38,7 @@ pub(super) const SEVERITY_ORDER: [LatticeState; 7] = [
 /// (US2) Fold a section's rows into per-state counts, nonzero only, in
 /// severity order. Exhaustive over `LatticeState` (the lock-3 posture):
 /// a new state is a compile error here, never a silently uncounted glyph.
-pub(super) fn section_rollup(
+pub(crate) fn section_rollup(
     states: impl Iterator<Item = LatticeState>,
 ) -> Vec<(LatticeState, usize)> {
     let mut counts = [0usize; SEVERITY_ORDER.len()];
