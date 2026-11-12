@@ -311,7 +311,6 @@ mod tests {
     #[test]
     fn open_argv_is_the_one_fixed_command() {
         let argv = open_argv("p/m");
-        let (_, rest) = argv.split_first().unwrap();
-        assert_eq!(rest, ["config", "plugins", "open", "p/m"]);
+        assert_eq!(&argv[1..], ["config", "plugins", "open", "p/m"]);
     }
 }

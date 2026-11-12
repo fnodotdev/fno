@@ -4914,9 +4914,8 @@ binding = { mod = "fno-panels/review-ledger" }
 "#,
         )
         .unwrap();
-        let slot = spec.slots.first().unwrap();
         assert_eq!(
-            slot.binding,
+            spec.slots[0].binding,
             LayoutBinding::Mod("fno-panels/review-ledger".into())
         );
 
