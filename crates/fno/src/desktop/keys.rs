@@ -66,8 +66,8 @@ pub enum Shortcut {
     Command(Command),
     Paste,
     Quit,
-    /// cmd-1 shows the terminal, cmd-2 the orchestration board, cmd-3 the
-    /// extensions.
+    /// cmd-1 shows the chat, cmd-2 the orchestration board, cmd-3 the
+    /// extensions, cmd-4 the terminal.
     View(u8),
 }
 
@@ -88,6 +88,7 @@ pub fn shortcut(k: &Key) -> Option<Shortcut> {
         ("1", _) => Shortcut::View(1),
         ("2", _) => Shortcut::View(2),
         ("3", _) => Shortcut::View(3),
+        ("4", _) => Shortcut::View(4),
         _ => return None,
     })
 }
@@ -248,7 +249,8 @@ mod tests {
         };
         assert_eq!(shown("3"), MainView::Extensions);
         assert_eq!(shown("2"), MainView::Orchestration);
-        assert_eq!(shown("1"), MainView::Terminal);
+        assert_eq!(shown("1"), MainView::Chat);
+        assert_eq!(shown("4"), MainView::Terminal);
     }
 
     #[test]

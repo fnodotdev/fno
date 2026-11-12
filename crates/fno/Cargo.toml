@@ -85,7 +85,7 @@ full = [
     "dep:tempfile",
     "dep:tokio",
 ]
-desktop = ["full", "dep:gpui"]
+desktop = ["full", "dep:gpui", "dep:pulldown-cmark", "dep:unicode-segmentation"]
 
 [dependencies]
 # `fno mux serve --web`: the read-only web bridge's HTTP + WebSocket
@@ -183,6 +183,10 @@ tempfile = { version = "3", optional = true }
 # The desktop app's window, text and input layer (Zed's UI framework). Off
 # by default; `font-kit` is the one feature the macOS text system needs.
 gpui = { version = "0.2.2", default-features = false, features = ["font-kit"], optional = true }
+# Chat mode's markdown: gpui 0.2.2 ships no markdown element.
+pulldown-cmark = { version = "0.13", default-features = false, optional = true }
+# The chat composer deletes by grapheme.
+unicode-segmentation = { version = "1", optional = true }
 tokio = { optional = true, version = "1", features = [
     "rt-multi-thread",
     "net",

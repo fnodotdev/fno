@@ -36,6 +36,8 @@ pub struct Palette {
     pub panel: u32,
     /// A row that needs the user.
     pub warn: u32,
+    /// The user's own turns in chat mode.
+    pub bubble: u32,
     ansi: [u32; 16],
 }
 
@@ -104,6 +106,7 @@ impl Palette {
             muted: rgb_or(t.dim, 0x8a8a8a),
             panel: mix(rgb_or(t.base, 0x141414), rgb_or(t.stamp, 0xe8e8e8), 0.05),
             warn: rgb_or(t.needs_you, 0xe5c07b),
+            bubble: mix(rgb_or(t.base, 0x141414), rgb_or(t.stamp, 0xe8e8e8), 0.12),
             ansi,
         }
     }
