@@ -606,6 +606,64 @@ pub(super) fn heredoc_bodies(command: &str) -> Vec<String> {
     out
 }
 
+/// Every heredoc that writes a file, as `(target token, body)` in command
+/// order: `cat > s.sh <<'EOF'`, `cat <<EOF >> s.sh`, `tee s.sh <<EOF`. The
+/// target token is the lexer's spelling, so it equals the token in the
+/// writer's segment.
+pub(super) fn heredoc_writes(command: &str) -> Vec<(String, String)> {
+    let lines = split_lines_outside_quotes(command);
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let Some((delim, dash)) = find_heredoc_opener(&lines[i]) else {
+            i += 1;
+            continue;
+        };
+        let target = shlex_lex(
+            &lines[i],
+            Lex {
+                punct: true,
+                comments: true,
+            },
+        )
+        .and_then(|toks| write_target(&toks));
+        let mut body: Vec<&str> = Vec::new();
+        i += 1;
+        while let Some(line) = lines.get(i) {
+            i += 1;
+            if heredoc_ends(line, &delim, dash) {
+                break;
+            }
+            body.push(line);
+        }
+        if let Some(target) = target {
+            out.push((target, body.join("\n")));
+        }
+    }
+    out
+}
+
+/// The file a token run writes through `>`/`>>` or `tee`, if any.
+pub(super) fn write_target(tokens: &[String]) -> Option<String> {
+    for (idx, tok) in tokens.iter().enumerate() {
+        let next = tokens.get(idx + 1)?;
+        if REDIRECT_TOKENS.contains(&tok.as_str()) {
+            let dup = (tok == ">&" || tok == "&>")
+                && (is_digits(next) || is_digits(next.trim_end_matches('-')));
+            if !dup {
+                return Some(next.clone());
+            }
+        }
+        if base_lower(tok) == "tee" {
+            return tokens[idx + 1..]
+                .iter()
+                .find(|t| !t.starts_with('-'))
+                .cloned();
+        }
+    }
+    None
+}
+
 /// The joined text of every segment that directly follows a `|` or `|&`.
 /// A shell runner on such a segment reads the previous stage's output as
 /// its script, text the command never carries. The walk mirrors

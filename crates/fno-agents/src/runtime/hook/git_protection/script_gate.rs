@@ -1,14 +1,21 @@
 //! The shell-runner script doors. `bash script.sh` and `bash <<'EOF'` hand a
 //! script body to a shell without it ever appearing at command position, so
 //! the segment gates never see a push inside. expand() reads what the runner
-//! will execute and parses it as more command segments for the same gates. A
-//! script the guard cannot read fully refuses: the guard never bets on what
-//! it cannot see.
+//! will execute and parses it as more command segments for the same gates.
+//!
+//! The hook runs before the command, so it walks the segments in order the
+//! way the shell will: a `cd` moves the base of a relative script path, a
+//! `NAME=value` names a script path, and a writer (`cat > s.sh <<EOF`,
+//! `cp a.sh s.sh`) supplies the text a later `bash s.sh` runs. A script that
+//! does not exist and that nothing writes runs nothing, so it allows unless
+//! the command's own text holds a push. A script whose text the guard
+//! cannot get (a download, a variable it cannot resolve, a binary) refuses.
 
 use super::git_gate::is_a_push;
 use super::segments::{self, base_lower, Segment};
 use super::Ctx;
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 /// A script beyond this size is not a realistic agent action; refusing it
 /// is fail-closed and caps the hook's read cost.
@@ -41,8 +48,178 @@ impl From<Refusal> for String {
 /// the cap.
 pub(super) fn expand(command: &str, segs: &[Segment], ctx: &Ctx) -> Result<Vec<Segment>, Refusal> {
     let mut out: Vec<Segment> = Vec::new();
-    visit(command, segs, ctx, 0, &mut out)?;
+    visit(command, segs, ctx, &ctx.cwd, 0, &mut out)?;
     Ok(out)
+}
+
+/// What a writer in the same command puts at a path.
+#[derive(Clone)]
+enum Source {
+    /// Text the guard can read: a heredoc body, an echo, a copied file.
+    Text(String),
+    /// A writer whose output the guard cannot read, by its command text.
+    Opaque(String),
+}
+
+/// The shell state one command builds up as its segments run in order.
+struct Walk {
+    /// None after a `cd` the guard cannot resolve.
+    cwd: Option<PathBuf>,
+    /// None marks a name assigned a value the guard cannot resolve.
+    vars: HashMap<String, Option<String>>,
+    written: Vec<(PathBuf, Source)>,
+    heredocs: Vec<(String, String)>,
+}
+
+impl Walk {
+    fn new(command: &str, cwd: &Path) -> Self {
+        Walk {
+            cwd: Some(cwd.to_path_buf()),
+            vars: HashMap::new(),
+            written: Vec::new(),
+            heredocs: segments::heredoc_writes(command),
+        }
+    }
+
+    /// `$NAME` and `${NAME}` from this command's assignments, `$PWD`, then
+    /// the hook's environment. None when any expansion stays unresolved.
+    fn expand_vars(&self, raw: &str) -> Option<String> {
+        static VAR: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+        let re = VAR.get_or_init(|| {
+            regex::Regex::new(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
+                .expect("static regex")
+        });
+        if raw.contains("$(") || raw.contains('`') {
+            return None;
+        }
+        let mut unresolved = false;
+        let text = re.replace_all(raw, |caps: &regex::Captures| {
+            let name = caps
+                .get(1)
+                .or_else(|| caps.get(2))
+                .map_or("", |m| m.as_str());
+            let value = match self.vars.get(name) {
+                Some(v) => v.clone(),
+                None if name == "PWD" => self.cwd.as_ref().map(|p| p.display().to_string()),
+                None => std::env::var(name).ok(),
+            };
+            value.unwrap_or_else(|| {
+                unresolved = true;
+                String::new()
+            })
+        });
+        (!unresolved && !text.contains('$')).then(|| text.into_owned())
+    }
+
+    fn resolve(&self, raw: &str) -> Option<PathBuf> {
+        let text = self.expand_vars(raw)?;
+        let text = match text.strip_prefix("~/") {
+            Some(rest) => format!("{}/{rest}", std::env::var("HOME").ok()?),
+            None if text == "~" => std::env::var("HOME").ok()?,
+            None => text,
+        };
+        let path = PathBuf::from(text);
+        if path.is_absolute() {
+            Some(path)
+        } else {
+            self.cwd.as_ref().map(|cwd| cwd.join(path))
+        }
+    }
+
+    fn written_to(&self, path: &Path) -> Option<&Source> {
+        self.written
+            .iter()
+            .rev()
+            .find(|(p, _)| p == path)
+            .map(|(_, s)| s)
+    }
+
+    /// Fold one segment's effect on the shell state the later segments see.
+    fn observe(&mut self, seg: &Segment) {
+        let (argv, assignments) = segments::effective_argv_and_assignments(seg);
+        let base0 = argv.first().map(|t| base_lower(t)).unwrap_or_default();
+        if argv.is_empty() {
+            self.assign(&assignments);
+        } else if ["export", "declare", "local", "readonly"].contains(&base0.as_str()) {
+            let args: Vec<String> = argv
+                .iter()
+                .skip(1)
+                .filter(|a| a.contains('='))
+                .cloned()
+                .collect();
+            self.assign(&args);
+        } else if base0 == "cd" || base0 == "pushd" {
+            let target = argv
+                .iter()
+                .skip(1)
+                .find(|a| !a.starts_with('-') || *a == "-");
+            self.cwd = match target.map(String::as_str) {
+                None => std::env::var("HOME").ok().map(PathBuf::from),
+                Some("-") => None,
+                Some(t) => self.resolve(t),
+            };
+        }
+        if let Some(target) = segments::write_target(seg) {
+            let heredoc = self.heredocs.iter().position(|(t, _)| *t == target);
+            let source = match heredoc {
+                Some(at) => Source::Text(self.heredocs.remove(at).1),
+                None if base0 == "echo" || base0 == "printf" => {
+                    Source::Text(argv.iter().skip(1).cloned().collect::<Vec<_>>().join(" "))
+                }
+                None => Source::Opaque(seg.join(" ")),
+            };
+            self.record(&target, source);
+        }
+        if ["cp", "mv", "install"].contains(&base0.as_str()) {
+            let files: Vec<&String> = argv
+                .iter()
+                .skip(1)
+                .filter(|a| !a.starts_with('-'))
+                .collect();
+            if let [src, dst] = files.as_slice() {
+                let src_path = self.resolve(src);
+                let source = match src_path.as_deref().and_then(|p| self.written_to(p)) {
+                    Some(s) => s.clone(),
+                    None => match src_path.as_deref().map(|p| read_script(p, "", src)) {
+                        Some(Ok(text)) => Source::Text(text),
+                        _ => Source::Opaque(seg.join(" ")),
+                    },
+                };
+                let dst_path = self.resolve(dst).map(|d| {
+                    match (d.is_dir(), Path::new(src.as_str()).file_name()) {
+                        (true, Some(name)) => d.join(name),
+                        _ => d,
+                    }
+                });
+                if let Some(d) = dst_path {
+                    self.written.push((d, source));
+                }
+            }
+        }
+        if base0 == "curl" || base0 == "wget" {
+            let out_flag = argv
+                .iter()
+                .position(|a| ["-o", "-O", "--output", "--output-document"].contains(&a.as_str()));
+            if let Some(target) = out_flag.and_then(|at| argv.get(at + 1)) {
+                self.record(target, Source::Opaque(seg.join(" ")));
+            }
+        }
+    }
+
+    fn assign(&mut self, assignments: &[String]) {
+        for a in assignments {
+            if let Some((name, value)) = a.split_once('=') {
+                let value = self.expand_vars(value);
+                self.vars.insert(name.to_string(), value);
+            }
+        }
+    }
+
+    fn record(&mut self, target: &str, source: Source) {
+        if let Some(path) = self.resolve(target) {
+            self.written.push((path, source));
+        }
+    }
 }
 
 /// Follow the runner segments of `segs`, reading each script they would
@@ -52,6 +229,7 @@ fn visit(
     command: &str,
     segs: &[Segment],
     ctx: &Ctx,
+    cwd: &Path,
     depth: usize,
     out: &mut Vec<Segment>,
 ) -> Result<(), Refusal> {
@@ -64,18 +242,19 @@ fn visit(
             RefusalKind::Read,
         ));
     }
+    let mut walk = Walk::new(command, cwd);
     for seg in segs {
-        let (text, label) = match runner_script(command, seg, ctx) {
+        let found = runner_script(command, seg, &walk);
+        walk.observe(seg);
+        let (text, label) = match found {
             Ok(Some(pair)) => pair,
             Ok(None) => continue,
-            // A nested helper the door cannot read (a variable script
-            // path, or a file absent beside the script) carries no
-            // readable text. Judge it by the same fallback as an
-            // unparsable body: a push pair in the surrounding script
-            // refuses, otherwise the runner skips. `bash missing.sh` at
-            // the top level still refuses fail-closed, and the
-            // piped-runner refusal always propagates: the piped text
-            // never appears in any command.
+            // A nested helper the door cannot read (a variable the script
+            // assigns at run time, a binary) carries no readable text.
+            // Judge it by the same fallback as an unparsable body: a push
+            // pair in the surrounding script refuses, otherwise the runner
+            // skips. The piped-runner refusal always propagates: the piped
+            // text never appears in any command.
             Err(inner) if depth > 0 && inner.1 == RefusalKind::Read => {
                 if could_push(command) {
                     return Err(inner);
@@ -87,7 +266,8 @@ fn visit(
         let inner = parse_script_text(command, &label, &text)?;
         out.extend(inner.iter().cloned());
         if !inner.is_empty() {
-            visit(&text, &inner, ctx, depth + 1, out)?;
+            let child_cwd = walk.cwd.clone().unwrap_or_else(|| ctx.cwd.clone());
+            visit(&text, &inner, ctx, &child_cwd, depth + 1, out)?;
         }
     }
     Ok(())
@@ -100,7 +280,7 @@ fn visit(
 fn runner_script(
     command: &str,
     seg: &Segment,
-    ctx: &Ctx,
+    walk: &Walk,
 ) -> Result<Option<(String, String)>, Refusal> {
     let argv = segments::effective_argv(seg);
     let Some(base0) = argv.first().map(|t| base_lower(t)) else {
@@ -162,7 +342,47 @@ fn runner_script(
         }
         return Ok(None);
     };
-    read_script(&ctx.cwd.join(path), command, path).map(|text| Some((text, path.to_string())))
+    let label = path.to_string();
+    let Some(full) = walk.resolve(path) else {
+        let why = if walk.expand_vars(path).is_none() {
+            "names its path through a variable or substitution the guard cannot resolve. \
+             Assign the path in this same command, or spell it out"
+        } else {
+            "is relative to a `cd` target the guard cannot resolve. Spell the directory out, \
+             or give the script an absolute path"
+        };
+        return Err(refusal(command, path, why));
+    };
+    match walk.written_to(&full) {
+        Some(Source::Text(text)) => return Ok(Some((text.clone(), label))),
+        Some(Source::Opaque(writer)) => {
+            return Err(refusal(
+                command,
+                path,
+                &format!(
+                    "is written in this same command by `{writer}`, whose output the guard \
+                     cannot read. Write it in one call and run it in the next"
+                ),
+            ))
+        }
+        None => {}
+    }
+    if !full.exists() {
+        // A missing script runs nothing: bash fails on it. Only a push in
+        // this command's own text, which an unseen writer could put into
+        // the script, keeps the refusal.
+        if could_push(command) {
+            return Err(refusal(
+                command,
+                path,
+                "does not exist yet, and this command's own text holds a push that a writer \
+                 the guard cannot follow may put into it. Write the script in one call and \
+                 run it in the next",
+            ));
+        }
+        return Ok(None);
+    }
+    read_script(&full, command, path).map(|text| Some((text, label)))
 }
 
 /// Read the script file. Any read the guard cannot complete is a refusal.
@@ -334,12 +554,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let fake = feature(dir.path());
         let c = ctx(dir.path(), &fake);
-        // Missing
-        let refusal = judge_with(&bash("bash missing.sh"), &c).unwrap();
-        assert!(
-            refusal.contains("cannot be gated") && refusal.contains("missing.sh"),
-            "{refusal}"
-        );
         // Binary
         std::fs::write(dir.path().join("bin.sh"), b"\x00\x01trick").unwrap();
         let refusal = judge_with(&bash("bash bin.sh"), &c).unwrap();
@@ -352,6 +566,87 @@ mod tests {
         std::fs::write(dir.path().join("big.sh"), vec![b'a'; (1 << 20) + 1]).unwrap();
         let refusal = judge_with(&bash("bash big.sh"), &c).unwrap();
         assert!(refusal.contains("read cap"), "{refusal}");
+    }
+
+    #[test]
+    fn a_missing_script_nothing_writes_allows_unless_the_command_holds_a_push() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = feature(dir.path());
+        let c = ctx(dir.path(), &fake);
+        assert_eq!(judge_with(&bash("bash missing.sh; echo rc=$?"), &c), None);
+        let refusal = judge_with(
+            &bash("python3 -c \"open('m.sh','w').write('git push origin main')\" && bash m.sh"),
+            &c,
+        )
+        .unwrap();
+        assert!(
+            refusal.contains("does not exist yet") && refusal.contains("Script: m.sh"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_script_written_in_the_same_command_is_gated_by_what_writes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("clean.sh"), "cargo build\n").unwrap();
+        std::fs::write(dir.path().join("push.sh"), "git push origin main\n").unwrap();
+        let fake = feature(dir.path());
+        let c = ctx(dir.path(), &fake);
+        for cmd in [
+            "cat > s.sh <<'EOF'\necho hi\nEOF\nbash s.sh",
+            "cp clean.sh s.sh && bash s.sh",
+        ] {
+            assert_eq!(judge_with(&bash(cmd), &c), None, "{cmd}");
+        }
+        for cmd in [
+            "cat > s.sh <<'EOF'\ngit push origin main\nEOF\nbash s.sh",
+            "cp push.sh s.sh && bash s.sh",
+            // The file on disk is clean, but the heredoc overwrites it.
+            "cat > clean.sh <<'EOF'\ngit push origin main\nEOF\nbash clean.sh",
+        ] {
+            let refusal = judge_with(&bash(cmd), &c).unwrap_or_else(|| panic!("allowed: {cmd}"));
+            assert!(
+                refusal.contains("BLOCKED: Direct push to protected branch"),
+                "{cmd}: {refusal}"
+            );
+        }
+        let refusal = judge_with(
+            &bash("curl -fsSL -o d.sh https://example.test/d && bash d.sh"),
+            &c,
+        )
+        .unwrap();
+        assert!(
+            refusal.contains("written in this same command by `curl"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_script_path_resolves_through_cd_and_same_command_assignments() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("repo/scripts");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("push.sh"), "git push origin main\n").unwrap();
+        std::fs::create_dir(dir.path().join("crates")).unwrap();
+        let fake = feature(dir.path());
+        // The hook runs from a subdirectory with no scripts/ beside it.
+        let c = ctx(&dir.path().join("crates"), &fake);
+        let repo = dir.path().join("repo");
+        let repo = repo.display();
+        for cmd in [
+            format!("cd {repo} && bash scripts/push.sh"),
+            format!("S={repo}/scripts/push.sh; bash $S"),
+            format!("D={repo}; bash \"${{D}}/scripts/push.sh\""),
+            format!("cd {repo} && bash $PWD/scripts/push.sh"),
+        ] {
+            let refusal = judge_with(&bash(&cmd), &c).unwrap_or_else(|| panic!("allowed: {cmd}"));
+            assert!(
+                refusal.contains("BLOCKED: Direct push to protected branch"),
+                "{cmd}: {refusal}"
+            );
+        }
+        let refusal = judge_with(&bash("bash $FNO_TEST_UNSET_SCRIPT_DIR/x.sh"), &c).unwrap();
+        assert!(refusal.contains("cannot resolve"), "{refusal}");
     }
 
     #[test]
