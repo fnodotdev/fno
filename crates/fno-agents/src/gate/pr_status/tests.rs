@@ -619,11 +619,14 @@ fn an_unmeasured_head_names_the_state_and_stays_ready() {
     };
     let (_code, payload, stderr) = crate::pr_status::compose::compose_payload(&inputs);
     assert_eq!(
-        payload["ready"].as_bool(),
+        payload.get("ready").and_then(Value::as_bool),
         Some(true),
         "D3173: queued CI never reads ready:false"
     );
-    assert_eq!(payload["ci_unmeasured"].as_str(), Some(reason));
+    assert_eq!(
+        payload.get("ci_unmeasured").and_then(Value::as_str),
+        Some(reason)
+    );
     assert!(
         stderr
             .iter()

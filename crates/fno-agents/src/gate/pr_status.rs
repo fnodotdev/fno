@@ -1397,7 +1397,9 @@ pub(crate) fn status_payload<P: GhProbe>(
     // The unmeasured fact rides the ask too: the walk warns on it under
     // require_checks, so the read names the fact the merge decision sees.
     if let Some(reason) = &ci_unmeasured {
-        receipt_ask["ci_unmeasured"] = json!(reason);
+        if let Some(map) = receipt_ask.as_object_mut() {
+            map.insert("ci_unmeasured".into(), json!(reason));
+        }
     }
     // The read's own PR projection rides the ask: the walk parses facts from
     // it instead of spawning `fno do pr info`. An old cache row without the
