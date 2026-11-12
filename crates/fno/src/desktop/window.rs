@@ -349,7 +349,6 @@ impl Root {
         cx.notify();
     }
 
-    /// Repaint every pane and the chrome in `palette`.
     /// Resolve the palette again for the current appearance and project, and
     /// say what the theme ladder warned about.
     fn restyle(&mut self, cx: &mut Context<Self>) {
@@ -360,6 +359,7 @@ impl Root {
         }
     }
 
+    /// Repaint every pane and the chrome in `palette`.
     fn set_palette(&mut self, palette: Palette, cx: &mut Context<Self>) {
         self.palette = palette;
         for view in self.panes.values() {
