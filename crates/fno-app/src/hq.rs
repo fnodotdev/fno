@@ -9,10 +9,10 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
-use crate::backlog_model::Inputs;
-use crate::needs_overlay::AnswerPick;
-use crate::proto::AgentRow;
-use crate::web_hq::Board;
+use fno::app_api::web_hq::Board;
+use fno::backlog_model::Inputs;
+use fno::needs_overlay::AnswerPick;
+use fno::proto::AgentRow;
 
 /// The fleet and question reads, at the bridge's own cadence. Measured on
 /// a 38-seat fleet: `needs` takes about 1 CPU-second a call, so a 10 s cycle
@@ -44,16 +44,16 @@ pub async fn read(
     agents: &[AgentRow],
     backlog: Option<Arc<Inputs>>,
 ) -> Arc<Inputs> {
-    let graph = crate::backlog_view::graph_path();
+    let graph = fno::backlog_view::graph_path();
     let gather = async {
         match backlog {
             Some(b) => b,
-            None => Arc::new(crate::backlog_model::gather(&graph, agents.to_vec()).await),
+            None => Arc::new(fno::backlog_model::gather(&graph, agents.to_vec()).await),
         }
     };
     let (fleet, questions, backlog) = tokio::join!(
-        crate::client::org_seats::read_fleet(),
-        crate::needs_overlay::questions_now(),
+        fno::app_api::client::org_seats::read_fleet(),
+        fno::needs_overlay::questions_now(),
         gather,
     );
     let measured_at = chrono::Utc::now().timestamp().max(0) as u64;
@@ -83,7 +83,7 @@ impl Poller {
             .enable_all()
             .build()?;
         std::thread::Builder::new()
-            .name("fno-desktop-hq".into())
+            .name("fno-app-hq".into())
             .spawn(move || {
                 rt.block_on(async move {
                     let mut backlog: Option<(Arc<Inputs>, Instant)> = None;
@@ -109,7 +109,7 @@ impl Poller {
                             Ok(None) => return,
                             Ok(Some(Ask::Refresh)) => true,
                             Ok(Some(Ask::Answer { id, option })) => {
-                                let reply = match crate::needs_overlay::answer(
+                                let reply = match fno::needs_overlay::answer(
                                     &id,
                                     AnswerPick::Option(option),
                                 )

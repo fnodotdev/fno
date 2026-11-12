@@ -12615,3 +12615,24 @@ crates/fno-agents/src/gate/pr_status/tests.rs	clippy::indexing_slicing	assert_eq
 crates/fno-agents/src/gate/pr_status/tests.rs	clippy::indexing_slicing	assert_eq!(payload["verdict"].as_str(), Some("pending"));
 crates/fno-agents/src/gate/pr_status_facts/tests.rs	clippy::indexing_slicing	assert_eq!(out["blockers"], json!(["ci_pending"]));
 crates/fno-agents/src/gate/pr_status_facts/tests.rs	clippy::indexing_slicing	assert_eq!(out["blockers"], json!(["ci_red"]));
+crates/fno-app/src/boxdraw.rs	clippy::indexing_slicing	0x2500..=0x257f => lines(ARMS[(code - 0x2500) as usize], w, h, light),
+crates/fno-app/src/boxdraw.rs	clippy::indexing_slicing	assert_eq!(quads('━', w, h, 1.0).unwrap()[0].h, 2.0);
+crates/fno-app/src/boxdraw.rs	clippy::indexing_slicing	assert_eq!(quads('▒', w, h, 1.0).unwrap()[0].alpha, 0.5);
+crates/fno-app/src/boxdraw.rs	clippy::indexing_slicing	let (hlo, hhi) = span(weights[1], weights[3]);
+crates/fno-app/src/boxdraw.rs	clippy::indexing_slicing	let (vlo, vhi) = span(weights[0], weights[2]);
+crates/fno-app/src/chat/view.rs	clippy::indexing_slicing	let (a, b) = (w[0], w[1]);
+crates/fno-app/src/extensions.rs	clippy::indexing_slicing	assert_eq!(shown[0], ("fno-panels/backlog-board".to_string(), true));
+crates/fno-app/src/extensions.rs	clippy::indexing_slicing	assert_eq!(shown[3].0, "demo-clock/clock");
+crates/fno-app/src/keys.rs	clippy::indexing_slicing	if &bytes[i..i + 3] != b"\\x1b[?" {
+crates/fno-app/src/keys.rs	clippy::indexing_slicing	match &bytes[start..end] {
+crates/fno-app/src/keys.rs	clippy::indexing_slicing	s if s.len() == 1 && s.as_bytes()[0].is_ascii_alphabetic() => {
+crates/fno-app/src/keys.rs	clippy::indexing_slicing	s.as_bytes()[0].to_ascii_lowercase() & 0x1f
+crates/fno-app/src/keys.rs	clippy::indexing_slicing	while end < bytes.len() && bytes[end].is_ascii_digit() {
+crates/fno-app/src/left_pane.rs	clippy::indexing_slicing	assert!(matches!(&rows[at + 1], Row::Item { label, .. } if label == "ship it?"));
+crates/fno-app/src/left_pane.rs	clippy::indexing_slicing	assert!(strip[1].active);
+crates/fno-app/src/left_pane.rs	clippy::indexing_slicing	assert_eq!(strip[0].action, Action::Send(Command::SelectTab(10)));
+crates/fno-app/src/left_pane.rs	clippy::indexing_slicing	assert_eq!(super::super::tabs::strip(&layout)[0].label, "build");
+crates/fno-app/src/left_pane.rs	clippy::indexing_slicing	layout.squads[0].tabs[0] = TabMeta {
+crates/fno-app/src/left_pane.rs	clippy::indexing_slicing	matches!(&rows[0], Row::Header { rollup, .. } if rollup == &vec![
+crates/fno-app/src/left_pane.rs	clippy::indexing_slicing	matches!(&rows[1], Row::Item { state: Some(LatticeState::Unmeasured), detail, .. } if detail.ends_with("unknown"))
+crates/fno-app/src/palette.rs	clippy::indexing_slicing	Color::Indexed(i) if i < 16 => self.ansi[i as usize],

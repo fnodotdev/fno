@@ -8,12 +8,12 @@ use gpui::{div, point, prelude::*, px, rgb, Context, Div, FontWeight, ScrollWhee
 use super::link::Layout;
 use super::palette::Palette;
 use super::window::{Action, MainView, Root};
-use crate::client::agent_lattice_state;
-use crate::client::card_line::binding_suffix;
-use crate::client::header_band::section_rollup;
-use crate::lattice::{lattice_glyph, status_long, LatticeState};
-use crate::proto::{AgentRow, Command};
-use crate::web_hq::Board;
+use fno::app_api::client::agent_lattice_state;
+use fno::app_api::client::card_line::binding_suffix;
+use fno::app_api::client::header_band::section_rollup;
+use fno::app_api::lattice::{lattice_glyph, status_long, LatticeState};
+use fno::app_api::web_hq::Board;
+use fno::proto::{AgentRow, Command};
 
 pub const WIDTH: f32 = 260.0;
 /// The agents shown before a "+N more" row, so the sections below stay above
@@ -112,7 +112,7 @@ fn state_color(p: &Palette, s: LatticeState) -> u32 {
 }
 
 pub fn rows(layout: &Layout, board: &Board, now_secs: u64, agents_open: bool) -> Vec<Row> {
-    let agents = crate::client::agent_sort::sideline_order(&layout.agents, now_secs);
+    let agents = fno::app_api::client::agent_sort::sideline_order(&layout.agents, now_secs);
     let mut out = vec![Row::Header {
         title: "Agents",
         rollup: section_rollup(agents.iter().map(|a| agent_lattice_state(a))),
@@ -127,7 +127,7 @@ pub fn rows(layout: &Layout, board: &Board, now_secs: u64, agents_open: bool) ->
         total.min(AGENTS_SHOWN)
     };
     for a in agents.into_iter().take(shown) {
-        use crate::client::agent_group::{click_command, RowClick};
+        use fno::app_api::client::agent_group::{click_command, RowClick};
         let action = match click_command(a) {
             RowClick::Send(cmd) => Action::Send(cmd),
             RowClick::Notice(notice) => Action::Notice(notice),
@@ -451,7 +451,7 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::{AgentBadge, SquadMeta, TabMeta};
+    use fno::proto::{AgentBadge, SquadMeta, TabMeta};
 
     fn agent(name: &str, pane: u64, badge: Option<AgentBadge>) -> AgentRow {
         serde_json::from_value(serde_json::json!({
@@ -508,17 +508,17 @@ mod tests {
             ..Layout::default()
         };
         let mut board = Board::default();
-        let question = crate::needs_overlay::QuestionItem {
+        let question = fno::needs_overlay::QuestionItem {
             id: "q-1".into(),
             title: "ship it?".into(),
             state: "open".into(),
             ..Default::default()
         };
-        let fold = crate::needs_overlay::QuestionsFold {
+        let fold = fno::needs_overlay::QuestionsFold {
             items: vec![question],
             ..Default::default()
         };
-        let none = crate::backlog_model::Inputs::default();
+        let none = fno::backlog_model::Inputs::default();
         board.record(Err("no fleet".into()), Ok(fold), &none, 1, &[]);
         board.record(
             Err("no fleet".into()),

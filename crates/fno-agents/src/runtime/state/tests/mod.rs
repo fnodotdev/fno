@@ -642,6 +642,7 @@ fn registry_schema_fields() {
         tool_calls: Some(1),
         tool_errors: Some(1),
         mail_held: Some(1),
+        mail_held_since: Some("value".into()),
         context_measured_at: Some("value".into()),
         mail_unread: Some(1),
         harness_title: Some("value".into()),

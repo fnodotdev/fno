@@ -65,7 +65,7 @@ fn set_test_projects_dir(dir: Option<&Path>) {
 /// The claude projects (transcript) base dir. Mirrors fno-agents'
 /// `claude_drive::claude_projects_dir` - mirrored, not imported: the crates
 /// share no types and the FILE is the contract (same rule as `roster_path`).
-pub(crate) fn claude_projects_dir() -> PathBuf {
+pub fn claude_projects_dir() -> PathBuf {
     #[cfg(test)]
     if let Some(p) = TEST_PROJECTS_DIR.with(|c| c.borrow().clone()) {
         return p;
@@ -144,7 +144,7 @@ pub fn transcript_store_root(store: &str) -> Option<PathBuf> {
 /// A uuid safe to use as a path component. Registry content is untrusted and
 /// lands in a path join, so anything but the transcript filename shape is
 /// refused before it can escape the projects dir.
-pub(crate) fn transcript_uuid_shaped(uuid: &str) -> bool {
+pub fn transcript_uuid_shaped(uuid: &str) -> bool {
     !uuid.is_empty() && uuid.len() <= 64 && uuid.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
 }
 

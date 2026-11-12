@@ -3,10 +3,11 @@
 //! deletes the session and stops the private serve.
 //!
 //! It runs against whichever `opencode` is on PATH and follows the contract
-//! the boot classified: 1.x launches through the `run --attach` writer, 2.x
-//! over the `/api/*` routes. Set `FNO_JOURNEY_OPENCODE_CONTRACT=2.x` (or
-//! `1.x`) to refuse a run on the other contract, which is how a 2.x run
-//! proves the 2.x lane and not a 1.x fallback.
+//! the boot classified: 1.x mints the session with the worker rules and runs
+//! each turn under the turn driver, 2.x goes over the `/api/*` routes. Set
+//! `FNO_JOURNEY_OPENCODE_CONTRACT=2.x` (or `1.x`) to refuse a run on the
+//! other contract, which is how a 2.x run proves the 2.x lane and not a 1.x
+//! fallback.
 //!
 //! Server-kill survival, review-lane selection, and viewport materialisation
 //! remain separate environment checks. They must not be inferred from a
@@ -111,6 +112,10 @@ fn opencode_bg_worker_completes_unattended_over_serve() {
     let home = AgentsHome::at(dir.path().to_path_buf());
     let cwd = dir.path().join("worktree");
     std::fs::create_dir_all(&cwd).unwrap();
+    // A granted state dir, so the journey also proves the writable-dirs grant
+    // lands on the session.
+    let state_dir = dir.path().join("state-root");
+    std::fs::create_dir_all(&state_dir).unwrap();
 
     let serve = ensure_serve(&home).expect("serve boots unattended");
     let _reaper = ServeReaper(serve.pid);
@@ -122,13 +127,17 @@ fn opencode_bg_worker_completes_unattended_over_serve() {
             "the serve on PATH speaks the other contract"
         );
     }
-    // Boot proof: the generated config carries the unattended permission posture.
-    let config = std::fs::read_to_string(home.root().join("opencode-serve-config.json")).unwrap();
+    // Boot proof: no contract boots with an fno permission config, so the
+    // user's grants bind.
+    let v1 = serve.contract.label() == "1.x";
     assert!(
-        config.contains("allow") && config.contains("*"),
-        "config: {config}"
+        !home.root().join("opencode-serve-config.json").exists(),
+        "fno writes no serve permission config"
     );
 
+    // The dispatch under test: the public entry, so the env-read dirs path is
+    // the real one.
+    std::env::set_var("FNO_WORKER_ADD_DIRS", state_dir.to_string_lossy().as_ref());
     let outcome = dispatch_opencode_serve(
         &home,
         "wk-journey",
@@ -139,6 +148,7 @@ fn opencode_bg_worker_completes_unattended_over_serve() {
         None,
         None,
     );
+    std::env::remove_var("FNO_WORKER_ADD_DIRS");
     assert_eq!(outcome.exit_code, 0, "dispatch failed: {}", outcome.stderr);
     let receipt: serde_json::Value = serde_json::from_str(outcome.stdout.trim()).unwrap();
     assert_eq!(
@@ -170,6 +180,41 @@ fn opencode_bg_worker_completes_unattended_over_serve() {
     assert!(
         assistant.id.starts_with("msg_"),
         "structured message id on the readback: {assistant:?}"
+    );
+
+    // The writable-dirs grant is ON the session: a scoped external_directory
+    // allow rule for the granted root, in each contract's rule shape.
+    let (list, name, pattern, verdict) = if v1 {
+        ("permission", "permission", "pattern", "action")
+    } else {
+        ("permissions", "action", "resource", "effect")
+    };
+    let session = fetch_session(&serve, &session_id).expect("session readback");
+    let rules = session
+        .get(list)
+        .and_then(|p| p.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let granted = rules.iter().any(|r| {
+        r.get(name).and_then(|p| p.as_str()) == Some("external_directory")
+            && r.get(verdict).and_then(|a| a.as_str()) == Some("allow")
+            && r.get(pattern)
+                .and_then(|p| p.as_str())
+                .is_some_and(|p| p.starts_with(state_dir.to_string_lossy().as_ref()))
+    });
+    assert!(
+        granted,
+        "no external_directory allow for the state root: {rules:?}"
+    );
+    // The driver's log is the diagnostics trail. Existence is the claim;
+    // a quiet run writes nothing.
+    assert!(
+        home.root()
+            .join("agents")
+            .join("logs")
+            .join("wk-journey.jsonl")
+            .exists(),
+        "driver log file missing"
     );
 
     // Steering confirms a new serve message by id. The recalled token is the

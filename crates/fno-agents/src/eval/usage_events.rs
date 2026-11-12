@@ -31,7 +31,7 @@ const MAX_COMMAND_LEN: usize = 120;
 /// The event kinds that ship. An allowlist in code, not config: widening it
 /// is a code review, which is the point. Each kind carries at least one
 /// allowlisted field (spawns, consults, refusals, merges, latency).
-const TYPES: &[&str] = &[
+pub(crate) const TYPES: &[&str] = &[
     "agent_spawned",
     "consult_call",
     "style_refusal",
@@ -125,7 +125,7 @@ pub fn resolve(cwd: &Path) -> Resolved {
 /// A string ships only when it reads as one identifier: the eval arm's
 /// charset, the length cap, and a path refusal (a leading `/` or `~`, or
 /// any `..` segment, because a relative walk is a path too).
-fn identifier_value(value: &str) -> Option<&str> {
+pub(crate) fn identifier_value(value: &str) -> Option<&str> {
     if value.is_empty() || value.len() > MAX_VALUE_LEN {
         return None;
     }
@@ -165,7 +165,7 @@ fn command_value(value: &str) -> Option<&str> {
 /// prefix, whatever shape it arrived in (a bare 32-hex id, the store's
 /// `evt:`-prefixed sha fallback, or an emitter-supplied id), so a
 /// redelivered batch still dedups to one event per row.
-fn event_uuid(event_id: &str) -> String {
+pub(crate) fn event_uuid(event_id: &str) -> String {
     let digest = Sha256::digest(event_id.as_bytes());
     let h: String = digest.iter().map(|b| format!("{b:02x}")).collect();
     format!(

@@ -4,7 +4,7 @@ use clap::Parser;
 
 /// Attach to a running fno mux session in a native window.
 #[derive(Parser)]
-#[command(name = "fno-desktop", version)]
+#[command(name = "fno-app", version)]
 struct Args {
     /// The mux session to attach to (default: FNO_SERVER, then `default`).
     #[arg(long)]
@@ -20,8 +20,8 @@ struct Args {
     #[arg(long)]
     probe: bool,
     /// The view the window opens on.
-    #[arg(long, value_enum, default_value_t = fno::desktop::MainView::Chat)]
-    mode: fno::desktop::MainView,
+    #[arg(long, value_enum, default_value_t = fno_app::MainView::Chat)]
+    mode: fno_app::MainView,
     /// Show this claude session's chat (a session id, or `newest`) instead
     /// of the focused agent's. With --probe, print
     /// `chat_events=<n> session=<id>` and exit.
@@ -31,7 +31,7 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    std::process::exit(fno::desktop::run(fno::desktop::Options {
+    std::process::exit(fno_app::run(fno_app::Options {
         session: args.session,
         font: args.font,
         font_size: args.font_size,

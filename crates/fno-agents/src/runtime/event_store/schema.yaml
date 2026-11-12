@@ -8635,6 +8635,16 @@ event_types:
     sources: [daemon, agents]
     data:
       required: []
+  - name: thread_permission_answered
+    description: "fno answered a thread worker's permission ask through the fnod ladder (allow, model_note or hold_for_user)."
+    sources: [agents]
+    data:
+      required: []
+  - name: thread_permission_reply_failed
+    description: "A thread permission reply did not land on the harness; the ask stays pending."
+    sources: [agents]
+    data:
+      required: []
   - name: agent_ask_failed
     description: "An fno-agents ask RPC failed before a reply."
     sources: [daemon, agents]

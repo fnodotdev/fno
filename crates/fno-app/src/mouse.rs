@@ -3,7 +3,7 @@
 //! borders sit in the gap), so area cell (0, 0) starts at (cw/2, ch/2) of the
 //! terminal area.
 
-use crate::tree::Rect;
+use fno::tree::Rect;
 
 /// A pane and a pane-local, 0-based cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

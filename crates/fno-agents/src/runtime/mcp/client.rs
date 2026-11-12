@@ -220,7 +220,7 @@ fn state_log_path() -> PathBuf {
 /// the WORKER, never `current_exe`: when the client answers inside the
 /// daemon, `current_exe` is `fno-agents-daemon`, which has no `--mcp-exec`
 /// door, and the lazy-start would deterministically time out.
-fn worker_executable() -> Option<PathBuf> {
+pub(crate) fn worker_executable() -> Option<PathBuf> {
     if let Ok(v) = std::env::var("FNO_AGENTS_WORKER") {
         let p = PathBuf::from(v);
         if p.is_file() {

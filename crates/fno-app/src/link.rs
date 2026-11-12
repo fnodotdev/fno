@@ -10,11 +10,11 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
-use crate::proto::{
+use fno::proto::{
     self, AgentRow, ClientMsg, Frame, ProtoError, ServerMsg, SquadMeta, BUILD_VERSION,
     PROTO_VERSION,
 };
-use crate::tree::Rect;
+use fno::tree::Rect;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -155,7 +155,7 @@ impl Link {
         })?;
         let (tx, rx) = unbounded_channel();
         std::thread::Builder::new()
-            .name("fno-desktop-reader".into())
+            .name("fno-app-reader".into())
             .spawn(move || read_loop(reader, tx))
             .map_err(|source| LinkError::Io {
                 what: "reader thread start",
@@ -202,7 +202,7 @@ pub fn probe(session: &str, budget: Duration) -> (i32, Option<Layout>) {
     let mut stream = match attach(session, 0, 0) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("fno-desktop: {e}");
+            eprintln!("fno-app: {e}");
             return (1, None);
         }
     };
@@ -243,7 +243,7 @@ pub fn probe(session: &str, budget: Duration) -> (i32, Option<Layout>) {
     let _ = proto::write_msg_sync(&mut stream, &ClientMsg::Detach);
     let Some(layout) = layout else {
         eprintln!(
-            "fno-desktop: no layout from session {session}: {}",
+            "fno-app: no layout from session {session}: {}",
             failure.unwrap_or_default()
         );
         return (1, None);
@@ -259,7 +259,7 @@ pub fn probe(session: &str, budget: Duration) -> (i32, Option<Layout>) {
     );
     let code = match failure {
         Some(why) => {
-            eprintln!("fno-desktop: {why}");
+            eprintln!("fno-app: {why}");
             1
         }
         None => 0,

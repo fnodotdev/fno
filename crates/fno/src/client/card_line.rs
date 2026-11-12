@@ -41,7 +41,7 @@ pub(super) fn identity_spans(a: &AgentRow, text_w: usize) -> IdentitySpans {
 /// those of the row's other bindings; else ` +N open` when another binding
 /// stays open. Empty when there is nothing else. Wire order is the fold's
 /// strongest-first order, the wire carrying no ts.
-pub(crate) fn binding_suffix(a: &AgentRow) -> String {
+pub fn binding_suffix(a: &AgentRow) -> String {
     let is_current = |b: &&SessionBinding| Some(b.node.as_str()) == a.node.as_deref();
     let older_own = a
         .bindings
