@@ -141,9 +141,35 @@ fn fence_for(body: &str) -> String {
     "`".repeat(longest)
 }
 
-fn render(input: &Value, registry_path: &Path) -> Result<String, String> {
+/// Why the envelope refused to build a live turn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderRefused(String);
+
+impl std::fmt::Display for RenderRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<String> for RenderRefused {
+    fn from(why: String) -> Self {
+        RenderRefused(why)
+    }
+}
+
+impl From<&str> for RenderRefused {
+    fn from(why: &str) -> Self {
+        RenderRefused(why.to_string())
+    }
+}
+
+fn mode_and_body(input: &Value) -> (&str, Option<&str>) {
     let mode = input.get("mode").and_then(Value::as_str).unwrap_or("wrap");
-    let wrapping = input.get("body").and_then(Value::as_str);
+    (mode, input.get("body").and_then(Value::as_str))
+}
+
+fn render(input: &Value, registry_path: &Path) -> Result<String, String> {
+    let (mode, wrapping) = mode_and_body(input);
     if !matches!(mode, "wrap" | "tag" | "header" | "held-release") {
         return Err(format!("mail envelope: unknown render mode {mode:?}"));
     }
@@ -160,18 +186,21 @@ fn render(input: &Value, registry_path: &Path) -> Result<String, String> {
         }
         return Ok(body.to_string());
     }
-    render_turn(input, registry_path).map(|turn| turn.as_str().to_string())
+    render_turn(input, mode, wrapping, registry_path)
+        .map(|turn| turn.as_str().to_string())
+        .map_err(|why| why.0)
 }
 
 /// The live turn for every mode but held-release: a checked header, then the
 /// body. A held-release fold is not one message, so it never builds a turn.
-fn render_turn(input: &Value, registry_path: &Path) -> Result<TurnText, String> {
-    let mode = input.get("mode").and_then(Value::as_str).unwrap_or("wrap");
-    let wrapping = input.get("body").and_then(Value::as_str);
+fn render_turn(
+    input: &Value,
+    mode: &str,
+    wrapping: Option<&str>,
+    registry_path: &Path,
+) -> Result<TurnText, RenderRefused> {
     if !matches!(mode, "wrap" | "tag" | "header") {
-        return Err(format!(
-            "mail envelope: render mode {mode:?} builds no live turn"
-        ));
+        return Err(format!("mail envelope: render mode {mode:?} builds no live turn").into());
     }
     if let Some(body) = wrapping {
         if crate::mail_inject::contains_fno_mail_tag_anywhere(body) {
@@ -188,9 +217,7 @@ fn render_turn(input: &Value, registry_path: &Path) -> Result<TurnText, String> 
     let annotated = wrapping.map(crate::numbers::annotate);
     let wrapping = annotated.as_deref();
     if (mode != "tag") != wrapping.is_some() {
-        return Err(format!(
-            "mail envelope: render mode {mode:?} has the wrong body shape"
-        ));
+        return Err(format!("mail envelope: render mode {mode:?} has the wrong body shape").into());
     }
     let from_input = attr(input, "from").unwrap_or("");
     let harness_hint = attr(input, "harness");
@@ -272,7 +299,8 @@ fn render_turn(input: &Value, registry_path: &Path) -> Result<TurnText, String> 
         if !["operator", "peer", "scheduler", "recovery"].contains(&origin) {
             return Err(format!(
                 "mail envelope origin {origin:?} is not one of (\"operator\", \"peer\", \"scheduler\", \"recovery\")"
-            ));
+            )
+            .into());
         }
     }
     let attrs = [
@@ -324,7 +352,7 @@ fn render_turn(input: &Value, registry_path: &Path) -> Result<TurnText, String> 
             if s.contains('`') || s.contains(" · ") || s.contains('\n') {
                 return Err(
                     "mail envelope: subject must not hold a backtick, a separator or a newline"
-                        .to_string(),
+                        .into(),
                 );
             }
         }
@@ -368,8 +396,9 @@ pub fn render_at(input: &Value, registry_path: &Path) -> Result<String, String> 
 
 /// The live turn a lane types. A render refusal is an error, never the bare
 /// body: a lane that cannot get a turn delivers nothing live.
-pub fn render_turn_at(input: &Value, registry_path: &Path) -> Result<TurnText, String> {
-    render_turn(input, registry_path)
+pub fn render_turn_at(input: &Value, registry_path: &Path) -> Result<TurnText, RenderRefused> {
+    let (mode, wrapping) = mode_and_body(input);
+    render_turn(input, mode, wrapping, registry_path)
 }
 
 pub fn run(args: &[String]) -> i32 {
