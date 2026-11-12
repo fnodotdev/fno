@@ -108,12 +108,37 @@ fn serve_health(base_url: &str, token: &str) -> Option<ServeHealth> {
 /// The connect/read bound for the health probe.
 const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 
-/// RFC 4648 standard base64 through the crate: the same one-line encode
-/// opencode_serve.rs runs for its serve, so the workspace carries one
-/// base64 implementation instead of two hand-rolled copies.
+/// RFC 4648 standard base64, hand-rolled: one dependency for one encode of
+/// a 41-byte credential is not a trade this file makes. The runtime's copy
+/// (opencode_serve.rs) uses the crate; the mux mirrors the AUTH SHAPE, not
+/// the implementation.
 fn basic_auth(user: &str, password: &str) -> String {
-    use base64::Engine as _;
-    base64::engine::general_purpose::STANDARD.encode(format!("{user}:{password}"))
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let input = format!("{user}:{password}");
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let mut b = [0u8; 3];
+        for (slot, byte) in b.iter_mut().zip(chunk) {
+            *slot = *byte;
+        }
+        let [b0, b1, b2] = b;
+        let n = u32::from_be_bytes([0, b0, b1, b2]);
+        for shift in [18, 12, 6, 0] {
+            out.extend(
+                TABLE
+                    .get((n >> shift) as usize & 63)
+                    .map(|&c| char::from(c)),
+            );
+        }
+    }
+    let pad = (3 - bytes.len() % 3) % 3;
+    let len = out.len() - pad;
+    out.truncate(len);
+    for _ in 0..pad {
+        out.push('=');
+    }
+    out
 }
 
 /// The TUI binary's self-reported major version, measured with one bounded
@@ -154,9 +179,10 @@ fn tui_version(bin: &str) -> Option<String> {
 
 /// Parse a `major.minor.patch` (or `v`-prefixed) version line to its major.
 fn parse_major(version: &str) -> Option<u32> {
+    let version = version.trim();
     version
-        .trim()
-        .strip_prefix('v')?
+        .strip_prefix('v')
+        .unwrap_or(version)
         .split('.')
         .next()?
         .parse()
@@ -299,13 +325,13 @@ pub(crate) fn serve_seat(row: &RegistryAgent) -> ServeSeat {
     let env = vec![(form.password_env.clone(), state.token.clone())];
     #[cfg(test)]
     {
-        capture_serve_env(&env);
-        capture_serve_argv(&argv);
         if let Some(bin) = BIN_OVERRIDE.with(|p| p.borrow().clone()) {
             if let Some(first) = argv.first_mut() {
                 *first = bin;
             }
         }
+        capture_serve_env(&env);
+        capture_serve_argv(&argv);
     }
     ServeSeat::Attach { argv, env }
 }

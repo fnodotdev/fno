@@ -678,11 +678,16 @@ fn run_home(args: &[String]) -> i32 {
     }
 
     let auto_mode_settings = crate::cli_hooks::user_claude_settings_path();
+    let must_enable = crate::must_enable::doctor_report();
     let mut rep = Report::build(source.as_deref());
     if let Value::Object(report) = &mut rep.value {
         report.insert(
             "auto_mode_rules".into(),
             report::auto_mode_rules(&auto_mode_settings),
+        );
+        report.insert(
+            "must_enable_rules".into(),
+            serde_json::to_value(&must_enable).unwrap_or(Value::Null),
         );
     }
     let blockers = Blockers::of(&rep.value);
@@ -728,6 +733,9 @@ fn run_home(args: &[String]) -> i32 {
                 auto_mode_settings.display()
             )),
             _ => {}
+        }
+        for line in crate::must_enable::doctor_lines(&must_enable) {
+            echo_stdout(&line);
         }
         if !fix {
             if let Some(line) = report::preamble_budget_line(src.as_ref().and_then(|p| p.to_str()))

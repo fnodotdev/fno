@@ -2105,7 +2105,6 @@ name = "fno"
 version = "0.4.5"
 dependencies = [
  "axum",
- "base64 0.22.1",
  "blake3",
  "chrono",
  "clap",
