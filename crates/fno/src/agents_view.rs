@@ -247,11 +247,12 @@ pub enum Liveness {
 /// (crates/fno-agents/src/runtime/session_truth.rs), which owns `--follow`'s
 /// tailable-source question. A static mirror of that seam, because this crate
 /// does not link fno-agents; `thread_reach_mirrors_the_peek_reader_seam`
-/// pins it against the source so the two cannot drift. opencode follows its
-/// 2.x serve's `/api/event` stream (its store has no tailable file, so the
-/// arm is the SSE one and a pre-2.x serve still answers tail-only at
-/// runtime).
-const PEEK_READER_HARNESSES: [&str; 3] = ["claude", "codex", "opencode"];
+/// pins it against the source so the two cannot drift. opencode is DELIBERATELY
+/// absent: its seat tier stays Locate so the portal's serve-attach capability
+/// drives compatible serves to Drive, and `peek --follow` still reaches its
+/// 2.x serve's `/api/event` stream at runtime through the dispatch in
+/// `peek_one`, which never reads this tier.
+const PEEK_READER_HARNESSES: [&str; 2] = ["claude", "codex"];
 
 /// The argv that opens pi's OWN interface on `session_id`.
 ///
@@ -3260,9 +3261,9 @@ mod tests {
             );
         }
         assert_eq!(reach("agy-row"), Reach::Locate);
-        // opencode follows its 2.x serve's /api/event stream (PEEK_READER_
-        // HARNESSES doc); no attach form resolves, so the tier is Follow.
-        assert_eq!(reach("oc-row"), Reach::Follow);
+        // opencode stays Locate: the seat's serve-attach capability drives
+        // from the Locate tier (PEEK_READER_HARNESSES doc).
+        assert_eq!(reach("oc-row"), Reach::Locate);
         assert_eq!(reach("gm-row"), Reach::Locate);
     }
     /// AC14-HP, AC16-EDGE: the viewport renders codex's
@@ -4364,9 +4365,11 @@ config_dir = "~/.claude-alt"
         // its transcript still reads, so Follow, never Locate.
         assert_eq!(thread_reach(Some("claude"), None), Reach::Follow);
         assert_eq!(thread_reach(Some("codex"), None), Reach::Follow);
-        // opencode follows its 2.x serve's /api/event stream (PEEK_READER_
-        // HARNESSES doc); a pre-2.x serve still answers tail-only at runtime.
-        assert_eq!(thread_reach(Some("opencode"), None), Reach::Follow);
+        // opencode stays Locate on purpose: the portal's serve-attach
+        // capability drives compatible serves to Drive from the Locate tier
+        // (PEEK_READER_HARNESSES doc), and peek --follow reaches the 2.x
+        // serve's stream at runtime without this tier.
+        assert_eq!(thread_reach(Some("opencode"), None), Reach::Locate);
         assert_eq!(thread_reach(Some("gemini"), None), Reach::Locate);
         assert_eq!(thread_reach(Some("agy"), None), Reach::Locate);
         // A harness the contract has never heard of, and a row with no
