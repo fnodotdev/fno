@@ -1,6 +1,8 @@
 [package]
 name = "fno-app"
-# Matches crates/fno for now; the app's own version line belongs to its release node.
+# Versions in lockstep with fno: sync-version.sh stamps it on every release.
+# Wire compatibility is checked at attach from the server .ver sidecar,
+# never from this version.
 version = "0.4.5"
 edition = "2021"
 rust-version = "1.92"

@@ -2044,7 +2044,8 @@ fn git_policy_refusal_rows() {
         other => panic!("expected a pre-wire refusal, got {other:?}"),
     }
 
-    use super::agent_launcher::{version_at_least, LAUNCH_EXTRA_AXES_PROTO, LAUNCH_WORKTREE_PROTO};
+    use super::agent_launcher::{LAUNCH_EXTRA_AXES_PROTO, LAUNCH_WORKTREE_PROTO};
+    use crate::mux_rows::version_at_least;
     assert!(!version_at_least(None, LAUNCH_EXTRA_AXES_PROTO));
     assert!(!version_at_least(Some(90), LAUNCH_EXTRA_AXES_PROTO));
     assert!(version_at_least(Some(91), LAUNCH_EXTRA_AXES_PROTO));

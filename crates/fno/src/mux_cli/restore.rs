@@ -72,7 +72,7 @@ pub(super) fn workspace_restore(args: &[OsString], env_session: Option<&str>) ->
             return EXIT_ERROR;
         }
     };
-    if member_session.is_some() && read_wire_version(&sock).is_none_or(|version| version < 109) {
+    if member_session.is_some() && !crate::mux_rows::wire_at_least(&session, 109) {
         eprintln!("fno mux workspace restore: exact-session restore needs server protocol 109 or newer; no restore sent");
         return EXIT_ERROR;
     }

@@ -40,8 +40,35 @@ pub struct Options {
     pub chat: Option<String>,
 }
 
+/// `path` with the directories fno installs into appended when missing. A
+/// Finder launch hands the app `/usr/bin:/bin:/usr/sbin:/sbin`, which holds
+/// neither `fno` nor `fno-agents`, so the fleet and question reads fail.
+fn widened_path(path: &str, home: &str) -> String {
+    let wanted = [
+        format!("{home}/.local/bin"),
+        format!("{home}/.fno/install/bin"),
+        "/opt/homebrew/bin".to_string(),
+        "/usr/local/bin".to_string(),
+    ];
+    let mut dirs: Vec<String> = path
+        .split(':')
+        .filter(|d| !d.is_empty())
+        .map(str::to_string)
+        .collect();
+    for dir in wanted {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    dirs.join(":")
+}
+
 /// Run the app (or the headless probe) and return the process exit code.
 pub fn run(opts: Options) -> i32 {
+    if let Some(home) = std::env::var_os("HOME").and_then(|h| h.into_string().ok()) {
+        let path = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", widened_path(&path, &home));
+    }
     let session = resolve_session(opts.session.as_deref(), env_server().as_deref());
     let pinned = match opts.chat.as_deref().map(chat::claude_key) {
         Some(None) => {
@@ -89,4 +116,19 @@ fn probe(session: &str) -> i32 {
         eprintln!("fno-app: {e}");
     }
     code
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::widened_path;
+
+    #[test]
+    fn widened_path_adds_the_install_dirs_once() {
+        let path = widened_path("/usr/bin:/bin", "/Users/u");
+        assert_eq!(
+            path,
+            "/usr/bin:/bin:/Users/u/.local/bin:/Users/u/.fno/install/bin:/opt/homebrew/bin:/usr/local/bin"
+        );
+        assert_eq!(widened_path(&path, "/Users/u"), path);
+    }
 }

@@ -192,7 +192,7 @@ On macOS, `fno update` signs each binary it places with the Developer ID identit
 | `APPLE_NOTARY_KEY_ID` | The key ID of that API key |
 | `APPLE_NOTARY_ISSUER_ID` | The issuer ID of the App Store Connect team |
 
-Set all five. If one is missing, CI skips both steps. A bare binary cannot carry a stapled notarization ticket, so Gatekeeper checks the notarization online.
+The same five secrets sign and notarize `fno-app.app` in the desktop app release job. Set all five. If one is missing, CI skips both steps. A bare binary cannot carry a stapled notarization ticket, so Gatekeeper checks the notarization online.
 
 ## Keeping fno up to date
 
