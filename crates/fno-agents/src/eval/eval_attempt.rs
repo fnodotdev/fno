@@ -615,6 +615,15 @@ fn observe_opencode(dbs: &[PathBuf], workdir: &str, started: f64, now: f64) -> O
 /// The 2.x observe: the session row carries its own token rollups and the
 /// selected model, so one row answers what the 1.x walk recomputed from
 /// every assistant message.
+/// The 2.x session row's selected model, typed at the boundary.
+#[derive(serde::Deserialize)]
+struct V2ModelRef {
+    #[serde(default)]
+    id: String,
+    #[serde(rename = "providerID", default)]
+    provider_id: String,
+}
+
 fn observe_opencode_v2(
     conn: &rusqlite::Connection,
     session_id: &str,
@@ -637,12 +646,10 @@ fn observe_opencode_v2(
     // fold the 1.x walk applies.
     let output = (to + tr).max(0) as u64;
     let model = model_raw.and_then(|raw| {
-        serde_json::from_str::<Value>(&raw).ok().and_then(|m| {
-            m.get("providerID")
-                .and_then(Value::as_str)
-                .zip(m.get("id").and_then(Value::as_str))
-                .map(|(p, i)| format!("{p}/{i}"))
-        })
+        serde_json::from_str::<V2ModelRef>(&raw)
+            .ok()
+            .filter(|m| !m.id.is_empty() && !m.provider_id.is_empty())
+            .map(|m| format!("{}/{}", m.provider_id, m.id))
     });
     Some((
         model,

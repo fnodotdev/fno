@@ -514,26 +514,51 @@ fn parse_codex_record(v: &Value) -> Option<TruthRecord> {
     })
 }
 
-/// One 2.x SSE event envelope to a record, statelessly: the self-describing
-/// subset the follow loop needs. `session.tool.called` carries no name; the
-/// marker comes from `session.tool.input.ended`, the only event that does.
+/// The 2.x SSE envelope and payload, typed once at the parse boundary.
+#[derive(serde::Deserialize)]
+struct OpendeSseEnvelope {
+    #[serde(rename = "type")]
+    etype: String,
+    data: OpendeSseData,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct OpendeSseData {
+    #[serde(rename = "sessionID", default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// The session an SSE event belongs to, typed the same way.
+pub(crate) fn opencode_event_session(v: &Value) -> Option<String> {
+    let Ok(envelope) = serde_json::from_value::<OpendeSseEnvelope>(v.clone()) else {
+        return None;
+    };
+    envelope.data.session_id
+}
+
 pub(crate) fn parse_opencode_event(v: &Value) -> Option<TruthRecord> {
-    let etype = v.get("type").and_then(Value::as_str)?;
-    let data = v.get("data")?;
-    match etype {
+    let Ok(envelope) = serde_json::from_value::<OpendeSseEnvelope>(v.clone()) else {
+        return None;
+    };
+    let data = envelope.data;
+    match envelope.etype.as_str() {
         "session.text.ended" => {
-            let text = data.get("text").and_then(Value::as_str)?;
+            let text = data.text.as_deref()?.trim();
             if text.is_empty() {
                 return None;
             }
             Some(TruthRecord {
                 role: "assistant".into(),
-                text: text.trim().to_string(),
+                text: text.to_string(),
                 timestamp: None,
             })
         }
         "session.tool.input.ended" => {
-            let name = data.get("name").and_then(Value::as_str).unwrap_or("?");
+            let name = data.name.as_deref().unwrap_or("?");
             Some(TruthRecord {
                 role: "assistant".into(),
                 text: format!("[tool_use: {name}]"),
@@ -541,7 +566,7 @@ pub(crate) fn parse_opencode_event(v: &Value) -> Option<TruthRecord> {
             })
         }
         "session.synthetic" => {
-            let text = data.get("text").and_then(Value::as_str)?;
+            let text = data.text.as_deref()?;
             Some(TruthRecord {
                 role: "user".into(),
                 text: text.trim().to_string(),
@@ -741,30 +766,46 @@ fn opencode_records_db_v2(
     records.reverse();
     records
 }
+/// The 2.x part shapes the records view renders, typed at the boundary.
+#[derive(serde::Deserialize)]
+struct V2UserishText {
+    #[serde(default)]
+    text: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum V2AssistantPart {
+    Text {
+        #[serde(default)]
+        text: String,
+    },
+    Tool {
+        #[serde(default)]
+        name: String,
+    },
+    #[serde(other)]
+    Other,
+}
 
 /// The 2.x part-rendering policy: a user or synthetic message speaks its
 /// own `text`; an assistant message joins its text parts and renders each
 /// tool part as a compact marker (the `name` field, not 1.x's `tool`).
 fn join_v2_parts(mtype: &str, mdata: &str, parts: &[Value]) -> String {
     match mtype {
-        "user" | "synthetic" => serde_json::from_str::<Value>(mdata)
-            .ok()
-            .and_then(|m| m.get("text").and_then(Value::as_str).map(str::to_string))
+        "user" | "synthetic" => serde_json::from_str::<V2UserishText>(mdata)
+            .map(|t| t.text)
             .unwrap_or_default(),
         "assistant" => {
             let mut out: Vec<String> = Vec::new();
             for p in parts {
-                match p.get("type").and_then(Value::as_str) {
-                    Some("text") => {
-                        if let Some(t) = p.get("text").and_then(Value::as_str) {
-                            out.push(t.to_string());
-                        }
-                    }
-                    Some("tool") => {
-                        let name = p.get("name").and_then(Value::as_str).unwrap_or("?");
-                        out.push(format!("[tool_use: {name}]"));
-                    }
-                    _ => {}
+                let Ok(part) = serde_json::from_value::<V2AssistantPart>(p.clone()) else {
+                    continue;
+                };
+                match part {
+                    V2AssistantPart::Text { text } => out.push(text),
+                    V2AssistantPart::Tool { name } => out.push(format!("[tool_use: {name}]")),
+                    V2AssistantPart::Other => {}
                 }
             }
             out.join(" ")

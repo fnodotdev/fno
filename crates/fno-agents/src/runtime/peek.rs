@@ -745,9 +745,7 @@ fn follow_opencode_sse(
                 let payload = frame.trim();
                 if let Some(data) = payload.strip_prefix("data:") {
                     if let Ok(v) = serde_json::from_str::<Value>(data.trim()) {
-                        if v.get("data")
-                            .and_then(|d| d.get("sessionID"))
-                            .and_then(Value::as_str)
+                        if crate::session_truth::opencode_event_session(&v).as_deref()
                             == Some(session_id)
                         {
                             if let Some(rec) = parse_opencode_event(&v) {
