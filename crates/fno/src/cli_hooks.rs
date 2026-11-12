@@ -91,7 +91,7 @@ fn expand_tilde(p: &Path) -> PathBuf {
     }
 }
 
-fn env_path(key: &str) -> Option<PathBuf> {
+pub(crate) fn env_path(key: &str) -> Option<PathBuf> {
     std::env::var_os(key)
         .filter(|v| !v.is_empty())
         .map(|v| expand_tilde(Path::new(&v)))
@@ -195,7 +195,7 @@ fn backup(path: &Path) -> std::io::Result<Option<PathBuf>> {
 
 /// Temp file plus rename, keeping the old file's mode: a fresh temp file is
 /// 0600, which would tighten a 0644 user config.
-fn atomic_write(path: &Path, text: &str) -> std::io::Result<()> {
+pub(crate) fn atomic_write(path: &Path, text: &str) -> std::io::Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir)?;
     let mode = std::fs::metadata(path).ok().map(|m| m.permissions());
@@ -209,7 +209,7 @@ fn atomic_write(path: &Path, text: &str) -> std::io::Result<()> {
 }
 
 /// Back up, then write `data` as indented JSON.
-fn write_json(path: &Path, data: &Value) -> std::io::Result<Option<PathBuf>> {
+pub(crate) fn write_json(path: &Path, data: &Value) -> std::io::Result<Option<PathBuf>> {
     let bak = backup(path)?;
     let text = serde_json::to_string_pretty(data).map_err(std::io::Error::other)?;
     atomic_write(path, &(text + "\n"))?;
@@ -231,7 +231,7 @@ fn kind(v: &Value) -> &'static str {
 /// The settings object to merge into, or the reason not to. An absent file
 /// merges into an empty object. A file that exists but is not a readable
 /// JSON object must never be overwritten as if it were empty.
-fn load_settings(path: &Path) -> Result<Map<String, Value>, String> {
+pub(crate) fn load_settings(path: &Path) -> Result<Map<String, Value>, String> {
     if !path.exists() {
         return Ok(Map::new());
     }
@@ -959,7 +959,7 @@ pub fn parse_opts(tail: &[OsString], codex_only: bool) -> Result<Option<Opts>, S
     Ok(Some(o))
 }
 
-fn home() -> PathBuf {
+pub(crate) fn home() -> PathBuf {
     env_path("HOME").unwrap_or_else(|| PathBuf::from("."))
 }
 

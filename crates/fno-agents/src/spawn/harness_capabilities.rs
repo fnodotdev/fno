@@ -45,14 +45,18 @@ pub fn session_state_names_no_blocked_producer(harness: &str) -> bool {
     set.contains(harness)
 }
 
-const SESSION_LANES: [&str; 6] = [
+const SESSION_LANES: [&str; 5] = [
     "interactive_create",
     "interactive_resume",
     "interactive_attach",
-    "interactive_serve_attach",
     "headless_create",
     "headless_resume",
 ];
+/// The one lane a harness may carry beyond [`SESSION_LANES`]: a seat that
+/// attaches a TUI to a shared serve. Only opencode declares it, so it is not
+/// a session lane every row must carry. Its kind is `serve_attach`, which no
+/// other lane may use, and its token lists ride `tokens_v1`/`tokens_v2`.
+const SERVE_ATTACH_LANE: &str = "interactive_serve_attach";
 const RESPONSE_ACTIONS: [&str; 3] = ["allow_once", "allow_always", "deny"];
 /// The rule states a capability row may DECLARE. A readiness manifest carries
 /// more (`working`, and rules that hold the current state), but only these two
@@ -1694,6 +1698,7 @@ fn validate_row(harness: &str, caps: &HarnessCapabilities) -> Result<(), Contrac
         .forms
         .keys()
         .map(String::as_str)
+        .filter(|lane| *lane != SERVE_ATTACH_LANE)
         .collect();
     if lanes != SESSION_LANES.into_iter().collect() {
         return Err(field_error(
@@ -1703,6 +1708,27 @@ fn validate_row(harness: &str, caps: &HarnessCapabilities) -> Result<(), Contrac
         ));
     }
     for (lane, form) in &caps.resume_strategy.forms {
+        if lane == SERVE_ATTACH_LANE {
+            let generation = |tokens: &[String]| {
+                !tokens.iter().any(String::is_empty)
+                    && tokens.iter().any(|t| t == "{serve_url}")
+                    && tokens.iter().any(|t| t == "{session_id}")
+            };
+            if form.kind != "serve_attach"
+                || !form.tokens.is_empty()
+                || !generation(&form.tokens_v1)
+                || !generation(&form.tokens_v2)
+                || form.boundary_major.is_none_or(|major| major == 0)
+                || form.password_env.as_deref().is_none_or(str::is_empty)
+            {
+                return Err(field_error(
+                    harness,
+                    "resume_strategy",
+                    &format!("malformed {lane}"),
+                ));
+            }
+            continue;
+        }
         if !RESUME_KINDS.contains(&form.kind.as_str())
             || form.tokens.iter().any(String::is_empty)
             || (form.kind == "unsupported" && !form.tokens.is_empty())
@@ -2054,7 +2080,13 @@ mod tests {
                 assert_eq!(caps.permission_response.len(), 3, "{name}");
                 assert!(!caps.submit_keys.is_empty(), "{name}");
             }
-            assert_eq!(caps.resume_strategy.forms.len(), 5, "{name}");
+            let session_forms = caps
+                .resume_strategy
+                .forms
+                .keys()
+                .filter(|lane| *lane != SERVE_ATTACH_LANE)
+                .count();
+            assert_eq!(session_forms, 5, "{name}");
             assert!(!caps.model_switch_strategy.kind.is_empty(), "{name}");
             assert!(
                 LOOP_PARTICIPATION.contains(&caps.loop_participation.as_str()),
@@ -2091,6 +2123,18 @@ mod tests {
         let codex = contract.harness.get_mut("codex").unwrap();
         codex.provider_actions.get_mut("compact").unwrap().transport = "pane".into();
         assert!(validate_row("codex", codex).is_err());
+
+        // The serve-attach lane is optional and keeps its own shape: a form
+        // that cannot address the serve and the session refuses.
+        let opencode = contract.harness.get_mut("opencode").unwrap();
+        assert!(validate_row("opencode", opencode).is_ok());
+        let serve = opencode
+            .resume_strategy
+            .forms
+            .get_mut(SERVE_ATTACH_LANE)
+            .unwrap();
+        serve.tokens_v2.retain(|t| t != "{session_id}");
+        assert!(validate_row("opencode", opencode).is_err());
 
         // Hook jobs: every bundled row declares every job; a supported job's
         // via paths exist under the repo root; the gate refuses a `missing`
