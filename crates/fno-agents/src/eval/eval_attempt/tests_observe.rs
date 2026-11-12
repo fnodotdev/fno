@@ -5,6 +5,10 @@ use super::observe;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
+fn fld<'a>(v: &'a Value, k: &str) -> &'a Value {
+    v.get(k).unwrap_or(&Value::Null)
+}
+
 fn observe_payload(lane: Value, extra: Value) -> Value {
     let mut p = json!({
         "lane": lane,
@@ -309,8 +313,12 @@ fn observe_pi_reads_a_flat_store_header() {
     let lane = json!({"name": "glm", "harness": "pi", "model": "glm-5.3-flash", "effort": "high"});
     let out = observe(&observe_payload(lane, json!({})));
     assert_eq!(out["lane_status"], "ok", "out: {out}");
-    assert_eq!(out["observed_model"], "zai/glm-5.3-flash", "out: {out}");
-    assert_eq!(out["observed_session_id"], "p1");
+    assert_eq!(
+        fld(&out, "observed_model"),
+        &json!("zai/glm-5.3-flash"),
+        "out: {out}"
+    );
+    assert_eq!(fld(&out, "observed_session_id"), &json!("p1"));
     assert_eq!(out["usage"], Value::Null);
     match previous {
         Some(v) => std::env::set_var("PI_CODING_AGENT_SESSION_DIR", v),
@@ -340,11 +348,15 @@ fn observe_opencode_v2_fallback_reads_the_session_row() {
         json!({"opencode_dbs": [db.to_str().unwrap()]}),
     ));
     assert_eq!(out["lane_status"], "ok", "out: {out}");
-    assert_eq!(out["observed_model"], "zai/glm-5.3-flash", "out: {out}");
-    assert_eq!(out["observed_session_id"], "s2");
-    assert_eq!(out["usage"]["input"], 20);
-    assert_eq!(out["usage"]["output"], 12);
-    assert_eq!(out["usage_source"], "opencode-store-v2");
+    assert_eq!(
+        fld(&out, "observed_model"),
+        &json!("zai/glm-5.3-flash"),
+        "out: {out}"
+    );
+    assert_eq!(fld(&out, "observed_session_id"), &json!("s2"));
+    assert_eq!(fld(fld(&out, "usage"), "input"), &json!(20));
+    assert_eq!(fld(fld(&out, "usage"), "output"), &json!(12));
+    assert_eq!(fld(&out, "usage_source"), &json!("opencode-store-v2"));
 }
 
 #[test]

@@ -1218,10 +1218,15 @@ pub fn run_task(
             }
             row["requested_account"] = json!(l.account);
         }
-        row["harness_version"] = match &harness_version {
-            Some(v) => json!(v),
-            None => serde_json::Value::Null,
-        };
+        if let Some(fields) = row.as_object_mut() {
+            fields.insert(
+                "harness_version".to_string(),
+                match &harness_version {
+                    Some(v) => json!(v),
+                    None => serde_json::Value::Null,
+                },
+            );
+        }
         let _ = super::history::append_attempt(history_path, &row);
         results.push(RunResult {
             task_id: task.id.clone(),

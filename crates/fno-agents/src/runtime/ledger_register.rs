@@ -1081,7 +1081,7 @@ fn append_locked(tasks_path: &Path, entry: &Value) -> Result<(), String> {
                 eprintln!("Skipping duplicate started entry for target fno_id: {scalar}");
                 return Ok(());
             }
-            if is_started_row(&entries[index]) {
+            if entries.get(index).is_some_and(|e| is_started_row(e)) {
                 stale_started = true;
                 continue;
             }
@@ -1779,7 +1779,8 @@ mod tests {
         let _ = append_to_tasks_json(&ledger, &json!({"fno_id": "t1", "status": "started"}));
         let doc = read_ledger(&ledger);
         assert_eq!(doc["entries"].as_array().unwrap().len(), 1);
-        assert_eq!(doc["entries"][0]["status"], "started");
+        let first = j_field(&doc, "entries").as_array().and_then(|a| a.first());
+        assert_eq!(first.and_then(|e| j_str(e, "status")), Some("started"));
         // A re-init is idempotent: the second started row skips.
         let _ = append_to_tasks_json(&ledger, &json!({"fno_id": "t1", "status": "started"}));
         let doc = read_ledger(&ledger);
@@ -1791,7 +1792,8 @@ mod tests {
         );
         let doc = read_ledger(&ledger);
         assert_eq!(doc["entries"].as_array().unwrap().len(), 1);
-        assert_eq!(doc["entries"][0]["status"], "done");
+        let first = j_field(&doc, "entries").as_array().and_then(|a| a.first());
+        assert_eq!(first.and_then(|e| j_str(e, "status")), Some("done"));
     }
 
     #[test]
