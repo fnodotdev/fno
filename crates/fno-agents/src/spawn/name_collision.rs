@@ -278,6 +278,10 @@ mod tests {
         let home = AgentsHome::at(temp.path().join("agents"));
         let mut row = RegistryEntry::default();
         row.name = "t-pidless".into();
+        // The store requires a resolvable handle: pidless rows (the claude
+        // --cloud shape) carry a session id.
+        row.harness = Some("claude".into());
+        row.harness_session_id = Some("1e133a42-5b04-4c05-9df1-2c7ae1a4f6d0".into());
         row.cwd = "/tmp".into();
         row.created_at = "2026-11-12T00:00:00Z".into();
         seed(&home, row);
