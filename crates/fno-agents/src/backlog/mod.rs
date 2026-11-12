@@ -136,6 +136,7 @@ pub mod graph_get;
 pub mod graph_keeper;
 pub mod graph_store;
 pub mod join_marker;
+pub mod keeper_wire;
 pub mod law_filters;
 pub mod law_firings;
 pub mod law_match;

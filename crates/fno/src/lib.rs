@@ -133,6 +133,7 @@ pub mod group_help;
 pub mod inbox_user;
 #[cfg(feature = "full")]
 pub mod join_marker;
+pub mod keeper_wire;
 #[cfg(feature = "full")]
 pub mod keybindings_file;
 #[cfg(feature = "full")]
