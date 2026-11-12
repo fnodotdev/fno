@@ -457,7 +457,7 @@ pub(crate) fn ci_unmeasured_reason(runs: &Value, head: &str) -> Option<String> {
     let total = rows.len();
     let completed = rows
         .iter()
-        .filter(|r| r.get("status").and_then(Value::as_str) == Some("completed"))
+        .filter(|r| row_text(r, &["status"]) == "completed")
         .count();
     if completed > 0 {
         return None;

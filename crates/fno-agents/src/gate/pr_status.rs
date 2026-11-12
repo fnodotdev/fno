@@ -1282,7 +1282,7 @@ pub(crate) fn status_payload<P: GhProbe>(
         None
     } else {
         crate::pr_status_facts::ci_unmeasured_reason(
-            pr_json.get("workflowRuns").unwrap_or(&Value::Null),
+            pr_json.pointer("/workflowRuns").unwrap_or(&Value::Null),
             &head_sha,
         )
     };

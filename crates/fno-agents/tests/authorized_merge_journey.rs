@@ -107,6 +107,7 @@ impl Probes for FakeGitHub {
             rerun_recovered: None,
             rerun_failures: None,
             evals_gate_row: None,
+            unmeasured: None,
         }
     }
     fn fno_shell(
@@ -170,6 +171,7 @@ fn ask(effect: Effect) -> Request {
         supplied_review_hold: None,
         supplied_facts: None,
         supplied_evals_gate: None,
+        supplied_unmeasured: None,
     }
 }
 

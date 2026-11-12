@@ -127,7 +127,7 @@ pub(crate) fn parse_request(payload: &Value) -> Result<Request, String> {
         // The unmeasured reason the caller already computed: absent
         // or null = no fact, the walk probes or adds nothing.
         supplied_unmeasured: payload
-            .get("ci_unmeasured")
+            .pointer("/ci_unmeasured")
             .and_then(Value::as_str)
             .map(str::to_owned),
         // Present-but-null is a probed CLEAR, so a held answer must stay a

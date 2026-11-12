@@ -726,7 +726,7 @@ pub(super) fn read_pr_info(
                 if out.status.success() {
                     let parsed: Result<Value, _> = serde_json::from_slice(&out.stdout);
                     if let Ok(v) = parsed {
-                        if let Some(rows) = v.get("workflow_runs").and_then(Value::as_array) {
+                        if let Some(rows) = v.pointer("/workflow_runs").and_then(Value::as_array) {
                             ci_unmeasured = crate::pr_status_facts::ci_unmeasured_reason(
                                 &Value::Array(rows.clone()),
                                 &head_oid,

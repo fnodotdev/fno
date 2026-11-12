@@ -2785,7 +2785,7 @@ fn parse_checks_read(stdout: &[u8]) -> ChecksRead {
         // The unmeasured fact, from the same payload the verdict
         // came off: the walk warns on it under require_checks.
         unmeasured: v
-            .get("ci_unmeasured")
+            .pointer("/ci_unmeasured")
             .and_then(Value::as_str)
             .map(str::to_owned),
     }
