@@ -4,8 +4,10 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use crate::claude_ask::{emit_event, py_repr};
+use crate::claude_ask::emit_event;
 use crate::paths::AgentsHome;
+
+use super::name_collision::{self as spawn_collision, Resolution};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(600);
 
@@ -188,15 +190,10 @@ pub fn dispatch_grok_once(
         Ok(registry) => registry,
         Err(error) => return AskOutcome::error(format!("registry read failed: {error}"), 12),
     };
-    if registry.find(name).is_some() {
-        return AskOutcome::error(
-            format!(
-                "agent {} already exists; use 'fno agents rm {}' first or pick another name",
-                py_repr(name),
-                name
-            ),
-            2,
-        );
+    match spawn_collision::resolve(home, &registry, name) {
+        Resolution::Refuse(line) => return AskOutcome::error(line, 2),
+        Resolution::Registry(line) => return AskOutcome::error(line, 12),
+        _ => {}
     }
 
     let session_id = match crate::identity::mint_fno_id() {

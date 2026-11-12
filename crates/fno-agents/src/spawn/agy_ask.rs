@@ -38,6 +38,8 @@ use std::time::{Duration, Instant};
 use crate::claude_ask::emit_event;
 use crate::paths::AgentsHome;
 
+use super::name_collision::{self as spawn_collision, Resolution};
+
 /// Default one-shot timeout (matches the wrapper's outer-guard intent; the
 /// caller can override via the `timeout` param).
 const DEFAULT_ASK_TIMEOUT: Duration = Duration::from_secs(600);
@@ -663,7 +665,6 @@ pub fn dispatch_agy_once_with_effort(
     add_dir: Option<&str>,
     harness_args: &[String],
 ) -> AskOutcome {
-    use crate::claude_ask::py_repr;
     if let Err(msg) = crate::claude_ask::validate_spawn_inputs(name, from_name) {
         return AskOutcome::err(msg, 2);
     }
@@ -691,15 +692,10 @@ pub fn dispatch_agy_once_with_effort(
             return AskOutcome::err(format!("registry read failed: {}", e), 12);
         }
     };
-    if registry.find(name).is_some() {
-        return AskOutcome::err(
-            format!(
-                "agent {} already exists; use 'fno agents rm {}' first or pick another name",
-                py_repr(name),
-                name
-            ),
-            2,
-        );
+    match spawn_collision::resolve(home, &registry, name) {
+        Resolution::Refuse(line) => return AskOutcome::err(line, 2),
+        Resolution::Registry(line) => return AskOutcome::err(line, 12),
+        _ => {}
     }
 
     // spawn allows an empty initial message; default it to "hello" (Python parity).
