@@ -223,10 +223,11 @@ fn run_store_request(rest: &[String]) -> i32 {
         lock_timeout: graph_store::DEFAULT_LOCK_TIMEOUT,
         events: Some(crate::paths::events_path(&cwd)),
     };
-    let payload = json!({"id": 1, "method": method, "params": params}).to_string();
+    let request = crate::keeper_wire::KeeperRequest::new(1, method, params);
+    let reply = crate::store_exec::exec_request(&cfg, &request);
     println!(
         "{}",
-        crate::store_exec::exec_reply(&cfg, payload.as_bytes())
+        String::from_utf8(crate::graph_keeper::reply_bytes(&reply)).unwrap_or_default()
     );
     0
 }

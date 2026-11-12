@@ -85,7 +85,7 @@ pub(crate) use backlog::owner_ladder;
 pub use backlog::{
     active_backlog, additional_prs, announce, backlog_ready, backlog_share, check_supersession,
     day, decide_door, decision_index, decision_trace, digest, epic_issue, feed, fleet_law,
-    graph_get, graph_keeper, graph_store, join_marker, law_filters, law_firings, law_match,
+    graph_get, graph_keeper, graph_store, join_marker, keeper_wire, law_filters, law_firings, law_match,
     law_pr_shape, law_recheck, law_renew, law_restore, law_when, lead_answers, lint_registry,
     list_render, list_row, live_store_fence, needs, node_bind, node_branch, node_liveness,
     node_origin, node_reading, node_route, node_seed, outstanding, outstanding_cmds, plan_carry,

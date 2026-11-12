@@ -74,17 +74,10 @@ fn store(method: &str, params: Value) -> Result<Value, String> {
         lock_timeout: crate::graph_store::DEFAULT_LOCK_TIMEOUT,
         events: Some(crate::paths::events_path(&cwd())),
     };
-    let payload = json!({"id": 1, "method": method, "params": params}).to_string();
-    let reply = crate::store_exec::exec_reply(&cfg, payload.as_bytes());
-    if reply.get("ok").and_then(Value::as_bool) != Some(true) {
-        let err = &reply["error"];
-        return Err(err
-            .get("message")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| err.to_string()));
-    }
-    Ok(reply.get("result").cloned().unwrap_or(Value::Null))
+    let request = crate::keeper_wire::KeeperRequest::new(1, method, params);
+    crate::store_exec::exec_request(&cfg, &request)
+        .outcome
+        .map_err(|error| error.message)
 }
 
 /// The plan-docs call every writer leaf shares: warnings print, an

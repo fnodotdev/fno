@@ -52,12 +52,12 @@ use std::time::Duration;
 pub const PROTOCOL_VERSION: u32 = 1;
 
 use crate::backlog::Backend;
+use crate::keeper_wire::{ErrorKind, KeeperMethod, KeeperReply, KeeperRequest};
 
 // Frame tags. Client -> keeper then keeper -> client.
-pub(crate) const TAG_REQUEST: u8 = 1;
+pub(crate) use crate::keeper_wire::{TAG_REQUEST, TAG_RESPONSE};
 pub(crate) const TAG_SHUTDOWN: u8 = 2;
 pub(crate) const TAG_IDENTIFY: u8 = 3;
-pub(crate) const TAG_RESPONSE: u8 = 4;
 pub(crate) const TAG_IDENTIFY_REPLY: u8 = 5;
 
 /// One request/response frame exchange bound. Sized for a large operator
@@ -1065,10 +1065,11 @@ fn serve_client(
                 let Some(inflight_guard) = inflight_guard else {
                     let _ = stream.write_all(&encode(
                         TAG_RESPONSE,
-                        json!({"id": 0, "ok": false, "error": {"kind": "busy",
-                              "message": "a mutation is in flight"}})
-                        .to_string()
-                        .as_bytes(),
+                        &reply_bytes(&err_reply(
+                            0,
+                            ErrorKind::Busy,
+                            "a mutation is in flight".into(),
+                        )),
                     ));
                     let _ = stream.flush();
                     return;
@@ -1080,9 +1081,7 @@ fn serve_client(
                 let _ = &inflight_guard;
                 let _ = stream.write_all(&encode(
                     TAG_RESPONSE,
-                    json!({"id": 0, "ok": true, "result": "shutdown"})
-                        .to_string()
-                        .as_bytes(),
+                    &reply_bytes(&KeeperReply::ok(0, json!("shutdown"))),
                 ));
                 let _ = stream.flush();
                 shutdown.store(1, Ordering::SeqCst);
@@ -1102,20 +1101,21 @@ fn serve_client(
                 // The splice fast path: read and begin stream the cache's
                 // serialized bytes with no reply-tree copy. Everything else,
                 // and any splice refusal, keeps today's handle_request path.
-                if let Some(spliced) = splice_reply(&state, &payload) {
-                    if spliced.write_to(&mut stream).is_ok() {
-                        continue;
+                let reply = match parse_request(&payload) {
+                    Ok(req) => {
+                        if let Some(spliced) = splice_reply(&state, &req) {
+                            if spliced.write_to(&mut stream).is_ok() {
+                                continue;
+                            }
+                            return;
+                        }
+                        handle_parsed(&state, &req)
                     }
-                    return;
-                }
-                let reply = handle_request(&state, &payload);
-                let body = serde_json::to_vec(&reply).unwrap_or_else(|_| {
-                    json!({"id": 0, "ok": false,
-                           "error": {"kind": "internal", "message": "reply serialization failed"}})
-                    .to_string()
-                    .into_bytes()
-                });
-                if stream.write_all(&encode(TAG_RESPONSE, &body)).is_err()
+                    Err(reply) => reply,
+                };
+                if stream
+                    .write_all(&encode(TAG_RESPONSE, &reply_bytes(&reply)))
+                    .is_err()
                     || stream.flush().is_err()
                 {
                     return;
@@ -1125,34 +1125,58 @@ fn serve_client(
     }
 }
 
-pub(crate) fn err_reply(id: u64, kind: &str, message: String) -> Value {
-    json!({"id": id, "ok": false, "error": {"kind": kind, "message": message}})
+pub(crate) fn err_reply(id: u64, kind: ErrorKind, message: String) -> KeeperReply {
+    KeeperReply::err(id, kind, message)
 }
 
-fn store_err_kind(err: &StoreError) -> &'static str {
+/// The reply's wire bytes. Serializing a reply fails only on a broken
+/// result value; the fallback still answers a refusal, never silence.
+pub(crate) fn reply_bytes(reply: &KeeperReply) -> Vec<u8> {
+    serde_json::to_vec(reply).unwrap_or_else(|_| {
+        let fallback = err_reply(0, ErrorKind::Internal, "reply serialization failed".into());
+        serde_json::to_vec(&fallback).unwrap_or_default()
+    })
+}
+
+fn store_err_kind(err: &StoreError) -> ErrorKind {
     match err {
-        StoreError::Corrupt(_) => "corrupt",
-        StoreError::Unreadable(_, _) => "unreadable",
-        StoreError::MalformedRoot(_) => "malformed_root",
-        StoreError::LockTimeout(..) => "lock_timeout",
-        StoreError::Conflict => "conflict",
-        StoreError::EmptyFieldUpdate(_) => "empty_field_update",
-        StoreError::Invalid(_) => "invalid",
-        StoreError::ClaimsUnavailable(_) => "claims_unavailable",
-        StoreError::Db(_) => "sqlite",
-        StoreError::Io(_) => "io",
+        StoreError::Corrupt(_) => ErrorKind::Corrupt,
+        StoreError::Unreadable(_, _) => ErrorKind::Unreadable,
+        StoreError::MalformedRoot(_) => ErrorKind::MalformedRoot,
+        StoreError::LockTimeout(..) => ErrorKind::LockTimeout,
+        StoreError::Conflict => ErrorKind::Conflict,
+        StoreError::EmptyFieldUpdate(_) => ErrorKind::EmptyFieldUpdate,
+        StoreError::Invalid(_) => ErrorKind::Invalid,
+        StoreError::ClaimsUnavailable(_) => ErrorKind::ClaimsUnavailable,
+        StoreError::Db(_) => ErrorKind::Sqlite,
+        StoreError::Io(_) => ErrorKind::Io,
     }
 }
 
-pub(crate) fn handle_request(state: &StoreState, payload: &[u8]) -> Value {
-    let req: Value = match serde_json::from_slice(payload) {
-        Ok(v) => v,
-        Err(e) => return err_reply(0, "malformed_frame", format!("request is not JSON: {e}")),
-    };
-    let id = req.get("id").and_then(Value::as_u64).unwrap_or(0);
-    let method = req.get("method").and_then(Value::as_str).unwrap_or("");
-    let params = req.get("params").cloned().unwrap_or(Value::Null);
-    let request_id = if is_write_method(method) {
+/// The one request parse. A payload that is not a JSON object answers
+/// `malformed_frame` with id 0: there is no id to echo.
+pub(crate) fn parse_request(payload: &[u8]) -> Result<KeeperRequest, KeeperReply> {
+    serde_json::from_slice(payload).map_err(|e| {
+        err_reply(
+            0,
+            ErrorKind::MalformedFrame,
+            format!("request is not JSON: {e}"),
+        )
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn handle_request(state: &StoreState, payload: &[u8]) -> KeeperReply {
+    match parse_request(payload) {
+        Ok(req) => handle_parsed(state, &req),
+        Err(reply) => reply,
+    }
+}
+
+pub(crate) fn handle_parsed(state: &StoreState, req: &KeeperRequest) -> KeeperReply {
+    let id = req.id;
+    let params = &req.params;
+    let request_id = if req.method.is_write() {
         params
             .get("request_id")
             .and_then(Value::as_str)
@@ -1164,28 +1188,28 @@ pub(crate) fn handle_request(state: &StoreState, payload: &[u8]) -> Value {
     if let Some(request_id) = request_id.as_deref() {
         record_write_started(state, request_id);
     }
-    if method == "commit_rows" {
-        let reply = handle_commit_rows_reply(id, state, &params);
+    if req.method == KeeperMethod::CommitRows {
+        let reply = handle_commit_rows_reply(id, state, params);
         if let Some(request_id) = request_id.as_deref() {
             record_write_done(state, request_id, &reply);
         }
         return reply;
     }
-    let result = match method {
-        "read" => handle_read(state, &params),
-        "read_strict" => handle_read(state, &params),
-        "read_ids" => handle_read_ids(state, &params),
-        "plan_refs" => handle_plan_refs(state),
-        "begin" => handle_begin(state),
-        "commit" => handle_commit(state, &params),
-        "write_status" => handle_write_status(state, &params),
-        "export_status" => handle_export_status(state),
-        "keeper_scan" => crate::store_exec::handle_keeper_scan(state),
-        "op" => handle_op(state, &params),
-        "api" => handle_api(state, &params),
-        "read_archive" => handle_read_archive(state, &params),
-        "read_file" => handle_read_file(state),
-        "defaults" => handle_pure(&params, |mut entries, p| {
+    let result = match &req.method {
+        KeeperMethod::Read => handle_read(state, params),
+        KeeperMethod::ReadStrict => handle_read(state, params),
+        KeeperMethod::ReadIds => handle_read_ids(state, params),
+        KeeperMethod::PlanRefs => handle_plan_refs(state),
+        KeeperMethod::Begin => handle_begin(state),
+        KeeperMethod::Commit => handle_commit(state, params),
+        KeeperMethod::WriteStatus => handle_write_status(state, params),
+        KeeperMethod::ExportStatus => handle_export_status(state),
+        KeeperMethod::KeeperScan => crate::store_exec::handle_keeper_scan(state),
+        KeeperMethod::Op => handle_op(state, params),
+        KeeperMethod::Api => handle_api(state, params),
+        KeeperMethod::ReadArchive => handle_read_archive(state, params),
+        KeeperMethod::ReadFile => handle_read_file(state),
+        KeeperMethod::Defaults => handle_pure(params, |mut entries, p| {
             graph_store::apply_defaults(
                 &mut entries,
                 p.get("keep_malformed")
@@ -1194,7 +1218,7 @@ pub(crate) fn handle_request(state: &StoreState, payload: &[u8]) -> Value {
             );
             entries
         }),
-        "recompute" => handle_pure(&params, |mut entries, p| {
+        KeeperMethod::Recompute => handle_pure(params, |mut entries, p| {
             let plan_rungs = plan_rung_map(p);
             graph_store::recompute_statuses_with_plan_rungs(&mut entries, plan_rungs.as_ref());
             entries
@@ -1204,18 +1228,18 @@ pub(crate) fn handle_request(state: &StoreState, payload: &[u8]) -> Value {
         // With `entries` in the params the command filters that list (the
         // external-tracker backend's joined candidates); without, it reads
         // the graph this keeper owns.
-        "ready" => handle_ready(state, &params),
+        KeeperMethod::Ready => handle_ready(state, params),
         // The assembled rule set for the caller's cwd, served so a resident
         // harness decides in process and no second assembly leg exists.
-        "rules" => handle_rules(state, &params),
+        KeeperMethod::Rules => handle_rules(state, params),
         // The plan-doc writer (codec + projection + stamp), served so the
         // Python callers are clients and no second writer leg exists.
-        "plan_docs" => crate::plan_doc::keeper::handle_plan_docs(state, &params),
+        KeeperMethod::PlanDocs => crate::plan_doc::keeper::handle_plan_docs(state, params),
         // The read-time readiness overlay (statuses.compute_readiness), for
         // the client's pre-render pass: the write path's recompute does not
         // derive `blocked` -- it is a read overlay -- so a mutation that
         // newly blocks a sibling must overlay before rendering graph.md.
-        "overlay" => handle_pure(&params, |mut entries, _p| {
+        KeeperMethod::Overlay => handle_pure(params, |mut entries, _p| {
             graph_store::apply_readiness_overlay(&mut entries);
             entries
         }),
@@ -1223,60 +1247,62 @@ pub(crate) fn handle_request(state: &StoreState, payload: &[u8]) -> Value {
         // twin of the overlay chase): client-shipped rows in, rewritten rows
         // plus one receipt per settled edge out. No file I/O, no publish -
         // the caller persists under the graph lock.
-        "settle_edges" => handle_settle_edges(&params),
-        "normalize_plan_path" => {
-            let normalized = graph_store::normalize_plan_path(opt_str(&params, "path"));
+        KeeperMethod::SettleEdges => handle_settle_edges(params),
+        KeeperMethod::NormalizePlanPath => {
+            let normalized = graph_store::normalize_plan_path(opt_str(params, "path"));
             Ok(json!({ "path": normalized }))
         }
         // The canonical key order, for the ordering tests and one caller that
         // documents the on-disk shape: one source of truth (the ported
         // store's constant), never a re-typed copy.
-        "canonical_field_order" => Ok(json!({ "fields": graph_store::CANONICAL_FIELD_ORDER })),
+        KeeperMethod::CanonicalFieldOrder => {
+            Ok(json!({ "fields": graph_store::CANONICAL_FIELD_ORDER }))
+        }
         // The one delivery classifier (scoreboard.rs): graph nodes + ledger
         // rows in, a per-node delivery classification out.
-        "scoreboard_classify" => crate::scoreboard::classify(&params).map_err(StoreError::Invalid),
+        KeeperMethod::ScoreboardClassify => {
+            crate::scoreboard::classify(params).map_err(StoreError::Invalid)
+        }
         // The ported by-provider fold (scoreboard_provider.rs): client-shipped
         // entries + rows in, the view plus its rendered text out.
-        "scoreboard_by_provider" => {
-            crate::scoreboard_provider::view(&params).map_err(StoreError::Invalid)
+        KeeperMethod::ScoreboardByProvider => {
+            crate::scoreboard_provider::view(params).map_err(StoreError::Invalid)
         }
         // The plan-fidelity join (scoreboard::plan_join): the gate ships its
         // pre-filtered rows + entries, the one fold answers both readers.
-        "scoreboard_plan_fidelity" => {
-            crate::scoreboard::plan_join::plan_fidelity_op(&params).map_err(StoreError::Invalid)
+        KeeperMethod::ScoreboardPlanFidelity => {
+            crate::scoreboard::plan_join::plan_fidelity_op(params).map_err(StoreError::Invalid)
         }
         // The escalation-vs-stayed fold (scoreboard_escalation.rs): client-
         // shipped entries + rows + delegated events in, view + text out.
-        "scoreboard_escalation" => {
-            crate::scoreboard_escalation::view(&params).map_err(StoreError::Invalid)
+        KeeperMethod::ScoreboardEscalation => {
+            crate::scoreboard_escalation::view(params).map_err(StoreError::Invalid)
         }
         // The lifecycle command decision (backlog_ready::serve_effective_command):
         // one answer per shipped row; a refusal rides its own row. The old
         // method name stays served so a client of an older build still reads.
-        "effective_command" | "effective_verb" => {
-            crate::backlog_ready::serve_effective_command(&params).map_err(StoreError::Invalid)
+        KeeperMethod::EffectiveCommand | KeeperMethod::EffectiveVerb => {
+            crate::backlog_ready::serve_effective_command(params).map_err(StoreError::Invalid)
         }
         // One named op applied over client-shipped rows, no file I/O and no
         // publish: `set_related`, `plan_path_owner_conflict`, and friends
         // run INSIDE a client mutator on an in-hand snapshot, where a full
         // locked cycle would be a write the caller never asked for.
-        "pure_op" => handle_pure_op(&params),
-        other => Err(StoreError::Invalid(format!(
-            "unknown store method {other:?}"
+        KeeperMethod::PureOp => handle_pure_op(params),
+        // CommitRows returned above; only an unserved word reaches here.
+        KeeperMethod::CommitRows | KeeperMethod::Other(_) => Err(StoreError::Invalid(format!(
+            "unknown store method {:?}",
+            req.method.as_str()
         ))),
     };
     let reply = match result {
-        Ok(v) => json!({"id": id, "ok": true, "result": v}),
+        Ok(v) => KeeperReply::ok(id, v),
         Err(e) => err_reply(id, store_err_kind(&e), e.to_string()),
     };
     if let Some(request_id) = request_id.as_deref() {
         record_write_done(state, request_id, &reply);
     }
     reply
-}
-
-pub(crate) fn is_write_method(method: &str) -> bool {
-    matches!(method, "commit" | "commit_rows" | "op" | "api")
 }
 
 pub(crate) fn api_is_read_op(op: &str) -> bool {
@@ -1311,11 +1337,15 @@ fn record_write_started(state: &StoreState, request_id: &str) {
     }
 }
 
-fn elide_write_entries(reply: &Value) -> Value {
+fn elide_write_entries(reply: &KeeperReply) -> Value {
     let mut reply = reply.clone();
-    let Some(result) = reply.get_mut("result").and_then(Value::as_object_mut) else {
-        return reply;
-    };
+    if let Ok(Value::Object(result)) = &mut reply.outcome {
+        elide_entries(result);
+    }
+    serde_json::to_value(&reply).unwrap_or(Value::Null)
+}
+
+fn elide_entries(result: &mut Map<String, Value>) {
     if result.get("entries").map(Value::is_array).unwrap_or(false) {
         result.insert("entries".to_owned(), Value::Null);
         result.insert("entries_elided".to_owned(), Value::Bool(true));
@@ -1326,10 +1356,9 @@ fn elide_write_entries(reply: &Value) -> Value {
             outcome.insert("entries_elided".to_owned(), Value::Bool(true));
         }
     }
-    reply
 }
 
-fn record_write_done(state: &StoreState, request_id: &str, reply: &Value) {
+fn record_write_done(state: &StoreState, request_id: &str, reply: &KeeperReply) {
     let now = std::time::Instant::now();
     let mut ledger = state
         .write_ledger
@@ -1864,12 +1893,12 @@ impl From<StoreError> for CommitRowsError {
     }
 }
 
-fn handle_commit_rows_reply(id: u64, state: &StoreState, params: &Value) -> Value {
+fn handle_commit_rows_reply(id: u64, state: &StoreState, params: &Value) -> KeeperReply {
     match handle_commit_rows(state, params) {
-        Ok(result) => json!({"id": id, "ok": true, "result": result}),
+        Ok(result) => KeeperReply::ok(id, result),
         Err(CommitRowsError::Conflict(ids)) => err_reply(
             id,
-            "conflict",
+            ErrorKind::Conflict,
             format!(
                 "graph conflict on {}; nothing was written - confirm with `fno backlog get <id>`, then retry",
                 ids.join(", ")
@@ -3776,14 +3805,35 @@ mod tests {
             let payload =
                 serde_json::to_vec(&json!({"id":3,"method":"read_strict","params":params}))
                     .unwrap();
+            let req = parse_request(&payload).unwrap();
             assert!(
-                splice_reply(&state, &payload).is_none(),
+                splice_reply(&state, &req).is_none(),
                 "an erroring read must not splice"
             );
             let reply = handle_request(&state, &payload);
-            assert_eq!(reply["ok"], json!(false));
-            assert_eq!(reply["error"]["kind"], json!("unreadable"));
+            assert_eq!(
+                reply.outcome.map_err(|e| e.kind),
+                Err(ErrorKind::Unreadable)
+            );
         }
+    }
+
+    #[test]
+    fn a_misspelled_method_and_a_non_json_frame_answer_today_s_bytes() {
+        let (_dir, state) = sqlite_state(json!({"entries": []}));
+        let reply = handle_request(&state, br#"{"id":9,"method":"raed","params":{}}"#);
+        assert_eq!(
+            serde_json::to_vec(&reply).unwrap(),
+            serde_json::to_vec(&json!({"id": 9, "ok": false,
+                "error": {"kind": "invalid", "message": "unknown store method \"raed\""}}))
+            .unwrap()
+        );
+        let reply = handle_request(&state, b"not json");
+        assert_eq!(reply.id, 0);
+        assert_eq!(
+            reply.outcome.map_err(|e| e.kind),
+            Err(ErrorKind::MalformedFrame)
+        );
     }
 
     fn rules_envelope(ts: &str, data: Value) -> String {
@@ -3843,15 +3893,14 @@ mod tests {
             Some(v) => std::env::set_var("FNO_HOME", v),
             None => std::env::remove_var("FNO_HOME"),
         }
-        assert_eq!(reply["ok"], json!(true));
-        let rules = reply["result"]["rules"].as_array().expect("rules array");
+        let result = reply.outcome.expect("the rules ask answers");
+        let rules = result["rules"].as_array().expect("rules array");
         assert!(
             rules.iter().any(|r| r["id"] == json!("law-triggered")),
-            "the imported trigger rule ships: {}",
-            reply["result"]
+            "the imported trigger rule ships: {result}"
         );
         assert!(
-            !reply["result"]["version"].as_str().unwrap_or("").is_empty(),
+            !result["version"].as_str().unwrap_or("").is_empty(),
             "the version rides the reply"
         );
     }
