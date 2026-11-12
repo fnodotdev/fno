@@ -302,8 +302,11 @@ fn staged_marketplace_bytes(source_bytes: &str, marketplace: &str) -> Result<Str
             "{marketplace}: no fno entry; cannot serve the plugin locally"
         ));
     }
-    if marketplace == MARKETPLACE_REL {
-        manifest["name"] = json!(DEV_MARKETPLACE_NAME);
+    if let Some(obj) = manifest
+        .as_object_mut()
+        .filter(|_| marketplace == MARKETPLACE_REL)
+    {
+        obj.insert("name".into(), json!(DEV_MARKETPLACE_NAME));
     }
     serde_json::to_string_pretty(&manifest).map_err(|e| format!("{marketplace}: {e}"))
 }
@@ -4392,9 +4395,12 @@ mod tests {
     fn dev_stage_takes_fno_dev_and_retires_only_a_local_fno() {
         let public = r#"{"name":"fno","plugins":[{"name":"fno","source":{"source":"github","repo":"fnodotdev/fno"}}]}"#;
         let name_of = |rel: &str| -> Value {
-            serde_json::from_str::<Value>(&staged_marketplace_bytes(public, rel).unwrap()).unwrap()
-                ["name"]
-                .clone()
+            let staged = staged_marketplace_bytes(public, rel).unwrap();
+            serde_json::from_str::<Value>(&staged)
+                .unwrap()
+                .get("name")
+                .cloned()
+                .unwrap_or_default()
         };
         assert_eq!(name_of(MARKETPLACE_REL), json!("fno-dev"));
         assert_eq!(name_of(CODEX_MARKETPLACE_REL), json!("fno"));
@@ -4406,7 +4412,7 @@ mod tests {
             fs::write(path, known.to_string()).unwrap();
             claude_dev_migration(tmp.path())
                 .iter()
-                .map(|argv| argv[2..].join(" "))
+                .map(|argv| argv.get(2..).unwrap_or_default().join(" "))
                 .collect()
         };
         let local = json!({"source": {"source": "directory", "path": "/stage"}});
@@ -4435,10 +4441,7 @@ mod tests {
 
         let marker = codex.join("footnote/plugin-channel.json");
         let codex_with = |channel: &str, git_ref: Option<&str>| {
-            let mut v = json!({"channel": channel, "source": "fnodotdev/fno"});
-            if let Some(r) = git_ref {
-                v["ref"] = json!(r);
-            }
+            let v = json!({"channel": channel, "source": "fnodotdev/fno", "ref": git_ref});
             fs::write(&marker, v.to_string()).unwrap();
             release_channel("codex", &codex)
         };
