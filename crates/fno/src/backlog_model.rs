@@ -1936,10 +1936,24 @@ pub(crate) fn search_fields(
         "column",
         Some(card.column.as_str().replace(' ', "_")),
     );
-    let details = row.and_then(|r| r.details.clone()).unwrap_or_default();
-    let area = crate::search_query::areas_for_node(&card.title, &details, card.project.as_deref());
+    // An `area:` tag is the node's area; the title heuristic fills only an
+    // untagged node, so the two never disagree on one row.
+    let tagged: Vec<String> = card
+        .tags
+        .iter()
+        .filter_map(|t| t.strip_prefix("area:").map(str::to_string))
+        .collect();
+    let area = if tagged.is_empty() {
+        let details = row.and_then(|r| r.details.clone()).unwrap_or_default();
+        crate::search_query::areas_for_node(&card.title, &details, card.project.as_deref())
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    } else {
+        tagged
+    };
     for a in area {
-        push_val(&mut f, "area", Some(a.to_string()));
+        push_val(&mut f, "area", Some(a));
     }
     push_val(&mut f, "created", str_of(|r| &r.created_at));
     push_val(&mut f, "updated", card.updated_at.clone());

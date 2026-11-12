@@ -648,7 +648,8 @@ fn project_and_priority_filters_narrow_cards_and_totals() {
     );
     // Tags: one facet widens, two facets narrow.
     let rows3 = vec![
-        json!({"id": "x-1", "status": "ready", "tags": ["area:mail", "audience:user"]}),
+        json!({"id": "x-1", "status": "ready", "title": "mux pane crash",
+               "tags": ["area:mail", "audience:user"]}),
         json!({"id": "x-2", "status": "ready", "tags": ["area:mux", "audience:internal"]}),
         json!({"id": "x-3", "status": "ready", "tags": ["area:mux", "audience:user"]}),
     ];
@@ -672,6 +673,10 @@ fn project_and_priority_filters_narrow_cards_and_totals() {
     let mut narrow = tagged(&[("tag", "area:mux"), ("tag", "audience:user")]);
     narrow.sort();
     assert_eq!(narrow, ["x-3"]);
+    // The area search key reads the tag before the title heuristic.
+    let mut searched = tagged(&[("q", "area:mux")]);
+    searched.sort();
+    assert_eq!(searched, ["x-2", "x-3"], "x-1's tag outranks its mux title");
 }
 
 #[test]
