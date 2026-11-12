@@ -3894,13 +3894,20 @@ mod tests {
             None => std::env::remove_var("FNO_HOME"),
         }
         let result = reply.outcome.expect("the rules ask answers");
-        let rules = result["rules"].as_array().expect("rules array");
+        let rules = result
+            .pointer("/rules")
+            .and_then(Value::as_array)
+            .expect("rules array");
         assert!(
             rules.iter().any(|r| r["id"] == json!("law-triggered")),
             "the imported trigger rule ships: {result}"
         );
         assert!(
-            !result["version"].as_str().unwrap_or("").is_empty(),
+            !result
+                .pointer("/version")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .is_empty(),
             "the version rides the reply"
         );
     }

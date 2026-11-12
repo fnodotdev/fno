@@ -312,8 +312,11 @@ mod tests {
             })
         );
         assert_eq!(
-            serde_json::to_value(&reply).unwrap()["error"]["kind"],
-            "quota_spent"
+            serde_json::to_value(&reply)
+                .unwrap()
+                .pointer("/error/kind")
+                .and_then(Value::as_str),
+            Some("quota_spent")
         );
     }
 
