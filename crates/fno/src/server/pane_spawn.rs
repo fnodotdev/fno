@@ -102,7 +102,7 @@ pub(crate) fn walk_shell_candidates(
                     shell,
                     ring,
                     rc_dir,
-                })
+                });
             }
             Err(e) => {
                 last = e.to_string();

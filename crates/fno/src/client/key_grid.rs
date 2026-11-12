@@ -70,6 +70,7 @@ pub(crate) fn hints(view: KeyView) -> &'static [KeyHint] {
             ("s", "sort"),
             ("d", "details"),
             ("r", "retry"),
+            ("x", "exchanges"),
             ("m", "id"),
             ("y", "copy"),
             ("q", "close"),
@@ -234,8 +235,10 @@ mod tests {
     #[test]
     fn grid_is_four_wide_and_ends_in_the_full_overlay_cell() {
         let rows = grid_rows(KeyView::Messages, 100);
-        assert_eq!(rows.len(), 3, "11 keys + the closing cell = 12 cells");
+        assert_eq!(rows.len(), 4, "12 keys + the closing cell = 13 cells");
         assert!(rows[0].text.starts_with("h/l columns"));
-        assert!(rows[2].text.trim_end().ends_with("* all keys"));
+        assert!(rows
+            .last()
+            .is_some_and(|r| r.text.trim_end().ends_with("* all keys")));
     }
 }
