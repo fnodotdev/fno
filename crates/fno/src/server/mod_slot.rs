@@ -311,6 +311,7 @@ mod tests {
     #[test]
     fn open_argv_is_the_one_fixed_command() {
         let argv = open_argv("p/m");
-        assert_eq!(&argv[1..], ["config", "plugins", "open", "p/m"]);
+        let fixed: Vec<&str> = argv.iter().skip(1).map(String::as_str).collect();
+        assert_eq!(fixed, ["config", "plugins", "open", "p/m"]);
     }
 }

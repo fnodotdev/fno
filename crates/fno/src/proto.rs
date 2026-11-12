@@ -4914,8 +4914,9 @@ binding = { mod = "fno-panels/review-ledger" }
 "#,
         )
         .unwrap();
+        let slot = spec.slots.first().expect("toml declares one slot");
         assert_eq!(
-            spec.slots[0].binding,
+            slot.binding,
             LayoutBinding::Mod("fno-panels/review-ledger".into())
         );
 
