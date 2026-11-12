@@ -29,6 +29,11 @@
 # rust-ci.yml names the toolchain that wrote the baseline; bump them
 # together, never apart (same contract as the fmt job's RUSTFMT_TOOLCHAIN).
 #
+# Known limit: keys are unique lines, so a new flagged line whose trimmed text
+# equals an already-baselined line in the same file passes (common for
+# `let _ = tx.send(..)` and `.lock().unwrap()`). The gate sees the first
+# occurrence only; a duplicate is review's to catch.
+#
 # Escape hatch: a targeted `#[allow(clippy::indexing_slicing)]` silences a
 # site for good; the diagnostic and its key disappear together.
 #
@@ -126,7 +131,7 @@ else
         # code to ratchet.
         if ( cd "$REPO_ROOT/$crate" && cargo clippy --lib --bins --locked --message-format=json -- "${PRODUCT_LINT_FLAGS[@]}" ) >"$local_tmp" 2>"$err_tmp"; then
             extract_keys "$local_tmp" "$crate" >>"$CURRENT"
-        elif ! grep -q "no library targets found\|a bin target must be available" "$err_tmp"; then
+        elif ! grep -q "no library targets found" "$err_tmp"; then
             echo "clippy-check: cargo clippy (product pass) failed in $crate; stderr tail:" >&2
             tail -30 "$err_tmp" >&2
             rm -f "$local_tmp" "$err_tmp"
