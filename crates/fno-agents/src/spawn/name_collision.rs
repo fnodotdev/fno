@@ -101,8 +101,10 @@ pub fn resolve(home: &AgentsHome, registry: &Registry, name: &str) -> Resolution
             None => Resolution::Clear,
         };
     }
-    // Stamp before the removal is observable: a racing resolver must never
-    // see row-gone-but-no-tombstone (the rm door's own ordering).
+    // The tombstone lands after the removal persists: a stamp written before
+    // the write would mark a live session removed if the write was refused.
+    // A resolver that holds the pre-write row sees row-gone briefly, and the
+    // tombstone heals any retry after it.
     if let Some(session_id) = stale
         .harness_session_id
         .as_deref()
