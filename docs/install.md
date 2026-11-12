@@ -21,11 +21,11 @@ The catalog pins the fno entry to the newest release tag with its commit sha, an
 
 The add clones the repository, so a slow connection can hit the 120-second "Add marketplace" timeout. Retrying usually lands it.
 
-If the add refuses because the name `fno` is already in use: `fno config plugin install claude` already staged a local directory marketplace under that same name, at `~/.fno/install/plugin-stage/fno`. Remove that entry, or the whole stage, before you add the GitHub source under the same name. Or skip the GitHub add and keep using the staged copy.
+The add can refuse with `Cannot add marketplace "fno": its source doesn't match its extraKnownMarketplaces entry`. That means an older dev install registered your local stage under the name `fno`. Run `fno doctor update` or `fno config plugin install claude` once. Each moves the stage to its own name, `fno-dev`. Then the add works.
 
 The previous stage path, `~/.fno/plugin-stage`, remains readable during migration. `fno doctor update` rebuilds the new stage, repoints configured harnesses, and keeps the old stage until earlier sessions exit and no config names that old path.
 
-`fno config plugin install claude` is the dev channel: it installs your local checkout for development. Claude's own `marketplace add` replaces a GitHub `fno` source with the local stage and says nothing. When your plugin comes from a GitHub marketplace, the dev install refuses with exit 3 and names your channel. Pass `--dev` to switch to your local checkout.
+`fno config plugin install claude` is the dev channel: it installs your local checkout for development. It registers the stage at `~/.fno/install/plugin-stage/fno` as the marketplace `fno-dev`, and installs `fno@fno-dev`. The public `fno` name stays free for the GitHub catalog, so both installs can sit side by side. Only one loads: when `fno@fno` is installed, the dev install turns it off, and its receipt names the command that turns it back on. For Codex, both channels share the one id `fno@fno`, so a Codex dev install refuses with exit 3 over a release install. Pass `--dev` to switch.
 
 An install made before the marketplace rename reads `fno@footnote`. It keeps working, and `fno doctor` reads it and names the move. To move a GitHub install to `fno@fno`, run `/plugin uninstall fno@footnote` and `/plugin marketplace remove footnote`, then the two commands above. The dev install, `fno config plugin install claude`, moves a local `footnote` stage by itself. For Codex, `fno config setup run --only harness-wiring` moves a release install and `fno config plugin install codex` moves a dev install.
 

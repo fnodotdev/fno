@@ -1127,10 +1127,11 @@ fn generated_target(t: &str, payload_cwd: &str, command: &str) -> Option<String>
             return Some(plugin_msg(abs_str[i + prefix.len()..].to_string()));
         }
     }
-    // The marketplace dir is "fno", or a "footnote" name on an install made
-    // before the rename.
+    // The marketplace dir is "fno", "fno-dev" for the local stage, or a
+    // "footnote" name on an install made before the rename.
     for prefix in [
         "/plugins/cache/fno/fno/",
+        "/plugins/cache/fno-dev/fno/",
         "/plugins/cache/footnote/fno/",
         "/plugins/cache/footnote-dev/fno/",
         "/plugins/cache/footnote-local/fno/",
