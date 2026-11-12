@@ -21,9 +21,11 @@
 #      FNO_NO_MODIFY_PATH to get a manual hint only).
 #
 # POSIX sh ONLY (runs unmodified under dash and macOS /bin/sh): no bashisms, no
-# arrays, no `local`, no `set -o pipefail`. Fully non-interactive - it is its own
-# stdin under `curl | sh`, so it can never `read` a prompt. Every configuration
-# is an env var.
+# arrays, no `local`, no `set -o pipefail`. The script itself never reads its
+# own stdin: under `curl | sh` that stdin is the pipe. On a machine with a
+# controlling terminal, the interactive setup wizard runs at the end against
+# /dev/tty; agents, CI and --yes keep the non-interactive setup. Every
+# configuration is an env var.
 #
 # Env knobs:
 #   FNO_VERSION          pin an exact release (`FNO_VERSION=1.2.3` -> tag v1.2.3)
@@ -37,7 +39,9 @@
 #                        print a manual PATH hint instead
 #   FNO_NO_WIRE          set to any non-empty value to skip the plugin wiring step
 #                        (every agent CLI on PATH gets the fno plugin otherwise;
-#                        `fno do wizard` still chooses by hand)
+#                        `fno do wizard` still chooses by hand) and the
+#                        end-of-install wizard; the non-interactive setup is
+#                        skipped with it
 #
 # The channel is read from the TREE this script sits in: the nightly tag stamps
 # a dev version into .claude-plugin/plugin.json, so an install run from inside a
@@ -266,12 +270,28 @@ wire_harnesses() {
 	fi
 }
 
-# The one run-once setup (config + wiring), best effort. FNO_YES or a non-TTY
-# stdin takes the recommended defaults; FNO_NO_WIRE skips it too.
+# The one run-once setup (config + wiring), best effort. A person on a
+# terminal gets the wizard in place of the silent setup: the wizard's stdin
+# is /dev/tty, because under `curl | sh` the script's own stdin is the pipe,
+# and a wizard that already finished on this machine (its marker) is never
+# offered twice. FNO_YES, FNO_NO_WIRE and a machine with no controlling
+# terminal (agents, CI) keep the non-interactive setup. Either way the
+# install stays successful: a wizard that fails or is cancelled prints the
+# one command that finishes setup later.
 run_setup_once() {
 	[ -n "${FNO_NO_WIRE:-}" ] && return 0
 	_yes=""
 	[ -n "${FNO_YES:-}" ] && _yes="--yes"
+	if [ -z "$_yes" ] \
+		&& [ ! -f "$FNO_STATE/sidecar/wizard-done" ] \
+		&& ( </dev/tty ) 2>/dev/null; then
+		say "opening the setup wizard; Ctrl-C skips it and keeps the install."
+		if "$FNO_BIN/fno" do wizard </dev/tty; then
+			return 0
+		fi
+		say "the wizard did not finish. run fno to finish setup."
+		return 0
+	fi
 	if _out=$("$FNO_BIN/fno" config setup run --once $_yes --json 2>&1); then
 		printf '%s\n' "$_out"
 	fi

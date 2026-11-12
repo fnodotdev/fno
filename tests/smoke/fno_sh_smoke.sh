@@ -12,7 +12,9 @@
 #   4. no uv and no Python CLI is involved,
 #   5. a tampered .sha256 refuses, names both digests, and installs nothing,
 #   6. a second run is a clean no-op,
-#   7. the PATH hint names the link dir.
+#   7. the PATH hint names the link dir,
+#   8. a headless run without FNO_NO_WIRE keeps the non-interactive setup:
+#      no wizard opens where no controlling terminal exists (agents, CI).
 #
 # The whole run is isolated into a temp HOME and runs from a cwd outside any
 # git repo. Per-check pass/fail; exits non-zero on any miss.
@@ -108,6 +110,17 @@ if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -qi 'already installed' \
   pass "idempotent" "second run detected the install and fetched nothing (rc=0)"
 else
   miss "idempotent" "rc=$RC out: $(printf '%s' "$OUT" | tail -2)"
+fi
+
+# --- check 8: a headless run without FNO_NO_WIRE keeps the silent setup ---
+# This smoke never owns a controlling terminal, so the installer must take
+# the non-interactive path on its own: the wizard opens only where /dev/tty
+# opens, which is the journey script's attended business.
+run_capture env -u FNO_NO_WIRE FNO_INSTALL_TARBALL="$TARBALL" sh "$INSTALLER"
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -qi 'wizard'; then
+  pass "agent-silent" "headless run without FNO_NO_WIRE stayed on the non-interactive setup (rc=0)"
+else
+  miss "agent-silent" "rc=$RC out: $(printf '%s' "$OUT" | tail -2)"
 fi
 
 echo "---"
