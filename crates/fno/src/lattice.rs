@@ -138,6 +138,20 @@ pub(crate) fn status_word(s: LatticeState) -> &'static str {
     }
 }
 
+/// The state as a whole word, for surfaces with room for it (the desktop
+/// pane). [`status_word`] stays the 5-cell form.
+pub(crate) fn status_long(s: LatticeState) -> &'static str {
+    match s {
+        LatticeState::Working => "working",
+        LatticeState::Idle => "idle",
+        LatticeState::Blocked => "needs you",
+        LatticeState::DoneUnseen => "done",
+        LatticeState::Exited => "exited",
+        LatticeState::Unmeasured => "unknown",
+        LatticeState::Empty => "empty",
+    }
+}
+
 /// The build throbber's frame set: the same crate's BRAILLE_SIX, the user's
 /// 2026-10-09 pick for a compiling row (one cell wide, throbber-widgets
 /// vocabulary, distinct from the BLACK_CIRCLE working spin at a glance).

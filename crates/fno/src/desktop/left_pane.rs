@@ -3,11 +3,16 @@
 //! command the sideline click sends. A section whose read failed shows the
 //! error and keeps its last good rows.
 
-use gpui::{div, prelude::*, px, rgb, Context, Div, Stateful};
+use gpui::{div, prelude::*, px, rgb, Context, Div, FontWeight, Stateful};
 
 use super::link::Layout;
+use super::palette::Palette;
 use super::window::{Action, MainView, Root};
-use crate::proto::{AgentBadge, AgentRow, Command};
+use crate::client::agent_lattice_state;
+use crate::client::card_line::binding_suffix;
+use crate::client::header_band::section_rollup;
+use crate::lattice::{lattice_glyph, status_long, LatticeState};
+use crate::proto::{AgentRow, Command};
 use crate::web_hq::Board;
 
 pub const WIDTH: f32 = 260.0;
@@ -15,30 +20,38 @@ pub const WIDTH: f32 = 260.0;
 /// the fold.
 pub const AGENTS_SHOWN: usize = 8;
 
-/// How a row's label reads: a blocked agent in the error color, a question
-/// in the needs-you color the board's feed uses.
+/// What a row says about "where I am". Only the focused agent carries the
+/// cursor; the active session and the local machine carry a quiet word.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Tone {
-    Plain,
-    Blocked,
-    Question,
+pub enum Mark {
+    None,
+    Cursor,
+    Current(&'static str),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Row {
-    Header(&'static str),
+    Header {
+        title: &'static str,
+        /// Per-state counts in severity order; empty for a section with no
+        /// states.
+        rollup: Vec<(LatticeState, usize)>,
+    },
     Item {
         label: String,
         detail: String,
-        active: bool,
-        tone: Tone,
+        /// The node and PR an agent works on.
+        identity: Option<String>,
+        /// An agent's lattice state; `None` for sessions, machines, questions.
+        state: Option<LatticeState>,
+        /// A question: it needs the user.
+        question: bool,
+        mark: Mark,
         action: Option<Action>,
     },
     /// The agents past [`AGENTS_SHOWN`], folded, or the row that folds
     /// them back.
-    More {
-        hidden: usize,
-    },
+    More { hidden: usize },
     /// A failed read. The section's last good rows follow it.
     Error(String),
     /// A section with nothing to show, and why.
@@ -61,26 +74,40 @@ fn clamp(text: String, color: u32, small: bool) -> Div {
         .child(if small { line.text_xs() } else { line })
 }
 
-fn agent_detail(a: &AgentRow) -> String {
-    let state = if a.exited {
-        Some("exited")
-    } else {
-        a.badge.map(|b| match b {
-            AgentBadge::Working => "working",
-            AgentBadge::Blocked => "blocked",
-            AgentBadge::Done => "done",
-        })
+fn header(title: &'static str) -> Row {
+    Row::Header {
+        title,
+        rollup: Vec::new(),
+    }
+}
+
+fn agent_identity(a: &AgentRow) -> Option<String> {
+    let mut out = match (a.node.as_deref(), a.pr) {
+        (Some(n), Some(pr)) => format!("{n} · #{pr}"),
+        (Some(n), None) => n.to_string(),
+        (None, Some(pr)) => format!("#{pr}"),
+        (None, None) => return None,
     };
-    let harness = a.harness.as_deref().unwrap_or("pane");
-    match state {
-        Some(s) => format!("{harness} · {s}"),
-        None => harness.to_string(),
+    out.push_str(&binding_suffix(a));
+    Some(out)
+}
+
+/// The glyph's color. Shape carries the state; color only reinforces it.
+fn state_color(p: &Palette, s: LatticeState) -> u32 {
+    match s {
+        LatticeState::Blocked => p.warn,
+        LatticeState::DoneUnseen => p.ok,
+        LatticeState::Working => p.fg,
+        _ => p.muted,
     }
 }
 
 pub fn rows(layout: &Layout, board: &Board, now_secs: u64, agents_open: bool) -> Vec<Row> {
-    let mut out = vec![Row::Header("Agents")];
     let agents = crate::client::agent_sort::sideline_order(&layout.agents, now_secs);
+    let mut out = vec![Row::Header {
+        title: "Agents",
+        rollup: section_rollup(agents.iter().map(|a| agent_lattice_state(a))),
+    }];
     if agents.is_empty() {
         out.push(Row::Empty("no agents in this session"));
     }
@@ -96,14 +123,18 @@ pub fn rows(layout: &Layout, board: &Board, now_secs: u64, agents_open: bool) ->
             RowClick::Send(cmd) => Action::Send(cmd),
             RowClick::Notice(notice) => Action::Notice(notice),
         };
+        let state = agent_lattice_state(a);
+        let harness = a.harness.as_deref().unwrap_or("pane");
         out.push(Row::Item {
             label: a.name.clone(),
-            detail: agent_detail(a),
-            active: a.pane_id == Some(layout.focus),
-            tone: if a.badge == Some(AgentBadge::Blocked) {
-                Tone::Blocked
+            detail: format!("{harness} · {}", status_long(state)),
+            identity: agent_identity(a),
+            state: Some(state),
+            question: false,
+            mark: if a.pane_id == Some(layout.focus) {
+                Mark::Cursor
             } else {
-                Tone::Plain
+                Mark::None
             },
             action: Some(action),
         });
@@ -114,7 +145,7 @@ pub fn rows(layout: &Layout, board: &Board, now_secs: u64, agents_open: bool) ->
         });
     }
 
-    out.push(Row::Header("Sessions"));
+    out.push(header("Sessions"));
     for s in &layout.squads {
         let tabs = s.tabs.len();
         out.push(Row::Item {
@@ -125,8 +156,14 @@ pub fn rows(layout: &Layout, board: &Board, now_secs: u64, agents_open: bool) ->
                 s.panes,
                 if s.panes == 1 { "" } else { "s" }
             ),
-            active: s.id == layout.active_squad,
-            tone: Tone::Plain,
+            identity: None,
+            state: None,
+            question: false,
+            mark: if s.id == layout.active_squad {
+                Mark::Current("current")
+            } else {
+                Mark::None
+            },
             action: Some(Action::Send(Command::SelectSquad(s.id))),
         });
     }
@@ -139,7 +176,7 @@ pub fn rows(layout: &Layout, board: &Board, now_secs: u64, agents_open: bool) ->
             (true, None) => None,
         }
     };
-    out.push(Row::Header("Questions"));
+    out.push(header("Questions"));
     out.extend(failed(board.questions_error()));
     let questions = board.questions_newest_first();
     if questions.is_empty() && board.questions_error().is_none() {
@@ -150,13 +187,15 @@ pub fn rows(layout: &Layout, board: &Board, now_secs: u64, agents_open: bool) ->
         out.push(Row::Item {
             label: q.title.clone(),
             detail: q.node.clone().unwrap_or_else(|| q.kind.clone()),
-            active: false,
-            tone: Tone::Question,
+            identity: None,
+            state: None,
+            question: true,
+            mark: Mark::None,
             action: Some(Action::Show(MainView::Orchestration)),
         });
     }
 
-    out.push(Row::Header("Machines"));
+    out.push(header("Machines"));
     out.extend(failed(board.fleet_error()));
     for m in board
         .fleet()
@@ -175,8 +214,14 @@ pub fn rows(layout: &Layout, board: &Board, now_secs: u64, agents_open: bool) ->
                 "{seats} seat{} · {fresh}",
                 if seats == 1 { "" } else { "s" }
             ),
-            active: m.local,
-            tone: Tone::Plain,
+            identity: None,
+            state: None,
+            question: false,
+            mark: if m.local {
+                Mark::Current("this machine")
+            } else {
+                Mark::None
+            },
             action: None,
         });
     }
@@ -204,14 +249,33 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
     for (i, row) in rows.into_iter().enumerate() {
         let hover = p.border;
         pane = pane.child(match row {
-            Row::Header(title) => div()
+            Row::Header { title, rollup } => div()
                 .id(i)
                 .px_3()
                 .pt_3()
                 .pb_1()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
                 .text_xs()
-                .text_color(rgb(p.muted))
-                .child(title.to_uppercase()),
+                .child(
+                    div()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(p.fg))
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap_2()
+                        .children(rollup.into_iter().map(|(state, n)| {
+                            div()
+                                .text_color(rgb(state_color(&p, state)))
+                                .child(format!("{} {n}", lattice_glyph(state).0))
+                        })),
+                ),
             Row::Error(e) => div()
                 .id(i)
                 .px_3()
@@ -246,32 +310,96 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
             Row::Item {
                 label,
                 detail,
-                active,
-                tone,
+                identity,
+                state,
+                question,
+                mark,
                 action,
             } => {
-                let label_color = match tone {
-                    Tone::Plain => p.fg,
-                    Tone::Blocked => p.error,
-                    Tone::Question => p.warn,
+                let cursor = mark == Mark::Cursor;
+                let blocked = state == Some(LatticeState::Blocked);
+                let label_color = if question { p.warn } else { p.fg };
+                // Shape carries the state: a triangle for blocked, a circle for
+                // work. A question leads with `?`, so none leans on color.
+                let (glyph, glyph_color) = match (state, question) {
+                    (Some(s), _) => (lattice_glyph(s).0.to_string(), state_color(&p, s)),
+                    (None, true) => ("?".to_string(), p.warn),
+                    (None, false) => (String::new(), p.muted),
                 };
-                // The active row carries a bar in the focus color as well as
-                // the fill, so it reads at a glance.
+                let mut title = div()
+                    .w_full()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .child(clamp(label, label_color, false).flex_1().font_weight(
+                        if blocked || cursor {
+                            FontWeight::SEMIBOLD
+                        } else {
+                            FontWeight::MEDIUM
+                        },
+                    ));
+                if let Mark::Current(word) = mark {
+                    title = title.child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .text_color(rgb(p.muted))
+                            .child(word),
+                    );
+                }
+                let mut meta = div()
+                    .w_full()
+                    .flex()
+                    .flex_row()
+                    .gap_2()
+                    .child(clamp(detail, p.muted, true).flex_1());
+                if let Some(identity) = identity {
+                    meta = meta.child(
+                        div()
+                            .flex_none()
+                            .max_w(px(112.0))
+                            .overflow_hidden()
+                            .line_clamp(1)
+                            .text_ellipsis()
+                            .text_xs()
+                            .text_color(rgb(p.muted))
+                            .child(identity),
+                    );
+                }
+                // One cursor: the fill and the bar belong to the focused agent
+                // alone. The bar is the accent, never the done color.
                 let mut item = div()
                     .id(i)
                     .mx_1()
+                    .mb(px(2.0))
                     .pl(px(6.0))
                     .pr_2()
-                    .py_1()
-                    .rounded_md()
+                    .py(px(6.0))
+                    .rounded_lg()
                     .flex()
-                    .flex_col()
+                    .flex_row()
+                    .gap_2()
                     .min_w_0()
                     .border_l_2()
-                    .border_color(rgb(if active { p.ok } else { p.panel }))
-                    .when(active, |d| d.bg(rgb(p.border)))
-                    .child(clamp(label, label_color, false))
-                    .child(clamp(detail, p.muted, true));
+                    .border_color(rgb(if cursor { p.accent } else { p.panel }))
+                    .when(cursor, |d| d.bg(rgb(p.border)))
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(px(14.0))
+                            .text_color(rgb(glyph_color))
+                            .child(glyph),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(title)
+                            .child(meta),
+                    );
                 if let Some(action) = action {
                     // On click: a press that leaves the row before release
                     // does nothing.
@@ -291,7 +419,7 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::{SquadMeta, TabMeta};
+    use crate::proto::{AgentBadge, SquadMeta, TabMeta};
 
     fn agent(name: &str, pane: u64, badge: Option<AgentBadge>) -> AgentRow {
         serde_json::from_value(serde_json::json!({
@@ -303,6 +431,26 @@ mod tests {
 
     fn tab(id: u64, name: &str) -> TabMeta {
         serde_json::from_value(serde_json::json!({"id": id, "name": name})).unwrap()
+    }
+
+    #[test]
+    fn an_unmeasured_exit_is_not_exited_and_a_bound_agent_shows_node_and_pr() {
+        let a: AgentRow = serde_json::from_value(serde_json::json!({
+            "squad": null, "name": "gone", "pane_id": 1, "badge": null,
+            "reason": null, "exited": true, "unmeasured": true,
+            "node": "x-35bd", "pr": 84,
+        }))
+        .unwrap();
+        assert_eq!(agent_lattice_state(&a), LatticeState::Unmeasured);
+        assert_eq!(agent_identity(&a).as_deref(), Some("x-35bd · #84"));
+        let layout = Layout {
+            agents: vec![a],
+            ..Layout::default()
+        };
+        let rows = rows(&layout, &Board::default(), 100, false);
+        assert!(
+            matches!(&rows[1], Row::Item { state: Some(LatticeState::Unmeasured), detail, .. } if detail.ends_with("unknown"))
+        );
     }
 
     #[test]
@@ -363,6 +511,24 @@ mod tests {
         assert_eq!(names, ["stuck", "busy", "idle"]);
         let stuck = got.iter().find(|(n, _)| n == "stuck").unwrap();
         assert_eq!(stuck.1, Some(Action::Send(Command::FocusPane(2))));
+        // One cursor: the focused agent. The active session says "current".
+        let marks: Vec<Mark> = rows
+            .iter()
+            .filter_map(|r| match r {
+                Row::Item { mark, .. } => Some(*mark),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(marks.iter().filter(|m| **m == Mark::Cursor).count(), 1);
+        assert!(marks.contains(&Mark::Current("current")));
+        // The Agents header rolls up blocked 1, working 1, idle 1.
+        assert!(
+            matches!(&rows[0], Row::Header { rollup, .. } if rollup == &vec![
+                (LatticeState::Blocked, 1),
+                (LatticeState::Working, 1),
+                (LatticeState::Idle, 1),
+            ])
+        );
         // The failed question read names its error and keeps "ship it?".
         let at = rows
             .iter()
