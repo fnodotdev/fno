@@ -95,6 +95,9 @@ impl Probes for FakeGitHub {
         Ok(())
     }
     fn release_slot(&self, _cwd: &Path, _base_ref: &str, _pr: u64) {}
+    fn look_request(&self, _cwd: &Path, _facts: &PrFacts, _detail: &str) -> bool {
+        false
+    }
     fn slot_retested(&self, _cwd: &Path, _base_ref: &str, _pr: u64) -> bool {
         false
     }

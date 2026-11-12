@@ -113,7 +113,9 @@ fn nothing_answered(name: &str, pane_id: Option<u64>, verdict: Option<&str>) -> 
         (Some(pid), None) => format!(", and the pane table by pane id {pid}"),
         (None, _) => String::new(),
     };
-    format!("no such agent: {name} - searched the registry by session id and by label{pane_part}; nothing answered")
+    format!(
+        "no such agent: {name} - searched the registry by session id and by label{pane_part}; nothing answered"
+    )
 }
 
 /// True for the session-id shapes harnesses mint: the hyphenated 36-char hex

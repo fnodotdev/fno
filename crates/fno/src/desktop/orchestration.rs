@@ -127,7 +127,10 @@ fn table(root: &Root) -> Div {
             );
         }
     }
-    if machines.is_empty() && root.board.fleet_error().is_none() {
+    let any_seat = machines
+        .iter()
+        .any(|m| m.leads.iter().any(|l| !l.seats.is_empty()));
+    if !any_seat && root.board.fleet_error().is_none() {
         out = out.child(quiet("no seats", root));
     }
     out
@@ -174,8 +177,8 @@ fn options(q: &crate::needs_overlay::QuestionItem, root: &Root, cx: &mut Context
                 .border_1()
                 .border_color(rgb(border))
                 .cursor_pointer()
-                .hover(move |s| s.bg(rgb(p.border)))
-                .active(move |s| s.bg(rgb(p.focus)))
+                .hover(move |s| s.bg(rgb(p.hover)))
+                .active(move |s| s.bg(rgb(p.pressed)))
                 // On click: a press dragged off the option answers nothing.
                 .on_click(cx.listener(move |root, _, _, cx| root.act(action.clone(), cx)))
                 .child(format!("{}. {}", o.n, o.text))

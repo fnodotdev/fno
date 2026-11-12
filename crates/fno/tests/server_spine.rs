@@ -241,6 +241,7 @@ fn wait_for_raw_frame(
             | Ok(ServerMsg::Copy { .. })
             | Ok(ServerMsg::OpenLink { .. })
             | Ok(ServerMsg::SearchResult { .. })
+            | Ok(ServerMsg::AnchorJumped { .. })
             | Ok(ServerMsg::LinkHover { .. })
             | Ok(ServerMsg::PaneInputResult(_))
             | Ok(ServerMsg::PeekBody { .. })

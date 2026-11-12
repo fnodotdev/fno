@@ -5,6 +5,7 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::ops::Range;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -101,11 +102,17 @@ pub struct Root {
     panes: HashMap<u64, Entity<PaneView>>,
     modes: Modes,
     notice: Option<String>,
+    /// The notice reports a failure: it paints in the error color.
+    notice_failed: bool,
     /// Bumped by each notice, so only the newest one's timer clears it.
     notice_gen: u64,
     pub(super) closed: Option<String>,
     pub(super) metrics: Metrics,
     pub(super) palette: Palette,
+    /// Whether the window appearance is light, and the project directory the
+    /// palette was last resolved from.
+    light: bool,
+    theme_cwd: PathBuf,
     focus: FocusHandle,
     /// The content size (rows, cols) last sent to the server.
     sent_size: (u16, u16),
@@ -133,7 +140,6 @@ pub struct Root {
     _chat_wait: Option<Task<()>>,
     _hq: Option<Task<()>>,
     _plugins: Option<Task<()>>,
-    _plugins_tick: Option<Task<()>>,
     _activation: Option<Subscription>,
     _appearance: Option<Subscription>,
     _notice: Option<Task<()>>,
@@ -169,10 +175,9 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> Self {
         let sent_size = grid_size(window.viewport_size(), metrics.cell);
-        let (palette, theme_warning) = super::palette::for_appearance(
-            super::palette::appearance_is_light(window.appearance()),
-            &std::env::current_dir().unwrap_or_else(|_| "/".into()),
-        );
+        let light = super::palette::appearance_is_light(window.appearance());
+        let theme_cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
+        let (palette, theme_warning) = super::palette::for_appearance(light, &theme_cwd);
         let mut root = Root {
             main,
             link: None,
@@ -181,6 +186,7 @@ impl Root {
             panes: HashMap::new(),
             modes: Modes::default(),
             notice: theme_warning,
+            notice_failed: false,
             notice_gen: 0,
             closed: None,
             metrics,
@@ -195,6 +201,8 @@ impl Root {
             wheel_pane: None,
             answers: HashMap::new(),
             agents_open: false,
+            light,
+            theme_cwd: theme_cwd.clone(),
             session: session.clone(),
             ext: extensions::Page::default(),
             chat: Chat::default(),
@@ -205,7 +213,6 @@ impl Root {
             _chat_wait: None,
             _hq: None,
             _plugins: None,
-            _plugins_tick: None,
             _activation: None,
             _appearance: None,
             _notice: None,
@@ -223,9 +230,8 @@ impl Root {
         // Follow the system appearance live: macOS flips at dusk with the app
         // open.
         root._appearance = Some(cx.observe_window_appearance(window, |root, window, cx| {
-            let cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
-            let light = super::palette::appearance_is_light(window.appearance());
-            root.set_palette(super::palette::for_appearance(light, &cwd).0, cx);
+            root.light = super::palette::appearance_is_light(window.appearance());
+            root.restyle(cx);
         }));
         match Link::connect(&session, sent_size.0, sent_size.1) {
             Ok((link, mut rx)) => {
@@ -261,8 +267,8 @@ impl Root {
         root
     }
 
-    /// Start the plugins thread, its reply reader and the timer that re-reads
-    /// the list while the Extensions view shows.
+    /// Start the plugins thread and its reply reader. The list reads when
+    /// the view shows, after a switch and when an install pane closes.
     fn start_plugins(&mut self, cx: &mut Context<Self>) {
         match extensions::start() {
             Ok((asks, mut rx)) => {
@@ -270,8 +276,12 @@ impl Root {
                 self._plugins = Some(cx.spawn(async move |this, cx| {
                     while let Some(reply) = rx.recv().await {
                         let landed = this.update(cx, |root, cx| {
-                            if let Some(text) = root.ext.apply(reply) {
-                                root.say(text, cx);
+                            let did = root.ext.apply(reply);
+                            if did.terminal {
+                                root.main = MainView::Terminal;
+                            }
+                            if let Some(text) = did.notice {
+                                root.say_as(text, did.failed, cx);
                             }
                             cx.notify();
                         });
@@ -280,20 +290,8 @@ impl Root {
                         }
                     }
                 }));
-                self._plugins_tick = Some(cx.spawn(async move |this, cx| loop {
-                    cx.background_executor().timer(extensions::REREAD).await;
-                    let open = this.update(cx, |root, _| {
-                        let shown = root.main == MainView::Extensions;
-                        if shown {
-                            root.ext.read();
-                        }
-                    });
-                    if open.is_err() {
-                        break;
-                    }
-                }));
             }
-            Err(e) => self.notice = Some(format!("the plugins read did not start: {e}")),
+            Err(e) => self.notice = Some(format!("The plugins read did not start: {e}")),
         }
     }
 
@@ -308,7 +306,13 @@ impl Root {
 
     /// Show `text` in the corner for [`NOTICE_FOR`].
     pub(super) fn say(&mut self, text: String, cx: &mut Context<Self>) {
+        self.say_as(text, false, cx);
+    }
+
+    /// [`Self::say`], in the error color when `failed`.
+    fn say_as(&mut self, text: String, failed: bool, cx: &mut Context<Self>) {
         self.notice = Some(text);
+        self.notice_failed = failed;
         self.notice_gen += 1;
         let gen = self.notice_gen;
         self._notice = Some(cx.spawn(async move |this, cx| {
@@ -500,6 +504,16 @@ impl Root {
         cx.notify();
     }
 
+    /// Resolve the palette again for the current appearance and project, and
+    /// say what the theme ladder warned about.
+    fn restyle(&mut self, cx: &mut Context<Self>) {
+        let (palette, warning) = super::palette::for_appearance(self.light, &self.theme_cwd);
+        self.set_palette(palette, cx);
+        if let Some(text) = warning {
+            self.say(text, cx);
+        }
+    }
+
     /// Repaint every pane and the chrome in `palette`.
     fn set_palette(&mut self, palette: Palette, cx: &mut Context<Self>) {
         self.palette = palette;
@@ -541,6 +555,14 @@ impl Root {
                 }
                 Event::Layout(l) => {
                     self.layout = l;
+                    // A Finder launch has cwd `/`: the project's `mux.theme`
+                    // pin is read from the active session's own directory.
+                    if let Some(dir) = super::palette::project_dir(&self.layout) {
+                        if dir != self.theme_cwd {
+                            self.theme_cwd = dir;
+                            self.restyle(cx);
+                        }
+                    }
                     if let Some(poller) = &self.poller {
                         poller.set_roster(&self.layout.agents);
                     }
@@ -581,6 +603,7 @@ impl Root {
             let live: Vec<u64> = self.layout.panes.iter().map(|(id, _)| *id).collect();
             self.panes.retain(|id, _| live.contains(id));
             self.frames.retain(|id, _| live.contains(id));
+            self.ext.layout(&live);
             self.sync_panes(cx);
             self.sync_chat(cx);
             cx.notify();
@@ -1130,8 +1153,8 @@ impl Render for Root {
             .items_center()
             .font_family(".SystemUIFont")
             .text_sm();
-        // A closed link stays in the error color; a notice is muted and
-        // expires. Neither takes a row: the toast floats over the corner.
+        // A closed link and a failed notice use the error color; a notice
+        // is muted and expires. Neither takes a row: the toast floats over the corner.
         // In chat mode a closed stream's bar already carries the exit
         // reason, so the corner toast would repeat it - unless a sheet
         // covers that bar, where the toast is the only visible signal.
@@ -1139,7 +1162,9 @@ impl Render for Root {
             self.main == MainView::Chat && self.chat.closed.is_some() && self.chat.sheet.is_none();
         let (status, status_color) = match (&self.closed, &self.notice) {
             (Some(c), _) if !bar_shows_reason => (Some(c.clone()), self.palette.error),
-            (_, n) => (n.clone(), self.palette.muted),
+            (_, n) if bar_shows_reason && !self.notice_failed => (n.clone(), self.palette.muted),
+            (_, n) if self.notice_failed => (n.clone(), self.palette.error),
+            (None, n) => (n.clone(), self.palette.muted),
         };
         let toast = status.map(|text| {
             div()
