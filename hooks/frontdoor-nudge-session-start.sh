@@ -94,5 +94,5 @@ The one command that runs the install: \`bash $INSTALLER\`
 
 You (the agent) must tell the user what it does, ask, and run it only on a yes - never unasked, never detached in the background. It takes a few minutes. Its output ends with \`installer exit 0\` on success; any other code on that final line means it failed.
 
-On \`installer exit 0\`, do not send the user to a new session: run the \`fno\` command they asked about right here. Call \`$HOME/.local/bin/fno\` when this session's PATH lacks \`~/.local/bin\`; bare \`fno\` works once PATH carries it. The installer edits no shell profile, so a fresh session reads nothing extra.
+On \`installer exit 0\`, do not send the user to a new session: run the \`fno\` command they asked about right here. Call \`~/.local/bin/fno\` when this session's PATH lacks \`~/.local/bin\`; bare \`fno\` works once PATH carries it. The installer edits no shell profile, so a fresh session reads nothing extra.
 EOF
