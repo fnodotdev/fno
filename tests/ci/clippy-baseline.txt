@@ -12329,6 +12329,7 @@ crates/fno/src/agents_view/lineage_layout.rs	clippy::indexing_slicing	let depths
 crates/fno/src/agents_view/lineage_layout.rs	clippy::indexing_slicing	let parent_depth = parent_idx[node].and_then(|p| depth[p]).unwrap_or(0);
 crates/fno/src/agents_view/lineage_layout.rs	clippy::indexing_slicing	match parent_idx[cur] {
 crates/fno/src/agents_view/pid_probe.rs	clippy::undocumented_unsafe_blocks	let mut info: libc::proc_bsdinfo = unsafe { mem::zeroed() };
+crates/fno/src/agents_view/pid_probe.rs	clippy::undocumented_unsafe_blocks	let tck = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
 crates/fno/src/agents_view/pid_probe.rs	clippy::undocumented_unsafe_blocks	let written = unsafe {
 crates/fno/src/agents_view/pid_probe.rs	clippy::undocumented_unsafe_blocks	unsafe { *libc::__error() = 0 };
 crates/fno/src/agents_view/reader_state.rs	clippy::too_many_lines	pub fn tick(
