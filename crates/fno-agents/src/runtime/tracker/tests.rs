@@ -559,6 +559,7 @@ fn tracker_backend_config_leaf_reads_and_filters_empty() {
     let config = tmp.path().join("config.toml");
     std::fs::write(&config, "[tracker]\nbackend = \"linear\"\n").unwrap();
     let _guard = hermetic_env(tmp.path());
+    std::env::set_var("FNO_CONFIG", &config);
     let got = config_backend_name_at(tmp.path());
     assert_eq!(got.as_deref(), Some("linear"), "the config leaf answers");
 
@@ -587,6 +588,7 @@ fn tracker_backend_env_beats_config_and_explicit_beats_env() {
     let config = tmp.path().join("config.toml");
     std::fs::write(&config, "[tracker]\nbackend = \"linear\"\n").unwrap();
     let _guard = hermetic_env(tmp.path());
+    std::env::set_var("FNO_CONFIG", &config);
     std::env::set_var("FNO_TRACKER_BACKEND", "github");
     assert_eq!(
         backend_name(None),
@@ -612,6 +614,7 @@ fn tracker_backend_config_resolves_through_fno_config() {
     let config = tmp.path().join("config.toml");
     std::fs::write(&config, "[tracker]\nbackend = \"github\"\n").unwrap();
     let _guard = hermetic_env(tmp.path());
+    std::env::set_var("FNO_CONFIG", &config);
     assert_eq!(
         backend_name(None),
         "github",

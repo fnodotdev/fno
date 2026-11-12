@@ -134,11 +134,9 @@ fn apply_tracker_backend_flag(args: &[String]) -> Vec<String> {
             eprintln!("Error: unknown tracker backend {name:?}. Available: graph, github, linear");
             std::process::exit(2);
         }
-        if name != "graph" {
-            std::env::set_var("FNO_TRACKER_BACKEND", &name);
-        } else {
-            std::env::remove_var("FNO_TRACKER_BACKEND");
-        }
+        // "graph" lands in the env tier too, so the flag beats both an
+        // inherited env value and a standing tracker.backend config key.
+        std::env::set_var("FNO_TRACKER_BACKEND", &name);
         args.drain(pos..=pos + 1);
     }
     args
@@ -474,7 +472,7 @@ mod tests {
             .collect();
         let stripped = apply_tracker_backend_flag(&owned);
         assert_eq!(stripped, ["get", "x-abc".to_string()]);
-        assert!(std::env::var("FNO_TRACKER_BACKEND").is_err());
+        assert_eq!(std::env::var("FNO_TRACKER_BACKEND").as_deref(), Ok("graph"));
         std::env::remove_var("FNO_TRACKER_BACKEND");
     }
 }
