@@ -2778,13 +2778,15 @@ fn a_paint_pr_holds_until_an_answered_page_names_it() {
         .warnings()
         .iter()
         .any(|w| w.code == "visual_approval" && w.detail.contains("no recorded look")));
-    assert_eq!(
-        fake.look_requests.borrow().as_slice(),
-        [(7u64, fake.look_requests.borrow()[0].1.clone())]
+    let requests = fake.look_requests.borrow();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    let (requested_pr, requested_detail) = requests.first().expect("one look request");
+    assert_eq!(*requested_pr, 7);
+    assert!(
+        requested_detail.contains("no recorded look"),
+        "{requested_detail}"
     );
-    assert!(fake.look_requests.borrow()[0]
-        .1
-        .contains("no recorded look"));
+    drop(requests);
     fake.facts = None;
     std::fs::write(
         &page,
