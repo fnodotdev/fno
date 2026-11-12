@@ -1,0 +1,153 @@
+# The backlog tag vocabulary. This file is the one authority: the binary
+# compiles it in, every tag write checks it, and the backfill classifier
+# reads its keywords.
+#
+# A tag is `facet:value`. A closed facet takes only the values listed here.
+# `release` takes a version. `topic` takes any kebab-case word. A tag with
+# no `:` is an operational marker (main-repair, tier-hold) and stays legal.
+# A `facet:value` name is also a legal GitHub and Linear label name, so a
+# tracker backend can store it as a label unchanged.
+#
+# To add a value: add it here, in the same PR as the first node that needs it.
+
+[facets.audience]
+kind = "closed"
+describe = "who the change is for"
+values = ["user", "contributor", "internal"]
+
+[facets.area]
+kind = "closed"
+describe = "the product surface the change touches"
+# The values are the `name` of each [[areas]] row below.
+
+[facets.harness]
+kind = "closed"
+describe = "the harness the work is specific to; omit when it is not"
+values = ["claude", "codex", "opencode", "pi", "omp", "agy"]
+
+[facets.release]
+kind = "version"
+describe = "the release the node must ship in, e.g. release:0.4.8"
+
+[facets.topic]
+kind = "open"
+describe = "a free kebab-case word, e.g. topic:rust-idiom"
+
+# Audience words. A title or details word from one list votes for that
+# audience. The classifier stamps an audience only when one list wins.
+[audience_keywords]
+user = ["install", "installer", "onboarding", "quickstart", "readme", "website", "landing", "desktop", "ux", "ui"]
+contributor = ["flaky", "test", "tests", "lint", "clippy", "ci", "shard", "cargo", "budget", "golden", "goldens", "refactor"]
+internal = ["lead", "leads", "king", "fleet", "law", "laws", "ruling", "watchdog", "reap", "reaper", "worker", "workers", "daemon", "org"]
+
+# Areas. `audience` is the audience a node in the area has when no
+# audience word says otherwise. `keywords` are whole words the classifier
+# matches in the title (strong) and the details (weak). `projects` maps a
+# whole project onto the area.
+[[areas]]
+name = "mux"
+audience = "user"
+keywords = ["mux", "pane", "panes", "portal", "portals", "keeper", "tmux", "tui", "sideline", "composer", "overlay"]
+
+[[areas]]
+name = "desktop"
+audience = "user"
+keywords = ["desktop", "tauri", "fno-app", "menubar"]
+
+[[areas]]
+name = "mail"
+audience = "user"
+keywords = ["mail", "inbox", "mailbox", "outbox", "a2a"]
+
+[[areas]]
+name = "backlog"
+audience = "user"
+keywords = ["backlog", "node", "nodes", "graph", "groom", "board", "triage", "epic", "epics", "tags", "kanban"]
+
+[[areas]]
+name = "review"
+audience = "user"
+keywords = ["review", "reviews", "reviewer", "reviewers", "attestation", "code-review", "findings"]
+
+[[areas]]
+name = "merge-gate"
+audience = "user"
+keywords = ["merge", "merged", "mergeable", "auto-merge", "rebase", "conflict", "conflicting"]
+
+[[areas]]
+name = "spawn"
+audience = "user"
+keywords = ["spawn", "spawned", "dispatch", "thread", "threads", "lane", "lanes", "headless"]
+
+[[areas]]
+name = "target"
+audience = "user"
+keywords = ["target", "loop", "loop-check", "promise", "manifest", "blueprint", "execute", "wave", "waves"]
+
+[[areas]]
+name = "ci"
+audience = "contributor"
+keywords = ["ci", "workflow", "workflows", "shard", "shards", "flaky", "rerun", "preflight", "actions"]
+
+[[areas]]
+name = "evals"
+audience = "internal"
+keywords = ["eval", "evals", "golden", "goldens", "grader", "traces", "labels"]
+
+[[areas]]
+name = "release"
+audience = "user"
+keywords = ["release", "releases", "install", "installer", "tarball", "nightly", "version", "upgrade", "postinstall"]
+
+[[areas]]
+name = "telemetry"
+audience = "internal"
+keywords = ["telemetry", "analytics", "posthog", "metrics", "ledger", "events", "cost", "costs"]
+
+[[areas]]
+name = "hooks"
+audience = "user"
+keywords = ["hook", "hooks", "pretooluse", "posttooluse", "sessionstart", "stop-hook"]
+
+[[areas]]
+name = "docs"
+audience = "user"
+keywords = ["docs", "doc", "documentation", "readme", "guide", "quickstart"]
+
+[[areas]]
+name = "config"
+audience = "user"
+keywords = ["config", "settings", "setup", "doctor", "wizard"]
+
+[[areas]]
+name = "accounts"
+audience = "user"
+keywords = ["account", "accounts", "rotation", "provider", "providers", "oauth", "quota", "failover"]
+
+[[areas]]
+name = "skills"
+audience = "user"
+keywords = ["skill", "skills", "plugin", "slash"]
+
+[[areas]]
+name = "fleet"
+audience = "internal"
+keywords = ["fleet", "lead", "leads", "king", "org", "daemon", "watchdog", "reap", "reaper", "law", "laws", "ruling"]
+
+[[areas]]
+name = "web"
+audience = "user"
+keywords = ["website", "landing", "fno-web"]
+projects = ["fno-web", "web"]
+
+[[areas]]
+name = "books"
+audience = "user"
+keywords = ["book", "books", "chapter", "fno-books"]
+projects = ["fno-books"]
+
+[[areas]]
+name = "fnh"
+audience = "user"
+keywords = ["fnh"]
+projects = ["fnh"]

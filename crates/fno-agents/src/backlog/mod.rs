@@ -101,6 +101,8 @@ pub mod settings;
 pub mod settings_read;
 pub mod style_check;
 pub(crate) mod supersession;
+pub(crate) mod tag_backfill;
+pub mod tags;
 pub mod target_binding;
 pub mod task;
 pub mod title_gate;

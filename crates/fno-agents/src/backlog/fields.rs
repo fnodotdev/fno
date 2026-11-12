@@ -59,6 +59,7 @@ pub fn write_canonical_difficulty(
 /// Lowercase-trim a tag and validate its charset: `[a-z0-9-:.]+`, never
 /// starting or ending with `:` or `.`, so `release:0.4.8` is one tag. A space
 /// or any other byte still refuses: a space-split tag would corrupt the field.
+/// A `facet:value` tag then checks against the tag vocabulary (`tags.rs`).
 pub fn normalize_tag(raw: &str) -> Result<String, String> {
     let tag = raw.trim().to_lowercase();
     let edge = |b: u8| b == b':' || b == b'.';
@@ -73,6 +74,7 @@ pub fn normalize_tag(raw: &str) -> Result<String, String> {
             "invalid tag '{raw}': tags use [a-z0-9-:.] (letters, digits, hyphens, and an inner ':' or '.')"
         ));
     }
+    super::tags::check(&tag)?;
     Ok(tag)
 }
 
