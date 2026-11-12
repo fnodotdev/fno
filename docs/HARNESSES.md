@@ -20,7 +20,8 @@ Not for: per-CLI command syntax or hook wiring detail. Those are the harness's o
 | Openclaw | Loop-wrapper path. | Sequential |
 | OpenCode | First-class: `fno config plugin install opencode` installs commands, agents, skills and the bridge for every project, and switches oh-my-openagent off with consent. The bridge hosts footnote's hooks.json through opencode's plugin events (guards, injections, compaction, identity stamp) and drives the same completion gate on idle. The repo-local plugin keeps task delegation and the orchestrator prompt. Replacement guide: docs/guide/opencode.md. | Yes on the 1.x task tool. V2 seats agents from installed files. The capability row carries no `subagent_dispatch` claim, so the matrix cell reads unmeasured |
 | Antigravity CLI (`agy`) | Native `Stop`-hook adapter (world-gated, `decision:"continue"` re-drive). Claude-shaped hook events, Gemini-family wire format. Reads fleet announcements through its PreInvocation handler. | Sequential |
-| pi (`@earendil-works/pi-coding-agent`) | Keeper-hosted TUI on the thread lane (spawn measured native, 2026-09-01); `pi --mode rpc` is the driving transport the same session rides. | Yes with pi-subagents installed; Sequential otherwise |
+| pi (`@earendil-works/pi-coding-agent`) | Keeper-hosted TUI on the thread lane (spawn measured native, 2026-09-01) and a `pi --print --mode json` headless lane. fno builds no `pi --mode rpc` lane. | Yes with pi-subagents installed; Sequential otherwise |
+| oh-my-pi (`omp`, `@oh-my-pi/pi-coding-agent`) | A fork of pi with its own row. Headless `omp --print --mode json` lane; no pane or thread lane yet. Read from source (18.18.9), not measured live. | Sequential |
 | cursor-agent (Cursor CLI agent) | fno drives the hosted TUI: a mux pane attended, the keeper-hosted thread lane dispatched. The `--print` stream is output-only; no rpc, acp, serve, or stdio transport exists. | Sequential |
 | grok CLI | fno drives its hosted TUI. Rust ACP is separate. Headless `grok -p` awaits signed-in create/resume proof. | Sequential |
 | zcode (ZCode's CLI agent) | Headless one-shot lane: fno runs `zcode -p` turns and resumes the minted `sess_<uuid>` by name. The TUI lane is unmeasured on the 3.14.3 bundle. | Sequential |
@@ -29,7 +30,7 @@ Not for: per-CLI command syntax or hook wiring detail. Those are the harness's o
 
 ### footnote
 
-`fno agents spawn -H footnote --as pane "<task>" -- -m zai/glm-5.3-flash` runs footnote's own loop. The prefix names a `config.model_routing.providers` record, and `-P` is a claude route that this harness refuses. footnote sends each turn to the model API. It runs the tools (Read, Glob, Grep, Edit, Write, Bash, Skill, Footnotes) under `hooks/hooks.json`. It reads permissions and the sandbox switch from the footnote settings files: `~/.footnote/settings.json`, then `.footnote/settings.json`, then `.footnote/settings.local.json`. It writes every call to `~/.fno/sessions/<project-slug>/<fno_id>.jsonl` before it acts. `fno agents mail ask <name>` resumes by name. A resume never re-runs a started Edit, Write or Bash. It tells the model the outcome is unknown. The `footnote` binary is built from the private repo bllshttng/fnh with `cargo install --locked --path <your fnh checkout>`. `FNO_FOOTNOTE_BIN` names another path. The release tarball ships no footnote binary; an update installs only a compat stub at that name. The spawn row stays deliberately `capable`, so the thread lane keeps the honest seat refusal instead of launching the stub.
+`fno agents spawn -H footnote --as pane "<task>" -- -m zai/glm-5.3-flash` runs footnote's own loop. The prefix names a `config.model_routing.providers` record, and `-P` is a claude route that this harness refuses. footnote sends each turn to the model API. It runs the tools (Read, Glob, Grep, Edit, Write, Bash, Skill, Footnotes) under `hooks/hooks.json`. It reads permissions and the sandbox switch from the footnote settings files: `~/.footnote/settings.json`, then `.footnote/settings.json`, then `.footnote/settings.local.json`. It writes every call to `~/.fno/sessions/<project-slug>/<fno_id>.jsonl` before it acts. `fno agents mail ask <session-id>` resumes that session. A resume never re-runs a started Edit, Write or Bash. It tells the model the outcome is unknown. The `footnote` binary is built from the private repo bllshttng/fnh with `cargo install --locked --path <your fnh checkout>`. `FNO_FOOTNOTE_BIN` names another path. The release tarball ships no footnote binary. An update installs only a compat stub at that name. The spawn row stays deliberately `capable`, so the thread lane keeps the honest seat refusal instead of launching the stub.
 
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -48,24 +49,24 @@ Tools run with your own permissions. There is no sandbox.
 
 | Command | ACP message |
 |---|---|
-| `fno agents mail send <name> ...` | `session/prompt` with `_meta["footnote/origin"]` = `{kind: "mail", sender_session_id, message_id}`. fnh records the turn's origin as `mail`. |
-| `fno agents mail ask <name> "<text>"` | `session/prompt` with no origin, so fnh records `operator`. |
-| `fno agents mail ask <name> --answer allow_once\|deny` | The answer to the pending `session/request_permission`: `allow_once`, or `reject_once` for `deny`. |
+| `fno agents mail send <session-id> ...` | `session/prompt` with `_meta["footnote/origin"]` = `{kind: "mail", sender_session_id, message_id}`. fnh records the turn's origin as `mail`. |
+| `fno agents mail ask <session-id> "<text>"` | `session/prompt` with no origin, so fnh records `operator`. |
+| `fno agents mail ask <session-id> --answer allow_once\|deny` | The answer to the pending `session/request_permission`: `allow_once`, or `reject_once` for `deny`. |
 | `fno agents session stop <name>` | The stop signals the host. The host rejects any pending ask, sends `session/cancel`, and closes fnh's stdin. fnh writes its terminal record. |
 
 Mail and asks run one turn at a time. A mail sent during a turn waits until the turn ends. An ask nobody answers rejects after 290 s, and fnh rejects on its own at 300 s. Neither side allows by default. The permission-response rows in the capability table stay unsupported, because they describe pane keystrokes.
 
 ### muse
 
-`fno agents spawn -H muse --as thread "<task>"` starts Muse Code (Meta's coding CLI). One-time setup: `fno config plugin install muse` registers the stage's skills as a Muse-native plugin bundle (`.muse-plugin/plugin.json` plus copies of the stage's skill dirs, installed into Muse's own cache), so `/target` and the rest resolve in any repo. `FNO_MUSE_BIN` names the binary the install runs. The `fno-agents-worker --muse-host` process runs `muse serve`, holds its stdin and stdout, and serves the session on a socket under `~/.fno/agents/muse/`. The registry row carries the Muse session id, the host pid and that socket. fno picks the session id, so the row is bound before the first turn. `--as headless` runs one `muse exec --json --session-id <id>` turn instead. `fno agents mail ask <name>` on a headless row runs the same form again, and Muse continues the session. Tokens after the `--` fence go to `muse serve` or `muse exec` unchanged. Muse refuses an unknown flag itself. `FNO_MUSE_BIN` names another binary. Log in first with `muse login` or `META_API_KEY`.
+`fno agents spawn -H muse --as thread "<task>"` starts Muse Code (Meta's coding CLI). One-time setup: `fno config plugin install muse` registers the stage's skills as a Muse-native plugin bundle. The bundle is `.muse-plugin/plugin.json` plus copies of the stage's skill dirs, installed into Muse's own cache. So `/target` and the rest resolve in any repo. `FNO_MUSE_BIN` names the binary the install runs. The `fno-agents-worker --muse-host` process runs `muse serve`, holds its stdin and stdout, and serves the session on a socket under `~/.fno/agents/muse/`. The registry row carries the Muse session id, the host pid and that socket. fno picks the session id, so the row is bound before the first turn. `--as headless` runs one `muse exec --json --session-id <id>` turn instead. `fno agents mail ask <session-id>` on a headless row runs the same form again, and Muse continues the session. Tokens after the `--` fence go to `muse serve` or `muse exec` unchanged. Muse refuses an unknown flag itself. `FNO_MUSE_BIN` names another binary. Log in first with `muse login` or `META_API_KEY`.
 
 #### The thread lane: steering over MSP
 
 | Command | MSP message |
 |---|---|
-| `fno agents mail send <name> ...` | `turn/start` with the wrapped mail as text, `ifBusy: "queue"`, and `displayText` set to `[fno-mail <envelope id>]`. |
-| `fno agents mail ask <name> "<text>"` | `turn/start`. A text that starts with `/<skill>` goes as a skill part. |
-| `fno agents mail ask <name> --answer allow_once\|deny` | `approval/decide` with the choice Muse offered for that decision. |
+| `fno agents mail send <session-id> ...` | `turn/start` with the wrapped mail as text, `ifBusy: "queue"`, and `displayText` set to `[fno-mail <envelope id>]`. |
+| `fno agents mail ask <session-id> "<text>"` | `turn/start`. A text that starts with `/<skill>` goes as a skill part. |
+| `fno agents mail ask <session-id> --answer allow_once\|deny` | `approval/decide` with the choice Muse offered for that decision. |
 | `fno agents session stop <name>` | The host denies a pending approval, sends `turn/interrupt` and `session/leave` with `stop: true`, then closes `muse serve`'s stdin. |
 
 The proof of a delivery is the user message that Muse records with the host's own `commandId` and the envelope id. A `turn/started` event alone does not count, because a queued turn starts later. The host answers within 10 s with one of the delivery states. `accepted-new-turn` means Muse recorded the message. `parked` means the message waits in Muse's queue behind a running turn. Muse runs it when that turn ends, so the send reports it hosted and writes no durable copy, which would reach the worker twice. The host appends the late landing to `~/.fno/agents/muse/<session>.delivery.jsonl`. An approval nobody answers is denied after 290 s, the footnote host's bound. `failed` names a reason: `reclaimed` for `turn/unqueued`, `retracted`, or the MSP error kind. Mail never steers a running turn.
@@ -116,14 +117,15 @@ Versions measured 2026-10-11: claude 2.1.296, codex 0.162.1, opencode 1.18.33, p
 | claude | `claude --bg --name w "/fno:target x-aaaa"` | `--bg`: Claude's own supervisor, paneless | `--model M`, `--permission-mode P`, `--effort E`; route via `--settings <file>` | `--name` | `claude attach <short>` restarts a stopped one; `claude --bg --resume <uuid> --name w`; a showing permission prompt answers without a TTY: `fno agents ask <name> --answer allow_once\|allow_always\|deny` | `claude agents --json --all` | `hooks/context-hooks.json` |
 | codex | `codex -m M -a never -s workspace-write -c model_reasoning_effort=high "$fno:target x-aaaa"` | fno keeper via spawn | `-m`, `-a`, `-s`, `--yolo`, `-c model_reasoning_effort=E`, `-p <profile>` | none at launch (`/rename` in the TUI) | `codex resume <id> --remote unix://` | app-server thread list; `~/.codex/sessions` rollouts | `hooks/codex-hooks.json` |
 | opencode | v1 only: `opencode run --attach $URL --title w -m zai/glm-5.3 --command fno:target x-aaaa`. v2 `run` has no `--attach` or `--command`. | fno keeper via spawn | `-m provider/model`, `--agent A`; permission only through the serve's `OPENCODE_CONFIG` file | `--title` | `opencode attach $URL`, then `-s <id>` | `opencode session list --format json` | `cli/src/fno/setup/assets/opencode/footnote.js` (`session.created`) |
-| pi | `pi --session-id <uuid> --model zai/glm-5.3:high "/skill:target x-aaaa"` | fno keeper via spawn | `--provider`, `--model p/id[:thinking]`, `--thinking L`; no permission prompts | none | `pi --session <id>` from the session's own cwd | the `--session-dir` store | `cli/src/fno/setup/assets/pi/footnote.ts` (`before_agent_start`) |
+| pi | `pi --session-id <uuid> --model zai/glm-5.3:high "/skill:target x-aaaa"` | fno keeper via spawn | `--provider`, `--model p/id[:thinking]`, `--thinking L`; no permission prompts | none | `pi --session-id <id>` from the session's own cwd | the `--session-dir` store | `cli/src/fno/setup/assets/pi/footnote.ts` (`before_agent_start`) |
+| omp | `omp --print --mode json --no-session -- "/skill:target x-aaaa"` | headless only via spawn | `--model`, `--thinking L`, `--approval-mode M` (default `yolo`) | none | `omp --resume <id>`; omp mints the id and has no `--session-id` | `~/.omp/agent/sessions` | `cli/src/fno/setup/assets/pi/footnote.ts` (`before_agent_start`, stop on `session_stop`) |
 | agy | `agy -i "/target x-aaaa" --model M --dangerously-skip-permissions` | fno keeper via spawn | `--model`, `--dangerously-skip-permissions`, `--effort` | none | `agy --conversation <id>` | none measured on 1.3.3 | `hooks/agy-session-report.sh` |
 
 Background mode is a keeper owned by a daemon. For claude that keeper is Claude's own supervisor: `claude --bg`, paneless, with peek, attach, detach and restart from the saved conversation. For every other harness it is fno's daemon and pane keeper. An unattended worker rides the thread lane: `fno agents spawn -H <harness> --node <node-id> --name w '<payload>'`. A watched worker runs the harness's whole line in a keeper pane: `fno mux pane run --cwd <dir> -- <native argv>`. Every word after that `--` reaches the harness verbatim. The spawn fence carries the same law. Flags spawn does not own reach the harness argv verbatim, before or after the `--` fence, on the pane, thread and headless lanes. A lane that cannot carry a flag refuses and names it, never drops it. A loose unknown flag forwards as one token. A value rides in the `--flag=value` form or through `--harness-arg`.
 
 An agent-typed `claude --bg` line must carry `--name`. Without it, claude titles the row from the first prompt. A resume copy also keeps the old session's name after the worker moves to another node. A `claude --bg --resume <id>` of a running session starts a copy under a new id. That copy shows the old id in its status line. The Bash hook refuses both lines. Revive a fleet worker with `fno agents session resume <name>`, which passes the row's name.
 
-A launched session is adopted through the SessionStart hook file named in its row. A pi session reports through fno's own pi extension, so no pi-code install is needed. The adopted session joins the registry with the row shape a spawned worker gets. `fno agents session list`, `fno agents session peek`, mail and the stop command reach it like any other.
+A launched session is adopted through the SessionStart hook file named in its row. A pi or omp session reports through fno's own pi extension, so no pi-code install is needed. The adopted session joins the registry with the row shape a spawned worker gets. `fno agents session list`, mail and the stop command reach it like any other. Peek and receipts read its session store, which honors `PI_CODING_AGENT_DIR`. The chat-event stream has no pi arm yet.
 
 ## Sandboxed headless workers
 
@@ -178,6 +180,17 @@ One scannable table per harness: `symptom | cause | fix`. Every row names the ca
 | pi ships no permission popups, so its three `permission_response` actions are unsupported, its readiness manifest declares no blocked rule, and a credential vanished | Only the TUI's `/login <provider>` writes a credential | `pi auth` is read-only (three commands, none writes); never synthesize a credential; the pane lane is the only lane where that command runs |
 | Modified Enter keys collapsed to plain Enter on modified keys | `extended-keys` off in tmux | `set -g extended-keys on` in `~/.tmux.conf`; plain Enter is `\r` and submits, which is all fno's submit path needs |
 
+### omp
+
+Read from oh-my-pi source (`origin/main` d210c30657, 18.18.9), not from a live run.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `omp --session-id <id>` exits with "unknown flag" | omp has no `--session-id`, and an unknown flag is a hard error (`cli/args.ts`) | Let omp mint the id; read it back from the `--mode json` session header; resume with `--resume <id>` |
+| A pi reader takes a title line for the session header | omp writes a fixed-width title slot as line 1 and the header as line 2 | Find the header by `"type":"session"`, never by line number (`spawn/omp.rs`) |
+| The stop gate never fires on omp | omp has no `agent_settled`; its stop event is `session_stop` | The shared extension answers `session_stop` with `{decision: "block", reason}` |
+| omp needs bun 1.4.4 or newer | `engines.bun` in its package | Upgrade bun before `bun add -g @oh-my-pi/pi-coding-agent` |
+
 ### Antigravity plugin packaging
 
 | Symptom | Cause | Fix |
@@ -209,9 +222,9 @@ The table is measured at release time, and a harness newer than its fno drifts i
 
 ## pi: two lanes, one session, and one unsafe half
 
-pi is the first harness whose driving lane is neither a shellout nor a keystroke PTY. It is also the first whose worst failure mode is a SUCCESS. Read this before wiring anything to it. The traps are tabled under [Per-harness pitfall tables](#per-harness-pitfall-tables). This section keeps the identity facts the tables lean on.
+pi's worst failure mode is a SUCCESS. Read this before wiring anything to it. The traps are tabled under [Per-harness pitfall tables](#per-harness-pitfall-tables). This section keeps the identity facts the tables lean on.
 
-**The two lanes, and which one ships.** `pi --mode rpc` speaks strict JSONL over stdin and stdout: commands in, typed events out, LF the only delimiter. An `id` correlates request to response. That is the DRIVING lane, and the shipped spawn arm seats pi on the keeper-hosted thread lane (`features.spawn = native`, first green 2026-09-01 on pi 0.84.2). The keeper holds the TUI's pty, and the TUI is the view onto the session the rpc driver can hold. A plain interactive `pi` in a mux pane is the WATCHING lane, showing pi's real TUI. They are mutually exclusive per PROCESS, chosen at exec, and never per session. Measured 2026-08-28: a TUI opened on a session an rpc driver already held JOINED it. It rendered that session's own turns and left the session-file count at one. So the pane is a view onto a live rpc session, not a rival launch, and `fno agents session attach` on a pi row execs that TUI directly.
+**The two lanes, and which one ships.** `pi --mode rpc` speaks strict JSONL over stdin and stdout: commands in, typed events out, LF the only delimiter. An `id` correlates request to response. fno builds no rpc lane today. The rpc facts here are measurements kept for a future rpc driver. The shipped spawn arm seats pi on the keeper-hosted thread lane (`features.spawn = native`, first green 2026-09-01 on pi 0.84.2). The keeper holds the TUI's pty, and the TUI is the view onto the session the rpc driver can hold. A plain interactive `pi` in a mux pane is the WATCHING lane, showing pi's real TUI. They are mutually exclusive per PROCESS, chosen at exec, and never per session. Measured 2026-08-28: a TUI opened on a session an rpc driver already held JOINED it. It rendered that session's own turns and left the session-file count at one. So the pane is a view onto a live rpc session, not a rival launch, and `fno agents session attach` on a pi row execs that TUI directly.
 
 **A pi session is the pair `(cwd, session_id)`.** Sessions live at `~/.pi/agent/sessions/<encoded-cwd>/<ISO-timestamp>_<session-id>.jsonl`. The encoding replaces path separators with `-` and fences the result with `--` at both ends. The id alone addresses nothing. A resume issued from the wrong cwd finds nothing or creates a second session.
 
@@ -245,5 +258,6 @@ Doctor reports three failures: `broken` (dangling link), `stale` (link target ha
 | OpenCode | https://opencode.ai/docs |
 | Antigravity CLI (`agy`) | https://antigravity.google/docs/cli/reference |
 | pi | ships its own docs with the package (`docs/rpc.md`, `docs/sessions.md`, `docs/tmux.md`) |
+| oh-my-pi (`omp`) | https://omp.sh |
 
 For per-skill cross-CLI consequences see [docs/SKILL-COMPAT-MATRIX.md](SKILL-COMPAT-MATRIX.md); for how footnote wires into each CLI's hook surface see [docs/architecture/multi-cli-hooks.md](architecture/multi-cli-hooks.md).

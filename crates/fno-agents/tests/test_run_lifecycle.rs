@@ -1375,6 +1375,42 @@ fn a_third_agent_cargo_refuses_when_every_slot_is_busy() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// The run door's answer to an agent's test binary carries the CI-ride
+/// answer and names what a fleet test-hold all-clear does NOT lift: the
+/// worker that read the 2026-11-10 all-clear then filed the standing
+/// refusal as a broken wrapper (the exit-86 node). A free slot admits
+/// nothing here: the refusal precedes the slots.
+#[test]
+fn an_agent_test_binary_refusal_names_the_all_clear_reach() {
+    let root = std::fs::canonicalize(tmp_claims_root("run-agent-refusal")).unwrap();
+    let tree = root.join("w1");
+    std::fs::create_dir_all(&tree).unwrap();
+    slot_pool_setup(&root);
+    let refused = run_admit(&root, std::process::id(), &tree)
+        .env(
+            "FNO_CARGO_RUN_PROGRAM",
+            tree.join("target/debug/deps/fno_agents-abc123"),
+        )
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .unwrap();
+    assert_eq!(
+        refused.status.code(),
+        Some(86),
+        "an agent's test binary must refuse: {refused:?}"
+    );
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        stderr.contains("an agent session runs no tests"),
+        "the refusal must be the agent-tests answer, not the slots answer: {stderr}"
+    );
+    assert!(
+        stderr.contains("all-clear"),
+        "the refusal must name what a fleet test-hold all-clear does not lift: {stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// AC3-EDGE: a process under a slot holder (a nested cargo, a doctest's
 /// rustdoc) is admitted through the status pass with no second claim.
 #[test]

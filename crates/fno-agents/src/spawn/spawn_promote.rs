@@ -623,6 +623,47 @@ mod tests {
         }
     }
 
+    /// The granted-row staging the caller-seam tests share: a temp agents
+    /// home seeded with the granted esther row (level 0 over fnh,fno,
+    /// session s-granted), `HOME_ENV` pinned to it. The seed guard and the
+    /// temp dir stay alive in the caller's bindings, and the parent pid
+    /// seeds the census chain.
+    fn granted_home_stage() -> (tempfile::TempDir, crate::claims::EnvVarGuard, u32) {
+        let tmp = tempfile::tempdir().unwrap();
+        let agents = tmp.path().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        crate::registry_store::seed_raw(
+            agents.join("registry.json"),
+            json!({"schema_version": 4, "agents": [
+                {"name": "esther", "status": "live", "role_scope": "fnh,fno", "role_level": 0,
+                 "cwd": std::env::current_dir().unwrap().display().to_string(), "harness": "claude",
+                 "harness_session_id": "s-granted",
+                 "created_at": "2026-11-10T06:21:00Z"}
+            ]})
+            .to_string(),
+        );
+        let ppid: u32 = unsafe { libc::getppid() } as u32;
+        let home_root = crate::claims::EnvVarGuard::set(
+            crate::paths::HOME_ENV,
+            agents.display().to_string().as_str(),
+        );
+        (tmp, home_root, ppid)
+    }
+
+    /// The harness-ancestry census the granted-row caller proves: the Bash
+    /// tool invocation sits under the lead's claude process, under launchd.
+    fn granted_census_stage(ppid: u32) -> crate::claims::proof_tests::CensusGuard {
+        crate::claims::proof_tests::CensusGuard::chain(&[
+            (
+                std::process::id(),
+                ppid,
+                "fno-agents spawn --role-level 0 --role-scope fnh,fno",
+            ),
+            (ppid, 1, "claude --resume /t/lead.jsonl --name lead"),
+            (1, 0, "launchd"),
+        ])
+    }
+
     /// The bare command (`spawn --promote <scope> --hand-off`, no `--name`)
     /// draws the successor's name at plan. The seam mints no name for a
     /// hand-off, so the settle draw is the only name source; an empty one
@@ -930,6 +971,137 @@ mod tests {
         };
         let params = json!({"role_level": json!(0), "role_scope": json!("e-1")});
         raw_role_pair_gate(&params).expect("a proved human grants the raw pair");
+    }
+
+    #[test]
+    fn a_granted_row_resolves_a_session_env_caller_under_harness_ancestry() {
+        // The node's acceptance, verbatim: inside a lead session, the gates
+        // resolve the session id the role grant names, driven by a
+        // harness-ancestry call with the session env set. The full spawn
+        // stamp rides the Bash tool env, the census pins a claude ancestor,
+        // and the registry row grants that session level 0.
+        let guard = PlanEnvGuard::take();
+        guard.clear_identity();
+        let (_tmp, _home_root, ppid) = granted_home_stage();
+        let _self = crate::claims::EnvVarGuard::set("FNO_AGENT_SELF", "esther");
+        let _session = crate::claims::EnvVarGuard::set("FNO_AGENT_SESSION", "s-granted");
+        let _agent_harness = crate::claims::EnvVarGuard::set("FNO_AGENT_HARNESS", "claude");
+        let _hn = crate::claims::EnvVarGuard::set("FNO_HARNESS_NAME", "claude");
+        let _hsid = crate::claims::EnvVarGuard::set("FNO_HARNESS_SESSION_ID", "s-granted");
+        // The harness's own attester marker rides the Bash tool env in
+        // production (claude exports CLAUDE_CODE_SESSION_ID); the Complete
+        // fno stamp alone refuses fail-closed, and that is the bystander
+        // contract the next test pins.
+        let _attest = crate::claims::EnvVarGuard::set("CLAUDE_CODE_SESSION_ID", "s-granted");
+        let _spid = crate::claims::EnvVarGuard::set(
+            "FNO_SESSION_PID",
+            std::process::id().to_string().as_str(),
+        );
+        let _sharness = crate::claims::EnvVarGuard::set("FNO_SESSION_HARNESS", "claude");
+        let _census = granted_census_stage(ppid);
+        let home = crate::paths::AgentsHome::from_env();
+        let calling = calling_row(&home);
+        let Calling::Agent(row, sid) = &calling else {
+            panic!("a session-env granted caller read {calling:?}, not Agent");
+        };
+        assert_eq!(row.role_level, Some(0), "{calling:?}");
+        assert_eq!(sid, "s-granted");
+        // The gate stamps a raw pair onto ANOTHER row, so the request names
+        // a scope the caller contains, never its own (that is the transfer
+        // refusal the sibling test pins). The grant check also validates the
+        // request against the project map, which the test supplies.
+        let params = json!({"role_level": json!(0), "role_scope": json!("fno")});
+        let projects: std::collections::HashMap<String, String> = [("fnh", "fnh"), ("fno", "fno")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let raw = raw_role_pair_checked(&calling, &params, &[], &projects);
+        assert!(
+            raw.is_none(),
+            "the granted lead passes the raw pair gate: {raw:?}"
+        );
+    }
+
+    #[test]
+    fn a_markerless_claude_caller_stays_unproven_beside_a_live_row() {
+        // The bystander rule holds: a markerless claude process shares its
+        // cwd and its project with live neighbour rows, so the cwd-keyed
+        // adoption refuses claude rows no marker names. The census proving
+        // the harness family does not lift that guard - several live claude
+        // sessions can serve one project, and adopting the only row would
+        // sign the neighbour's mail. The unproven refusal stays verbatim.
+        let guard = PlanEnvGuard::take();
+        guard.clear_identity();
+        let (_tmp, _home_root, ppid) = granted_home_stage();
+        let _pid = crate::claims::EnvVarGuard::unset("FNO_SESSION_PID");
+        let _walk_harness = crate::claims::EnvVarGuard::unset("FNO_SESSION_HARNESS");
+        let _census = granted_census_stage(ppid);
+        let home = crate::paths::AgentsHome::from_env();
+        let calling = calling_row(&home);
+        match &calling {
+            Calling::Unproven(reason) => {
+                assert_eq!(
+                    *reason, "a harness process is in this call's ancestry",
+                    "{calling:?}"
+                );
+            }
+            other => panic!("a markerless caller read {other:?}, not Unproven"),
+        }
+    }
+
+    #[test]
+    fn a_resolved_holder_hands_off_its_own_scope() {
+        // Specimens 2 and 3 of the widened acceptance: once the caller is
+        // resolved (the env-set contract above), the hand-off door's grant
+        // arms hold. A same-scope promote with succession intent is
+        // admitted, an L0 grants over a lower scope, and the same
+        // same-scope promote without succession intent still refuses as a
+        // transfer.
+        let holder = crate::state::RegistryEntry {
+            name: "tania".into(),
+            role_scope: Some("x-1,x-2".into()),
+            role_level: Some(2),
+            ..Default::default()
+        };
+        let projects: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let grant = |succession: bool| {
+            crate::territory::role_grant_kind(&json!({
+                "op": "check", "requested": "x-1,x-2",
+                "caller": agent_caller(&holder, "s-t"),
+                "allow_succession": succession,
+                "projects": projects, "entries": Vec::<serde_json::Value>::new(),
+            }))
+            .expect("the grant check answers")
+            .as_object()
+            .and_then(|answer| answer.iter().find(|(k, _)| k.as_str() == "refusal"))
+            .and_then(|(_, v)| v.as_str())
+            .map(str::to_string)
+        };
+        assert!(
+            grant(true).is_none(),
+            "hand-off admits its own scope: {:?}",
+            grant(true)
+        );
+        let transfer = grant(false).expect("no succession intent is a transfer refusal");
+        assert!(transfer.contains("transfer, not a grant"), "{transfer}");
+        let l0 = crate::state::RegistryEntry {
+            name: "atticus".into(),
+            role_scope: Some("fnh,fno".into()),
+            role_level: Some(0),
+            ..Default::default()
+        };
+        let lower = crate::territory::role_grant_kind(&json!({
+            "op": "check", "requested": "x-9",
+            "caller": agent_caller(&l0, "s-a"),
+            "allow_succession": false,
+            "projects": projects, "entries": Vec::<serde_json::Value>::new(),
+        }))
+        .expect("the grant check answers")
+        .as_object()
+        .and_then(|answer| answer.iter().find(|(k, _)| k.as_str() == "refusal"))
+        .and_then(|(_, v)| v.as_str())
+        .map(str::to_string);
+        assert!(lower.is_none(), "an L0 grants a lower scope: {lower:?}");
     }
 
     #[test]

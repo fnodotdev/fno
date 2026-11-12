@@ -24,6 +24,7 @@ pub mod pretool_host;
 pub mod pretooluse_bash;
 pub mod prompt;
 pub mod recursive_grep_guard;
+pub mod refusal;
 pub mod refusal_streak;
 pub mod rules;
 pub mod save_session;
@@ -116,12 +117,19 @@ pub(crate) fn emit_allow() -> i32 {
 /// millisecond - a line-level collision would dedup into one row and break
 /// the exactly-one-row liveness contract.
 pub(crate) fn emit_guard_decision(cwd: &Path, guard: &str, tool: &str, denied: bool) {
+    emit_guard_row(cwd, guard, tool, if denied { "block" } else { "allow" });
+}
+
+/// The same row with a named decision: `nudge` (allowed with a note), `ask`
+/// (the harness prompted the person) or `override` (the person approved an
+/// ask and the call ran).
+pub(crate) fn emit_guard_row(cwd: &Path, guard: &str, tool: &str, decision: &str) {
     let path =
         crate::state_path::resolve("events", cwd).unwrap_or_else(|| crate::paths::events_path(cwd));
     let event = json!({
         "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
         "type": "guard_decision",
-        "data": {"guard": guard, "decision": if denied { "block" } else { "allow" }, "tool": tool},
+        "data": {"guard": guard, "decision": decision, "tool": tool},
         "source": "hook"
     });
     let _ = crate::claims::append_event_line(&path, &event, std::time::Duration::from_secs(2));

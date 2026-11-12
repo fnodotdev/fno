@@ -1,0 +1,81 @@
+# fno's must-enable list: its own record commands plus the common reads a
+# worker runs, translated per harness by must_enable.rs. A word that is a
+# list matches any one of its strings. A row may name no interpreter, shell
+# or runner (filter A) and nothing that launches, merges or rotates (the
+# never-list): the loader refuses both. Every rule needs a corpus command it
+# allows, and CI replays every corpus command through fno's Bash guards.
+
+corpus = [
+  "fno backlog get x-0000",
+  "fno backlog note x-0000 progress",
+  "fno inbox operator status",
+  "fno mail unread",
+  "fno whoami",
+  "fno agents mail unread",
+  "fno agents claim status node:x-0000",
+  "fno agents session list",
+  "fno agents session logs worker",
+  "fno agents session peek worker",
+  "fno agents session status",
+  "fno do plan path",
+  "fno do state get",
+  "fno do pr status 1",
+  "fno do pr wait 1 --until settled --timeout 15m",
+  "fno do pr info 1",
+  "fno do pr list",
+  "fno do pr logs 1",
+  "grep -rn foo src | head -20",
+  "tail -n 5 README.md",
+  "jq .name package.json",
+  "git status",
+  "git diff --stat",
+  "git log --oneline -5",
+  "git show HEAD",
+  "gh pr view 1",
+  "gh pr checks 1",
+  "gh pr list",
+]
+
+[[rule]]
+prefix = ["fno", "backlog"]
+why = "fno's backlog record: read and annotate nodes"
+
+[[rule]]
+prefix = ["fno", "inbox"]
+why = "what waits on a human"
+
+[[rule]]
+prefix = ["fno", "mail"]
+why = "agent mail between sessions"
+
+[[rule]]
+prefix = ["fno", "whoami"]
+why = "read-only self-introspection"
+
+[[rule]]
+prefix = ["fno", "agents", ["mail", "claim"]]
+why = "agent mail and work claims"
+
+[[rule]]
+prefix = ["fno", "agents", "session", ["list", "logs", "peek", "status"]]
+why = "session reads; never stop, rm, resume, recover or move"
+
+[[rule]]
+prefix = ["fno", "do", ["plan", "state"]]
+why = "plan files and the session manifest"
+
+[[rule]]
+prefix = ["fno", "do", "pr", ["status", "wait", "info", "list", "logs"]]
+why = "PR reads; never create, push or merge"
+
+[[rule]]
+prefix = [["grep", "head", "tail", "jq"]]
+why = "plain reads"
+
+[[rule]]
+prefix = ["git", ["status", "diff", "log", "show"]]
+why = "git reads"
+
+[[rule]]
+prefix = ["gh", "pr", ["view", "checks", "list"]]
+why = "GitHub PR reads"

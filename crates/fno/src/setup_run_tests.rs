@@ -131,20 +131,21 @@ fn step_selection_offers_both_layers_and_filters() {
     }
     assert!(STEPS.iter().any(|s| s.layer == Layer::Global));
     assert!(STEPS.iter().any(|s| s.layer == Layer::Project));
-    // The service and report rows: the approve gate owns the first five's
-    // proposals, the last two only ever report.
+    // The service and report rows: the approve gate owns the first six's
+    // proposals, the last one only ever reports.
     for id in [
         "pr-watcher",
         "auto-heal",
         "groom-agent",
         "projects",
         "review-merge",
+        "permission-rules",
     ] {
         assert!(STEPS
             .iter()
             .any(|s| s.id == id && s.kind == Kind::Approve && s.layer == Layer::Global));
     }
-    for id in ["machine-tools", "permission-rules"] {
+    for id in ["machine-tools"] {
         assert!(STEPS
             .iter()
             .any(|s| s.id == id && s.kind == Kind::Report && s.layer == Layer::Global));

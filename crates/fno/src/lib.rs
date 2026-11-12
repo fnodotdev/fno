@@ -166,6 +166,8 @@ pub mod model_catalog;
 #[cfg(feature = "full")]
 pub mod mouse;
 #[cfg(feature = "full")]
+pub mod must_enable;
+#[cfg(feature = "full")]
 pub mod mux_cli;
 #[cfg(feature = "full")]
 pub mod mux_link;
@@ -210,6 +212,8 @@ pub mod path_migration;
 mod path_migration_tests;
 #[cfg(feature = "full")]
 pub mod paths_route;
+#[cfg(feature = "full")]
+pub(crate) mod plugins_feed;
 #[cfg(feature = "full")]
 pub mod popup;
 #[cfg(feature = "full")]

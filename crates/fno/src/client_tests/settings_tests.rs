@@ -133,12 +133,14 @@ async fn settings_tabs_switch_by_tab_and_by_tap() {
     let mut v = settings_on(SettingsTab::General);
     let mut keys = Keys::new();
     // The tab cycle walks the header order and wraps, never leaving the
-    // modal: general, theme, colors, experimental, remote hosts, general.
+    // modal: general, theme, colors, experimental, remote hosts,
+    // extensions, general.
     for want in [
         SettingsTab::Theme,
         SettingsTab::Colors,
         SettingsTab::Experimental,
         SettingsTab::RemoteHosts,
+        SettingsTab::Extensions,
         SettingsTab::General,
     ] {
         keys.send(&mut v, b"\t").await;
@@ -160,7 +162,14 @@ async fn settings_tabs_switch_by_tab_and_by_tap() {
         .collect();
     assert_eq!(
         tabs,
-        ["general", "theme", "colors", "experimental", "remote hosts"]
+        [
+            "general",
+            "theme",
+            "colors",
+            "experimental",
+            "remote hosts",
+            "extensions"
+        ]
     );
     // A hover over a tab label moves no row selection.
     let sel = v.aux.as_ref().unwrap().popup.sel;
@@ -224,4 +233,55 @@ async fn lane_custom_entry_enter_refuses_an_invalid_color_without_saving() {
         Some("#12a"),
         "nothing saved; the field stays open for a fix"
     );
+}
+
+/// The Extensions tab: one switch per mod from `ls --json`, a built-in view
+/// without one, and a failed read as one notice row with no mod rows.
+#[test]
+fn extensions_tab_lists_switches_and_names_a_failed_read() {
+    use crate::client::extensions::{act, parse_installed, Act, ReadFailed};
+    let listing = br#"{"packs": [{"pack_id": "p", "mods": [
+        {"id": "on", "title": "On", "enabled": true, "kind": "feed", "preview": "/x.png"},
+        {"id": "off", "title": "Off", "enabled": false, "kind": "run", "runs_code": true,
+         "run": ["sh", "-c", "echo hi"]},
+        {"id": "board", "title": "Board", "enabled": true, "kind": "native"}]}]}"#;
+    let mut v = two_pane_view();
+    v.extensions.installed = Some(parse_installed(Ok(listing.to_vec())));
+    let (rows, actions) = v.settings_rows_for(SettingsTab::Extensions);
+    let text = format!("{rows:?}");
+    assert!(text.contains("☑") && text.contains("☐"), "{text}");
+    assert!(
+        text.contains("Board · p/board") && text.contains("Built in"),
+        "{text}"
+    );
+    assert!(text.contains("Runs code"), "{text}");
+    let switches: Vec<_> = actions
+        .iter()
+        .filter_map(|a| match a {
+            AuxAction::Extension(Act::Switch(t, on)) => Some((t.as_str(), *on)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(switches, [("p/on", false), ("p/off", true)]);
+
+    // Turning on a mod that runs code asks again and shows the argv.
+    act(&mut v, Act::Switch("p/off".into(), true));
+    let (rows, actions) = v.settings_rows_for(SettingsTab::Extensions);
+    let text = format!("{rows:?}");
+    assert!(text.contains("Runs code: sh -c 'echo hi'"), "{text}");
+    assert!(actions.contains(&AuxAction::Extension(Act::Confirm("p/off".into()))));
+    v.extensions.confirm = None;
+
+    v.extensions.installed = Some(parse_installed(Err(ReadFailed(
+        "`fno config plugins ls --json` exited 1".into(),
+    ))));
+    let (rows, actions) = v.settings_rows_for(SettingsTab::Extensions);
+    let text = format!("{rows:?}");
+    assert!(
+        text.contains("`fno config plugins ls --json` exited 1"),
+        "{text}"
+    );
+    assert!(!actions
+        .iter()
+        .any(|a| matches!(a, AuxAction::Extension(Act::Switch(..)))));
 }

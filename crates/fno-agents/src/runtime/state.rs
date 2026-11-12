@@ -444,6 +444,21 @@ impl Registry {
             .iter()
             .find(|entry| entry.name == token || session_handle_tier_any(entry, token))
     }
+
+    /// [`Self::find_name_or_full_session_id`], then the 8-hex short id a
+    /// notice prints: the transport short or the session id's head. The short
+    /// form resolves only when exactly one row answers it, so a shared head
+    /// refuses instead of picking a row.
+    pub fn find_name_session_or_short_id(&self, token: &str) -> Option<&RegistryEntry> {
+        self.find_name_or_full_session_id(token).or_else(|| {
+            let mut hits = self.entries.iter().filter(|e| {
+                e.transport_short() == Some(token)
+                    || entry_session_ids(e).any(|sid| session_handle_tier(token, sid) == Some(1))
+            });
+            let first = hits.next()?;
+            hits.next().is_none().then_some(first)
+        })
+    }
 }
 
 /// True when `token` resolves the row at the full-id session tier.

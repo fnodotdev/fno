@@ -104,7 +104,7 @@ A subagent fails the same way and gives you less to read. One finished at 23:13 
 
 Two channels, and they answer different questions.
 
-`fno agents mail send <name> "<text>"` can reach a **live** worker. Read its receipt. `accepted-new-turn` and `accepted-steer` mean the worker's own turn record holds the message. `parked` and `injected` mean the bytes reached the worker but no turn took them yet. A `queued` message waits until the agent looks up or a human presses ESC. Any other receipt means the worker still has its old instructions. A failed injection falls back to the durable queue, where the message can remain unread.
+`fno agents mail send <session-id> "<text>"` can reach a **live** worker. Read its receipt. `accepted-new-turn` and `accepted-steer` mean the worker's own turn record holds the message. `parked` and `injected` mean the bytes reached the worker but no turn took them yet. A `queued` message waits until the agent looks up or a human presses ESC. Any other receipt means the worker still has its old instructions. A failed injection falls back to the durable queue, where the message can remain unread.
 
 `fno backlog update <id> 'dispatch_brief+=...'` changes what the **next** worker reads. This is a standing order, not a note. Update it before you spawn, never after.
 
@@ -464,6 +464,14 @@ The same read reported both branches as 32 commits behind `main`. That is the no
 **Specimen.** `fno backlog note` exited 124 at a 40s budget and again at 60s, and the report went out as "graph writes hang while reads answer". Writes were landing the whole time. Ten measured writes that night: 34.7s, 41.4s, 44.6s, 46.7s, 51.9s, 53.2s, 66.3s, 87.6s, 102.4s, 150.9s. One write the operator interrupted at 400s had already been recorded on the node. Five reports of a hang were one slow subsystem and a short timeout.
 
 *Graduates to:* a receipt from the graph commands naming the elapsed time, so a caller can tell a slow write from a lost one.
+
+## A claude supervisor born outside the GUI session breaks DNS, gh and ps for every session it hosts
+
+**Answer.** A claude supervisor born outside the user's Aqua GUI session hosts sessions that inherit its broken bootstrap. Every hosted session loses the same services at the same moment. `getaddrinfo` cannot resolve `github.com`. `scutil --dns` prints nothing. `pgrep` says `Cannot get process list`. The Tailscale CLI says `Failed to load preferences`. When its last client disconnects, the claude daemon exits. The supervisor serving the fleet is the one the most recent client birthed. A client typed in an ssh login, a bad pane keeper, or an fno launchd job births the supervisor there. When the job is replaced, a supervisor born inside an fno launchd job dies to DNS and keychain. fno refuses to birth a supervisor from those contexts and exits 13 with the cure. A SessionStart hook names the state from inside a hosted session. A bare `claude` typed in a non-GUI pane never reaches fno, so it births the bad supervisor anyway.
+
+**Answer.** The cure is a restart from a GUI terminal. Run `claude daemon stop --any`, then start any `claude --bg` command from that GUI shell (or a GUI-born mux pane), and resume each stopped session with `claude --bg --resume <session-id>`. Stopping and resuming one session does not cure it. The supervisor, not the session, holds the broken bootstrap, so every session under the old supervisor stays broken until the supervisor itself is restarted. Read `claude agents` before each resume and skip rows that are already live. Mail can wake a session in the gap between the stop and the resume, and a blind resume forks a copy. `claude stop` on a copy also stops its original.
+
+*Graduates to:* claude refusing to birth its own supervisor outside the Aqua session, or an fno hook that blocks the bare-claude birth road.
 
 ## Retired
 

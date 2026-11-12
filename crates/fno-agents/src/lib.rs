@@ -109,7 +109,7 @@ pub use eval::{
     otel_ingest, otel_read, otlp_export, prove_it_verdicts, reader_cost, refusal_fold,
     refusal_rate, refusal_trend, research, retro, scoreboard, scoreboard_escalation,
     scoreboard_provider, session_cost, session_report, skill_diff, skill_drift, stability_report,
-    test_census, tick_ledger, wake_meter,
+    test_census, tick_ledger, usage_events, wake_meter,
 };
 pub use gate::{
     acceptance_evidence, approvals, attest, authorized_merge, autonomy_policy, autonomy_status,
@@ -192,7 +192,7 @@ pub use spawn::{
     harness_capabilities, harness_commands, harness_matrix, harness_roster, keeper_spawn,
     lane_heal, lanes, launch_exec, launch_flags, launch_record, launch_workdir, launchd_labels,
     loop_dispatch, loops_config, machine_key, model_env_scrub, model_family, model_price,
-    name_draw, name_ledger, naming, native_bg_mint, occupancy_classify, occupancy_login,
+    name_draw, name_ledger, naming, native_bg_mint, occupancy_classify, occupancy_login, omp,
     opencode_ask, opencode_config, opencode_install, pack_profile, pane_spawn, pi, pi_ask,
     plugin_install, plugins, project_sandbox, provider, provider_cap, provider_cap_commands,
     provider_key, provider_route, retask, role_cwd, role_grant, role_migration, route_capacity,

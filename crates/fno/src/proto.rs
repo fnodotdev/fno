@@ -413,9 +413,11 @@ fn default_true() -> bool {
 /// v126: `ControlCommand::PaneKillChecked` binds removal to the observed child.
 /// v127: `ClientMsg::ChatTail` and `ServerMsg::ChatEvents`, the chat event
 /// stream; floor stays 58.
-/// v128: `AgentRow.mail_held_since` (serde default), the wall stamp of the
+/// v128: `LayoutBinding::Mod`, `GraftOutcome::Mod` and `GraftSlotResult.reason`,
+/// a layout slot that holds a mod; floor stays 58.
+/// v129: `AgentRow.mail_held_since` (serde default), the wall stamp of the
 /// oldest held submission; floor stays 58.
-pub const PROTO_VERSION: u32 = 128;
+pub const PROTO_VERSION: u32 = 129;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -2328,6 +2330,9 @@ pub struct GraftSlotResult {
     pub slot: String,
     pub pane_id: u64,
     pub outcome: GraftOutcome,
+    /// Why a slot fell back to a shell (v128), e.g. `mod off`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// How a graft slot was filled (v44).
@@ -2340,6 +2345,8 @@ pub enum GraftOutcome {
     Fno,
     /// A freshly spawned shell.
     Shell,
+    /// A pane running `fno config plugins open <pack>/<mod>` (v128).
+    Mod,
 }
 
 /// One tab in a [`ServerMsg::TabList`] (v41, layout-api). `pane_ids` are the
@@ -4263,7 +4270,7 @@ mod tests {
         // re-assert the same literal, which caught nothing a single pin does
         // not and turned every bump into a three-file edit; they now assert
         // only their own wire shapes.
-        assert_eq!(PROTO_VERSION, 128);
+        assert_eq!(PROTO_VERSION, 129);
         // v64 added `PanePlacement.portal` and `AgentRow.portal`.
         // Both are additive `#[serde(default)]` fields, so the floor does NOT
         // move with them - a v63 client still attaches. Pinned beside the
@@ -4901,5 +4908,30 @@ mod tests {
         };
         let bytes = serde_json::to_vec(&closed).unwrap();
         assert_eq!(closed, serde_json::from_slice::<ServerMsg>(&bytes).unwrap());
+    }
+
+    #[test]
+    fn mod_slot_wire_shapes_round_trip() {
+        let spec: AnchoredLayoutSpec = toml::from_str(
+            r#"
+version = 1
+[tree]
+slot = "panel"
+[[slots]]
+name = "panel"
+binding = { mod = "fno-panels/review-ledger" }
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            spec.slots[0].binding,
+            LayoutBinding::Mod("fno-panels/review-ledger".into())
+        );
+
+        // A v127 receipt has no `reason`; it decodes to None and stays absent.
+        let old = r#"{"slot":"a","pane_id":3,"outcome":"shell"}"#;
+        let got: GraftSlotResult = serde_json::from_str(old).unwrap();
+        assert_eq!(got.reason, None);
+        assert!(!serde_json::to_string(&got).unwrap().contains("reason"));
     }
 }

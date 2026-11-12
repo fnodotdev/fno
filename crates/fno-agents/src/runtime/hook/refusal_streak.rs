@@ -55,6 +55,57 @@ pub(super) fn judge_pre(payload: &Value) -> Option<String> {
     park_reason(&ledger_path(&cwd, &session), now_secs(), &key)
 }
 
+/// A stop that returned `ask` leaves its shape and guards here. PostToolUse
+/// fires only for a call that ran, so a later post for the same shape means
+/// the person approved the prompt: `record` journals one `override` row per
+/// guard. The count is what tells a guard it is in the way.
+pub(super) fn note_asked(payload: &Value, guards: &[&str]) {
+    let Some((cwd, session, command)) = parts(payload) else {
+        return;
+    };
+    let path = asks_path(&cwd, &session);
+    let mut entries = load(&path);
+    let now = now_secs();
+    entries.retain(|_, e| AskEntry::read(e).is_some_and(|a| a.expires > now));
+    entries.insert(
+        shape_key(&cwd, &command),
+        json!({"guards": guards, "expires": now + ENTRY_TTL_SECS}),
+    );
+    save(&path, &entries);
+}
+
+fn asks_path(cwd: &Path, session: &str) -> PathBuf {
+    super::events_space(cwd)
+        .join("guard-asks")
+        .join(format!("{session}.json"))
+}
+
+/// The guards whose ask this finished call answered, removed from the file.
+fn take_overrides(path: &Path, now: u64, key: &str) -> Vec<String> {
+    let mut entries = load(path);
+    let Some(entry) = entries.remove(key) else {
+        return Vec::new();
+    };
+    save(path, &entries);
+    match AskEntry::read(&entry) {
+        Some(ask) if ask.expires > now => ask.guards,
+        _ => Vec::new(),
+    }
+}
+
+/// One asked shape in the ledger.
+#[derive(serde::Deserialize)]
+struct AskEntry {
+    guards: Vec<String>,
+    expires: u64,
+}
+
+impl AskEntry {
+    fn read(entry: &Value) -> Option<Self> {
+        serde_json::from_value(entry.clone()).ok()
+    }
+}
+
 /// The post side against the resolved payload: bump, restart or clear the
 /// shape's streak. Best-effort end to end; an unreadable payload records
 /// nothing.
@@ -62,6 +113,12 @@ fn record(payload: &Value) {
     let Some((cwd, session, command)) = parts(payload) else {
         return;
     };
+    let asks = asks_path(&cwd, &session);
+    if asks.exists() {
+        for guard in take_overrides(&asks, now_secs(), &shape_key(&cwd, &command)) {
+            super::emit_guard_row(&cwd, &guard, "Bash", "override");
+        }
+    }
     let exit = payload
         .get("tool_response")
         .and_then(|r| r.get("exit_code").or_else(|| r.get("exitCode")))
@@ -304,6 +361,25 @@ fn park_reason(path: &Path, now: u64, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An asked shape that then ran names its guards once; a stale or
+    /// unasked shape names none.
+    #[test]
+    fn an_answered_ask_reads_as_an_override_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s1.json");
+        let mut entries = BTreeMap::new();
+        entries.insert(
+            "k".to_string(),
+            json!({"guards": ["test-run guard"], "expires": 2_000}),
+        );
+        entries.insert("old".to_string(), json!({"guards": ["x"], "expires": 10}));
+        save(&path, &entries);
+        assert_eq!(take_overrides(&path, 1_000, "k"), vec!["test-run guard"]);
+        assert!(take_overrides(&path, 1_000, "k").is_empty(), "spent once");
+        assert!(take_overrides(&path, 1_000, "old").is_empty(), "expired");
+        assert!(take_overrides(&path, 1_000, "none").is_empty());
+    }
 
     #[test]
     fn streak_parks_the_third_identical_failure_and_clears_on_success() {
