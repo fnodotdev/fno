@@ -20,17 +20,18 @@ pub const TAG_REQUEST: u8 = 1;
 /// Frame tag of a keeper reply.
 pub const TAG_RESPONSE: u8 = 4;
 
-macro_rules! keeper_methods {
-    ($($variant:ident => $wire:literal),+ $(,)?) => {
-        /// One store method. `Other` carries a word this build does not
-        /// serve, so the keeper answers it with its own refusal text.
+/// A closed word set with an `Other` arm: the wire form is the bare word,
+/// and a word this build does not know reads as `Other`, never a failure.
+macro_rules! wire_words {
+    ($(#[$doc:meta])* $name:ident { $($variant:ident => $wire:literal),+ $(,)? }) => {
+        $(#[$doc])*
         #[derive(Debug, Clone, PartialEq, Eq)]
-        pub enum KeeperMethod {
+        pub enum $name {
             $($variant,)+
             Other(String),
         }
 
-        impl KeeperMethod {
+        impl $name {
             pub fn as_str(&self) -> &str {
                 match self {
                     $(Self::$variant => $wire,)+
@@ -45,40 +46,82 @@ macro_rules! keeper_methods {
                 }
             }
         }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self::Other(String::new())
+            }
+        }
+
+        impl Serialize for $name {
+            fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serializer.serialize_str(self.as_str())
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                Ok(Self::parse(&String::deserialize(deserializer)?))
+            }
+        }
     };
 }
 
-keeper_methods! {
-    Read => "read",
-    ReadStrict => "read_strict",
-    ReadIds => "read_ids",
-    PlanRefs => "plan_refs",
-    Begin => "begin",
-    Commit => "commit",
-    CommitRows => "commit_rows",
-    WriteStatus => "write_status",
-    ExportStatus => "export_status",
-    KeeperScan => "keeper_scan",
-    Op => "op",
-    Api => "api",
-    ReadArchive => "read_archive",
-    ReadFile => "read_file",
-    Defaults => "defaults",
-    Recompute => "recompute",
-    Ready => "ready",
-    Rules => "rules",
-    PlanDocs => "plan_docs",
-    Overlay => "overlay",
-    SettleEdges => "settle_edges",
-    NormalizePlanPath => "normalize_plan_path",
-    CanonicalFieldOrder => "canonical_field_order",
-    ScoreboardClassify => "scoreboard_classify",
-    ScoreboardByProvider => "scoreboard_by_provider",
-    ScoreboardPlanFidelity => "scoreboard_plan_fidelity",
-    ScoreboardEscalation => "scoreboard_escalation",
-    EffectiveCommand => "effective_command",
-    EffectiveVerb => "effective_verb",
-    PureOp => "pure_op",
+wire_words! {
+    /// One store method. `Other` carries a word this build does not serve,
+    /// so the keeper answers it with its own refusal text.
+    KeeperMethod {
+        Read => "read",
+        ReadStrict => "read_strict",
+        ReadIds => "read_ids",
+        PlanRefs => "plan_refs",
+        Begin => "begin",
+        Commit => "commit",
+        CommitRows => "commit_rows",
+        WriteStatus => "write_status",
+        ExportStatus => "export_status",
+        KeeperScan => "keeper_scan",
+        Op => "op",
+        Api => "api",
+        ReadArchive => "read_archive",
+        ReadFile => "read_file",
+        Defaults => "defaults",
+        Recompute => "recompute",
+        Ready => "ready",
+        Rules => "rules",
+        PlanDocs => "plan_docs",
+        Overlay => "overlay",
+        SettleEdges => "settle_edges",
+        NormalizePlanPath => "normalize_plan_path",
+        CanonicalFieldOrder => "canonical_field_order",
+        ScoreboardClassify => "scoreboard_classify",
+        ScoreboardByProvider => "scoreboard_by_provider",
+        ScoreboardPlanFidelity => "scoreboard_plan_fidelity",
+        ScoreboardEscalation => "scoreboard_escalation",
+        EffectiveCommand => "effective_command",
+        EffectiveVerb => "effective_verb",
+        PureOp => "pure_op",
+    }
+}
+
+wire_words! {
+    /// Why the keeper refused. `Other` keeps a kind this build does not
+    /// know, so a newer keeper's refusal still reads as a refusal.
+    ErrorKind {
+        Corrupt => "corrupt",
+        Unreadable => "unreadable",
+        MalformedRoot => "malformed_root",
+        LockTimeout => "lock_timeout",
+        Conflict => "conflict",
+        EmptyFieldUpdate => "empty_field_update",
+        Invalid => "invalid",
+        ClaimsUnavailable => "claims_unavailable",
+        Sqlite => "sqlite",
+        Io => "io",
+        MalformedFrame => "malformed_frame",
+        Internal => "internal",
+        Busy => "busy",
+    }
 }
 
 impl KeeperMethod {
@@ -86,12 +129,6 @@ impl KeeperMethod {
     /// keeper's write ledger records.
     pub fn is_write(&self) -> bool {
         matches!(self, Self::Commit | Self::CommitRows | Self::Op | Self::Api)
-    }
-}
-
-impl Serialize for KeeperMethod {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
     }
 }
 
@@ -134,84 +171,6 @@ impl<'de> Deserialize<'de> for KeeperRequest {
             method: KeeperMethod::parse(raw.method.as_str().unwrap_or("")),
             params: raw.params,
         })
-    }
-}
-
-/// Why the keeper refused. `Other` keeps a kind this build does not know, so
-/// a newer keeper's refusal still reads as a refusal.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ErrorKind {
-    Corrupt,
-    Unreadable,
-    MalformedRoot,
-    LockTimeout,
-    Conflict,
-    EmptyFieldUpdate,
-    Invalid,
-    ClaimsUnavailable,
-    Sqlite,
-    Io,
-    MalformedFrame,
-    Internal,
-    Busy,
-    Other(String),
-}
-
-impl ErrorKind {
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Corrupt => "corrupt",
-            Self::Unreadable => "unreadable",
-            Self::MalformedRoot => "malformed_root",
-            Self::LockTimeout => "lock_timeout",
-            Self::Conflict => "conflict",
-            Self::EmptyFieldUpdate => "empty_field_update",
-            Self::Invalid => "invalid",
-            Self::ClaimsUnavailable => "claims_unavailable",
-            Self::Sqlite => "sqlite",
-            Self::Io => "io",
-            Self::MalformedFrame => "malformed_frame",
-            Self::Internal => "internal",
-            Self::Busy => "busy",
-            Self::Other(word) => word,
-        }
-    }
-
-    pub fn parse(word: &str) -> Self {
-        match word {
-            "corrupt" => Self::Corrupt,
-            "unreadable" => Self::Unreadable,
-            "malformed_root" => Self::MalformedRoot,
-            "lock_timeout" => Self::LockTimeout,
-            "conflict" => Self::Conflict,
-            "empty_field_update" => Self::EmptyFieldUpdate,
-            "invalid" => Self::Invalid,
-            "claims_unavailable" => Self::ClaimsUnavailable,
-            "sqlite" => Self::Sqlite,
-            "io" => Self::Io,
-            "malformed_frame" => Self::MalformedFrame,
-            "internal" => Self::Internal,
-            "busy" => Self::Busy,
-            other => Self::Other(other.to_owned()),
-        }
-    }
-}
-
-impl Default for ErrorKind {
-    fn default() -> Self {
-        Self::Other(String::new())
-    }
-}
-
-impl Serialize for ErrorKind {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for ErrorKind {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(Self::parse(&String::deserialize(deserializer)?))
     }
 }
 

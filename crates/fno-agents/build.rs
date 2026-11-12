@@ -40,6 +40,7 @@ fn main() {
     sync_module_copy("backlog/live_store_fence");
     sync_module_copy("spawn/role_migration");
     sync_module_copy("backlog/store_conn");
+    sync_module_copy("backlog/keeper_wire");
     sync_module_copy("gate/chokepoint");
     sync_module_copy("eval/otel_read");
     sync_module_copy("runtime/registry_read");
