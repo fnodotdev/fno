@@ -133,18 +133,8 @@ pub fn resolve(home: &AgentsHome, registry: &Registry, name: &str) -> Resolution
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::state::RegistryEntry;
-    use std::path::Path;
+    use crate::spawn::test_spare::{fake_spare_process as spawn_fake_spare, spare_row};
     use std::process::Child;
-
-    #[cfg(unix)]
-    fn spawn_fake_spare(sock: &Path) -> Child {
-        use std::os::unix::process::CommandExt;
-        let mut cmd = std::process::Command::new("sleep");
-        cmd.arg("30");
-        cmd.arg0(format!("claude bg-spare --bg-spare {}", sock.display()));
-        cmd.spawn().unwrap()
-    }
 
     #[cfg(unix)]
     fn spawn_plain_sleeper() -> Child {
@@ -152,17 +142,6 @@ mod tests {
             .arg("30")
             .spawn()
             .unwrap()
-    }
-
-    fn spare_row(name: &str, pid: u32) -> RegistryEntry {
-        let mut row = RegistryEntry::default();
-        row.name = name.into();
-        row.harness = Some("claude".into());
-        row.cwd = "/tmp".into();
-        row.created_at = "2026-11-12T00:00:00Z".into();
-        row.pid = Some(pid);
-        row.pid_start_time = process_start_time(pid);
-        row
     }
 
     fn seed(home: &AgentsHome, row: RegistryEntry) {

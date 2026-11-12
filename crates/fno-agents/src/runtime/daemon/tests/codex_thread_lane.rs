@@ -1856,18 +1856,10 @@ async fn codex_target_launch_cwd_refuses_a_worktree_removed_after_ensure() {
 // A name held only by an idle claude bg spare must not block the daemon
 // spawn lanes. The shared verdict (`spawn::name_collision::resolve`) runs
 // off the async executor before either lane launches anything; the
-// fixtures mirror the verdict's own tests (pool argv + claim socket on
-// disk).
+// fixtures come from the shared idle-spare fixture (pool argv + claim
+// socket on disk).
 
-/// A process wearing claude's idle-spare argv, holding a claim socket.
-#[cfg(unix)]
-fn fake_spare_process(sock: &std::path::Path) -> std::process::Child {
-    use std::os::unix::process::CommandExt;
-    let mut cmd = std::process::Command::new("sleep");
-    cmd.arg("30");
-    cmd.arg0(format!("claude bg-spare --bg-spare {}", sock.display()));
-    cmd.spawn().unwrap()
-}
+use crate::spawn::test_spare::fake_spare_process;
 
 /// The codex thread lane reclaims a spare-held name and STARTS: before the
 /// verdict routed here, the lane started a real app-server driver and only

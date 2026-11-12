@@ -761,29 +761,9 @@ mod tests {
         );
     }
 
-    // The collision gate's contracts, over the same fixture shape the
-    // name-collision verdict tests use: a process wearing claude's idle
-    // spare argv with its claim socket still on disk.
+    // The collision gate's contracts, over the shared idle-spare fixture.
 
-    #[cfg(unix)]
-    fn spawn_fake_spare(sock: &std::path::Path) -> std::process::Child {
-        use std::os::unix::process::CommandExt;
-        let mut cmd = std::process::Command::new("sleep");
-        cmd.arg("30");
-        cmd.arg0(format!("claude bg-spare --bg-spare {}", sock.display()));
-        cmd.spawn().unwrap()
-    }
-
-    fn spare_row(name: &str, pid: u32) -> RegistryEntry {
-        let mut row = RegistryEntry::default();
-        row.name = name.into();
-        row.harness = Some("claude".into());
-        row.cwd = "/tmp".into();
-        row.created_at = "2026-11-12T00:00:00Z".into();
-        row.pid = Some(pid);
-        row.pid_start_time = crate::runtime::process_probe::process_start_time(pid);
-        row
-    }
+    use crate::spawn::test_spare::{fake_spare_process as spawn_fake_spare, spare_row};
 
     /// A name held only by an idle spare passes the gate, and the gate has
     /// already reclaimed the row: the create that follows never burns a
