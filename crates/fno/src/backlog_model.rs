@@ -1938,13 +1938,13 @@ pub(crate) fn search_fields(
     );
     // An `area:` tag is the node's area; the title heuristic fills only an
     // untagged node, so the two never disagree on one row.
+    let details = row.and_then(|r| r.details.clone()).unwrap_or_default();
     let tagged: Vec<String> = card
         .tags
         .iter()
         .filter_map(|t| t.strip_prefix("area:").map(str::to_string))
         .collect();
     let area = if tagged.is_empty() {
-        let details = row.and_then(|r| r.details.clone()).unwrap_or_default();
         crate::search_query::areas_for_node(&card.title, &details, card.project.as_deref())
             .into_iter()
             .map(str::to_string)
