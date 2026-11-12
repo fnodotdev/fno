@@ -2412,7 +2412,7 @@ mod tests {
             pid: None,
             host: "t".into(),
             pid_unavailable: true,
-            expires_at: None,
+            expires_at: Some(1),
             reason: Some("target dispatch".into()),
             harness: Some("claude".into()),
             session_id: sid.map(str::to_string),
