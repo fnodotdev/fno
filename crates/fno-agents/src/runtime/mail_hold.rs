@@ -1044,15 +1044,18 @@ fn fold_legacy_clock(
         .and_then(|s| s.to_str())
         .and_then(|s| SessionId::parse(s).ok());
     let legacy: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-    let until = legacy["until"]
-        .as_str()
+    let until = legacy
+        .pointer("/until")
+        .and_then(serde_json::Value::as_str)
         .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
         .map(|d| d.with_timezone(&chrono::Utc));
     if let (Some(session), Some(until)) = (session, until.filter(|u| *u > now)) {
-        let set_by = if legacy["source"] == "conversation" {
-            SetBy::Conversation
-        } else {
-            SetBy::User
+        let set_by = match legacy
+            .pointer("/source")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some("conversation") => SetBy::Conversation,
+            _ => SetBy::User,
         };
         let hold = Hold::new(
             session,
@@ -1343,9 +1346,27 @@ pub(crate) mod tests {
 
     /// A mail-only row: the register command's lane capability.
     fn mail_only_row(name: &str, session: &str) -> serde_json::Value {
-        let mut row = registry_row(name, session);
-        row["delivery_policy"] = serde_json::Value::String(MAIL_ONLY.into());
-        row["origin"] = serde_json::Value::String("operator".into());
+        patched_row(
+            registry_row(name, session),
+            &[
+                (
+                    "delivery_policy",
+                    serde_json::Value::String(MAIL_ONLY.into()),
+                ),
+                ("origin", serde_json::Value::String("operator".into())),
+            ],
+        )
+    }
+
+    /// A row with fields set through the map, never through Value indexing.
+    fn patched_row(
+        mut row: serde_json::Value,
+        fields: &[(&str, serde_json::Value)],
+    ) -> serde_json::Value {
+        let obj = row.as_object_mut().expect("the row is a json object");
+        for (key, value) in fields {
+            obj.insert((*key).to_string(), value.clone());
+        }
         row
     }
 
@@ -1386,7 +1407,10 @@ pub(crate) mod tests {
             let (outcome, _) = arm_conversation(SID);
             assert!(matches!(outcome, ArmOutcome::Armed));
             let registry = crate::state::load_registry(&dir.join("registry.json")).unwrap();
-            assert_eq!(registry.entries[0].delivery_policy, None);
+            assert_eq!(
+                registry.entries.first().expect("one row").delivery_policy,
+                None
+            );
             let hold = stored(SID).expect("the arm writes a hold record");
             assert_eq!(hold.set_by(), SetBy::Conversation);
             assert_eq!(hold.clock(), HoldClock::Wall);
@@ -1398,7 +1422,9 @@ pub(crate) mod tests {
             let status = self_status(SID).unwrap();
             assert_eq!(status["clock_live"], true);
             assert_eq!(status["conversation"], true);
-            assert!(status["delivery_policy"].is_null());
+            assert!(status
+                .pointer("/delivery_policy")
+                .is_none_or(serde_json::Value::is_null));
             // The write names its writer, so a phantom hold traces to a caller.
             let journal =
                 crate::event_store::journal_text(&dir.join("events.jsonl"), &["mail_hold_stamped"]);
@@ -1821,13 +1847,17 @@ pub(crate) mod tests {
                 .to_string();
             let sid = |n: u8| format!("{n:08}-1111-2222-3333-444455556666");
             let row = |name: &str, n: u8, origin: Option<&str>, born: &str| {
-                let mut r = registry_row(name, &sid(n));
-                r["delivery_policy"] = serde_json::Value::String(MAIL_ONLY.into());
-                r["created_at"] = serde_json::Value::String(born.into());
+                let mut fields = vec![
+                    (
+                        "delivery_policy",
+                        serde_json::Value::String(MAIL_ONLY.into()),
+                    ),
+                    ("created_at", serde_json::Value::String(born.into())),
+                ];
                 if let Some(o) = origin {
-                    r["origin"] = serde_json::Value::String(o.into());
+                    fields.push(("origin", serde_json::Value::String(o.into())));
                 }
-                r
+                patched_row(registry_row(name, &sid(n)), &fields)
             };
             write_registry(
                 dir,
