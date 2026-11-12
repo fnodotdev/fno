@@ -4401,6 +4401,11 @@ config_dir = "~/.claude-alt"
             .lines()
             .filter_map(|l| l.trim().split_once("\" =>"))
             .map(|(arm, _)| arm.trim_start_matches('"'))
+            // The opencode arm parses SSE event RECORDS for the records door,
+            // not a follow source: opencode's seat tier stays Locate (the
+            // portal's serve-attach capability drives it) and its follow
+            // dispatches through peek_one's SSE stream at runtime.
+            .filter(|arm| *arm != "opencode")
             .collect();
         let mirror: std::collections::BTreeSet<&str> =
             super::PEEK_READER_HARNESSES.into_iter().collect();
