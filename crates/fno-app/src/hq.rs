@@ -9,10 +9,10 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
+use fno::app_api::web_hq::Board;
 use fno::backlog_model::Inputs;
 use fno::needs_overlay::AnswerPick;
 use fno::proto::AgentRow;
-use fno::app_api::web_hq::Board;
 
 /// The fleet and question reads, at the bridge's own cadence. Measured on
 /// a 38-seat fleet: `needs` takes about 1 CPU-second a call, so a 10 s cycle

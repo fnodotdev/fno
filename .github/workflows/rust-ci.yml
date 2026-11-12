@@ -77,6 +77,10 @@ jobs:
         working-directory: crates/fno-mail
         run: cargo "+$RUSTFMT_TOOLCHAIN" fmt --all --check
 
+      - name: cargo fmt --check (fno-app)
+        working-directory: crates/fno-app
+        run: cargo "+$RUSTFMT_TOOLCHAIN" fmt --all --check
+
   warnings:
     name: cargo check --all-targets (deny warnings)
     # The ratchet the node asked for: rustc warnings fail CI, so the count can
@@ -363,11 +367,11 @@ jobs:
           if-no-files-found: error
 
   desktop:
-    name: cargo check fno-desktop (macOS)
-    # The desktop app builds on macOS only, behind the non-default `desktop`
-    # feature, so no Linux job compiles it. A macOS runner costs ten Linux
-    # minutes per minute, so the job checks only when the app's own files
-    # or the crate manifest change.
+    name: cargo check fno-app (macOS)
+    # The desktop app builds on macOS only, so no Linux job compiles it. A
+    # macOS runner costs ten Linux minutes per minute, so the job checks only
+    # when the app's own crate, the fno manifest or a file behind
+    # `fno::app_api` changes.
     if: github.event_name == 'pull_request'
     runs-on: macos-15
     timeout-minutes: 40
@@ -383,7 +387,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           files="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')"
-          if printf '%s\n' "$files" | grep -qE '^crates/fno/src/desktop/|^crates/fno/src/bin/fno-desktop\.rs$|^crates/fno/Cargo\.toml$'; then
+          if printf '%s\n' "$files" | grep -qE '^crates/fno-app/|^crates/fno/Cargo\.(toml|lock)$|^crates/fno/src/(app_api|client|lattice|plugins_feed|web_hq|digest_overlay|transcript_tail|text_style|needs_overlay|backlog_model|backlog_view|chat_events|tree|theme|link|mux_cli/pane_submit)(\.rs|/)|^crates/fno/src/proto/'; then
             echo "check=1" >> "$GITHUB_ENV"
             echo "the desktop surface changed: checking"
           else
@@ -402,18 +406,22 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            crates/fno/target
-          key: ${{ runner.os }}-desktop-${{ hashFiles('crates/fno/Cargo.lock') }}
+            crates/fno-app/target
+          key: ${{ runner.os }}-app-${{ hashFiles('crates/fno-app/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-desktop-
+            ${{ runner.os }}-app-
 
-      - name: cargo check --features desktop
+      - name: cargo check (fno-app)
         if: env.check == '1'
-        run: cargo check --locked --manifest-path crates/fno/Cargo.toml --features desktop --bin fno-desktop
+        run: cargo check --locked --manifest-path crates/fno-app/Cargo.toml --all-targets
 
-      - name: cargo test desktop
+      - name: cargo test (fno-app)
         if: env.check == '1'
-        run: "cargo test --locked --manifest-path crates/fno/Cargo.toml --features desktop --lib desktop::"
+        run: cargo test --locked --manifest-path crates/fno-app/Cargo.toml
+
+      - name: clippy gate (fno-app)
+        if: env.check == '1'
+        run: bash scripts/ci/clippy-check.sh crates/fno-app
 
   release-version-math:
     name: release version math (sync-version + release-version)

@@ -26,8 +26,7 @@ pub(super) use view::render;
 
 /// The pause between the pasted text and the Enter that submits it, the
 /// same settle `fno mux pane send --submit` uses.
-pub const SUBMIT_SETTLE: Duration =
-    Duration::from_millis(fno::app_api::CR_SETTLE_MS);
+pub const SUBMIT_SETTLE: Duration = Duration::from_millis(fno::app_api::CR_SETTLE_MS);
 
 /// How long a stream may send nothing before the view says it is empty.
 pub const EMPTY_AFTER: Duration = Duration::from_secs(2);

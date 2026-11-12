@@ -12,8 +12,8 @@ use fno::app_api::client::agent_lattice_state;
 use fno::app_api::client::card_line::binding_suffix;
 use fno::app_api::client::header_band::section_rollup;
 use fno::app_api::lattice::{lattice_glyph, status_long, LatticeState};
-use fno::proto::{AgentRow, Command};
 use fno::app_api::web_hq::Board;
+use fno::proto::{AgentRow, Command};
 
 pub const WIDTH: f32 = 260.0;
 /// A row's text width: the pane less the row's margins, padding and bar.

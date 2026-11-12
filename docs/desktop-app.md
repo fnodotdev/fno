@@ -1,22 +1,24 @@
 # The fno desktop app
 
-`fno-desktop` is a macOS window onto a running mux session. It opens in chat mode: the focused agent's conversation, drawn as turns. The terminal view draws the frames the mux server sends and types into the focused pane. The app runs no terminal emulator and parses no transcript of its own, so it shows exactly what the mux serves.
+`fno-app` is a macOS window onto a running mux session. It opens in chat mode: the focused agent's conversation, drawn as turns. The terminal view draws the frames the mux server sends and types into the focused pane. The app runs no terminal emulator and parses no transcript of its own, so it shows exactly what the mux serves.
 
 ## Build and run
 
 The app is macOS only and is built from source. It is not part of `cargo install fno`.
 
-The build compiles Metal shaders, so it needs Xcode and its Metal toolchain. If the build stops on `missing Metal Toolchain`, install it once with `xcodebuild -downloadComponent MetalToolchain`. To build without it, add `gpui/runtime_shaders` to `--features`: the app then compiles its shaders at launch.
+The build compiles Metal shaders, so it needs Xcode and its Metal toolchain. If the build stops on `missing Metal Toolchain`, install it once with `xcodebuild -downloadComponent MetalToolchain`. To build without it, add `--features gpui/runtime_shaders`: the app then compiles its shaders at launch.
 
 ```bash
-cargo build --release --manifest-path crates/fno/Cargo.toml --features desktop --bin fno-desktop
-T="$(cargo metadata --format-version 1 --no-deps --manifest-path crates/fno/Cargo.toml | jq -r .target_directory)/release/fno-desktop"
+cargo build --release --manifest-path crates/fno-app/Cargo.toml --bin fno-app
+T="$(cargo metadata --format-version 1 --no-deps --manifest-path crates/fno-app/Cargo.toml | jq -r .target_directory)/release/fno-app"
 codesign -s - "$T"
 fno mux            # in another terminal: the app needs a running mux server
 "$T"
 ```
 
 The `codesign -s -` step gives the binary an ad-hoc signature. No developer account is needed.
+
+Each release also ships `fno-app-macos-arm64.tar.gz` for Apple Silicon, ad-hoc signed, so Gatekeeper asks once. Clear the prompt with `xattr -d com.apple.quarantine fno-app`. The app runs the `fno` and `fno-agents` it finds beside itself, then on `PATH`, so install fno first.
 
 ## Flags
 

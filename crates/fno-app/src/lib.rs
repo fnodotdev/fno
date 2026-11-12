@@ -18,8 +18,8 @@ mod window;
 
 use std::time::Duration;
 
-use fno::mux_cli::{env_server, resolve_session};
 use fno::app_api::web_hq::Board;
+use fno::mux_cli::{env_server, resolve_session};
 pub use window::MainView;
 
 /// How long `--probe` waits for a layout and a frame per pane.

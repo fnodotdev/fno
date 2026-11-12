@@ -26,10 +26,10 @@ use super::link::{Event, Layout, Link};
 use super::mouse::{self, Hit};
 use super::palette::Palette;
 use super::{extensions, left_pane, orchestration, tabs};
+use fno::app_api::web_hq::Board;
 use fno::proto::chat_event::SessionKey;
 use fno::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};
 use fno::tree::Rect;
-use fno::app_api::web_hq::Board;
 
 /// What fills the main area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
