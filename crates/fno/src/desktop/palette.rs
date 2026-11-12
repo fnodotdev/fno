@@ -59,6 +59,36 @@ fn rgb_or(c: Color, fallback: u32) -> u32 {
     }
 }
 
+/// WCAG 2.x relative-luminance contrast ratio.
+fn contrast(a: u32, b: u32) -> f32 {
+    let lin = |v: u32| {
+        let c = (v & 0xff) as f32 / 255.0;
+        if c <= 0.03928 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let lum = |c: u32| 0.2126 * lin(c >> 16) + 0.7152 * lin(c >> 8) + 0.0722 * lin(c);
+    let (x, y) = (lum(a), lum(b));
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
+/// The user's own turns in chat mode: `base` walked toward `stamp` until the
+/// fill separates from the base ground at 3:1 and keeps `stamp` text at
+/// 4.5:1 (the bubble paints on `bg`, its text is `fg`). A theme whose twins
+/// never satisfy both bars keeps the gentle 12% mix.
+fn bubble_fill(base: u32, stamp: u32) -> u32 {
+    for step in 3..=23 {
+        let t = step as f32 / 25.0; // 0.12 ..= 0.92
+        let c = mix(base, stamp, t);
+        if contrast(c, base) >= 3.0 && contrast(c, stamp) >= 4.5 {
+            return c;
+        }
+    }
+    mix(base, stamp, 0.12)
+}
+
 /// Slots 16-231 are the 6x6x6 cube, 232-255 the 24-step gray ramp.
 fn xterm256(i: u8) -> u32 {
     if i >= 232 {
@@ -106,7 +136,7 @@ impl Palette {
             muted: rgb_or(t.dim, 0x8a8a8a),
             panel: mix(rgb_or(t.base, 0x141414), rgb_or(t.stamp, 0xe8e8e8), 0.05),
             warn: rgb_or(t.needs_you, 0xe5c07b),
-            bubble: mix(rgb_or(t.base, 0x141414), rgb_or(t.stamp, 0xe8e8e8), 0.12),
+            bubble: bubble_fill(rgb_or(t.base, 0x141414), rgb_or(t.stamp, 0xe8e8e8)),
             ansi,
         }
     }
@@ -161,20 +191,6 @@ mod tests {
         assert_eq!(p.bg(Color::Rgb(1, 2, 3)), 0x010203);
     }
 
-    fn contrast(a: u32, b: u32) -> f32 {
-        let lin = |v: u32| {
-            let c = (v & 0xff) as f32 / 255.0;
-            if c <= 0.03928 {
-                c / 12.92
-            } else {
-                ((c + 0.055) / 1.055).powf(2.4)
-            }
-        };
-        let lum = |c: u32| 0.2126 * lin(c >> 16) + 0.7152 * lin(c >> 8) + 0.0722 * lin(c);
-        let (x, y) = (lum(a), lum(b));
-        (x.max(y) + 0.05) / (x.min(y) + 0.05)
-    }
-
     fn saturation(c: u32) -> f32 {
         let ch = |s: u32| (c >> s & 0xff) as f32 / 255.0;
         let (r, g, b) = (ch(16), ch(8), ch(0));
@@ -204,6 +220,15 @@ mod tests {
             let p = Palette::from_theme(&Theme::default_for(light));
             assert!(contrast(p.recommend, p.bg) >= 3.0, "light={light}");
             assert!(saturation(p.recommend) >= 0.3, "light={light}");
+        }
+    }
+
+    #[test]
+    fn bubble_separates_from_the_ground_and_keeps_fg_text_readable() {
+        for light in [false, true] {
+            let p = Palette::from_theme(&Theme::default_for(light));
+            assert!(contrast(p.bubble, p.bg) >= 3.0, "light={light}");
+            assert!(contrast(p.bubble, p.fg) >= 4.5, "light={light}");
         }
     }
 
