@@ -144,7 +144,7 @@ fn apply_tracker_backend_flag(args: &[String]) -> Vec<String> {
 
 /// The run entry: returns the process exit code.
 pub fn run(args: &[String]) -> i32 {
-    let args = apply_tracker_backend_flag(args);
+    let args = &apply_tracker_backend_flag(args);
     let head = args.first().map(String::as_str);
     if head.is_none() || head == Some("-h") || head == Some("--help") {
         println!("{}", help_text());
