@@ -387,7 +387,10 @@ fn a_fleet_stop_refusal_emits_spawn_gate_refused() {
         "exactly one spawn_gate_refused row: {:?}",
         rows.iter().map(|r| &r.line).collect::<Vec<_>>()
     );
-    let line = &rows[0].line;
+    let line = rows
+        .first()
+        .map(|r| r.line.as_str())
+        .expect("query_events returned the refused row");
     assert!(
         line.contains("\"gate\":\"rust\"") && line.contains("\"reason\":\"fleet-stop\""),
         "the row must name the leg and cause: {line}"
