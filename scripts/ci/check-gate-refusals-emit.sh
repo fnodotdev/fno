@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # A spawn-gate refusal must leave a machine-readable trace.
 #
-# The x-32db guard of this name held the Python gate's one _refuse() seam;
-# the Python leg and the guard died together (527c4b08e7). The Rust gate
-# carried the same silent shape, and node x-ab75 re-opens the contract
-# against the Rust gate: run_gate already emitted friction rows +
+# An earlier Python-leg guard of this name held the gate's one _refuse()
+# seam; the Python leg and the guard died together. The Rust gate carried
+# the same silent shape, and this guard re-opens the contract against the
+# Rust gate: run_gate already emitted friction rows +
 # agent_spawn_refused + a machine-sample stamp, but no spawn_gate_refused
 # row - the kind the feed's dedicated handler keys on. The state-root
 # pre-gate (bin/client.rs) returned its exit code with no trace at all.

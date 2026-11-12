@@ -425,6 +425,11 @@ jobs:
           bash scripts/ci/check-state-root-rows.sh --self-test
           bash scripts/ci/check-state-root-rows.sh
 
+      - name: every spawn-gate refusal emits
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: bash scripts/ci/check-gate-refusals-emit.sh
+
       - name: PR node closure
         id: closure
         env:
