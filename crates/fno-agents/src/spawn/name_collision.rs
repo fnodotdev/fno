@@ -111,7 +111,9 @@ pub fn resolve(home: &AgentsHome, registry: &Registry, name: &str) -> Resolution
         .map(str::trim)
         .filter(|session_id| !session_id.is_empty())
     {
-        let _ = crate::rm_tombstone::record(
+        // The row is already gone, so a failed stamp must not undo the
+        // reclaim; it is named instead of dropped.
+        if let Err(e) = crate::rm_tombstone::record(
             home,
             stale.harness_name(),
             session_id,
@@ -119,8 +121,10 @@ pub fn resolve(home: &AgentsHome, registry: &Registry, name: &str) -> Resolution
             &stale.name,
             &stale.cwd,
             stale.host_mode.as_deref().unwrap_or_default(),
-        );
-        let _ = crate::wake_name::stamp_from_row(home, &stale);
+        ) {
+            eprintln!("fno agents spawn: reclaimed '{name}' but its removal tombstone failed: {e}");
+        }
+        crate::wake_name::stamp_from_row(home, &stale);
     }
     emit_event(
         &home.events_jsonl(),
