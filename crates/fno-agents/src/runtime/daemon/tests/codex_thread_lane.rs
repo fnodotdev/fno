@@ -1852,12 +1852,8 @@ async fn codex_target_launch_cwd_refuses_a_worktree_removed_after_ensure() {
 }
 
 // --- the daemon spawn lanes' spare-name verdict ---------------------------
-//
-// A name held only by an idle claude bg spare must not block the daemon
-// spawn lanes. The shared verdict (`spawn::name_collision::resolve`) runs
-// off the async executor before either lane launches anything; the
-// fixtures come from the shared idle-spare fixture (pool argv + claim
-// socket on disk).
+// The shared verdict runs off the async executor before either lane
+// launches anything; fixtures come from the shared idle-spare module.
 
 use crate::spawn::test_spare::fake_spare_process;
 
