@@ -26,7 +26,7 @@ fno backlog next --tracker-backend github
 
 The env var `FNO_TRACKER_BACKEND` selects for one shell or one CI job. The whole chain reads, in order: flag, env, config, and the built-in store. This page assumes the config key or the flag. CI jobs that export the env var keep working unchanged.
 
-The flag rides the `fno backlog` verb group, before or after the verb. An unknown value refuses and names the available backends, and `--tracker-backend graph` pins the built-in store over an inherited env value or a config key.
+The flag rides the `fno backlog` command group, before or after the command word. An unknown value refuses and names the available backends, and `--tracker-backend graph` pins the built-in store over an inherited env value or a config key.
 
 ## Scope and credentials
 

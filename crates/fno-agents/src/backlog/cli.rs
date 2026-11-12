@@ -115,13 +115,14 @@ fn carries(tail: &[String], markers: &[&str]) -> bool {
     tail.iter().any(|a| markers.contains(&a.as_str()))
 }
 
-/// The `--tracker-backend <name>` flag: one parse point ahead of every verb,
-/// so an agent invokes `fno backlog get x-1 --tracker-backend github`
+/// The `--tracker-backend <name>` flag: one parse point ahead of every
+/// backlog command, so an agent invokes
+/// `fno backlog get x-1 --tracker-backend github`
 /// instead of exporting FNO_TRACKER_BACKEND. Landing it in the process env
 /// keeps one resolution chain (flag, env, `tracker.backend` config, graph):
 /// the flag overwrites an inherited env value here, and child processes the
-/// verb spawns inherit it. The pair may ride anywhere in the argv, before
-/// or after the verb.
+/// command spawns inherit it. The pair may ride anywhere in the argv, before
+/// or after the command word.
 fn apply_tracker_backend_flag(args: &[String]) -> Vec<String> {
     let mut args = args.to_vec();
     if let Some(pos) = args.iter().position(|a| a == "--tracker-backend") {
