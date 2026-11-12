@@ -3,7 +3,7 @@
 //! install row and the published gallery. The mux settings tab reads the
 //! same feed through `plugins_feed`, so both hosts show one list.
 //!
-//! Reads, switches and pane launches run on one `fno-desktop-plugins` thread
+//! Reads, switches and pane launches run on one `fno-app-plugins` thread
 //! and land through a reply channel, like the board poll. Install and open
 //! run in a mux pane split beside the focused pane of the attached session,
 //! so the consent card and its prompt stay the CLI's: the app never installs
@@ -20,9 +20,9 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
 use super::keys::Key;
 use super::window::Root;
-use crate::client::node_detail::backlog_md::md_lines;
-use crate::plugins_feed::{self as feed, Component, Published, ReadFailed};
-use crate::text_style::TextStyle;
+use fno::app_api::client::node_detail::backlog_md::md_lines;
+use fno::app_api::plugins_feed::{self as feed, Component, Published, ReadFailed};
+use fno::text_style::TextStyle;
 
 const MAX_URL: usize = 512;
 const URL_HINT: &str = "https://github.com/owner/repo";
@@ -73,7 +73,7 @@ pub(super) fn start() -> std::io::Result<(Sender<Ask>, UnboundedReceiver<Reply>)
     let (asks, ask_rx) = channel::<Ask>();
     let (out, replies) = unbounded_channel();
     std::thread::Builder::new()
-        .name("fno-desktop-plugins".into())
+        .name("fno-app-plugins".into())
         .spawn(move || {
             for ask in ask_rx {
                 let reply = match ask {

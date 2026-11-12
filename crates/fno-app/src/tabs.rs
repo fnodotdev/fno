@@ -6,7 +6,7 @@ use gpui::{div, prelude::*, px, rgb, Context, Div, ElementId, Stateful};
 
 use super::link::Layout;
 use super::window::{Action, MainView, Root};
-use crate::proto::{Command, TabMeta};
+use fno::proto::{Command, TabMeta};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tab {
@@ -20,7 +20,7 @@ pub struct Tab {
 /// never both read as the repo name.
 fn label(t: &TabMeta, i: usize, focus: u64) -> String {
     if t.named {
-        return crate::client::tab_label_text(&t.name, i, true);
+        return fno::app_api::client::tab_label_text(&t.name, i, true);
     }
     let pane = t
         .panes
@@ -31,7 +31,7 @@ fn label(t: &TabMeta, i: usize, focus: u64) -> String {
         .filter(|l| !l.is_empty());
     match pane {
         Some(l) => l.to_string(),
-        None => crate::client::tab_label_text(&t.name, i, false),
+        None => fno::app_api::client::tab_label_text(&t.name, i, false),
     }
 }
 

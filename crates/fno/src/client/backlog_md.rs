@@ -4,7 +4,7 @@
 use super::node_detail::wrap_line_joined;
 use crate::text_style::TLine;
 
-pub(crate) fn md_lines(text: &str, w: usize) -> Vec<TLine> {
+pub fn md_lines(text: &str, w: usize) -> Vec<TLine> {
     let mut out: Vec<TLine> = Vec::new();
     let src: Vec<&str> = text.lines().collect();
     let mut i = 0usize;

@@ -72,7 +72,7 @@ fn table(root: &Root) -> Div {
         .map(|f| f.machines.as_slice())
         .unwrap_or_default();
     // One host in view: the MACHINE column would repeat one name.
-    let host_of = |m: &crate::client::org_seats::Machine| {
+    let host_of = |m: &fno::app_api::client::org_seats::Machine| {
         m.display_name.clone().unwrap_or_else(|| m.host.clone())
     };
     // Count only hosts with a seat row: a seatless host shows no row.
@@ -137,7 +137,7 @@ fn table(root: &Root) -> Div {
 }
 
 /// The options of one question, or where the answer the user clicked stands.
-fn options(q: &crate::needs_overlay::QuestionItem, root: &Root, cx: &mut Context<Root>) -> Div {
+fn options(q: &fno::needs_overlay::QuestionItem, root: &Root, cx: &mut Context<Root>) -> Div {
     let p = root.palette;
     let mut out = div().flex().flex_col().gap_2().pt_2();
     let state = root.answers.get(&q.id);

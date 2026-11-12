@@ -38,9 +38,7 @@ pub(crate) const SEVERITY_ORDER: [LatticeState; 7] = [
 /// (US2) Fold a section's rows into per-state counts, nonzero only, in
 /// severity order. Exhaustive over `LatticeState` (the lock-3 posture):
 /// a new state is a compile error here, never a silently uncounted glyph.
-pub(crate) fn section_rollup(
-    states: impl Iterator<Item = LatticeState>,
-) -> Vec<(LatticeState, usize)> {
+pub fn section_rollup(states: impl Iterator<Item = LatticeState>) -> Vec<(LatticeState, usize)> {
     let mut counts = [0usize; SEVERITY_ORDER.len()];
     for st in states {
         let idx = match st {

@@ -153,16 +153,14 @@ pub(super) fn enter_placement() -> PanePlacement {
 
 /// What a click on an agent row does: send a command, or say why it sends
 /// none.
-#[cfg(feature = "desktop")]
-pub(crate) enum RowClick {
+pub enum RowClick {
     Send(Command),
     Notice(String),
 }
 
 /// The one command a click on an agent row sends: the sideline click's own
 /// [`agent_hit`].
-#[cfg(feature = "desktop")]
-pub(crate) fn click_command(a: &AgentRow) -> RowClick {
+pub fn click_command(a: &AgentRow) -> RowClick {
     let none = || RowClick::Notice(format!("{}: no action", a.name));
     match agent_hit(a, 0) {
         ChromeHit::Cmds(cmds) => cmds.into_iter().next().map_or_else(none, RowClick::Send),

@@ -327,6 +327,7 @@ mod tests {
             failing_checks: vec![],
             outside_hold_only: false,
             ci_has_pending: true,
+            ci_unmeasured: None,
             mergeable: "CONFLICTING".to_string(),
             merge_slot_holder: None,
             merge_hold: None,

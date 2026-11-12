@@ -64,6 +64,7 @@ const DOCTOR: &[(&str, &str)] = &[
     ("scratch", "sweep or report scratch files"),
     ("skill-diff", "skill drift between installs"),
     ("stalls", "stalled sessions"),
+    ("telemetry", "the opt-in daily usage report"),
     ("test", "run tests with the worktree's paths"),
     ("update", "update fno"),
 ];

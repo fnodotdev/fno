@@ -468,14 +468,10 @@ where
                     // installed binary is present, so a Python-only key would be
                     // missing from the path nearly every reader takes.
                     "origin": e.origin,
-                    // the row's mail delivery policy ("bus-only" holds
-                    // mail on the durable bus, null is the injectable default).
-                    // Stored since v14, read by every injector gate, and until
-                    // now never rendered anywhere a human or a lead could see
-                    // it. The remaining time on a timed hold is Python-only
-                    // (`dnd` in schemas/agents-list-row.json): its clock lives
-                    // under fno's config-resolved state dir, which the daemon
-                    // does not load.
+                    // the row's mail-only capability ("bus-only": mail waits
+                    // on the durable bus, never typed text; null is the
+                    // injectable default). A timed hold is not here: it lives
+                    // in the fno-mail hold store, which readers open directly.
                     "delivery_policy": e.delivery_policy,
                     "project_root": e.project_root,
                 });

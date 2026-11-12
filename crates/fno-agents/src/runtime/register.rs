@@ -13,7 +13,7 @@
 
 use crate::identity::{canonical_handle, session_handle_tier};
 use crate::paths::AgentsHome;
-use crate::spawn_context::{resolve_self_identity, session_identity_key, OwnedDisposition};
+use crate::spawn_context::{resolve_self_identity, OwnedDisposition};
 use crate::state::{load_registry, update_registry, RegistryEntry};
 use std::io::IsTerminal as _;
 use std::path::Path;
@@ -243,24 +243,10 @@ written once. Mail escalation reads it, so this session is still treated as '{o}
         );
     }
 
-    // The delivery-policy clock: the identity key clears any standing clock,
-    // and the flip to an injectable policy also drops a pre-migration
-    // name-keyed one. Best effort on the stamp: the row is already stamped,
-    // and an older binary must not fail the register.
-    if delivery_policy.is_some() {
-        let clock_key = session_identity_key(&session_id);
-        if run_mail_hold(&["--clear", &clock_key]) != 0 {
-            eprintln!("register failed: fno-agents mail-hold failed");
-            return 1;
-        }
-        if policy_after.as_deref() != Some("bus-only") {
-            if run_mail_hold(&["--clear", &name]) != 0 {
-                eprintln!("register failed: fno-agents mail-hold failed");
-                return 1;
-            }
-        } else {
-            let _ = run_mail_hold(&["--record-stamp", &session_id]);
-        }
+    // The mail-only capability is a lane fact, not a hold: it leaves any
+    // hold record alone and journals its writer.
+    if delivery_policy.is_some() && policy_after.as_deref() == Some(crate::mail_hold::MAIL_ONLY) {
+        crate::mail_hold::record_stamp("register_command", &session_id);
     }
 
     crate::events::EventEmitter::new(home.events_jsonl(), "rust")
@@ -326,11 +312,6 @@ pub(crate) fn bind_own_pid(row: &mut RegistryEntry, ambient: Option<u32>) {
             }
         }
     }
-}
-
-fn run_mail_hold(argv: &[&str]) -> i32 {
-    let owned: Vec<String> = argv.iter().map(|s| (*s).to_string()).collect();
-    crate::mail_hold::run_mail_hold(&owned)
 }
 
 /// The Python `_address_is_taken` predicate: a token is taken when a row

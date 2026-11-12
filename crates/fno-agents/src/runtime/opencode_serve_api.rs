@@ -339,11 +339,13 @@ pub(super) fn create_body(
     title: &str,
     directory: &str,
     model: &serde_json::Value,
+    permissions: serde_json::Value,
 ) -> serde_json::Value {
     serde_json::json!({
         "title": title,
         "location": {"directory": directory},
         "model": model,
+        "permissions": permissions,
     })
 }
 
