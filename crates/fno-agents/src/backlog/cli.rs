@@ -93,7 +93,8 @@ fn resolve_head(args: &[String]) -> Result<Resolved<'_>, String> {
 
 fn help_text() -> String {
     let mut out = String::from("fno backlog <group> <action> [args...]\n");
-    out.push_str("       fno backlog <legacy-command> [args...]  (compatibility spelling)\n\n");
+    out.push_str("       fno backlog <legacy-command> [args...]  (compatibility spelling)\n");
+    out.push_str("       --tracker-backend <graph|github|linear>  select the tracker backend for this invocation\n\n");
     for g in GROUPS {
         out.push_str(&format!(
             "  {:<8} {:<32} {}\n",
@@ -114,8 +115,38 @@ fn carries(tail: &[String], markers: &[&str]) -> bool {
     tail.iter().any(|a| markers.contains(&a.as_str()))
 }
 
+/// The `--tracker-backend <name>` flag: one parse point ahead of every verb,
+/// so an agent invokes `fno backlog get x-1 --tracker-backend github`
+/// instead of exporting FNO_TRACKER_BACKEND. Landing it in the process env
+/// keeps one resolution chain (flag, env, `tracker.backend` config, graph):
+/// the flag overwrites an inherited env value here, and child processes the
+/// verb spawns inherit it. The pair may ride anywhere in the argv, before
+/// or after the verb.
+fn apply_tracker_backend_flag(args: &[String]) -> Vec<String> {
+    let mut args = args.to_vec();
+    if let Some(pos) = args.iter().position(|a| a == "--tracker-backend") {
+        let Some(value) = args.get(pos + 1) else {
+            eprintln!("Error: --tracker-backend needs a value (graph|github|linear)");
+            std::process::exit(2);
+        };
+        let name = value.clone();
+        if !matches!(name.as_str(), "graph" | "github" | "linear") {
+            eprintln!("Error: unknown tracker backend {name:?}. Available: graph, github, linear");
+            std::process::exit(2);
+        }
+        if name != "graph" {
+            std::env::set_var("FNO_TRACKER_BACKEND", &name);
+        } else {
+            std::env::remove_var("FNO_TRACKER_BACKEND");
+        }
+        args.drain(pos..=pos + 1);
+    }
+    args
+}
+
 /// The run entry: returns the process exit code.
 pub fn run(args: &[String]) -> i32 {
+    let args = apply_tracker_backend_flag(args);
     let head = args.first().map(String::as_str);
     if head.is_none() || head == Some("-h") || head == Some("--help") {
         println!("{}", help_text());
@@ -418,5 +449,32 @@ mod tests {
         let r = resolve_head(&owned).unwrap();
         assert_eq!(r.legacy, "frobnicate");
         assert_eq!(r.tail, &["x-abc".to_string()]);
+    }
+
+    #[test]
+    fn tracker_backend_flag_lands_in_env_and_strips_from_argv() {
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("FNO_TRACKER_BACKEND");
+        let owned: Vec<String> = ["get", "x-abc", "--tracker-backend", "github"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let stripped = apply_tracker_backend_flag(&owned);
+        assert_eq!(stripped, ["get", "x-abc".to_string()]);
+        assert_eq!(
+            std::env::var("FNO_TRACKER_BACKEND").as_deref(),
+            Ok("github")
+        );
+        // graph pins the default: an inherited external env is removed.
+        let owned: Vec<String> = ["--tracker-backend", "graph", "get", "x-abc"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let stripped = apply_tracker_backend_flag(&owned);
+        assert_eq!(stripped, ["get", "x-abc".to_string()]);
+        assert!(std::env::var("FNO_TRACKER_BACKEND").is_err());
+        std::env::remove_var("FNO_TRACKER_BACKEND");
     }
 }
