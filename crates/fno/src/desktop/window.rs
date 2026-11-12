@@ -1133,8 +1133,10 @@ impl Render for Root {
         // A closed link stays in the error color; a notice is muted and
         // expires. Neither takes a row: the toast floats over the corner.
         // In chat mode a closed stream's bar already carries the exit
-        // reason, so the corner toast would repeat it.
-        let bar_shows_reason = self.main == MainView::Chat && self.chat.closed.is_some();
+        // reason, so the corner toast would repeat it - unless a sheet
+        // covers that bar, where the toast is the only visible signal.
+        let bar_shows_reason =
+            self.main == MainView::Chat && self.chat.closed.is_some() && self.chat.sheet.is_none();
         let (status, status_color) = match (&self.closed, &self.notice) {
             (Some(c), _) if !bar_shows_reason => (Some(c.clone()), self.palette.error),
             (_, n) => (n.clone(), self.palette.muted),
