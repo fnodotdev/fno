@@ -253,7 +253,7 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
         .border_color(rgb(p.border));
     let rows = rows(&root.layout, &root.board, now_secs, root.agents_open);
     for (i, row) in rows.into_iter().enumerate() {
-        let hover = p.border;
+        let hover = p.hover;
         pane = pane.child(match row {
             Row::Header { title, rollup } => div()
                 .id(i)
@@ -306,7 +306,7 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
                 .text_color(rgb(p.muted))
                 .cursor_pointer()
                 .hover(move |s| s.bg(rgb(hover)))
-                .active(move |s| s.bg(rgb(p.focus)))
+                .active(move |s| s.bg(rgb(p.pressed)))
                 .on_click(cx.listener(|root, _, _, cx| root.act(Action::ToggleAgents, cx)))
                 .child(if hidden > 0 {
                     format!("+{hidden} more")
@@ -380,6 +380,9 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
                     .id(i)
                     .mx_1()
                     .mb(px(2.0))
+                    // A definite width, so a label's ellipsis box measures the
+                    // row and not its own text.
+                    .w(px(WIDTH - 9.0))
                     .pl(px(6.0))
                     .pr_2()
                     .py(px(6.0))
@@ -390,7 +393,7 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
                     .min_w_0()
                     .border_l_2()
                     .border_color(rgb(if cursor { p.accent } else { p.panel }))
-                    .when(cursor, |d| d.bg(rgb(p.border)))
+                    .when(cursor, |d| d.bg(rgb(p.row_fill)))
                     .child(
                         div()
                             .flex_none()
@@ -413,7 +416,7 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
                     item = item
                         .cursor_pointer()
                         .hover(move |s| s.bg(rgb(hover)))
-                        .active(move |s| s.bg(rgb(p.focus)))
+                        .active(move |s| s.bg(rgb(p.pressed)))
                         .on_click(cx.listener(move |root, _, _, cx| root.act(action.clone(), cx)));
                 }
                 item
