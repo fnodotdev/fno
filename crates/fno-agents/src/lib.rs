@@ -109,7 +109,7 @@ pub use eval::{
     otel_ingest, otel_read, otlp_export, prove_it_verdicts, reader_cost, refusal_fold,
     refusal_rate, refusal_trend, research, retro, scoreboard, scoreboard_escalation,
     scoreboard_provider, session_cost, session_report, skill_diff, skill_drift, stability_report,
-    test_census, tick_ledger, usage_events, wake_meter,
+    test_census, tick_ledger, usage_events, usage_report, wake_meter,
 };
 pub use gate::{
     acceptance_evidence, approvals, attest, authorized_merge, autonomy_policy, autonomy_status,

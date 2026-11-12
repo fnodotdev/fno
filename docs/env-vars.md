@@ -16,7 +16,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `CARGO_MANIFEST_DIR` | rs | Cargo sets it on each process that it starts. The live-store fence then refuses to open a store under the operator home `.fno`. Only the admission call of the rustc wrapper removes it. |
 | `CENSUS_DEFERRED_FILE` | rs | Overrides the census deferred set for a targeted run: crates/fno-agents/src/eval/test_census.rs |
 | `CENSUS_KILL_BOUND_S` | rs | Ceiling for each census entry before its group is killed: crates/fno-agents/src/eval/test_census.rs |
-| `CI` | rs | unclear: crates/fno/src/wizard_term.rs:972 |
+| `CI` | rs | Any nonempty value holds the daily usage report and makes `fno doctor telemetry on` refuse (crates/fno-agents/src/eval/usage_report.rs); the wizard and splash also read it for raw mode (crates/fno/src/wizard_term.rs:972). |
 | `CLAUDECODE` | rs | unclear: crates/fno-agents/src/runtime/hook/stop.rs:440 |
 | `CLAUDECODE_SESSION_ID` | rs | unclear: crates/fno-agents/src/backlog/workflows.rs |
 | `CLAUDE_CLI` | rs | unclear: crates/fno-agents/src/spawn/loop_dispatch.rs:186 |

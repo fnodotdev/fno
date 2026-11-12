@@ -473,6 +473,8 @@ The shell resolver in `scripts/lib/worktree-lifecycle.sh::_cargo_build_base` sta
 
 When Cargo runs the wrapper before a native fno binary exists, the wrapper uses the current base for `SCCACHE_DIR`. When the caller sets `SCCACHE_DIR`, the wrapper keeps that value.
 
+**The PostHog install count.** Dual, disposition dual-logic, RETIRED by the opt-in usage report (2026-11-11). The shell leg was `count_once_per_day` in `hooks/wheel-move-session-start.sh`: a `curl` post of `fno_install_seen` beside the Rust capture-route senders, default on, blind to `DO_NOT_TRACK` and `CI`. The consented daily report in `crates/fno-agents/src/eval/usage_report.rs` carries its five fields and reuses its install id file. The `telemetry.install_count` key became `telemetry.usage_report`, which can only force the report off.
+
 **The ssh fast options.** Shared-vocabulary. `SSH_FAST_OPTIONS` in `crates/fno-agents/src/runtime/mail_remote.rs` and the option pair in `crates/fno/src/client/remote_hosts.rs` `probe_argv` spell the same BatchMode + ConnectTimeout=5 probe prefix at two sites. The fno crate lists no fno-agents dependency, so neither site can import the other. A served constant door through an `fno-agents` read is the one-owner form. Until then the copy is named here, so the next audit counts it.
 
 ## The four CI parity scripts
