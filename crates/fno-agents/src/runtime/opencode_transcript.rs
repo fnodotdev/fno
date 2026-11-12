@@ -721,9 +721,16 @@ mod tests {
              CREATE TABLE session_part (message_id TEXT NOT NULL, session_id TEXT NOT NULL, ordinal INTEGER NOT NULL, type TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (message_id, ordinal));",
         )
         .unwrap();
+        // A live clock: the 1-day window in v2_real_schema_window_and_read
+        // must reject the stale row for real, not because a pinned stamp
+        // aged out.
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(NOW_MS);
         for (id, updated) in [
-            ("ses_fresh", NOW_MS),
-            ("ses_stale", NOW_MS - 3 * 24 * 3600 * 1000),
+            ("ses_fresh", now_ms),
+            ("ses_stale", now_ms - 3 * 24 * 3600 * 1000),
         ] {
             conn.execute(
                 "INSERT INTO session_v2 (id, parent_id, directory, time_updated) VALUES (?1, NULL, '/fixture/v2', ?2)",
@@ -734,13 +741,13 @@ mod tests {
         conn.execute(
             "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES \
              ('vm1', 'ses_fresh', 'user', 1, ?1, ?1, ?2)",
-            rusqlite::params![NOW_MS, r#"{"text":"v2 real-schema control"}"#],
+            rusqlite::params![now_ms, r#"{"text":"v2 real-schema control"}"#],
         )
         .unwrap();
         conn.execute(
             "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES \
              ('vm2', 'ses_fresh', 'assistant', 2, ?1, ?1, ?2)",
-            rusqlite::params![NOW_MS, r#"{"time":{"created":2}}"#],
+            rusqlite::params![now_ms, r#"{"time":{"created":2}}"#],
         )
         .unwrap();
         conn.execute(
@@ -755,20 +762,20 @@ mod tests {
         // row and never write session_part.
         conn.execute(
             "INSERT INTO session_v2 (id, parent_id, directory, time_updated) VALUES ('ses_v2b', NULL, '/fixture/v2', ?1)",
-            rusqlite::params![NOW_MS - 1000],
+            rusqlite::params![now_ms - 1000],
         )
         .unwrap();
         conn.execute(
             "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES \
              ('vm1b', 'ses_v2b', 'user', 1, ?1, ?1, ?2)",
-            rusqlite::params![NOW_MS - 1000, r#"{"text":"v2 inline control"}"#],
+            rusqlite::params![now_ms - 1000, r#"{"text":"v2 inline control"}"#],
         )
         .unwrap();
         conn.execute(
             "INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES \
              ('vm2b', 'ses_v2b', 'assistant', 2, ?1, ?1, ?2)",
             rusqlite::params![
-                NOW_MS - 1000,
+                now_ms - 1000,
                 r#"{"time":{"created":2,"completed":3},"content":[{"type":"tool","name":"bash","state":{"status":"completed","input":{}}},{"type":"text","text":"done"}]}"#
             ],
         )
@@ -788,7 +795,9 @@ mod tests {
             .iter()
             .map(|s| s.session_id.clone())
             .collect();
-        assert_eq!(ids, vec!["ses_fresh".to_string()]);
+        // The 1-day window keeps both fresh rows (v2b is 1 second old) and
+        // drops the 3-day-old stale one.
+        assert_eq!(ids, vec!["ses_fresh".to_string(), "ses_v2b".to_string()]);
         let fresh = src
             .sessions(1)
             .into_iter()
