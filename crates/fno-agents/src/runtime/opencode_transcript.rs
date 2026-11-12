@@ -394,6 +394,21 @@ fn read_v2(conn: &rusqlite::Connection, sid: &str) -> String {
     out
 }
 
+/// The 2.x message-row fields the renderer reads, typed at the boundary.
+#[derive(serde::Deserialize, Default)]
+struct V2RenderMsg {
+    #[serde(default)]
+    time: V2RenderTime,
+    #[serde(default)]
+    text: Option<String>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct V2RenderTime {
+    #[serde(default)]
+    created: i64,
+}
+
 /// One 2.x message group rendered as claude-shaped JSONL: a user message's
 /// text comes from the message row itself, a synthetic message renders the
 /// isMeta row, and an assistant message's tool parts render tool_use rows
@@ -404,19 +419,15 @@ fn render_v2_message(
     mdata: &str,
     parts: Vec<(String, String, i64)>,
 ) {
-    let msg: Value = serde_json::from_str(mdata).unwrap_or(Value::Null);
-    let ts = msg
-        .get("time")
-        .and_then(|t| t.get("created"))
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
+    let msg: V2RenderMsg = serde_json::from_str(mdata).unwrap_or_default();
+    let ts = msg.time.created;
     if mtype == "user" {
-        if let Some(text) = msg.get("text").and_then(|v| v.as_str()) {
+        if let Some(text) = msg.text.as_deref() {
             push_user_row(out, ts, text);
         }
     }
     if mtype == "synthetic" {
-        if let Some(text) = msg.get("text").and_then(|v| v.as_str()) {
+        if let Some(text) = msg.text.as_deref() {
             let row = serde_json::json!({
                 "type": "user", "isMeta": true, "timestamp": rfc3339_ms(ts),
                 "message": {"role": "user", "content": text},
