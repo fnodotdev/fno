@@ -61,6 +61,7 @@ fn lists_by_header_cwd_and_renders_user_turns() {
     let source = PiSource {
         sessions_dir: Some(base),
         roots: Some(vec!["/fixture/pi-a".into()]),
+        omp: false,
     };
     assert!(source.probe().is_ok());
     let sessions = source.sessions(0);

@@ -193,7 +193,7 @@ pub use spawn::{
     harness_capabilities, harness_commands, harness_matrix, harness_roster, keeper_spawn,
     lane_heal, lanes, launch_exec, launch_flags, launch_record, launch_workdir, launchd_labels,
     loop_dispatch, loops_config, machine_key, model_env_scrub, model_family, model_price,
-    name_draw, name_ledger, naming, native_bg_mint, occupancy_classify, occupancy_login,
+    name_draw, name_ledger, naming, native_bg_mint, occupancy_classify, occupancy_login, omp,
     opencode_ask, opencode_config, opencode_install, pack_profile, pane_spawn, pi, pi_ask,
     plugin_install, plugins, project_sandbox, provider, provider_cap, provider_cap_commands,
     provider_key, provider_route, retask, role_cwd, role_grant, role_migration, route_capacity,
