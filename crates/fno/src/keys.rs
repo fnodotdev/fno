@@ -568,7 +568,7 @@ pub enum Event {
     /// answers, `n`/`N` cycle the blocked queue, Enter focuses, Esc closes) are
     /// interpreted by the client's view layer, not here (like OpenSelector).
     OpenAnswers,
-    /// Open the backlog board (prefix+O).
+    /// Open the backlog board (prefix+B).
     OpenBacklogBoard,
     CycleSidelineView,
     /// (redefined by) Open the org modal: the full reading of load against
@@ -606,7 +606,7 @@ pub enum Event {
     /// either direction.
     ToggleFullSideline,
     /// Cycle the sideline density slim -> regular -> extended
-    /// (prefix+B). Orthogonal to [`Event::TogglePanel`]: this changes how much
+    /// (prefix+=). Orthogonal to [`Event::TogglePanel`]: this changes how much
     /// each row shows, that changes whether the panel renders at all.
     CycleDensity,
     /// Toggle the extended table's order between by-squad and

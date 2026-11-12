@@ -380,7 +380,7 @@ One graph feeds every view. Pick the view by where you are.
 | Where | Command | What you see |
 |-------|---------|--------------|
 | Terminal | `fno backlog board` | Three short sections: just finished, in progress, on deck |
-| The mux | prefix+O inside `fno mux` | The full kanban board, with keys to search, filter, rank and dispatch |
+| The mux | prefix+B inside `fno mux` | The full kanban board, with keys to search, filter, rank and dispatch |
 | A local HTML file | `backlog.render_targets` in the global config | The board page as a file, re-rendered in the background |
 | A browser, private | `fno mux serve --web`, then the backlog link | The live board behind the bridge token |
 | A browser, public | `fno backlog publish` | Open, public rows only, on any static host |
@@ -403,7 +403,7 @@ The "In progress" blocking fact comes from the cache's newest row for that PR. T
 
 ### In the mux
 
-Press prefix+O in `fno mux` to open the backlog board. The default prefix is Ctrl-b. The sideline menu has a `backlog` row that opens the same board.
+Press prefix+B in `fno mux` to open the backlog board. The default prefix is Ctrl-b. The sideline menu has a `backlog` row that opens the same board.
 
 ![The mux backlog board: one lane per project, one lane open by column, and the selected node's details](images/backlog-mux-board.png)
 
