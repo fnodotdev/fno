@@ -3391,7 +3391,16 @@ fn opencode_serve_seat_drives_a_compatible_serve() {
     let mut row = bg_row("oc-worker", "/tmp/seen", None);
     row.harness = Some("opencode".into());
     row.harness_session_id = Some("ses_full0123".into());
-    serve_attach::set_serve_bin("/bin/cat");
+    // The stub must outlive the assertions: a stub that exits at once
+    // (`cat` given file names it cannot open) is swapped for the pane
+    // path's idle-shell stand-in before the entry is read, and cmd then
+    // reads `sh`. A script that ignores its args and sleeps keeps the
+    // viewer alive through them.
+    let stub = std::env::temp_dir().join("portal-seat-stub");
+    std::fs::write(&stub, "#!/bin/sh\nsleep 30\n").expect("stub script writes");
+    std::fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .expect("stub becomes executable");
+    serve_attach::set_serve_bin(stub.to_str().expect("stub path is utf-8"));
     serve_attach::set_pinned_state("http://127.0.0.1:1", Some(4096), Some(4043), "served-token");
     serve_attach::set_pinned_health(true, Some("1.18.33"));
     serve_attach::set_pinned_tui_version(Some("1.18.33"));
@@ -3415,7 +3424,11 @@ fn opencode_serve_seat_drives_a_compatible_serve() {
     assert_eq!(core.panes.len(), panes_before + 1, "the viewer spawned");
     let seat = core.portals.get(&0).expect("portal recorded").seat;
     let entry = core.panes.get(&seat).expect("seat pane entry");
-    assert_eq!(entry.cmd.as_deref(), Some("cat"), "the stub bin spawned");
+    assert_eq!(
+        entry.cmd.as_deref(),
+        Some("portal-seat-stub"),
+        "the stub bin spawned"
+    );
     assert_eq!(
         serve_attach::last_serve_argv(),
         Some(vec![
