@@ -294,6 +294,54 @@ fn ci_verdict_fact_blocks_ready_on_red_and_pending() {
     );
 }
 
+/// The unmeasured read (x-734e): PR 82 merged ready with all 7 Actions runs
+/// on its head still queued and none started - the check-run rollup carried
+/// only fno's own passing statuses, so the verdict read unknown and unknown
+/// added no blocker. The runs listing the reader already holds is the
+/// evidence: zero completed runs on the head is unmeasured, never green.
+#[test]
+fn ci_unmeasured_reads_the_runs_listing() {
+    let head = "11a2fc423508de47db4b5669f06cf3a2c229f7ac";
+    // The specimen: 7 runs queued, none started.
+    let queued: Vec<Value> = [
+        "cli-ci",
+        "rust-ci",
+        "guards",
+        "crates-publish",
+        "review-coverage-gate",
+        "multiplayer-attestation",
+        "stacked-base-guard",
+    ]
+    .iter()
+    .map(|name| json!({"name": name, "status": "queued", "conclusion": null}))
+    .collect();
+    let out = ci_unmeasured_reason(&json!(queued), head);
+    assert_eq!(
+        out.as_deref(),
+        Some(format!("ci unmeasured: 7 runs queued, none completed at {head}").as_str())
+    );
+
+    // A head with completed runs plus some still running is measured:
+    // today's D3173 behavior keeps it.
+    let mixed = json!([
+        {"name": "cli-ci", "status": "completed", "conclusion": "success"},
+        {"name": "rust-ci", "status": "queued", "conclusion": null},
+    ]);
+    assert_eq!(ci_unmeasured_reason(&mixed, head), None);
+
+    // A listing that read and names no run blocks too: absent runs are
+    // unmeasured (the node's own words), not ready.
+    let out = ci_unmeasured_reason(&json!([]), head);
+    assert_eq!(
+        out.as_deref(),
+        Some(format!("ci unmeasured: no runs at {head}").as_str())
+    );
+
+    // A listing that was never read (the GraphQL route, a legacy payload)
+    // has no evidence either way and adds nothing.
+    assert_eq!(ci_unmeasured_reason(&Value::Null, head), None);
+}
+
 // --- AC5-HP .. AC9-HP: failure_cause ----------------------------------------
 
 /// A raw Actions-log line: GitHub prefixes every line with an ISO timestamp.

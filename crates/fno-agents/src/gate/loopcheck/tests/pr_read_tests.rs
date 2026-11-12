@@ -316,3 +316,87 @@ exit 1
     );
     assert!(checks_pinned, "the checks read ran: {recorded}");
 }
+
+/// The unmeasured fold (x-734e): a green checks read over a head whose
+/// Actions runs listing names no completed run reads PENDING, not SUCCESS -
+/// PR 82 merged ready with all 7 head runs queued and the loop said
+/// DonePRGreen for a head CI never measured.
+#[test]
+fn a_green_read_over_an_unmeasured_head_folds_to_pending() {
+    let _guard = crate::claims::test_env_lock();
+    let dir = tempfile::tempdir().unwrap();
+    let calls = dir.path().join("calls");
+    let oid = "a".repeat(40);
+    let runs: Vec<String> = (0..7)
+        .map(|i| {
+            format!(r#"{{"id": {i}, "name": "w{i}", "status": "queued", "conclusion": null}}"#)
+        })
+        .collect();
+    let runs_j = runs.join(",");
+    let script = format!(
+        r#"#!/bin/sh
+printf '%s\n' "$*" >> "$RECORD_CALLS"
+case "$*" in
+  *pr*view*)
+    echo '{{"state":"OPEN","number":7,"headRefName":"feature","headRefOid":"{oid}","mergeable":"MERGEABLE","mergeStateStatus":"clean","baseRefName":"main","author":{{"login":"jj"}},"url":"https://github.com/b/r/pull/7"}}'
+    exit 0 ;;
+  *pr*checks*)
+    echo '[{{"name":"rust-ci","bucket":"pass"}}]'
+    exit 0 ;;
+  *actions/runs?head_sha*)
+    echo '{{"total_count": 7, "workflow_runs": [{runs_j}]}}'
+    exit 0 ;;
+esac
+echo 'unexpected gh call' >&2
+exit 1
+"#
+    );
+    let gh = crate::write_exec_stub(dir.path(), "gh-fold", &script);
+    std::env::set_var("RECORD_CALLS", &calls);
+    let events = dir.path().join("events.jsonl");
+    let global = dir.path().join("global.jsonl");
+    std::fs::write(&events, "").unwrap();
+    std::fs::write(&global, "").unwrap();
+    let head = "b".repeat(40);
+    let info = pr_read::read_pr_info(
+        gh.to_str().unwrap(),
+        "git",
+        dir.path(),
+        false,
+        true, // no_external: the review reads stay out; the fold is the point
+        &[],
+        &[],
+        false,
+        &[],
+        &[],
+        &[],
+        &head,
+        &events,
+        &global,
+        "a/r",
+        None,
+        Some("7"),
+        None,
+        true,
+        2,
+        100,
+        None,
+        &[],
+        Some("b/r"),
+    )
+    .unwrap_or_else(|_| panic!("the fold read answers"));
+    std::env::remove_var("RECORD_CALLS");
+    assert!(
+        info.ci_unmeasured
+            .as_deref()
+            .unwrap_or("")
+            .contains("7 runs queued"),
+        "the fold names the unmeasured head: {:?}",
+        info.ci_unmeasured
+    );
+    assert!(
+        matches!(info.ci_conclusion, CiConclusion::Pending),
+        "a green read over an unmeasured head holds: {:?}",
+        info.ci_conclusion
+    );
+}

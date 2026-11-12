@@ -462,6 +462,7 @@ impl Probes for Fake {
             } else {
                 None
             },
+            unmeasured: None,
         }
     }
 
@@ -579,6 +580,7 @@ fn request(effect: Effect) -> Request {
         supplied_review_hold: None,
         supplied_facts: None,
         supplied_evals_gate: None,
+        supplied_unmeasured: None,
     }
 }
 
@@ -734,6 +736,53 @@ fn parse_checks_read_reads_the_evals_gate_fact() {
     assert!(queued.evals_gate_pending(), "{:?}", queued.evals_gate_row);
     assert!(!fine.evals_gate_pending());
     assert!(!absent.evals_gate_pending());
+}
+
+/// The unmeasured warning (x-734e, lead ruling 02:06Z under D3173): a head
+/// whose runs listing names no completed run warns BY NAME on a
+/// require_checks ask and never blocks - PR 82 merged ready there. The
+/// parse lift covers the walk's own read path; require_checks=false keeps
+/// the no-CI-gate posture with no warning either.
+#[test]
+fn the_unmeasured_head_warns_by_name_and_never_blocks() {
+    let fake = Fake { ..clean() };
+    let reason = "ci unmeasured: 7 runs queued, none completed at abc123";
+    let req = Request {
+        require_checks: true,
+        supplied_unmeasured: Some(reason.to_string()),
+        ..request(Effect::Preview)
+    };
+    let preview = preview_walk(&fake, &req, &open_facts());
+    assert!(
+        matches!(preview, PreviewVerdict::Go { .. }),
+        "D3173: queued CI never blocks: {preview:?}"
+    );
+    let warned = preview
+        .warnings()
+        .iter()
+        .any(|w| w.code == "ci_unmeasured" && w.detail.contains("7 runs queued"));
+    assert!(warned, "the warning names the unmeasured fact: {preview:?}");
+
+    // The walk's own read path lifts the fact off the status payload.
+    let lifted = parse_checks_read(
+        br#"{"verdict": "unknown", "ci_unmeasured": "ci unmeasured: no runs at abc123"}"#,
+    );
+    assert_eq!(
+        lifted.unmeasured.as_deref(),
+        Some("ci unmeasured: no runs at abc123")
+    );
+
+    // No CI gate, no warning: require_checks=false keeps today's posture.
+    let ungated = Request {
+        require_checks: false,
+        ..req
+    };
+    let preview = preview_walk(&fake, &ungated, &open_facts());
+    assert!(matches!(preview, PreviewVerdict::Go { .. }));
+    assert!(
+        preview.warnings().is_empty(),
+        "an ungated ask carries no unmeasured warning: {preview:?}"
+    );
 }
 
 // ── the head-scoped operator merge grant ──────────────────────────────

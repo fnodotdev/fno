@@ -443,6 +443,33 @@ pub(crate) fn merge_blocker<P: GhProbe>(probes: &P, payload: &Value) -> Value {
     })
 }
 
+/// The unmeasured read over the raw Actions runs listing the status reader
+/// already holds (`workflowRuns`, from `zero_job_scan`'s paginated read).
+/// PR 82 (x-734e) merged ready with all 7 runs on its head still queued:
+/// the check-run rollup carried only fno's own passing statuses, so the
+/// verdict read unknown and unknown added no blocker. The listing is the
+/// evidence. `None` = measured (at least one run completed), or the listing
+/// was never read (`Value::Null`: the GraphQL route, a legacy payload) and
+/// has no evidence either way. A readable listing with no run at all is
+/// unmeasured too: absent runs block with a named reason.
+pub(crate) fn ci_unmeasured_reason(runs: &Value, head: &str) -> Option<String> {
+    let rows = runs.as_array()?;
+    let total = rows.len();
+    let completed = rows
+        .iter()
+        .filter(|r| r.get("status").and_then(Value::as_str) == Some("completed"))
+        .count();
+    if completed > 0 {
+        return None;
+    }
+    let reason = if total > 0 {
+        format!("ci unmeasured: {total} runs queued, none completed at {head}")
+    } else {
+        format!("ci unmeasured: no runs at {head}")
+    };
+    Some(reason)
+}
+
 /// What the live rules read answers for a PR whose `mergeable_state` reads
 /// `blocked`. Three answers, never two: a successful read that names no
 /// unsatisfied requirement is positive evidence there is nothing to hold
