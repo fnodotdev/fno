@@ -16,6 +16,24 @@ use crate::state::{load_registry, Registry, RegistryEntry};
 /// per-territory cap can read the rows' worked NODES without a second
 /// liveness implementation.
 pub(crate) fn live_rows(registry_path: &Path, warnings: &mut Vec<String>) -> Vec<RegistryEntry> {
+    match live_rows_checked(registry_path, warnings) {
+        LiveRead::Rows(rows) => rows,
+        // The slot cap degrades to 0 on an unreadable registry; callers that
+        // must not act on a degraded read use [`live_rows_checked`].
+        LiveRead::RegistryUnreadable(_) => Vec::new(),
+    }
+}
+
+/// A liveness read that keeps its failure. Zero rows from an unreadable
+/// registry is a degraded answer, not an empty fleet: a caller whose next
+/// step would erase state it failed to see (a scope sweep dropping ladders)
+/// holds on [`LiveRead::RegistryUnreadable`] instead.
+pub(crate) enum LiveRead {
+    Rows(Vec<RegistryEntry>),
+    RegistryUnreadable(String),
+}
+
+pub(crate) fn live_rows_checked(registry_path: &Path, warnings: &mut Vec<String>) -> LiveRead {
     live_rows_with_blocked(
         registry_path,
         &crate::claude_roster::read_blocked_short_ids,
@@ -29,7 +47,7 @@ fn live_rows_with_blocked(
     registry_path: &Path,
     read_blocked: &dyn Fn() -> std::collections::HashSet<String>,
     warnings: &mut Vec<String>,
-) -> Vec<RegistryEntry> {
+) -> LiveRead {
     let live_roster_short_ids: std::collections::HashSet<String> = match ClaudeRoster::load_default(
     ) {
         Ok(roster) => roster
@@ -103,9 +121,12 @@ fn live_rows_with_blocked(
                 }
             }
         }
-        Err(e) => warnings.push(format!(
-            "{NOTE} fno registry unreadable ({e}); slot count degraded to 0"
-        )),
+        Err(e) => {
+            warnings.push(format!(
+                "{NOTE} fno registry unreadable ({e}); slot count degraded to 0"
+            ));
+            return LiveRead::RegistryUnreadable(e.to_string());
+        }
     }
     if !dropped_blocked.is_empty() {
         warnings.push(format!(
@@ -114,7 +135,7 @@ fn live_rows_with_blocked(
             dropped_blocked.join(", ")
         ))
     }
-    rows
+    LiveRead::Rows(rows)
 }
 
 pub(crate) fn holds_capacity(
@@ -327,11 +348,13 @@ mod tests {
         fleet_b.last_report_at = Some(stamp_ago(60));
         let reg = write_reg(&dir, &[fleet_a, fleet_b]);
         let mut warnings = Vec::new();
-        let rows = live_rows_with_blocked(
+        let LiveRead::Rows(rows) = live_rows_with_blocked(
             &reg,
             &|| std::collections::HashSet::from(["deadbeef".to_string()]),
             &mut warnings,
-        );
+        ) else {
+            panic!("registry readable, so the read must carry rows");
+        };
         assert_eq!(rows.len(), 1, "{warnings:?}");
         assert_eq!(rows[0].name, "bg-b");
         assert!(
@@ -340,5 +363,22 @@ mod tests {
         );
         std::env::remove_var("FNO_CLAUDE_DAEMON_DIR");
         std::env::remove_var("FNO_CLAIMS_ROOT");
+    }
+
+    #[test]
+    fn an_unreadable_registry_reads_unreadable_not_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let reg = dir.path().join("registry.json");
+        std::fs::write(&reg, "not json at all").unwrap();
+        let mut warnings = Vec::new();
+        let read = live_rows_checked(&reg, &mut warnings);
+        assert!(
+            matches!(read, LiveRead::RegistryUnreadable(_)),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("registry unreadable")),
+            "{warnings:?}"
+        );
     }
 }
