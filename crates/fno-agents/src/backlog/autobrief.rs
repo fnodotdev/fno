@@ -424,6 +424,9 @@ fn opencode_pairs(db_path: &Path, session_id: &str) -> Vec<Pair> {
     let Some(conn) = crate::graph_store::open_read_only_wal_safe(db_path) else {
         return Vec::new();
     };
+    if crate::opencode_transcript::store_family(&conn) == Some(true) {
+        return opencode_pairs_v2(&conn, session_id);
+    }
     let mut stmt = match conn.prepare(
         "SELECT m.time_created, json_extract(m.data, '$.role'), \
          json_extract(p.data, '$.text') FROM message m \
@@ -461,6 +464,69 @@ fn opencode_pairs(db_path: &Path, session_id: &str) -> Vec<Pair> {
         }
     }
     // The store returns newest-first; restore chronological order.
+    pairs.reverse();
+    pairs
+}
+
+/// The 2.x pair message: user text rides the row, an assistant message's
+/// text rides its inline content list.
+#[derive(serde::Deserialize)]
+struct V2PairMsg {
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    content: Vec<Value>,
+}
+
+/// The 2.x pairs: walk the message rows newest-first, cap at the same
+/// record budget, then restore chronological order like the 1.x query.
+fn opencode_pairs_v2(conn: &rusqlite::Connection, session_id: &str) -> Vec<Pair> {
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT m.time_created, m.type, m.data FROM session_message m \
+         WHERE m.session_id = ?1 ORDER BY m.seq DESC",
+    ) else {
+        return Vec::new();
+    };
+    let Ok(rows) = stmt.query_map([session_id], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    }) else {
+        return Vec::new();
+    };
+    let mut pairs: Vec<Pair> = Vec::new();
+    for row in rows.flatten() {
+        let (created, mtype, mdata) = row;
+        if mtype != "user" && mtype != "assistant" {
+            continue;
+        }
+        let Ok(msg) = serde_json::from_str::<V2PairMsg>(&mdata) else {
+            continue;
+        };
+        let text = if mtype == "user" {
+            msg.text
+        } else {
+            let mut items: Vec<String> = Vec::new();
+            for item in &msg.content {
+                if let Ok(crate::session_truth::V2AssistantPart::Text { text }) =
+                    serde_json::from_value::<crate::session_truth::V2AssistantPart>(item.clone())
+                {
+                    items.push(text);
+                }
+            }
+            items.join(" ")
+        };
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            continue;
+        }
+        pairs.push((mtype, text, Some(created as f64 / 1000.0)));
+        if pairs.len() >= TAIL_RECORDS_READ {
+            break;
+        }
+    }
     pairs.reverse();
     pairs
 }

@@ -270,8 +270,13 @@ fn resolve_opencode(session_id: &str, roots: &Roots) -> ResolvedTranscript {
     let Some(conn) = crate::graph_store::open_read_only_wal_safe(&store) else {
         return miss("error");
     };
+    let table = if crate::opencode_transcript::store_family(&conn) == Some(true) {
+        "session_v2"
+    } else {
+        "session"
+    };
     let found = conn
-        .prepare("SELECT 1 FROM session WHERE id = ?1 LIMIT 1")
+        .prepare(&format!("SELECT 1 FROM {table} WHERE id = ?1 LIMIT 1"))
         .and_then(|mut stmt| stmt.query([session_id])?.next().map(|row| row.is_some()));
     match found {
         Ok(true) => hit(store, "opencode-db", false),

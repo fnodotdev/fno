@@ -243,13 +243,15 @@ pub enum Liveness {
 }
 
 /// The harnesses whose transcripts `fno agents session peek` can tail: the
-/// file-backed reader arms in `record_parser`
+/// reader arms in `record_parser`
 /// (crates/fno-agents/src/runtime/session_truth.rs), which owns `--follow`'s
-/// tailable-file question. A static mirror of that seam, because this crate
+/// tailable-source question. A static mirror of that seam, because this crate
 /// does not link fno-agents; `thread_reach_mirrors_the_peek_reader_seam`
-/// pins it against the source so the two cannot drift. opencode has readable
-/// history but writes a directory tree with no tailable file, so it has no
-/// arm there and this list omits it.
+/// pins it against the source so the two cannot drift. opencode is DELIBERATELY
+/// absent: its seat tier stays Locate so the portal's serve-attach capability
+/// drives compatible serves to Drive, and `peek --follow` still reaches its
+/// 2.x serve's `/api/event` stream at runtime through the dispatch in
+/// `peek_one`, which never reads this tier.
 const PEEK_READER_HARNESSES: [&str; 2] = ["claude", "codex"];
 
 /// The argv that opens pi's OWN interface on `session_id`.
@@ -3259,6 +3261,8 @@ mod tests {
             );
         }
         assert_eq!(reach("agy-row"), Reach::Locate);
+        // opencode stays Locate: the seat's serve-attach capability drives
+        // from the Locate tier (PEEK_READER_HARNESSES doc).
         assert_eq!(reach("oc-row"), Reach::Locate);
         assert_eq!(reach("gm-row"), Reach::Locate);
     }
@@ -4361,9 +4365,10 @@ config_dir = "~/.claude-alt"
         // its transcript still reads, so Follow, never Locate.
         assert_eq!(thread_reach(Some("claude"), None), Reach::Follow);
         assert_eq!(thread_reach(Some("codex"), None), Reach::Follow);
-        // opencode's history reads fine (recent_records supports it), but it
-        // writes a directory tree with no tailable file, so --follow has
-        // nothing to run - Locate, not Follow (PEEK_READER_HARNESSES doc).
+        // opencode stays Locate on purpose: the portal's serve-attach
+        // capability drives compatible serves to Drive from the Locate tier
+        // (PEEK_READER_HARNESSES doc), and peek --follow reaches the 2.x
+        // serve's stream at runtime without this tier.
         assert_eq!(thread_reach(Some("opencode"), None), Reach::Locate);
         assert_eq!(thread_reach(Some("gemini"), None), Reach::Locate);
         assert_eq!(thread_reach(Some("agy"), None), Reach::Locate);
@@ -4396,6 +4401,11 @@ config_dir = "~/.claude-alt"
             .lines()
             .filter_map(|l| l.trim().split_once("\" =>"))
             .map(|(arm, _)| arm.trim_start_matches('"'))
+            // The opencode arm parses SSE event RECORDS for the records door,
+            // not a follow source: opencode's seat tier stays Locate (the
+            // portal's serve-attach capability drives it) and its follow
+            // dispatches through peek_one's SSE stream at runtime.
+            .filter(|arm| *arm != "opencode")
             .collect();
         let mirror: std::collections::BTreeSet<&str> =
             super::PEEK_READER_HARNESSES.into_iter().collect();
