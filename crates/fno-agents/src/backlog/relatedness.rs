@@ -285,7 +285,7 @@ pub fn related_to(entry: &Value, entries: &[Value], k: usize) -> Vec<(String, f6
         let Some(eid) = id_of(e) else { continue };
         if Some(eid) == nid
             || lineage.contains(eid)
-            || e.get("status").and_then(Value::as_str) == Some("superseded")
+            || super::workflows::text_at(e, "status") == Some("superseded")
         {
             continue;
         }

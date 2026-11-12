@@ -36,8 +36,7 @@ const OPEN: [&str; 6] = [
 ];
 
 fn is_open(e: &Value) -> bool {
-    e.get("archived_at").is_none_or(Value::is_null)
-        && text_at(e, "status").is_some_and(|s| OPEN.contains(&s))
+    text_at(e, "archived_at").is_none() && text_at(e, "status").is_some_and(|s| OPEN.contains(&s))
 }
 
 /// The guesses for one row, split into the tags to write and the review list.
@@ -111,8 +110,8 @@ pub fn run(tail: &[String]) -> i32 {
                     let Some(obj) = node.as_object_mut() else {
                         continue;
                     };
-                    let mut tags: Vec<Value> = match obj.get("tags") {
-                        Some(Value::Array(a)) => a.clone(),
+                    let mut tags: Vec<Value> = match obj.remove("tags") {
+                        Some(Value::Array(a)) => a,
                         _ => Vec::new(),
                     };
                     for t in add {

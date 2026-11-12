@@ -85,40 +85,52 @@ fn is_version(s: &str) -> bool {
         })
 }
 
+/// A tag the vocabulary refuses; the text names the allowed values.
+#[derive(Debug, PartialEq, Eq)]
+pub struct TagRefusal(pub String);
+
+impl std::fmt::Display for TagRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// Check one normalized tag against the vocabulary. A bare tag (no `:`) is
 /// an operational marker and passes. A refusal names the allowed values.
-pub fn check(tag: &str) -> Result<(), String> {
+pub fn check(tag: &str) -> Result<(), TagRefusal> {
     let Some((facet, value)) = tag.split_once(':') else {
         return Ok(());
     };
     let v = vocabulary();
     let Some(spec) = v.facets.get(facet) else {
         let known: Vec<&str> = v.facets.keys().map(String::as_str).collect();
-        return Err(format!(
+        return Err(TagRefusal(format!(
             "unknown tag facet '{facet}' in '{tag}'; facets: {} (a tag with no ':' is a free marker)",
             known.join(", ")
-        ));
+        )));
     };
     match spec.kind {
         FacetKind::Closed => {
             let allowed = closed_values(facet);
             if !allowed.iter().any(|a| a == value) {
-                return Err(format!(
+                return Err(TagRefusal(format!(
                     "'{value}' is not a {facet} value; allowed: {}. Add a value in crates/fno-agents/src/backlog/tag_vocabulary.toml",
                     allowed.join(", ")
-                ));
+                )));
             }
         }
         FacetKind::Version => {
             if !is_version(value) {
-                return Err(format!("'{tag}' needs a version, e.g. {facet}:0.4.8"));
+                return Err(TagRefusal(format!(
+                    "'{tag}' needs a version, e.g. {facet}:0.4.8"
+                )));
             }
         }
         FacetKind::Open => {
             if !is_kebab_word(value) {
-                return Err(format!(
+                return Err(TagRefusal(format!(
                     "'{tag}' needs one kebab-case word, e.g. {facet}:rust-idiom"
-                ));
+                )));
             }
         }
     }
@@ -127,10 +139,7 @@ pub fn check(tag: &str) -> Result<(), String> {
 
 /// The tags stored on a row, empty when absent.
 pub fn row_tags(e: &Value) -> Vec<&str> {
-    e.get("tags")
-        .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Value::as_str).collect())
-        .unwrap_or_default()
+    super::workflows::list_at(e, "tags")
 }
 
 /// True when the row carries a tag of `facet`.
@@ -337,14 +346,15 @@ mod tests {
         ] {
             assert_eq!(check(ok), Ok(()), "{ok}");
         }
-        let err = check("audience:everyone").unwrap_err();
+        let err = check("audience:everyone").unwrap_err().0;
         assert!(
             err.contains("allowed: user, contributor, internal"),
             "{err}"
         );
-        assert!(check("area:nowhere").unwrap_err().contains("mux"));
+        assert!(check("area:nowhere").unwrap_err().0.contains("mux"));
         assert!(check("colour:red")
             .unwrap_err()
+            .0
             .contains("unknown tag facet"));
         assert!(check("release:next").is_err());
         assert!(check("topic:two.words").is_err());

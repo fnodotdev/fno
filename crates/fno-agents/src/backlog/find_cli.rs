@@ -9,6 +9,8 @@
 
 use serde_json::Value;
 
+use super::workflows::text_at;
+
 /// The parsed find invocation. `None` is the usage-error shape (an unknown
 /// flag, a second positional, or no query).
 struct FindArgs<'a> {
@@ -549,7 +551,7 @@ fn run_related(live: &[Value], anchor: &str, args: &FindArgs<'_>, tags: &[String
     };
     let by_id: std::collections::BTreeMap<&str, &Value> = live
         .iter()
-        .filter_map(|e| e.get("id").and_then(Value::as_str).map(|i| (i, e)))
+        .filter_map(|e| text_at(e, "id").map(|i| (i, e)))
         .collect();
     let ranked: Vec<(&Value, f64, String)> =
         super::relatedness::related_to(&entry, live, usize::MAX)
@@ -569,10 +571,10 @@ fn run_related(live: &[Value], anchor: &str, args: &FindArgs<'_>, tags: &[String
             .iter()
             .map(|(e, score, reason)| {
                 serde_json::json!({
-                    "id": e.get("id"),
-                    "title": e.get("title"),
-                    "status": e.get("status"),
-                    "tags": e.get("tags"),
+                    "id": text_at(e, "id"),
+                    "title": text_at(e, "title"),
+                    "status": text_at(e, "status"),
+                    "tags": super::tags::row_tags(e),
                     "score": score,
                     "reason": reason,
                 })
@@ -585,8 +587,8 @@ fn run_related(live: &[Value], anchor: &str, args: &FindArgs<'_>, tags: &[String
         println!(
             "{}\t{score:.2}\t{}\t{}\t{reason}",
             format_handle(e),
-            e.get("status").and_then(Value::as_str).unwrap_or("?"),
-            e.get("title").and_then(Value::as_str).unwrap_or(""),
+            text_at(e, "status").unwrap_or("?"),
+            text_at(e, "title").unwrap_or(""),
         );
     }
     0
@@ -604,7 +606,7 @@ fn resolve_against(
     if args.query.is_empty() {
         let (open, done): (Vec<&Value>, Vec<&Value>) = pool
             .iter()
-            .partition(|e| e.get("status").and_then(Value::as_str) != Some("done"));
+            .partition(|e| text_at(e, "status") != Some("done"));
         return open.into_iter().chain(done).cloned().collect();
     }
     if let Some(candidates) = exact_tier(pool, args.query) {
