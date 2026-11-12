@@ -95,13 +95,20 @@ pub(crate) fn decide(ask: &ThreadAsk, events: &Path) -> Answer {
     )
 }
 
+/// Filing a held ask failed: the outstanding-ask door exited non-zero.
+#[derive(Debug, thiserror::Error)]
+#[error("outstanding ask exited {code}")]
+pub(crate) struct HoldError {
+    pub code: i32,
+}
+
 /// The ladder with its fnod question, server and hold door injected.
 pub(crate) fn decide_with(
     ask: &ThreadAsk,
     q: &Question,
     url: &str,
     timeout: Duration,
-    hold: &dyn Fn(&ThreadAsk) -> Result<String, String>,
+    hold: &dyn Fn(&ThreadAsk) -> Result<String, HoldError>,
     events: &Path,
 ) -> Answer {
     let state = json!({
@@ -125,7 +132,7 @@ pub(crate) fn decide_with(
         },
         _ => Answer::ModelNote(note(ask, &model_reason(&d))),
     };
-    journal(events, ask, &d, &answer, hold_error.as_deref());
+    journal(events, ask, &d, &answer, hold_error.as_ref());
     answer
 }
 
@@ -152,7 +159,7 @@ fn journal(
     ask: &ThreadAsk,
     d: &Decision,
     answer: &Answer,
-    hold_error: Option<&str>,
+    hold_error: Option<&HoldError>,
 ) {
     let mut fields: Vec<(&str, Value)> = vec![
         ("harness", json!(ask.harness)),
@@ -177,13 +184,13 @@ fn journal(
         fields.push(("question_id", json!(question_id)));
     }
     if let Some(e) = hold_error {
-        fields.push(("hold_error", json!(e)));
+        fields.push(("hold_error", json!(e.to_string())));
     }
     crate::claude_ask::emit_event(events, "thread_permission_answered", &fields);
 }
 
 /// File the hold as an outstanding ask from the worker's cwd.
-fn file_hold(ask: &ThreadAsk) -> Result<String, String> {
+fn file_hold(ask: &ThreadAsk) -> Result<String, HoldError> {
     let who = ask.worker.as_deref().unwrap_or(&ask.session_id);
     let text = format!(
         "Thread worker {who} ({}) asks to run {} on {}. Allow it once or deny it?",
@@ -203,14 +210,22 @@ fn file_hold(ask: &ThreadAsk) -> Result<String, String> {
     };
     match crate::outstanding_cmds::file_ask(filing, &ask.cwd) {
         (0, Some(qid)) => Ok(qid),
-        (code, _) => Err(format!("outstanding ask exited {code}")),
+        (code, _) => Err(HoldError { code }),
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)] // asserts index the journal row's data object
 mod tests {
     use super::*;
     use crate::fnod::tests::serve_once;
+
+    type Hold = Result<String, HoldError>;
+
+    #[derive(serde::Deserialize)]
+    struct Row {
+        data: Value,
+    }
 
     fn ask(user_rule: bool) -> ThreadAsk {
         ThreadAsk {
@@ -232,10 +247,12 @@ mod tests {
         q
     }
 
+    /// The `data` object of each journaled answer row.
     fn rows(events: &Path) -> Vec<Value> {
         crate::event_store::journal_text(events, &["thread_permission_answered"])
             .lines()
-            .filter_map(|l| serde_json::from_str(l).ok())
+            .filter_map(|l| serde_json::from_str::<Row>(l).ok())
+            .map(|r| r.data)
             .collect()
     }
 
@@ -247,7 +264,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let events = dir.path().join("events.jsonl");
         let (url, server) = serve_once(ROUTINE, Duration::ZERO);
-        let no_hold = |_: &ThreadAsk| -> Result<String, String> { panic!("no hold") };
+        let no_hold = |_: &ThreadAsk| -> Hold { panic!("no hold") };
         let answer = decide_with(
             &ask(false),
             &trained(false),
@@ -260,7 +277,7 @@ mod tests {
         assert_eq!(answer, Answer::Allow);
         let rows = rows(&events);
         assert_eq!(rows.len(), 1);
-        let data = rows[0].get("data").unwrap_or(&rows[0]);
+        let data = &rows[0];
         assert_eq!(data["fnod_label"], "routine");
         assert_eq!(data["answer"], "allow");
         assert_eq!(data["request_id"], "per_a");
@@ -270,7 +287,7 @@ mod tests {
     fn fnod_off_or_slow_or_untrained_never_allows() {
         let dir = tempfile::tempdir().unwrap();
         let events = dir.path().join("events.jsonl");
-        let no_hold = |_: &ThreadAsk| -> Result<String, String> { panic!("no hold") };
+        let no_hold = |_: &ThreadAsk| -> Hold { panic!("no hold") };
         let off = decide_with(
             &ask(true),
             &trained(true),
@@ -315,7 +332,7 @@ mod tests {
     fn a_user_rule_holds_for_the_user_and_a_failed_filing_refuses() {
         let dir = tempfile::tempdir().unwrap();
         let events = dir.path().join("events.jsonl");
-        let filed = |_: &ThreadAsk| -> Result<String, String> { Ok("q-1".into()) };
+        let filed = |_: &ThreadAsk| -> Hold { Ok("q-1".into()) };
         let (url, server) = serve_once(ROUTINE, Duration::ZERO);
         let held = decide_with(
             &ask(true),
@@ -333,7 +350,7 @@ mod tests {
             }
         );
 
-        let broken = |_: &ThreadAsk| -> Result<String, String> { Err("down".into()) };
+        let broken = |_: &ThreadAsk| -> Hold { Err(HoldError { code: 3 }) };
         let (url, server) = serve_once(ROUTINE, Duration::ZERO);
         let refused = decide_with(
             &ask(true),
@@ -345,8 +362,7 @@ mod tests {
         );
         server.join().unwrap();
         assert!(matches!(refused, Answer::ModelNote(_)), "{refused:?}");
-        let last = rows(&events).pop().unwrap();
-        let data = last.get("data").unwrap_or(&last).clone();
-        assert_eq!(data["hold_error"], "down");
+        let data = rows(&events).pop().unwrap();
+        assert_eq!(data["hold_error"], "outstanding ask exited 3");
     }
 }

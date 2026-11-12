@@ -40,6 +40,7 @@ use crate::claude_ask::{emit_event, validate_spawn_inputs};
 use crate::opencode_ask::{
     apply_opencode_variant, require_qualified_model, AskOutcome, OPENCODE_DEFAULT_MODEL,
 };
+use crate::opencode_permission::LaneError;
 use crate::paths::AgentsHome;
 use crate::state::load_registry;
 
@@ -453,44 +454,46 @@ fn create_session(
     cwd: &Path,
     name: &str,
     state_dirs: &[String],
-) -> Result<String, String> {
+) -> Result<String, LaneError> {
     let path = format!(
         "/session?directory={}",
         crate::opencode_permission::encode_query_path(&cwd.to_string_lossy())
     );
     let body = serde_json::json!({"title": name, "permission": session_rules(cwd, state_dirs)});
-    let (status, text) = http_json(
+    let (status, text) = crate::opencode_permission::call(
         &serve.base_url,
         "POST",
         &path,
         Some(&body),
-        Some(&serve.token),
+        &serve.token,
         HTTP_CALL_TIMEOUT,
     )?;
     if status != 200 {
-        return Err(format!(
-            "session create answered {status}: {}",
-            tail_reason(&text, status)
-        ));
+        return Err(LaneError::Status {
+            route: "session create".to_string(),
+            status,
+            body: tail_reason(&text, status),
+        });
     }
-    serde_json::from_str::<serde_json::Value>(&text)
+    #[derive(serde::Deserialize)]
+    struct Created {
+        id: String,
+    }
+    serde_json::from_str::<Created>(&text)
         .ok()
-        .and_then(|v| v.get("id").and_then(|id| id.as_str()).map(str::to_string))
+        .map(|c| c.id)
         .filter(|id| crate::provider::is_opencode_session_id(id))
-        .ok_or_else(|| {
-            format!(
-                "session create returned no ses_ id: {}",
-                tail_reason(&text, status)
-            )
+        .ok_or_else(|| LaneError::NoSessionId {
+            body: tail_reason(&text, status),
         })
 }
 
 /// The turn driver binary: `fno-agents-worker`, resolved the way the MCP
 /// lazy-start resolves it.
-fn driver_binary() -> Result<String, String> {
+fn driver_binary() -> Result<String, LaneError> {
     crate::mcp::client::worker_executable()
         .map(|p| p.to_string_lossy().into_owned())
-        .ok_or_else(|| "fno-agents-worker not found beside this binary or on PATH".to_string())
+        .ok_or(LaneError::NoDriver)
 }
 
 /// Start one detached turn driver (`<driver_bin> --opencode-turn <spec>`)
@@ -605,7 +608,7 @@ pub fn dispatch_opencode_serve(
 ) -> AskOutcome {
     let driver = match driver_binary() {
         Ok(path) => path,
-        Err(error) => return AskOutcome::err(error, 13),
+        Err(error) => return AskOutcome::err(error.to_string(), 13),
     };
     dispatch_opencode_serve_inner(
         home,
@@ -717,10 +720,10 @@ fn dispatch_opencode_serve_inner(
                     ("stage", "opencode-session-create".into()),
                     ("name", name.into()),
                     ("provider", "opencode".into()),
-                    ("error", error.clone().into()),
+                    ("error", error.to_string().into()),
                 ],
             );
-            return AskOutcome::err(error, 13);
+            return AskOutcome::err(error.to_string(), 13);
         }
     };
 
@@ -925,7 +928,7 @@ pub fn steer_existing_session(
     timeout: Duration,
 ) -> Result<String, String> {
     require_qualified_model(model)?;
-    let driver = driver_binary()?;
+    let driver = driver_binary().map_err(|e| e.to_string())?;
     steer_existing_session_with_binary(home, session_id, message, cwd, model, timeout, &driver)
 }
 
@@ -1511,6 +1514,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::indexing_slicing)] // asserts index the receipt and the driver argv
     fn dispatch_mints_the_session_with_rules_and_launches_the_turn_driver() {
         let dir = tempfile::tempdir().unwrap();
         let h = home(dir.path());

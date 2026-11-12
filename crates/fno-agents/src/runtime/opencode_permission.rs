@@ -18,7 +18,7 @@
 //! layer. A reject carries a message, which the model reads as the tool's
 //! refusal (`The user rejected permission ... with the following feedback`).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -28,6 +28,63 @@ use crate::opencode_serve::http_json;
 use crate::thread_permission::{Answer, ThreadAsk};
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The ways a thread-lane call to an opencode serve fails.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum LaneError {
+    /// The HTTP exchange failed before a status came back.
+    #[error("{0}")]
+    Transport(String),
+    /// The serve answered a status the route does not succeed with.
+    #[error("{route} answered {status}: {body}")]
+    Status {
+        route: String,
+        status: u16,
+        body: String,
+    },
+    /// A body did not parse as the contract's frame.
+    #[error("{what} parse: {source}")]
+    Parse {
+        what: &'static str,
+        #[source]
+        source: serde_json::Error,
+    },
+    /// A session create answered 200 with no `ses_` id.
+    #[error("session create returned no ses_ id: {body}")]
+    NoSessionId { body: String },
+    /// The serve stayed unreachable past the driver's limit.
+    #[error("serve unreachable for {secs}s: {last}")]
+    Unreachable { secs: u64, last: Box<LaneError> },
+    /// A driver file (its spec or its answer lock) failed.
+    #[error("{what} {}: {source}", path.display())]
+    File {
+        what: &'static str,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    /// `--answer` named a choice other than allow_once or deny.
+    #[error("--answer takes allow_once or deny, not {0:?}")]
+    BadChoice(String),
+    /// No ask is pending for the session.
+    #[error("no permission ask is pending for session {0}")]
+    NothingPending(String),
+    /// The turn driver binary is not installed.
+    #[error("fno-agents-worker not found beside this binary or on PATH")]
+    NoDriver,
+}
+
+/// One `http_json` call with its transport error typed.
+pub(crate) fn call(
+    base_url: &str,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    token: &str,
+    timeout: Duration,
+) -> Result<(u16, String), LaneError> {
+    http_json(base_url, method, path, body, Some(token), timeout).map_err(LaneError::Transport)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Contract {
@@ -113,25 +170,33 @@ pub(crate) fn list_pending(
     serve: &Serve,
     cwd: &Path,
     session_id: &str,
-) -> Result<Vec<Pending>, String> {
+) -> Result<Vec<Pending>, LaneError> {
     let path = match serve.contract {
         Contract::V1 => format!("/permission?{}", dir_query(cwd)),
         Contract::V2 => format!("/api/session/{session_id}/permission"),
     };
-    let (status, body) = http_json(
+    let (status, body) = call(
         serve.base_url,
         "GET",
         &path,
         None,
-        Some(serve.token),
+        serve.token,
         CALL_TIMEOUT,
     )?;
     if status != 200 {
-        return Err(format!("GET {path} answered {status}"));
+        return Err(LaneError::Status {
+            route: format!("GET {path}"),
+            status,
+            body: String::new(),
+        });
     }
+    let parse = |source| LaneError::Parse {
+        what: "permission list",
+        source,
+    };
     let rows: Vec<Pending> = match serve.contract {
         Contract::V1 => serde_json::from_str::<Vec<V1Request>>(&body)
-            .map_err(|e| format!("permission list parse: {e}"))?
+            .map_err(parse)?
             .into_iter()
             .map(|r| Pending {
                 request_id: r.id,
@@ -141,7 +206,7 @@ pub(crate) fn list_pending(
             })
             .collect(),
         Contract::V2 => serde_json::from_str::<V2List>(&body)
-            .map_err(|e| format!("permission list parse: {e}"))?
+            .map_err(parse)?
             .data
             .into_iter()
             .map(|r| Pending {
@@ -166,42 +231,46 @@ pub(crate) enum Reply<'a> {
 
 /// Send one reply. An answer other than 200 is an error naming the status;
 /// the ask stays pending on the serve.
-pub(crate) fn reply(serve: &Serve, cwd: &Path, p: &Pending, r: Reply) -> Result<(), String> {
+pub(crate) fn reply(serve: &Serve, cwd: &Path, p: &Pending, r: Reply) -> Result<(), LaneError> {
     let (word, message) = match r {
         Reply::Once => ("once", None),
         Reply::Reject(m) => ("reject", Some(m)),
     };
-    let (path, mut body) = match serve.contract {
+    let (path, key) = match serve.contract {
         Contract::V1 => (
             format!("/permission/{}/reply?{}", p.request_id, dir_query(cwd)),
-            json!({"reply": word}),
+            "reply",
         ),
         Contract::V2 => (
             format!(
                 "/api/session/{}/permission/{}/reply",
                 p.session_id, p.request_id
             ),
-            json!({"decision": word}),
+            "decision",
         ),
     };
+    let mut body = serde_json::Map::new();
+    body.insert(key.to_string(), json!(word));
     if let Some(m) = message {
-        body["message"] = json!(m);
+        body.insert("message".to_string(), json!(m));
     }
-    let (status, text) = http_json(
+    let body = Value::Object(body);
+    let (status, text) = call(
         serve.base_url,
         "POST",
         &path,
         Some(&body),
-        Some(serve.token),
+        serve.token,
         CALL_TIMEOUT,
     )?;
     if status == 200 || status == 204 {
         Ok(())
     } else {
-        Err(format!(
-            "POST {path} answered {status}: {}",
-            text.chars().take(120).collect::<String>()
-        ))
+        Err(LaneError::Status {
+            route: format!("POST {path}"),
+            status,
+            body: text.chars().take(120).collect(),
+        })
     }
 }
 
@@ -214,7 +283,7 @@ pub(crate) fn answer(
     p: &Pending,
     a: &Answer,
     events: &Path,
-) -> Result<(), String> {
+) -> Result<(), LaneError> {
     let sent = match a {
         Answer::Allow => reply(serve, cwd, p, Reply::Once),
         Answer::ModelNote(m) => reply(serve, cwd, p, Reply::Reject(m)),
@@ -228,7 +297,7 @@ pub(crate) fn answer(
                 ("harness", json!("opencode")),
                 ("session_id", json!(p.session_id)),
                 ("request_id", json!(p.request_id)),
-                ("error", json!(e)),
+                ("error", json!(e.to_string())),
             ],
         );
     }
@@ -239,17 +308,21 @@ pub(crate) fn answer(
 /// writing no permission key, this is the user's own rules.
 pub(crate) fn user_rules(serve: &Serve, cwd: &Path) -> Value {
     let path = format!("/config?{}", dir_query(cwd));
-    match http_json(
+    #[derive(Deserialize)]
+    struct Config {
+        #[serde(default)]
+        permission: Value,
+    }
+    match call(
         serve.base_url,
         "GET",
         &path,
         None,
-        Some(serve.token),
+        serve.token,
         CALL_TIMEOUT,
     ) {
-        Ok((200, body)) => serde_json::from_str::<Value>(&body)
-            .ok()
-            .and_then(|c| c.get("permission").cloned())
+        Ok((200, body)) => serde_json::from_str::<Config>(&body)
+            .map(|c| c.permission)
             .unwrap_or(Value::Null),
         _ => Value::Null,
     }
@@ -306,6 +379,7 @@ pub(crate) fn thread_ask(
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)] // asserts index fixed-size fake replies
 pub(crate) mod tests {
     use super::*;
     use std::io::{Read, Write};
@@ -451,7 +525,10 @@ pub(crate) mod tests {
             &events,
         )
         .unwrap_err();
-        assert!(err.contains("404"), "{err}");
+        assert!(
+            matches!(err, LaneError::Status { status: 404, .. }),
+            "{err}"
+        );
         let seen = fake.seen.lock().unwrap();
         assert_eq!(seen.len(), 1, "one reply, no retry: {seen:?}");
         assert!(!seen[0].1.contains("always"));

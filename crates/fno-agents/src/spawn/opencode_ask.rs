@@ -30,6 +30,17 @@ const ASK_REFUSAL: &str = "fno-agents: opencode has no stateful 'ask' resume \
     once the payload is large enough to render as a pasted block) or the prompt \
     sits there unsent.";
 
+/// The `ask` params this interceptor reads, parsed once.
+#[derive(Default, serde::Deserialize)]
+struct AskParams {
+    provider: Option<String>,
+    answer: Option<String>,
+    message: Option<String>,
+    from_name: Option<String>,
+    model: Option<String>,
+    timeout: Option<u64>,
+}
+
 /// Returns `None` for a non-opencode target, or a client exit code for an
 /// opencode target. Serve rows receive a read-back reply; other shapes keep the
 /// historical refusal.
@@ -38,7 +49,14 @@ pub fn maybe_run_opencode_ask(
     params: &serde_json::Value,
     name: &str,
 ) -> Option<i32> {
-    let provider_param = params.get("provider").and_then(|v| v.as_str());
+    let params: AskParams = match serde_json::from_value(params.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("fno-agents: ask params: {e}");
+            return Some(2);
+        }
+    };
+    let provider_param = params.provider.as_deref();
     let registry = match crate::state::load_registry(&home.registry_json()) {
         Ok(r) => r,
         Err(e) => {
@@ -59,7 +77,7 @@ pub fn maybe_run_opencode_ask(
     if existing.is_some_and(|entry| {
         entry.harness_name() == "opencode" && entry.substrate.as_deref() == Some("thread")
     }) {
-        if let Some(choice) = params.get("answer").and_then(|v| v.as_str()) {
+        if let Some(choice) = params.answer.as_deref() {
             let outcome = crate::opencode_serve::answer_registered_session(home, name, choice);
             if !outcome.stderr.is_empty() {
                 eprintln!("{}", outcome.stderr.trim_end());
@@ -69,14 +87,12 @@ pub fn maybe_run_opencode_ask(
             }
             return Some(outcome.exit_code);
         }
-        let message = params.get("message").and_then(|v| v.as_str()).unwrap_or("");
-        let from_name_stamped =
-            crate::mail_cli::send::stamp_from(params.get("from_name").and_then(|v| v.as_str()));
+        let message = params.message.as_deref().unwrap_or("");
+        let from_name_stamped = crate::mail_cli::send::stamp_from(params.from_name.as_deref());
         let from_name = from_name_stamped.as_str();
-        let model = params.get("model").and_then(|v| v.as_str());
+        let model = params.model.as_deref();
         let timeout = params
-            .get("timeout")
-            .and_then(|v| v.as_u64())
+            .timeout
             .map(std::time::Duration::from_secs)
             .unwrap_or(Duration::from_secs(600));
         let outcome = crate::opencode_serve::ask_registered_session(

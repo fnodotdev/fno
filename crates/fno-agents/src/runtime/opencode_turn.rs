@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::opencode_permission::{self as perm, Contract, Pending, Reply, Serve};
+use crate::opencode_permission::{self as perm, Contract, LaneError, Pending, Reply, Serve};
 use crate::opencode_serve::http_json;
 use crate::thread_permission::{self, Answer};
 
@@ -88,6 +88,11 @@ pub fn run(spec_path: &Path) -> i32 {
     }
 }
 
+#[derive(Deserialize)]
+struct Health {
+    version: Option<String>,
+}
+
 /// The contract the serve's health version names; unreadable reads V1, the
 /// live shared serve's.
 pub(crate) fn serve_contract(base_url: &str, token: &str) -> Contract {
@@ -100,12 +105,9 @@ pub(crate) fn serve_contract(base_url: &str, token: &str) -> Contract {
         CALL_TIMEOUT,
     )
     .ok()
-    .and_then(|(_, body)| serde_json::from_str::<Value>(&body).ok())
-    .and_then(|h| {
-        h.get("version")
-            .and_then(Value::as_str)
-            .map(Contract::of_version)
-    })
+    .and_then(|(_, body)| serde_json::from_str::<Health>(&body).ok())
+    .and_then(|h| h.version)
+    .map(|v| Contract::of_version(&v))
     .unwrap_or(Contract::V1)
 }
 
@@ -135,7 +137,7 @@ pub(crate) fn drive(
     grace: Duration,
     answer_lock: Option<&Path>,
     decide: &dyn Fn(&thread_permission::ThreadAsk, &Path) -> Answer,
-) -> Result<(), String> {
+) -> Result<(), LaneError> {
     let sid = &spec.session_id;
     let dir = format!(
         "directory={}",
@@ -144,10 +146,10 @@ pub(crate) fn drive(
     let command_done = Arc::new(AtomicBool::new(false));
     let is_command = match command_of(&spec.message) {
         Some((command, arguments)) => {
-            let mut body = json!({"command": command, "arguments": arguments});
-            if let Some(m) = &spec.model {
-                body["model"] = json!(m);
-            }
+            let body = with_model(
+                json!({"command": command, "arguments": arguments}),
+                spec.model.as_ref().map(|m| json!(m)),
+            );
             let (url, token, path, done) = (
                 spec.base_url.clone(),
                 spec.token.clone(),
@@ -170,21 +172,30 @@ pub(crate) fn drive(
             true
         }
         None => {
-            let mut body = json!({"parts": [{"type": "text", "text": spec.message}]});
-            if let Some((provider, model)) = spec.model.as_deref().and_then(|m| m.split_once('/')) {
-                body["model"] = json!({"providerID": provider, "modelID": model});
-            }
+            let model = spec
+                .model
+                .as_deref()
+                .and_then(|m| m.split_once('/'))
+                .map(|(provider, model)| json!({"providerID": provider, "modelID": model}));
+            let body = with_model(
+                json!({"parts": [{"type": "text", "text": spec.message}]}),
+                model,
+            );
             let path = format!("/session/{sid}/prompt_async?{dir}");
-            let (status, text) = http_json(
+            let (status, text) = perm::call(
                 &spec.base_url,
                 "POST",
                 &path,
                 Some(&body),
-                Some(&spec.token),
+                &spec.token,
                 CALL_TIMEOUT,
             )?;
             if !(200..300).contains(&status) {
-                return Err(format!("prompt_async answered {status}: {text}"));
+                return Err(LaneError::Status {
+                    route: "prompt_async".to_string(),
+                    status,
+                    body: text,
+                });
             }
             false
         }
@@ -252,10 +263,10 @@ pub(crate) fn drive(
                 }
             }
             Err(e) if last_reach.elapsed() >= UNREACHABLE_LIMIT => {
-                return Err(format!(
-                    "serve unreachable for {}s: {e}",
-                    UNREACHABLE_LIMIT.as_secs()
-                ));
+                return Err(LaneError::Unreachable {
+                    secs: UNREACHABLE_LIMIT.as_secs(),
+                    last: Box::new(e),
+                });
             }
             Err(_) => {}
         }
@@ -282,6 +293,15 @@ pub(crate) fn drive(
     }
 }
 
+/// `body` with a `model` key when one is named; absent, the session's own
+/// model runs.
+fn with_model(mut body: Value, model: Option<Value>) -> Value {
+    if let (Some(map), Some(m)) = (body.as_object_mut(), model) {
+        map.insert("model".to_string(), m);
+    }
+    body
+}
+
 fn decide_one(
     spec: &TurnSpec,
     serve: &Serve,
@@ -296,21 +316,22 @@ fn decide_one(
 
 /// Block until this process holds an exclusive flock on `path`. The lock
 /// drops with the file handle when the driver exits.
-fn lock_exclusive(path: &Path) -> Result<std::fs::File, String> {
+fn lock_exclusive(path: &Path) -> Result<std::fs::File, LaneError> {
     use std::os::unix::io::AsRawFd;
+    let failed = |source| LaneError::File {
+        what: "answer lock",
+        path: path.to_path_buf(),
+        source,
+    };
     let file = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(false)
         .open(path)
-        .map_err(|e| format!("answer lock {}: {e}", path.display()))?;
+        .map_err(failed)?;
     // SAFETY: flock on an fd this function owns for the File's lifetime.
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
-        return Err(format!(
-            "answer lock {}: {}",
-            path.display(),
-            std::io::Error::last_os_error()
-        ));
+        return Err(failed(std::io::Error::last_os_error()));
     }
     Ok(file)
 }
@@ -330,11 +351,13 @@ fn session_busy(base_url: &str, token: &str, dir: &str, sid: &str) -> Option<boo
     if status != 200 {
         return None;
     }
-    let map: Value = serde_json::from_str(&body).ok()?;
-    let kind = map
-        .get(sid)
-        .and_then(|s| s.get("type"))
-        .and_then(Value::as_str);
+    #[derive(Deserialize)]
+    struct Status {
+        #[serde(rename = "type")]
+        kind: String,
+    }
+    let map: HashMap<String, Status> = serde_json::from_str(&body).ok()?;
+    let kind = map.get(sid).map(|s| s.kind.as_str());
     Some(matches!(kind, Some("busy" | "retry")))
 }
 
@@ -357,11 +380,11 @@ pub(crate) fn answer_for_user(
     session_id: &str,
     choice: &str,
     held: &[String],
-) -> Result<String, String> {
+) -> Result<String, LaneError> {
     let reply = match choice {
         "allow_once" => Reply::Once,
         "deny" => Reply::Reject("The user denied this call. Do not retry it."),
-        other => return Err(format!("--answer takes allow_once or deny, not {other:?}")),
+        other => return Err(LaneError::BadChoice(other.to_string())),
     };
     let serve = Serve {
         base_url,
@@ -374,15 +397,14 @@ pub(crate) fn answer_for_user(
         .find(|p| held.contains(&p.request_id))
         .or(pending.first());
     let Some(first) = target else {
-        return Err(format!(
-            "no permission ask is pending for session {session_id}"
-        ));
+        return Err(LaneError::NothingPending(session_id.to_string()));
     };
     perm::reply(&serve, cwd, first, reply)?;
     Ok(first.request_id.clone())
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)] // asserts index the fake serve's recorded bodies
 mod tests {
     use super::*;
     use crate::opencode_permission::tests::Fake;
@@ -492,8 +514,14 @@ mod tests {
             &[],
         )
         .unwrap_err();
-        assert!(err.contains("no permission ask is pending"), "{err}");
-        assert!(answer_for_user(&fake.url, "t", Path::new("/w"), "ses_a", "always", &[]).is_err());
+        assert!(
+            matches!(err, LaneError::NothingPending(ref s) if s == "ses_other"),
+            "{err}"
+        );
+        assert!(matches!(
+            answer_for_user(&fake.url, "t", Path::new("/w"), "ses_a", "always", &[]),
+            Err(LaneError::BadChoice(_))
+        ));
 
         // With two asks pending, the held one gets the user's answer, and the
         // driver's published file names it.
