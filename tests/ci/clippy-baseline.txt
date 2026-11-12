@@ -12636,3 +12636,10 @@ crates/fno-app/src/left_pane.rs	clippy::indexing_slicing	layout.squads[0].tabs[0
 crates/fno-app/src/left_pane.rs	clippy::indexing_slicing	matches!(&rows[0], Row::Header { rollup, .. } if rollup == &vec![
 crates/fno-app/src/left_pane.rs	clippy::indexing_slicing	matches!(&rows[1], Row::Item { state: Some(LatticeState::Unmeasured), detail, .. } if detail.ends_with("unknown"))
 crates/fno-app/src/palette.rs	clippy::indexing_slicing	Color::Indexed(i) if i < 16 => self.ansi[i as usize],
+crates/fno-agents/src/runtime/mail_hold.rs	clippy::indexing_slicing	assert!(status["delivery_policy"].is_null());
+crates/fno-agents/src/runtime/mail_hold.rs	clippy::indexing_slicing	assert_eq!(registry.entries[0].delivery_policy, None);
+crates/fno-agents/src/runtime/mail_hold.rs	clippy::indexing_slicing	let set_by = if legacy["source"] == "conversation" {
+crates/fno-agents/src/runtime/mail_hold.rs	clippy::indexing_slicing	let until = legacy["until"]
+crates/fno-agents/src/runtime/mail_hold.rs	clippy::indexing_slicing	r["delivery_policy"] = serde_json::Value::String(MAIL_ONLY.into());
+crates/fno-agents/src/runtime/mail_hold.rs	clippy::indexing_slicing	row["delivery_policy"] = serde_json::Value::String(MAIL_ONLY.into());
+crates/fno-agents/src/runtime/mail_hold.rs	clippy::indexing_slicing	row["origin"] = serde_json::Value::String("operator".into());
