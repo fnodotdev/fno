@@ -340,7 +340,7 @@ fn a_fleet_stop_refusal_emits_spawn_gate_refused() {
     let prior_config = std::env::var_os("FNO_CONFIG");
     std::env::remove_var("FNO_CONFIG");
     std::fs::write(
-        dir.join("fleet_stop.json"),
+        crate::paths::AgentsHome::from_env().fleet_stop_json(),
         r#"{"version":1,"state":"stopped","generation":1,"changed_at":"2026-11-12T00:00:00Z","changed_by":"gate-emit-test","reason":"gate-emit-test","holds":["spawns"]}"#,
     )
     .unwrap();
