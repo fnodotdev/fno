@@ -27,6 +27,10 @@ use fno_mail::session::SessionId;
 use crate::paths::AgentsHome;
 use crate::state::{load_registry, update_registry};
 
+fn j_field<'a>(v: &'a serde_json::Value, k: &str) -> &'a serde_json::Value {
+    v.get(k).unwrap_or(&serde_json::Value::Null)
+}
+
 /// The turn-end grace (C3), in seconds: a Stop fire shortens a live
 /// conversation clock to `now + GRACE_S`, so held mail flows about two
 /// minutes after the answer ends. The user may change this value; the
@@ -1044,12 +1048,12 @@ fn fold_legacy_clock(
         .and_then(|s| s.to_str())
         .and_then(|s| SessionId::parse(s).ok());
     let legacy: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-    let until = legacy["until"]
+    let until = j_field(&legacy, "until")
         .as_str()
         .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
         .map(|d| d.with_timezone(&chrono::Utc));
     if let (Some(session), Some(until)) = (session, until.filter(|u| *u > now)) {
-        let set_by = if legacy["source"] == "conversation" {
+        let set_by = if j_field(&legacy, "source").as_str() == Some("conversation") {
             SetBy::Conversation
         } else {
             SetBy::User
@@ -1344,8 +1348,18 @@ pub(crate) mod tests {
     /// A mail-only row: the register command's lane capability.
     fn mail_only_row(name: &str, session: &str) -> serde_json::Value {
         let mut row = registry_row(name, session);
-        row["delivery_policy"] = serde_json::Value::String(MAIL_ONLY.into());
-        row["origin"] = serde_json::Value::String("operator".into());
+        if let Some(fields) = row.as_object_mut() {
+            fields.insert(
+                "delivery_policy".into(),
+                serde_json::Value::String(MAIL_ONLY.into()),
+            );
+        }
+        if let Some(fields) = row.as_object_mut() {
+            fields.insert(
+                "origin".into(),
+                serde_json::Value::String("operator".into()),
+            );
+        }
         row
     }
 
@@ -1386,7 +1400,14 @@ pub(crate) mod tests {
             let (outcome, _) = arm_conversation(SID);
             assert!(matches!(outcome, ArmOutcome::Armed));
             let registry = crate::state::load_registry(&dir.join("registry.json")).unwrap();
-            assert_eq!(registry.entries[0].delivery_policy, None);
+            assert_eq!(registry.entries.len(), 1);
+            assert_eq!(
+                registry
+                    .entries
+                    .first()
+                    .and_then(|e| e.delivery_policy.clone()),
+                None
+            );
             let hold = stored(SID).expect("the arm writes a hold record");
             assert_eq!(hold.set_by(), SetBy::Conversation);
             assert_eq!(hold.clock(), HoldClock::Wall);
@@ -1398,7 +1419,7 @@ pub(crate) mod tests {
             let status = self_status(SID).unwrap();
             assert_eq!(status["clock_live"], true);
             assert_eq!(status["conversation"], true);
-            assert!(status["delivery_policy"].is_null());
+            assert!(j_field(&status, "delivery_policy").is_null());
             // The write names its writer, so a phantom hold traces to a caller.
             let journal =
                 crate::event_store::journal_text(&dir.join("events.jsonl"), &["mail_hold_stamped"]);
@@ -1822,7 +1843,12 @@ pub(crate) mod tests {
             let sid = |n: u8| format!("{n:08}-1111-2222-3333-444455556666");
             let row = |name: &str, n: u8, origin: Option<&str>, born: &str| {
                 let mut r = registry_row(name, &sid(n));
-                r["delivery_policy"] = serde_json::Value::String(MAIL_ONLY.into());
+                if let Some(fields) = r.as_object_mut() {
+                    fields.insert(
+                        "delivery_policy".into(),
+                        serde_json::Value::String(MAIL_ONLY.into()),
+                    );
+                }
                 r["created_at"] = serde_json::Value::String(born.into());
                 if let Some(o) = origin {
                     r["origin"] = serde_json::Value::String(o.into());
