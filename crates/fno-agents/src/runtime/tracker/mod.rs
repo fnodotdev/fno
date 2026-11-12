@@ -126,8 +126,11 @@ pub fn backend(name: &str) -> Result<Box<dyn Tracker>, TrackerError> {
     }
 }
 
-/// The selected backend: explicit wins, else `FNO_TRACKER_BACKEND`, else
-/// "graph" - the same resolution the Python `active_backend_name` applies.
+/// The selected backend: explicit wins, else `FNO_TRACKER_BACKEND` (the
+/// per-invocation channel CI and the live gate drive), else the
+/// `tracker.backend` config key, else "graph" - the same resolution the
+/// Python `active_backend_name` applies. Env above config keeps every
+/// existing env user's behavior unchanged.
 pub fn backend_name(explicit: Option<&str>) -> String {
     explicit
         .map(str::to_string)
@@ -136,7 +139,22 @@ pub fn backend_name(explicit: Option<&str>) -> String {
                 .ok()
                 .filter(|v| !v.trim().is_empty())
         })
+        .or_else(config_backend_name)
         .unwrap_or_else(|| "graph".to_string())
+}
+
+/// The `tracker.backend` config leaf at `cwd`, project beating global,
+/// fail-open: an absent file, an unreadable one, or an empty value all
+/// answer None and the caller keeps its fallback.
+fn config_backend_name_at(cwd: &std::path::Path) -> Option<String> {
+    crate::spawn::agents_config::config_value_deep(cwd, &["tracker", "backend"])
+        .and_then(|v| v.as_str().map(str::to_string))
+        .filter(|v| !v.trim().is_empty())
+}
+
+fn config_backend_name() -> Option<String> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    config_backend_name_at(&cwd)
 }
 
 /// The graph-get stdin door's tracker dispatch. Every op answers one JSON

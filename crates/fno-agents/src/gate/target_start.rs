@@ -1480,10 +1480,7 @@ fn refuse_dispatch_hold(node: Option<&Value>, entries: Option<&[Value]>) -> Resu
     let Some(node) = node else {
         return Ok(());
     };
-    if matches!(
-        std::env::var("FNO_TRACKER_BACKEND").as_deref(),
-        Ok(backend) if !backend.is_empty() && backend != "graph"
-    ) {
+    if crate::tracker::backend_name(None) != "graph" {
         return Ok(());
     }
     let owned;

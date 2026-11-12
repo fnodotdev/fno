@@ -1442,10 +1442,7 @@ pub async fn gather(graph: &Path, agents: Vec<AgentRow>) -> Inputs {
 }
 
 fn external_backend_name() -> String {
-    std::env::var("FNO_TRACKER_BACKEND")
-        .ok()
-        .filter(|v| !v.trim().is_empty() && v.trim() != "graph")
-        .unwrap_or_else(|| "graph".to_string())
+    crate::backlog_view::external_backend_name()
 }
 
 /// The snapshot document's rows and its error surface, split out so tests

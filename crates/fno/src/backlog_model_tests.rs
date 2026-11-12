@@ -891,6 +891,60 @@ fn external_backend_names_its_gaps() {
 }
 
 #[test]
+fn tracker_backend_config_tier_resolution_orders() {
+    // The fno-crate half of the mirrored resolution chain (explicit is an
+    // fno-agents-side tier; here env > config > graph). Temp files drive
+    // config; the env window is serialized so a sibling test never reads
+    // the override mid-flight.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let tmp = std::env::temp_dir().join(format!(
+        "fno-tracker-cfg-test-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos()
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let global = tmp.join("global.toml");
+    let project = tmp.join("project.toml");
+    std::fs::write(&global, "[tracker]\nbackend = \"github\"\n").unwrap();
+    std::fs::write(&project, "[tracker]\nbackend = \"linear\"\n").unwrap();
+
+    std::env::remove_var("FNO_TRACKER_BACKEND");
+    assert_eq!(
+        crate::backlog_view::external_backend_name_in(None, None),
+        "graph",
+        "no env and no config answers the graph default"
+    );
+    assert_eq!(
+        crate::backlog_view::external_backend_name_in(None, Some(&project)),
+        "linear",
+        "a project config leaf answers"
+    );
+    assert_eq!(
+        crate::backlog_view::external_backend_name_in(Some(&global), Some(&project)),
+        "linear",
+        "project beats global"
+    );
+    std::env::set_var("FNO_TRACKER_BACKEND", "github");
+    assert_eq!(
+        crate::backlog_view::external_backend_name_in(None, Some(&project)),
+        "github",
+        "the env tier sits above the config tier"
+    );
+    std::env::set_var("FNO_TRACKER_BACKEND", "   ");
+    assert_eq!(
+        crate::backlog_view::external_backend_name_in(None, Some(&project)),
+        "linear",
+        "a blank env value reads as unset"
+    );
+    std::env::remove_var("FNO_TRACKER_BACKEND");
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn a_board_facts_failure_degrades_to_created_at_order() {
     // AC23-ERR.
     let rows = vec![

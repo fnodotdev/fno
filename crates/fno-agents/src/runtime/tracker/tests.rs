@@ -552,3 +552,69 @@ fn sidecar_load_refuses_a_tracker_owned_key() {
     let err = sidecar::load(tmp.path(), "o/r#1").unwrap_err();
     assert!(err.to_string().contains("title"), "{err}");
 }
+
+#[test]
+fn tracker_backend_config_leaf_reads_and_filters_empty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = tmp.path().join("config.toml");
+    std::fs::write(&config, "[tracker]\nbackend = \"linear\"\n").unwrap();
+    let _guard = hermetic_env(tmp.path());
+    let got = config_backend_name_at(tmp.path());
+    assert_eq!(got.as_deref(), Some("linear"), "the config leaf answers");
+
+    let absent = tmp.path().join("absent.toml");
+    std::env::set_var("FNO_CONFIG", &absent);
+    assert_eq!(
+        config_backend_name_at(tmp.path()),
+        None,
+        "no tracker block reads as unset"
+    );
+    std::env::remove_var("FNO_CONFIG");
+
+    std::fs::write(&config, "[tracker]\nbackend = \"   \"\n").unwrap();
+    std::env::set_var("FNO_CONFIG", &config);
+    assert_eq!(
+        config_backend_name_at(tmp.path()),
+        None,
+        "an empty value reads as unset"
+    );
+    std::env::remove_var("FNO_CONFIG");
+}
+
+#[test]
+fn tracker_backend_env_beats_config_and_explicit_beats_env() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = tmp.path().join("config.toml");
+    std::fs::write(&config, "[tracker]\nbackend = \"linear\"\n").unwrap();
+    let _guard = hermetic_env(tmp.path());
+    std::env::set_var("FNO_TRACKER_BACKEND", "github");
+    assert_eq!(
+        backend_name(None),
+        "github",
+        "the env tier sits above the config tier"
+    );
+    assert_eq!(
+        backend_name(Some("linear")),
+        "linear",
+        "an explicit value beats the env tier"
+    );
+    std::env::remove_var("FNO_TRACKER_BACKEND");
+    assert_eq!(
+        backend_name(None),
+        "linear",
+        "with env gone the config tier answers"
+    );
+}
+
+#[test]
+fn tracker_backend_config_resolves_through_fno_config() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = tmp.path().join("config.toml");
+    std::fs::write(&config, "[tracker]\nbackend = \"github\"\n").unwrap();
+    let _guard = hermetic_env(tmp.path());
+    assert_eq!(
+        backend_name(None),
+        "github",
+        "FNO_CONFIG pins the config candidates, so backend_name reads it at any cwd"
+    );
+}
