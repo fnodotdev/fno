@@ -9,7 +9,9 @@ use super::{
     state_error_code, thread_spawn_refusal, update_registry_offloaded, Ctx, WARMUP_SEED,
 };
 use crate::codex_thread_entry::build_codex_thread_entry;
+use crate::paths::AgentsHome;
 use crate::protocol::{ErrorCode, Request, Response};
+use crate::runtime::state::Registry;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -31,6 +33,41 @@ fn birth_stage_ms(client: &Value, launch_ms: u64, row_ms: u64) -> Option<Value> 
 
 fn duration_ms(duration: std::time::Duration) -> u64 {
     duration.as_millis().try_into().unwrap_or(u64::MAX)
+}
+
+/// The daemon lanes' shared name-collision door: the one spare verdict
+/// (`spawn::name_collision::resolve`) run off the async executor, since the
+/// reclaim writes the registry under a file lock and probes the holder's
+/// process. A name held only by an idle spare is reclaimed and the spawn
+/// proceeds; every other holder refuses with the shared line (holder pid +
+/// way out; a pidless row keeps the byte-exact pidless form). `None`
+/// proceeds; `Some` is the answer the lane returns. A lane's write-time
+/// insert stays the race backstop for a row minted after this verdict.
+pub(super) async fn lane_name_collision_verdict(
+    home: &AgentsHome,
+    registry: &Registry,
+    name: &str,
+    req_id: u64,
+) -> Option<Response> {
+    use crate::spawn::name_collision::{self as spawn_collision, Resolution};
+    if registry.find(name).is_none() {
+        return None;
+    }
+    let home = home.clone();
+    let registry = registry.clone();
+    let name = name.to_string();
+    match tokio::task::spawn_blocking(move || spawn_collision::resolve(&home, &registry, &name))
+        .await
+    {
+        Ok(Resolution::Refuse(line)) => Some(Response::err(req_id, ErrorCode::AgentExists, line)),
+        Ok(Resolution::Registry(line)) => Some(Response::err(req_id, ErrorCode::Internal, line)),
+        Ok(_) => None,
+        Err(join) => Some(Response::err(
+            req_id,
+            ErrorCode::Internal,
+            format!("registry collision verdict failed: {join}"),
+        )),
+    }
 }
 
 pub(super) async fn spawn_codex_thread_lane(
@@ -237,6 +274,24 @@ pub(super) async fn spawn_codex_thread_lane(
         Ok(cwd) => cwd,
         Err(reason) => return thread_spawn_refusal(ctx, req, name, provider, &reason),
     };
+    // The name collision routes through the shared spare verdict BEFORE the
+    // driver starts: a codex thread is a real app-server session, and a
+    // spare-held row would burn it the way the write-time insert then
+    // refuses. The insert below stays the race backstop for a row minted
+    // while the driver starts.
+    let registry = match load_registry_offloaded(ctx.home.registry_json()).await {
+        Ok(registry) => registry,
+        Err(e) => {
+            return Response::err(
+                req.id,
+                state_error_code(&e),
+                format!("registry read failed: {e}"),
+            )
+        }
+    };
+    if let Some(refusal) = lane_name_collision_verdict(&ctx.home, &registry, name, req.id).await {
+        return refusal;
+    }
     let launch_started = std::time::Instant::now();
     let driver = match crate::codex_thread::CodexThread::start_with_state_dirs(
         cwd.clone(),

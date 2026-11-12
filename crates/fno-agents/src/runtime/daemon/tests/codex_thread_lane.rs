@@ -1850,3 +1850,127 @@ async fn codex_target_launch_cwd_refuses_a_worktree_removed_after_ensure() {
     })
     .await;
 }
+
+// --- the daemon spawn lanes' spare-name verdict ---------------------------
+//
+// A name held only by an idle claude bg spare must not block the daemon
+// spawn lanes. The shared verdict (`spawn::name_collision::resolve`) runs
+// off the async executor before either lane launches anything; the
+// fixtures mirror the verdict's own tests (pool argv + claim socket on
+// disk).
+
+/// A process wearing claude's idle-spare argv, holding a claim socket.
+#[cfg(unix)]
+fn fake_spare_process(sock: &std::path::Path) -> std::process::Child {
+    use std::os::unix::process::CommandExt;
+    let mut cmd = std::process::Command::new("sleep");
+    cmd.arg("30");
+    cmd.arg0(format!("claude bg-spare --bg-spare {}", sock.display()));
+    cmd.spawn().unwrap()
+}
+
+/// The codex thread lane reclaims a spare-held name and STARTS: before the
+/// verdict routed here, the lane started a real app-server driver and only
+/// then refused at the registry insert, wasting the session it launched.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn codex_thread_lane_reclaims_a_spare_held_name_and_starts() {
+    with_fake_codex_daemon(crate::codex_fake_daemon::Behavior::quick(), async {
+        let home = tmp_home("codex-spare-name");
+        let sock_dir = home.root().join("pool");
+        std::fs::create_dir_all(&sock_dir).unwrap();
+        let sock = sock_dir.join("s.claim.sock");
+        std::fs::write(&sock, b"").unwrap();
+        let mut spare = fake_spare_process(&sock);
+        let mut row = rentry("t", AgentStatus::Live, None);
+        row.pid = Some(spare.id());
+        row.pid_start_time = crate::runtime::process_probe::process_start_time(spare.id());
+        update_registry_offloaded(home.registry_json(), move |reg| {
+            reg.entries.push(row);
+            true
+        })
+        .await
+        .unwrap();
+        let ctx = test_ctx(home.clone(), PathBuf::from("/nonexistent"));
+        let spawned = spawn_codex_thread_for_test(&ctx, &home, "seed turn").await;
+        assert!(
+            spawned.result().is_some(),
+            "the spawn must proceed over a spare-held name: {spawned:?}"
+        );
+        let registry = load_registry_offloaded(home.registry_json())
+            .await
+            .expect("registry readable");
+        let row = registry.find("t").expect("the spawn's row");
+        assert_eq!(
+            row.harness.as_deref(),
+            Some("codex"),
+            "the row is the new thread's, not the spare's"
+        );
+        assert_ne!(
+            row.pid,
+            Some(spare.id()),
+            "the spare's pid must not survive under the name"
+        );
+        ctx.codex_threads.lock().await.remove("t");
+        spare.kill().unwrap();
+        spare.wait().unwrap();
+        std::fs::remove_dir_all(home.root()).ok();
+    })
+    .await;
+}
+
+/// A live working holder still refuses, with the holder pid and the way
+/// out, and the refusal lands BEFORE the driver starts: no hosted handle
+/// exists after the refusal, and the holder's row stays.
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn codex_thread_lane_refuses_a_live_holder_before_the_driver_starts() {
+    let home = tmp_home("codex-live-name");
+    let mut worker = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .unwrap();
+    let mut row = rentry("t", AgentStatus::Live, None);
+    row.pid = Some(worker.id());
+    row.pid_start_time = crate::runtime::process_probe::process_start_time(worker.id());
+    update_registry_offloaded(home.registry_json(), move |reg| {
+        reg.entries.push(row);
+        true
+    })
+    .await
+    .unwrap();
+    let ctx = test_ctx(home.clone(), PathBuf::from("/nonexistent"));
+    let spawned = spawn_codex_thread_for_test(&ctx, &home, "seed turn").await;
+    match spawned.payload {
+        crate::protocol::ResponsePayload::Err(error) => {
+            assert_eq!(error.code, ErrorCode::AgentExists);
+            assert!(
+                error
+                    .message
+                    .contains(&format!("holder pid {}", worker.id())),
+                "{}",
+                error.message
+            );
+            assert!(
+                error.message.contains("fno agents rm t"),
+                "{}",
+                error.message
+            );
+        }
+        _ => panic!("a live holder must refuse, got {spawned:?}"),
+    }
+    assert!(
+        ctx.codex_threads.lock().await.is_empty(),
+        "no driver may start behind the refusal"
+    );
+    let registry = load_registry_offloaded(home.registry_json())
+        .await
+        .expect("registry readable");
+    assert!(
+        registry.find("t").is_some(),
+        "the refusal keeps the holder's row"
+    );
+    worker.kill().unwrap();
+    worker.wait().unwrap();
+    std::fs::remove_dir_all(home.root()).ok();
+}
