@@ -2042,11 +2042,11 @@ pub(crate) async fn keys(
                 b.col = b.col.next();
             }
             ModalKey::Up | ModalKey::Byte(b'k') => {
-                let len = column_len(b);
+                let len = column_len(b, b.col);
                 b.step(false, len);
             }
             ModalKey::Down | ModalKey::Byte(b'j') => {
-                let len = column_len(b);
+                let len = column_len(b, b.col);
                 b.step(true, len);
             }
             // The filter row's keys (item 5).
@@ -2106,8 +2106,8 @@ pub(crate) async fn keys(
 }
 
 /// The active column's row count.
-fn column_len(b: &MessagesBoard) -> usize {
-    match b.col {
+fn column_len(b: &MessagesBoard, col: Col) -> usize {
+    match col {
         Col::Tree => b.tree_rows().len(),
         Col::Chats => b.active_chat_rows().len(),
         Col::Thread => thread_len(b),
@@ -2535,6 +2535,9 @@ pub(crate) async fn mouse(
         rep.kind,
         crate::proto::MouseKind::Press(crate::proto::MouseButton::Left)
     ) {
+        if matches!(rep.kind, MouseKind::WheelUp | MouseKind::WheelDown) {
+            wheel(view, rep);
+        }
         return Ok(());
     }
     view.region_owner = super::region_focus::RegionOwner::Board;
@@ -2571,13 +2574,7 @@ pub(crate) async fn mouse(
         return Ok(());
     }
     let (tree_w, part_w) = split(view.term.1 as usize, &view.edge_sizes);
-    let col = if (rep.col as usize) < tree_w {
-        Col::Tree
-    } else if (rep.col as usize) < tree_w + part_w {
-        Col::Chats
-    } else {
-        Col::Thread
-    };
+    let col = col_at(view, rep.col as usize);
     if let Some(b) = view.messages_board.as_mut() {
         b.col = col;
     }
@@ -2755,6 +2752,69 @@ pub(crate) async fn mouse(
         return Ok(());
     }
     act(view, sock).await
+}
+
+/// The column under a pointer x: the click map and the wheel share it, so
+/// the two can never disagree on the split.
+fn col_at(view: &View, x: usize) -> Col {
+    let (tree_w, part_w) = split(view.term.1 as usize, &view.edge_sizes);
+    if x < tree_w {
+        Col::Tree
+    } else if x < tree_w + part_w {
+        Col::Chats
+    } else {
+        Col::Thread
+    }
+}
+
+/// The wheel steps the pointer column's cursor three rows a tick (the file
+/// viewer's WHEEL_ROWS); the paint follows the cursor, so the column
+/// scrolls. Focus stays put: a scroll is not a click, and the sideline's
+/// own wheel arm never moves it either. The detail modal's popup owns the
+/// wheel over itself (the keys modal's rule); the reply dock takes none.
+/// The asks views need no arm of their own: their rows are the Thread
+/// column's.
+fn wheel(view: &mut View, rep: crate::mouse::MouseReport) {
+    const WHEEL_ROWS: usize = 3;
+    let down = matches!(rep.kind, MouseKind::WheelDown);
+    // Resolved before the board borrow starts: col_at takes the whole
+    // &View, and a call cannot borrow against the live as_mut() the way a
+    // direct field read can.
+    let col = col_at(view, rep.col as usize);
+    let Some(b) = view.messages_board.as_mut() else {
+        return;
+    };
+    if b.reply.is_some() {
+        return;
+    }
+    if b.detail
+        .as_ref()
+        .is_some_and(|d| d.popup.render(view.term).contains(rep.row, rep.col))
+    {
+        if let Some(d) = b.detail.as_mut() {
+            let delta = if down {
+                WHEEL_ROWS as isize
+            } else {
+                -(WHEEL_ROWS as isize)
+            };
+            d.popup.scroll_by(delta);
+        }
+        return;
+    }
+    if b.detail.is_some() {
+        return;
+    }
+    let len = column_len(b, col);
+    let cur = match col {
+        Col::Tree => &mut b.cursors[0],
+        Col::Chats => &mut b.cursors[1],
+        Col::Thread => &mut b.cursors[2],
+    };
+    *cur = if down {
+        (*cur + WHEEL_ROWS).min(len.saturating_sub(1))
+    } else {
+        cur.saturating_sub(WHEEL_ROWS)
+    };
 }
 
 #[cfg(test)]
