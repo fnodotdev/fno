@@ -1682,17 +1682,21 @@ fn validate_row(harness: &str, caps: &HarnessCapabilities) -> Result<(), Contrac
             "an unsupported submit contract cannot carry a nonzero delay",
         ));
     }
-    let lanes: BTreeSet<&str> = caps
-        .resume_strategy
-        .forms
-        .keys()
-        .map(String::as_str)
+    // Every standard lane must be present; a harness may carry more (the
+    // opencode serve-attach seat names its own lane beside the standard
+    // five). Extras ride the same per-form shape check below, and the
+    // renderer looks lanes up by exact name, so an inert extra lane is
+    // harmless while a missing standard lane breaks every resume on it.
+    let missing: Vec<&str> = SESSION_LANES
+        .iter()
+        .copied()
+        .filter(|lane| !caps.resume_strategy.forms.contains_key(*lane))
         .collect();
-    if lanes != SESSION_LANES.into_iter().collect() {
+    if !missing.is_empty() {
         return Err(field_error(
             harness,
             "resume_strategy",
-            "needs every session lane",
+            &format!("missing session lanes: {}", missing.join(", ")),
         ));
     }
     for (lane, form) in &caps.resume_strategy.forms {
