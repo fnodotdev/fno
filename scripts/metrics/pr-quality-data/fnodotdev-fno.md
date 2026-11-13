@@ -1,5 +1,7 @@
 Repo data: 166 merged PRs, first merge 2026-11-11, last merge 2026-11-13.
+
 Reverted PRs: none.
+
 Last 90 days: merged_at on or after 2026-08-15.
 
 | Window | Merged | First-push CI pass | Reverted | Hours to merge (p50 / p90) | Changed by review |

@@ -158,7 +158,9 @@ def h1: if . == null then "n/a" else "\((. * 10) | round / 10)" end;
   def head: "| Window | Merged | First-push CI pass | Reverted | Hours to merge (p50 / p90) | Changed by review |",
             "|---|---|---|---|---|---|";
   "Repo data: \($all | length) merged PRs, first merge \($all | map(.merged_at) | min | .[0:10]), last merge \($all | map(.merged_at) | max | .[0:10]).",
+  "",
   "Reverted PRs: \(if ($reverted | length) == 0 then "none" else ($reverted | map("#\(.)") | join(", ")) end).",
+  "",
   "Last 90 days: merged_at on or after \($cut | todate | .[0:10]).",
   "",
   head,
