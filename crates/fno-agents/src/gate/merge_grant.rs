@@ -889,6 +889,59 @@ pub(crate) fn branch_bound_manifest(cwd: &Path, branch: &str) -> BoundRead {
     }
 }
 
+/// What the PR's branch-bound manifest does to the CALLER'S merge posture.
+/// The fold replaced the unscoped arm that folded every manifest's posture
+/// into every caller, which let one session's `--no-merge` spawn stamp
+/// refuse every other session's merge of the green PR.
+pub(crate) enum BoundFold {
+    /// The posture folds into the caller's: the (approved, source) pair the
+    /// caller adopts. No manifest at the branch folds `None, None`.
+    Folds(Option<bool>, Option<String>),
+    /// The manifest's refusal belongs to another session: it is that
+    /// session's dispatch brief, not this caller's, and nothing folds.
+    OtherSession,
+    /// A manifest exists at the branch but cannot be read; fail closed.
+    Unreadable(String),
+}
+
+/// Does a manifest refusal name THIS caller's session? A refusal on an
+/// unattributed manifest cannot be scoped, so it binds (fail closed); a
+/// refusal on an attributed manifest binds only the session that wrote it.
+pub(crate) fn refusal_binds_current_session(session: Option<&str>) -> bool {
+    refusal_binds(session, &crate::claims::ambient_session_candidates())
+}
+
+/// The pure core: a refusal on an unattributed manifest binds any caller;
+/// an attributed refusal binds only a caller whose ambient session id
+/// matches the manifest's.
+pub(crate) fn refusal_binds(session: Option<&str>, current: &[String]) -> bool {
+    match session {
+        None => true,
+        Some(sess) => current
+            .iter()
+            .any(|cur| crate::claims::same_session_id(cur, sess)),
+    }
+}
+
+/// The branch-bound manifest fold with the session scope applied. A permit,
+/// an absent manifest, or a refusal naming the current session folds; a
+/// refusal written by another session does not.
+pub(crate) fn bound_posture_for_caller(cwd: &Path, branch: &str) -> BoundFold {
+    match branch_bound_manifest(cwd, branch) {
+        BoundRead::None => BoundFold::Folds(None, None),
+        BoundRead::Unreadable(why) => BoundFold::Unreadable(why),
+        BoundRead::Read(bound) => {
+            let binds = bound.approved != Some(false)
+                || refusal_binds_current_session(bound.session.as_deref());
+            if binds {
+                BoundFold::Folds(bound.approved, bound.source)
+            } else {
+                BoundFold::OtherSession
+            }
+        }
+    }
+}
+
 /// The node-keyed binding for the durable verdict: the worktrees whose bound
 /// manifest names this node. `Err` = the binding is ambiguous (two or more
 /// live binds) or every candidate is unreadable - either way the verdict

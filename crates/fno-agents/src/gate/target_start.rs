@@ -229,14 +229,13 @@ fn run_body(args: &Args, deadline: Instant) -> Result<i32, Fail> {
     let mut plan_path = args.plan_path.clone();
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
-    // Bare id: init binds. Scope may fork a child, so a held parent refuses
-    // first - only for a multi-word input (a scope) or an explicit in-review
-    // allowance, exactly as the Python body gated it.
+    // Bare id: init binds. Scope may fork a child, so the binding check
+    // runs first - only for a multi-word input (a scope) or an explicit
+    // in-review allowance, exactly as the Python body gated it. A merge
+    // hold does not gate this step: it binds the merge gate, and the start
+    // notice names it (`note_merge_hold`, the cold-start body).
     let allow_in_review = std::env::var("TARGET_ALLOW_IN_REVIEW").as_deref() == Ok("1");
     if node.split_whitespace().count() > 1 || allow_in_review {
-        let dispatch_node =
-            crate::target_init::resolve_dispatch_node(Some(&node), plan_path.as_deref(), None);
-        refuse_dispatch_hold(dispatch_node.as_ref(), None)?;
         let receipt = target_binding::prepare(
             &Request {
                 input: node.clone(),
@@ -335,15 +334,16 @@ fn run_body(args: &Args, deadline: Instant) -> Result<i32, Fail> {
         )));
     };
     let repo_root = PathBuf::from(repo_root_s);
-    // One graph read feeds the slug resolution, the find, and the hold gate.
-    // An unreadable graph on a node-shaped argument refuses; feature text
-    // keeps its proceed path.
+    // One graph read feeds the slug resolution, the find, and the hold
+    // notice. An unreadable graph on a node-shaped argument still refuses:
+    // the node row carries the containment redirect, so a start that cannot
+    // read it claims blind. Nothing was claimed.
     let entries = crate::target_init::graph_rows(&cwd);
     if entries.is_none() && crate::target_init::input_may_name_a_node(&node) {
         return Err(fail_code(
             &format!(
                 "fno do target start: dispatch-hold-invalid: backlog graph is \
-                 unreadable; refusing to assume unheld. Nothing was claimed. Fix or \
+                 unreadable; refusing to claim blind. Nothing was claimed. Fix or \
                  restore {} and retry.",
                 crate::target_init::graph_store_label(&cwd)
             ),
@@ -356,7 +356,7 @@ fn run_body(args: &Args, deadline: Instant) -> Result<i32, Fail> {
             .find(|e| e.get("id").and_then(Value::as_str) == Some(node.as_str()))
             .cloned()
     });
-    refuse_dispatch_hold(start_node.as_ref(), entries.as_deref())?;
+    note_merge_hold(start_node.as_ref(), entries.as_deref());
     // Redirect a contained node BEFORE `worktree ensure`: by init's gate the
     // worktree and branch would already exist beside the refusal.
     redirect_if_contained(start_node.as_ref(), entries.as_deref())?;
@@ -1529,41 +1529,26 @@ fn warn_if_authority_not_granted(project_root: &Path) {
 }
 
 // ---------------------------------------------------------------------------
-// The hold and containment gates
+// The hold notice and containment gates
 // ---------------------------------------------------------------------------
 
-/// Refuse a named dispatch when its plan ancestry carries a hold. An external
-/// tracker backend carries no graph-resident hold, so the gate skips there.
-/// Every refusal keeps the Python text and the exit-2 value.
-fn refuse_dispatch_hold(node: Option<&Value>, entries: Option<&[Value]>) -> Result<(), Fail> {
+/// Notice the merge hold on the start node's ancestry, never refuse. A hold
+/// set before dispatch binds the MERGE gate (the probes chain reads the
+/// same block), so a worker dispatched against a merge-held node starts,
+/// builds, and reads the hold again when its PR reaches a merge door. The
+/// notice exists so the worker learns the hold here instead of at the merge.
+/// An external tracker backend carries no graph-resident hold, so the
+/// notice skips there, and a declared-but-invalid block still warns: the
+/// merge gate fails closed on it later.
+fn note_merge_hold(node: Option<&Value>, entries: Option<&[Value]>) {
     let Some(node) = node else {
-        return Ok(());
+        return;
     };
     if crate::tracker::backend_name(None) != "graph" {
-        return Ok(());
+        return;
     }
-    let owned;
-    let rows: &[Value] = match entries {
-        Some(rows) => rows,
-        None => {
-            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            match crate::target_init::graph_rows(&cwd) {
-                Some(rows) => {
-                    owned = rows;
-                    &owned
-                }
-                None => {
-                    let id = node.get("id").and_then(Value::as_str).unwrap_or("unknown");
-                    return Err(fail_code(
-                        format!(
-                            "fno do target: dispatch-hold-invalid:{id}: backlog graph \
-                             is unreadable; refusing to assume unheld."
-                        ),
-                        2,
-                    ));
-                }
-            }
-        }
+    let Some(rows) = entries else {
+        return;
     };
     let by_id: std::collections::BTreeMap<String, Value> = rows
         .iter()
@@ -1573,41 +1558,21 @@ fn refuse_dispatch_hold(node: Option<&Value>, entries: Option<&[Value]>) -> Resu
         })
         .collect();
     let Some(verdict) = crate::backlog_ready::hold_verdict_receipt(node, &by_id) else {
-        return Ok(());
+        return;
     };
-    if !verdict.held {
-        let missing = verdict
-            .detail
-            .contains("missing under its existing plan root");
-        let remedy = if missing {
-            "Repair the node with: fno backlog update <id> plan_path=<path>, or \
-             restore the plan file."
-        } else {
-            "fix or remove the declaration, then retry."
-        };
-        return Err(fail_code(
-            format!(
-                "fno do target: {}: {}. The plan cannot prove that dispatch is \
-                 unheld; {remedy} Nothing was claimed.",
-                verdict.guard_reason, verdict.detail
-            ),
-            2,
-        ));
+    if verdict.held {
+        eprintln!(
+            "fno do target start: merge hold on {} (set_by {}): {}. Release when: {}. \
+             The start proceeds; the hold binds the merge gate. Nothing was lifted.",
+            verdict.owner, verdict.set_by, verdict.reason, verdict.release_when
+        );
+        return;
     }
-    let exempt_line = if verdict.exempt.is_empty() {
-        String::new()
-    } else {
-        format!("  exempt: {}\n", verdict.exempt)
-    };
-    Err(fail_code(
-        format!(
-            "fno do target: dispatch held by plan {}\n  reason: {}\n  set_by: {}\n  \
-             release_when: {}\n  review_on: {}\n{exempt_line}Remove dispatch_hold \
-             only after the release condition is confirmed. Nothing was claimed.",
-            verdict.owner, verdict.reason, verdict.set_by, verdict.release_when, verdict.review_on
-        ),
-        2,
-    ))
+    eprintln!(
+        "fno do target start: merge hold on {} is invalid ({}); the merge gate \
+         will refuse until the block is fixed or removed. The start proceeds.",
+        verdict.owner, verdict.detail
+    );
 }
 
 /// Route a named contained node to the delivery unit that owns its PR. A

@@ -299,6 +299,21 @@ struct LawAnswer {
     lines: Vec<String>,
 }
 
+/// A law whose decision text marks it withdrawn reads as retired for the
+/// ask gate, however the store classifies it: a retraction is a separate
+/// write, and until one lands the text is the truth the asker can see.
+/// Measured against a live law that opens WITHDRAWN yet answered every
+/// live-laws read, the matcher skips it so a dead ruling never refuses a
+/// question or rides a notice.
+pub(crate) fn text_marks_withdrawn(decision: &str) -> bool {
+    decision
+        .trim()
+        .trim_start_matches(['#', '*', '[', '('])
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .find(|w| !w.is_empty())
+        .is_some_and(|w| w.eq_ignore_ascii_case("WITHDRAWN"))
+}
+
 /// One-line, char-safe truncation: collapse whitespace, then cut at a char
 /// boundary so a multi-byte character is never split.
 pub(crate) fn one_line(text: &str, cap: usize) -> String {
@@ -395,6 +410,24 @@ fn b_ts<'a>(laws: &'a [LawRow], id: &str) -> &'a str {
 }
 
 pub(crate) fn ask_answer(req: &AskRequest) -> AskAnswer {
+    // A WITHDRAWN-marked law rides no tier: filtered before either tier
+    // reads it, so one predicate governs the exact refusal and the notice.
+    let live_laws: Vec<LawRow> = req
+        .laws
+        .iter()
+        .filter(|l| {
+            l.decision
+                .as_deref()
+                .map(|d| !text_marks_withdrawn(d))
+                .unwrap_or(true)
+        })
+        .cloned()
+        .collect();
+    let req = &AskRequest {
+        question: req.question.clone(),
+        subject: req.subject.clone(),
+        laws: live_laws,
+    };
     let exact = exact_tier(req);
     let nearby = nearby_tier(req, &exact);
     let uncited: Vec<String> = nearby
@@ -3346,6 +3379,45 @@ pub(crate) mod tests {
             ans.nearby.is_empty(),
             "nearby runs only when a subject was named"
         );
+    }
+
+    #[test]
+    fn a_withdrawn_marked_law_rides_no_tier() {
+        let law_row = law(
+            "d-withdr1",
+            "pr-1847-budget-exception",
+            "WITHDRAWN. The label was misapplied and the allowance stands.",
+            "2026-09-11T12:00:00Z",
+        );
+        // The exact by-text tier (every subject part in the question words)
+        // would hit without the skip.
+        let req = AskRequest {
+            question: Q470.to_owned(),
+            subject: None,
+            laws: vec![law_row.clone()],
+        };
+        let ans = ask_answer(&req);
+        assert!(ans.exact.is_empty());
+
+        // The nearby tier (a named subject sharing tokens) would list it.
+        let req = AskRequest {
+            question: Q470.to_owned(),
+            subject: Some("budget-exception-policy".to_owned()),
+            laws: vec![law_row],
+        };
+        let ans = ask_answer(&req);
+        assert!(ans.exact.is_empty());
+        assert!(ans.nearby.is_empty());
+        assert!(ans.nearby_notice.is_none());
+
+        // Cased and fenced spellings mark too; a word that merely appears in
+        // the sentence does not.
+        assert!(text_marks_withdrawn("[WITHDRAWN] d-1 covers it"));
+        assert!(text_marks_withdrawn("withdrawn: two reviews settle it"));
+        assert!(!text_marks_withdrawn(
+            "The label was withdrawn later by hand."
+        ));
+        assert!(!text_marks_withdrawn("Two reviews, get it green, merge."));
     }
 
     fn ask_req(question: &str, subject: Option<&str>, _node: Option<&str>) -> AskRequest {

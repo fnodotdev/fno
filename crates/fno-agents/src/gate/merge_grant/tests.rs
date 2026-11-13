@@ -840,3 +840,24 @@ fn op_rows() {
         HeadGrant::Unreadable("malformed decisions payload".to_string())
     );
 }
+
+#[test]
+fn a_bound_refusal_binds_only_the_session_that_wrote_it() {
+    let mine = vec!["aaaa1111-2222-3333-4444-555566667777".to_string()];
+    assert!(refusal_binds(
+        Some("aaaa1111-2222-3333-4444-555566667777"),
+        &mine
+    ));
+    // Casefold matches, the way claim holders compare.
+    assert!(refusal_binds(
+        Some("AAAA1111-2222-3333-4444-555566667777"),
+        &mine
+    ));
+    assert!(!refusal_binds(
+        Some("99998888-7777-6666-5555-444433332222"),
+        &mine
+    ));
+    // An unattributed manifest cannot be scoped: it binds every caller,
+    // fail closed.
+    assert!(refusal_binds(None, &[]));
+}

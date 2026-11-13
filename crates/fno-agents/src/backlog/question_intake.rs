@@ -678,11 +678,26 @@ pub fn run_intake(req: &IntakeRequest, home: &AgentsHome) -> IntakeAnswer {
     });
     if !law_verdict.exact.is_empty() && !retraction_ask {
         for hit in &law_verdict.exact {
+            // The matched text rides the refusal: the asker judges relevance
+            // (and whether to retract) without a second command.
+            let law_text = req
+                .laws
+                .iter()
+                .find(|l| {
+                    hit.ids
+                        .iter()
+                        .any(|id| id.eq_ignore_ascii_case(&l.decision_id))
+                })
+                .and_then(|l| l.decision.as_deref())
+                .map(|d| crate::law_match::one_line(d, 2000))
+                .unwrap_or_default();
             let mut line = format!(
-                "outstanding: refused: live law already rules on '{}' ({}). Read it: \
+                "outstanding: refused: live law already rules on '{}' ({}). It reads: \"{}\" \
+Read it: \
 fno inbox decisions {} --lane law --state live. Act on the law; do not ask {who}.",
                 hit.subject,
                 hit.ids.join(", "),
+                law_text,
                 hit.subject
             );
             if req.subject.is_none() {
