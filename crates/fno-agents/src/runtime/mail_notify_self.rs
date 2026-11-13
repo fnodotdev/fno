@@ -126,10 +126,9 @@ impl Pending<'_> {
 /// names ids this same pass already delivered by another lane. A transcript
 /// read failure dedups nothing: print everything rather than risk a drop.
 ///
-/// The scan walks every bus address form the session answers to, minus the
-/// short forms a second stored session also answers to: two same-window
-/// codex ids share the first-eight head, and reading it renders the
-/// sibling's mail at this session's prompt. The full-id form never refuses.
+/// The scan reads rows addressed to the full session id only: two
+/// same-window codex ids share the first-eight head, so a head-addressed row
+/// would render the sibling's mail at this session's prompt.
 pub(crate) fn pending<'a>(
     bus_dir: &Path,
     msgs: &'a [Value],
@@ -138,22 +137,7 @@ pub(crate) fn pending<'a>(
     landed: &[String],
 ) -> Pending<'a> {
     let handle = crate::identity::canonical_handle(session);
-    let stored: Vec<String> =
-        crate::state::load_registry(&crate::paths::AgentsHome::from_env().registry_json())
-            .map(|registry| {
-                registry
-                    .entries
-                    .iter()
-                    .filter_map(|e| e.harness_session_id.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
-    let (forms, refused) = crate::identity::bus_drain_forms(session, &stored);
-    for form in &refused {
-        eprintln!(
-            "note: not rendering short form {form}: more than one stored session answers to it"
-        );
-    }
+    let forms = [crate::spawn_context::session_identity_key(session)];
     let mut form_by_id: HashMap<String, String> = HashMap::new();
     let mut collected: Vec<&Value> = Vec::new();
     for form in &forms {
