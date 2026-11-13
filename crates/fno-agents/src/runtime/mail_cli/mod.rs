@@ -155,7 +155,8 @@ Usage: fno agents mail reply --to MSG_ID [OPTIONS] [BODY]
   Reply to a message, routed by the answered message's lane.
 
 Options:
-  --to <id>                The message being answered.
+  --to <id>                The message being answered (a leading positional
+                           msg-id works too).
   --body <str>             Reply body (alternative to the positional arg).
   --body-file <path>       Read the body from a file ('-' = stdin).
   --kind <str>             Inbox kind of the reply.
