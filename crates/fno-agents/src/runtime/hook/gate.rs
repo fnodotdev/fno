@@ -60,6 +60,29 @@ fn chain(tool: &str, mux: bool) -> Vec<(&'static str, Entry)> {
     out
 }
 
+/// The write gate's posture when it cannot answer, the same one its shim
+/// holds: a payload naming a protected state file is refused, any other
+/// payload proceeds.
+fn write_gate_fail_closed(raw: &str) -> Option<String> {
+    let protected = [
+        "graph.json",
+        "target-state.md",
+        "graph.db",
+        ".fno/artifacts/",
+    ];
+    if !protected.iter().any(|p| raw.contains(p)) {
+        return None;
+    }
+    let reason = "graph-write-protect: the write gate could not answer for a payload \
+                  referencing a protected state file; blocking fail-closed.";
+    Some(
+        json!({"decision": "block", "reason": reason, "hookSpecificOutput": {
+            "hookEventName": "PreToolUse", "permissionDecision": "deny",
+            "permissionDecisionReason": reason}})
+        .to_string(),
+    )
+}
+
 fn rules_pre_tool(_args: &[String]) -> i32 {
     super::rules::run("pre-tool")
 }
@@ -126,10 +149,17 @@ pub fn run(_args: &[String]) -> i32 {
     let mut answers = Vec::new();
     if !tool.is_empty() {
         for (name, entry) in chain(&tool, mux) {
-            match std::panic::catch_unwind(|| super::captured(&raw, || entry(&[]))) {
-                Ok((0, out)) => answers.push(out),
-                Ok((code, _)) => eprintln!("hook gate: {name} answered exit {code}; skipped"),
-                Err(_) => eprintln!("hook gate: {name} panicked; skipped"),
+            let failure = match std::panic::catch_unwind(|| super::captured(&raw, || entry(&[]))) {
+                Ok((0, out)) => {
+                    answers.push(out);
+                    continue;
+                }
+                Ok((code, _)) => format!("answered exit {code}"),
+                Err(_) => "panicked".to_string(),
+            };
+            eprintln!("hook gate: {name} {failure}; skipped");
+            if name == "write-gate" {
+                answers.extend(write_gate_fail_closed(&raw));
             }
         }
     }
@@ -275,5 +305,16 @@ mod tests {
         assert_eq!(advised["systemMessage"], "heads up");
 
         assert_eq!(merge(&["{}".into(), String::new()]), json!({}));
+    }
+
+    /// A write gate that cannot answer still refuses a protected state file,
+    /// and lets every other payload through.
+    #[test]
+    fn a_failed_write_gate_refuses_only_protected_state_paths() {
+        let graph = r#"{"tool_name":"Edit","tool_input":{"file_path":"/h/.fno/db/graph.db"}}"#;
+        let refused = super::write_gate_fail_closed(graph).expect("a refusal");
+        assert_eq!(merge(&[refused])["decision"], "block");
+        let notes = r#"{"tool_name":"Edit","tool_input":{"file_path":"/h/notes.md"}}"#;
+        assert!(super::write_gate_fail_closed(notes).is_none());
     }
 }

@@ -446,7 +446,19 @@ pub(crate) fn tool_boundary_hook(session: &str, cwd: &Path) -> Option<String> {
     if !valid {
         return None;
     }
-    let bus_dir = crate::mail_paths::state_bus_dir_opt()?;
+    let Some(bus_dir) = crate::mail_paths::state_bus_dir_opt() else {
+        // A door miss is a no-answer, never a guessed path: one row says so.
+        let events = crate::state_path::resolve("events", cwd)
+            .unwrap_or_else(|| crate::paths::events_path(cwd));
+        let row = json!({
+            "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+            "type": "mail_notify_self_missed",
+            "data": {"rc": 1, "stderr_tail": "bus dir unresolved"},
+            "source": "hook"
+        });
+        let _ = crate::claims::append_event_line(&events, &row, std::time::Duration::from_secs(2));
+        return None;
+    };
     if !tool_boundary_due(&bus_dir, session) {
         return None;
     }

@@ -41,7 +41,10 @@ pub fn rule_set_fast(cwd: &Path) -> Result<ServedRules, String> {
     if let Some(served) = ask_daemon(&graph, cwd) {
         return Ok(served);
     }
-    eprintln!("rules: no daemon answered agent.rule-set; built the rule set in process");
+    // Named once per hook fire; a door (merge, spawn, send) stays quiet.
+    if std::env::var_os("FNO_HOOK_CONTEXT").is_some() {
+        eprintln!("rules: no daemon answered agent.rule-set; built the rule set in process");
+    }
     rule_set_in(&graph, cwd).map(|set| ServedRules {
         rules: set.rules,
         unread: set.unread,
