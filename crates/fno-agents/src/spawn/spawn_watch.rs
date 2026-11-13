@@ -264,6 +264,7 @@ pub(crate) fn run_pass(
         runner,
         &crate::claude_roster::read_all_agents_union,
     )
+    .map_err(String::from)
 }
 
 /// One pass with the harness roster injected. The roster is read at most once
@@ -273,7 +274,7 @@ fn run_pass_with(
     now: i64,
     runner: crate::burn_watch::Runner<'_>,
     roster: &dyn Fn() -> ClaudeAgentsSnapshot,
-) -> Result<(), String> {
+) -> Result<(), Box<str>> {
     let snapshot = std::cell::OnceCell::new();
     let roster = || snapshot.get_or_init(roster).clone();
     let dir = watch_dir(home);
@@ -322,7 +323,7 @@ fn run_pass_with(
             first_error.get_or_insert_with(|| format!("{}: {error}", path.display()));
         }
     }
-    first_error.map_or(Ok(()), Err)
+    first_error.map_or(Ok(()), |e| Err(e.into()))
 }
 
 /// The worker row: by session id once one is known (law d-e952ed19), then by
