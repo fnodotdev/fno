@@ -2338,15 +2338,16 @@ mod tests {
         let bodies = bodies.into_inner();
         assert_eq!(deferred, 0);
         assert_eq!(bodies.len(), 1);
+        let body = bodies.pop().expect("one bounce body");
         assert!(
-            bodies[0].contains("amends the open question in place"),
+            body.contains("amends the open question in place"),
             "the mail names the amend door: {}",
-            bodies[0]
+            body
         );
         assert!(
-            bodies[0].contains("fno inbox outstanding clear"),
+            body.contains("fno inbox outstanding clear"),
             "the mail names the withdrawal form: {}",
-            bodies[0]
+            body
         );
     }
 
