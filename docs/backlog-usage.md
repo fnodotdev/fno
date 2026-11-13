@@ -475,7 +475,7 @@ fno config set backlog.render_targets '[{"path": "~/notes/fno/backlog.html", "sc
 Set `backlog.render_path` in the global config to get one board per project with no rows to maintain. The daemon expands `{project}` for every project in `work.workspaces` and renders `~/vault/{project}/backlog/backlog.html`, so the boards live inside your vault. A `render_targets` row scoped to a project overrides the template row for that project. When the Obsidian vault is on, `fno setup` offers the key. A malformed shape warns at render time and the config-set door refuses it at write time. The refused shapes: not a string, no `{project}`, a relative or glob path, an unknown template.
 
 ```bash
-fno config set backlog.render_path '~/c3po/internal/{project}/backlog/backlog.html'
+fno config set backlog.render_path '~/notes/{project}/backlog/backlog.html'
 ```
 
 `fno config set` writes the global config by default. The renderer reads the global config only. Like `render_targets`, the renderer reads `backlog.render_path` from the global config only.

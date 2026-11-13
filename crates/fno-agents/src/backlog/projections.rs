@@ -692,34 +692,53 @@ fn work_map_names() -> Vec<String> {
 }
 
 /// Template names in `text`, the `{...}` runs that `{{`/`}}` do not escape.
+/// Iterator form: the clippy ratchet denies indexing and slicing, and the
+/// semantics pin validators_root::template_vars, the write door's scanner.
 fn template_names(text: &str) -> Vec<String> {
-    let chars: Vec<char> = text.chars().collect();
     let mut out = Vec::new();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] != '{' || (i > 0 && chars[i - 1] == '{') {
-            i += 1;
+    let mut prev = ' ';
+    let mut pending: Option<char> = None;
+    let mut it = text.chars().peekable();
+    while let Some(c) = pending.take().or_else(|| it.next()) {
+        let candidate = c == '{' && prev != '{';
+        prev = c;
+        if !candidate {
             continue;
         }
-        let mut j = i + 1;
-        while j < chars.len() && chars[j] != '{' && chars[j] != '}' {
-            j += 1;
+        let mut current = String::new();
+        let mut resume: Option<char> = None;
+        let mut closed = false;
+        while let Some(n) = it.next() {
+            match n {
+                '{' => {
+                    resume = Some('{');
+                    break;
+                }
+                '}' => {
+                    if it.peek() == Some(&'}') {
+                        resume = Some('}');
+                    } else {
+                        closed = !current.is_empty();
+                    }
+                    break;
+                }
+                _ => current.push(n),
+            }
         }
-        let closed = j > i + 1 && chars.get(j) == Some(&'}') && chars.get(j + 1) != Some(&'}');
         if closed {
-            out.push(chars[i + 1..j].iter().collect());
-            i = j + 1;
+            out.push(current);
+            prev = '}';
         } else {
-            i += 1;
+            prev = match resume {
+                Some(_) => current.chars().next_back().unwrap_or('{'),
+                None => '}',
+            };
+            pending = resume;
         }
     }
     out
 }
 
-/// `backlog.render_path` from the GLOBAL config: a `{project}`-templated
-/// board path expanded one target per `work.workspaces` project. Every
-/// malformed shape warns and disables the key for this render; the
-/// `fno config set` door refuses the same shapes at write time.
 fn render_path_template(block: Option<&Value>) -> Option<String> {
     let raw = block.and_then(|b| b.get("render_path"));
     let s = match raw {
