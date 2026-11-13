@@ -284,10 +284,12 @@ fn open_rows(index: &Path) -> Vec<OpenRow> {
 /// The open rows already folded, so one read serves the dedup, the amend
 /// fetch and the receipt without a second fold between them.
 fn open_rows_from(asked: &Map<String, Value>, closed: &HashSet<String>) -> Vec<OpenRow> {
-    let mut out: Vec<OpenRow> = asked
-        .into_iter()
-        .filter(|(id, _)| !closed.contains(id))
-        .map(|(id, v)| OpenRow {
+    let mut out: Vec<OpenRow> = Vec::new();
+    for (id, v) in asked {
+        if closed.contains(id) {
+            continue;
+        }
+        out.push(OpenRow {
             blocks: v
                 .get("data")
                 .and_then(|d| d.get("blocks"))
@@ -300,12 +302,12 @@ fn open_rows_from(asked: &Map<String, Value>, closed: &HashSet<String>) -> Vec<O
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string(),
-            subject: str_field(&v, "subject").map(str::to_string),
-            node: str_field(&v, "node").map(str::to_string),
-            session_id: str_field(&v, "session_id").map(str::to_string),
-            id: id.clone(),
-        })
-        .collect();
+            subject: str_field(v, "subject").map(str::to_string),
+            node: str_field(v, "node").map(str::to_string),
+            session_id: str_field(v, "session_id").map(str::to_string),
+            id: (*id).clone(),
+        });
+    }
     // Newest first, then more blocks, then id (mirrors read_open_questions
     // with a zero liveness budget: one lane, no probes).
     out.sort_by(|a, b| {
