@@ -241,16 +241,19 @@ pub enum InstallRefusal {
     NoGh,
     NoAgents,
     NoParentDir,
+    /// The durable state-root install failed; the text is the installer's
+    /// own reason (no HOME, or the dir refused the write).
+    NoStateRoot(String),
 }
 
 impl std::fmt::Display for InstallRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let text = match self {
-            Self::NoGh => "no gh on PATH",
-            Self::NoAgents => "no fno-agents binary to exec",
-            Self::NoParentDir => "gh on PATH has no parent dir",
-        };
-        f.write_str(text)
+        match self {
+            Self::NoGh => f.write_str("no gh on PATH"),
+            Self::NoAgents => f.write_str("no fno-agents binary to exec"),
+            Self::NoParentDir => f.write_str("gh on PATH has no parent dir"),
+            Self::NoStateRoot(why) => f.write_str(why),
+        }
     }
 }
 
@@ -286,7 +289,9 @@ pub fn install_for_path() -> Result<String, InstallRefusal> {
     // The first-PATH dir refused the write (unwritable, or the loop
     // guard): fall back to the state root's durable home and report the
     // shadow honestly. Doctor's report reads the same verdict.
-    let root = ensure_proxy(None, &path)?.ok_or(InstallRefusal::NoAgents)?;
+    let root = ensure_proxy(None, &path)
+        .map_err(InstallRefusal::NoStateRoot)?
+        .ok_or(InstallRefusal::NoAgents)?;
     Ok(format!(
         "gh proxy shim at {}; {} still resolves first on PATH; put the shim dir ahead of it to activate",
         root.display(),
