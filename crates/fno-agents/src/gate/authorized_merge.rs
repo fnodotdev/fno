@@ -1745,12 +1745,12 @@ fn authority_refusal<P: Probes>(
     let mut approved = request.approved;
     let mut folded_source = request.auto_merge_source.clone();
     if approved.is_none() {
-        match crate::merge_grant::branch_bound_manifest(cwd, &facts.head_ref) {
-            crate::merge_grant::BoundRead::Read(bound) => {
-                approved = bound.approved;
-                folded_source = bound.source;
+        match crate::merge_grant::bound_posture_for_caller(cwd, &facts.head_ref) {
+            crate::merge_grant::BoundFold::Folds(approved_in, source_in) => {
+                approved = approved_in;
+                folded_source = source_in;
             }
-            crate::merge_grant::BoundRead::Unreadable(why) => {
+            crate::merge_grant::BoundFold::Unreadable(why) => {
                 return Some((
                     "manifest_unreadable",
                     format!(
@@ -1759,7 +1759,10 @@ fn authority_refusal<P: Probes>(
                     ),
                 ));
             }
-            crate::merge_grant::BoundRead::None => {}
+            // Another session's refusal is that session's dispatch brief,
+            // not this caller's: it rides as provenance and the caller's own
+            // gates decide.
+            crate::merge_grant::BoundFold::OtherSession(_) => {}
         }
     }
     // A `default-off` stamp is init's failed config read, never a refusal:
