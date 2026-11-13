@@ -115,9 +115,12 @@ fi
 # --- check 8: a headless run without FNO_NO_WIRE keeps the silent setup ---
 # This smoke never owns a controlling terminal, so the installer must take
 # the non-interactive path on its own: the wizard opens only where /dev/tty
-# opens, which is the journey script's attended business.
+# opens, which is the journey script's attended business. The grep names the
+# installer's own wizard lines: the setup report itself can carry the word
+# "wizard" (a needs-human row names the wizard prompt), so a bare 'wizard'
+# grep would false-fail a healthy silent run.
 run_capture env -u FNO_NO_WIRE FNO_INSTALL_TARBALL="$TARBALL" sh "$INSTALLER"
-if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -qi 'wizard'; then
+if [ "$RC" -eq 0 ] && ! printf '%s' "$OUT" | grep -qiE 'opening the setup wizard|wizard did not finish'; then
   pass "agent-silent" "headless run without FNO_NO_WIRE stayed on the non-interactive setup (rc=0)"
 else
   miss "agent-silent" "rc=$RC out: $(printf '%s' "$OUT" | tail -2)"
