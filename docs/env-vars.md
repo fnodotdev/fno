@@ -108,6 +108,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_DEMO_EPOCH` | rs | Freezes the render clock to these epoch seconds for a demo shoot, so a seeded board's ages read the same on every shoot; a value that does not parse falls through to the real clock. Set only by the demo scripts. |
 | `FNO_DEMO_HOST` | rs | The host name painted text shows instead of the real machine's, so a demo shot never carries the live host; liveness checks keep the real host. Set only by the demo scripts. |
 | `FNO_DEMO_ID_SEED` | rs | Makes the backlog node-id mint deterministic for a demo shoot: the mint hashes the seed and the attempt index instead of OS entropy, so a seeded board mints the same ids every shoot. Set only by the demo scripts, one token per idea call. |
+| `FNO_DEMO_MARK_AT` | rs | Seconds into the HQ empty-state mark's one play, so a demo shoot paints the mark as it reads at that second; at or past 2.25 it paints the finished mark. A value that does not parse falls through to the real clock. Set only by a person shooting frames for a video. |
 | `FNO_DISPATCH_ACCOUNT_ENV` | rs | The proven-credential carrier of a cutover spawn: a flat JSON map `accounts::launch` stages verbatim for `--dispatch-account`. The spawn door claims it, and a spawn without the flag refuses. |
 | `FNO_DRIVER_LIB` | rs | unclear: crates/fno-agents/src/gate/finalize.rs:849 |
 | `FNO_DRIVER_LIB_DIR` | rs | unclear: crates/fno-agents/src/runtime/loop_target.rs:616 |
