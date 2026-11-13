@@ -253,8 +253,8 @@ const AGENT_COMPILE_SUBCOMMANDS: [&str; 5] = ["build", "b", "check", "c", "clipp
 /// The advertised alias folded to the long form a journal key reads.
 pub(crate) fn long_compile_name(sub: &str) -> &'static str {
     match sub {
-        "b" => "build",
-        "c" => "check",
+        "build" | "b" => "build",
+        "check" | "c" => "check",
         _ => "clippy",
     }
 }
