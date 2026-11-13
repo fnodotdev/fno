@@ -103,7 +103,8 @@ pub fn run_claim(args: &[String]) -> i32 {
         // The init helper's adopt decision, printed as --handover-from
         // flags: one own-session check shared with the start pre-check, so
         // a claim start adopts init adopts too (measured live 2026-11-13).
-        return crate::claim_cli::adopt_flags::run(&args[1..]);
+        let rest = args.get(1..).unwrap_or(&[]);
+        return crate::claim_cli::adopt_flags::run(rest);
     }
     if op == "lane-acquire" {
         return crate::claim_lanes_cli::run_lane_acquire(&args[1..]);

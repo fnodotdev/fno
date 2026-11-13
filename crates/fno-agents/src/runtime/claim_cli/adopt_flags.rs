@@ -1,10 +1,8 @@
 //! The `claim adopt-flags` leaf: the init helper's adopt decision, printed as
 //! its `--handover-from` flags. One own-session check shared with the start
 //! pre-check ([`crate::target_start::claim_names_current_session`]), so a
-//! claim one surface adopts the other cannot refuse. Prints the flags when
-//! this session is the claim's beneficiary; prints nothing when no rung
-//! passes, so the caller's ordinary acquire decides. Always exit 0: the
-//! empty output is the answer, not a failure.
+//! claim one surface adopts the other cannot refuse. Prints nothing when no
+//! rung passes, so the caller's ordinary acquire decides. Always exit 0.
 
 pub fn run(args: &[String]) -> i32 {
     let mut key: Option<&str> = None;

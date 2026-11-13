@@ -136,9 +136,8 @@ Usage: fno agents claim adopt-flags KEY
 
   The one own-session check shared with the start pre-check: prints
   `--handover-from <holder>` when THIS session is the claim's beneficiary
-  (spawn env carrier, worker name, registry row, recorded session id, or a
-  suspect launch window). Prints nothing when no rung passes, so the
-  caller's ordinary acquire decides. Always exit 0.
+  (env carrier, worker name, registry row, recorded session id, suspect
+  window). Prints nothing when no rung passes. Always exit 0.
 
 Options:
   --help               Show this message and exit.

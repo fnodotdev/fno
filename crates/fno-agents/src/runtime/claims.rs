@@ -123,6 +123,18 @@ pub struct ClaimRecord {
     pub metadata: Map<String, Value>,
 }
 
+impl ClaimRecord {
+    /// The demoted minter session the handover takeover writes. One typed
+    /// reader: the key literal lives here, beside the takeover that inserts
+    /// it, and consumers never spell the string key.
+    pub(crate) fn dispatched_by_session(&self) -> Option<&str> {
+        self.metadata
+            .iter()
+            .find(|(k, _)| k.as_str() == "dispatched_by_session")
+            .and_then(|(_, v)| v.as_str())
+    }
+}
+
 fn default_schema_version() -> u32 {
     SCHEMA_VERSION
 }

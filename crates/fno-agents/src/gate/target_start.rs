@@ -880,12 +880,11 @@ fn read_node_claim(
 /// env carrier, the exact session holder, the launch-window handover
 /// (worker name, registry row, recorded session id, suspect takeover),
 /// then durable session pid + machine. An uncapturable own pid reads as
-/// not-ours (park / re-acquire, never assume ownership).
+/// not-ours: park or re-acquire, never assume ownership.
 pub(crate) fn claim_names_current_session(holder: &str, rec: &crate::claims::ClaimRecord) -> bool {
     // The spawn exports its holder in the worker's environment; naming it
     // exactly is the successorship proof, and the acquire re-checks holder
-    // equality. Start ignored the carrier and parked its own beneficiary
-    // (measured live 2026-11-13).
+    // equality. Start once parked its own beneficiary (measured 2026-11-13).
     if let Ok(carrier) = std::env::var("FNO_NODE_CLAIM_HOLDER") {
         if !carrier.is_empty() && carrier == holder {
             return true;
@@ -970,9 +969,7 @@ fn handover_session_id_matches(rec: &crate::claims::ClaimRecord, own_sid: Option
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .or_else(|| {
-            rec.metadata
-                .get("dispatched_by_session")
-                .and_then(Value::as_str)
+            rec.dispatched_by_session()
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
         });
@@ -2747,8 +2744,7 @@ mod advisory_flag_tests {
 mod adopt_rung_tests {
     use super::*;
 
-    /// The env rungs read process-global state; these tests serialize on one
-    /// lock so parallel in-process tests cannot race a half-set variable.
+    /// Serializes the env-rung tests: the rungs read process-global state.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn record(holder: &str) -> crate::claims::ClaimRecord {
@@ -2805,8 +2801,8 @@ mod adopt_rung_tests {
         ] {
             std::env::remove_var(var);
         }
-        // A carrier naming a DIFFERENT holder decides nothing; the pid arm
-        // answers for a pid-liveness claim, and a foreign live pid refuses.
+        // A carrier naming a DIFFERENT holder decides nothing; a foreign
+        // live pid refuses.
         let mut rec = record("target-session:s-elsewhere");
         rec.pid = Some(999_999_999);
         std::env::set_var("FNO_NODE_CLAIM_HOLDER", "spawn-handover:t-other-w");
@@ -2816,9 +2812,7 @@ mod adopt_rung_tests {
 
     #[test]
     fn the_recorded_session_id_names_its_beneficiary() {
-        // Pure logic: the fold matches init's bash rung, the ses_ prefix
-        // blocks it, and the metadata demotion answers when session_id is
-        // absent.
+        // Pure logic: the fold, the ses_ block, the metadata demotion.
         let mut rec = record("spawn-handover:t-sid-w");
         rec.session_id = Some("  SID-9  ".into());
         assert!(handover_session_id_matches(&rec, Some("sid-9")));
@@ -2845,23 +2839,19 @@ mod adopt_rung_tests {
         ] {
             std::env::remove_var(var);
         }
-        // pid None + TTL window: the classifier answers (suspect,
-        // pid-absent) - the launch window that outlived its launcher.
+        // pid None + TTL window: the classifier answers (suspect, pid-absent)
+        // - the launch window that outlived its launcher.
         let mut rec = record("spawn-handover:t-dead-w");
         rec.expires_at = Some(i64::MAX);
         assert!(
             claim_names_current_session(&rec.holder, &rec),
             "suspect + pid-absent: the takeover rung adopts"
         );
-        // Death unproven (pid-unavailable suspect) keeps the refusal: the
-        // named worker may still be coming.
+        // Death unproven (pid-unavailable suspect) keeps the refusal.
         let mut rec = record("spawn-handover:t-live-w");
         rec.pid_unavailable = true;
         rec.expires_at = Some(i64::MAX);
-        assert!(
-            !claim_names_current_session(&rec.holder, &rec),
-            "pid-unavailable suspect stays refused"
-        );
+        assert!(!claim_names_current_session(&rec.holder, &rec));
     }
 
     #[test]

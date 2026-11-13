@@ -75,6 +75,7 @@ fno-agents canonical-check
 fno-agents census
 fno-agents chats
 fno-agents claim
+fno-agents claim adopt-flags
 fno-agents claim acquire
 fno-agents claim backlog
 fno-agents claim birth

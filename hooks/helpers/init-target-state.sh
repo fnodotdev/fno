@@ -1594,9 +1594,8 @@ EOF
       # THE one own-session check, shared with the start pre-check: the door
       # prints the --handover-from flags when THIS session is the claim's
       # beneficiary; the four inline rungs this replaces are the deleted leg.
-      # The env carrier stays a literal pass ahead of the door: it names the
-      # holder the spawner minted for THIS worker, so a helper paired with a
-      # binary that predates the door keeps the primary spawn path working.
+      # The env carrier stays a literal pass ahead of the door so a helper
+      # paired with a pre-door binary keeps the primary spawn path working.
       _HANDOVER_FLAGS=""
       if [[ -n "${FNO_NODE_CLAIM_HOLDER:-}" ]]; then
         _HANDOVER_FLAGS="--handover-from ${FNO_NODE_CLAIM_HOLDER}"
