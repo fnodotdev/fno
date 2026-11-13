@@ -8,8 +8,12 @@
 //! `NAME=value` names a script path, and a writer (`cat > s.sh <<EOF`,
 //! `cp a.sh s.sh`) supplies the text a later `bash s.sh` runs. A script that
 //! does not exist and that nothing writes runs nothing, so it allows unless
-//! the command's own text holds a push. A script whose text the guard
-//! cannot get (a download, a variable it cannot resolve, a binary) refuses.
+//! the command's own text holds a push.
+//!
+//! The guard-diet ruling (refuse nothing harmless): the door refuses only
+//! what it can read showing a protected push or --no-verify. A script whose
+//! text the guard cannot get (a download, a variable it cannot resolve, a
+//! binary, a piped stdin, a chain nested past the cap) WARNS and proceeds.
 
 use super::git_gate::is_a_push;
 use super::segments::{self, base_lower, Segment};
@@ -23,18 +27,29 @@ const MAX_SCRIPT_BYTES: u64 = 1 << 20;
 /// A chain deeper than this is adversarial: refuse, never follow.
 const MAX_DEPTH: usize = 3;
 
-/// Which fail-closed rule produced a refusal. Read failures soften at
-/// nested levels to the push-pair fallback; the piped-runner refusal
-/// always propagates, because the piped text never appears in any command.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum RefusalKind {
-    Read,
-    Piped,
+/// The guard diet's warn-and-proceed yield: the segments the doors parsed,
+/// plus what they could not read. A warning surfaces only when no gate
+/// refuses.
+#[derive(Default)]
+pub(super) struct Expanded {
+    pub segments: Vec<Segment>,
+    pub warnings: Vec<String>,
+}
+
+/// What one runner segment contributed: nothing, a readable script, an
+/// unreadable script (label + why: a warning at the top level, a silent
+/// skip nested, since the enclosing readable text is gated), or a refusal
+/// (readable text shows a push).
+enum Runner {
+    None,
+    Text(String, String),
+    Warn(String, String),
+    Refuse(Refusal),
 }
 
 /// The refusal text a script door blocks with, newtyped so this module adds
 /// no string-error surface (R6: that pattern is shrink-only per crate).
-pub(super) struct Refusal(pub String, pub RefusalKind);
+pub(super) struct Refusal(pub String);
 
 impl From<Refusal> for String {
     fn from(r: Refusal) -> String {
@@ -42,12 +57,11 @@ impl From<Refusal> for String {
     }
 }
 
-/// Every segment the runner segments hide, in execution order. `Err` is the
-/// refusal text: the command is blocked because a script could not be read
-/// (missing, binary, oversized, not a regular file) or the chain nests past
-/// the cap.
-pub(super) fn expand(command: &str, segs: &[Segment], ctx: &Ctx) -> Result<Vec<Segment>, Refusal> {
-    let mut out: Vec<Segment> = Vec::new();
+/// Every segment the runner segments hide, in execution order, plus the
+/// unreadable-script warnings. `Err` is a refusal: some readable text shows
+/// a push, the only refusing fact this door reports.
+pub(super) fn expand(command: &str, segs: &[Segment], ctx: &Ctx) -> Result<Expanded, Refusal> {
+    let mut out = Expanded::default();
     visit(command, segs, ctx, &ctx.cwd, 0, &mut out)?;
     Ok(out)
 }
@@ -172,7 +186,7 @@ impl Walk {
                 let src_path = self.resolve(src);
                 let source = match src_path.as_deref().and_then(|p| self.written_to(p)) {
                     Some(s) => s.clone(),
-                    None => match src_path.as_deref().map(|p| read_script(p, "", src)) {
+                    None => match src_path.as_deref().map(read_script) {
                         Some(Ok(text)) => Source::Text(text),
                         _ => Source::Opaque(seg.join(" ")),
                     },
@@ -223,43 +237,40 @@ fn visit(
     ctx: &Ctx,
     cwd: &Path,
     depth: usize,
-    out: &mut Vec<Segment>,
+    out: &mut Expanded,
 ) -> Result<(), Refusal> {
     if depth > MAX_DEPTH {
-        return Err(Refusal(
-            format!(
-                "🚫 BLOCKED: script chain nests more than {MAX_DEPTH} shells deep\n\n\
-                 Command: {command}\n\nA script the guard cannot follow to the bottom refuses."
-            ),
-            RefusalKind::Read,
-        ));
+        let why = format!("script chain nests more than {MAX_DEPTH} shells deep");
+        if could_push(command) {
+            return Err(refusal(command, "<chain>", &why));
+        }
+        out.warnings.push(warn_line("<chain>", &why));
+        return Ok(());
     }
     let mut walk = Walk::new(command, cwd);
     for seg in segs {
         let found = runner_script(command, seg, &walk);
         walk.observe(seg);
-        let (text, label) = match found {
-            Ok(Some(pair)) => pair,
-            Ok(None) => continue,
-            // A nested helper the door cannot read (a variable the script
-            // assigns at run time, a binary) carries no readable text.
-            // Judge it by the same fallback as an unparsable body: a push
-            // pair in the surrounding script refuses, otherwise the runner
-            // skips. The piped-runner refusal always propagates: the piped
-            // text never appears in any command.
-            Err(inner) if depth > 0 && inner.1 == RefusalKind::Read => {
-                if could_push(command) {
-                    return Err(inner);
+        match found {
+            Runner::None => {}
+            Runner::Warn(label, why) => {
+                // A nested helper the door cannot read (a variable the
+                // script assigns at run time, a binary) carries no readable
+                // text, and the enclosing script's own lines are gated, so
+                // it skips silently; the outermost door warns.
+                if depth == 0 {
+                    out.warnings.push(warn_line(&label, &why));
                 }
-                continue;
             }
-            Err(inner) => return Err(inner),
-        };
-        let inner = parse_script_text(command, &label, &text)?;
-        out.extend(inner.iter().cloned());
-        if !inner.is_empty() {
-            let child_cwd = walk.cwd.clone().unwrap_or_else(|| ctx.cwd.clone());
-            visit(&text, &inner, ctx, &child_cwd, depth + 1, out)?;
+            Runner::Refuse(r) => return Err(r),
+            Runner::Text(text, label) => {
+                let inner = parse_script_text(command, &label, &text)?;
+                out.segments.extend(inner.iter().cloned());
+                if !inner.is_empty() {
+                    let child_cwd = walk.cwd.clone().unwrap_or_else(|| ctx.cwd.clone());
+                    visit(&text, &inner, ctx, &child_cwd, depth + 1, out)?;
+                }
+            }
         }
     }
     Ok(())
@@ -269,17 +280,13 @@ fn visit(
 /// names it by (its path, or a stdin form), or None. `bash -c` strings are
 /// excluded: effective_argv already re-tokenizes them, so argv[0] is the
 /// inner command, never the runner.
-fn runner_script(
-    command: &str,
-    seg: &Segment,
-    walk: &Walk,
-) -> Result<Option<(String, String)>, Refusal> {
+fn runner_script(command: &str, seg: &Segment, walk: &Walk) -> Runner {
     let argv = segments::effective_argv(seg);
     let Some(base0) = argv.first().map(|t| base_lower(t)) else {
-        return Ok(None);
+        return Runner::None;
     };
     if !segments::SHELL_RUNNERS.contains(&base0.as_str()) {
-        return Ok(None);
+        return Runner::None;
     }
     // First non-flag token after the runner is the script; `<` names a
     // stdin script instead. `-c` strings are not files.
@@ -316,25 +323,34 @@ fn runner_script(
         break;
     }
     if let Some(body) = herestring {
-        return Ok(Some((body.clone(), "<herestring>".to_string())));
+        return Runner::Text(body.clone(), "<herestring>".to_string());
     }
     let Some(path) = file else {
         // Bare runner: a heredoc stdin is its script. `-c` never lands here.
         let bodies = segments::heredoc_bodies(command);
         if !bodies.is_empty() {
-            return Ok(Some((bodies.join("\n"), "<heredoc>".to_string())));
+            return Runner::Text(bodies.join("\n"), "<heredoc>".to_string());
         }
         // No heredoc: a piped stdin is the only remaining script source,
-        // and its text never appears in the command. Refuse fail-closed.
+        // and its text never appears in the command. The readable command
+        // text showing a push refuses; anything else warns and proceeds.
         if segments::pipe_fed_texts(command)
             .iter()
             .any(|t| *t == seg.join(" "))
         {
-            return Err(piped_refusal(command));
+            // The readable command text showing a push refuses (a pipe
+            // would carry it past the gate); anything else warns.
+            if could_push(command) {
+                return Runner::Refuse(piped_refusal(command));
+            }
+            return Runner::Warn(
+                "<stdin>".to_string(),
+                "is fed to the runner by a pipe, so its text never appears in the command"
+                    .to_string(),
+            );
         }
-        return Ok(None);
+        return Runner::None;
     };
-    let label = path.to_string();
     let Some(full) = walk.resolve(path) else {
         let why = if walk.expand_vars(path).is_none() {
             "names its path through a variable or substitution the guard cannot resolve. \
@@ -343,19 +359,26 @@ fn runner_script(
             "is relative to a `cd` target the guard cannot resolve. Spell the directory out, \
              or give the script an absolute path"
         };
-        return Err(refusal(command, path, why));
+        return decide(command, path, why);
     };
-    match walk.written_to(&full) {
-        Some(Source::Text(text)) => return Ok(Some((text.clone(), label))),
+    runner_file(command, path, &full, walk)
+}
+
+/// The file-path tail of [`runner_script`]: the walk resolved the script's
+/// path, so its writer, its presence, or its text decides the verdict.
+fn runner_file(command: &str, path: &str, full: &Path, walk: &Walk) -> Runner {
+    let label = path.to_string();
+    match walk.written_to(full) {
+        Some(Source::Text(text)) => return Runner::Text(text.clone(), label),
         Some(Source::Opaque(writer)) => {
-            return Err(refusal(
+            return decide(
                 command,
                 path,
                 &format!(
                     "is written in this same command by `{writer}`, whose output the guard \
                      cannot read. Write it in one call and run it in the next"
                 ),
-            ))
+            )
         }
         None => {}
     }
@@ -364,7 +387,7 @@ fn runner_script(
         // this command's own text, which an unseen writer could put into
         // the script, keeps the refusal.
         if could_push(command) {
-            return Err(refusal(
+            return Runner::Refuse(refusal(
                 command,
                 path,
                 "does not exist yet, and this command's own text holds a push that a writer \
@@ -372,37 +395,66 @@ fn runner_script(
                  run it in the next",
             ));
         }
-        return Ok(None);
+        return Runner::None;
     }
-    read_script(&full, command, path).map(|text| Some((text, label)))
+    match read_script(full) {
+        Ok(text) => Runner::Text(text, label),
+        Err(why) => decide(command, path, &why.why()),
+    }
 }
 
-/// Read the script file. Any read the guard cannot complete is a refusal.
-fn read_script(full: &Path, command: &str, path: &str) -> Result<String, Refusal> {
-    let meta = std::fs::metadata(full).map_err(|e| refusal(command, path, &read_why(&e)))?;
+/// The guard-diet split for one unreadable script: the readable command
+/// text showing a push refuses; anything else warns and proceeds.
+fn decide(command: &str, script: &str, why: &str) -> Runner {
+    if could_push(command) {
+        Runner::Refuse(refusal(command, script, why))
+    } else {
+        Runner::Warn(script.to_string(), why.to_string())
+    }
+}
+
+/// Why a script file's text could not be read. Typed because the crate's
+/// string error count is shrink-only (docs/rust-style.md R6); `why` spells
+/// the sentence the refusal or warning names the script by.
+enum ReadWhy {
+    Io(std::io::Error),
+    NotAFile,
+    TooLarge,
+    Binary,
+}
+
+impl ReadWhy {
+    fn why(self) -> String {
+        match self {
+            Self::Io(e) => {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    "does not exist".to_string()
+                } else {
+                    format!("unreadable ({e})")
+                }
+            }
+            Self::NotAFile => "is not a regular file".to_string(),
+            Self::TooLarge => "is larger than the guard's 1 MiB read cap".to_string(),
+            Self::Binary => "contains NUL bytes (binary)".to_string(),
+        }
+    }
+}
+
+/// Read the script file. `Err` carries the why; the caller decides between
+/// a refusal (the command text holds a push) and warn-and-proceed.
+fn read_script(full: &Path) -> Result<String, ReadWhy> {
+    let meta = std::fs::metadata(full).map_err(ReadWhy::Io)?;
     if !meta.is_file() {
-        return Err(refusal(command, path, "is not a regular file"));
+        return Err(ReadWhy::NotAFile);
     }
     if meta.len() > MAX_SCRIPT_BYTES {
-        return Err(refusal(
-            command,
-            path,
-            "is larger than the guard's 1 MiB read cap",
-        ));
+        return Err(ReadWhy::TooLarge);
     }
-    let bytes = std::fs::read(full).map_err(|e| refusal(command, path, &read_why(&e)))?;
+    let bytes = std::fs::read(full).map_err(ReadWhy::Io)?;
     if bytes.contains(&0u8) {
-        return Err(refusal(command, path, "contains NUL bytes (binary)"));
+        return Err(ReadWhy::Binary);
     }
     Ok(String::from_utf8_lossy(&bytes).into_owned())
-}
-
-fn read_why(e: &std::io::Error) -> String {
-    if e.kind() == std::io::ErrorKind::NotFound {
-        "does not exist".to_string()
-    } else {
-        format!("unreadable ({e})")
-    }
 }
 
 /// Parse script text as command segments. Text that parses as unbalanced is
@@ -434,36 +486,39 @@ fn could_push(text: &str) -> bool {
 }
 
 fn refusal(command: &str, script: &str, why: &str) -> Refusal {
-    Refusal(
-        format!(
-            "🚫 BLOCKED: the script this command would run cannot be gated\n\nCommand: {command}\n\n\
+    Refusal(format!(
+        "🚫 BLOCKED: the script this command would run cannot be gated\n\nCommand: {command}\n\n\
          Script: {script}\nReason: {why}\n\n\
          A shell runner on a script file must let the guard read the script, so the \
          protected-branch push gate can see every line it executes. No marker opens this \
          door: write the script where the guard can read it, or run the steps as typed commands."
-        ),
-        RefusalKind::Read,
-    )
+    ))
 }
 
+/// The warn-and-proceed line an unreadable script produces. It surfaces
+/// only when no gate refuses.
+fn warn_line(label: &str, why: &str) -> String {
+    format!("fno script door: `{label}` {why}; proceeding without gating its lines")
+}
+
+/// The piped runner's refusal, kept distinct from the file door's: it fires
+/// only when the readable command text shows a push the pipe would carry
+/// past the gate.
 fn piped_refusal(command: &str) -> Refusal {
-    Refusal(
-        format!(
-            "🚫 BLOCKED: a piped shell runner cannot be gated\n\nCommand: {command}\n\n\
-         The script this command pipes into the runner is not in the command text, so the \
-         protected-branch push gate can never read the lines it executes. No marker opens \
-         this door: write the script to a file, feed it with a quoted heredoc (`bash <<'EOF'`), \
-         or run the steps as typed commands."
-        ),
-        RefusalKind::Piped,
-    )
+    Refusal(format!(
+        "🚫 BLOCKED: a piped shell runner would carry a push past the gate\n\nCommand: {command}\n\n\
+         The readable command text holds a push, and the script this command pipes into the \
+         runner is not in the command text, so the protected-branch push gate can never read \
+         the lines it executes. No marker opens this door: write the script to a file, feed it \
+         with a quoted heredoc (`bash <<'EOF'`), or run the steps as typed commands."
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::fake::{bash, Fake};
     use super::super::git_gate::approval_flag;
-    use super::super::{judge_with, Ctx};
+    use super::super::{judge_verdict, judge_with, Ctx, Verdict};
     use super::*;
 
     fn ctx<'a>(dir: &Path, fake: &'a Fake) -> Ctx<'a> {
@@ -542,22 +597,43 @@ mod tests {
     }
 
     #[test]
-    fn a_script_the_guard_cannot_read_refuses_fail_closed() {
+    fn an_unreadable_script_warns_and_proceeds() {
         let dir = tempfile::tempdir().unwrap();
         let fake = feature(dir.path());
         let c = ctx(dir.path(), &fake);
+        let warns = |cmd: &str, needle: &str| {
+            let verdict = judge_verdict(&bash(cmd), &c);
+            assert!(
+                matches!(&verdict, Verdict::Warn(text) if text.contains(needle)),
+                "{cmd}: {verdict:?}"
+            );
+        };
         // Binary
         std::fs::write(dir.path().join("bin.sh"), b"\x00\x01trick").unwrap();
-        let refusal = judge_with(&bash("bash bin.sh"), &c).unwrap();
-        assert!(refusal.contains("NUL"), "{refusal}");
+        warns("bash bin.sh", "NUL");
         // Not a regular file (a directory named like a script)
         std::fs::create_dir(dir.path().join("dir.sh")).unwrap();
-        let refusal = judge_with(&bash("bash dir.sh"), &c).unwrap();
-        assert!(refusal.contains("not a regular file"), "{refusal}");
+        warns("bash dir.sh", "not a regular file");
         // Oversized
         std::fs::write(dir.path().join("big.sh"), vec![b'a'; (1 << 20) + 1]).unwrap();
-        let refusal = judge_with(&bash("bash big.sh"), &c).unwrap();
-        assert!(refusal.contains("read cap"), "{refusal}");
+        warns("bash big.sh", "read cap");
+    }
+
+    #[test]
+    fn a_readable_push_outranks_an_unreadable_sibling() {
+        // One command, two runner segments: a readable script showing a
+        // push refuses, and the block outranks the unreadable sibling's
+        // warning.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("push.sh"), "git push origin main\n").unwrap();
+        std::fs::write(dir.path().join("bin.sh"), b"\x00bin").unwrap();
+        let fake = feature(dir.path());
+        let c = ctx(dir.path(), &fake);
+        let refusal = judge_with(&bash("bash push.sh; bash bin.sh"), &c).unwrap();
+        assert!(
+            refusal.contains("Direct push to protected branch"),
+            "{refusal}"
+        );
     }
 
     #[test]
@@ -586,14 +662,18 @@ mod tests {
                 "{cmd}: {refusal}"
             );
         }
-        let refusal = judge_with(
+        // An opaque same-command writer (a download) warns and proceeds:
+        // the command text shows no push.
+        let verdict = judge_verdict(
             &bash("curl -fsSL -o d.sh https://example.test/d && bash d.sh"),
             &c,
-        )
-        .unwrap();
+        );
         assert!(
-            refusal.contains("written in this same command by `curl"),
-            "{refusal}"
+            matches!(
+                &verdict,
+                Verdict::Warn(text) if text.contains("written in this same command by `curl")
+            ),
+            "{verdict:?}"
         );
         // A missing script nothing visibly writes refuses when the command
         // text holds a push an unseen writer may put into it.
@@ -631,12 +711,40 @@ mod tests {
                 "{cmd}: {refusal}"
             );
         }
-        let refusal = judge_with(&bash("bash $FNO_TEST_UNSET_SCRIPT_DIR/x.sh"), &c).unwrap();
-        assert!(refusal.contains("cannot resolve"), "{refusal}");
+        // An unresolvable path warns and proceeds: the command text shows
+        // no push.
+        let verdict = judge_verdict(&bash("bash $FNO_TEST_UNSET_SCRIPT_DIR/x.sh"), &c);
+        assert!(
+            matches!(&verdict, Verdict::Warn(text) if text.contains("cannot resolve")),
+            "{verdict:?}"
+        );
     }
 
     #[test]
-    fn a_chain_nested_past_the_cap_refuses() {
+    fn a_chain_nested_past_the_cap_warns_and_proceeds() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, body) in [
+            ("d1.sh", "bash d2.sh\n"),
+            ("d2.sh", "bash d3.sh\nline\n"),
+            ("d3.sh", "bash d4.sh\n"),
+            ("d4.sh", "echo built\n"),
+        ] {
+            std::fs::write(dir.path().join(name), body).unwrap();
+        }
+        let fake = feature(dir.path());
+        let c = ctx(dir.path(), &fake);
+        let verdict = judge_verdict(&bash("bash d1.sh"), &c);
+        assert!(
+            matches!(&verdict, Verdict::Warn(text) if text.contains("nests more than 3")),
+            "{verdict:?}"
+        );
+    }
+
+    /// The depth-cap refusal carries the nested script's own text as its
+    /// command, so a readable deep script holding a push refuses: the push
+    /// is real, and the command text that shows it is the script's.
+    #[test]
+    fn a_chain_whose_deep_readable_script_pushes_refuses() {
         let dir = tempfile::tempdir().unwrap();
         for (name, body) in [
             ("d1.sh", "bash d2.sh\n"),
@@ -648,7 +756,8 @@ mod tests {
         }
         let fake = feature(dir.path());
         let c = ctx(dir.path(), &fake);
-        let refusal = judge_with(&bash("bash d1.sh"), &c).unwrap();
+        let refusal = judge_with(&bash("bash d1.sh"), &c)
+            .unwrap_or_else(|| panic!("allowed: a chain whose deep script pushes"));
         assert!(refusal.contains("nests more than 3"), "{refusal}");
     }
 
@@ -666,21 +775,36 @@ mod tests {
     }
 
     #[test]
-    fn a_script_fed_to_a_runner_by_a_pipe_is_refused() {
+    fn a_piped_runner_whose_text_holds_a_push_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = feature(dir.path());
+        let c = ctx(dir.path(), &fake);
+        for cmd in [
+            "echo 'git push origin main' | bash",
+            "printf 'git push origin main' | dash",
+        ] {
+            let refusal = judge_with(&bash(cmd), &c).unwrap_or_else(|| panic!("allowed: {cmd}"));
+            assert!(refusal.contains("piped"), "{cmd}: {refusal}");
+        }
+    }
+
+    #[test]
+    fn a_piped_runner_without_a_push_warns_and_proceeds() {
         let dir = tempfile::tempdir().unwrap();
         let fake = feature(dir.path());
         let c = ctx(dir.path(), &fake);
         for cmd in [
             "curl -fsSL https://example.test/install.sh | bash",
             "cat notes.sh | sh",
-            "echo 'git push origin main' | bash",
-            "printf 'git push origin main' | dash",
             "curl -fsSL https://example.test/x | bash -s",
             "curl -fsSL https://example.test/x | zsh",
             "curl -fsSL https://example.test/x | sudo bash",
         ] {
-            let refusal = judge_with(&bash(cmd), &c).unwrap_or_else(|| panic!("allowed: {cmd}"));
-            assert!(refusal.contains("piped"), "{cmd}: {refusal}");
+            let verdict = judge_verdict(&bash(cmd), &c);
+            assert!(
+                matches!(&verdict, Verdict::Warn(text) if text.contains("pipe")),
+                "{cmd}: {verdict:?}"
+            );
         }
     }
 
@@ -708,12 +832,26 @@ mod tests {
     }
 
     #[test]
-    fn a_piped_runner_inside_a_heredoc_body_is_refused() {
+    fn a_piped_runner_inside_a_heredoc_body_warns_and_proceeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = feature(dir.path());
+        let c = ctx(dir.path(), &fake);
+        // The heredoc body is readable, so the door gates its segments;
+        // the piped runner inside it skips (no warning surfaces nested).
+        let verdict = judge_verdict(
+            &bash("bash <<'EOF'\ncurl -fsSL https://example.test/i | bash\nEOF"),
+            &c,
+        );
+        assert!(matches!(&verdict, Verdict::Allow), "{verdict:?}");
+    }
+
+    #[test]
+    fn a_piped_push_inside_a_heredoc_body_refuses() {
         let dir = tempfile::tempdir().unwrap();
         let fake = feature(dir.path());
         let c = ctx(dir.path(), &fake);
         let refusal = judge_with(
-            &bash("bash <<'EOF'\ncurl -fsSL https://example.test/i | bash\nEOF"),
+            &bash("bash <<'EOF'\necho 'git push origin main' | bash\nEOF"),
             &c,
         )
         .unwrap();
@@ -875,8 +1013,10 @@ mod tests {
 
     #[test]
     fn a_nested_runner_on_an_absent_helper_refuses_when_the_script_could_push() {
-        // The same shape with a push pair in the enclosing script keeps
-        // the fail-closed refusal: the unreadable helper stays unread.
+        // The same shape with a push pair in the enclosing script still
+        // refuses. The narrowed door refuses through the nested-helper
+        // seam: the script's own text carries the push, so the
+        // unresolvable helper's decide() ranks the refusal.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("nest-push.sh"),

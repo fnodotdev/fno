@@ -1,6 +1,8 @@
-//! The two `gh` text gates: the GraphQL reserve (direct PR reads route
-//! through `fno do pr`) and the `gh pr create` closure line, a notice since
-//! the guard purge (the merge gate still enforces the trailer).
+//! The one surviving `gh` text gate: the `gh pr create` closure line, a
+//! notice since the guard purge (the merge gate still enforces the
+//! trailer). The GraphQL reserve refusals are gone with the guard diet;
+//! direct PR reads are a CI check (`scripts/ci/check-no-direct-graphql-pr-read.sh`),
+//! never a hook refusal.
 
 use super::segments::{self, base_lower, effective_argv, Segment};
 use super::Ctx;

@@ -1,6 +1,8 @@
-//! The git-protection Bash guard. It refuses a push to a protected branch,
-//! `--no-verify` and its core.hooksPath twin, and a direct GraphQL PR read.
-//! It WARNS on a `gh pr create` whose branch names a node and whose command
+//! The git-protection Bash guard. It refuses a push to a protected branch
+//! and `--no-verify` with its core.hooksPath twin. Direct GraphQL PR reads
+//! are a CI check (`scripts/ci/check-no-direct-graphql-pr-read.sh`), never
+//! a hook refusal. It WARNS on a `gh pr create` whose branch names a node
+//! and whose command
 //! shows no composed closure line (the merge-time closure gate still reds
 //! the PR), and on a push that repeats one inside the debounce window or
 //! lands while a GitHub run is in flight (the 2026-11-07 guard-purge
@@ -109,13 +111,17 @@ pub(super) fn judge_verdict(payload: &Value, ctx: &Ctx) -> Verdict {
     // Script doors: a shell runner on a script file or a heredoc stdin
     // hides the script's lines from command position, so the gates never
     // see a push inside. Read what the runner will execute and parse it as
-    // more command segments; a script the guard cannot read refuses.
+    // more command segments; an unreadable script warns and proceeds.
     let mut script_refusal: Option<String> = None;
+    let mut door_warnings: Vec<String> = Vec::new();
     let mut all_segs: Vec<Segment> = Vec::new();
     if let Some(segs) = &segments {
         all_segs.extend(segs.iter().cloned());
         match script_gate::expand(command, segs, ctx) {
-            Ok(extra) => all_segs.extend(extra),
+            Ok(extra) => {
+                all_segs.extend(extra.segments);
+                door_warnings = extra.warnings;
+            }
             Err(reason) => script_refusal = Some(reason.into()),
         }
     }
@@ -193,6 +199,15 @@ pub(super) fn judge_verdict(payload: &Value, ctx: &Ctx) -> Verdict {
         if !git_gate::claim_marker(&git_gate::approval_flag(&ctx.home)) {
             return Verdict::Block(git_gate::no_verify_deny_message(&seg, &ctx.home));
         }
+    }
+    // The script door's unreadable-script warnings surface only when no
+    // gate refuses: a warning never outranks a block.
+    if !door_warnings.is_empty() {
+        let door = door_warnings.join("; ");
+        notice = Some(match notice {
+            Some(existing) => format!("{existing}; {door}"),
+            None => door,
+        });
     }
     match notice {
         Some(reason) => Verdict::Warn(reason),
