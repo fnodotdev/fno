@@ -6,7 +6,7 @@ How the four Rust binaries (`fno`, `fno-agents`, `fno-agents-daemon`, `fno-agent
 > deliberate act behind the `release` environment approval click (runbook at the
 > end of this doc). Nothing reaches crates.io as a side effect of merging.
 
-## Three artifacts, one crate source
+## Two artifacts, one crate source
 
 | Artifact | Built by | Installed by | Audience |
 |----------|----------|--------------|----------|
