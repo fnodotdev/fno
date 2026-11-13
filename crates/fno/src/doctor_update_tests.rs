@@ -4,6 +4,7 @@
 
 use serde_json::Value;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::doctor_update::*;
 
@@ -556,4 +557,45 @@ fn sync_member_refreshes_differing_real_files_only() {
     // never had is never seeded.
     assert!(sync_member(&src.join("bin"), &dir.join("absent"), true));
     assert!(!sync_member(&src.join("bin"), &dir.join("absent"), false));
+}
+
+#[test]
+fn budget_overrun_warns_with_a_slowest_first_breakdown() {
+    // 2026-11-12 user order: an overrun is a WARN with its phase times,
+    // never a failed step. The breakdown names the slowest phase first and
+    // folds the unnamed time into `other`.
+    let phases = vec![
+        PhaseTime {
+            name: "rust bins",
+            took: Duration::from_millis(4_200),
+        },
+        PhaseTime {
+            name: "plugin restage",
+            took: Duration::from_millis(71_300),
+        },
+        PhaseTime {
+            name: "pr watch refresh",
+            took: Duration::from_millis(900),
+        },
+    ];
+    let total = Duration::from_secs(119);
+    let line = phase_breakdown(&phases, total);
+    assert!(line.starts_with("plugin restage 71.3s"), "{line}");
+    assert!(line.contains("rust bins 4.2s"), "{line}");
+    assert!(line.contains("other 42.6s"), "{line}");
+    let quiet = phase_breakdown(&[], Duration::from_millis(2_000));
+    assert_eq!(quiet, "total 2.0s");
+}
+
+#[test]
+fn publish_eta_line_flips_at_the_window() {
+    // Under the window: minutes left plus the commit age. At or past it:
+    // overdue, point at the run.
+    let under = publish_eta_line(18);
+    assert!(under.contains("should publish in ~12m"), "{under}");
+    assert!(under.contains("commit 18m old"), "{under}");
+    let at = publish_eta_line(30);
+    assert!(at.contains("past its ~30m build window"), "{at}");
+    let over = publish_eta_line(47);
+    assert!(over.contains("17m past its ~30m build window"), "{over}");
 }

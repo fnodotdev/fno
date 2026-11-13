@@ -607,17 +607,96 @@ fn catchup_roots() -> Vec<PathBuf> {
             return Vec::new();
         }
     };
+    let cwds: Vec<String> = sidecars
+        .into_iter()
+        .filter_map(|(_, row)| {
+            row.get("cwd")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+        })
+        .collect();
+    fold_catchup_roots(cwds, registered_fno_checkout(), &origin_url)
+}
+
+/// The checkout the installed build registered (`path` in
+/// `~/.fno/install/source-pin.json`, decision allow): the fno checkout this
+/// machine updates from. 2026-11-12: the pre-cutover clone kept arriving as
+/// a catch-up root off old session sidecars, so update and restart read
+/// `Heal: armed ... root /Users/bb16/code/footnote/footnote`. The registered
+/// checkout leads; another clone of the same repo folds into it.
+fn registered_fno_checkout() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    let pin = crate::state_layout::place(&PathBuf::from(home).join(".fno"), "source-pin.json");
+    let text = std::fs::read_to_string(pin).ok()?;
+    registered_checkout_from_pin(&text)
+}
+
+/// The two fields the catch-up fold reads off `install/source-pin.json`;
+/// the rest of the pin is the update's business (R1: one typed read).
+#[derive(serde::Deserialize)]
+struct SourcePinPath {
+    decision: Option<String>,
+    path: Option<String>,
+}
+
+fn registered_checkout_from_pin(text: &str) -> Option<PathBuf> {
+    let pin: SourcePinPath = serde_json::from_str(text).ok()?;
+    if pin.decision.as_deref() != Some("allow") {
+        return None;
+    }
+    let path = pin.path?;
+    let mut dir = PathBuf::from(path);
+    if !dir.is_absolute() {
+        return None;
+    }
+    loop {
+        if dir.join(".git").exists() {
+            return Some(dir);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
+
+fn origin_url(root: &Path) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["config", "--get", "remote.origin.url"])
+        .output()
+        .ok()?;
+    let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (out.status.success() && !url.is_empty()).then_some(url)
+}
+
+/// Registered checkout first, then sidecar cwds. A sidecar whose repo is the
+/// registered checkout's (same origin URL: a worktree or the pre-cutover
+/// clone) folds into it. One repo heals once, and the drive loop runs each
+/// PR from its own per-PR worktree, so folding loses nothing.
+fn fold_catchup_roots(
+    sidecar_cwds: impl IntoIterator<Item = String>,
+    registered: Option<PathBuf>,
+    origin_of: &dyn Fn(&Path) -> Option<String>,
+) -> Vec<PathBuf> {
     let mut seen = BTreeSet::new();
     let mut roots = Vec::new();
-    for (_, row) in sidecars {
-        if let Some(cwd) = row
-            .get("cwd")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-        {
-            if seen.insert(cwd.to_string()) && Path::new(cwd).is_dir() {
-                roots.push(PathBuf::from(cwd));
-            }
+    if let Some(reg) = registered {
+        seen.insert(reg.display().to_string());
+        roots.push(reg);
+    }
+    let reg_url = roots.first().and_then(|r| origin_of(r));
+    for cwd in sidecar_cwds {
+        if cwd.is_empty() || !seen.insert(cwd.clone()) {
+            continue;
+        }
+        let path = PathBuf::from(&cwd);
+        if reg_url.is_some() && origin_of(&path) == reg_url {
+            continue;
+        }
+        if path.is_dir() {
+            roots.push(path);
         }
     }
     roots
@@ -1572,5 +1651,68 @@ mod tests {
         });
         clock::set_deadline(None);
         assert_eq!(answer.err(), Some(DoorError::Cut));
+    }
+}
+
+#[cfg(test)]
+mod fold_tests {
+    use super::*;
+
+    #[test]
+    fn fold_catchup_roots_leads_with_the_registered_checkout() {
+        let reg = PathBuf::from("/repo/reg");
+        let cwds = vec![
+            "/repo/reg".to_string(),
+            "/repo/stale".to_string(),
+            "/other/x".to_string(),
+        ];
+        let origins = |p: &Path| {
+            if p == Path::new("/repo/reg") || p == Path::new("/repo/stale") {
+                Some("u1".to_string())
+            } else {
+                Some("u2".to_string())
+            }
+        };
+        let roots = fold_catchup_roots(cwds, Some(reg.clone()), &origins);
+        assert_eq!(roots, vec![reg.clone(), PathBuf::from("/other/x")]);
+    }
+
+    #[test]
+    fn fold_catchup_roots_without_registration_passes_sidecars_through() {
+        let cwds = vec![
+            "/repo/stale".to_string(),
+            "/other/x".to_string(),
+            "/repo/stale".to_string(),
+        ];
+        let origins = |p: &Path| {
+            if p == Path::new("/repo/stale") {
+                Some("u1".to_string())
+            } else {
+                Some("u2".to_string())
+            }
+        };
+        let roots = fold_catchup_roots(cwds, None, &origins);
+        assert_eq!(
+            roots,
+            vec![PathBuf::from("/repo/stale"), PathBuf::from("/other/x")]
+        );
+    }
+
+    #[test]
+    fn registered_checkout_from_pin_walks_to_git_and_refuses_non_allow() {
+        let tmp = tempfile::tempdir().unwrap();
+        let checkout = tmp.path().join("checkout");
+        std::fs::create_dir_all(checkout.join("cli/deep")).unwrap();
+        std::fs::write(checkout.join(".git"), b"worktree").unwrap();
+        let pin = serde_json::json!({
+            "decision": "allow",
+            "path": checkout.join("cli/deep").display().to_string(),
+        });
+        let got = registered_checkout_from_pin(&pin.to_string());
+        assert_eq!(got, Some(checkout.clone()));
+        let denied = serde_json::json!({"decision": "refuse", "path": checkout.join("cli").display().to_string()});
+        assert_eq!(registered_checkout_from_pin(&denied.to_string()), None);
+        let absent = serde_json::json!({"decision": "allow", "path": tmp.path().join("nope")});
+        assert_eq!(registered_checkout_from_pin(&absent.to_string()), None);
     }
 }
