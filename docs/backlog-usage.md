@@ -83,7 +83,7 @@ fno backlog update <id> related=x-bbbb         # affinity edge, symmetric
 fno backlog update <id> 'details+=<paragraph>' # append without re-reading the node
 fno backlog update <id> blocked_by+=<id>       # add one blocker
 fno backlog update <id> blocked_by-=<id>       # remove one blocker
-fno backlog update <id> tags+=<tag>            # add one tag ([a-z0-9-:.], e.g. release:0.4.8)
+fno backlog update <id> tags+=<tag>            # add one tag, e.g. area:mail (see Tags below)
 ```
 
 The operator form (`field=value`, `field+=value`, `field-=value`) covers every field. `fno backlog update --help` lists them by kind.
@@ -93,6 +93,31 @@ The operator form (`field=value`, `field+=value`, `field-=value`) covers every f
 (`dashless-spawn`), or bare hex (`1a2b3c4d`).
 
 When a PR opens outside the Footnote PR path, acquire the owner claim with `fno agents claim acquire node:<id> --holder <worker>`, then record the primary PR with `fno backlog update <id> pr_number=<n>`. The claim lockfile is the owner source, and the update receipt reports its owner, PR, and status. `--add-pr` records only an additional PR and can leave a ready node offered for dispatch. Without a claim lockfile, the owner reads as `unknown`.
+
+## Tags
+
+A tag is `facet:value`. Tags find similar and related nodes across epics. One file holds the vocabulary: `crates/fno-agents/src/backlog/tag_vocabulary.toml`. Every tag write checks it. An unknown facet or value refuses, and the refusal names the allowed values.
+
+| Facet | Values | Use |
+|---|---|---|
+| `audience` | `user`, `contributor`, `internal` | Who the change is for. Every open node carries one. |
+| `area` | `mux`, `mail`, `backlog`, `review`, `merge-gate`, `spawn`, `ci`, ... | The product surface. Every open node carries one. |
+| `harness` | `claude`, `codex`, `opencode`, `pi`, `omp`, `agy` | Only when the work is specific to one harness. |
+| `release` | a version, e.g. `release:0.4.8` | The release the node must ship in. |
+| `topic` | any kebab-case word, e.g. `topic:rust-idiom` | Free grouping. |
+
+A tag with no `:` (`main-repair`, `tier-hold`) is an operational marker and stays legal. A `facet:value` name is also a legal GitHub and Linear label name.
+
+```bash
+fno backlog find --tag area:mail --tag audience:user   # every tag must match
+fno backlog find --related <id>                        # rank related nodes across epics
+fno backlog admin backfill-tags                        # dry run: the guesses and the review list
+fno backlog admin backfill-tags --apply                # write the high-confidence guesses
+```
+
+`find --related` ranks on shared title and details words, shared `area`, `harness` and `topic` tags, and a shared epic. The board's `tag` filter widens inside one facet and narrows across facets. `area:mail` plus `area:mux` shows both areas. `area:mail` plus `audience:user` shows only nodes that carry both.
+
+If the classifier is sure, a new node gets `audience` and `area` at birth. `admin backfill-tags` writes only sure guesses on open nodes and never replaces a tag a node already carries. It prints every unsure guess on a review list. Tag those nodes by hand. To add a value, edit the vocabulary file in the same PR as the first node that needs it.
 
 ## Demand signal: what the agents keep hitting
 

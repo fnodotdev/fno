@@ -59,7 +59,16 @@ pub fn write_canonical_difficulty(
 /// Lowercase-trim a tag and validate its charset: `[a-z0-9-:.]+`, never
 /// starting or ending with `:` or `.`, so `release:0.4.8` is one tag. A space
 /// or any other byte still refuses: a space-split tag would corrupt the field.
+/// A `facet:value` tag then checks against the tag vocabulary (`tags.rs`).
 pub fn normalize_tag(raw: &str) -> Result<String, String> {
+    let tag = normalize_tag_shape(raw).map_err(|e| e.0)?;
+    super::tags::check(&tag).map_err(|e| e.0)?;
+    Ok(tag)
+}
+
+/// The charset check alone. Removal uses it, so a stored tag the
+/// vocabulary no longer allows can still be taken off.
+pub fn normalize_tag_shape(raw: &str) -> Result<String, super::tags::TagRefusal> {
     let tag = raw.trim().to_lowercase();
     let edge = |b: u8| b == b':' || b == b'.';
     let ok = !tag.is_empty()
@@ -69,9 +78,9 @@ pub fn normalize_tag(raw: &str) -> Result<String, String> {
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || edge(b));
     if !ok {
-        return Err(format!(
+        return Err(super::tags::TagRefusal(format!(
             "invalid tag '{raw}': tags use [a-z0-9-:.] (letters, digits, hyphens, and an inner ':' or '.')"
-        ));
+        )));
     }
     Ok(tag)
 }
