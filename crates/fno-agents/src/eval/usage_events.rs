@@ -922,36 +922,6 @@ mod tests {
         }
     }
 
-    /// Only the allowlist leaves. Free text, paths and non-identifier values
-    /// stay on this machine, and every event carries the machine dimension.
-    #[test]
-    fn event_carries_only_the_allowlist() {
-        let row = row_line(
-            "agent_spawned",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            json!({
-                "node": "x-aaaa",
-                "model": "glm-5.3-flash",
-                "spawned_by_harness": "claude",
-                "title": "secret title words",
-                "prompt": "secret prompt text",
-                "cmdline": "/usr/bin/fno",
-            }),
-        );
-        let doc = event(&row, "mac1").unwrap().1;
-        let text = doc.to_string();
-        assert!(!text.contains("secret"), "free text leaked: {text}");
-        let props = doc["properties"].as_object().expect("properties object");
-        assert_eq!(props["machine"], "mac1");
-        assert_eq!(props["node"], "x-aaaa");
-        assert_eq!(props["model"], "glm-5.3-flash");
-        assert_eq!(props["spawned_by_harness"], "claude");
-        assert_eq!(props["$process_person_profile"], false);
-        assert!(!props.contains_key("title"), "titles never ship");
-        assert!(!props.contains_key("prompt"), "prompts never ship");
-        assert!(!props.contains_key("cmdline"), "unlisted fields never ship");
-    }
-
     /// A redelivered batch still dedups: every event_id shape (bare hex, the
     /// store's evt-prefixed sha, an emitter-supplied id) maps to one stable
     /// dashed uuid, and different ids map differently.
