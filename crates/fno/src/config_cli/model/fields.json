@@ -270,6 +270,12 @@
      }
     },
     {
+     "name": "tracker",
+     "default": {
+      "backend": "graph"
+     }
+    },
+    {
      "name": "guards",
      "default": {
       "preset": "standard"
