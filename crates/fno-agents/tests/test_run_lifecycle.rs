@@ -1088,7 +1088,11 @@ fn agent_compile_refusal_declared_why_and_human_lane_at_the_compile_door() {
     std::fs::create_dir_all(&tree).unwrap();
     let home = root.join("agents-home");
     std::fs::create_dir_all(&home).unwrap();
-    let journal = root.join("events.jsonl");
+    // The journal sits one level under the scratch root, so neither the
+    // door's FNO_AGENTS_HOME-derived state root nor the test process's own
+    // ~/.fno equals its parent: the store routing never fires, and both
+    // processes read and write the same <journal>.db beside it.
+    let journal = root.join("journal/events.jsonl");
 
     // A real binary named `cargo` that naps (a shebang script would show the
     // interpreter's argv in ps, which `compile_subcommand_of` never matches).
