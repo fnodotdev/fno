@@ -962,7 +962,7 @@ pub fn build_argv(
         argv.push("--model".to_string());
         argv.push(m.to_string());
     }
-    pin_route_model(&mut argv, flags.route);
+    pin_route_model(&mut argv, flags.route.as_ref());
     if !use_stdin {
         // Behind `--` so a leading-flag seed is the prompt positional, not a
         // claude flag; same fence as the Python `_build_argv` (parity).
@@ -2932,7 +2932,7 @@ pub fn dispatch_claude_headless(
         argv.push("--model".to_string());
         argv.push(m.to_string());
     }
-    pin_route_model(&mut argv, flags.route);
+    pin_route_model(&mut argv, flags.route.as_ref());
     if let Some(value) = effort.filter(|v| !v.is_empty()) {
         argv.push("--effort".to_string());
         argv.push(value.to_string());
