@@ -29,11 +29,162 @@ pub struct RuleSet {
     pub version: String,
 }
 
-/// The Route 3 seam: the set builds in process on every fire. A resident
-/// host (the keeper socket) slots in here when the release gate measures
-/// the build over budget, and nothing else changes.
-pub fn rule_set_fast(cwd: &Path) -> Result<RuleSet, String> {
-    rule_set(cwd)
+/// The rules decide() reads, as a hook or door fire gets them: from the
+/// daemon's cache when one answers, else built in process. Building costs
+/// a read of the whole store (~210 ms measured 2026-11-13, every tool call),
+/// so the daemon builds once per store change and serves the rest.
+pub fn rule_set_fast(cwd: &Path) -> Result<ServedRules, String> {
+    let graph = crate::graph_get::default_graph_path();
+    if RESIDENT.load(std::sync::atomic::Ordering::Relaxed) {
+        return cached_rules(&graph, cwd);
+    }
+    if let Some(served) = ask_daemon(&graph, cwd) {
+        return Ok(served);
+    }
+    eprintln!("rules: no daemon answered agent.rule-set; built the rule set in process");
+    rule_set_in(&graph, cwd).map(|set| ServedRules {
+        rules: set.rules,
+        unread: set.unread,
+    })
+}
+
+/// The part of a [`RuleSet`] decide() reads, the shape the daemon serves.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct ServedRules {
+    pub rules: Vec<Rule>,
+    pub unread: Vec<String>,
+}
+
+/// The daemon command that serves [`ServedRules`] for one cwd.
+pub const RULE_SET_COMMAND: &str = "rule-set";
+
+/// Set once in the daemon process: its own fires read the cache directly
+/// instead of calling their own socket.
+static RESIDENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn mark_resident() {
+    RESIDENT.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A daemon answer is a cache read; a round trip this slow means it is
+/// wedged, and the caller builds in process instead.
+const ASK_BUDGET: std::time::Duration = std::time::Duration::from_millis(300);
+
+fn ask_daemon(graph: &Path, cwd: &Path) -> Option<ServedRules> {
+    let sock = crate::client::client_sock(&crate::paths::AgentsHome::from_env());
+    let result = crate::protocol::blocking_call(
+        &sock,
+        &format!("agent.{RULE_SET_COMMAND}"),
+        json!({ "cwd": cwd.to_string_lossy(), "graph": graph.to_string_lossy() }),
+        ASK_BUDGET,
+    )?;
+    serde_json::from_value(result).ok()
+}
+
+/// The daemon handler: one cached set per cwd.
+pub fn rule_set_rpc(req: &crate::protocol::Request) -> crate::protocol::Response {
+    let cwd = req
+        .params
+        .get("cwd")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from);
+    let Some(cwd) = cwd else {
+        return crate::protocol::Response::err(
+            req.id,
+            crate::protocol::ErrorCode::InvalidParams,
+            "agent.rule-set needs params.cwd",
+        );
+    };
+    // The caller's graph, not this process's default: a session pinned to
+    // another store must read that store's laws.
+    let graph = req
+        .params
+        .get("graph")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(crate::graph_get::default_graph_path);
+    match cached_rules(&graph, &cwd)
+        .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
+    {
+        Ok(v) => crate::protocol::Response::ok(req.id, v),
+        Err(e) => crate::protocol::Response::err(req.id, crate::protocol::ErrorCode::Internal, e),
+    }
+}
+
+/// How long a cached set may serve with unchanged store stamps: config
+/// flips and project rule files carry no stamp in the key.
+const CACHE_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(5);
+const CACHE_CWDS: usize = 64;
+
+struct Cached {
+    stamps: Vec<Option<(u64, std::time::SystemTime)>>,
+    built: std::time::Instant,
+    rules: ServedRules,
+}
+
+type CacheKey = (PathBuf, PathBuf);
+
+static CACHE: std::sync::OnceLock<std::sync::Mutex<BTreeMap<CacheKey, Cached>>> =
+    std::sync::OnceLock::new();
+
+/// Length and mtime of each file the set is built from. SQLite writes land
+/// in the WAL first, so the WAL rides the key beside the db.
+fn store_stamps(graph: &Path, cwd: &Path) -> Vec<Option<(u64, std::time::SystemTime)>> {
+    let mut wal = graph.as_os_str().to_os_string();
+    wal.push("-wal");
+    let mut files = vec![
+        decision_index::graph_journal(graph),
+        PathBuf::from(wal),
+        graph.to_path_buf(),
+    ];
+    files.extend(project_rules_dir(cwd));
+    files
+        .iter()
+        .map(|p| {
+            let m = std::fs::metadata(p).ok()?;
+            Some((m.len(), m.modified().ok()?))
+        })
+        .collect()
+}
+
+fn cached_rules(graph: &Path, cwd: &Path) -> Result<ServedRules, String> {
+    let stamps = store_stamps(graph, cwd);
+    let key: CacheKey = (graph.to_path_buf(), cwd.to_path_buf());
+    let cache = CACHE.get_or_init(Default::default);
+    if let Ok(map) = cache.lock() {
+        if let Some(hit) = map.get(&key) {
+            if hit.stamps == stamps && hit.built.elapsed() < CACHE_MAX_AGE {
+                return Ok(hit.rules.clone());
+            }
+        }
+    }
+    let set = rule_set_in(graph, cwd)?;
+    let rules = ServedRules {
+        rules: set.rules,
+        unread: set.unread,
+    };
+    if let Ok(mut map) = cache.lock() {
+        if map.len() >= CACHE_CWDS && !map.contains_key(&key) {
+            let oldest = map
+                .iter()
+                .min_by_key(|(_, c)| c.built)
+                .map(|(k, _)| k.clone());
+            if let Some(k) = oldest {
+                map.remove(&k);
+            }
+        }
+        map.insert(
+            key,
+            Cached {
+                stamps,
+                built: std::time::Instant::now(),
+                rules: rules.clone(),
+            },
+        );
+    }
+    Ok(rules)
 }
 
 pub fn rule_set(cwd: &Path) -> Result<RuleSet, String> {
