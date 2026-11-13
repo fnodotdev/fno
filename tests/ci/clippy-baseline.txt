@@ -7350,6 +7350,7 @@ crates/fno-agents/src/runtime/hook/lead_guard.rs	clippy::unwrap_used	let (strip_
 crates/fno-agents/src/runtime/hook/mod.rs	clippy::indexing_slicing	Some("backlog-impostor") => backlog_impostor::run(&args[1..]),
 crates/fno-agents/src/runtime/hook/mod.rs	clippy::indexing_slicing	Some("bg-process-guard") => bg_process_guard::run(&args[1..]),
 crates/fno-agents/src/runtime/hook/mod.rs	clippy::indexing_slicing	Some("bin-install-guard") => bin_install_guard::run(&args[1..]),
+crates/fno-agents/src/runtime/hook/mod.rs	clippy::indexing_slicing	Some("broad-kill-guard") => broad_kill_guard::run(&args[1..]),
 crates/fno-agents/src/runtime/hook/mod.rs	clippy::indexing_slicing	Some("buddy-statusline") => buddy_statusline::run(&args[1..]),
 crates/fno-agents/src/runtime/hook/mod.rs	clippy::indexing_slicing	Some("diff-budget") => diff_budget::run(&args[1..]),
 crates/fno-agents/src/runtime/hook/mod.rs	clippy::indexing_slicing	Some("edit-integrity") => edit_integrity::run(&args[1..]),

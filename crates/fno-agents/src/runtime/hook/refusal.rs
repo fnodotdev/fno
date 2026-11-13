@@ -21,6 +21,7 @@ use serde_json::json;
 pub(crate) enum Guard {
     BgProcess,
     BinInstall,
+    BroadKill,
     GitProtection,
     BacklogImpostor,
     RecursiveGrep,
@@ -45,8 +46,9 @@ const OWN_SHELL: &str = "a person runs the same line in their own shell, where n
 
 impl Guard {
     #[cfg(test)]
-    const ALL: [Guard; 17] = [
+    const ALL: [Guard; 18] = [
         Guard::BgProcess,
+        Guard::BroadKill,
         Guard::BinInstall,
         Guard::GitProtection,
         Guard::BacklogImpostor,
@@ -70,6 +72,7 @@ impl Guard {
         match self {
             Guard::BgProcess => "bg-process guard",
             Guard::BinInstall => "bin-install guard",
+            Guard::BroadKill => "broad-kill guard",
             Guard::GitProtection => "git-protection",
             Guard::BacklogImpostor => "backlog-impostor guard",
             Guard::RecursiveGrep => "recursive-grep guard",
@@ -93,6 +96,10 @@ impl Guard {
         match self {
             Guard::BgProcess => ("give the command a bound: `timeout <secs> <cmd>`, or `bash scripts/lib/loadgen.sh start <label> <seconds>` for load.", PRESET_STRICT),
             Guard::BinInstall => ("pin your build with `export FNO_AGENTS_FRONT=\"$PWD/crates/fno-agents/target/debug/fno-agents\"`; deploy with `fno doctor update`.", PRESET_STRICT),
+            Guard::BroadKill => (
+                "stop only what you started: `kill <pid>`, or `kill -- -<pgid>` for the process group of a command you launched; measure fleet load with `fno doctor footprint`.",
+                PRESET_OFF,
+            ),
             Guard::GitProtection => ("push and merge through `fno do pr push` and `fno do pr merge`; the reason above names the form for this command.", PRESET_OFF),
             Guard::BacklogImpostor => ("prefix the command: `fno backlog ...`.", PRESET_OFF),
             Guard::RecursiveGrep => ("use `rg <pattern> <path>` or the harness Grep tool; both honor .gitignore.", PRESET_STRICT),

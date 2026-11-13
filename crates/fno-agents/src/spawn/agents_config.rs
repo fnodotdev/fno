@@ -224,8 +224,8 @@ pub(crate) fn guard_preset(cwd: &Path) -> &'static str {
 
 /// Whether one gatable guard runs under the project's preset. Names are the
 /// guard ids the hooks know: backlog-impostor, test-run, bin-install,
-/// recursive-grep, bg-process, git-protection. The state-integrity guards
-/// (graph write protection and friends) never gate here.
+/// recursive-grep, broad-kill, bg-process, git-protection. The
+/// state-integrity guards (graph write protection and friends) never gate here.
 pub(crate) fn guard_enabled(cwd: &Path, guard: &str) -> bool {
     preset_runs(guard_preset(cwd), guard)
 }

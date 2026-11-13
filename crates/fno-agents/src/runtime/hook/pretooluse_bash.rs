@@ -85,6 +85,20 @@ pub fn run(_args: &[String]) -> i32 {
         );
     }
 
+    if crate::agents_config::preset_runs(preset, "broad-kill") {
+        // Advisory: a broad kill harms shared-machine work, never data, so
+        // the call runs and the note names the scoped stop.
+        let kill_note = super::broad_kill_guard::judge(&payload);
+        let decision = if kill_note.is_some() {
+            "nudge"
+        } else {
+            "allow"
+        };
+        super::emit_guard_row(&cwd, "broad-kill-guard", "Bash", decision);
+        notices
+            .extend(kill_note.map(|n| Refusal::new(super::refusal::Guard::BroadKill, n).render()));
+    }
+
     let test = if crate::agents_config::preset_runs(preset, "test-run") {
         super::test_run_guard::evaluate(&payload)
     } else {

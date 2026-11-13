@@ -12,6 +12,7 @@ pub mod adapter;
 pub mod backlog_impostor;
 pub mod bg_process_guard;
 pub mod bin_install_guard;
+pub mod broad_kill_guard;
 pub mod buddy_statusline;
 pub mod diff_budget;
 pub mod edit_integrity;
@@ -49,6 +50,7 @@ pub fn dispatch(args: &[String]) -> i32 {
         Some("bg-process-guard") => bg_process_guard::run(&args[1..]),
         Some("backlog-impostor") => backlog_impostor::run(&args[1..]),
         Some("bin-install-guard") => bin_install_guard::run(&args[1..]),
+        Some("broad-kill-guard") => broad_kill_guard::run(&args[1..]),
         Some("buddy-statusline") => buddy_statusline::run(&args[1..]),
         Some("diff-budget") => diff_budget::run(&args[1..]),
         Some("edit-integrity") => edit_integrity::run(&args[1..]),
@@ -75,7 +77,7 @@ pub fn dispatch(args: &[String]) -> i32 {
         Some("write-gate") => write_gate::run(&args[1..]),
         other => {
             eprintln!(
-                "fno-agents hook: unknown entry {other:?}; expected backlog-impostor, bg-process-guard, bin-install-guard, diff-budget, edit-integrity, effect-guard, git-protection, join-partition-guard, lead-guard, posttooluse-bash, pretool, pretooluse-bash, prompt, recursive-grep-guard, rules, save-session, send-message-guard, session-state, subagent-worktree-guard, task-boundary, test-run-guard, transcript-push, worktree-relocation-allow, write-gate or stop"
+                "fno-agents hook: unknown entry {other:?}; expected backlog-impostor, bg-process-guard, bin-install-guard, broad-kill-guard, diff-budget, edit-integrity, effect-guard, git-protection, join-partition-guard, lead-guard, posttooluse-bash, pretool, pretooluse-bash, prompt, recursive-grep-guard, rules, save-session, send-message-guard, session-state, subagent-worktree-guard, task-boundary, test-run-guard, transcript-push, worktree-relocation-allow, write-gate or stop"
             );
             2
         }
