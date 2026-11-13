@@ -38,6 +38,7 @@ pub const FNO_ARGVS: &[&[&str]] = &[
 
 #[cfg(test)]
 mod tests {
+    use super::{FNO_ARGVS, MERGE_CLOSE_RECONCILE};
     use fno::agents_menu::{classify, Agents};
     use std::ffi::OsString;
 
