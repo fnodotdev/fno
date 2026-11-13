@@ -839,31 +839,31 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
     }
     if !c.preview.is_empty() {
         let (path, error, muted, ground) = (c.preview.clone(), p.error, p.muted, p.bg);
-        // The box holds the preview's space and paints its own loading word
-        // under the image, so the recipe never jumps up and the wait reads
-        // from the first frame: gpui shows no loading element for 200 ms.
+        // The box holds the preview's space so the recipe never jumps up. The
+        // loading word is the image's own loading element, so it leaves with
+        // the load. gpui shows that element after a 200 ms delay.
         out = out.child(
             div()
-                .relative()
                 .w(px(PREVIEW_MAX))
                 .max_w_full()
                 .min_h(px(PREVIEW_RESERVE))
-                .child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_color(rgb(muted))
-                        .child("Loading preview..."),
-                )
                 .child(
                     img(PathBuf::from(&c.preview))
                         .w(px(PREVIEW_MAX))
                         .max_w_full()
                         .bg(rgb(ground))
                         .object_fit(ObjectFit::Contain)
+                        .with_loading(move || {
+                            div()
+                                .w_full()
+                                .h(px(PREVIEW_RESERVE))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_color(rgb(muted))
+                                .child("Loading preview...")
+                                .into_any_element()
+                        })
                         .with_fallback(move || {
                             div()
                                 .w_full()
