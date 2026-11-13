@@ -55,11 +55,7 @@ pub(crate) fn unpassed_check_counts(checks: &Value) -> (usize, usize) {
     let mut pending = 0;
     let mut failing = 0;
     for check in filtered.as_array().into_iter().flatten() {
-        let bucket = check
-            .get("bucket")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_lowercase();
+        let bucket = check["bucket"].as_str().unwrap_or("").to_lowercase();
         match bucket.as_str() {
             "pass" | "skipping" => {}
             "fail" => failing += 1,
