@@ -873,10 +873,6 @@ fn warn_shadowed_local_rows(honored: &[RenderTarget]) {
     else {
         return;
     };
-    let Some(Value::Array(rows)) = merged.get("backlog").and_then(|b| b.get("render_targets"))
-    else {
-        return;
-    };
     let mut local: Vec<RenderTarget> = rows.iter().filter_map(|r| parse_target(r).ok()).collect();
     let mut honored = honored.to_vec();
     let key = |t: &RenderTarget| (t.path.clone(), t.scope.clone(), t.projection.clone());
