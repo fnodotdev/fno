@@ -37,12 +37,8 @@ jobs:
             dir: crates/fno-mail
           - crate: fno-agents
             dir: crates/fno-agents
-            # fno-mail at this version is not on crates.io until release
-            # publishes it, so the dry-run resolves it through the tree.
-            extra: --config 'patch.crates-io.fno-mail.path="crates/fno-mail"'
           - crate: fno
             dir: crates/fno
-            extra: --config 'patch.crates-io.fno-mail.path="crates/fno-mail"'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,4 +47,19 @@ jobs:
       - name: Dry-run package + verify
         # Explicit --manifest-path (never a cwd/glob resolution) so the stale
         # untracked pre-rename crate dir can never be packaged by mistake (AC5-FR).
-        run: cargo publish --dry-run --manifest-path "${{ matrix.dir }}/Cargo.toml" ${{ matrix.extra }}
+        run: |
+          set -euo pipefail
+          extra=()
+          if [ "${{ matrix.crate }}" != "fno-mail" ]; then
+            # fno-mail versions on its own. A version not on crates.io yet
+            # resolves through the tree, as release publishes it first. A
+            # version already there is what release will skip, so the dry
+            # run verifies against the registry copy: a fno-mail change
+            # merged without a version bump fails here, not at release.
+            mail="$(perl -ne 'if(/^version = "(.*)"/){print $1; exit}' crates/fno-mail/Cargo.toml)"
+            code="$(curl -s -o /dev/null -w '%{http_code}' "https://crates.io/api/v1/crates/fno-mail/${mail}")"
+            if [ "$code" != "200" ]; then
+              extra=(--config 'patch.crates-io.fno-mail.path="crates/fno-mail"')
+            fi
+          fi
+          cargo publish --dry-run --manifest-path "${{ matrix.dir }}/Cargo.toml" "${extra[@]}"

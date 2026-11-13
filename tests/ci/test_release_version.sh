@@ -44,10 +44,10 @@ run() { # run <outfile> <errfile> <cmd...>
 sync="$work/sync"
 mkdir -p "$sync/scripts/release" "$sync/crates/fno/src" "$sync/crates/fno-agents/src" "$sync/crates/fno-mail/src" "$sync/crates/fno-app/src"
 cp scripts/release/sync-version.sh "$sync/scripts/release/"
-printf '[package]\nname = "fno"\nversion = "0.3.2"\nedition = "2021"\nfno-mail = { path = "../fno-mail", version = "=0.3.2" }\n' > "$sync/crates/fno/Cargo.toml"
-printf '[package]\nname = "fno-mail"\nversion = "0.3.2"\nedition = "2021"\n' > "$sync/crates/fno-mail/Cargo.toml"
+printf '[package]\nname = "fno"\nversion = "0.3.2"\nedition = "2021"\nfno-mail = { path = "../fno-mail", version = "0.1" }\n' > "$sync/crates/fno/Cargo.toml"
+printf '[package]\nname = "fno-mail"\nversion = "0.1.0"\nedition = "2021"\n' > "$sync/crates/fno-mail/Cargo.toml"
 printf '[package]\nname = "fno-app"\nversion = "0.3.2"\nedition = "2021"\n' > "$sync/crates/fno-app/Cargo.toml"
-printf '[package]\nname = "fno-agents"\nversion = "0.3.2"\nedition = "2021"\nfno-mail = { path = "../fno-mail", version = "=0.3.2" }\n' > "$sync/crates/fno-agents/Cargo.toml"
+printf '[package]\nname = "fno-agents"\nversion = "0.3.2"\nedition = "2021"\nfno-mail = { path = "../fno-mail", version = "0.1" }\n' > "$sync/crates/fno-agents/Cargo.toml"
 # Seed each crate's lockfile so --check's lock drift guard has an entry to
 # read; the stamp's cargo update rewrites it in place.
 for c in fno fno-agents fno-mail fno-app; do
@@ -97,15 +97,14 @@ grep -q '^version = "0.4.0-rc.1"' "$sync/crates/fno/Cargo.toml"
 check "crates/fno/Cargo.toml reads 0.4.0-rc.1" $?
 grep -q '^version = "0.4.0-rc.1"' "$sync/crates/fno-agents/Cargo.toml"
 check "crates/fno-agents/Cargo.toml reads 0.4.0-rc.1" $?
-grep -q '^version = "0.4.0-rc.1"' "$sync/crates/fno-mail/Cargo.toml"
-check "crates/fno-mail/Cargo.toml reads 0.4.0-rc.1" $?
+grep -q '^version = "0.1.0"' "$sync/crates/fno-mail/Cargo.toml"
+check "crates/fno-mail/Cargo.toml stays at its own version through an fno bump" $?
 grep -q '^version = "0.3.2"' "$sync/crates/fno-app/Cargo.toml"
 check "crates/fno-app/Cargo.toml stays at its own version through an fno bump" $?
-grep -q 'version = "=0.4.0-rc.1"' "$sync/crates/fno-agents/Cargo.toml"
-check "the fno-mail pin in fno-agents reads =0.4.0-rc.1" $?
-grep -q 'version = "=0.4.0-rc.1"' "$sync/crates/fno/Cargo.toml"
-check "the fno-mail pin in fno reads =0.4.0-rc.1" $?
-for c in fno fno-agents fno-mail; do
+grep -q 'fno-mail = { path = "../fno-mail", version = "0.1" }' "$sync/crates/fno-agents/Cargo.toml" \
+  && grep -q 'fno-mail = { path = "../fno-mail", version = "0.1" }' "$sync/crates/fno/Cargo.toml"
+check "the fno-mail caret ranges in fno and fno-agents stay untouched" $?
+for c in fno fno-agents; do
   awk -v pkg="$c" '$0 == "name = \"" pkg "\"" { seen = 1; next } seen && /^version = / { print; exit }' "$sync/crates/$c/Cargo.lock" | grep -q '"0.4.0-rc.1"'
   check "the $c lockfile entry reads 0.4.0-rc.1" $?
 done
@@ -135,7 +134,7 @@ check_rc "--check agrees after a dev bump (exit 0)" "$rc" "0"
 # The stamp must leave a version cargo can actually parse: a PEP 440 spelling
 # reaching a manifest fails every cargo build (the nightly shipped exactly
 # that once). Parse both stamped manifests, not just the text.
-for cf in "$sync/crates/fno/Cargo.toml" "$sync/crates/fno-agents/Cargo.toml" "$sync/crates/fno-mail/Cargo.toml"; do
+for cf in "$sync/crates/fno/Cargo.toml" "$sync/crates/fno-agents/Cargo.toml"; do
   if cargo metadata --offline --no-deps --format-version 1 --manifest-path "$cf" > "$work/meta.json" 2>>"$work/e"; then
     echo "  ok: cargo metadata parses $(basename "$(dirname "$cf")") at the dev version"
   else
