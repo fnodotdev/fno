@@ -8,6 +8,7 @@
 //! transient) and the human/JSON output shapes.
 
 pub mod acquire;
+pub mod adopt_flags;
 pub mod help;
 pub mod list;
 pub mod manifest_refresh;

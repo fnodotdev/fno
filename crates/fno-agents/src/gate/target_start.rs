@@ -872,13 +872,26 @@ fn read_node_claim(
     (state, rec)
 }
 
-/// True iff `holder` is THIS session's identity (any claim state). Five arms,
-/// mirroring init-target-state.sh's `claim_owner_id`: the driver-assigned run
-/// id, the codex thread id, the resolved self identity, the launch-window
-/// handover this session was minted for, then durable session pid + machine.
-/// An uncapturable own pid reads as not-ours (park / re-acquire, never
-/// assume ownership).
-fn holder_is_ours(holder: &str, rec: &crate::claims::ClaimRecord) -> bool {
+/// True iff `holder` is THIS session's identity (any claim state). THE one
+/// own-session check, shared verbatim by the start pre-check and the init
+/// helper's adopt door (`fno agents claim adopt-flags`), so a claim one
+/// surface adopts the other can never refuse - start once parked its own
+/// beneficiary while init adopted it. The rungs mirror init's: the spawn's
+/// env carrier, the exact session holder (run id, codex thread, resolved
+/// self identity), the launch-window handover (worker name, registry row,
+/// recorded session id, suspect takeover), then durable session pid +
+/// machine. An uncapturable own pid reads as not-ours (park / re-acquire,
+/// never assume ownership).
+pub(crate) fn claim_names_current_session(holder: &str, rec: &crate::claims::ClaimRecord) -> bool {
+    // The spawn exports its holder in the worker's environment; naming it
+    // exactly is the successorship proof, and the acquire re-checks holder
+    // equality. Start ignored the carrier and parked its own beneficiary
+    // (measured live 2026-11-13).
+    if let Ok(carrier) = std::env::var("FNO_NODE_CLAIM_HOLDER") {
+        if !carrier.is_empty() && carrier == holder {
+            return true;
+        }
+    }
     for env_var in ["TARGET_SESSION_ID", "CODEX_THREAD_ID"] {
         if let Ok(own) = std::env::var(env_var) {
             if !own.is_empty() && holder == format!("target-session:{own}") {
@@ -901,16 +914,43 @@ fn holder_is_ours(holder: &str, rec: &crate::claims::ClaimRecord) -> bool {
     }
     // A launch-window claim names its worker, not its session: the spawn
     // wrote `spawn-handover:<worker>` before this session existed. The
-    // registry row the worker name joins to answers with a session id, and
-    // only an exact match with this session's own adopts the claim - the
-    // same proof init's bash fallback trusts. Without this arm the start
-    // pre-check classifies its own beneficiary as foreign and refuses
-    // before init's adopt fallback can run (measured live 2026-10-26).
+    // registry join and the name rung below are the only proofs, and an
+    // unresolvable row once refused here (measured live 2026-10-26).
     if let Some(worker) = holder.strip_prefix(crate::claim_commands::HANDOVER_HOLDER_PREFIX) {
+        // The dispatch name rides the environment for workers whose registry
+        // row is not resolvable yet.
+        if std::env::var("FNO_WORKER_NAME")
+            .ok()
+            .is_some_and(|n| n.trim() == worker)
+        {
+            return true;
+        }
         let entries = crate::state::load_registry(&home.registry_json())
             .map(|r| r.entries)
             .unwrap_or_default();
-        return handover_row_is_ours(&entries, worker, own_sid.as_deref());
+        if handover_row_is_ours(&entries, worker, own_sid.as_deref()) {
+            return true;
+        }
+        // The session-id proof: proven identity lands in session_id, an
+        // ambient-only creator is demoted to dispatched_by_session metadata.
+        // Either way a window naming THIS session was minted for it: the
+        // respawned worker whose earlier process still holds the window
+        // (measured live 2026-10-30).
+        if handover_session_id_matches(rec, own_sid.as_deref()) {
+            return true;
+        }
+        // A launch window that outlived its launcher: the pid probe proves
+        // the spawner gone (basis pid-absent) while the TTL grace still
+        // runs (state suspect), so the named worker never reached init.
+        // A pid-unavailable suspect (death unproven) stays refused: the
+        // named worker may still be coming (measured live 2026-10-28).
+        let (state, basis) = crate::claim_commands::status_verdict(rec);
+        if matches!(state, crate::claims::ClaimState::Suspect)
+            && basis == crate::claims::basis::PID_ABSENT
+        {
+            return true;
+        }
+        return false;
     }
     if rec.pid_unavailable {
         return false;
@@ -918,6 +958,32 @@ fn holder_is_ours(holder: &str, rec: &crate::claims::ClaimRecord) -> bool {
     let (own_pid, _harness) = crate::spawn_context::session_identity_ambient(std::process::id());
     let same_machine = crate::claims::is_same_machine(&rec.host, rec.machine_id.as_deref());
     matches!(own_pid, Some(p) if rec.pid == Some(p as i32)) && same_machine
+}
+
+/// The claim's recorded creating session (`session_id`, demoted to
+/// `dispatched_by_session` metadata) against this session's own id: exact,
+/// or case-folded when neither carries the store's `ses_` prefix - the same
+/// fold init's bash rung applies. Exact match only, never a prefix.
+fn handover_session_id_matches(rec: &crate::claims::ClaimRecord, own_sid: Option<&str>) -> bool {
+    let recorded = rec
+        .session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            rec.metadata
+                .get("dispatched_by_session")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        });
+    let (Some(recorded), Some(own)) = (recorded, own_sid) else {
+        return false;
+    };
+    recorded == own
+        || (!recorded.starts_with("ses_")
+            && !own.starts_with("ses_")
+            && recorded.eq_ignore_ascii_case(own))
 }
 
 /// True when the registry rows carry a row answering to `worker` whose session
@@ -1032,7 +1098,7 @@ fn classify_node_claim(
     if matches!(state, crate::claims::ClaimState::Free) {
         return ("free", word, Some(rec));
     }
-    if holder_is_ours(&rec.holder, &rec) {
+    if claim_names_current_session(&rec.holder, &rec) {
         return ("ours", word, Some(rec));
     }
     if matches!(
@@ -2678,5 +2744,147 @@ mod advisory_flag_tests {
         let mut default_init_args = vec!["--input".into(), "x-1".into()];
         append_advisory_init_flag(&mut default_init_args, defaults.advisory);
         assert_eq!(default_init_args, ["--input", "x-1"]);
+    }
+}
+
+#[cfg(test)]
+mod adopt_rung_tests {
+    use super::*;
+
+    /// The env rungs read process-global state; these tests serialize on one
+    /// lock so parallel in-process tests cannot race a half-set variable.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn record(holder: &str) -> crate::claims::ClaimRecord {
+        crate::claims::ClaimRecord {
+            schema_version: 1,
+            key: "node:adopt-rung".into(),
+            holder: holder.into(),
+            acquired_at: 0,
+            pid: None,
+            host: String::new(),
+            pid_unavailable: false,
+            expires_at: None,
+            reason: None,
+            harness: None,
+            session_id: None,
+            pid_provenance: None,
+            machine_id: None,
+            metadata: Default::default(),
+        }
+    }
+
+    #[test]
+    fn the_spawn_env_carrier_names_its_own_beneficiary() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for var in [
+            "FNO_NODE_CLAIM_HOLDER",
+            "FNO_WORKER_NAME",
+            "TARGET_SESSION_ID",
+            "CODEX_THREAD_ID",
+        ] {
+            std::env::remove_var(var);
+        }
+        let rec = record("spawn-handover:t-carrier-w");
+        assert!(
+            !claim_names_current_session(&rec.holder, &rec),
+            "no carrier, no row, no recorded session: refused"
+        );
+        std::env::set_var("FNO_NODE_CLAIM_HOLDER", "spawn-handover:t-carrier-w");
+        assert!(
+            claim_names_current_session(&rec.holder, &rec),
+            "the carrier names this worker's holder: adopted"
+        );
+        std::env::remove_var("FNO_NODE_CLAIM_HOLDER");
+    }
+
+    #[test]
+    fn a_foreign_carrier_misses_and_a_foreign_live_pid_stays_refused() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for var in [
+            "FNO_NODE_CLAIM_HOLDER",
+            "FNO_WORKER_NAME",
+            "TARGET_SESSION_ID",
+            "CODEX_THREAD_ID",
+        ] {
+            std::env::remove_var(var);
+        }
+        // A carrier naming a DIFFERENT holder decides nothing; the pid arm
+        // answers for a pid-liveness claim, and a foreign live pid refuses.
+        let mut rec = record("target-session:s-elsewhere");
+        rec.pid = Some(999_999_999);
+        std::env::set_var("FNO_NODE_CLAIM_HOLDER", "spawn-handover:t-other-w");
+        assert!(!claim_names_current_session(&rec.holder, &rec));
+        std::env::remove_var("FNO_NODE_CLAIM_HOLDER");
+    }
+
+    #[test]
+    fn the_recorded_session_id_names_its_beneficiary() {
+        // Pure logic: the fold matches init's bash rung, the ses_ prefix
+        // blocks it, and the metadata demotion answers when session_id is
+        // absent.
+        let mut rec = record("spawn-handover:t-sid-w");
+        rec.session_id = Some("  SID-9  ".into());
+        assert!(handover_session_id_matches(&rec, Some("sid-9")));
+        assert!(!handover_session_id_matches(&rec, Some("sid-8")));
+        assert!(!handover_session_id_matches(&rec, None));
+        rec.session_id = Some("ses_CAPS".into());
+        assert!(!handover_session_id_matches(&rec, Some("ses_caps")));
+        rec.session_id = None;
+        rec.metadata.insert(
+            "dispatched_by_session".into(),
+            serde_json::Value::String("sid-7".into()),
+        );
+        assert!(handover_session_id_matches(&rec, Some("SID-7")));
+    }
+
+    #[test]
+    fn a_suspect_dead_spawner_window_is_taken_over() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for var in [
+            "FNO_NODE_CLAIM_HOLDER",
+            "FNO_WORKER_NAME",
+            "TARGET_SESSION_ID",
+            "CODEX_THREAD_ID",
+        ] {
+            std::env::remove_var(var);
+        }
+        // pid None + TTL window: the classifier answers (suspect,
+        // pid-absent) - the launch window that outlived its launcher.
+        let mut rec = record("spawn-handover:t-dead-w");
+        rec.expires_at = Some(i64::MAX);
+        assert!(
+            claim_names_current_session(&rec.holder, &rec),
+            "suspect + pid-absent: the takeover rung adopts"
+        );
+        // Death unproven (pid-unavailable suspect) keeps the refusal: the
+        // named worker may still be coming.
+        let mut rec = record("spawn-handover:t-live-w");
+        rec.pid_unavailable = true;
+        rec.expires_at = Some(i64::MAX);
+        assert!(
+            !claim_names_current_session(&rec.holder, &rec),
+            "pid-unavailable suspect stays refused"
+        );
+    }
+
+    #[test]
+    fn the_worker_name_env_adopts_before_the_registry() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for var in [
+            "FNO_NODE_CLAIM_HOLDER",
+            "FNO_WORKER_NAME",
+            "TARGET_SESSION_ID",
+            "CODEX_THREAD_ID",
+        ] {
+            std::env::remove_var(var);
+        }
+        std::env::set_var("FNO_WORKER_NAME", "t-named-w");
+        let rec = record("spawn-handover:t-named-w");
+        assert!(
+            claim_names_current_session(&rec.holder, &rec),
+            "FNO_WORKER_NAME answers the holder's worker: adopted"
+        );
+        std::env::remove_var("FNO_WORKER_NAME");
     }
 }

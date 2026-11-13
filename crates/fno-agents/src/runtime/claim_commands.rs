@@ -99,6 +99,12 @@ pub fn run_claim(args: &[String]) -> i32 {
         // goldens are the contract.
         return crate::claim_cli::status::run(&args[1..]);
     }
+    if op == "adopt-flags" {
+        // The init helper's adopt decision, printed as --handover-from
+        // flags: one own-session check shared with the start pre-check, so
+        // a claim start adopts init adopts too (measured live 2026-11-13).
+        return crate::claim_cli::adopt_flags::run(&args[1..]);
+    }
     if op == "lane-acquire" {
         return crate::claim_lanes_cli::run_lane_acquire(&args[1..]);
     }
