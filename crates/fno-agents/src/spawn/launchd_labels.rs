@@ -40,6 +40,10 @@ pub const PR_WATCHER_PLIST_FILENAME: &str = "sh.fno.pr-watcher.plist";
 /// The groom agent's plist file name (no suffix).
 pub const GROOM_PLIST_FILENAME: &str = "sh.fno.groom.plist";
 
+/// The nightly law-upkeep agent's plist filename (HOME-derived label inside;
+/// the per-HOME LaunchAgents directory separates files).
+pub const LAW_UPKEEP_PLIST_FILENAME: &str = "sh.fno.law-upkeep.plist";
+
 /// This HOME's launchd label suffix: 8 hex chars of sha256(HOME). A missing
 /// or empty HOME reads as `00000000` and logs nothing.
 pub fn launchd_suffix() -> String {
@@ -67,6 +71,11 @@ pub fn pr_watcher_label() -> String {
 /// This HOME's daily groom launchd label.
 pub fn groom_label() -> String {
     format!("sh.fno.groom.{}", launchd_suffix())
+}
+
+/// This HOME's nightly law-upkeep launchd label.
+pub fn law_upkeep_label() -> String {
+    format!("sh.fno.law-upkeep.{}", launchd_suffix())
 }
 
 fn hex(bytes: &[u8]) -> String {

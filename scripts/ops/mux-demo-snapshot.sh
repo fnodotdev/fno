@@ -5,7 +5,7 @@
 #       [--window-size smallest|latest|largest] [--peer 120x40] [--no-fit]
 #       [--hold] [--group <axis>] [--remote-pane] [--web [--web-port <port>]]
 #       [--hold] [--group <axis>] [--remote-pane] [--flat-pins] [--sort <col:dir>] [--layout list] [--lead-nesting] [--holds]
-#       [--install-card data|code] [--app [--app-theme <theme>]]
+#       [--install-card data|code] [--mod-pane review-ledger] [--app [--app-theme <theme>]]
 #
 # Builds a throwaway server in a temp state root: its own config, graph,
 # agent registry, view prefs and socket dir. It seeds invented backlog nodes,
@@ -22,10 +22,15 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
 # build drives its own tree's agents sibling, so the seeded mint (which reads
 # FNO_DEMO_ID_SEED there) is the one under test, never the deployed binary.
 if [ -n "${FNO_BIN:-}" ] && [ -z "${FNO_AGENTS_BIN:-}" ]; then
-  SIBLING="$(cd "$(dirname "$FNO_BIN")/../../.." && pwd)/fno-agents/target/release/fno-agents"
-  if [ -x "$SIBLING" ]; then
+  SIBLING_DIR="$(cd "$(dirname "$FNO_BIN")/../../.." && pwd)/fno-agents/target"
+  SIBLING=""
+  for profile in release debug; do
+    if [ -x "$SIBLING_DIR/$profile/fno-agents" ]; then SIBLING="$SIBLING_DIR/$profile/fno-agents"; break; fi
+  done
+  if [ -n "$SIBLING" ]; then
     export FNO_AGENTS_BIN="$SIBLING"
   else
+    SIBLING="$SIBLING_DIR/release/fno-agents"
     # A branch build without its agents sibling would silently test the
     # deployed mint, and the seeded ids would re-roll. Say so instead.
     echo "mux-demo-snapshot: no fno-agents sibling beside FNO_BIN ($SIBLING missing); backlog ids come from the deployed binary" >&2
@@ -77,6 +82,9 @@ FNO_DEMO_LEAD_NESTING=""
 # --install-card data|code runs a real `fno config plugins install` of a
 # throwaway local pack in the first pane, so the shot shows its consent card.
 INSTALL_CARD=""
+# --mod-pane review-ledger activates the first-party pack and opens that feed
+# mod in the first pane over invented review_attestation rows.
+MOD_PANE=""
 for a in "$@"; do
   if [ "$PREV" = "--out" ]; then
     mkdir -p -- "$(dirname -- "$a")"
@@ -95,7 +103,9 @@ for a in "$@"; do
     INSTALL_CARD="$a"
   elif [ "$PREV" = "--app-theme" ]; then
     APP_THEME="$a"
-  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--web-port" ] || [ "$a" = "--sort" ] || [ "$a" = "--layout" ] || [ "$a" = "--install-card" ] || [ "$a" = "--app-theme" ]; then
+  elif [ "$PREV" = "--mod-pane" ]; then
+    MOD_PANE="$a"
+  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--web-port" ] || [ "$a" = "--sort" ] || [ "$a" = "--layout" ] || [ "$a" = "--install-card" ] || [ "$a" = "--app-theme" ] || [ "$a" = "--mod-pane" ]; then
     :
   elif [ "$a" = "--lead-nesting" ]; then
     FNO_DEMO_LEAD_NESTING=1
@@ -118,6 +128,10 @@ for a in "$@"; do
   fi
   PREV="$a"
 done
+case "$MOD_PANE" in
+  ""|review-ledger) ;;
+  *) echo "mux-demo-snapshot: --mod-pane supports: review-ledger" >&2; exit 2 ;;
+esac
 export FNO_DEMO_FLATPINS FNO_DEMO_SORT FNO_DEMO_LAYOUT FNO_DEMO_LEAD_NESTING FNO_DEMO_HOLDS
 # bash 3.2 (stock macOS) reads an empty array under set -u as unbound.
 set -- ${ARGS[@]+"${ARGS[@]}"}
@@ -306,7 +320,9 @@ case " $* " in
     printf '{\n  "preset": "zellij",\n  "split-up": "}",\n  "split-left": "g s",\n  "grab-work": "^"\n}\n' >"$ROOT/.fno/keybindings.json"
     ;;
 esac
-unset FNO_SERVER FNO_SESSION FNO_PANE FNO_OWNER_BIRTH
+# FNO_BOARD_SCOPE is latched per client pane: left in, it filters the invented
+# backlog to the caller's own project and the board shoots empty.
+unset FNO_SERVER FNO_SESSION FNO_PANE FNO_OWNER_BIRTH FNO_BOARD_SCOPE
 # A harness identity in the caller's env would join the demo's fresh store as
 # that real session: every seed call stamps it onto the demo nodes and the
 # shot leaks the id (the look flag on the backlog graph paint). Strip the
@@ -592,6 +608,36 @@ YAML
     commit --quiet -m "demo pack"
   run --cwd "$ROOT/code/checkout" -- \
     sh -c "'$FNO' config plugins install 'file://$PACK'; while :; do sleep 1; done"
+  run --cwd "$ROOT/code/checkout" --tab 1 --at "${PANES[0]}" --split right -- \
+    sh -c "$(show codex)"
+  RUN_AT="${PANES[1]}"
+elif [ -n "$MOD_PANE" ]; then
+  # Invented attestations on the frozen clock: mixed verdicts and rounds so the
+  # verdict colours show. The feed reads the state root's events journal.
+  python3 - "$ROOT" <<'PY'
+import json, os, sys, datetime
+root = sys.argv[1]
+now = datetime.datetime.fromtimestamp(int(os.environ["FNO_DEMO_EPOCH"]), datetime.timezone.utc)
+rows = [
+    (12, "feature/tide-source", "3c9a1e7", "pass", 2, 0),
+    (95, "feature/meter-units", "81d04b2", "fail", 1, 3),
+    (240, "fix/rate-limit-retry", "e5f7a60", "pass", 1, 1),
+    (610, "feature/queue-drain", "0b72c9d", "fail", 2, 2),
+    (1500, "docs/onboarding", "7aa31f4", "pass", 1, 0),
+    (2900, "fix/sync-backoff", "d41e8c5", "pass", 2, 0),
+]
+os.makedirs(f"{root}/.fno", exist_ok=True)
+with open(f"{root}/.fno/events.jsonl", "w") as f:
+    for mins, branch, head, verdict, rnd, blocking in rows:
+        ts = (now - datetime.timedelta(minutes=mins)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        f.write(json.dumps({"type": "review_attestation", "ts": ts, "data": {
+            "reviewer": "code-review", "branch": branch, "head_sha": head,
+            "verdict": verdict, "review_round": rnd,
+            "findings_blocking": blocking, "findings_nonblocking": 0}}) + "\n")
+PY
+  "$FNO" config plugins activate "$REPO_ROOT/plugins/fno-panels" >/dev/null
+  run --cwd "$ROOT/code/checkout" -- \
+    sh -c "'$FNO' config plugins open fno-panels/review-ledger; while :; do sleep 1; done"
   run --cwd "$ROOT/code/checkout" --tab 1 --at "${PANES[0]}" --split right -- \
     sh -c "$(show codex)"
   RUN_AT="${PANES[1]}"

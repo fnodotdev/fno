@@ -146,6 +146,7 @@ pub mod law_pr_shape;
 pub mod law_recheck;
 pub mod law_renew;
 pub mod law_restore;
+pub mod law_upkeep;
 pub mod law_when;
 pub mod lead_answers;
 pub mod lint_registry;

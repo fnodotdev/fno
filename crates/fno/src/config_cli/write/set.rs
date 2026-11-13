@@ -512,7 +512,7 @@ mod tests {
         set_values(
             &[(
                 "dispatch.command_registry.check.invocation".to_string(),
-                "$fno:check".to_string(),
+                "$fno:review".to_string(),
             )],
             "global",
             None,

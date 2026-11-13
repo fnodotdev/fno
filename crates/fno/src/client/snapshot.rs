@@ -1606,11 +1606,21 @@ shoot a root whose fleet map has seats \
                 super::backlog_board::focus_card(b, focus.as_deref());
             }
             if !b.body.as_ref().is_some_and(|body| !body.lanes.is_empty()) {
-                return Err(
-                    "backlog view rendered empty: this root has no backlog nodes; \
-shoot a root seeded with nodes (scripts/ops/mux-demo-snapshot.sh seeds one)"
-                        .into(),
+                let read = b.inputs.as_ref().map_or_else(
+                    || "the gather never landed".to_string(),
+                    |i| {
+                        format!(
+                            "gather read {} rows, rows_error {:?}, errors {:?}",
+                            i.rows.len(),
+                            i.rows_error,
+                            b.errors
+                        )
+                    },
                 );
+                return Err(format!(
+                    "backlog view rendered empty ({read}); \
+shoot a root seeded with nodes (scripts/ops/mux-demo-snapshot.sh seeds one)"
+                ));
             }
         }
         Some(ViewKind::TabMenu) => {
@@ -1763,12 +1773,12 @@ pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
         | Some(ViewKind::MessagesAsksTopics)
         | None => {}
         Some(ViewKind::Decisions) => {
-            let node = format!("x-{}", 7145);
+            let node = "x-aaaa";
             let rows = serde_json::from_value(serde_json::json!([
-                {"decision_id":"d-1","decision":"Ship the Decisions tab whole","subject":node,"subject_node":node,"subject_pr":"","subject_text":"","decided_by":"jc","authority_source":"operator","quote":"build all of it","ts":"2026-11-03T09:00:00Z","lifecycle":"live","lane":"law","question":"Split the node into three PRs?"},
-                {"decision_id":"d-2","decision":"Hold CI until the ranked PRs land","subject":"fnodotdev/fno#4414","subject_node":"","subject_pr":"#4414","subject_text":"","decided_by":"7c1e9a02-1111-4222-8333-444455556666","decided_by_name":"iris","authority_source":"role","ts":"2026-11-02T15:30:00Z","lifecycle":"live","lane":"coord"},
-                {"decision_id":"d-3","decision":"Retry the push after the rate limit","subject":"push","subject_node":"","subject_pr":"","subject_text":"push","ts":"2026-10-30T11:00:00Z","lifecycle":"expired","lane":"unattributed"},
-                {"decision_id":"d-4","decision":"Use the shared pane for retract","subject":"mux","subject_node":"","subject_pr":"","subject_text":"mux","ts":"2026-10-28T08:15:00Z","lifecycle":"live","lane":"unattributed"}
+                {"decision_id":"d-1","decision":"Meter usage in whole units","subject":node,"subject_node":node,"subject_pr":"","subject_text":"","decided_by":"ada","authority_source":"operator","quote":"count whole units only","ts":"2026-11-03T09:00:00Z","lifecycle":"live","lane":"law","question":"Round partial units up?"},
+                {"decision_id":"d-2","decision":"Hold the build until the queue drains","subject":"example/app#118","subject_node":"","subject_pr":"#118","subject_text":"","decided_by":"7c1e9a02-1111-4222-8333-444455556666","decided_by_name":"bo","authority_source":"role","ts":"2026-11-02T15:30:00Z","lifecycle":"live","lane":"coord"},
+                {"decision_id":"d-3","decision":"Retry the sync after the rate limit","subject":"sync","subject_node":"","subject_pr":"","subject_text":"sync","ts":"2026-10-30T11:00:00Z","lifecycle":"expired","lane":"unattributed"},
+                {"decision_id":"d-4","decision":"Read tide data from one source","subject":"tide-source","subject_node":"","subject_pr":"","subject_text":"tide-source","ts":"2026-10-28T08:15:00Z","lifecycle":"live","lane":"unattributed"}
             ]))
             .map_err(|e| e.to_string())?;
             crate::client::decisions_view::open_rows(&mut view, rows);
@@ -1778,13 +1788,13 @@ pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
             // demo frame, and a throwaway server seeds no decisions. The
             // live tab reads the real listing through open()/adopt.
             let rows = serde_json::from_value(serde_json::json!([
-                {"decision_id":"d-10","decision":"A merge guard stops a PR only when it does not solve the problems its plan set out, or when the plan's own gates cannot run at the head the PR pins.","subject":"merge-guard-purpose","subject_node":"","subject_pr":"","subject_text":"merge-guard-purpose","decided_by":"jc","authority_source":"operator","ts":"2026-11-04T09:00:00Z","lifecycle":"live","lane":"law"},
-                {"decision_id":"d-11","decision":"A look approval rolls forward to every later head of the PR until merge. Only a substantive paint change re-arms the look.","subject":"look-rolls-forward","subject_node":"","subject_pr":"","subject_text":"look-rolls-forward","decided_by":"jc","authority_source":"operator","ts":"2026-11-06T10:00:00Z","lifecycle":"unscoped","lane":"coord"},
-                {"decision_id":"d-12","decision":"The public launch is v0.5.0. v0.4.7 seeds the fresh public repo and nothing else.","subject":"public-launch-version","subject_node":"","subject_pr":"","subject_text":"public-launch-version","decided_by":"jc","authority_source":"operator","ts":"2026-11-05T12:00:00Z","lifecycle":"live","lane":"law"},
-                {"decision_id":"d-13","decision":"Codex workers start from the repo root, not a worktree. A finished target worker is removed, and new build work gets a fresh spawn through the gate.","subject":"codex-worker-start","subject_node":"","subject_pr":"","subject_text":"codex-worker-start","decided_by":"jc","authority_source":"operator","ts":"2026-11-07T08:00:00Z","lifecycle":"live","lane":"law"},
-                {"decision_id":"d-14","decision":"Keep the ask short. One question, one decision word.","subject":"ask-length","subject_node":"","subject_pr":"","subject_text":"ask-length","decided_by":"jc","authority_source":"operator","ts":"2026-11-03T08:00:00Z","lifecycle":"live","lane":"law"},
-                {"decision_id":"d-15","decision":"The zai lanes hold sixteen workers; the machine caps live sessions at twenty-three.","subject":"zai-lanes-cap","subject_node":"","subject_pr":"","subject_text":"zai-lanes-cap","decided_by":"jc","authority_source":"operator","ts":"2026-11-02T08:00:00Z","lifecycle":"live","lane":"law"},
-                {"decision_id":"d-16","decision":"The older merge-guard wording, superseded by the purpose ruling.","subject":"merge-guard-purpose","subject_node":"","subject_pr":"","subject_text":"merge-guard-purpose","decided_by":"jc","authority_source":"operator","ts":"2026-11-01T09:00:00Z","lifecycle":"superseded","lane":"law"}
+                {"decision_id":"d-10","decision":"A merge guard stops a PR only when it does not solve the problems its plan set out, or when the plan's own gates cannot run at the head the PR pins.","subject":"merge-guard-purpose","subject_node":"","subject_pr":"","subject_text":"merge-guard-purpose","decided_by":"ada","authority_source":"operator","ts":"2026-11-04T09:00:00Z","lifecycle":"live","lane":"law"},
+                {"decision_id":"d-11","decision":"A look approval rolls forward to every later head of the PR until merge. Only a substantive paint change re-arms the look.","subject":"look-rolls-forward","subject_node":"","subject_pr":"","subject_text":"look-rolls-forward","decided_by":"ada","authority_source":"operator","ts":"2026-11-06T10:00:00Z","lifecycle":"unscoped","lane":"coord"},
+                {"decision_id":"d-12","decision":"The public launch is v0.5.0. v0.4.7 seeds the fresh public repo and nothing else.","subject":"public-launch-version","subject_node":"","subject_pr":"","subject_text":"public-launch-version","decided_by":"ada","authority_source":"operator","ts":"2026-11-05T12:00:00Z","lifecycle":"live","lane":"law"},
+                {"decision_id":"d-13","decision":"Codex workers start from the repo root, not a worktree. A finished target worker is removed, and new build work gets a fresh spawn through the gate.","subject":"codex-worker-start","subject_node":"","subject_pr":"","subject_text":"codex-worker-start","decided_by":"ada","authority_source":"operator","ts":"2026-11-07T08:00:00Z","lifecycle":"live","lane":"law"},
+                {"decision_id":"d-14","decision":"Keep the ask short. One question, one decision word.","subject":"ask-length","subject_node":"","subject_pr":"","subject_text":"ask-length","decided_by":"ada","authority_source":"operator","ts":"2026-11-03T08:00:00Z","lifecycle":"live","lane":"law"},
+                {"decision_id":"d-15","decision":"The zai lanes hold sixteen workers; the machine caps live sessions at twenty-three.","subject":"zai-lanes-cap","subject_node":"","subject_pr":"","subject_text":"zai-lanes-cap","decided_by":"ada","authority_source":"operator","ts":"2026-11-02T08:00:00Z","lifecycle":"live","lane":"law"},
+                {"decision_id":"d-16","decision":"The older merge-guard wording, superseded by the purpose ruling.","subject":"merge-guard-purpose","subject_node":"","subject_pr":"","subject_text":"merge-guard-purpose","decided_by":"ada","authority_source":"operator","ts":"2026-11-01T09:00:00Z","lifecycle":"superseded","lane":"law"}
             ]))
             .map_err(|e| e.to_string())?;
             crate::client::decisions_view::open_rows(&mut view, rows);

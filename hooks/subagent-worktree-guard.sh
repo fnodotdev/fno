@@ -1,21 +1,10 @@
 #!/usr/bin/env bash
-# fno hook: PreToolUse - subagent worktree guard
-# PreToolUse: refuse EnterWorktree from a subagent (policy:
-# crates/fno-agents/src/runtime/hook/subagent_worktree_guard.rs). Never exec a
-# candidate: an old build answers "unknown entry" and a nonzero PreToolUse
-# refuses every tool in the session. Run each, deployed binary first; relay
-# only exit 0.
-stdin=$(cat)
-errfile=$(mktemp -t swg-stderr.XXXXXX) || errfile=/dev/null
-trap 'rm -f "$errfile"' EXIT
-for bin in "$(command -v fno-agents 2>/dev/null)" "${FNO_AGENTS_BIN:-}" \
-    "$PWD"/crates/fno-agents/target/{release,debug}/fno-agents; do
-    [[ -n "$bin" && -x "$bin" ]] || continue
-    if out="$(printf '%s' "$stdin" | "$bin" hook subagent-worktree-guard 2>"$errfile")"; then
-        cat "$errfile" >&2
-        printf '%s\n' "$out"
-        exit 0
-    fi
-done
-echo "subagent-worktree-guard: no fno-agents could answer the hook command; allowing" >&2
+# fno hook: PreToolUse - subagent worktree guard (TOMBSTONE)
+# Retired: the one PreToolUse gate runs this in process
+# (hooks/pretool-gate.sh, crates/fno-agents/src/runtime/hook/gate.rs). This
+# no-op stub stays one release so sessions started before the merge - which
+# answer hook config from an init-time snapshot - do not brick every Bash
+# call on a missing script. Delete this stub in a later release.
+# Exit 0 always (hook result is communicated via stdout JSON).
 printf '%s\n' '{}'
+exit 0

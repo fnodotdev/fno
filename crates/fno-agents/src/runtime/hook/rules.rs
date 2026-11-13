@@ -43,7 +43,7 @@ pub fn run(event: &str) -> i32 {
             }
         }
         Rendered::Context(out) => {
-            println!("{out}");
+            crate::hook::emit_line(&out.to_string());
             0
         }
         Rendered::Allow => crate::hook::emit_allow(),

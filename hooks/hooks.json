@@ -1,16 +1,17 @@
 {
-  "description": "Abilities plugin hooks for target loops, context monitoring, and project context injection. Optional context/nudge/inject/announce hooks fail open fast under scripts/lib/hook-budget.sh, and skip entirely once hook_overloaded reads the load at 8x cores; their timeout entries here are backstops just above that internal budget. Gates that decide (target-stop-hook.sh, the PreToolUse guards, edit-integrity.sh, code-review-attest.sh, target-subagent-guard.sh, inject-control-drain-tool-boundary.sh) keep their own budgets; docs/hooks-fail-open.md owns the list.",
+  "description": "Abilities plugin hooks for target loops, context monitoring, and project context injection. Optional context/nudge/inject/announce hooks fail open fast under scripts/lib/hook-budget.sh, and skip entirely once hook_overloaded reads the load at 8x cores; their timeout entries here are backstops just above that internal budget. Gates that decide (target-stop-hook.sh, the PreToolUse guards, edit-integrity.sh, code-review-attest.sh, target-subagent-guard.sh, the pretool-gate.sh control drain) keep their own budgets; docs/hooks-fail-open.md owns the list.",
   "modules": [
     "./register.mjs"
   ],
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Edit|Write|Bash",
+        "matcher": "",
         "hooks": [
           {
             "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/write-gate.sh\""
+            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/pretool-gate.sh\"",
+            "timeout": 10
           }
         ]
       },
@@ -24,89 +25,11 @@
         ]
       },
       {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/join-partition-write-guard.sh\""
-          }
-        ]
-      },
-      {
         "matcher": "Write",
         "hooks": [
           {
             "type": "command",
             "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/plan-location-guard.sh\""
-          }
-        ]
-      },
-      {
-        "matcher": "Edit|Write|NotebookEdit|Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/lead-delegation-guard.sh\""
-          }
-        ]
-      },
-      {
-        "matcher": "SendMessage",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/send-message-guard.sh\""
-          }
-        ]
-      },
-      {
-        "matcher": "Edit|Write|Bash|Skill",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/rules-dispatch.sh\" pre-tool",
-            "timeout": 4
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/pretooluse-bash-dispatch.sh\""
-          }
-        ]
-      },
-      {
-        "matcher": "mcp__.*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/effect-guard-dispatch.sh\""
-          }
-        ]
-      },
-      {
-        "matcher": "EnterWorktree",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/subagent-worktree-guard.sh\""
-          }
-        ]
-      },
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-state.sh\" claude PreToolUse"
-          },
-          {
-            "type": "command",
-            "command": "PYTHONDONTWRITEBYTECODE=1 FNO_HOOK_CONTEXT=1 bash \"${CLAUDE_PLUGIN_ROOT}/hooks/inject-control-drain-tool-boundary.sh\"",
-            "timeout": 8
           }
         ]
       },

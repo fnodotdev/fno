@@ -2240,6 +2240,15 @@ fn post_install_steps(
         );
         failed.push("post-install groom agent refresh".into());
     }
+    // The gh proxy shim: shadows the machine's first-PATH gh so plain gh
+    // runs the quota broker. Best-effort: doctor names absence at read
+    // time, and the update's exit never rides on a PATH nicety.
+    match crate::gh_proxy::install_for_path() {
+        Ok(line) => println!("fno doctor update: {line}"),
+        Err(reason) => {
+            eprintln!("fno doctor update: WARNING: gh proxy shim not installed: {reason}")
+        }
+    }
     restage_plugin(resolved, failed, phases)
 }
 
