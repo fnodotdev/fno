@@ -962,9 +962,10 @@ fn is_outside_non_bot(io: &dyn Io, pull: &Value) -> bool {
     if pull.pointer("/user/type").and_then(Value::as_str) == Some("Bot") {
         return false;
     }
-    let permission = |slug: &str, login: &str| -> Result<String, String> {
+    let permission = |slug: &str, login: &str| -> crate::pr_admission::Permission {
         let path = crate::pr_admission::permission_path(slug, login);
-        crate::pr_admission::permission_of(&io.gh(&[path])?)
+        let raw = io.gh(&[path]).map_err(crate::pr_admission::Unreadable)?;
+        crate::pr_admission::permission_of(&raw)
     };
     matches!(
         crate::pr_admission::outside_reason(pull, &permission),
