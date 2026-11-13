@@ -64,6 +64,7 @@ pub mod claude_fallback;
 pub mod cli_args;
 #[cfg(feature = "full")]
 pub mod cli_hooks;
+pub mod cli_usage;
 #[cfg(feature = "full")]
 pub mod client;
 #[cfg(feature = "full")]

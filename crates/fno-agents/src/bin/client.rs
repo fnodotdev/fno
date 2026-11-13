@@ -138,139 +138,144 @@ const ALL_CLIENT_ACTIONS: &[&str] = &[
 
 fn main() {
     fno_agents::chokepoint_events::install();
+    fno_agents::usage_events::take_cli_start();
     let args: Vec<String> = std::env::args().skip(1).collect();
     // First, so a proxied gh call pays no other arm; transport-only.
     if let Some(code) = fno_agents::pr_status::adapter::gh_transport_door(&args) {
-        std::process::exit(code);
+        fno_agents::usage_events::exit_cli(code);
     }
     if args.first().map(String::as_str) == Some("backlog") {
-        std::process::exit(fno_agents::backlog::cli::run(&args[1..]));
+        fno_agents::usage_events::exit_cli(fno_agents::backlog::cli::run(&args[1..]));
     }
     // The ported target-family doors dispatch through family_doors: hidden
     // daemon-free leaves in the graph-get mold, never registered
     // ALL_CLIENT_ACTIONS tokens (the shrink law allows no added token).
     if let Some(code) = fno_agents::family_doors::client_dispatch(&args) {
-        std::process::exit(code);
+        fno_agents::usage_events::exit_cli(code);
     }
     if args.first().map(String::as_str) == Some("question-intake") {
-        std::process::exit(fno_agents::question_intake::run_question_intake());
+        fno_agents::usage_events::exit_cli(fno_agents::question_intake::run_question_intake());
     }
     if args.first().map(String::as_str) == Some("question-clear") {
-        std::process::exit(fno_agents::question_clear::run_question_clear());
+        fno_agents::usage_events::exit_cli(fno_agents::question_clear::run_question_clear());
     }
     // The SessionStart reconcile sweep execs here; see backlog::orphan_plans.
     if args.first().map(String::as_str) == Some("backlog-orphan-plans") {
-        std::process::exit(fno_agents::backlog::orphan_plans::run_orphan_plans(
+        fno_agents::usage_events::exit_cli(fno_agents::backlog::orphan_plans::run_orphan_plans(
             &args[1..],
         ));
     }
     // scripts/validate-plan.sh shells HERE and reads the E/W/X/O/U line
     // protocol back.
     if args.first().map(String::as_str) == Some("surface-check") {
-        std::process::exit(fno_agents::surface_check::run_surface_check(&args[1..]));
+        fno_agents::usage_events::exit_cli(fno_agents::surface_check::run_surface_check(
+            &args[1..],
+        ));
     }
     // executor-route: the parser door; body in executor_route.rs (registers no command).
     if args.first().map(String::as_str) == Some("executor-route") {
-        std::process::exit(fno_agents::executor_route::run(&args[1..]));
+        fno_agents::usage_events::exit_cli(fno_agents::executor_route::run(&args[1..]));
     }
     if args.first().map(String::as_str) == Some("wave") {
-        std::process::exit(fno_agents::wave::run(&args[1..]));
+        fno_agents::usage_events::exit_cli(fno_agents::wave::run(&args[1..]));
     }
     // cli/src/fno/pr/_sync_canonical.py transports HERE through command_call:
     // the post-merge sync + its catch-up sweep and staleness alarm, native.
     // Registers no command (the shrink law allows no new action).
     if args.first().map(String::as_str) == Some("sync-canonical") {
-        std::process::exit(fno_agents::sync_canonical::run_sync_canonical_command(
+        fno_agents::usage_events::exit_cli(fno_agents::sync_canonical::run_sync_canonical_command(
             &args[1..],
         ));
     }
     // PR-scoped callers resolve the local checkout from the head branch; transport-only.
     if args.first().map(String::as_str) == Some("pr-worktree") {
-        std::process::exit(fno_agents::pr_worktree::run());
+        fno_agents::usage_events::exit_cli(fno_agents::pr_worktree::run());
     }
     if args.first().map(String::as_str) == Some("do")
         && args.get(1).map(String::as_str) == Some("pr")
     {
-        std::process::exit(fno_agents::pr_front::run(&args[2..]));
+        fno_agents::usage_events::exit_cli(fno_agents::pr_front::run(&args[2..]));
     }
     if args.first().map(String::as_str) == Some("pr") {
-        std::process::exit(fno_agents::pr_front::run(&args[1..]));
+        fno_agents::usage_events::exit_cli(fno_agents::pr_front::run(&args[1..]));
     }
     if args.first() == Some(&"do".to_string()) && args.get(1) == Some(&"ci".to_string()) {
-        std::process::exit(fno_agents::ci_front::run(&args[2..]));
+        fno_agents::usage_events::exit_cli(fno_agents::ci_front::run(&args[2..]));
     }
     if args.first().map(String::as_str) == Some("do")
         && matches!(args.get(1).map(String::as_str), Some("show" | "diff"))
     {
-        std::process::exit(fno_agents::rev_front::run(&args[1..]));
+        fno_agents::usage_events::exit_cli(fno_agents::rev_front::run(&args[1..]));
     }
     // gh-cache, target-status: the early transport arms; client_transport.rs
     // holds their bodies and comments. worktree-reapable and launch-workdir
     // stay here: their own ports own the moves into their modules.
     if let Some(code) = fno_agents::client_transport::transport_early_arms(&args) {
-        std::process::exit(code);
+        fno_agents::usage_events::exit_cli(code);
     }
     // One dispatch site per family; the op tables live in the modules.
     if let Some(code) = fno_agents::worktree::client_dispatch(&args) {
-        std::process::exit(code);
+        fno_agents::usage_events::exit_cli(code);
     }
     if let Some(code) = fno_agents::launch_workdir::client_dispatch(&args) {
-        std::process::exit(code);
+        fno_agents::usage_events::exit_cli(code);
     }
     // `harness-probe` / `harness-matrix` / `harness-beat`: capability reads, transport-only.
     if matches!(
         args.first().map(String::as_str),
         Some("harness-probe" | "harness-matrix" | "harness-beat")
     ) {
-        std::process::exit(fno_agents::harness_reader::transport_doors(&args));
+        fno_agents::usage_events::exit_cli(fno_agents::harness_reader::transport_doors(&args));
     }
     // `harness-roster`: the one-roster JSON read.
     if args.first().map(String::as_str) == Some("harness-roster") {
-        std::process::exit(fno_agents::harness_roster::run_harness_roster(&args[1..]));
+        fno_agents::usage_events::exit_cli(fno_agents::harness_roster::run_harness_roster(
+            &args[1..],
+        ));
     }
     // `terminals`: the delivered-terminal vocabulary JSON read; Python's
     // ledger promotion gate and scoreboard fold read it like the roster.
     if args.first().map(String::as_str) == Some("terminals") {
-        std::process::exit(fno_agents::terminal_vocab::run_terminals(&args[1..]));
+        fno_agents::usage_events::exit_cli(fno_agents::terminal_vocab::run_terminals(&args[1..]));
     }
     if args.first().map(String::as_str) == Some("pending-session-row") {
-        std::process::exit(fno_agents::pending_session_row::run(&args[1..]));
+        fno_agents::usage_events::exit_cli(fno_agents::pending_session_row::run(&args[1..]));
     }
     if args.first().map(String::as_str) == Some("registry-commit") {
-        std::process::exit(fno_agents::registry_commit::run(&args[1..]));
+        fno_agents::usage_events::exit_cli(fno_agents::registry_commit::run(&args[1..]));
     }
     // hooks/context-run.sh is the only caller.
     if args.first().map(String::as_str) == Some("context-run") {
-        std::process::exit(fno_agents::context_run::run_context_run(&args[1..]));
+        fno_agents::usage_events::exit_cli(fno_agents::context_run::run_context_run(&args[1..]));
     }
     // A fire answers in microseconds; the runtime never builds for one.
     if args.first().map(String::as_str) == Some("hook") {
-        std::process::exit(fno_agents::hook::dispatch(&args[1..]));
+        fno_agents::usage_events::exit_cli(fno_agents::hook::dispatch(&args[1..]));
     }
     // `mail-hold`: transport-only (no client action - the shrink law allows
     // none); the mux server's keystroke arm and `lead cancel` are the
     // callers. The arm runs detached-safe and answers in microseconds, so
     // it dispatches before the runtime builds, with the other early arms.
     if args.first().map(String::as_str) == Some("mail-hold") {
-        std::process::exit(fno_agents::mail_hold::run_mail_hold(&args[1..]));
+        fno_agents::usage_events::exit_cli(fno_agents::mail_hold::run_mail_hold(&args[1..]));
     }
     // The resume receipt's argv door: transport-only, like mail-hold. The
     // forwarding leaf (cli/src/fno/resume_receipt_cli.py) shells the do
     // command here with the same options; the menu counter never sees
     // transport arms.
     if args.first().map(String::as_str) == Some("resume-receipt") {
-        std::process::exit(fno_agents::resume_receipt::run(&args[1..]));
+        fno_agents::usage_events::exit_cli(fno_agents::resume_receipt::run(&args[1..]));
     }
     // `delivery-evaluate`: the native evaluator behind the `fno delivery
     // evaluate` forward leaf; transport-only (no client action - the shrink
     // law allows none), answers in microseconds, so it dispatches before the
     // runtime builds, with the other early arms.
     if args.first().map(String::as_str) == Some("delivery-evaluate") {
-        std::process::exit(fno_agents::delivery_eval::run(&args[1..]));
+        fno_agents::usage_events::exit_cli(fno_agents::delivery_eval::run(&args[1..]));
     }
     // `mail-notify-self`: transport-only; the inject-mail-notify hook is the caller; early arm, answers in microseconds.
     if args.first().map(String::as_str) == Some("mail-notify-self") {
-        std::process::exit(fno_agents::mail_notify_self::run(&args[1..]));
+        fno_agents::usage_events::exit_cli(fno_agents::mail_notify_self::run(&args[1..]));
     }
     // `pane-rebind`: the mux workspace restore's registry rebind door;
     // transport-only (no client action - the shrink law allows no new
@@ -278,11 +283,11 @@ fn main() {
     // one registry transaction, so it dispatches before the runtime builds,
     // with the other early arms.
     if args.first().map(String::as_str) == Some("pane-rebind") {
-        std::process::exit(fno_agents::pane_rebind::run(&args[1..]));
+        fno_agents::usage_events::exit_cli(fno_agents::pane_rebind::run(&args[1..]));
     }
     // `state-root`: the seal-handshake door (agents_config::run_state_root_probe).
     if args.first().map(String::as_str) == Some("state-root") {
-        std::process::exit(fno_agents::agents_config::run_state_root_probe());
+        fno_agents::usage_events::exit_cli(fno_agents::agents_config::run_state_root_probe());
     }
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -290,45 +295,45 @@ fn main() {
         .expect("build runtime");
     // The Python evals phase reaches this arm through resolve_binary.
     if args.first().map(String::as_str) == Some("evals-arm") {
-        std::process::exit(fno_agents::evals_arm::run_evals_arm(&args[1..]));
+        fno_agents::usage_events::exit_cli(fno_agents::evals_arm::run_evals_arm(&args[1..]));
     }
     // `evals`: the leaf's family dispatch; the shrink law bars a new `run` arm (contract in evals.rs).
     if args.first().map(String::as_str) == Some("evals") {
-        std::process::exit(fno_agents::evals::run(&args[1..]));
+        fno_agents::usage_events::exit_cli(fno_agents::evals::run(&args[1..]));
     }
     // `evals-trend`: a transport-only fold (the shrink law allows no new
     // `run` arm); the module doc carries the contract.
     if args.first().map(String::as_str) == Some("evals-trend") {
-        std::process::exit(fno_agents::evals_trend::run_evals_trend(&args[1..]));
+        fno_agents::usage_events::exit_cli(fno_agents::evals_trend::run_evals_trend(&args[1..]));
     }
     // `evals-attempt`: the native attempt-eligibility verdict for eval history
     // rows. Transport-only, dispatched here like evals-trend: the
     // Python runner asks it per attempt at write time; the report re-asks it
     // over whole-history batches at read time.
     if args.first().map(String::as_str) == Some("evals-attempt") {
-        std::process::exit(fno_agents::eval_attempt::run_evals_attempt(&args[1..]));
+        fno_agents::usage_events::exit_cli(fno_agents::eval_attempt::run_evals_attempt(&args[1..]));
     }
     // `scoreboard`: the telemetry family's transport door, dispatched here
     // like evals-trend because the shrink law bars a new `run` arm. The
     // front door (`fno whoami scoreboard`) execs here; the parity goldens
     // replay the same spelling.
     if args.first().map(String::as_str) == Some("scoreboard") {
-        std::process::exit(fno_agents::scoreboard::run_scoreboard(&args[1..]));
+        fno_agents::usage_events::exit_cli(fno_agents::scoreboard::run_scoreboard(&args[1..]));
     }
     // `pr-park` and `pr-watch`: the two command families behind `fno do pr
     // watch`; both dispatch here like evals-arm because the shrink law bars
     // a new `run` arm. Their module docs carry the per-command contract.
     if args.first().map(String::as_str) == Some("pr-park") {
-        std::process::exit(fno_agents::pr_park::run(&args[1..]));
+        fno_agents::usage_events::exit_cli(fno_agents::pr_park::run(&args[1..]));
     }
     if args.first().map(String::as_str) == Some("pr-watch") {
-        std::process::exit(fno_agents::pr_watch::run(&args[1..]));
+        fno_agents::usage_events::exit_cli(fno_agents::pr_watch::run(&args[1..]));
     }
     // A spawn is admitted in process (spawn_seam) before run() parses it.
     let mut spawn_timing = fno_agents::spawn_seam::SpawnTiming::for_spawn(&args);
     let args = match fno_agents::spawn_seam::admit_spawn(args) {
         Ok(args) => args,
-        Err(code) => std::process::exit(code),
+        Err(code) => fno_agents::usage_events::exit_cli(code),
     };
     if let Some(timing) = spawn_timing.as_mut() {
         timing.record_seam();
@@ -337,10 +342,10 @@ fn main() {
     let command = args.first().cloned().unwrap_or_default();
     let args = match fno_agents::agents_seam::prepare(&command, args) {
         Ok(args) => args,
-        Err(code) => std::process::exit(code),
+        Err(code) => fno_agents::usage_events::exit_cli(code),
     };
     let code = rt.block_on(run(args, spawn_timing));
-    std::process::exit(code);
+    fno_agents::usage_events::exit_cli(code);
 }
 
 async fn run(
