@@ -1147,11 +1147,9 @@ pub struct AgentRow {
     /// test on it is the defect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub portal: Option<u8>,
-    /// The one-shot end word on a headless row (`finished`, `failed`,
-    /// `failed-to-start`), verbatim from the registry row. The detail line
-    /// renders it in place of the lane status, so a finished run reads as
-    /// ended - never as a stuck lane. Additive like `unmeasured`: an older
-    /// client decodes `None` and keeps the plain status word.
+    /// The one-shot end word on a headless row, verbatim from the
+    /// registry. The detail line renders it in place of the lane status.
+    /// Additive like `unmeasured`: an older client keeps the plain status.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<String>,
     /// In-TTL inside-leg badge; `None` = liveness-only (never a scraped guess).

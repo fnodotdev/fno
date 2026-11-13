@@ -1175,19 +1175,14 @@ pub struct RegistryEntry {
     /// (additive-optional, no schema bump).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exited_at: Option<String>,
-    /// WHY a one-shot headless run ended (additive-optional, the `exited_at`
-    /// precedent: no schema bump). The headless lane's parent stamps it with
-    /// the child's exit, and the reconcile sweep stamps
-    /// [`HeadlessResult::FailedToStart`] when no session ever bound. `None`
-    /// on every interactive row and on a terminal row whose writer predated
-    /// the field: absence means unknown, never "finished", because a silent
-    /// default would read a crashed run as a clean one. Same X3 passthrough
-    /// duty as every daemon-stamped field.
+    /// WHY a one-shot run ended: the parent lane stamps the child's exit,
+    /// the sweep stamps failed-to-start when no session ever bound. Absence
+    /// means unknown, never finished. Additive-optional (the exited_at
+    /// precedent), same X3 passthrough duty as every daemon-stamped field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<HeadlessResult>,
-    /// The child process exit code behind [`RegistryEntry::result`], when
-    /// the writer observed one (the parent lane's wait). `None` when the
-    /// row settled without an observed exit (the sweep arms): no invented
+    /// The child exit code behind [`RegistryEntry::result`], when observed
+    /// by the parent lane's wait; `None` = no observed exit, no invented
     /// number on the wire. Same additive-optional shape as `result`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,

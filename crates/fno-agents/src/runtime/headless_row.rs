@@ -1,22 +1,10 @@
-//! The headless row lifecycle: the parent lane's two registry stamps around a
-//! one-shot child.
-//!
-//! A `--mux` headless run keeps a registry row so the mux can show it. Before
-//! this module the row's truth lived entirely in the child's SessionStart
-//! report: the row minted `Live` with no pid, and nothing ever wrote the end,
-//! so a finished one-shot read as a live lane holding a seat. The parent is
-//! the only process that observes both ends of the run, so it stamps them:
-//! [`stamp_spawn`] records the child's pid (positive liveness evidence for
-//! the sweep) under the row's name, and [`stamp_exit`] writes the observed
-//! exit as [`crate::state::HeadlessResult`]. Both writes are keyed by name
-//! and both are best-effort: a registry that will not take the stamp must
-//! never fail a spawn that is otherwise fine.
-//!
-//! The child's SessionStart report JOINS the row by the same key
-//! (`find_row` matches `agent_self` against the row name), so the row the
-//! report restamps is the row these stamps wrote. A repeat of a verifier
-//! name grafts onto the older row by design (the report path's own rule),
-//! and this module follows it rather than minting a second row.
+//! The headless row lifecycle: the parent lane's two registry stamps around
+//! a one-shot child. The parent observes both ends of the run, so it stamps
+//! both: [`stamp_spawn`] records the child's pid (the sweep's positive death
+//! proof), [`stamp_exit`] writes the observed exit. Both writes are keyed by
+//! name, best-effort, and the child's SessionStart report joins the row by
+//! the same key, so a repeat of a verifier name grafts onto the older row
+//! by design, the report path's own rule.
 
 use crate::paths::AgentsHome;
 use crate::state::{self, HeadlessResult, RegistryEntry};

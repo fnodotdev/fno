@@ -163,11 +163,8 @@ impl ReaderState {
                 .unwrap_or_default(),
             None => Vec::new(),
         };
-        // A headless one-shot row now paints: it is its own kind, with the
-        // result word as its state line (running / finished / failed), so a
-        // spawn that just ended reads as ended - never as a stuck lane. The
-        // fno-truth badge overlay below only fills gaps for lane-bearing
-        // rows, which a one-shot never is.
+        // A headless one-shot row now paints as its own kind, with the
+        // result word as its state line: ended, never a stuck lane.
         // fno-truth junior badge: fill the no-badge/Idle gap for a
         // bg /target worker between turns from its claim + loop_check recency.
         if let Some(raw) = &self.reg_raw {

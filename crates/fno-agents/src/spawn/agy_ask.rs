@@ -423,8 +423,7 @@ fn run_agy(
     cmd.args(&argv[1..]);
     cmd.current_dir(popen_cwd);
     crate::claims::stamp_command_env(&mut cmd, agent_self, "agy", None);
-    // The one-shot identity every consumer keys on (the SessionStart report
-    // carries it so a mint stamps the row's substrate).
+    // The one-shot identity every consumer keys on.
     cmd.env("FNO_AGENT_SUBSTRATE", "headless");
     // A `[sandbox] provider = "devcontainer"` spawn runs this lane in the sandbox.
     let mut cmd = crate::sandbox_launch::sandboxed(cmd);

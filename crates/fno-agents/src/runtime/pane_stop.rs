@@ -89,11 +89,9 @@ pub(crate) fn stop_pane_process_confirmed(e: &RegistryEntry) -> PaneStop {
     stop_pane_process_confirmed_with(e, &production_seams())
 }
 
-/// Identified thread views retire by session. Old mux rows without a
-/// session identity need the same process proof as pane workers. A
-/// headless one-shot row is never a pane row, whoever minted it and
+/// A headless one-shot row is never a pane row, whoever minted it and
 /// whatever stale mux ref it carries: the one-shot contract ends the run,
-/// so the stop arm has nothing to prove and rm retires the row directly.
+/// so the stop arm has nothing to prove and rm retires it without --force.
 pub(crate) fn requires_pane_stop(e: &RegistryEntry) -> bool {
     !e.is_headless_once()
         && (e.substrate.as_deref() == Some("pane")

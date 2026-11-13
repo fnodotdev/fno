@@ -133,8 +133,7 @@ fn run_turn(
     cmd.stderr(Stdio::piped());
     cmd.current_dir(cwd);
     crate::claims::stamp_command_env(&mut cmd, Some(name), "zcode", session);
-    // The one-shot identity every consumer keys on (the SessionStart report
-    // carries it so a mint stamps the row's substrate).
+    // The one-shot identity every consumer keys on.
     cmd.env("FNO_AGENT_SUBSTRATE", "headless");
     // Own process group so SIGTERM/SIGKILL/SIGINT reach zcode's children.
     unsafe {

@@ -134,9 +134,7 @@ pub fn rows(layout: &Layout, board: &Board, now_secs: u64, agents_open: bool) ->
         };
         let state = agent_lattice_state(a);
         let harness = a.harness.as_deref().unwrap_or("pane");
-        // A one-shot's end word outranks the lane status in the detail
-        // line: "finished" / "failed" / "failed-to-start" reads as ended,
-        // never as a stuck lane.
+        // A one-shot's end word outranks the lane status: ended, not stuck.
         let status = a.result.as_deref().unwrap_or(status_long(state));
         out.push(Row::Item {
             label: a.name.clone(),

@@ -270,20 +270,15 @@ pub(crate) fn served_word(
 
 use crate::events::EventEmitter;
 
-/// How long a quiet headless row waits inside the settle window before the
-/// sweep ends it. Long enough that a healthy one-shot's transcript or log
-/// activity answers Alive first (the window never fires on a run that
-/// writes anything); short enough that a stuck row does not hold a seat
-/// and a lane for hours. Anchored on the row's NEWEST clock: the spawn
-/// stamp, or a report's arrival for a row the parent never stamped.
+/// How long a quiet headless row waits before the sweep ends it: long
+/// enough that a healthy one-shot's transcript answers Alive first, short
+/// enough that a stuck row does not hold a seat for hours.
 pub(crate) const HEADLESS_SETTLE_WINDOW_MS: i64 = 10 * 60 * 1000;
 
-/// The end word a quiet headless row settles under, decided only from the
-/// row's own facts: did a harness session ever bind (`failed-to-start`
-/// when not, past the window) or did the run start and go quiet
-/// (`finished`). `None` while inside the window. An unparseable clock
-/// (a legacy row with an empty created_at) keeps the row: age must be
-/// provable to settle on it.
+/// The end word a quiet headless row settles under: no session ever bound
+/// (`failed-to-start`) past the window, else a started run gone quiet
+/// (`finished`). `None` inside the window. An unparseable clock keeps the
+/// row: age must be provable to settle on it.
 fn headless_settle_word(entry: &RegistryEntry, now_ms: i64) -> Option<state::HeadlessResult> {
     let newest = [
         crate::event_store::parse_rfc3339_ms(&entry.created_at),
@@ -404,18 +399,12 @@ where
             out.deferred = entries.len() - i;
             break;
         }
-        // A one-shot headless run's row ends with its child's exit. The
-        // parent lane stamps the observed exit (`headless_row::stamp_exit`);
-        // this arm settles what the parent never observed - a parent that
-        // died mid-run, a lane with no parent-side stamp, a run that never
-        // came up. Neither existing bucket can own it: a minted headless
-        // row carries a short_id (the ask bucket skips it) and no mux ref,
-        // so the probe path's pid_decides never fires either - which is
-        // exactly how a finished one-shot read as a live lane holding a
-        // seat forever. Silence past the window is the evidence here, not
-        // coming-up: a one-shot has no readiness to wait for, and the
-        // window anchors on the row's newest clock (spawn or report) so a
-        // late-but-live report keeps resetting it.
+        // A one-shot headless row ends with its child's exit. The parent
+        // lane stamps the observed exit; this arm settles what the parent
+        // never observed. Neither existing bucket can own it: a minted
+        // headless row carries a short_id (the ask bucket skips it) and no
+        // mux ref, so the probe path's pid_decides never fires either -
+        // exactly how a finished one-shot read as a live lane forever.
         if entry.is_headless_once() {
             let measured = liveness(entry);
             let settle = if measured == RowLiveness::Alive {

@@ -2945,9 +2945,7 @@ pub fn dispatch_claude_headless(
     }
     crate::claims::stamp_command_env(&mut cmd, Some(name), "claude", None);
     cmd.env("FNO_AGENT_FROM", from_name);
-    // The one-shot identity every consumer keys on: the SessionStart report
-    // carries it so a mint stamps the row's substrate, and birth's attended
-    // read inherits it. The parent-side row stamps below key on it too.
+    // The one-shot identity every consumer keys on.
     cmd.env("FNO_AGENT_SUBSTRATE", "headless");
     // No row unless the caller opted in to watch: the opt-in is this spawn's
     // alone, so the child never passes it on to a spawn of its own.
@@ -2992,11 +2990,16 @@ pub fn dispatch_claude_headless(
         }
         Err(e) => return AskOutcome::err(e.to_string(), 127),
     };
-    // The parent saw the child come up: stamp the row before the wait, so a
-    // row exists from the first moment and carries the pid the sweep can
-    // prove dead later. Without --mux the run keeps no row and stamps none.
+    // Stamp the row before the wait, so it exists from the first moment
+    // and carries the pid; without --mux the run keeps no row.
     if keep_row {
-        crate::headless_row::stamp_spawn(home, name, "claude", &cwd.to_string_lossy(), child.id());
+        crate::runtime::headless_row::stamp_spawn(
+            home,
+            name,
+            "claude",
+            &cwd.to_string_lossy(),
+            child.id(),
+        );
     }
 
     // Drain stdout/stderr on their own threads so a filling pipe can never
@@ -3110,7 +3113,7 @@ pub fn dispatch_claude_headless(
     // ERROR the child's state is unknown, so `observed` is None and no exit
     // stamp rides: the sweep settles the row instead.
     if keep_row {
-        crate::headless_row::stamp_exit(home, name, observed);
+        crate::runtime::headless_row::stamp_exit(home, name, observed);
     }
     outcome
 }

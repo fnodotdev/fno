@@ -445,8 +445,7 @@ fn run_gemini(
         cmd.current_dir(cwd);
     }
     crate::claims::stamp_command_env(&mut cmd, agent_self, "gemini", bound_session_id);
-    // The one-shot identity every consumer keys on (the SessionStart report
-    // carries it so a mint stamps the row's substrate).
+    // The one-shot identity every consumer keys on.
     cmd.env("FNO_AGENT_SUBSTRATE", "headless");
     // A `[sandbox] provider = "devcontainer"` spawn runs this lane in the sandbox.
     let mut cmd = crate::sandbox_launch::sandboxed(cmd);
