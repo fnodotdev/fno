@@ -1226,7 +1226,7 @@ mod tests {
         // dir; pin both to the rig so the label resolves hermetically.
         std::env::set_var("FNO_STATE_DIR", rig._dir.path());
         let hash = "q-1a2b3c4d";
-        let graph = crate::backlog::database_path(crate::backlog::graph_get::default_graph_path());
+        let graph = crate::backlog::database_path(&crate::backlog::graph_get::default_graph_path());
         std::fs::create_dir_all(graph.parent().unwrap()).unwrap();
         let conn = rusqlite::Connection::open(&graph).unwrap();
         conn.execute_batch(

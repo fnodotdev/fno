@@ -1532,7 +1532,7 @@ fn client_spawn_devcontainer_sandboxes_the_headless_lane() {
         "{calls} {methods:?}"
     );
 
-    let (_, calls, methods, _) = run("none", &["--once"], "0");
+    let (_, calls, methods, _) = run("none", &["--once"], "0", "0");
     assert!(calls.is_empty(), "none never sandboxes: {calls}");
     assert!(
         !methods.iter().any(|m| m == "agent.sandbox-plan"),
