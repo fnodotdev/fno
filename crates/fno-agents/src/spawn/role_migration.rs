@@ -77,7 +77,7 @@ fn vocabulary(text: &str) -> String {
         .replace("role_succession_reverted", "team_succession_reverted")
         .replace("role_ledger", "team_ledger")
         .replace("term_eval", "lead_eval")
-        .replace("fno agents lead", "fno agents org")
+        .replace("fno agents lead", "fno agents hq")
 }
 
 #[doc(hidden)]
@@ -723,14 +723,14 @@ pub fn contains_legacy_vocabulary(text: &str) -> bool {
 
 pub fn retired_verb(verb: &str) -> Option<&'static str> {
     match verb {
-        "king" => Some("fno agents org <action>"),
-        "king-checkin" => Some("fno agents org checkin"),
-        "king-history" => Some("fno agents org history"),
-        "crown" => Some("fno agents org promote <session> --scope <scope>"),
-        "court" => Some("fno agents org"),
-        "court-fold" => Some("fno agents org fold"),
-        "court-orphans" => Some("fno agents org vacancies"),
-        "reign-ledger" => Some("fno agents org rundown"),
+        "king" => Some("fno agents hq <action>"),
+        "king-checkin" => Some("fno agents hq checkin"),
+        "king-history" => Some("fno agents hq history"),
+        "crown" => Some("fno agents hq promote <session> --scope <scope>"),
+        "court" => Some("fno agents hq"),
+        "court-fold" => Some("fno agents hq chart fold"),
+        "court-orphans" => Some("fno agents hq chart vacancies"),
+        "reign-ledger" => Some("fno agents hq chart rundown"),
         _ => None,
     }
 }
@@ -773,7 +773,7 @@ mod tests {
         );
         let mut conflict = serde_json::json!({"crown_scope":"old","role_scope":"new"});
         assert!(migrate_value(&mut conflict, "").is_err());
-        assert_eq!(retired_verb("king"), Some("fno agents org <action>"));
+        assert_eq!(retired_verb("king"), Some("fno agents hq <action>"));
         assert_eq!(retired_verb("lead"), None);
         let mut node = serde_json::json!({"source_crown":"L1 project", "title":"preserved"});
         assert!(migrate_node_provenance(&mut node).unwrap());

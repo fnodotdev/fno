@@ -19,7 +19,7 @@ The control plane runs every scheduled loop below. One row names its scheduler, 
 | `retire` | `daemon` | 300 | always | `control_plane_tick` | `fno agents loops table` |
 | `machine_watch` | `daemon` | 300 | always | `control_plane_tick` | `fno agents loops table` |
 | `arm_watch` | `daemon` | 300 | always | `control_plane_tick` | `fno agents loops table` |
-| `lead_settle` | `daemon` | 300 | always | `control_plane_tick` | `fno agents org --nodes` |
+| `lead_settle` | `daemon` | 300 | always | `control_plane_tick` | `fno agents hq --nodes` |
 | `provider_cap` | `daemon` | 120 | always | `control_plane_tick` | `fno agents loops table` |
 | `slot_cutover` | `daemon` | 120 | `slot_cutover.enabled` | `control_plane_tick` | `fno agents loops table` |
 | `slot_login_health` | `daemon` | 120 | always | `control_plane_tick` | `fno agents loops table` |
@@ -99,7 +99,7 @@ Start: daemon fires, every 300s. End: a `control_plane_tick` receipt lands in th
 
 ### lead_settle
 
-Start: daemon fires, every 300s. End: a `control_plane_tick` receipt lands in the journal. If it looks wrong, run `fno agents org --nodes`. If the row reads red, its `cause=` suffix names the next read.
+Start: daemon fires, every 300s. End: a `control_plane_tick` receipt lands in the journal. If it looks wrong, run `fno agents hq --nodes`. If the row reads red, its `cause=` suffix names the next read.
 
 ### provider_cap
 

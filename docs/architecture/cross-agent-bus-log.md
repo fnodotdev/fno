@@ -102,7 +102,7 @@ The rule:
 
 - exactly one live titled row over that scope: deliver live to it.
 - none: refuse, exit 16, queue nothing. A project queue has a future drain that reads it as that project. A vacant role has no such reader. Queueing strands the message at the address.
-- more than one: refuse, naming both holders. That is the split role `fno agents org` already reports. It is not a multiplicity to pick between, so there is no `--any` tie-break here.
+- more than one: refuse, naming both holders. That is the split role `fno agents hq` already reports. It is not a multiplicity to pick between, so there is no `--any` tie-break here.
 
 `resolve_to_lead` returns the holder names as a plain list. A list has no illegal state to guard, so unlike `ProjectResolution` there is no construction-time check. The one caller reads the three outcomes off the length.
 

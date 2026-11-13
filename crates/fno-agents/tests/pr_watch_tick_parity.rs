@@ -27,36 +27,15 @@ if [ "${PR_WATCH_TEST_GH_DELAY:-0}" -gt 0 ]; then sleep "$PR_WATCH_TEST_GH_DELAY
 case " $args " in *" -i "*) printf 'HTTP/2.0 200 OK\r\n\r\n' ;; esac
 case "$args" in
   *rate_limit*) echo '{"resources":{"graphql":{"remaining":4000,"reset":1893456000},"core":{"remaining":4000,"reset":1893456000}}}' ;;
-  *repos/o/r/pulls/7/reviews*) echo '[{"user":{"login":"bot[bot]"},"submitted_at":"<<REVIEWED>>","state":"COMMENTED"}]' ;;
+  *repos/o/r/pulls/7/reviews*) echo '[{"user":{"login":"bot[bot]"},"submitted_at":"2026-10-30T00:00:00Z","state":"COMMENTED"}]' ;;
   *repos/o/r/issues/7/comments*) echo '[]' ;;
   *repos/o/r/pulls/8/reviews*|*repos/o/r/issues/8/comments*) echo '[]' ;;
-  *repos/o/r/pulls/7*) echo '{"number":7,"state":"open","merged_at":null,"merged":false,"draft":false,"created_at":"<<CREATED>>","head":{"sha":"aaa","ref":"f"},"base":{"ref":"main"},"html_url":"https://github.com/o/r/pull/7","merge_commit_sha":null}' ;;
-  *repos/o/r/pulls/8*) echo '{"number":8,"state":"closed","merged_at":"<<REVIEWED>>","merged":true,"draft":false,"created_at":"<<CREATED>>","head":{"sha":"aaa","ref":"f"},"base":{"ref":"main"},"html_url":"https://github.com/o/r/pull/8","merge_commit_sha":"abc"}' ;;
-  *repos/o/r/pulls*) echo '[{"number":7,"state":"open","draft":false,"created_at":"<<CREATED>>"}]' ;;
+  *repos/o/r/pulls/7*) echo '{"number":7,"state":"open","merged_at":null,"merged":false,"draft":false,"created_at":"__CREATED_AT__","head":{"sha":"aaa","ref":"f"},"base":{"ref":"main"},"html_url":"https://github.com/o/r/pull/7","merge_commit_sha":null}' ;;
+  *repos/o/r/pulls/8*) echo '{"number":8,"state":"closed","merged_at":"__MERGED_AT__","merged":true,"draft":false,"created_at":"__CREATED_AT__","head":{"sha":"aaa","ref":"f"},"base":{"ref":"main"},"html_url":"https://github.com/o/r/pull/8","merge_commit_sha":"abc"}' ;;
+  *repos/o/r/pulls*) echo '[{"number":7,"state":"open","draft":false,"created_at":"__CREATED_AT__"}]' ;;
   *) echo "{}" ;;
 esac
 "#;
-
-/// The fixture's clock-relative stamps. The verdicts depend on the age
-/// RELATIONSHIPS (the review is newer than the watermark, the PR sits inside
-/// the tick's 14-day max-age horizon), never on the wall clock: fixed dates
-/// aged past that horizon on 2026-11-13 and parked the fixture PR, so the
-/// golden read acted=0 instead of acted=1. Stamps relative to now keep every
-/// relationship and cannot age out.
-fn fixture_stamp(age: chrono::Duration) -> String {
-    (chrono::Utc::now() - age)
-        .format("%Y-%m-%dT%H:%M:%SZ")
-        .to_string()
-}
-
-fn write_stub(bin: &std::path::Path) {
-    let created = fixture_stamp(chrono::Duration::hours(24));
-    let reviewed = fixture_stamp(chrono::Duration::hours(12));
-    let stub = GH_STUB
-        .replace("<<CREATED>>", &created)
-        .replace("<<REVIEWED>>", &reviewed);
-    std::fs::write(bin, stub).unwrap();
-}
 
 struct Case {
     label: &'static str,
@@ -117,15 +96,31 @@ fn write_case(root: &Path, case: &Case, leg: &str) -> Home {
     std::fs::create_dir_all(state.join("state")).unwrap();
     std::fs::create_dir_all(&bin).unwrap();
     let stub = bin.join("gh");
-    write_stub(&stub);
+    // The stub PRs' dates are relative to the run: a fixed created_at aged
+    // past the tick's 14-day max_age default on 2026-11-12 and parked every
+    // fixture PR, so "new review fires" printed acted=0 from then on. Three
+    // days back stays inside the window even with CI clock skew; the merged
+    // stamp lands after the created one to stay plausible.
+    let created = (chrono::Utc::now() - chrono::Duration::days(3))
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+    let merged = (chrono::Utc::now() - chrono::Duration::days(2))
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+    let gh_stub = GH_STUB
+        .replace("__CREATED_AT__", &created)
+        .replace("__MERGED_AT__", &merged);
+    std::fs::write(&stub, gh_stub).unwrap();
     let fire = bin.join("fire-ok");
     std::fs::write(&fire, "#!/bin/sh\necho '{\"is_error\": false}'\n").unwrap();
     use std::os::unix::fs::PermissionsExt;
     for path in [&stub, &fire] {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
+    // The stub PR opened 2026-10-29; a wide max_age_days keeps the max-age
+    // park off, or the goldens change on the day the fixture ages out.
     let config = format!(
-        "state_dir = \"{}\"\n\n[pr_watch]\nenabled = {}\ninterval_seconds = 600\n\n[autonomy]\nenabled = true\n\n[recovery]\nenabled = false\n\n[evals]\nschedule_days = 0\n\n[review]\ngithub_apps = [\"bot\"]\n",
+        "state_dir = \"{}\"\n\n[pr_watch]\nenabled = {}\ninterval_seconds = 600\nmax_age_days = 36500\n\n[autonomy]\nenabled = true\n\n[recovery]\nenabled = false\n\n[evals]\nschedule_days = 0\n\n[review]\ngithub_apps = [\"bot\"]\n",
         state.display(), case.enabled
     );
     std::fs::write(state.join("config.toml"), &config).unwrap();

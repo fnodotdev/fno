@@ -141,7 +141,7 @@ pub fn enforce(pre: &[Value], post: &[Value], cap: Option<usize>) -> Result<(), 
              An epic stays small enough to finish, so new work starts a new epic. Next: \
              fno backlog idea \"EPIC: <theme>\" --type epic --difficulty <low|medium|high>, \
              then point this write at the new epic id. If a lead leads '{epic}', it adds the \
-             new epic to its own team: fno agents org promote <its handle> --scope <each epic \
+             new epic to its own team: fno agents hq promote <its handle> --scope <each epic \
              it \
              holds> --scope '<new-epic-id>'. That works for an epic the lead's own session \
              created. Any other epic needs a team that contains both: ask that lead."

@@ -15,6 +15,14 @@ pub(super) type Segment = Vec<String>;
 pub(super) struct Unbalanced;
 
 const SEPARATORS: &[&str] = &[";", ";;", "&&", "||", "|", "|&", "&", ")"];
+
+/// A separator token, including the lexer's glued punctuation runs: `);`
+/// in `X=$(pwd); git push` is one token, and reading it as a word kept the
+/// push off command position.
+fn is_separator(tok: &str) -> bool {
+    SEPARATORS.contains(&tok)
+        || (tok.chars().all(|c| ";&|()".contains(c)) && tok.chars().any(|c| ";&|)".contains(c)))
+}
 // Keywords occupy command position, so the real command is the next token:
 // `! git push origin main` and `if git push ...; then` hide nothing.
 const KEYWORDS: &[&str] = &[
@@ -337,6 +345,16 @@ pub(super) fn command_segments(command: &str) -> Result<Vec<Segment>, Unbalanced
     command_segments_at(command, 0)
 }
 
+/// The segments of `command` without the `$( ... )` bodies, which run in a
+/// subshell: a `cd` or assignment there never reaches the next command.
+pub(super) fn top_level_segments(command: &str) -> Vec<Segment> {
+    let mut text = command.to_string();
+    for body in substitution_bodies(command) {
+        text = text.replace(&format!("$({body})"), "SUBST");
+    }
+    command_segments_at(&text, 3).unwrap_or_default()
+}
+
 fn command_segments_at(command: &str, depth: usize) -> Result<Vec<Segment>, Unbalanced> {
     static CONT: OnceLock<Regex> = OnceLock::new();
     let command = re(&CONT, r"\\\r?\n").replace_all(command, "");
@@ -386,7 +404,7 @@ fn segments_one_line(line: &str) -> Result<Vec<Segment>, Unbalanced> {
     let mut current: Segment = Vec::new();
     let mut at_start = true;
     for tok in tokens {
-        if SEPARATORS.contains(&tok.as_str()) {
+        if is_separator(&tok) {
             if !current.is_empty() {
                 segments.push(std::mem::take(&mut current));
             }
@@ -577,6 +595,15 @@ pub(super) fn writes_a_file(tokens: &[String]) -> bool {
 /// matter here: a body fed to a shell runner executes either way, so the
 /// script door gates quoted bodies too (`bash <<'EOF'`).
 pub(super) fn heredoc_bodies(command: &str) -> Vec<String> {
+    heredocs(command)
+        .into_iter()
+        .map(|(_, body)| body)
+        .filter(|body| !body.is_empty())
+        .collect()
+}
+
+/// Each heredoc as `(opener line, body)`, in command order.
+fn heredocs(command: &str) -> Vec<(String, String)> {
     let lines = split_lines_outside_quotes(command);
     let mut out = Vec::new();
     let mut i = 0;
@@ -585,6 +612,7 @@ pub(super) fn heredoc_bodies(command: &str) -> Vec<String> {
             i += 1;
             continue;
         };
+        let opener = lines.get(i).cloned().unwrap_or_default();
         let mut body: Vec<&str> = Vec::new();
         i += 1;
         while i < lines.len() {
@@ -599,11 +627,50 @@ pub(super) fn heredoc_bodies(command: &str) -> Vec<String> {
                 break;
             }
         }
-        if !body.is_empty() {
-            out.push(body.join("\n"));
-        }
+        out.push((opener, body.join("\n")));
     }
     out
+}
+
+/// Every heredoc that writes a file, as `(target token, body)` in command
+/// order: `cat > s.sh <<'EOF'`, `cat <<EOF >> s.sh`, `tee s.sh <<EOF`. The
+/// target token is the lexer's spelling, so it equals the token in the
+/// writer's segment.
+pub(super) fn heredoc_writes(command: &str) -> Vec<(String, String)> {
+    let lex = Lex {
+        punct: true,
+        comments: true,
+    };
+    heredocs(command)
+        .into_iter()
+        .filter_map(|(opener, body)| {
+            let target = shlex_lex(&opener, lex).and_then(|toks| write_target(&toks))?;
+            Some((target, body))
+        })
+        .collect()
+}
+
+/// The file a token run writes through `>`/`>>` or `tee`, if any.
+pub(super) fn write_target(tokens: &[String]) -> Option<String> {
+    for (idx, tok) in tokens.iter().enumerate() {
+        let next = tokens.get(idx + 1)?;
+        if REDIRECT_TOKENS.contains(&tok.as_str()) {
+            let dup = (tok == ">&" || tok == "&>")
+                && (is_digits(next) || is_digits(next.trim_end_matches('-')));
+            if !dup {
+                return Some(next.clone());
+            }
+        }
+        if base_lower(tok) == "tee" {
+            return tokens
+                .get(idx + 1..)
+                .unwrap_or_default()
+                .iter()
+                .find(|t| !t.starts_with('-'))
+                .cloned();
+        }
+    }
+    None
 }
 
 /// The joined text of every segment that directly follows a `|` or `|&`.
@@ -670,7 +737,7 @@ fn pipe_fed_on_line(line: &str) -> Vec<String> {
     let mut at_start = true;
     let mut piped = false;
     for tok in tokens {
-        if SEPARATORS.contains(&tok.as_str()) {
+        if is_separator(&tok) {
             if !current.is_empty() {
                 if piped {
                     out.push(current.join(" "));
@@ -678,7 +745,7 @@ fn pipe_fed_on_line(line: &str) -> Vec<String> {
                 current.clear();
             }
             at_start = true;
-            piped = tok == "|" || tok == "|&";
+            piped = tok.ends_with("|&") || (tok.ends_with('|') && !tok.ends_with("||"));
             continue;
         }
         if at_start && KEYWORDS.contains(&tok.as_str()) {
@@ -753,6 +820,10 @@ mod tests {
             ["git status", "gh pr merge 1"]
         );
         assert_eq!(segs("git push \\\norigin main"), ["git push origin main"]);
+        // The lexer glues `);` into one token; it still separates.
+        assert!(segs("X=$(pwd); git push origin main")
+            .iter()
+            .any(|s| s == "git push origin main"));
         assert_eq!(
             segs("git push origin feat # main"),
             ["git push origin feat"]

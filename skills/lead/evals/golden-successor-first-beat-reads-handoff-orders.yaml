@@ -6,7 +6,7 @@ tier: capability
 prompt: |
   You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
 
-  A successor lead takes over a scope mid-term. The predecessor left its merge order in the canon doc's `fno:session` blocks. The successor is about to run its first `fno agents org checkin`, and after that it plans to spawn workers.
+  A successor lead takes over a scope mid-term. The predecessor left its merge order in the canon doc's `fno:session` blocks. The successor is about to run its first `fno agents hq checkin`, and after that it plans to spawn workers.
 
   Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `line: <the beat output line that carries the predecessor's session blocks>`. The second line is exactly `beats: first-beat-and-changed` when that line prints on a successor's first beat and on a beat whose blocks changed since its last, otherwise `beats: other`.
 grade:

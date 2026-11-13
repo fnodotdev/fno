@@ -10374,32 +10374,32 @@ async fn prefix_reorder_sends_the_active_tab_id_and_delta() {
 #[tokio::test]
 async fn keys_modal_executed_resize_arms_the_repeat_window() {
     // codex P2 parity: a resize run from the which-key modal arms the repeat
-    // window, so a following bare H repeats without prefix - exactly as a
-    // typed prefix+H would (the scanner never saw the modal keystroke).
+    // window, so a following bare J repeats without prefix - exactly as a
+    // typed prefix+J would (the scanner never saw the modal keystroke).
     let mut v = two_pane_view();
     v.term = (40, 80);
     let mut scanner = Scanner::default();
     let mut carry = Vec::new();
     let mut buf: Vec<u8> = Vec::new();
     v.open_keys_modal();
-    keys_modal_keys(&mut v, &mut scanner, b"H", &mut buf)
+    keys_modal_keys(&mut v, &mut scanner, b"J", &mut buf)
         .await
         .unwrap();
     buf.clear();
-    handle_stdin(&mut v, &mut scanner, &mut carry, b"H", &mut buf)
+    handle_stdin(&mut v, &mut scanner, &mut carry, b"J", &mut buf)
         .await
         .unwrap();
     let mut cur = std::io::Cursor::new(buf);
     match crate::proto::read_msg_sync::<_, ClientMsg>(&mut cur).unwrap() {
-        ClientMsg::Command(Command::ResizeDir(crate::tree::Dir::Left)) => {}
-        other => panic!("bare H after a modal resize should repeat-resize, got {other:?}"),
+        ClientMsg::Command(Command::ResizeDir(crate::tree::Dir::Down)) => {}
+        other => panic!("bare J after a modal resize should repeat-resize, got {other:?}"),
     }
 }
 #[tokio::test]
 async fn mouse_scroll_disarms_the_resize_repeat_window() {
     // codex P2: a scroll (like a click) is "other input" - it disarms the
     // window in the mouse pre-pass, before the report is stripped and the
-    // scanner runs, so a following bare H forwards to the pane instead of
+    // scanner runs, so a following bare J forwards to the pane instead of
     // silently resizing. (A wheel, unlike a chrome click, opens no overlay
     // that would swallow the next key, so it isolates the disarm wiring.)
     let mut v = two_pane_view();
@@ -10407,8 +10407,8 @@ async fn mouse_scroll_disarms_the_resize_repeat_window() {
     let mut scanner = Scanner::default();
     let mut carry = Vec::new();
     let mut buf: Vec<u8> = Vec::new();
-    // Arm via a typed prefix+H.
-    handle_stdin(&mut v, &mut scanner, &mut carry, b"\x02H", &mut buf)
+    // Arm via a typed prefix+J.
+    handle_stdin(&mut v, &mut scanner, &mut carry, b"\x02J", &mut buf)
         .await
         .unwrap();
     // A wheel-down SGR report (button 65) disarms.
@@ -10422,20 +10422,20 @@ async fn mouse_scroll_disarms_the_resize_repeat_window() {
     )
     .await
     .unwrap();
-    // A bare H now forwards to the pane, not a resize.
+    // A bare J now forwards to the pane, not a resize.
     buf.clear();
-    handle_stdin(&mut v, &mut scanner, &mut carry, b"H", &mut buf)
+    handle_stdin(&mut v, &mut scanner, &mut carry, b"J", &mut buf)
         .await
         .unwrap();
     let mut cur = std::io::Cursor::new(buf);
     match crate::proto::read_msg_sync::<_, ClientMsg>(&mut cur).unwrap() {
         ClientMsg::Input(bytes) => {
             assert_eq!(
-                bytes, b"H",
-                "bare H forwards after a scroll disarms the window"
+                bytes, b"J",
+                "bare J forwards after a scroll disarms the window"
             )
         }
-        other => panic!("bare H after a scroll should forward, not resize, got {other:?}"),
+        other => panic!("bare J after a scroll should forward, not resize, got {other:?}"),
     }
 }
 

@@ -296,7 +296,7 @@ pub(crate) fn hold_check_flow(pr: i64, cwd: &Path) -> FlowResult {
         flow.exit_code = 1;
         return flow;
     };
-    if std::env::var("FNO_TRACKER_BACKEND").unwrap_or_else(|_| "graph".into()) != "graph" {
+    if crate::tracker::backend_name(None) != "graph" {
         hold_clear(&mut flow, pr);
         return flow;
     }

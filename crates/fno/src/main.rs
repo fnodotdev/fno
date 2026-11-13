@@ -225,7 +225,7 @@ enum Role {
     /// `fno agents history ... --graph ...`: the native session-card reader.
     AgentsHistory(Vec<OsString>),
     /// `fno agents lead refresh-canon` (the front's rewrite of
-    /// `fno agents org refresh-canon`): the beat's canon-doc refresh. The
+    /// `fno agents hq refresh-canon`): the beat's canon-doc refresh. The
     /// carried tail is empty by contract; the door resolves the plugin root
     /// itself and refuses naming every source it tried.
     AgentsLeadRefreshCanon(Vec<OsString>),
@@ -320,7 +320,7 @@ enum Role {
     /// `fno agents restart ...` and root `fno restart ...`: exec'd as
     /// `fno-agents restart`, the one implementation.
     AgentsRestart(Vec<OsString>),
-    /// `fno agents org chart fold ...` (forwarded as `agents org-fold`):
+    /// `fno agents hq chart fold ...` (forwarded as `agents org-fold`):
     /// exec'd as `fno-agents org-fold`, so the Explorer org tab's read skips
     /// the Python front.
     AgentsOrgFold(Vec<OsString>),
@@ -370,7 +370,7 @@ enum Role {
     /// resolves it against the local registry then the shared store, and
     /// forwards byte-verbatim when nothing binds.
     RemoteMail(Vec<OsString>),
-    /// `fno agents org promote <name>@<host> ...`: the cross-machine
+    /// `fno agents hq promote <name>@<host> ...`: the cross-machine
     /// hand-off. The carried tail runs `fno-agents org-remote`; a target
     /// without `@` forwards byte-verbatim to the local command.
     RemoteOrg(Vec<OsString>),
@@ -426,7 +426,7 @@ enum Role {
     /// paths commands still forward to Python (one command per PR,
     /// d-450caaeb).
     PathsCli(Vec<OsString>),
-    /// The `fno agents org` lead commands and `fno inbox board`, exec'd as
+    /// The `fno agents hq` lead commands and `fno inbox board`, exec'd as
     /// arguments of existing fno-agents actions. Their Python legs are gone.
     Lead(fno::lead_route::Claim),
     /// `fno agents mcp send ...` and the deprecated root `fno mcp send ...`:
@@ -695,7 +695,7 @@ fn classify_agents_session_move(args: &[OsString]) -> Option<Vec<OsString>> {
     classify_agents_command(args, "move")
 }
 
-/// `fno agents org refresh-canon` arrives here as `agents lead
+/// `fno agents hq refresh-canon` arrives here as `agents lead
 /// refresh-canon` (the front's rewrite of the org row): the beat's
 /// canon-doc refresh, claimed natively so the door resolves the plugin root
 /// itself. The door takes no deeper words; the tail forwards so the usage
@@ -730,7 +730,7 @@ fn classify_agents_status(args: &[OsString]) -> Option<Vec<OsString>> {
 }
 
 /// `fno agents roles <op>`, the deprecated root `fno roles <op>`, and a
-/// root `-J` before either (`agents org roles` arrives here already
+/// root `-J` before either (`agents hq roles` arrives here already
 /// rewritten by the agents menu). The group options may precede the op.
 /// Every op is the Rust door's; an unknown op, and the bare group's help,
 /// still forward.
@@ -2178,7 +2178,7 @@ fn main() {
             &rest,
         )),
         Role::RemoteOrg(rest) => std::process::exit(fno_agents_exec(
-            "fno agents org promote <name>@<host> --scope <scope>",
+            "fno agents hq promote <name>@<host> --scope <scope>",
             &["org-remote"],
             &rest,
         )),
@@ -2242,7 +2242,7 @@ fn main() {
             std::process::exit(fno_agents_exec("fno agents restart", &["restart"], &rest))
         }
         Role::AgentsOrgFold(rest) => std::process::exit(fno_agents_exec(
-            "fno agents org chart fold",
+            "fno agents hq chart fold",
             fno::agents_menu::native_leaf("org-fold"),
             &rest,
         )),

@@ -78,7 +78,7 @@ fn vocabulary(text: &str) -> String {
         .replace("role_succession_reverted", "team_succession_reverted")
         .replace("role_ledger", "team_ledger")
         .replace("term_eval", "lead_eval")
-        .replace("fno agents lead", "fno agents org")
+        .replace("fno agents lead", "fno agents hq")
 }
 
 #[doc(hidden)]
@@ -724,14 +724,14 @@ pub fn contains_legacy_vocabulary(text: &str) -> bool {
 
 pub fn retired_verb(verb: &str) -> Option<&'static str> {
     match verb {
-        "king" => Some("fno agents org <action>"),
-        "king-checkin" => Some("fno agents org checkin"),
-        "king-history" => Some("fno agents org history"),
-        "crown" => Some("fno agents org promote <session> --scope <scope>"),
-        "court" => Some("fno agents org"),
-        "court-fold" => Some("fno agents org fold"),
-        "court-orphans" => Some("fno agents org vacancies"),
-        "reign-ledger" => Some("fno agents org rundown"),
+        "king" => Some("fno agents hq <action>"),
+        "king-checkin" => Some("fno agents hq checkin"),
+        "king-history" => Some("fno agents hq history"),
+        "crown" => Some("fno agents hq promote <session> --scope <scope>"),
+        "court" => Some("fno agents hq"),
+        "court-fold" => Some("fno agents hq chart fold"),
+        "court-orphans" => Some("fno agents hq chart vacancies"),
+        "reign-ledger" => Some("fno agents hq chart rundown"),
         _ => None,
     }
 }

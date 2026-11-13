@@ -83,7 +83,7 @@ fno backlog update <id> related=x-bbbb         # affinity edge, symmetric
 fno backlog update <id> 'details+=<paragraph>' # append without re-reading the node
 fno backlog update <id> blocked_by+=<id>       # add one blocker
 fno backlog update <id> blocked_by-=<id>       # remove one blocker
-fno backlog update <id> tags+=<tag>            # add one tag ([a-z0-9-:.], e.g. release:0.4.8)
+fno backlog update <id> tags+=<tag>            # add one tag, e.g. area:mail (see Tags below)
 ```
 
 The operator form (`field=value`, `field+=value`, `field-=value`) covers every field. `fno backlog update --help` lists them by kind.
@@ -94,9 +94,34 @@ The operator form (`field=value`, `field+=value`, `field-=value`) covers every f
 
 When a PR opens outside the Footnote PR path, acquire the owner claim with `fno agents claim acquire node:<id> --holder <worker>`, then record the primary PR with `fno backlog update <id> pr_number=<n>`. The claim lockfile is the owner source, and the update receipt reports its owner, PR, and status. `--add-pr` records only an additional PR and can leave a ready node offered for dispatch. Without a claim lockfile, the owner reads as `unknown`.
 
+## Tags
+
+A tag is `facet:value`. Tags find similar and related nodes across epics. One file holds the vocabulary: `crates/fno-agents/src/backlog/tag_vocabulary.toml`. Every tag write checks it. An unknown facet or value refuses, and the refusal names the allowed values.
+
+| Facet | Values | Use |
+|---|---|---|
+| `audience` | `user`, `contributor`, `internal` | Who the change is for. Every open node carries one. |
+| `area` | `mux`, `mail`, `backlog`, `review`, `merge-gate`, `spawn`, `ci`, ... | The product surface. Every open node carries one. |
+| `harness` | `claude`, `codex`, `opencode`, `pi`, `omp`, `agy` | Only when the work is specific to one harness. |
+| `release` | a version, e.g. `release:0.4.8` | The release the node must ship in. |
+| `topic` | any kebab-case word, e.g. `topic:rust-idiom` | Free grouping. |
+
+A tag with no `:` (`main-repair`, `tier-hold`) is an operational marker and stays legal. A `facet:value` name is also a legal GitHub and Linear label name.
+
+```bash
+fno backlog find --tag area:mail --tag audience:user   # every tag must match
+fno backlog find --related <id>                        # rank related nodes across epics
+fno backlog admin backfill-tags                        # dry run: the guesses and the review list
+fno backlog admin backfill-tags --apply                # write the high-confidence guesses
+```
+
+`find --related` ranks on shared title and details words, shared `area`, `harness` and `topic` tags, and a shared epic. The board's `tag` filter widens inside one facet and narrows across facets. `area:mail` plus `area:mux` shows both areas. `area:mail` plus `audience:user` shows only nodes that carry both.
+
+If the classifier is sure, a new node gets `audience` and `area` at birth. `admin backfill-tags` writes only sure guesses on open nodes and never replaces a tag a node already carries. It prints every unsure guess on a review list. Tag those nodes by hand. To add a value, edit the vocabulary file in the same PR as the first node that needs it.
+
 ## Demand signal: what the agents keep hitting
 
-Every other agent pushback surface is shaped for BLOCKAGE. `fno inbox outstanding ask` means "I need a decision". `fno agents org escalate` means "the board is stalled". The `<help>` tag means "I am stuck". None of them means "this keeps costing me". `fno backlog encounter` is the one that does.
+Every other agent pushback surface is shaped for BLOCKAGE. `fno inbox outstanding ask` means "I need a decision". `fno agents hq escalate` means "the board is stalled". The `<help>` tag means "I am stuck". None of them means "this keeps costing me". `fno backlog encounter` is the one that does.
 
 A repeat `fno backlog note` on a node with no encounter from the same session ends its receipt with the encounter command. A note is prose nothing ranks. An encounter is the row `fno backlog demand` reads.
 
@@ -253,9 +278,9 @@ A child is open: not done, not superseded, not deferred. Children are direct. A 
 
 Every write that sets a parent meets the refusal: `update parent=`, `idea --parent`, `contain`, `decompose`, the rollup role auto-link, and the api node_create. A hand-up is exempt. That write moves the live children of a closing node to the nearest live ancestor. It moves existing work and adds none. If the role's single epic is full, a titled `idea` with no `--parent` meets the same refusal. The auto-link sets the parent in the same write. The filer re-runs with `--parent <new epic>`.
 
-The refusal names the epic, its open count, the cap, and the next step. Run `fno backlog idea "EPIC: <theme>" --type epic` to start a new small epic, then point the write at the new epic id. If a lead leads the full epic, it adds the new epic to its own role: `fno agents org promote <its handle> --scope <each epic it holds> --scope <new-epic-id>`. That works for an epic the lead's own session created. Any other epic needs a grant the user makes in chat, or a role that contains both. The user says it, you record their exact words with `fno inbox law set 'role-grant:<new-epic-id>' '<your handle>' --rationale 'user in chat: <their words>'`, and the next check-in stamps the role.
+The refusal names the epic, its open count, the cap, and the next step. Run `fno backlog idea "EPIC: <theme>" --type epic` to start a new small epic, then point the write at the new epic id. If a lead leads the full epic, it adds the new epic to its own role: `fno agents hq promote <its handle> --scope <each epic it holds> --scope <new-epic-id>`. That works for an epic the lead's own session created. Any other epic needs a grant the user makes in chat, or a role that contains both. The user says it, you record their exact words with `fno inbox law set 'role-grant:<new-epic-id>' '<your handle>' --rationale 'user in chat: <their words>'`, and the next check-in stamps the role.
 
-The same count reads before any write, on the `epics:` line of `fno agents org checkin`. `19/15 full` means the next open child is refused at the current cap. `19/- (cap unset)` means no cap is configured, which is the OSS default. `fno agents org --nodes --json` carries the list per role as `epics` and `epic_cap`.
+The same count reads before any write, on the `epics:` line of `fno agents hq checkin`. `19/15 full` means the next open child is refused at the current cap. `19/- (cap unset)` means no cap is configured, which is the OSS default. `fno agents hq --nodes --json` carries the list per role as `epics` and `epic_cap`.
 
 ### Unplanned idea cap
 
@@ -380,7 +405,7 @@ One graph feeds every view. Pick the view by where you are.
 | Where | Command | What you see |
 |-------|---------|--------------|
 | Terminal | `fno backlog board` | Three short sections: just finished, in progress, on deck |
-| The mux | prefix+O inside `fno mux` | The full kanban board, with keys to search, filter, rank and dispatch |
+| The mux | prefix+B inside `fno mux` | The full kanban board, with keys to search, filter, rank and dispatch |
 | A local HTML file | `backlog.render_targets` in the global config | The board page as a file, re-rendered in the background |
 | A browser, private | `fno mux serve --web`, then the backlog link | The live board behind the bridge token |
 | A browser, public | `fno backlog publish` | Open, public rows only, on any static host |
@@ -403,7 +428,7 @@ The "In progress" blocking fact comes from the cache's newest row for that PR. T
 
 ### In the mux
 
-Press prefix+O in `fno mux` to open the backlog board. The default prefix is Ctrl-b. The sideline menu has a `backlog` row that opens the same board.
+Press prefix+B in `fno mux` to open the backlog board. The default prefix is Ctrl-b. The sideline menu has a `backlog` row that opens the same board.
 
 ![The mux backlog board: one lane per project, one lane open by column, and the selected node's details](images/backlog-mux-board.png)
 

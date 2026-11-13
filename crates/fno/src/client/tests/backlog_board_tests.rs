@@ -177,6 +177,53 @@ fn board_render_rows() {
     );
 }
 
+// `/` opens a visible input: the bar echoes each key, the board filters as
+// the text grows, a second `/` never stacks, and Esc restores the old filter.
+#[test]
+fn find_input_echoes_filters_live_and_never_stacks_slashes() {
+    let total = |b: &BoardView| -> usize {
+        b.body
+            .as_ref()
+            .unwrap()
+            .lanes
+            .iter()
+            .map(|l| l.cells.iter().map(|c| c.total).sum::<usize>())
+            .sum()
+    };
+    let mut v = key_view(board_with(board_inputs()));
+    open_find(&mut v);
+    input_keys(&mut v, b"//");
+    input_keys(&mut v, b"s:ready");
+    let b = v.backlog_board.as_ref().expect("board open");
+    assert_eq!(find_input(b).map(|(t, _)| t), Some("s:ready"));
+    assert_eq!(total(b), 2, "the board filtered before Enter");
+    let bar = filter_bar_lines(b, b.body.as_ref().unwrap(), 120);
+    assert!(
+        bar.iter().any(|l| l.text.contains("s:ready\u{2588}")),
+        "the Search cell echoes the typed text: {bar:?}"
+    );
+
+    input_keys(&mut v, b"//");
+    let b = v.backlog_board.as_ref().expect("board open");
+    assert_eq!(find_input(b).map(|(t, _)| t), Some("s:ready/"));
+
+    // A keyed typo holds the last good filter and the footer names the error.
+    input_keys(&mut v, &[0x7f]);
+    v.backlog_board.as_mut().expect("board open").input =
+        Some((BoardInputKind::Find, "stauts:ready".into()));
+    let b = v.backlog_board.as_ref().expect("board open");
+    assert!(find_input(b).is_some_and(|(_, err)| err.is_some()));
+    assert_eq!(total(b), 2, "no keystroke ran, so the filter holds");
+
+    // Esc puts back the filter that was in force when `/` opened.
+    input_keys(&mut v, b"\x1b");
+    input_keys(&mut v, b"");
+    let b = v.backlog_board.as_ref().expect("board open");
+    assert!(b.input.is_none());
+    assert_eq!(b.query.q, None);
+    assert_eq!(total(b), 3);
+}
+
 // AC4-HP: the stats line counts every column and renders the flow line.
 
 // AC5-HP: `L` cycles project -> epic -> none and keeps the cursor on the

@@ -105,7 +105,7 @@ fn world(events: &str) -> tempfile::TempDir {
         &p.join("bin/fno-stub"),
         "#!/bin/bash\ncase \"$*\" in\n  \
          \"doctor footprint --json\") echo '{\"cpu_pct\":12.5,\"processes\":40,\"lanes\":3}' ;;\n  \
-         \"agents org --json\") echo '{\"summary\":{\"workers\":2},\"teams\":[]}' ;;\n  \
+         \"agents hq --json\") echo '{\"summary\":{\"workers\":2},\"teams\":[]}' ;;\n  \
          *) exit 3 ;;\nesac\n",
     );
     write_script(&p.join("bin/gh"), "#!/bin/bash\necho \"[]\"\n");

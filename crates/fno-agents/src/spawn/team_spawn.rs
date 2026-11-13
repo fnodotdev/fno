@@ -138,7 +138,7 @@ fn settle(payload: &Value) -> Value {
             let name = crate::claude_ask::py_repr(payload["name"].as_str().unwrap_or(""));
             json!({"notices": [format!(
                 "spawn: promotion settlement failed after launch: {e}; {name} runs \
-                 without a confirmed role. Grant it with fno agents org promote."
+                 without a confirmed role. Grant it with fno agents hq promote."
             )]})
         }
     }
@@ -546,7 +546,7 @@ fn receipt(payload: &Value) -> Value {
     let name = payload["name"].as_str().unwrap_or("");
     let mut notices = Vec::new();
     if payload["found"] != true {
-        notices.push(format!("spawn: promotion over {scope:?} NOT applied: no matching registry identity for {name:?}; grant it with `fno agents org promote`"));
+        notices.push(format!("spawn: promotion over {scope:?} NOT applied: no matching registry identity for {name:?}; grant it with `fno agents hq promote`"));
     } else if payload["outcome"] == "declined" {
         notices.push(format!("spawn: promotion declined (scope {scope:?} already held by a live row); the worker launched without a role."));
     } else {

@@ -353,16 +353,6 @@ jobs:
       version: ${{ needs.resolve.outputs.version }}
       ref: ${{ needs.resolve.outputs.sha }}
 
-  app:
-    name: build the desktop app tarball
-    needs: resolve
-    if: needs.resolve.outputs.skip != 'true'
-    uses: ./.github/workflows/release-app.yml
-    secrets: inherit
-    with:
-      version: ${{ needs.resolve.outputs.version }}
-      ref: ${{ needs.resolve.outputs.sha }}
-
   wheels:
     name: build wheels
     needs: resolve
@@ -374,7 +364,7 @@ jobs:
 
   publish-nightly:
     name: publish the nightly pre-release (rolling, replaceable, no registry)
-    needs: [resolve, binaries, app, wheels]
+    needs: [resolve, binaries, wheels]
     if: needs.resolve.outputs.skip != 'true' && needs.resolve.outputs.channel == 'nightly'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -405,7 +395,7 @@ jobs:
           ls -1 dist >/dev/null 2>&1 || { echo "no releaseable artifacts remain"; exit 1; }
           # One sha256sum line per tarball, so `fno update` verifies a release
           # download the way it verifies a bin-cache one.
-          (cd dist && for f in fno-agents-*.tar.gz fno-app-*.tar.gz; do [ -e "$f" ] || continue; sha256sum "$f" > "$f.sha256"; done)
+          (cd dist && for f in fno-agents-*.tar.gz; do [ -e "$f" ] || continue; sha256sum "$f" > "$f.sha256"; done)
           # The floor ships beside the tarballs; the update
           # check and the session-start hook read it (rate-limit-free route).
           printf '{"version": "%s", "min_supported": "%s"}\n' "${{ needs.resolve.outputs.version }}" "$(tr -d '[:space:]' < scripts/release/min-supported)" > dist/fno-release.json
@@ -474,7 +464,7 @@ jobs:
 
   publish:
     name: publish rc / stable (one approval click)
-    needs: [resolve, binaries, app, wheels]
+    needs: [resolve, binaries, wheels]
     if: needs.resolve.outputs.skip != 'true' && needs.resolve.outputs.channel != 'nightly'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -512,7 +502,7 @@ jobs:
           ls -1 dist >/dev/null 2>&1 || { echo "no releaseable artifacts remain"; exit 1; }
           # One sha256sum line per tarball, so `fno update` verifies a release
           # download the way it verifies a bin-cache one.
-          (cd dist && for f in fno-agents-*.tar.gz fno-app-*.tar.gz; do [ -e "$f" ] || continue; sha256sum "$f" > "$f.sha256"; done)
+          (cd dist && for f in fno-agents-*.tar.gz; do [ -e "$f" ] || continue; sha256sum "$f" > "$f.sha256"; done)
           # The floor ships beside the tarballs; the update
           # check and the session-start hook read it (rate-limit-free route).
           printf '{"version": "%s", "min_supported": "%s"}\n' "$VERSION" "$(tr -d '[:space:]' < scripts/release/min-supported)" > dist/fno-release.json
@@ -673,6 +663,60 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -am "fno ${VERSION}: bump url + sha256 (auto, x-0afe)"
           git push
+
+      - name: Sync main's version surfaces to the promoted release (stable only)
+        if: ${{ inputs.dry_run != true && env.CHANNEL == 'stable' }}
+        # Main lags a shipped stable: the repository rule rejects the release
+        # job's push, and release-version.sh skips released v<src> tags so the
+        # nightly and rc math stay ahead of it. Left unsynced, main's
+        # manifests stay behind forever - they still read 0.4.5 after 0.4.8
+        # shipped, so every source build reported the stale version, and on a
+        # repo without rc tags the rc math can regress below the shipped
+        # stable. Same mechanics as the catalog pin above: a GITHUB_TOKEN PR
+        # fires no CI events, so this step posts the required
+        # stacked-base-guard context itself and arms auto-merge.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          branch="version-sync/${TAG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "$DEFAULT_BRANCH"
+          if git fetch origin "$branch" 2>/dev/null; then
+            # A previous run left the branch; continue it (plain commits
+            # only). A branch already carrying the stamp makes the sync a
+            # no-op below, so a re-run exits cleanly instead of reopening.
+            git checkout -B "$branch" "origin/$branch"
+          else
+            git checkout -b "$branch" "origin/${DEFAULT_BRANCH}"
+          fi
+          bash scripts/release/sync-version.sh "$VERSION"
+          bash scripts/release/sync-version.sh --check
+          if git diff --quiet; then
+            echo "main already carries ${VERSION}; nothing to sync"
+            exit 0
+          fi
+          # The branch is cut fresh here and only sync-version.sh wrote to
+          # it, so staging every tracked modification stages exactly the
+          # stamp; the surface list lives in the script alone.
+          git add -u
+          git commit -m "chore(release): sync main's version to ${VERSION}"
+          git push origin "$branch"
+          pr=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -z "$pr" ]; then
+            pr=$(gh pr create --head "$branch" \
+              --title "chore(release): sync main's version to ${VERSION}" \
+              --body "Stamps the wheel VERSION, the crate manifests and lockfiles and the plugin manifests to ${VERSION}, the version just promoted to ${TAG}. release-version.sh skips released v<src> tags, so the nightly math moves past ${VERSION} while main carries it; the rc base passes it only when a later bump lands.")
+          fi
+          head=$(git rev-parse HEAD)
+          git merge-base --is-ancestor "origin/${DEFAULT_BRANCH}" HEAD
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${head}" \
+            -f state=success -f context=stacked-base-guard \
+            -f description="base is the default branch (${DEFAULT_BRANCH})"
+          gh pr merge "$pr" --squash --auto
+          echo "version-sync PR: ${pr} (auto-merge armed at ${head})"
 
   wheel-upgrade-path:
     name: "container proof: a 0.4.5 wheel reaches the candidate binary"

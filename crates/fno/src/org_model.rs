@@ -8,7 +8,7 @@ use serde_json::Value;
 /// The public `fno` commands the Explorer tabs read. They resolve through
 /// the front's own native-leaf table, so moving an internal fno-agents
 /// command cannot break a tab.
-pub const ORG_FOLD_ARGV: &[&str] = &["agents", "org", "chart", "fold"];
+pub const ORG_FOLD_ARGV: &[&str] = &["agents", "hq", "chart", "fold"];
 pub const FLEET_TOP_ARGV: &[&str] = &["agents", "fleet", "top", "--machines", "--json"];
 
 /// Exec the leaf a public tab argv resolves to, plus `tail`, under the 30 s

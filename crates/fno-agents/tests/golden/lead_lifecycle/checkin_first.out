@@ -49,4 +49,4 @@ failed readers: user_notes (no canon handoff doc for scope epic-y), operator_tur
 vs last beat: none, this is the first canonical beat for this scope
 change: attention: <FOLDED>
 report rule: state only verified facts, show fresh output for done, and a cannot claim names the routes it tried
-fno agents org faq add --question "..." --answer "..." --specimen "<node or PR>, <date>" --exit "<the change that retires this>"
+fno agents hq faq add --question "..." --answer "..." --specimen "<node or PR>, <date>" --exit "<the change that retires this>"

@@ -72,7 +72,7 @@ These are deliberately exempt, because their leaf-count change is not a plain co
 
 A manual `layout apply`, a `layout graft`, or a hand-drawn split wins the moment it runs. Auto-reflow only fires on the next pane-count change after that, so a manually-tuned shape never gets fought over mid-session.
 
-`fno agents org checkin` prints one `layout:` line per live tab, naming its pane count and its current template. When the count sits outside 2/3/4, the line reads `unshaped`. A coordinator reads a tab's shape this way without attaching to it.
+`fno agents hq checkin` prints one `layout:` line per live tab, naming its pane count and its current template. When the count sits outside 2/3/4, the line reads `unshaped`. A coordinator reads a tab's shape this way without attaching to it.
 
 ## Arrange-only
 

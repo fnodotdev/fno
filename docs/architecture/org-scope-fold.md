@@ -1,6 +1,6 @@
 # The org scope fold
 
-`fno agents org -n` folds every role's scope into its row: counts by
+`fno agents hq -n` folds every role's scope into its row: counts by
 status for the whole scope, the active nodes with their worker, PR and
 session ids, and the omitted count stated rather than implied. Design
 notes gathered here.
@@ -80,7 +80,7 @@ Each fold also carries its own verdict at `scope_nodes[<scope>].stuck`. It is co
 
 A clause names five ids and then counts the rest, because a live org put 40 ids in one clause. The full list stays in the JSON.
 
-The caller adds only what the fold cannot see. `fno agents org` appends the spawn gate's refusal. An unknown gate is itself a blind spot, so it lands in `blind` rather than being dropped. When nothing is stuck and the gate accepts, the line reads `stuck: nothing`. When the fold, the sweep or the gate cannot answer, the line says which one cannot answer. A clean line and a blind line must never look the same.
+The caller adds only what the fold cannot see. `fno agents hq` appends the spawn gate's refusal. An unknown gate is itself a blind spot, so it lands in `blind` rather than being dropped. When nothing is stuck and the gate accepts, the line reads `stuck: nothing`. When the fold, the sweep or the gate cannot answer, the line says which one cannot answer. A clean line and a blind line must never look the same.
 
 Live PR state is deliberately out of scope. `merge_status` on a graph entry is a closure stamp that only ever reads `merged` or null. It cannot say CONFLICTING or red. The honest verdict needs a network read, and `fno do pr status <n>` already performs it. The row carries `pr_number` and an age, so an `in_review` node past the threshold surfaces without one.
 

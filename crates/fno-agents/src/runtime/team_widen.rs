@@ -181,7 +181,7 @@ pub fn resolve(payload: &Value) -> Result<Value, String> {
             )
         };
         return Ok(refused(Some(&format!(
-            "{lead}, so the command is fno agents org promote <own handle> {command}"
+            "{lead}, so the command is fno agents hq promote <own handle> {command}"
         ))));
     }
 

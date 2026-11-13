@@ -439,10 +439,7 @@ fn sorted_source_kinds() -> String {
 }
 
 fn active_backend_name() -> String {
-    std::env::var("FNO_TRACKER_BACKEND")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "graph".to_string())
+    crate::tracker::backend_name(None)
 }
 
 /// One birth record through the native owner, in-process. Returns
@@ -1380,6 +1377,15 @@ pub(crate) fn create_node(
             "request_origin": origin,
             "origin_evidence": origin_evidence_ref,
         });
+        // A high-confidence audience or area guess lands with the birth; a
+        // low one waits on the `admin backfill-tags` review list.
+        for g in super::tags::classify(&node) {
+            if g.confidence == super::tags::Confidence::High {
+                if let Some(tags) = node.pointer_mut("/tags").and_then(Value::as_array_mut) {
+                    tags.push(json!(g.tag));
+                }
+            }
+        }
 
         // Refuse a birth --parent that cannot hold the child; the scope and
         // lenient pass-through cases are named in strand.birth_parent_refusal.

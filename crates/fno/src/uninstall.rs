@@ -50,8 +50,9 @@ const CRON_END: &str = "# END autocorrect-managed";
 /// The plugin name agy knows: the repo plugin.json "name", the same name
 /// `scripts/install/agy-plugin.sh` installs and `agy plugin uninstall` takes.
 const AGY_PLUGIN: &str = "footnote";
-/// The plugin marketplace name, then the name it had before the rename.
-const MARKETPLACE_NAMES: [&str; 2] = ["fno", "footnote"];
+/// The public marketplace name, the local dev stage's name, then the name the
+/// public one had before the rename.
+const MARKETPLACE_NAMES: [&str; 3] = ["fno", "fno-dev", "footnote"];
 
 enum Action {
     Run(Vec<String>),
@@ -461,8 +462,8 @@ fn discover() -> Vec<Item> {
         }
     }
 
-    // An install made before the marketplace moved to "fno" still carries
-    // the old "footnote" name, so both are removed.
+    // The release ("fno"), the dev stage ("fno-dev") and an install made
+    // before the rename ("footnote") are each removed.
     let claude = env_dir("CLAUDE_CONFIG_DIR", ".claude");
     if on_path("claude").is_some() {
         let installed = read(&claude.join("plugins/installed_plugins.json"));
