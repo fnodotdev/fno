@@ -329,7 +329,9 @@ pub fn needs_refresh(mtime: Option<SystemTime>, now: SystemTime) -> bool {
 /// so the mux server can run the same hour-24 fetch: pricing never depends
 /// on a user who never opens the composer. Fire-and-forget: the fetch never
 /// blocks the caller, a failed fetch keeps the old cache, and the next
-/// hour's stat is the retry.
+/// hour's stat is the retry. The wizard and bare `fno` run with no ambient
+/// tokio runtime, so the fetch falls back to a detached thread with its own
+/// single-thread runtime instead of panicking.
 pub fn refresh_if_stale(state: &Path) {
     let mtime = std::fs::metadata(cache_path(state))
         .and_then(|m| m.modified())
@@ -338,9 +340,23 @@ pub fn refresh_if_stale(state: &Path) {
         return;
     }
     let spawn_state = state.to_path_buf();
-    tokio::spawn(async move {
-        let _ = refresh(&spawn_state).await;
-    });
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            handle.spawn(async move {
+                let _ = refresh(&spawn_state).await;
+            });
+        }
+        Err(_) => {
+            std::thread::spawn(move || {
+                if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    rt.block_on(refresh(&spawn_state)).ok();
+                }
+            });
+        }
+    }
 }
 
 /// One refresh: fetch to `<dir>/models-dev.json.tmp.<pid>`, parse the tmp
@@ -1004,6 +1020,17 @@ mod tests {
         assert!(!tmp.exists(), "tmp renamed away");
         let catalog = load(&dir).unwrap();
         assert!(catalog.get("deepseek").is_some());
+    }
+    /// The fresh-machine repro: bare `fno` and the wizard call refresh_if_stale
+    /// with no ambient runtime and no cache. A plain #[test] has no runtime,
+    /// so this panics at the tokio::spawn unless the fallback holds.
+    #[test]
+    fn refresh_if_stale_survives_no_runtime_and_missing_cache() {
+        let (dir, _guard) = state_fixture();
+        refresh_if_stale(&dir);
+        // Fire-and-forget: the fallback thread may still be mid-fetch. The
+        // contract is "returned instead of panicking"; a failed fetch keeps
+        // the cache absent and the next stale check retries.
     }
     #[test]
     fn load_reason_names_the_cache_path_when_missing_or_unparseable() {
