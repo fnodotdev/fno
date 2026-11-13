@@ -474,7 +474,7 @@ fn child_refs_in(
     let mut out = Vec::new();
     for child in entries
         .iter()
-        .filter(|e| e.get("parent").and_then(Value::as_str) == Some(parent_id))
+        .filter(|e| super::workflows::text_at(e, "parent") == Some(parent_id))
     {
         for (num, url) in node_pr_refs(child) {
             if !seen.contains(&num) {
