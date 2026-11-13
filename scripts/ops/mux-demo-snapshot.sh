@@ -22,10 +22,15 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
 # build drives its own tree's agents sibling, so the seeded mint (which reads
 # FNO_DEMO_ID_SEED there) is the one under test, never the deployed binary.
 if [ -n "${FNO_BIN:-}" ] && [ -z "${FNO_AGENTS_BIN:-}" ]; then
-  SIBLING="$(cd "$(dirname "$FNO_BIN")/../../.." && pwd)/fno-agents/target/release/fno-agents"
-  if [ -x "$SIBLING" ]; then
+  SIBLING_DIR="$(cd "$(dirname "$FNO_BIN")/../../.." && pwd)/fno-agents/target"
+  SIBLING=""
+  for profile in release debug; do
+    if [ -x "$SIBLING_DIR/$profile/fno-agents" ]; then SIBLING="$SIBLING_DIR/$profile/fno-agents"; break; fi
+  done
+  if [ -n "$SIBLING" ]; then
     export FNO_AGENTS_BIN="$SIBLING"
   else
+    SIBLING="$SIBLING_DIR/release/fno-agents"
     # A branch build without its agents sibling would silently test the
     # deployed mint, and the seeded ids would re-roll. Say so instead.
     echo "mux-demo-snapshot: no fno-agents sibling beside FNO_BIN ($SIBLING missing); backlog ids come from the deployed binary" >&2
@@ -288,7 +293,9 @@ case " $* " in
     printf '{\n  "preset": "zellij",\n  "split-up": "}",\n  "split-left": "g s",\n  "grab-work": "^"\n}\n' >"$ROOT/.fno/keybindings.json"
     ;;
 esac
-unset FNO_SERVER FNO_SESSION FNO_PANE FNO_OWNER_BIRTH
+# FNO_BOARD_SCOPE is latched per client pane: left in, it filters the invented
+# backlog to the caller's own project and the board shoots empty.
+unset FNO_SERVER FNO_SESSION FNO_PANE FNO_OWNER_BIRTH FNO_BOARD_SCOPE
 # A harness identity in the caller's env would join the demo's fresh store as
 # that real session: every seed call stamps it onto the demo nodes and the
 # shot leaks the id (the look flag on the backlog graph paint). Strip the
