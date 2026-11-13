@@ -212,6 +212,7 @@ fn end_run(pid: u32, birth: u64) -> bool {
         return false;
     }
     let group_leader = pid > 1
+        // SAFETY: getpgid only reads the kernel's process-table entry.
         && Pid::new(pid).is_some_and(|p| unsafe { libc::getpgid(p.as_raw()) } == p.as_raw());
     if group_leader
         && Pid::new(pid)

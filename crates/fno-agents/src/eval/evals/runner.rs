@@ -86,9 +86,14 @@ fn owner_alive(worktree: &str) -> bool {
     if parts.len() < 3 {
         return false;
     }
-    match parts[parts.len() - 2].parse::<i64>() {
-        Ok(pid) => Pid::try_from(pid).map(|p| p.exists()).unwrap_or(false),
-        Err(_) => false,
+    match parts
+        .iter()
+        .rev()
+        .nth(1)
+        .and_then(|s| s.parse::<i64>().ok())
+    {
+        Some(pid) => Pid::try_from(pid).map(|p| p.exists()).unwrap_or(false),
+        None => false,
     }
 }
 
