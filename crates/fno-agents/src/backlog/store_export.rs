@@ -66,6 +66,14 @@ pub(crate) fn export(remote: &Remote, out: &Path) -> Result<Value, String> {
         &[],
     )?;
     let mut connection = crate::store_conn::open_write(&partial)?;
+    // This is a restore: tables and rows land in table-name order, so a
+    // child can copy before its foreign-key parent exists. Enforcement
+    // stays off for the load, the sqlite3 restore prescription - the
+    // bundled SQLite builds with foreign keys on by default, and the
+    // first child INSERT would refuse on the not-yet-copied parent table.
+    connection
+        .execute_batch("PRAGMA foreign_keys=OFF;")
+        .map_err(|e| e.to_string())?;
     let transaction = connection.transaction().map_err(|e| e.to_string())?;
     let mut counts = Map::new();
     let field = |row: &[SqlValue], i: usize| row[i].text().unwrap_or("").to_string();
@@ -101,25 +109,34 @@ pub(crate) fn export(remote: &Remote, out: &Path) -> Result<Value, String> {
 fn copy_rows(remote: &Remote, into: &rusqlite::Connection, table: &str) -> Result<u64, String> {
     let quoted = format!("\"{}\"", table.replace('"', "\"\""));
     let (mut copied, mut last, mut by_rowid) = (0u64, i64::MIN, true);
+    // A reply can still be too large for the primary (an image table, say),
+    // so the page halves until one fits; a single row over the cap refuses
+    // with the table named.
+    let mut page_size = PAGE;
     loop {
         // A WITHOUT ROWID table (an FTS5 shadow table, say) pages by offset.
-        let page = if by_rowid {
-            let read = remote.execute(
-                &format!("SELECT rowid AS fno_export_rowid, * FROM {quoted} WHERE rowid > ?1 ORDER BY rowid LIMIT {PAGE}"),
+        let read = if by_rowid {
+            remote.execute(
+                &format!("SELECT rowid AS fno_export_rowid, * FROM {quoted} WHERE rowid > ?1 ORDER BY rowid LIMIT {page_size}"),
                 &[SqlValue::Integer(last)],
-            );
-            match read {
-                Err(error) if copied == 0 && error.contains("no such column: rowid") => {
-                    by_rowid = false;
-                    continue;
-                }
-                read => read?,
-            }
+            )
         } else {
             remote.execute(
-                &format!("SELECT * FROM {quoted} LIMIT {PAGE} OFFSET {copied}"),
+                &format!("SELECT * FROM {quoted} LIMIT {page_size} OFFSET {copied}"),
                 &[],
-            )?
+            )
+        };
+        let page = match read {
+            Err(error) if copied == 0 && error.contains("no such column: rowid") => {
+                by_rowid = false;
+                continue;
+            }
+            Err(error) if error.contains("too large") && page_size > 1 => {
+                page_size /= 2;
+                continue;
+            }
+            Err(error) if error.contains("too large") => return Err(format!("{table}: {error}")),
+            page => page?,
         };
         let Some(final_row) = page.rows.last() else {
             return Ok(copied);
@@ -203,5 +220,73 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(kept.holder, "a");
+    }
+
+    /// A child table sorting before its foreign-key parent still exports:
+    /// the load runs with enforcement off, the sqlite3 restore prescription,
+    /// because the bundled SQLite builds with foreign keys on by default.
+    #[test]
+    fn store_export_copies_children_before_their_foreign_key_parents() {
+        let root = tempfile::tempdir().unwrap();
+        let primary = crate::store_remote::test_primary::start();
+        primary
+            .db
+            .lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE a_child (parent TEXT REFERENCES a_parent(id));
+                 CREATE TABLE a_parent (id TEXT PRIMARY KEY);
+                 INSERT INTO a_parent VALUES ('p1');
+                 INSERT INTO a_child VALUES ('p1');",
+            )
+            .unwrap();
+        let out = root.path().join("out.db");
+        let receipt = export(&primary.remote, &out).unwrap();
+        assert_eq!(receipt["rows"]["a_child"], 1, "{receipt}");
+        assert_eq!(receipt["rows"]["a_parent"], 1, "{receipt}");
+    }
+
+    /// A reply too large for the primary halves the page until one fits and
+    /// the copy still lands every row.
+    #[test]
+    fn store_export_halves_the_page_until_a_reply_fits() {
+        let root = tempfile::tempdir().unwrap();
+        let primary = crate::store_remote::test_primary::start();
+        let blob = "x".repeat(10_000);
+        primary
+            .db
+            .lock()
+            .unwrap()
+            .execute_batch(&format!(
+                "CREATE TABLE blobs (v TEXT);
+                 INSERT INTO blobs VALUES ('{blob}'), ('{blob}'), ('{blob}'), ('{blob}'), ('{blob}');"
+            ))
+            .unwrap();
+        primary.set_cap(12_000);
+        let out = root.path().join("out.db");
+        let receipt = export(&primary.remote, &out).unwrap();
+        assert_eq!(receipt["rows"]["blobs"], 5, "{receipt}");
+    }
+
+    /// One row still over the primary's reply cap refuses, naming the table.
+    #[test]
+    fn a_single_row_over_the_reply_cap_refuses_and_names_the_table() {
+        let root = tempfile::tempdir().unwrap();
+        let primary = crate::store_remote::test_primary::start();
+        let blob = "x".repeat(10_000);
+        primary
+            .db
+            .lock()
+            .unwrap()
+            .execute_batch(&format!(
+                "CREATE TABLE big_blobs (v TEXT);
+                 INSERT INTO big_blobs VALUES ('{blob}');"
+            ))
+            .unwrap();
+        primary.set_cap(5_000);
+        let out = root.path().join("out.db");
+        let error = export(&primary.remote, &out).unwrap_err();
+        assert!(error.contains("big_blobs"), "{error}");
+        assert!(error.contains("too large"), "{error}");
     }
 }

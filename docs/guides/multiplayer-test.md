@@ -105,7 +105,7 @@ Remove the `[store]` table on both machines, and restart each daemon. Then copy 
 fno-agents claim export --url http://linux1:18080 --out ~/fno-primary-export.db
 ```
 
-The export can refuse with `no such table: main.harnesses`. That reads as a schema gap: the primary's stored schema predates a table the export tool expects. When it refuses, take a cold copy instead. Stop the container, then copy the data directory while it is stopped. The copy is complete and consistent, because nothing writes during it.
+The export copies what the primary serves, while it is up. If the primary is down, take a cold copy instead: stop the container, then copy the data directory while it is stopped. The copy is complete and consistent, because nothing writes during it.
 
 The receipt names each table and its row count. Read a claim back from the file:
 
