@@ -68,6 +68,10 @@ pub enum ViewKind {
     NeedsInputPulseOff,
     /// The sideline menu popup.
     SidelineMenu,
+    /// HQ with no seat: the designed empty state, full screen.
+    HqEmpty,
+    /// The composer opened from the empty HQ, with a task typed.
+    HqComposer,
     /// The new-workspace form, with a name typed.
     NewWorkspace,
     /// A workspace section's menu.
@@ -328,6 +332,8 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "sideline-menu" => Some(ViewKind::SidelineMenu),
         "new-workspace" => Some(ViewKind::NewWorkspace),
         "workspace-menu" => Some(ViewKind::WorkspaceMenu),
+        "hq-empty" => Some(ViewKind::HqEmpty),
+        "hq-composer" => Some(ViewKind::HqComposer),
         "composer" => Some(ViewKind::Composer),
         "composer-ghost" => Some(ViewKind::ComposerGhost),
         "composer-refused" => Some(ViewKind::ComposerRefused),
@@ -1636,6 +1642,25 @@ pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
                 n.cursor = at;
             }
             view.nav_open_menu();
+        }
+        Some(ViewKind::HqEmpty | ViewKind::HqComposer) => {
+            super::org_board::open(&mut view);
+            view.board_full = matches!(kind, Some(ViewKind::HqEmpty));
+            view.sideline_width = view.sideline_width.max(60);
+            let b = view.org_board.as_mut().ok_or("org view did not open")?;
+            b.fleet = Some(super::org_seats::Fleet {
+                machines: Vec::new(),
+                notice: None,
+                seat_error: None,
+                measured_at: chrono::Utc::now().timestamp().max(0) as u64,
+            });
+            if matches!(kind, Some(ViewKind::HqComposer)) {
+                super::org_board::open_composer(&mut view, "");
+                if let Some(l) = view.launcher.as_mut() {
+                    l.draft.message = "write the retry test for the spawn door".to_string();
+                    l.draft.cursor_chars = l.draft.message.chars().count();
+                }
+            }
         }
         Some(ViewKind::SidelineMenu) => view.open_sideline_menu(Anchor::Center),
         Some(ViewKind::NewWorkspace) => {

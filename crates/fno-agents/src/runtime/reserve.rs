@@ -60,14 +60,7 @@ struct App {
     preset: &'static str,
 }
 
-/// The apps watched when `agents.reserve_apps` is unset. An entry is an app
-/// name; `Name=stream` arms the stream preset, any other entry arms edit.
-pub const DEFAULT_APPS: &[&str] = &[
-    "OBS=stream",
-    "Final Cut Pro",
-    "Premiere Pro",
-    "DaVinci Resolve",
-];
+use fno_mail::reserve::DEFAULT_APPS;
 
 fn parse_apps<S: AsRef<str>>(entries: &[S]) -> Vec<App> {
     entries

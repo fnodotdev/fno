@@ -8,19 +8,14 @@ use super::*;
 const MAX_INPUT: usize = 256;
 const KEY: &str = "agents.reserve_apps";
 
-/// The list shipped when the config sets none. `Name=stream` arms the stream
-/// preset (spawns and tests held); any other entry arms edit (tests held).
-pub(super) const DEFAULT: [&str; 4] = [
-    "OBS=stream",
-    "Final Cut Pro",
-    "Premiere Pro",
-    "DaVinci Resolve",
-];
-
 /// The configured list, read from the mux's cwd ladder.
 pub(super) fn current() -> Vec<String> {
-    crate::config_defaults::lookup_list(KEY)
-        .unwrap_or_else(|| DEFAULT.iter().map(|s| s.to_string()).collect())
+    crate::config_defaults::lookup_list(KEY).unwrap_or_else(|| {
+        fno_mail::reserve::DEFAULT_APPS
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    })
 }
 
 /// What the row shows beside its label.
@@ -29,10 +24,11 @@ pub(super) fn summary() -> String {
     if apps.is_empty() {
         return "none".into();
     }
-    apps.iter()
-        .map(|a| a.split('=').next().unwrap_or(a))
-        .collect::<Vec<_>>()
-        .join(", ")
+    let shown: Vec<&str> = apps.iter().take(2).map(String::as_str).collect();
+    match apps.len().saturating_sub(2) {
+        0 => shown.join(", "),
+        more => format!("{}, +{more} more", shown.join(", ")),
+    }
 }
 
 /// The apps a typed line names: comma-separated, blanks dropped.

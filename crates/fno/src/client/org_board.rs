@@ -1018,11 +1018,22 @@ pub(crate) async fn keys(
     Ok(StdinFlow::Continue)
 }
 
+/// Put HQ back after a composer opened from it closes, with the full-screen
+/// flag it had.
+pub(crate) fn return_to_hq(view: &mut View) {
+    if let Some(full) = view.hq_return.take() {
+        if view.org_board.is_some() {
+            view.board_full = full;
+            view.sideline_view = SidelineView::Org;
+        }
+    }
+}
+
 /// Open the composer prefix+i opens, over HQ: the same launcher and the same
-/// spawn door, so a session started here is one started anywhere. The
-/// launcher parks the sideline on Agents, where its card paints; esc there
-/// returns to the list and `H` comes back to HQ.
-fn open_composer(view: &mut View, seed: &str) {
+/// spawn door, so a session started here is one started anywhere. The card
+/// paints in the Agents list, so the sideline shows that while it is open
+/// and [`return_to_hq`] brings HQ back when it closes.
+pub(crate) fn open_composer(view: &mut View, seed: &str) {
     if view.density == super::Density::Slim || view.panel_w() == 0 {
         view.set_notice("widen the sideline to open the composer".into());
         return;
@@ -1035,6 +1046,12 @@ fn open_composer(view: &mut View, seed: &str) {
     };
     if let Err(e) = opened {
         view.set_notice(e);
+    }
+    // The card paints in the Agents list, so a full-screen HQ would hide it:
+    // step the board back for the length of the composer.
+    if view.launcher.is_some() {
+        view.hq_return = Some(view.board_full);
+        view.board_full = false;
     }
 }
 

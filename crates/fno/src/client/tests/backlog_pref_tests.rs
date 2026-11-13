@@ -65,6 +65,34 @@ fn sideline_menu_lists_backlog_and_leaves_experimental_to_settings() {
     assert_eq!(on.actions[at], AuxAction::Share(share_flow::Act::Start));
 }
 
+// The composer opened from HQ keeps HQ behind it and brings it back on close;
+// the keys that mean something in HQ (`n`, `L`) are plain text inside it.
+#[test]
+fn n_and_l_typed_in_the_hq_composer_are_text_and_hq_stays_behind() {
+    let mut v = two_pane_view();
+    org_board::open(&mut v);
+    org_board::open_composer(&mut v, "");
+    assert!(v.launcher.is_some(), "the composer opened");
+    assert!(v.org_board.is_some(), "HQ is kept behind it");
+    let mut sock: Vec<u8> = Vec::new();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let _ = super::agent_launcher::launcher_keys(&mut v, b"nLn", &mut sock).await;
+    });
+    let draft = &v.launcher.as_ref().expect("still open").draft;
+    assert_eq!(draft.message, "nLn", "n and L type text");
+    assert!(v.org_board.is_some(), "HQ is still there");
+    rt.block_on(async {
+        let _ = super::agent_launcher::launcher_keys(&mut v, b"\x1b", &mut sock).await;
+    });
+    assert!(v.launcher.is_none(), "esc closes the composer");
+    assert_eq!(
+        v.sideline_view,
+        crate::view_store::SidelineView::Org,
+        "and HQ is back"
+    );
+}
+
 // HQ is always reachable: `open` takes no flag. The launch screen only picks
 // what a boot shows first, and a boot into HQ paints the board without taking
 // the keyboard, so a user still types into their pane.
