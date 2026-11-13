@@ -8,6 +8,7 @@
 //! of its own.
 
 use serde_json::Value;
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -128,7 +129,7 @@ fn exec_lane(payload: &Value) -> Result<i32, String> {
         crate::launch_record::Launch {
             harness: harness.clone(),
             resume: None,
-            name: Some(name),
+            name: Some(name.clone()),
             node: payload
                 .get("node")
                 .and_then(Value::as_str)

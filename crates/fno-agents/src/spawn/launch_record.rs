@@ -707,12 +707,12 @@ pub fn amend_launch_short_id(root: &Path, name: &str, short: &str) -> bool {
             _ => best = Some((entry, record)),
         }
     }
-    let Some((path, record)) = best else {
+    let Some((entry, record)) = best else {
         return false;
     };
     let mut record = record;
     record.launch_short_id = Some(short.to_string());
-    write_atomic(&path, &record).is_ok()
+    write_atomic(&entry.path(), &record).is_ok()
 }
 
 /// Delete pending records older than the window. Best effort.
