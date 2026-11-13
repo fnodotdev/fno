@@ -513,7 +513,7 @@ fn resolve(args: &[OsString]) -> Option<(Agents, Option<String>)> {
                     // newer sub-spelling. The direct legacy forward stays
                     // as the fallback for a tail the table does not claim.
                     let mut rewritten: Vec<OsString> = new_path.iter().map(|w| os(w)).collect();
-                    rewritten.extend(args[len..].iter().cloned());
+                    rewritten.extend(args.iter().skip(len).cloned());
                     match resolve(&rewritten) {
                         Some((outcome, _)) => return Some((outcome, Some(notice))),
                         None => {
@@ -544,25 +544,30 @@ fn help(args: &[OsString]) -> Option<Agents> {
     let mut node: &'static Node = &ROOT;
     let mut words = words;
     let mut depth = 0usize;
-    while depth < words.len() {
-        let word = words[depth];
+    while let Some(word) = words.get(depth).copied() {
         match node.children.iter().find(|c| c.name == word) {
             Some(child) => {
                 node = child;
                 depth += 1;
             }
-            None => match old_hit(&words[..=depth]) {
+            None => {
                 // A deprecated spelling walks under its new path, so
                 // `help agents org` reads as `help agents hq`.
-                Some((new_path, _, len)) if len == depth + 1 => {
-                    let mut rewritten: Vec<&str> = new_path.clone();
-                    rewritten.extend(words[depth + 1..].iter().copied());
-                    words = rewritten;
-                    node = &ROOT;
-                    depth = 0;
+                let hit = words.get(..=depth).and_then(|prefix| old_hit(prefix));
+                match hit {
+                    Some((new_path, _, len)) if len == depth + 1 => {
+                        let mut rewritten: Vec<&str> = new_path.clone();
+                        rewritten.extend(words.iter().skip(depth + 1).copied());
+                        words = rewritten;
+                        node = &ROOT;
+                        depth = 0;
+                    }
+                    _ => {
+                        let walked: Vec<&str> = words.iter().take(depth).copied().collect();
+                        return Some(Agents::Refuse(unknown(&walked, node, word)));
+                    }
                 }
-                _ => return Some(Agents::Refuse(unknown(&words[..depth], node, word))),
-            },
+            }
         }
     }
     if node.children.is_empty() {
@@ -727,7 +732,7 @@ mod tests {
             ),
             (
                 &["org", "promote", "s", "--scope", "x"][..],
-                &["agents", "role", "promote", "s", "--scope", "x"][..],
+                &["agents", "role", "s", "--scope", "x"][..],
             ),
         ] {
             match run(old) {
