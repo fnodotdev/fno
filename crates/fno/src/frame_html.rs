@@ -501,7 +501,16 @@ fn cell_geometry(ch: char, x: f64, y: f64, color: &str) -> Option<String> {
         )
         };
     match ch {
-        '█' => return Some(rect(0.0, 0.0, w, h, 1.0)),
+        // Crisp edges: cells sit on an 8.4 px grid, and a rasterizer that
+        // anti-aliases each full block leaves a bg-colored seam on every
+        // fractional cell boundary.
+        '█' => {
+            return Some(rect(0.0, 0.0, w, h, 1.0).replacen(
+                "/>",
+                " shape-rendering=\"crispEdges\"/>",
+                1,
+            ))
+        }
         '▀' => return Some(rect(0.0, 0.0, w, h / 2.0, 1.0)),
         '▄' => return Some(rect(0.0, h / 2.0, w, h / 2.0, 1.0)),
         '▌' => return Some(rect(0.0, 0.0, w / 2.0, h, 1.0)),
