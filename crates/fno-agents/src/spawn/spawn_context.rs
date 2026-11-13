@@ -565,7 +565,7 @@ pub fn walk_finds_no_harness_ambient() -> bool {
 /// session's argv is `.../versions/<v> --resume <path>/<session-id>.jsonl
 /// --name <name>` and carries none of them. Measured argv shapes,
 /// 2026-09-17; deny-list posture, so adding a shape costs a measurement
-/// (sibling: `_SHARED_HOST_HARNESSES` in `session_pid.py`).
+/// (sibling: `SHARED_HOST_HARNESSES` in `crates/fno-agents/src/runtime/claims.rs`).
 fn is_claude_pool_machinery(command: &str) -> bool {
     let argv: Vec<&str> = command.split_whitespace().collect();
     if argv.is_empty() {
@@ -616,9 +616,9 @@ pub fn session_identity_from_table(
 }
 
 /// Ambient session identity `(durable pid, harness)`: the launcher-stamped
-/// proof pair leads with the rules `session_pid.py`'s docstrings state
-/// (`FNO_SESSION_PID` live answers the pid; a known `FNO_SESSION_HARNESS`
-/// beside a live pid answers the harness), otherwise the census walk decides.
+/// proof pair leads (`FNO_SESSION_PID` live answers the pid; a known
+/// `FNO_SESSION_HARNESS` beside a live pid answers the harness), otherwise
+/// the census walk decides.
 /// The pid half comes from the REFUSING walk
 /// ([`session_identity_from_table`]) and the harness half from the plain
 /// walk, so a thread worker under a `claude bg-spare` degrades to

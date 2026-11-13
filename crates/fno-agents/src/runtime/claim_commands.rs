@@ -758,6 +758,12 @@ const SPAWN_GATE_HOLDER_PREFIX: &str = "spawn-gate:";
 /// shrink-only (4996 lines).
 const REGISTRY_SERVED_LIVE: &str = "registry-served-live";
 
+/// Witness basis for an opencode session record whose `time_updated` is fresh
+/// (within [`crate::opencode_transcript::OPENCODE_SESSION_FRESH_SECS`]). The
+/// shared server pid proves nothing per-session; this is the session's own
+/// recency stamp answering instead.
+const OPENCODE_SESSION_FRESH_LIVE: &str = "opencode-session-fresh-live";
+
 /// The production session witness. Resolution order for the record's
 /// resolved subject session (the worker a handover holder names, else the
 /// record's own session id): (a) the fleet registry row keyed by `harness_session_id`, whose
@@ -916,7 +922,7 @@ pub(crate) fn session_witness_primed_within(
             if matches!(answer, crate::claims::SessionLiveness::Unresolved)
                 && shared_hosts.contains(session)
             {
-                answer = codex_rollout_rung(session, &index, None, true);
+                answer = shared_host_session_rung(session, &index, None, true);
             }
             memo.borrow_mut().insert(session.clone(), answer);
         }
@@ -1301,7 +1307,7 @@ fn session_liveness_answer_uncached(
     if !matches!(answer, crate::claims::SessionLiveness::Unresolved) {
         return answer;
     }
-    codex_rollout_rung(session, index, codex_root, harness_shared_host)
+    shared_host_session_rung(session, index, codex_root, harness_shared_host)
 }
 
 /// The per-thread instrument for a shared-host witness read that ended
@@ -1340,6 +1346,61 @@ fn codex_rollout_rung(
         return crate::claims::SessionLiveness::Absent;
     }
     crate::claims::SessionLiveness::Unresolved
+}
+
+/// The per-session instrument for an OPENCODE shared-host witness read that
+/// ended Unresolved: the session record's own `time_updated` in the opencode
+/// store, the per-session recency stamp the shared server pid cannot be.
+/// Fresh proves the session is advancing (Live); quiet beside a removed
+/// worker row proves gone (Absent). Fails closed to Unresolved on any
+/// unreadable input, and on a store with no row for the id (it may never
+/// have been an opencode session).
+fn opencode_session_rung(
+    session: &str,
+    index: &std::cell::RefCell<Option<SessionRegistryIndex>>,
+    harness_shared_host: bool,
+) -> crate::claims::SessionLiveness {
+    if !harness_shared_host {
+        return crate::claims::SessionLiveness::Unresolved;
+    }
+    let (registry_known, row_gone) = {
+        let borrowed = index.borrow();
+        let registry = borrowed
+            .as_ref()
+            .expect("session registry index initialized");
+        (registry.known, registry.rows.get(session).is_none())
+    };
+    if !registry_known || !row_gone {
+        return crate::claims::SessionLiveness::Unresolved;
+    }
+    match crate::opencode_transcript::opencode_session_time_updated(session) {
+        Ok(Some(updated)) => {
+            let now = crate::claude_ask::now_epoch_secs();
+            if now.saturating_sub(updated)
+                <= crate::opencode_transcript::OPENCODE_SESSION_FRESH_SECS
+            {
+                return crate::claims::SessionLiveness::Live(OPENCODE_SESSION_FRESH_LIVE);
+            }
+            crate::claims::SessionLiveness::Absent
+        }
+        Ok(None) | Err(_) => crate::claims::SessionLiveness::Unresolved,
+    }
+}
+
+/// The two per-session instruments in one chain, so the lazy path and the
+/// primed path ask the identical question: codex's rollout mtime first, then
+/// opencode's session record. A rung without an answer falls to the next.
+fn shared_host_session_rung(
+    session: &str,
+    index: &std::cell::RefCell<Option<SessionRegistryIndex>>,
+    codex_root: Option<&std::path::Path>,
+    harness_shared_host: bool,
+) -> crate::claims::SessionLiveness {
+    let codex = codex_rollout_rung(session, index, codex_root, harness_shared_host);
+    if !matches!(codex, crate::claims::SessionLiveness::Unresolved) {
+        return codex;
+    }
+    opencode_session_rung(session, index, harness_shared_host)
 }
 
 fn session_liveness_from_observations(
@@ -1774,5 +1835,67 @@ mod tests {
         let f = std::fs::File::options().write(true).open(path).unwrap();
         f.set_times(std::fs::FileTimes::new().set_modified(past))
             .unwrap();
+    }
+
+    /// A minimal 2.x-family store for the opencode rung tests: two session
+    /// rows, one fresh and one 3 days quiet.
+    fn opencode_rung_store(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("fno-oc-rung-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("opencode.db");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT NOT NULL, time_updated INTEGER NOT NULL);",
+        )
+        .unwrap();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        for (id, updated) in [
+            ("ses_fresh", now_ms),
+            ("ses_stale", now_ms - 3 * 24 * 3600 * 1000),
+        ] {
+            conn.execute(
+                "INSERT INTO session_v2 (id, parent_id, directory, time_updated) VALUES (?1, NULL, '/fixture', ?2)",
+                rusqlite::params![id, updated],
+            )
+            .unwrap();
+        }
+        db
+    }
+
+    /// The opencode rung reads the session's own record: fresh answers Live,
+    /// quiet-beside-a-removed-row answers Absent, and a per-session harness
+    /// never reaches the store.
+    #[test]
+    fn opencode_session_rung_answers_from_the_session_record() {
+        let _g = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let restore = std::env::var_os("OPENCODE_DB");
+        let db = opencode_rung_store("rung");
+        std::env::set_var("OPENCODE_DB", &db);
+        let index = rung_index(Default::default());
+        let fresh = opencode_session_rung("ses_fresh", &index, true);
+        assert!(
+            matches!(
+                &fresh,
+                crate::claims::SessionLiveness::Live("opencode-session-fresh-live")
+            ),
+            "{fresh:?}"
+        );
+        assert!(matches!(
+            opencode_session_rung("ses_stale", &index, true),
+            crate::claims::SessionLiveness::Absent
+        ));
+        // A per-session harness never reaches the store: the gate decides
+        // before any read.
+        assert!(matches!(
+            opencode_session_rung("ses_fresh", &index, false),
+            crate::claims::SessionLiveness::Unresolved
+        ));
+        let _ = std::fs::remove_dir_all(db.parent().unwrap());
     }
 }

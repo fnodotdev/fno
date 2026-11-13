@@ -1535,11 +1535,21 @@ fn resolve_identity_from(get: impl Fn(&str) -> Option<String>) -> (Option<String
 ///   opencode: MEASURED 2026-09-04, opencode 1.14.50. `opencode run` forked pid
 ///             26245 whose exe IS the session, and zero opencode processes
 ///             remained four seconds after it exited. Per-invocation, so OFF
-///             the list.
+///             the list at the time.
+///   opencode: REMEASURED 2026-11-13. `opencode serve --service` pid 17476
+///             (up since Nov 11) hosts every opencode session on the machine;
+///             the ancestry walk stamps that one server pid on every session.
+///             A claim carrying it and a session last active two days earlier
+///             read `Live` (basis `live`) while the session witness answered
+///             `unresolved`, and the claim filled its territory cap (node
+///             x-b3fb repro). The list is keyed by harness NAME, and the
+///             fleet's opencode runs as one server, so the name moves ON. The
+///             2026-09-04 per-invocation reading stays true of `opencode run`;
+///             for it the session evidence now decides instead of the pid.
 ///
 /// Every other harness is unmeasured and therefore off the list by default.
 ///
-const SHARED_HOST_HARNESSES: &[&str] = &["codex"];
+const SHARED_HOST_HARNESSES: &[&str] = &["codex", "opencode"];
 
 /// True when `harness` forks a process per session, so its pid's death is the
 /// session's death.
