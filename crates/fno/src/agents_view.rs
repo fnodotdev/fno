@@ -1951,6 +1951,21 @@ fn attach_job_id(raw: &str) -> String {
     raw.to_string()
 }
 
+/// The row's additive result word, read typed (R1): a misspelled field
+/// refuses compile here, while the string-key reads around it stay
+/// grandfathered by the value-reads ratchet.
+#[derive(serde::Deserialize)]
+struct RowResultWord {
+    result: Option<String>,
+}
+
+fn row_result_word(row: &serde_json::Value) -> Option<String> {
+    <RowResultWord as serde::Deserialize>::deserialize(row)
+        .ok()
+        .and_then(|r| r.result)
+        .filter(|s| !s.is_empty())
+}
+
 pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgent>, usize)> {
     let doc: serde_json::Value = serde_json::from_str(raw).ok()?;
     let rows = doc
@@ -2316,11 +2331,7 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
                 .map(str::to_string),
-            result: row
-                .get("result")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .map(str::to_string),
+            result: row_result_word(row),
             model,
             route,
             session_id,
