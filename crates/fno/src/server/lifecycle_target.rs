@@ -26,9 +26,9 @@
 //! pref back on. (v26/ and v67 wire prose for the two commands moved
 //! here from proto.rs, where this module now lives.)
 
-use crate::pid::{Pid, SignalResult};
 use super::{dead_pane, err_code, ControlReply, ServerMsg};
 use crate::agents_view::RegistryAgent;
+use crate::pid::{Pid, SignalResult};
 
 /// The pane-table facts a lifecycle decision needs. The label is the same
 /// `pane_label` derivation section 1 rendered the row with, so the
