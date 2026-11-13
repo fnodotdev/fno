@@ -3029,16 +3029,15 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     showNoteLine(snap.failed);
   }
   if (openId) openNode(openId);
+  // One row per click on a control that names itself (data-fno): the bridge
+  // writes it through the same door the TUI client uses, ids only, and a
+  // click on nothing named ships nothing.
+  document.addEventListener("click", (e) => {
+    const tgt = e.target.closest("[data-fno]");
+    if (!tgt) return;
+    fetch(base + "ui/click?t=" + encodeURIComponent(t), {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify({screen: "web_backlog", control: tgt.dataset.fno}), keepalive: true}).catch(() => {});
+  }, true);
 })();
-
-// One row per click on a control that names itself (data-fno): the bridge
-// writes it through the same door the TUI client uses, ids only, and a
-// click on nothing named ships nothing.
-document.addEventListener("click", (e) => {
-  const tgt = e.target.closest("[data-fno]");
-  if (!tgt) return;
-  fetch(base + "ui/click?t=" + encodeURIComponent(t), {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify({screen: "web_backlog", control: tgt.dataset.fno}), keepalive: true}).catch(() => {});
-}, true);
 </script>
 </body>
 </html>

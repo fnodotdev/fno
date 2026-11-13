@@ -277,9 +277,6 @@ pub(super) async fn mouse_pre_pass(
         // US3: while the which-key modal is open, the mouse drives it
         // (hover selects, wheel scrolls, click executes or dismisses) and is
         // SWALLOWED - it never reaches a pane or the chrome underneath.
-        // US3: while the which-key modal is open, the mouse drives it
-        // (hover selects, wheel scrolls, click executes or dismisses) and is
-        // SWALLOWED - it never reaches a pane or the chrome underneath.
         if view.keys_modal.is_some() {
             click_press(&rep, "whichkey");
             if let StdinFlow::Detach =
