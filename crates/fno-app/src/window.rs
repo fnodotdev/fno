@@ -706,6 +706,47 @@ impl Root {
         self.chat.field.dragging.set(false);
     }
 
+    /// A key in chat mode: an open sheet takes Escape, otherwise it edits the draft.
+    fn chat_key(&mut self, key: &Key, window: &Window, cx: &mut Context<Self>) {
+        // An open sheet takes only Escape; an IME draft takes the keys.
+        if self.chat.sheet.is_some() {
+            if key.key == "escape" {
+                self.chat.sheet = None;
+                cx.stop_propagation();
+                cx.notify();
+            }
+            return;
+        }
+        if self.chat.draft.marked().is_some() {
+            return;
+        }
+        let (shift, alt, cmd) = (key.shift, key.alt, key.cmd);
+        let vertical = matches!(key.key, "up" | "down");
+        if !vertical {
+            self.chat.field.goal_x.set(None);
+        }
+        match key.key {
+            "enter" if !shift => self.submit_chat(cx),
+            "enter" => self.chat.draft.replace_selection("\n"),
+            "backspace" => self.chat.draft.backspace(),
+            "delete" => self.chat.draft.delete(),
+            "left" if cmd => self.chat.draft.home(shift),
+            "left" if alt => self.chat.draft.word_left(shift),
+            "left" => self.chat.draft.left(shift),
+            "right" if cmd => self.chat.draft.end(shift),
+            "right" if alt => self.chat.draft.word_right(shift),
+            "right" => self.chat.draft.right(shift),
+            "home" => self.chat.draft.home(shift),
+            "end" => self.chat.draft.end(shift),
+            "up" if cmd => self.chat.draft.doc_start(shift),
+            "down" if cmd => self.chat.draft.doc_end(shift),
+            "up" | "down" => self.chat_vertical(key.key == "up", shift, window),
+            _ => return,
+        }
+        cx.stop_propagation();
+        self.chat_moved(cx);
+    }
+
     fn on_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let ks = &ev.keystroke;
         let key = Key {
@@ -770,43 +811,7 @@ impl Root {
             return;
         }
         if self.main == MainView::Chat {
-            // An open sheet takes only Escape; an IME draft takes the keys.
-            if self.chat.sheet.is_some() {
-                if ks.key == "escape" {
-                    self.chat.sheet = None;
-                    cx.stop_propagation();
-                    cx.notify();
-                }
-                return;
-            }
-            if self.chat.draft.marked().is_some() {
-                return;
-            }
-            let (shift, alt, cmd) = (key.shift, key.alt, key.cmd);
-            let vertical = matches!(ks.key.as_str(), "up" | "down");
-            if !vertical {
-                self.chat.field.goal_x.set(None);
-            }
-            match ks.key.as_str() {
-                "enter" if !shift => self.submit_chat(cx),
-                "enter" => self.chat.draft.replace_selection("\n"),
-                "backspace" => self.chat.draft.backspace(),
-                "delete" => self.chat.draft.delete(),
-                "left" if cmd => self.chat.draft.home(shift),
-                "left" if alt => self.chat.draft.word_left(shift),
-                "left" => self.chat.draft.left(shift),
-                "right" if cmd => self.chat.draft.end(shift),
-                "right" if alt => self.chat.draft.word_right(shift),
-                "right" => self.chat.draft.right(shift),
-                "home" => self.chat.draft.home(shift),
-                "end" => self.chat.draft.end(shift),
-                "up" if cmd => self.chat.draft.doc_start(shift),
-                "down" if cmd => self.chat.draft.doc_end(shift),
-                "up" | "down" => self.chat_vertical(ks.key == "up", shift, window),
-                _ => return,
-            }
-            cx.stop_propagation();
-            self.chat_moved(cx);
+            self.chat_key(&key, window, cx);
             return;
         }
         if self.main == MainView::Mods && mods::key(self, &key, cx) {

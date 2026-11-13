@@ -99,8 +99,9 @@ impl Layout {
     }
 
     fn line_top(&self, ix: usize) -> Pixels {
-        self.lines[..ix]
+        self.lines
             .iter()
+            .take(ix)
             .map(|l| l.size(self.line_height).height)
             .fold(px(0.), |a, h| a + h)
     }
@@ -122,8 +123,11 @@ impl Layout {
             return Point::default();
         }
         let ix = self.line_of(offset);
-        let local = (offset - self.starts[ix]).min(self.lines[ix].len());
-        let at = self.lines[ix]
+        let (Some(line), Some(start)) = (self.lines.get(ix), self.starts.get(ix)) else {
+            return Point::default();
+        };
+        let local = offset.saturating_sub(*start).min(line.len());
+        let at = line
             .position_for_index(local, self.line_height)
             .unwrap_or_default();
         point(at.x, at.y + self.line_top(ix))
@@ -142,7 +146,8 @@ impl Layout {
                 let found = line
                     .closest_index_for_position(local, self.line_height)
                     .unwrap_or_else(|e| e);
-                return (self.starts[ix] + found).min(text_len);
+                let start = self.starts.get(ix).copied().unwrap_or_default();
+                return (start + found).min(text_len);
             }
             top += h;
         }
@@ -398,14 +403,15 @@ impl Element for Field {
         }
         let mut top = px(0.);
         for line in &pre.layout.lines {
-            let _ = line.paint(
+            line.paint(
                 origin + point(px(0.), top),
                 pre.layout.line_height,
                 gpui::TextAlign::Left,
                 None,
                 window,
                 cx,
-            );
+            )
+            .unwrap_or_default();
             top += line.size(pre.layout.line_height).height;
         }
         if self.focused && !self.draft.has_selection() {
