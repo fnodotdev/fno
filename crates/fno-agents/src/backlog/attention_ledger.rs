@@ -11,7 +11,7 @@
 use chrono::{DateTime, Datelike, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// The week the ledger reports: `2026-W46` plus its Monday 00:00 UTC start.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -378,6 +378,12 @@ fn revert_count(window: &Window, cwd: &Path, notes: &mut Vec<String>) -> usize {
                 "--format",
                 "%H",
             ])
+            // Both streams pipe: wait_with_output only collects what is
+            // piped, an inherited stderr would leak git's fatal lines into
+            // the beat's own stderr, and the count and the failure note
+            // both read what the child prints.
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .and_then(|child| child.wait_with_output());
         match out {
