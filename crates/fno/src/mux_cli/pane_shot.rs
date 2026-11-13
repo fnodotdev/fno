@@ -157,7 +157,7 @@ fn shoot(session: &str, sock: &Path, spec: ShotSpec) -> Result<PathBuf, ShotErro
     let _ = std::fs::remove_file(&out);
     let _ = std::fs::remove_file(&status);
     let out_str = out.to_string_lossy().into_owned();
-    let cwd = super::resolve_run_cwd(spec.cwd, std::env::current_dir().ok());
+    let cwd = super::pane_args::resolve_run_cwd(spec.cwd, std::env::current_dir().ok());
     let run = ControlCommand::PaneRun {
         cwd,
         argv: capture_argv(&spec.area, &out_str),

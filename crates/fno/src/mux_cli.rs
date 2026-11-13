@@ -78,6 +78,7 @@ mod pane_args;
 mod pane_keeper_list;
 use block_args::{parse_block_annotate, parse_block_args};
 use clap::Parser as _;
+use pane_args::resolve_run_cwd;
 pub use pane_args::{
     parse_pane_args, ParsedPane, PANE_LS_IDENTITY_HELP, PANE_REFERENCE_USAGE, PANE_RUN_WORKER_HELP,
     PANE_SEND_RAW_HELP,
@@ -1974,27 +1975,6 @@ fn reply_deadline_for(is_wait: bool, read_timeout: Duration) -> Duration {
         read_timeout
     } else {
         CONTROL_REPLY_DEADLINE
-    }
-}
-
-/// Resolve `pane run --cwd` to an absolute path CLIENT-side. The server is a
-/// detached daemon with its own cwd, so a RELATIVE path would resolve against
-/// the wrong directory there (gemini review). Absolute passes through; a
-/// relative path is joined onto `client_cwd`; omitted defaults to `client_cwd`.
-/// `client_cwd` is passed in (not read here) so the branch is unit-testable.
-fn resolve_run_cwd(cwd: Option<String>, client_cwd: Option<std::path::PathBuf>) -> String {
-    let join = |rel: &str| -> Option<String> {
-        client_cwd
-            .as_ref()
-            .map(|d| d.join(rel).to_string_lossy().into_owned())
-    };
-    match cwd {
-        Some(c) if std::path::Path::new(&c).is_absolute() => c,
-        Some(c) => join(&c).unwrap_or(c),
-        None => client_cwd
-            .as_ref()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default(),
     }
 }
 

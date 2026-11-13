@@ -687,6 +687,30 @@ pub fn parse_pane_args(
 }
 
 /// `--size 144x40`: columns, then rows, each 1..=1000.
+/// Resolve `pane run --cwd` to an absolute path CLIENT-side. The server is a
+/// detached daemon with its own cwd, so a RELATIVE path would resolve against
+/// the wrong directory there (gemini review). Absolute passes through; a
+/// relative path is joined onto `client_cwd`; omitted defaults to `client_cwd`.
+/// `client_cwd` is passed in (not read here) so the branch is unit-testable.
+pub(crate) fn resolve_run_cwd(
+    cwd: Option<String>,
+    client_cwd: Option<std::path::PathBuf>,
+) -> String {
+    let join = |rel: &str| -> Option<String> {
+        client_cwd
+            .as_ref()
+            .map(|d| d.join(rel).to_string_lossy().into_owned())
+    };
+    match cwd {
+        Some(c) if std::path::Path::new(&c).is_absolute() => c,
+        Some(c) => join(&c).unwrap_or(c),
+        None => client_cwd
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    }
+}
+
 pub(crate) fn parse_size(v: &str) -> Result<(u16, u16), String> {
     let dim = |s: &str| s.parse::<u16>().ok().filter(|n| (1..=1000).contains(n));
     v.split_once('x')
