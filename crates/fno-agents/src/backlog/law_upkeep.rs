@@ -67,7 +67,7 @@ const PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
     <key>Hour</key>
     <integer>{hour}</integer>
     <key>Minute</key>
-    <integer>30</integer>
+    <integer>{minute}</integer>
   </dict>
 
   <key>RunAtLoad</key>
@@ -387,6 +387,7 @@ fn render_plist(fno_binary: &str, install_path: &str, hour: i64, workdir: Option
         .replace("{home}", &esc(&home_s))
         .replace("{workdir}", &esc(workdir.unwrap_or(&home_s)))
         .replace("{hour}", &hour.to_string())
+        .replace("{minute}", &MINUTE.to_string())
         .replace(
             "{log_out}",
             &esc(&logs.join("law-upkeep.out.log").display().to_string()),
