@@ -351,7 +351,6 @@ fn runner_script(command: &str, seg: &Segment, walk: &Walk) -> Runner {
         }
         return Runner::None;
     };
-    let label = path.to_string();
     let Some(full) = walk.resolve(path) else {
         let why = if walk.expand_vars(path).is_none() {
             "names its path through a variable or substitution the guard cannot resolve. \
@@ -362,7 +361,14 @@ fn runner_script(command: &str, seg: &Segment, walk: &Walk) -> Runner {
         };
         return decide(command, path, why);
     };
-    match walk.written_to(&full) {
+    runner_file(command, path, &full, walk)
+}
+
+/// The file-path tail of [`runner_script`]: the walk resolved the script's
+/// path, so its writer, its presence, or its text decides the verdict.
+fn runner_file(command: &str, path: &str, full: &Path, walk: &Walk) -> Runner {
+    let label = path.to_string();
+    match walk.written_to(full) {
         Some(Source::Text(text)) => return Runner::Text(text.clone(), label),
         Some(Source::Opaque(writer)) => {
             return decide(
@@ -391,9 +397,9 @@ fn runner_script(command: &str, seg: &Segment, walk: &Walk) -> Runner {
         }
         return Runner::None;
     }
-    match read_script(&full) {
+    match read_script(full) {
         Ok(text) => Runner::Text(text, label),
-        Err(why) => decide(command, path, &why),
+        Err(why) => decide(command, path, &why.why()),
     }
 }
 
@@ -407,29 +413,48 @@ fn decide(command: &str, script: &str, why: &str) -> Runner {
     }
 }
 
-/// Read the script file. `Err` carries the why; the caller decides between
-/// a refusal (the command text holds a push) and warn-and-proceed.
-fn read_script(full: &Path) -> Result<String, String> {
-    let meta = std::fs::metadata(full).map_err(|e| read_why(&e))?;
-    if !meta.is_file() {
-        return Err("is not a regular file".to_string());
-    }
-    if meta.len() > MAX_SCRIPT_BYTES {
-        return Err("is larger than the guard's 1 MiB read cap".to_string());
-    }
-    let bytes = std::fs::read(full).map_err(|e| read_why(&e))?;
-    if bytes.contains(&0u8) {
-        return Err("contains NUL bytes (binary)".to_string());
-    }
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+/// Why a script file's text could not be read. Typed because the crate's
+/// string error count is shrink-only (docs/rust-style.md R6); `why` spells
+/// the sentence the refusal or warning names the script by.
+enum ReadWhy {
+    Io(std::io::Error),
+    NotAFile,
+    TooLarge,
+    Binary,
 }
 
-fn read_why(e: &std::io::Error) -> String {
-    if e.kind() == std::io::ErrorKind::NotFound {
-        "does not exist".to_string()
-    } else {
-        format!("unreadable ({e})")
+impl ReadWhy {
+    fn why(self) -> String {
+        match self {
+            Self::Io(e) => {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    "does not exist".to_string()
+                } else {
+                    format!("unreadable ({e})")
+                }
+            }
+            Self::NotAFile => "is not a regular file".to_string(),
+            Self::TooLarge => "is larger than the guard's 1 MiB read cap".to_string(),
+            Self::Binary => "contains NUL bytes (binary)".to_string(),
+        }
     }
+}
+
+/// Read the script file. `Err` carries the why; the caller decides between
+/// a refusal (the command text holds a push) and warn-and-proceed.
+fn read_script(full: &Path) -> Result<String, ReadWhy> {
+    let meta = std::fs::metadata(full).map_err(ReadWhy::Io)?;
+    if !meta.is_file() {
+        return Err(ReadWhy::NotAFile);
+    }
+    if meta.len() > MAX_SCRIPT_BYTES {
+        return Err(ReadWhy::TooLarge);
+    }
+    let bytes = std::fs::read(full).map_err(ReadWhy::Io)?;
+    if bytes.contains(&0u8) {
+        return Err(ReadWhy::Binary);
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Parse script text as command segments. Text that parses as unbalanced is
