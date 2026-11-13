@@ -270,6 +270,45 @@ pub(crate) fn served_word(
 
 use crate::events::EventEmitter;
 
+/// How long a quiet headless row waits inside the settle window before the
+/// sweep ends it. Long enough that a healthy one-shot's transcript or log
+/// activity answers Alive first (the window never fires on a run that
+/// writes anything); short enough that a stuck row does not hold a seat
+/// and a lane for hours. Anchored on the row's NEWEST clock: the spawn
+/// stamp, or a report's arrival for a row the parent never stamped.
+pub(crate) const HEADLESS_SETTLE_WINDOW_MS: i64 = 10 * 60 * 1000;
+
+/// The end word a quiet headless row settles under, decided only from the
+/// row's own facts: did a harness session ever bind (`failed-to-start`
+/// when not, past the window) or did the run start and go quiet
+/// (`finished`). `None` while inside the window. An unparseable clock
+/// (a legacy row with an empty created_at) keeps the row: age must be
+/// provable to settle on it.
+fn headless_settle_word(entry: &RegistryEntry, now_ms: i64) -> Option<state::HeadlessResult> {
+    let newest = [
+        crate::event_store::parse_rfc3339_ms(&entry.created_at),
+        entry
+            .last_report_at
+            .as_deref()
+            .and_then(crate::event_store::parse_rfc3339_ms),
+    ]
+    .into_iter()
+    .flatten()
+    .max();
+    let newest = newest?;
+    (now_ms - newest > HEADLESS_SETTLE_WINDOW_MS).then(|| {
+        if entry
+            .harness_session_id
+            .as_deref()
+            .is_none_or(str::is_empty)
+        {
+            state::HeadlessResult::FailedToStart
+        } else {
+            state::HeadlessResult::Finished
+        }
+    })
+}
+
 /// A status change reconcile decided for one probed entry. `new_status: None`
 /// means "probed, status unchanged" — its `last_reconciled_at` is still bumped
 /// so the fairness ordering rotates.
@@ -286,6 +325,12 @@ pub(crate) struct ReconcileChange {
     /// probe inference. A process fact is writable by any sweep; a probe
     /// inference stays on the operator-driven sweeps.
     pub(crate) pid_proven: bool,
+    /// The one-shot end word a headless settle writes beside the Exited
+    /// status: `failed-to-start` (no session ever bound) or `finished`
+    /// (started, then went quiet past the window). `None` on every other
+    /// arm; the parent lane's own stamp (`headless_row::stamp_exit`) is the
+    /// senior writer and this field never overwrites one.
+    pub(crate) new_result: Option<state::HeadlessResult>,
     /// A guarded team revival: the write must re-resolve the row by its own
     /// (harness, session id) - never the name fallback - and skip unless the
     /// team fields still sit on it, so a concurrent stop or succession
@@ -340,6 +385,7 @@ pub(crate) fn plan_reconcile<P, D, L, B, W, H, R, V>(
     mut rollout_exists: R,
     mut liveness: V,
     roster_readable: bool,
+    now_ms: i64,
 ) -> (Vec<ReconcileChange>, ReconcileOutcome)
 where
     P: FnMut(&RegistryEntry) -> Result<bool, crate::provider::ReachabilityProbeError>,
@@ -357,6 +403,56 @@ where
         if budget_exhausted() {
             out.deferred = entries.len() - i;
             break;
+        }
+        // A one-shot headless run's row ends with its child's exit. The
+        // parent lane stamps the observed exit (`headless_row::stamp_exit`);
+        // this arm settles what the parent never observed - a parent that
+        // died mid-run, a lane with no parent-side stamp, a run that never
+        // came up. Neither existing bucket can own it: a minted headless
+        // row carries a short_id (the ask bucket skips it) and no mux ref,
+        // so the probe path's pid_decides never fires either - which is
+        // exactly how a finished one-shot read as a live lane holding a
+        // seat forever. Silence past the window is the evidence here, not
+        // coming-up: a one-shot has no readiness to wait for, and the
+        // window anchors on the row's newest clock (spawn or report) so a
+        // late-but-live report keeps resetting it.
+        if entry.is_headless_once() {
+            let measured = liveness(entry);
+            let settle = if measured == RowLiveness::Alive {
+                // Still running: the ladder answers Alive, keep the row.
+                None
+            } else if entry.status == AgentStatus::Exited {
+                // Terminal: the parent's stamp stands.
+                None
+            } else {
+                // Quiet and past the window: settle Exited with the honest
+                // word; quiet but young keeps waiting inside the window.
+                headless_settle_word(entry, now_ms).map(|result| (AgentStatus::Exited, result))
+            };
+            let (new_status, new_result, pid_proven, liveness_word) = match settle {
+                None => (None, None, false, measured),
+                Some((status, result)) => (
+                    Some(status),
+                    Some(result),
+                    // A positive process fact when the row recorded one: the
+                    // pid answers gone, so any sweep may write the death.
+                    entry.pid.is_some() && !pid_live(entry),
+                    RowLiveness::Dead,
+                ),
+            };
+            changes.push(ReconcileChange {
+                name: entry.name.clone(),
+                new_status,
+                new_liveness: match liveness_word {
+                    RowLiveness::Alive => Some("alive"),
+                    RowLiveness::Dead => Some("dead"),
+                    RowLiveness::Unknown => None,
+                },
+                pid_proven,
+                new_result,
+                team_revive: false,
+            });
+            continue;
         }
         // A Codex thread hosted by THIS daemon is owned by its actor: the
         // stale registry pid must not settle it. A row no longer hosted is
@@ -423,6 +519,7 @@ where
                     None
                 },
                 pid_proven: false,
+                new_result: None,
                 team_revive: false,
             });
             continue;
@@ -536,6 +633,7 @@ where
                     }
                 },
                 pid_proven: false,
+                new_result: None,
                 team_revive: false,
             });
             continue;
@@ -650,6 +748,7 @@ where
             new_status,
             new_liveness: crate::liveness_sweep::served_word(entry, &measured, &mut pid_live),
             pid_proven: pid_proven_dead,
+            new_result: None,
             team_revive: false,
         });
     }
@@ -695,6 +794,7 @@ where
             new_status: Some(AgentStatus::Live),
             new_liveness: Some("alive"),
             pid_proven: false,
+            new_result: None,
             team_revive: true,
         });
     }
@@ -982,6 +1082,13 @@ pub(crate) fn apply_reconcile_changes(
             };
             let from = e.status;
             apply_reconcile_change(e, status, ch.new_liveness, now);
+            // The settle word rides beside the status transition, never
+            // ahead of it: only a change that TOOK gets the word.
+            if status.is_some() {
+                if let Some(result) = ch.new_result {
+                    e.result = Some(result);
+                }
+            }
             if let Some(to) = status {
                 if from != to {
                     applied.push(AppliedTransition {
@@ -1109,6 +1216,7 @@ mod tests {
             |_| false,
             |_| RowLiveness::Unknown,
             true, // roster readable: the flip needs a successful roster read
+            1_700_000_000_000,
         );
         assert_eq!(
             changes[0].new_status,
@@ -1144,6 +1252,7 @@ mod tests {
             |_| false,
             |_| RowLiveness::Alive, // the transcript keeps advancing
             true,
+            1_700_000_000_000,
         );
         assert_eq!(
             changes[0].new_status, None,
@@ -1176,6 +1285,7 @@ mod tests {
             |_| false,
             |_| RowLiveness::Alive, // the comeback rung answered
             true,
+            1_700_000_000_000,
         );
         assert_eq!(
             changes[0].new_status,
@@ -1227,6 +1337,7 @@ mod tests {
             |_| false,
             |_| RowLiveness::Unknown, // 2h idle: the ladder answers Unknown
             true,                     // roster readable
+            1_700_000_000_000,
         );
         assert_eq!(
             changes[0].new_status, None,
@@ -1275,6 +1386,7 @@ mod tests {
             new_status: Some(AgentStatus::Exited),
             new_liveness: Some("dead"),
             pid_proven: false,
+            new_result: None,
             team_revive: false,
         }];
         let titles: std::collections::HashMap<String, Option<String>> =
@@ -1401,6 +1513,7 @@ mod tests {
             |_| false,
             |_| RowLiveness::Unknown,
             true,
+            1_700_000_000_000,
         )
         .0;
         assert_eq!(changes.len(), 1);
@@ -1467,6 +1580,7 @@ mod tests {
             |_| false,
             |_| RowLiveness::Alive,
             true,
+            1_700_000_000_000,
         );
         assert_eq!(
             changes[0].new_liveness,
@@ -1685,6 +1799,7 @@ mod tests {
             new_status: None,
             new_liveness: Some("unmeasured"),
             pid_proven: false,
+            new_result: None,
             team_revive: false,
         };
         let mut changes = vec![change("quill"), change("warden"), change("gone")];
@@ -1733,5 +1848,102 @@ mod tests {
         blind.serve_listing(&entries, &mut changes);
         assert_eq!(changes[0].new_liveness, Some("unmeasured"));
         assert_eq!(changes[1].new_liveness, Some("unmeasured"));
+    }
+
+    /// A headless row the ladder cannot vouch for, quiet past the settle
+    /// window with no session ever bound: the arm settles it Exited under
+    /// `failed-to-start`, and the applied write lands the word on the row.
+    #[test]
+    fn a_quiet_headless_row_past_the_window_settles_failed_to_start() {
+        let mut entry = state::RegistryEntry::default();
+        entry.name = "t-once".into();
+        entry.substrate = Some("headless".into());
+        entry.status = AgentStatus::Live;
+        entry.created_at = "2026-11-12T00:00:00Z".into();
+        let entries = vec![entry.clone()];
+        let spawned_at =
+            crate::event_store::parse_rfc3339_ms(&entry.created_at).expect("test clock parses");
+        let now = spawned_at + HEADLESS_SETTLE_WINDOW_MS + 1;
+        let (changes, _out) = plan_reconcile(
+            &entries,
+            |_| Ok(true),
+            || false,
+            |_| true,
+            |_| false,
+            |_| false,
+            |_| false,
+            |_| false,
+            |_| RowLiveness::Unknown,
+            true,
+            now,
+        );
+        assert_eq!(changes.len(), 1, "the headless arm owns the row");
+        assert_eq!(changes[0].new_status, Some(AgentStatus::Exited));
+        assert_eq!(
+            changes[0].new_result,
+            Some(state::HeadlessResult::FailedToStart)
+        );
+        assert_eq!(changes[0].new_liveness, Some("dead"));
+        // The applied write carries the word onto the row beside the stamp.
+        let titles: std::collections::HashMap<String, Option<String>> =
+            std::collections::HashMap::new();
+        let mut reg = state::Registry::default();
+        reg.entries.push(entry);
+        apply_reconcile_changes(
+            &mut reg,
+            &entries,
+            &changes,
+            &titles,
+            &SweepMode::Full,
+            "2026-11-12T00:20:00Z",
+        );
+        let row = reg.find_mut("t-once").unwrap();
+        assert_eq!(row.status, AgentStatus::Exited);
+        assert_eq!(row.result, Some(state::HeadlessResult::FailedToStart));
+        assert!(row.exited_at.is_some(), "the Exited write stamps the time");
+    }
+
+    /// Two rows the arm must NOT settle: a headless run the ladder still
+    /// answers Alive (it writes something), and a quiet one still inside
+    /// the settle window.
+    #[test]
+    fn a_headless_row_keeps_running_while_alive_or_young() {
+        let mut running = state::RegistryEntry::default();
+        running.name = "t-running".into();
+        running.substrate = Some("headless".into());
+        running.status = AgentStatus::Live;
+        running.created_at = "2026-11-12T00:00:00Z".into();
+        let mut young = state::RegistryEntry::default();
+        young.name = "t-young".into();
+        young.substrate = Some("headless".into());
+        young.status = AgentStatus::Spawning;
+        let spawned_at =
+            crate::event_store::parse_rfc3339_ms(&running.created_at).expect("test clock parses");
+        let now = spawned_at + HEADLESS_SETTLE_WINDOW_MS - 1;
+        let entries = vec![running, young];
+        let (changes, _out) = plan_reconcile(
+            &entries,
+            |_| Ok(true),
+            || false,
+            |_| true,
+            |_| false,
+            |_| false,
+            |_| false,
+            |_| false,
+            |e| {
+                if e.name == "t-running" {
+                    RowLiveness::Alive
+                } else {
+                    RowLiveness::Unknown
+                }
+            },
+            true,
+            now,
+        );
+        assert_eq!(changes.len(), 2);
+        for change in &changes {
+            assert_eq!(change.new_status, None, "{} stays", change.name);
+            assert_eq!(change.new_result, None);
+        }
     }
 }

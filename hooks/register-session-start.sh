@@ -78,6 +78,11 @@ if [[ -n "${FNO_AGENT_SELF:-}" ]]; then
     # report action (the client action list is shrink-only).
     ARGS=(report --kind session --harness "$HARNESS" --agent-self "$FNO_AGENT_SELF")
     [[ -n "$SESSION_ID" ]] && ARGS+=(--session-id "$SESSION_ID")
+    # The lane's own substrate word: the headless lanes stamp it on the child,
+    # and the daemon's mint reads it so the row carries the one-shot identity
+    # the lifecycle arms key on. Absent on pane/thread stamps (their env_wrap
+    # pair already says pane) and on hand-started sessions.
+    [[ -n "${FNO_AGENT_SUBSTRATE:-}" ]] && ARGS+=(--agent-substrate "$FNO_AGENT_SUBSTRATE")
     # Pane substrate only: the spawner writes the row AFTER `mux pane run`
     # returns, so a fast-booting child reports before its row exists. The
     # daemon polls for it under this flag; every other substrate has its row

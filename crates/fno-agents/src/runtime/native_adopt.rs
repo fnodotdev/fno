@@ -78,6 +78,7 @@ pub(crate) fn prepare_mint(
     transcript_path: Option<&str>,
     source: Option<&str>,
     report_cwd: Option<&str>,
+    report_substrate: Option<&str>,
 ) -> Option<NativeMint> {
     // Plain read; the write closure re-decides absence under the lock.
     let entries = crate::daemon::load_registry_asserted(&home.registry_json())
@@ -125,11 +126,19 @@ pub(crate) fn prepare_mint(
         Some(r) => (
             r.launch.node.clone(),
             Some(r.launch.cwd.clone()),
-            Some(crate::launch_record::native_substrate_word(
-                &r.launch.harness,
-            )),
+            Some(crate::launch_record::native_substrate_word(&r.launch.harness).to_string()),
         ),
-        None => (None, report_cwd.map(str::to_string), None),
+        // A record-less report carries the lane's own word: the headless
+        // lanes stamp FNO_AGENT_SUBSTRATE on the child, the SessionStart
+        // hook passes it, and the row's substrate becomes the one-shot
+        // identity every lifecycle arm keys on. Strictly the known one-shot
+        // word: anything else is a value no arm knows how to honor, and an
+        // unverified stamp would reclassify an interactive session.
+        None => (
+            None,
+            report_cwd.map(str::to_string),
+            (report_substrate == Some("headless")).then(|| "headless".to_string()),
+        ),
     };
     let mut entry = RegistryEntry {
         name: base_name,
@@ -137,7 +146,7 @@ pub(crate) fn prepare_mint(
         status: AgentStatus::Live,
         short_id: short,
         harness: Some(harness.to_string()),
-        substrate: substrate.map(str::to_string),
+        substrate: substrate.as_deref().map(str::to_string),
         node,
         node_basis: record.and_then(|r| r.node_basis.clone()),
         transcript_path: transcript_path.map(str::to_string),

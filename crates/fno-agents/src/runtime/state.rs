@@ -782,6 +782,22 @@ fn legacy_row_status() -> AgentStatus {
     AgentStatus::Live
 }
 
+/// Why a one-shot headless run ended. A closed vocabulary (R2), serialized
+/// kebab-case on the row: `finished` (the child exited clean), `failed`
+/// (the child exited nonzero), `failed-to-start` (no harness session ever
+/// bound within the settle window, so the run never came up). The parent
+/// lane writes the first two from the observed exit; the reconcile sweep
+/// writes the third. There is deliberately no "crashed" arm: a run whose
+/// parent died before the wait settles through the sweep without an exit
+/// observation, and an invented word would dress a guess as a fact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HeadlessResult {
+    Finished,
+    Failed,
+    FailedToStart,
+}
+
 /// One registry row. Optional fields default to `None`; fields not modeled
 /// here are retained in `extra` so a read-modify-write preserves newer data.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -1159,6 +1175,22 @@ pub struct RegistryEntry {
     /// (additive-optional, no schema bump).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exited_at: Option<String>,
+    /// WHY a one-shot headless run ended (additive-optional, the `exited_at`
+    /// precedent: no schema bump). The headless lane's parent stamps it with
+    /// the child's exit, and the reconcile sweep stamps
+    /// [`HeadlessResult::FailedToStart`] when no session ever bound. `None`
+    /// on every interactive row and on a terminal row whose writer predated
+    /// the field: absence means unknown, never "finished", because a silent
+    /// default would read a crashed run as a clean one. Same X3 passthrough
+    /// duty as every daemon-stamped field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<HeadlessResult>,
+    /// The child process exit code behind [`RegistryEntry::result`], when
+    /// the writer observed one (the parent lane's wait). `None` when the
+    /// row settled without an observed exit (the sweep arms): no invented
+    /// number on the wire. Same additive-optional shape as `result`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
     /// fno's own stop, stamped by the stop handler and the terminal-stop
     /// sweep (schema v32). The work readers treat a harness `stopped` state
     /// as terminal only when this is absent, so a row fno stopped holds as
@@ -1902,6 +1934,16 @@ impl RegistryEntry {
         // agent, never a finished ask - without this exclusion the reconcile
         // sweep would flip it to Exited unprobed (codex P1, PR #142).
         (self.short_id.is_empty() || is_claude_shellout) && self.pid.is_none() && self.mux.is_none()
+    }
+
+    /// A one-shot headless run (the `--as headless` lanes): the process is
+    /// one turn long by contract, so the row's life ends with the child's
+    /// exit. The substrate stamp is the identity, not a guess from the
+    /// harness or the pid: an interactive row and a one-shot can share
+    /// every other field. `None` substrate means the writer could not know
+    /// (older rows, adopt) and never reads as headless here.
+    pub fn is_headless_once(&self) -> bool {
+        self.substrate.as_deref() == Some("headless")
     }
 }
 

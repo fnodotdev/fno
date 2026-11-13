@@ -325,6 +325,7 @@ fn derive_log_path(home: &crate::paths::AgentsHome, name: &str) -> std::path::Pa
 ///
 /// Returns the stdout text on a clean exit, or `(exit_code, message)`. `harness`
 /// names the binary in every refusal and stamps the child's identity env.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_one_shot(
     harness: &str,
     argv: &[String],
@@ -332,6 +333,7 @@ pub(crate) fn run_one_shot(
     timeout: Option<Duration>,
     cwd: &Path,
     agent_self: &str,
+    row: Option<&crate::paths::AgentsHome>,
 ) -> Result<String, (i32, String)> {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
@@ -345,6 +347,9 @@ pub(crate) fn run_one_shot(
     // The harness resolves its project from $PWD, not the process cwd.
     cmd.env("PWD", cwd);
     crate::claims::stamp_command_env(&mut cmd, Some(agent_self), harness, None);
+    // The one-shot identity every consumer keys on (the SessionStart report
+    // carries it so a mint stamps the row's substrate).
+    cmd.env("FNO_AGENT_SUBSTRATE", "headless");
     // A `[sandbox] provider = "devcontainer"` spawn runs this lane in the sandbox.
     let mut cmd = crate::sandbox_launch::sandboxed(cmd);
     cmd.stdin(Stdio::null());
@@ -366,6 +371,12 @@ pub(crate) fn run_one_shot(
         Err(e) => return Err((2, format!("OSError invoking {harness}: {e}"))),
     };
     let pid = child.id();
+    // The parent saw the child come up: stamp the row before the wait, so a
+    // row exists from the first moment and carries the pid the sweep can
+    // prove dead later. `None` means the caller kept no row (no --mux).
+    if let Some(home) = row {
+        crate::headless_row::stamp_spawn(home, agent_self, harness, &cwd.to_string_lossy(), pid);
+    }
     // Forward operator Ctrl-C to the child's process group for this call. RAII
     // guard held for the whole function - do NOT discard to `_`.
     let _sigint_guard = crate::subprocess_ask::SigintForwarder::install(pid);
@@ -401,6 +412,11 @@ pub(crate) fn run_one_shot(
     watchdog.join();
     let _ = stderr_handle.join();
     let stderr_text = stderr_buf.lock().map(|s| s.clone()).unwrap_or_default();
+    // The child is reaped, so the exit is observed on every path past the
+    // wait: the row ends here, never at spawning.
+    if let Some(home) = row {
+        crate::headless_row::stamp_exit(home, agent_self, Some(exit_code));
+    }
 
     // Operator Ctrl-C wins over every other classification.
     if crate::subprocess_ask::ask_interrupted() {
@@ -502,8 +518,15 @@ pub fn dispatch_opencode_once(
         let _ = std::fs::create_dir_all(parent);
     }
     let eff_timeout = timeout.or(Some(DEFAULT_ONE_SHOT_TIMEOUT));
+    // The row is opt-in (`fno agents spawn --mux`); without it the run keeps
+    // no row and stamps none.
+    let row = (std::env::var(crate::claude_ask::SHOW_ROW_ENV)
+        .ok()
+        .as_deref()
+        == Some("1"))
+    .then_some(home);
 
-    match run_one_shot("opencode", &argv, &log_path, eff_timeout, cwd, name) {
+    match run_one_shot("opencode", &argv, &log_path, eff_timeout, cwd, name, row) {
         Ok(reply) => AskOutcome::ok_reply(reply),
         Err((code, msg)) => {
             emit_event(

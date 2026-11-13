@@ -2753,6 +2753,7 @@ fn maybe_run_spawn(
         ("claude", "headless") => {
             let claude_home = ClaudeHome::from_env();
             emit!(dispatch_claude_headless(
+                home,
                 &claude_home,
                 name,
                 &message,

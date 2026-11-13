@@ -605,6 +605,7 @@ mod tests {
             |_| false,
             |_| crate::client_commands::RowLiveness::Unknown,
             true,
+            crate::claims::now_ms(),
         );
         assert_eq!(changes.len(), 2);
         let bound = changes.first().expect("two rows planned");

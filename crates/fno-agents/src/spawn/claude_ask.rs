@@ -2861,6 +2861,7 @@ pub const SHOW_ROW_ENV: &str = "FNO_SPAWN_SHOW_ROW";
 /// with the bg path's signature.
 #[allow(clippy::too_many_arguments)]
 pub fn dispatch_claude_headless(
+    home: &AgentsHome,
     _claude_home: &ClaudeHome,
     name: &str,
     message: &str,
@@ -2944,9 +2945,14 @@ pub fn dispatch_claude_headless(
     }
     crate::claims::stamp_command_env(&mut cmd, Some(name), "claude", None);
     cmd.env("FNO_AGENT_FROM", from_name);
+    // The one-shot identity every consumer keys on: the SessionStart report
+    // carries it so a mint stamps the row's substrate, and birth's attended
+    // read inherits it. The parent-side row stamps below key on it too.
+    cmd.env("FNO_AGENT_SUBSTRATE", "headless");
     // No row unless the caller opted in to watch: the opt-in is this spawn's
     // alone, so the child never passes it on to a spawn of its own.
-    if std::env::var(SHOW_ROW_ENV).ok().as_deref() != Some("1") {
+    let keep_row = std::env::var(SHOW_ROW_ENV).ok().as_deref() == Some("1");
+    if !keep_row {
         cmd.env(crate::session_report::NO_ROW_ENV, name);
     }
     cmd.env_remove(SHOW_ROW_ENV);
@@ -2986,6 +2992,12 @@ pub fn dispatch_claude_headless(
         }
         Err(e) => return AskOutcome::err(e.to_string(), 127),
     };
+    // The parent saw the child come up: stamp the row before the wait, so a
+    // row exists from the first moment and carries the pid the sweep can
+    // prove dead later. Without --mux the run keeps no row and stamps none.
+    if keep_row {
+        crate::headless_row::stamp_spawn(home, name, "claude", &cwd.to_string_lossy(), child.id());
+    }
 
     // Drain stdout/stderr on their own threads so a filling pipe can never
     // deadlock the bounded wait below (we can't use wait_with_output: it blocks
@@ -3057,7 +3069,15 @@ pub fn dispatch_claude_headless(
     // the threads (they die when the OS finally closes the fds); the timed-out
     // one-shot has no useful deliverable anyway. (Same orphan-pipe hazard the
     // --bg launch path documents.)
-    match wait_result {
+    // The exit observation is read BEFORE the match consumes the result: a
+    // wait error leaves the child's state unknown, so no exit stamp rides
+    // (the sweep settles the row); a timeout kill reads 124.
+    let observed = match &wait_result {
+        Ok(Some(code)) => Some(*code),
+        Ok(None) => Some(124), // timeout kill: the child was SIGKILLed
+        Err(_) => None,        // child state unknown; the sweep settles it
+    };
+    let outcome = match wait_result {
         Err(msg) => AskOutcome::err(msg, 1),
         Ok(None) => AskOutcome::err(
             format!(
@@ -3084,7 +3104,15 @@ pub fn dispatch_claude_headless(
                 exit_code,
             }
         }
+    };
+    // The run is over: the exit fact lands even when the wait itself failed
+    // to produce a code (a timeout kill reads Failed under 124). On a wait
+    // ERROR the child's state is unknown, so `observed` is None and no exit
+    // stamp rides: the sweep settles the row instead.
+    if keep_row {
+        crate::headless_row::stamp_exit(home, name, observed);
     }
+    outcome
 }
 
 #[allow(clippy::too_many_arguments)]

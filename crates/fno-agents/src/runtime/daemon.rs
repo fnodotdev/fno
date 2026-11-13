@@ -5306,6 +5306,7 @@ pub(crate) fn run_reconcile_sweep(
         rollout_exists,
         prober,
         roster_readable,
+        crate::claims::now_ms(),
     );
     changes.append(&mut revivals);
     witness.serve_listing(&entries, &mut changes);
