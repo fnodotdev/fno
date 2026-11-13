@@ -54,7 +54,7 @@ pub(crate) fn may_replace(origin: &str, current: Option<&str>) -> bool {
 }
 
 /// An app that reserves the machine while it runs: the name a person reads
-/// (matched against its bundle and executable names) and the preset it arms.
+/// (matched against its bundle name) and the preset it arms.
 struct App {
     name: String,
     preset: &'static str,
@@ -74,7 +74,7 @@ fn parse_apps<S: AsRef<str>>(entries: &[S]) -> Vec<App> {
         .iter()
         .filter_map(|entry| {
             let (name, preset) = match entry.as_ref().split_once('=') {
-                Some((name, "stream")) => (name, "stream"),
+                Some((name, p)) if p.trim().eq_ignore_ascii_case("stream") => (name, "stream"),
                 Some((name, _)) => (name, "edit"),
                 None => (entry.as_ref(), "edit"),
             };
@@ -129,12 +129,7 @@ fn app_of<'a>(command: &str, apps: &'a [App]) -> Option<&'a App> {
         return None;
     }
     let bundle = head.rsplit('/').next().unwrap_or_default();
-    let exec = command[at + MARK.len()..]
-        .split(" -")
-        .next()
-        .unwrap_or_default();
-    apps.iter()
-        .find(|app| has_words(bundle, &app.name) || has_words(exec, &app.name))
+    apps.iter().find(|app| has_words(bundle, &app.name))
 }
 
 /// The running app that sets the reserve and when its oldest process

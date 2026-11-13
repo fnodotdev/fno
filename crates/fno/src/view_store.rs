@@ -573,6 +573,12 @@ pub fn load_experimental(name: &str) -> bool {
 /// operator had stored, so the caller can carry an explicit `true` into
 /// `mux.launch_screen` once. `None` when no value was stored.
 pub fn take_legacy_org_board() -> Option<bool> {
+    let held = read_raw().experimental.is_some_and(|v| {
+        v.get(LEGACY_ORG_BOARD).is_some() || v.get(LEGACY_ORG_BOARD_SEEN).is_some()
+    });
+    if !held {
+        return None;
+    }
     let mut stored = None;
     mutate(|file| {
         if let Some(serde_json::Value::Object(map)) = file.experimental.as_mut() {

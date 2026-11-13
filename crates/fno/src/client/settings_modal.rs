@@ -82,7 +82,7 @@ impl View {
                 rows.push(toggle(self.confirm_lifecycle, "confirm before stop/remove"));
                 rows.push(toggle(
                     hold::reserve_auto_on(),
-                    "hold the fleet while OBS or an editor runs",
+                    "hold the fleet while a listed app runs",
                 ));
                 rows.push(PopupRow::Entry {
                     glyph: "\u{270e}".into(),

@@ -1018,8 +1018,8 @@ pub(crate) async fn keys(
 
 /// Open the composer prefix+i opens, over HQ: the same launcher and the same
 /// spawn door, so a session started here is one started anywhere. The
-/// launcher parks the sideline on Agents (its card lives there), so HQ is put
-/// back: the composer is a centered sheet and the board stays behind it.
+/// launcher parks the sideline on Agents, where its card paints; esc there
+/// returns to the list and `H` comes back to HQ.
 fn open_composer(view: &mut View, seed: &str) {
     if view.density == super::Density::Slim || view.panel_w() == 0 {
         view.set_notice("widen the sideline to open the composer".into());
@@ -1033,9 +1033,6 @@ fn open_composer(view: &mut View, seed: &str) {
     };
     if let Err(e) = opened {
         view.set_notice(e);
-    }
-    if view.launcher.is_some() {
-        view.sideline_view = SidelineView::Org;
     }
 }
 
