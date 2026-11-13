@@ -32,7 +32,7 @@ There is no notify cursor: `SessionStart` and `UserPromptSubmit` race on the one
 
 ## Tool-boundary delivery
 
-A worker busy in one long turn reaches no prompt boundary, so its mail can wait an hour. The Claude `PreToolUse` gate, `hooks/pretool-gate.sh`, lands control mail at the next tool call. Its drain pays two stat calls when nothing is pending. Set `inbox.tool_boundary_ordinary = true` and it lands ordinary mail there too. The default is false, so ordinary mail waits for the prompt boundary.
+A worker busy in one long turn reaches no prompt boundary, so its mail can wait an hour. The Claude `PreToolUse` gate, `hooks/pretool-gate.sh`, lands control mail at the next tool call. With nothing pending, its drain pays two stat calls. Set `inbox.tool_boundary_ordinary = true` and it lands ordinary mail there too. The default is false, so ordinary mail waits for the prompt boundary.
 
 If a control flag exists, or the bus log is newer than the session's stamp (`bus/tool-boundary/<session>.stamp`), the hook runs `fno-agents mail-inject --control-drain`. That check is a bash `-nt` test, so a clean tool call forks nothing. After each pass the command sets the stamp to the bus mtime it read before the scan. A row appended during the scan therefore trips the next call. With the key off, or with a live hold, the command sets the stamp 5 minutes ahead instead. An off session then pays one command run per 5 minutes at most, and it still sees a later key change.
 
