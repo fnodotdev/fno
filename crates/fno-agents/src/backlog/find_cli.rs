@@ -9,6 +9,8 @@
 
 use serde_json::Value;
 
+use super::workflows::text_at;
+
 /// The parsed find invocation. `None` is the usage-error shape (an unknown
 /// flag, a second positional, or no query).
 struct FindArgs<'a> {
@@ -17,6 +19,11 @@ struct FindArgs<'a> {
     project: Option<&'a str>,
     status: Option<&'a str>,
     source_kind: Option<&'a str>,
+    /// `--tag` values; a row must carry every one.
+    tags: Vec<&'a str>,
+    /// `--related <id>`: rank the graph against this node.
+    related: Option<&'a str>,
+    limit: usize,
     fts: bool,
     json_out: bool,
 }
@@ -28,6 +35,9 @@ impl FindArgs<'_> {
         let mut project: Option<&'a str> = None;
         let mut status: Option<&'a str> = None;
         let mut source_kind: Option<&'a str> = None;
+        let mut tags: Vec<&'a str> = Vec::new();
+        let mut related: Option<&'a str> = None;
+        let mut limit = 20;
         let mut fts = false;
         let mut json_out = false;
         let mut i = 0;
@@ -49,12 +59,20 @@ impl FindArgs<'_> {
                     i += 1;
                     source_kind = Some(tail.get(i)?.as_str());
                 }
+                "--tag" | "-t" => {
+                    i += 1;
+                    tags.push(tail.get(i)?.as_str());
+                }
+                "--related" => {
+                    i += 1;
+                    related = Some(tail.get(i)?.as_str());
+                }
                 // Accepted for compatibility; the native find has no FTS
                 // cache, so the flag rides the documented substring degrade.
                 "--fts" => fts = true,
                 "--limit" | "-L" => {
                     i += 1;
-                    tail.get(i)?;
+                    limit = tail.get(i)?.parse().ok()?;
                 }
                 "--json" | "-J" => json_out = true,
                 other => {
@@ -69,19 +87,29 @@ impl FindArgs<'_> {
             }
             i += 1;
         }
-        query.map(|query| FindArgs {
-            query,
+        // A `--tag` or `--related` read needs no query; `--related` takes
+        // none beside its id.
+        if (related.is_some() && query.is_some())
+            || (query.is_none() && tags.is_empty() && related.is_none())
+        {
+            return None;
+        }
+        Some(FindArgs {
+            query: query.unwrap_or(""),
             domain,
             project,
             status,
             source_kind,
+            tags,
+            related,
+            limit,
             fts,
             json_out,
         })
     }
 }
 
-const FIND_HELP: &str = "Search graph entries: exact id/slug/bare-hex, else high-recall over title+slug+details+wave notes\n\nUsage: fno backlog find [OPTIONS] <QUERY>\n\nArguments:\n  <QUERY>  ab-id / id-prefix / slug / bare-hex / free-text description\n\nOptions:\n  -d, --domain <DOMAIN>     Filter by domain\n  -p, --project <PROJECT>   Filter by project\n  -s, --status <STATUS>     Filter by status\n      --source-kind <KIND>  Filter by origin: organic|from_inbox|from_observation|from_supervisor|operator_request\n      --fts                 Full-text search; the native find degrades to substring search\n  -L, --limit <LIMIT>       Max results for the --fts lane [default: 20]\n  -J, --json                Emit JSON array\n  -h, --help                Print help";
+const FIND_HELP: &str = "Search graph entries: exact id/slug/bare-hex, else high-recall over title+slug+details+wave notes\n\nUsage: fno backlog find [OPTIONS] [QUERY]\n       fno backlog find --tag <FACET:VALUE>... [OPTIONS]\n       fno backlog find --related <ID> [OPTIONS]\n\nArguments:\n  [QUERY]  ab-id / id-prefix / slug / bare-hex / free-text description\n\nOptions:\n  -t, --tag <TAG>           Keep nodes that carry TAG, e.g. area:mail (repeatable; every tag must match)\n      --related <ID>        Rank nodes related to ID across epics: shared terms, area/harness/topic tags, same epic\n  -d, --domain <DOMAIN>     Filter by domain\n  -p, --project <PROJECT>   Filter by project\n  -s, --status <STATUS>     Filter by status\n      --source-kind <KIND>  Filter by origin: organic|from_inbox|from_observation|from_supervisor|operator_request\n      --fts                 Full-text search; the native find degrades to substring search\n  -L, --limit <LIMIT>       Max results for the --fts and --related lanes [default: 20]\n  -J, --json                Emit JSON array\n  -h, --help                Print help";
 
 /// The describe-it search: every query token must appear in the
 /// concatenated title+slug+details+wave-note text, case-insensitive,
@@ -184,8 +212,12 @@ fn exact_tier(entries: &[Value], query: &str) -> Option<Vec<Value>> {
     None
 }
 
-/// The four filters, reading the resolved source_kind default.
-fn passes_filters(e: &Value, args: &FindArgs<'_>) -> bool {
+/// The filters, reading the resolved source_kind default. `tags` holds the
+/// normalized `--tag` values.
+fn passes_filters(e: &Value, args: &FindArgs<'_>, tags: &[String]) -> bool {
+    if !super::tags::has_all(e, tags) {
+        return false;
+    }
     if let Some(d) = args.domain {
         if e.get("domain").and_then(Value::as_str) != Some(d) {
             return false;
@@ -390,10 +422,10 @@ pub fn run(tail: &[String]) -> i32 {
         return 0;
     }
     let Some(args) = FindArgs::parse(tail) else {
-        eprintln!(
-            "fno backlog find: usage: fno backlog find <query> [-d DOMAIN] [-p PROJECT] \
-             [-s STATUS] [--source-kind KIND] [--fts] [-L LIMIT] [-J] (--help for detail)"
-        );
+        eprintln!("{FIND_USAGE}");
+        return 2;
+    };
+    let Some(tags) = normalized_tags(&args.tags) else {
         return 2;
     };
     // The Python surface refused here with the guarded metadata reader's
@@ -411,7 +443,7 @@ pub fn run(tail: &[String]) -> i32 {
     // --fts rides the native FTS5 index (search.rs): the ids come back best
     // first and the pool filters still apply. An unavailable index degrades
     // to the substring search with the same warning the gap shipped with.
-    let fts_ids: Option<Vec<String>> = if args.fts {
+    let fts_ids: Option<Vec<String>> = if args.fts && !args.query.is_empty() {
         match super::search::search(&super::api::Store::new(&graph_path), &args.query, None) {
             Ok(ids) => Some(ids),
             Err(_) => {
@@ -450,8 +482,11 @@ pub fn run(tail: &[String]) -> i32 {
         .filter(|r| r.get("archived_at").is_none())
         .cloned()
         .collect();
+    if let Some(anchor) = args.related {
+        return run_related(&live, anchor, &args, &tags);
+    }
     let mut matched = resolve_against(&live, &args, &fts_ids);
-    matched.retain(|e| passes_filters(e, &args));
+    matched.retain(|e| passes_filters(e, &args, &tags));
     if matched.is_empty() {
         let archived: Vec<Value> = entries
             .iter()
@@ -459,7 +494,7 @@ pub fn run(tail: &[String]) -> i32 {
             .cloned()
             .collect();
         let mut hits = resolve_against(&archived, &args, &fts_ids);
-        hits.retain(|e| passes_filters(e, &args));
+        hits.retain(|e| passes_filters(e, &args, &tags));
         for h in hits {
             let mut row = h.clone();
             if let Some(obj) = row.as_object_mut() {
@@ -469,7 +504,12 @@ pub fn run(tail: &[String]) -> i32 {
         }
     }
     if matched.is_empty() {
-        eprintln!("fno backlog find: no matches for {:?}", args.query);
+        let what = if args.query.is_empty() {
+            tags.join(" + ")
+        } else {
+            format!("{:?}", args.query)
+        };
+        eprintln!("fno backlog find: no matches for {what}");
         return 1;
     }
     if args.json_out {
@@ -490,14 +530,94 @@ pub fn run(tail: &[String]) -> i32 {
     0
 }
 
+const FIND_USAGE: &str = "fno backlog find: usage: fno backlog find <query> [-d DOMAIN] \
+    [-p PROJECT] [-s STATUS] [--source-kind KIND] [-t TAG]... [--fts] [-L LIMIT] [-J], or \
+    fno backlog find --related <id> (--help for detail)";
+
+/// The `--tag` values, normalized. A typo'd tag prints the refusal with the
+/// allowed values and returns None, never a silent zero.
+fn normalized_tags(raw: &[&str]) -> Option<Vec<String>> {
+    let mut tags = Vec::new();
+    for t in raw {
+        match super::fields::normalize_tag(t) {
+            Ok(tag) => tags.push(tag),
+            Err(e) => {
+                eprintln!("fno backlog find: {e}");
+                return None;
+            }
+        }
+    }
+    Some(tags)
+}
+
+/// `--related <id>`: the anchor resolves through the exact tiers, then
+/// every other live row ranks on the rollup relatedness score. The filters
+/// narrow the ranked rows, never the anchor.
+fn run_related(live: &[Value], anchor: &str, args: &FindArgs<'_>, tags: &[String]) -> i32 {
+    let Some(entry) = exact_tier(live, anchor).and_then(|c| c.into_iter().next()) else {
+        eprintln!("fno backlog find: --related {anchor:?} matches no live node");
+        return 1;
+    };
+    let by_id: std::collections::BTreeMap<&str, &Value> = live
+        .iter()
+        .filter_map(|e| text_at(e, "id").map(|i| (i, e)))
+        .collect();
+    let ranked: Vec<(&Value, f64, String)> =
+        super::relatedness::related_to(&entry, live, usize::MAX)
+            .into_iter()
+            .filter_map(|(id, score, reason)| {
+                let e = *by_id.get(id.as_str())?;
+                passes_filters(e, args, tags).then_some((e, score, reason))
+            })
+            .take(args.limit)
+            .collect();
+    if ranked.is_empty() {
+        eprintln!("fno backlog find: nothing related to {anchor}");
+        return 1;
+    }
+    if args.json_out {
+        let rows: Vec<Value> = ranked
+            .iter()
+            .map(|(e, score, reason)| {
+                serde_json::json!({
+                    "id": text_at(e, "id"),
+                    "title": text_at(e, "title"),
+                    "status": text_at(e, "status"),
+                    "tags": super::tags::row_tags(e),
+                    "score": score,
+                    "reason": reason,
+                })
+            })
+            .collect();
+        println!("{}", super::render::py_json_pretty(&Value::Array(rows)));
+        return 0;
+    }
+    for (e, score, reason) in &ranked {
+        println!(
+            "{}\t{score:.2}\t{}\t{}\t{reason}",
+            format_handle(e),
+            text_at(e, "status").unwrap_or("?"),
+            text_at(e, "title").unwrap_or(""),
+        );
+    }
+    0
+}
+
 /// Resolve against one pool: exact tiers, then the ab- prefix tier, then
 /// the describe-it search. With `--fts`, the FTS ids order the search lane
-/// (best first); an unavailable index keeps the substring fallback.
+/// (best first); an unavailable index keeps the substring fallback. An empty
+/// query (a bare `--tag` read) keeps the whole pool, non-done first.
 fn resolve_against(
     pool: &[Value],
     args: &FindArgs<'_>,
     fts_ids: &Option<Vec<String>>,
 ) -> Vec<Value> {
+    if args.query.is_empty() {
+        let (open, done): (Vec<&Value>, Vec<&Value>) = pool
+            .iter()
+            .partition(|e| text_at(e, "status") != Some("done"));
+        return open.into_iter().chain(done).cloned().collect();
+    }
     if let Some(candidates) = exact_tier(pool, args.query) {
         return candidates;
     }

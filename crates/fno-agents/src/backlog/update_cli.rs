@@ -2025,7 +2025,7 @@ fn apply_mutators(
             let mut normalized_untag = Vec::new();
             for t in &args.untag {
                 normalized_untag.push(
-                    super::fields::normalize_tag(t)
+                    super::fields::normalize_tag_shape(t)
                         .map_err(|e| refused(format!("Error: {e}"), 1))?,
                 );
             }

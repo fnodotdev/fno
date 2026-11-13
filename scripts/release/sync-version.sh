@@ -6,14 +6,15 @@
 # is that single point: the release workflow (release.yml) and any manual bump
 # both call it, so all surfaces stay in lockstep by construction.
 #
-# Accepts one PEP 440 version; cargo refuses PEP 440 spellings, so the two
-# Cargo.toml files get the semver form while __init__.py and the JSON manifests
-# keep the PEP 440 string (the codex plugin cache dir keys off __version__):
-#   X.Y.Z        -> __init__.py / JSON: X.Y.Z             Cargo.toml: X.Y.Z
-#   X.Y.ZrcN     -> __init__.py / JSON: X.Y.ZrcN          Cargo.toml: X.Y.Z-rc.N
-#   X.Y.Z.devN   -> __init__.py / JSON: X.Y.Z.devN        Cargo.toml: X.Y.Z-dev.N
-# Any other shape exits 2. --check compares each Cargo.toml against the semver
-# form of __version__, so a hand-patched crate version fails the drift guard.
+# Accepts one PEP 440 version; cargo refuses PEP 440 spellings, so the
+# Cargo.toml files get the semver form while packaging/pypi/VERSION and the
+# JSON manifests keep the PEP 440 string:
+#   X.Y.Z        -> VERSION / JSON: X.Y.Z                 Cargo.toml: X.Y.Z
+#   X.Y.ZrcN     -> VERSION / JSON: X.Y.ZrcN              Cargo.toml: X.Y.Z-rc.N
+#   X.Y.Z.devN   -> VERSION / JSON: X.Y.Z.devN            Cargo.toml: X.Y.Z-dev.N
+# Any other shape exits 2. --check compares every other surface against
+# packaging/pypi/VERSION (the PEP 440 anchor hatchling reads), so a
+# hand-patched crate version fails the drift guard.
 #
 # Version-agnostic: it overwrites whatever is there with $1, so it works from any
 # starting version and imposes no zero-padding (0.3.9 -> 0.3.10 -> 0.3.100 is
@@ -48,8 +49,8 @@ is_release_version() {
   printf '%s' "$1" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(rc[0-9]+|\.dev[0-9]+)?$'
 }
 
-# The manifests whose top-level `"version"` must track the release. __init__.py
-# is the source of truth, so --check compares everything else against it.
+# The manifests whose top-level `"version"` must track the release. --check
+# compares every one of them against packaging/pypi/VERSION.
 # buddy is deliberately absent: it versions on its own (0.0.1 today); a release
 # is a PR that bumps its plugin.json, never fno's stable promotion.
 JSON_MANIFESTS=(
@@ -61,33 +62,54 @@ JSON_MANIFESTS=(
   plugins/openclaw/promise-tag-reader/package.json
 )
 
+# The crate manifests the stamp moves: their [package] version, their
+# lockfile's own entry, and the fno-mail pins in fno and fno-agents all
+# read from this one list.
+CRATE_MANIFESTS=(
+  crates/fno/Cargo.toml
+  crates/fno-agents/Cargo.toml
+  crates/fno-mail/Cargo.toml
+)
+
+# fno-app versions on its own line (its Cargo.toml is never stamped here), but
+# its lockfile pins the path crates above, so each stamp refreshes that lock.
+LOCK_ONLY_MANIFESTS=(
+  crates/fno-app/Cargo.toml
+)
+
 # --check: fail (exit 1) if any surface disagrees with the wheel version. The
 # drift guard that would have caught the plugins stranded at 0.2.x. Read-only.
+# The anchor is packaging/pypi/VERSION: since the Python deletion it is the
+# only PEP 440 source of truth in the tree (the __init__.py read this once
+# anchored on went away with it).
 if [[ "$arg" == "--check" ]]; then
-  want_pep="$(perl -ne 'print $1 if /^__version__ = "(.*)"$/' cli/src/fno/__init__.py)"
+  want_pep="$(tr -d '[:space:]' < packaging/pypi/VERSION)"
+  is_release_version "$want_pep" || {
+    echo "sync-version: packaging/pypi/VERSION does not hold an X.Y.Z, X.Y.ZrcN or X.Y.Z.devN version: '$want_pep'" >&2
+    exit 1
+  }
   want_semver="$(pep_to_semver "$want_pep")"
   bad=0
   # Cargo carries the semver spelling; everything else carries the PEP 440 one.
-  for cf in crates/fno/Cargo.toml crates/fno-agents/Cargo.toml crates/fno-mail/Cargo.toml crates/fno-app/Cargo.toml; do
+  for cf in "${CRATE_MANIFESTS[@]}"; do
     got="$(perl -ne 'if(/^version = "(.*)"/){print $1; exit}' "$cf")"
     [[ "$got" == "$want_semver" ]] || { echo "drift: $cf = $got (want $want_semver)"; bad=1; }
+  done
+  # The crate's own entry in its lockfile must carry the stamped version: the
+  # `cargo update` that moves it runs || true, so a silent failure (a
+  # resolution conflict, for example) would strand the lock a --locked build
+  # refuses.
+  for cf in "${CRATE_MANIFESTS[@]}"; do
+    c="$(basename "$(dirname "$cf")")"
+    lock="$(dirname "$cf")/Cargo.lock"
+    got="$(awk -v pkg="$c" '$0 == "name = \"" pkg "\"" { seen = 1; next } seen && /^version = / { sub(/^version = "/, ""); sub(/"$/, ""); print; exit }' "$lock" 2>/dev/null)"
+    [[ "$got" == "$want_semver" ]] || { echo "drift: $lock ($c) = ${got:-missing} (want $want_semver)"; bad=1; }
   done
   # The path-dependency pin must carry the exact stamped version: both crates
   # are 0.x, and a stale pin stales every --locked build.
   pin="$(perl -ne 'if(/^fno-mail = \{ path/ && /version = "=(.*)"/){print $1; exit}' crates/fno-agents/Cargo.toml)"
   [[ "$pin" == "$want_semver" ]] || { echo "drift: crates/fno-agents/Cargo.toml fno-mail pin = ${pin:-missing} (want =${want_semver})"; bad=1; }
-  # The bridge wheel's VERSION file must also agree with __init__.py; the
-  # Python deletion re-anchors this check on VERSION alone. One check, not
-  # one per JSON manifest.
-  if ! grep -qx "$want_pep" packaging/pypi/VERSION 2>/dev/null; then
-    echo "drift: packaging/pypi/VERSION = $(tr -d '[:space:]' < packaging/pypi/VERSION 2>/dev/null || echo missing) (want $want_pep)"; bad=1
-  fi
   for j in "${JSON_MANIFESTS[@]}"; do
-    # The bridge wheel's VERSION file must also agree with __init__.py; the
-    # Python deletion re-anchors this check on VERSION alone.
-    if ! grep -qx "$want_pep" packaging/pypi/VERSION 2>/dev/null; then
-      echo "drift: packaging/pypi/VERSION = $(tr -d '[:space:]' < packaging/pypi/VERSION 2>/dev/null || echo missing) (want $want_pep)"; bad=1
-    fi
     matches="$(perl -ne 'print "$1\n" while /"version"\s*:\s*"([^"]*)"/g' "$j")"
     # Zero version fields is itself drift: a dropped/renamed key would otherwise
     # pass silently (the while loop just never runs).
@@ -110,28 +132,45 @@ is_release_version "$ver" || {
 semver="$(pep_to_semver "$ver")"
 
 # 0. The bridge wheel's VERSION file: one PEP 440 line, read by
-#    hatchling's regex version source. Sits first so every surface below is
-#    stamped from the same call.
+#    hatchling's regex version source and by --check as the anchor. Sits
+#    first so every surface below is stamped from the same call.
 mkdir -p packaging/pypi
 printf '%s\n' "$ver" > packaging/pypi/VERSION
 
-# 1. Python wheel (the source of truth; cli/pyproject.toml reads it dynamically).
-perl -i -pe "s/^__version__ = \".*\"/__version__ = \"${ver}\"/" cli/src/fno/__init__.py
-
-# 2. Rust crates + their lockfiles, in the semver form. `^version = ` matches
+# 1. Rust crate manifests, in the semver form. `^version = ` matches
 #    only the [package] version (rust-version and dependency lines never start
-#    with `version `).
-for cf in crates/fno/Cargo.toml crates/fno-agents/Cargo.toml crates/fno-mail/Cargo.toml crates/fno-app/Cargo.toml; do
+#    with `version `). Manifest text only: the lockfile pass below runs after
+#    every manifest edit, never interleaved.
+for cf in "${CRATE_MANIFESTS[@]}"; do
   perl -i -pe "s/^version = \".*\"/version = \"${semver}\"/" "$cf"
-  cargo update --manifest-path "$cf" -p "$(basename "$(dirname "$cf")")" \
-    --precise "${semver}" >/dev/null 2>&1 || true
 done
 
-# 2b. The exact pin on the fno-agents path dependency: a stamped path-dep
-#     version stales a --locked build, so the pin and the lockfile move
-#     together with the manifest version.
-perl -i -pe "s/^(fno-mail = \{ path = \"\.\.\/fno-mail\", version = \")[^\"]*/\${1}=${semver}/" crates/fno-agents/Cargo.toml
-cargo update --manifest-path crates/fno-agents/Cargo.toml -p fno-mail >/dev/null 2>&1 || true
+# 1b. The exact pins on the fno-mail path dependency: a stamped path-dep
+#     version stales a --locked build, so every pin moves with the manifest
+#     version. fno-agents and fno both pin it; missing one leaves the
+#     requirement unsatisfiable and every build red.
+for pf in crates/fno-agents/Cargo.toml crates/fno/Cargo.toml; do
+  perl -i -pe "s/^(fno-mail = \{ path = \"\.\.\/fno-mail\", version = \")[^\"]*/\${1}=${semver}/" "$pf"
+  grep -q "fno-mail = { path = \"../fno-mail\", version = \"=${semver}\"" "$pf" \
+    || { echo "sync-version: the fno-mail pin in $pf did not land (missing or unrecognized shape?)" >&2; exit 1; }
+done
+
+# 1c. Lockfiles: cargo update per crate, after EVERY manifest edit above.
+#     One crate's resolution walks another crate's pin (fno-app -> fno ->
+#     fno-mail), so an update run while any pin is still stale fails - and
+#     the failure hides under || true, stranding the lock. --check's lock
+#     drift guard catches a stranded lock; this ordering is what keeps it
+#     from firing on every stamp.
+for cf in "${CRATE_MANIFESTS[@]}"; do
+  c="$(basename "$(dirname "$cf")")"
+  cargo update --manifest-path "$cf" -p "$c" --precise "${semver}" >/dev/null 2>&1 || true
+  cargo update --manifest-path "$cf" -p fno-mail >/dev/null 2>&1 || true
+done
+for cf in "${LOCK_ONLY_MANIFESTS[@]}"; do
+  for dep in fno fno-agents fno-mail; do
+    cargo update --manifest-path "$cf" -p "$dep" >/dev/null 2>&1 || true
+  done
+done
 
 # 3. JSON plugin / extension manifests. Every `"version"` key in each of these is
 #    the package version (verified: no nested/dependency `"version"` keys), so a
@@ -144,8 +183,8 @@ for j in "${JSON_MANIFESTS[@]}"; do
   perl -i -pe "s/\"version\"\s*:\s*\"[^\"]*\"/\"version\": \"${ver}\"/g" "$j"
   # Verify the bump actually landed. A missing/renamed version key - or a format
   # this regex somehow still missed - would otherwise no-op SILENTLY and ship a
-  # stale plugin version behind a bumped CLI (the exact drift this guards, and
-  # the nightly only re-verifies __version__). Fail loud instead.
+  # stale plugin version behind a bumped CLI (the exact drift this guards;
+  # installers resolve the plugin through these manifests). Fail loud instead.
   grep -q "\"version\": \"${ver}\"" "$j" \
     || { echo "sync-version: no \"version\" field set to ${ver} in $j (missing or unrecognized key?)" >&2; exit 1; }
 done

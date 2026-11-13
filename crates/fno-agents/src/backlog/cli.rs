@@ -345,6 +345,7 @@ pub fn run(args: &[String]) -> i32 {
         "demand" => super::cutover::run_demand(resolved.tail),
         "collisions" => super::cutover::run_collisions(resolved.tail),
         "backfill-deferred-kind" => super::cutover::run_backfill_deferred_kind(resolved.tail),
+        "backfill-tags" => super::tag_backfill::run(resolved.tail),
         "unclaim" => super::cutover::run_unclaim(resolved.tail),
         "defer" => super::cutover::run_defer(resolved.tail),
         "undefer" => super::cutover::run_undefer(resolved.tail),

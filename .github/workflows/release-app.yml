@@ -1,24 +1,18 @@
 name: release-app
 
-# Build the macOS desktop app (`fno-app`) into one tarball. Build-only: this
-# workflow publishes nothing. It runs on manual dispatch (an inspection
-# build) or as a reusable workflow called from release.yml, which owns every
-# publish leg behind the `release` environment approval. The tarball holds
-# `fno-app.app`: Developer ID signed, notarized and stapled when the five
-# signing secrets are set (docs/install.md), ad hoc signed otherwise.
+# Build and publish the macOS desktop app (`fno-app`). The app versions on its
+# own line (crates/fno-app/Cargo.toml), decoupled from fno: pushing a
+# `fno-app-v<version>` tag builds that version and publishes it as a GitHub
+# release; a manual dispatch is an inspection build that publishes nothing.
+# The tarball holds `fno-app.app`: Developer ID signed, notarized and stapled
+# when the five signing secrets are set (docs/install.md), ad hoc signed
+# otherwise.
 
 on:
   workflow_dispatch:
-  workflow_call:
-    inputs:
-      version:
-        description: "Release version to stamp (PEP 440); empty builds the checked-out source version"
-        type: string
-        default: ""
-      ref:
-        description: "Commit to build; empty builds the caller's ref"
-        type: string
-        default: ""
+  push:
+    tags:
+      - "fno-app-v*"
 
 permissions:
   contents: read
@@ -31,32 +25,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        # No `ref:` argument: the pin step below applies inputs.ref through
-        # plain git, as release-binaries.yml does.
         with:
           fetch-depth: 0
-
-      - name: Pin build ref
-        if: inputs.ref != ''
-        env:
-          REF: ${{ inputs.ref }}
-        run: |
-          set -euo pipefail
-          git fetch origin "$REF"
-          git checkout --detach FETCH_HEAD
-
-      - name: Stamp release version
-        if: inputs.version != ''
-        # Workspace-only stamp, never committed. The script comes from THIS
-        # workflow's commit, as in release-binaries.yml.
-        shell: bash
-        env:
-          VERSION: ${{ inputs.version }}
-        run: |
-          set -euo pipefail
-          git fetch --depth=1 origin "${{ github.sha }}"
-          git show "${{ github.sha }}:scripts/release/sync-version.sh" > scripts/release/sync-version.sh
-          bash scripts/release/sync-version.sh "$VERSION"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -68,9 +38,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Read the cargo-form version sync-version.sh stamped, never the
-          # PEP 440 input: 0.4.0rc1 in the plist would not equal 0.4.0-rc.1.
-          version="$(sed -n 's/^version = "\(.*\)"/\1/p' crates/fno/Cargo.toml | head -1)"
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' crates/fno-app/Cargo.toml | head -1)"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "fno-app-v${version}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match crates/fno-app/Cargo.toml version ${version}"
+            exit 1
+          fi
           git fetch --depth=1 origin "${{ github.sha }}"
           for f in scripts/release/build-app-bundle.sh crates/fno-app/macos/Info.plist.in tests/test_build_app_bundle.sh; do
             mkdir -p "$(dirname "$f")"
@@ -143,3 +115,30 @@ jobs:
         with:
           name: app-macos-arm64
           path: fno-app-macos-arm64.tar.gz
+
+  publish:
+    name: publish the app release
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: app-macos-arm64
+          path: dist
+
+      - name: Create the GitHub release
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum fno-app-macos-arm64.tar.gz > fno-app-macos-arm64.tar.gz.sha256)
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" --latest=false \
+            --title "fno-app ${GITHUB_REF_NAME#fno-app-v}" \
+            --notes "Desktop app for macOS (arm64)." \
+            dist/fno-app-macos-arm64.tar.gz dist/fno-app-macos-arm64.tar.gz.sha256
