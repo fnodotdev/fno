@@ -5,17 +5,56 @@
 //! recorded act over any PR is the per-PR hold, an operator law row.
 
 use crate::authorized_merge::{PrFacts, ProbeOutcome};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
 pub const HOLD_SUBJECT: &str = "pr-hold";
 pub const HOLD_DECISION: &str = "do not merge this pull request";
 const INSIDE: [&str; 3] = ["OWNER", "MEMBER", "COLLABORATOR"];
+const WRITE_ACCESS: [&str; 3] = ["admin", "maintain", "write"];
+
+/// Why a permission read gave no answer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Unreadable(pub String);
+
+impl From<Unreadable> for String {
+    fn from(e: Unreadable) -> String {
+        e.0
+    }
+}
+
+/// The `permission` word of one account on one repo, or why it is unknown.
+pub type Permission = Result<String, Unreadable>;
+
+/// Reads one account's permission on a repo: `(slug, login)` to the
+/// `permission` word of `collaborators/{login}/permission`.
+pub type PermissionRead<'a> = &'a dyn Fn(&str, &str) -> Permission;
+
+#[derive(Deserialize)]
+struct PermissionBody {
+    permission: String,
+}
+
+/// The REST path of one account's permission read.
+pub fn permission_path(slug: &str, login: &str) -> String {
+    format!("repos/{slug}/collaborators/{login}/permission")
+}
+
+/// The `permission` word of a collaborators permission body.
+pub fn permission_of(raw: &str) -> Permission {
+    serde_json::from_str::<PermissionBody>(raw)
+        .map(|body| body.permission)
+        .map_err(|e| Unreadable(format!("permission json: {e}")))
+}
 
 /// Some(cause) when a REST pulls object is from outside; Err when the base
-/// repo is unreadable. A null head repo is a deleted fork, so it reads
-/// outside; so does any `author_association` that is not owner-class.
-pub fn outside_reason(pull: &Value) -> Result<Option<String>, String> {
+/// repo or the author's permission is unreadable. A null head repo is a
+/// deleted fork, so it reads outside. A same-repo author whose
+/// `author_association` is not owner-class is inside when they hold write
+/// access: the association depends on the token's view (an App token reads
+/// a private org member as CONTRIBUTOR), the permission does not.
+pub fn outside_reason(pull: &Value, permission: PermissionRead) -> Result<Option<String>, String> {
     let base = pull
         .pointer("/base/repo/full_name")
         .and_then(Value::as_str)
@@ -31,12 +70,21 @@ pub fn outside_reason(pull: &Value) -> Result<Option<String>, String> {
         .get("author_association")
         .and_then(Value::as_str)
         .unwrap_or("NONE");
-    if !INSIDE.contains(&association) {
-        return Ok(Some(format!(
-            "author association {association} is not one of OWNER, MEMBER, COLLABORATOR"
-        )));
+    if INSIDE.contains(&association) {
+        return Ok(None);
     }
-    Ok(None)
+    let not_inside =
+        format!("author association {association} is not one of OWNER, MEMBER, COLLABORATOR");
+    let Some(login) = pull.pointer("/user/login").and_then(Value::as_str) else {
+        return Ok(Some(not_inside));
+    };
+    let access = permission(base, login)?;
+    if WRITE_ACCESS.contains(&access.as_str()) {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "{not_inside}, and {login} holds {access} access to {base}"
+    )))
 }
 
 /// The subject one per-PR hold lives at. Not head-scoped: a hold survives
@@ -83,36 +131,65 @@ fn cache_path(dir: &Path, slug: &str, pr: u64) -> Option<PathBuf> {
 }
 
 /// The origin facts of one pulls object, exactly as read. `head_repo` is
-/// null for a deleted fork.
-fn facts_of(pull: &Value) -> Value {
+/// None for a deleted fork; `author_permission` is None until a permission
+/// read answered.
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct OriginFacts {
+    #[serde(default)]
+    head_repo: Option<String>,
+    #[serde(default)]
+    base_repo: Option<String>,
+    #[serde(default)]
+    author_association: Option<String>,
+    #[serde(default)]
+    login: Option<String>,
+    #[serde(default)]
+    author_permission: Option<String>,
+}
+
+fn facts_of(pull: &Value) -> OriginFacts {
+    let text = |at: &str| pull.pointer(at).and_then(Value::as_str).map(str::to_string);
+    OriginFacts {
+        head_repo: text("/head/repo/full_name"),
+        base_repo: text("/base/repo/full_name"),
+        author_association: text("/author_association"),
+        login: text("/user/login"),
+        author_permission: None,
+    }
+}
+
+/// Reshape cached facts into a pulls-like object, so the cache hit answers
+/// through `outside_reason` and no second predicate exists.
+fn pulls_of_facts(facts: &OriginFacts) -> Value {
     json!({
-        "head_repo": pull.pointer("/head/repo/full_name"),
-        "base_repo": pull.pointer("/base/repo/full_name"),
-        "author_association": pull.get("author_association"),
-        "login": pull.pointer("/user/login"),
+        "head": {"repo": {"full_name": facts.head_repo}},
+        "base": {"repo": {"full_name": facts.base_repo}},
+        "author_association": facts.author_association,
+        "user": {"login": facts.login},
     })
 }
 
-/// Reshape a cached facts object into a pulls-like object, so the cache hit
-/// answers through `outside_reason` and no second predicate exists.
-fn pulls_of_facts(facts: &Value) -> Value {
-    let head_repo = facts.get("head_repo").cloned().unwrap_or(Value::Null);
-    json!({
-        "head": {"repo": {"full_name": head_repo}},
-        "base": {"repo": {"full_name": facts.get("base_repo").cloned().unwrap_or(Value::Null)}},
-        "author_association": facts.get("author_association").cloned().unwrap_or(Value::Null),
-        "user": {"login": facts.get("login").cloned().unwrap_or(Value::Null)},
-    })
-}
+/// Origin facts older than this read as a miss: an author's association and
+/// access can change while the PR stays open.
+const ORIGIN_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
-fn read_cached(dir: &Path, slug: &str, pr: u64) -> Option<Value> {
+fn read_cached(dir: &Path, slug: &str, pr: u64) -> Option<OriginFacts> {
     let path = cache_path(dir, slug, pr)?;
+    let age = std::fs::metadata(&path)
+        .ok()?
+        .modified()
+        .ok()?
+        .elapsed()
+        .ok()?;
+    if age > ORIGIN_TTL {
+        return None;
+    }
     let raw = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&raw).ok()
 }
 
 /// A failed cache write is ignored: the network read is the truth.
-fn write_cached(dir: &Path, slug: &str, pr: u64, facts: &Value) {
+fn write_cached(dir: &Path, slug: &str, pr: u64, facts: &OriginFacts) {
     let Some(path) = cache_path(dir, slug, pr) else {
         return;
     };
@@ -120,8 +197,11 @@ fn write_cached(dir: &Path, slug: &str, pr: u64, facts: &Value) {
     if std::fs::create_dir_all(dir).is_err() {
         return;
     }
+    let Ok(body) = serde_json::to_string(facts) else {
+        return;
+    };
     let tmp = path.with_extension("tmp");
-    if std::fs::write(&tmp, facts.to_string()).is_ok() {
+    if std::fs::write(&tmp, body).is_ok() {
         let _ = std::fs::rename(&tmp, &path);
     }
 }
@@ -144,17 +224,33 @@ fn real_fetch(slug: &str, pr: u64) -> Result<Value, String> {
     serde_json::from_slice(&out.stdout).map_err(|e| format!("gh api pulls json: {e}"))
 }
 
-pub(crate) fn outside_pr(cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
-    match pr_origin_cache_dir(cwd) {
-        Some(dir) => outside_pr_in(Some(&dir), facts, &real_fetch),
-        None => outside_pr_in(None, facts, &real_fetch),
+/// The real permission read, on the same budgeted channel as the pulls read.
+fn real_permission(slug: &str, login: &str) -> Permission {
+    let path = permission_path(slug, login);
+    let mut cmd = std::process::Command::new("gh");
+    cmd.args(["api", &path]);
+    let out = crate::gh_budget::output(cmd)
+        .map_err(|e| Unreadable(format!("gh api spawn failed: {e}")))?;
+    if !out.status.success() {
+        return Err(Unreadable(format!(
+            "gh api {path} exited {}: {}",
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
     }
+    permission_of(&String::from_utf8_lossy(&out.stdout))
+}
+
+pub(crate) fn outside_pr(cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
+    let dir = pr_origin_cache_dir(cwd);
+    outside_pr_in(dir.as_deref(), facts, &real_fetch, &real_permission)
 }
 
 fn outside_pr_in(
     cache_dir: Option<&Path>,
     facts: &PrFacts,
     fetch: &dyn Fn(&str, u64) -> Result<Value, String>,
+    permission: PermissionRead,
 ) -> ProbeOutcome {
     let Some(slug) = crate::merge_grant::repo_slug_from_pr_url(&facts.url) else {
         return ProbeOutcome::Inconclusive(
@@ -162,18 +258,36 @@ fn outside_pr_in(
         );
     };
     let cached = cache_dir.and_then(|dir| read_cached(dir, &slug, facts.number));
-    let pull = match cached {
-        Some(f) => pulls_of_facts(&f),
+    let fetched = cached.is_none();
+    let (pull, mut origin) = match cached {
+        Some(f) => (pulls_of_facts(&f), f),
         None => match fetch(&slug, facts.number) {
             Ok(pull) => {
-                if let Some(dir) = cache_dir {
-                    write_cached(dir, &slug, facts.number, &facts_of(&pull));
-                }
-                pull
+                let origin = facts_of(&pull);
+                (pull, origin)
             }
             Err(e) => return ProbeOutcome::Inconclusive(format!("outside_pr: {e}")),
         },
     };
+    // A cached permission answers with no read; a fresh one joins the cache.
+    let fresh = std::cell::RefCell::new(None::<String>);
+    let read = |repo: &str, login: &str| -> Permission {
+        if let Some(p) = &origin.author_permission {
+            return Ok(p.clone());
+        }
+        let p = permission(repo, login)?;
+        *fresh.borrow_mut() = Some(p.clone());
+        Ok(p)
+    };
+    let verdict = outside_reason(&pull, &read);
+    let fresh = fresh.into_inner();
+    let refresh = fetched || fresh.is_some();
+    if fresh.is_some() {
+        origin.author_permission = fresh;
+    }
+    if let Some(dir) = cache_dir.filter(|_| refresh) {
+        write_cached(dir, &slug, facts.number, &origin);
+    }
     let login = pull
         .pointer("/user/login")
         .and_then(Value::as_str)
@@ -182,7 +296,7 @@ fn outside_pr_in(
         .get("author_association")
         .and_then(Value::as_str)
         .unwrap_or("NONE");
-    match outside_reason(&pull) {
+    match verdict {
         Ok(None) => ProbeOutcome::Clear,
         Ok(Some(cause)) => ProbeOutcome::Refused(format!(
             "outside_pr: PR #{} is from {cause} by {login} ({association}); \
@@ -343,23 +457,42 @@ mod tests {
     #[test]
     fn the_outside_predicate_tables_fork_association_cache_and_fails_closed() {
         let base = "fnodotdev/fno";
+        let unread = |_: &str, _: &str| -> Permission {
+            panic!("an owner-class or fork PR reads no permission")
+        };
         // Same repo plus OWNER reads inside.
         assert_eq!(
-            outside_reason(&pull(json!("fnodotdev/fno"), base, "OWNER")),
+            outside_reason(&pull(json!("fnodotdev/fno"), base, "OWNER"), &unread),
             Ok(None)
         );
         // A fork reads outside, naming the head repo.
-        let fork = outside_reason(&pull(json!("stranger/footnote"), base, "OWNER")).unwrap();
+        let fork =
+            outside_reason(&pull(json!("stranger/footnote"), base, "OWNER"), &unread).unwrap();
         assert!(fork.is_some());
         // A deleted fork (null head repo) reads outside.
-        let deleted = outside_reason(&pull(Value::Null, base, "OWNER")).unwrap();
+        let deleted = outside_reason(&pull(Value::Null, base, "OWNER"), &unread).unwrap();
         assert!(deleted.is_some());
-        // A same-repo non-member reads outside.
-        let nonmember = outside_reason(&pull(json!(base), base, "NONE")).unwrap();
+        // A same-repo author outside the owner class is judged by write
+        // access, never by the token's view of the association: an App
+        // token reads a private org member as CONTRIBUTOR.
+        let access = |p: &'static str| move |_: &str, _: &str| -> Permission { Ok(p.to_string()) };
+        let contributor = pull(json!(base), base, "CONTRIBUTOR");
+        assert_eq!(outside_reason(&contributor, &access("admin")), Ok(None));
+        assert_eq!(outside_reason(&contributor, &access("write")), Ok(None));
+        let reader = outside_reason(&contributor, &access("read")).unwrap();
+        assert!(reader.is_some_and(|c| c.contains("holds read access")));
+        let nonmember = outside_reason(&pull(json!(base), base, "NONE"), &access("none")).unwrap();
         assert!(nonmember.is_some());
+        // An unreadable permission is an unreadable pull, never inside.
+        let down = |_: &str, _: &str| -> Permission { Err(Unreadable("gh down".to_string())) };
+        assert!(outside_reason(&contributor, &down).is_err());
+        assert_eq!(
+            permission_of(r#"{"permission":"admin","role_name":"admin"}"#),
+            Ok("admin".to_string())
+        );
         // No base repo is an unreadable pull, not an outside one.
         let no_base = json!({"head": {"repo": json!(base)}, "author_association": "OWNER"});
-        assert!(outside_reason(&no_base).is_err());
+        assert!(outside_reason(&no_base, &unread).is_err());
 
         // A cache hit answers with no fetch; a corrupt file reads as a miss.
         let tmp = std::env::temp_dir().join(format!("pr-admission-test-{}", std::process::id()));
@@ -382,7 +515,7 @@ mod tests {
             *calls.borrow_mut() += 1;
             Ok(Value::Null)
         };
-        let out = outside_pr_in(Some(dir.as_path()), &pr7, &count);
+        let out = outside_pr_in(Some(dir.as_path()), &pr7, &count, &unread);
         assert_eq!(calls.into_inner(), 0);
         assert!(
             matches!(out, ProbeOutcome::Refused(reason) if reason.contains("stranger/footnote"))
@@ -390,12 +523,12 @@ mod tests {
         // A corrupt file reads as a miss: one fetch, then the facts are cached.
         std::fs::write(cache_path(&dir, "fnodotdev/fno", 7).unwrap(), "{not json").unwrap();
         let fork = pull(json!("stranger/footnote"), "fnodotdev/fno", "FIRST_TIMER");
-        let out = outside_pr_in(Some(dir.as_path()), &pr7, &|_, _| Ok(fork.clone()));
+        let out = outside_pr_in(Some(dir.as_path()), &pr7, &|_, _| Ok(fork.clone()), &unread);
         assert!(matches!(out, ProbeOutcome::Refused(_)));
         let cached = read_cached(&dir, "fnodotdev/fno", 7);
         assert_eq!(
-            cached.and_then(|c| c.get("author_association").cloned()),
-            Some(json!("FIRST_TIMER"))
+            cached.and_then(|c| c.author_association),
+            Some("FIRST_TIMER".to_string())
         );
 
         // Outside reads Refused whatever the law rows say; unreadable is Inconclusive.
@@ -403,14 +536,60 @@ mod tests {
         let dir = tmp.join("cache");
         let _ = std::fs::remove_dir_all(&dir);
         // Any law rows at all admit nothing: outside is final.
-        let out = outside_pr_in(Some(dir.as_path()), &facts(8), &|_, _| {
-            Ok(pull(json!("stranger/footnote"), "fnodotdev/fno", "OWNER"))
-        });
+        let out = outside_pr_in(
+            Some(dir.as_path()),
+            &facts(8),
+            &|_, _| Ok(pull(json!("stranger/footnote"), "fnodotdev/fno", "OWNER")),
+            &unread,
+        );
         assert!(matches!(out, ProbeOutcome::Refused(reason) if reason.contains("never merges")));
         // A fetch that fails reads Inconclusive, never Clear.
-        let out = outside_pr_in(Some(dir.as_path()), &facts(9), &|_, _| {
-            Err("gh down".to_string())
-        });
+        let out = outside_pr_in(
+            Some(dir.as_path()),
+            &facts(9),
+            &|_, _| Err("gh down".to_string()),
+            &unread,
+        );
+        assert!(matches!(out, ProbeOutcome::Inconclusive(e) if e.contains("gh down")));
+        // A same-repo admin read as CONTRIBUTOR is Clear; the permission
+        // joins the cache, so the second probe reads nothing.
+        let admin = pull(json!("fnodotdev/fno"), "fnodotdev/fno", "CONTRIBUTOR");
+        let out = outside_pr_in(
+            Some(dir.as_path()),
+            &facts(11),
+            &|_, _| Ok(admin.clone()),
+            &access("admin"),
+        );
+        assert!(matches!(out, ProbeOutcome::Clear));
+        let out = outside_pr_in(
+            Some(dir.as_path()),
+            &facts(11),
+            &|_, _| Err("no fetch".to_string()),
+            &unread,
+        );
+        assert!(matches!(out, ProbeOutcome::Clear));
+        // Facts past the TTL read as a miss, so a demotion reaches the gate.
+        let aged = std::time::SystemTime::now() - 2 * ORIGIN_TTL;
+        std::fs::File::options()
+            .write(true)
+            .open(cache_path(&dir, "fnodotdev/fno", 11).unwrap())
+            .unwrap()
+            .set_modified(aged)
+            .unwrap();
+        let out = outside_pr_in(
+            Some(dir.as_path()),
+            &facts(11),
+            &|_, _| Err("no fetch".to_string()),
+            &unread,
+        );
+        assert!(matches!(out, ProbeOutcome::Inconclusive(e) if e.contains("no fetch")));
+        // An unreadable permission is Inconclusive, never Clear.
+        let out = outside_pr_in(
+            Some(dir.as_path()),
+            &facts(12),
+            &|_, _| Ok(admin.clone()),
+            &down,
+        );
         assert!(matches!(out, ProbeOutcome::Inconclusive(e) if e.contains("gh down")));
         // A URL with no repository is Inconclusive.
         let no_slug = PrFacts {
@@ -419,7 +598,12 @@ mod tests {
             ..Default::default()
         };
         assert!(matches!(
-            outside_pr_in(Some(dir.as_path()), &no_slug, &|_, _| Ok(Value::Null)),
+            outside_pr_in(
+                Some(dir.as_path()),
+                &no_slug,
+                &|_, _| Ok(Value::Null),
+                &unread
+            ),
             ProbeOutcome::Inconclusive(_)
         ));
     }
