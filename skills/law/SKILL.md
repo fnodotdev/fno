@@ -39,8 +39,8 @@ Pass the words the user typed as `--quote`. Under `autonomy.mode` `balanced` (th
 The command prints the `d-` id on stdout. Report that id and the subject.
 
 5. Read stderr. Each `law: d-... may answer open q-...` line names an open question. Read the question and the law together, and judge whether the law answers it. For each question it answers, run the mail command the line prints. Report which askers you told. Do not close a question yourself: an agent session cannot answer it, and a withdrawal notifies nobody.
-6. Each `law: <id> touches node ... No owner session to mail.` line names open work with nobody to tell. Note the law on that node: `fno backlog note <node> "<law id>: <what changes>"`.
-7. When the recorded ruling names a command form, add a row to `scripts/ci/law-command-forms.txt` naming the skill file that must carry it, in the same PR, and run `bash scripts/ci/check-law-command-forms.sh --live` to confirm no live form is unregistered.
+6. When the recorded ruling names a command form, add a row to `scripts/ci/law-command-forms.txt` naming the skill file that must carry it, in the same PR, and run `bash scripts/ci/check-law-command-forms.sh --live` to confirm no live form is unregistered.
+7. Each `law: <id> touches node ... No owner session to mail.` line names open work with nobody to tell. Note the law on that node: `fno backlog note <node> "<law id>: <what changes>"`.
 
 ## What this store does and does not reach
 
