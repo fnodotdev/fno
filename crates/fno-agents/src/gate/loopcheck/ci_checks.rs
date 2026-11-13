@@ -47,6 +47,28 @@ pub(crate) fn classify_checks_payload(
     Ok((conclusion, failing_check_names(&filtered), pending))
 }
 
+/// `(pending, failing)` check counts over a `gh pr checks --json` payload, on
+/// the same dedup and coverage filter as the classifier. A merged PR reads
+/// these to say how many checks had not passed when it landed.
+pub(crate) fn unpassed_check_counts(checks: &Value) -> (usize, usize) {
+    let filtered = without_coverage_statuses(&latest_per_name(checks));
+    let mut pending = 0;
+    let mut failing = 0;
+    for check in filtered.as_array().into_iter().flatten() {
+        let bucket = check
+            .get("bucket")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_lowercase();
+        match bucket.as_str() {
+            "pass" | "skipping" => {}
+            "fail" => failing += 1,
+            _ => pending += 1,
+        }
+    }
+    (pending, failing)
+}
+
 pub(super) fn compute_ci_conclusion(checks: &Value) -> Result<CiConclusion, String> {
     let arr = match checks.as_array() {
         Some(a) => a,

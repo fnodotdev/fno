@@ -709,6 +709,7 @@ fn parse_reason(s: &str) -> crate::loopcheck::TerminationReason {
     // carries the Debug name. Parse those.
     match s {
         "DonePRGreen" => T::DonePRGreen,
+        "DoneMergedUnsettled" => T::DoneMergedUnsettled,
         "DoneAdvisory" => T::DoneAdvisory,
         "DoneDelivery" => T::DoneDelivery,
         "NoWork" => T::NoWork,

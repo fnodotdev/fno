@@ -85,6 +85,29 @@ pub(super) fn ci_named(conclusion: &CiConclusion, unmeasured: Option<&str>) -> S
     }
 }
 
+/// `(pending, failing)` checks at the head of PR `number`, for the graph-store
+/// merged shortcut that skips the full PR read. Fail-open: an unreadable
+/// answer is `None`, no evidence either way.
+pub(super) fn merged_checks_counts(
+    gh_bin: &std::ffi::OsStr,
+    cwd: &Path,
+    number: i64,
+) -> Option<(usize, usize)> {
+    let number = number.to_string();
+    let args = [
+        "pr",
+        "checks",
+        number.as_str(),
+        "--json",
+        "name,state,bucket,startedAt,workflow",
+    ];
+    bounded_read(gh_bin, &args, cwd, "merged_checks", stopgate_read_timeout())
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| serde_json::from_slice::<Value>(&out.stdout).ok())
+        .map(|payload| super::ci_checks::unpassed_check_counts(&payload))
+}
+
 #[derive(Debug, Default)]
 pub(super) struct PrInfo {
     pub(super) state: PrState,
@@ -119,6 +142,10 @@ pub(super) struct PrInfo {
     /// flips the conclusion to Pending so DonePRGreen cannot fire on a head
     /// CI never measured. None = measured, skipped, or no evidence.
     pub(super) ci_unmeasured: Option<String>,
+    /// `(pending, failing)` checks at the head of a MERGED PR. `Some` only on
+    /// a merged read that could see the checks; `None` = open PR, no hosted
+    /// CI, or an unreadable checks answer (no evidence either way).
+    pub(super) merged_unpassed: Option<(usize, usize)>,
     /// GitHub mergeable state ("MERGEABLE" | "CONFLICTING" | "UNKNOWN"). The
     /// DoneAwaitingMerge terminal must not fire on a "CONFLICTING" PR: the human
     /// cannot merge past main-red until the branch is rebased, and the terminal
@@ -640,6 +667,31 @@ pub(super) fn read_pr_info(
     // applies downstream: an unpushed commit on top of a merged PR stays
     // unshipped work.
     if state == PrState::Merged {
+        // The merge is still the terminal authority, but a merge over checks
+        // that had not passed must say so: one bounded read of the head's
+        // checks, fail-open (an unreadable answer is no evidence either way).
+        let merged_unpassed =
+            if crate::verify_evidence::hosted_ci_not_configured(ci_declared_none, cwd, head_sha) {
+                None
+            } else {
+                let mut checks_args = vec!["pr", "checks"];
+                checks_args.extend(sel.iter().copied());
+                if let Some((_, flag)) = repo_pin {
+                    checks_args.extend(flag);
+                }
+                checks_args.extend(["--json", "name,state,bucket,startedAt,workflow"]);
+                bounded_read(
+                    gh_bin.as_ref(),
+                    &checks_args,
+                    cwd,
+                    checks_read,
+                    stopgate_read_timeout(),
+                )
+                .ok()
+                .filter(|out| out.status.success())
+                .and_then(|out| serde_json::from_slice::<Value>(&out.stdout).ok())
+                .map(|payload| super::ci_checks::unpassed_check_counts(&payload))
+            };
         return Ok(PrInfo {
             state,
             number,
@@ -648,6 +700,7 @@ pub(super) fn read_pr_info(
             mergeable,
             reviewed: true,
             review_skipped: true,
+            merged_unpassed,
             ..PrInfo::default()
         });
     }
@@ -1276,6 +1329,7 @@ pub(super) fn read_pr_info(
         outside_hold_only,
         ci_has_pending,
         ci_unmeasured,
+        merged_unpassed: None,
         mergeable,
         merge_slot_holder,
         merge_hold,

@@ -798,6 +798,30 @@ fn the_unmeasured_head_warns_by_name_and_never_blocks() {
     );
 }
 
+/// A red head never merges or arms, even with `require_checks` off: the
+/// finalize arm carries that flag false, so the refusal cannot ride it.
+#[test]
+fn a_red_head_refuses_every_effect_with_require_checks_off() {
+    for effect in [Effect::Merge, Effect::Arm] {
+        let fake = Fake {
+            checks: Some("red".into()),
+            ..clean()
+        };
+        let req = Request {
+            require_checks: false,
+            ..request(effect)
+        };
+        let outcome = run(&fake, &req);
+        assert_eq!(outcome.word(), "failed", "{effect:?}: {outcome:?}");
+        assert!(outcome.detail().contains("checks are red"), "{outcome:?}");
+        assert!(!fake
+            .gh_calls
+            .borrow()
+            .iter()
+            .any(|args| args.get(1).map(String::as_str) == Some("merge")));
+    }
+}
+
 // ── the head-scoped operator merge grant ──────────────────────────────
 
 #[test]

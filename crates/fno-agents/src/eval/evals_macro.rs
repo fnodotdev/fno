@@ -45,6 +45,7 @@ const HEALTHY: &[&str] = &[
     "idempotent_noop",
     "allow",
     "DonePRGreen",
+    "DoneMergedUnsettled",
     "DoneAdvisory",
     "DoneDelivery",
     "DoneUnreviewed",

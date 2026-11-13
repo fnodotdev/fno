@@ -21,8 +21,9 @@ use std::collections::BTreeMap;
 
 /// Every [`TerminationReason`] variant, spelled through serde so a rename on
 /// the enum cannot drift from the wire names the ledger and Python carry.
-pub(crate) const ALL_TERMINALS: [TerminationReason; 15] = [
+pub(crate) const ALL_TERMINALS: [TerminationReason; 16] = [
     TerminationReason::DonePRGreen,
+    TerminationReason::DoneMergedUnsettled,
     TerminationReason::DoneAdvisory,
     TerminationReason::DoneDelivery,
     TerminationReason::DoneBatched,
@@ -55,7 +56,9 @@ pub(crate) fn default_terminal_lists() -> (Vec<String>, Vec<String>, Vec<String>
         match terminal {
             TerminationReason::DoneAdvisory => doc.push(name),
             TerminationReason::DoneDelivery => delivery.push(name),
-            TerminationReason::DonePRGreen | TerminationReason::DoneBatched => ship.push(name),
+            TerminationReason::DonePRGreen
+            | TerminationReason::DoneMergedUnsettled
+            | TerminationReason::DoneBatched => ship.push(name),
             TerminationReason::DoneAwaitingMerge
             | TerminationReason::DoneUnreviewed
             | TerminationReason::DoneAwaitingReview

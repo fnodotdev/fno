@@ -328,6 +328,7 @@ mod tests {
             outside_hold_only: false,
             ci_has_pending: true,
             ci_unmeasured: None,
+            merged_unpassed: None,
             mergeable: "CONFLICTING".to_string(),
             merge_slot_holder: None,
             merge_hold: None,

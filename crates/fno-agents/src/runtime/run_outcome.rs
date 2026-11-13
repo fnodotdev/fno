@@ -11,6 +11,7 @@ impl TerminationReason {
         matches!(
             self,
             TerminationReason::DonePRGreen
+                | TerminationReason::DoneMergedUnsettled
                 | TerminationReason::DoneAdvisory
                 | TerminationReason::DoneDelivery
                 | TerminationReason::NoWork
@@ -87,6 +88,9 @@ pub enum Outstanding {
     /// A user ruling: the work is complete and the only missing input is an
     /// answer the session already asked for once.
     Ruling,
+    /// The PR merged while checks at its head had not passed. The merge is
+    /// the delivery; the unpassed checks are the fact to name.
+    UnsettledCi,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,6 +175,13 @@ pub fn classify(reason: TerminationReason) -> RunOutcome {
             true,
             true,
             Outstanding::Nothing,
+        )),
+        TerminationReason::DoneMergedUnsettled => Outcome::Committed(commit(
+            Deliverable::Pr,
+            true,
+            true,
+            false,
+            Outstanding::UnsettledCi,
         )),
         TerminationReason::DoneAdvisory => Outcome::Committed(commit(
             Deliverable::Doc,
@@ -278,11 +289,14 @@ pub fn legacy_projection(reason: &TerminationReason) -> PredicateProjection {
     PredicateProjection {
         ship_reason: matches!(
             reason,
-            TerminationReason::DonePRGreen | TerminationReason::DoneAdvisory
+            TerminationReason::DonePRGreen
+                | TerminationReason::DoneMergedUnsettled
+                | TerminationReason::DoneAdvisory
         ),
         do_stamp_terminal: matches!(
             reason,
             TerminationReason::DonePRGreen
+                | TerminationReason::DoneMergedUnsettled
                 | TerminationReason::DoneAwaitingMerge
                 | TerminationReason::DoneUnreviewed
                 | TerminationReason::DoneAwaitingReview
@@ -307,6 +321,7 @@ pub fn legacy_projection(reason: &TerminationReason) -> PredicateProjection {
         node_closable: matches!(
             reason,
             TerminationReason::DonePRGreen
+                | TerminationReason::DoneMergedUnsettled
                 | TerminationReason::DoneAdvisory
                 | TerminationReason::DoneDelivery
         ),
@@ -314,6 +329,7 @@ pub fn legacy_projection(reason: &TerminationReason) -> PredicateProjection {
         progress: matches!(
             reason,
             TerminationReason::DonePRGreen
+                | TerminationReason::DoneMergedUnsettled
                 | TerminationReason::DoneAdvisory
                 | TerminationReason::DoneDelivery
                 | TerminationReason::DoneBatched
@@ -355,6 +371,7 @@ impl From<RunOutcome> for TerminationReason {
             Some(Outcome::Committed(commit)) => {
                 match (commit.deliverable, commit.shipped, commit.outstanding) {
                     (Deliverable::Pr, true, Outstanding::Nothing) => Self::DonePRGreen,
+                    (Deliverable::Pr, true, Outstanding::UnsettledCi) => Self::DoneMergedUnsettled,
                     (Deliverable::Doc, true, Outstanding::Nothing) => Self::DoneAdvisory,
                     (Deliverable::Delivery, false, Outstanding::Nothing) => Self::DoneDelivery,
                     (Deliverable::BatchMember, false, Outstanding::BatchPr) => Self::DoneBatched,
