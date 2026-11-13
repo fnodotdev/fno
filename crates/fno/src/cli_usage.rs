@@ -3,10 +3,11 @@
 //! ships it (docs/telemetry.md).
 //!
 //! The path is menu words only. A root word must be a live row of
-//! `command-names.tsv`, and each later word must be in `cli-usage-words.txt`,
-//! the command words the committed inventories name. The first word off that
-//! list ends the path, so an argument (a node id, a search term, a message)
-//! is never written.
+//! `command-names.tsv`, and a longer path must be a line of
+//! `cli-usage-paths.txt`, the command paths the committed inventories name.
+//! The first word that makes no known path ends it, so an argument (a node
+//! id, a search term, a message) is never written, even one that happens to
+//! be a command word.
 //!
 //! A command the front door answers in-process writes its row in
 //! [`exit`]. A command it execs into `fno-agents` cannot come back, so the
@@ -18,7 +19,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-const WORDS: &str = include_str!("../cli-usage-words.txt");
+const PATHS: &str = include_str!("../cli-usage-paths.txt");
 const MAX_WORDS: usize = 3;
 /// The command path an exec hands to `fno-agents`.
 pub const PATH_ENV: &str = "FNO_CLI_PATH";
@@ -34,11 +35,11 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-fn words() -> HashSet<&'static str> {
-    WORDS
+fn paths() -> HashSet<&'static str> {
+    PATHS
         .lines()
         .map(str::trim)
-        .filter(|w| !w.is_empty() && !w.starts_with('#'))
+        .filter(|p| !p.is_empty() && !p.starts_with('#'))
         .collect()
 }
 
@@ -55,15 +56,17 @@ pub fn command_path(args: &[OsString]) -> Option<String> {
     {
         return None;
     }
-    let known = words();
-    let mut path = vec![root];
+    let known = paths();
+    let mut path = root.to_string();
     for token in tokens.take(MAX_WORDS - 1) {
-        match token {
-            Some(word) if known.contains(word) => path.push(word),
-            _ => break,
+        let Some(word) = token else { break };
+        let longer = format!("{path} {word}");
+        if !known.contains(longer.as_str()) {
+            break;
         }
+        path = longer;
     }
-    Some(path.join(" "))
+    Some(path)
 }
 
 /// Note the command at the front door's start. `main` calls this once.
@@ -82,9 +85,14 @@ pub fn exec_env() -> Vec<(&'static str, String)> {
     }
 }
 
+/// The agents journal, or None for a hermetic test run that pinned no
+/// agents home: a test must never write a row into a real home.
 fn agents_journal() -> Option<PathBuf> {
+    let hermetic = std::env::var("FNO_TEST_HERMETIC").as_deref() == Ok("1")
+        || std::env::var_os("PYTEST_CURRENT_TEST").is_some();
     let home = match std::env::var_os("FNO_AGENTS_HOME").filter(|v| !v.is_empty()) {
         Some(declared) => PathBuf::from(declared),
+        None if hermetic => return None,
         None => PathBuf::from(std::env::var_os("HOME").filter(|h| !h.is_empty())?)
             .join(".fno")
             .join("agents"),
@@ -121,11 +129,11 @@ mod tests {
         command_path(&args)
     }
 
-    /// Menu words ship and the first argument ends the path: a node id, a
-    /// search term or a message never rides in it. Every listed word is a
-    /// word the committed command inventories name.
+    /// Known command paths ship and the first argument ends the path: a node
+    /// id, a search term or a message never rides in it. Every word of every
+    /// listed path is a word the committed command inventories name.
     #[test]
-    fn the_path_is_menu_words_and_every_word_is_in_the_inventories() {
+    fn the_path_is_a_known_command_path_and_every_path_is_in_the_inventories() {
         assert_eq!(
             path(&["backlog", "get", "x-2f27"]).as_deref(),
             Some("backlog get")
@@ -143,6 +151,11 @@ mod tests {
             Some("mail send")
         );
         assert_eq!(path(&["backlog", "x-2f27"]).as_deref(), Some("backlog"));
+        // A command word inside free text ships nothing: no known path holds it.
+        assert_eq!(
+            path(&["backlog", "idea", "review", "the", "cache"]).as_deref(),
+            Some("backlog idea")
+        );
         assert_eq!(path(&["not-a-root", "get"]), None);
         assert_eq!(path(&[]), None);
 
@@ -161,8 +174,13 @@ mod tests {
         let named: HashSet<&str> = inventory
             .split(|c: char| !(c.is_ascii_lowercase() || c == '-'))
             .collect();
-        for word in words() {
-            assert!(named.contains(word), "{word} is in no command inventory");
+        for listed in paths() {
+            for word in listed.split(' ') {
+                assert!(
+                    named.contains(word),
+                    "{listed}: {word} is in no command inventory"
+                );
+            }
         }
     }
 }

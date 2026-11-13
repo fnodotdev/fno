@@ -802,7 +802,7 @@ mod tests {
                 "agents",
                 "merge_cleanup_requested",
                 json!({"request_id": "merge-cleanup-ab12", "repo": secret, "pr": 7,
-                       "branch": secret, "worktree": null, "node_ids": ["x-aaaa"]}),
+                       "branch": secret, "worktree": "w-second-pass", "node_ids": ["x-aaaa"]}),
             ),
             (
                 &journals.global,

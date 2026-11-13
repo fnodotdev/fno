@@ -1,0 +1,472 @@
+# The two- and three-word command paths a cli_command row may name, one per
+# line, from the committed command inventories; the cli_usage test checks it.
+# A path missing here only shortens the row's path; it never leaks an arg.
+agents adopt
+agents announce
+agents ask
+agents attach
+agents attest
+agents authorized-merge
+agents bash-census
+agents capabilities
+agents census
+agents claim
+agents claim acquire
+agents claim list
+agents claim reap
+agents claim refresh
+agents claim release
+agents claim session-pid
+agents claim status
+agents codex-session-for-pid
+agents compaction
+agents digest
+agents discovered-json
+agents distress-scan
+agents distress-verdicts
+agents drive-authority
+agents evals-macro
+agents fallback-chain
+agents feed
+agents finalize
+agents fleet-incident
+agents friction-escalate
+agents gate-status
+agents harness
+agents harness probe
+agents heal-token
+agents history
+agents honesty-sweep
+agents incident
+agents judge
+agents kill-check
+agents lead-checkin
+agents lead-history
+agents lead-rundown
+agents list
+agents liveness
+agents logs
+agents loop
+agents loop-check
+agents loops
+agents mail
+agents mail ack
+agents mail drain
+agents mail drain-self
+agents mail hold
+agents mail hold-release
+agents mail list
+agents mail pane-prepare
+agents mail reply
+agents mail seed-provenance
+agents mail send
+agents mail sent
+agents mail show
+agents mail status
+agents mail team
+agents mail triage
+agents mail unread
+agents mail withdraw
+agents mail-teach
+agents name
+agents needs
+agents org-fold
+agents org-vacancies
+agents orphans
+agents pane-identity
+agents peek
+agents permission-tokens
+agents probe-run
+agents prove-it-verdicts
+agents provider-cap
+agents reap
+agents reconcile
+agents recover
+agents register
+agents registry-json
+agents registry-repair
+agents rename
+agents report
+agents restart
+agents resume
+agents retask
+agents review-coverage
+agents revival-check
+agents rm
+agents role
+agents roles
+agents roles ls
+agents route-slot
+agents sandbox-probe
+agents select-read
+agents session-start-bytes
+agents spawn
+agents spawn-axes
+agents spawn-gate
+agents spawn-guard
+agents spawn-overlay
+agents stale-escalate
+agents status
+agents stop
+agents subscribe
+agents sweep
+agents target-family
+agents team
+agents test-run
+agents top
+agents trace
+agents transcript
+agents truth
+agents verify-evidence
+agents wait
+agents watch
+agents watchdog
+agents whoami
+agents worked-nodes
+backlog add
+backlog add idea
+backlog add node
+backlog add plan
+backlog add requests
+backlog add scoped
+backlog admin
+backlog admin advance
+backlog admin archive
+backlog admin archive-dedupe-ids
+backlog admin backfill-deferred-kind
+backlog admin backfill-tags
+backlog admin batch
+backlog admin capture
+backlog admin decide
+backlog admin decide-reindex
+backlog admin decide-retract
+backlog admin decisions
+backlog admin dispatch-lanes
+backlog admin join
+backlog admin lane-fill
+backlog admin maintain
+backlog admin migrate-difficulty
+backlog admin migrate-priorities
+backlog admin migrate-updated-at
+backlog admin reconcile
+backlog admin remove
+backlog admin render-views
+backlog admin retro
+backlog admin session
+backlog admin task
+backlog admin unarchive
+backlog advance
+backlog album
+backlog annotate
+backlog annotate add
+backlog annotate list
+backlog annotate resolve
+backlog archive
+backlog archive-dedupe-ids
+backlog backfill-deferred-kind
+backlog backfill-tags
+backlog bases
+backlog batch
+backlog board
+backlog board album
+backlog board bases
+backlog board cost
+backlog board demand
+backlog board open
+backlog board publish
+backlog board roadmap
+backlog board summary
+backlog calibration
+backlog capture
+backlog carveout
+backlog carveout add
+backlog carveout list
+backlog carveout resolve
+backlog carveout update
+backlog collisions
+backlog collisions check
+backlog comment
+backlog contain
+backlog cost
+backlog decide
+backlog decide-reindex
+backlog decide-retract
+backlog decisions
+backlog decompose
+backlog defer
+backlog demand
+backlog discover
+backlog dispatch-lanes
+backlog done
+backlog encounter
+backlog epic
+backlog find
+backlog find text
+backlog get
+backlog get calibration
+backlog get node
+backlog get project-root
+backlog get provenance
+backlog get status
+backlog get version
+backlog groom
+backlog idea
+backlog import-requests
+backlog intake
+backlog join
+backlog lane-fill
+backlog lanes
+backlog link
+backlog link carveout
+backlog link collisions
+backlog link contain
+backlog link decompose
+backlog link epic
+backlog link relatedness
+backlog link supersede
+backlog link unsupersede
+backlog list
+backlog list lanes
+backlog list next
+backlog list queued
+backlog list ready
+backlog list stuck-epics
+backlog list undispatched
+backlog list wave-notes
+backlog list worked
+backlog maintain
+backlog migrate-difficulty
+backlog migrate-priorities
+backlog migrate-updated-at
+backlog move
+backlog move defer
+backlog move done
+backlog move queue
+backlog move reopen
+backlog move requeue
+backlog move retract
+backlog move unclaim
+backlog move undefer
+backlog move unqueue
+backlog new
+backlog next
+backlog note
+backlog note comment
+backlog note dispose
+backlog note state
+backlog pick
+backlog project-root
+backlog provenance
+backlog publish
+backlog queue
+backlog queued
+backlog rank
+backlog ready
+backlog reconcile
+backlog relatedness
+backlog relatedness build
+backlog relatedness get
+backlog remove
+backlog render-views
+backlog reopen
+backlog reprioritize
+backlog requeue
+backlog retract
+backlog retro
+backlog retro drain-postmortems
+backlog retro run
+backlog retro sweep-carveouts
+backlog roadmap
+backlog session
+backlog session add
+backlog session backfill
+backlog session close
+backlog session open
+backlog session reap-open
+backlog status
+backlog stuck-epics
+backlog supersede
+backlog task
+backlog triage
+backlog triage discover
+backlog triage encounter
+backlog triage groom
+backlog triage pick
+backlog triage run
+backlog unarchive
+backlog unclaim
+backlog undefer
+backlog undispatched
+backlog unqueue
+backlog unsupersede
+backlog update
+backlog update node
+backlog update priority
+backlog update rank
+backlog version
+backlog view
+backlog wave-dispose
+backlog wave-notes
+backlog worked
+config accounts
+config active-backlog
+config assert-subagent-budget
+config build-dir
+config doctor
+config get
+config history
+config plugin
+config project
+config rm
+config route
+config routing
+config schema
+config set
+config status-sinks
+config unset
+do ci
+do ci status
+do delivery
+do delivery evaluate
+do feedback
+do pr
+do pr attestation
+do pr base-check
+do pr base-lineage-check
+do pr bind-created
+do pr closure-trailer
+do pr coverage-check
+do pr coverage-publish
+do pr coverage-waive
+do pr create
+do pr evidence-check
+do pr evidence-required
+do pr global-receipt-events-path
+do pr graphql-exec
+do pr heal
+do pr hold-check
+do pr info
+do pr list
+do pr logs
+do pr merge
+do pr merge-result-check
+do pr next-receipt-generation
+do pr publish-review
+do pr push
+do pr rebase
+do pr review-hold
+do pr ritual
+do pr status
+do pr sync-canonical
+do pr verify
+do pr wait
+do pr watch
+do research
+do review
+do review classify
+do review invocations
+do review post-dispositions
+do review resolve-level
+do think
+do think dispatch
+do think inspect
+doctor bundle
+doctor evals
+doctor evals export
+doctor evals grade
+doctor evals graduate
+doctor evals macro
+doctor evals qualify
+doctor evals report
+doctor evals run
+doctor evals trend
+doctor event
+doctor harness
+doctor harness-matrix
+doctor intel
+doctor observer
+doctor observer judge
+doctor observer replay
+doctor observer sweep
+doctor plugin-file
+doctor route
+doctor stalls
+doctor test
+doctor update
+inbox day
+inbox decide
+inbox decisions
+inbox law
+inbox notify
+inbox outstanding
+inbox peers
+mail ack
+mail drain
+mail drain-self
+mail hold
+mail hold-release
+mail list
+mail pane-prepare
+mail reply
+mail seed-provenance
+mail send
+mail sent
+mail show
+mail status
+mail team
+mail triage
+mail unread
+mail withdraw
+mux attach
+mux block
+mux block annotate
+mux block pipe
+mux command
+mux doctor
+mux kill-server
+mux layout
+mux layout apply
+mux layout get
+mux layout graft
+mux ls
+mux notify
+mux pane
+mux pane break
+mux pane claim
+mux pane focus
+mux pane keeper
+mux pane kill
+mux pane ls
+mux pane read
+mux pane release
+mux pane run
+mux pane send
+mux pane split
+mux pane wait
+mux retire-session
+mux rows
+mux serve
+mux server
+mux shell-init
+mux stats
+mux tab
+mux tab close
+mux tab create
+mux tab join
+mux tab ls
+mux tab move
+mux tab rename
+mux thread
+mux thread reseat
+mux view
+mux web
+mux web install-agent
+mux web reap
+mux web uninstall-agent
+mux where
+mux workspace
+mux workspace origin
+mux workspace prune
+mux workspace restore
+whoami cost
+whoami ledger
