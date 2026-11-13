@@ -839,7 +839,7 @@ setInterval(() => { if (document.visibilityState === "visible") load(); }, 60000
 document.addEventListener("click", (e) => {
   const t = e.target.closest("[data-fno]");
   if (!t) return;
-  fetch((nav ? nav.dataset.base : "./") + "ui/click?t=" + encodeURIComponent(token), {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify({screen: "web_hq", control: t.dataset.fno}), keepalive: true}).catch(() => {});
+  fetch((nav ? nav.dataset.base : "./") + "ui/click?t=" + encodeURIComponent(token), {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify({screen: "web_hq", control: t.dataset.fno}), keepalive: true}).catch(() => { /* quiet-ok: the click count is fire-and-forget */ });
 }, true);
 })();
 </script>

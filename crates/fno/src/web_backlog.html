@@ -3035,7 +3035,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
   document.addEventListener("click", (e) => {
     const tgt = e.target.closest("[data-fno]");
     if (!tgt) return;
-    fetch(base + "ui/click?t=" + encodeURIComponent(t), {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify({screen: "web_backlog", control: tgt.dataset.fno}), keepalive: true}).catch(() => {});
+    fetch(base + "ui/click?t=" + encodeURIComponent(t), {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify({screen: "web_backlog", control: tgt.dataset.fno}), keepalive: true}).catch(() => { /* quiet-ok: the click count is fire-and-forget */ });
   }, true);
 })();
 </script>

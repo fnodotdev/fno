@@ -629,7 +629,7 @@
     if (!tgt) return;
     const nav = document.querySelector("nav.fno-nav");
     const base = nav && nav.dataset.base ? nav.dataset.base : "./";
-    fetch(base + "ui/click?t=" + encodeURIComponent(token), {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify({screen: "web_pane", control: tgt.dataset.fno}), keepalive: true}).catch(() => {});
+    fetch(base + "ui/click?t=" + encodeURIComponent(token), {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify({screen: "web_pane", control: tgt.dataset.fno}), keepalive: true}).catch(() => { /* quiet-ok: the click count is fire-and-forget */ });
   }, true);
   // A pasted per-pane link names its pane : pin the first paint to it
   // instead of whichever frame lands first, then clear the want so the operator
