@@ -2176,7 +2176,7 @@ proof = "goal-active"
 
 [harness.claude.hooks.lead_guard]
 state = "supported"
-via = ["hooks/hooks.json", "hooks/lead-delegation-guard.sh", "crates/fno-agents/src/runtime/hook/lead_guard.rs"]
+via = ["hooks/hooks.json", "hooks/pretool-gate.sh", "crates/fno-agents/src/runtime/hook/lead_guard.rs"]
 
 [harness.claude.hooks.lead_reinject]
 state = "supported"
@@ -2322,7 +2322,7 @@ reason = "no fno hook registration for muse (no plugin hook file and no capabili
 
 [harness.claude.hooks.session_state]
 state = "supported"
-via = ["hooks/session-state.sh", "hooks/hooks.json", "crates/fno-agents/src/runtime/hook/session_state.rs"]
+via = ["hooks/session-state.sh", "hooks/pretool-gate.sh", "hooks/hooks.json", "crates/fno-agents/src/runtime/hook/session_state.rs"]
 
 # A parked prompt stays observable when its notification is missed.
 [harness.claude.hooks.session_state.wiring]
