@@ -234,8 +234,14 @@ fn a_long_synthetic_quote_folds_to_what_the_notice_door_accepts() {
         child_session: Some("dead-beef-cafe".into()),
         ..Default::default()
     };
+    // The folded quote itself: 25 words plus the ellipsis.
+    let quote = synthetic_error(&path).expect("synthetic evidence");
+    assert!(quote.ends_with("..."), "{quote}");
+    assert_eq!(quote.split_whitespace().count(), 26, "{quote}");
+    assert!(!quote.contains(';'), "{quote}");
+    // The stage line carries the quote behind its prefix and still folds.
     let (_, evidence) = stage(&watch, None, Some(&path));
     assert!(evidence.ends_with("..."), "{evidence}");
-    assert_eq!(evidence.split_whitespace().count(), 26, "{evidence}");
-    assert!(!evidence.contains(';'), "{evidence}");
+    assert!(evidence.contains("word25"), "{evidence}");
+    assert!(!evidence.contains("word26"), "{evidence}");
 }
