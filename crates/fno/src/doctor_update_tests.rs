@@ -584,7 +584,7 @@ fn budget_overrun_warns_with_a_slowest_first_breakdown() {
     assert!(line.contains("rust bins 4.2s"), "{line}");
     assert!(line.contains("other 42.6s"), "{line}");
     let quiet = phase_breakdown(&[], Duration::from_millis(2_000));
-    assert_eq!(quiet, "total 2.0s");
+    assert_eq!(quiet, "other 2.0s");
 }
 
 #[test]

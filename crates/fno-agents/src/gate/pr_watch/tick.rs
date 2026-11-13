@@ -661,12 +661,15 @@ fn registered_checkout_from_pin(text: &str) -> Option<PathBuf> {
 }
 
 fn origin_url(root: &Path) -> Option<String> {
-    let out = std::process::Command::new("git")
+    let child = std::process::Command::new("git")
         .arg("-C")
         .arg(root)
         .args(["config", "--get", "remote.origin.url"])
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .ok()?;
+    let out = child.wait_with_output().ok()?;
     let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
     (out.status.success() && !url.is_empty()).then_some(url)
 }

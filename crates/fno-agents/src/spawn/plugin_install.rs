@@ -559,7 +559,9 @@ fn build_stage_as(
                 profile,
             )),
         };
-        let _ = std::fs::write(
+        // Best effort: a stamp write failure reads as no stamp, and the next
+        // build rebuilds.
+        let _stamp_written = std::fs::write(
             new_dir.join(STAGE_STAMP),
             serde_json::to_string(&stamp).unwrap_or_default(),
         );
