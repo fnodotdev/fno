@@ -359,6 +359,13 @@ pub const STEPS: &[Step] = &[
         effect: "appends {name, path} rows for this repo to the workspace list",
     },
     Step {
+        id: "render-path",
+        layer: Layer::Global,
+        kind: Kind::Approve,
+        question: "Render one backlog board per project into the Obsidian vault?",
+        effect: "writes backlog.render_path = ~/<vault>/{project}/backlog/backlog.html when the vault is on and the key is unset",
+    },
+    Step {
         id: "review-merge",
         layer: Layer::Global,
         kind: Kind::Approve,
@@ -964,6 +971,83 @@ fn step_backlog_prefix(exe: &Path, root: &Path, rep: &mut Report) {
         rep.rows
             .push(row("needs_human", "config_set_refused", message.clone()));
         rep.needs_human.push(message);
+    }
+}
+
+/// The obsidian-driven `backlog.render_path` proposal: global scope, the
+/// vault-templated board path, refused shapes the writer already rejects.
+fn propose_render_path(skips: &mut Vec<String>) -> Option<Proposal> {
+    let doc = global_config_doc();
+    let obs = doc.as_ref().and_then(|d| d.get("obsidian"));
+    let enabled = obs
+        .and_then(|o| o.get("enabled"))
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false);
+    if !enabled {
+        skips.push(
+            "render-path: obsidian is off; the per-project board key applies when the vault is on"
+                .into(),
+        );
+        return None;
+    }
+    if doc
+        .as_ref()
+        .and_then(|d| d.get("backlog"))
+        .and_then(|b| b.get("render_path"))
+        .is_some()
+    {
+        skips.push("render-path: backlog.render_path is set; setup never overwrites it".into());
+        return None;
+    }
+    let vault = obs
+        .and_then(|o| o.get("vault"))
+        .and_then(toml::Value::as_str)
+        .filter(|s| !s.is_empty())?;
+    Some(render_path_proposal(vault))
+}
+
+fn render_path_proposal(vault: &str) -> Proposal {
+    let root = vault.strip_suffix('/').unwrap_or(vault);
+    let rooted = if root.starts_with('~') || root.starts_with('/') {
+        root.to_string()
+    } else {
+        format!("~/{root}")
+    };
+    Proposal {
+        id: "render-path".into(),
+        key: "backlog.render_path".into(),
+        value: format!("{rooted}/{{project}}/backlog/backlog.html"),
+        scope: "global".into(),
+        reason: "one board per workspace project, rendered by the daemon into the vault".into(),
+        source: "default",
+    }
+}
+
+fn global_config_doc() -> Option<toml::Table> {
+    let path = crate::config_defaults::global_config_path();
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| t.parse::<toml::Table>().ok())
+}
+
+fn step_render_path(exe: &Path, rep: &mut Report) {
+    let mut skips = Vec::new();
+    let Some(p) = propose_render_path(&mut skips) else {
+        rep.skipped.extend(skips);
+        return;
+    };
+    match config_set(exe, &[("backlog.render_path", p.value.as_str())], false) {
+        Ok(path) => {
+            rep.done
+                .push(format!("render-path: backlog.render_path = {}", p.value));
+            rep.paths.push(path.display().to_string());
+        }
+        Err(e) => {
+            let message = format!("render-path: {e}");
+            rep.rows
+                .push(row("needs_human", "config_set_refused", message.clone()));
+            rep.needs_human.push(message);
+        }
     }
 }
 
@@ -1683,6 +1767,11 @@ fn compute_proposals(
             }
             "backlog-prefix" => {
                 if let Some(p) = propose_backlog_prefix(root, skips) {
+                    proposed.push(p);
+                }
+            }
+            "render-path" => {
+                if let Some(p) = propose_render_path(skips) {
                     proposed.push(p);
                 }
             }
@@ -2658,6 +2747,7 @@ pub fn run(tail: &[OsString]) -> i32 {
             (Layer::Global, "auto-heal") => step_auto_heal(&exe, &mut rep),
             (Layer::Global, "groom-agent") => step_groom_agent(&exe, &mut rep, &mut loaded),
             (Layer::Global, "projects") => step_projects(&exe, &root, &mut rep),
+            (Layer::Global, "render-path") => step_render_path(&exe, &mut rep),
             (Layer::Global, "review-merge") => step_review_merge(&mut rep),
             (Layer::Global, "messaging") => step_messaging(&exe, prompting, None, &mut rep),
             (Layer::Global, "machine-tools") => step_machine_tools(&mut rep),
