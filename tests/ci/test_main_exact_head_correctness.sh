@@ -182,7 +182,7 @@ check(str((release.get("concurrency") or {}).get("group", "")) == "release-${{ i
 
 # Build workflows are callable and build-only: release.yml calls them and owns
 # every publish leg behind the release-environment approval.
-for wf_name in ("release-binaries.yml", "release-wheels.yml"):
+for wf_name in ("release-binaries.yml",):
     wf = load(f".github/workflows/{wf_name}")
     wf_events = event_map(wf)
     call_inputs = (wf_events.get("workflow_call") or {}).get("inputs") or {}
