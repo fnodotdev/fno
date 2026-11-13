@@ -60,12 +60,17 @@ pub struct Ledger {
 #[derive(Debug)]
 pub enum LedgerError {
     Io(String),
+    StoresAbsent,
 }
 
 impl std::fmt::Display for LedgerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LedgerError::Io(why) => write!(f, "attention ledger io: {why}"),
+            LedgerError::StoresAbsent => write!(
+                f,
+                "no attention stores found: no question files and no event journals"
+            ),
         }
     }
 }
@@ -324,10 +329,9 @@ fn merged_nodes(notes: &mut Vec<String>) -> Vec<MergedNode> {
 
 /// Guard refusals in the window: events whose type ends `_refused`, read
 /// through the same journals the lead history read takes.
-fn refusal_count(window: &Window, cwd: &Path, notes: &mut Vec<String>) -> usize {
-    let journals = crate::lead_history::default_journals(cwd);
+fn refusal_count(window: &Window, journals: &[PathBuf], notes: &mut Vec<String>) -> usize {
     let mut count = 0usize;
-    for journal in &journals {
+    for journal in journals {
         let raw = match crate::event_store::journal_text_checked(
             &journal,
             &crate::event_store::EventQuery::of_types(&[]),
@@ -348,16 +352,7 @@ fn refusal_count(window: &Window, cwd: &Path, notes: &mut Vec<String>) -> usize 
             }
         }
     }
-    if count == 0 {
-        // A zero may be a true zero or an unreadable journal; the notes only
-        // name a read that produced nothing at all.
-        let any_journal = journals
-            .iter()
-            .any(|j| crate::event_store::store_path(j).exists() || j.exists());
-        if !any_journal {
-            notes.push("event journals missing".to_string());
-        }
-    }
+    let _ = notes;
     count
 }
 
@@ -423,9 +418,20 @@ pub fn compute(cwd: &Path) -> Result<Ledger, LedgerError> {
     let now = Utc::now();
     let window = week_window(now);
     let mut notes: Vec<String> = Vec::new();
-    let questions = question_rows(&crate::gate::escalation::questions_dir(cwd), &mut notes);
+    let qdir = crate::gate::escalation::questions_dir(cwd);
+    let journals = crate::lead_history::default_journals(cwd);
+    let journals_present = journals
+        .iter()
+        .any(|j| crate::event_store::store_path(j).exists() || j.exists());
+    if !qdir.is_dir() && !journals_present {
+        // Neither attention store exists: a fixture world or a fresh install.
+        // The checkin line would pin a wall-clock week into contexts whose
+        // goldens must stay time-free, and there is nothing to measure.
+        return Err(LedgerError::StoresAbsent);
+    }
+    let questions = question_rows(&qdir, &mut notes);
     let merged = merged_nodes(&mut notes);
-    let refusals = refusal_count(&window, cwd, &mut notes);
+    let refusals = refusal_count(&window, &journals, &mut notes);
     let reverts = revert_count(&window, cwd, &mut notes);
     let mut ledger = fold(
         &window,
