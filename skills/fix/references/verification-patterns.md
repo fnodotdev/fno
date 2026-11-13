@@ -21,18 +21,18 @@ Always prefer the fastest command that still catches the target failure.
 | TypeScript / Node | `pnpm test`, `npm test`, or framework-specific test path | `pnpm tsc --noEmit` or `npx tsc --noEmit` | `pnpm lint` or `npm run lint` | `pnpm build` or `npm run build` |
 | Python | `pytest` | `python -m py_compile <files>` or `mypy` if configured | `ruff check .` or `flake8` | project-specific smoke command |
 | Go | `go test ./...` | `go test` doubles as compile validation | `golangci-lint run` if configured | `go build ./...` |
-| Rust | `cargo test` | `cargo check` | `cargo clippy -- -D warnings` | `cargo build` |
+| Rust | `cargo test` (CI runs it. A worker runs no local cargo build, check, clippy or test before a push) | `cargo fmt --check` | `cargo clippy -- -D warnings` (CI) | `cargo build` only to reproduce a bug or take mux shots. CI builds. |
 | Shell / Docs / Plugin repos | focused shell test scripts | `bash -n <script>` for syntax | `shellcheck` if configured | repo-specific doctor and integration scripts |
 
 ## Fast vs Thorough Tiers
 
 | Tier | Use When | Examples |
 |------|----------|----------|
-| Fast | inside an iteration loop | targeted pytest path, single shell test, `cargo check`, `python -m py_compile` |
+| Fast | inside an iteration loop | targeted pytest path, single shell test, `cargo fmt --check`, `bash scripts/ci/check-file-budget.sh`, `python -m py_compile` |
 | Standard | before keeping a final change set | broader test category, repo smoke script |
-| Thorough | pre-ship validation | full doctor/build/test suite |
+| Thorough | pre-ship validation | none local (law D3323). CI runs the full build and test suite on the PR head |
 
-Use fast checks inside the loop and reserve thorough checks for the target validate phase.
+Use fast checks inside the loop. The validate phase runs the pre-push trio (fmt --check, file budget, style lint). CI owns the thorough suite (law D3323).
 
 ## Guard Pattern
 
