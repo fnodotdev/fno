@@ -589,16 +589,18 @@ fn short_labels(text: &str) -> Vec<String> {
         if !boundary(i.checked_sub(1).and_then(|j| bytes.get(j))) {
             continue;
         }
-        let digits = bytes[i + 1..]
-            .iter()
-            .take_while(|b: &&u8| b.is_ascii_digit())
-            .count();
+        let digits = bytes
+            .get(i + 1..)
+            .map(|rest| rest.iter().take_while(|b: &&u8| b.is_ascii_digit()).count())
+            .unwrap_or(0);
         let labelled = (1..=7).contains(&digits)
             && bytes
                 .get(i + 1 + digits)
                 .is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'-');
         if labelled {
-            out.push(text[i..i + 1 + digits].to_string());
+            if let Some(label) = text.get(i..i + 1 + digits) {
+                out.push(label.to_string());
+            }
         }
     }
     out
@@ -1238,7 +1240,7 @@ mod tests {
             "INSERT OR IGNORE INTO fno_numbers \
              (kind, num, key, store, host, created_at) \
              VALUES ('q', 3546, ?1, 'local', 'test', 0)",
-            [hash],
+            rusqlite::params![hash],
         )
         .unwrap();
         // A predecessor lead filed the question; this reply only points at
