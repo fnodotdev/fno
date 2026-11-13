@@ -802,6 +802,15 @@
       "doc": "Session-input default: max pipeline iterations."
     },
     {
+      "path": "tracker.backend",
+      "type": "str",
+      "default": "graph",
+      "tier": "advanced",
+      "question": "",
+      "default_source": "default",
+      "doc": "Which tracker backend answers backlog reads and writes: graph (the built-in store, the default), github (GitHub Issues), or linear. Resolution: explicit --tracker-backend flag, then FNO_TRACKER_BACKEND env, then this key, then graph. Scope and auth stay in env by design (FNO_TRACKER_GITHUB_REPO, FNO_TRACKER_LINEAR_TEAM, FNO_TRACKER_LINEAR_API_KEY)."
+    },
+    {
       "path": "guards.preset",
       "type": "typing.Literal['strict', 'standard', 'off']",
       "default": "standard",

@@ -679,6 +679,139 @@ fn render_default_on(block: Option<&Value>) -> bool {
     super::advance_settings::coerce_bool(block.and_then(|b| b.get("render_default")), true)
 }
 
+/// The workspace project names, first occurrence kept, sorted: the set the
+/// `backlog.render_path` template expands over.
+fn work_map_names() -> Vec<String> {
+    let mut names: BTreeSet<String> = BTreeSet::new();
+    for (name, _) in super::settings::work_map_pairs() {
+        if !name.is_empty() {
+            names.insert(name);
+        }
+    }
+    names.into_iter().collect()
+}
+
+/// Template names in `text`, the `{...}` runs that `{{`/`}}` do not escape.
+/// Iterator form: the clippy ratchet denies indexing and slicing, and the
+/// semantics pin validators_root::template_vars, the write door's scanner.
+fn template_names(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut prev = ' ';
+    let mut pending: Option<char> = None;
+    let mut it = text.chars().peekable();
+    while let Some(c) = pending.take().or_else(|| it.next()) {
+        let candidate = c == '{' && prev != '{';
+        prev = c;
+        if !candidate {
+            continue;
+        }
+        let mut current = String::new();
+        let mut resume: Option<char> = None;
+        let mut closed = false;
+        while let Some(n) = it.next() {
+            match n {
+                '{' => {
+                    resume = Some('{');
+                    break;
+                }
+                '}' => {
+                    if it.peek() == Some(&'}') {
+                        resume = Some('}');
+                    } else {
+                        closed = !current.is_empty();
+                    }
+                    break;
+                }
+                _ => current.push(n),
+            }
+        }
+        if closed {
+            out.push(current);
+            prev = '}';
+        } else {
+            prev = match resume {
+                Some(_) => current.chars().next_back().unwrap_or('{'),
+                None => '}',
+            };
+            pending = resume;
+        }
+    }
+    out
+}
+
+fn render_path_template(block: Option<&Value>) -> Option<String> {
+    let raw = block.and_then(|b| b.get("render_path"));
+    let s = match raw {
+        None | Some(Value::Null) => return None,
+        Some(Value::String(s)) => s,
+        Some(other) => {
+            let kind = match other {
+                Value::Object(_) => "dict",
+                Value::Bool(_) => "bool",
+                Value::Number(_) => "int",
+                _ => "list",
+            };
+            eprintln!("Warning: backlog.render_path is {kind}, not a string - ignoring it");
+            return None;
+        }
+    };
+    let template = s.trim();
+    if template.is_empty() {
+        return None;
+    }
+    let names = template_names(template);
+    if names.as_slice() != ["project"] {
+        eprintln!(
+            "Warning: backlog.render_path {template:?} must carry exactly the {{project}} \
+             placeholder; ignoring it"
+        );
+        return None;
+    }
+    if !expand(template).is_absolute() {
+        eprintln!(
+            "Warning: backlog.render_path must be absolute or ~/-rooted (it is written from \
+             arbitrary cwds), got: {template:?}; ignoring it"
+        );
+        return None;
+    }
+    Some(template.to_string())
+}
+
+/// One row to one materialized target: parse, the legacy page fold, the
+/// state-file collision and duplicate checks, each a warn-and-drop. `seen`
+/// carries the resolved paths already honored this render.
+fn materialize_target(row: &Value, seen: &mut BTreeSet<PathBuf>) -> Option<RenderTarget> {
+    let mut target = match parse_target(row) {
+        Ok(t) => t,
+        Err(message) => {
+            eprintln!("Warning: {message}");
+            return None;
+        }
+    };
+    let expanded = fold_legacy_page(&state_dir(), &expand(&target.path));
+    target.path = expanded.to_string_lossy().into_owned();
+    let clashes = state_file_collisions(&expanded);
+    if !clashes.is_empty() {
+        let names: Vec<String> = clashes.iter().map(|p| p.display().to_string()).collect();
+        eprintln!(
+            "Warning: skipping render target {}: collides with graph state file {}; \
+             refusing to overwrite it",
+            target.path,
+            names.join(", ")
+        );
+        return None;
+    }
+    if !seen.insert(resolve(&expanded)) {
+        eprintln!(
+            "Warning: skipping duplicate render target path {}: duplicate render target \
+             path; first target kept",
+            target.path
+        );
+        return None;
+    }
+    Some(target)
+}
+
 /// `config.backlog.render_targets` from the GLOBAL config only: a render
 /// fired from any cwd must not depend on a project-local list. Every bad
 /// row warns and costs that one board; the canonical board row is implicit
@@ -713,35 +846,33 @@ fn targets_from_global(global: &Value, unreadable: &[PathBuf]) -> Vec<RenderTarg
     let mut out: Vec<RenderTarget> = Vec::new();
     let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
     for row in &rows {
-        let mut target = match parse_target(row) {
-            Ok(t) => t,
-            Err(message) => {
-                eprintln!("Warning: {message}");
+        if let Some(target) = materialize_target(row, &mut seen) {
+            out.push(target);
+        }
+    }
+    // `backlog.render_path`: one templated row per work.workspaces project.
+    // An explicit row scoped to a project overrides the template row for
+    // that project; template rows pay the same dedup and state-collision
+    // checks the explicit rows pay.
+    let named: BTreeSet<String> = out
+        .iter()
+        .filter(|t| t.scope != "all")
+        .map(|t| t.scope.clone())
+        .collect();
+    if let Some(template) = render_path_template(block) {
+        for project in work_map_names() {
+            if named.contains(&project) {
                 continue;
             }
-        };
-        let expanded = fold_legacy_page(&state_dir(), &expand(&target.path));
-        target.path = expanded.to_string_lossy().into_owned();
-        let clashes = state_file_collisions(&expanded);
-        if !clashes.is_empty() {
-            let names: Vec<String> = clashes.iter().map(|p| p.display().to_string()).collect();
-            eprintln!(
-                "Warning: skipping render target {}: collides with graph state file {}; \
-                 refusing to overwrite it",
-                target.path,
-                names.join(", ")
-            );
-            continue;
+            let row = json!({
+                "path": template.replace("{project}", &project),
+                "scope": project,
+                "projection": "local",
+            });
+            if let Some(target) = materialize_target(&row, &mut seen) {
+                out.push(target);
+            }
         }
-        if !seen.insert(resolve(&expanded)) {
-            eprintln!(
-                "Warning: skipping duplicate render target path {}: duplicate render target \
-                 path; first target kept",
-                target.path
-            );
-            continue;
-        }
-        out.push(target);
     }
     warn_shadowed_local_rows(&out);
     if render_default_on(block) && !names_canonical_page(&out) {
@@ -751,10 +882,13 @@ fn targets_from_global(global: &Value, unreadable: &[PathBuf]) -> Vec<RenderTarg
 }
 
 /// A project-local `render_targets` list validates in the settings loader but
-/// never renders; say so instead of failing silently.
+/// never renders; say so instead of failing silently. The check reads the
+/// PROJECT-local layers only, so a global-only list never warns (the iMac
+/// false warning: the merged read holds the global rows even when no
+/// project file sets the key).
 fn warn_shadowed_local_rows(honored: &[RenderTarget]) {
-    let merged = super::advance_settings::load_merged(None);
-    let Some(Value::Array(rows)) = merged.get("backlog").and_then(|b| b.get("render_targets"))
+    let Some(Value::Array(rows)) =
+        crate::backlog::advance_settings::project_local_backlog_value_at(None, "render_targets")
     else {
         return;
     };
@@ -2042,5 +2176,117 @@ mod tests {
             .contains("scope must not be empty"));
         let star = parse_target(&json!({"path": "/tmp/b.html", "scope": "*"})).unwrap();
         assert_eq!(star.scope, "all");
+    }
+
+    #[test]
+    fn render_path_expands_one_target_per_workspace_project() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("work.toml");
+        let body = format!(
+            "[[work.workspaces.main.projects]]\nname = \"alpha\"\npath = \"{p}\"\n[[work.workspaces.main.projects]]\nname = \"beta\"\npath = \"{p}\"\n",
+            p = dir.path().display()
+        );
+        std::fs::write(&cfg, body).unwrap();
+        let _a = crate::claims::EnvVarGuard::set("FNO_CONFIG", cfg.to_str().unwrap());
+        let _b = crate::claims::EnvVarGuard::set("FNO_GLOBAL_SETTINGS_PATH", cfg.to_str().unwrap());
+        let template = format!("{}/{{project}}/b.html", dir.path().display());
+        let global = json!({"backlog": {"render_path": template}});
+        let targets = targets_from_global(&global, &[]);
+        let get = |s: &str| {
+            targets
+                .iter()
+                .find(|t| t.scope == s)
+                .map(|t| t.path.clone())
+        };
+        assert_eq!(
+            get("alpha"),
+            Some(format!("{}/alpha/b.html", dir.path().display()))
+        );
+        assert_eq!(
+            get("beta"),
+            Some(format!("{}/beta/b.html", dir.path().display()))
+        );
+    }
+
+    #[test]
+    fn render_targets_row_overrides_the_template_row_for_its_project() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("work.toml");
+        let body = format!(
+            "[[work.workspaces.main.projects]]\nname = \"alpha\"\npath = \"{p}\"\n[[work.workspaces.main.projects]]\nname = \"beta\"\npath = \"{p}\"\n",
+            p = dir.path().display()
+        );
+        std::fs::write(&cfg, body).unwrap();
+        let _a = crate::claims::EnvVarGuard::set("FNO_CONFIG", cfg.to_str().unwrap());
+        let _b = crate::claims::EnvVarGuard::set("FNO_GLOBAL_SETTINGS_PATH", cfg.to_str().unwrap());
+        let template = format!("{}/{{project}}/b.html", dir.path().display());
+        let explicit = format!("{}/beta.html", dir.path().display());
+        let global = json!({
+            "backlog": {
+                "render_path": template,
+                "render_targets": [{"path": explicit, "scope": "beta"}],
+            }
+        });
+        let targets = targets_from_global(&global, &[]);
+        let get = |s: &str| {
+            targets
+                .iter()
+                .find(|t| t.scope == s)
+                .map(|t| t.path.clone())
+        };
+        assert_eq!(get("beta"), Some(explicit), "explicit row wins for beta");
+        assert_eq!(
+            get("alpha"),
+            Some(format!("{}/alpha/b.html", dir.path().display()))
+        );
+    }
+
+    #[test]
+    fn render_path_without_the_placeholder_contributes_no_rows() {
+        let global = json!({"backlog": {"render_path": "/tmp/fixed.html"}});
+        let targets = targets_from_global(&global, &[]);
+        assert!(
+            targets.iter().all(|t| t.scope == "all"),
+            "no per-project rows: {targets:?}"
+        );
+    }
+
+    #[test]
+    fn project_local_backlog_value_reads_only_project_layers() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("repo");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        let cfg_dir = root.join(".fno");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(
+            cfg_dir.join("config.toml"),
+            "backlog.render_targets = []\nbacklog.render_path = \"/tmp/p/{project}.html\"\n",
+        )
+        .unwrap();
+        let _n = crate::claims::EnvVarGuard::set("FNO_NO_CANONICAL_CONFIG", "1");
+        let value = crate::backlog::advance_settings::project_local_backlog_value_at(
+            Some(&root),
+            "render_path",
+        );
+        assert_eq!(
+            value,
+            Some(json!("/tmp/p/{project}.html")),
+            "the project file's value is the answer"
+        );
+        let bare = dir.path().join("bare");
+        let none = crate::backlog::advance_settings::project_local_backlog_value_at(
+            Some(&bare),
+            "render_targets",
+        );
+        assert_eq!(none, None, "no project file, no value");
     }
 }

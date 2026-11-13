@@ -559,6 +559,18 @@
       "title": "Render Default",
       "type": "boolean"
      },
+     "render_path": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Render Path"
+     },
      "page_reload_s": {
       "default": 60,
       "title": "Page Reload S",
@@ -4533,6 +4545,15 @@
    "question": "",
    "default_source": "",
    "doc": "Render the default board page (~/.fno/cache/pages/graph.html) after graph changes (default true). Set false to stop the store keeper rewriting the page after every burst: only explicit [[backlog.render_targets]] rows render, and `fno backlog view` rebuilds the page on demand before opening. GLOBAL config file only, like render_targets."
+  },
+  {
+   "path": "backlog.render_path",
+   "type": "str (optional)",
+   "default": null,
+   "wizard": "never",
+   "question": "",
+   "default_source": "",
+   "doc": "Board page template (GLOBAL config file only): the daemon renders one board for every project registered in work.workspaces, expanding {project} in the template. A [[backlog.render_targets]] row scoped to a project overrides the template row for that project. Example: ~/vault/{project}/backlog/backlog.html. See [A local HTML file](backlog-usage.md#a-local-html-file)."
   },
   {
    "path": "backlog.page_reload_s",

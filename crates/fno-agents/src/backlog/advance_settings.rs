@@ -202,6 +202,62 @@ pub(crate) fn coerce_bool(value: Option<&serde_json::Value>, default: bool) -> b
     }
 }
 
+/// The project-local settings candidates for `root` (None: the nearest
+/// `.git` ancestor of the cwd): the repo files only. Unlike
+/// [`settings_candidates`] this never appends the global tail and never
+/// honors the FNO_CONFIG short-circuit - the pin may name the global file,
+/// and a pinned read replaces the world rather than shadowing it.
+fn project_settings_candidates_at(root: Option<&Path>) -> Vec<PathBuf> {
+    let repo_root = match root {
+        Some(r) => r.to_path_buf(),
+        None => match worktree_repo_root() {
+            Some(r) => r,
+            None => return Vec::new(),
+        },
+    };
+    let mut out = vec![
+        repo_root.join(".fno").join("config.toml"),
+        repo_root.join(".fno").join("settings.yaml"),
+    ];
+    if std::env::var_os("FNO_NO_CANONICAL_CONFIG").is_none_or(|v| v != "1") {
+        if let Some(canonical) = crate::paths::canonical_repo_root(&repo_root) {
+            let pair = [
+                canonical.join(".fno").join("config.toml"),
+                canonical.join(".fno").join("settings.yaml"),
+            ];
+            if !pair.iter().any(|p| out.contains(p)) {
+                out.push(pair[0].clone());
+                out.push(pair[1].clone());
+            }
+        }
+    }
+    out
+}
+
+/// `backlog.<leaf>` from the highest-priority PROJECT-local file that sets
+/// it (the layer the merge would let win), or None when no project file
+/// carries the key. The board renders honor `render_targets` from the
+/// global files only, so a shadow warning must name a project file that
+/// actually sets the key: a global-only list is not a shadow.
+pub fn project_local_backlog_value_at(
+    root: Option<&Path>,
+    leaf: &str,
+) -> Option<serde_json::Value> {
+    for path in project_settings_candidates_at(root) {
+        let Some(doc) = parse_file(&path) else {
+            continue;
+        };
+        if let Some(value) = unwrap_config_dict(doc)
+            .get("backlog")
+            .and_then(|b| b.get(leaf))
+            .cloned()
+        {
+            return Some(value);
+        }
+    }
+    None
+}
+
 /// `config.autonomy.enabled`, default TRUE (the AutonomyBlock default: the
 /// switch arms off only when named). A NON-MAPPING autonomy block is the
 /// Python validation failure and fails safe to FALSE, the one read that

@@ -127,6 +127,8 @@ max_open_ideas = 25
 render_targets = []
 # Render the default board page (~/.fno/cache/pages/graph.html) after graph changes (default true). Set false to stop the store keeper rewriting the page after every burst: only explicit [[backlog.render_targets]] rows render, and `fno backlog view` rebuilds the page on demand before opening. GLOBAL config file only, like render_targets.
 render_default = true
+# Board page template (GLOBAL config file only): the daemon renders one board for every project registered in work.workspaces, expanding {project} in the template. A [[backlog.render_targets]] row scoped to a project overrides the template row for that project. Example: ~/vault/{project}/backlog/backlog.html. See [A local HTML file](backlog-usage.md#a-local-html-file).
+# render_path = <unset>   # optional; no default
 # Seconds an open local board or lead.html tab waits, visible and untouched, before it reloads itself (default 60; 0 is off).
 page_reload_s = 60
 
@@ -333,6 +335,10 @@ max_iterations = 40
 timeout_seconds = 1800
 # Cap on net-new test declarations enforced at pr push and `fno-agents test-delta`; unset means no cap.
 # max_net_new = <unset>   # optional; no default
+
+[tracker]
+# Which tracker backend answers backlog reads and writes: graph (the built-in store, the default), github (GitHub Issues), or linear. Resolution: explicit --tracker-backend flag, then FNO_TRACKER_BACKEND env, then this key, then graph. Scope and auth stay in env by design (FNO_TRACKER_GITHUB_REPO, FNO_TRACKER_LINEAR_TEAM, FNO_TRACKER_LINEAR_API_KEY).
+backend = "graph"
 
 [guards]
 # Guardrail preset: strict (every gatable guard), standard (default: the two destructive-write guards stay on), or off. Read in Rust by guard_enabled; FNO_GUARD_PRESET wins over this key. Default standard.
