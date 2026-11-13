@@ -15,6 +15,14 @@ pub(super) type Segment = Vec<String>;
 pub(super) struct Unbalanced;
 
 const SEPARATORS: &[&str] = &[";", ";;", "&&", "||", "|", "|&", "&", ")"];
+
+/// A separator token, including the lexer's glued punctuation runs: `);`
+/// in `X=$(pwd); git push` is one token, and reading it as a word kept the
+/// push off command position.
+fn is_separator(tok: &str) -> bool {
+    SEPARATORS.contains(&tok)
+        || (tok.chars().all(|c| ";&|()".contains(c)) && tok.chars().any(|c| ";&|)".contains(c)))
+}
 // Keywords occupy command position, so the real command is the next token:
 // `! git push origin main` and `if git push ...; then` hide nothing.
 const KEYWORDS: &[&str] = &[
@@ -396,7 +404,7 @@ fn segments_one_line(line: &str) -> Result<Vec<Segment>, Unbalanced> {
     let mut current: Segment = Vec::new();
     let mut at_start = true;
     for tok in tokens {
-        if SEPARATORS.contains(&tok.as_str()) {
+        if is_separator(&tok) {
             if !current.is_empty() {
                 segments.push(std::mem::take(&mut current));
             }
@@ -729,7 +737,7 @@ fn pipe_fed_on_line(line: &str) -> Vec<String> {
     let mut at_start = true;
     let mut piped = false;
     for tok in tokens {
-        if SEPARATORS.contains(&tok.as_str()) {
+        if is_separator(&tok) {
             if !current.is_empty() {
                 if piped {
                     out.push(current.join(" "));
@@ -737,7 +745,7 @@ fn pipe_fed_on_line(line: &str) -> Vec<String> {
                 current.clear();
             }
             at_start = true;
-            piped = tok == "|" || tok == "|&";
+            piped = tok.ends_with("|&") || (tok.ends_with('|') && !tok.ends_with("||"));
             continue;
         }
         if at_start && KEYWORDS.contains(&tok.as_str()) {
@@ -812,6 +820,10 @@ mod tests {
             ["git status", "gh pr merge 1"]
         );
         assert_eq!(segs("git push \\\norigin main"), ["git push origin main"]);
+        // The lexer glues `);` into one token; it still separates.
+        assert!(segs("X=$(pwd); git push origin main")
+            .iter()
+            .any(|s| s == "git push origin main"));
         assert_eq!(
             segs("git push origin feat # main"),
             ["git push origin feat"]
