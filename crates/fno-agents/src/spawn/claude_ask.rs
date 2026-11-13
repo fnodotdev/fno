@@ -962,23 +962,7 @@ pub fn build_argv(
         argv.push("--model".to_string());
         argv.push(m.to_string());
     }
-    // The route's model pins on argv ahead of the settings env (pane-parity
-    // with inject_route_model_argv): the harness resolves an argv model
-    // itself, while a model that reaches the forked session only through the
-    // settings file goes to the API verbatim, and a bare tier alias delivered
-    // there dies on the first turn. A caller model already on argv is intent
-    // and wins.
-    if let Some(route) = flags.route.as_ref() {
-        let route_model = route.model.trim();
-        if !route_model.is_empty()
-            && !argv
-                .iter()
-                .any(|t| t == "--model" || t == "-m" || t.starts_with("--model="))
-        {
-            argv.push("--model".to_string());
-            argv.push(route_model.to_string());
-        }
-    }
+    pin_route_model(&mut argv, flags.route);
     if !use_stdin {
         // Behind `--` so a leading-flag seed is the prompt positional, not a
         // claude flag; same fence as the Python `_build_argv` (parity).
@@ -991,6 +975,27 @@ pub fn build_argv(
 /// True iff the message must be sent via stdin (exceeds the argv threshold).
 pub fn use_stdin_for(message: &str) -> bool {
     message.len() > ARGV_OVERFLOW_THRESHOLD
+}
+
+/// The route's model pins on argv ahead of the settings env (pane-parity with
+/// inject_route_model_argv): the harness resolves an argv model itself, while
+/// a model that reaches the session only through the settings file goes to the
+/// API verbatim, and a bare tier alias delivered there dies on the first turn.
+/// A caller model already on argv is intent and wins.
+fn pin_route_model(argv: &mut Vec<String>, route: Option<&RouteStamp<'_>>) {
+    let Some(route) = route else {
+        return;
+    };
+    let route_model = route.model.trim();
+    if route_model.is_empty()
+        || argv
+            .iter()
+            .any(|t| t == "--model" || t == "-m" || t.starts_with("--model="))
+    {
+        return;
+    }
+    argv.push("--model".to_string());
+    argv.push(route_model.to_string());
 }
 
 // ===========================================================================
@@ -2910,7 +2915,7 @@ pub fn dispatch_claude_headless(
     // skip (a headless one-shot cannot answer permission prompts).
     let mut argv: Vec<String> = vec!["claude".into(), "-p".into()];
     // A routed one-shot carries the route's settings file, as bg_create does.
-    if let Some(settings) = flags.route.map(|r| r.settings).or(flags.settings) {
+    if let Some(settings) = flags.route.as_ref().map(|r| r.settings).or(flags.settings) {
         argv.push("--settings".to_string());
         argv.push(settings.to_string());
     }
@@ -2927,6 +2932,7 @@ pub fn dispatch_claude_headless(
         argv.push("--model".to_string());
         argv.push(m.to_string());
     }
+    pin_route_model(&mut argv, flags.route);
     if let Some(value) = effort.filter(|v| !v.is_empty()) {
         argv.push("--effort".to_string());
         argv.push(value.to_string());

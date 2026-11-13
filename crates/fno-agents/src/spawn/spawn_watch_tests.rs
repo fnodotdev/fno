@@ -204,3 +204,38 @@ fn a_string_content_synthetic_row_is_evidence_too() {
     );
     assert!(!evidence.contains(';'), "{evidence}");
 }
+
+#[test]
+fn a_long_synthetic_quote_folds_to_what_the_notice_door_accepts() {
+    let temp = tempfile::tempdir().unwrap();
+    let t0 = crate::claims::now_ms();
+    let path = temp.path().join("dead.jsonl");
+    let long = (1..=30)
+        .map(|n| format!("word{n}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    std::fs::write(
+        &path,
+        format!(
+            "{}\n",
+            json!({
+                "type": "assistant",
+                "timestamp": stamp(t0 + 11_000),
+                "message": {
+                    "role": "assistant",
+                    "model": "<synthetic>",
+                    "content": [{"type": "text", "text": long}]
+                }
+            })
+        ),
+    )
+    .unwrap();
+    let watch = Watch {
+        child_session: Some("dead-beef-cafe".into()),
+        ..Default::default()
+    };
+    let (_, evidence) = stage(&watch, None, Some(&path));
+    assert!(evidence.ends_with("..."), "{evidence}");
+    assert_eq!(evidence.split_whitespace().count(), 26, "{evidence}");
+    assert!(!evidence.contains(';'), "{evidence}");
+}

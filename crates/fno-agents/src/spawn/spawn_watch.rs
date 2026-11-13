@@ -505,9 +505,11 @@ fn is_model_turn(row: &Value) -> bool {
         && row.pointer("/message/model").and_then(Value::as_str) != Some("<synthetic>")
 }
 
-/// The text of the last synthetic assistant row, with semicolons folded to
-/// periods so the notice door accepts it: the model error a first-prompt
-/// death leaves behind.
+/// The text of the last synthetic assistant row, folded for the notice door
+/// (semicolons to periods, em-dashes to hyphens, newlines to spaces, 25 words
+/// at most): the model error a first-prompt death leaves behind. A refused
+/// notice body is dropped and read as sent, so an unfolded quote could
+/// swallow the very word this notice exists to carry.
 fn synthetic_error(path: &Path) -> Option<String> {
     let last = tail_text(path)?
         .lines()
@@ -527,8 +529,18 @@ fn synthetic_error(path: &Path) -> Option<String> {
         Value::String(text) => text.clone(),
         _ => String::new(),
     };
-    let text = text.trim().replace(';', ".");
-    (!text.is_empty()).then(|| text.chars().take(240).collect())
+    let text = text
+        .replace(['\n', '\r'], " ")
+        .replace(';', ".")
+        .replace('\u{2014}', "-")
+        .trim()
+        .to_string();
+    let mut words: Vec<&str> = text.split_whitespace().take(25).collect();
+    let truncated = words.len() == 25 && text.split_whitespace().count() > 25;
+    if truncated {
+        words.push("...");
+    }
+    (!words.is_empty()).then(|| words.join(" "))
 }
 
 /// The first model turn stamped at or after the call; a row with no stamp
