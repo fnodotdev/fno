@@ -303,22 +303,8 @@ pub(crate) fn release(session_id: &str, held_for_s: i64) -> Value {
     let home = AgentsHome::from_env();
     let entry = entry_for(session_id);
     let sid = entry.as_ref().and_then(|e| e.harness_session_id.clone());
-    let stored: Vec<String> = crate::state::load_registry(&AgentsHome::shared_registry_json())
-        .map(|registry| {
-            registry
-                .entries
-                .iter()
-                .filter_map(|e| e.harness_session_id.clone())
-                .collect()
-        })
-        .unwrap_or_default();
     let drain_id = sid.clone().unwrap_or_else(|| session_id.to_string());
-    let (forms, refused) = crate::identity::bus_drain_forms(&drain_id, &stored);
-    for form in &refused {
-        eprintln!(
-            "note: held-mail release skips short form {form}: more than one stored session answers to it; mail addressed to a full session id still releases"
-        );
-    }
+    let forms = [crate::spawn_context::session_identity_key(&drain_id)];
     let handle = session_id;
 
     let bus = crate::mail_paths::state_bus_dir(&home);

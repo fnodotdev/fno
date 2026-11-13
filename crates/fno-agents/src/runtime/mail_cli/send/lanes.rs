@@ -1463,6 +1463,27 @@ fn live_discovery_hit(token: &str) -> Option<ReachableSession> {
     matches!(state.as_str(), "working" | "watching" | "your-move").then_some(hit)
 }
 
+/// The earlier row this send repeats while that row still waits for its
+/// recipient. Only a session-id target keys a send: a name resolves to a
+/// session later, inside the lanes.
+fn prior_unreached_send(
+    token: &str,
+    body: &str,
+    sender: &str,
+    reply_to: Option<&str>,
+    origin: Option<&str>,
+) -> Option<String> {
+    fno_mail::session::SessionId::parse(token).ok()?;
+    let to = crate::spawn_context::session_identity_key(token);
+    let live = crate::mail_paths::live_bus_log();
+    let bus = live.parent()?;
+    let rows = crate::mail_notify_self::read_bus(bus);
+    let unread = crate::mail_control_drain::unread_messages(bus, &rows, &to);
+    let scheduled = origin == Some("scheduler");
+    let key = fno_mail::send_key::SendKey::derive(sender, &to, reply_to, body, scheduled);
+    fno_mail::send_key::duplicate_of(&unread, &rows, &key, scheduled)
+}
+
 /// The registered-name lane: dispatch_send first; its unknown-name refusal
 /// falls into the shared name-lane choke point carrying the raw token, where
 /// exit 16 lives at the BOTTOM of the ladder.
@@ -1475,6 +1496,22 @@ pub(super) fn run_dispatch_then_name_lane(
     subject: Option<&str>,
 ) -> i32 {
     let sender = stamp_from(from_name);
+    if let Some(first) =
+        prior_unreached_send(token, body, &sender, args.reply_to.as_deref(), origin)
+    {
+        println!(
+            "{}",
+            crate::mail_receipt::json_line(
+                &first,
+                subject,
+                token,
+                &format!(
+                    "queued (durable) [duplicate of {first}: it has not reached the recipient yet]"
+                ),
+            )
+        );
+        return 0;
+    }
     let dispatched = dispatch_send(
         token,
         body,

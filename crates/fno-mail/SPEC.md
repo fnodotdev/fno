@@ -68,6 +68,12 @@ If the harness's own turn record holds the envelope id, the lane reports an acce
 
 The bus keeps state history as append-only rows with `kind: state`. `meta.of` names the message. `newest_state` folds them in log order. An accepted state is terminal: a later row never lowers it. Among the other states the newest wins. With no state row, a `landed` row reads as accepted. A legacy `delivery` field maps as follows: `typed` is `injected`. `hosted` and `cross-session` are `accepted-new-turn`. Anything else is `queued`.
 
+## One send per key
+
+File: `send_key.rs`.
+
+A send to a session id has a key: the sender, the recipient, `in_reply_to`, and the body without its header line. A machine send (`--origin scheduler`) leaves the numbers out of the body, because its text repeats with a new count each tick. Before a send writes a row, it looks for an unread row with the same key whose state is not accepted. When it finds one, it writes nothing and prints `queued (durable)` with the earlier row's id. An accepted row never blocks a new send. A send to a name has no key, because the name resolves to a session later.
+
 ## The log
 
 File: `log.rs`.

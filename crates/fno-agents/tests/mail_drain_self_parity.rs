@@ -218,13 +218,13 @@ fn seed_unread(root: &Path) {
     seed_bus(
         root,
         &[
-            row("m1", HANDLE, "2026-10-12T09:00:00Z", "first unread"),
+            row("m1", SID, "2026-10-12T09:00:00Z", "first unread"),
             row_with_origin(
-                row("m2", HANDLE, "2026-10-12T09:05:00Z", "second unread"),
+                row("m2", SID, "2026-10-12T09:05:00Z", "second unread"),
                 "pane",
             ),
             row_with_origin(
-                row("m3", HANDLE, "2026-10-12T09:07:00Z", "peer sent this"),
+                row("m3", SID, "2026-10-12T09:07:00Z", "peer sent this"),
                 "peer",
             ),
         ],
@@ -238,7 +238,7 @@ fn seed_held_job(root: &Path) {
         root,
         &[
             row("j1", JOB, "2026-10-12T10:00:00Z", "job mail body"),
-            row("r1", HANDLE, "2026-10-12T10:01:00Z", "regular mail body"),
+            row("r1", SID, "2026-10-12T10:01:00Z", "regular mail body"),
         ],
     );
 }
@@ -297,7 +297,7 @@ fn unread_mail_json() {
 }
 
 #[test]
-fn all_address_forms() {
+fn only_the_full_session_id_drains() {
     let root = case_root();
     seed_bus(
         &root,
@@ -310,8 +310,17 @@ fn all_address_forms() {
         ],
     );
     let leg = run_drain(&root, &["drain-self"]);
-    assert_golden("mail_drain_self", "all_address_forms", &leg.golden(), None);
-    assert_eq!(marker_lines(&root).len(), 4, "keep-first drops the twin");
+    assert_golden(
+        "mail_drain_self",
+        "only_the_full_session_id_drains",
+        &leg.golden(),
+        None,
+    );
+    assert_eq!(
+        marker_lines(&root).len(),
+        2,
+        "a short head or the legacy suffix never drains"
+    );
 }
 
 #[test]
@@ -339,18 +348,8 @@ fn duplicates_skipped() {
     seed_bus(
         &root,
         &[
-            row(
-                "d1",
-                HANDLE,
-                "2026-10-12T11:00:00Z",
-                "already delivered one",
-            ),
-            row(
-                "d2",
-                HANDLE,
-                "2026-10-12T11:01:00Z",
-                "already delivered two",
-            ),
+            row("d1", SID, "2026-10-12T11:00:00Z", "already delivered one"),
+            row("d2", SID, "2026-10-12T11:01:00Z", "already delivered two"),
         ],
     );
     let leg = run_drain(&root, &["drain-self"]);
