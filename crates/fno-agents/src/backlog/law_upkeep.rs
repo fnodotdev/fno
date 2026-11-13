@@ -12,7 +12,6 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde_json::{json, Value};
 
@@ -404,7 +403,9 @@ fn install_agent(hour: i64, dry_run: bool) -> Value {
     let fno_binary = which("fno").unwrap_or_else(|| "fno".into());
     let install_path = refresh::default_agent_path(&fno_binary);
     let state = super::settings::state_dir().unwrap_or_else(home);
-    let _ = std::fs::create_dir_all(state.join("logs"));
+    if let Err(e) = std::fs::create_dir_all(state.join("logs")) {
+        eprintln!("fno inbox law upkeep install: could not create the logs dir ({e})");
+    }
     let workdir = repo_root();
     let rendered = render_plist(&fno_binary, &install_path, hour, workdir.as_deref());
     if dry_run {
@@ -419,7 +420,9 @@ fn install_agent(hour: i64, dry_run: bool) -> Value {
     }
     let plist_path = launch_agents_dir().join(crate::launchd_labels::LAW_UPKEEP_PLIST_FILENAME);
     if let Some(dir) = plist_path.parent() {
-        let _ = std::fs::create_dir_all(dir);
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            eprintln!("fno inbox law upkeep install: could not create {dir:?} ({e})");
+        }
     }
     match refresh::write_if_changed(&plist_path, &rendered) {
         Ok(false) => {
@@ -441,16 +444,19 @@ fn install_agent(hour: i64, dry_run: bool) -> Value {
 }
 
 /// Truthful installed state: the plist on disk AND the label loaded in
-/// launchd, plus the last run's age from the out log.
+/// launchd, plus the last run's age from the out log. The launchd read rides
+/// the crate's bounded spawn seam, never bare `Command::output`.
 fn status_json() -> Value {
     let label = label();
     let plist_path = launch_agents_dir().join(crate::launchd_labels::LAW_UPKEEP_PLIST_FILENAME);
-    let loaded = Command::new("launchctl")
-        .arg("list")
-        .arg(&label)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    let list_cmd = vec!["launchctl".to_string(), "list".to_string(), label.clone()];
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let loaded = crate::runtime::org_board::budget::run_with_timeout(
+        &list_cmd,
+        &cwd,
+        std::time::Duration::from_secs(5),
+    )
+    .is_ok();
     let installed = plist_path.is_file() && loaded;
     let log = home().join(".fno").join("logs").join("law-upkeep.out.log");
     let age = std::fs::metadata(&log)
@@ -473,11 +479,26 @@ fn uninstall_agent() -> Value {
     if cfg!(target_os = "macos") {
         // SAFETY: getuid reads a per-process kernel value; it cannot fail.
         let uid = unsafe { libc::getuid() };
-        let outcome = Command::new("launchctl")
-            .args(["bootout", &format!("gui/{uid}/{label}")])
-            .output();
-        if let Err(e) = outcome {
-            return json!({"status": "failed", "detail": format!("launchctl bootout: {e}")});
+        let bootout_cmd = vec![
+            "launchctl".to_string(),
+            "bootout".to_string(),
+            format!("gui/{uid}/{label}"),
+        ];
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        // A bootout that names no loaded job exits 3 ("No such process"):
+        // for an uninstall that is success, not failure. The verdict stays
+        // with the plist removal below.
+        let bootout_detail = match crate::runtime::org_board::budget::run_with_timeout_accepting(
+            &bootout_cmd,
+            &cwd,
+            std::time::Duration::from_secs(5),
+            &[0, 3],
+        ) {
+            Ok(_) => None,
+            Err(e) => Some(format!("launchctl bootout: {e}")),
+        };
+        if let Some(detail) = bootout_detail {
+            return json!({"status": "failed", "detail": detail});
         }
     }
     match std::fs::remove_file(&plist_path) {
@@ -494,11 +515,10 @@ fn uninstall_agent() -> Value {
 /// The `fno inbox law upkeep` door. The worker owns stdout and the exit code
 /// (0 answered or acted, 1 the pass could not run, 2 usage).
 pub(crate) fn run_upkeep(argv: &[String]) -> i32 {
-    let Some(action) = argv.first() else {
+    let Some((action, rest)) = argv.split_first() else {
         eprintln!("fno inbox law upkeep: a subcommand is required (run | install | status | uninstall)\n{USAGE}");
         return 2;
     };
-    let rest = &argv[1..];
     match action.as_str() {
         "run" => {
             let mut apply = false;
@@ -604,8 +624,9 @@ mod tests {
             json!({"decision_id": "d-ccc", "subject": "other law"}),
         ]);
         assert_eq!(groups.len(), 1, "{groups:?}");
-        assert_eq!(groups[0]["subject"], "merge main");
-        assert_eq!(groups[0]["decision_ids"].as_array().unwrap().len(), 2);
+        let group = groups.first().expect("one duplicate group");
+        assert_eq!(group["subject"], "merge main");
+        assert_eq!(group["decision_ids"].as_array().unwrap().len(), 2);
     }
 
     #[test]
