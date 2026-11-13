@@ -148,7 +148,7 @@ On a stock config the pre-push obligation is the focused checks below, each taki
 - `bash scripts/ci/check-file-budget.sh` for source changes. It is the CI gate itself, so its number cannot disagree with CI. It prints a line for each over-budget file you touched and refuses a new `.py` file outside the allowed homes. Run it after the commit that grows code, not at ship. A cut is cheap before review and expensive after a red check. It counts commits only, and it names any uncommitted change it did not count.
 - No local build or test joins the set (law D3323). CI builds and tests the PR head. A worker builds locally only to reproduce a bug or take mux shots.
 
-`fno doctor lint style` remains available for voluntary hand runs. For Markdown, run `fno doctor lint style --surface markdown --files <changed .md> --diff-base origin/main`. It is not part of the stock pre-push or CI gate.
+`fno doctor lint style` is one of the three pre-push checks (law D3323). For Markdown, run `fno doctor lint style --surface markdown --files <changed .md> --diff-base origin/main`.
 
 On a project that set `preflight.required = true` (see `skills/target/references/ship-phase.md`):
 
