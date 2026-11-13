@@ -2117,10 +2117,7 @@ fn collect_intake_paths(plan_paths: &[String], from_list: Option<&str>) -> Vec<S
 /// The one birth-lane refusal every creation surface carries: on an external
 /// tracker backend the item lives there, and a graph mint would be a phantom.
 fn refuse_create_on_external_backend() -> bool {
-    let backend = std::env::var("FNO_TRACKER_BACKEND")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "graph".to_string());
+    let backend = crate::tracker::backend_name(None);
     if backend == "graph" {
         return false;
     }

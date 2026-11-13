@@ -144,6 +144,7 @@ pub const GROUPS: &[Group] = &[
             ("archive", "archive"),
             ("archive-dedupe-ids", "archive-dedupe-ids"),
             ("backfill-deferred-kind", "backfill-deferred-kind"),
+            ("backfill-tags", "backfill-tags"),
             ("batch", "batch"),
             ("capture", "capture"),
             ("decide", "decide"),

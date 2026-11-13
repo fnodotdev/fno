@@ -167,62 +167,106 @@ fn carry_referenced_scripts(old_stage: &Path, new_stage: &Path, mux: Option<&Mux
 const MARKETPLACE_REL: &str = ".claude-plugin/marketplace.json";
 const CODEX_MARKETPLACE_REL: &str = ".agents/plugins/marketplace.json";
 
-/// The plugin marketplace name, and the name it had before the rename. An
-/// install made under the old name keeps loading: every read accepts both,
-/// and a dev install moves the old registration to the new name.
+/// The public catalog's marketplace name, the local stage's own name, and the
+/// name the public one had before the rename. The stage never registers as
+/// `fno`: Claude records every `marketplace add` in user settings, and a
+/// local `fno` entry there refuses the public `marketplace add fnodotdev/fno`.
+/// An install made under an old name keeps loading: every read accepts all
+/// three, and a dev install moves an old registration to `fno-dev`.
 const MARKETPLACE_NAME: &str = "fno";
+const DEV_MARKETPLACE_NAME: &str = "fno-dev";
 const LEGACY_MARKETPLACE_NAME: &str = "footnote";
 const PLUGIN_ID: &str = "fno@fno";
+const DEV_PLUGIN_ID: &str = "fno@fno-dev";
 const LEGACY_PLUGIN_ID: &str = "fno@footnote";
 
-/// The fno record in a known_marketplaces.json, under either name.
-fn known_fno_marketplace(known: &Value) -> Option<&Value> {
-    known
-        .get(MARKETPLACE_NAME)
-        .or_else(|| known.get(LEGACY_MARKETPLACE_NAME))
+/// The fno records in a known_marketplaces.json, the local stage first.
+fn known_fno_marketplaces(known: &Value) -> Vec<&Value> {
+    [
+        DEV_MARKETPLACE_NAME,
+        MARKETPLACE_NAME,
+        LEGACY_MARKETPLACE_NAME,
+    ]
+    .iter()
+    .filter_map(|name| known.get(*name))
+    .collect()
 }
 
-/// The fno entries in an installed_plugins.json, under both plugin ids: a
-/// failed migration leaves both registered, and the sweep's guard must see
-/// each. None when neither id is registered.
+/// Whether a known_marketplaces.json record loads from a local path.
+fn is_local_source(record: &Value) -> bool {
+    matches!(
+        record
+            .get("source")
+            .and_then(|s| s.get("source"))
+            .and_then(Value::as_str),
+        Some("directory" | "file")
+    )
+}
+
+/// The fno entries in an installed_plugins.json, under every plugin id: a
+/// failed migration leaves several registered, and the sweep's guard must see
+/// each. None when no id is registered.
 fn registry_fno_entries(registry: &Value) -> Option<Vec<&Value>> {
     let plugins = registry.get("plugins")?;
-    let lists: Vec<&Vec<Value>> = [PLUGIN_ID, LEGACY_PLUGIN_ID]
+    let lists: Vec<&Vec<Value>> = [DEV_PLUGIN_ID, PLUGIN_ID, LEGACY_PLUGIN_ID]
         .iter()
         .filter_map(|id| plugins.get(*id).and_then(Value::as_array))
         .collect();
     (!lists.is_empty()).then(|| lists.into_iter().flatten().collect())
 }
 
-/// The commands that retire an old-name Claude registration, so the
-/// following `marketplace add` + `install` leave one fno@fno. Empty when
-/// known_marketplaces.json names no old-name marketplace.
-fn legacy_claude_migration(claude_dir: &Path) -> Vec<Vec<String>> {
-    let known = std::fs::read_to_string(claude_dir.join("plugins/known_marketplaces.json"))
+/// known_marketplaces.json, or Null when it is absent or unreadable.
+fn claude_known_marketplaces(claude_dir: &Path) -> Value {
+    std::fs::read_to_string(claude_dir.join("plugins/known_marketplaces.json"))
         .ok()
-        .and_then(|t| serde_json::from_str::<Value>(&t).ok());
-    if known
-        .and_then(|k| k.get(LEGACY_MARKETPLACE_NAME).cloned())
-        .is_none()
-    {
-        return Vec::new();
-    }
-    let argv = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
-    vec![
-        argv(&["claude", "plugin", "uninstall", LEGACY_PLUGIN_ID]),
-        argv(&[
-            "claude",
-            "plugin",
-            "marketplace",
-            "remove",
-            LEGACY_MARKETPLACE_NAME,
-        ]),
-    ]
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .unwrap_or(Value::Null)
 }
 
-/// The stage serves its own copy of the public manifest with the fno entry
-/// pointed at the stage root (`source: "./"`), so `claude plugin install
-/// fno@fno` resolves in place and never clones a GitHub ref: the public pin
+/// Whether Claude registers a local fno under the public name `fno`, the
+/// entry that refuses `marketplace add fnodotdev/fno`.
+fn local_stage_holds_public_name(claude_dir: &Path) -> bool {
+    claude_known_marketplaces(claude_dir)
+        .get(MARKETPLACE_NAME)
+        .is_some_and(is_local_source)
+}
+
+/// The commands that retire an old Claude registration, so the following
+/// `marketplace add` + `install` leave one fno@fno-dev: the pre-rename
+/// `footnote` marketplace, and a local stage registered under the public
+/// name `fno`. A GitHub `fno` is the release install and stays. Empty when
+/// known_marketplaces.json names neither.
+fn claude_dev_migration(claude_dir: &Path) -> Vec<Vec<String>> {
+    let known = claude_known_marketplaces(claude_dir);
+    let retire = [
+        (
+            LEGACY_MARKETPLACE_NAME,
+            LEGACY_PLUGIN_ID,
+            known.get(LEGACY_MARKETPLACE_NAME).is_some(),
+        ),
+        (
+            MARKETPLACE_NAME,
+            PLUGIN_ID,
+            known.get(MARKETPLACE_NAME).is_some_and(is_local_source),
+        ),
+    ];
+    let argv = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+    retire
+        .into_iter()
+        .filter(|(_, _, old)| *old)
+        .flat_map(|(name, id, _)| {
+            [
+                argv(&["claude", "plugin", "uninstall", id]),
+                argv(&["claude", "plugin", "marketplace", "remove", name]),
+            ]
+        })
+        .collect()
+}
+
+/// The stage serves its own copy of the public manifest, renamed `fno-dev`
+/// for Claude, with the fno entry pointed at the stage root (`source: "./"`),
+/// so `claude plugin install fno@fno-dev` resolves in place and never clones
+/// a GitHub ref: the public pin
 /// (a release tag) is a release-side ref a dev machine cannot rely on. The
 /// buddy entry points at `./plugins/buddy` the same way. The repo file
 /// stays verbatim. Anything that would leave the fno entry
@@ -257,6 +301,12 @@ fn staged_marketplace_bytes(source_bytes: &str, marketplace: &str) -> Result<Str
         return Err(format!(
             "{marketplace}: no fno entry; cannot serve the plugin locally"
         ));
+    }
+    if let Some(obj) = manifest
+        .as_object_mut()
+        .filter(|_| marketplace == MARKETPLACE_REL)
+    {
+        obj.insert("name".into(), json!(DEV_MARKETPLACE_NAME));
     }
     serde_json::to_string_pretty(&manifest).map_err(|e| format!("{marketplace}: {e}"))
 }
@@ -832,18 +882,19 @@ fn registry_install_paths(home: &Path) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-/// The fno marketplace's `source.source` kind ("directory", "file",
-/// "github", ...). None when the registry is unreadable or names no fno
-/// marketplace.
-fn marketplace_source_kind(home: &Path) -> Option<String> {
+/// The `source.source` kind ("directory", "file", "github", ...) of the
+/// marketplace a cache dir is named for. `Some(None)` when the registry is
+/// readable and no longer names it: the cache is an orphan of a removed
+/// marketplace. None when the registry is unreadable.
+fn marketplace_source_kind(home: &Path, name: &str) -> Option<Option<String>> {
     let text =
         std::fs::read_to_string(home.join(".claude/plugins/known_marketplaces.json")).ok()?;
     let v = serde_json::from_str::<Value>(&text).ok()?;
-    known_fno_marketplace(&v)?
-        .get("source")?
-        .get("source")?
-        .as_str()
-        .map(String::from)
+    Some(
+        v.get(name)
+            .and_then(|r| r.get("source")?.get("source")?.as_str())
+            .map(String::from),
+    )
 }
 
 /// Every fno plugin root this machine could load or mistake for the loaded
@@ -868,20 +919,25 @@ fn plugin_roots_for(home: &Path) -> (Vec<PluginRoot>, Vec<String>) {
         .and_then(|t| serde_json::from_str::<Value>(&t).map_err(|e| e.to_string()))
     {
         Err(e) => detail.push(format!("{} unreadable: {e}", marketplaces.display())),
-        Ok(v) => match (
-            known_fno_marketplace(&v),
-            known_fno_marketplace(&v).and_then(|f| f.get("source")),
-        ) {
-            (Some(rec), Some(source)) => {
-                let local = matches!(
-                    source.get("source").and_then(Value::as_str),
-                    Some("directory" | "file")
-                );
+        Ok(v) => {
+            let records = known_fno_marketplaces(&v);
+            if records.is_empty() {
+                detail.push(format!(
+                    "{} names no fno marketplace",
+                    marketplaces.display()
+                ));
+            }
+            for rec in records {
                 let path = rec
                     .get("installLocation")
                     .and_then(Value::as_str)
-                    .or_else(|| source.get("path").and_then(Value::as_str));
+                    .or_else(|| {
+                        rec.get("source")
+                            .and_then(|s| s.get("path"))
+                            .and_then(Value::as_str)
+                    });
                 if let Some(p) = path {
+                    let local = is_local_source(rec);
                     push_root(
                         &mut roots,
                         &mut seen,
@@ -891,11 +947,7 @@ fn plugin_roots_for(home: &Path) -> (Vec<PluginRoot>, Vec<String>) {
                     );
                 }
             }
-            _ => detail.push(format!(
-                "{} names no fno marketplace",
-                marketplaces.display()
-            )),
-        },
+        }
     }
 
     let registry = home.join(".claude/plugins/installed_plugins.json");
@@ -922,6 +974,7 @@ fn plugin_roots_for(home: &Path) -> (Vec<PluginRoot>, Vec<String>) {
     for path in [
         home.join(".gemini/config/plugins/footnote"),
         home.join(".codex/plugins/cache/footnote-local"),
+        home.join(".claude/plugins/cache/fno-dev"),
         home.join(".claude/plugins/cache/fno"),
         home.join(".claude/plugins/cache/footnote"),
     ] {
@@ -1230,6 +1283,18 @@ fn rename_findings() -> Vec<RenameFinding> {
                 command,
             });
         }
+    }
+    if local_stage_holds_public_name(&claude) {
+        findings.push(RenameFinding {
+            harness: "claude",
+            kind: "local-holds-public-name",
+            name: MARKETPLACE_NAME.to_string(),
+            detail: format!(
+                "claude registers a local fno under the public name {MARKETPLACE_NAME}, \
+                 so `marketplace add fnodotdev/fno` refuses; the dev stage is {DEV_MARKETPLACE_NAME} now"
+            ),
+            command: "fno config plugin install claude".to_string(),
+        });
     }
     if legacy_marketplace_named && legacy_plugin_ids.is_empty() {
         let command = if legacy_marketplace_is_local {
@@ -1698,12 +1763,9 @@ fn drain_legacy_stage(legacy: &Path, blockers: Result<Vec<u32>, String>) -> Resu
 
 fn install_claude(stage: &Path, force: bool) -> Result<String, String> {
     // Best effort: a step that fails leaves the old registration loading,
-    // and the add + install below still land fno@fno.
-    let claude_dir = match std::env::var_os("CLAUDE_CONFIG_DIR") {
-        Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-        _ => dirs_home().join(".claude"),
-    };
-    for argv in legacy_claude_migration(&claude_dir) {
+    // and the add + install below still land fno@fno-dev.
+    let claude_dir = claude_config_dir();
+    for argv in claude_dev_migration(&claude_dir) {
         let _ = run_checked(&argv, None);
     }
     run_checked(
@@ -1721,24 +1783,51 @@ fn install_claude(stage: &Path, force: bool) -> Result<String, String> {
             "claude".into(),
             "plugin".into(),
             action.into(),
-            PLUGIN_ID.into(),
+            DEV_PLUGIN_ID.into(),
         ]
     };
-    if force {
+    let installed = if force {
         // update keeps same-version files; force means delete and reinstall,
         // and also covers not-yet-installed, so uninstall failure is fine.
         let _ = run_checked(&plugin("uninstall"), None);
         run_checked(&plugin("install"), None)?;
-        return Ok(format!("reinstalled {PLUGIN_ID} from {}", stage.display()));
-    }
-    match run_checked(&plugin("install"), None) {
-        Ok(_) => Ok(format!("installed {PLUGIN_ID} from {}", stage.display())),
-        Err(e) if e.contains("already installed") => {
-            run_checked(&plugin("update"), None)?;
-            Ok(format!("updated {PLUGIN_ID} from {}", stage.display()))
+        "reinstalled"
+    } else {
+        match run_checked(&plugin("install"), None) {
+            Ok(_) => "installed",
+            Err(e) if e.contains("already installed") => {
+                run_checked(&plugin("update"), None)?;
+                "updated"
+            }
+            Err(e) => return Err(e),
         }
-        Err(e) => Err(e),
-    }
+    };
+    let installed = format!("{installed} {DEV_PLUGIN_ID} from {}", stage.display());
+    Ok(match disable_claude_release(&claude_dir) {
+        Some(note) => format!("{installed}; {note}"),
+        None => installed,
+    })
+}
+
+/// Turn off a GitHub fno@fno beside the dev install, so one copy loads.
+/// Both stay installed: the receipt names the command that swaps them back.
+fn disable_claude_release(claude_dir: &Path) -> Option<String> {
+    let registry: Value = serde_json::from_str(
+        &std::fs::read_to_string(claude_dir.join("plugins/installed_plugins.json")).ok()?,
+    )
+    .ok()?;
+    registry.get("plugins")?.get(PLUGIN_ID)?;
+    let argv = |action: &str, id: &str| -> Vec<String> {
+        ["claude", "plugin", action, id].map(String::from).to_vec()
+    };
+    let swap_back = format!(
+        "to load the release again: claude plugin disable {DEV_PLUGIN_ID} && claude plugin enable {PLUGIN_ID}"
+    );
+    Some(match run_checked(&argv("disable", PLUGIN_ID), None) {
+        Ok(_) => format!("disabled the release {PLUGIN_ID}, so one copy loads ({swap_back})"),
+        Err(e) if e.contains("already disabled") => format!("the release {PLUGIN_ID} stays disabled ({swap_back})"),
+        Err(e) => format!("the release {PLUGIN_ID} is still enabled, so both copies load: disable it with claude plugin disable {PLUGIN_ID} ({e})"),
+    })
 }
 
 /// A value fno wrote: under a `.fno` state dir, or the exact value this
@@ -1931,7 +2020,11 @@ fn remove_stale_copies(home: &Path, roots: &[PluginRoot]) -> (Vec<PathBuf>, Vec<
             removed.push(path);
         }
     }
-    for name in [MARKETPLACE_NAME, LEGACY_MARKETPLACE_NAME] {
+    for name in [
+        DEV_MARKETPLACE_NAME,
+        MARKETPLACE_NAME,
+        LEGACY_MARKETPLACE_NAME,
+    ] {
         let cache = home.join(".claude/plugins/cache").join(name);
         if !cache.exists() {
             continue;
@@ -1954,12 +2047,12 @@ fn remove_stale_copies(home: &Path, roots: &[PluginRoot]) -> (Vec<PathBuf>, Vec<
         }
         let live_roots: Vec<&PluginRoot> = roots.iter().filter(|r| r.live).collect();
         let cache_is_live = live_roots.iter().any(|r| paths_equal(&r.path, &cache));
-        match marketplace_source_kind(home) {
+        match marketplace_source_kind(home, name) {
             None => refused.push(format!(
                 "claude cache {} kept: fno marketplace shape unreadable",
                 cache.display()
             )),
-            Some(kind) if kind != "directory" && kind != "file" => refused.push(format!(
+            Some(Some(kind)) if kind != "directory" && kind != "file" => refused.push(format!(
                 "claude cache {} kept: marketplace source is '{kind}', not a local directory",
                 cache.display()
             )),
@@ -2005,31 +2098,16 @@ fn default_source_dir() -> PathBuf {
     std::env::current_dir().unwrap_or_default()
 }
 
-/// The release channel the harness's footnote plugin comes from, or None for
-/// a local (dev) install or no install. A dev install must refuse to replace
-/// a release one: `claude plugin marketplace add <stage>` silently repoints
-/// an existing GitHub fno marketplace at the stage, exit 0.
-fn release_channel(harness: &str, claude_dir: &Path, codex_dir: &Path) -> Option<String> {
+/// The release channel the codex footnote plugin comes from, or None for a
+/// local (dev) install, no install, or any other harness. A codex dev install
+/// must refuse to replace a release one: both converge on the one id
+/// fno@fno. Claude never refuses: its dev stage registers as fno@fno-dev
+/// beside the release fno@fno, so neither install moves the other.
+fn release_channel(harness: &str, codex_dir: &Path) -> Option<String> {
     let read = |path: PathBuf| -> Option<Value> {
         serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
     };
     let (place, git_ref) = match harness {
-        "claude" => {
-            let known = read(claude_dir.join("plugins").join("known_marketplaces.json"))?;
-            let source = known_fno_marketplace(&known)?.get("source")?;
-            let place = match source.get("source").and_then(Value::as_str)? {
-                "github" => format!("github:{}", source.get("repo")?.as_str()?),
-                "git" | "url" => source.get("url")?.as_str()?.to_string(),
-                _ => return None,
-            };
-            (
-                place,
-                source
-                    .get("ref")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-            )
-        }
         "codex" => {
             let marker = read(codex_dir.join("footnote").join("plugin-channel.json"))?;
             if marker.get("channel").and_then(Value::as_str) != Some("release") {
@@ -2060,16 +2138,11 @@ fn release_channel(harness: &str, claude_dir: &Path, codex_dir: &Path) -> Option
 }
 
 fn release_channel_here(harness: &str) -> Option<String> {
-    let home = dirs_home();
-    let env_dir = |key: &str, fallback: &str| match std::env::var_os(key) {
+    let codex_dir = match std::env::var_os("CODEX_HOME") {
         Some(dir) if !dir.is_empty() => PathBuf::from(dir),
-        _ => home.join(fallback),
+        _ => dirs_home().join(".codex"),
     };
-    release_channel(
-        harness,
-        &env_dir("CLAUDE_CONFIG_DIR", ".claude"),
-        &env_dir("CODEX_HOME", ".codex"),
-    )
+    release_channel(harness, &codex_dir)
 }
 
 fn release_refusal(harness: &str, channel: &str) -> String {
@@ -2392,6 +2465,25 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
                         "plugin stage: restaged {files} files from {} at {head12}",
                         root.display()
                     );
+                    let full = std::iter::once(stage_parent.clone())
+                        .chain(legacy_stage_parent())
+                        .map(|parent| parent.join(Profile::Full.stage_dir()))
+                        .find(|stage| stage.exists());
+                    if let Some(full) =
+                        full.filter(|_| local_stage_holds_public_name(&claude_config_dir()))
+                    {
+                        // The restaged manifest now names fno-dev, so the old
+                        // `fno` registration moves with it.
+                        match install_claude(&full, false) {
+                            Ok(detail) => println!("plugin stage: claude moved to {detail}"),
+                            Err(e) => {
+                                eprintln!(
+                                    "plugin stage: claude still registers the stage as {MARKETPLACE_NAME}: {e}; run fno config plugin install claude"
+                                );
+                                return 1;
+                            }
+                        }
+                    }
                     0
                 }
                 Err(e) => {
@@ -2480,7 +2572,7 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
             eprintln!(
                 "usage: fno-agents plugin-install <claude|codex|opencode|agy|grok|zcode|footnote|muse> [--force] [--dev] [--pack] [--no-reclaim] [--source <dir>]"
             );
-            eprintln!("         installs your local checkout for development; exit 3 refuses to replace a release-channel plugin without --dev");
+            eprintln!("         installs your local checkout for development; codex exits 3 rather than replace a release-channel plugin without --dev; claude installs fno@fno-dev beside a release fno@fno");
             eprintln!("       fno-agents plugin-install --check [--stage <dir>] [--source <dir>] [--json|-J]");
             eprintln!("         (no --stage checks every plugin root; exit is the worst status across roots)");
             eprintln!("       fno-agents plugin-install --restage [--source <dir>]");
@@ -4297,64 +4389,78 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 
-    /// A GitHub-sourced claude marketplace or a codex release marker is a
-    /// release channel the dev install must not replace; a directory source,
-    /// a dev marker, or no record at all is not.
+    /// The stage's Claude catalog is fno-dev, so a local `fno` never holds the
+    /// public name; the dev install retires a local `fno` and keeps a GitHub one.
     #[test]
-    fn release_channel_names_github_and_codex_release_only() {
-        let tmp = tempfile::tempdir().unwrap();
-        let claude = tmp.path().join("claude");
-        let codex = tmp.path().join("codex");
-        fs::create_dir_all(claude.join("plugins")).unwrap();
-        fs::create_dir_all(codex.join("footnote")).unwrap();
-        assert_eq!(release_channel("claude", &claude, &codex), None);
-        assert_eq!(release_channel("codex", &claude, &codex), None);
-
-        let known = claude.join("plugins/known_marketplaces.json");
-        let claude_with = |source: Value| {
-            fs::write(&known, json!({"fno": {"source": source}}).to_string()).unwrap();
-            release_channel("claude", &claude, &codex)
+    fn dev_stage_takes_fno_dev_and_retires_only_a_local_fno() {
+        let public = r#"{"name":"fno","plugins":[{"name":"fno","source":{"source":"github","repo":"fnodotdev/fno"}}]}"#;
+        let name_of = |rel: &str| -> Value {
+            let staged = staged_marketplace_bytes(public, rel).unwrap();
+            serde_json::from_str::<Value>(&staged)
+                .unwrap()
+                .get("name")
+                .cloned()
+                .unwrap_or_default()
         };
+        assert_eq!(name_of(MARKETPLACE_REL), json!("fno-dev"));
+        assert_eq!(name_of(CODEX_MARKETPLACE_REL), json!("fno"));
+
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("plugins")).unwrap();
+        let commands_for = |known: Value| -> Vec<String> {
+            let path = tmp.path().join("plugins/known_marketplaces.json");
+            fs::write(path, known.to_string()).unwrap();
+            claude_dev_migration(tmp.path())
+                .iter()
+                .map(|argv| argv.get(2..).unwrap_or_default().join(" "))
+                .collect()
+        };
+        let local = json!({"source": {"source": "directory", "path": "/stage"}});
+        let github = json!({"source": {"source": "github", "repo": "fnodotdev/fno"}});
         assert_eq!(
-            claude_with(json!({"source": "github", "repo": "fnodotdev/fno", "ref": "stable"}))
-                .as_deref(),
-            Some("stable (github:fnodotdev/fno#stable)")
+            commands_for(json!({"fno": local.clone()})),
+            ["uninstall fno@fno", "marketplace remove fno"]
         );
+        assert!(local_stage_holds_public_name(tmp.path()));
+        assert!(commands_for(json!({"fno": github.clone(), "fno-dev": local})).is_empty());
+        assert!(!local_stage_holds_public_name(tmp.path()));
         assert_eq!(
-            claude_with(
-                json!({"source": "github", "repo": "fnodotdev/fno", "ref": "v0.4.8", "sha": "fd456348a2e1410ec4f9fc65d883de742c0a3067"})
-            )
-            .as_deref(),
-            Some("v0.4.8 (github:fnodotdev/fno#v0.4.8)")
+            commands_for(json!({"footnote": github})),
+            ["uninstall fno@footnote", "marketplace remove footnote"]
         );
-        assert_eq!(
-            claude_with(
-                json!({"source": "github", "repo": "fnodotdev/fno", "ref": "plugin-nightly"})
-            )
-            .as_deref(),
-            Some("nightly (github:fnodotdev/fno#plugin-nightly)")
-        );
-        assert_eq!(
-            claude_with(json!({"source": "github", "repo": "fnodotdev/fno"})).as_deref(),
-            Some("main (github:fnodotdev/fno#main)")
-        );
-        assert_eq!(
-            claude_with(json!({"source": "directory", "path": "/stage"})),
-            None
-        );
+    }
+
+    /// A codex release marker is a release channel the dev install must not
+    /// replace; a dev marker, no marker, or any claude record is not.
+    #[test]
+    fn release_channel_names_codex_release_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let codex = tmp.path().join("codex");
+        fs::create_dir_all(codex.join("footnote")).unwrap();
+        assert_eq!(release_channel("codex", &codex), None);
 
         let marker = codex.join("footnote/plugin-channel.json");
-        let codex_with = |channel: &str| {
-            let v = json!({"channel": channel, "source": "fnodotdev/fno", "ref": "stable"});
+        let codex_with = |channel: &str, git_ref: Option<&str>| {
+            let v = json!({"channel": channel, "source": "fnodotdev/fno", "ref": git_ref});
             fs::write(&marker, v.to_string()).unwrap();
-            release_channel("codex", &claude, &codex)
+            release_channel("codex", &codex)
         };
         assert_eq!(
-            codex_with("release").as_deref(),
+            codex_with("release", Some("stable")).as_deref(),
             Some("stable (fnodotdev/fno#stable)")
         );
-        assert_eq!(codex_with("dev"), None);
-        assert_eq!(release_channel("agy", &claude, &codex), None);
+        assert_eq!(
+            codex_with("release", Some("plugin-nightly")).as_deref(),
+            Some("nightly (fnodotdev/fno#plugin-nightly)")
+        );
+        assert_eq!(
+            codex_with("release", None).as_deref(),
+            Some("main (fnodotdev/fno#main)")
+        );
+        assert_eq!(codex_with("dev", Some("stable")), None);
+        // Claude never refuses: a GitHub fno and the fno-dev stage coexist.
+        assert_eq!(release_channel("claude", &codex), None);
+        assert_eq!(release_channel("agy", &codex), None);
     }
 
     /// A throwaway HOME for the root-enumeration fixtures. The marketplace
@@ -4491,7 +4597,8 @@ mod tests {
         let home = fixture_home(&base);
         let stage = base.join("stage");
         fs::create_dir_all(&stage).unwrap();
-        let cache = home.join(".claude/plugins/cache/footnote");
+        // The guard reads the record the cache dir is named for.
+        let cache = home.join(".claude/plugins/cache/fno");
         fs::create_dir_all(&cache).unwrap();
         let live_stage = vec![PluginRoot {
             path: stage.clone(),

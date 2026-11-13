@@ -30,9 +30,9 @@ case "$args" in
   *repos/o/r/pulls/7/reviews*) echo '[{"user":{"login":"bot[bot]"},"submitted_at":"2026-10-30T00:00:00Z","state":"COMMENTED"}]' ;;
   *repos/o/r/issues/7/comments*) echo '[]' ;;
   *repos/o/r/pulls/8/reviews*|*repos/o/r/issues/8/comments*) echo '[]' ;;
-  *repos/o/r/pulls/7*) echo '{"number":7,"state":"open","merged_at":null,"merged":false,"draft":false,"created_at":"2026-10-29T00:00:00Z","head":{"sha":"aaa","ref":"f"},"base":{"ref":"main"},"html_url":"https://github.com/o/r/pull/7","merge_commit_sha":null}' ;;
-  *repos/o/r/pulls/8*) echo '{"number":8,"state":"closed","merged_at":"2026-10-30T00:00:00Z","merged":true,"draft":false,"created_at":"2026-10-29T00:00:00Z","head":{"sha":"aaa","ref":"f"},"base":{"ref":"main"},"html_url":"https://github.com/o/r/pull/8","merge_commit_sha":"abc"}' ;;
-  *repos/o/r/pulls*) echo '[{"number":7,"state":"open","draft":false,"created_at":"2026-10-29T00:00:00Z"}]' ;;
+  *repos/o/r/pulls/7*) echo '{"number":7,"state":"open","merged_at":null,"merged":false,"draft":false,"created_at":"__CREATED_AT__","head":{"sha":"aaa","ref":"f"},"base":{"ref":"main"},"html_url":"https://github.com/o/r/pull/7","merge_commit_sha":null}' ;;
+  *repos/o/r/pulls/8*) echo '{"number":8,"state":"closed","merged_at":"__MERGED_AT__","merged":true,"draft":false,"created_at":"__CREATED_AT__","head":{"sha":"aaa","ref":"f"},"base":{"ref":"main"},"html_url":"https://github.com/o/r/pull/8","merge_commit_sha":"abc"}' ;;
+  *repos/o/r/pulls*) echo '[{"number":7,"state":"open","draft":false,"created_at":"__CREATED_AT__"}]' ;;
   *) echo "{}" ;;
 esac
 "#;
@@ -96,15 +96,31 @@ fn write_case(root: &Path, case: &Case, leg: &str) -> Home {
     std::fs::create_dir_all(state.join("state")).unwrap();
     std::fs::create_dir_all(&bin).unwrap();
     let stub = bin.join("gh");
-    std::fs::write(&stub, GH_STUB).unwrap();
+    // The stub PRs' dates are relative to the run: a fixed created_at aged
+    // past the tick's 14-day max_age default on 2026-11-12 and parked every
+    // fixture PR, so "new review fires" printed acted=0 from then on. Three
+    // days back stays inside the window even with CI clock skew; the merged
+    // stamp lands after the created one to stay plausible.
+    let created = (chrono::Utc::now() - chrono::Duration::days(3))
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+    let merged = (chrono::Utc::now() - chrono::Duration::days(2))
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+    let gh_stub = GH_STUB
+        .replace("__CREATED_AT__", &created)
+        .replace("__MERGED_AT__", &merged);
+    std::fs::write(&stub, gh_stub).unwrap();
     let fire = bin.join("fire-ok");
     std::fs::write(&fire, "#!/bin/sh\necho '{\"is_error\": false}'\n").unwrap();
     use std::os::unix::fs::PermissionsExt;
     for path in [&stub, &fire] {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
+    // The stub PR opened 2026-10-29; a wide max_age_days keeps the max-age
+    // park off, or the goldens change on the day the fixture ages out.
     let config = format!(
-        "state_dir = \"{}\"\n\n[pr_watch]\nenabled = {}\ninterval_seconds = 600\n\n[autonomy]\nenabled = true\n\n[recovery]\nenabled = false\n\n[evals]\nschedule_days = 0\n\n[review]\ngithub_apps = [\"bot\"]\n",
+        "state_dir = \"{}\"\n\n[pr_watch]\nenabled = {}\ninterval_seconds = 600\nmax_age_days = 36500\n\n[autonomy]\nenabled = true\n\n[recovery]\nenabled = false\n\n[evals]\nschedule_days = 0\n\n[review]\ngithub_apps = [\"bot\"]\n",
         state.display(), case.enabled
     );
     std::fs::write(state.join("config.toml"), &config).unwrap();

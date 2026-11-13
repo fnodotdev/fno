@@ -39,10 +39,12 @@ cat > "$TMP/bin/fno" <<'STUB'
 #!/usr/bin/env bash
 if [ "$1" = "agents" ] && [ "$2" = "internal" ] && [ "$3" = "registry-json" ]; then
   cat "$LEAD_REG_FIXTURE"
+elif [ "$1" = "agents" ] && [ "$2" = "hq" ] && [ "$3" = "faq" ] && [ "$4" = "list" ]; then
+  cat "$LEAD_FAQ_FIXTURE" 2>/dev/null || true
 elif [ "$1" = "agents" ] && [ "$2" = "lead" ] && [ "$3" = "faq" ] && [ "$4" = "list" ]; then
   cat "$LEAD_FAQ_FIXTURE" 2>/dev/null || true
 elif [ "$1" = "agents" ] && [ "$2" = "org" ] && [ "$3" = "faq" ] && [ "$4" = "list" ]; then
-  # The canonical org spelling forwards the same action.
+  # The deprecated org spelling answers beside hq for one release.
   cat "$LEAD_FAQ_FIXTURE" 2>/dev/null || true
 elif [ "$1" = "config" ] && [ "$2" = "paths" ] && [ "$3" = "handoff" ]; then
   cat "$LEAD_HANDOFF_PATH_FIXTURE" 2>/dev/null || true

@@ -287,7 +287,7 @@ pub(crate) fn global_config_path() -> PathBuf {
 
 /// The project config file: `$FNO_REPO_ROOT` when pinned, else the nearest
 /// ancestor holding a `.git` dir, else the working directory.
-fn project_config_path() -> PathBuf {
+pub(crate) fn project_config_path() -> PathBuf {
     if let Some(root) = std::env::var_os("FNO_REPO_ROOT").filter(|r| !r.is_empty()) {
         return PathBuf::from(root).join(".fno").join("config.toml");
     }

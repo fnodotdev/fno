@@ -307,7 +307,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_THINK_SPAWN_WAVE0` | rs | unclear: crates/fno-agents/src/backlog/decompose.rs:2382 |
 | `FNO_THREAD_TURN_REFRESH_MS` | rs | unclear: crates/fno-agents/src/runtime/codex_thread.rs:105 |
 | `FNO_TOUCH_EMIT` | rs | unclear: crates/fno/src/server.rs:10464 |
-| `FNO_TRACKER_BACKEND` | rs | unclear: the store enumeration reads it first (crates/fno-agents/src/backlog/outstanding.rs). |
+| `FNO_TRACKER_BACKEND` | rs | Which tracker backend answers the backlog reads and writes; this env tier sits above the `tracker.backend` config key and below the `--tracker-backend` flag. |
 | `FNO_TRACKER_GITHUB_REPO` | rs | unclear: crates/fno-agents/src/runtime/tracker/github.rs:113 |
 | `FNO_TRACKER_LINEAR_API_KEY` | rs | Linear API key for the linear tracker backend, read once at construction. Every backend op refuses without it, naming this var. Auth rides env only, no config key. |
 | `FNO_TRACKER_LINEAR_TEAM` | rs | Linear team key (e.g. ENG) scoping the linear tracker backend's list_open and list_closed_since, the way FNO_TRACKER_GITHUB_REPO scopes github. Without it the listings warn and return empty. |

@@ -49,4 +49,4 @@ failed readers: user_notes (no canon handoff doc for scope epic-y), operator_tur
 vs last beat (2026-10-24T10:00:00Z): open_prs 3 -> 0, free_claim_no_driver 1 -> 0, blocked 2 -> 0, owned_active 5 -> 3
 change: attention: <FOLDED>
 report rule: state only verified facts, show fresh output for done, and a cannot claim names the routes it tried
-fno agents org faq add --question "..." --answer "..." --specimen "<node or PR>, <date>" --exit "<the change that retires this>"
+fno agents hq faq add --question "..." --answer "..." --specimen "<node or PR>, <date>" --exit "<the change that retires this>"

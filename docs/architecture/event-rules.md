@@ -174,7 +174,7 @@ The source prose carried 55 if-then rules across skills/lead, using-fno, target 
 
 | # | Rule (file:line) | Verdict |
 |---|---|---|
-| 1 | Split, conflict or unknown role stops the skill (lead:32) | stays prose (start-up read of `fno agents org`) |
+| 1 | Split, conflict or unknown role stops the skill (lead:32) | stays prose (start-up read of `fno agents hq`) |
 | 2 | Read settled findings before the first check-in (lead:39) | stays prose |
 | 3 | Declare `shape team` the moment the first worker spawns (lead:42) | guard: lead Stop nudge on an undeclared org |
 | 4 | Term reached: hand off or extend with a reason (lead:43) | guard: Stop term report + `org term` refuses without `--reason` |

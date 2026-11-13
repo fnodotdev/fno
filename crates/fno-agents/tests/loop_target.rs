@@ -1235,7 +1235,7 @@ fn pin_clean_board(dir: &Path, scope: &str) {
     fs::write(
         bin_dir.join("fno"),
         &format!(
-            "#!/bin/sh\nif [ \"$1\" = \"agents\" ] && [ \"$2\" = \"org\" ] && [ \"$3\" = \"drain\" ]; \
+            "#!/bin/sh\nif [ \"$1\" = \"agents\" ] && [ \"$2\" = \"hq\" ] && [ \"$3\" = \"drain\" ]; \
              then echo '{{\"scope\":\"{scope}\",\"undelivered\":0}}'; exit 0; fi\n\
              echo '{{}}'\n"
         ),
@@ -1258,7 +1258,7 @@ fn write_stub_fno_board(dir: &Path, actionable: u64) {
         dir,
         "fno",
         &format!(
-            "if [ \"$1\" = \"agents\" ] && [ \"$2\" = \"org\" ] && [ \"$3\" = \"drain\" ]; then \
+            "if [ \"$1\" = \"agents\" ] && [ \"$2\" = \"hq\" ] && [ \"$3\" = \"drain\" ]; then \
              echo '{{\"scope\":\"epic-x\",\"undelivered\": {actionable}}}'; exit 0; fi\n\
              if [ \"$1\" = \"inbox\" ]; then echo '{{\"actionable\": {actionable}, \"unreadable\": 0, \"queues\": []}}'; exit 0; fi\nexit 1"
         ),

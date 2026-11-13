@@ -1380,7 +1380,7 @@
       "type": "string"
      },
      "checkin_text": {
-      "default": "lead check-in. Run fno agents org checkin: it gathers the check-in readings, prints them, diffs the last beat, and journals lead_checkin. Then act on the printout per the lead skill. When nothing changed and coverage is full, print 'no change' and stop. This beat is a heartbeat. ",
+      "default": "lead check-in. Run fno agents hq checkin: it gathers the check-in readings, prints them, diffs the last beat, and journals lead_checkin. Then act on the printout per the lead skill. When nothing changed and coverage is full, print 'no change' and stop. This beat is a heartbeat. ",
       "title": "Checkin Text",
       "type": "string"
      }
@@ -3456,6 +3456,18 @@
     "title": "TestBlock",
     "type": "object"
    },
+   "TrackerBlock": {
+    "description": "config.tracker.* - which work-item tracker answers the backlog. One backend per invocation; the graph store stays the default forever.",
+    "properties": {
+     "backend": {
+      "default": "graph",
+      "title": "Backend",
+      "type": "string"
+     }
+    },
+    "title": "TrackerBlock",
+    "type": "object"
+   },
    "ThinkSpawnBlock": {
     "description": "Context-carrying /think spawn settings (nested under 'config.think_spawn').\n\nThe opt-in for node : when enabled, the node-birth path (``fno backlog\nidea``) OFFERS a context-carrying ``/think`` thread for a generated organic\nnode (a birth trigger never auto-spawns -), handing it the *resolved*\norigin transcript pointer (not a paraphrase) so a later pickup starts from\nground truth. A real spawn still happens for the explicit conversational\ncommand, an armed lifecycle trigger (``on_work_start``), or a\nconsented decompose fan-out.\n\nDefault ``False`` (Locked Decision 2): shipping this changes nothing until\nthe operator arms it; an absent key reads as off. The fail-safe posture\nmirrors ``config.auto_continue``: a malformed block degrades to disabled\nrather than failing the whole settings load - false-enabled (a background\n``/think`` dispatched against the operator's intent) is the dangerous\ndirection. The enable + presence + spawn logic lives in\n``crates/fno-agents/src/backlog/think_dispatch.rs`` and ``backlog/birth.rs``.\n\n``max_per_run`` is the per-node-generation-run blast-radius cap (AC4-EDGE):\na bulk run exceeding it skips the remainder and logs the truncation.\n``idle_threshold_s`` is the discretionary activity-recency refinement\n(Claude's Discretion 1); ``0`` (default) disables it so the primary\nattended-vs-headless signal stands alone.\n\nActual context-think launches use the shared ``config.dispatch`` profile;\nthis block controls when to offer or launch them, not their harness or\nsubstrate.",
     "properties": {
@@ -3951,6 +3963,9 @@
    },
    "test": {
     "$ref": "#/$defs/TestBlock"
+   },
+   "tracker": {
+    "$ref": "#/$defs/TrackerBlock"
    },
    "guards": {
     "$ref": "#/$defs/GuardsBlock"
@@ -5202,6 +5217,15 @@
    "question": "",
    "default_source": "",
    "doc": "Cap on net-new test declarations enforced at pr push and `fno-agents test-delta`; unset means no cap."
+  },
+  {
+   "path": "tracker.backend",
+   "type": "str",
+   "default": "graph",
+   "wizard": "advanced",
+   "question": "",
+   "default_source": "default",
+   "doc": "Which tracker backend answers backlog reads and writes: graph (the built-in store, the default), github (GitHub Issues), or linear. Resolution: explicit --tracker-backend flag, then FNO_TRACKER_BACKEND env, then this key, then graph. Scope and auth stay in env by design (FNO_TRACKER_GITHUB_REPO, FNO_TRACKER_LINEAR_TEAM, FNO_TRACKER_LINEAR_API_KEY)."
   },
   {
    "path": "guards.preset",
@@ -7199,11 +7223,11 @@
   {
    "path": "lead.checkin_text",
    "type": "str",
-   "default": "lead check-in. Run fno agents org checkin: it gathers the check-in readings, prints them, diffs the last beat, and journals lead_checkin. Then act on the printout per the lead skill. When nothing changed and coverage is full, print 'no change' and stop. This beat is a heartbeat. ",
+   "default": "lead check-in. Run fno agents hq checkin: it gathers the check-in readings, prints them, diffs the last beat, and journals lead_checkin. Then act on the printout per the lead skill. When nothing changed and coverage is full, print 'no change' and stop. This beat is a heartbeat. ",
    "wizard": "advanced",
    "question": "",
    "default_source": "",
-   "doc": "The /loop prompt text a lead self-injects at each check-in (default: run fno agents org checkin, which gathers the readings, diffs the last beat, and journals lead_checkin; print 'no change' when idle)."
+   "doc": "The /loop prompt text a lead self-injects at each check-in (default: run fno agents hq checkin, which gathers the readings, diffs the last beat, and journals lead_checkin; print 'no change' when idle)."
   },
   {
    "path": "accounts.active",

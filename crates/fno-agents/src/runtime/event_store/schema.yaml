@@ -3285,7 +3285,7 @@ event_types:
           type: string
 
   - name: lead_term
-    description: "A role's term was declared or extended via `fno agents org term <spec> [--reason]`, or the Stop-hook gate observed it reached. The receipt a lead's tenure bound leaves."
+    description: "A role's term was declared or extended via `fno agents hq term <spec> [--reason]`, or the Stop-hook gate observed it reached. The receipt a lead's tenure bound leaves."
     sources: [loop, daemon, hook]
     data:
       required: [scope, term]
@@ -3407,7 +3407,7 @@ event_types:
           type: integer
 
   - name: agent_role_vacated
-    description: "A role left its holder. The dead-role sweep emits it with cause holder_dead when a manifest-only role's holder session is proven dead: evidence carries the death receipt, inheritor names the live role one rung up that takes the territory (else operator), and cleared_rows names the terminal rows whose stale role fields cleared in the same registry write. The attended `fno agents org done` emits the same kind with its own cause. The sweep grants no role; territory falls back to its project by construction."
+    description: "A role left its holder. The dead-role sweep emits it with cause holder_dead when a manifest-only role's holder session is proven dead: evidence carries the death receipt, inheritor names the live role one rung up that takes the territory (else operator), and cleared_rows names the terminal rows whose stale role fields cleared in the same registry write. The attended `fno agents hq done` emits the same kind with its own cause. The sweep grants no role; territory falls back to its project by construction."
     sources: [daemon, agents]
     data:
       required: [scope, cause]
@@ -6180,7 +6180,7 @@ event_types:
     consumers: [operator]
 
   - name: mission_activated
-    description: "Emitted by `fno backlog advance --epic <id>` (K1) on the first epic advance of an epic mission: the epic node is marked mission_active=true (a durable graph field K2's drain loop reads) and converge pass 1 begins. Emitted once per activation - a re-run of an already-active mission runs the idempotent converge pass without re-emitting this. A mission is an epic node plus its transitive children (the parent edge is the mission key; mission_id is untouched). A role grant over an epic (fno agents org promote / fno agents spawn --promote) also emits this with source=role, so a titled epic can never lack the flag the drain reads."
+    description: "Emitted by `fno backlog advance --epic <id>` (K1) on the first epic advance of an epic mission: the epic node is marked mission_active=true (a durable graph field K2's drain loop reads) and converge pass 1 begins. Emitted once per activation - a re-run of an already-active mission runs the idempotent converge pass without re-emitting this. A mission is an epic node plus its transitive children (the parent edge is the mission key; mission_id is untouched). A role grant over an epic (fno agents hq promote / fno agents spawn --promote) also emits this with source=role, so a titled epic can never lack the flag the drain reads."
     sources: [backlog, agents]
     data:
       required: [epic_id]

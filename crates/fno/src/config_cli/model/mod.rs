@@ -1125,10 +1125,14 @@ mod table_agreement_tests {
 
     /// The schema tables are hand-edited source now (the pydantic generator is
     /// gone with the config family). This is the check that keeps the two
-    /// tables agreeing: every field fields.json carries, config_schema.json's
-    /// json_schema carries as a property of the same model, and the reverse
-    /// within shared models. A key added to one table only fails here and
-    /// names the key.
+    /// tables agreeing: every model one table carries, the other carries too,
+    /// and every field fields.json carries, config_schema.json's json_schema
+    /// carries as a property of the same model, and the reverse within shared
+    /// models. A key added to one table only fails here and names the key.
+    /// The model-set half is load-bearing on its own: the writer resolves a
+    /// dotted key by walking `models()`, so a $defs block with no fields.json
+    /// model row refuses every write under it (`set telemetry.usage_events.*`
+    /// shipped that way; `get` still read the key off field_meta).
     #[test]
     fn fields_json_and_config_schema_agree_on_every_block() {
         let fields: Value = serde_json::from_str(FIELDS).expect("fields.json parses");
@@ -1137,7 +1141,8 @@ mod table_agreement_tests {
             .as_object()
             .expect("$defs table");
         let mut problems: Vec<String> = Vec::new();
-        for (model, node) in fields["models"].as_object().expect("models table") {
+        let models_table = fields["models"].as_object().expect("models table");
+        for (model, node) in models_table {
             // SettingsModel is the schema's root: json_schema renders it as
             // top-level properties, never as a $def, so the root object
             // itself plays the $def role.
@@ -1176,6 +1181,17 @@ mod table_agreement_tests {
                         "config_schema.json $defs {model}.{name} has no fields.json field"
                     ));
                 }
+            }
+        }
+        // The reverse at the model level: a $defs block with no fields.json
+        // model row cannot resolve a write (field_node reads the spec first),
+        // while get still reads the key off field_meta. SettingsModel is the
+        // root and never a $def, so it plays the reverse role above.
+        for model in defs.keys() {
+            if !models_table.contains_key(model) {
+                problems.push(format!(
+                    "config_schema.json $defs {model} has no fields.json model"
+                ));
             }
         }
         assert!(

@@ -1,9 +1,9 @@
 //! `org-remote`: the cross-machine lead hand-off relay command.
 //!
-//! The front door claims `agents org promote <name>@<host> --scope <scope>`
+//! The front door claims `agents hq promote <name>@<host> --scope <scope>`
 //! and execs this command on the predecessor's machine. One ssh hop runs
 //! `record-succession` ON the target host: the remote machine's own
-//! `fno agents org promote` grants, then a pending succession record
+//! `fno agents hq promote` grants, then a pending succession record
 //! attaches, so the successor's next beat runs verify, the release readback,
 //! and the retro attempt (the same steps the spawn `--hand-off` path runs).
 //! On remote success the sending machine vacates the predecessor row, files
@@ -15,7 +15,7 @@
 use crate::team_names::{attach_pending_succession, PendingSuccession};
 
 fn usage() -> String {
-    "usage: fno agents org promote <name>@<host> --scope <scope>".into()
+    "usage: fno agents hq promote <name>@<host> --scope <scope>".into()
 }
 
 /// What the ssh leg carries and what the local legs write. Pure data, so the
@@ -44,7 +44,7 @@ pub fn plan_handoff(
     let scope = scope.trim().to_string();
     if holder.1.is_none() {
         return Err(
-            "the predecessor row carries no harness_session_id, so the retro join has no key; re-register the row (`fno agents register`), or move the lead with the remote machine's own `fno agents org promote` and file the retro by hand (`fno-agents intel --write`)"
+            "the predecessor row carries no harness_session_id, so the retro join has no key; re-register the row (`fno agents register`), or move the lead with the remote machine's own `fno agents hq promote` and file the retro by hand (`fno-agents intel --write`)"
                 .into(),
         );
     }
@@ -148,7 +148,7 @@ fn cmd_record_succession(args: &mut dyn Iterator<Item = String>) -> i32 {
     };
     let grant_argv = [
         "agents".to_string(),
-        "org".to_string(),
+        "hq".to_string(),
         "promote".to_string(),
         successor.clone(),
         "--scope".to_string(),

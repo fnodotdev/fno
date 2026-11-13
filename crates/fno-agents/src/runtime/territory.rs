@@ -312,7 +312,7 @@ fn grant_refusal<'a>(
         };
         let sep = if way.ends_with(' ') { "" } else { " " };
         format!(
-            " If you are the user at this terminal, {way}{sep}fno agents org promote <handle> \
+            " If you are the user at this terminal, {way}{sep}fno agents hq promote <handle> \
              --scope {requested}"
         )
     };
@@ -321,7 +321,7 @@ fn grant_refusal<'a>(
         "unproven" => Some(format!(
             "cannot verify the grantor's authority: no session identity resolved and \
              {}, so this call is not read as an attended human. If you are the user, \
-             open a terminal outside any harness session and run: fno agents org promote \
+             open a terminal outside any harness session and run: fno agents hq promote \
              <handle> --scope {requested}",
             field("reason")
         )),
@@ -337,7 +337,7 @@ fn grant_refusal<'a>(
                  as an agent fno cannot resolve, not an attended human. A \
                  shell that once hosted a worker keeps that variable. If you \
                  are the human at this shell, rerun as: \
-                 env -u FNO_AGENT_SELF fno agents org promote <args>."
+                 env -u FNO_AGENT_SELF fno agents hq promote <args>."
             ),
         }),
         "unregistered" => Some(format!(
@@ -1567,7 +1567,7 @@ mod grant_tests {
             "{named}"
         );
         assert!(
-            named.contains("env -u CODEX_THREAD_ID fno agents org promote <handle> --scope e-1"),
+            named.contains("env -u CODEX_THREAD_ID fno agents hq promote <handle> --scope e-1"),
             "{named}"
         );
         let dead = check(agent("exited", "alpha"), "e-1", false).unwrap();

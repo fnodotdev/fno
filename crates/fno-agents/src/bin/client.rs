@@ -933,7 +933,7 @@ async fn run(
 
     // `lead-state`/`lead-shape`: the lead reader and the shape rewrite (see
     // lead_state.rs doc). Direct dispatch, daemon-free reads; the Python
-    // `fno agents org shape` shell and escalate's client invoke the binary
+    // `fno agents hq shape` shell and escalate's client invoke the binary
     // directly rather than routing through the agents command set.
     if matches!(command, "lead-state" | "term-state") {
         return fno_agents::lead_state::run_lead_state(&args[1..]);
@@ -953,12 +953,12 @@ async fn run(
 
     // `backlog-notes` and `backlog-note` folded into the grouped `backlog`
     // dispatcher (the early transport arm); see backlog::cli's doc.
-    // `org-vacancies`: the orphan-team sweep for `fno agents org`, daemon-free;
+    // `org-vacancies`: the orphan-team sweep for `fno agents hq`, daemon-free;
     // `==` dispatch like graph-get, registered in ALL_CLIENT_ACTIONS.
     if command == "org-vacancies" || command == "team-orphans" {
         return fno_agents::lead_state::run_org_vacancies(&args[1..]);
     }
-    // `org-fold`: the team scope fold for `fno agents org --nodes` and the
+    // `org-fold`: the team scope fold for `fno agents hq --nodes` and the
     // local board's org section, daemon-free like org-vacancies; the workers
     // column rides the same native claim verdicts `claim sweep` established,
     // so a fold and the claims surface cannot disagree about who holds a node.
@@ -966,7 +966,7 @@ async fn run(
         return fno_agents::org_fold::run_org_fold(&args[1..]);
     }
 
-    // `lead-history`: the team-scope lead_checkin readback for `fno agents org history`, exec'd by the front door.
+    // `lead-history`: the team-scope lead_checkin readback for `fno agents hq history`, exec'd by the front door.
     //
     // Daemon-free `==` dispatch like org-fold: the caller's team scope and the live journals resolve natively when the argv names none. `--verdict` reads the same journals as a tenure verdict (law d-fe66560a).
     if command == "lead-history" {
@@ -981,7 +981,7 @@ async fn run(
     }
 
     // `lead-checkin`: one command runs the lead check-in body for
-    // `fno agents org checkin`. Daemon-free beat like lead-history: Python
+    // `fno agents hq checkin`. Daemon-free beat like lead-history: Python
     // resolves the caller's team scope and Python-owned paths, the native
     // side gathers, prints, diffs and journals the row, reusing the org-fold
     // fold and the lead-history scan in process.
@@ -3041,7 +3041,7 @@ fn retired_command_pointer(command: &str) -> Option<&'static str> {
              launches in the mux itself; the lane template owns the placement).",
         ),
         "promote" => Some(
-            "fno agents promote is now fno agents org promote <session> --scope <scope>; \
+            "fno agents promote is now fno agents hq promote <session> --scope <scope>; \
              the old pane command was retired at G4 (a spawn lands in the mux by default).",
         ),
         _ => None,

@@ -457,7 +457,7 @@ fn plan_with_projects(
             "scope {scope:?} overlaps territory held by live row(s) {listed}. Two live \
              teams would rule the same members, so this spawn refuses before launch. \
              --hand-off hands down only an identical team, never part of a wider or \
-             overlapping one. Re-scope the holder (fno agents org promote {first} --scope \
+             overlapping one. Re-scope the holder (fno agents hq promote {first} --scope \
              <other territory>), run fno agents reconcile if it looks dead, or fno \
              agents stop {first}, then retry."
         );

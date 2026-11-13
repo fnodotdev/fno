@@ -460,6 +460,42 @@
       "doc": "Path to the PostHog project token file (mode 0600); token_env wins when set; a leading ~ expands against $HOME."
     },
     {
+      "path": "telemetry.usage_events.enabled",
+      "type": "bool",
+      "default": false,
+      "tier": "advanced",
+      "question": "",
+      "default_source": "",
+      "doc": "Send allowlisted fleet journal rows (spawns, refusals, merges, latency) to PostHog as events, identifiers only (default off)."
+    },
+    {
+      "path": "telemetry.usage_events.host",
+      "type": "str",
+      "default": "https://us.i.posthog.com",
+      "tier": "advanced",
+      "question": "",
+      "default_source": "",
+      "doc": "PostHog ingest host, https only."
+    },
+    {
+      "path": "telemetry.usage_events.token_env",
+      "type": "str",
+      "default": "FNO_POSTHOG_PROJECT_TOKEN",
+      "tier": "advanced",
+      "question": "",
+      "default_source": "",
+      "doc": "Env var holding the PostHog project token."
+    },
+    {
+      "path": "telemetry.usage_events.token_file",
+      "type": "str",
+      "default": "~/.fno/secrets/posthog-project-token",
+      "tier": "advanced",
+      "question": "",
+      "default_source": "",
+      "doc": "Path to the PostHog project token file (mode 0600); token_env wins when set; a leading ~ expands against $HOME."
+    },
+    {
       "path": "attention.enabled",
       "type": "bool",
       "default": true,
@@ -2100,11 +2136,11 @@
     {
       "path": "lead.checkin_text",
       "type": "str",
-      "default": "lead check-in. Run fno agents org checkin: it gathers the check-in readings, prints them, diffs the last beat, and journals lead_checkin. Then act on the printout per the lead skill. When nothing changed and coverage is full, print 'no change' and stop. This beat is a heartbeat. ",
+      "default": "lead check-in. Run fno agents hq checkin: it gathers the check-in readings, prints them, diffs the last beat, and journals lead_checkin. Then act on the printout per the lead skill. When nothing changed and coverage is full, print 'no change' and stop. This beat is a heartbeat. ",
       "tier": "advanced",
       "question": "",
       "default_source": "",
-      "doc": "The /loop prompt text a lead self-injects at each check-in (default: run fno agents org checkin, which gathers the readings, diffs the last beat, and journals lead_checkin; print 'no change' when idle)."
+      "doc": "The /loop prompt text a lead self-injects at each check-in (default: run fno agents hq checkin, which gathers the readings, diffs the last beat, and journals lead_checkin; print 'no change' when idle)."
     },
     {
       "path": "telemetry.usage_report.enabled",
@@ -2171,7 +2207,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "",
-      "doc": "Paint paths used for optional look evidence. Explicit head-scoped user declines retain authority."
+      "doc": "Render-surface paths whose PRs warn when no look is recorded at their head; the merge proceeds and the look request routes to the lead for the Visual Log page after it lands. Explicit head-scoped user declines retain authority."
     },
     {
       "path": "merge.visual_shot_workflows",

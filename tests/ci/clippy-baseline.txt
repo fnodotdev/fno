@@ -13572,6 +13572,7 @@ crates/fno/src/config_cli/model/mod.rs	clippy::indexing_slicing	for (model, node
 crates/fno/src/config_cli/model/mod.rs	clippy::indexing_slicing	for (name, spec) in table["models"].as_object().into_iter().flatten() {
 crates/fno/src/config_cli/model/mod.rs	clippy::indexing_slicing	if path_held(&flat, loc) || path_held(&flat, &loc[..loc.len() - 1]) {
 crates/fno/src/config_cli/model/mod.rs	clippy::indexing_slicing	let defs = schema["json_schema"]["$defs"]
+crates/fno/src/config_cli/model/mod.rs	clippy::indexing_slicing	let models_table = fields["models"].as_object().expect("models table");
 crates/fno/src/config_cli/model/mod.rs	clippy::indexing_slicing	return self.typed(non_null[0], value, loc);
 crates/fno/src/config_cli/model/mod.rs	clippy::indexing_slicing	table["field_meta"]
 crates/fno/src/config_cli/model/mod.rs	clippy::indexing_slicing	table["json_schema"].clone()

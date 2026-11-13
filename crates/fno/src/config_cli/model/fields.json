@@ -270,6 +270,12 @@
      }
     },
     {
+     "name": "tracker",
+     "default": {
+      "backend": "graph"
+     }
+    },
+    {
      "name": "guards",
      "default": {
       "preset": "standard"
@@ -711,7 +717,7 @@
       "implementation_guard": "refuse",
       "write_roots": [],
       "checkin_interval": "55m",
-      "checkin_text": "lead check-in. Run fno agents org checkin: it gathers the check-in readings, prints them, diffs the last beat, and journals lead_checkin. Then act on the printout per the lead skill. When nothing changed and coverage is full, print 'no change' and stop. This beat is a heartbeat. "
+      "checkin_text": "lead check-in. Run fno agents hq checkin: it gathers the check-in readings, prints them, diffs the last beat, and journals lead_checkin. Then act on the printout per the lead skill. When nothing changed and coverage is full, print 'no change' and stop. This beat is a heartbeat. "
      }
     },
     {
@@ -1235,6 +1241,31 @@
     }
    ]
   },
+  "ReviewerDescriptor": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "kind",
+     "required": true
+    },
+    {
+     "name": "requires",
+     "required": true
+    },
+    {
+     "name": "invocation",
+     "required": true
+    },
+    {
+     "name": "asserts",
+     "required": true
+    },
+    {
+     "name": "invocations",
+     "default": null
+    }
+   ]
+  },
   "StyleBlock": {
    "extra": "ignore",
    "fields": [
@@ -1318,6 +1349,15 @@
     {
      "name": "max_net_new",
      "default": null
+    }
+   ]
+  },
+  "TrackerBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "backend",
+     "default": "graph"
     }
    ]
   },
@@ -1582,6 +1622,35 @@
     {
      "name": "blueprint_floor",
      "default": "high"
+    }
+   ]
+  },
+  "DispatchCommandDescriptor": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "invocation",
+     "required": true
+    },
+    {
+     "name": "invocations",
+     "default": null
+    },
+    {
+     "name": "requires",
+     "default": "none"
+    },
+    {
+     "name": "takes_node_id",
+     "default": true
+    },
+    {
+     "name": "asserts",
+     "default": "invocation"
+    },
+    {
+     "name": "session_phase",
+     "default": null
     }
    ]
   },
@@ -2359,7 +2428,7 @@
     },
     {
      "name": "checkin_text",
-     "default": "lead check-in. Run fno agents org checkin: it gathers the check-in readings, prints them, diffs the last beat, and journals lead_checkin. Then act on the printout per the lead skill. When nothing changed and coverage is full, print 'no change' and stop. This beat is a heartbeat. "
+     "default": "lead check-in. Run fno agents hq checkin: it gathers the check-in readings, prints them, diffs the last beat, and journals lead_checkin. Then act on the printout per the lead skill. When nothing changed and coverage is full, print 'no change' and stop. This beat is a heartbeat. "
     }
    ]
   },
@@ -2475,6 +2544,27 @@
    ]
   },
   "TelemetryEvalEventsBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "enabled",
+     "default": false
+    },
+    {
+     "name": "host",
+     "default": "https://us.i.posthog.com"
+    },
+    {
+     "name": "token_env",
+     "default": "FNO_POSTHOG_PROJECT_TOKEN"
+    },
+    {
+     "name": "token_file",
+     "default": "~/.fno/secrets/posthog-project-token"
+    }
+   ]
+  },
+  "TelemetryUsageEventsBlock": {
    "extra": "ignore",
    "fields": [
     {
@@ -3373,6 +3463,7 @@
   "target.loop_skills",
   "test.timeout_seconds",
   "test.max_net_new",
+  "tracker.backend",
   "agents.a2a.auto",
   "agents.a2a.turn_ceiling",
   "agents.confirm",
