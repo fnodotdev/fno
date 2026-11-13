@@ -576,13 +576,28 @@ pub(crate) fn emit_event(name: &str, data: Value) {
     let _ = emitter.emit(name, &data);
 }
 
-/// One `node_done` row per closed node, for the usage arm.
-pub(crate) fn emit_node_done(node_id: &str, via: &str, pr_number: Option<i64>) {
+/// One `node_done` row per closed node, for the usage arm. It lands in the
+/// space of `checkout` (the node's own repo) when the caller knows it, so a
+/// reconcile run from another cwd still writes where the arm reads.
+pub(crate) fn emit_node_done(
+    node_id: &str,
+    via: &str,
+    pr_number: Option<i64>,
+    checkout: Option<&Path>,
+) {
     let mut data = json!({"node_id": node_id, "via": via});
     if let Some(pr) = pr_number {
         data["pr_number"] = json!(pr);
     }
-    emit_event("node_done", data);
+    let Some(cwd) = checkout.filter(|c| c.is_dir()) else {
+        emit_event("node_done", data);
+        return;
+    };
+    if let Some(space) = crate::paths::space_dir_opt(cwd) {
+        std::fs::create_dir_all(&space).ok();
+        let emitter = crate::events::EventEmitter::new(space.join("events.jsonl"), "backlog");
+        let _ = emitter.emit("node_done", &data);
+    }
 }
 
 /// Best-effort operator audit during a drive window: an informational action
@@ -681,7 +696,7 @@ pub(super) fn canonical_post_close(
 ) {
     let pr = super::pr_link::pr_number_from_url(evidence_pr_url);
     for id in std::iter::once(task_id).chain(cascade_closed.iter().map(String::as_str)) {
-        emit_node_done(id, "done", pr);
+        emit_node_done(id, "done", pr, None);
     }
     if let Some(plan) = plan_path {
         if !skip_stamp {
