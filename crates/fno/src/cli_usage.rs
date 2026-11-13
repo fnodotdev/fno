@@ -72,7 +72,9 @@ pub fn command_path(args: &[OsString]) -> Option<String> {
 /// Note the command at the front door's start. `main` calls this once.
 pub fn start(args: &[OsString]) {
     if let Some(path) = command_path(args) {
-        let _ = STARTED.set((path, now_ms()));
+        if STARTED.set((path, now_ms())).is_err() {
+            eprintln!("cli usage: the command start was already noted");
+        }
     }
 }
 
@@ -115,7 +117,9 @@ pub fn envelope(command: &str, code: i32, duration_ms: i64) -> serde_json::Value
 pub fn exit(code: i32) -> ! {
     if let (Some((path, start)), Some(journal)) = (STARTED.get(), agents_journal()) {
         let row = envelope(path, code, (now_ms() - start).max(0));
-        let _ = crate::event_store::append_envelope(&journal, &row.to_string(), None);
+        if let Err(e) = crate::event_store::append_envelope(&journal, &row.to_string(), None) {
+            eprintln!("cli usage: the cli_command row did not land: {e}");
+        }
     }
     std::process::exit(code)
 }
