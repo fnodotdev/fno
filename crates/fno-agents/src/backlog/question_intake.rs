@@ -226,7 +226,6 @@ struct OpenRow {
     blocks: usize,
     subject: Option<String>,
     node: Option<String>,
-    asker: Option<String>,
     session_id: Option<String>,
 }
 
@@ -279,6 +278,12 @@ pub fn question_rows(index: &Path) -> (Map<String, Value>, HashSet<String>) {
 
 fn open_rows(index: &Path) -> Vec<OpenRow> {
     let (asked, closed) = question_rows(index);
+    open_rows_from(&asked, &closed)
+}
+
+/// The open rows already folded, so one read serves the dedup, the amend
+/// fetch and the receipt without a second fold between them.
+fn open_rows_from(asked: &Map<String, Value>, closed: &HashSet<String>) -> Vec<OpenRow> {
     let mut out: Vec<OpenRow> = asked
         .into_iter()
         .filter(|(id, _)| !closed.contains(id))
@@ -297,9 +302,8 @@ fn open_rows(index: &Path) -> Vec<OpenRow> {
                 .to_string(),
             subject: str_field(&v, "subject").map(str::to_string),
             node: str_field(&v, "node").map(str::to_string),
-            asker: str_field(&v, "asker").map(str::to_string),
             session_id: str_field(&v, "session_id").map(str::to_string),
-            id,
+            id: id.clone(),
         })
         .collect();
     // Newest first, then more blocks, then id (mirrors read_open_questions
@@ -921,7 +925,10 @@ judges. Pass each screenshot with --image <path>; the page embeds them under ## 
         .unwrap_or_else(|| questions_path(home));
     // One read serves the dedup and the supersede after the write: the
     // open rows a re-ask closes are the ones this read saw.
-    let open = open_rows(&index);
+    // One read serves the dedup, the amend fetch and the receipt: no second
+    // fold sits between the dedup decision and the amend write.
+    let (asked, closed) = question_rows(&index);
+    let open = open_rows_from(&asked, &closed);
     // The amend door: the not-ready bounce tells the asker to
     // re-ask with the fields, but the dedup refused that re-ask and a
     // user-lane clear refuses the agent, so the asker had no way out. The
@@ -929,6 +936,8 @@ judges. Pass each screenshot with --image <path>; the page embeds them under ## 
     // place: a fresh envelope under the SAME question_id, which every fold
     // (index, board projection, recall) already reads as the row's latest
     // state. It never answers anything: the row stays open on its lane.
+    // Same asker means the same asking session: the handle derives from the
+    // session id, so a handle match adds only the same-window collision.
     let mut amend: Option<(String, Value)> = None;
     if let (Some(s), Some(n)) = (subject.as_deref(), node) {
         let dup = open.iter().find(|row| {
@@ -940,17 +949,8 @@ judges. Pass each screenshot with --image <path>; the page embeds them under ## 
                 .as_deref()
                 .zip(row.session_id.as_deref())
                 .is_some_and(|(a, b)| a == b);
-            let same_handle = req
-                .asker
-                .as_deref()
-                .zip(row.asker.as_deref())
-                .is_some_and(|(a, b)| !a.trim().is_empty() && a.trim() == b.trim());
-            if from_file && (same_session || same_handle) {
-                let old = question_rows(&index)
-                    .0
-                    .get(&row.id)
-                    .cloned()
-                    .unwrap_or(Value::Null);
+            if from_file && same_session {
+                let old = asked.get(&row.id).cloned().unwrap_or(Value::Null);
                 amend = Some((row.id.clone(), old));
             } else {
                 answer.lines.push(format!(
