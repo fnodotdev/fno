@@ -589,7 +589,10 @@ fn short_labels(text: &str) -> Vec<String> {
         if !boundary(i.checked_sub(1).and_then(|j| bytes.get(j))) {
             continue;
         }
-        let digits = bytes[i + 1..].iter().take_while(u8::is_ascii_digit).count();
+        let digits = bytes[i + 1..]
+            .iter()
+            .take_while(|b: &&u8| b.is_ascii_digit())
+            .count();
         let labelled = (1..=7).contains(&digits)
             && bytes
                 .get(i + 1 + digits)
@@ -608,7 +611,10 @@ fn named_qids(text: &str) -> Vec<String> {
     let mut out: Vec<String> = hash_qids(text).into_iter().map(str::to_string).collect();
     for token in short_labels(text) {
         if let Some(key) = crate::numbers::resolve('q', &token) {
-            out.push(key);
+            // A reply can name the hash and its label; one board id, one row.
+            if !out.contains(&key) {
+                out.push(key);
+            }
         }
     }
     out
@@ -1159,6 +1165,10 @@ mod tests {
         let lock = crate::claims::test_env_lock();
         let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
         let rig = Rig::new(true);
+        // Pin the number table to the rig: the label negative below must
+        // never read the machine's real fno_numbers, where the label used
+        // in that assertion may genuinely exist.
+        std::env::set_var("FNO_STATE_DIR", rig._dir.path());
         // A predecessor lead filed q-1f456994; this session only relays it.
         rig.seed(json!({
             "ts": crate::events::now_rfc3339(),
