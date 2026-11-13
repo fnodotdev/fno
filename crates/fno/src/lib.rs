@@ -53,6 +53,8 @@ pub mod build_drift;
 #[cfg(feature = "full")]
 pub mod chat_events;
 #[cfg(feature = "full")]
+pub mod chat_ws;
+#[cfg(feature = "full")]
 pub mod chokepoint;
 #[cfg(feature = "full")]
 pub mod chokepoint_events;

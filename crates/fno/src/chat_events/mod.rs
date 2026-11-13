@@ -221,6 +221,72 @@ pub(crate) fn injected_text(text: &str) -> bool {
     text.starts_with('<') || text.starts_with("# AGENTS.md instructions")
 }
 
+pub const IDLE_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+const BATCH_EVENTS: usize = 256;
+/// Well under `MAX_MSG_BYTES`, so a batch of inline images still fits.
+const BATCH_BYTES: usize = 8 * 1024 * 1024;
+
+/// Split by count and by encoded size.
+pub fn batches(events: Vec<ChatEvent>) -> Vec<Vec<ChatEvent>> {
+    let mut out = Vec::new();
+    let mut batch = Vec::new();
+    let mut bytes = 0;
+    for event in events {
+        let size = serde_json::to_vec(&event).map(|v| v.len()).unwrap_or(0);
+        if !batch.is_empty() && (batch.len() == BATCH_EVENTS || bytes + size > BATCH_BYTES) {
+            out.push(std::mem::take(&mut batch));
+            bytes = 0;
+        }
+        bytes += size;
+        batch.push(event);
+    }
+    if !batch.is_empty() {
+        out.push(batch);
+    }
+    out
+}
+
+/// Where [`pump`] sends batches: the mux socket and the app WebSocket each
+/// implement it, so one loop answers when a chat stream polls and how big a
+/// batch is.
+pub trait BatchSink: Send {
+    /// Deliver one batch. `false` means the client is gone.
+    fn send(&mut self, batch: Vec<ChatEvent>) -> impl std::future::Future<Output = bool> + Send;
+    /// Wait out one idle poll. `false` means the client is gone.
+    fn idle(&mut self) -> impl std::future::Future<Output = bool> + Send;
+}
+
+/// Poll `reader` in `spawn_blocking` and feed `sink` until the client leaves
+/// (`Ok`) or the source fails (`Err`).
+pub async fn pump<S: BatchSink>(
+    mut reader: SessionReader,
+    sink: &mut S,
+) -> Result<(), ChatReadError> {
+    loop {
+        let polled = tokio::task::spawn_blocking(move || {
+            let result = reader.poll();
+            (reader, result)
+        })
+        .await;
+        let Ok((back, result)) = polled else {
+            return Ok(());
+        };
+        reader = back;
+        let events = result?;
+        if events.is_empty() {
+            if !sink.idle().await {
+                return Ok(());
+            }
+            continue;
+        }
+        for batch in batches(events) {
+            if !sink.send(batch).await {
+                return Ok(());
+            }
+        }
+    }
+}
+
 /// A live chat stream from a mux server, read without tokio.
 pub struct ChatTail {
     stream: std::os::unix::net::UnixStream,
