@@ -871,11 +871,20 @@ mod tests {
         let batch = select(rows, &state, "mac1");
         let text = serde_json::to_string(&batch.iter().map(|b| &b.2).collect::<Vec<_>>()).unwrap();
         assert!(!text.contains("secret"), "free text leaked: {text}");
+        #[derive(serde::Deserialize)]
+        struct Shipped {
+            event: String,
+            properties: Map<String, Value>,
+        }
+        let shipped: Vec<Shipped> = batch
+            .iter()
+            .map(|b| serde_json::from_value(b.2.clone()).unwrap())
+            .collect();
         let named = |event: &str| -> Vec<&Map<String, Value>> {
-            batch
+            shipped
                 .iter()
-                .filter(|b| b.2.get("event") == Some(&json!(event)))
-                .map(|b| b.2.get("properties").and_then(Value::as_object).unwrap())
+                .filter(|s| s.event == event)
+                .map(|s| &s.properties)
                 .collect()
         };
         let first = |rows: &[&Map<String, Value>], key: &str| -> Value {
