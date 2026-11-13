@@ -444,7 +444,7 @@ fn validate_render_path(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
             repr_text(&path)
         )));
     }
-    if !is_abs_after_expanduser(&path) {
+    if !(path.starts_with('/') || path.starts_with("~/")) {
         return Err(Fail::Value(format!(
             "backlog.render_path must be absolute or ~/-rooted (it is written from arbitrary \
              cwds), got: {}",
