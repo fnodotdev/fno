@@ -334,6 +334,7 @@ fn reap_plain_child(pid: u32) {
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut status = 0;
     loop {
+        // SAFETY: waitpid reaps only this file's own child; status is owned.
         let result = unsafe { libc::waitpid(pid.as_raw(), &mut status, libc::WNOHANG) };
         if result == pid.as_raw() {
             return;
@@ -2024,8 +2025,7 @@ fn node_id_shaped(s: &str) -> bool {
     }
 }
 
-/// True while `pid` is alive (or unprobeable - erring toward "held": ESRCH is
-/// the definitive "gone", and an out-of-range pid errs the same way).
+/// True while `pid` is alive; ESRCH or an out-of-range pid errs toward "held".
 fn pid_alive(pid: u32) -> bool {
     i32::try_from(pid).is_ok_and(|p| !crate::proto::pid_confirmed_dead(p))
 }
