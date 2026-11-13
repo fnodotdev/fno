@@ -568,7 +568,7 @@ pub enum Event {
     /// answers, `n`/`N` cycle the blocked queue, Enter focuses, Esc closes) are
     /// interpreted by the client's view layer, not here (like OpenSelector).
     OpenAnswers,
-    /// Open the backlog board (prefix+O).
+    /// Open the backlog board (prefix+B).
     OpenBacklogBoard,
     CycleSidelineView,
     /// (redefined by) Open the org modal: the full reading of load against
@@ -606,7 +606,7 @@ pub enum Event {
     /// either direction.
     ToggleFullSideline,
     /// Cycle the sideline density slim -> regular -> extended
-    /// (prefix+B). Orthogonal to [`Event::TogglePanel`]: this changes how much
+    /// (prefix+=). Orthogonal to [`Event::TogglePanel`]: this changes how much
     /// each row shows, that changes whether the panel renders at all.
     CycleDensity,
     /// Toggle the extended table's order between by-squad and
@@ -1331,11 +1331,11 @@ pub(crate) fn default_bindings() -> Vec<KeyBinding> {
             "focus right",
         ),
         b(
-            b'H',
+            0,
             "resize-left",
             Cmd(C::ResizeDir(Dir::Left)),
             Panes,
-            "resize left",
+            "resize left (Ctrl+Left, or bind a key)",
         ),
         b(
             b'J',
@@ -1566,14 +1566,21 @@ pub(crate) fn default_bindings() -> Vec<KeyBinding> {
             "org",
             OpenTeam,
             Global,
-            "the org modal (load, census, lanes)",
+            "the HQ modal (load, census, lanes)",
         ),
         b(
-            b'G',
+            b'H',
             "org-view",
             OpenOrgView,
             Global,
-            "HQ: org view (fleet, machines, leads, seats)",
+            "HQ (fleet, machines, leads, seats)",
+        ),
+        b(
+            b'G',
+            "org-view-old-key",
+            OpenOrgView,
+            Global,
+            "HQ, the old key (goes away next release)",
         ),
         b(
             b'q',
@@ -1583,18 +1590,25 @@ pub(crate) fn default_bindings() -> Vec<KeyBinding> {
             "open notifications for questions and announcements",
         ),
         b(
-            b'O',
+            b'B',
             "open-backlog-board",
             OpenBacklogBoard,
             Global,
             "open the backlog board",
         ),
         b(
+            b'O',
+            "open-backlog-board-old-key",
+            OpenBacklogBoard,
+            Global,
+            "open the backlog board, the old key (goes away next release)",
+        ),
+        b(
             b'V',
             "cycle-sideline-view",
             CycleSidelineView,
             Global,
-            "cycle sideline view (agents, backlog, org)",
+            "cycle sideline view (agents, backlog, HQ)",
         ),
         b(
             b'b',
@@ -1618,7 +1632,7 @@ pub(crate) fn default_bindings() -> Vec<KeyBinding> {
             "full-screen sideline",
         ),
         b(
-            b'B',
+            b'=',
             "cycle-density",
             CycleDensity,
             Global,
@@ -2120,7 +2134,11 @@ pub fn meta_rows() -> Vec<(String, String, KeySection)> {
     // door; each row leaves this table once a rebind materializes the action
     // in `key_bindings` (no double row).
     let mut rows = rows;
-    for (action, label) in [("split-up", "split up"), ("split-left", "split left")] {
+    for (action, label) in [
+        ("split-up", "split up"),
+        ("split-left", "split left"),
+        ("resize-left", "resize left"),
+    ] {
         if key_for(action).is_none() {
             rows.push((
                 "-".into(),
@@ -2397,8 +2415,13 @@ mod tests {
         assert_eq!(scan_all(&[b"\x02a"]), vec![Event::OpenAnswers]);
         assert_eq!(scan_all(&[b"\x02b"]), vec![Event::TogglePanel]);
         assert_eq!(scan_all(&[b"\x02i"]), vec![Event::ToggleComposer]);
-        // prefix+O opens the backlog board.
+        // prefix+B opens the backlog board; O stays one release as an alias.
+        assert_eq!(scan_all(&[b"\x02B"]), vec![Event::OpenBacklogBoard]);
         assert_eq!(scan_all(&[b"\x02O"]), vec![Event::OpenBacklogBoard]);
+        // prefix+H opens HQ; G stays one release as an alias.
+        assert_eq!(scan_all(&[b"\x02H"]), vec![Event::OpenOrgView]);
+        assert_eq!(scan_all(&[b"\x02G"]), vec![Event::OpenOrgView]);
+        assert_eq!(scan_all(&[b"\x02="]), vec![Event::CycleDensity]);
         assert_eq!(scan_all(&[b"\x02F"]), vec![Event::ToggleFullSideline]);
         assert_eq!(scan_all(&[b"\x02s"]), vec![Event::ToggleStatus]);
         assert_eq!(scan_all(&[b"\x02?"]), vec![Event::ShowKeys]);
