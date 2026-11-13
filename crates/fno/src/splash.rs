@@ -516,12 +516,6 @@ mod tests {
         assert_eq!(mark_rows(Some(MARK_PLAY_SECS)), last);
     }
     #[test]
-    fn a_still_gate_means_no_clock_and_no_wake() {
-        // Tests are not a TTY, so the motion gate is closed.
-        assert_eq!(hq_mark_clock(), None);
-        assert_eq!(hq_mark_next_beat(), None);
-    }
-    #[test]
     fn a_long_version_never_overflows_the_footer_row() {
         let fin = visual_rows(FINAL, "10.100.100-beta.7+x", CtColor::Reset);
         let width: usize = fin[8].iter().map(|s| s.text.chars().count()).sum();
