@@ -58,6 +58,12 @@ pub struct Record {
     pub launched_at_ms: i64,
     #[serde(default)]
     pub command: String,
+    /// Amended by the launcher after the exec: the session head the launch's
+    /// own output named (`backgrounded · <head> · <name>`). The one id the
+    /// launcher observed the launch producing, so the claim can bind by the
+    /// launched session instead of by cwd or recency.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_short_id: Option<String>,
     /// Set by the claim: the child that took this record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub child_session: Option<String>,
@@ -73,6 +79,20 @@ pub struct Child {
     pub cwd: String,
     pub name: Option<String>,
     pub started_at_ms: i64,
+    /// The child's own claude-bg job head (the `CLAUDE_JOB_DIR` stem): the
+    /// launch id the harness itself proves for this process. `None` outside
+    /// a bg job. A reported session head that disagrees with it is a marker
+    /// the process inherited from the launcher chain, never its identity.
+    pub job_short: Option<String>,
+}
+
+/// This process's claude-bg job head, when it runs as one: the
+/// `CLAUDE_JOB_DIR` stem. Proven live to equal the bg job's real session
+/// head (the job id is the session id claude mints for the job).
+pub fn claude_job_short() -> Option<String> {
+    let dir = std::env::var_os("CLAUDE_JOB_DIR")?;
+    let stem = Path::new(&dir).file_name()?.to_str()?.to_ascii_lowercase();
+    (!stem.is_empty()).then_some(stem)
 }
 
 fn pending_dir(root: &Path) -> PathBuf {
@@ -664,6 +684,37 @@ fn write_atomic(path: &Path, value: &Record) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The launcher's post-exec amendment: stamp the session head the launch's
+/// own output named onto this launch's pending record. Scans the pending
+/// dir for records named `name` and rewrites the newest one that does not
+/// carry a head yet; a False return is one stderr line for the launcher,
+/// never a launch failure. `claude --bg` prints the head on its first
+/// stdout line, so the launcher learns it while the child still boots.
+pub fn amend_launch_short_id(root: &Path, name: &str, short: &str) -> bool {
+    let Ok(entries) = std::fs::read_dir(pending_dir(root)) else {
+        return false;
+    };
+    let mut best: Option<(std::fs::DirEntry, Record)> = None;
+    for entry in entries.flatten() {
+        let Some(record) = read_record(&entry.path()) else {
+            continue;
+        };
+        if record.launch.name.as_deref() != Some(name) || record.launch_short_id.is_some() {
+            continue;
+        }
+        match &best {
+            Some((_, current)) if current.launched_at_ms >= record.launched_at_ms => {}
+            _ => best = Some((entry, record)),
+        }
+    }
+    let Some((path, record)) = best else {
+        return false;
+    };
+    let mut record = record;
+    record.launch_short_id = Some(short.to_string());
+    write_atomic(&path, &record).is_ok()
+}
+
 /// Delete pending records older than the window. Best effort.
 fn prune(root: &Path, now_ms: i64) {
     let Ok(entries) = std::fs::read_dir(pending_dir(root)) else {
@@ -763,6 +814,7 @@ fn write_record_with(
         launcher_cwd: launcher_cwd.map(str::to_string),
         launched_at_ms: now_ms,
         command: command.unwrap_or_default().to_string(),
+        launch_short_id: None,
         child_session: None,
         claimed_at_ms: None,
     };
@@ -858,6 +910,25 @@ pub fn claim(root: &Path, child: &Child) -> Option<Record> {
     if child.session_id.is_empty() || child.session_id.contains('/') {
         return None;
     }
+    // A claude bg child whose own job head disagrees with its reported
+    // session head carries a marker it inherited from the launcher chain
+    // (the daemon and its spare pass a dead worker's env down the process
+    // tree). Nothing it says about which launch it is can be trusted, so it
+    // claims nothing: not an amended record, not one its inherited name
+    // matches. A fresh bg job's job head IS its session head, so a clean
+    // worker passes; resume reports never reach claim at all.
+    if child.harness == "claude" {
+        if let Some(job) = &child.job_short {
+            if crate::identity::canonical_handle(&child.session_id) != *job {
+                eprintln!(
+                    "launch record: session {} names job head {job}; claiming nothing \
+                     (the id is inherited lineage, not this process's identity)",
+                    child.session_id
+                );
+                return None;
+            }
+        }
+    }
     let cwd = canonical(&child.cwd);
     let mut candidates: Vec<(PathBuf, Record)> = std::fs::read_dir(pending_dir(root))
         .ok()?
@@ -876,6 +947,12 @@ pub fn claim(root: &Path, child: &Child) -> Option<Record> {
                     (Some(_), None) => false,
                     (None, _) => true,
                 }
+                // An amended record names the session the launch produced:
+                // bind by the launched session id, never by cwd or recency.
+                // A record without the amendment keeps today's match.
+                && r.launch_short_id.as_deref().is_none_or(|short| {
+                    crate::identity::canonical_handle(&child.session_id) == short
+                })
         })
         .collect();
     candidates.sort_by_key(|(_, r)| r.launched_at_ms);

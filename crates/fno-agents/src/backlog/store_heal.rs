@@ -910,6 +910,7 @@ mod tests {
             cwd: "/work".into(),
             name: Some("t-held-mail-release".into()),
             started_at_ms: 1_002_000,
+            job_short: None,
         };
         crate::launch_record::record_command(
             dir.path(),

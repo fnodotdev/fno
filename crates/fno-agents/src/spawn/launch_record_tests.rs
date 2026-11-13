@@ -128,6 +128,7 @@ fn child(sid: &str, harness: &str, cwd: &str, name: Option<&str>, at: i64) -> Ch
         cwd: cwd.into(),
         name: name.map(str::to_string),
         started_at_ms: at,
+        job_short: None,
     }
 }
 
@@ -262,4 +263,117 @@ fn a_forking_claude_bg_line_is_refused() {
         let launches = parse_command(ok, "/repo");
         assert!(claude_bg_refusal(&launches, |_| false).is_none(), "{ok}");
     }
+}
+
+/// x-c217: the launcher amends the pending record with the launch's own
+/// head (the short claude printed), and the amended record binds only to
+/// the session that head names. A bystander session in the same cwd - or a
+/// child carrying the worker's inherited name - claims nothing, and the
+/// record stays pending for the launch's own session.
+#[test]
+fn an_amended_record_binds_only_the_launched_session() {
+    let seed = |home: &tempfile::TempDir, cwd: &str| {
+        write_record(
+            home.path(),
+            Launch {
+                harness: "claude".into(),
+                resume: None,
+                name: Some("w-bg".into()),
+                node: None,
+                slot: None,
+                provider: None,
+                cwd: cwd.to_string(),
+            },
+            "lead-1",
+            Some("claude"),
+            cwd,
+            1_000_000,
+        )
+        .unwrap();
+        assert!(amend_launch_short_id(home.path(), "w-bg", "2ee23622"));
+    };
+    // The launch's own session claims; the claim records its id.
+    let home = tempfile::tempdir().unwrap();
+    let cwd = home.path().to_string_lossy().into_owned();
+    seed(&home, &cwd);
+    let own = child(
+        "2ee23622-0000-4000-8000-00000000000a",
+        "claude",
+        &cwd,
+        Some("w-bg"),
+        1_001_000,
+    );
+    let got = claim(home.path(), &own).expect("the launched session claims");
+    assert_eq!(got.child_session.as_deref(), own.session_id.as_str());
+    // A bystander with a different head, even carrying the worker's name,
+    // cannot claim, and the record stays pending.
+    let home = tempfile::tempdir().unwrap();
+    let cwd = home.path().to_string_lossy().into_owned();
+    seed(&home, &cwd);
+    let bystander = child(
+        "6611e61e-0000-4000-8000-00000000000b",
+        "claude",
+        &cwd,
+        Some("w-bg"),
+        1_001_000,
+    );
+    assert!(claim(home.path(), &bystander).is_none());
+    assert_eq!(
+        pending_dir(home.path()).read_dir().unwrap().count(),
+        1,
+        "the record stays pending"
+    );
+}
+
+/// x-c217: a claude bg child whose own job head disagrees with its reported
+/// session head carries a leaked marker (the daemon and its spare pass a
+/// dead worker's env down the process tree). It claims nothing - not the
+/// amended record, not an unamended one its inherited name matches - and a
+/// clean child whose heads agree still claims.
+#[test]
+fn a_claude_child_whose_job_head_disagrees_claims_nothing() {
+    let home = tempfile::tempdir().unwrap();
+    let cwd = home.path().to_string_lossy().into_owned();
+    write_record(
+        home.path(),
+        Launch {
+            harness: "claude".into(),
+            resume: None,
+            name: Some("w-bg".into()),
+            node: None,
+            slot: None,
+            provider: None,
+            cwd: cwd.clone(),
+        },
+        "lead-1",
+        Some("claude"),
+        &cwd,
+        1_000_000,
+    )
+    .unwrap();
+    let mut polluted = child(
+        "6611e61e-0000-4000-8000-00000000000b",
+        "claude",
+        &cwd,
+        Some("w-bg"),
+        1_001_000,
+    );
+    polluted.job_short = Some("8a6d6680".into());
+    assert!(claim(home.path(), &polluted).is_none());
+    assert_eq!(
+        pending_dir(home.path()).read_dir().unwrap().count(),
+        1,
+        "the record stays pending"
+    );
+    // The clean worker (its job head names its own session) claims the same
+    // record on the next report.
+    let mut clean = child(
+        "8a6d6680-0000-4000-8000-00000000000c",
+        "claude",
+        &cwd,
+        Some("w-bg"),
+        1_002_000,
+    );
+    clean.job_short = Some("8a6d6680".into());
+    assert!(claim(home.path(), &clean).is_some());
 }

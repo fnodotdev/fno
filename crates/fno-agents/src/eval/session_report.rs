@@ -210,9 +210,33 @@ pub(crate) fn handle_session_report(
         .map(String::from)
         .or_else(|| str_field(p, "cwd"));
     // A claimed launch record rides the request (run_session_report attaches
-    // it): the child that reported is the launcher's launch.
-    let launch_record: Option<crate::launch_record::Record> =
-        params_object(p, "launch_record").and_then(|v| serde_json::from_value(v.clone()).ok());
+    // it): the child that reported is the launcher's launch. A report whose
+    // session head guard: a report whose session head disagrees with the
+    // record's amended launch head (the claimed id is inherited lineage,
+    // not the launch's own session) births no row at all: the id binds
+    // nothing and the reporter stays unregistered until a report whose id
+    // the launcher observed arrives. The refusal is the no_row shape:
+    // stored false, dropped names the reason.
+    let launch_record: Option<crate::launch_record::Record> = 'rec: {
+        let parsed: Option<crate::launch_record::Record> =
+            params_object(p, "launch_record").and_then(|v| serde_json::from_value(v.clone()).ok());
+        let Some(record) = parsed else {
+            break 'rec None;
+        };
+        if let Some(short) = &record.launch_short_id {
+            if crate::identity::canonical_handle(&session_id) != *short {
+                eprintln!(
+                    "session-report: session {session_id} disagrees with the claimed \
+                     record's launch head {short}; birthing no row"
+                );
+                return Response::ok(
+                    req.id,
+                    json!({"stored": false, "dropped": "launch_head_mismatch"}),
+                );
+            }
+        }
+        Some(record)
+    };
     let launch_child_name = str_field(p, "launch_child_name");
     // A proven pane claim rides as {session, pane_id}; anything else (absent,
     // malformed) is ignored - the report still stores normally, it just
@@ -1297,6 +1321,7 @@ fn claim_launch(
         cwd,
         name: child_name.clone(),
         started_at_ms: crate::claims::now_ms(),
+        job_short: crate::launch_record::claude_job_short(),
     };
     let record = crate::launch_record::claim_and_stamp(
         home.root(),
@@ -1985,6 +2010,7 @@ mod tests {
             launcher_cwd: Some("/repo".into()),
             launched_at_ms: 1_000,
             command: String::new(),
+            launch_short_id: None,
             child_session: Some(reaped.into()),
             claimed_at_ms: None,
         };
@@ -2035,6 +2061,7 @@ mod tests {
                 launcher_cwd: Some("/repo".into()),
                 launched_at_ms: 1_000,
                 command: String::new(),
+                launch_short_id: None,
                 child_session: Some("3228ccad-c078-4f2e-9a51-6d1f0a2b3c4d".into()),
                 claimed_at_ms: Some(2_000),
             };
@@ -2218,5 +2245,66 @@ mod tests {
             None => std::env::remove_var("FNO_SPACES_DIR"),
         }
         drop(lock);
+    }
+    /// x-c217 backstop at the mint: a claimed record amended with the
+    /// launch's own head adopts only the session that head names. A report
+    /// whose session id disagrees with the amended record births no row, so
+    /// a polluted reporter can never mint the launch's row under its id.
+    #[test]
+    fn a_report_disagreeing_with_the_amended_record_births_no_row() {
+        let (_d, home) = temp_home("head-mismatch");
+        let record = crate::launch_record::Record {
+            launch: crate::launch_record::Launch {
+                harness: "claude".into(),
+                resume: None,
+                name: Some("w-bg".into()),
+                node: None,
+                slot: None,
+                provider: None,
+                cwd: "/repo".into(),
+            },
+            node_basis: None,
+            launcher_session: "lead-1".into(),
+            launcher_harness: Some("claude".into()),
+            launcher_cwd: Some("/repo".into()),
+            launched_at_ms: 1_000,
+            command: String::new(),
+            launch_short_id: Some("2ee23622".into()),
+            child_session: None,
+            claimed_at_ms: None,
+        };
+        let report = |record: &crate::launch_record::Record| {
+            let params = report_params(
+                "claude",
+                "6611e61e-0000-4000-8000-00000000000b",
+                json!({
+                    "agent_self": "w-bg",
+                    "launch_record": serde_json::to_value(record).unwrap()
+                }),
+            );
+            response_json(&handle_session_report(&home, &emitter(&home), &req(params)))
+        };
+        let body = report(&record);
+        assert_eq!(body["result"]["stored"], false);
+        assert_eq!(body["result"]["dropped"], "launch_head_mismatch");
+        assert!(read_rows(&home).is_empty(), "no row births on mismatch");
+        // The launched session's own report adopts the same record.
+        let params = report_params(
+            "claude",
+            "2ee23622-0000-4000-8000-00000000000a",
+            json!({
+                "agent_self": "w-bg",
+                "launch_record": serde_json::to_value(&record).unwrap()
+            }),
+        );
+        let body = response_json(&handle_session_report(&home, &emitter(&home), &req(params)));
+        assert_eq!(body["result"]["stored"], true);
+        let rows = read_rows(&home);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "w-bg");
+        assert_eq!(
+            rows[0].claude_session_uuid.as_deref(),
+            Some("2ee23622-0000-4000-8000-00000000000a")
+        );
     }
 }

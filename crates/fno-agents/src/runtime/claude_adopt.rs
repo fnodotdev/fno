@@ -720,6 +720,7 @@ mod tests {
             cwd,
             name: Some("w1".into()),
             started_at_ms: 1_002_000,
+            job_short: None,
         };
         crate::launch_record::claim(dir.path(), &child).unwrap();
         upsert_adopted_row(&reg, fixture_entry("2026-10-09T20:00:00Z")).unwrap();

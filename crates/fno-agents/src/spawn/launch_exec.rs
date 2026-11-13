@@ -172,10 +172,57 @@ fn exec_lane(payload: &Value) -> Result<i32, String> {
     ) {
         return Ok(crate::claude_supervisor::BIRTH_REFUSED_EXIT);
     }
-    let status = command
-        .status()
+    let mut child = command
+        .stdout(std::process::Stdio::piped())
+        .spawn()
         .map_err(|error| format!("exec {}: {error}", tokens[0]))?;
+    // The launcher reads the launch's own output while streaming it through:
+    // the first `backgrounded · <head> · <name>` line names the session the
+    // launch produced, and the launcher stamps it onto the pending record so
+    // the claim binds by the launched session id, never by cwd or recency.
+    if let Some(stdout) = child.stdout.take() {
+        let mut out = std::io::stdout();
+        forward_scan(stdout, &mut out, &name, &home.root());
+    }
+    let status = child
+        .wait()
+        .map_err(|error| format!("wait {}: {error}", tokens[0]))?;
     Ok(status.code().unwrap_or(1))
+}
+
+/// Stream a child's stdout through line by line, and on the first line that
+/// names a backgrounded session head, amend the launch's pending record
+/// with it. The forward is byte-faithful; the scan is silent on any line
+/// the head parser refuses, and the amendment is one stderr line on a miss
+/// - never a launch failure.
+fn forward_scan<R: std::io::Read, W: std::io::Write>(
+    stdout: R,
+    out: &mut W,
+    name: &str,
+    root: &Path,
+) -> Option<String> {
+    let mut short = None;
+    let mut reader = std::io::BufReader::new(stdout);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {
+                let _ = out.write_all(line.as_bytes());
+                let _ = out.flush();
+                if short.is_none() {
+                    if let Ok(found) = crate::claude_ask::parse_short_id(&line) {
+                        if crate::launch_record::amend_launch_short_id(root, name, &found) {
+                            short = Some(found);
+                        }
+                    }
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    short
 }
 
 #[cfg(test)]
@@ -304,5 +351,52 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(out, 3);
+    }
+    /// The streamed scan: a `backgrounded` line amends the pending record
+    /// with the head it names; the forward stays byte-faithful; a stream
+    /// with no head line leaves every record untouched.
+    #[test]
+    fn the_streamed_scan_amends_the_record_with_the_launched_head() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_string_lossy().into_owned();
+        crate::launch_record::write_record(
+            dir.path(),
+            crate::launch_record::Launch {
+                harness: "claude".into(),
+                resume: None,
+                name: Some("w-scan".into()),
+                node: None,
+                slot: None,
+                provider: None,
+                cwd: cwd.clone(),
+            },
+            "lead-1",
+            Some("claude"),
+            &cwd,
+            1_000_000,
+        )
+        .unwrap();
+        let stream = "noise first\n\
+                      backgrounded \u{b7} 2ee23622 \u{b7} w-scan\n\
+                      tail\n";
+        let mut sink: Vec<u8> = Vec::new();
+        let got = forward_scan(stream.as_bytes(), &mut sink, "w-scan", dir.path());
+        assert_eq!(got.as_deref(), Some("2ee23622"));
+        assert_eq!(sink, stream.as_bytes());
+        let pending = dir.path().join("launches").join("pending");
+        let path = std::fs::read_dir(&pending)
+            .unwrap()
+            .flatten()
+            .next()
+            .unwrap()
+            .path();
+        let record: crate::launch_record::Record =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(record.launch_short_id.as_deref(), Some("2ee23622"));
+        // A stream with no backgrounded line amends nothing.
+        let mut sink: Vec<u8> = Vec::new();
+        let got = forward_scan("plain output\n".as_bytes(), &mut sink, "w-scan", dir.path());
+        assert_eq!(got, None);
+        assert_eq!(sink, "plain output\n".as_bytes());
     }
 }
