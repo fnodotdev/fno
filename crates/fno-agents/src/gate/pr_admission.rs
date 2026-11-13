@@ -139,8 +139,21 @@ fn pulls_of_facts(facts: &Value) -> Value {
     })
 }
 
+/// Origin facts older than this read as a miss: an author's association and
+/// access can change while the PR stays open.
+const ORIGIN_TTL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
 fn read_cached(dir: &Path, slug: &str, pr: u64) -> Option<Value> {
     let path = cache_path(dir, slug, pr)?;
+    let age = std::fs::metadata(&path)
+        .ok()?
+        .modified()
+        .ok()?
+        .elapsed()
+        .ok()?;
+    if age > ORIGIN_TTL {
+        return None;
+    }
     let raw = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&raw).ok()
 }
@@ -519,6 +532,16 @@ mod tests {
         let none = |_: &str, _: u64| -> Result<Value, String> { Err("no fetch".to_string()) };
         let out = outside_pr_in(Some(dir.as_path()), &facts(11), &none, &unread);
         assert!(matches!(out, ProbeOutcome::Clear));
+        // Facts past the TTL read as a miss, so a demotion reaches the gate.
+        let aged = std::time::SystemTime::now() - 2 * ORIGIN_TTL;
+        std::fs::File::options()
+            .write(true)
+            .open(cache_path(&dir, "fnodotdev/fno", 11).unwrap())
+            .unwrap()
+            .set_modified(aged)
+            .unwrap();
+        let out = outside_pr_in(Some(dir.as_path()), &facts(11), &none, &unread);
+        assert!(matches!(out, ProbeOutcome::Inconclusive(e) if e.contains("no fetch")));
         // An unreadable permission is Inconclusive, never Clear.
         let out = outside_pr_in(
             Some(dir.as_path()),
