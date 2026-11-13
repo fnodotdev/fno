@@ -337,6 +337,16 @@ pub(super) fn command_segments(command: &str) -> Result<Vec<Segment>, Unbalanced
     command_segments_at(command, 0)
 }
 
+/// The segments of `command` without the `$( ... )` bodies, which run in a
+/// subshell: a `cd` or assignment there never reaches the next command.
+pub(super) fn top_level_segments(command: &str) -> Vec<Segment> {
+    let mut text = command.to_string();
+    for body in substitution_bodies(command) {
+        text = text.replace(&format!("$({body})"), "SUBST");
+    }
+    command_segments_at(&text, 3).unwrap_or_default()
+}
+
 fn command_segments_at(command: &str, depth: usize) -> Result<Vec<Segment>, Unbalanced> {
     static CONT: OnceLock<Regex> = OnceLock::new();
     let command = re(&CONT, r"\\\r?\n").replace_all(command, "");

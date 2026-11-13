@@ -69,6 +69,8 @@ struct Walk {
     vars: HashMap<String, Option<String>>,
     written: Vec<(PathBuf, Source)>,
     heredocs: Vec<(String, String)>,
+    /// Segments outside `$( ... )`: only these change cwd and variables.
+    top: Vec<Segment>,
 }
 
 impl Walk {
@@ -78,6 +80,7 @@ impl Walk {
             vars: HashMap::new(),
             written: Vec::new(),
             heredocs: segments::heredoc_writes(command),
+            top: segments::top_level_segments(command),
         }
     }
 
@@ -136,11 +139,12 @@ impl Walk {
     fn observe(&mut self, seg: &Segment) {
         let (argv, assignments) = segments::effective_argv_and_assignments(seg);
         let base0 = argv.first().map(|t| base_lower(t)).unwrap_or_default();
-        if argv.is_empty() {
+        let top = self.top.contains(seg);
+        if top && argv.is_empty() {
             self.assign(&assignments);
-        } else if base0 == "export" {
+        } else if top && base0 == "export" {
             self.assign(&argv[1..]);
-        } else if base0 == "cd" {
+        } else if top && base0 == "cd" {
             let target = argv
                 .iter()
                 .skip(1)
@@ -618,6 +622,8 @@ mod tests {
             format!("S={repo}/scripts/push.sh; bash $S"),
             format!("D={repo}; bash \"${{D}}/scripts/push.sh\""),
             format!("cd {repo} && bash $PWD/scripts/push.sh"),
+            // A cd inside a substitution runs in a subshell.
+            format!("cd {repo} && X=$(cd /tmp && pwd) && bash scripts/push.sh"),
         ] {
             let refusal = judge_with(&bash(&cmd), &c).unwrap_or_else(|| panic!("allowed: {cmd}"));
             assert!(
