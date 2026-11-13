@@ -88,13 +88,19 @@ fn first_run_needed_in(state_dir: &std::path::Path) -> bool {
 }
 
 /// Best-effort like every sidecar write: a marker that cannot land only
-/// means the gate offers the wizard again next launch.
+/// means the gate offers the wizard again next launch, so an error prints
+/// and the wizard's success never depends on this write.
 pub(crate) fn write_done_marker() {
     let path = done_marker_path();
     if let Some(dir) = path.parent() {
-        let _ = fs::create_dir_all(dir);
+        if let Err(e) = fs::create_dir_all(dir) {
+            eprintln!("fno do wizard: cannot create {}: {e}", dir.display());
+            return;
+        }
     }
-    let _ = fs::write(path, setup_run::marker_line());
+    if let Err(e) = fs::write(&path, setup_run::marker_line()) {
+        eprintln!("fno do wizard: cannot write {}: {e}", path.display());
+    }
 }
 
 fn parse_preset(word: &str) -> Option<Preset> {
