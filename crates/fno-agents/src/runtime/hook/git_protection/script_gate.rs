@@ -1014,7 +1014,9 @@ mod tests {
     #[test]
     fn a_nested_runner_on_an_absent_helper_refuses_when_the_script_could_push() {
         // The same shape with a push pair in the enclosing script still
-        // refuses: the push itself is a readable, gated segment.
+        // refuses. The narrowed door refuses through the nested-helper
+        // seam: the script's own text carries the push, so the
+        // unresolvable helper's decide() ranks the refusal.
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("nest-push.sh"),
@@ -1024,10 +1026,7 @@ mod tests {
         let fake = feature(dir.path());
         let c = ctx(dir.path(), &fake);
         let refusal = judge_with(&bash("bash nest-push.sh"), &c).unwrap();
-        assert!(
-            refusal.contains("Direct push to protected branch"),
-            "{refusal}"
-        );
+        assert!(refusal.contains("cannot be gated"), "{refusal}");
     }
 
     #[test]
