@@ -40,6 +40,11 @@ A release install updates from the newest GitHub release; a wheel install moves 
 const UPDATE_CLAIM_KEY: &str = "update:fno";
 const UPDATE_BUDGET_SECS: u64 = 60;
 
+/// CI publishes a main-binaries build about this many minutes after a rev
+/// lands (measured 2026-11-12: ~30 min per build). The "not published yet"
+/// lines quote a remaining-time estimate built from the rev's commit time.
+const PUBLISH_WINDOW_MINS: u64 = 30;
+
 pub(crate) fn exe_suffix() -> &'static str {
     if cfg!(windows) {
         ".exe"
@@ -303,6 +308,40 @@ fn deploy_prebuilt(crates_rev: &str, bin_dir: &Path, dry_run: bool) -> Result<()
     Ok(())
 }
 
+/// The remaining-time clause for a rev CI has not published yet: minutes
+/// left in the usual main-binaries window, or how far past it the rev is.
+/// An estimate from the rev's commit time, never a promise.
+fn publish_eta(repo: &Path, rev: &str) -> Option<String> {
+    let secs = git_in(repo, &["log", "-1", "--format=%ct", rev])?
+        .parse::<u64>()
+        .ok()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let age_mins = now.saturating_sub(secs) / 60;
+    Some(publish_eta_line(age_mins))
+}
+
+/// The parenthesised form the update's publish lines quote the ETA in.
+fn eta_suffix(eta: &Option<String>) -> String {
+    eta.as_ref().map(|t| format!(" ({t})")).unwrap_or_default()
+}
+
+pub(crate) fn publish_eta_line(age_mins: u64) -> String {
+    if age_mins >= PUBLISH_WINDOW_MINS {
+        return format!(
+            "main-binaries is {}m past its ~{PUBLISH_WINDOW_MINS}m build window; check the run",
+            age_mins - PUBLISH_WINDOW_MINS
+        );
+    }
+    format!(
+        "main-binaries should publish in ~{}m (commit {}m old, ~{PUBLISH_WINDOW_MINS}m per build)",
+        PUBLISH_WINDOW_MINS - age_mins,
+        age_mins
+    )
+}
+
 /// The release-path arm when CI has not published the source's crates rev
 /// yet: install the newest tarball CI DID publish, never compile. The bins
 /// then trail the source honestly: the update's rev marker is left
@@ -351,10 +390,12 @@ fn install_newest_published_arm(
         }
     };
     let got12: String = newest_rev.chars().take(12).collect();
+    let eta = subtree.and_then(|rev| publish_eta(repo, rev));
     if !installed_rev.is_empty() {
         if installed_rev == newest_rev {
             println!(
-                "fno doctor update: the newest published build ({got12}) is already installed; waiting for CI to publish {want12}; NOT compiling"
+                "fno doctor update: the newest published build ({got12}) is already installed; waiting for CI to publish {want12}{}; NOT compiling",
+                eta_suffix(&eta)
             );
             return "newest-published-current".into();
         }
@@ -379,7 +420,8 @@ fn install_newest_published_arm(
         }
     }
     println!(
-        "fno doctor update: the source rev {want12} has no published tarball yet; installing the newest published build {got12}; never compiles"
+        "fno doctor update: the source rev {want12} has no published tarball yet{}; installing the newest published build {got12}; never compiles",
+        eta_suffix(&eta)
     );
     let bin_dir = install_root.join("bin");
     let deploy = |rev: &str| -> Result<(), String> {
@@ -403,7 +445,8 @@ fn install_newest_published_arm(
     }
     chained_restart_if_drifted(&bin_dir.join(triad_names()[0].clone()), false);
     println!(
-        "fno doctor update: installed the newest published build (rev {got12}); the source rev {want12} is not published yet; the next update retries once CI publishes; NOT compiling"
+        "fno doctor update: installed the newest published build (rev {got12}); the source rev {want12} is not published yet{}; the next update retries once CI publishes; NOT compiling",
+        eta_suffix(&eta)
     );
     "installed-newest-published".into()
 }
@@ -2138,9 +2181,44 @@ fn render_component_evidence(source: &Path, subtree: Option<&str>, install_root:
 /// refresh follows the restage when its channel marker says dev. Returns
 /// whether the codex refresh ran (the update then runs the janitor itself,
 /// outside its budget).
-fn post_install_steps(resolved: &Path, failed: &mut Vec<String>) -> bool {
+/// One named stretch of an update's wall time, for the over-budget WARN line.
+pub(crate) struct PhaseTime {
+    pub(crate) name: &'static str,
+    pub(crate) took: Duration,
+}
+
+/// The over-budget readout: named phases slowest first, then `other` for
+/// whatever the named phases did not cover (resolve, git sync, journal).
+pub(crate) fn phase_breakdown(phases: &[PhaseTime], total: Duration) -> String {
+    let mut rows: Vec<&PhaseTime> = phases.iter().filter(|p| p.took.as_millis() > 0).collect();
+    rows.sort_by(|a, b| b.took.cmp(&a.took));
+    let named: f64 = rows.iter().map(|p| p.took.as_secs_f64()).sum();
+    let other = total.as_secs_f64() - named;
+    let mut parts: Vec<String> = rows
+        .iter()
+        .map(|p| format!("{} {:.1}s", p.name, p.took.as_secs_f64()))
+        .collect();
+    if other > 0.05 {
+        parts.push(format!("other {other:.1}s"));
+    }
+    if parts.is_empty() {
+        parts.push(format!("total {:.1}s", total.as_secs_f64()));
+    }
+    parts.join(", ")
+}
+
+fn post_install_steps(
+    resolved: &Path,
+    failed: &mut Vec<String>,
+    phases: &mut Vec<PhaseTime>,
+) -> bool {
+    let started = Instant::now();
     let args: Vec<String> = vec!["pr-watch".into(), "refresh".into()];
     let code = run_inherit(&fno_agents_bin(), &args);
+    phases.push(PhaseTime {
+        name: "pr watch refresh",
+        took: started.elapsed(),
+    });
     if code != 0 {
         eprintln!(
             "fno doctor update: WARNING: post-install `pr watch refresh` exited {code}; continuing"
@@ -2149,15 +2227,20 @@ fn post_install_steps(resolved: &Path, failed: &mut Vec<String>) -> bool {
     }
     // groom lives in fno-agents only, and a wheel or Homebrew install puts
     // fno-agents beside fno rather than under cargo home.
+    let started = Instant::now();
     let args: Vec<String> = vec!["backlog".into(), "groom".into(), "--refresh-agent".into()];
     let code = run_inherit(&fno_agents_bin(), &args);
+    phases.push(PhaseTime {
+        name: "groom agent refresh",
+        took: started.elapsed(),
+    });
     if code != 0 {
         eprintln!(
             "fno doctor update: WARNING: post-install `groom agent refresh` exited {code}; continuing"
         );
         failed.push("post-install groom agent refresh".into());
     }
-    restage_plugin(resolved, failed)
+    restage_plugin(resolved, failed, phases)
 }
 
 /// The plugin-stage restage, plus the codex refresh when its channel marker
@@ -2166,9 +2249,10 @@ fn post_install_steps(resolved: &Path, failed: &mut Vec<String>) -> bool {
 /// chain the reclaim inline (plugin-install chains it after every full
 /// install), and the update passes --no-reclaim and runs the janitor after
 /// its budget fold instead.
-fn restage_plugin(resolved: &Path, failed: &mut Vec<String>) -> bool {
+fn restage_plugin(resolved: &Path, failed: &mut Vec<String>, phases: &mut Vec<PhaseTime>) -> bool {
     let mut codex_refresh_ran = false;
     if let Some(agents_bin) = cargo_installed_bin() {
+        let started = Instant::now();
         let args: Vec<String> = [
             "plugin-install".into(),
             "--restage".into(),
@@ -2177,16 +2261,21 @@ fn restage_plugin(resolved: &Path, failed: &mut Vec<String>) -> bool {
         ]
         .to_vec();
         let code = run_inherit(&agents_bin, &args);
+        phases.push(PhaseTime {
+            name: "plugin restage",
+            took: started.elapsed(),
+        });
         if code != 0 {
             eprintln!(
                 "fno doctor update: WARNING: post-install plugin restage exited {code}; continuing"
             );
             failed.push("post-install plugin restage".into());
         }
-        // A restage keeps the version; codex re-copies its cache only on a
+        // A restage keeps the version; codex re-copies its plugin cache only on a
         // forced converge, so the dev-channel marker gates the refresh.
         if codex_channel_is_dev() {
             codex_refresh_ran = true;
+            let started = Instant::now();
             let args: Vec<String> = [
                 "plugin-install".into(),
                 "codex".into(),
@@ -2197,6 +2286,10 @@ fn restage_plugin(resolved: &Path, failed: &mut Vec<String>) -> bool {
             ]
             .to_vec();
             let code = run_inherit(&agents_bin, &args);
+            phases.push(PhaseTime {
+                name: "codex refresh",
+                took: started.elapsed(),
+            });
             if code != 0 {
                 eprintln!(
                     "fno doctor update: WARNING: post-install codex refresh exited {code}; continuing"
@@ -2539,6 +2632,7 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     println!("Reinstalling fno from {}", resolved.display());
 
     let mut failed: Vec<String> = Vec::new();
+    let mut phases: Vec<PhaseTime> = Vec::new();
     let mut rev = source_rev(&resolved);
 
     if flags.dry_run {
@@ -2664,7 +2758,12 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
 
     let mut rust_outcome: Option<String> = None;
     if !flags.no_rust {
+        let rust_started = Instant::now();
         rust_outcome = Some(refresh_rust_bins(&resolved, flags.rust, false, &mut failed));
+        phases.push(PhaseTime {
+            name: "rust bins",
+            took: rust_started.elapsed(),
+        });
         // These outcomes left the rust bins uninstalled: the leg named its
         // reason on stderr, and the update must not pass as healthy on top
         // of it. "fresh" proved the bins current and
@@ -2734,7 +2833,7 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     }
     // The codex dev refresh passes --no-reclaim; the janitor runs after the
     // budget fold below, so a big reclaim never counts against the update.
-    let codex_refresh_ran = post_install_steps(&resolved, &mut failed);
+    let codex_refresh_ran = post_install_steps(&resolved, &mut failed, &mut phases);
 
     release_update_claim();
 
@@ -2765,12 +2864,19 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
         journal_call("failed", &fields, None);
         1
     };
-    // An update finishes in 60 seconds (user order 2026-10-09). One that runs
-    // longer still installs, but exits 1 and names its time, so a slow path
-    // such as the compile fallback never passes as healthy.
-    let took = started.elapsed().as_secs();
-    if took > UPDATE_BUDGET_SECS {
-        failed.push(format!("the {UPDATE_BUDGET_SECS}s budget (took {took}s)"));
+    // An update finishes in 60 seconds (user order 2026-10-09). User order
+    // 2026-11-12 retires the exit: an overrun prints a WARN naming where the
+    // time went and never fails the exit when every install step succeeded.
+    // The failed-step list stays the only exit-1 voice, so `fno update &&
+    // fno restart` still restarts after a slow-but-healthy install.
+    let took = started.elapsed();
+    if took.as_secs() > UPDATE_BUDGET_SECS {
+        eprintln!(
+            "fno doctor update: WARNING: took {}s against the {}s budget: {}",
+            took.as_secs(),
+            UPDATE_BUDGET_SECS,
+            phase_breakdown(&phases, took)
+        );
     }
     // The janitor runs after the budget fold: a big reclaim (6.3 GB measured)
     // is the janitor's time, not the update's. Best-effort, bounded: its

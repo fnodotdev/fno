@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use regex::Regex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_json::Value;
 
@@ -416,6 +416,78 @@ fn codex_runtime_read_guard(source_root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// What a stage's content depends on: the git head and a fingerprint over
+/// exactly the files the copy walk would copy (same mux and codex skips).
+/// Equal head plus equal print means the stage already holds those bytes,
+/// so the restage skips the copy - the restage was the measured update's
+/// slowest phase (23,904 files, 2026-11-12).
+#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy, Debug)]
+struct StageTreePrint {
+    files: u64,
+    bytes: u64,
+    hash: u64,
+}
+
+fn stage_tree_print(
+    source_root: &Path,
+    listed: &str,
+    mux: Option<&MuxPaths>,
+    profile: Profile,
+) -> StageTreePrint {
+    let mut files = 0u64;
+    let mut bytes = 0u64;
+    let mut prints: Vec<u8> = Vec::new();
+    for rel in listed.split('\0').filter(|s| !s.is_empty()) {
+        if mux.as_ref().is_some_and(|m| m.covers(rel)) {
+            continue;
+        }
+        if matches!(profile, Profile::Codex) && codex_dropped_tree(rel) {
+            continue;
+        }
+        let Ok(meta) = std::fs::symlink_metadata(&source_root.join(rel)) else {
+            continue;
+        };
+        if meta.is_symlink() || !meta.is_file() {
+            continue;
+        }
+        files += 1;
+        bytes += meta.len();
+        // One digest per file: name, length and mtime fold in, so a rename,
+        // a resize or any content touch moves the print.
+        let mut piece = rel.as_bytes().to_vec();
+        piece.extend_from_slice(&meta.len().to_le_bytes());
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok());
+        piece.extend_from_slice(
+            &mtime
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(0)
+                .to_le_bytes(),
+        );
+        prints.extend_from_slice(&crate::backlog::backlog_share::fnv1a(&piece).to_le_bytes());
+    }
+    let hash = crate::backlog::backlog_share::fnv1a(&prints);
+    StageTreePrint { files, bytes, hash }
+}
+
+/// The stamp a finished build writes into its own stage dir; `tree` names
+/// the print of the source tree it copied, so an equal print plus an equal
+/// head means the stage is already current and the copy can be skipped.
+#[derive(Serialize, Deserialize, Debug, Default)]
+struct StageStamp {
+    source_head: Option<String>,
+    built_at: Option<String>,
+    profile: Option<String>,
+    tree: Option<StageTreePrint>,
+}
+
+fn read_stage_stamp(stage: &Path) -> Option<StageStamp> {
+    let text = std::fs::read_to_string(stage.join(STAGE_STAMP)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
 /// `build_stage` for one profile. A pack stage lives at `install/plugin-stage/fno-pack`
 /// and holds no mux path and no hook entry that runs one.
 fn build_stage_as(
@@ -443,6 +515,32 @@ fn build_stage_as(
     )?;
     let dir = profile.stage_dir();
     let dest = stage_parent.join(dir);
+    // Unchanged tree at the same head: the stage already holds those bytes,
+    // so skip the copy (the restage was the measured update's slowest
+    // phase: 23,904 files, 2026-11-12). Old stamps carry no tree print and
+    // read as None, so the first build after this deploy rebuilds once.
+    let head = run_checked(
+        &[
+            "git".to_string(),
+            "rev-parse".to_string(),
+            "HEAD".to_string(),
+        ],
+        Some(source_root),
+    )
+    .unwrap_or_default();
+    if let Some(stamp) = read_stage_stamp(&dest) {
+        if stamp.source_head.as_deref() == Some(head.as_str())
+            && stamp.tree
+                == Some(stage_tree_print(
+                    source_root,
+                    &listed,
+                    mux.as_ref(),
+                    profile,
+                ))
+        {
+            return Ok((dest, 0));
+        }
+    }
     let pid = std::process::id();
     let new_dir = stage_parent.join(format!(".{dir}.new-{pid}"));
     let old_dir = stage_parent.join(format!(".{dir}.old-{pid}"));
@@ -495,20 +593,28 @@ fn build_stage_as(
             return Err(e);
         }
     };
-    if let Ok(head) = run_checked(
-        &["git".to_string(), "rev-parse".into(), "HEAD".into()],
-        Some(source_root),
-    ) {
-        let stamp = json!({
-            "source_head": head,
-            "built_at": chrono::Utc::now().to_rfc3339(),
-            "profile": match profile {
-                Profile::Pack => "pack",
-                Profile::Codex => "codex",
-                Profile::Full => "full",
-            },
-        });
-        let _ = std::fs::write(new_dir.join(STAGE_STAMP), stamp.to_string());
+    if !head.is_empty() {
+        let stamp = StageStamp {
+            source_head: Some(head.clone()),
+            built_at: Some(chrono::Utc::now().to_rfc3339()),
+            profile: Some(match profile {
+                Profile::Pack => "pack".to_string(),
+                Profile::Codex => "codex".to_string(),
+                Profile::Full => "full".to_string(),
+            }),
+            tree: Some(stage_tree_print(
+                source_root,
+                &listed,
+                mux.as_ref(),
+                profile,
+            )),
+        };
+        // Best effort: a stamp write failure reads as no stamp, and the next
+        // build rebuilds.
+        let _stamp_written = std::fs::write(
+            new_dir.join(STAGE_STAMP),
+            serde_json::to_string(&stamp).unwrap_or_default(),
+        );
     }
 
     for marketplace in [MARKETPLACE_REL, CODEX_MARKETPLACE_REL] {
@@ -2461,10 +2567,17 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
                     root,
                     head12,
                 }) => {
-                    println!(
-                        "plugin stage: restaged {files} files from {} at {head12}",
-                        root.display()
-                    );
+                    if files == 0 {
+                        println!(
+                            "plugin stage: already current from {} at {head12}",
+                            root.display()
+                        );
+                    } else {
+                        println!(
+                            "plugin stage: restaged {files} files from {} at {head12}",
+                            root.display()
+                        );
+                    }
                     let full = std::iter::once(stage_parent.clone())
                         .chain(legacy_stage_parent())
                         .map(|parent| parent.join(Profile::Full.stage_dir()))
@@ -4213,6 +4326,30 @@ mod tests {
         }
         let _ = fs::remove_dir_all(&base);
         let _ = fs::remove_dir_all(&pack_base);
+    }
+
+    #[test]
+    fn restage_skips_the_copy_when_the_tree_is_unchanged() {
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!("pi-restage-skip-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let (source, stage) = fresh_stage(&base);
+        let stage_parent = stage.parent().unwrap().to_path_buf();
+        // fresh_stage already built the stage from this tree, so its stamp
+        // names the same head and print: the copy skips. Any tree change
+        // (here: a new file) moves the print and forces a rebuild, and the
+        // next unchanged build skips again.
+        let (_, unchanged) = build_stage_as(&source, &stage_parent, Profile::Full).unwrap();
+        assert_eq!(unchanged, 0, "an unchanged tree skips the copy");
+        fs::write(source.join("skip-probe.md"), b"probe").unwrap();
+        let (_, rebuilt) = build_stage_as(&source, &stage_parent, Profile::Full).unwrap();
+        assert!(rebuilt > 0, "a tree change forces a rebuild");
+        let (_, again) = build_stage_as(&source, &stage_parent, Profile::Full).unwrap();
+        assert_eq!(again, 0, "the rebuilt stage skips on the next build");
+        let _ = stage;
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]
