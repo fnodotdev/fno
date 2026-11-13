@@ -23,7 +23,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--keys-footer] [--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
-[--view report|report-preview|bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|mods|mods-gallery|mods-confirm|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-kanban|backlog-graph|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|needs|dock|machines]";
+[--view report|report-preview|bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|mods|mods-gallery|mods-confirm|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-search|backlog-kanban|backlog-graph|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|needs|dock|machines]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -157,6 +157,7 @@ pub enum ViewKind {
     ReviewPanelDrag,
     /// The backlog board full screen in list view, details pane beside it.
     BacklogList,
+    BacklogSearch,
     /// The backlog board full screen in kanban view, details pane beside it.
     BacklogKanban,
     /// The backlog board full screen in graph view, details pane beside it.
@@ -369,6 +370,7 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "review-panel" => Some(ViewKind::ReviewPanel),
         "review-panel-drag" => Some(ViewKind::ReviewPanelDrag),
         "backlog-list" => Some(ViewKind::BacklogList),
+        "backlog-search" => Some(ViewKind::BacklogSearch),
         "backlog-kanban" => Some(ViewKind::BacklogKanban),
         "backlog-graph" => Some(ViewKind::BacklogGraph),
         "navigator-pr" => Some(ViewKind::NavigatorPr),
@@ -489,7 +491,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
             "--view" => {
                 let v = value()?;
                 view = Some(parse_view(&v).ok_or_else(|| {
-                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, new-workspace, workspace-menu, composer, composer-ghost, composer-refused, composer-tab-N, composer-picker, composer-mode, composer-approval, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, messages-asks, messages-asks-topics, law-book, backlog-list, backlog-kanban, backlog-graph, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections")
+                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, new-workspace, workspace-menu, composer, composer-ghost, composer-refused, composer-tab-N, composer-picker, composer-mode, composer-approval, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, messages-asks, messages-asks-topics, law-book, backlog-list, backlog-search, backlog-kanban, backlog-graph, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections")
                 })?)
             }
             tok @ ("--server" | "--session") => {
@@ -1569,6 +1571,7 @@ shoot a root whose fleet map has seats \
             split_fixture(&mut view, kind);
         }
         Some(ViewKind::BacklogList)
+        | Some(ViewKind::BacklogSearch)
         | Some(ViewKind::BacklogKanban)
         | Some(ViewKind::BacklogGraph) => {
             // The V-cycle backlog board, full screen so the board and
@@ -1587,6 +1590,10 @@ shoot a root whose fleet map has seats \
                 Some(ViewKind::BacklogGraph) => crate::backlog_model::View::Graph,
                 _ => crate::backlog_model::View::Kanban,
             };
+            if matches!(kind, Some(ViewKind::BacklogSearch)) {
+                // `/` mid-typing: the input open on a half-typed qualifier.
+                super::backlog_board::seed_find(b, "-p:p3");
+            }
             if b.query.view == crate::backlog_model::View::Graph {
                 b.query.focus = focus.clone();
                 super::backlog_board::rederive(b);
@@ -1950,6 +1957,7 @@ mod tests {
             ("review-panel", ViewKind::ReviewPanel),
             ("review-panel-drag", ViewKind::ReviewPanelDrag),
             ("backlog-list", ViewKind::BacklogList),
+            ("backlog-search", ViewKind::BacklogSearch),
             ("backlog-kanban", ViewKind::BacklogKanban),
             ("backlog-graph", ViewKind::BacklogGraph),
             ("navigator-pr", ViewKind::NavigatorPr),
@@ -1989,7 +1997,7 @@ mod tests {
         let e = parse_extra(&["--view", "nonesuch"]).expect_err("unknown view names the options");
         assert!(
                     e.contains(
-                        "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, new-workspace, workspace-menu, composer, composer-ghost, composer-refused, composer-tab-N, composer-picker, composer-mode, composer-approval, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, messages-asks, messages-asks-topics, law-book, backlog-list, backlog-kanban, backlog-graph, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections"
+                        "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, new-workspace, workspace-menu, composer, composer-ghost, composer-refused, composer-tab-N, composer-picker, composer-mode, composer-approval, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, messages-asks, messages-asks-topics, law-book, backlog-list, backlog-search, backlog-kanban, backlog-graph, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections"
                     ),
                     "{e}"
                 );
