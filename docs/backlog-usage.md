@@ -406,7 +406,7 @@ One graph feeds every view. Pick the view by where you are.
 |-------|---------|--------------|
 | Terminal | `fno backlog board` | Three short sections: just finished, in progress, on deck |
 | The mux | prefix+B inside `fno mux` | The full kanban board, with keys to search, filter, rank and dispatch |
-| A local HTML file | `backlog.render_targets` in the global config | The board page as a file, re-rendered in the background |
+| A local HTML file | `backlog.render_path` or `backlog.render_targets` in the global config | The board page as a file, re-rendered in the background |
 | A browser, private | `fno mux serve --web`, then the backlog link | The live board behind the bridge token |
 | A browser, public | `fno backlog publish` | Open, public rows only, on any static host |
 
@@ -471,6 +471,16 @@ fno config set backlog.render_targets '[{"path": "~/notes/fno/backlog.html", "sc
 ```
 
 `fno config set` writes the global config by default. Keep these rows there. The renderer reads the global config only and warns about a project-local list.
+
+Set `backlog.render_path` in the global config to get one board per project with no rows to maintain. The daemon expands `{project}` for every project in `work.workspaces` and renders `~/vault/{project}/backlog/backlog.html`, so the boards live inside your vault. A `render_targets` row scoped to a project overrides the template row for that project. `fno setup` offers the key when the Obsidian vault is on. A malformed shape (not a string, no `{project}`, a relative or glob path, an unknown template) warns at render time and the `fno config set` door refuses it at write time.
+
+```bash
+fno config set backlog.render_path '~/c3po/internal/{project}/backlog/backlog.html'
+```
+
+`fno config set` writes the global config by default. The renderer reads the global config only. Like `render_targets`, the renderer reads `backlog.render_path` from the global config only.
+
+Like `render_targets` and `render_path`, the renderer reads `backlog.render_default` from the global config only.
 
 Set `backlog.render_default` to `false` in the global config to stop the automatic page render. The daemon then re-renders only your `backlog.render_targets` rows, and `fno backlog view` rebuilds the page on demand before it opens. This suits machines where the ~28 MB page rewrite after every graph burst costs more than the page is worth.
 
