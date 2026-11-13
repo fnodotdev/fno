@@ -4,11 +4,13 @@
 use std::ops::Range;
 
 use gpui::{
-    canvas, div, font, img, list, prelude::*, px, relative, rgb, rgba, AnyElement, Context, Div,
-    ElementId, Font, FontStyle, FontWeight, InteractiveText, MouseButton, ObjectFit, SharedString,
-    Stateful, StrikethroughStyle, StyledImage, StyledText, TextRun, UnderlineStyle, Window,
+    canvas, div, font, img, list, prelude::*, px, relative, rgb, rgba, AnyElement, Context,
+    CursorStyle, Div, ElementId, Font, FontStyle, FontWeight, InteractiveText, MouseButton,
+    ObjectFit, SharedString, Stateful, StrikethroughStyle, StyledImage, StyledText, TextRun,
+    UnderlineStyle, Window,
 };
 
+use super::field::Field;
 use super::markdown::{Block, Inline, Runs};
 use super::model::{Content, Item, Picture};
 use super::{Closed, EMPTY_AFTER};
@@ -554,21 +556,22 @@ fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div>
             ));
         return Some(column(bar).pb_3());
     }
-    let preedit = root.preedit_text();
-    let (text, color) = if root.chat.draft.is_empty() && preedit.is_empty() {
-        (
-            "Message the agent. Enter sends; Shift-Enter adds a line.".to_string(),
-            p.muted,
-        )
-    } else {
-        (format!("{}{preedit}▏", root.chat.draft), p.fg)
-    };
     let border = if root.has_focus(window) {
         p.focus
     } else {
         p.border
     };
     let at = root.chat.composer.clone();
+    let state = root.chat.field.clone();
+    let text = Field {
+        draft: root.chat.draft.clone(),
+        placeholder: "Message the agent. Enter sends; Shift-Enter adds a line.",
+        fg: rgb(p.fg).into(),
+        muted: rgb(p.muted).into(),
+        selection: (p.accent << 8) | 0x55,
+        focused: root.has_focus(window),
+        state: state.clone(),
+    };
     let field = div()
         .id("composer")
         .relative()
@@ -576,8 +579,22 @@ fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div>
         .min_w_0()
         .max_h(px(160.0))
         .overflow_y_scroll()
+        .track_scroll(&state.scroll)
         .py_1()
-        .text_color(rgb(color))
+        .cursor(CursorStyle::IBeam)
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|root, ev, window, cx| root.composer_down(ev, window, cx)),
+        )
+        .on_mouse_move(cx.listener(|root, ev, window, cx| root.composer_drag(ev, window, cx)))
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(|root, ev, window, cx| root.composer_up(ev, window, cx)),
+        )
+        .on_mouse_up_out(
+            MouseButton::Left,
+            cx.listener(|root, ev, window, cx| root.composer_up(ev, window, cx)),
+        )
         .child(
             canvas(move |bounds, _, _| at.set(bounds), |_, _, _, _| {})
                 .absolute()
