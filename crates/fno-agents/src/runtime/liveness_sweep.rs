@@ -860,7 +860,10 @@ pub(crate) enum SweepMode {
 pub(crate) fn mode_writes_status(mode: &SweepMode, ch: &ReconcileChange) -> bool {
     match mode {
         SweepMode::Full => true,
-        SweepMode::ServeOnly => ch.pid_proven,
+        // A headless settle is clock evidence on the row's own contract, not
+        // a probe inference: a one-shot with no session past the window is
+        // ended whoever reads it, so the serve tick may write it too.
+        SweepMode::ServeOnly => ch.pid_proven || ch.new_result.is_some(),
     }
 }
 
