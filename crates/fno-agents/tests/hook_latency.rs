@@ -1438,6 +1438,7 @@ fn assert_bash_pretooluse_dispatch_order() {
         "backlog-impostor-guard",
         "bg-process-guard",
         "bin-install-guard",
+        "broad-kill-guard",
         "effect-guard",
         "git-protection",
         "recursive-grep-guard",
