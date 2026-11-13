@@ -48,7 +48,6 @@ fn sideline_menu_lists_backlog_and_leaves_experimental_to_settings() {
         Anchor::Center,
         None,
         experimental::Flags {
-            org_board: true,
             pane_share: true,
             ..Default::default()
         },
