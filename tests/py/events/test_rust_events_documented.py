@@ -55,6 +55,12 @@ RUST_CLIENT_EVENT_SOURCES = {
     # The first-check sweep is a standalone client process beside the
     # worker; it names its own producer source.
     "first_check_notice": "fno-first-check",
+    # The usage events arm's rows come from the command that did the work:
+    # the front door, the rules hook, pr create and the backlog close.
+    "cli_command": "cli",
+    "skill_invoked": "hook",
+    "pr_opened": "target",
+    "node_done": "backlog",
 }
 
 

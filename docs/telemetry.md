@@ -56,3 +56,32 @@ All under the agents home (`~/.fno/agents` by default), in `otlp_export/usage_re
 - `sent/<day>.json`: the exact body each send posted. The last 30 stay.
 
 The install id lives at `~/.fno/install/fno_install_seen.id`. The daemon checks once an hour. If the last complete day has no `sent/` file, it sends.
+
+`show` also prints, on stderr, every kind the report counts. A guard's `allow` row never counts: only its blocks do.
+
+## The usage events arm (fleet machines)
+
+The usage events arm is for the maintainers' own machines. It ships off. It turns on with `[telemetry.usage_events] enabled = true` plus a PostHog project token in `FNO_POSTHOG_PROJECT_TOKEN` or `~/.fno/secrets/posthog-project-token`. The token picks the PostHog project. Every 5 minutes the daemon posts each new allowlisted row from the last 24 hours as one `fno_<kind>` event. `fno-agents evals events --usage` prints the exact batch the next beat posts, token redacted.
+
+Each kind lives in one journal, and the arm reads it there. The agents journal is `~/.fno/agents/events.jsonl`. The global journal is `~/.fno/events.jsonl`. A space journal is the `events.jsonl` in the space of each project registered under `[work]` in config.
+
+| Kind | Journal | What it answers |
+|---|---|---|
+| `agent_spawned`, `agent_spawn_refused`, `agent_spawn_failed`, `spawn_first_turn` | agents | Sessions spawned, by harness and substrate, and spawn latency. |
+| `agent_row_reaped`, `lead_wake`, `agent_ask_done` | agents | Reaps, lead wakes, asks. |
+| `agent_mail_drained` | agents | Mail delivered to a turn. |
+| `agent_send_done`, `agent_send_failed` | space | Mail sent through the daemon. |
+| `merge_cleanup_requested` | agents | PRs merged. A merge's request id keys the event, so a re-minted request ships once. |
+| `merge_cleanup_completed` | agents | The cleanup each merge ran. |
+| `run_recorded`, `termination`, `session_finalized` | global | Targets started and finished, and the stop reason. |
+| `review_attestation`, `verifier_verdict` | global | Review verdicts, level, round and finding counts. |
+| `pr_push_landed`, `ci_cadence_check` | global | Each push and each read of that head's CI: green, red, pending. |
+| `pr_opened` | space | PRs opened by `fno do pr create`. |
+| `node_done` | space | Nodes closed by `fno backlog done` or by reconcile after a merge. |
+| `guard_decision` | space | Guard refusals by guard and tool. `allow` rows stay home. |
+| `style_refusal`, `backlog_done_refused`, `backlog_done_forced` | space | Style and close refusals. |
+| `cli_command` | agents | Every `fno` command: the command path, exit code and duration. |
+| `skill_invoked` | space | Every `fno:` skill invoked, by harness, typed (`prompt`) or called (`tool`). |
+| `consult_call`, `sandbox_denial`, `sandbox_ingest`, `plan_graduated`, `chokepoint_wait_exceeded`, `graph_lock_held` | agents or space | Consults, sandbox events, plan graduations, lock waits. |
+
+An event carries only allowlisted fields, each through a gate. If a string field reads as one identifier, it ships, the same rule as the daily report. `command` keeps its spaces, and any slash drops it. A `cli_command` path holds menu words only: the root must be a live command, and a longer path must be a line of `crates/fno/cli-usage-paths.txt`. The first word that makes no known path ends it, so `fno backlog idea review the cache` ships as `backlog idea`. An argument, a prompt, a path, a title or free text never ships. The arm also sends the machine's hostname, which is why it stays a fleet arm.

@@ -91,11 +91,15 @@ pub fn build(day: &str, rows: &[crate::event_store::EventRow], facts: &Facts) ->
         model: BTreeMap::new(),
     };
     for row in rows {
-        if !usage_events::TYPES.contains(&row.r#type.as_str()) {
+        if !usage_events::allowlisted(&row.r#type) {
+            continue;
+        }
+        let env = serde_json::from_str::<Envelope>(&row.line).ok();
+        if !usage_events::kept(&row.r#type, env.as_ref().map(|e| &e.data)) {
             continue;
         }
         *report.events.entry(row.r#type.clone()).or_default() += 1;
-        let Ok(env) = serde_json::from_str::<Envelope>(&row.line) else {
+        let Some(env) = env else {
             continue;
         };
         for (field, map) in [
@@ -304,13 +308,11 @@ fn day_rows(home: &AgentsHome, day: NaiveDate) -> Vec<crate::event_store::EventR
         .and_hms_opt(0, 0, 0)
         .map(|t| t.and_utc().timestamp_millis())
         .unwrap_or_default();
-    let query = crate::event_store::EventQuery {
-        types: usage_events::TYPES.iter().map(|t| t.to_string()).collect(),
-        since_ms: Some(start),
-        until_ms: Some(start + 86_400_000 - 1),
-        ..Default::default()
-    };
-    crate::event_store::query_events(&home.events_jsonl(), &query).unwrap_or_default()
+    usage_events::rows_between(
+        &usage_events::Journals::of(home),
+        start,
+        Some(start + 86_400_000 - 1),
+    )
 }
 
 /// The day the next send covers: yesterday until it is sent, then today
@@ -421,6 +423,14 @@ pub fn command(args: &[String]) -> i32 {
             eprintln!(
                 "usage report: the body the send for {day} posts; sent bodies stay under {}",
                 dir(&home).join("sent").display()
+            );
+            eprintln!(
+                "usage report: counts these kinds: {}",
+                usage_events::KINDS
+                    .iter()
+                    .map(|k| k.name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
             );
             0
         }

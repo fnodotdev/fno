@@ -717,6 +717,9 @@ mod tests {
             "operator_decision",
             // The hook emits this in Python; Rust only stages fixtures of it.
             "loop_check_watch_idle",
+            // The hooks append this as a raw line (`hook::emit_guard_row`),
+            // never through `.emit`; the usage export test stages one.
+            "guard_decision",
         ];
         let test_only: BTreeSet<&str> = TEST_ONLY_EMIT_KINDS.iter().copied().collect();
 
@@ -1678,6 +1681,13 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // The first-check sweep's notice beside the parent mail
     // (first_check.rs); the notice index orders the repeats.
     "first_check_notice",
+    // The usage events arm's own rows: a front-door command run
+    // (eval/usage_events.rs), an fno skill (runtime/hook/rules.rs), an
+    // opened PR (gate/pr_create.rs) and a closed node (backlog/workflows.rs).
+    "cli_command",
+    "skill_invoked",
+    "pr_opened",
+    "node_done",
 ];
 
 /// Build the unified events.jsonl envelope JSON Schema and the

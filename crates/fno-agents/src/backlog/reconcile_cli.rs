@@ -1394,6 +1394,15 @@ fn close_leg(
     let result = result.into_inner();
     for record in &result.actually_closed {
         emit_outside_merge_label(record);
+        super::workflows::emit_node_done(
+            &record.node_id,
+            "reconcile",
+            Some(record.pr_number),
+            record.cwd.as_deref().map(std::path::Path::new),
+        );
+    }
+    for id in result.contained_closed.iter().chain(&result.cascade_closed) {
+        super::workflows::emit_node_done(id, "reconcile", None, None);
     }
     let closed: Vec<&str> = result
         .actually_closed

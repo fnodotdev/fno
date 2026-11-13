@@ -28,39 +28,176 @@ const DISTINCT_ID: &str = "fno-usage";
 const MAX_VALUE_LEN: usize = 128;
 const MAX_COMMAND_LEN: usize = 120;
 
+/// The journal a kind lives in. Each fact lands in one home: the agents
+/// journal (daemon and agents rows), the global journal (target and hook
+/// rows from every project), or each registered project's space journal
+/// (hook guards, the backlog, mail sends). A kind reads only its home, so a
+/// row that one emitter mirrors into a second journal still ships once.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Home {
+    Agents,
+    Global,
+    Space,
+}
+
+/// One kind that ships. `key` names the fields that identify the fact when
+/// one fact mints many rows (a merge's cleanup request is re-minted by every
+/// detector pass): the uuid hashes those values instead of the row id, so a
+/// re-mint dedups to one event. `skip_when` is a (field, value) pair that
+/// keeps a row home (a guard's `allow` outnumbers its blocks fifty to one
+/// and answers no question).
+pub(crate) struct Kind {
+    pub name: &'static str,
+    pub home: Home,
+    pub key: &'static [&'static str],
+    pub skip_when: Option<(&'static str, &'static str)>,
+}
+
+const fn kind(name: &'static str, home: Home) -> Kind {
+    Kind {
+        name,
+        home,
+        key: &[],
+        skip_when: None,
+    }
+}
+
 /// The event kinds that ship. An allowlist in code, not config: widening it
 /// is a code review, which is the point. Each kind carries at least one
-/// allowlisted field (spawns, consults, refusals, merges, latency).
-pub(crate) const TYPES: &[&str] = &[
-    "agent_spawned",
-    "consult_call",
-    "style_refusal",
-    "sandbox_denial",
-    "sandbox_ingest",
-    "backlog_done_refused",
-    "merge_cleanup_completed",
-    "plan_graduated",
-    "chokepoint_wait_exceeded",
-    "graph_lock_held",
+/// allowlisted field.
+pub(crate) const KINDS: &[Kind] = &[
+    // Sessions: spawns, refusals, first turns, reaps, lead wakes.
+    kind("agent_spawned", Home::Agents),
+    kind("agent_spawn_refused", Home::Agents),
+    kind("agent_spawn_failed", Home::Agents),
+    kind("spawn_first_turn", Home::Agents),
+    kind("agent_row_reaped", Home::Agents),
+    kind("lead_wake", Home::Agents),
+    kind("agent_ask_done", Home::Agents),
+    kind("consult_call", Home::Agents),
+    kind("sandbox_denial", Home::Agents),
+    kind("sandbox_ingest", Home::Agents),
+    kind("cli_command", Home::Agents),
+    // Mail: delivered to a turn, sent through the daemon.
+    kind("agent_mail_drained", Home::Agents),
+    kind("agent_send_done", Home::Space),
+    kind("agent_send_failed", Home::Space),
+    // Merges: one event per merge, then the cleanup it ran.
+    Kind {
+        key: &["request_id"],
+        ..kind("merge_cleanup_requested", Home::Agents)
+    },
+    kind("merge_cleanup_completed", Home::Agents),
+    // Targets: start and finish, the stop reason, the review verdict.
+    kind("run_recorded", Home::Global),
+    kind("termination", Home::Global),
+    kind("session_finalized", Home::Global),
+    kind("review_attestation", Home::Global),
+    kind("verifier_verdict", Home::Global),
+    // CI: each push, and each read of that head's checks.
+    kind("pr_push_landed", Home::Global),
+    kind("ci_cadence_check", Home::Global),
+    // Space rows: guard refusals, PRs, node closes, skills, locks.
+    Kind {
+        skip_when: Some(("decision", "allow")),
+        ..kind("guard_decision", Home::Space)
+    },
+    kind("style_refusal", Home::Space),
+    kind("backlog_done_refused", Home::Space),
+    kind("backlog_done_forced", Home::Space),
+    kind("node_done", Home::Space),
+    kind("pr_opened", Home::Space),
+    kind("skill_invoked", Home::Space),
+    kind("plan_graduated", Home::Space),
+    kind("chokepoint_wait_exceeded", Home::Space),
+    kind("graph_lock_held", Home::Space),
 ];
+
+/// True when `name` is a shipped kind.
+pub(crate) fn allowlisted(name: &str) -> bool {
+    KINDS.iter().any(|k| k.name == name)
+}
+
+/// False when the kind's `skip_when` keeps this row home. A row whose data
+/// did not parse is kept: its kind still counts.
+pub(crate) fn kept(name: &str, data: Option<&Map<String, Value>>) -> bool {
+    let skip = KINDS
+        .iter()
+        .find(|k| k.name == name)
+        .and_then(|k| k.skip_when);
+    match (skip, data) {
+        (Some((field, value)), Some(data)) => {
+            data.get(field).and_then(Value::as_str) != Some(value)
+        }
+        _ => true,
+    }
+}
 
 /// String fields that ship when the row carries them; `command` keeps its
 /// words through its own gate, the rest pass one identifier each.
 const STRING_FIELDS: &[&str] = &[
     "command",
     "harness",
+    "provider",
     "model",
     "spawned_by_harness",
+    "substrate",
+    "launch",
     "class",
     "rule",
     "refusal",
     "reason",
     "outcome",
+    "status",
+    "verdict",
+    "reviewer",
+    "level",
+    "guard",
+    "decision",
+    "tool",
+    "skill",
+    "via",
+    "surface",
+    "delivery",
+    "stage",
+    "termination_reason",
+    "project",
     "node",
+    "node_id",
+    "graph_node_id",
+    "scope",
 ];
 
 /// Numeric fields that ship when the row carries them.
-const INT_FIELDS: &[&str] = &["exit", "duration_ms", "hold_ms", "hits", "violation_count"];
+const INT_FIELDS: &[&str] = &[
+    "exit",
+    "exit_code",
+    "duration_ms",
+    "latency_ms",
+    "hold_ms",
+    "idle_secs",
+    "hits",
+    "violation_count",
+    "pr",
+    "pr_number",
+    "offset_s",
+    "review_round",
+    "findings_blocking",
+    "findings_nonblocking",
+    "reclaimed_bytes",
+    "acted",
+];
+
+/// Boolean fields that ship when the row carries them.
+const BOOL_FIELDS: &[&str] = &["ship", "delivered", "resumable"];
+
+/// Array fields whose every element must pass the identifier gate; one
+/// failing element drops the whole field.
+const ID_LIST_FIELDS: &[&str] = &["node_ids"];
+
+/// A nested object whose allowlisted fields ship beside the top level ones
+/// (`run_recorded` carries its facts under `run`). A top level value wins.
+const NESTED: &[&str] = &["run"];
 
 pub enum Resolved {
     Off { forced_off_by: Option<&'static str> },
@@ -187,15 +324,13 @@ struct Envelope {
     data: Map<String, Value>,
 }
 
-/// One journal row as one PostHog event. None for a row whose line is not
-/// the envelope shape (query_events already rejected those rows; this is a
-/// belt-and-braces read).
-fn event(row: &crate::event_store::EventRow, machine: &str) -> Option<Value> {
-    let parsed: Envelope = serde_json::from_str(&row.line).ok()?;
-    let data = &parsed.data;
-    let mut props = Map::new();
-    props.insert("machine".into(), json!(machine));
-    props.insert("$process_person_profile".into(), json!(false));
+/// Copy the allowlisted fields of `data` into `props`, each through its
+/// gate. A key already in `props` stays, so a top level value outranks the
+/// same key in a nested object.
+fn copy_fields(data: &Map<String, Value>, props: &mut Map<String, Value>) {
+    let mut put = |field: &str, value: Value| {
+        props.entry(field.to_string()).or_insert(value);
+    };
     for field in STRING_FIELDS {
         if let Some(v) = data.get(*field).and_then(Value::as_str) {
             let clean = if *field == "command" {
@@ -204,27 +339,86 @@ fn event(row: &crate::event_store::EventRow, machine: &str) -> Option<Value> {
                 identifier_value(v)
             };
             if let Some(clean) = clean {
-                props.insert((*field).into(), json!(clean));
+                put(*field, json!(clean));
             }
         }
     }
     for field in INT_FIELDS {
         if let Some(v) = data.get(*field).and_then(Value::as_i64) {
-            props.insert((*field).into(), json!(v));
+            put(*field, json!(v));
         }
     }
-    let event_name = format!("fno_{}", row.r#type);
-    Some(json!({
-        "event": event_name,
-        "uuid": event_uuid(&row.event_id),
-        "timestamp": parsed.ts,
-        "distinct_id": DISTINCT_ID,
-        "properties": props,
-    }))
+    for field in BOOL_FIELDS {
+        if let Some(v) = data.get(*field).and_then(Value::as_bool) {
+            put(*field, json!(v));
+        }
+    }
+    for field in ID_LIST_FIELDS {
+        let Some(items) = data.get(*field).and_then(Value::as_array) else {
+            continue;
+        };
+        let clean: Option<Vec<&str>> = items
+            .iter()
+            .map(|v| v.as_str().and_then(identifier_value))
+            .collect();
+        if let Some(clean) = clean {
+            put(*field, json!(clean));
+        }
+    }
+}
+
+/// The uuid for a row: the fact key when the kind names one and the row
+/// carries every key field, else the row's own event id.
+fn row_uuid(kind: &Kind, row: &crate::event_store::EventRow, data: &Map<String, Value>) -> String {
+    let parts: Option<Vec<String>> = kind
+        .key
+        .iter()
+        .map(|f| data.get(*f).map(|v| v.to_string()))
+        .collect();
+    match parts {
+        Some(parts) if !parts.is_empty() => {
+            event_uuid(&format!("{}:{}", kind.name, parts.join(":")))
+        }
+        _ => event_uuid(&row.event_id),
+    }
+}
+
+/// One journal row as one PostHog event, with its uuid. None for a kind off
+/// the allowlist, a row its kind keeps home, or a line that is not the
+/// envelope shape (query_events already rejected those rows; this is a
+/// belt-and-braces read).
+fn event(row: &crate::event_store::EventRow, machine: &str) -> Option<(String, Value)> {
+    let kind = KINDS.iter().find(|k| k.name == row.r#type)?;
+    let parsed: Envelope = serde_json::from_str(&row.line).ok()?;
+    let data = &parsed.data;
+    if !kept(kind.name, Some(data)) {
+        return None;
+    }
+    let mut props = Map::new();
+    props.insert("machine".into(), json!(machine));
+    props.insert("$process_person_profile".into(), json!(false));
+    copy_fields(data, &mut props);
+    for nested in NESTED {
+        if let Some(inner) = data.get(*nested).and_then(Value::as_object) {
+            copy_fields(inner, &mut props);
+        }
+    }
+    let uuid = row_uuid(kind, row, data);
+    Some((
+        uuid.clone(),
+        json!({
+            "event": format!("fno_{}", row.r#type),
+            "uuid": uuid,
+            "timestamp": parsed.ts,
+            "distinct_id": DISTINCT_ID,
+            "properties": props,
+        }),
+    ))
 }
 
 /// The rows a beat owes, oldest first: inside the lookback window, on the
-/// type allowlist, not yet delivered or dropped, capped at one batch.
+/// type allowlist, not yet delivered or dropped, one per uuid, capped at one
+/// batch.
 fn select(
     rows: Vec<crate::event_store::EventRow>,
     state: &ExportState,
@@ -232,12 +426,12 @@ fn select(
 ) -> Vec<(String, String, Value)> {
     let mut pending: Vec<(i64, (String, Value))> = rows
         .into_iter()
-        .filter_map(|row| {
-            event(&row, machine).map(|doc| (row.ts_ms, (event_uuid(&row.event_id), doc)))
-        })
+        .filter_map(|row| event(&row, machine).map(|doc| (row.ts_ms, doc)))
         .filter(|(_, (id, _))| !state.knows(id))
         .collect();
     pending.sort_by_key(|(ms, _)| *ms);
+    let mut seen = std::collections::HashSet::new();
+    pending.retain(|(_, (id, _))| seen.insert(id.clone()));
     pending.truncate(MAX_BATCH);
     pending
         .into_iter()
@@ -252,17 +446,73 @@ fn state_path(home: &crate::paths::AgentsHome) -> PathBuf {
     home.otlp_export_dir().join("usage_events_state.json")
 }
 
+/// The journal files a read walks, one per home: the agents journal, the
+/// global journal, and the space journal of every registered project.
+pub(crate) struct Journals {
+    pub agents: PathBuf,
+    pub global: PathBuf,
+    pub spaces: Vec<PathBuf>,
+}
+
+impl Journals {
+    pub(crate) fn of(home: &crate::paths::AgentsHome) -> Self {
+        let mut spaces: Vec<PathBuf> = Vec::new();
+        for root in crate::backlog::settings::project_roots() {
+            if let Some(space) = crate::paths::space_dir_opt(&root) {
+                let journal = space.join("events.jsonl");
+                if !spaces.contains(&journal) {
+                    spaces.push(journal);
+                }
+            }
+        }
+        Journals {
+            agents: home.events_jsonl(),
+            global: crate::daemon::global_events_path(home),
+            spaces,
+        }
+    }
+
+    fn paths(&self, home: Home) -> Vec<&Path> {
+        match home {
+            Home::Agents => vec![self.agents.as_path()],
+            Home::Global => vec![self.global.as_path()],
+            Home::Space => self.spaces.iter().map(PathBuf::as_path).collect(),
+        }
+    }
+}
+
+/// Every allowlisted row in `[since_ms, until_ms]`, each kind read from its
+/// own home: one bounded SQL read per journal file.
+pub(crate) fn rows_between(
+    journals: &Journals,
+    since_ms: i64,
+    until_ms: Option<i64>,
+) -> Vec<crate::event_store::EventRow> {
+    let mut out = Vec::new();
+    for home in [Home::Agents, Home::Global, Home::Space] {
+        let types: Vec<String> = KINDS
+            .iter()
+            .filter(|k| k.home == home)
+            .map(|k| k.name.to_string())
+            .collect();
+        for path in journals.paths(home) {
+            let query = crate::event_store::EventQuery {
+                types: types.clone(),
+                since_ms: Some(since_ms),
+                until_ms,
+                ..Default::default()
+            };
+            out.extend(crate::event_store::query_events(path, &query).unwrap_or_default());
+        }
+    }
+    out
+}
+
 /// The rows a beat reads, already bounded: the type allowlist and a 24h
 /// lookback window, so a store the size of a fleet's is still one bounded
-/// SQL read.
-fn read_rows(home: &crate::paths::AgentsHome, now_ms: i64) -> Vec<crate::event_store::EventRow> {
-    let cutoff = now_ms - LOOKBACK_S * 1000;
-    let query = crate::event_store::EventQuery {
-        types: TYPES.iter().map(|t| t.to_string()).collect(),
-        since_ms: Some(cutoff),
-        ..Default::default()
-    };
-    crate::event_store::query_events(&home.events_jsonl(), &query).unwrap_or_default()
+/// SQL read per journal.
+fn read_rows(journals: &Journals, now_ms: i64) -> Vec<crate::event_store::EventRow> {
+    rows_between(journals, now_ms - LOOKBACK_S * 1000, None)
 }
 
 /// One beat. The same delivery rule as the eval arm: a 2xx records the batch,
@@ -270,13 +520,14 @@ fn read_rows(home: &crate::paths::AgentsHome, now_ms: i64) -> Vec<crate::event_s
 fn run_beat(
     cfg: &Config,
     home: &crate::paths::AgentsHome,
+    journals: &Journals,
     poster: &mut dyn crate::attention_http::HttpPost,
     now_ms: i64,
 ) -> otlp_export::BeatReport {
     let path = state_path(home);
     let mut state = otlp_export::load_state_at(&path);
     let machine = crate::claims::hostname();
-    let rows = read_rows(home, now_ms);
+    let rows = read_rows(journals, now_ms);
     let pending = select(rows, &state, &machine);
     let count = pending.len();
     if pending.is_empty() {
@@ -341,7 +592,7 @@ pub fn preview_command(_args: &[String]) -> i32 {
     };
     let state = otlp_export::load_state_at(&state_path(&home));
     let pending = select(
-        read_rows(&home, otlp_export::now_ms()),
+        read_rows(&Journals::of(&home), otlp_export::now_ms()),
         &state,
         &crate::claims::hostname(),
     );
@@ -362,6 +613,53 @@ pub fn preview_command(_args: &[String]) -> i32 {
     };
     eprintln!("usage events: {posture}; {} pending", pending.len());
     0
+}
+
+/// The command path and start the `fno` front door handed over on exec
+/// (`crates/fno/src/cli_usage.rs`), read once and taken out of this
+/// process's environment so a child this process spawns writes no second
+/// row under the parent's name.
+static CLI_START: std::sync::OnceLock<Option<(String, i64)>> = std::sync::OnceLock::new();
+
+/// Read the handed-over command, if any. `fno-agents` main calls this first.
+pub fn take_cli_start() {
+    let path = std::env::var("FNO_CLI_PATH").ok();
+    let start = std::env::var("FNO_CLI_START_MS")
+        .ok()
+        .and_then(|s| s.parse::<i64>().ok());
+    std::env::remove_var("FNO_CLI_PATH");
+    std::env::remove_var("FNO_CLI_START_MS");
+    let handed = match (path, start) {
+        (Some(path), Some(start))
+            if path
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || matches!(c, '-' | ' ')) =>
+        {
+            Some((path, start))
+        }
+        _ => None,
+    };
+    if CLI_START.set(handed).is_err() {
+        eprintln!("fno-agents: the handed-over command was already read");
+    }
+}
+
+/// Write the `cli_command` row for a handed-over command, then exit.
+pub fn exit_cli(code: i32) -> ! {
+    if let (Some(Some((path, start))), Some(home)) =
+        (CLI_START.get(), crate::paths::AgentsHome::from_env_opt())
+    {
+        let data = json!({
+            "command": path,
+            "exit": code,
+            "duration_ms": (otlp_export::now_ms() - start).max(0),
+        });
+        let emitter = crate::runtime::events::EventEmitter::new(home.events_jsonl(), "cli");
+        if let Err(e) = emitter.emit("cli_command", &data) {
+            eprintln!("fno-agents: the cli_command row did not land: {e}");
+        }
+    }
+    std::process::exit(code)
 }
 
 pub struct Arm {
@@ -423,7 +721,13 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
             }
             Resolved::On(cfg) => {
                 let mut poster = crate::attention_http::CurlPost;
-                let report = run_beat(&cfg, &home, &mut poster, otlp_export::now_ms());
+                let report = run_beat(
+                    &cfg,
+                    &home,
+                    &Journals::of(&home),
+                    &mut poster,
+                    otlp_export::now_ms(),
+                );
                 emit_tick_row(&home, report.acted, report.skip, &report.detail.join("; "));
             }
         }
@@ -459,6 +763,169 @@ mod tests {
         }
     }
 
+    fn test_journals(dir: &Path, home: &crate::paths::AgentsHome) -> Journals {
+        Journals {
+            agents: home.events_jsonl(),
+            global: dir.join("global").join("events.jsonl"),
+            spaces: vec![dir.join("space").join("events.jsonl")],
+        }
+    }
+
+    /// The golden map: each kind reads from its own journal and ships as
+    /// `fno_<kind>` with only allowlisted fields. A guard allow stays home,
+    /// a re-minted merge request ships once, and a nested run's facts ship
+    /// beside the top level ones.
+    #[test]
+    fn each_kind_ships_from_its_home_with_only_allowlisted_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = crate::paths::AgentsHome::at(dir.path());
+        let journals = test_journals(dir.path(), &home);
+        let space = journals.spaces.first().cloned().unwrap();
+        for path in [&journals.global, &space] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        }
+        let at = |path: &PathBuf, source: &str| {
+            crate::runtime::events::EventEmitter::new(path.clone(), source.to_string())
+        };
+        let secret = "secret free text /Users/x";
+        let rows: [(&PathBuf, &str, &str, Value); 10] = [
+            (
+                &journals.agents,
+                "cli",
+                "cli_command",
+                json!({"command": "backlog get", "exit": 0, "duration_ms": 41, "argv": secret}),
+            ),
+            (
+                &journals.agents,
+                "agents",
+                "merge_cleanup_requested",
+                json!({"request_id": "merge-cleanup-ab12", "repo": secret, "pr": 7,
+                       "branch": secret, "worktree": null, "node_ids": ["x-aaaa"]}),
+            ),
+            (
+                &journals.agents,
+                "agents",
+                "merge_cleanup_requested",
+                json!({"request_id": "merge-cleanup-ab12", "repo": secret, "pr": 7,
+                       "branch": secret, "worktree": "w-second-pass", "node_ids": ["x-aaaa"]}),
+            ),
+            (
+                &journals.global,
+                "target",
+                "run_recorded",
+                json!({"run": {"status": "started", "graph_node_id": "x-aaaa",
+                               "model": "sonnet", "title": secret}}),
+            ),
+            (
+                &journals.global,
+                "target",
+                "review_attestation",
+                json!({"reviewer": "code-review", "head_sha": "abc123", "verdict": "pass",
+                       "session_id": "s-1", "level": "low", "findings_blocking": 0,
+                       "branch": secret}),
+            ),
+            (
+                &space,
+                "hook",
+                "guard_decision",
+                json!({"guard": "git-protection", "decision": "allow", "tool": "Bash"}),
+            ),
+            (
+                &space,
+                "hook",
+                "guard_decision",
+                json!({"guard": "git-protection", "decision": "block", "tool": "Bash"}),
+            ),
+            (
+                &space,
+                "hook",
+                "skill_invoked",
+                json!({"skill": "fno:target", "harness": "claude", "via": "tool"}),
+            ),
+            (
+                &space,
+                "target",
+                "pr_opened",
+                json!({"pr": 141, "node": "x-aaaa", "title": secret}),
+            ),
+            (
+                &space,
+                "backlog",
+                "node_done",
+                json!({"node_id": "x-aaaa", "via": "reconcile", "pr_number": 141}),
+            ),
+        ];
+        for (path, source, kind, data) in rows {
+            at(path, source).emit(kind, &data).unwrap();
+        }
+        // A space-home kind in the agents journal is not read: one home each.
+        at(&journals.agents, "hook")
+            .emit(
+                "guard_decision",
+                &json!({"guard": "x", "decision": "block", "tool": "Bash"}),
+            )
+            .unwrap();
+
+        let rows = read_rows(&journals, otlp_export::now_ms());
+        let state = ExportState::default();
+        let batch = select(rows, &state, "mac1");
+        let text = serde_json::to_string(&batch.iter().map(|b| &b.2).collect::<Vec<_>>()).unwrap();
+        assert!(!text.contains("secret"), "free text leaked: {text}");
+        #[derive(serde::Deserialize)]
+        struct Shipped {
+            event: String,
+            properties: Map<String, Value>,
+        }
+        let shipped: Vec<Shipped> = batch
+            .iter()
+            .map(|b| serde_json::from_value(b.2.clone()).unwrap())
+            .collect();
+        let named = |event: &str| -> Vec<&Map<String, Value>> {
+            shipped
+                .iter()
+                .filter(|s| s.event == event)
+                .map(|s| &s.properties)
+                .collect()
+        };
+        let first = |rows: &[&Map<String, Value>], key: &str| -> Value {
+            rows.first()
+                .and_then(|m| m.get(key))
+                .cloned()
+                .unwrap_or(Value::Null)
+        };
+        let cli = named("fno_cli_command");
+        assert_eq!(cli.len(), 1);
+        assert_eq!(first(&cli, "command"), "backlog get");
+        assert_eq!(first(&cli, "duration_ms"), 41);
+        let merges = named("fno_merge_cleanup_requested");
+        assert_eq!(merges.len(), 1, "a re-mint ships once");
+        assert_eq!(first(&merges, "node_ids"), json!(["x-aaaa"]));
+        assert_eq!(first(&merges, "pr"), 7);
+        let runs = named("fno_run_recorded");
+        assert_eq!(first(&runs, "status"), "started");
+        assert_eq!(first(&runs, "graph_node_id"), "x-aaaa");
+        assert_eq!(first(&named("fno_review_attestation"), "verdict"), "pass");
+        let guards = named("fno_guard_decision");
+        assert_eq!(guards.len(), 1, "allow stays home, one home read");
+        assert_eq!(first(&guards, "decision"), "block");
+        assert_eq!(first(&named("fno_skill_invoked"), "skill"), "fno:target");
+        assert_eq!(first(&named("fno_pr_opened"), "pr"), 141);
+        assert_eq!(first(&named("fno_node_done"), "via"), "reconcile");
+        let allowed: Vec<&str> = STRING_FIELDS
+            .iter()
+            .chain(INT_FIELDS)
+            .chain(BOOL_FIELDS)
+            .chain(ID_LIST_FIELDS)
+            .chain(&["machine", "$process_person_profile"])
+            .copied()
+            .collect();
+        for (_, _, doc) in &batch {
+            for key in doc["properties"].as_object().unwrap().keys() {
+                assert!(allowed.contains(&key.as_str()), "unlisted field {key}");
+            }
+        }
+    }
+
     struct Scripted {
         status: Option<u16>,
         bodies: Vec<String>,
@@ -473,36 +940,6 @@ mod tests {
                 error: None,
             }
         }
-    }
-
-    /// Only the allowlist leaves. Free text, paths and non-identifier values
-    /// stay on this machine, and every event carries the machine dimension.
-    #[test]
-    fn event_carries_only_the_allowlist() {
-        let row = row_line(
-            "agent_spawned",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            json!({
-                "node": "x-aaaa",
-                "model": "glm-5.3-flash",
-                "spawned_by_harness": "claude",
-                "title": "secret title words",
-                "prompt": "secret prompt text",
-                "cmdline": "/usr/bin/fno",
-            }),
-        );
-        let doc = event(&row, "mac1").unwrap();
-        let text = doc.to_string();
-        assert!(!text.contains("secret"), "free text leaked: {text}");
-        let props = doc["properties"].as_object().expect("properties object");
-        assert_eq!(props["machine"], "mac1");
-        assert_eq!(props["node"], "x-aaaa");
-        assert_eq!(props["model"], "glm-5.3-flash");
-        assert_eq!(props["spawned_by_harness"], "claude");
-        assert_eq!(props["$process_person_profile"], false);
-        assert!(!props.contains_key("title"), "titles never ship");
-        assert!(!props.contains_key("prompt"), "prompts never ship");
-        assert!(!props.contains_key("cmdline"), "unlisted fields never ship");
     }
 
     /// A redelivered batch still dedups: every event_id shape (bare hex, the
@@ -537,6 +974,7 @@ mod tests {
             host: "ph.example".into(),
             token: "tok".into(),
         };
+        let journals = test_journals(dir.path(), &home);
         let daemon = crate::runtime::events::EventEmitter::new(home.events_jsonl(), "daemon");
         daemon
             .emit("agent_spawned", &json!({"node": "x-aaaa"}))
@@ -562,7 +1000,7 @@ mod tests {
         daemon.emit("daemon_started", &json!({"pid": 1})).unwrap();
 
         let mut held = scripted(Some(503));
-        let report = run_beat(&cfg, &home, &mut held, otlp_export::now_ms());
+        let report = run_beat(&cfg, &home, &journals, &mut held, otlp_export::now_ms());
         assert_eq!(report.skip, Some("held"));
         assert_eq!(report.acted, 0);
         assert_eq!(held.bodies.len(), 1, "a held beat still posts once");
@@ -571,7 +1009,7 @@ mod tests {
         assert_eq!(sent["batch"].as_array().unwrap().len(), 2);
 
         let mut ok = scripted(Some(200));
-        let report = run_beat(&cfg, &home, &mut ok, otlp_export::now_ms());
+        let report = run_beat(&cfg, &home, &journals, &mut ok, otlp_export::now_ms());
         assert_eq!(report.acted, 2);
         let sent: Value = serde_json::from_str(&ok.bodies[0]).unwrap();
         let first = &sent["batch"][0];
@@ -580,7 +1018,7 @@ mod tests {
         assert_eq!(first["properties"]["$process_person_profile"], false);
         assert_eq!(first["properties"]["machine"], crate::claims::hostname());
 
-        let report = run_beat(&cfg, &home, &mut ok, otlp_export::now_ms());
+        let report = run_beat(&cfg, &home, &journals, &mut ok, otlp_export::now_ms());
         assert_eq!(report.skip, Some("caught_up"));
         assert_eq!(ok.bodies.len(), 1, "a delivered attempt never resends");
     }
@@ -672,7 +1110,7 @@ mod tests {
                 "b".repeat(32).as_str(),
                 json!({"command": cmd, "hold_ms": 4210}),
             );
-            event(&row, "mac1").unwrap()
+            event(&row, "mac1").unwrap().1
         };
         let doc = mk("fno do pr merge 12");
         assert_eq!(doc["properties"]["command"], "fno do pr merge 12");
@@ -708,7 +1146,7 @@ mod tests {
     fn identifier_needs_one_token() {
         let mk = |data: Value| {
             let row = row_line("consult_call", "c".repeat(32).as_str(), data);
-            event(&row, "mac1").unwrap()
+            event(&row, "mac1").unwrap().1
         };
         let ships = |field: &str, doc: &Value| doc["properties"].get(field).is_some();
         let drops = |field: &str, doc: &Value| doc["properties"].get(field).is_none();

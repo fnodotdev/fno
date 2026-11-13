@@ -67,6 +67,8 @@ pub mod cli_args;
 #[cfg(feature = "full")]
 pub mod cli_hooks;
 #[cfg(feature = "full")]
+pub mod cli_usage;
+#[cfg(feature = "full")]
 pub mod client;
 #[cfg(feature = "full")]
 pub mod clipboard;

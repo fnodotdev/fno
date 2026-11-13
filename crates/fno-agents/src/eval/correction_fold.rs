@@ -235,7 +235,7 @@ fn load_detect_facts(home: &AgentsHome) -> DetectFacts {
 }
 
 /// The node a branch names: `feature/ab-12cd-some-title` reads `ab-12cd`.
-fn node_from_branch(branch: &str) -> Option<String> {
+pub(crate) fn node_from_branch(branch: &str) -> Option<String> {
     let re = regex::Regex::new(r"(?:^|/)([a-z]+-[0-9a-f]{4})(?:-|$)").ok()?;
     re.captures(branch).map(|c| c[1].to_string())
 }

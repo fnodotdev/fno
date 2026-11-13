@@ -629,6 +629,24 @@ fn sibling_gate(cwd: &Path, body: &str, branch: &str, slug: &str, gh: Gh) -> Opt
     sibling_notice(node, &entries, body, branch, &prs, chrono::Utc::now())
 }
 
+/// One `pr_opened` row in the space journal: the number from the URL gh
+/// printed and the node the branch names. No URL, no row.
+fn emit_pr_opened(cwd: &Path, printed: &str, branch: &str) {
+    let Some(pr) = printed
+        .lines()
+        .rev()
+        .find_map(|l| crate::backlog::pr_link::pr_number_from_url(Some(l)))
+    else {
+        return;
+    };
+    let node = crate::eval::correction_fold::node_from_branch(branch);
+    let data = serde_json::json!({"pr": pr, "node": node});
+    let emitter = crate::events::EventEmitter::new(crate::paths::events_path(cwd), "target");
+    if let Err(e) = emitter.emit("pr_opened", &data) {
+        eprintln!("pr-create: the pr_opened row did not land: {e}");
+    }
+}
+
 fn run(a: &Args, gh: Gh) -> i32 {
     let branch = match git(&a.cwd, &["rev-parse", "--abbrev-ref", "HEAD"]) {
         Ok(b) if !b.is_empty() && b != "HEAD" => b,
@@ -750,7 +768,9 @@ fn run(a: &Args, gh: Gh) -> i32 {
             ];
             match crate::org_board::budget::run_with_timeout(&cmd, &a.cwd, CREATE_TIMEOUT) {
                 Ok(out) => {
-                    print!("{}", String::from_utf8_lossy(&out));
+                    let printed = String::from_utf8_lossy(&out);
+                    print!("{printed}");
+                    emit_pr_opened(&a.cwd, &printed, &branch);
                     // The sha origin holds is the PR head; local HEAD can
                     // carry commits that were never pushed.
                     let remote = format!("refs/heads/{branch}");
