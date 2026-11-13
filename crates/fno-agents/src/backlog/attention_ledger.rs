@@ -10,7 +10,6 @@
 
 use chrono::{DateTime, Datelike, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -61,13 +60,13 @@ pub struct Ledger {
 /// only an unusable read (the graph store cannot open at all) stops here.
 #[derive(Debug)]
 pub enum LedgerError {
-    Graph(String),
+    Io(String),
 }
 
 impl std::fmt::Display for LedgerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LedgerError::Graph(why) => write!(f, "graph store unreadable: {why}"),
+            LedgerError::Io(why) => write!(f, "attention ledger io: {why}"),
         }
     }
 }
@@ -340,8 +339,9 @@ fn merged_nodes(notes: &mut Vec<String>) -> Vec<MergedNode> {
 /// Guard refusals in the window: events whose type ends `_refused`, read
 /// through the same journals the lead history read takes.
 fn refusal_count(window: &Window, cwd: &Path, notes: &mut Vec<String>) -> usize {
+    let journals = crate::lead_history::default_journals(cwd);
     let mut count = 0usize;
-    for journal in crate::lead_history::default_journals(cwd) {
+    for journal in &journals {
         let raw = match crate::event_store::journal_text_checked(
             &journal,
             &crate::event_store::EventQuery::of_types(&[]),
@@ -365,7 +365,7 @@ fn refusal_count(window: &Window, cwd: &Path, notes: &mut Vec<String>) -> usize 
     if count == 0 {
         // A zero may be a true zero or an unreadable journal; the notes only
         // name a read that produced nothing at all.
-        let any_journal = crate::lead_history::default_journals(cwd)
+        let any_journal = journals
             .iter()
             .any(|j| crate::event_store::store_path(j).exists() || j.exists());
         if !any_journal {
@@ -506,10 +506,10 @@ pub fn report_markdown(ledger: &Ledger) -> String {
 /// Write the week's report into `dir`, overwriting the same week's file.
 /// Returns the path written.
 pub fn write_report_into(dir: &Path, ledger: &Ledger) -> Result<PathBuf, LedgerError> {
-    std::fs::create_dir_all(dir).map_err(|e| LedgerError::Graph(e.to_string()))?;
+    std::fs::create_dir_all(dir).map_err(|e| LedgerError::Io(e.to_string()))?;
     let path = dir.join(format!("attention-ledger-{}.md", ledger.week));
     std::fs::write(&path, report_markdown(ledger))
-        .map_err(|e| LedgerError::Graph(format!("report write failed: {e}")))?;
+        .map_err(|e| LedgerError::Io(format!("report write failed: {e}")))?;
     Ok(path)
 }
 
@@ -558,11 +558,11 @@ pub fn beat_write(readings: &[crate::lead_checkin::Reading], cwd: &Path) {
 }
 
 /// `fno-agents attention-ledger [--json|-J] [--report]`
-pub fn run_cli(args: &[&str]) -> i32 {
+pub fn run_cli(args: &[String]) -> i32 {
     let mut as_json = false;
     let mut want_report = false;
     for arg in args {
-        match *arg {
+        match arg.as_str() {
             "--json" | "-J" => as_json = true,
             "--report" => want_report = true,
             other => {

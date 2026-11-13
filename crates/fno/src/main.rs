@@ -2475,7 +2475,7 @@ fn main() {
         )),
         Role::InboxAttentionLedger(rest) => std::process::exit(fno_agents_exec(
             "fno inbox attention-ledger",
-            &["attention-ledger"],
+            &["compaction", "attention-ledger"],
             &rest,
         )),
         Role::InboxDay(argv) => {

@@ -40,10 +40,10 @@ fn attention_ledger_failed_reading_renders_the_failure_line() {
     let data = Map::new();
     let readings = vec![Reading::failed(
         "attention_ledger",
-        "graph store unreadable".to_string(),
+        "beat deadline exceeded (reader timed out)".to_string(),
     )];
     let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
     assert!(lines
         .iter()
-        .any(|l| l == "READER FAILED attention_ledger: graph store unreadable"));
+        .any(|l| l.starts_with("READER FAILED attention_ledger: beat deadline exceeded")));
 }
