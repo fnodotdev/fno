@@ -92,15 +92,25 @@ fn rgb_or(c: Color, fallback: u32) -> u32 {
     }
 }
 
+/// The least a bubble fill separates from a light ground.
+const LIGHT_BUBBLE_SEP: f32 = 1.3;
+
 /// The user's own turns in chat mode: `base` walked toward `stamp` until the
-/// fill separates from the base ground at 3:1 and keeps `stamp` text at
+/// fill separates from the base ground at 3:1 (1.3:1 on a light ground) and keeps `stamp` text at
 /// 4.5:1 (the bubble paints on `bg`, its text is `fg`). A theme whose twins
 /// never satisfy both bars keeps the gentle 12% mix.
 fn bubble_fill(base: u32, stamp: u32) -> u32 {
+    // A light ground needs far less separation to show a fill: 3:1 against
+    // near-white lands on a mid gray that dims the dark text.
+    let sep = if contrast(base, 0xffffff) < 2.0 {
+        LIGHT_BUBBLE_SEP
+    } else {
+        3.0
+    };
     for step in 3..=23 {
         let t = step as f32 / 25.0; // 0.12 ..= 0.92
         let c = mix(base, stamp, t);
-        if contrast(c, base) >= 3.0 && contrast(c, stamp) >= 4.5 {
+        if contrast(c, base) >= sep && contrast(c, stamp) >= 4.5 {
             return c;
         }
     }
@@ -352,7 +362,8 @@ mod tests {
     fn bubble_separates_from_the_ground_and_keeps_fg_text_readable() {
         for light in [false, true] {
             let p = Palette::from_theme(&Theme::default_for(light));
-            assert!(contrast(p.bubble, p.bg) >= 3.0, "light={light}");
+            let sep = if light { LIGHT_BUBBLE_SEP } else { 3.0 };
+            assert!(contrast(p.bubble, p.bg) >= sep, "light={light}");
             assert!(contrast(p.bubble, p.fg) >= 4.5, "light={light}");
         }
     }

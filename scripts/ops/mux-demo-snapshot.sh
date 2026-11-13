@@ -5,7 +5,7 @@
 #       [--window-size smallest|latest|largest] [--peer 120x40] [--no-fit]
 #       [--hold] [--group <axis>] [--remote-pane] [--web [--web-port <port>]]
 #       [--hold] [--group <axis>] [--remote-pane] [--flat-pins] [--sort <col:dir>] [--layout list] [--lead-nesting] [--holds]
-#       [--install-card data|code] [--mod-pane review-ledger]
+#       [--install-card data|code] [--mod-pane review-ledger] [--app [--app-theme <theme>]]
 #
 # Builds a throwaway server in a temp state root: its own config, graph,
 # agent registry, view prefs and socket dir. It seeds invented backlog nodes,
@@ -72,6 +72,8 @@ GROUP=""
 REMOTE_PANE=""
 WEB=""
 WEB_PORT=8722
+APP=""
+APP_THEME=""
 FNO_DEMO_FLATPINS=""
 FNO_DEMO_HOLDS=""
 FNO_DEMO_SORT=""
@@ -99,9 +101,11 @@ for a in "$@"; do
     FNO_DEMO_LAYOUT="$a"
   elif [ "$PREV" = "--install-card" ]; then
     INSTALL_CARD="$a"
+  elif [ "$PREV" = "--app-theme" ]; then
+    APP_THEME="$a"
   elif [ "$PREV" = "--mod-pane" ]; then
     MOD_PANE="$a"
-  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--web-port" ] || [ "$a" = "--sort" ] || [ "$a" = "--layout" ] || [ "$a" = "--install-card" ] || [ "$a" = "--mod-pane" ]; then
+  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--web-port" ] || [ "$a" = "--sort" ] || [ "$a" = "--layout" ] || [ "$a" = "--install-card" ] || [ "$a" = "--app-theme" ] || [ "$a" = "--mod-pane" ]; then
     :
   elif [ "$a" = "--lead-nesting" ]; then
     FNO_DEMO_LEAD_NESTING=1
@@ -115,6 +119,8 @@ for a in "$@"; do
     REMOTE_PANE=1
   elif [ "$a" = "--web" ]; then
     WEB=1
+  elif [ "$a" = "--app" ]; then
+    APP=1
   elif [ "$a" = "--no-fit" ]; then
     FIT=()
   else
@@ -129,6 +135,14 @@ esac
 export FNO_DEMO_FLATPINS FNO_DEMO_SORT FNO_DEMO_LAYOUT FNO_DEMO_LEAD_NESTING FNO_DEMO_HOLDS
 # bash 3.2 (stock macOS) reads an empty array under set -u as unbound.
 set -- ${ARGS[@]+"${ARGS[@]}"}
+
+# Refuse before the seed runs: a missing app binary would otherwise surface
+# only after the world is built.
+APP_BIN="${FNO_APP_BIN:-fno-app}"
+if [ -n "$APP" ] && ! command -v "$APP_BIN" >/dev/null 2>&1; then
+  echo "mux-demo-snapshot: --app needs the fno-app binary; set FNO_APP_BIN or put it on PATH" >&2
+  exit 1
+fi
 
 cleanup() {
   for p in "${PANES[@]+"${PANES[@]}"}"; do
@@ -242,8 +256,12 @@ mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.f
     'plan = "GLM Coding Plan Max"' \
     'priority = 40'
   # FNO_DEMO_PREFIX=alt+shift+a shoots the keys list and footer with that prefix.
-  if [ -n "${FNO_DEMO_PREFIX:-}" ]; then
-    printf '[mux]\nprefix = "%s"\n' "$FNO_DEMO_PREFIX"
+  # --app-theme pins the palette the desktop app paints, light or dark. Both
+  # keys live in one [mux] table: TOML refuses a second header.
+  if [ -n "${FNO_DEMO_PREFIX:-}" ] || [ -n "$APP_THEME" ]; then
+    printf '[mux]\n'
+    [ -z "${FNO_DEMO_PREFIX:-}" ] || printf 'prefix = "%s"\n' "$FNO_DEMO_PREFIX"
+    [ -z "$APP_THEME" ] || printf 'theme = "%s"\n' "$APP_THEME"
   fi
   # FNO_DEMO_LAYOUT=list shoots the one-line row instead of the card.
   if [ -n "${FNO_DEMO_LAYOUT:-}" ]; then
@@ -294,6 +312,8 @@ mkdir -p "$ROOT/claimroot/.fno/claims"
 # HOME too, for every process: the server reads harness rosters under it,
 # and a real home would list real sessions in the sideline.
 export HOME="$ROOT"
+# Chat transcripts the server reads live here, never under a real home.
+export FNO_CLAUDE_PROJECTS_DIR="$ROOT/transcripts"
 # The keys-tags view shows a preset row, a user row and a two-stroke chord,
 # so it needs a file. Only that view gets one: a preset would move key hints
 # in every other shot. grab-work leaves `g` so the chord can start on it.
@@ -862,7 +882,7 @@ remote = [
      "status": "unknown", "age_s": None, "rss_mb": None, "parent": None},
 ]
 fleet = {"fresh_s": 300, "machines": [
-    machine("demo-u", "u", True, 4, local),
+    machine("demo-u", "demo-host", True, 4, local),
     machine("demo-mac2", "mac2", False, 21, remote),
 ]}
 open(out, "w").write(json.dumps(fleet))
@@ -975,7 +995,7 @@ qs = [
                    "next": "review the provenance card on the next paint PR",
                    "pros": ["the slot holds"], "cons": ["the provenance fields stay unreviewed"]}],
               "origin": {"handle": "scout", "session_id": scout_sid, "name": "scout",
-                         "harness": "claude", "host": "u"},
+                         "harness": "claude", "host": "demo-host"},
               "rung": {"level": "user"},
               "via": [{"level": "lead", "holder_name": "rowan", "evidence": "the demo script reads no machine state"}],
               "context": {"blocked_because": "the paint gate holds the run until the look clears",
@@ -1106,7 +1126,21 @@ sleep 6
 sleep 3
 
 # The flags after ours win. HOME makes the status row read ~/code/checkout.
-if [ -n "$WEB" ]; then
+if [ -n "$APP" ]; then
+  # Hold the seeded world for the desktop app. HOME is the throwaway root, so
+  # the app reads the invented transcript below and no real session.
+  DEMO_SID="de0e0000-0000-4000-8000-000000000001"
+  TR_APP="$FNO_CLAUDE_PROJECTS_DIR/-Users-demo-checkout/$DEMO_SID.jsonl"
+  mkdir -p "$(dirname "$TR_APP")"
+  {
+    printf '%s\n' "{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"$DEMO_SID\",\"timestamp\":\"${TS_BASE}:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"which nodes are ready to land on demo-host?\"}}"
+    printf '%s\n' "{\"type\":\"assistant\",\"uuid\":\"a1\",\"sessionId\":\"$DEMO_SID\",\"timestamp\":\"${TS_BASE}:01.000Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Two nodes are ready: x-1a2b0 and x-3c4d1. Both have green checks and one review round.\"}]},\"stop_reason\":\"end_turn\"}"
+  } >"$TR_APP"
+  # The Mods screen lists what is installed: activate the first-party pack so
+  # it shows real rows and previews, not an empty install state.
+  "$FNO" config plugins activate "$REPO_ROOT/plugins/fno-panels" >/dev/null
+  "$APP_BIN" --session "$SERVER" --mode chat --chat newest
+elif [ -n "$WEB" ]; then
   "$FNO" mux serve --web --server "$SERVER" --port "$WEB_PORT"
 elif ! "$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 ${FIT[@]+"${FIT[@]}"} --squad checkout "$@"; then
   # A first store fold can answer empty and refuse the shot (measured

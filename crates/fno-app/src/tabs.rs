@@ -1,4 +1,4 @@
-//! The strip above the grid: the active squad's tabs and the Terminal / Board
+//! The strip above the grid: the active squad's tabs and the Terminal / HQ
 //! switch. It is rebuilt from every `Layout`, so a rename from another client
 //! shows on the next one.
 
@@ -106,7 +106,7 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
         .border_color(rgb(p.border));
     let views = [
         ("Chat", MainView::Chat),
-        ("Board", MainView::Orchestration),
+        ("HQ", MainView::Orchestration),
         ("Mods", MainView::Mods),
         ("Terminal", MainView::Terminal),
     ];
