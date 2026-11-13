@@ -1198,7 +1198,11 @@ pub(crate) fn file_ask(filing: AskFiling, cwd: &Path) -> (i32, Option<String>) {
         None,
         &home,
     );
-    let session = crate::outstanding::session_id(&cwd);
+    // The row's identity tier: the manifest/env session when it resolves,
+    // else the identity prover's, so a row that carries an asker handle
+    // always carries the session id that handle derives from. Rows on disk
+    // from before this stamp still amend through the handle tier.
+    let session = crate::outstanding::session_id(&cwd).or_else(|| ident.session_id.clone());
     let asker = match (&ident.session_id, &ident.harness) {
         (Some(s), Some(_)) => Some(crate::identity::canonical_handle(s)),
         _ => None,
