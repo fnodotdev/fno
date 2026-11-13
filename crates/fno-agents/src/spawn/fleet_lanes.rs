@@ -12,6 +12,7 @@
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use crate::pid::Pid;
 use serde_json::{json, Value};
 
 use crate::spawn_gate_command::probe_answer;
@@ -121,8 +122,8 @@ fn read_macmon(timeout: u64) -> (Option<Value>, Option<String>) {
     let deadline = Instant::now() + Duration::from_secs(timeout);
     let raw = loop {
         if Instant::now() >= deadline {
-            unsafe {
-                libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+            if let Some(pid) = Pid::from_child(child) {
+                let _ = pid.signal_group(libc::SIGKILL);
             }
             let _ = child.kill();
             let _ = child.wait();

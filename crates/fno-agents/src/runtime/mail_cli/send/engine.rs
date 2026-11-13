@@ -1,4 +1,5 @@
 // Ported from the single-file draft of send.rs; split by question.
+use crate::pid::Pid;
 use super::lanes::*;
 use super::resolve::*;
 use super::*;
@@ -105,8 +106,7 @@ pub(super) fn read_holder(path: &Path) -> String {
 }
 
 pub(super) fn process_alive(pid: u32) -> bool {
-    let rc = unsafe { libc::kill(pid as i32, 0) };
-    rc == 0 || errno() == libc::EPERM
+    Pid::new(pid).is_some_and(|p| p.exists())
 }
 
 pub(super) fn errno() -> i32 {

@@ -10,6 +10,7 @@
 //! only. Extracted from daemon.rs under the file-budget gate; `run_mux_pane_kill`
 //! and `mux_pane_is_absent` moved with the code that uses them.
 
+use crate::pid::{Pid, SignalResult};
 use crate::state::RegistryEntry;
 use std::time::Duration;
 
@@ -792,10 +793,7 @@ pub(crate) fn rm_pane_outcome(stop: &PaneStop) -> (crate::daemon::CascadeOutcome
 }
 
 fn signal_pid(pid: u32, sig: i32) -> bool {
-    // SAFETY: a real signal to a pid the caller already verified through
-    // `pid_is_ours`; the range guard there rejects the broadcast forms.
-    let rc = unsafe { libc::kill(pid as libc::pid_t, sig) };
-    rc == 0
+    Pid::new(pid).is_some_and(|p| matches!(p.signal(sig), SignalResult::Sent))
 }
 
 /// What one `fno` invocation answered.

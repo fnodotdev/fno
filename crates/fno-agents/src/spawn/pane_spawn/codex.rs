@@ -16,6 +16,7 @@
 //! it changes nothing here. The arm's gate is therefore the payload scan plus
 //! the `--node` leg, and the identity leaf renders from
 //! [`super::PaneContext::worker_name`].
+use crate::pid::Pid;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -790,92 +791,11 @@ pub(crate) fn rollout_session_id_for_tree(child_pid: u32) -> Option<String> {
     }
 }
 
-/// Every open file's path for one pid. NEW platform code (no crate helper
-/// exists); empty on any failure - the oracle degrades, the spawn does not
-/// break.
-#[cfg(target_os = "macos")]
+/// Every open file's path for one pid: the pid module owns the per-platform
+/// walks (LISTFDS+vnode on macOS, /proc symlinks on Linux); empty on any
+/// failure - the oracle degrades, the spawn does not break.
 fn open_file_paths(pid: i32) -> Vec<PathBuf> {
-    use std::mem;
-    // sys/proc_info.h selector for the per-fd vnode info. libc exposes
-    // PROC_PIDLISTFDS but not this one; the ABI value is stable on Darwin.
-    const PROC_PIDFDVNODEINFO: libc::c_int = 3;
-    let fdinfo_size = mem::size_of::<libc::proc_fdinfo>();
-    // SAFETY: null buffer, size 0: the call ANSWERS the needed buffer size.
-    // errno is cleared first so a stale EPERM from an unrelated earlier call
-    // cannot be honored (the claims.rs probe_pid idiom).
-    unsafe { *libc::__error() = 0 };
-    let list_size =
-        unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDLISTFDS, 0, std::ptr::null_mut(), 0) };
-    if list_size <= 0 {
-        return Vec::new();
-    }
-    let count = list_size as usize / fdinfo_size;
-    let mut fds: Vec<libc::proc_fdinfo> = vec![unsafe { mem::zeroed() }; count];
-    // SAFETY: `fds` is a caller-owned zeroed buffer of exactly `list_size`
-    // bytes; the kernel fills at most that.
-    let written = unsafe {
-        libc::proc_pidinfo(
-            pid,
-            libc::PROC_PIDLISTFDS,
-            0,
-            fds.as_mut_ptr() as *mut libc::c_void,
-            list_size,
-        )
-    };
-    if written <= 0 {
-        return Vec::new();
-    }
-    let filled = written as usize / fdinfo_size;
-    let mut out = Vec::new();
-    for fd in &fds[..filled] {
-        let mut info: libc::proc_vnodepathinfo = unsafe { mem::zeroed() };
-        let size = mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
-        unsafe { *libc::__error() = 0 };
-        // SAFETY: `info` is a caller-owned zeroed buffer of exactly `size`
-        // bytes; `fd.proc_fd` names the fd this read describes.
-        let got = unsafe {
-            libc::proc_pidinfo(
-                pid,
-                PROC_PIDFDVNODEINFO,
-                fd.proc_fd as u64,
-                &mut info as *mut _ as *mut libc::c_void,
-                size,
-            )
-        };
-        if got != size {
-            continue;
-        }
-        // vip_path is [c_char; MAXPATHLEN] (libc models it [[c_char; 32];
-        // 32]); the zeroed tail guarantees NUL termination.
-        let path = unsafe {
-            std::ffi::CStr::from_ptr(info.pvi_cdir.vip_path.as_ptr() as *const libc::c_char)
-        };
-        if let Ok(text) = path.to_str() {
-            if !text.is_empty() {
-                out.push(PathBuf::from(text));
-            }
-        }
-    }
-    out
-}
-
-/// Linux: the symlink targets under /proc/<pid>/fd.
-#[cfg(target_os = "linux")]
-fn open_file_paths(pid: i32) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    let entries = match std::fs::read_dir(format!("/proc/{pid}/fd")) {
-        Ok(entries) => entries,
-        Err(_) => return out,
-    };
-    for entry in entries.flatten() {
-        if let Ok(target) = std::fs::read_link(entry.path()) {
-            out.push(target);
-        }
-    }
-    out
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn open_file_paths(_pid: i32) -> Vec<PathBuf> {
-    Vec::new()
+    Pid::try_from(i64::from(pid))
+        .map(|p| p.open_file_paths())
+        .unwrap_or_default()
 }

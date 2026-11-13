@@ -3,6 +3,7 @@
 //! track the machine's load? One inbound caller: `crate::intel::run_intel`
 //! (`fno-agents intel --readers <secs>`). On-demand sampler, never a watcher.
 
+use crate::pid::Pid;
 use serde::Serialize;
 
 /// Cumulative CPU time of one pid in nanoseconds, `None` when unreadable
@@ -11,20 +12,7 @@ use serde::Serialize;
 /// (an unconverted read overstates ~41x on Apple Silicon).
 #[cfg(target_os = "macos")]
 pub fn cpu_time_ns(pid: u32) -> Option<u64> {
-    let mut task: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
-    let size = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
-    let written = unsafe {
-        libc::proc_pidinfo(
-            pid as libc::c_int,
-            libc::PROC_PIDTASKINFO,
-            0,
-            &mut task as *mut _ as *mut libc::c_void,
-            size,
-        )
-    };
-    if written != size {
-        return None;
-    }
+    let task = Pid::new(pid).and_then(|p| p.task())?;
     Some(crate::mach_ticks_to_ns(
         task.pti_total_user.saturating_add(task.pti_total_system),
     ))

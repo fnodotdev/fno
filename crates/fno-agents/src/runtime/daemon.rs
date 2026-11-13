@@ -497,6 +497,8 @@ fn recover_with_policy(
 /// Re-exported from [`crate::process_probe`], which owns the probe.
 pub use crate::process_probe::process_start_time;
 
+use crate::pid::Pid;
+
 pub(crate) use crate::gc_inventory::index_tree;
 // the pane kill and its absence vocabulary moved to pane_stop.rs
 // with the stop helper that now shares them.
@@ -955,20 +957,21 @@ pub fn pid_is_ours(pid: u32, recorded: Option<u64>) -> bool {
     // to the trust-existence arm, so the probe returns TRUE and a caller goes on
     // to broadcast SIGTERM. Reject anything outside a real pid's range here, in
     // the shared probe, so every signalling caller inherits the guard.
-    if pid <= 1 || pid > i32::MAX as u32 {
+    let Some(pid) = Pid::new(pid) else {
+        return false;
+    };
+    if pid.is_init() {
         return false;
     }
-    // SAFETY: signal 0 is an existence/permission probe only. rc == 0 means the
-    // process exists AND we may signal it; a non-zero rc is ESRCH (dead) or
-    // EPERM (alive but owned by another user). Our worker is always the same user
-    // as the daemon, so an unsignalable pid is never ours -- this also closes the
-    // EPERM hole where a recycled foreign-user pid (no readable start time) would
-    // otherwise fall through to "trust liveness" and be mistaken for our worker
+    // EPERM reads not-ours: our worker is always the same user as the daemon, so
+    // an unsignalable pid is never ours -- this closes the EPERM hole where a
+    // recycled foreign-user pid (no readable start time) would otherwise fall
+    // through to "trust liveness" and be mistaken for our worker
     // (Gemini medium, PR #365).
-    if unsafe { libc::kill(pid as libc::pid_t, 0) } != 0 {
+    if !pid.probe() {
         return false;
     }
-    match (recorded, process_start_time(pid)) {
+    match (recorded, pid.start_time()) {
         (Some(rec), Some(now)) => rec == now,
         // No basis to prove reuse -> trust existence (legacy / unsupported).
         _ => true,
@@ -3850,13 +3853,13 @@ pub(crate) async fn stop_worker_confirmed_for_home(
     if !down {
         if let Some(pid) = entry.pid {
             if pid_is_ours(pid, entry.pid_start_time) {
-                unsafe {
-                    libc::kill(pid as libc::pid_t, libc::SIGTERM);
+                if let Some(pid) = Pid::new(pid) {
+                    pid.signal(libc::SIGTERM);
                 }
                 down = worker_down_within(&sock, Duration::from_secs(5)).await;
                 if !down && pid_is_ours(pid, entry.pid_start_time) {
-                    unsafe {
-                        libc::kill(pid as libc::pid_t, libc::SIGKILL);
+                    if let Some(pid) = Pid::new(pid) {
+                        pid.signal(libc::SIGKILL);
                     }
                     down = worker_down_within(&sock, Duration::from_secs(2)).await;
                 }
@@ -3907,16 +3910,18 @@ async fn worker_down_within(sock: &std::path::Path, budget: Duration) -> bool {
 /// not yet reaped: `kill(pid, 0)` keeps succeeding while it holds no fds and
 /// serves nothing, so `census::pid_is_zombie` decides that arm.
 fn pid_confirmed_dead(pid: u32) -> bool {
-    if pid <= 1 || pid > i32::MAX as u32 {
+    let Some(pid) = Pid::new(pid) else {
         // Never signalled in the first place, so nothing is running on our behalf.
         return true;
+    };
+    if pid.is_init() {
+        return true;
     }
-    // SAFETY: signal 0 is an existence/permission probe only, no signal is sent.
-    if unsafe { libc::kill(pid as libc::pid_t, 0) } == 0 {
+    if pid.probe() {
         // Reachable => alive, unless it is a zombie: dead-but-unreaped.
         return crate::census::pid_is_zombie(pid);
     }
-    std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    matches!(pid.signal(0), crate::pid::SignalResult::AlreadyGone)
 }
 
 /// Whether `pid` is PROVABLY a different incarnation than the one recorded:
@@ -3927,14 +3932,16 @@ fn pid_recycled(pid: u32, recorded_start: Option<u64>) -> bool {
     let Some(recorded) = recorded_start else {
         return false; // nothing to compare against
     };
-    if pid <= 1 || pid > i32::MAX as u32 {
+    let Some(pid) = Pid::new(pid) else {
+        return false;
+    };
+    if pid.is_init() {
         return false;
     }
-    // SAFETY: signal 0 is an existence/permission probe only, no signal is sent.
-    if unsafe { libc::kill(pid as libc::pid_t, 0) } != 0 {
+    if !pid.probe() {
         return false; // dead or unsignalable: not a positive recycle finding
     }
-    match process_start_time(pid) {
+    match pid.start_time() {
         Some(now) => now != recorded,
         None => false, // unreadable: no verdict
     }

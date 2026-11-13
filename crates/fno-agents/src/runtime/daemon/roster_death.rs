@@ -6,6 +6,7 @@
 //! holds daemon.rs at shrink-only; these moved here with the death-evidence
 //! work that grew it.
 
+use crate::pid::{Pid, SignalResult};
 use crate::state;
 
 /// The row's harness row id: the stored short id, else the 8-char prefix of
@@ -120,11 +121,10 @@ pub(crate) fn pid_is_gone(pid: u32) -> bool {
     // existence probes; a pid above i32::MAX casts to a negative pid_t and
     // would read as one of those broadcasts. Only a positive, representable
     // pid may vote on death.
-    if pid == 0 || pid > i32::MAX as u32 {
+    let Some(pid) = Pid::new(pid) else {
         return false;
-    }
-    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    rc == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    };
+    matches!(pid.signal(0), SignalResult::AlreadyGone)
 }
 
 /// No kill(2) surface: the probe can never answer, and never-death holds.

@@ -14,6 +14,7 @@ use crate::claims::{
     classify_with_basis_and_exclusivity, encode_key, is_expired, is_same_machine, list_in_result,
     now_ms, probe_pid, ClaimRecord, PidProbe, SessionWitness,
 };
+use crate::pid::{Pid, SignalResult};
 use serde::Serialize;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -245,7 +246,7 @@ mod tests {
 
     fn dead_pid() -> u32 {
         let mut candidate = 999_999u32;
-        while unsafe { libc::kill(candidate as i32, 0) } == 0 {
+        while Pid::new(candidate).is_some_and(|p| p.probe()) {
             candidate += 1;
         }
         candidate

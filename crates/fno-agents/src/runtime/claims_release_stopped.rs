@@ -7,6 +7,7 @@ use crate::claims::{
 };
 #[cfg(test)]
 use crate::claims::{encode_key, read_claim_file};
+use crate::pid::{Pid, SignalResult};
 use serde_json::Value;
 
 use std::path::{Path, PathBuf};
@@ -220,7 +221,7 @@ mod tests {
     // A pid the OS does not report as alive (copy of the claims.rs test helper).
     fn dead_pid() -> u32 {
         let mut candidate = 999_999u32;
-        while unsafe { libc::kill(candidate as i32, 0) } == 0 {
+        while Pid::new(candidate).is_some_and(|p| p.probe()) {
             candidate += 1;
         }
         candidate

@@ -2,6 +2,8 @@
 //! how long. One question, so one module - the four answers below were four
 //! loose helpers in the middle of the stop gate.
 
+use crate::pid::Pid;
+
 /// Slack added beyond the declared watch window so the claim lease outlives the
 /// agent's watcher: a watcher that fires right at its timeout must not
 /// race claim expiry.
@@ -516,7 +518,7 @@ mod tests {
     fn dead_pid() -> u32 {
         let mut candidate = 999_999u32;
         while std::path::Path::new(&format!("/proc/{candidate}")).exists()
-            || unsafe { libc::kill(candidate as i32, 0) } == 0
+            || Pid::new(candidate).is_some_and(|p| p.probe())
         {
             candidate += 1;
         }

@@ -8,6 +8,7 @@
 //! `CLIENT_COMMAND_USAGE` / `RUST_CLIENT_COMMANDS`; `fno agents claim` is still the
 //! only operator CLI for claims.
 
+use crate::pid::Pid;
 use serde_json::Value;
 #[cfg(test)]
 #[cfg(test)]
@@ -1576,7 +1577,7 @@ mod tests {
 
     fn dead_pid() -> u32 {
         let mut candidate = 999_999u32;
-        while unsafe { libc::kill(candidate as i32, 0) } == 0 {
+        while Pid::new(candidate).is_some_and(|p| p.probe()) {
             candidate += 1;
         }
         candidate

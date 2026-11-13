@@ -13,6 +13,7 @@
 //! The client lazy-starts this detached on first need; running it directly is
 //! for debugging and for the Python wrapper's explicit `daemon` sub-mode.
 
+use crate::pid::Pid;
 use fno_agents::daemon::{run, DaemonOptions};
 use fno_agents::paths::AgentsHome;
 use std::time::Duration;
@@ -132,8 +133,8 @@ fn main() {
                         "fno-agents-daemon: test_owner_reaped owner_pid={owner_pid} owner_birth={owner_birth}"
                     );
                 }
-                // SAFETY: SIGTERM to self enters the existing graceful shutdown arm.
-                unsafe { libc::kill(libc::getpid(), libc::SIGTERM) };
+                // SIGTERM to self enters the existing graceful shutdown arm.
+                Pid::current().signal(libc::SIGTERM);
             },
         );
         if !armed {

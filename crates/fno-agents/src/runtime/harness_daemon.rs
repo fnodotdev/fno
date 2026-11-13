@@ -1,4 +1,5 @@
 use std::fmt;
+use crate::pid::Pid;
 use std::path::{Path, PathBuf};
 
 /// The state needed to prove that a provider owns the thread outside the
@@ -303,7 +304,9 @@ fn reap_owned_process(state: &DaemonState) {
         return;
     };
     if crate::daemon::pid_is_ours(pid, Some(start)) {
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+        if let Some(pid) = Pid::new(pid) {
+            pid.signal(libc::SIGTERM);
+        }
     }
 }
 

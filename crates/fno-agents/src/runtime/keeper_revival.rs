@@ -15,6 +15,7 @@
 //! Python leg.
 
 use crate::state::RegistryEntry;
+use crate::pid::Pid;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -553,29 +554,24 @@ pub(crate) fn launch_keeper(spec: &LaunchSpec) -> Result<u32, String> {
 /// Stop a keeper this revival started or named: SIGTERM, then SIGKILL once
 /// the grace passes, so a wedged keeper never outlives its refusal.
 pub(crate) fn terminate_keeper(pid: u32) {
-    // SAFETY: pid targets the keeper this process launched; SIGTERM carries
-    // no payload.
-    unsafe {
-        libc::kill(pid as libc::pid_t, libc::SIGTERM);
-    }
+    let Some(pid) = Pid::new(pid) else {
+        return;
+    };
+    pid.signal(libc::SIGTERM);
     for _ in 0..20 {
         // This process launched the keeper, so waitpid reaps the corpse a
-        // kill(pid, 0) probe would still see (a zombie answers the existence
-        // probe). ECHILD means it was never ours: fall back to the probe.
-        // SAFETY: WNOHANG wait and signal 0 deliver nothing.
+        // probe would still see (a zombie answers the existence probe).
+        // ECHILD means it was never ours: fall back to the probe.
+        // SAFETY: WNOHANG wait delivers nothing.
         let reaped =
-            unsafe { libc::waitpid(pid as libc::pid_t, std::ptr::null_mut(), libc::WNOHANG) };
-        let gone = reaped == pid as libc::pid_t
-            || (reaped < 0 && unsafe { libc::kill(pid as libc::pid_t, 0) } != 0);
+            unsafe { libc::waitpid(pid.as_raw(), std::ptr::null_mut(), libc::WNOHANG) };
+        let gone = reaped == pid.as_raw() || (reaped < 0 && !pid.probe());
         if gone {
             return;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    // SAFETY: SIGKILL carries no payload.
-    unsafe {
-        libc::kill(pid as libc::pid_t, libc::SIGKILL);
-    }
+    pid.signal(libc::SIGKILL);
 }
 
 #[cfg(test)]

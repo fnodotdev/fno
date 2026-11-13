@@ -9,6 +9,7 @@ pub mod source;
 pub mod thread;
 pub mod transcript;
 
+use crate::pid::Pid;
 use serde_json::Value;
 use std::io::Write;
 use std::os::unix::process::CommandExt;
@@ -333,15 +334,18 @@ pub(crate) async fn stop_confirmed(pid: u32, started: Option<u64>) -> bool {
     if !pid_is_ours(pid, started) {
         return pid_gone_within(pid, started, Duration::from_secs(1)).await;
     }
-    // SAFETY: the child called setpgid(0, 0), so its pid is its group id, and
+    // The child called setpgid(0, 0), so its pid is its group id, and
     // pid_is_ours rejected pid 0, 1 and anything above i32::MAX.
-    unsafe { libc::killpg(pid as libc::pid_t, libc::SIGINT) };
+    if let Some(pid) = Pid::new(pid) {
+        let _ = pid.signal_group(libc::SIGINT);
+    }
     if pid_gone_within(pid, started, Duration::from_secs(5)).await {
         return true;
     }
     if pid_is_ours(pid, started) {
-        // SAFETY: as above.
-        unsafe { libc::killpg(pid as libc::pid_t, libc::SIGKILL) };
+        if let Some(pid) = Pid::new(pid) {
+            let _ = pid.signal_group(libc::SIGKILL);
+        }
     }
     pid_gone_within(pid, started, Duration::from_secs(2)).await
 }

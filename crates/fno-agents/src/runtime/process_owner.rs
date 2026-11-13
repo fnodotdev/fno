@@ -1,5 +1,6 @@
 //! Read the narrow owner lease carried by fno-launched sandbox processes.
 
+use crate::pid::Pid;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
@@ -327,8 +328,7 @@ pub fn owner_status(lease: &OwnerLease) -> OwnerStatus {
         Some(birth) if birth == lease.birth => OwnerStatus::Alive,
         Some(_) => OwnerStatus::Dead,
         None => {
-            let result = unsafe { libc::kill(lease.pid as libc::pid_t, 0) };
-            if result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM) {
+            if Pid::new(lease.pid).is_some_and(|pid| pid.exists()) {
                 OwnerStatus::Unknown
             } else {
                 OwnerStatus::Dead

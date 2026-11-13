@@ -39,6 +39,7 @@ mod splice;
 use seat_lock::{release_seat, take_seat};
 use splice::splice_reply;
 
+use crate::pid::Pid;
 use serde_json::{json, Map, Value};
 use std::io::{Read, Write};
 use std::os::unix::fs::MetadataExt;
@@ -3986,8 +3987,8 @@ fn keeper_alive(pid: i32) -> bool {
 pub fn sweep_orphaned(timeout_secs: f64) -> Vec<i32> {
     let candidates = orphaned_keeper_pids();
     for pid in &candidates {
-        unsafe {
-            libc::kill(*pid, libc::SIGTERM);
+        if let Some(pid) = Pid::try_from(i64::from(*pid)) {
+            pid.signal(libc::SIGTERM);
         }
     }
     let deadline = std::time::Instant::now() + Duration::from_secs_f64(timeout_secs);
@@ -4001,8 +4002,8 @@ pub fn sweep_orphaned(timeout_secs: f64) -> Vec<i32> {
         pending.retain(|p| keeper_alive(*p));
     }
     for pid in &pending {
-        unsafe {
-            libc::kill(*pid, libc::SIGKILL);
+        if let Some(pid) = Pid::try_from(i64::from(*pid)) {
+            pid.signal(libc::SIGKILL);
         }
     }
     let mut survivors: Vec<i32> = pending.into_iter().filter(|p| keeper_alive(*p)).collect();

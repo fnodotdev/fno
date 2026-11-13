@@ -15,6 +15,7 @@
 //! The stamp stays one JSON line, `{pid, name, acquired_at, chokepoint}`, the
 //! shape Python's `fno.agents.lock` parses.
 
+use crate::pid::Pid;
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -218,14 +219,7 @@ pub fn set_event_sink(sink: Sink) {
 }
 
 fn pid_alive(pid: u64) -> bool {
-    if pid == 0 || pid > i32::MAX as u64 {
-        return false;
-    }
-    // SAFETY: signal 0 checks existence and permission only; it delivers nothing.
-    if unsafe { libc::kill(pid as libc::pid_t, 0) } == 0 {
-        return true;
-    }
-    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    Pid::try_from(pid).is_some_and(|pid| pid.exists())
 }
 
 /// Write this process as the holder, truncating any earlier line first. Every

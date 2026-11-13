@@ -7,6 +7,7 @@
 //! posted back. The law gate fails closed: with no live operator ruling in
 //! scope for this project, the steward does nothing.
 
+use crate::pid::Pid;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::os::unix::process::CommandExt;
@@ -133,9 +134,10 @@ fn bounded_fno(
             break done;
         }
         if std::time::Instant::now() >= deadline {
-            // Negative pid targets the process group set by process_group(0).
-            unsafe {
-                libc::kill(-(child.id() as i32), libc::SIGKILL);
+            // Negative pid targets the process group set by process_group(0);
+            // killpg(pid) spells the same group kill through the typed pid.
+            if let Some(pid) = Pid::from_child(child) {
+                let _ = pid.signal_group(libc::SIGKILL);
             }
             let _ = child.wait();
             let _ = out_reader.join();

@@ -9,6 +9,7 @@
 //! self-describing lines so every reader prints the same text without a
 //! second renderer.
 
+use crate::pid::Pid;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -511,7 +512,7 @@ mod tests {
 
     fn dead_pid() -> u32 {
         let mut candidate = 999_999u32;
-        while unsafe { libc::kill(candidate as i32, 0) } == 0 {
+        while Pid::new(candidate).is_some_and(|p| p.probe()) {
             candidate += 1;
         }
         candidate

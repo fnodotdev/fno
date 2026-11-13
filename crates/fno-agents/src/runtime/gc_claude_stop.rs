@@ -14,6 +14,7 @@
 //! refusal while anything live is still reported (the same shape the stop
 //! command applies).
 
+use crate::pid::Pid;
 use crate::claude_roster::ClaudeAgentRow;
 use crate::state;
 
@@ -138,9 +139,9 @@ fn session_descendants(pid: u32) -> Vec<(u32, u64)> {
 fn end_leftovers(members: &[(u32, u64)]) {
     for &(pid, start) in members {
         if crate::daemon::process_start_time(pid) == Some(start) {
-            // SAFETY: start-time equality proves the process named before the stop.
-            unsafe {
-                libc::kill(pid as libc::pid_t, libc::SIGTERM);
+            // Start-time equality proves the process named before the stop.
+            if let Some(pid) = Pid::new(pid) {
+                pid.signal(libc::SIGTERM);
             }
         }
     }
@@ -205,10 +206,10 @@ pub(crate) fn stop_claude_confirmed_with(
             crate::daemon::process_start_time(pid),
         ) {
             (Some(recorded), Some(live)) if live == recorded && pid > 1 => {
-                // SAFETY: start-time equality proves the incarnation; SIGTERM
+                // Start-time equality proves the incarnation; SIGTERM
                 // to the survivor the ask left behind.
-                unsafe {
-                    libc::kill(pid as libc::pid_t, libc::SIGTERM);
+                if let Some(pid) = Pid::new(pid) {
+                    pid.signal(libc::SIGTERM);
                 }
             }
             _ => return false,

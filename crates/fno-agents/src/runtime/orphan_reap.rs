@@ -13,6 +13,7 @@
 
 use crate::events::EventEmitter;
 use regex::Regex;
+use crate::pid::{Pid, SignalResult};
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::io::Write as _;
@@ -182,9 +183,11 @@ pub fn reap_rows(ps_output: &str, apply: bool, min_elapsed: u64) -> Vec<ReapRow>
         } else if !apply {
             row.reason = "dry-run: pass --apply to kill".into();
         } else {
-            // SAFETY: SIGKILL to a ppid-1 deps binary the confirmed detector named.
-            let rc = unsafe { libc::kill(orphan.pid as libc::pid_t, libc::SIGKILL) };
-            if rc == 0 {
+            // SIGKILL to a ppid-1 deps binary the confirmed detector named.
+            let rc = Pid::new(orphan.pid)
+                .map(|p| matches!(p.signal(libc::SIGKILL), SignalResult::Sent))
+                .unwrap_or(false);
+            if rc {
                 row.reaped = true;
                 row.reason = "SIGKILL sent".into();
             } else {
@@ -312,10 +315,15 @@ pub fn reap_daemon_children() {
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
     set.retain(|pid| {
+        let Ok(pid) = Pid::new(*pid) else {
+            // A pid the type refuses was never a detached child of ours;
+            // drop it from the watch set, as a reaped pid would be.
+            return false;
+        };
         let mut status: libc::c_int = 0;
         // SAFETY: per-pid waitpid with WNOHANG answers without blocking and
         // reaps only this one child; it cannot take another child's status.
-        let rc = unsafe { libc::waitpid(*pid as libc::pid_t, &mut status, libc::WNOHANG) };
+        let rc = unsafe { libc::waitpid(pid.as_raw(), &mut status, libc::WNOHANG) };
         if rc < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
             // Interrupted before an answer: keep watching, decide next tick.
             return true;
@@ -567,19 +575,23 @@ fn is_claude_daemon_command(command: &str) -> bool {
 /// tagged-worker shape), the pid alone otherwise. A group kill must never be
 /// attempted on a carrier that merely SHARES a group.
 fn kill_carrier(pid: u32, daemon_tree: &[u32]) -> bool {
+    let Some(pid) = Pid::new(pid) else {
+        return false;
+    };
     // SAFETY: getpgid answers the carrier's group without signalling.
-    let pgid = unsafe { libc::getpgid(pid as libc::pid_t) };
+    let pgid = unsafe { libc::getpgid(pid.as_raw()) };
     // A daemon started on demand without setsid stays in its starter's group.
     // SAFETY: getpgid answers each held pid's group without signalling.
     let shares_daemon = daemon_tree
         .iter()
-        .any(|held| unsafe { libc::getpgid(*held as libc::pid_t) } == pgid);
-    if pgid > 0 && pgid == pid as libc::pid_t && !shares_daemon {
-        // SAFETY: SIGKILL to the group the confirmed carrier leads.
-        unsafe { libc::killpg(pgid, libc::SIGKILL) == 0 }
+        .any(|held| Pid::new(*held).is_some_and(|h| unsafe { libc::getpgid(h.as_raw()) } == pgid));
+    if pgid > 0 && pgid == pid.as_raw() && !shares_daemon {
+        // SIGKILL to the group the confirmed carrier leads.
+        Pid::try_from(i64::from(pgid))
+            .is_some_and(|g| matches!(g.signal_group(libc::SIGKILL), SignalResult::Sent))
     } else {
-        // SAFETY: SIGKILL to the one pid the confirmed carrier named.
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) == 0 }
+        // SIGKILL to the one pid the confirmed carrier named.
+        matches!(pid.signal(libc::SIGKILL), SignalResult::Sent)
     }
 }
 
@@ -708,7 +720,8 @@ fn reap_owner_server_rows(ps_output: &str, apply: bool) -> Vec<ReapRow> {
             ));
             continue;
         }
-        let killed = unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) } == 0;
+        let killed =
+            Pid::new(pid).is_some_and(|p| matches!(p.signal(libc::SIGKILL), SignalResult::Sent));
         rows.push(owner_reap_row(
             pid,
             elapsed,
@@ -761,8 +774,7 @@ fn leased_row(
 }
 
 fn pid_exists(pid: u32) -> bool {
-    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    Pid::new(pid).is_some_and(|p| p.exists())
 }
 
 fn process_parent(pid: u32) -> Option<u32> {
@@ -1039,7 +1051,9 @@ mod tests {
         );
         // The released zombie is gone: a direct waitpid answers ECHILD.
         let mut status: libc::c_int = 0;
-        let rc = unsafe { libc::waitpid(released_pid as libc::pid_t, &mut status, libc::WNOHANG) };
+        let rc = Pid::new(released_pid)
+            .map(|pid| unsafe { libc::waitpid(pid.as_raw(), &mut status, libc::WNOHANG) })
+            .unwrap_or(-1);
         assert_eq!(rc, -1, "the released child must already be reaped");
         // The owned child's status survived the drain ticks.
         let status = owned

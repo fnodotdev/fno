@@ -2,6 +2,7 @@
 //! drain, copy, publish, park, verify. Nothing is deleted. A refused row
 //! keeps both copies; a pending row retries on the next lane pass.
 
+use crate::pid::Pid;
 use crate::state_layout::{find, park_file_at, Row, Status};
 use rusqlite::Connection;
 use std::collections::BTreeMap;
@@ -62,12 +63,8 @@ pub fn wait_for_fence(root: &Path) {
 }
 
 fn is_pid_alive(pid: u32) -> bool {
-    // kill 0 probes liveness without signalling; EPERM means the process
-    // exists but belongs to another user, which is still alive.
-    unsafe {
-        libc::kill(pid as i32, 0) == 0
-            || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-    }
+    // EPERM means the process exists but belongs to another user, still alive.
+    Pid::new(pid).is_some_and(|p| p.exists())
 }
 
 /// The census gate: a live store-keeper older than the running build would

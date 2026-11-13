@@ -41,6 +41,7 @@
 //! /api/session/:id/permission`, replies through `/reply`, and reads idle
 //! from the session's `time.busy` / `time.idle` stamps (measured on 2.2.2).
 
+use crate::pid::Pid;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
@@ -505,8 +506,8 @@ impl crate::harness_daemon::HarnessDaemonAdapter for OpenCodeDaemonAdapter<'_> {
                 // The serve was setsid'd into its own group: without this kill
                 // every boot timeout leaks one serve, and the next spawn boots
                 // another beside it (measured: two orphans after two refusals).
-                unsafe {
-                    libc::killpg(pid as libc::pid_t, libc::SIGKILL);
+                if let Some(pid) = Pid::new(pid) {
+                    let _ = pid.signal_group(libc::SIGKILL);
                 }
                 return Err(format!(
                 "opencode serve did not report a healthy port within {}s (log: {:?}, pid {pid})",

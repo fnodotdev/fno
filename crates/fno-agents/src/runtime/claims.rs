@@ -567,45 +567,21 @@ pub const UNRESOLVED_GRACE_MS: i64 = 30 * 60 * 1000;
 /// Ask the OS what the pid's holder create time is, and name the failure.
 #[cfg(target_os = "macos")]
 pub fn probe_pid(pid: i32) -> PidProbe {
-    use std::mem;
     if pid <= 0 {
         return PidProbe::Absent;
     }
-    let mut info: libc::proc_bsdinfo = unsafe { mem::zeroed() };
-    let size = mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-    // SAFETY: buffer is a zeroed proc_bsdinfo of exactly `size` bytes; a
-    // partial fill means gone / not introspectable -> Absent unless the OS
-    // named a permission failure, which is a live holder refusing inspection.
-    //
-    // proc_pidinfo's failure return is not uniformly -1 (it can return 0 or a
-    // short fill), and errno is only meaningful when the call failed, so
-    // clear errno first and consult it on ANY failed fill. Reading errno
-    // without the clear could honor a stale EPERM from an unrelated earlier
-    // call; skipping the read entirely would make a denied inspection read
-    // as death, which is the misclassification this probe exists to prevent.
-    unsafe { *libc::__error() = 0 };
-    let written = unsafe {
-        libc::proc_pidinfo(
-            pid as libc::c_int,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            &mut info as *mut _ as *mut libc::c_void,
-            size,
-        )
+    let Some(pid) = Pid::try_from(i64::from(pid)).ok() else {
+        return PidProbe::Absent;
     };
-    if written == size {
-        // A zombie holds no fds and will never resume; a no-TTL claim naming
-        // one must not read Live forever (a CI run-slot wedge).
-        if crate::census::pid_is_zombie(pid as u32) {
-            return PidProbe::Absent;
-        }
-        return PidProbe::Created(
-            (info.pbi_start_tvsec as i64) * 1000 + (info.pbi_start_tvusec as i64) / 1000,
-        );
+    // A zombie holds no fds and will never resume; a no-TTL claim naming
+    // one must not read Live forever (a CI run-slot wedge).
+    if pid.zombie() {
+        return PidProbe::Absent;
     }
-    match std::io::Error::last_os_error().raw_os_error() {
-        Some(libc::EPERM) | Some(libc::EACCES) => PidProbe::Refused,
-        _ => PidProbe::Absent,
+    match pid.created_ms() {
+        Creation::Created(ms) => PidProbe::Created(ms),
+        Creation::Refused => PidProbe::Refused,
+        Creation::Absent => PidProbe::Absent,
     }
 }
 

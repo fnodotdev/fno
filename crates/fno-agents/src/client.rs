@@ -4,6 +4,7 @@
 
 use crate::drift::{classify, DriftState, ExeFingerprint};
 use crate::paths::AgentsHome;
+use crate::pid::{Pid, SignalResult};
 use crate::protocol::{read_response, write_request, ProtocolError, Request, Response};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -658,33 +659,6 @@ fn teardown_bound_for(load_1m: Option<f64>, cores: f64) -> Duration {
     }
 }
 
-enum SignalResult {
-    /// Signal delivered.
-    Sent,
-    /// The pid was already gone (ESRCH) -- treat as a successful "it exited".
-    AlreadyGone,
-    /// The signal could not be delivered (e.g. EPERM); a loud, named failure.
-    Failed(String),
-}
-
-/// Send `sig` to `pid`, mapping the syscall result to a typed verdict. ESRCH
-/// (no such process) is `AlreadyGone`, not a failure -- the daemon exiting on
-/// its own between the status read and here is the success we wanted. Any other
-/// errno is a `Failed` the caller surfaces loudly.
-fn send_signal(pid: u32, sig: i32) -> SignalResult {
-    // SAFETY: kill(pid, sig) has no memory effects; errno is read only on the
-    // error return.
-    let rc = unsafe { libc::kill(pid as libc::pid_t, sig) };
-    if rc == 0 {
-        return SignalResult::Sent;
-    }
-    let err = std::io::Error::last_os_error();
-    match err.raw_os_error() {
-        Some(e) if e == libc::ESRCH => SignalResult::AlreadyGone,
-        _ => SignalResult::Failed(err.to_string()),
-    }
-}
-
 /// Read the serving daemon's pid via `agent.status` (already-running path).
 /// An ERROR reply is its own verdict, not a missing field: the daemon is
 /// alive and named a cause, so that text surfaces instead of a generic
@@ -697,7 +671,8 @@ async fn read_daemon_pid(home: &AgentsHome) -> Result<u32, RestartError> {
         .get("daemon")
         .and_then(|d| d.get("pid"))
         .and_then(Value::as_u64)
-        .map(|p| p as u32)
+        .and_then(|p| Pid::try_from(p).ok())
+        .map(Pid::as_u32)
         .ok_or(RestartError::StatusMissingPid)
 }
 
@@ -720,31 +695,37 @@ fn status_result(resp: Response) -> Result<Value, RestartError> {
 /// longer matches at any poll counts as gone: the process we signalled
 /// exited and its pid was recycled; the new occupant is nobody's target.
 async fn terminate_confirmed(
-    pid: u32,
+    pid: Pid,
     recorded_start: Option<u64>,
     grace: Duration,
 ) -> Result<Termination, RestartError> {
-    match send_signal(pid, libc::SIGTERM) {
+    match pid.signal(libc::SIGTERM) {
         SignalResult::Sent | SignalResult::AlreadyGone => {}
-        SignalResult::Failed(reason) => {
-            return Err(RestartError::SigtermFailed { pid, reason });
+        SignalResult::Failed(err) => {
+            return Err(RestartError::SigtermFailed {
+                pid: pid.as_u32(),
+                reason: err.to_string(),
+            });
         }
     }
-    if crate::daemon::pid_gone_within(pid, recorded_start, grace).await {
+    if crate::daemon::pid_gone_within(pid.as_u32(), recorded_start, grace).await {
         return Ok(Termination::Exited);
     }
     // Still serving at the bound. Escalate only while the pid is still THIS
     // daemon (AC1-ERR): a recycled pid is never signalled.
-    if !crate::daemon::pid_is_ours(pid, recorded_start) {
+    if !crate::daemon::pid_is_ours(pid.as_u32(), recorded_start) {
         return Ok(Termination::Exited);
     }
-    match send_signal(pid, libc::SIGKILL) {
+    match pid.signal(libc::SIGKILL) {
         SignalResult::Sent | SignalResult::AlreadyGone => {}
-        SignalResult::Failed(reason) => {
-            return Err(RestartError::SigkillFailed { pid, reason });
+        SignalResult::Failed(err) => {
+            return Err(RestartError::SigkillFailed {
+                pid: pid.as_u32(),
+                reason: err.to_string(),
+            });
         }
     }
-    if crate::daemon::pid_gone_within(pid, recorded_start, teardown_bound()).await {
+    if crate::daemon::pid_gone_within(pid.as_u32(), recorded_start, teardown_bound()).await {
         Ok(Termination::Escalated)
     } else {
         Ok(Termination::Survived)
@@ -780,17 +761,18 @@ pub async fn stop_daemon(home: &AgentsHome) -> Result<DaemonStop, RestartError> 
     let pid = daemon
         .and_then(|d| d.get("pid"))
         .and_then(Value::as_u64)
-        .ok_or(RestartError::StatusMissingPid)? as u32;
+        .and_then(|p| Pid::try_from(p).ok())
+        .ok_or(RestartError::StatusMissingPid)?;
     let recorded_start = daemon
         .and_then(|d| d.get("pid_start_time"))
         .and_then(Value::as_u64);
-    if !crate::daemon::pid_is_ours(pid, recorded_start) {
+    if !crate::daemon::pid_is_ours(pid.as_u32(), recorded_start) {
         return Ok(DaemonStop::WasDown);
     }
     match terminate_confirmed(pid, recorded_start, RESTART_SIGTERM_GRACE).await? {
-        Termination::Exited => Ok(DaemonStop::Exited { pid }),
-        Termination::Escalated => Ok(DaemonStop::Escalated { pid }),
-        Termination::Survived => Err(RestartError::DidNotDie { pid }),
+        Termination::Exited => Ok(DaemonStop::Exited { pid: pid.as_u32() }),
+        Termination::Escalated => Ok(DaemonStop::Escalated { pid: pid.as_u32() }),
+        Termination::Survived => Err(RestartError::DidNotDie { pid: pid.as_u32() }),
     }
 }
 
@@ -1097,7 +1079,8 @@ pub async fn restart_daemon(
     let old_pid = daemon
         .and_then(|d| d.get("pid"))
         .and_then(Value::as_u64)
-        .ok_or(RestartError::StatusMissingPid)? as u32;
+        .and_then(|p| Pid::try_from(p).ok())
+        .ok_or(RestartError::StatusMissingPid)?;
     let recorded_start = daemon
         .and_then(|d| d.get("pid_start_time"))
         .and_then(Value::as_u64);
@@ -1108,10 +1091,10 @@ pub async fn restart_daemon(
     // cleaned up race-free by the daemon's own bind_supervisor_socket
     // (exclusive flock, then remove + bind), and unlinking from the client could
     // delete a socket a concurrent client just rebound.
-    if !crate::daemon::pid_is_ours(old_pid, recorded_start) {
+    if !crate::daemon::pid_is_ours(old_pid.as_u32(), recorded_start) {
         let new_pid = start_fresh(home, daemon_bin).await?;
         return Ok(RestartOutcome {
-            old_pid: Some(old_pid),
+            old_pid: Some(old_pid.as_u32()),
             new_pid,
             forced: false,
             note: None,
@@ -1128,17 +1111,20 @@ pub async fn restart_daemon(
     // to claim a stop that did not happen).
     let termination = terminate_confirmed(old_pid, recorded_start, RESTART_SIGTERM_GRACE).await?;
     if termination == Termination::Survived {
-        return Err(RestartError::DidNotDie { pid: old_pid });
+        return Err(RestartError::DidNotDie {
+            pid: old_pid.as_u32(),
+        });
     }
     // Both arms wait for the singleton to become startable again before
     // starting fresh, so start_fresh never binds while the old daemon still
     // holds it - and a supervisor that re-binds a fresh daemon in that window
     // is a SUCCESS to adopt, not a wedge to fail on (see the helper).
     let escalated = termination == Termination::Escalated;
-    match await_lock_free_or_rebound(home, old_pid, recorded_start, teardown_bound()).await {
+    match await_lock_free_or_rebound(home, old_pid.as_u32(), recorded_start, teardown_bound()).await
+    {
         Ok(Some(new_pid)) => {
             return Ok(RestartOutcome {
-                old_pid: Some(old_pid),
+                old_pid: Some(old_pid.as_u32()),
                 new_pid,
                 forced: escalated,
                 note: Some(if escalated {
@@ -1224,8 +1210,8 @@ mod restart_termination_tests {
     }
 
     fn cleanup(perl: &mut Child, pid: u32) {
-        unsafe {
-            libc::kill(pid as libc::pid_t, libc::SIGKILL);
+        if let Some(pid) = Pid::new(pid) {
+            pid.signal(libc::SIGKILL);
         }
         let _ = perl.wait();
     }
@@ -1234,7 +1220,11 @@ mod restart_termination_tests {
     async fn terminate_confirmed_escalates_when_sigterm_is_ignored() {
         let (mut midman, pid) = spawn_victim(true);
         let start = crate::daemon::process_start_time(pid);
-        let t = terminate_confirmed(pid, start, Duration::from_secs(1))
+        let t = terminate_confirmed(
+            Pid::new(pid).expect("victim pid in range"),
+            start,
+            Duration::from_secs(1),
+        )
             .await
             .unwrap();
         assert!(matches!(t, Termination::Escalated), "got {t:?}");
@@ -1250,10 +1240,14 @@ mod restart_termination_tests {
         // AC1-ERR: the recorded start time no longer matches at the grace
         // bound -> the pid was recycled; no SIGKILL for a stranger.
         let (mut midman, pid) = spawn_victim(true);
-        let t = terminate_confirmed(pid, Some(1), Duration::from_secs(1))
+        let t = terminate_confirmed(
+            Pid::new(pid).expect("victim pid in range"),
+            Some(1),
+            Duration::from_secs(1),
+        )
             .await
             .unwrap();
-        let untouched = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
+        let untouched = Pid::new(pid).is_some_and(|p| p.probe());
         cleanup(&mut midman, pid);
         assert!(matches!(t, Termination::Exited), "got {t:?}");
         assert!(untouched, "the recycled-pid occupant was never signalled");

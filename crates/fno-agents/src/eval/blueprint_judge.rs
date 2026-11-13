@@ -27,6 +27,7 @@ use crate::plan_doc::codec;
 use crate::plan_doc::codec::Value as Fv;
 use crate::plan_doc::lock::PlanDocLock;
 use regex::Regex;
+use crate::pid::Pid;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::os::unix::process::CommandExt;
@@ -358,7 +359,9 @@ pub(crate) fn bounded_wait(
                     // SAFETY: the pid is the child we just spawned; its
                     // process group cannot be ours, so the signal cannot
                     // reach this process.
-                    let _ = unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
+                    if let Some(pid) = Pid::from_child(child) {
+                        let _ = pid.signal_group(libc::SIGKILL);
+                    }
                     let _ = child.wait();
                     let err = collect(stderr);
                     let named = format!(

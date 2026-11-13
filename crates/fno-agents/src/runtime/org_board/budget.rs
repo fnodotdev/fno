@@ -1,6 +1,7 @@
 //! The board's ONE whole-board budget and the bounded subprocess runner.
 //! Every per-source slice derives from it; there is no second timeout.
 use super::SourceRead;
+use crate::pid::{Pid, SignalResult};
 use serde_json::Value;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -169,8 +170,8 @@ pub(crate) fn run_with_timeout_accepting(
     // SIGKILL to the child's whole group (negative pid). The leader reaps via
     // `child.wait()`; group members die with it.
     fn kill_group(child: &std::process::Child) {
-        unsafe {
-            libc::kill(-(child.id() as i32), libc::SIGKILL);
+        if let Some(pid) = Pid::from_child(child) {
+            let _ = pid.signal_group(libc::SIGKILL);
         }
     }
     loop {

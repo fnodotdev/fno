@@ -5,6 +5,7 @@
 //! goldens, which carry this report byte for byte on the states a fresh init
 //! lands in.
 
+use crate::pid::Pid;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -84,18 +85,11 @@ fn manifest_str(raw: &Option<BTreeMap<String, String>>, key: &str) -> String {
 /// on any uncertainty: a false-live costs one autonomous /think, a false-dead
 /// would archive a still-running session's manifest.
 fn pid_alive(pid_val: &str) -> bool {
-    let Ok(pid) = pid_val.trim().parse::<i32>() else {
+    let Ok(pid) = pid_val.trim().parse::<i64>() else {
         return false;
     };
-    if pid <= 0 {
-        return false;
-    }
-    match unsafe { libc::kill(pid, 0) } {
-        0 => true,
-        // EPERM is exists-but-not-ours: biased live.
-        -1 => std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM),
-        _ => false,
-    }
+    // EPERM reads biased live: exists-but-not-ours.
+    Pid::try_from(pid).is_some_and(|p| p.exists())
 }
 
 /// The claim lockfile state for `claim_key` (free|live|suspect|stale|

@@ -11,6 +11,7 @@
 //! reads `unknown` with the failure named, never `current`.
 
 use crate::drift;
+use crate::pid::Pid;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -114,66 +115,10 @@ pub(crate) fn test_proc_row(pid: u32, ppid: u32, command: &str) -> ProcRow {
 }
 
 /// True while `pid` is a zombie: dead but not yet reaped by its parent, so
-/// `kill(pid, 0)` keeps succeeding while it holds no fds and serves nothing.
-/// On macOS the kernel record is the sysctl `KERN_PROC_PID` read (the
-/// `proc_pidinfo` BSD-status read answers a zero write for a zombie, so it
-/// can never fire; measured 2026-09-18); on Linux the state letter after
-/// the last `)` of `/proc/<pid>/stat`. An unreadable pid reads not-zombie:
-/// this helper never invents a death.
-#[cfg(target_os = "macos")]
+/// a probe keeps succeeding even though it holds no fds and serves nothing.
+/// An unreadable pid reads not-zombie: this read never invents a death.
 pub fn pid_is_zombie(pid: u32) -> bool {
-    use std::mem;
-    // libc does not export `kinfo_proc` on Apple targets, so the read pins
-    // the one field this decision needs: `extern_proc` prefix (p_un 16, two
-    // pointers 16, p_flag 4) puts `p_stat` at byte 36 of the 648-byte
-    // record. The ABI is stable on all 64-bit Darwin.
-    #[repr(C, align(8))]
-    struct KinfoProcScratch {
-        head: KinfoProcHead,
-        tail: [u8; 768],
-    }
-    #[repr(C)]
-    struct KinfoProcHead {
-        p_un: [u8; 16],
-        p_vmspace: u64,
-        p_sigacts: u64,
-        p_flag: libc::c_int,
-        p_stat: u8,
-    }
-    let mut mib = [
-        libc::CTL_KERN,
-        libc::KERN_PROC,
-        libc::KERN_PROC_PID,
-        pid as libc::c_int,
-    ];
-    let mut info: KinfoProcScratch = unsafe { mem::zeroed() };
-    let mut size = mem::size_of::<KinfoProcScratch>();
-    // SAFETY: sysctl fills a caller-owned zeroed buffer; mib and size live
-    // in this frame and are read only during the call.
-    let done = unsafe {
-        libc::sysctl(
-            mib.as_mut_ptr(),
-            4,
-            &mut info as *mut _ as *mut libc::c_void,
-            &mut size,
-            std::ptr::null_mut(),
-            0,
-        )
-    };
-    done == 0 && info.head.p_stat == libc::SZOMB as u8
-}
-
-#[cfg(target_os = "linux")]
-pub fn pid_is_zombie(pid: u32) -> bool {
-    std::fs::read_to_string(format!("/proc/{pid}/stat"))
-        .ok()
-        .and_then(|s| Some(s.rsplit_once(')')?.1.trim_start().starts_with('Z')))
-        .unwrap_or(false)
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn pid_is_zombie(_pid: u32) -> bool {
-    false
+    Pid::new(pid).is_some_and(|p| p.zombie())
 }
 
 /// The process table plus the count of pids whose row could not be read.
@@ -192,54 +137,12 @@ pub fn process_table() -> (Vec<ProcRow>, usize) {
 /// table skips another uid's process (a terminal's root-owned `login`, and
 /// launchd), and macOS answers this short read for any uid. A sandbox refuses
 /// it, so a sandboxed caller reads `None`.
-#[cfg(target_os = "macos")]
 pub fn hidden_process(pid: u32) -> Option<(u32, String)> {
-    // `<sys/proc_info.h>`: the libc crate carries neither name.
-    const PROC_PIDT_SHORTBSDINFO: libc::c_int = 13;
-    #[repr(C)]
-    struct ProcBsdShortInfo {
-        pbsi_pid: u32,
-        pbsi_ppid: u32,
-        pbsi_pgid: u32,
-        pbsi_status: u32,
-        pbsi_comm: [libc::c_char; 16],
-        pbsi_rest: [u32; 8],
-    }
-    let mut info: ProcBsdShortInfo = unsafe { std::mem::zeroed() };
-    let size = std::mem::size_of::<ProcBsdShortInfo>() as libc::c_int;
-    let written = unsafe {
-        libc::proc_pidinfo(
-            pid as libc::c_int,
-            PROC_PIDT_SHORTBSDINFO,
-            0,
-            &mut info as *mut _ as *mut libc::c_void,
-            size,
-        )
-    };
-    if written != size {
-        return None;
-    }
-    let name: Vec<u8> = info
-        .pbsi_comm
-        .iter()
-        .take_while(|c| **c != 0)
-        .map(|c| *c as u8)
-        .collect();
-    Some((info.pbsi_ppid, String::from_utf8_lossy(&name).into_owned()))
-}
-
-/// `ps` already lists every uid off macOS, so a missing row stays unknown.
-#[cfg(not(target_os = "macos"))]
-pub fn hidden_process(_pid: u32) -> Option<(u32, String)> {
-    None
+    Pid::new(pid).and_then(|p| p.short_bsd())
 }
 
 #[cfg(target_os = "macos")]
 fn process_table_libproc() -> (Vec<ProcRow>, usize) {
-    use std::mem;
-    // libc has no PROC_PIDLISTTHREADS constant.
-    const PROC_PIDLISTTHREADS: libc::c_int = 6;
-
     let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
     if count <= 0 {
         return (Vec::new(), 0);
@@ -258,23 +161,12 @@ fn process_table_libproc() -> (Vec<ProcRow>, usize) {
     let mut rows: Vec<ProcRow> = Vec::new();
     let mut unreadable = 0usize;
     for &pid in &pids[..filled as usize] {
-        let mut bsd: libc::proc_bsdinfo = unsafe { mem::zeroed() };
-        let bsd_size = mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-        let written = unsafe {
-            libc::proc_pidinfo(
-                pid as libc::c_int,
-                libc::PROC_PIDTBSDINFO,
-                0,
-                &mut bsd as *mut _ as *mut libc::c_void,
-                bsd_size,
-            )
-        };
-        // A short write is a pid that exited mid-walk or a kernel task:
+        // A short read is a pid that exited mid-walk or a kernel task:
         // neither belongs in the table, but both count as unreadable.
-        if written != bsd_size {
+        let Some(bsd) = Pid::new(pid).and_then(|p| p.bsd()) else {
             unreadable += 1;
             continue;
-        }
+        };
         // Zombies never reach this line: their proc_pidinfo read is a zero
         // write and was counted unreadable above, so the sysctl-based
         // pid_is_zombie would be a dead second read per pid here.
@@ -283,48 +175,21 @@ fn process_table_libproc() -> (Vec<ProcRow>, usize) {
         let mut usage_sum = 0i64;
         let mut state = if zombie { 'Z' } else { 'S' };
         if !zombie {
-            let mut task: libc::proc_taskinfo = unsafe { mem::zeroed() };
-            let task_size = mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
-            let got_task = unsafe {
-                libc::proc_pidinfo(
-                    pid as libc::c_int,
-                    libc::PROC_PIDTASKINFO,
-                    0,
-                    &mut task as *mut _ as *mut libc::c_void,
-                    task_size,
-                )
-            };
-            if got_task == task_size {
+            if let Some(task) = Pid::new(pid).and_then(|p| p.task()) {
                 rss_kb = task.pti_resident_size / 1024;
                 let mut handles = vec![0u64; task.pti_threadnum.max(0) as usize];
-                let got = unsafe {
-                    libc::proc_pidinfo(
-                        pid as libc::c_int,
-                        PROC_PIDLISTTHREADS,
-                        0,
-                        handles.as_mut_ptr().cast::<libc::c_void>(),
-                        (handles.len() * mem::size_of::<u64>()) as libc::c_int,
-                    )
-                };
+                let got = Pid::new(pid)
+                    .map(|p| p.thread_handles(&mut handles))
+                    .unwrap_or(0);
                 if got > 0 {
                     let mut any_running = false;
                     let mut any_stopped = false;
                     let mut any_uninterruptible = false;
-                    for handle in &handles[..got as usize / mem::size_of::<u64>()] {
-                        let mut thread: libc::proc_threadinfo = unsafe { mem::zeroed() };
-                        let thread_size = mem::size_of::<libc::proc_threadinfo>() as libc::c_int;
-                        let thread_written = unsafe {
-                            libc::proc_pidinfo(
-                                pid as libc::c_int,
-                                libc::PROC_PIDTHREADINFO,
-                                *handle,
-                                &mut thread as *mut _ as *mut libc::c_void,
-                                thread_size,
-                            )
-                        };
-                        if thread_written != thread_size {
+                    for handle in &handles[..got] {
+                        let Some(thread) = Pid::new(pid).and_then(|p| p.thread_info(*handle))
+                        else {
                             continue;
-                        }
+                        };
                         usage_sum += thread.pth_cpu_usage as i64;
                         match thread.pth_run_state {
                             1 => any_running = true,
@@ -432,38 +297,12 @@ pub(crate) fn process_argv(pid: u32) -> Option<Vec<String>> {
 }
 
 /// The parent pid of `pid`, for the spend journal's caller walk: the same
-/// `PROC_PIDTBSDINFO` read the table scan makes, one pid at a time.
-#[cfg(target_os = "macos")]
+/// read the table scan makes, one pid at a time.
 pub(crate) fn parent_pid(pid: u32) -> Option<u32> {
-    let mut bsd: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-    let written = unsafe {
-        libc::proc_pidinfo(
-            pid as libc::c_int,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            &mut bsd as *mut _ as *mut libc::c_void,
-            size,
-        )
-    };
-    (written == size).then_some(bsd.pbi_ppid)
+    Pid::new(pid).and_then(|p| p.parent_pid())
 }
 
-/// The `ps` leg: the ppid column of the same one-pid probe.
-#[cfg(not(target_os = "macos"))]
-pub(crate) fn parent_pid(pid: u32) -> Option<u32> {
-    let out = std::process::Command::new("ps")
-        .args(["-o", "ppid=", "-p", &pid.to_string()])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&out.stdout)
-        .trim()
-        .parse::<u32>()
-        .ok()
-}
+
 
 /// The `ps` leg. It splits on whitespace, so an argument that CONTAINS a
 /// space comes back as two. Every flag the conversion carries takes a

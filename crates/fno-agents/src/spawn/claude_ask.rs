@@ -18,6 +18,7 @@
 //! helpers). `bg_create` / `wait_for_reply` / `ask_followup` orchestration is
 //! layered on top in later waves within this module.
 
+use crate::pid::Pid;
 use std::borrow::Cow;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
@@ -1820,8 +1821,8 @@ pub fn bg_create(
                 // No confirmation within the deadline. claude prints the short-id
                 // AFTER it backgrounds the agent, so no agent has launched yet --
                 // SIGKILL the stalled launcher with nothing to orphan.
-                unsafe {
-                    libc::kill(pid as libc::pid_t, libc::SIGKILL);
+                if let Some(pid) = Pid::new(pid) {
+                    pid.signal(libc::SIGKILL);
                 }
                 let secs = d.as_secs_f64();
                 let secs_str = if secs.fract() == 0.0 {

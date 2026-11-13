@@ -18,6 +18,7 @@
 //! session delivers live now. Own sends and `control:` mail pass a hold; the
 //! receipt names when it ends.
 
+use crate::pid::Pid;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -758,7 +759,7 @@ fn parked_dir(handle: &str) -> PathBuf {
 }
 
 fn process_alive(pid: i32) -> bool {
-    unsafe { libc::kill(pid, 0) == 0 }
+    Pid::try_from(i64::from(pid)).is_some_and(|p| p.probe())
 }
 
 /// The park receipt, on the gate's time rule: a wall or grace clock names

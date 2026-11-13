@@ -15,6 +15,7 @@
 //! stderr (codex merges it, gemini drains it on a separate thread to keep the
 //! JSON parse pure). Everything below is identical for both.
 
+use crate::pid::{Pid, SignalResult};
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -68,10 +69,10 @@ pub fn ask_interrupted() -> bool {
 extern "C" fn forward_sigint_to_child(_sig: libc::c_int) {
     let pgid = ASK_CHILD_PGID.load(Ordering::SeqCst);
     if pgid > 0 && pgid != unsafe { libc::getpgrp() } {
-        // SAFETY: killpg and getpgrp are async-signal-safe; pgid is the
+        // getpgrp and the typed killpg stay async-signal-safe; pgid is the
         // child's group id, never our own (the ask spawners setpgid(0, 0)).
-        unsafe {
-            libc::killpg(pgid, libc::SIGINT);
+        if let Some(pgid) = Pid::try_from(i64::from(pgid)) {
+            let _ = pgid.signal_group(libc::SIGINT);
         }
     }
     ASK_INTERRUPTED.store(true, Ordering::SeqCst);
@@ -169,10 +170,14 @@ impl Drop for SigintForwarder {
 /// its own session shares the caller's group, and killpg would signal this
 /// whole tree (pytest workers, the step shell, the runner).
 pub fn kill_pgrp(pid: u32, sig: libc::c_int) -> bool {
-    unsafe {
-        let pgid = libc::getpgid(pid as libc::pid_t);
-        if pgid > 0 && pgid != libc::getpgrp() {
-            libc::killpg(pgid, sig);
+    let Some(pid) = Pid::new(pid) else {
+        return false;
+    };
+    // SAFETY: getpgid answers the group without signalling.
+    let pgid = unsafe { libc::getpgid(pid.as_raw()) };
+    if pgid > 0 && pgid != unsafe { libc::getpgrp() } {
+        if let Some(pgid) = Pid::try_from(i64::from(pgid)) {
+            let _ = pgid.signal_group(sig);
             return true;
         }
     }

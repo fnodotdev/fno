@@ -13,6 +13,7 @@
 //! `None` and the arm never fires - Linux allocators trim on their own free
 //! paths.
 
+use crate::pid::Pid;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -54,18 +55,7 @@ fn should_relief(rss_kb: Option<u64>) -> bool {
 /// cheap self read (the arm then never fires).
 #[cfg(target_os = "macos")]
 fn resident_kb() -> Option<u64> {
-    let mut task: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
-    let size = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
-    let written = unsafe {
-        libc::proc_pidinfo(
-            libc::getpid(),
-            libc::PROC_PIDTASKINFO,
-            0,
-            &mut task as *mut _ as *mut libc::c_void,
-            size,
-        )
-    };
-    (written == size).then(|| task.pti_resident_size / 1024)
+    Pid::current().task().map(|task| task.pti_resident_size / 1024)
 }
 
 #[cfg(not(target_os = "macos"))]

@@ -27,6 +27,7 @@
 //!   caller already takes on a policy error.
 
 use regex::Regex;
+use crate::pid::Pid;
 use serde_json::{json, Value};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -2447,8 +2448,8 @@ fn run_bounded_init(
                 // The child is its own group leader, so the kill reaches the
                 // grandchildren a forking init left behind.
                 timed_out = true;
-                unsafe {
-                    libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
+                if let Some(pid) = Pid::from_child(child) {
+                    let _ = pid.signal_group(libc::SIGKILL);
                 }
                 break child
                     .wait()

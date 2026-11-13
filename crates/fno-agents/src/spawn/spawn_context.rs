@@ -19,6 +19,7 @@ use crate::claims::{
 };
 use crate::paths::AgentsHome;
 use crate::state::load_registry;
+use crate::pid::{Pid, SignalResult};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
@@ -698,16 +699,12 @@ pub fn resolve_session_harness_ambient() -> Option<&'static str> {
 /// live pid, or the stamp is ignored and the walk decides.
 fn stamp_pid_is_live() -> bool {
     let pid_raw = std::env::var("FNO_SESSION_PID").unwrap_or_default();
-    match pid_raw.trim().parse::<u32>() {
-        Ok(0) | Err(_) => false,
-        Ok(pid) => match unsafe { libc::kill(pid as libc::pid_t, 0) } {
-            0 => true,
-            // EPERM proves the pid exists (another uid's process) - the
-            // same semantics psutil's pid_exists gives the retired python
-            // walk, which honored a cross-uid stamped pid.
-            -1 => std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM),
-            _ => false,
-        },
+    match pid_raw.trim().parse::<u64>() {
+        Err(_) => false,
+        // EPERM proves the pid exists (another uid's process) - the
+        // same semantics psutil's pid_exists gives the retired python
+        // walk, which honored a cross-uid stamped pid.
+        Ok(pid) => Pid::try_from(pid).map(|p| p.exists()).unwrap_or(false),
     }
 }
 
@@ -1628,7 +1625,7 @@ mod tests {
         // A dead stamped pid: the pair is ignored, the walk refuses -> None.
         let corpse = {
             let mut candidate = 4_194_300u32;
-            while unsafe { libc::kill(candidate as libc::pid_t, 0) } == 0 {
+            while Pid::new(candidate).is_some_and(|p| p.probe()) {
                 candidate += 1;
             }
             candidate

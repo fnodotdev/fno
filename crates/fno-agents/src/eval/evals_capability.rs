@@ -14,6 +14,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
+use crate::pid::Pid;
 use serde_json::{json, Value};
 
 use crate::claims;
@@ -247,9 +248,9 @@ pub(crate) fn run(r: &Run) -> i32 {
         }
     };
     if code.is_none() {
-        // SAFETY: the child leads its own session, so -pid is only its group.
-        unsafe {
-            libc::kill(-(child.id() as i32), libc::SIGKILL);
+        // The child leads its own session, so its pid is the group id.
+        if let Some(pid) = Pid::from_child(child) {
+            let _ = pid.signal_group(libc::SIGKILL);
         }
         let _ = child.wait();
     }
