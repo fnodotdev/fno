@@ -7074,7 +7074,7 @@
    "wizard": "never",
    "question": "",
    "default_source": "",
-   "doc": "Maintainer pin: a checkout root the Rust bootstrap re-provisions from (uv tool install <path>/cli) instead of the PyPI wheel when its tool venv is wiped. Unset = PyPI self-provision (end-user default)."
+   "doc": "Maintainer pin: a checkout root the Rust bootstrap re-provisions from (uv tool install <path>/cli) when its tool venv is wiped. Unset = the frozen 0.4.8 wheel self-provision (legacy end-user default)."
   },
   {
    "path": "loops",

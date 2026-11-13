@@ -1,18 +1,9 @@
 # hook-classes.tsv: the class of every hook registration in hooks/hooks.json (claude) and hooks/codex-hooks.json (codex).
 # Contract: docs/hooks-fail-open.md, "Four hook classes". Gate: scripts/ci/check-hook-classes.sh.
 # Columns (TAB-separated): harness, event, script, class (block|wait|next-turn|rewake), fail (open|closed for block, else -)
-claude	PreToolUse	write-gate.sh	block	closed
+claude	PreToolUse	pretool-gate.sh	block	closed
 claude	PreToolUse	worktree-write-protect.sh	block	open
-claude	PreToolUse	join-partition-write-guard.sh	block	open
 claude	PreToolUse	plan-location-guard.sh	block	open
-claude	PreToolUse	lead-delegation-guard.sh	block	open
-claude	PreToolUse	send-message-guard.sh	block	open
-claude	PreToolUse	pretooluse-bash-dispatch.sh	block	open
-claude	PreToolUse	effect-guard-dispatch.sh	block	open
-claude	PreToolUse	subagent-worktree-guard.sh	block	open
-claude	PreToolUse	rules-dispatch.sh	block	open
-claude	PreToolUse	session-state.sh	wait	-
-claude	PreToolUse	inject-control-drain-tool-boundary.sh	wait	-
 claude	PreToolUse	review-hold.sh	block	open
 claude	PermissionRequest	worktree-relocation-allow.sh	block	closed
 claude	Notification	session-state.sh	wait	-

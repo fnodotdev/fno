@@ -502,30 +502,6 @@ row_install_sh_alias() {
   fi
 }
 
-row_pypi_uv() {
-  assert_clean_machine
-  install_uv_astral || return 0
-  run_capture uv tool install fno
-  if [ "$RC" -ne 0 ]; then
-    miss "uv-tool-install" "rc=$RC: $(printf '%s' "$OUT" | tail -1)"
-    return 0
-  fi
-  shared_smoke "$HOME/.local/bin"
-}
-
-row_pypi_uv_pinned() {
-  assert_clean_machine
-  install_uv_astral || return 0
-  local version
-  version="$(newest_release_version)" || { miss "release" "could not read the newest release version"; return 0; }
-  run_capture uv tool install "fno==$version"
-  if [ "$RC" -ne 0 ]; then
-    miss "uv-tool-install" "rc=$RC: $(printf '%s' "$OUT" | tail -1)"
-    return 0
-  fi
-  shared_smoke "$HOME/.local/bin"
-}
-
 row_brew() {
   assert_clean_machine
   export PATH="/opt/homebrew/bin:$PATH"
@@ -820,8 +796,6 @@ run_row() {
     fno-sh-nightly)        row_fno_sh_nightly ;;
     fno-sh-fresh)          row_fno_sh_fresh ;;
     install-sh-alias)      row_install_sh_alias ;;
-    pypi-uv)               row_pypi_uv ;;
-    pypi-uv-pinned)        row_pypi_uv_pinned ;;
     brew)                  row_brew ;;
     cargo)                 row_cargo ;;
     skills-sh)             row_skills_sh ;;

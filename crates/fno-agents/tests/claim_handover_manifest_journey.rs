@@ -107,6 +107,7 @@ fn run(sandbox: &Sandbox, args: &[&str]) -> (i32, String, String) {
         .env("FNO_EVENTS_PATH", sandbox.base.join("events.jsonl"))
         .envs(fno_agents::test_run::self_owner_env())
         .env("FNO_HARNESS_NAME", "claude")
+        .env("FNO_HARNESS_SESSION_ID", "")
         .env("CLAUDE_CODE_SESSION_ID", "")
         .env("CODEX_THREAD_ID", "")
         .env("CODEX_SESSION_ID", "")
@@ -126,6 +127,38 @@ fn run(sandbox: &Sandbox, args: &[&str]) -> (i32, String, String) {
 
 /// A pid guaranteed dead on this host: wait() reaped it, so the pid is free
 /// and the claim it anchors reads suspect, never live.
+/// The run() env with the claude marker SET: the ambient-identity half of
+/// the holder-default contract (the default run() scrubs it).
+fn run_ambient(sandbox: &Sandbox, session_id: &str, args: &[&str]) -> (i32, String, String) {
+    let out = Command::new(binary_path())
+        .args(args)
+        .current_dir(&sandbox.repo)
+        .env("FNO_CLAIMS_ROOT", &sandbox.claims_root)
+        .env("FNO_STATE_DIR", sandbox.base.join("state"))
+        .env("FNO_AGENTS_HOME", sandbox.base.join("agents-home"))
+        .env("FNO_SPACES_DIR", sandbox.base.join("spaces"))
+        .env("FNO_EVENTS_PATH", sandbox.base.join("events.jsonl"))
+        .envs(fno_agents::test_run::self_owner_env())
+        .env("FNO_HARNESS_NAME", "claude")
+        .env("FNO_HARNESS_SESSION_ID", session_id)
+        .env("CLAUDE_CODE_SESSION_ID", session_id)
+        .env("CODEX_THREAD_ID", "")
+        .env("CODEX_SESSION_ID", "")
+        .env("CODEX_COMPANION_SESSION_ID", "")
+        .env("CODEX_COMPANION_TRANSCRIPT_PATH", "")
+        .env("GEMINI_SESSION_ID", "")
+        .env("OPENCODE_SESSION_ID", "")
+        .env("CLAUDE_SESSION_ID", "")
+        .env("PI_SESSION_ID", "")
+        .output()
+        .expect("run fno-agents");
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
 fn waited_dead_pid() -> u32 {
     let mut child = Command::new("true").spawn().expect("spawn true");
     child.wait().expect("reap child");
@@ -260,4 +293,64 @@ fn suspect_prior_claim_adopts_as_handover_and_heals_manifest() {
         "the adopt must answer the handover form: {stdout}"
     );
     assert_manifest_unblocked(&manifest);
+}
+
+/// The ambient holder default (the measured refusal fold): a bare acquire
+/// inside a harness session holds the claim under the caller's own session
+/// id, announced on stderr; a scrubbed shell still refuses, naming the flag
+/// and the way out.
+#[test]
+fn bare_acquire_defaults_holder_to_the_ambient_session_id() {
+    let sandbox = Sandbox::new("holder-default");
+    let sid = "0f1e2d3c-1111-2222-3333-444455556666";
+    let (rc, stdout, stderr) = run_ambient(
+        &sandbox,
+        sid,
+        &[
+            "claim",
+            "acquire",
+            "node:x-hd1",
+            "--ttl",
+            "30m",
+            "--pid-unavailable",
+            "--reason",
+            "ambient default",
+        ],
+    );
+    assert_eq!(
+        rc, 0,
+        "bare acquire must default --holder: {stdout} / {stderr}"
+    );
+    assert!(
+        stderr.contains("note: --holder defaulted"),
+        "the default must be announced: {stderr}"
+    );
+    let (rc, status_out, status_err) = run(&sandbox, &["claim", "status", "node:x-hd1", "--json"]);
+    assert_eq!(rc, 0, "status failed: {status_out} / {status_err}");
+    assert!(
+        status_out.contains(sid),
+        "the claim must be held by the ambient session id: {status_out}"
+    );
+}
+
+#[test]
+fn bare_acquire_without_ambient_identity_refuses_naming_the_flag() {
+    let sandbox = Sandbox::new("holder-scrubbed");
+    let (rc, stdout, stderr) = run(
+        &sandbox,
+        &[
+            "claim",
+            "acquire",
+            "node:x-hd2",
+            "--ttl",
+            "30m",
+            "--pid-unavailable",
+        ],
+    );
+    assert_eq!(rc, 2, "a scrubbed shell must refuse: {stdout} / {stderr}");
+    assert!(stderr.contains("--holder is required"), "{stderr}");
+    assert!(
+        stderr.contains("--holder <session-id>"),
+        "the refusal must name the way out: {stderr}"
+    );
 }

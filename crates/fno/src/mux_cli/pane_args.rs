@@ -42,7 +42,9 @@ runs keeper-hosted, so any pane outlives its server and a fresh server re-adopts
 (`fno mux pane keeper list` reads them); a keeper that cannot start falls back to an inline pane \
 marked unkept, and `fno mux kill-server` refuses while one is live. A run without --worker \
 records no member. pane run --size 144x40 sets the pane's columns and rows; a client that views \
-its tab later fits it to that screen.";
+its tab later fits it to that screen. pane run --shot <out.png> [--rect x,y,w,h | --window-id <n>] \
+[--timeout <secs>] takes one screen capture and prints its path: the pane runs under the mux \
+server's terminal app, which holds Screen Recording when your own shell does not.";
 
 /// What the `fno_id` column answers, stated where the listing is
 /// read: identity, never idleness or reusability. The dash is reserved for
@@ -171,6 +173,9 @@ pub fn parse_pane_args(
         let mut at_current = false;
         let mut max_panes = None;
         let mut size = None;
+        let mut shot: Option<String> = None;
+        let mut shot_area: Option<pane_shot::Area> = None;
+        let mut shot_timeout: Option<std::time::Duration> = None;
         // run keeps the common flags as loop arms, not a fence-less
         // MuxCommon::take: everything from the first bare token or `--` is
         // the spawned command's argv verbatim, and a payload token that
@@ -315,13 +320,51 @@ pub fn parse_pane_args(
                     size = Some(parse_size(v)?);
                     i += 1;
                 }
+                "--shot" | "--rect" | "--window-id" | "--timeout" => {
+                    let Some(v) = sargs.get(i + 1) else {
+                        return Err(format!("{tok} needs a value"));
+                    };
+                    match tok {
+                        "--shot" => shot = Some(v.clone()),
+                        "--rect" | "--window-id" if shot_area.is_some() => {
+                            return Err("--rect and --window-id are one choice".into())
+                        }
+                        "--rect" => {
+                            shot_area = Some(pane_shot::parse_rect(v).ok_or_else(|| {
+                                format!("--rect needs x,y,w,h as four non-negative integers (w and h above 0), got {v:?}")
+                            })?)
+                        }
+                        "--window-id" => {
+                            shot_area =
+                                Some(pane_shot::Area::Window(v.parse().map_err(|_| {
+                                    format!("--window-id needs a number, got {v:?}")
+                                })?))
+                        }
+                        _ => {
+                            let secs =
+                                v.parse::<u64>().ok().filter(|n| *n > 0).ok_or_else(|| {
+                                    format!(
+                                        "--timeout needs a positive number of seconds, got {v:?}"
+                                    )
+                                })?;
+                            shot_timeout = Some(std::time::Duration::from_secs(secs));
+                        }
+                    }
+                    i += 1;
+                }
                 t if t.starts_with("--") => return Err(format!("unknown flag: {t}")),
                 _ => break, // first bare token begins the command argv
             }
             i += 1;
         }
         let argv = sargs[i..].to_vec();
-        if argv.is_empty() {
+        if shot.is_none() && (shot_area.is_some() || shot_timeout.is_some()) {
+            return Err("--rect, --window-id and --timeout belong to --shot".into());
+        }
+        if shot.is_some() && !argv.is_empty() {
+            return Err("--shot writes its own command; give it no payload after the flags".into());
+        }
+        if argv.is_empty() && shot.is_none() {
             return Err("pane run needs a command".to_string());
         }
         let mut fallback = PlacementFallback::NewTab;
@@ -361,6 +404,20 @@ pub fn parse_pane_args(
         };
         if let Some((_, msg)) = crate::server::placement_fit::refuse_fit_with_geometry(&placement) {
             return Err(msg);
+        }
+        if let Some(out) = shot {
+            let spec = pane_shot::ShotSpec {
+                out,
+                area: shot_area.unwrap_or(pane_shot::Area::Display),
+                timeout: shot_timeout.unwrap_or(pane_shot::DEFAULT_TIMEOUT),
+                cwd,
+                placement,
+            };
+            return Ok(ParsedPane {
+                session,
+                json,
+                cmd: PaneCmd::Shot(Box::new(spec)),
+            });
         }
         return Ok(ParsedPane {
             session,
@@ -631,6 +688,30 @@ pub fn parse_pane_args(
         session = selector_session;
     }
     Ok(ParsedPane { session, json, cmd })
+}
+
+/// Resolve `pane run --cwd` to an absolute path CLIENT-side. The server is a
+/// detached daemon with its own cwd, so a RELATIVE path would resolve against
+/// the wrong directory there (gemini review). Absolute passes through; a
+/// relative path is joined onto `client_cwd`; omitted defaults to `client_cwd`.
+/// `client_cwd` is passed in (not read here) so the branch is unit-testable.
+pub(crate) fn resolve_run_cwd(
+    cwd: Option<String>,
+    client_cwd: Option<std::path::PathBuf>,
+) -> String {
+    let join = |rel: &str| -> Option<String> {
+        client_cwd
+            .as_ref()
+            .map(|d| d.join(rel).to_string_lossy().into_owned())
+    };
+    match cwd {
+        Some(c) if std::path::Path::new(&c).is_absolute() => c,
+        Some(c) => join(&c).unwrap_or(c),
+        None => client_cwd
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    }
 }
 
 /// `--size 144x40`: columns, then rows, each 1..=1000.

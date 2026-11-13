@@ -190,7 +190,7 @@ pub(crate) fn emit(refusals: &[Refusal], notices: &[String]) -> (i32, bool) {
     let mut parts: Vec<String> = refusals.iter().map(Refusal::render).collect();
     parts.extend(notices.iter().cloned());
     let reason = parts.join("\n\n");
-    println!("{}", answer(&reason, ask));
+    super::emit_line(&answer(&reason, ask).to_string());
     (0, ask)
 }
 

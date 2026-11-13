@@ -22,7 +22,6 @@ release.yml
 pitfalls.yml
 release-app.yml
 release-binaries.yml
-release-wheels.yml
 review-coverage-gate.yml
 skill-limitations.yml
 rust-ci.yml

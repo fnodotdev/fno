@@ -1606,11 +1606,21 @@ shoot a root whose fleet map has seats \
                 super::backlog_board::focus_card(b, focus.as_deref());
             }
             if !b.body.as_ref().is_some_and(|body| !body.lanes.is_empty()) {
-                return Err(
-                    "backlog view rendered empty: this root has no backlog nodes; \
-shoot a root seeded with nodes (scripts/ops/mux-demo-snapshot.sh seeds one)"
-                        .into(),
+                let read = b.inputs.as_ref().map_or_else(
+                    || "the gather never landed".to_string(),
+                    |i| {
+                        format!(
+                            "gather read {} rows, rows_error {:?}, errors {:?}",
+                            i.rows.len(),
+                            i.rows_error,
+                            b.errors
+                        )
+                    },
                 );
+                return Err(format!(
+                    "backlog view rendered empty ({read}); \
+shoot a root seeded with nodes (scripts/ops/mux-demo-snapshot.sh seeds one)"
+                ));
             }
         }
         Some(ViewKind::TabMenu) => {

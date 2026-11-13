@@ -7,14 +7,14 @@
 # both call it, so all surfaces stay in lockstep by construction.
 #
 # Accepts one PEP 440 version; cargo refuses PEP 440 spellings, so the
-# Cargo.toml files get the semver form while packaging/pypi/VERSION and the
-# JSON manifests keep the PEP 440 string:
-#   X.Y.Z        -> VERSION / JSON: X.Y.Z                 Cargo.toml: X.Y.Z
-#   X.Y.ZrcN     -> VERSION / JSON: X.Y.ZrcN              Cargo.toml: X.Y.Z-rc.N
-#   X.Y.Z.devN   -> VERSION / JSON: X.Y.Z.devN            Cargo.toml: X.Y.Z-dev.N
+# Cargo.toml files get the semver form while the JSON manifests keep the
+# PEP 440 string:
+#   X.Y.Z        -> JSON: X.Y.Z                 Cargo.toml: X.Y.Z
+#   X.Y.ZrcN     -> JSON: X.Y.ZrcN              Cargo.toml: X.Y.Z-rc.N
+#   X.Y.Z.devN   -> JSON: X.Y.Z.devN            Cargo.toml: X.Y.Z-dev.N
 # Any other shape exits 2. --check compares every other surface against
-# packaging/pypi/VERSION (the PEP 440 anchor hatchling reads), so a
-# hand-patched crate version fails the drift guard.
+# .claude-plugin/plugin.json (the PEP 440 anchor), so a hand-patched crate
+# version fails the drift guard.
 #
 # Version-agnostic: it overwrites whatever is there with $1, so it works from any
 # starting version and imposes no zero-padding (0.3.9 -> 0.3.10 -> 0.3.100 is
@@ -50,7 +50,7 @@ is_release_version() {
 }
 
 # The manifests whose top-level `"version"` must track the release. --check
-# compares every one of them against packaging/pypi/VERSION.
+# compares every one of them against the plugin.json anchor.
 # buddy is deliberately absent: it versions on its own (0.0.1 today); a release
 # is a PR that bumps its plugin.json, never fno's stable promotion.
 JSON_MANIFESTS=(
@@ -77,15 +77,14 @@ LOCK_ONLY_MANIFESTS=(
   crates/fno-app/Cargo.toml
 )
 
-# --check: fail (exit 1) if any surface disagrees with the wheel version. The
-# drift guard that would have caught the plugins stranded at 0.2.x. Read-only.
-# The anchor is packaging/pypi/VERSION: since the Python deletion it is the
-# only PEP 440 source of truth in the tree (the __init__.py read this once
-# anchored on went away with it).
+# --check: fail (exit 1) if any surface disagrees with the anchored version.
+# The drift guard that would have caught the plugins stranded at 0.2.x. Read-only.
+# The anchor is .claude-plugin/plugin.json: since the wheel went frozen it is
+# the only PEP 440 source of truth in the tree.
 if [[ "$arg" == "--check" ]]; then
-  want_pep="$(tr -d '[:space:]' < packaging/pypi/VERSION)"
+  want_pep="$(perl -ne 'if (/"version"\s*:\s*"([^"]*)"/) { print $1; exit }' .claude-plugin/plugin.json)"
   is_release_version "$want_pep" || {
-    echo "sync-version: packaging/pypi/VERSION does not hold an X.Y.Z, X.Y.ZrcN or X.Y.Z.devN version: '$want_pep'" >&2
+    echo "sync-version: .claude-plugin/plugin.json does not hold an X.Y.Z, X.Y.ZrcN or X.Y.Z.devN version: '$want_pep'" >&2
     exit 1
   }
   want_semver="$(pep_to_semver "$want_pep")"
@@ -130,12 +129,6 @@ is_release_version "$ver" || {
   exit 2
 }
 semver="$(pep_to_semver "$ver")"
-
-# 0. The bridge wheel's VERSION file: one PEP 440 line, read by
-#    hatchling's regex version source and by --check as the anchor. Sits
-#    first so every surface below is stamped from the same call.
-mkdir -p packaging/pypi
-printf '%s\n' "$ver" > packaging/pypi/VERSION
 
 # 1. Rust crate manifests, in the semver form. `^version = ` matches
 #    only the [package] version (rust-version and dependency lines never start
