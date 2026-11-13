@@ -1227,7 +1227,10 @@ pub fn guard_client_spawn(
         }
         // The caller holds this refusal, so the first-turn watch owes it no
         // gate notice for the same launch.
-        let reason = verdict["reason"].as_str().unwrap_or("refused");
+        let reason = verdict
+            .pointer("/reason")
+            .and_then(Value::as_str)
+            .unwrap_or("refused");
         crate::spawn_watch::settle_refused(
             &crate::paths::AgentsHome::from_env(),
             caller_session,
