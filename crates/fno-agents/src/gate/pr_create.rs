@@ -639,12 +639,12 @@ fn emit_pr_opened(cwd: &Path, printed: &str, branch: &str) {
     else {
         return;
     };
-    let mut data = serde_json::json!({"pr": pr});
-    if let Some(node) = crate::eval::correction_fold::node_from_branch(branch) {
-        data["node"] = serde_json::json!(node);
-    }
+    let node = crate::eval::correction_fold::node_from_branch(branch);
+    let data = serde_json::json!({"pr": pr, "node": node});
     let emitter = crate::events::EventEmitter::new(crate::paths::events_path(cwd), "target");
-    let _ = emitter.emit("pr_opened", &data);
+    if let Err(e) = emitter.emit("pr_opened", &data) {
+        eprintln!("pr-create: the pr_opened row did not land: {e}");
+    }
 }
 
 fn run(a: &Args, gh: Gh) -> i32 {

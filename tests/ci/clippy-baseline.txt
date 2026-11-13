@@ -1,6 +1,30 @@
 # clippy ratchet baseline: one <crate>/<path><TAB><lint><TAB>line text> per line.
 # Written by scripts/ci/clippy-check.sh --write-baseline; regen after fixing
 # flagged lines or bumping CLIPPY_TOOLCHAIN in .github/workflows/rust-ci.yml.
+  crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::backlog::cli::run(&args[1..]));
+  crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::ci_front::run(&args[2..]));
+  crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::context_run::run_context_run(&args[1..]));
+  crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::delivery_eval::run(&args[1..]));
+  crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::eval_attempt::run_evals_attempt(&args[1..]));
+  crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::evals::run(&args[1..]));
+  crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::evals_arm::run_evals_arm(&args[1..]));
+  crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::evals_trend::run_evals_trend(&args[1..]));
+  crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::executor_route::run(&args[1..]));
+  crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::hook::dispatch(&args[1..]));
+  crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::mail_hold::run_mail_hold(&args[1..]));
+  crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::mail_notify_self::run(&args[1..]));
+  crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::pane_rebind::run(&args[1..]));
+  crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::pending_session_row::run(&args[1..]));
+  crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::pr_front::run(&args[1..]));
+  crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::pr_front::run(&args[2..]));
+  crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::pr_park::run(&args[1..]));
+  crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::pr_watch::run(&args[1..]));
+  crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::registry_commit::run(&args[1..]));
+  crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::resume_receipt::run(&args[1..]));
+  crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::rev_front::run(&args[1..]));
+  crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::scoreboard::run_scoreboard(&args[1..]));
+  crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::terminal_vocab::run_terminals(&args[1..]));
+  crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::wave::run(&args[1..]));
 crates/fno-agents/build.rs	clippy::indexing_slicing	"allowed_sources": seq_to_json(&parsed["envelope"]["properties"]["source"]["enum"]),
 crates/fno-agents/build.rs	clippy::indexing_slicing	"envelope_allowed": seq_to_json(&family["envelope"]["allowed"]),
 crates/fno-agents/build.rs	clippy::indexing_slicing	"envelope_required": seq_to_json(&family["envelope"]["required"]),
@@ -2405,32 +2429,6 @@ crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return run_node_route(&args[1..]);
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return run_reap(&args[1..]);
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return run_roster_reap(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::backlog::cli::run(&args[1..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::ci_front::run(&args[2..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::context_run::run_context_run(&args[1..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::delivery_eval::run(&args[1..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::eval_attempt::run_evals_attempt(&args[1..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::evals::run(&args[1..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::evals_arm::run_evals_arm(&args[1..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::evals_trend::run_evals_trend(&args[1..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::executor_route::run(&args[1..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::harness_roster::run_harness_roster(&args[1..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::hook::dispatch(&args[1..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::mail_hold::run_mail_hold(&args[1..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::mail_notify_self::run(&args[1..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::pane_rebind::run(&args[1..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::pending_session_row::run(&args[1..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::pr_front::run(&args[1..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::pr_front::run(&args[2..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::pr_park::run(&args[1..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::pr_watch::run(&args[1..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::registry_commit::run(&args[1..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::resume_receipt::run(&args[1..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::rev_front::run(&args[1..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::scoreboard::run_scoreboard(&args[1..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::surface_check::run_surface_check(&args[1..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::terminal_vocab::run_terminals(&args[1..]));
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	std::process::exit(fno_agents::wave::run(&args[1..]));
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	with_loaded["codex_loaded"] = fno_agents::codex_inject::loaded_threads_block(
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	} else if fno_agents::resume_args::requests_conversion(&args[1..]) {
 crates/fno-agents/src/bin/client.rs	clippy::let_underscore_must_use	let _ = std::io::stdout().flush();

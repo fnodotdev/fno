@@ -585,10 +585,7 @@ pub(crate) fn emit_node_done(
     pr_number: Option<i64>,
     checkout: Option<&Path>,
 ) {
-    let mut data = json!({"node_id": node_id, "via": via});
-    if let Some(pr) = pr_number {
-        data["pr_number"] = json!(pr);
-    }
+    let data = json!({"node_id": node_id, "via": via, "pr_number": pr_number});
     let Some(cwd) = checkout.filter(|c| c.is_dir()) else {
         emit_event("node_done", data);
         return;
@@ -596,7 +593,9 @@ pub(crate) fn emit_node_done(
     if let Some(space) = crate::paths::space_dir_opt(cwd) {
         std::fs::create_dir_all(&space).ok();
         let emitter = crate::events::EventEmitter::new(space.join("events.jsonl"), "backlog");
-        let _ = emitter.emit("node_done", &data);
+        if let Err(e) = emitter.emit("node_done", &data) {
+            eprintln!("fno backlog: the node_done row did not land: {e}");
+        }
     }
 }
 

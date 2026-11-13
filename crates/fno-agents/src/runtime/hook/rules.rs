@@ -73,7 +73,9 @@ fn emit_skill_invoked(cwd: &Path, ev: &Event) {
         "harness": ev.harness.as_deref().unwrap_or("unknown"),
         "via": via,
     });
-    let _ = crate::events::EventEmitter::new(path, "hook").emit("skill_invoked", &data);
+    if let Err(e) = crate::events::EventEmitter::new(path, "hook").emit("skill_invoked", &data) {
+        eprintln!("rules hook: the skill_invoked row did not land: {e}");
+    }
 }
 
 /// The event a payload describes, or `None` for a payload with nothing to

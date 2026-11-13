@@ -639,7 +639,9 @@ pub fn take_cli_start() {
         }
         _ => None,
     };
-    let _ = CLI_START.set(handed);
+    if CLI_START.set(handed).is_err() {
+        eprintln!("fno-agents: the handed-over command was already read");
+    }
 }
 
 /// Write the `cli_command` row for a handed-over command, then exit.
@@ -653,7 +655,9 @@ pub fn exit_cli(code: i32) -> ! {
             "duration_ms": (otlp_export::now_ms() - start).max(0),
         });
         let emitter = crate::runtime::events::EventEmitter::new(home.events_jsonl(), "cli");
-        let _ = emitter.emit("cli_command", &data);
+        if let Err(e) = emitter.emit("cli_command", &data) {
+            eprintln!("fno-agents: the cli_command row did not land: {e}");
+        }
     }
     std::process::exit(code)
 }
@@ -776,7 +780,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = crate::paths::AgentsHome::at(dir.path());
         let journals = test_journals(dir.path(), &home);
-        for path in [&journals.global, &journals.spaces[0]] {
+        let space = journals.spaces.first().cloned().unwrap();
+        for path in [&journals.global, &space] {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         }
         let at = |path: &PathBuf, source: &str| {
@@ -820,31 +825,31 @@ mod tests {
                        "branch": secret}),
             ),
             (
-                &journals.spaces[0],
+                &space,
                 "hook",
                 "guard_decision",
                 json!({"guard": "git-protection", "decision": "allow", "tool": "Bash"}),
             ),
             (
-                &journals.spaces[0],
+                &space,
                 "hook",
                 "guard_decision",
                 json!({"guard": "git-protection", "decision": "block", "tool": "Bash"}),
             ),
             (
-                &journals.spaces[0],
+                &space,
                 "hook",
                 "skill_invoked",
                 json!({"skill": "fno:target", "harness": "claude", "via": "tool"}),
             ),
             (
-                &journals.spaces[0],
+                &space,
                 "target",
                 "pr_opened",
                 json!({"pr": 141, "node": "x-aaaa", "title": secret}),
             ),
             (
-                &journals.spaces[0],
+                &space,
                 "backlog",
                 "node_done",
                 json!({"node_id": "x-aaaa", "via": "reconcile", "pr_number": 141}),
@@ -869,28 +874,34 @@ mod tests {
         let named = |event: &str| -> Vec<&Map<String, Value>> {
             batch
                 .iter()
-                .filter(|b| b.2["event"] == event)
-                .map(|b| b.2["properties"].as_object().unwrap())
+                .filter(|b| b.2.get("event") == Some(&json!(event)))
+                .map(|b| b.2.get("properties").and_then(Value::as_object).unwrap())
                 .collect()
+        };
+        let first = |rows: &[&Map<String, Value>], key: &str| -> Value {
+            rows.first()
+                .and_then(|m| m.get(key))
+                .cloned()
+                .unwrap_or(Value::Null)
         };
         let cli = named("fno_cli_command");
         assert_eq!(cli.len(), 1);
-        assert_eq!(cli[0]["command"], "backlog get");
-        assert_eq!(cli[0]["duration_ms"], 41);
+        assert_eq!(first(&cli, "command"), "backlog get");
+        assert_eq!(first(&cli, "duration_ms"), 41);
         let merges = named("fno_merge_cleanup_requested");
         assert_eq!(merges.len(), 1, "a re-mint ships once");
-        assert_eq!(merges[0]["node_ids"], json!(["x-aaaa"]));
-        assert_eq!(merges[0]["pr"], 7);
+        assert_eq!(first(&merges, "node_ids"), json!(["x-aaaa"]));
+        assert_eq!(first(&merges, "pr"), 7);
         let runs = named("fno_run_recorded");
-        assert_eq!(runs[0]["status"], "started");
-        assert_eq!(runs[0]["graph_node_id"], "x-aaaa");
-        assert_eq!(named("fno_review_attestation")[0]["verdict"], "pass");
+        assert_eq!(first(&runs, "status"), "started");
+        assert_eq!(first(&runs, "graph_node_id"), "x-aaaa");
+        assert_eq!(first(&named("fno_review_attestation"), "verdict"), "pass");
         let guards = named("fno_guard_decision");
         assert_eq!(guards.len(), 1, "allow stays home, one home read");
-        assert_eq!(guards[0]["decision"], "block");
-        assert_eq!(named("fno_skill_invoked")[0]["skill"], "fno:target");
-        assert_eq!(named("fno_pr_opened")[0]["pr"], 141);
-        assert_eq!(named("fno_node_done")[0]["via"], "reconcile");
+        assert_eq!(first(&guards, "decision"), "block");
+        assert_eq!(first(&named("fno_skill_invoked"), "skill"), "fno:target");
+        assert_eq!(first(&named("fno_pr_opened"), "pr"), 141);
+        assert_eq!(first(&named("fno_node_done"), "via"), "reconcile");
         let allowed: Vec<&str> = STRING_FIELDS
             .iter()
             .chain(INT_FIELDS)
