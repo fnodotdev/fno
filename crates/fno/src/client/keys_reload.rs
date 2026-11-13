@@ -130,7 +130,7 @@ mod tests {
         assert!(warning.0.contains("split-right"), "{warning:?}");
         assert_eq!(watch.poll(now, &files, bad), Reload::Unchanged);
         touch(2);
-        let good = || crate::keys::resolve_keymap(Some("5"), &[("split-right".into(), "=".into())]);
+        let good = || crate::keys::resolve_keymap(Some("5"), &[("split-right".into(), "-".into())]);
         assert_eq!(watch.poll(now, &files, good), Reload::Reloaded(good().0));
     }
 }

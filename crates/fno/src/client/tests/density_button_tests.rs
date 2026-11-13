@@ -16,7 +16,7 @@ fn density_button_click_routes_to_the_cycle() {
         Some(ChromeHit::CycleDensity)
     ));
     assert_eq!(
-        crate::keys::resolve_chord(b'B'),
+        crate::keys::resolve_chord(b'='),
         crate::keys::Event::CycleDensity
     );
     assert_eq!(
