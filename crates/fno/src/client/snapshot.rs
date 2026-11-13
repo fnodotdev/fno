@@ -1763,7 +1763,7 @@ pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
         | Some(ViewKind::MessagesAsksTopics)
         | None => {}
         Some(ViewKind::Decisions) => {
-            let node = "x-0e5b";
+            let node = "x-aaaa";
             let rows = serde_json::from_value(serde_json::json!([
                 {"decision_id":"d-1","decision":"Meter usage in whole units","subject":node,"subject_node":node,"subject_pr":"","subject_text":"","decided_by":"ada","authority_source":"operator","quote":"count whole units only","ts":"2026-11-03T09:00:00Z","lifecycle":"live","lane":"law","question":"Round partial units up?"},
                 {"decision_id":"d-2","decision":"Hold the build until the queue drains","subject":"example/app#118","subject_node":"","subject_pr":"#118","subject_text":"","decided_by":"7c1e9a02-1111-4222-8333-444455556666","decided_by_name":"bo","authority_source":"role","ts":"2026-11-02T15:30:00Z","lifecycle":"live","lane":"coord"},
