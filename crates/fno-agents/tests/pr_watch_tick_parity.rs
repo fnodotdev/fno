@@ -103,8 +103,9 @@ fn write_case(root: &Path, case: &Case, leg: &str) -> Home {
     for path in [&stub, &fire] {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
+    // The stub PRs carry fixed 2026-10 created_at stamps; the default 14-day age cut parks them once the wall clock passes it.
     let config = format!(
-        "state_dir = \"{}\"\n\n[pr_watch]\nenabled = {}\ninterval_seconds = 600\n\n[autonomy]\nenabled = true\n\n[recovery]\nenabled = false\n\n[evals]\nschedule_days = 0\n\n[review]\ngithub_apps = [\"bot\"]\n",
+        "state_dir = \"{}\"\n\n[pr_watch]\nenabled = {}\ninterval_seconds = 600\nmax_age_days = 36500\n\n[autonomy]\nenabled = true\n\n[recovery]\nenabled = false\n\n[evals]\nschedule_days = 0\n\n[review]\ngithub_apps = [\"bot\"]\n",
         state.display(), case.enabled
     );
     std::fs::write(state.join("config.toml"), &config).unwrap();
