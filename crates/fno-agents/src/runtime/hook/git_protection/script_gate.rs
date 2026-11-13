@@ -727,7 +727,7 @@ mod tests {
             ("d1.sh", "bash d2.sh\n"),
             ("d2.sh", "bash d3.sh\nline\n"),
             ("d3.sh", "bash d4.sh\n"),
-            ("d4.sh", "git push origin main\n"),
+            ("d4.sh", "echo built\n"),
         ] {
             std::fs::write(dir.path().join(name), body).unwrap();
         }
@@ -738,6 +738,27 @@ mod tests {
             matches!(&verdict, Verdict::Warn(text) if text.contains("nests more than 3")),
             "{verdict:?}"
         );
+    }
+
+    /// The depth-cap refusal carries the nested script's own text as its
+    /// command, so a readable deep script holding a push refuses: the push
+    /// is real, and the command text that shows it is the script's.
+    #[test]
+    fn a_chain_whose_deep_readable_script_pushes_refuses() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, body) in [
+            ("d1.sh", "bash d2.sh\n"),
+            ("d2.sh", "bash d3.sh\nline\n"),
+            ("d3.sh", "bash d4.sh\n"),
+            ("d4.sh", "git push origin main\n"),
+        ] {
+            std::fs::write(dir.path().join(name), body).unwrap();
+        }
+        let fake = feature(dir.path());
+        let c = ctx(dir.path(), &fake);
+        let refusal = judge_with(&bash("bash d1.sh"), &c)
+            .unwrap_or_else(|| panic!("allowed: a chain whose deep script pushes"));
+        assert!(refusal.contains("nests more than 3"), "{refusal}");
     }
 
     #[test]
