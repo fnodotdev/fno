@@ -284,9 +284,12 @@ run_setup_once() {
 	[ -n "${FNO_YES:-}" ] && _yes="--yes"
 	if [ -z "$_yes" ] \
 		&& [ ! -f "$FNO_STATE/sidecar/wizard-done" ] \
-		&& ( </dev/tty ) 2>/dev/null; then
+		&& ( : </dev/tty ) 2>/dev/null; then
 		say "opening the setup wizard; Ctrl-C skips it and keeps the install."
-		if "$FNO_BIN/fno" do wizard </dev/tty; then
+		# Quoted words, not style: shellcheck reads a bare `do` argument as
+		# the loop keyword (SC1010), so the quoted spelling keeps the gate
+		# quiet and the argv identical.
+		if "$FNO_BIN/fno" "do" "wizard" </dev/tty; then
 			return 0
 		fi
 		say "the wizard did not finish. run fno to finish setup."
