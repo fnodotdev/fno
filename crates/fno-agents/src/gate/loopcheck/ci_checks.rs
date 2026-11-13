@@ -250,4 +250,21 @@ mod tests {
         let only_cancel = json!([{"name": "channel (fno-sh-fresh)", "bucket": "cancel"}]);
         assert!(!outside_hold_only(&only_cancel));
     }
+
+    #[test]
+    fn a_merged_pr_names_its_unpassed_checks() {
+        let payload = json!([
+            {"name": "a", "bucket": "pass"},
+            {"name": "b", "bucket": "pending"},
+            {"name": "c", "bucket": "pending"},
+            {"name": "d", "bucket": "fail"}
+        ]);
+        assert_eq!(unpassed_check_counts(&payload), (2, 1));
+        assert_eq!(
+            merged_unsettled_message(9, Some((2, 1))).as_deref(),
+            Some("PR #9 merged with checks not passed at its head (2 pending, 1 failing); merged, not green")
+        );
+        assert_eq!(merged_unsettled_message(9, Some((0, 0))), None);
+        assert_eq!(merged_unsettled_message(9, None), None);
+    }
 }
