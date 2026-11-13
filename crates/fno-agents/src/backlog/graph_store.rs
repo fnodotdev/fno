@@ -354,7 +354,40 @@ pub fn to_python_pretty_json(value: &Value) -> String {
     out
 }
 
-fn write_value(value: &Value, indent: usize, out: &mut String) {
+/// Where the serializer's bytes land: the String `to_python_pretty_json`
+/// builds, or a sha2 digest hashing the content version, which takes the
+/// same bytes without building the per-row String.
+trait PythonJsonSink {
+    fn push_str(&mut self, s: &str);
+    fn push_char(&mut self, c: char);
+}
+
+impl PythonJsonSink for String {
+    fn push_str(&mut self, s: &str) {
+        String::push_str(self, s);
+    }
+    fn push_char(&mut self, c: char) {
+        String::push(self, c);
+    }
+}
+
+impl PythonJsonSink for sha2::Sha256 {
+    fn push_str(&mut self, s: &str) {
+        sha2::Digest::update(self, s.as_bytes());
+    }
+    fn push_char(&mut self, c: char) {
+        let mut buf = [0u8; 4];
+        sha2::Digest::update(self, c.encode_utf8(&mut buf).as_bytes());
+    }
+}
+
+/// Streams the exact bytes `to_python_pretty_json` builds into any sink,
+/// one pass, no per-row String. The content-version hash reads this.
+pub(crate) fn write_python_pretty_json_into<J: PythonJsonSink>(value: &Value, out: &mut J) {
+    write_value(value, 0, out);
+}
+
+fn write_value<J: PythonJsonSink>(value: &Value, indent: usize, out: &mut J) {
     match value {
         Value::Null => out.push_str("null"),
         Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
@@ -371,12 +404,12 @@ fn write_value(value: &Value, indent: usize, out: &mut String) {
                 out.push_str(&pad);
                 write_value(item, indent + 1, out);
                 if i + 1 < items.len() {
-                    out.push(',');
+                    out.push_char(',');
                 }
-                out.push('\n');
+                out.push_char('\n');
             }
             out.push_str(&"  ".repeat(indent));
-            out.push(']');
+            out.push_char(']');
         }
         Value::Object(map) => {
             if map.is_empty() {
@@ -391,18 +424,18 @@ fn write_value(value: &Value, indent: usize, out: &mut String) {
                 out.push_str(": ");
                 write_value(v, indent + 1, out);
                 if i + 1 < map.len() {
-                    out.push(',');
+                    out.push_char(',');
                 }
-                out.push('\n');
+                out.push_char('\n');
             }
             out.push_str(&"  ".repeat(indent));
-            out.push('}');
+            out.push_char('}');
         }
     }
 }
 
-fn write_json_string(s: &str, out: &mut String) {
-    out.push('"');
+fn write_json_string<J: PythonJsonSink>(s: &str, out: &mut J) {
+    out.push_char('"');
     for ch in s.chars() {
         match ch {
             '"' => out.push_str("\\\""),
@@ -415,7 +448,7 @@ fn write_json_string(s: &str, out: &mut String) {
             c if (c as u32) < 0x20 => {
                 out.push_str(&format!("\\u{:04x}", c as u32));
             }
-            c if (c as u32) <= 0x7e => out.push(c),
+            c if (c as u32) <= 0x7e => out.push_char(c),
             // ensure_ascii: everything above DEL becomes \uXXXX, with a
             // surrogate pair past the BMP, matching Python's json module.
             c => {
@@ -431,7 +464,7 @@ fn write_json_string(s: &str, out: &mut String) {
             }
         }
     }
-    out.push('"');
+    out.push_char('"');
 }
 
 /// The serialized graph file body: `{"entries": [...]}` pretty-printed with a
@@ -2185,14 +2218,16 @@ pub fn canonicalize_entries(entries: &mut Vec<Value>) {
     normalize_lock_fields(entries);
     let mut out = Vec::with_capacity(entries.len());
     for e in entries.drain(..) {
-        if !e.is_object() {
+        // The map moves, never deep-clones: a whole-graph publish canonicalizes
+        // every row twice (working set plus baseline), and the clone of every
+        // row's map was the measurable half of that pass.
+        let Value::Object(mut obj) = e else {
             out.push(e);
             continue;
-        }
-        let mut obj = e.as_object().unwrap().clone();
+        };
         // One-write migration: remove only the legacy top-level lock key.
         obj.shift_remove("claimed_at");
-        let mut ordered = Map::new();
+        let mut ordered = Map::with_capacity(obj.len());
         for k in CANONICAL_FIELD_ORDER {
             if let Some(v) = obj.shift_remove(*k) {
                 ordered.insert((*k).to_string(), v);
@@ -2873,15 +2908,26 @@ fn prepare_mutate(
     // change nobody asked for.
     let mut pre = raw.clone();
     apply_defaults_without_readiness_overlay(&mut pre, false);
-    let mut pre_normalized = pre.clone();
-    recompute_statuses_with_plan_rungs(&mut pre_normalized, plan_rungs.as_ref());
+    // The curation keys are captured BEFORE the status recompute: the key
+    // reads the defaulted row's own priority, rank, parent, blocked_by and
+    // size, and only its status slot is swapped to the recomputed status
+    // below. Capturing first lets the recompute mutate `pre` in place,
+    // saving the full-store clone the separate normalized copy needed.
+    let mut pre_curation: std::collections::HashMap<String, Value> = Default::default();
+    for e in pre.iter() {
+        let (Some(id), true) = (RowFacts::id_of(e).map(str::to_string), e.is_object()) else {
+            continue;
+        };
+        pre_curation.insert(id.clone(), curation_key(e));
+    }
+    recompute_statuses_with_plan_rungs(&mut pre, plan_rungs.as_ref());
     // The baseline is the rows as read: the db holds the last publish, so
     // `raw` is that publish. A change normalization alone makes
     // (defaults, settles, ownership stamps, children) must compare unequal
     // against this baseline to reach the store. Deriving the baseline from
     // the normalized pre-image instead hid exactly those changes, and the
     // db row stayed stale for good.
-    let status_normalized: std::collections::HashMap<String, String> = pre_normalized
+    let status_normalized: std::collections::HashMap<String, String> = pre
         .iter()
         .filter(|e| e.is_object())
         .filter_map(|e| {
@@ -2896,22 +2942,13 @@ fn prepare_mutate(
             })
         })
         .collect();
-    let mut pre_curation: std::collections::HashMap<String, Value> = Default::default();
-    for e in pre.iter() {
-        let (Some(id), true) = (RowFacts::id_of(e).map(str::to_string), e.is_object()) else {
+    for (id, key) in pre_curation.iter_mut() {
+        let Value::Array(parts) = key else {
             continue;
         };
-        let mut snapshot = e.clone();
-        if let Some(obj) = snapshot.as_object_mut() {
-            obj.insert(
-                "status".to_string(),
-                status_normalized
-                    .get(&id)
-                    .map(|s| Value::String(s.clone()))
-                    .unwrap_or_else(|| status_value(e)),
-            );
+        if let Some(s) = status_normalized.get(id) {
+            parts[0] = Value::String(s.clone()); // "status" is CURATION_FIELDS[0]
         }
-        pre_curation.insert(id, curation_key(&snapshot));
     }
 
     let dropped = raw
@@ -3015,8 +3052,7 @@ fn prepare_mutate(
     // row-level conflict detection for untouched rows.
     let mut baseline = raw.clone();
     canonicalize_entries(&mut baseline);
-    let changed_ids = crate::backlog::diff_rows(&baseline, &entries);
-    let version = crate::backlog::content_version(&entries);
+    let (changed_ids, version) = crate::backlog::diff_and_version(&baseline, &entries);
     Ok(PreparedMutate {
         raw,
         entries,
