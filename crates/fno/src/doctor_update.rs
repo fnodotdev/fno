@@ -11,7 +11,7 @@
 //! Long-running installs (cargo, uv) run to completion unbounded, exactly as
 //! the exec did. Probe-shaped calls carry the Python timeouts.
 
-use crate::pid::Pid;use crate::pid::{Pid, SignalResult};
+use crate::pid::Pid;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};

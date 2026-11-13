@@ -22,8 +22,8 @@
 //! stop, the worktree probes, the clock - is injected, so the policy is
 //! unit-testable in isolation.
 
-use crate::pid::Pid;
 use crate::graph_store::WorkState;
+use crate::pid::Pid;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 

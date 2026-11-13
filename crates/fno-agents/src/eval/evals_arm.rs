@@ -41,9 +41,9 @@ use std::process::Stdio;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::pid::Pid;
 use chrono::DateTime;
 use chrono::Utc;
-use crate::pid::Pid;
 use serde_json::json;
 use serde_json::Value;
 

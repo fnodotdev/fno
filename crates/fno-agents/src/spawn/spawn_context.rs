@@ -18,8 +18,8 @@ use crate::claims::{
     LEGACY_HARNESS_SESSION_MARKERS,
 };
 use crate::paths::AgentsHome;
-use crate::state::load_registry;
 use crate::pid::{Pid, SignalResult};
+use crate::state::load_registry;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 

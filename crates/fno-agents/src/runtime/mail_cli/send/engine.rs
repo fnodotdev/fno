@@ -1,8 +1,8 @@
 // Ported from the single-file draft of send.rs; split by question.
-use crate::pid::Pid;
 use super::lanes::*;
 use super::resolve::*;
 use super::*;
+use crate::pid::Pid;
 use fno_mail::lane::{first_applicable, Lane, LaneKind, Target, LADDER};
 use fno_mail::turn::{NewlineRule, TurnText};
 

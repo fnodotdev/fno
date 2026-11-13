@@ -55,7 +55,9 @@ fn should_relief(rss_kb: Option<u64>) -> bool {
 /// cheap self read (the arm then never fires).
 #[cfg(target_os = "macos")]
 fn resident_kb() -> Option<u64> {
-    Pid::current().task().map(|task| task.pti_resident_size / 1024)
+    Pid::current()
+        .task()
+        .map(|task| task.pti_resident_size / 1024)
 }
 
 #[cfg(not(target_os = "macos"))]

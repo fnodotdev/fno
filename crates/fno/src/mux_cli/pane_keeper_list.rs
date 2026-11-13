@@ -5,8 +5,8 @@
 //! classifier reads to decide whether a keeper sits behind a pane, so it
 //! earns a module named by the question it answers.
 
-use crate::pid::Pid;
 use super::*;
+use crate::pid::Pid;
 
 /// `fno mux pane keeper list`: one row per keeper socket under the panes
 /// dir, probed DIRECTLY (connect + Identify, short timeout). Answers "did

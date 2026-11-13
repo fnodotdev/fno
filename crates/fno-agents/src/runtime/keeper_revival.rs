@@ -14,8 +14,8 @@
 //! module's launch step with an `interactive_create` form and delete the
 //! Python leg.
 
-use crate::state::RegistryEntry;
 use crate::pid::Pid;
+use crate::state::RegistryEntry;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -563,8 +563,7 @@ pub(crate) fn terminate_keeper(pid: u32) {
         // probe would still see (a zombie answers the existence probe).
         // ECHILD means it was never ours: fall back to the probe.
         // SAFETY: WNOHANG wait delivers nothing.
-        let reaped =
-            unsafe { libc::waitpid(pid.as_raw(), std::ptr::null_mut(), libc::WNOHANG) };
+        let reaped = unsafe { libc::waitpid(pid.as_raw(), std::ptr::null_mut(), libc::WNOHANG) };
         let gone = reaped == pid.as_raw() || (reaped < 0 && !pid.probe());
         if gone {
             return;

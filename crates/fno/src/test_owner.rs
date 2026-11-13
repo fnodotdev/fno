@@ -25,7 +25,6 @@ pub(crate) fn process_start_time(pid: u32) -> Option<u64> {
     crate::pid::Pid::new(pid).and_then(|p| p.start_time())
 }
 
-
 /// The current test process's identity in the env shape every spawned
 /// server, client, and keeper inherits.
 pub(crate) fn self_owner_env() -> [(&'static str, String); 2] {

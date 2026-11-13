@@ -302,8 +302,6 @@ pub(crate) fn parent_pid(pid: u32) -> Option<u32> {
     Pid::new(pid).and_then(|p| p.parent_pid())
 }
 
-
-
 /// The `ps` leg. It splits on whitespace, so an argument that CONTAINS a
 /// space comes back as two. Every flag the conversion carries takes a
 /// space-free value, and the caller drops what it does not recognise.

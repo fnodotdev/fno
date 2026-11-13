@@ -4,12 +4,12 @@
 //! the terminal stamp. The non-cursor arm contracts (confirm-then-stamp,
 //! refuse-on-silence) stay owned by keeper_sweep.rs.
 
-use crate::pid::{Pid, SignalResult};
 use super::*;
 use crate::daemon::tests::keeper_sweep::{
     expect_row, keeper_sweep_home, load_registry_tolerating_wipe, spawn_killable_keeper,
 };
 use crate::daemon::tests::test_ctx;
+use crate::pid::{Pid, SignalResult};
 
 fn read_events(home: &AgentsHome) -> Vec<Value> {
     let journal = home.events_jsonl();

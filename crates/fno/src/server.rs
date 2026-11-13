@@ -314,15 +314,14 @@ fn kill_plain_children(roster: &HashSet<PaneChild>) {
         .copied()
         .collect::<Vec<_>>();
     for child in &plain {
-        if let Some(pid) = Pid::new(child.pid) {
-            if let SignalResult::Failed(error) = pid.signal(libc::SIGKILL) {
-                if error.raw_os_error() != Some(libc::ESRCH) {
-                    crate::mux_log!(error;
-                        "fno mux: emergency SIGKILL failed for pane child {}: {error}",
-                        child.pid
-                    );
-                }
-            }
+        if let Some(error) = Pid::new(child.pid).and_then(|pid| match pid.signal(libc::SIGKILL) {
+            SignalResult::Failed(error) if error.raw_os_error() != Some(libc::ESRCH) => Some(error),
+            _ => None,
+        }) {
+            crate::mux_log!(error;
+                "fno mux: emergency SIGKILL failed for pane child {}: {error}",
+                child.pid
+            );
         }
     }
     for child in plain {
@@ -331,13 +330,10 @@ fn kill_plain_children(roster: &HashSet<PaneChild>) {
 }
 
 fn reap_plain_child(pid: u32) {
-    let Some(pid) = Pid::new(pid) else {
-        return;
-    };
+    let Some(pid) = Pid::new(pid) else { return };
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut status = 0;
     loop {
-        // SAFETY: WNOHANG wait of this process's own pane child.
         let result = unsafe { libc::waitpid(pid.as_raw(), &mut status, libc::WNOHANG) };
         if result == pid.as_raw() {
             return;
@@ -2028,13 +2024,10 @@ fn node_id_shaped(s: &str) -> bool {
     }
 }
 
-/// True while `pid` is alive (or unprobeable - erring toward "held" keeps a
-/// live holder's claim from being stolen by a permissions error; ESRCH is the
-/// definitive "gone").
+/// True while `pid` is alive (or unprobeable - erring toward "held": ESRCH is
+/// the definitive "gone", and an out-of-range pid errs the same way).
 fn pid_alive(pid: u32) -> bool {
-    i32::try_from(pid)
-        .map(|pid| !crate::proto::pid_confirmed_dead(pid))
-        .unwrap_or(true) // out of any kernel's range: err toward held
+    i32::try_from(pid).is_ok_and(|p| !crate::proto::pid_confirmed_dead(p))
 }
 
 /// Resolve the `fno` binary: `$FNO_BIN`, else the running executable itself (the

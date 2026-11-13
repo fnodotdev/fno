@@ -1,5 +1,5 @@
-use std::fmt;
 use crate::pid::Pid;
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 /// The state needed to prove that a provider owns the thread outside the

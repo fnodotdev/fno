@@ -204,7 +204,6 @@ pub mod pane_argv;
 pub mod pane_border;
 #[cfg(feature = "full")]
 pub mod pane_cwd;
-pub mod pid;
 #[cfg(feature = "full")]
 mod pane_send_audit;
 #[cfg(feature = "full")]
@@ -214,6 +213,7 @@ pub mod path_migration;
 mod path_migration_tests;
 #[cfg(feature = "full")]
 pub mod paths_route;
+pub mod pid;
 #[cfg(feature = "full")]
 pub(crate) mod plugins_feed;
 #[cfg(feature = "full")]

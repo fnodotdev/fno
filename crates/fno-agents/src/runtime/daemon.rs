@@ -938,36 +938,21 @@ pub(crate) fn live_liveness_prober(
 }
 
 /// Is `pid` still OUR worker, not a recycled PID? True iff the process exists,
-/// we may signal it, AND its current start time matches `recorded`
-///. If a start time is unavailable on either side (`None` — lookup
-/// unsupported/failed, or no start time was recorded for a legacy entry), fall
-/// back to a bare existence check so behavior degrades to the pre-create_time
-/// semantics rather than mis-deciding.
+/// we may signal it, AND its current start time matches `recorded`. If a start
+/// time is unavailable on either side (`None`), fall back to a bare existence
+/// check so behavior degrades to the pre-create_time semantics.
 pub fn pid_is_ours(pid: u32, recorded: Option<u64>) -> bool {
-    // Never treat pid 0 or 1 as ours (gemini security-high, PR #472). `kill(0, sig)`
-    // signals the CALLER's whole process group and `kill(1, sig)` targets init;
-    // worse, a corrupt status/registry pid of 0 would otherwise pass the probe
-    // (kill(0,0)==0) and fall through to the `_ => true` arm, so a later
-    // `send_sigterm(0)` would SIGTERM the client's own process group. A real
-    // worker/daemon pid is never <= 1, so this only ever rejects a malformed pid.
-    // An out-of-range pid is not merely absurd, it is dangerous: `pid_t` is
-    // signed, so a u32 above i32::MAX wraps negative, and 4294967295 becomes -1 --
-    // the "every process the caller may signal" broadcast target. `kill(-1, 0)`
-    // then succeeds, `process_start_time` finds nothing, and the match below falls
-    // to the trust-existence arm, so the probe returns TRUE and a caller goes on
-    // to broadcast SIGTERM. Reject anything outside a real pid's range here, in
-    // the shared probe, so every signalling caller inherits the guard.
+    // Never pid 0 (the caller's whole group) or pid 1 (init) - gemini
+    // security-high, PR #472 - and never a wrapping value: the type refuses
+    // them, so every signalling caller inherits the guard.
     let Some(pid) = Pid::new(pid) else {
         return false;
     };
     if pid.is_init() {
         return false;
     }
-    // EPERM reads not-ours: our worker is always the same user as the daemon, so
-    // an unsignalable pid is never ours -- this closes the EPERM hole where a
-    // recycled foreign-user pid (no readable start time) would otherwise fall
-    // through to "trust liveness" and be mistaken for our worker
-    // (Gemini medium, PR #365).
+    // EPERM reads not-ours: our worker is always the daemon's user, so an
+    // unsignalable pid is never ours (Gemini medium, PR #365).
     if !pid.probe() {
         return false;
     }
@@ -3911,7 +3896,7 @@ async fn worker_down_within(sock: &std::path::Path, budget: Duration) -> bool {
 /// serves nothing, so `census::pid_is_zombie` decides that arm.
 fn pid_confirmed_dead(pid: u32) -> bool {
     let Some(pid) = Pid::new(pid) else {
-        // Never signalled in the first place, so nothing is running on our behalf.
+        // Never signalled: nothing runs on our behalf.
         return true;
     };
     if pid.is_init() {

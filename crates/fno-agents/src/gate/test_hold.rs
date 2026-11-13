@@ -212,10 +212,10 @@ fn end_run(pid: u32, birth: u64) -> bool {
         return false;
     }
     let group_leader = pid > 1
-        && Pid::new(pid)
-            .is_some_and(|p| unsafe { libc::getpgid(p.as_raw()) } == p.as_raw());
+        && Pid::new(pid).is_some_and(|p| unsafe { libc::getpgid(p.as_raw()) } == p.as_raw());
     if group_leader
-        && Pid::new(pid).is_some_and(|p| matches!(p.signal_group(libc::SIGKILL), SignalResult::Sent))
+        && Pid::new(pid)
+            .is_some_and(|p| matches!(p.signal_group(libc::SIGKILL), SignalResult::Sent))
     {
         return true;
     }

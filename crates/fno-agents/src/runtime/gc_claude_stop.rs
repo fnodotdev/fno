@@ -14,8 +14,8 @@
 //! refusal while anything live is still reported (the same shape the stop
 //! command applies).
 
-use crate::pid::Pid;
 use crate::claude_roster::ClaudeAgentRow;
+use crate::pid::Pid;
 use crate::state;
 
 /// The read-only half of [`stop_claude_confirmed`]: the roster no longer

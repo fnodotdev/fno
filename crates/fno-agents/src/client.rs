@@ -1225,8 +1225,8 @@ mod restart_termination_tests {
             start,
             Duration::from_secs(1),
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         assert!(matches!(t, Termination::Escalated), "got {t:?}");
         let waited = midman.wait().is_ok();
         assert!(
@@ -1245,8 +1245,8 @@ mod restart_termination_tests {
             Some(1),
             Duration::from_secs(1),
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         let untouched = Pid::new(pid).is_some_and(|p| p.probe());
         cleanup(&mut midman, pid);
         assert!(matches!(t, Termination::Exited), "got {t:?}");

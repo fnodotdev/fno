@@ -2484,8 +2484,6 @@ fn parent_pid(pid: u32) -> Option<u32> {
     Pid::new(pid).and_then(|p| p.parent_pid())
 }
 
-
-
 /// Spawn `argv` as the leader of a brand-new session (so it, and everything
 /// it forks, carries a pgid this process never shares - a signal aimed at
 /// the group can never boomerang onto the owner itself). The owner identity

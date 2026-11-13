@@ -17,8 +17,8 @@
 
 use std::time::{Duration, Instant};
 
-use crate::pid::Pid;
 use crate::paths::AgentsHome;
+use crate::pid::Pid;
 
 /// RAII per-agent flock. The lock releases when this drops, and also when the
 /// process exits: a POSIX flock belongs to the open file description, never to

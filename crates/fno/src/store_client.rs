@@ -14,12 +14,12 @@
 //! never an empty answer: the commands surface the failure as the card's
 //! notice line.
 
-use crate::pid::Pid;
 use crate::keeper_wire::{ErrorKind, KeeperError, KeeperReply, KeeperRequest};
 use crate::keeper_wire::{TAG_REQUEST, TAG_RESPONSE};
 #[cfg(feature = "full")]
 use crate::node_row::KanbanColumn;
 use crate::node_row::NodeRow;
+use crate::pid::Pid;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};

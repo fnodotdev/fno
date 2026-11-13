@@ -12,8 +12,8 @@
 //! daemon children; this sweep catches wedged test binaries with ppid 1.
 
 use crate::events::EventEmitter;
-use regex::Regex;
 use crate::pid::{Pid, SignalResult};
+use regex::Regex;
 use serde::Serialize;
 use std::collections::BTreeSet;
 use std::io::Write as _;

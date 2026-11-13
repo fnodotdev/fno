@@ -2,8 +2,8 @@
 //! The served window lives in crate::served_liveness. Child of
 //! `agents_view`; parent items resolve through the glob.
 
-use crate::pid::Pid;
 use super::*;
+use crate::pid::Pid;
 
 /// A recorded pid is CONFIRMED gone: ESRCH, or reachable but a zombie (dead,
 /// unreaped - it holds no fds and serves nothing). Fails toward

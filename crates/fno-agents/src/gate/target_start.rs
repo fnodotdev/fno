@@ -26,8 +26,8 @@
 //!   invalid policy answers "no native handoff", the direction the Python
 //!   caller already takes on a policy error.
 
-use regex::Regex;
 use crate::pid::Pid;
+use regex::Regex;
 use serde_json::{json, Value};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
