@@ -1594,7 +1594,15 @@ EOF
       # THE one own-session check, shared with the start pre-check: the door
       # prints the --handover-from flags when THIS session is the claim's
       # beneficiary; the four inline rungs this replaces are the deleted leg.
-      _HANDOVER_FLAGS="$(FNO_CLAIMS_ROOT="$HOME" fno agents claim adopt-flags "node:${_NODE_ID}" 2>/dev/null || true)"
+      # The env carrier stays a literal pass ahead of the door: it names the
+      # holder the spawner minted for THIS worker, so a helper paired with a
+      # binary that predates the door keeps the primary spawn path working.
+      _HANDOVER_FLAGS=""
+      if [[ -n "${FNO_NODE_CLAIM_HOLDER:-}" ]]; then
+        _HANDOVER_FLAGS="--handover-from ${FNO_NODE_CLAIM_HOLDER}"
+      else
+        _HANDOVER_FLAGS="$(FNO_CLAIMS_ROOT="$HOME" fno agents claim adopt-flags "node:${_NODE_ID}" 2>/dev/null || true)"
+      fi
       # Unquoted on purpose: empty => zero args (bash 3.2 set -u safe, unlike an
       # empty "${array[@]}"); the regex guarantees $_SESSION_PID is digits only.
       if FNO_CLAIMS_ROOT="$HOME" fno agents claim acquire "$_CLAIM_KEY" \

@@ -877,11 +877,10 @@ fn read_node_claim(
 /// helper's adopt door (`fno agents claim adopt-flags`), so a claim one
 /// surface adopts the other can never refuse - start once parked its own
 /// beneficiary while init adopted it. The rungs mirror init's: the spawn's
-/// env carrier, the exact session holder (run id, codex thread, resolved
-/// self identity), the launch-window handover (worker name, registry row,
-/// recorded session id, suspect takeover), then durable session pid +
-/// machine. An uncapturable own pid reads as not-ours (park / re-acquire,
-/// never assume ownership).
+/// env carrier, the exact session holder, the launch-window handover
+/// (worker name, registry row, recorded session id, suspect takeover),
+/// then durable session pid + machine. An uncapturable own pid reads as
+/// not-ours (park / re-acquire, never assume ownership).
 pub(crate) fn claim_names_current_session(holder: &str, rec: &crate::claims::ClaimRecord) -> bool {
     // The spawn exports its holder in the worker's environment; naming it
     // exactly is the successorship proof, and the acquire re-checks holder
@@ -961,9 +960,9 @@ pub(crate) fn claim_names_current_session(holder: &str, rec: &crate::claims::Cla
 }
 
 /// The claim's recorded creating session (`session_id`, demoted to
-/// `dispatched_by_session` metadata) against this session's own id: exact,
-/// or case-folded when neither carries the store's `ses_` prefix - the same
-/// fold init's bash rung applies. Exact match only, never a prefix.
+/// `dispatched_by_session` metadata) against this session's own id, the
+/// same fold `same_session_id` applies: exact for `ses_` ids, ASCII-case
+/// folded otherwise.
 fn handover_session_id_matches(rec: &crate::claims::ClaimRecord, own_sid: Option<&str>) -> bool {
     let recorded = rec
         .session_id
@@ -980,10 +979,7 @@ fn handover_session_id_matches(rec: &crate::claims::ClaimRecord, own_sid: Option
     let (Some(recorded), Some(own)) = (recorded, own_sid) else {
         return false;
     };
-    recorded == own
-        || (!recorded.starts_with("ses_")
-            && !own.starts_with("ses_")
-            && recorded.eq_ignore_ascii_case(own))
+    crate::claims::same_session_id(recorded, own)
 }
 
 /// True when the registry rows carry a row answering to `worker` whose session
