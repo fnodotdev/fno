@@ -89,12 +89,13 @@ async fn chat(
         // A browser cannot read a failed handshake's status, so a bad token
         // completes the upgrade and closes with 1008, as the web bridge does.
         return ws.on_upgrade(|mut socket| async move {
-            let _ = socket
+            socket
                 .send(Message::Close(Some(CloseFrame {
                     code: close_code::POLICY,
                     reason: "invalid token".into(),
                 })))
-                .await;
+                .await
+                .ok();
         });
     }
     let key = SessionKey {
@@ -127,13 +128,17 @@ async fn stream(mut socket: WebSocket, roots: ChatRoots, key: SessionKey, since:
 
 /// One error frame, then close 1011.
 async fn fail(mut socket: WebSocket, error: &ChatReadError) {
-    let _ = socket.send(Message::Text(error_frame(error).into())).await;
-    let _ = socket
+    socket
+        .send(Message::Text(error_frame(error).into()))
+        .await
+        .ok();
+    socket
         .send(Message::Close(Some(CloseFrame {
             code: close_code::ERROR,
             reason: "chat stream failed".into(),
         })))
-        .await;
+        .await
+        .ok();
 }
 
 struct WsSink<'a> {
@@ -180,6 +185,7 @@ fn error_frame(error: &ChatReadError) -> String {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::indexing_slicing)]
     use super::*;
     use crate::chat_events::batches;
     use axum::http::HeaderValue;
