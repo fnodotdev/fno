@@ -664,8 +664,12 @@ fn names_canonical_page(targets: &[RenderTarget]) -> bool {
 /// The target list `fno backlog view` renders: the configured targets, plus
 /// the canonical page when no target names it. With `render_default` off the
 /// keeper never writes the page, so the view renders it here on demand.
-fn view_targets(global: &Value, unreadable: &[PathBuf]) -> Vec<RenderTarget> {
-    let mut targets = targets_from_global(global, unreadable);
+fn view_targets(
+    global: &Value,
+    unreadable: &[PathBuf],
+    populated: Option<&BTreeSet<String>>,
+) -> Vec<RenderTarget> {
+    let mut targets = targets_from_global(global, unreadable, populated);
     if !names_canonical_page(&targets) {
         targets.push(default_target());
     }
@@ -816,7 +820,11 @@ fn materialize_target(row: &Value, seen: &mut BTreeSet<PathBuf>) -> Option<Rende
 /// fired from any cwd must not depend on a project-local list. Every bad
 /// row warns and costs that one board; the canonical board row is implicit
 /// unless `backlog.render_default: false` turns it off.
-fn targets_from_global(global: &Value, unreadable: &[PathBuf]) -> Vec<RenderTarget> {
+fn targets_from_global(
+    global: &Value,
+    unreadable: &[PathBuf],
+    populated: Option<&BTreeSet<String>>,
+) -> Vec<RenderTarget> {
     let block = global.get("backlog");
     let rows = match block.and_then(|b| b.get("render_targets")) {
         None | Some(Value::Null) => Vec::new(),
@@ -862,6 +870,14 @@ fn targets_from_global(global: &Value, unreadable: &[PathBuf]) -> Vec<RenderTarg
     if let Some(template) = render_path_template(block) {
         for project in work_map_names() {
             if named.contains(&project) {
+                continue;
+            }
+            // A workspace project with no live rows has no board yet, and
+            // the engine reads an empty named scope as the typo'd-project
+            // signature: dispatching the row fails the whole pass. Skip it
+            // quietly. An explicit row still dispatches: its scope was
+            // typed by a hand, so empty means suspect and stays loud.
+            if populated.is_some_and(|set| !set.contains(&project)) {
                 continue;
             }
             let row = json!({
@@ -926,10 +942,14 @@ fn board_render(request: &Value) -> Result<std::process::Output, String> {
 
 /// Write every configured `local` board target through `fno board-render`
 /// and return the count of failures. Retired projections warn and skip.
-pub(crate) fn render_local_targets() -> usize {
+/// `populated` carries the project names the live rows carry, so a
+/// `render_path` template row for a project with no rows skips instead of
+/// failing the pass; `None` (store unreadable) skips nothing and lets the
+/// engine report the store.
+pub(crate) fn render_local_targets(populated: Option<&BTreeSet<String>>) -> usize {
     let (global, unreadable) = super::advance_settings::load_global_merged();
     render_board_targets(
-        &targets_from_global(&global, &unreadable),
+        &targets_from_global(&global, &unreadable, populated),
         global_obsidian_vault(&global),
     )
 }
@@ -1025,6 +1045,18 @@ fn live_rows(graph: &Path) -> Result<Vec<Value>, String> {
 // render-views
 // ---------------------------------------------------------------------------
 
+/// The project names the live rows carry: the set a `render_path` template
+/// row must hit to materialize. Rows with an empty project match no named
+/// scope on the board, so they join no set here either.
+fn populated_projects(entries: &[Value]) -> BTreeSet<String> {
+    entries
+        .iter()
+        .filter_map(|row| row.get("project").and_then(Value::as_str))
+        .filter(|project| !project.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 /// The canonical post-publish view pass: graph.md, then (for the configured
 /// store) every local board target. Returns one message per failed view.
 pub(crate) fn render_views(graph: &Path, canonical: bool) -> Vec<String> {
@@ -1045,7 +1077,8 @@ pub(crate) fn render_views(graph: &Path, canonical: bool) -> Vec<String> {
         failures.push(format!("graph.md render failed: {e}"));
     }
     if canonical {
-        let failed = render_local_targets();
+        let populated = populated_projects(&entries);
+        let failed = render_local_targets(Some(&populated));
         if failed > 0 {
             failures.push(format!("local board render: {failed} target(s) failed"));
         }
@@ -1146,7 +1179,9 @@ pub fn run_view(tail: &[String]) -> i32 {
         return usage_error("view", arg);
     }
     let (global, unreadable) = super::advance_settings::load_global_merged();
-    let targets = view_targets(&global, &unreadable);
+    let graph = super::settings::graph_path();
+    let populated = live_rows(&graph).ok().map(|rows| populated_projects(&rows));
+    let targets = view_targets(&global, &unreadable, populated.as_ref());
     let failures = render_board_targets(&targets, global_obsidian_vault(&global));
     if failures > 0 {
         eprintln!(
@@ -2194,7 +2229,7 @@ mod tests {
         let _b = crate::claims::EnvVarGuard::set("FNO_GLOBAL_SETTINGS_PATH", cfg.to_str().unwrap());
         let template = format!("{}/{{project}}/b.html", dir.path().display());
         let global = json!({"backlog": {"render_path": template}});
-        let targets = targets_from_global(&global, &[]);
+        let targets = targets_from_global(&global, &[], None);
         let get = |s: &str| {
             targets
                 .iter()
@@ -2233,7 +2268,7 @@ mod tests {
                 "render_targets": [{"path": explicit, "scope": "beta"}],
             }
         });
-        let targets = targets_from_global(&global, &[]);
+        let targets = targets_from_global(&global, &[], None);
         let get = |s: &str| {
             targets
                 .iter()
@@ -2250,10 +2285,64 @@ mod tests {
     #[test]
     fn render_path_without_the_placeholder_contributes_no_rows() {
         let global = json!({"backlog": {"render_path": "/tmp/fixed.html"}});
-        let targets = targets_from_global(&global, &[]);
+        let targets = targets_from_global(&global, &[], None);
         assert!(
             targets.iter().all(|t| t.scope == "all"),
             "no per-project rows: {targets:?}"
+        );
+    }
+
+    /// A `render_path` template row for a workspace project with no live
+    /// rows skips quietly: the engine reads an empty named scope as the
+    /// typo'd-project signature and an enumerated scope cannot be a typo.
+    /// An explicit row for the same project still materializes (typed
+    /// scope, empty means suspect), and `None` (store unreadable) keeps
+    /// every template row so the engine reports the store.
+    #[test]
+    fn render_path_skips_template_rows_for_projects_with_no_live_rows() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("work.toml");
+        let body = format!(
+            "[[work.workspaces.main.projects]]\nname = \"alpha\"\npath = \"{p}\"\n[[work.workspaces.main.projects]]\nname = \"beta\"\npath = \"{p}\"\n",
+            p = dir.path().display()
+        );
+        std::fs::write(&cfg, body).unwrap();
+        let _a = crate::claims::EnvVarGuard::set("FNO_CONFIG", cfg.to_str().unwrap());
+        let _b = crate::claims::EnvVarGuard::set("FNO_GLOBAL_SETTINGS_PATH", cfg.to_str().unwrap());
+        let template = format!("{}/{{project}}/b.html", dir.path().display());
+        let global = json!({"backlog": {"render_path": template}});
+        let populated: BTreeSet<String> = ["alpha".to_string()].into_iter().collect();
+        let targets = targets_from_global(&global, &[], Some(&populated));
+        assert!(
+            targets.iter().any(|t| t.scope == "alpha"),
+            "the populated project's row stays: {targets:?}"
+        );
+        assert!(
+            !targets.iter().any(|t| t.scope == "beta"),
+            "the empty project's row skips: {targets:?}"
+        );
+        let explicit = format!("{}/beta.html", dir.path().display());
+        let global = json!({
+            "backlog": {
+                "render_path": template,
+                "render_targets": [{"path": explicit, "scope": "beta"}],
+            }
+        });
+        let targets = targets_from_global(&global, &[], Some(&populated));
+        assert!(
+            targets
+                .iter()
+                .any(|t| t.scope == "beta" && t.path == explicit),
+            "the explicit typed row still dispatches: {targets:?}"
+        );
+        let global = json!({"backlog": {"render_path": template}});
+        let targets = targets_from_global(&global, &[], None);
+        assert!(
+            targets.iter().any(|t| t.scope == "beta"),
+            "no store answer keeps the row a store answer would skip: {targets:?}"
         );
     }
 
