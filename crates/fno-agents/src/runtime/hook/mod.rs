@@ -54,7 +54,7 @@ pub fn dispatch(args: &[String]) -> i32 {
         Some("diff-budget") => diff_budget::run(&args[1..]),
         Some("edit-integrity") => edit_integrity::run(&args[1..]),
         Some("effect-guard") => crate::effect_gate::run_hook(&args[1..]),
-        Some("gate") => gate::run(&args[1..]),
+        Some("gate") => gate::run(args.get(1..).unwrap_or(&[])),
         Some("git-protection") => git_protection::run(&args[1..]),
         Some("join-partition-guard") => join_partition_guard::run(&args[1..]),
         Some("lead-guard") => lead_guard::run(&args[1..]),

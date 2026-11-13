@@ -456,7 +456,11 @@ pub(crate) fn tool_boundary_hook(session: &str, cwd: &Path) -> Option<String> {
             "data": {"rc": 1, "stderr_tail": "bus dir unresolved"},
             "source": "hook"
         });
-        let _ = crate::claims::append_event_line(&events, &row, std::time::Duration::from_secs(2));
+        if let Err(e) =
+            crate::claims::append_event_line(&events, &row, std::time::Duration::from_secs(2))
+        {
+            eprintln!("tool-boundary drain: miss row not written: {e}");
+        }
         return None;
     };
     if !tool_boundary_due(&bus_dir, session) {
