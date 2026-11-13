@@ -142,6 +142,7 @@ fn routed_backlog_joins_attach_then_hint_and_leaves_ready_alone() {
             forked_from_session_id: None,
             exited: true,
             ..bg_row("tgt-x-ddd", "/w", Some("deadbee2"))
+                    result: None,
         },
         RegistryAgent {
             session_id: None,
@@ -151,6 +152,7 @@ fn routed_backlog_joins_attach_then_hint_and_leaves_ready_alone() {
             forked_from_session_id: None,
             mux: Some(("test".into(), 5)),
             ..bg_row("tgt-x-ddd", "/w", Some("deadbee3"))
+                    result: None,
         },
         bg_row("tgt-x-eee", "/w", Some("deadbee4")),
     ];
