@@ -15,7 +15,7 @@ use std::process::{Command, Stdio};
 /// The commands the native surface serves. The Python `fno inbox law` group
 /// forwards here instead of holding its own write path.
 pub const NATIVE_LAW_SUBCOMMANDS: &[&str] = &[
-    "set", "stage", "match", "retract", "restore", "renew", "history", "recheck",
+    "set", "stage", "match", "retract", "restore", "renew", "history", "recheck", "upkeep",
 ];
 
 /// Classify `fno inbox law <sub> ...` for the front door: `Some(rest)` runs
@@ -143,7 +143,7 @@ pub fn run(args: &[OsString]) -> i32 {
             // tty - the one credential a piped lane can never carry.
             law_exec(&request, Attended::Yes)
         }
-        "history" | "recheck" => {
+        "history" | "recheck" | "upkeep" => {
             let argv: Vec<String> = rest
                 .iter()
                 .filter_map(|a| a.to_str().map(str::to_owned))
@@ -157,7 +157,7 @@ pub fn run(args: &[OsString]) -> i32 {
         }
         _ => {
             eprintln!(
-                "error: expected a subcommand (set | stage | match | retract | restore | renew | history | recheck)"
+                "error: expected a subcommand (set | stage | match | retract | restore | renew | history | recheck | upkeep)"
             );
             2
         }
@@ -362,7 +362,11 @@ mod tests {
             Some(1)
         );
         assert_eq!(
-            classify_inbox_law(&mk(&["inbox", "law", "restore"])).map(|r| r.len()),
+            classify_inbox_law(&mk(&["inbox", "law", "restore"])).map(|r| { r.len() }),
+            Some(1)
+        );
+        assert_eq!(
+            classify_inbox_law(&mk(&["inbox", "law", "upkeep"])).map(|r| { r.len() }),
             Some(1)
         );
         // Unknown subcommands still fall through to the Python group.
