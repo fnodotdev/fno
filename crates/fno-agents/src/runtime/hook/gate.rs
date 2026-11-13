@@ -20,11 +20,54 @@
 //! claude-only and mux-profile: the agy and pi guard host, and a pack
 //! install, run this entry for its block guards alone.
 
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::path::PathBuf;
 use std::time::Duration;
 
 type Entry = fn(&[String]) -> i32;
+
+/// The payload fields this entry reads. A field of the wrong type reads as
+/// an empty payload, which runs no guard: the old unparsable-payload allow.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct Payload {
+    tool_name: Option<String>,
+    cwd: Option<String>,
+    session_id: Option<String>,
+}
+
+impl Payload {
+    fn read(raw: &str) -> Self {
+        serde_json::from_str(raw.trim()).unwrap_or_default()
+    }
+
+    fn cwd(&self) -> Option<PathBuf> {
+        self.cwd
+            .as_deref()
+            .filter(|c| !c.is_empty())
+            .map(PathBuf::from)
+    }
+}
+
+/// One guard's answer, in the PreToolUse shape the emit helpers print.
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct Answer {
+    decision: Option<String>,
+    reason: Option<String>,
+    system_message: Option<String>,
+    hook_specific_output: Option<Specific>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct Specific {
+    permission_decision: Option<String>,
+    permission_decision_reason: Option<String>,
+    additional_context: Option<String>,
+    updated_input: Option<Value>,
+}
 
 /// The guards one tool call meets, in the former hooks.json order.
 fn chain(tool: &str, mux: bool) -> Vec<(&'static str, Entry)> {
@@ -91,20 +134,14 @@ fn rules_pre_tool(_args: &[String]) -> i32 {
 /// joined worktree (a real `.fno/join-partition/`) pays for the judge.
 fn join_partition(_args: &[String]) -> i32 {
     let raw = super::read_stdin();
-    let payload: Value = serde_json::from_str(raw.trim()).unwrap_or(Value::Null);
+    let payload = Payload::read(&raw);
     let Some(cwd) = payload
-        .get("cwd")
-        .and_then(Value::as_str)
-        .filter(|c| !c.is_empty())
-        .map(PathBuf::from)
+        .cwd()
         .filter(|c| c.join(".fno/join-partition").is_dir())
     else {
         return super::emit_allow();
     };
-    let tool = payload
-        .get("tool_name")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let tool = payload.tool_name.as_deref().unwrap_or("");
     let verdict = super::join_partition_guard::judge(&raw);
     super::emit_guard_decision(&cwd, "join-partition-write-guard", tool, verdict.is_some());
     match verdict {
@@ -122,12 +159,8 @@ const SIDE_LEG_WAIT: Duration = Duration::from_millis(2500);
 
 pub fn run(_args: &[String]) -> i32 {
     let raw = super::read_stdin();
-    let payload: Value = serde_json::from_str(raw.trim()).unwrap_or(Value::Null);
-    let tool = payload
-        .get("tool_name")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
+    let payload = Payload::read(&raw);
+    let tool = payload.tool_name.clone().unwrap_or_default();
     let hosted = std::env::var("FNO_HOOK_HARNESS").is_ok_and(|h| !h.is_empty() && h != "claude");
     // A pack install drops every mux script, session-state.sh among them,
     // and with it the mux legs this entry folds in.
@@ -136,11 +169,11 @@ pub fn run(_args: &[String]) -> i32 {
         .is_none_or(|root| root.join("hooks/session-state.sh").is_file());
     let side_legs = mux && !hosted;
 
-    let report = (side_legs && !payload.is_null()).then(|| {
+    let whole: Option<Value> = serde_json::from_str(raw.trim()).ok();
+    let report = whole.filter(|_| side_legs).map(|whole| {
         let (done, wait) = std::sync::mpsc::channel();
-        let payload = payload.clone();
         std::thread::spawn(move || {
-            super::session_state::process("claude", "PreToolUse", &payload);
+            super::session_state::process("claude", "PreToolUse", &whole);
             let _ = done.send(());
         });
         wait
@@ -165,15 +198,9 @@ pub fn run(_args: &[String]) -> i32 {
     }
 
     if side_legs {
-        let session = payload
-            .get("session_id")
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let session = payload.session_id.as_deref().unwrap_or("");
         let cwd = payload
-            .get("cwd")
-            .and_then(Value::as_str)
-            .filter(|c| !c.is_empty())
-            .map(PathBuf::from)
+            .cwd()
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("."));
         answers.extend(crate::mail_control_drain::tool_boundary_hook(session, &cwd));
@@ -186,10 +213,6 @@ pub fn run(_args: &[String]) -> i32 {
     0
 }
 
-fn str_at<'a>(hso: Option<&'a Value>, key: &str) -> Option<&'a str> {
-    hso.and_then(|h| h.get(key)).and_then(Value::as_str)
-}
-
 /// Fold every guard's answer into the one PreToolUse answer.
 pub(crate) fn merge(answers: &[String]) -> Value {
     let mut denies: Vec<String> = Vec::new();
@@ -200,13 +223,11 @@ pub(crate) fn merge(answers: &[String]) -> Value {
     let mut system: Vec<String> = Vec::new();
     let mut updated: Option<Value> = None;
     let lines = answers.iter().flat_map(|a| a.lines());
-    for v in lines.filter_map(|l| serde_json::from_str::<Value>(l.trim()).ok()) {
-        let hso = v.get("hookSpecificOutput");
-        let reason = str_at(hso, "permissionDecisionReason")
-            .or_else(|| v.get("reason").and_then(Value::as_str))
-            .map(str::to_string);
-        let decision = str_at(hso, "permissionDecision");
-        if decision == Some("deny") || v.get("decision").and_then(Value::as_str) == Some("block") {
+    for answer in lines.filter_map(|l| serde_json::from_str::<Answer>(l.trim()).ok()) {
+        let hso = answer.hook_specific_output.unwrap_or_default();
+        let reason = hso.permission_decision_reason.or(answer.reason);
+        let decision = hso.permission_decision.as_deref();
+        if decision == Some("deny") || answer.decision.as_deref() == Some("block") {
             denies.push(reason.unwrap_or_else(|| "refused".to_string()));
             continue;
         }
@@ -218,14 +239,10 @@ pub(crate) fn merge(answers: &[String]) -> Value {
             allowed = true;
             allows.extend(reason);
         }
-        context.extend(str_at(hso, "additionalContext").map(str::to_string));
-        system.extend(
-            v.get("systemMessage")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-        );
+        context.extend(hso.additional_context);
+        system.extend(answer.system_message);
         if updated.is_none() {
-            updated = hso.and_then(|h| h.get("updatedInput")).cloned();
+            updated = hso.updated_input;
         }
     }
 

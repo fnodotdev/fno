@@ -32,23 +32,21 @@ pub struct RuleSet {
 /// The rules decide() reads, as a hook or door fire gets them: from the
 /// daemon's cache when one answers, else built in process. Building costs
 /// a read of the whole store (~210 ms measured 2026-11-13, every tool call),
-/// so the daemon builds once per store change and serves the rest.
-pub fn rule_set_fast(cwd: &Path) -> Result<ServedRules, String> {
+/// so the daemon builds once per store change and serves the rest. A set
+/// that cannot build serves no rules and names the reason in `unread`.
+pub fn rule_set_fast(cwd: &Path) -> ServedRules {
     let graph = crate::graph_get::default_graph_path();
     if RESIDENT.load(std::sync::atomic::Ordering::Relaxed) {
         return cached_rules(&graph, cwd);
     }
     if let Some(served) = ask_daemon(&graph, cwd) {
-        return Ok(served);
+        return served;
     }
     // Named once per hook fire; a door (merge, spawn, send) stays quiet.
     if std::env::var_os("FNO_HOOK_CONTEXT").is_some() {
         eprintln!("rules: no daemon answered agent.rule-set; built the rule set in process");
     }
-    rule_set_in(&graph, cwd).map(|set| ServedRules {
-        rules: set.rules,
-        unread: set.unread,
-    })
+    ServedRules::of(rule_set_in(&graph, cwd))
 }
 
 /// The part of a [`RuleSet`] decide() reads, the shape the daemon serves.
@@ -56,6 +54,30 @@ pub fn rule_set_fast(cwd: &Path) -> Result<ServedRules, String> {
 pub struct ServedRules {
     pub rules: Vec<Rule>,
     pub unread: Vec<String>,
+}
+
+impl ServedRules {
+    fn of(built: Result<RuleSet, String>) -> Self {
+        match built {
+            Ok(set) => ServedRules {
+                rules: set.rules,
+                unread: set.unread,
+            },
+            Err(reason) => ServedRules {
+                rules: Vec::new(),
+                unread: vec![format!("the rule set ({reason})")],
+            },
+        }
+    }
+}
+
+/// `agent.rule-set` params: the caller's cwd and its own graph path, so a
+/// session pinned to another store reads that store's laws.
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct RuleSetParams {
+    cwd: String,
+    graph: String,
 }
 
 /// Set in the daemon by its first `agent.rule-set` answer: from then on its
@@ -83,33 +105,26 @@ pub(crate) fn rule_set_rpc<C>(
     req: &crate::protocol::Request,
 ) -> crate::protocol::Response {
     RESIDENT.store(true, std::sync::atomic::Ordering::Relaxed);
-    let cwd = req
-        .params
-        .get("cwd")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from);
-    let Some(cwd) = cwd else {
+    let params: RuleSetParams = serde_json::from_value(req.params.clone()).unwrap_or_default();
+    if params.cwd.is_empty() {
         return crate::protocol::Response::err(
             req.id,
             crate::protocol::ErrorCode::InvalidParams,
             "agent.rule-set needs params.cwd",
         );
-    };
-    // The caller's graph, not this process's default: a session pinned to
-    // another store must read that store's laws.
-    let graph = req
-        .params
-        .get("graph")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
+    }
+    let graph = Some(params.graph)
+        .filter(|g| !g.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(crate::graph_get::default_graph_path);
-    match cached_rules(&graph, &cwd)
-        .and_then(|r| serde_json::to_value(r).map_err(|e| e.to_string()))
-    {
+    let served = cached_rules(&graph, Path::new(&params.cwd));
+    match serde_json::to_value(served) {
         Ok(v) => crate::protocol::Response::ok(req.id, v),
-        Err(e) => crate::protocol::Response::err(req.id, crate::protocol::ErrorCode::Internal, e),
+        Err(e) => crate::protocol::Response::err(
+            req.id,
+            crate::protocol::ErrorCode::Internal,
+            e.to_string(),
+        ),
     }
 }
 
@@ -149,22 +164,24 @@ fn store_stamps(graph: &Path, cwd: &Path) -> Vec<Option<(u64, std::time::SystemT
         .collect()
 }
 
-fn cached_rules(graph: &Path, cwd: &Path) -> Result<ServedRules, String> {
+fn cached_rules(graph: &Path, cwd: &Path) -> ServedRules {
     let stamps = store_stamps(graph, cwd);
     let key: CacheKey = (graph.to_path_buf(), cwd.to_path_buf());
     let cache = CACHE.get_or_init(Default::default);
     if let Ok(map) = cache.lock() {
         if let Some(hit) = map.get(&key) {
             if hit.stamps == stamps && hit.built.elapsed() < CACHE_MAX_AGE {
-                return Ok(hit.rules.clone());
+                return hit.rules.clone();
             }
         }
     }
-    let set = rule_set_in(graph, cwd)?;
-    let rules = ServedRules {
-        rules: set.rules,
-        unread: set.unread,
-    };
+    let built = rule_set_in(graph, cwd);
+    let failed = built.is_err();
+    let rules = ServedRules::of(built);
+    // A failed build is served, never cached: the next fire retries.
+    if failed {
+        return rules;
+    }
     if let Ok(mut map) = cache.lock() {
         // A bound, not an LRU: past it the next builds refill the map.
         if map.len() >= CACHE_CWDS {
@@ -179,7 +196,7 @@ fn cached_rules(graph: &Path, cwd: &Path) -> Result<ServedRules, String> {
             },
         );
     }
-    Ok(rules)
+    rules
 }
 
 pub fn rule_set(cwd: &Path) -> Result<RuleSet, String> {
@@ -343,13 +360,8 @@ pub struct Ruling {
 /// decision span. The one call every decision point makes.
 pub fn rule(cwd: &Path, ev: &crate::rules::Event) -> Ruling {
     let today = chrono::Local::now().date_naive();
-    let (decision, unread) = match rule_set_fast(cwd) {
-        Ok(set) => (crate::rules::decide(&set.rules, ev, today), set.unread),
-        Err(reason) => (
-            crate::rules::decide(&[], ev, today),
-            vec![format!("the rule set ({reason})")],
-        ),
-    };
+    let set = rule_set_fast(cwd);
+    let (decision, unread) = (crate::rules::decide(&set.rules, ev, today), set.unread);
     log_fires(ev, &decision);
     Ruling { decision, unread }
 }
