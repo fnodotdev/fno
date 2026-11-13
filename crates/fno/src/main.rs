@@ -2533,12 +2533,17 @@ fn main() {
                 // A fresh install runs the setup wizard once before the
                 // picker: a piped `curl | sh` install, an agent's --yes
                 // install, a Ctrl-C'd wizard and Homebrew all leave the
-                // wizard-done marker unset, and this terminal is the first
-                // place a person can answer it. Finished (or skipped) hands
-                // straight to the picker; a cancelled or refused wizard
-                // keeps the marker unset and names the one command that
-                // finishes setup later.
-                if fno::wizard_term::first_run_needed() {
+                // wizard-done marker in the scratch HOME unset, and this
+                // terminal is the first place a person can answer it.
+                // Finished (or skipped) hands straight to the picker; a
+                // cancelled or refused wizard keeps the marker unset and
+                // names the one command that finishes setup later. An e2e
+                // pty client is a test double, never a person: the harness
+                // stamps FNO_E2E on every spawned command, and the gate
+                // stands down there (a fresh scratch HOME reads as
+                // never-setup and would launch the wizard over the view
+                // the test asserts on).
+                if fno::wizard_term::first_run_needed() && std::env::var_os("FNO_E2E").is_none() {
                     let code = fno::wizard_term::run(&[]);
                     if code != 0 {
                         println!();
