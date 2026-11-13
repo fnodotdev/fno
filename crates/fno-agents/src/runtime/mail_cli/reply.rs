@@ -76,7 +76,8 @@ const REPLY_FORMS: &str = "Reply forms: fno agents mail reply --to <msg-id> <bod
 /// pre-widening ids still resolving off migrated chats rows). A leading
 /// positional carrying one names the target without `--to`.
 fn looks_like_msg_id(token: &str) -> bool {
-    token.starts_with("fmail-") || token.starts_with("msg-")
+    (token.starts_with("fmail-") || token.starts_with("msg-"))
+        && !token.contains(char::is_whitespace)
 }
 
 /// Every flag this leaf parses, so an unknown flag that merely misspells one
