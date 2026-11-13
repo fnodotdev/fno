@@ -1760,9 +1760,9 @@ fn authority_refusal<P: Probes>(
                 ));
             }
             // Another session's refusal is that session's dispatch brief,
-            // not this caller's: it rides as provenance and the caller's own
-            // gates decide.
-            crate::merge_grant::BoundFold::OtherSession(_) => {}
+            // not this caller's: nothing folds and the caller's own gates
+            // decide.
+            crate::merge_grant::BoundFold::OtherSession => {}
         }
     }
     // A `default-off` stamp is init's failed config read, never a refusal:

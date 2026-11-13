@@ -891,16 +891,15 @@ pub(crate) fn branch_bound_manifest(cwd: &Path, branch: &str) -> BoundRead {
 
 /// What the PR's branch-bound manifest does to the CALLER'S merge posture.
 /// The fold replaced the unscoped arm that folded every manifest's posture
-/// into every caller, which let a king's `--no-merge` spawn stamp refuse the
-/// crown's own merge of the green PR.
+/// into every caller, which let one session's `--no-merge` spawn stamp
+/// refuse every other session's merge of the green PR.
 pub(crate) enum BoundFold {
     /// The posture folds into the caller's: the (approved, source) pair the
     /// caller adopts. No manifest at the branch folds `None, None`.
     Folds(Option<bool>, Option<String>),
     /// The manifest's refusal belongs to another session: it is that
-    /// session's dispatch brief, not this caller's, and nothing folds. The
-    /// read rides along as provenance.
-    OtherSession(BoundManifestRead),
+    /// session's dispatch brief, not this caller's, and nothing folds.
+    OtherSession,
     /// A manifest exists at the branch but cannot be read; fail closed.
     Unreadable(String),
 }
@@ -937,7 +936,7 @@ pub(crate) fn bound_posture_for_caller(cwd: &Path, branch: &str) -> BoundFold {
             if binds {
                 BoundFold::Folds(bound.approved, bound.source)
             } else {
-                BoundFold::OtherSession(bound)
+                BoundFold::OtherSession
             }
         }
     }
