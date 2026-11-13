@@ -160,7 +160,10 @@ pub fn fold(
 }
 
 /// One checkin/CLI line for the ledger. Zero merged PRs prints the raw asks
-/// and no ratio, never a division artifact.
+/// and no ratio, never a division artifact. The line names no week: every
+/// render surface answers about the current week, and a wall-clock label
+/// here would pin fixture goldens to the calendar (the report file, its body
+/// title and the JSON payload carry the week).
 pub fn render_line(ledger: &Ledger) -> String {
     let ratio = match ledger.questions_per_merged_pr {
         Some(r) => format!("{r} questions/merged PR"),
@@ -175,8 +178,7 @@ pub fn render_line(ledger: &Ledger) -> String {
         _ => String::new(),
     };
     format!(
-        "attention ledger {}: {} ({} asks, {} merged), {} repeated subject(s), {} revert(s), {} guard refusal(s){}{queue}",
-        ledger.week,
+        "attention ledger: {} ({} asks, {} merged), {} repeated subject(s), {} revert(s), {} guard refusal(s){}{queue}",
         ratio,
         ledger.questions_filed,
         ledger.merged_prs,

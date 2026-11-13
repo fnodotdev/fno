@@ -5,7 +5,7 @@ fn attention_ledger_ok_reading_renders_one_line() {
     let data = Map::new();
     let payload = crate::backlog::attention_ledger::ReadingPayload {
         week: "2026-W46".into(),
-        line: "attention ledger 2026-W46: no merged PRs (2 asks, 0 merged), 1 repeated subject(s), 0 revert(s), 3 guard refusal(s)".into(),
+        line: "attention ledger: no merged PRs (2 asks, 0 merged), 1 repeated subject(s), 0 revert(s), 3 guard refusal(s)".into(),
         ledger: crate::backlog::attention_ledger::Ledger {
             week: "2026-W46".into(),
             questions_filed: 2,
@@ -30,7 +30,7 @@ fn attention_ledger_ok_reading_renders_one_line() {
         .filter(|l| l.starts_with("attention ledger"))
         .collect();
     assert_eq!(hits.len(), 1, "exactly one attention ledger line");
-    assert!(hits.first().is_some_and(|l| l.contains("2026-W46")));
+    assert!(hits.first().is_some_and(|l| l.contains("2 asks")));
 }
 
 /// AC4: a failed attention_ledger reading renders the named failure line
