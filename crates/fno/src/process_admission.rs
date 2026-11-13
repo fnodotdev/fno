@@ -1089,7 +1089,7 @@ fn marker_start_time(pid: u32, read: fn(u32) -> Option<u64>) -> Option<u64> {
         if let Some(start) = read(pid) {
             return Some(start);
         }
-        if crate::proto::pid_confirmed_dead(pid) || crate::proto::pid_is_zombie(pid) {
+        if crate::proto::pid_confirmed_dead(pid as i32) || crate::proto::pid_is_zombie(pid as i32) {
             return None;
         }
         if attempt < 5 {
@@ -1134,7 +1134,7 @@ fn marker_count_with(
         if !seen.insert(pid) {
             continue;
         }
-        if crate::proto::pid_confirmed_dead(pid) || crate::proto::pid_is_zombie(pid) {
+        if crate::proto::pid_confirmed_dead(pid as i32) || crate::proto::pid_is_zombie(pid as i32) {
             continue;
         }
         // A pid whose start time will not resolve can never be matched
@@ -1310,7 +1310,7 @@ fn snapshot_macos() -> Result<Vec<ProcessRow>, CensusFailure> {
                 // answers neither ESRCH here nor ESRCH to kill(2), so positive
                 // death evidence decides, the same rule the child marker ledger
                 // already applies to its own unreadable entries.
-                if crate::proto::pid_confirmed_dead(pid) {
+                if crate::proto::pid_confirmed_dead(pid as i32) {
                     continue;
                 }
                 // System services owned by another user can expose a name but

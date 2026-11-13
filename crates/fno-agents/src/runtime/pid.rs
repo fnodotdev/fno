@@ -546,12 +546,15 @@ impl Pid {
     /// non-positive answer reads 0.
     #[cfg(target_os = "macos")]
     pub fn thread_handles(self, handles: &mut [u64]) -> usize {
+        // libc has no PROC_PIDLISTTHREADS constant; the ABI value is stable
+        // on Darwin.
+        const PROC_PIDLISTTHREADS: libc::c_int = 6;
         // SAFETY: `handles` is a caller-owned buffer; the kernel writes at
         // most its byte length.
         let got = unsafe {
             libc::proc_pidinfo(
                 self.0.get(),
-                libc::PROC_PIDLISTTHREADS,
+                PROC_PIDLISTTHREADS,
                 0,
                 handles.as_mut_ptr().cast::<libc::c_void>(),
                 (handles.len() * std::mem::size_of::<u64>()) as libc::c_int,

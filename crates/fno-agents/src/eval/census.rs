@@ -151,7 +151,7 @@ fn process_table_libproc() -> (Vec<ProcRow>, usize) {
     let filled = unsafe {
         libc::proc_listallpids(
             pids.as_mut_ptr().cast::<libc::c_void>(),
-            (pids.len() * mem::size_of::<u32>()) as libc::c_int,
+            (pids.len() * std::mem::size_of::<u32>()) as libc::c_int,
         )
     };
     if filled <= 0 {

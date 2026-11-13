@@ -360,9 +360,7 @@ fn exec_call_within(graph: &Path, method: &str, params: Value, deadline: Duratio
         // long-lived mux server accumulates one zombie per timed-out read.
         // process_group(0) made the child a group leader, so its pid is
         // the pgid; the typed killpg signals that group.
-        if let Some(pid) = Pid::from_child(child) {
-            let _ = pid.signal_group(libc::SIGKILL);
-        }
+        let _ = Pid::from_child(&child).signal_group(libc::SIGKILL);
         let _ = child.wait();
         let _ = reader.join();
         return Err(StoreClientError::TimedOut {

@@ -15,7 +15,7 @@
 //! stderr (codex merges it, gemini drains it on a separate thread to keep the
 //! JSON parse pure). Everything below is identical for both.
 
-use crate::pid::{Pid, SignalResult};
+use crate::pid::Pid;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -71,7 +71,7 @@ extern "C" fn forward_sigint_to_child(_sig: libc::c_int) {
     if pgid > 0 && pgid != unsafe { libc::getpgrp() } {
         // getpgrp and the typed killpg stay async-signal-safe; pgid is the
         // child's group id, never our own (the ask spawners setpgid(0, 0)).
-        if let Some(pgid) = Pid::try_from(i64::from(pgid)) {
+        if let Ok(pgid) = Pid::try_from(i64::from(pgid)) {
             let _ = pgid.signal_group(libc::SIGINT);
         }
     }
@@ -176,7 +176,7 @@ pub fn kill_pgrp(pid: u32, sig: libc::c_int) -> bool {
     // SAFETY: getpgid answers the group without signalling.
     let pgid = unsafe { libc::getpgid(pid.as_raw()) };
     if pgid > 0 && pgid != unsafe { libc::getpgrp() } {
-        if let Some(pgid) = Pid::try_from(i64::from(pgid)) {
+        if let Ok(pgid) = Pid::try_from(i64::from(pgid)) {
             let _ = pgid.signal_group(sig);
             return true;
         }

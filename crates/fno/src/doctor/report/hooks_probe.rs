@@ -320,9 +320,7 @@ fn launch_one_hook(command: &str, root_value: &str, shell: &str, root_var: &str)
                 break;
             }
             Ok(None) if std::time::Instant::now() >= deadline => {
-                if let Some(pid) = Pid::from_child(child) {
-                    let _ = pid.signal_group(libc::SIGKILL);
-                }
+                let _ = Pid::from_child(&child).signal_group(libc::SIGKILL);
                 let _ = child.wait();
                 rc = None;
                 stderr_text = "timed out".to_string();

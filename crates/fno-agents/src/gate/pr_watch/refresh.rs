@@ -228,9 +228,7 @@ fn stdout_of(argv: &[&str], timeout_s: u64) -> String {
 }
 
 fn kill_group(child: &std::process::Child) {
-    if let Some(pid) = Pid::from_child(child) {
-        let _ = pid.signal_group(libc::SIGKILL);
-    }
+    let _ = Pid::from_child(&child).signal_group(libc::SIGKILL);
 }
 
 /// `[[dd-]hh:]mm:ss` from `ps -o etime=`; None on anything else.

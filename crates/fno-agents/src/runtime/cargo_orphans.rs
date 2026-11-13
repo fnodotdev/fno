@@ -9,7 +9,7 @@
 //! older than the cap, ends that holder's cargo tree and frees the claim.
 //! A user build records no chain, so it is never swept (law d-705a00a3).
 
-use crate::pid::{Pid, SignalResult};
+use crate::pid::Pid;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::path::Path;

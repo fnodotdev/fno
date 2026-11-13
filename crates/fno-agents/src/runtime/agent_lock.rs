@@ -67,7 +67,7 @@ pub(crate) fn holder_note(home: &AgentsHome, name: &str) -> String {
 /// 31-hour-corpse misreading this stamp exists to end, told with more
 /// authority than the bare mtime ever had, so the reader drops it.
 pub(crate) fn pid_is_alive(pid: u64) -> bool {
-    Pid::try_from(pid).is_some_and(|pid| pid.exists())
+    Pid::try_from(pid).is_ok_and(|pid| pid.exists())
 }
 
 /// Gone means the pid is dead, a zombie, or a DIFFERENT process than the

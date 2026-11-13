@@ -6,9 +6,12 @@
 /// `Refused` is its own arm because the holder EXISTS when inspection is
 /// denied - permission cannot be denied on a pid that is gone - so a
 /// refusal must never read as death.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 use crate::pid::{Creation, Pid};
 
+/// `Refused` is its own arm because the holder EXISTS when inspection is
+/// denied - permission cannot be denied on a pid that is gone - so a
+/// refusal must never read as death.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PidProbe {
     Created(i64),
     Absent,

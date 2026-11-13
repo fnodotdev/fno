@@ -18,9 +18,7 @@ struct KeeperProcess(std::process::Child);
 impl Drop for KeeperProcess {
     fn drop(&mut self) {
         // SIGKILL to a process this test spawned.
-        if let Some(pid) = Pid::from_child(&self.0) {
-            pid.signal(libc::SIGKILL);
-        }
+        Pid::from_child(&self.0).signal(libc::SIGKILL);
         let _ = self.0.wait();
     }
 }

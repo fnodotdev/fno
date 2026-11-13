@@ -3987,7 +3987,7 @@ fn keeper_alive(pid: i32) -> bool {
 pub fn sweep_orphaned(timeout_secs: f64) -> Vec<i32> {
     let candidates = orphaned_keeper_pids();
     for pid in &candidates {
-        if let Some(pid) = Pid::try_from(i64::from(*pid)) {
+        if let Ok(pid) = Pid::try_from(i64::from(*pid)) {
             pid.signal(libc::SIGTERM);
         }
     }
@@ -4002,7 +4002,7 @@ pub fn sweep_orphaned(timeout_secs: f64) -> Vec<i32> {
         pending.retain(|p| keeper_alive(*p));
     }
     for pid in &pending {
-        if let Some(pid) = Pid::try_from(i64::from(*pid)) {
+        if let Ok(pid) = Pid::try_from(i64::from(*pid)) {
             pid.signal(libc::SIGKILL);
         }
     }

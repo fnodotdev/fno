@@ -973,10 +973,19 @@ pub async fn restart_daemon(
                 // that inherited the pid -- the same refusal standard
                 // `stop_claude_pid_confirmed` applies to worker kills.
                 if crate::daemon::pid_is_ours(pid, Some(recorded_start)) {
-                    match send_signal(pid, libc::SIGKILL) {
-                        SignalResult::Sent | SignalResult::AlreadyGone => {}
-                        SignalResult::Failed(reason) => {
-                            return Err(RestartError::SigkillFailed { pid, reason })
+                    match Pid::try_from(i64::from(pid)).map(|p| p.signal(libc::SIGKILL)) {
+                        Some(SignalResult::Sent) | Some(SignalResult::AlreadyGone) => {}
+                        Some(SignalResult::Failed(reason)) => {
+                            return Err(RestartError::SigkillFailed {
+                                pid,
+                                reason: reason.to_string(),
+                            })
+                        }
+                        None => {
+                            return Err(RestartError::SigkillFailed {
+                                pid,
+                                reason: "pid out of range".into(),
+                            })
                         }
                     }
                     match await_lock_free_or_rebound(
@@ -1391,11 +1400,12 @@ mod drift_restart_tests {
         let mut child = child;
         let _ = child.wait(); // reap so the pid is fully gone
         std::thread::sleep(Duration::from_millis(50));
-        match send_signal(pid, libc::SIGTERM) {
+        match Pid::new(pid).map(|p| p.signal(libc::SIGTERM)) {
             // pid retired -> ESRCH; not-yet-retired -> Sent. Both acceptable;
             // a Failed (e.g. EPERM) for our own just-reaped child is the bug.
-            SignalResult::AlreadyGone | SignalResult::Sent => {}
-            SignalResult::Failed(e) => panic!("unexpected Failed: {e}"),
+            Some(SignalResult::AlreadyGone) | Some(SignalResult::Sent) => {}
+            Some(SignalResult::Failed(e)) => panic!("unexpected Failed: {e}"),
+            None => panic!("pid {pid} out of range"),
         }
     }
 

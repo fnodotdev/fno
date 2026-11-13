@@ -122,9 +122,7 @@ fn read_macmon(timeout: u64) -> (Option<Value>, Option<String>) {
     let deadline = Instant::now() + Duration::from_secs(timeout);
     let raw = loop {
         if Instant::now() >= deadline {
-            if let Some(pid) = Pid::from_child(child) {
-                let _ = pid.signal_group(libc::SIGKILL);
-            }
+            let _ = Pid::from_child(&child).signal_group(libc::SIGKILL);
             let _ = child.kill();
             let _ = child.wait();
             break reader.join().unwrap_or_default();

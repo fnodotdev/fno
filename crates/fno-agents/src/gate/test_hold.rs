@@ -31,7 +31,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use crate::pid::Pid;
+use crate::pid::{Pid, SignalResult};
 use serde::{Deserialize, Serialize};
 
 use crate::census::ProcRow;

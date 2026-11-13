@@ -23,7 +23,7 @@
 //! unit-testable in isolation.
 
 use crate::graph_store::WorkState;
-use crate::pid::Pid;
+use crate::pid::{Pid, SignalResult};
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 

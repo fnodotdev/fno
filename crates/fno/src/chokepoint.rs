@@ -220,7 +220,7 @@ pub fn set_event_sink(sink: Sink) {
 }
 
 fn pid_alive(pid: u64) -> bool {
-    Pid::try_from(pid).is_some_and(|pid| pid.exists())
+    Pid::try_from(pid).is_ok_and(|pid| pid.exists())
 }
 
 /// Write this process as the holder, truncating any earlier line first. Every

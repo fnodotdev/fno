@@ -14,7 +14,7 @@ use crate::claims::{
     classify_with_basis_and_exclusivity, encode_key, is_expired, is_same_machine, list_in_result,
     now_ms, probe_pid, ClaimRecord, PidProbe, SessionWitness,
 };
-use crate::pid::{Pid, SignalResult};
+use crate::pid::Pid;
 use serde::Serialize;
 use serde_json::Value;
 use std::path::{Path, PathBuf};

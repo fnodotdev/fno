@@ -1,6 +1,7 @@
 use super::*;
 // The drain-fold tests kept here use the routing module's step constant and
 // burst cap; server.rs itself no longer imports these two names.
+use crate::pid::{Pid, SignalResult};
 use crate::proto::TemplateName;
 use crate::pty::ChildGuard;
 use crate::restore_gate::{set_restore_registry_rows, RestoreRegistryRowsGuard};

@@ -7,7 +7,7 @@ use crate::claims::{
 };
 #[cfg(test)]
 use crate::claims::{encode_key, read_claim_file};
-use crate::pid::{Pid, SignalResult};
+use crate::pid::Pid;
 use serde_json::Value;
 
 use std::path::{Path, PathBuf};

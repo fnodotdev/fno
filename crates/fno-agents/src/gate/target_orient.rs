@@ -89,7 +89,7 @@ fn pid_alive(pid_val: &str) -> bool {
         return false;
     };
     // EPERM reads biased live: exists-but-not-ours.
-    Pid::try_from(pid).is_some_and(|p| p.exists())
+    Pid::try_from(pid).is_ok_and(|p| p.exists())
 }
 
 /// The claim lockfile state for `claim_key` (free|live|suspect|stale|

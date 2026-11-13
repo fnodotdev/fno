@@ -77,9 +77,7 @@ pub(crate) fn output_with_timeout_result(
             Ok(None) => {
                 // The child is its own group leader (process_group(0)), so
                 // this reaches the grandchildren a forking child left behind.
-                if let Some(pid) = Pid::from_child(child) {
-                    let _ = pid.signal_group(libc::SIGKILL);
-                }
+                let _ = Pid::from_child(&child).signal_group(libc::SIGKILL);
                 break child.wait()?;
             }
             Err(e) => return Err(e),
@@ -201,9 +199,7 @@ pub(crate) fn output_with_timeout_stdin(
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
             Ok(None) => {
-                if let Some(pid) = Pid::from_child(child) {
-                    let _ = pid.signal_group(libc::SIGKILL);
-                }
+                let _ = Pid::from_child(&child).signal_group(libc::SIGKILL);
                 break child.wait()?;
             }
             Err(e) => return Err(e),
