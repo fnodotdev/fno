@@ -25,7 +25,7 @@ use super::test_run_guard::head_of;
 pub fn run(_args: &[String]) -> i32 {
     let payload: Value = serde_json::from_str(super::read_stdin().trim()).unwrap_or(Value::Null);
     let cwd = payload
-        .get("cwd")
+        .pointer("/cwd")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
@@ -47,7 +47,7 @@ pub fn run(_args: &[String]) -> i32 {
 
 /// The whole verdict for one payload: a note, or None to allow.
 pub(super) fn judge(payload: &Value) -> Option<String> {
-    if payload.get("tool_name").and_then(Value::as_str) != Some("Bash") {
+    if payload.pointer("/tool_name").and_then(Value::as_str) != Some("Bash") {
         return None;
     }
     let command = payload
