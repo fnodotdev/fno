@@ -961,8 +961,8 @@ mod tests {
                 other => panic!("daemon arm argv root {other:?} has no resolver here"),
             }
         }
-        // The backlog row carries no menu or tree row: hold it to its root
-        // and verb here, where the baseline ratchet cannot see it.
+        // The backlog row carries no menu or tree row: hold it to its
+        // exact words here, where the baseline ratchet cannot see it.
         assert_eq!(
             fno_agents::door_argv::MERGE_CLOSE_RECONCILE,
             &["backlog", "reconcile", "--json"],
