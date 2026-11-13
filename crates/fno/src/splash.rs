@@ -511,8 +511,8 @@ mod tests {
         let last = mark_rows(None);
         assert_eq!(first.len(), STAMP_ROWS);
         assert_eq!(last.len(), STAMP_ROWS);
-        assert!(first[0].chars().count() <= 8, "{first:?}");
-        assert_eq!(last[0].chars().count(), MARK_CELLS);
+        assert!(first.first().map_or(0, |r| r.chars().count()) <= 8, "{first:?}");
+        assert_eq!(last.first().map_or(0, |r| r.chars().count()), MARK_CELLS);
         assert_eq!(mark_rows(Some(MARK_PLAY_SECS)), last);
     }
     #[test]
