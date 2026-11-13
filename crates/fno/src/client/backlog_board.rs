@@ -117,6 +117,9 @@ pub(crate) struct BoardView {
     /// the details append. The typed buffer rides along.
     pub(crate) input: Option<(BoardInputKind, String)>,
     input_esc: Vec<u8>,
+    /// The search text in force when `/` opened the find input: Esc puts it
+    /// back after the live filter has moved on.
+    find_prev: Option<String>,
     /// A p/s/S field picker, when open.
     /// `f` facet picker: cursor per level (facet, then value).
     pub(crate) facet: Option<FacetPick>,
@@ -299,6 +302,7 @@ impl BoardView {
             force: false,
             input: None,
             input_esc: Vec::new(),
+            find_prev: None,
             facet: None,
             layout: crate::view_store::load_board_layout(),
             colpick: None,
@@ -934,7 +938,11 @@ pub(crate) fn filter_bar_lines(b: &BoardView, board: &Board, w: usize) -> Vec<TL
     let _ = w;
     let mut cells: Vec<(&str, String)> = Vec::new();
     let q = b.query.q.as_deref().unwrap_or("any");
-    cells.push(("Search", q.to_string()));
+    match find_input(b) {
+        // While `/` is open the cell is the input: the text so far and a cursor.
+        Some((typed, _)) => cells.push(("Search", format!("{typed}\u{2588}"))),
+        None => cells.push(("Search", q.to_string())),
+    }
     let set = |name: &str| -> String {
         let vals = b.query.sets.get(name).map(|v| v.as_slice()).unwrap_or(&[]);
         if vals.is_empty() {
@@ -1851,7 +1859,59 @@ fn cycle_lanes_b(b: &mut BoardView) {
 /// `/`: open the one-line find input.
 fn open_find(view: &mut View) {
     if let Some(b) = view.backlog_board.as_mut() {
-        b.input = Some((BoardInputKind::Find, String::new()));
+        b.find_prev = b.query.q.clone();
+        let seed = b.query.q.clone().unwrap_or_default();
+        b.input = Some((BoardInputKind::Find, seed));
+    }
+}
+
+/// Apply the find input's text to the board as it is typed. A query that
+/// does not parse leaves the last good filter in place; the painted input
+/// footer names the parse error ([`find_input`]).
+fn apply_live_find(b: &mut BoardView) {
+    let text = match &b.input {
+        Some((BoardInputKind::Find, buf)) => buf.trim().to_string(),
+        _ => return,
+    };
+    let q = (!text.is_empty()).then_some(text);
+    if b.query.q == q {
+        return;
+    }
+    let candidate = QueryState {
+        q: q.clone(),
+        ..b.query.clone()
+    };
+    if candidate.to_query().is_err() {
+        return;
+    }
+    b.query.q = q;
+    let focus = cursor_card_id(b);
+    rederive(b);
+    focus_card(b, focus.as_deref());
+}
+
+/// Open the find input already holding `text`, as if typed: the demo
+/// snapshot's mid-typing shot.
+pub(crate) fn seed_find(b: &mut BoardView, text: &str) {
+    b.find_prev = b.query.q.clone();
+    b.input = Some((BoardInputKind::Find, text.to_string()));
+    apply_live_find(b);
+}
+
+/// The find input's live state for the painted bar: the text typed so far
+/// and the parse error holding the board on its last good filter, if any.
+pub(crate) fn find_input(b: &BoardView) -> Option<(&str, Option<String>)> {
+    match &b.input {
+        Some((BoardInputKind::Find, buf)) => {
+            let err = QueryState {
+                q: (!buf.trim().is_empty()).then(|| buf.trim().to_string()),
+                ..b.query.clone()
+            }
+            .to_query()
+            .err();
+            Some((buf.as_str(), err))
+        }
+        _ => None,
     }
 }
 
@@ -1874,8 +1934,16 @@ fn input_keys(view: &mut View, bytes: &[u8]) {
         }
         match key {
             SearchKey::Esc => {
+                let was_find = matches!(b.input, Some((BoardInputKind::Find, _)));
                 b.input = None;
                 b.input_esc.clear();
+                if was_find && b.query.q != b.find_prev {
+                    b.query.q = b.find_prev.take();
+                    let focus = cursor_card_id(b);
+                    rederive(b);
+                    focus_card(b, focus.as_deref());
+                }
+                b.find_prev = None;
             }
             SearchKey::Byte(b'\r' | b'\n') => input_commit(view),
             SearchKey::Byte(0x7f | 0x08) => {
@@ -1889,13 +1957,21 @@ fn input_keys(view: &mut View, bytes: &[u8]) {
                 }
             }
             SearchKey::Byte(c @ 0x20..=0x7e) => {
-                if let Some((_, buf)) = b.input.as_mut() {
-                    if buf.len() < 200 {
+                if let Some((kind, buf)) = b.input.as_mut() {
+                    // `/` opened this input; a second one is not search text,
+                    // so it never stacks at the start or after another `/`.
+                    let stacked = *kind == BoardInputKind::Find
+                        && c == b'/'
+                        && (buf.is_empty() || buf.ends_with('/'));
+                    if buf.len() < 200 && !stacked {
                         buf.push(c as char);
                     }
                 }
             }
             SearchKey::Byte(_) => {}
+        }
+        if let Some(b) = view.backlog_board.as_mut() {
+            apply_live_find(b);
         }
     }
 }
@@ -1909,6 +1985,7 @@ fn input_commit(view: &mut View) {
         return;
     };
     b.input_esc.clear();
+    b.find_prev = None;
     let text = text.trim().to_string();
     match kind {
         BoardInputKind::Find => {

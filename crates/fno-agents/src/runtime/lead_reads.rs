@@ -1,6 +1,6 @@
-//! The user surfaces of the lead read commands: `fno agents org chart
-//! manifest-path`, `fno agents org faq list|add`, the caller ladder behind
-//! `fno agents org chart shape`, and the `fno inbox board` text page.
+//! The user surfaces of the lead read commands: `fno agents hq chart
+//! manifest-path`, `fno agents hq faq list|add`, the caller ladder behind
+//! `fno agents hq chart shape`, and the `fno inbox board` text page.
 //!
 //! The front door (`crates/fno`) execs these through arguments of existing
 //! actions, because law d-fe66560a bars a new one: `lead-state
@@ -370,7 +370,7 @@ pub(crate) fn own_role(scope: &str) -> Result<(String, String, PathBuf), String>
     Ok((own, row_session, root))
 }
 
-/// `lead-shape --user-command pass|team [--scope S]`: `fno agents org chart shape`.
+/// `lead-shape --user-command pass|team [--scope S]`: `fno agents hq chart shape`.
 pub fn run_shape_command(args: &[String]) -> i32 {
     let mut shape: Option<&str> = None;
     let mut scope = String::new();

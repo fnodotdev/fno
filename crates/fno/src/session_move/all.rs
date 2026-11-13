@@ -42,7 +42,7 @@ pub fn left_after(workers: &[String], i: usize) -> Vec<&str> {
 
 /// The hand-off line for a lead: a successor on the target takes the scope.
 fn hand_off(scope: &str, host: &str) -> String {
-    format!("on {host}, a person runs: fno agents org promote <handle> --scope {scope}")
+    format!("on {host}, a person runs: fno agents hq promote <handle> --scope {scope}")
 }
 
 pub fn render_dry_run(plan: &AllPlan, host: &str) -> String {

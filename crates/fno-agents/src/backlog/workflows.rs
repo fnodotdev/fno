@@ -184,6 +184,14 @@ pub(crate) fn text_at<'a>(row: &'a Value, key: &str) -> Option<&'a str> {
     row.get(key).and_then(Value::as_str)
 }
 
+/// The string items of a list field, empty when absent or not a list.
+pub(crate) fn list_at<'a>(row: &'a Value, key: &str) -> Vec<&'a str> {
+    row.get(key)
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default()
+}
+
 /// Ids of the owner's live membership children; contained children never
 /// count (the _live_child_ids twin).
 fn live_child_ids(entries: &[Value], owner_id: &str) -> Vec<String> {
@@ -1534,10 +1542,7 @@ fn find_node<'a>(rows: &'a [Value], task_id: &str) -> Option<&'a Value> {
 }
 
 pub(crate) fn active_backend_name() -> String {
-    std::env::var("FNO_TRACKER_BACKEND")
-        .ok()
-        .filter(|b| !b.trim().is_empty())
-        .unwrap_or_else(|| "graph".into())
+    crate::tracker::backend_name(None)
 }
 
 /// Aggregate session_id / cost_usd / cost_sessions / points from the ledger

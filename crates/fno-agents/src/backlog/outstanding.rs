@@ -1131,7 +1131,7 @@ fn is_promoted(home: &crate::paths::AgentsHome) -> bool {
 }
 
 fn prove_it_rows() -> Result<Vec<Value>, String> {
-    let backend = env_nonempty("FNO_TRACKER_BACKEND").unwrap_or_else(|| "graph".to_string());
+    let backend = crate::tracker::backend_name(None);
     if backend != "graph" {
         return Err(
             "the prove-it reader reads the graph store, which is not authoritative under an external tracker backend"
@@ -1150,7 +1150,7 @@ pub(crate) fn sources(cwd: &Path) -> Sources {
         questions: crate::provider_cap::questions_path(&home),
         lane: crate::org_board::scope::operator_lane_path(cwd),
         graph: crate::graph_get::default_graph_path(),
-        backend: env_nonempty("FNO_TRACKER_BACKEND").unwrap_or_else(|| "graph".to_string()),
+        backend: crate::tracker::backend_name(None),
         sidecar_dir: crate::tracker::sidecar::root(cwd),
         home: std::env::var_os("HOME").map(PathBuf::from),
     }

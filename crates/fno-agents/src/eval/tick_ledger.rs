@@ -237,7 +237,7 @@ pub const KNOWN_ARMS: &[ArmSpec] = &[
         scheduler: SCHED_DAEMON,
         upstream: None,
         arm_key: None,
-        reader: Some("fno agents org --nodes"),
+        reader: Some("fno agents hq --nodes"),
     },
     ArmSpec {
         arm: "provider_cap",

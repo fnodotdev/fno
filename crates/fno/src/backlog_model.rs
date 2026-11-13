@@ -761,7 +761,16 @@ fn keeps_query(
     if !in_set(&q.kind, card.kind.as_deref()) {
         return false;
     }
-    if !q.tag.is_empty() && !q.tag.iter().any(|t| card.tags.iter().any(|have| have == t)) {
+    // Tags of one facet (`area:mail`, `area:mux`) widen; facets narrow, so
+    // `area:mail` + `audience:user` keeps only cards carrying both.
+    let facet = |t: &str| t.split_once(':').map_or("", |(f, _)| f).to_string();
+    let facets: std::collections::BTreeSet<String> = q.tag.iter().map(|t| facet(t)).collect();
+    if !facets.iter().all(|f| {
+        q.tag
+            .iter()
+            .filter(|t| facet(t) == *f)
+            .any(|t| card.tags.contains(t))
+    }) {
         return false;
     }
     if !q.lead.is_empty()
@@ -1442,10 +1451,7 @@ pub async fn gather(graph: &Path, agents: Vec<AgentRow>) -> Inputs {
 }
 
 fn external_backend_name() -> String {
-    std::env::var("FNO_TRACKER_BACKEND")
-        .ok()
-        .filter(|v| !v.trim().is_empty() && v.trim() != "graph")
-        .unwrap_or_else(|| "graph".to_string())
+    crate::backlog_view::external_backend_name()
 }
 
 /// The snapshot document's rows and its error surface, split out so tests
@@ -1927,10 +1933,24 @@ pub(crate) fn search_fields(
         "column",
         Some(card.column.as_str().replace(' ', "_")),
     );
+    // An `area:` tag is the node's area; the title heuristic fills only an
+    // untagged node, so the two never disagree on one row.
     let details = row.and_then(|r| r.details.clone()).unwrap_or_default();
-    let area = crate::search_query::areas_for_node(&card.title, &details, card.project.as_deref());
+    let tagged: Vec<String> = card
+        .tags
+        .iter()
+        .filter_map(|t| t.strip_prefix("area:").map(str::to_string))
+        .collect();
+    let area = if tagged.is_empty() {
+        crate::search_query::areas_for_node(&card.title, &details, card.project.as_deref())
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    } else {
+        tagged
+    };
     for a in area {
-        push_val(&mut f, "area", Some(a.to_string()));
+        push_val(&mut f, "area", Some(a));
     }
     push_val(&mut f, "created", str_of(|r| &r.created_at));
     push_val(&mut f, "updated", card.updated_at.clone());

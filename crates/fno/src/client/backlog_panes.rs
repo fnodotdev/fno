@@ -599,6 +599,11 @@ fn enter_word(b: &BoardView) -> String {
     }
 }
 
+/// The find input's footer. Every qualifier named here is a grammar key the
+/// board's own parser accepts (`status` `priority` `type` `tag` `project`
+/// `lead` `is` `has` `sort` all carry the node surface in `search_query::KEYS`).
+const FIND_FOOTER: &str = "type to filter as you go \u{b7} s:ready p:p1 t:epic tag:x l:lead h:codex is: has: sort:updated-desc, -s: negates \u{b7} enter keep \u{b7} esc cancel";
+
 /// The hint sheet: the key list for the board or the focused details.
 /// Every word lands (nothing drops off the bottom unseen); a sheet longer
 /// than 4 rows ends its last row in `? keys`, the full keys overlay one
@@ -606,6 +611,13 @@ fn enter_word(b: &BoardView) -> String {
 /// caller ([`paint`]) flattens the whole sheet to the title rows' dim role
 /// when the pane does not own typing.
 pub(crate) fn hint_lines(b: &BoardView, detail_focus: bool, w: usize) -> Vec<TLine> {
+    if let Some((_, err)) = super::backlog_board::find_input(b) {
+        let text = match err {
+            Some(msg) => format!("not a query yet: {msg} \u{b7} esc cancel"),
+            None => FIND_FOOTER.to_string(),
+        };
+        return TLine::meta(&text).wrap(w.max(1));
+    }
     if b.keys_footer {
         let view = if detail_focus {
             super::key_grid::KeyView::Detail

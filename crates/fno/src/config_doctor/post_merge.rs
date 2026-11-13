@@ -202,8 +202,8 @@ fn repo_has_fno_activity(repo_root: &Path, project_id: Option<&str>) -> bool {
     if repo_root.join(".fno").join("target-state.md").is_file() {
         return true;
     }
-    let backend = std::env::var("FNO_TRACKER_BACKEND").unwrap_or_default();
-    if !backend.is_empty() && backend != "graph" {
+    let backend = crate::backlog_view::external_backend_name();
+    if backend != "graph" {
         return false;
     }
     let settings = super::Settings::load();

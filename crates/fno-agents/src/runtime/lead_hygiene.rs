@@ -291,7 +291,9 @@ fn team_read_or_grant_command(target: &str) -> bool {
         !has_help_flag(args)
             && (args_start_with(args, &["fno", "agents", "role"])
                 || args_start_with(args, &["fno", "agents", "org"])
-                || args_start_with(args, &["fno", "whoami"]))
+                // The deprecated group spelling rides its one-release window.
+                || args_start_with(args, &["fno", "agents", "hq"])
+                || args_start_with(args, &["fno", "agents", "whoami"]))
     })
 }
 
@@ -480,7 +482,7 @@ fn check3_team_before_ruling(entries: &[Entry]) -> CheckResult {
         true,
         "violation",
         format!(
-            "ruled at index {first_ruling} with no team read (fno agents org) or promotion before it"
+            "ruled at index {first_ruling} with no team read (fno agents hq) or promotion before it"
         ),
         Some(first_ruling),
     )

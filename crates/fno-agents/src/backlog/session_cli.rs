@@ -26,10 +26,7 @@ pub fn run(tail: &[String]) -> i32 {
         // The external-backend guard the Python surface carried: session
         // commands own graph state, so under any other tracker backend they
         // refuse before any read or write.
-        let backend = std::env::var("FNO_TRACKER_BACKEND")
-            .ok()
-            .filter(|v| !v.trim().is_empty())
-            .unwrap_or_else(|| "graph".to_string());
+        let backend = crate::tracker::backend_name(None);
         if backend != "graph" {
             eprintln!(
                 "fno backlog session {sub}: this command owns graph state; under \

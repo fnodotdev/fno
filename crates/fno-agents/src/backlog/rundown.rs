@@ -1,5 +1,5 @@
 //!
-//! `lead-rundown`: the Rundown page for `fno agents org rundown`.
+//! `lead-rundown`: the Rundown page for `fno agents hq rundown`.
 //!
 //! Python resolves the org (registry adjudication, manifest limbs, the
 //! caller's paths) and hands one org JSON over; the native side owns the
@@ -822,7 +822,7 @@ pub struct Arm {
 /// the child named, so a tick can never call the wrong file rendered.
 fn run_ledger() -> Result<String, String> {
     let output = std::process::Command::new(crate::scrape::fno_bin())
-        .args(["agents", "org", "rundown"])
+        .args(["agents", "hq", "rundown"])
         .stdin(std::process::Stdio::null())
         .output()
         .map_err(|e| format!("spawn: {e}"))?;
@@ -1024,7 +1024,7 @@ pub(crate) fn render(
          <link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css2?family=Fraunces:wght@500;700&family=JetBrains+Mono:wght@400;600&family=Public+Sans:wght@400;600&display=swap\">\
          <style>{CSS}{NEEDS_CSS}{}</style></head><body><div class=\"wrap\">\
          <header class=\"masthead\">\
-         <span class=\"eyebrow\">fno agents org · {gen} · <span class=\"age\" data-generated=\"{gen}\"></span></span>\
+         <span class=\"eyebrow\">fno agents hq · {gen} · <span class=\"age\" data-generated=\"{gen}\"></span></span>\
          <h1>Rundown</h1>\
          <p class=\"dek\">Who leads which team, what each team still owes, and whether the manifest and the registry tell the same story about any of it.</p>\
          </header>", crate::ledger_workers::CSS
@@ -1111,7 +1111,7 @@ pub(crate) fn render(
         format!("<span>{}</span>", parts.join(" · "))
     };
     out.push_str(&format!(
-        "<footer><span>generated from fno agents org</span>{right}</footer>"
+        "<footer><span>generated from fno agents hq</span>{right}</footer>"
     ));
     out.push_str(
         "</div><script>(function(){var el=document.querySelector(\".age\");if(!el)return;\
@@ -1158,8 +1158,8 @@ fn default_page() -> PathBuf {
     crate::state_layout::place(&root, "term.html")
 }
 
-/// `fno agents org ledger [--out PATH]`, riding `lead-rundown --ledger`: the
-/// team comes from `fno agents org --nodes`, so the term ledger and the team
+/// `fno agents hq ledger [--out PATH]`, riding `lead-rundown --ledger`: the
+/// team comes from `fno agents hq --nodes`, so the term ledger and the team
 /// read share one gather. The daemon's team_ledger arm greps the
 /// `lead ledger: ` line ([`run_ledger`]).
 fn run_ledger_command(args: &[String]) -> i32 {
@@ -1167,7 +1167,7 @@ fn run_ledger_command(args: &[String]) -> i32 {
         [] => None,
         [flag, path] if flag == "--out" => Some(PathBuf::from(path)),
         _ => {
-            eprintln!("Usage: fno agents org ledger [--out PATH]");
+            eprintln!("Usage: fno agents hq ledger [--out PATH]");
             return 2;
         }
     };

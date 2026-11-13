@@ -472,6 +472,8 @@ pub(crate) fn plugin_file_report(active_raw: &str) -> Value {
         let posix = active_path.to_string_lossy();
         let plugin_id = if posix.contains("/.claude/plugins/cache/footnote/") {
             "fno@footnote"
+        } else if posix.contains("/.claude/plugins/cache/fno-dev/") {
+            "fno@fno-dev"
         } else {
             "fno@fno"
         };

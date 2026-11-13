@@ -35,6 +35,9 @@ fn token_re() -> &'static regex::Regex {
 const MIN_SCORE: f64 = 0.15;
 const DOMAIN_BONUS: f64 = 0.10;
 const EPIC_BONUS: f64 = 0.25;
+/// Per shared area, harness or topic tag, capped at three tags.
+const TAG_BONUS: f64 = 0.15;
+const TAG_BONUS_CAP: usize = 3;
 /// Filing-time dedup floor: above this an existing node is surfaced as a
 /// likely duplicate when a new node is born.
 const DEDUP_MIN_SCORE: f64 = 0.30;
@@ -118,6 +121,16 @@ fn score(
         if !da.is_empty() && Some(da) == db {
             combined += DOMAIN_BONUS;
             reasons.push(format!("shared domain '{da}'"));
+        }
+    }
+
+    // Shared tags ride the rollup lane only: two nodes in one area are
+    // related, never duplicates, so the dedup net stays text-driven.
+    if include_epic {
+        let shared = super::tags::shared_signal_tags(a, b);
+        if !shared.is_empty() {
+            combined += TAG_BONUS * shared.len().min(TAG_BONUS_CAP) as f64;
+            reasons.push(format!("shared tags ({})", shared.join(", ")));
         }
     }
 
@@ -244,6 +257,40 @@ pub fn similar_nodes(
         }
         let (s, reason) = score(entry, e, &ta, &tokens(e), false, threshold);
         if s >= threshold {
+            scored.push((eid.to_string(), s, reason));
+        }
+    }
+    scored.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.0.cmp(&b.0))
+    });
+    scored.truncate(k);
+    scored
+}
+
+/// `fno backlog find --related <id>`: every live node ranked against
+/// `entry` on the rollup score (shared terms, domain, tags, same epic),
+/// across epics, best first, top-K. Self, lineage and superseded rows drop.
+pub fn related_to(entry: &Value, entries: &[Value], k: usize) -> Vec<(String, f64, String)> {
+    let nid = id_of(entry);
+    let ta = tokens(entry);
+    let by_id: BTreeMap<String, Value> = entries
+        .iter()
+        .filter_map(|e| id_of(e).map(|i| (i.to_string(), e.clone())))
+        .collect();
+    let lineage = lineage_ids(entry, &by_id);
+    let mut scored: Vec<(String, f64, String)> = Vec::new();
+    for e in entries {
+        let Some(eid) = id_of(e) else { continue };
+        if Some(eid) == nid
+            || lineage.contains(eid)
+            || super::workflows::text_at(e, "status") == Some("superseded")
+        {
+            continue;
+        }
+        let (s, reason) = score(entry, e, &ta, &tokens(e), true, MIN_SCORE);
+        if s > 0.0 {
             scored.push((eid.to_string(), s, reason));
         }
     }

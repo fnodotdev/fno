@@ -86,8 +86,9 @@ Reinstall fno, run `fno doctor update --rust`, or set FNO_AGENTS_BIN."
 const HELP: &str = concat!(
     "Usage: fno config plugin install [OPTIONS] [HARNESS]\n",
     "\n",
-    "  Install your local checkout for development. --dev replaces a release-channel\n",
-    "  plugin.\n",
+    "  Install your local checkout for development. Claude gets fno@fno-dev beside\n",
+    "  a release fno@fno, and the release turns off. For codex, --dev replaces a\n",
+    "  release-channel plugin.\n",
     "\n",
     "  Side effects. It builds a stage under ~/.fno/install/plugin-stage/fno (fno-pack with\n",
     "  --pack, which drops the mux skills and mux hooks) and points the harness at\n",

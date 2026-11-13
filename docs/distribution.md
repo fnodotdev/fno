@@ -70,7 +70,7 @@ The pin reads the included PRs from `git log --first-parent <base_tag>..<sha>` i
 
 1. Promote: `gh workflow run release.yml -f channel=stable`.
 2. The one click uploads `0.4.0` to PyPI and crates.io. Both are permanent: a version cannot be re-uploaded. The click also creates the `v0.4.0` tag as Latest and bumps the Homebrew tap. It moves the `stable` branch and the `fno--v0.4.0` plugin tag. The plugin marketplaces pin those refs, and they move only on stable promotion.
-3. The job does not push to main: a repository rule rejects it. The nightly and the next candidate skip the released patch on their own. They need no bump. To move main's version, run `scripts/release/sync-version.sh <next>`, land it, then verify with `scripts/release/sync-version.sh --check`.
+3. The job does not push to main: a repository rule rejects it. The nightly and the next candidate skip the released patch on their own. They need no bump. The job opens the version-sync PR for main instead. It cuts `version-sync/v<version>`, runs `scripts/release/sync-version.sh <version>`, self-posts the guard status, and squash-merges once green. For an off-cycle bump, run `scripts/release/sync-version.sh <next>`, land it, then verify with `scripts/release/sync-version.sh --check`.
 
 ### Rehearsal (fork, `dry_run`)
 

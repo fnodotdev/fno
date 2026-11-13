@@ -1590,10 +1590,7 @@ fn max_children_from_frontmatter(fm: &serde_json::Map<String, Value>) -> MaxChil
 
 /// The create guard, shared spelling with intake's door.
 fn refuse_external_backend_for_decompose() -> bool {
-    let backend = std::env::var("FNO_TRACKER_BACKEND")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "graph".to_string());
+    let backend = crate::tracker::backend_name(None);
     if backend == "graph" {
         return false;
     }

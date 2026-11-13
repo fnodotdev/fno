@@ -1443,7 +1443,7 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // resting goal, so the beat is a work beat (lead_wake.rs). The same kind
     // the wake-mode loop emits for its dispatch-side resume.
     "lead_goal_resumed",
-    // A team's term declared or extended (`fno agents org term <spec>
+    // A team's term declared or extended (`fno agents hq term <spec>
     // [--reason]`), before or after a Stop-hook gate observed it reached.
     // The receipt a lead's tenure bound leaves; `fno doctor event audit`
     // resolves it through this table exactly like the lead kinds above.

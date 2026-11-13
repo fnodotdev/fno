@@ -135,16 +135,41 @@ pub fn done_session_ids() -> HashSet<(String, String)> {
     }
 }
 
-/// Whether an external tracker backend is selected, resolved exactly as the
-/// Python side resolves it (`FNO_TRACKER_BACKEND`, default `graph`). Shared
-/// resolution so the reader and `get_tracker` can never disagree about which
-/// store is live - the mux reading graph.json while selection reads GitHub
-/// would display rows the dispatcher will never pick.
+/// The selected tracker backend name, resolved exactly as fno-agents'
+/// `tracker::backend_name` resolves it (explicit, then `FNO_TRACKER_BACKEND`
+/// env, then the `tracker.backend` config key, then `graph`). Mirrors that
+/// resolver rather than linking the crate: fno-agents keeps `fno` a
+/// dev/test-only dependency, so each side re-implements this one-line
+/// contract and a test pins it against the same resolution. Shared so the
+/// reader and `get_tracker` can never disagree about which store is live -
+/// the mux reading graph.json while selection reads GitHub would display
+/// rows the dispatcher will never pick.
+pub fn external_backend_name() -> String {
+    external_backend_name_in(
+        Some(&crate::config_defaults::global_config_path()),
+        Some(&crate::config_defaults::project_config_path()),
+    )
+}
+
+/// The same chain with injected config paths, so tests drive temp files
+/// without touching the process's real config or cwd.
+pub(crate) fn external_backend_name_in(
+    global: Option<&std::path::Path>,
+    project: Option<&std::path::Path>,
+) -> String {
+    std::env::var("FNO_TRACKER_BACKEND")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| {
+            crate::config_defaults::lookup(global, project, "tracker.backend")
+                .filter(|v| !v.trim().is_empty())
+        })
+        .unwrap_or_else(|| "graph".to_string())
+}
+
+/// Whether an external tracker backend is selected.
 pub fn external_backend_selected() -> bool {
-    match std::env::var("FNO_TRACKER_BACKEND") {
-        Ok(v) => !v.trim().is_empty() && v.trim() != "graph",
-        Err(_) => false,
-    }
+    external_backend_name() != "graph"
 }
 
 /// Seconds between snapshot refreshes in external mode (Risk 4: a remote

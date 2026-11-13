@@ -139,7 +139,7 @@ This audit compares the table with `tmux list-keys -T prefix` from tmux 3.8, run
 | `d` | detach | Same |
 | `w`, `f`, `?` | window tree, find, list keys | Close: `w` opens the sideline selector, `f` the navigator, `?` the key table |
 | `Up`, `Down`, `Left`, `Right` | select pane | Same, plus `h j k l` |
-| `Ctrl+arrow` | resize | Same, plus `H J K L` |
+| `Ctrl+arrow` | resize | Same, plus `J K L`. `H` opens HQ, so resize left has no letter by default |
 | `z` | zoom pane | Same under `preset = "tmux"`. Unset, `z` cycles the active section |
 | `o` | next pane | Same under `preset = "tmux"`. Unset, `o` sorts agents |
 | `;` | last pane | Same, every preset: `;` is a free built-in key |
