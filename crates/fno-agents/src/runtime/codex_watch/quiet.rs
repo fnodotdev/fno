@@ -626,12 +626,9 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
             // recovery's: send no nudge, no resume and no help for it. When
             // its work also delivered, the revival rule records the skip it
             // mandates; an open node stays the silent grace skip. A claude
-            // stop run outside fno journals nothing, so the vendor
-            // listing's `stopped` word stands in for the missing record.
-            let stopped_by_fno = stopped.contains(sid);
-            let stopped_by_vendor =
-                !stopped_by_fno && vendor_stopped(entry, &mut vendor_listing_memo);
-            if stopped_by_fno || stopped_by_vendor {
+            // stop run outside fno journals nothing, so its stop is read
+            // off the vendor listing further down, once the row is dead.
+            if stopped.contains(sid) {
                 if let Some(reason) = stopped_skip_reason(closed) {
                     emitter
                         .emit(
@@ -682,6 +679,14 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
             ) || entry.pid.is_some_and(|pid| crate::daemon::pid_is_gone(pid))
                 || daemon_dead
                 || thread_unloaded;
+            // A claude row fno reads dead whose vendor word reads stopped
+            // is a deliberate stop the journal never recorded. The listing
+            // read is spent only on dead rows, never on a healthy fleet's
+            // pass: a vendor-stopped row's pid is gone, so it reads dead
+            // on the same probe the rest of the ladder uses.
+            if dead && vendor_stopped(entry, &mut vendor_listing_memo) {
+                return Ok(());
+            }
             let transcript_tail = match path.as_deref() {
                 Some(path) => tail(path, episode.pending.as_ref().map(|p| p.0.as_str())),
                 None if dead => Some(Tail::default()),
