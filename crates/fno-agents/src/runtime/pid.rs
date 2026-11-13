@@ -730,6 +730,8 @@ mod tests {
         let lo = Pid::new(1).expect("1 is a real pid");
         assert_eq!(lo.as_raw(), 1);
         assert_eq!(lo.as_u32(), 1);
+        // Display is the bare number, no wrapper.
+        assert_eq!(lo.to_string(), "1");
         assert!(lo.is_init());
         let hi = Pid::new(i32::MAX as u32).expect("i32::MAX is the ceiling");
         assert_eq!(hi.as_raw(), i32::MAX);
@@ -742,11 +744,6 @@ mod tests {
         assert!(Pid::try_from(-1i64).is_err(), "negative pids refuse");
         assert!(Pid::try_from(0i64).is_err());
         assert!(Pid::try_from(i64::from(i32::MAX) + 1).is_err());
-    }
-
-    #[test]
-    fn display_names_the_number() {
-        assert_eq!(Pid::new(4242).expect("in range").to_string(), "4242");
     }
 
     #[test]
