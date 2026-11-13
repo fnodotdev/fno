@@ -36,3 +36,4 @@ crates/fno/src/role_migration.rs	crates/fno-agents/src/spawn/role_migration.rs	c
 docs/architecture/help-routing.md	crates/fno-agents/src/help_router.rs	cargo test -p fno-agents help_router -- --ignored bless_help_routing
 crates/fno/src/model_reach.toml	crates/fno-agents/src/model_reach.toml	cargo build --manifest-path crates/fno-agents/Cargo.toml
 crates/fno/tests/golden/config_schema/*.stdout	crates/fno/config_schema.json	bash scripts/ci/regen-config-schema-goldens.sh
+crates/fno/src/pid.rs	crates/fno-agents/src/runtime/pid.rs	cargo build --manifest-path crates/fno-agents/Cargo.toml

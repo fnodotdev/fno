@@ -18,6 +18,7 @@
 use std::time::{Duration, Instant};
 
 use crate::paths::AgentsHome;
+use crate::pid::Pid;
 
 /// RAII per-agent flock. The lock releases when this drops, and also when the
 /// process exits: a POSIX flock belongs to the open file description, never to
@@ -66,15 +67,7 @@ pub(crate) fn holder_note(home: &AgentsHome, name: &str) -> String {
 /// 31-hour-corpse misreading this stamp exists to end, told with more
 /// authority than the bare mtime ever had, so the reader drops it.
 pub(crate) fn pid_is_alive(pid: u64) -> bool {
-    if pid == 0 || pid > i32::MAX as u64 {
-        return false;
-    }
-    // SAFETY: signal 0 performs the permission and existence check only; it
-    // delivers nothing and cannot affect the target.
-    if unsafe { libc::kill(pid as libc::pid_t, 0) } == 0 {
-        return true;
-    }
-    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    Pid::try_from(pid).is_ok_and(|pid| pid.exists())
 }
 
 /// Gone means the pid is dead, a zombie, or a DIFFERENT process than the

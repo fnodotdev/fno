@@ -31,6 +31,7 @@
 //! `Identify`. Keeper -> client: `IdentifyReply(json)`, `Output(bytes)`,
 //! `Exited(i32 LE)`.
 
+use crate::pid::Pid;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::collections::VecDeque;
 use std::io::{Read, Write};
@@ -655,7 +656,9 @@ pub fn run(cfg: KeeperConfig) -> Result<(), String> {
             move || {
                 // SAFETY: same kill(pid, SIGKILL) the explicit Frame::Kill path
                 // already sends to this same child.
-                unsafe { libc::kill(child_pid as libc::pid_t, libc::SIGKILL) };
+                if let Some(child_pid) = Pid::new(child_pid) {
+                    child_pid.signal(libc::SIGKILL);
+                }
                 eprintln!(
                 "fno-agents-worker: test_keeper_reaped child_pid={child_pid} owner_pid={owner_pid} owner_birth={owner_birth}"
             );
@@ -865,24 +868,18 @@ pub fn run(cfg: KeeperConfig) -> Result<(), String> {
 /// site already runs off the main thread, so the grace never stalls the
 /// frame loop or the waiter.
 fn end_child(pid: u32) {
-    if pid == 0 {
+    let Some(pid) = Pid::new(pid) else {
         return;
-    }
-    // SAFETY: kill with a valid pid and SIGTERM, then SIGKILL after the
-    // confirmed grace.
-    unsafe {
-        libc::kill(pid as libc::pid_t, libc::SIGTERM);
-    }
+    };
+    pid.signal(libc::SIGTERM);
     for _ in 0..50 {
-        if !crate::claude_config_tmp::pid_alive(pid) {
+        if !crate::claude_config_tmp::pid_alive(pid.as_u32()) {
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    if crate::claude_config_tmp::pid_alive(pid) {
-        unsafe {
-            libc::kill(pid as libc::pid_t, libc::SIGKILL);
-        }
+    if crate::claude_config_tmp::pid_alive(pid.as_u32()) {
+        pid.signal(libc::SIGKILL);
     }
 }
 

@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use crate::pid::Pid;
 use serde_json::{json, Map, Value};
 
 use super::clock::{self, Call, DoorError};
@@ -1457,8 +1458,8 @@ fn arm_sigterm(journal: PathBuf, state_root: PathBuf, interval: i64, started: In
         // SAFETY: restores the default action and re-raises at this process.
         unsafe {
             libc::signal(libc::SIGTERM, libc::SIG_DFL);
-            libc::kill(libc::getpid(), libc::SIGTERM);
         }
+        Pid::current().signal(libc::SIGTERM);
     });
 }
 

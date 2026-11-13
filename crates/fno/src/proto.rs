@@ -3259,40 +3259,10 @@ pub fn pid_sidecar_path(socket: &Path) -> PathBuf {
 
 /// Process start time in this OS's own units: a per-host, per-boot quantity
 /// meaningful only compared for equality against a value captured for the
-/// SAME pid, never converted to wall-clock time. Lets a pid sidecar prove it
-/// still names the process that wrote it rather than one that reused the pid
-/// after that process exited: a stale sidecar can survive a rebind
-/// whose rewrite failed (best-effort, like the `.ver` sidecar), so the pid
-/// alone is not proof of identity.
-#[cfg(target_os = "linux")]
+/// SAME pid, never converted to wall-clock time. One delegate to the pid
+/// module, which owns the per-platform bodies the three old arms carried.
 pub fn pid_start_time(pid: u32) -> Option<u64> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let after = stat.rsplit_once(')')?.1;
-    after.split_whitespace().nth(19)?.parse().ok()
-}
-
-#[cfg(target_os = "macos")]
-pub fn pid_start_time(pid: u32) -> Option<u64> {
-    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-    let written = unsafe {
-        libc::proc_pidinfo(
-            pid as libc::pid_t,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            &mut info as *mut _ as *mut libc::c_void,
-            size,
-        )
-    };
-    if written != size {
-        return None;
-    }
-    Some(info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn pid_start_time(_pid: u32) -> Option<u64> {
-    None
+    Pid::new(pid).and_then(|p| p.start_time())
 }
 
 /// Write the pid sidecar beside a freshly bound socket: the server's own pid
@@ -3338,11 +3308,13 @@ pub use pid_state::pid_is_zombie;
 /// bare-init container never reaps at all), holds no fds, and serves
 /// nothing, so waiting out ESRCH would never converge.
 pub fn pid_confirmed_dead(pid: i32) -> bool {
-    let result = unsafe { libc::kill(pid, 0) };
-    if result != 0 {
+    let Some(pid) = Pid::try_from(i64::from(pid)).ok() else {
+        return false;
+    };
+    if !matches!(pid.signal(0), SignalResult::Sent) {
         return std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
     }
-    pid_is_zombie(pid)
+    pid.zombie()
 }
 
 mod owner_sidecar;
@@ -3358,6 +3330,7 @@ use startup_guard::{claim_startup, StartupClaim};
 pub use startup_guard::{remove_startup_guard, startup_sidecar_path};
 
 pub const DEFAULT_SESSION: &str = "main";
+use crate::pid::{Pid, SignalResult};
 
 /// Outcome of [`bind_or_probe`].
 pub enum BindOutcome {
@@ -3673,37 +3646,44 @@ fn reclaim_unresponsive_holder(path: &Path) -> std::io::Result<()> {
             ),
         )
     })?;
-    if pid <= 1 || pid as u32 == std::process::id() {
+    // The pid type refuses 0, 1 and anything a pid_t cannot hold, so the
+    // old pid <= 1 refusal and the self-pid refusal below are one parse.
+    if pid as u32 == std::process::id() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
             format!("cannot signal holder pid {pid} from {}", pid_path.display()),
         ));
     }
+    let pid = Pid::try_from(i64::from(pid)).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("cannot signal holder pid from {}", pid_path.display()),
+        )
+    })?;
 
     let identity_matches = || -> std::io::Result<bool> {
         match recorded_start {
             None => Ok(true),
-            Some(recorded) => pid_start_time(pid as u32)
+            Some(recorded) => pid
+                .start_time()
                 .map(|observed| observed == recorded)
                 .ok_or_else(|| {
                     std::io::Error::new(
                         std::io::ErrorKind::PermissionDenied,
-                        format!("cannot verify holder pid {pid} from {}", pid_path.display()),
+                        format!("cannot verify holder pid from {}", pid_path.display()),
                     )
                 }),
         }
     };
-    let gone = || pid_confirmed_dead(pid) || pid_is_zombie(pid);
+    let gone = || pid_confirmed_dead(pid.as_raw()) || pid_is_zombie(pid.as_raw());
     if gone() {
         return Ok(());
     }
     if !identity_matches()? {
         return Ok(());
     }
-    if unsafe { libc::kill(pid, libc::SIGTERM) } != 0
-        && std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
-    {
-        return Err(std::io::Error::last_os_error());
+    if let SignalResult::Failed(e) = pid.signal(libc::SIGTERM) {
+        return Err(e);
     }
     let term_deadline = Instant::now() + PROBE_HOLDER_TERM_GRACE;
     while Instant::now() < term_deadline {
@@ -3720,10 +3700,8 @@ fn reclaim_unresponsive_holder(path: &Path) -> std::io::Result<()> {
         // takeover: the old SocketGuard cannot run in the replacement process.
         return Ok(());
     }
-    if unsafe { libc::kill(pid, libc::SIGKILL) } != 0
-        && std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
-    {
-        return Err(std::io::Error::last_os_error());
+    if let SignalResult::Failed(e) = pid.signal(libc::SIGKILL) {
+        return Err(e);
     }
     let kill_deadline = Instant::now() + PROBE_HOLDER_KILL_GRACE;
     while Instant::now() < kill_deadline {

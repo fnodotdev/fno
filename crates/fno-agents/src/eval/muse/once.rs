@@ -2,6 +2,7 @@
 //! turn. The first call with an id creates the session and a later call with
 //! the same id continues it, so spawn and ask share one form.
 
+use crate::pid::Pid;
 use serde_json::{json, Value};
 use std::io::Read;
 use std::os::unix::process::CommandExt;
@@ -114,8 +115,8 @@ fn run_exec(
             Ok(Some(status)) => break status.code(),
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
             _ => {
-                // SAFETY: the child leads its own group (process_group(0)).
-                unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
+                // The child leads its own group (process_group(0)).
+                Pid::kill_child_group(&child);
                 let _ = child.wait();
                 break None;
             }

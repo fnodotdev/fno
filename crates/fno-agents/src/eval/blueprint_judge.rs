@@ -23,6 +23,7 @@ use crate::backlog::row_facts::RowFacts;
 use crate::evidence::truncate_chars;
 use crate::graph_get::{default_graph_path, find_entry};
 use crate::paths::worktree_repo_root;
+use crate::pid::Pid;
 use crate::plan_doc::codec;
 use crate::plan_doc::codec::Value as Fv;
 use crate::plan_doc::lock::PlanDocLock;
@@ -358,7 +359,7 @@ pub(crate) fn bounded_wait(
                     // SAFETY: the pid is the child we just spawned; its
                     // process group cannot be ours, so the signal cannot
                     // reach this process.
-                    let _ = unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL) };
+                    Pid::kill_child_group(&child);
                     let _ = child.wait();
                     let err = collect(stderr);
                     let named = format!(

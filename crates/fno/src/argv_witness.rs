@@ -4,6 +4,7 @@
 //! session uuid (`claude --resume <uuid>`), so argv carries the truth the
 //! registry's pid cannot.
 
+use crate::pid::{Pid, SignalResult};
 use serde_json::Value;
 
 /// The resume rescue: a pid-falsified registry row is NOT stale when a
@@ -41,7 +42,9 @@ fn list_pids() -> Vec<u32> {
     if needed <= 0 {
         return Vec::new();
     }
-    let mut pids = vec![0 as libc::pid_t; needed as usize];
+    // pid_t is i32 on every supported target; the raw pid_t cast is the pid
+    // module's alone.
+    let mut pids = vec![0i32; needed as usize];
     let bytes = i32::try_from(pids.len() * std::mem::size_of::<libc::pid_t>()).unwrap_or(i32::MAX);
     let found = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
     if found < 0 {
@@ -68,43 +71,6 @@ fn list_pids() -> Vec<u32> {
 
 /// Process start time in the REGISTRY'S own units: macOS folds
 /// `proc_bsdinfo` to microseconds, Linux keeps the raw `/proc/<pid>/stat`
-/// starttime ticks. Deliberately NOT `probe_pid`: the registry's
-/// `pid_start_time` is a per-host, per-boot quantity compared only for
-/// equality against a value captured for the SAME pid, so it must be read
-/// with the same units `fno-agents`' registry writer used (daemon.rs
-/// `process_start_time`), not converted to epoch ms.
-#[cfg(target_os = "macos")]
-fn registry_start_time(pid: u32) -> Option<u64> {
-    use std::mem;
-    let mut info: libc::proc_bsdinfo = unsafe { mem::zeroed() };
-    let size = mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-    let written = unsafe {
-        libc::proc_pidinfo(
-            pid as libc::pid_t,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            &mut info as *mut _ as *mut libc::c_void,
-            size,
-        )
-    };
-    if written != size {
-        return None;
-    }
-    Some(info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec)
-}
-
-#[cfg(target_os = "linux")]
-fn registry_start_time(pid: u32) -> Option<u64> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let after = stat.rsplit_once(')')?.1;
-    after.split_whitespace().nth(19)?.parse().ok()
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn registry_start_time(_pid: u32) -> Option<u64> {
-    None
-}
-
 /// POSITIVE falsification of one non-terminal row's liveness by its own
 /// recorded pid. A machine restart writes nothing to the registry,
 /// so every row keeps the status it last had on disk - including "working"
@@ -129,18 +95,19 @@ fn row_falsified(row: &serde_json::Value, status: &str) -> bool {
     let Some(pid) = row.get("pid").and_then(|v| v.as_u64()) else {
         return false; // no recorded pid: the status field stays the verdict
     };
-    if pid <= 1 || pid > i32::MAX as u64 {
+    let Some(pid) = Pid::try_from(pid).ok().filter(|p| !p.is_init()) else {
         return true; // a recorded pid no worker can hold is corruption, not liveness
-    }
-    // SAFETY: signal 0 performs no delivery, only an existence/permission probe.
-    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    if rc != 0 {
-        return std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+    };
+    // Signal 0 performs no delivery, only an existence/permission probe.
+    match pid.signal(0) {
+        SignalResult::AlreadyGone => return true,
+        SignalResult::Failed(_) => return false,
+        SignalResult::Sent => {}
     }
     // Alive: only a start-time mismatch (a reused pid) may still falsify.
     match (
         row.get("pid_start_time").and_then(|v| v.as_u64()),
-        registry_start_time(pid as u32),
+        pid.start_time(),
     ) {
         (Some(recorded), Some(now)) => recorded != now,
         _ => false, // no basis to prove reuse -> trust existence
@@ -202,6 +169,19 @@ pub fn stale_live_attach_ids(reg_raw: &str) -> std::collections::HashSet<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The registry compares start times for equality against a value the
+    /// fno-agents writer captured for the SAME pid, so the test reads the
+    /// same units the module provides, never an epoch conversion.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn registry_start_time(pid: u32) -> Option<u64> {
+        Pid::new(pid).and_then(|p| p.start_time())
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    fn registry_start_time(_pid: u32) -> Option<u64> {
+        None
+    }
 
     fn reg(rows: &str) -> String {
         format!(r#"{{"schema_version": 6, "agents": [{rows}]}}"#)

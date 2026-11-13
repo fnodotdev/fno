@@ -1,3 +1,4 @@
+use crate::pid::Pid;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -64,10 +65,10 @@ pub(crate) fn reap(root: &Path) {
         return;
     };
     for pid in children.iter().chain(keepers.iter()) {
-        // SAFETY: each pid is this test directory's fno-agents-worker --pane
+        // Each pid is this test directory's fno-agents-worker --pane
         // command line or its direct hosted child; SIGKILL bounds teardown.
-        unsafe {
-            libc::kill(*pid as libc::pid_t, libc::SIGKILL);
+        if let Some(pid) = u32::try_from(*pid).ok().and_then(Pid::new) {
+            pid.signal(libc::SIGKILL);
         }
     }
     let deadline = Instant::now() + Duration::from_secs(2);

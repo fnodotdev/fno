@@ -1,6 +1,7 @@
 //! `-H muse --substrate thread`: start the host, register the row, and the
 //! row's mail, ask and stop. The host itself is host.rs.
 
+use crate::pid::Pid;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -249,8 +250,10 @@ pub fn dispatch_thread(
         true
     });
     if !matches!(registered, Ok(true)) {
-        // SAFETY: the host leads its own group (setsid above).
-        unsafe { libc::killpg(pid as libc::pid_t, libc::SIGINT) };
+        // The host leads its own group (setsid above).
+        if let Some(pid) = Pid::new(pid) {
+            let _ = pid.signal_group(libc::SIGINT);
+        }
         return match registered {
             Ok(_) => outcome(2, String::new(), format!("agent {name} already exists\n")),
             Err(e) => outcome(12, String::new(), format!("registry write failed: {e}\n")),

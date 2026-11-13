@@ -5,38 +5,13 @@
 //! case. Read live from the kernel when the child pid still resolves; a dead
 //! pid degrades to the caller's own spawn-cwd fallback rather than failing.
 
-/// macOS: `libc::proc_pidinfo` + `PROC_PIDVNODEPATHINFO`.
+#[cfg(target_os = "macos")]
+use crate::pid::Pid;
+
+/// macOS: the pid module's `PROC_PIDVNODEPATHINFO` read.
 #[cfg(target_os = "macos")]
 fn process_cwd(pid: u32) -> Option<String> {
-    let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
-    let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
-    let written = unsafe {
-        libc::proc_pidinfo(
-            pid as libc::c_int,
-            libc::PROC_PIDVNODEPATHINFO,
-            0,
-            &mut info as *mut _ as *mut libc::c_void,
-            size,
-        )
-    };
-    if written != size {
-        return None;
-    }
-    // `vip_path` is `[[c_char; 32]; 32]`, a libc workaround for
-    // `[c_char; MAXPATHLEN]` (1024) that flattens identically since a 2D
-    // fixed array has no inter-row padding.
-    let bytes: &[libc::c_char] = unsafe {
-        std::slice::from_raw_parts(
-            info.pvi_cdir.vip_path.as_ptr().cast::<libc::c_char>(),
-            32 * 32,
-        )
-    };
-    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-    if end == 0 {
-        return None;
-    }
-    let path_bytes: Vec<u8> = bytes[..end].iter().map(|&b| b as u8).collect();
-    String::from_utf8(path_bytes).ok()
+    Pid::new(pid).and_then(|p| p.cwd())
 }
 
 /// Linux: `/proc/<pid>/cwd`.

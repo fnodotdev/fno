@@ -28,6 +28,7 @@
 
 use super::{dead_pane, err_code, ControlReply, ServerMsg};
 use crate::agents_view::RegistryAgent;
+use crate::pid::{Pid, SignalResult};
 
 /// The pane-table facts a lifecycle decision needs. The label is the same
 /// `pane_label` derivation section 1 rendered the row with, so the
@@ -305,7 +306,8 @@ impl super::Core {
         match self.panes.get(&pane_id) {
             Some(entry) => match entry.pty.child_pid() {
                 Some(cpid) => {
-                    let ok = unsafe { libc::kill(cpid as libc::pid_t, libc::SIGTERM) } == 0;
+                    let ok = Pid::new(cpid)
+                        .is_some_and(|p| matches!(p.signal(libc::SIGTERM), SignalResult::Sent));
                     let msg = if ok {
                         format!("signalled {name} (pid {cpid}); pane stays open")
                     } else {

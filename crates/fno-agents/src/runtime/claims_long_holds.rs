@@ -241,11 +241,12 @@ pub fn run_claim_long_holds(args: &[String]) -> i32 {
 mod tests {
     use super::*;
     use crate::claims::{hostname, machine_id, SCHEMA_VERSION};
+    use crate::pid::Pid;
     use tempfile::TempDir;
 
     fn dead_pid() -> u32 {
         let mut candidate = 999_999u32;
-        while unsafe { libc::kill(candidate as i32, 0) } == 0 {
+        while Pid::new(candidate).is_some_and(|p| p.probe()) {
             candidate += 1;
         }
         candidate

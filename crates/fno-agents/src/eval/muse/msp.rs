@@ -8,6 +8,7 @@
 //! (`approval/request`, `userInput/request`) is answered at once with the
 //! empty presentation receipt; the decision travels later as a command.
 
+use crate::pid::Pid;
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -289,8 +290,8 @@ impl Client {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        // SAFETY: the child leads its own group (process_group(0) above).
-        unsafe { libc::killpg(self.child.id() as libc::pid_t, libc::SIGKILL) };
+        // The child leads its own group (process_group(0) above).
+        Pid::kill_child_group(&self.child);
         let _ = self.child.wait();
     }
 }

@@ -23,6 +23,7 @@
 //! unit-testable in isolation.
 
 use crate::graph_store::WorkState;
+use crate::pid::{Pid, SignalResult};
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
@@ -771,20 +772,23 @@ fn still_the_same(row: &ProcRow) -> bool {
 /// was already gone, changed identity, or refused the signal, so the summary
 /// counts what it actually ended rather than what it aimed at.
 fn terminate(row: &ProcRow) -> bool {
-    let pid = row.pid;
-    let alive = |p: u32| unsafe { libc::kill(p as libc::pid_t, 0) } == 0;
+    // A pid no worker can hold was never ours to reap; the row reads as
+    // unended rather than as a broadcast target.
+    let Some(pid) = Pid::new(row.pid) else {
+        return false;
+    };
     if !still_the_same(row) {
         return false;
     }
-    if unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) } != 0 {
+    if !matches!(pid.signal(libc::SIGTERM), SignalResult::Sent) {
         return false;
     }
     let deadline = std::time::Instant::now() + REAP_GRACE;
-    while alive(pid) && std::time::Instant::now() < deadline {
+    while pid.probe() && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(25));
     }
-    if alive(pid) {
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+    if pid.probe() {
+        pid.signal(libc::SIGKILL);
     }
     true
 }

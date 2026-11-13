@@ -15,6 +15,7 @@ mod bundle;
 mod human;
 mod report;
 
+use crate::pid::Pid;
 use std::ffi::OsString;
 use std::io::Write;
 
@@ -468,9 +469,7 @@ fn run_bounded(argv: &[String], deadline: std::time::Instant) -> Option<(i32, St
                 return Some((status.code().unwrap_or(-1), stdout, stderr));
             }
             Ok(None) if std::time::Instant::now() >= deadline => {
-                unsafe {
-                    libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
-                }
+                Pid::kill_child_group(&child);
                 let _ = child.kill();
                 let _ = child.wait();
                 return None;
@@ -1006,6 +1005,7 @@ fn cost_check_report() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{bounded_command_for, nothing_to_fix_message, report};
+    use crate::pid::Pid;
 
     fn os(args: &[&str]) -> Vec<std::ffi::OsString> {
         args.iter().map(std::ffi::OsString::from).collect()
@@ -1101,7 +1101,10 @@ mod tests {
             .expect("the pid file holds an int");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
-            let alive = unsafe { libc::kill(child_pid, 0) } == 0;
+            let alive = u32::try_from(child_pid)
+                .ok()
+                .and_then(Pid::new)
+                .is_some_and(|p| p.probe());
             if !alive {
                 break;
             }

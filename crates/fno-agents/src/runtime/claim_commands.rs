@@ -1483,6 +1483,7 @@ pub(crate) fn claim_sweep_payload_from_records(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pid::Pid;
 
     struct ClaimsRootRestore(Option<std::ffi::OsString>);
 
@@ -1576,7 +1577,7 @@ mod tests {
 
     fn dead_pid() -> u32 {
         let mut candidate = 999_999u32;
-        while unsafe { libc::kill(candidate as i32, 0) } == 0 {
+        while Pid::new(candidate).is_some_and(|p| p.probe()) {
             candidate += 1;
         }
         candidate

@@ -507,11 +507,12 @@ fn cut(text: &str, cap: usize) -> &str {
 mod tests {
     use super::*;
     use crate::claims::{encode_key, hostname, machine_id, now_ms, SCHEMA_VERSION};
+    use crate::pid::Pid;
     use tempfile::TempDir;
 
     fn dead_pid() -> u32 {
         let mut candidate = 999_999u32;
-        while unsafe { libc::kill(candidate as i32, 0) } == 0 {
+        while Pid::new(candidate).is_some_and(|p| p.probe()) {
             candidate += 1;
         }
         candidate

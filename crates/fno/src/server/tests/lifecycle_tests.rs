@@ -96,7 +96,7 @@ async fn checked_pane_kill_refuses_a_replaced_child_before_closing_the_pane() {
         core.panes.get(&pane).unwrap().pty.child_pid(),
         Some(successor_child)
     );
-    assert_eq!(unsafe { libc::kill(successor_child as libc::pid_t, 0) }, 0);
+    assert!(Pid::new(successor_child).is_some_and(|p| p.probe()));
 
     let (matched, routed) = request(&mut core, pane, successor_child, "PaneKillChecked").await;
     assert!(routed);

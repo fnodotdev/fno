@@ -217,6 +217,7 @@ pub mod path_migration;
 mod path_migration_tests;
 #[cfg(feature = "full")]
 pub mod paths_route;
+pub mod pid;
 #[cfg(feature = "full")]
 pub(crate) mod plugins_feed;
 #[cfg(feature = "full")]

@@ -9,6 +9,7 @@ use crate::daemon::tests::keeper_sweep::{
     expect_row, keeper_sweep_home, load_registry_tolerating_wipe, spawn_killable_keeper,
 };
 use crate::daemon::tests::test_ctx;
+use crate::pid::Pid;
 
 fn read_events(home: &AgentsHome) -> Vec<Value> {
     let journal = home.events_jsonl();
@@ -32,9 +33,11 @@ struct StopFixture {
 
 impl Drop for StopFixture {
     fn drop(&mut self) {
-        // SAFETY: teardown of a test-spawned child; already-reaped pids
+        // Teardown of a test-spawned child; already-reaped pids
         // answer ESRCH and the error is ignored.
-        unsafe { libc::kill(self.worker_pid as libc::pid_t, libc::SIGKILL) };
+        if let Some(pid) = Pid::new(self.worker_pid) {
+            pid.signal(libc::SIGKILL);
+        }
         self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
         if let Some(keeper) = self.keeper.take() {
             let _ = keeper.join();
@@ -166,9 +169,8 @@ async fn cursor_keeper_stop_reaps_the_worker_server_and_reports_the_count() {
     assert_eq!(result["worker_servers_reaped"], 1, "{result:?}");
 
     // The reaped pid is really gone, not just reported gone.
-    assert_ne!(
-        unsafe { libc::kill(worker_pid as libc::pid_t, 0) },
-        0,
+    assert!(
+        !Pid::new(worker_pid).is_some_and(|p| p.probe()),
         "the worker-server must be reaped, not reported"
     );
     if let Some(registry) = load_registry_tolerating_wipe(&home).await {
@@ -247,7 +249,7 @@ async fn cursor_keeper_stop_refuses_the_stamp_when_a_server_survives_the_reap() 
         );
     }
     assert!(
-        unsafe { libc::kill(worker_pid as libc::pid_t, 0) } == 0,
+        Pid::new(worker_pid).is_some_and(|p| p.probe()),
         "the stubborn server is the reason the reap failed"
     );
 

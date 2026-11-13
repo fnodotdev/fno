@@ -11,6 +11,7 @@
 //! Long-running installs (cargo, uv) run to completion unbounded, exactly as
 //! the exec did. Probe-shaped calls carry the Python timeouts.
 
+use crate::pid::Pid;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -2432,11 +2433,8 @@ pub(crate) fn update_holder_pid(holder: &str) -> Option<u32> {
 fn join_running_update(pid: u32) -> i32 {
     const JOIN_BOUND: Duration = Duration::from_secs(30 * 60);
     let deadline = Instant::now() + JOIN_BOUND;
-    // kill(pid, 0) probes liveness without a signal; EPERM still means alive.
-    let alive = || {
-        let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
-        rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-    };
+    // The probe reads liveness without a signal; EPERM still means alive.
+    let alive = || Pid::new(pid).is_some_and(|p| p.exists());
     // A dead holder ran nothing this joiner can wait on: the journal's last
     // row belongs to some earlier update, so it proves nothing about now.
     if !alive() {

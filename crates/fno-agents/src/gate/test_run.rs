@@ -19,6 +19,7 @@
 //! `cli/src/fno/test_runner.py` is the thin Python adapter that shells to
 //! this binary.
 
+use crate::pid::{Pid, SignalResult};
 use std::io::Write as _;
 use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
 use std::path::{Path, PathBuf};
@@ -2658,30 +2659,8 @@ fn is_self_or_ancestor(holder_pid: u32, pid: u32) -> bool {
     false
 }
 
-#[cfg(target_os = "macos")]
 fn parent_pid(pid: u32) -> Option<u32> {
-    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-    // SAFETY: `info` is a zeroed proc_bsdinfo of exactly `size` bytes.
-    let got = unsafe {
-        libc::proc_pidinfo(
-            pid as libc::c_int,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            &mut info as *mut _ as *mut libc::c_void,
-            size,
-        )
-    };
-    (got == size).then_some(info.pbi_ppid)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn parent_pid(pid: u32) -> Option<u32> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    // The command name may hold spaces and parens; fields resume after the
-    // last `)`: state, then ppid.
-    let rest = &stat[stat.rfind(')')? + 1..];
-    rest.split_whitespace().nth(1)?.parse().ok()
+    Pid::new(pid).and_then(|p| p.parent_pid())
 }
 
 /// Spawn `argv` as the leader of a brand-new session (so it, and everything
@@ -2794,22 +2773,26 @@ fn wait_bounded(child: &mut Child, deadline: Instant) -> Result<i32, Unfinished>
 /// itself `wait()`s for, which is exactly what a grandchild leaked by a
 /// leader's own clean exit needs.
 pub(crate) fn cleanup_group(pgid: i32) -> bool {
-    // SAFETY: pgid is this run's own child pid, and that child called
-    // setsid() before exec, so pgid == its own pid: the signal never reaches
-    // a process outside processes THIS run spawned.
-    unsafe { libc::killpg(pgid, libc::SIGTERM) };
+    // pgid is this run's own child pid, and that child called setsid() before
+    // exec, so pgid == its own pid: the signal never reaches a process outside
+    // processes THIS run spawned. A value the pid type refuses never spawned a
+    // real group, so there is nothing to clean.
+    let Ok(pgid) = Pid::try_from(i64::from(pgid)) else {
+        return true;
+    };
+    pgid.signal_group(libc::SIGTERM);
     let deadline = Instant::now() + TERM_GRACE;
     while Instant::now() < deadline {
-        if unsafe { libc::killpg(pgid, 0) } != 0 {
+        if !matches!(pgid.signal(0), SignalResult::Sent) {
             return true; // ESRCH: nothing left in the group
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    if unsafe { libc::killpg(pgid, libc::SIGKILL) } != 0 {
+    if !matches!(pgid.signal_group(libc::SIGKILL), SignalResult::Sent) {
         return true; // already gone between the last poll and this call
     }
     std::thread::sleep(Duration::from_millis(200));
-    unsafe { libc::killpg(pgid, 0) != 0 }
+    !matches!(pgid.signal(0), SignalResult::Sent)
 }
 
 /// The group members that outlived the leader, as `pid command` rows.
@@ -2819,7 +2802,9 @@ pub(crate) fn cleanup_group(pgid: i32) -> bool {
 /// column filter should have caught. An empty vec is a clean group (or an
 /// unreadable table); the cleanup kill below still runs.
 fn leaked_members(pgid: i32) -> Vec<String> {
-    if unsafe { libc::killpg(pgid, 0) } != 0 {
+    let gone_or_refused =
+        Pid::try_from(i64::from(pgid)).map(|p| !matches!(p.signal(0), SignalResult::Sent));
+    if gone_or_refused != Ok(true) {
         return Vec::new(); // ESRCH: nothing left in the group
     }
     let mut found: Vec<String> = Vec::new();

@@ -1,4 +1,5 @@
 use crate::node_row::{NodeRow, Status};
+use crate::pid::Pid;
 use crate::{
     backlog_model::{Inputs, NodeView, SessionView},
     proto::AgentRow,
@@ -44,12 +45,10 @@ pub(crate) async fn tab_read(
         Ok(output) => Some(output),
         Err(_) => {
             #[cfg(unix)]
-            if let Some(pid) = pid {
-                // SAFETY: process_group(0) made the child a group leader, so
-                // its pid is the pgid.
-                unsafe {
-                    libc::killpg(pid as libc::pid_t, libc::SIGKILL);
-                }
+            if let Some(pid) = pid.and_then(Pid::new) {
+                // process_group(0) made the child a group leader, so its pid
+                // is the pgid.
+                let _ = pid.signal_group(libc::SIGKILL);
             }
             #[cfg(not(unix))]
             let _ = pid;

@@ -7,6 +7,7 @@
 //! survivor is ended here, so a live worker is never reported stopped. Moved
 //! out of `daemon.rs` for the file budget, beside `rm_teardown`.
 
+use crate::pid::Pid;
 use serde_json::json;
 use std::time::{Duration, Instant};
 
@@ -215,8 +216,8 @@ pub(super) async fn end_survivors(members: &[(u32, u64)]) -> (bool, Vec<u32>) {
         }
         signalled = true;
         // SAFETY: ownership proved directly above; SIGTERM to our own worker.
-        unsafe {
-            libc::kill(pid as libc::pid_t, libc::SIGTERM);
+        if let Some(pid) = Pid::new(pid) {
+            pid.signal(libc::SIGTERM);
         }
         if pid_gone_within(pid, Some(start), Duration::from_secs(5)).await {
             continue;
@@ -224,8 +225,8 @@ pub(super) async fn end_survivors(members: &[(u32, u64)]) -> (bool, Vec<u32>) {
         if proved_ours(pid, start) {
             // SAFETY: ownership re-proved after the grace, so a pid recycled
             // during it takes no signal.
-            unsafe {
-                libc::kill(pid as libc::pid_t, libc::SIGKILL);
+            if let Some(pid) = Pid::new(pid) {
+                pid.signal(libc::SIGKILL);
             }
         }
         if !pid_gone_within(pid, Some(start), Duration::from_secs(2)).await
@@ -298,8 +299,8 @@ pub(super) async fn stop_claude_pid_confirmed(entry: &RegistryEntry) -> bool {
         return false;
     }
     // SAFETY: pid ownership proved directly above; SIGTERM to our own worker.
-    unsafe {
-        libc::kill(pid as libc::pid_t, libc::SIGTERM);
+    if let Some(pid) = Pid::new(pid) {
+        pid.signal(libc::SIGTERM);
     }
     if pid_gone_within(pid, entry.pid_start_time, Duration::from_secs(5)).await {
         return true;
@@ -307,8 +308,8 @@ pub(super) async fn stop_claude_pid_confirmed(entry: &RegistryEntry) -> bool {
     if proved_ours(pid, start) {
         // SAFETY: ownership re-proved after the grace window, so a pid recycled
         // during it takes no signal.
-        unsafe {
-            libc::kill(pid as libc::pid_t, libc::SIGKILL);
+        if let Some(pid) = Pid::new(pid) {
+            pid.signal(libc::SIGKILL);
         }
     }
     pid_gone_within(pid, entry.pid_start_time, Duration::from_secs(2)).await
@@ -639,9 +640,11 @@ mod tests {
         // an unreadable start would put a bogus token on a member, and that
         // member would then be skipped by the proof at signal time and LEAK.
         let (Some(host_start), Some(child_start)) = (start_of(host), start_of(child)) else {
-            unsafe {
-                libc::kill(host as libc::pid_t, libc::SIGKILL);
-                libc::kill(child as libc::pid_t, libc::SIGKILL);
+            if let Some(host) = Pid::new(host) {
+                host.signal(libc::SIGKILL);
+            }
+            if let Some(child) = Pid::new(child) {
+                child.signal(libc::SIGKILL);
             }
             return;
         };
@@ -682,8 +685,8 @@ mod tests {
             .parse()
             .expect("sleeper pid");
         let Some(start) = process_start_time(pid) else {
-            unsafe {
-                libc::kill(pid as libc::pid_t, libc::SIGKILL);
+            if let Some(pid) = Pid::new(pid) {
+                pid.signal(libc::SIGKILL);
             }
             return;
         };
@@ -699,8 +702,8 @@ mod tests {
             .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
             .unwrap_or(false);
         assert!(alive, "the process must still be alive");
-        unsafe {
-            libc::kill(pid as libc::pid_t, libc::SIGKILL);
+        if let Some(pid) = Pid::new(pid) {
+            pid.signal(libc::SIGKILL);
         }
     }
 }

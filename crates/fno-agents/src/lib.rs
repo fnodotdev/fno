@@ -79,6 +79,11 @@ pub mod eval;
 pub mod gate;
 pub mod runtime;
 
+// The copied pid module must resolve `crate::pid` in BOTH crates (the copy
+// contract forbids `crate::` paths in the body), so the runtime module is
+// re-exported at the lib root under the name the copy carries in fno.
+pub use runtime::pid;
+
 // The flat `crate::<module>` paths stay valid: each module moved into a
 // group directory is re-exported here under its old name.
 

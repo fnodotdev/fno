@@ -7,6 +7,7 @@
 //! pid may be mid-rename; a fresh file may still be writing; a name without a
 //! pid is never ours to judge.
 
+use crate::pid::Pid;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
@@ -28,9 +29,7 @@ pub fn tmp_pid(name: &str) -> Option<u32> {
 /// A pid the kernel has never heard of is dead; EPERM means it exists and is
 /// someone else's, which is as alive as it gets for this purpose.
 pub fn pid_alive(pid: u32) -> bool {
-    // SAFETY: signal 0 is the existence probe; it delivers nothing.
-    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    Pid::new(pid).is_some_and(|p| p.exists())
 }
 
 /// The Claude config dirs this machine knows: the ambient root

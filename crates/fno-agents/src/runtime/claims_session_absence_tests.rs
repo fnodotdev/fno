@@ -1,9 +1,11 @@
 use super::*;
 
+use crate::pid::Pid;
+
 fn dead_pid() -> u32 {
     let mut candidate = 999_999u32;
     while std::path::Path::new(&format!("/proc/{candidate}")).exists()
-        || unsafe { libc::kill(candidate as i32, 0) } == 0
+        || Pid::new(candidate).is_some_and(|p| p.probe())
     {
         candidate += 1;
     }

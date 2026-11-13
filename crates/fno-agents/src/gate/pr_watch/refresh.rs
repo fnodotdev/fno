@@ -6,6 +6,7 @@
 //! later wave moves (`groom.py`, the `heal` leaf) and dies with the package
 //! in wave 6; from here on this module is the native leg.
 
+use crate::pid::Pid;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -227,9 +228,7 @@ fn stdout_of(argv: &[&str], timeout_s: u64) -> String {
 }
 
 fn kill_group(child: &std::process::Child) {
-    unsafe {
-        libc::kill(-(child.id() as i32), libc::SIGKILL);
-    }
+    Pid::kill_child_group(&child);
 }
 
 /// `[[dd-]hh:]mm:ss` from `ps -o etime=`; None on anything else.

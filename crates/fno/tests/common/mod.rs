@@ -19,6 +19,13 @@ use std::path::{Path, PathBuf};
 // integration harness. See the module doc for the units contract.
 #[path = "../../src/test_owner.rs"]
 pub(crate) mod test_owner;
+
+/// The include reads the pid module through its parent. Inside the fno lib
+/// that parent is the crate root and the path is the real module; here it is
+/// this shim over the lib's generated copy.
+pub(crate) mod pid {
+    pub use fno::pid::Pid;
+}
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 

@@ -14,6 +14,7 @@
 //! stays out of `mux/threads/`: stop and mail read a socket there as a pane
 //! keeper and would speak the keeper protocol to it.
 
+use crate::pid::Pid;
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
@@ -401,10 +402,12 @@ pub(crate) async fn stop_host(pid: u32, started: Option<u64>, child_file: Option
     if let Some((child, start)) = child {
         let gone = pid_gone_within(child, Some(start), Duration::from_secs(2)).await;
         if !gone && pid_is_ours(child, Some(start)) {
-            // SAFETY: the child leads its own group (fnh: FOOTNOTE_PROFILE.own_group;
+            // The child leads its own group (fnh: FOOTNOTE_PROFILE.own_group;
             // muse serve: process_group(0)), and pid_is_ours rejected pid 0, 1
             // and a recycled pid.
-            unsafe { libc::killpg(child as libc::pid_t, libc::SIGKILL) };
+            if let Some(child) = Pid::new(child) {
+                let _ = child.signal_group(libc::SIGKILL);
+            }
         }
         let _ = std::fs::remove_file(&file);
     }
@@ -595,8 +598,10 @@ pub fn dispatch_thread(
         true
     });
     if !matches!(registered, Ok(true)) {
-        // SAFETY: the host leads its own group (setsid above).
-        unsafe { libc::killpg(pid as libc::pid_t, libc::SIGINT) };
+        // The host leads its own group (setsid above).
+        if let Some(pid) = Pid::new(pid) {
+            let _ = pid.signal_group(libc::SIGINT);
+        }
         return match registered {
             Ok(_) => outcome(2, String::new(), format!("agent {name} already exists\n")),
             Err(e) => outcome(12, String::new(), format!("registry write failed: {e}\n")),

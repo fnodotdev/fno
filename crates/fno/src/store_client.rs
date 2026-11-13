@@ -19,6 +19,7 @@ use crate::keeper_wire::{TAG_REQUEST, TAG_RESPONSE};
 #[cfg(feature = "full")]
 use crate::node_row::KanbanColumn;
 use crate::node_row::NodeRow;
+use crate::pid::Pid;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -357,12 +358,9 @@ fn exec_call_within(graph: &Path, method: &str, params: Value, deadline: Duratio
     let Some(status) = status else {
         // Deadline fired: take down the whole group and reap, or a
         // long-lived mux server accumulates one zombie per timed-out read.
-        // SAFETY: process_group(0) made the child a group leader, so its
-        // pid is the pgid; killpg signals that group and cannot fail on a
-        // live leader.
-        unsafe {
-            libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
-        }
+        // process_group(0) made the child a group leader, so its pid is
+        // the pgid; the typed killpg signals that group.
+        Pid::kill_child_group(&child);
         let _ = child.wait();
         let _ = reader.join();
         return Err(StoreClientError::TimedOut {

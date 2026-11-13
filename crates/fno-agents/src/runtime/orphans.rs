@@ -28,6 +28,7 @@
 //! reparents orphans elsewhere, and a literal `== 1` made every sweep there
 //! print `verdict withheld` forever.
 
+use crate::pid::{Pid, SignalResult};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -857,11 +858,7 @@ fn ppid_of(_pid: u32) -> Option<u32> {
 /// both the kill control and the reap re-check answer "killed" for a process
 /// still running.
 pub(crate) fn pid_alive(pid: u32) -> bool {
-    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    if rc == 0 {
-        return true;
-    }
-    std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    Pid::new(pid).is_some_and(|p| !matches!(p.signal(0), SignalResult::AlreadyGone))
 }
 
 /// SIGTERM, then SIGKILL if it is still there. Shared by the reap and by
@@ -871,16 +868,19 @@ pub(crate) fn pid_alive(pid: u32) -> bool {
 /// own between the scan and the reap must not hand the caller a "reaped: 1"
 /// receipt for a signal nobody sent, so the caller re-checks liveness too.
 pub(crate) fn kill_proc(pid: u32) -> bool {
-    if unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) } != 0 {
+    let Some(pid) = Pid::new(pid) else {
+        return false;
+    };
+    if !matches!(pid.signal(libc::SIGTERM), SignalResult::Sent) {
         return false;
     }
     for _ in 0..20 {
         std::thread::sleep(std::time::Duration::from_millis(100));
-        if !pid_alive(pid) {
+        if !matches!(pid.signal(0), SignalResult::Sent) {
             return true;
         }
     }
-    if unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) } != 0 {
+    if !matches!(pid.signal(libc::SIGKILL), SignalResult::Sent) {
         // Our SIGTERM landed; only the follow-up failed.
         return true;
     }
@@ -888,7 +888,7 @@ pub(crate) fn kill_proc(pid: u32) -> bool {
     // FAILED` microseconds before a stubborn probe died, because the caller's
     // liveness re-check raced this window; the grace here closes that.
     for _ in 0..20 {
-        if !pid_alive(pid) {
+        if !pid_alive(pid.as_u32()) {
             return true;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
@@ -921,39 +921,17 @@ pub fn read_rows(reapers: &HashSet<u32>) -> Vec<Row> {
         if pid == 0 {
             continue;
         }
-        let mut bsd: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-        let bsd_size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-        let written = unsafe {
-            libc::proc_pidinfo(
-                pid as libc::c_int,
-                libc::PROC_PIDTBSDINFO,
-                0,
-                &mut bsd as *mut _ as *mut libc::c_void,
-                bsd_size,
-            )
-        };
-        // A short write is a pid that exited mid-walk or a kernel task:
+        // A short read is a pid that exited mid-walk or a kernel task:
         // neither belongs in the table.
-        if written != bsd_size {
+        let Some(bsd) = Pid::new(pid).and_then(|p| p.bsd()) else {
             continue;
-        }
+        };
         let zombie = bsd.pbi_status == libc::SZOMB;
         // Lifetime CPU comes off the task read; a zombie's task read is a
         // zero write, and a zombie has burned no more CPU anyway.
         let mut cpu_seconds = 0.0;
         if !zombie {
-            let mut task: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
-            let task_size = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
-            let got = unsafe {
-                libc::proc_pidinfo(
-                    pid as libc::c_int,
-                    libc::PROC_PIDTASKINFO,
-                    0,
-                    &mut task as *mut _ as *mut libc::c_void,
-                    task_size,
-                )
-            };
-            if got == task_size {
+            if let Some(task) = Pid::new(pid).and_then(|p| p.task()) {
                 // The totals are nanoseconds of user+system time over the
                 // process's whole life.
                 cpu_seconds = (task.pti_total_user + task.pti_total_system) as f64 / 1e9;
@@ -1094,32 +1072,7 @@ fn boot_time_epoch_s() -> f64 {
 /// inspect: no cwd, never a verdict.
 #[cfg(target_os = "macos")]
 pub(crate) fn read_cwd(pid: u32) -> Option<String> {
-    let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
-    let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
-    let written = unsafe {
-        libc::proc_pidinfo(
-            pid as libc::c_int,
-            libc::PROC_PIDVNODEPATHINFO,
-            0,
-            &mut info as *mut _ as *mut libc::c_void,
-            size,
-        )
-    };
-    if written != size {
-        return None;
-    }
-    let bytes: Vec<u8> = info
-        .pvi_cdir
-        .vip_path
-        .iter()
-        .flat_map(|row| row.iter())
-        .take_while(|&&c| c != 0)
-        .map(|&c| c as u8)
-        .collect();
-    if bytes.is_empty() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&bytes).into_owned())
+    Pid::new(pid).and_then(|p| p.cwd())
 }
 
 #[cfg(test)]

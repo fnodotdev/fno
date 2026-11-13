@@ -15,6 +15,7 @@
 
 use fno_agents::daemon::{run, DaemonOptions};
 use fno_agents::paths::AgentsHome;
+use fno_agents::pid::Pid;
 use std::time::Duration;
 
 fn main() {
@@ -132,8 +133,8 @@ fn main() {
                         "fno-agents-daemon: test_owner_reaped owner_pid={owner_pid} owner_birth={owner_birth}"
                     );
                 }
-                // SAFETY: SIGTERM to self enters the existing graceful shutdown arm.
-                unsafe { libc::kill(libc::getpid(), libc::SIGTERM) };
+                // SIGTERM to self enters the existing graceful shutdown arm.
+                Pid::current().signal(libc::SIGTERM);
             },
         );
         if !armed {

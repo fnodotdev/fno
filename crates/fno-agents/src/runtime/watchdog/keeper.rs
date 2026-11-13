@@ -7,6 +7,7 @@
 //! `silent` and `unreadable` never reap, because silence never proves death.
 
 use crate::orphans::Row;
+use crate::pid::Pid;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -367,8 +368,9 @@ impl KeeperLaneResult {
                 // A keeper is its own group leader (it calls setsid). Pid 0 and
                 // pid 1 name a group this lane must never signal.
                 if pid > 1 {
-                    // SAFETY: a plain signal call; an error is read by the arms below.
-                    unsafe { libc::killpg(pid as libc::pid_t, libc::SIGKILL) };
+                    if let Some(pid) = Pid::new(pid) {
+                        let _ = pid.signal_group(libc::SIGKILL);
+                    }
                 }
             },
             &crate::orphans::kill_proc,

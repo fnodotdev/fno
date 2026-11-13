@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
+use crate::pid::Pid;
 use serde_json::Value;
 
 use crate::census::ProcRow;
@@ -313,8 +314,8 @@ pub fn apply_answer(answer: &str, pending: &mut PendingAsk) -> String {
                     .output();
             } else {
                 for pid in pids {
-                    unsafe {
-                        libc::kill(pid as i32, libc::SIGTERM);
+                    if let Some(pid) = Pid::new(pid) {
+                        pid.signal(libc::SIGTERM);
                     }
                 }
             }
@@ -323,8 +324,8 @@ pub fn apply_answer(answer: &str, pending: &mut PendingAsk) -> String {
         "pause" => {
             for pid in pids {
                 let birth = crate::daemon::process_start_time(pid).unwrap_or(0);
-                unsafe {
-                    libc::kill(pid as i32, libc::SIGSTOP);
+                if let Some(pid) = Pid::new(pid) {
+                    pid.signal(libc::SIGSTOP);
                 }
                 pending.paused_pids.push((pid, birth));
             }
@@ -406,8 +407,8 @@ pub fn resume_paused() -> Option<String> {
     let mut resumed = 0;
     for (pid, birth) in pending.paused_pids.iter() {
         if crate::daemon::process_start_time(*pid) == Some(*birth) {
-            unsafe {
-                libc::kill(*pid as i32, libc::SIGCONT);
+            if let Some(pid) = Pid::new(*pid) {
+                pid.signal(libc::SIGCONT);
             }
             resumed += 1;
         }
@@ -744,8 +745,8 @@ mod tests {
         // birth-checked path resume_paused uses.
         for (pid, birth) in pending.paused_pids.iter() {
             assert_eq!(crate::daemon::process_start_time(*pid), Some(*birth));
-            unsafe {
-                libc::kill(*pid as i32, libc::SIGCONT);
+            if let Some(pid) = Pid::new(*pid) {
+                pid.signal(libc::SIGCONT);
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(200));

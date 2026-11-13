@@ -12,6 +12,7 @@
 //! world" instead of refusing on the branch it was asked about. Absence stays
 //! immediate: ENOENT is a fact about the disk, not about the moment.
 
+use crate::pid::Pid;
 use std::ffi::OsStr;
 use std::path::Path;
 use std::process::Stdio;
@@ -137,13 +138,10 @@ pub(crate) fn spawn_bounded_command(
 
 /// SIGKILL a process group, ignoring "already gone".
 pub(crate) fn killpg(pgid: i32) {
-    if pgid <= 0 {
-        return;
-    }
-    // SAFETY: pgid is our own spawned group leader's pid; ESRCH is expected
-    // once every member has exited and is deliberately ignored.
-    unsafe {
-        libc::killpg(pgid, libc::SIGKILL);
+    if let Ok(pgid) = Pid::try_from(i64::from(pgid)) {
+        // ESRCH is expected once every member has exited and is deliberately
+        // ignored.
+        let _ = pgid.signal_group(libc::SIGKILL);
     }
 }
 
@@ -151,7 +149,7 @@ pub(crate) fn killpg(pgid: i32) {
 /// grandchildren hold the stderr pipe open; killing only the direct child would
 /// leave the drain thread blocked on a pipe that never reaches EOF.
 pub(crate) fn kill_process_group(child: &mut std::process::Child) {
-    killpg(child.id() as i32);
+    killpg(Pid::from_child(child).as_raw());
     let _ = child.kill();
     let _ = child.wait();
 }

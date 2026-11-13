@@ -26,6 +26,7 @@
 //!   invalid policy answers "no native handoff", the direction the Python
 //!   caller already takes on a policy error.
 
+use crate::pid::Pid;
 use regex::Regex;
 use serde_json::{json, Value};
 use std::os::unix::process::ExitStatusExt;
@@ -2447,9 +2448,7 @@ fn run_bounded_init(
                 // The child is its own group leader, so the kill reaches the
                 // grandchildren a forking init left behind.
                 timed_out = true;
-                unsafe {
-                    libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
-                }
+                Pid::kill_child_group(&child);
                 break child
                     .wait()
                     .map_err(|e| refuse(format!("fno do target start: init wait failed: {e}")))?;

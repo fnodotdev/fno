@@ -46,6 +46,7 @@ use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use crate::pid::Pid;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -2235,9 +2236,9 @@ fn with_live_deps<T>(body: impl FnOnce(&Deps<'_>) -> T) -> T {
     let slot_runner =
         crate::stacked_base_stamp::runner_with("git", "gh", &crate::gate_probes::run_slot_probe);
     let kill = |pid: u32| {
-        // SAFETY: the run leads its own session, so -pid is only its group.
-        unsafe {
-            libc::kill(-(pid as i32), libc::SIGKILL);
+        // The run leads its own session, so its pid is the group id.
+        if let Some(pid) = Pid::new(pid) {
+            let _ = pid.signal_group(libc::SIGKILL);
         }
     };
     let deps = Deps {

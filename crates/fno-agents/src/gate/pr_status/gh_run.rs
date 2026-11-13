@@ -5,6 +5,7 @@
 //! (127) survive
 //! the port instead of surfacing as spawn panics.
 
+use crate::pid::Pid;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -158,14 +159,14 @@ fn run_attempt(
             Ok(Some(status)) => break Ok(status),
             Ok(None) => {
                 if start.elapsed() >= timeout {
-                    let _ = unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
+                    Pid::kill_child_group(&child);
                     let _ = child.wait();
                     break Err(timeout);
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
             Err(e) => {
-                let _ = unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
+                Pid::kill_child_group(&child);
                 let _ = child.wait();
                 return Err(RunError::Io(e.to_string()));
             }

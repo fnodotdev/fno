@@ -3,6 +3,8 @@
 
 use tempfile::TempDir;
 
+use crate::pid::Pid;
+
 /// Pin FNO_AGENTS_HOME for a test whose renew call consults the session
 /// witness (renew classifies through the registry leg), so an
 /// ambient session id never reads the operator's real registry. Callers
@@ -56,7 +58,7 @@ pub(super) fn restore_session_markers(saved: Vec<(&'static str, Option<std::ffi:
 pub(super) fn dead_pid() -> u32 {
     let mut candidate = 999_999u32;
     while std::path::Path::new(&format!("/proc/{candidate}")).exists()
-        || unsafe { libc::kill(candidate as i32, 0) } == 0
+        || Pid::new(candidate).is_some_and(|p| p.probe())
     {
         candidate += 1;
     }

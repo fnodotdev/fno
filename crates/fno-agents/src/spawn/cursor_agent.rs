@@ -6,6 +6,7 @@
 //! transcript store is remote, so reachability cannot be inferred from a local
 //! session file.
 
+use crate::pid::{Pid, SignalResult};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Duration;
@@ -231,25 +232,25 @@ pub fn reap_detached_worker_servers(handles: &[CursorWorkerServerHandle]) -> Res
                 handle.pid
             ));
         }
-        let result = unsafe { libc::kill(handle.pid as libc::pid_t, libc::SIGTERM) };
-        if result != 0 {
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() != Some(libc::ESRCH) {
-                return Err(format!(
-                    "cursor-agent worker-server pid {} could not be terminated: {error}",
-                    handle.pid
-                ));
+        if let Some(pid) = Pid::new(handle.pid) {
+            if let SignalResult::Failed(error) = pid.signal(libc::SIGTERM) {
+                if error.raw_os_error() != Some(libc::ESRCH) {
+                    return Err(format!(
+                        "cursor-agent worker-server pid {} could not be terminated: {error}",
+                        handle.pid
+                    ));
+                }
             }
         }
     }
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     for handle in handles {
-        while unsafe { libc::kill(handle.pid as libc::pid_t, 0) } == 0
+        while Pid::new(handle.pid).is_some_and(|p| p.probe())
             && std::time::Instant::now() < deadline
         {
             std::thread::sleep(Duration::from_millis(25));
         }
-        if unsafe { libc::kill(handle.pid as libc::pid_t, 0) } == 0 {
+        if Pid::new(handle.pid).is_some_and(|p| p.probe()) {
             return Err(format!(
                 "cursor-agent worker-server pid {} survived teardown",
                 handle.pid

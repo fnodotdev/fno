@@ -31,6 +31,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use crate::pid::{Pid, SignalResult};
 use serde::{Deserialize, Serialize};
 
 use crate::census::ProcRow;
@@ -185,7 +186,7 @@ fn spare_pids(table: &[ProcRow]) -> HashSet<u32> {
 }
 
 fn signal(pid: u32, sig: libc::c_int) -> bool {
-    unsafe { libc::kill(pid as libc::pid_t, sig) == 0 }
+    Pid::new(pid).is_some_and(|p| matches!(p.signal(sig), SignalResult::Sent))
 }
 
 /// True when the pid still is the incarnation the scan picked: the same
@@ -210,9 +211,13 @@ fn end_run(pid: u32, birth: u64) -> bool {
     if !same_incarnation(pid, birth) {
         return false;
     }
-    let group_leader =
-        unsafe { libc::getpgid(pid as libc::pid_t) } == pid as libc::pid_t && pid > 1;
-    if group_leader && unsafe { libc::killpg(pid as libc::pid_t, libc::SIGKILL) } == 0 {
+    let group_leader = pid > 1
+        // SAFETY: getpgid only reads the kernel's process-table entry.
+        && Pid::new(pid).is_some_and(|p| unsafe { libc::getpgid(p.as_raw()) } == p.as_raw());
+    if group_leader
+        && Pid::new(pid)
+            .is_some_and(|p| matches!(p.signal_group(libc::SIGKILL), SignalResult::Sent))
+    {
         return true;
     }
     // Freeze before the second read so the subtree closes under us.

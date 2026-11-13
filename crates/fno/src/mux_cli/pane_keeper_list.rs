@@ -6,6 +6,7 @@
 //! earns a module named by the question it answers.
 
 use super::*;
+use crate::pid::Pid;
 
 /// `fno mux pane keeper list`: one row per keeper socket under the panes
 /// dir, probed DIRECTLY (connect + Identify, short timeout). Answers "did
@@ -98,9 +99,9 @@ pub(crate) fn pane_keeper_list(json: bool, stale_after: Option<std::time::Durati
                         }
                         let child_pid = reply.get("child_pid").and_then(serde_json::Value::as_u64);
                         if let Some(pid) = child_pid {
-                            // SAFETY: signal 0 is the existence probe.
-                            let hit = unsafe { libc::kill(pid as libc::pid_t, 0) };
-                            if hit != 0 {
+                            // Signal 0 is the existence probe.
+                            let hit = Pid::try_from(pid).is_ok_and(|p| !p.probe());
+                            if hit {
                                 row["stale"] =
                                     serde_json::json!(format!("child pid {pid} is gone"));
                             }

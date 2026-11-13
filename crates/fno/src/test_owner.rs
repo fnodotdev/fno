@@ -16,43 +16,13 @@
 //! (`tests/common/mod.rs` includes it by `#[path]`).
 
 /// Microseconds-since-epoch on macOS, clock-ticks-since-boot on Linux -
-/// exactly the representation `fno-agents::daemon::process_start_time`
-/// returns, because the worker's `owner_alive` compares equality against it.
+/// the pid module's start_time read, shared verbatim with fno-agents
+/// through the build.rs copy. The boundary-forced twin body this used to
+/// carry deleted: the mux never links the runtime, but the generated
+/// `crate::pid` copy is the crate's own module, so one body serves both
+/// crates again.
 pub(crate) fn process_start_time(pid: u32) -> Option<u64> {
-    #[cfg(target_os = "linux")]
-    {
-        // /proc/<pid>/stat field 22 (1-based) is `starttime` in clock ticks
-        // since boot; split on the LAST ')' because comm can hold spaces.
-        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-        let after = stat.rsplit_once(')')?.1;
-        return after.split_whitespace().nth(19)?.parse::<u64>().ok();
-    }
-    #[cfg(target_os = "macos")]
-    {
-        use std::mem;
-        let mut info: libc::proc_bsdinfo = unsafe { mem::zeroed() };
-        let size = mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-        // SAFETY: buffer is a zeroed proc_bsdinfo of exactly `size` bytes;
-        // proc_pidinfo only fills and never retains the pointer.
-        let written = unsafe {
-            libc::proc_pidinfo(
-                pid as libc::c_int,
-                libc::PROC_PIDTBSDINFO,
-                0,
-                &mut info as *mut _ as *mut libc::c_void,
-                size,
-            )
-        };
-        if written != size {
-            return None;
-        }
-        return Some(info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec);
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = pid;
-        None
-    }
+    super::pid::Pid::new(pid).and_then(|p| p.start_time())
 }
 
 /// The current test process's identity in the env shape every spawned

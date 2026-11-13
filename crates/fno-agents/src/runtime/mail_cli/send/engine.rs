@@ -2,6 +2,7 @@
 use super::lanes::*;
 use super::resolve::*;
 use super::*;
+use crate::pid::Pid;
 use fno_mail::lane::{first_applicable, Lane, LaneKind, Target, LADDER};
 use fno_mail::turn::{NewlineRule, TurnText};
 
@@ -105,12 +106,7 @@ pub(super) fn read_holder(path: &Path) -> String {
 }
 
 pub(super) fn process_alive(pid: u32) -> bool {
-    let rc = unsafe { libc::kill(pid as i32, 0) };
-    rc == 0 || errno() == libc::EPERM
-}
-
-pub(super) fn errno() -> i32 {
-    std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+    Pid::new(pid).is_some_and(|p| p.exists())
 }
 
 /// The grace window covers the inject budget,

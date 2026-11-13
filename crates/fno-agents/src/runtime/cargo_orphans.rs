@@ -9,6 +9,7 @@
 //! older than the cap, ends that holder's cargo tree and frees the claim.
 //! A user build records no chain, so it is never swept (law d-705a00a3).
 
+use crate::pid::Pid;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::path::Path;
@@ -119,9 +120,9 @@ fn end_cargo_tree(cargo_pid: u32, acquired_at: i64) -> bool {
     let mut members = crate::census::descendants(&table, cargo_pid);
     members.push(cargo_pid);
     for pid in members.into_iter().filter(|pid| *pid > 1) {
-        // SAFETY: the pid is the proved holder cargo or a process under it.
-        unsafe {
-            libc::kill(pid as libc::pid_t, libc::SIGTERM);
+        // The pid is the proved holder cargo or a process under it.
+        if let Some(pid) = Pid::new(pid) {
+            pid.signal(libc::SIGTERM);
         }
     }
     true

@@ -5,6 +5,7 @@
 //! working copy. The worker step routes through `fno agents spawn --once`
 //! so provider rotation and the spawn cap stay in play.
 
+use crate::pid::Pid;
 use serde_json::json;
 
 /// The worker spawn's answer.
@@ -85,14 +86,14 @@ fn owner_alive(worktree: &str) -> bool {
     if parts.len() < 3 {
         return false;
     }
-    match parts[parts.len() - 2].parse::<i32>() {
-        Ok(pid) => match unsafe { libc::kill(pid, 0) } {
-            0 => true,
-            // EPERM: the process exists but belongs to another user.
-            -1 => std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM),
-            _ => false,
-        },
-        Err(_) => false,
+    match parts
+        .iter()
+        .rev()
+        .nth(1)
+        .and_then(|s| s.parse::<i64>().ok())
+    {
+        Some(pid) => Pid::try_from(pid).map(|p| p.exists()).unwrap_or(false),
+        None => false,
     }
 }
 

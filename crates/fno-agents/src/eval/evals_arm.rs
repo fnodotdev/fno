@@ -41,6 +41,7 @@ use std::process::Stdio;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::pid::Pid;
 use chrono::DateTime;
 use chrono::Utc;
 use serde_json::json;
@@ -410,8 +411,7 @@ pub(crate) fn self_exe() -> String {
 /// Its callers only ever probe fno's own spawned children, so a foreign-owned
 /// pid is never a live worker.
 pub(crate) fn pid_alive(pid: u32) -> bool {
-    // SAFETY: kill(0) sends no signal; it only queries the process's existence.
-    unsafe { libc::kill(pid as i32, 0) == 0 }
+    Pid::new(pid).is_some_and(|p| p.probe())
 }
 
 /// The child argv, shared by the production spawner and the tests that
@@ -925,10 +925,8 @@ fn run_run_mode(o: &Opts) -> i32 {
 
     let outcome: Result<(usize, usize), (&str, String)> = match exit_code {
         None => {
-            // The child is its own group leader (setsid), so -pid is its group.
-            unsafe {
-                libc::kill(-(run.id() as i32), libc::SIGKILL);
-            }
+            // The child is its own group leader (setsid), so its pid is the group.
+            Pid::kill_child_group(&run);
             let _ = run.wait();
             Err((
                 "timeout",

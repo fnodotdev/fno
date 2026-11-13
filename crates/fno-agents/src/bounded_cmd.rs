@@ -1,6 +1,8 @@
 //! One subprocess read under a wall-clock budget (moved out of daemon.rs,
 //! : the file-budget ratchet made daemon.rs shrink-only).
 
+use crate::pid::Pid;
+
 /// The most a child's pipe may contribute to memory. Past it the reader
 /// drains to EOF without keeping, so a runaway child can never grow this
 /// process; the overflow is named on stderr once and the truncated output
@@ -75,9 +77,7 @@ pub(crate) fn output_with_timeout_result(
             Ok(None) => {
                 // The child is its own group leader (process_group(0)), so
                 // this reaches the grandchildren a forking child left behind.
-                unsafe {
-                    libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
-                }
+                Pid::kill_child_group(&child);
                 break child.wait()?;
             }
             Err(e) => return Err(e),
@@ -199,9 +199,7 @@ pub(crate) fn output_with_timeout_stdin(
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
             Ok(None) => {
-                unsafe {
-                    libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
-                }
+                Pid::kill_child_group(&child);
                 break child.wait()?;
             }
             Err(e) => return Err(e),

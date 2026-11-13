@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use crate::pid::Pid;
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
@@ -247,10 +248,8 @@ pub(crate) fn run(r: &Run) -> i32 {
         }
     };
     if code.is_none() {
-        // SAFETY: the child leads its own session, so -pid is only its group.
-        unsafe {
-            libc::kill(-(child.id() as i32), libc::SIGKILL);
-        }
+        // The child leads its own session, so its pid is the group id.
+        Pid::kill_child_group(&child);
         let _ = child.wait();
     }
     let stderr = drain.and_then(|h| h.join().ok()).unwrap_or_default();

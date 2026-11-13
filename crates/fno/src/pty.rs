@@ -9,6 +9,7 @@
 //! the kernel PTY buffer - bounded memory, never an unbounded server-side
 //! queue (AC2-EDGE).
 
+use crate::pid::Pid;
 use crate::shell_init::{BASH_SHELL_INIT, ZSH_SHELL_INIT};
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::ffi::{OsStr, OsString};
@@ -1570,11 +1571,7 @@ impl KeeperPty {
             return false;
         }
         match self.child_pid {
-            Some(pid) => {
-                // SAFETY: signal 0 is the existence probe.
-                let hit = unsafe { libc::kill(pid as libc::pid_t, 0) };
-                hit == 0
-            }
+            Some(pid) => Pid::new(pid).is_some_and(|p| p.probe()),
             None => true, // unknown pid: the socket is the only evidence
         }
     }
