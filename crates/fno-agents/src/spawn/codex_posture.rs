@@ -189,6 +189,16 @@ pub fn resolve_thread_posture(
         ));
     }
     match mode {
+        // fno's own builtin unattended answer (SPAWN_PERMISSION_BUILTIN): the
+        // pane lane already maps it to the bypass flag, so the thread lane
+        // translates it to the same posture instead of refusing a word fno
+        // itself stamps on every dispatch default. Genuine foreign
+        // words still refuse below.
+        "bypassPermissions" => Ok(CodexPosture {
+            sandbox: CodexSandbox::DangerFullAccess,
+            approval: CodexApproval::Never,
+            requested: mode.to_string(),
+        }),
         "yolo" => Ok(CodexPosture {
             sandbox: CodexSandbox::DangerFullAccess,
             approval: CodexApproval::Never,
@@ -236,15 +246,12 @@ mod tests {
     use super::*;
 
     /// AC1-ERR: fail closed, and say which value. An unknown half refuses
-    /// even though the other half parsed; no posture is guessed.
+    /// even though the other half parsed; no posture is guessed. fno's own
+    /// builtin word is the one translation: the pane lane maps it, so the
+    /// thread lane maps it to the same posture.
     #[test]
     fn refuses_rather_than_degrading_or_guessing() {
-        for mode in [
-            "accept-edits",
-            "bypassPermissions",
-            "danger-full-access",
-            ":never",
-        ] {
+        for mode in ["accept-edits", "danger-full-access", ":never"] {
             let err = resolve_thread_posture(None, Some(mode), None)
                 .expect_err("an unmappable mode must refuse");
             assert!(
@@ -265,6 +272,13 @@ mod tests {
         let err = resolve_thread_posture(Some(true), Some("full-auto"), None)
             .expect_err("two postures at once must refuse");
         assert!(err.contains("mutually exclusive"), "got: {err}");
+        // The builtin word is the one translation: full access with the
+        // operator's exact spelling recorded, matching the pane lane's
+        // --dangerously-bypass-approvals-and-sandbox.
+        let posture = resolve_thread_posture(None, Some("bypassPermissions"), None)
+            .expect("the builtin word translates");
+        assert!(posture.is_full_access());
+        assert_eq!(posture.requested, "bypassPermissions");
         // An empty mode is UNSET, not a mode: the bool still decides.
         assert_eq!(
             resolve_thread_posture(Some(true), Some(""), None).unwrap(),
@@ -386,8 +400,8 @@ pub fn permission_pane_tokens(provider: &str, mode: &str) -> Result<Vec<String>,
             // flag -Y rides. The pane lane carries it rather than silently
             // launching the worker on a weaker, prompt-bound posture (the pane
             // demote target sat on an approval prompt and never took its seed).
-            // The thread lane keeps refusing the word: there the daemon resolves
-            // its own posture, and resolve_thread_posture's vocabulary stands.
+            // The thread lane translates it through resolve_thread_posture to
+            // the same posture, so both lanes answer one word with one meaning.
             "yolo" | "bypassPermissions" => {
                 Ok(vec!["--dangerously-bypass-approvals-and-sandbox".into()])
             }
@@ -562,8 +576,9 @@ mod mappable_tests {
             permission_pane_tokens("codex", "bypassPermissions").unwrap(),
             vec!["--dangerously-bypass-approvals-and-sandbox"]
         );
-        // The thread lane's vocabulary is codex's own and still refuses the
-        // builtin word there (resolve_thread_posture).
+        // The thread lane translates the builtin to the same posture now, so
+        // `permission_mappable` answers yes for the word on both lanes.
+        assert!(permission_mappable("codex", "bypassPermissions", "thread").unwrap());
         assert_eq!(
             permission_pane_tokens("codex", "workspace-write:on-request").unwrap(),
             vec![
