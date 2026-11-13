@@ -1004,7 +1004,7 @@ fn resolve_plan_pointer_stage(
     args: &Args,
     node: Option<&serde_json::Value>,
     cwd: &Path,
-    fetch: &dyn Fn(&str, &str) -> Result<Option<String>, String>,
+    fetch: &dyn Fn(&str, &str) -> Result<Option<String>, crate::plan_carry::PlanCarryError>,
 ) -> Result<Option<String>, Fail> {
     if let Some(explicit) = &args.plan_path {
         if !explicit.is_empty() {
@@ -1192,10 +1192,11 @@ mod plan_carry_miss_tests {
         let dir = tempfile::tempdir().unwrap();
         let plan = dir.path().join("p.md");
         let plan_s = plan.to_str().unwrap().to_string();
-        let fetch_writes = |_: &str, _: &str| -> Result<Option<String>, String> {
-            std::fs::write(&plan, "---\nstatus: ready\n---\n").unwrap();
-            Ok(Some(plan_s.clone()))
-        };
+        let fetch_writes =
+            |_: &str, _: &str| -> Result<Option<String>, crate::plan_carry::PlanCarryError> {
+                std::fs::write(&plan, "---\nstatus: ready\n---\n").unwrap();
+                Ok(Some(plan_s.clone()))
+            };
         // A dangling pointer: the carrier writes the file and init proceeds.
         let node = serde_json::json!({"id": "x-1", "plan_path": plan_s});
         let got = resolve_plan_pointer_stage(&args, Some(&node), dir.path(), &fetch_writes);
@@ -1208,9 +1209,10 @@ mod plan_carry_miss_tests {
         // No copy anywhere: the refusal says so.
         std::fs::remove_file(&plan).unwrap();
         let node = serde_json::json!({"id": "x-1", "plan_path": plan_s});
-        let none = |_: &str, _: &str| -> Result<Option<String>, String> {
-            Err("no host pushed a plan for it".to_string())
-        };
+        let none =
+            |_: &str, _: &str| -> Result<Option<String>, crate::plan_carry::PlanCarryError> {
+                Err(crate::plan_carry::PlanCarryError::NoPlanPushed)
+            };
         let Err(fail) = resolve_plan_pointer_stage(&args, Some(&node), dir.path(), &none) else {
             panic!("a plan absent everywhere must refuse");
         };

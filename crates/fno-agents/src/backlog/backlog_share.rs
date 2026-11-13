@@ -2408,7 +2408,7 @@ pub fn maybe_tick(arm: &Arm) {
                 eprintln!("backlog-share: sync: {error}");
             }
             if let Err(error) = crate::plan_carry::sync(&graph) {
-                unreachable |= crate::store_remote::is_unreachable(&error);
+                unreachable |= error.is_unreachable();
                 eprintln!("backlog-share: plans: {error}");
             }
             if prune_due {
