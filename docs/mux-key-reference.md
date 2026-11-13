@@ -55,13 +55,13 @@ Each row is one action id. Put the id in `~/.fno/keybindings.json` with a key st
 | `decisions` | `m` | `m` | `m` | decisions table (audit, retract, overrule) |
 | `sideline-menu` | `P` | `P` | `P` | sideline menu (palette) |
 | `add-remote-host` | `+` | `+` | `+` | add a remote host |
-| `org` | `C` | `C` | `C` | the org modal (load, census, lanes) |
+| `org` | `C` | `C` | `C` | the HQ modal (load, census, lanes) |
 | `org-view` | `H` | `H` | `H` | HQ (fleet, machines, leads, seats) |
 | `org-view-old-key` | `G` | `G` | `G` | HQ, the old key (goes away next release) |
 | `notifications-bell` | `q` | `q` | `q` | open notifications for questions and announcements |
 | `open-backlog-board` | `B` | `B` | `B` | open the backlog board |
 | `open-backlog-board-old-key` | `O` | `O` | `O` | open the backlog board, the old key (goes away next release) |
-| `cycle-sideline-view` | `V` | `V` | `V` | cycle sideline view (agents, backlog, org) |
+| `cycle-sideline-view` | `V` | `V` | `V` | cycle sideline view (agents, backlog, HQ) |
 | `toggle-sideline` | `b` | `b` | `b` | toggle sideline |
 | `toggle-composer` | `i` | `i` | `i` | draft card in the focused workspace (reveals a hidden sideline) |
 | `full-sideline` | `F` | `F` | `F` | full-screen sideline |

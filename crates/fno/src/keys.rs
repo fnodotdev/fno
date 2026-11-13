@@ -1566,7 +1566,7 @@ pub(crate) fn default_bindings() -> Vec<KeyBinding> {
             "org",
             OpenTeam,
             Global,
-            "the org modal (load, census, lanes)",
+            "the HQ modal (load, census, lanes)",
         ),
         b(
             b'H',
@@ -1608,7 +1608,7 @@ pub(crate) fn default_bindings() -> Vec<KeyBinding> {
             "cycle-sideline-view",
             CycleSidelineView,
             Global,
-            "cycle sideline view (agents, backlog, org)",
+            "cycle sideline view (agents, backlog, HQ)",
         ),
         b(
             b'b',
