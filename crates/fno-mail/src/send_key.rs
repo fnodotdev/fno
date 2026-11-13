@@ -3,6 +3,7 @@
 //! the bus for that turn. A row that a turn record holds does not block a
 //! new one, so a deliberate re-send after a landed message still goes out.
 
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::state::newest_state;
@@ -41,15 +42,36 @@ impl SendKey {
         }
     }
 
-    fn of_row(row: &Value, scheduled: bool) -> SendKey {
-        let field = |k: &str| row.get(k).and_then(Value::as_str).unwrap_or("");
+    fn of_row(row: &MessageRow, scheduled: bool) -> SendKey {
         SendKey::derive(
-            field("from"),
-            field("to"),
-            row.get("in_reply_to").and_then(Value::as_str),
-            field("body"),
+            &row.from,
+            &row.to,
+            row.in_reply_to.as_deref(),
+            &row.body,
             scheduled,
         )
+    }
+}
+
+/// The fields of a bus row the key reads, parsed once. A row whose fields
+/// are not strings parses empty and keys nothing.
+#[derive(Debug, Default, Deserialize)]
+struct MessageRow {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    from: String,
+    #[serde(default)]
+    to: String,
+    #[serde(default)]
+    in_reply_to: Option<String>,
+    #[serde(default)]
+    body: String,
+}
+
+impl MessageRow {
+    fn of(row: &Value) -> MessageRow {
+        MessageRow::deserialize(row).unwrap_or_default()
     }
 }
 
@@ -65,10 +87,10 @@ pub fn duplicate_of(
     unread
         .iter()
         .rev()
-        .filter(|row| SendKey::of_row(row, scheduled) == *key)
-        .filter_map(|row| row.get("id").and_then(Value::as_str))
-        .find(|id| !newest_state(rows, id).is_accepted())
-        .map(str::to_string)
+        .map(|row| MessageRow::of(row))
+        .filter(|row| !row.id.is_empty() && SendKey::of_row(row, scheduled) == *key)
+        .find(|row| !newest_state(rows, &row.id).is_accepted())
+        .map(|row| row.id)
 }
 
 /// The body without the sender header a send stamps on its first line
