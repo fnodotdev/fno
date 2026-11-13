@@ -106,7 +106,8 @@ fn blocks_and_malformed_never_coalesce() {
 fn concurrent_identical_first_polls_yield_one_transition() {
     let dir = tempfile::tempdir().unwrap();
     let live = dir.path().join("events.jsonl");
-    let receipts: Arc<Mutex<Vec<Result<AppendReceipt, String>>>> = Arc::new(Mutex::new(Vec::new()));
+    let receipts: Arc<Mutex<Vec<Result<AppendReceipt, EventStoreError>>>> =
+        Arc::new(Mutex::new(Vec::new()));
     let barrier = Arc::new(Barrier::new(8));
     let mut handles = Vec::new();
     for i in 0..8 {

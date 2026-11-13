@@ -1149,7 +1149,7 @@ mod tests {
         let fetched = |alias: &str, path: &str| {
             assert_eq!(alias, "macbook.lan");
             assert_eq!(path, "/Users/alice/vault/plans/p.md");
-            Ok::<String, String>("rescued".to_string())
+            Ok::<String, PlanCarryError>("rescued".to_string())
         };
         let out = sync_with(
             &b,
