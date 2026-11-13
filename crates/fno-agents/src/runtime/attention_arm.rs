@@ -2335,7 +2335,7 @@ mod tests {
             true
         };
         let deferred = bounce_not_ready_with(&items, &dir, deadline, &send);
-        let bodies = bodies.into_inner();
+        let mut bodies = bodies.into_inner();
         assert_eq!(deferred, 0);
         assert_eq!(bodies.len(), 1);
         let body = bodies.pop().expect("one bounce body");

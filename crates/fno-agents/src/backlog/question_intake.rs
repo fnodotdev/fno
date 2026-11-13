@@ -1765,13 +1765,10 @@ stops
         assert_eq!(journal.lines().count(), 2, "one ask, one amend envelope");
         let amended: Value = serde_json::from_str(journal.lines().last().unwrap()).unwrap();
         assert_eq!(str_field(&amended, "question_id"), Some(qid.as_str()));
-        let ctx = amended
-            .get("data")
-            .and_then(|d| d.get("context"))
-            .and_then(Value::as_object)
-            .expect("context on the amend envelope");
         assert_eq!(
-            ctx.get("blocked_because").and_then(Value::as_str),
+            amended
+                .pointer("/data/context/blocked_because")
+                .and_then(Value::as_str),
             Some("the reconcile fix and the merge_close fix are both Python edits"),
             "the amend fills the missing context field"
         );
