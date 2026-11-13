@@ -20,7 +20,7 @@ fn collect(
         return Err("refusing to compact the global daemon journal: it is shared across projects, so one project's TTL policy must not rewrite it".into());
     }
     let cutoff = now_ms.saturating_sub(ttl.saturating_mul(3_600_000));
-    gc_ephemeral(journal, cutoff, dry_run)
+    gc_ephemeral(journal, cutoff, dry_run).map_err(|e| e.to_string())
 }
 
 pub(super) fn run(args: &[OsString], json: bool) -> i32 {

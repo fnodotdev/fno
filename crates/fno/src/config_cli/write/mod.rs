@@ -991,7 +991,7 @@ fn emit_receipts(before: &Value, after: &Value, real: &Path, scope: &str) {
         });
         if let Err(e) = crate::event_store::append_envelope(&journal, &envelope.to_string(), None) {
             failed.push(key.as_str());
-            last_error = e;
+            last_error = e.to_string();
         }
     }
     if !failed.is_empty() {

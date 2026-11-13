@@ -402,10 +402,11 @@ pub fn overlap_record(journal: &Path, stdin_text: &str, since_days: i64) -> Valu
     match crate::event_store::append_envelope(journal, &envelope, None) {
         Ok(_) => {}
         Err(msg) => {
-            let reason = if msg.starts_with(crate::event_store::VALIDATE_PREFIX) {
-                format!("schema-rejected: {msg}")
+            let text = msg.to_string();
+            let reason = if text.starts_with(crate::event_store::VALIDATE_PREFIX) {
+                format!("schema-rejected: {text}")
             } else {
-                format!("io-error: {msg}")
+                format!("io-error: {text}")
             };
             return finish_record(result, &reason);
         }

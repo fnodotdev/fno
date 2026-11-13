@@ -43,7 +43,7 @@ pub enum PlanCarryError {
     /// The shared primary (or another string-typed store seam) refused in
     /// words. `store_remote::is_unreachable` still reads it.
     #[error("{0}")]
-    Store(#[from] String),
+    Store(String),
     /// SQLite failed inside the local replica read.
     #[error("{0}")]
     Graph(#[from] rusqlite::Error),
@@ -76,6 +76,12 @@ impl PlanCarryError {
             Self::Store(text) => crate::store_remote::is_unreachable(text),
             _ => false,
         }
+    }
+}
+
+impl From<String> for PlanCarryError {
+    fn from(text: String) -> Self {
+        Self::Store(text)
     }
 }
 
@@ -424,7 +430,7 @@ fn write_atomic(path: &Path, body: &str) -> Result<(), PlanCarryError> {
         std::process::id()
     ));
     std::fs::write(&tmp, body)?;
-    std::fs::rename(&tmp, path)
+    Ok(std::fs::rename(&tmp, path)?)
 }
 
 /// Each open node's project cwd: per-node plans-root resolution for the
