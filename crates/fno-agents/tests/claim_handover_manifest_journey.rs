@@ -149,6 +149,7 @@ fn run_ambient(sandbox: &Sandbox, session_id: &str, args: &[&str]) -> (i32, Stri
         .env("GEMINI_SESSION_ID", "")
         .env("OPENCODE_SESSION_ID", "")
         .env("CLAUDE_SESSION_ID", "")
+        .env("PI_SESSION_ID", "")
         .output()
         .expect("run fno-agents");
     (
