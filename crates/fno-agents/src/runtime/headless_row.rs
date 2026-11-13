@@ -22,9 +22,12 @@ pub fn stamp_spawn(home: &AgentsHome, name: &str, harness: &str, cwd: &str, pid:
             entry.pid = Some(pid);
             entry.pid_start_time = start;
             // A repeat name is a new incarnation: re-open a terminal row so
-            // the view never paints the previous run's word over a live run.
+            // the view never paints the previous run's word over a live run,
+            // and re-anchor its clock so the fresh boot never reads as past
+            // the settle window.
             if !state::is_non_terminal(entry.status) {
                 entry.status = AgentStatus::Spawning;
+                entry.created_at = crate::daemon::now_rfc3339_like();
             }
             return;
         }
