@@ -438,6 +438,52 @@ pub fn run(args: &[String]) -> i32 {
     0
 }
 
+/// The tool-boundary pass as `hook gate` runs it in process: the stat gate
+/// the shell hook ran (a pending control flag, or a bus log newer than this
+/// session's stamp), then one pass. Answers the PreToolUse payload, if any.
+pub(crate) fn tool_boundary_hook(session: &str, cwd: &Path) -> Option<String> {
+    let valid = session.len() >= 16 && session.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
+    if !valid {
+        return None;
+    }
+    let bus_dir = crate::mail_paths::state_bus_dir_opt()?;
+    if !tool_boundary_due(&bus_dir, session) {
+        return None;
+    }
+    let ordinary =
+        crate::agents_config::config_value_deep(cwd, &["inbox", "tool_boundary_ordinary"])
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+    let mut out = Vec::new();
+    tool_boundary(
+        &bus_dir,
+        session,
+        ordinary,
+        &crate::claude_drive::claude_projects_dir(),
+        &mut out,
+    );
+    let text = String::from_utf8_lossy(&out).trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+/// The cheap gate in front of a pass: a pending control flag for any
+/// address form, or a bus log newer than this session's stamp.
+fn tool_boundary_due(bus_dir: &Path, session: &str) -> bool {
+    let flagged = address_forms(session)
+        .iter()
+        .any(|f| flag_path(bus_dir, f).exists());
+    let modified = |p: PathBuf| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    let bus_newer = match (
+        modified(bus_dir.join("messages.jsonl")),
+        modified(stamp_path(bus_dir, session)),
+    ) {
+        (Some(bus), Some(stamp)) => bus > stamp,
+        (Some(_), None) => true,
+        _ => false,
+    };
+    flagged || bus_newer
+}
+
 /// How far ahead the stamp is set when the ordinary lane did not read the
 /// bus (key off, or a live hold): the hook's `-nt` gate then skips the command
 /// until this passes, so an off session pays one run per window, not one
@@ -667,6 +713,23 @@ mod tests {
 
     fn msg_id(from: &str, to: &str, body: &str) -> String {
         format!("msg-{}", fnv(from, to, body))
+    }
+
+    /// The gate the hook pays on every tool call: an empty bus, or a bus no
+    /// newer than the stamp, skips the pass; a new bus row or a pending
+    /// control flag runs it.
+    #[test]
+    fn tool_boundary_runs_only_on_a_flag_or_a_newer_bus() {
+        let (_d, bus) = bus_fixture("due");
+        let sid = "ffffabcd-1111-2222-3333-444455556666";
+        assert!(!tool_boundary_due(&bus, sid));
+        append(&bus, "a", "b", "hi");
+        assert!(tool_boundary_due(&bus, sid));
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+        set_stamp(&stamp_path(&bus, sid), later);
+        assert!(!tool_boundary_due(&bus, sid));
+        flag(&bus, "ffffabcd");
+        assert!(tool_boundary_due(&bus, sid));
     }
 
     #[test]

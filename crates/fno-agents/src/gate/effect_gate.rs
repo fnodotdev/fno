@@ -11,7 +11,6 @@
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 pub use crate::effect_map::{
@@ -556,8 +555,7 @@ fn record_spent(conn: &Connection, request: &EffectRequest, digest: &str) {
 /// The `fno-agents hook effect-guard` entry: PreToolUse for non-Bash tools
 /// (the `mcp__.*` matcher). Same stdin/stdout contract as pretooluse-bash.
 pub fn run_hook(_args: &[String]) -> i32 {
-    let mut raw = String::new();
-    let _ = std::io::stdin().read_to_string(&mut raw);
+    let raw = crate::hook::read_stdin();
     let payload: Value = serde_json::from_str(raw.trim()).unwrap_or(Value::Null);
     let cwd = payload
         .get("cwd")
