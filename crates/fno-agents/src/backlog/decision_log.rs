@@ -102,7 +102,7 @@ pub(crate) fn render(rows: &[Value], now: chrono::DateTime<chrono::Utc>) -> Stri
     );
     for subject in order {
         out.push_str(&format!("\n### {subject}\n\n"));
-        for row in &by_subject[subject] {
+        for row in by_subject.get(subject).into_iter().flatten() {
             out.push_str(&bullet(row));
             out.push('\n');
         }

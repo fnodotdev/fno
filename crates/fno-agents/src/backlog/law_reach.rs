@@ -170,17 +170,23 @@ fn touched_nodes(rows: &[Value], law: &str, sweep: &[String]) -> Vec<NodeRow> {
         .map(|w| w.trim().to_lowercase())
         .filter(|w| !w.is_empty())
         .collect();
-    let named: Vec<usize> = (0..open.len())
-        .filter(|i| !picked.contains(i))
-        .filter(|&i| {
-            let text = node_text(&open[i]).to_lowercase();
+    let named: Vec<usize> = open
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !picked.contains(i))
+        .filter(|(_, node)| {
+            let text = node_text(node).to_lowercase();
             words.iter().any(|w| text.contains(w.as_str()))
         })
+        .map(|(i, _)| i)
         .take(SWEEP_MAX_NAMED)
         .collect();
     picked.extend(named);
     let mut slots: Vec<Option<NodeRow>> = open.into_iter().map(Some).collect();
-    picked.into_iter().filter_map(|i| slots[i].take()).collect()
+    picked
+        .into_iter()
+        .filter_map(|i| slots.get_mut(i).and_then(Option::take))
+        .collect()
 }
 
 /// The sweep after a law lands: one mail per owned node, one stderr line per
@@ -285,7 +291,7 @@ mod tests {
         let ids: Vec<&str> = touched.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, vec!["x-aaaa"], "a done node is not open work");
         assert_eq!(
-            owner_session(&touched[0]),
+            touched.first().and_then(owner_session),
             Some("36675be7-6519-45df-8c7e-943731994329")
         );
         let named = touched_nodes(&rows, law, &["Desktop".to_string()]);
