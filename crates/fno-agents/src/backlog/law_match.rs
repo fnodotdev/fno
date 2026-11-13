@@ -2126,8 +2126,8 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
             ));
         }
     }
-    // A near ruling on another subject outlived the law that replaced it
-    // (D3310 beside D3322), so each one is named before the write.
+    // A near ruling on another subject can outlive the law that replaces
+    // it, so each one is named before the write.
     if let Ok(index) = decision_index::default_store_live() {
         let near = crate::law_reach::near_rulings(&index, &door.subject, &decision, &scope);
         if let Some(message) =
@@ -3115,7 +3115,9 @@ pub fn run_law_match_str(input: &str) -> i32 {
             return run_record_door(&r.argv, &r.stdin);
         }
         MatchRequest::Decide(r) => {
-            return crate::decide_door::run_decide_door(&r.argv);
+            return crate::decision_log::refresh_after(crate::decide_door::run_decide_door(
+                &r.argv,
+            ));
         }
         MatchRequest::ResolveProvenance(r) => {
             let origin = crate::decide_door::enforce_origin_floor(

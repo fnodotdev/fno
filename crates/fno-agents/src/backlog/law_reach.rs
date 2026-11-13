@@ -26,8 +26,8 @@ const FILLER: &[&str] = &[
 
 /// A near ruling shares at least this many topic words with the new law, and
 /// they are at least half of the shorter word set. Measured on 377 live laws
-/// (2026-11-13): 42 sit near another at this bar; D3322 and D3310 share 7 at
-/// 0.78.
+/// (2026-11-13): 42 sit near another at this bar. The lockstep specimen
+/// shares 7 words at 0.78.
 const NEAR_MIN_SHARED: usize = 6;
 const NEAR_MIN_RATIO: f64 = 0.5;
 

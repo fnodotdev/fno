@@ -161,7 +161,7 @@ A same-subject law supersedes the live law on that subject by itself. A contradi
 
 ## A law reaches open work
 
-After the write, the door finds the open nodes the law touches. It ranks open nodes by the law's words, rare words weighted higher, and takes at most five. It adds every open node whose text carries a `--sweep <word>`. Each node owned by a live session lock gets one mail from `fno/law-sweep` that names the law, the node, its PR and its plan. A node with no owner session prints one stderr line for the recorder. The word match misses a node that names the changed thing in other words. The fno-web desktop guide (PR 112) never says `fno-app`. So the recorder passes `--sweep desktop`.
+After the write, the door finds the open nodes the law touches. It ranks open nodes by the law's words, rare words weighted higher, and takes at most five. It adds every open node whose text carries a `--sweep <word>`. Each node owned by a live session lock gets one mail from `fno/law-sweep` that names the law, the node, its PR and its plan. A node with no owner session prints one stderr line for the recorder. The word match misses a node that names the changed thing in other words. The fno-web desktop guide never says `fno-app`. So the recorder passes `--sweep desktop`.
 
 ## The decision log
 

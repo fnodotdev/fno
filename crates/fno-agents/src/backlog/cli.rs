@@ -257,7 +257,9 @@ pub fn run(args: &[String]) -> i32 {
             print!("{DECIDE_RETRACT_HELP}");
             0
         }
-        "decide-retract" => crate::law_match::run_backlog_retract(resolved.tail),
+        "decide-retract" => {
+            crate::decision_log::refresh_after(crate::law_match::run_backlog_retract(resolved.tail))
+        }
         // The decisions listing is native: the Python twin is deleted in the
         // same change (d-e11b2b3e), so the door owns every shape, help
         // included.
