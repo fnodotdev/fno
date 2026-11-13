@@ -1214,7 +1214,9 @@ fn agent_compile_refusal_declared_why_and_human_lane_at_the_compile_door() {
     );
 
     // The journal: one refused row and one allowed row, keyed cargo build.
-    let rows = std::fs::read_to_string(&journal).unwrap_or_default();
+    // The store reader, never a raw file read: rows live behind the SQL
+    // store at the path, not in plain bytes.
+    let rows = fno_agents::event_store::journal_text(&journal, &["test_run"]);
     assert!(
         rows.contains("\"stage\":\"refused\"") && rows.contains("agent-compile"),
         "the refusal journaled: {rows}"
