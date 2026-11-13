@@ -167,9 +167,6 @@ fn acquire_render_lock(
     lock_wait: Duration,
 ) -> Result<Option<crate::chokepoint::Held>, crate::chokepoint::Refused> {
     let lock_path = render_lock_path(graph);
-    if let Some(parent) = lock_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
     let deadline = Instant::now() + lock_wait;
     loop {
         match crate::chokepoint::try_take(
