@@ -848,7 +848,9 @@ fn wait_for_quiet_in(
 /// - effectively Blocked (a question picker, a permission wall): the C14
 ///   "session-asking" state, naming the stored reason. The reason rides
 ///   `inside_leg.reason` and falls back to the screen verdict's label for
-///   hook-less rows; a reason-less row reads as the bare class.
+///   hook-less rows; a reason-less row reads as the bare class. A Stop's
+///   "waiting on the user" report is no picker: the turn ended and only
+///   the stop-hooks hold below applies to it.
 /// - "stop-hooks": a claude row reported Done less than
 ///   [`STOP_HOOK_HOLD_MAX_MS`] ago, and its transcript shows neither the
 ///   turn's end nor its resumption since. The Done report fires as the Stop
@@ -875,7 +877,19 @@ fn session_hold(
     if entry.stop.is_some() || entry.exited_at.is_some() {
         return None;
     }
-    if crate::wait::effective_state(entry, now_secs).0 == crate::wait::EffState::Blocked {
+    // A Stop that ends on an open chat question reports Blocked, but the
+    // turn is over and the composer is free: a lead's chief must be able to
+    // wake it, so only its Stop hooks hold, as for a Done row.
+    let ended_on_question = entry.inside_leg.as_ref().is_some_and(|leg| {
+        leg.state == crate::state::InsideLegState::Blocked
+            && leg
+                .reason
+                .as_deref()
+                .is_some_and(|r| r.starts_with(crate::hook::session_state::WAITING_ON_USER))
+    });
+    if !ended_on_question
+        && crate::wait::effective_state(entry, now_secs).0 == crate::wait::EffState::Blocked
+    {
         let reason = entry
             .inside_leg
             .as_ref()
@@ -889,7 +903,9 @@ fn session_hold(
         });
     }
     let leg = entry.inside_leg.as_ref()?;
-    if entry.harness_name() != "claude" || leg.state != crate::state::InsideLegState::Done {
+    if entry.harness_name() != "claude"
+        || !(ended_on_question || leg.state == crate::state::InsideLegState::Done)
+    {
         return None;
     }
     let done_ms = chrono::DateTime::parse_from_rfc3339(&leg.received_at)
@@ -2869,7 +2885,8 @@ mod tests {
         // bounced its mail to durable for hours until the row cleared.
         // The reap evidence the row already carries - the sweep's stop
         // record, reconcile's exited_at - must end the hold; the same row
-        // without it still holds (C14), naming the stored reason.
+        // without it still holds (C14), naming the stored reason. Only a
+        // picker holds: a turn that ended on a chat question is idle.
         let journal = empty_journal("quiet-reaped");
         let dir = std::env::temp_dir().join(format!("mailinj-reg-{}-reaped", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -2881,7 +2898,7 @@ mod tests {
                 "name": "wk", "status": "live", "cwd": "/repo", "harness": "claude",
                 "harness_session_id": sid, "created_at": "2026-09-26T00:00:00Z",
                 "inside_leg": {"state": "blocked", "seq": 3,
-                    "reason": "waiting on the user: q-70b0e591",
+                    "reason": "asking the user: merge now?",
                     "received_at": "2026-09-26T00:00:00Z"},
             });
             if let (Some(map), Some(row_map)) = (extra.as_object(), row.as_object_mut()) {
@@ -2905,9 +2922,17 @@ mod tests {
         seed(row(serde_json::json!({})));
         assert_eq!(
             read().as_deref(),
-            Some("session-asking: waiting on the user: q-70b0e591"),
-            "a live row's question holds, naming the stored reason",
+            Some("session-asking: asking the user: merge now?"),
+            "a live row's picker holds, naming the stored reason",
         );
+        // An idle lead whose turn ended on a chat question sat with its
+        // mail queued for an hour: the composer is free, so it holds nothing.
+        seed(row(
+            serde_json::json!({"inside_leg": {"state": "blocked", "seq": 3,
+            "reason": "waiting on the user: q-70b0e591",
+            "received_at": "2026-09-26T00:00:00Z"}}),
+        ));
+        assert_eq!(read(), None, "a turn that ended on a question takes mail");
         seed(row(
             serde_json::json!({"stop": {"by": "terminal-sweep", "at": "2026-09-26T00:05:00Z"}}),
         ));
