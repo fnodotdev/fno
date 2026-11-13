@@ -618,10 +618,19 @@ mod tests {
 
     #[test]
     fn same_subject_in_two_laws_reads_as_one_duplicate_group() {
+        // Rows must be law-shaped: is_law reads authority_source and ts.
+        let law = |id: &str, subject: &str| {
+            json!({
+                "decision_id": id,
+                "subject": subject,
+                "authority_source": "operator",
+                "ts": "2026-11-13T00:00:00Z",
+            })
+        };
         let groups = duplicate_groups(&[
-            json!({"decision_id": "d-aaa", "subject": "Merge Main"}),
-            json!({"decision_id": "d-bbb", "subject": "merge main"}),
-            json!({"decision_id": "d-ccc", "subject": "other law"}),
+            law("d-aaa", "Merge Main"),
+            law("d-bbb", "merge main"),
+            law("d-ccc", "other law"),
         ]);
         assert_eq!(groups.len(), 1, "{groups:?}");
         let group = groups.first().expect("one duplicate group");
