@@ -227,6 +227,10 @@ mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.f
     'env = { ANTHROPIC_BASE_URL = "https://api.z.ai/api/anthropic", ANTHROPIC_API_KEY = "demo-placeholder" }' \
     'plan = "GLM Coding Plan Max"' \
     'priority = 40'
+  # FNO_DEMO_PREFIX=alt+shift+a shoots the keys list and footer with that prefix.
+  if [ -n "${FNO_DEMO_PREFIX:-}" ]; then
+    printf '[mux]\nprefix = "%s"\n' "$FNO_DEMO_PREFIX"
+  fi
   # FNO_DEMO_LAYOUT=list shoots the one-line row instead of the card.
   if [ -n "${FNO_DEMO_LAYOUT:-}" ]; then
     printf '[sideline]\nlayout = "%s"\n' "$FNO_DEMO_LAYOUT"
