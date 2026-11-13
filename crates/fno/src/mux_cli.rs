@@ -36,6 +36,7 @@ pub use crate::shell_init::shell_init;
 mod graft_slot;
 mod harness_command;
 mod pane_prepare;
+mod pane_shot;
 pub(crate) mod pane_submit;
 mod restore;
 mod workspace_origin;
@@ -77,6 +78,7 @@ mod pane_args;
 mod pane_keeper_list;
 use block_args::{parse_block_annotate, parse_block_args};
 use clap::Parser as _;
+use pane_args::resolve_run_cwd;
 pub use pane_args::{
     parse_pane_args, ParsedPane, PANE_LS_IDENTITY_HELP, PANE_REFERENCE_USAGE, PANE_RUN_WORKER_HELP,
     PANE_SEND_RAW_HELP,
@@ -1976,27 +1978,6 @@ fn reply_deadline_for(is_wait: bool, read_timeout: Duration) -> Duration {
     }
 }
 
-/// Resolve `pane run --cwd` to an absolute path CLIENT-side. The server is a
-/// detached daemon with its own cwd, so a RELATIVE path would resolve against
-/// the wrong directory there (gemini review). Absolute passes through; a
-/// relative path is joined onto `client_cwd`; omitted defaults to `client_cwd`.
-/// `client_cwd` is passed in (not read here) so the branch is unit-testable.
-fn resolve_run_cwd(cwd: Option<String>, client_cwd: Option<std::path::PathBuf>) -> String {
-    let join = |rel: &str| -> Option<String> {
-        client_cwd
-            .as_ref()
-            .map(|d| d.join(rel).to_string_lossy().into_owned())
-    };
-    match cwd {
-        Some(c) if std::path::Path::new(&c).is_absolute() => c,
-        Some(c) => join(&c).unwrap_or(c),
-        None => client_cwd
-            .as_ref()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default(),
-    }
-}
-
 fn wait_exit_code(outcome: WaitOutcome) -> i32 {
     match outcome {
         WaitOutcome::Quiet => EXIT_OK,
@@ -2083,6 +2064,8 @@ pub enum PaneCmd {
     Focus {
         target: FocusTarget,
     },
+    /// `pane run --shot`: a screen capture through a pane, run by `pane_shot`.
+    Shot(Box<pane_shot::ShotSpec>),
     Run {
         cwd: Option<String>,
         argv: Vec<String>,
@@ -2253,6 +2236,9 @@ pub fn pane(op: crate::cli_args::PaneOp, env_session: Option<&str>) -> i32 {
             return EXIT_USAGE;
         }
     };
+    if let PaneCmd::Shot(spec) = parsed.cmd {
+        return pane_shot::run(&session, &sock, parsed.json, *spec);
+    }
     dispatch(&session, &sock, parsed.json, parsed.cmd)
 }
 
@@ -3748,7 +3734,9 @@ pub(crate) fn dispatch(session: &str, sock: &Path, json: bool, cmd: PaneCmd) -> 
     let (command, read_timeout) = match cmd {
         // pane() intercepts the keeper read before dispatch; it needs no
         // server and this arm exists to keep the match total.
-        PaneCmd::KeeperList { .. } => unreachable!("keeper list never reaches dispatch"),
+        PaneCmd::KeeperList { .. } | PaneCmd::Shot(_) => {
+            unreachable!("keeper list and shot never reach dispatch")
+        }
         PaneCmd::Ls { .. } => (ControlCommand::PaneLs, CONTROL_TIMEOUT),
         PaneCmd::Split {
             pane,
