@@ -26,7 +26,7 @@ use fno::text_style::TextStyle;
 
 const MAX_URL: usize = 512;
 const URL_HINT: &str = "https://github.com/owner/repo";
-/// The height held for a preview that is still decoding: 16:9 at the widest.
+/// The tallest a preview draws, and the height held while it decodes: 16:9 at the widest.
 const PREVIEW_RESERVE: f32 = 270.0;
 /// The widest the preview draws, in logical pixels.
 const PREVIEW_MAX: f32 = 480.0;
@@ -839,41 +839,38 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
     }
     if !c.preview.is_empty() {
         let (path, error, muted, ground) = (c.preview.clone(), p.error, p.muted, p.bg);
-        // The box holds the preview's space so the recipe never jumps up. The
-        // loading word is the image's own loading element, so it leaves with
-        // the load. gpui shows that element after a 200 ms delay.
+        // The image takes its aspect height from gpui, capped at the reserve.
+        // Until it decodes, the loading and fallback elements hold the reserve
+        // so the recipe does not jump up on a failed load.
         out = out.child(
-            div()
-                .w(px(PREVIEW_MAX))
-                .max_w_full()
-                .min_h(px(PREVIEW_RESERVE))
-                .child(
-                    img(PathBuf::from(&c.preview))
-                        .w(px(PREVIEW_MAX))
-                        .max_w_full()
-                        .bg(rgb(ground))
-                        .object_fit(ObjectFit::Contain)
-                        .with_loading(move || {
-                            div()
-                                .w_full()
-                                .h(px(PREVIEW_RESERVE))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .text_color(rgb(muted))
-                                .child("Loading preview...")
-                                .into_any_element()
-                        })
-                        .with_fallback(move || {
-                            div()
-                                .w_full()
-                                .h(px(PREVIEW_RESERVE))
-                                .bg(rgb(ground))
-                                .text_color(rgb(error))
-                                .child(format!("Cannot draw {path}"))
-                                .into_any_element()
-                        }),
-                ),
+            div().w(px(PREVIEW_MAX)).max_w_full().child(
+                img(PathBuf::from(&c.preview))
+                    .w(px(PREVIEW_MAX))
+                    .max_w_full()
+                    .max_h(px(PREVIEW_RESERVE))
+                    .bg(rgb(ground))
+                    .object_fit(ObjectFit::Contain)
+                    .with_loading(move || {
+                        div()
+                            .w_full()
+                            .h(px(PREVIEW_RESERVE))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_color(rgb(muted))
+                            .child("Loading preview...")
+                            .into_any_element()
+                    })
+                    .with_fallback(move || {
+                        div()
+                            .w_full()
+                            .h(px(PREVIEW_RESERVE))
+                            .bg(rgb(ground))
+                            .text_color(rgb(error))
+                            .child(format!("Cannot draw {path}"))
+                            .into_any_element()
+                    }),
+            ),
         );
     }
     if !c.recipe.is_empty() {
