@@ -520,8 +520,7 @@ pub fn admit(params: &mut Map<String, Value>) -> Result<(), (String, i32)> {
     // check reads it from the same list the lane check reads --model from.
     // A hardcoded None here refused every spawn resume of a claude thread
     // whose transcript needed no fresh seed.
-    let resume_marker = params
-        .get("harness_args")
+    let resume_marker = param_value(params, "harness_args")
         .and_then(Value::as_array)
         .map(|items| {
             let toks: Vec<String> = items
