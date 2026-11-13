@@ -1225,6 +1225,18 @@ pub fn guard_client_spawn(
         if let Some(remedy) = verdict.get("remedy").and_then(Value::as_str) {
             eprintln!("{remedy}");
         }
+        // The caller holds this refusal, so the first-turn watch owes it no
+        // gate notice for the same launch.
+        let reason = verdict
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or("refused");
+        crate::spawn_watch::settle_refused(
+            &crate::paths::AgentsHome::from_env(),
+            caller_session,
+            name,
+            reason,
+        );
         return Err(if exit == 0 { 2 } else { exit });
     }
     let text = |k: &str| verdict.get(k).and_then(Value::as_str).map(str::to_string);
