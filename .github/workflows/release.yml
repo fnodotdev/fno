@@ -508,21 +508,25 @@ jobs:
           bash scripts/release/sync-version.sh "$VERSION"
           # crates.io uploads are permanent: a version already there is an
           # idempotent skip, so a re-run after a partial publish never retries.
+          # Each crate publishes at its own manifest version: fno-mail versions
+          # on its own API, so most releases skip it as already published.
           for pair in "fno-mail:crates/fno-mail" "fno-agents:crates/fno-agents" "fno:crates/fno"; do
             name="${pair%%:*}"
             dir="${pair#*:}"
-            code="$(curl -s -o /dev/null -w '%{http_code}' "https://crates.io/api/v1/crates/${name}/${VERSION}")"
+            ver="$(perl -ne 'if(/^version = "(.*)"/){print $1; exit}' "${dir}/Cargo.toml")"
+            code="$(curl -s -o /dev/null -w '%{http_code}' "https://crates.io/api/v1/crates/${name}/${ver}")"
             if [ "$code" = "200" ]; then
-              echo "${name} ${VERSION} is already on crates.io - skipping"
+              echo "${name} ${ver} is already on crates.io - skipping"
               continue
             fi
             if [ "$DRY_RUN" = "true" ]; then
               extra=()
-              # fno-mail at this version is not on crates.io until the upload
-              # above lands, so the fno-agents dry run resolves it through the
-              # tree. A dry run uploads nothing; the real publish needs no
-              # patch, because cargo waits for the index after that upload.
-              if [ "$name" = "fno-agents" ]; then
+              # A new fno-mail version is not on crates.io until the upload
+              # above lands, so the fno-agents and fno dry runs resolve it
+              # through the tree. A dry run uploads nothing; the real publish
+              # needs no patch, because cargo waits for the index after that
+              # upload.
+              if [ "$name" != "fno-mail" ]; then
                 extra=(--config "patch.crates-io.fno-mail.path=\"crates/fno-mail\"")
               fi
               cargo publish --dry-run --allow-dirty --manifest-path "${dir}/Cargo.toml" "${extra[@]}"

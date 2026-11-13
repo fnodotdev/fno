@@ -1,7 +1,9 @@
 [package]
 name = "fno-mail"
-# Keep in lockstep with crates/fno, crates/fno-agents and cli (Python).
-version = "0.4.8"
+# Versions on its own API, apart from the fno product number. A release
+# publishes it only when this version is not on crates.io yet; fno and
+# fno-agents take it by caret range. Bump it when the API changes.
+version = "0.1.0"
 edition = "2021"
 # MSRV: the bus log's advisory flock uses std's File::try_lock (log.rs),
 # stabilized in Rust 1.89. Pinning the floor lets `cargo` warn on an older

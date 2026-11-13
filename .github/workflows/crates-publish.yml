@@ -37,7 +37,7 @@ jobs:
             dir: crates/fno-mail
           - crate: fno-agents
             dir: crates/fno-agents
-            # fno-mail at this version is not on crates.io until release
+            # A new fno-mail version is not on crates.io until release
             # publishes it, so the dry-run resolves it through the tree.
             extra: --config 'patch.crates-io.fno-mail.path="crates/fno-mail"'
           - crate: fno

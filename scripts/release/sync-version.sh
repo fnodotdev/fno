@@ -62,17 +62,16 @@ JSON_MANIFESTS=(
   plugins/openclaw/promise-tag-reader/package.json
 )
 
-# The crate manifests the stamp moves: their [package] version, their
-# lockfile's own entry, and the fno-mail pins in fno and fno-agents all
-# read from this one list.
+# The crate manifests the stamp moves: their [package] version and their
+# lockfile's own entry both read from this one list. fno-mail is absent: it
+# versions on its own API, and fno and fno-agents take it by caret range.
 CRATE_MANIFESTS=(
   crates/fno/Cargo.toml
   crates/fno-agents/Cargo.toml
-  crates/fno-mail/Cargo.toml
 )
 
 # fno-app versions on its own line (its Cargo.toml is never stamped here), but
-# its lockfile pins the path crates above, so each stamp refreshes that lock.
+# its lockfile pins fno and fno-agents, so each stamp refreshes that lock.
 LOCK_ONLY_MANIFESTS=(
   crates/fno-app/Cargo.toml
 )
@@ -104,10 +103,6 @@ if [[ "$arg" == "--check" ]]; then
     got="$(awk -v pkg="$c" '$0 == "name = \"" pkg "\"" { seen = 1; next } seen && /^version = / { sub(/^version = "/, ""); sub(/"$/, ""); print; exit }' "$lock" 2>/dev/null)"
     [[ "$got" == "$want_semver" ]] || { echo "drift: $lock ($c) = ${got:-missing} (want $want_semver)"; bad=1; }
   done
-  # The path-dependency pin must carry the exact stamped version: both crates
-  # are 0.x, and a stale pin stales every --locked build.
-  pin="$(perl -ne 'if(/^fno-mail = \{ path/ && /version = "=(.*)"/){print $1; exit}' crates/fno-agents/Cargo.toml)"
-  [[ "$pin" == "$want_semver" ]] || { echo "drift: crates/fno-agents/Cargo.toml fno-mail pin = ${pin:-missing} (want =${want_semver})"; bad=1; }
   for j in "${JSON_MANIFESTS[@]}"; do
     matches="$(perl -ne 'print "$1\n" while /"version"\s*:\s*"([^"]*)"/g' "$j")"
     # Zero version fields is itself drift: a dropped/renamed key would otherwise
@@ -138,29 +133,17 @@ for cf in "${CRATE_MANIFESTS[@]}"; do
   perl -i -pe "s/^version = \".*\"/version = \"${semver}\"/" "$cf"
 done
 
-# 1b. The exact pins on the fno-mail path dependency: a stamped path-dep
-#     version stales a --locked build, so every pin moves with the manifest
-#     version. fno-agents and fno both pin it; missing one leaves the
-#     requirement unsatisfiable and every build red.
-for pf in crates/fno-agents/Cargo.toml crates/fno/Cargo.toml; do
-  perl -i -pe "s/^(fno-mail = \{ path = \"\.\.\/fno-mail\", version = \")[^\"]*/\${1}=${semver}/" "$pf"
-  grep -q "fno-mail = { path = \"../fno-mail\", version = \"=${semver}\"" "$pf" \
-    || { echo "sync-version: the fno-mail pin in $pf did not land (missing or unrecognized shape?)" >&2; exit 1; }
-done
-
-# 1c. Lockfiles: cargo update per crate, after EVERY manifest edit above.
-#     One crate's resolution walks another crate's pin (fno-app -> fno ->
-#     fno-mail), so an update run while any pin is still stale fails - and
-#     the failure hides under || true, stranding the lock. --check's lock
-#     drift guard catches a stranded lock; this ordering is what keeps it
-#     from firing on every stamp.
+# 1b. Lockfiles: cargo update per crate, after EVERY manifest edit above.
+#     fno-app's lock walks both stamped crates, so an update run while one
+#     manifest is still stale fails - and the failure hides under || true,
+#     stranding the lock. --check's lock drift guard catches a stranded lock;
+#     this ordering is what keeps it from firing on every stamp.
 for cf in "${CRATE_MANIFESTS[@]}"; do
   c="$(basename "$(dirname "$cf")")"
   cargo update --manifest-path "$cf" -p "$c" --precise "${semver}" >/dev/null 2>&1 || true
-  cargo update --manifest-path "$cf" -p fno-mail >/dev/null 2>&1 || true
 done
 for cf in "${LOCK_ONLY_MANIFESTS[@]}"; do
-  for dep in fno fno-agents fno-mail; do
+  for dep in fno fno-agents; do
     cargo update --manifest-path "$cf" -p "$dep" >/dev/null 2>&1 || true
   done
 done
