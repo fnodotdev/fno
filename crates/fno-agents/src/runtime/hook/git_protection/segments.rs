@@ -604,7 +604,7 @@ fn heredocs(command: &str) -> Vec<(String, String)> {
             i += 1;
             continue;
         };
-        let opener = lines[i].clone();
+        let opener = lines.get(i).cloned().unwrap_or_default();
         let mut body: Vec<&str> = Vec::new();
         i += 1;
         while i < lines.len() {
@@ -654,7 +654,9 @@ pub(super) fn write_target(tokens: &[String]) -> Option<String> {
             }
         }
         if base_lower(tok) == "tee" {
-            return tokens[idx + 1..]
+            return tokens
+                .get(idx + 1..)
+                .unwrap_or_default()
                 .iter()
                 .find(|t| !t.starts_with('-'))
                 .cloned();

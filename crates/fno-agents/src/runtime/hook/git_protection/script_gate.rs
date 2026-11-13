@@ -143,7 +143,7 @@ impl Walk {
         if top && argv.is_empty() {
             self.assign(&assignments);
         } else if top && base0 == "export" {
-            self.assign(&argv[1..]);
+            self.assign(argv.get(1..).unwrap_or_default());
         } else if top && base0 == "cd" {
             let target = argv
                 .iter()
