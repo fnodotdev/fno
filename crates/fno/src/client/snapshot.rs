@@ -1281,6 +1281,7 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
             runtime.block_on(super::report::snapshot(&mut view, true))?
         }
         Some(ViewKind::Keys) => {
+            reinstall_keymap();
             view.open_keys_modal();
         }
         Some(ViewKind::KeysTags) => {
@@ -1752,10 +1753,18 @@ pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
         }
     }
     if keys_footer {
+        reinstall_keymap();
         super::key_grid::toggle(&mut view);
     }
     crate::lattice::freeze_spin();
     Ok(view.compose())
+}
+
+/// The key layer a live client in this cwd would run, so a shot of the keys
+/// list or the footer names the configured prefix.
+fn reinstall_keymap() {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    crate::keys::reinstall(crate::digest_overlay::keymap(&cwd).0);
 }
 
 /// Attach a second sizing client at `dims` and keep it attached until the
