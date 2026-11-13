@@ -51,7 +51,7 @@ pub struct Ledger {
     pub operator_queue_depth: Option<usize>,
     /// Degradation notes: a store that was missing or unreadable, so a
     /// number reads as a floor rather than a count.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
 }
 
