@@ -6,6 +6,15 @@
 
 use super::*;
 
+/// Ship the usage row for a consumed left press. The TUI's only click shape:
+/// a tap is the same report, and drags, wheels and hovers ship nothing, so
+/// every surface that consumes the press names itself once here.
+fn click_press(rep: &crate::mouse::MouseReport, id: &'static str) {
+    if matches!(rep.kind, MouseKind::Press(MouseButton::Left)) {
+        crate::ui_usage::click("mux", id);
+    }
+}
+
 /// The client-local keyboard owner among the visible regions. `Pane` means
 /// the server's focused pane (`layout.focus`) takes typing: the client never
 /// stores a pane id here, so server focus identity is preserved and a layout
@@ -181,6 +190,7 @@ pub(super) async fn mouse_pre_pass(
             && super::esc_close::chip_at(view, rep.row, rep.col)
         {
             view.modal_release_swallow = true;
+            click_press(&rep, "esc_chip");
             if let StdinFlow::Detach = super::esc_close::tap(view, scanner, sock_w).await? {
                 return Ok(StdinFlow::Detach);
             }
@@ -228,12 +238,15 @@ pub(super) async fn mouse_pre_pass(
         // The questions view paints next and owns every cell it covers: off
         // the chip, a click reaches no pane and no sideline row under it.
         if view.question_detail.is_some() {
+            click_press(&rep, "question_detail");
             super::questions::mouse(view, rep);
             continue;
         }
-        if super::file_viewer::drag_mouse(view, rep, sock_w).await?
-            || super::file_viewer::mouse(view, rep)
-        {
+        if super::file_viewer::drag_mouse(view, rep, sock_w).await? {
+            continue;
+        }
+        if super::file_viewer::mouse(view, rep) {
+            click_press(&rep, "file_viewer");
             continue;
         }
         if view.bell.open {
@@ -265,6 +278,7 @@ pub(super) async fn mouse_pre_pass(
         // (hover selects, wheel scrolls, click executes or dismisses) and is
         // SWALLOWED - it never reaches a pane or the chrome underneath.
         if view.keys_modal.is_some() {
+            click_press(&rep, "whichkey");
             if let StdinFlow::Detach =
                 keys_modal::keys_modal_mouse(view, scanner, rep, sock_w).await?
             {
@@ -275,6 +289,7 @@ pub(super) async fn mouse_pre_pass(
         // US2: the row context menu owns the mouse while open (hover
         // selects, click runs, right-press re-anchors) and is swallowed.
         if view.row_menu.is_some() {
+            click_press(&rep, "row_menu");
             row_menu_mouse(view, rep, sock_w).await?;
             continue;
         }
@@ -309,6 +324,7 @@ pub(super) async fn mouse_pre_pass(
             continue;
         }
         if view.org_board.is_some() && view.board_full {
+            click_press(&rep, "board_org");
             if modal_mouse(view, rep) {
                 continue;
             }
@@ -337,6 +353,7 @@ pub(super) async fn mouse_pre_pass(
         // Under an overlay or a board popup the recorded spans describe
         // cells something else now paints, so the tap resolves nothing.
         if view.backlog_board.is_some() && view.board_full {
+            click_press(&rep, "board_backlog");
             if matches!(rep.kind, MouseKind::Press(MouseButton::Left))
                 && view.active_overlay_layout().is_none()
                 && !view.backlog_board.as_ref().is_none_or(|b| b.popup_open())
@@ -934,6 +951,7 @@ pub(super) async fn mouse_pre_pass(
             // the clicked pane receives typing without waiting on the
             // hover-settle the human path usually supplies first.
             if matches!(rep.kind, MouseKind::Press(MouseButton::Left)) {
+                click_press(&rep, "pane");
                 view.region_owner = RegionOwner::Pane;
                 view.hover_pending = None;
                 write_msg(sock_w, &ClientMsg::Command(Command::FocusPane(pane)))
@@ -955,6 +973,130 @@ pub(super) async fn mouse_pre_pass(
             .await
             .map_err(|e| format!("mouse send failed: {e}"))?;
         }
+    }
+    Ok(StdinFlow::Continue)
+}
+
+/// Apply one resolved [`ChromeHit`] - the single consumer both input paths
+/// share: the mouse press path and the selector's Enter. Cmds go to
+/// the wire; Notice is a local one-liner; Confirm arms the one-keypress
+/// dispatch prompt; OpenCreate opens the name-input overlay.
+pub(super) async fn apply_hit(
+    view: &mut View,
+    hit: ChromeHit,
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<(), String> {
+    crate::ui_usage::click("mux", hit.control_id());
+    match hit {
+        ChromeHit::TopRow(v) => match v {
+            crate::view_store::SidelineView::Agents => {
+                view.messages_board = None;
+                view.org_board = None;
+                view.backlog_board = None;
+                backlog_board::set_sideline_view(view, crate::view_store::SidelineView::Agents);
+            }
+            crate::view_store::SidelineView::Messages => messages_view::open(view),
+            crate::view_store::SidelineView::Backlog => View::open(view),
+            crate::view_store::SidelineView::Org => org_board::open(view),
+            crate::view_store::SidelineView::Decisions => decisions_view::open(view),
+        },
+        ChromeHit::NeedInput => view.needs_open = !view.needs_open,
+        ChromeHit::Bell(hit) => bell::apply_hit(view, hit),
+        ChromeHit::Cmds(cmds) => {
+            for cmd in cmds {
+                view.note_command_sent(&cmd);
+                write_msg(sock_w, &ClientMsg::Command(cmd))
+                    .await
+                    .map_err(|e| format!("command send failed: {e}"))?;
+            }
+        }
+        ChromeHit::Notice(msg) => view.set_notice(msg.to_string()),
+        ChromeHit::OpenRemote(remote) => machine_tree::open(view, remote, sock_w).await?,
+        // The `+` footer opens the name-input overlay; the next keys
+        // route to create_keys (Enter sends NewSquad, Esc cancels).
+        ChromeHit::OpenCreate => view.open_create(),
+        // Pure state flip, no I/O - usable even when the socket write path
+        // is failing (AC1-FR).
+        ChromeHit::CycleSection(key) => view.cycle_section(key),
+        ChromeHit::SortColumn(column) => view.set_agent_sort_column(column),
+        // Pure local set flip, like CycleSection - no I/O.
+        ChromeHit::ToggleIdle(key) => view.toggle_idle(key),
+        // The density button. The panel width moved with the density,
+        // so unlike CycleSection this owes the server a new content viewport.
+        ChromeHit::CycleDensity => {
+            view.cycle_density();
+            let (r, c) = view.content_dims();
+            write_msg(sock_w, &ClientMsg::Resize { rows: r, cols: c })
+                .await
+                .map_err(|e| format!("resize send failed: {e}"))?;
+        }
+        ChromeHit::ToggleComposer => sideline::toggle_composer(view, sock_w).await?,
+        ChromeHit::OpenDraft(squad) => sideline::open_draft(view, squad, sock_w).await?,
+        ChromeHit::Card(hit) => agent_launcher::card::card_hit(view, hit, sock_w).await?,
+        ChromeHit::AddRemoteHost => remote_hosts::open_add(view),
+        // US4: open the sideline MENU popup anchored at the clicked cell.
+        ChromeHit::OpenSidelineMenu { row, col } => {
+            view.open_sideline_menu(Anchor::At { row, col })
+        }
+        // Inspect first: the deep link is the view's own action, not the
+        // click path that opened it.
+        ChromeHit::OpenFeedDetail(item) => feed_detail::open_into(view, item),
+        // The questions detail overlay: opens on the clicked question.
+        ChromeHit::OpenQuestionDetail(id) => view.open_detail_on(&id),
+        ChromeHit::OpenNode(id) => node_link::open(view, id).await,
+        ChromeHit::OpenPr(url) => update_menu::open_pr(view, url).await,
+    }
+    Ok(())
+}
+
+/// One mouse report while an aux popup is open (US4/US5): hover selects, a left
+/// click runs the entry (propagating detach), a click off the popup dismisses.
+async fn aux_mouse(
+    view: &mut View,
+    rep: crate::mouse::MouseReport,
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) -> Result<StdinFlow, String> {
+    match rep.kind {
+        MouseKind::Move => {
+            if let Some(t) = view.aux_hit(rep.row, rep.col) {
+                if let Some(m) = view.aux.as_mut() {
+                    m.popup.select(t);
+                }
+            }
+        }
+        MouseKind::Press(MouseButton::Left) => {
+            if settings_modal::tap_tab(view, rep.row, rep.col) {
+                crate::ui_usage::click("mux", "settings_tab");
+                return Ok(StdinFlow::Continue);
+            }
+            match view.aux_hit(rep.row, rep.col) {
+                Some(t) => {
+                    if !settings_modal::row_tap_allowed(view, t) {
+                        return Ok(StdinFlow::Continue);
+                    }
+                    crate::ui_usage::click("mux", "menu_entry");
+                    if let Some(m) = view.aux.as_mut() {
+                        m.popup.select(t);
+                    }
+                    if matches!(
+                        aux_execute_selected(view, sock_w).await?,
+                        DispatchFlow::Detach
+                    ) {
+                        return Ok(StdinFlow::Detach);
+                    }
+                }
+                None => {
+                    // In-block miss (a header) is swallowed; off-block dismisses.
+                    if !view.aux_block_contains(rep.row, rep.col) {
+                        crate::ui_usage::click("mux", "menu_dismiss");
+                        view.lane.clear_entry();
+                        theme_import_ui::reset(view);
+                        view.aux = None;
+                    }
+                }
+            }
+        }
+        _ => {}
     }
     Ok(StdinFlow::Continue)
 }

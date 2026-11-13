@@ -308,3 +308,5 @@
 {"expect":"valid","reason":"skill_invoked happy path","event":{"ts":"2026-11-13T10:00:00Z","type":"skill_invoked","source":"hook","data":{"skill":"fno:target","harness":"claude","via":"tool"}}}
 {"expect":"valid","reason":"pr_opened happy path","event":{"ts":"2026-11-13T10:00:00Z","type":"pr_opened","source":"target","data":{"pr":141,"node":"x-2f27"}}}
 {"expect":"valid","reason":"node_done happy path","event":{"ts":"2026-11-13T10:00:00Z","type":"node_done","source":"backlog","data":{"node_id":"x-2f27","via":"reconcile","pr_number":141}}}
+{"expect":"valid","reason":"ui_click happy path","event":{"ts":"2026-11-13T10:00:00Z","type":"ui_click","source":"ui","data":{"screen":"mux","control":"tab_row"}}}
+{"expect":"invalid","reason":"ui_click missing screen","event":{"ts":"2026-11-13T10:00:00Z","type":"ui_click","source":"ui","data":{"control":"tab_row"}}}

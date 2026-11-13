@@ -868,10 +868,18 @@ jobs:
         # check reads an outdated --emit-schema (phantom kind drift). Prepend the
         # fresh build dir so `command -v` resolves it, and print a diagnostic of
         # the resolved binary + its emitted kind count for future triage.
+        # The schema-projection emitter is the fno FRONT door (event_schema.rs),
+        # which this job never built: build it into the script's candidate path
+        # first, or the projection runs from a stale PATH binary that predates
+        # whatever source the fresh yaml carries (measured 2026-11-13: the ui
+        # source drifted green-to-red with no source change on the Python side).
         run: |
-          export PATH="$PWD/crates/fno-agents/target/debug:$PATH"
+          cargo build --quiet --manifest-path crates/fno/Cargo.toml --bin fno
+          export PATH="$PWD/crates/fno-agents/target/debug:$PWD/crates/fno/target/debug:$PATH"
           echo "parity-diag: resolved fno-agents = $(command -v fno-agents || echo NONE)"
           echo "parity-diag: emits newest kind (inside_leg_completed) = $(fno-agents --emit-schema 2>/dev/null | grep -c inside_leg_completed) (fresh=1, stale=0)"
+          echo "parity-diag: resolved fno = $(command -v fno || echo NONE)"
+          echo "parity-diag: projection carries newest source (ui) = $(fno doctor event schema-projection 2>/dev/null | grep -c '\"ui\"') (fresh=1, stale=0)"
           bash scripts/check-event-schema-parity.sh
 
       - name: Preflight receipt-scope parity

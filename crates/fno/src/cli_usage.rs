@@ -88,8 +88,9 @@ pub fn exec_env() -> Vec<(&'static str, String)> {
 }
 
 /// The agents journal, or None for a hermetic test run that pinned no
-/// agents home: a test must never write a row into a real home.
-fn agents_journal() -> Option<PathBuf> {
+/// agents home: a test must never write a row into a real home. Shared with
+/// the `ui_click` row's writer ([`crate::ui_usage`]).
+pub(crate) fn agents_journal() -> Option<PathBuf> {
     let hermetic = std::env::var("FNO_TEST_HERMETIC").as_deref() == Ok("1")
         || std::env::var_os("PYTEST_CURRENT_TEST").is_some();
     let home = match std::env::var_os("FNO_AGENTS_HOME").filter(|v| !v.is_empty()) {

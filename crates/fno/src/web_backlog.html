@@ -1552,6 +1552,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
         group.appendChild(live);
       }
       if (id) {
+        group.dataset.fno = "node_open";
         group.addEventListener("click", () => {
           setSel(id);
           openNode(id);
@@ -1684,6 +1685,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     if (card.id === selId) b.classList.add("sel");
     if (card.id === openId) b.classList.add("open");
     visibleIds.push(card.id);
+    b.dataset.fno = "node_open";
     b.addEventListener("click", () => openNode(card.id));
     return b;
   }
@@ -1787,6 +1789,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
       bar.appendChild(fill);
       head.appendChild(bar);
     }
+    head.dataset.fno = "lane_toggle";
     head.addEventListener("click", () => {
       sec.classList.toggle("closed");
       if (sec.classList.contains("closed")) closedLanes.add(lane.key);
@@ -1845,6 +1848,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     if (card.id === selId) b.classList.add("sel");
     if (card.id === openId) b.classList.add("open");
     visibleIds.push(card.id);
+    b.dataset.fno = "node_open";
     b.addEventListener("click", () => openNode(card.id));
     return b;
   }
@@ -2013,6 +2017,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     b.type = "button";
     b.className = "linkbtn";
     b.textContent = (prefix || "") + link.id + (link.title ? " " + link.title : "") + (link.column ? " (" + link.column + ")" : "");
+    b.dataset.fno = "node_open";
     b.addEventListener("click", () => openNode(link.id));
     box.appendChild(b);
   }
@@ -2117,6 +2122,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
       const b = document.createElement("button");
       b.textContent = word;
       b.setAttribute("data-act", "1");
+      b.dataset.fno = "rank";
       b.addEventListener("click", () => act({ act: "rank", id: card.id, place: word }));
       if (moveUn) {
         b.disabled = true;
@@ -2131,6 +2137,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
       const b = document.createElement("button");
       b.textContent = kind === "blueprint" ? "blueprint" : "launch target";
       b.setAttribute("data-act", "1");
+      b.dataset.fno = "launch";
       b.addEventListener("click", () => act({ act: kind, id: card.id }));
       if (busy) {
         b.disabled = true;
@@ -2184,6 +2191,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     idCopy.type = "button";
     idCopy.className = "copybtn";
     idCopy.textContent = "copy";
+    idCopy.dataset.fno = "id_copy";
     idCopy.addEventListener("click", () => copyText(card.id, idCopy));
     h.appendChild(idCopy);
     const t = document.createElement("span");
@@ -2361,6 +2369,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
         b.type = "button";
         b.className = "linkbtn";
         b.textContent = id;
+        b.dataset.fno = "node_open";
         b.addEventListener("click", () => openNode(id));
         box.appendChild(b);
       });
@@ -2677,6 +2686,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
       box.appendChild(chip);
     }
   }
+  document.getElementById("f-dadd").dataset.fno = "filter_add";
   document.getElementById("f-dadd").addEventListener("click", () => {
     const field = { created_at: "created", updated_at: "updated",
       completed_at: "done" }[document.getElementById("f-dfield").value];
@@ -2711,6 +2721,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     syncUrl();
     fetchBoard();
   });
+  document.getElementById("f-reset").dataset.fno = "filter_reset";
   document.getElementById("f-reset").addEventListener("click", () => {
     for (const k of FILTER_KEYS) state[k] = [];
     state.q = "";
@@ -2913,6 +2924,7 @@ function laneKeyOf(card, lanesBy, parents, byId) {
   // attribute, store the choice. A refused localStorage only loses the
   // memory; the override still lasts the session.
   const themeBtn = document.getElementById("themebtn");
+  themeBtn.dataset.fno = "theme";
   function applyTheme(t) {
     const attr = themeAttr(t);
     if (attr) document.documentElement.dataset.theme = attr;
@@ -3017,6 +3029,14 @@ function laneKeyOf(card, lanesBy, parents, byId) {
     showNoteLine(snap.failed);
   }
   if (openId) openNode(openId);
+  // One row per click on a control that names itself (data-fno): the bridge
+  // writes it through the same door the TUI client uses, ids only, and a
+  // click on nothing named ships nothing.
+  document.addEventListener("click", (e) => {
+    const tgt = e.target.closest("[data-fno]");
+    if (!tgt) return;
+    fetch(base + "ui/click?t=" + encodeURIComponent(t), {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify({screen: "web_backlog", control: tgt.dataset.fno}), keepalive: true}).catch(() => { /* quiet-ok: the click count is fire-and-forget */ });
+  }, true);
 })();
 </script>
 </body>

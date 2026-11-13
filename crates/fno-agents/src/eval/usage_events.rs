@@ -111,6 +111,8 @@ pub(crate) const KINDS: &[Kind] = &[
     kind("plan_graduated", Home::Space),
     kind("chokepoint_wait_exceeded", Home::Space),
     kind("graph_lock_held", Home::Space),
+    // UI: one click or tap on a control, mux, desktop app or web, ids only.
+    kind("ui_click", Home::Agents),
 ];
 
 /// True when `name` is a shipped kind.
@@ -166,6 +168,8 @@ const STRING_FIELDS: &[&str] = &[
     "node_id",
     "graph_node_id",
     "scope",
+    "screen",
+    "control",
 ];
 
 /// Numeric fields that ship when the row carries them.

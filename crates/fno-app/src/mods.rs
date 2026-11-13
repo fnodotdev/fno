@@ -144,6 +144,23 @@ pub(super) enum Act {
     Submit,
 }
 
+/// The stable control id a click's [`Act`] ships to the usage events arm
+/// (`fno::ui_usage`). One constant per control, never a label.
+fn click_id(act: &Act) -> &'static str {
+    match act {
+        Act::Select(_) => "mod_select",
+        Act::Switch(..) => "mod_switch",
+        Act::Confirm => "mod_confirm",
+        Act::CancelUrl => "mod_cancel_url",
+        Act::CancelConfirm => "mod_cancel_confirm",
+        Act::Open(_) => "mod_open",
+        Act::Install => "mod_install",
+        Act::Browse => "mod_browse",
+        Act::Pick(_) => "mod_pick",
+        Act::Submit => "mod_submit",
+    }
+}
+
 /// The page state: the last good rows, the last failed read, the selection
 /// and its recipe, the open URL field, an armed code-mod confirm, the
 /// switches still out and the install pane being watched.
@@ -394,6 +411,7 @@ impl Page {
 /// pane beside the focused one. The window shows that pane once the launcher
 /// says it exists.
 pub(super) fn act(root: &mut Root, act: Act, cx: &mut Context<Root>) {
+    fno::ui_usage::click("app", click_id(&act));
     match act {
         Act::Select(t) => root.ext.select(t),
         Act::Switch(t, on) => root.ext.toggle(t, on),

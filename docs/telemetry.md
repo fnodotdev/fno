@@ -82,6 +82,9 @@ Each kind lives in one journal, and the arm reads it there. The agents journal i
 | `style_refusal`, `backlog_done_refused`, `backlog_done_forced` | space | Style and close refusals. |
 | `cli_command` | agents | Every `fno` command: the command path, exit code and duration. |
 | `skill_invoked` | space | Every `fno:` skill invoked, by harness, typed (`prompt`) or called (`tool`). |
+| `ui_click` | agents | One click or tap on a UI control: the control's stable id and the screen it landed in (mux, desktop app, web). |
 | `consult_call`, `sandbox_denial`, `sandbox_ingest`, `plan_graduated`, `chokepoint_wait_exceeded`, `graph_lock_held` | agents or space | Consults, sandbox events, plan graduations, lock waits. |
 
 An event carries only allowlisted fields, each through a gate. If a string field reads as one identifier, it ships, the same rule as the daily report. `command` keeps its spaces, and any slash drops it. A `cli_command` path holds menu words only: the root must be a live command, and a longer path must be a line of `crates/fno/cli-usage-paths.txt`. The first word that makes no known path ends it, so `fno backlog idea review the cache` ships as `backlog idea`. An argument, a prompt, a path, a title or free text never ships. The arm also sends the machine's hostname, which is why it stays a fleet arm.
+
+A `ui_click` id is a code constant, narrower than the identifier gate: lowercase words joined by `_`, digits allowed, 64 characters at most. A click the UI never resolved to a named control ships nothing, and a drag, a wheel or a hover ships nothing. The web pages name their controls with a `data-fno` attribute. A page whose controls carry no attribute ships nothing at all.
