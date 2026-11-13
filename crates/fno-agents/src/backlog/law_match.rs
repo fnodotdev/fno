@@ -56,6 +56,11 @@ enum MatchRequest {
     /// Same ownership as `restore`: stdout carries the new id.
     #[serde(rename = "renew")]
     Renew(RecordDoorRequest),
+    /// The nightly upkeep pass: `argv` is the `fno inbox law upkeep`
+    /// command line. The door owns stdout (the receipt or the summary line)
+    /// and the exit code (0 acted, 1 the pass could not run, 2 usage).
+    #[serde(rename = "upkeep")]
+    Upkeep(RecordDoorRequest),
     #[serde(rename = "scope-split")]
     ScopeSplit(ScopeSplitRequest),
     /// The decisions listing read: `argv` is the `fno backlog decisions`
@@ -3151,6 +3156,9 @@ pub fn run_law_match_str(input: &str) -> i32 {
         }
         MatchRequest::Renew(r) => {
             return crate::law_renew::run_renew(&r.argv);
+        }
+        MatchRequest::Upkeep(r) => {
+            return crate::law_upkeep::run_upkeep(&r.argv);
         }
         MatchRequest::Ask(r) => serde_json::to_string(&ask_answer(&r)).expect("serializes"),
         MatchRequest::Law(r) => {
