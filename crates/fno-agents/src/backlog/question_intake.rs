@@ -923,10 +923,10 @@ judges. Pass each screenshot with --image <path>; the page embeds them under ## 
         .index_path
         .clone()
         .unwrap_or_else(|| questions_path(home));
-    // One read serves the dedup and the supersede after the write: the
-    // open rows a re-ask closes are the ones this read saw.
-    // One read serves the dedup, the amend fetch and the receipt: no second
-    // fold sits between the dedup decision and the amend write.
+    // One read serves the dedup, the amend fetch and the post-write
+    // supersede: no second fold sits between the dedup decision and the
+    // amend write, and the open rows a re-ask closes are the ones this read
+    // saw.
     let (asked, closed) = question_rows(&index);
     let open = open_rows_from(&asked, &closed);
     // The amend door: the not-ready bounce tells the asker to
