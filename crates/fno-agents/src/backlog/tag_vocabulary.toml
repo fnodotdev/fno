@@ -38,7 +38,7 @@ describe = "a free kebab-case word, e.g. topic:rust-idiom"
 [audience_keywords]
 user = ["install", "installer", "onboarding", "quickstart", "readme", "website", "landing", "desktop", "ux", "ui"]
 contributor = ["flaky", "test", "tests", "lint", "clippy", "ci", "shard", "cargo", "budget", "golden", "goldens", "refactor"]
-internal = ["lead", "leads", "king", "fleet", "law", "laws", "ruling", "watchdog", "reap", "reaper", "worker", "workers", "daemon", "org"]
+internal = ["lead", "leads", "fleet", "law", "laws", "ruling", "watchdog", "reap", "reaper", "worker", "workers", "daemon", "org"]
 
 # Areas. `audience` is the audience a node in the area has when no
 # audience word says otherwise. `keywords` are whole words the classifier
@@ -132,7 +132,7 @@ keywords = ["skill", "skills", "plugin", "slash"]
 [[areas]]
 name = "fleet"
 audience = "internal"
-keywords = ["fleet", "lead", "leads", "king", "org", "daemon", "watchdog", "reap", "reaper", "law", "laws", "ruling"]
+keywords = ["fleet", "lead", "leads", "org", "daemon", "watchdog", "reap", "reaper", "law", "laws", "ruling"]
 
 [[areas]]
 name = "web"
