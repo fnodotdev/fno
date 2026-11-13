@@ -162,7 +162,7 @@ fn bounded_fno(
 pub(crate) fn run_pass(io: &dyn Io, cwd: &Path, pages: &[Value], dry_run: bool) -> &'static str {
     if dry_run {
         for pull in pages {
-            if !is_outside_non_bot(pull) {
+            if !is_outside_non_bot(io, pull) {
                 continue;
             }
             let slug = slug_of(pull).unwrap_or_default();
@@ -209,7 +209,7 @@ pub(crate) fn run_pass(io: &dyn Io, cwd: &Path, pages: &[Value], dry_run: bool) 
     let mut had_error = false;
 
     for pull in pages {
-        if !is_outside_non_bot(pull) {
+        if !is_outside_non_bot(io, pull) {
             continue;
         }
         let (Some(slug), Some(pr)) = (slug_of(pull), number_of(pull)) else {
@@ -958,11 +958,18 @@ fn assoc_of(pull: &Value) -> &str {
         .unwrap_or("unknown")
 }
 
-fn is_outside_non_bot(pull: &Value) -> bool {
+fn is_outside_non_bot(io: &dyn Io, pull: &Value) -> bool {
     if pull.pointer("/user/type").and_then(Value::as_str) == Some("Bot") {
         return false;
     }
-    matches!(crate::pr_admission::outside_reason(pull), Ok(Some(_)))
+    let permission = |slug: &str, login: &str| -> Result<String, String> {
+        let path = crate::pr_admission::permission_path(slug, login);
+        crate::pr_admission::permission_of(&io.gh(&[path])?)
+    };
+    matches!(
+        crate::pr_admission::outside_reason(pull, &permission),
+        Ok(Some(_))
+    )
 }
 
 fn node_for_key(find_out: &str, key: &str) -> Option<String> {

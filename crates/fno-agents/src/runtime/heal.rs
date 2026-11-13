@@ -961,7 +961,11 @@ fn read_pr(a: &Args, pr: &str) -> Result<PrState, String> {
         .unwrap_or_default()
         .to_string();
     let mergeable = v.get("mergeable").and_then(|m| m.as_bool());
-    let outside = match crate::pr_admission::outside_reason(&v) {
+    let permission = |slug: &str, login: &str| -> Result<String, String> {
+        let path = crate::pr_admission::permission_path(slug, login);
+        crate::pr_admission::permission_of(&gh_api(a, &path, &[])?)
+    };
+    let outside = match crate::pr_admission::outside_reason(&v, &permission) {
         Ok(inside) => inside,
         Err(msg) => Some(msg),
     };
