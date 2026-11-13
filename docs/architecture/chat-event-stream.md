@@ -38,6 +38,16 @@ Two rules keep a live tail and a replay equal:
 
 One race is left. A Claude subagent meta file that lands after a later row of the parent places `subagent_started` differently in a live tail and in a replay.
 
+## The app route
+
+The attention door (`fno mux serve --web --attention-api`) serves the same stream to a phone, a browser or a second machine: `GET /v1/chat/{harness}/{session_id}?since=<seq>`, a WebSocket upgrade. `since` is the `from_seq` rule above and defaults to 0. `subagent=<id>` selects a Claude subagent stream. The door reads in process through the same reader and the same poll loop as the socket, so a batch is at most 256 events and about 8 MiB.
+
+Auth takes a sink token in one of two forms. A native client sends `Authorization: Bearer <token>`. A browser cannot set headers, so it offers the subprotocols `fno.v1, bearer.<token>`, and the server selects `fno.v1`. The token never rides the query string. A missing or wrong token completes the upgrade and closes with code 1008 and the reason `invalid token`, so a browser can tell it from a network drop. No event frame goes out first.
+
+Each batch is one text frame: `{"v": 1, "session": {...}, "events": [...]}`, events in `seq` order. A reader failure sends one `{"v": 1, "error": {"kind": "unsupported_harness" | "not_found" | "io", "message": "..."}}` frame and closes with code 1011. A session with no transcript yet gets `not_found`. The client retries with the same `since`. An idle stream gets a WebSocket ping every 30 seconds. Inbound messages are dropped.
+
+`GET /v1` with the same token returns `{"api": 1, "build": ..., "proto": ..., "routes": [...]}`. A client reads `api` and refuses a major it does not know.
+
 ## Images
 
 An image smaller than or equal to 512 KiB decoded (`CHAT_IMAGE_INLINE_MAX`) rides inline as base64, with its size and sha256. A larger image carries its size and sha256 only. Fetching bytes by hash is not built yet.
@@ -76,4 +86,4 @@ Each prints `chat_events=<n> unknown=<m>` and a count per kind. A nonzero `unkno
 
 ## Not covered
 
-Pi, agy and footnote-harness sessions get an unsupported-harness error. The phone and web WebSocket route is not built.
+Pi, agy and footnote-harness sessions get an unsupported-harness error. The WebSocket route for phone and web is [The app route](#the-app-route).
