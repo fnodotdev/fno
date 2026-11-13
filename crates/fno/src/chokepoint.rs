@@ -88,6 +88,13 @@ pub static MUX_RESEAT: Chokepoint = lock("mux-reseat", 10, OnExpiry::Refuse);
 /// caller-supplied deadline and report expiry through [`report_expiry`].
 pub static GRAPH_STORE: Chokepoint = lock("graph-store", 10, OnExpiry::Refuse);
 pub static AGENT_ASK: Chokepoint = lock("agent-ask", 30, OnExpiry::Refuse);
+/// Held across one board snapshot render (`fno backlog publish
+/// --local-snapshot`: gather plus page writes). The keeper's settled trigger
+/// and the daemon's board_render arm can each fire a pass, and both spellings
+/// poll their own wait deadline before reporting expiry, so this row is the
+/// GRAPH_STORE shape: the wait bound here only feeds `take` users and the
+/// audit.
+pub static BOARD_RENDER: Chokepoint = lock("board-render", 240, OnExpiry::Refuse);
 
 pub static REGISTRY: &[&Chokepoint] = &[
     &REGISTRY_STATE,
@@ -110,6 +117,7 @@ pub static REGISTRY: &[&Chokepoint] = &[
     &MUX_RESEAT,
     &GRAPH_STORE,
     &AGENT_ASK,
+    &BOARD_RENDER,
 ];
 
 /// Why a wait ended without the lock.

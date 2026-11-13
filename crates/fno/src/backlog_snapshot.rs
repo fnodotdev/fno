@@ -16,8 +16,8 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::io::Read;
-use std::path::Path;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 /// The `fno board-render` command: read the request from stdin
 /// (`{"targets": [{"path", "scope"}], "vault"}`), gather once, write every
@@ -145,6 +145,83 @@ fn render_request(request: &Request) -> Result<Receipt, String> {
 }
 
 fn render_request_within(request: &Request, deadline: Duration) -> Result<Receipt, String> {
+    render_request_within_locks(request, deadline, RENDER_LOCK_WAIT)
+}
+
+/// The single-flight gate on one board snapshot render per store. The
+/// keeper's settled trigger and the daemon's board_render arm can each fire
+/// a pass, and on the iMac two fired 90 s apart, so two renders burned a
+/// full core each on the same store. A second run waits here for the first,
+/// then renders its own (fresher) copy. The bound stops short of the arm's
+/// 300 s command deadline so a waiter that acquires can still finish its
+/// render inside it; an expired waiter fails every target with the holder
+/// named, the same receipt shape the gather deadline returns.
+const RENDER_LOCK_WAIT: Duration = Duration::from_secs(240);
+const RENDER_LOCK_POLL: Duration = Duration::from_millis(50);
+
+/// The advisory gate file, beside the graph so a sandboxed store locks its
+/// own.
+fn render_lock_path(graph: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.board-render.lock", graph.display()))
+}
+
+/// Poll [`crate::chokepoint::try_take`] to the wait bound. A lock file that
+/// cannot even open never blocks the render it guards: the gate fails open
+/// with a stderr note and the caller renders ungated.
+fn acquire_render_lock(
+    graph: &Path,
+    lock_wait: Duration,
+) -> Result<Option<crate::chokepoint::Held>, crate::chokepoint::Refused> {
+    let lock_path = render_lock_path(graph);
+    if let Some(parent) = lock_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let deadline = Instant::now() + lock_wait;
+    loop {
+        match crate::chokepoint::try_take(
+            &crate::chokepoint::BOARD_RENDER,
+            &lock_path,
+            "backlog publish --local-snapshot",
+        ) {
+            Ok(Some(held)) => return Ok(Some(held)),
+            Ok(None) if Instant::now() >= deadline => {
+                return Err(crate::chokepoint::report_expiry(
+                    &crate::chokepoint::BOARD_RENDER,
+                    &lock_path,
+                    lock_wait,
+                ));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!(
+                    "board-render: render lock {} unreadable ({e}); rendering ungated",
+                    lock_path.display()
+                );
+                return Ok(None);
+            }
+        }
+        std::thread::sleep(RENDER_LOCK_POLL);
+    }
+}
+
+/// One error on every target: the receipt the lock expiry and the gather
+/// deadline return (nothing written, every path failed, exit 1).
+fn all_failed(request: &Request, error: String) -> Receipt {
+    Receipt {
+        written: Vec::new(),
+        failed: request
+            .targets
+            .iter()
+            .map(|t| json!({ "path": t.path, "error": error }))
+            .collect(),
+    }
+}
+
+fn render_request_within_locks(
+    request: &Request,
+    deadline: Duration,
+    lock_wait: Duration,
+) -> Result<Receipt, String> {
     // Leads are read once at render time from the agent registry and
     // stamped: the page header says when the leads were read, and a lead
     // change alone does not re-render the page. A public render drops the
@@ -155,6 +232,12 @@ fn render_request_within(request: &Request, deadline: Duration) -> Result<Receip
         .map(|raw| agents_from_registry(&raw, now))
         .unwrap_or_default();
     let graph = backlog_view::graph_path();
+    // One render at a time per store. Held through the gather and the page
+    // writes; the guard releases on every return path.
+    let _render_gate = match acquire_render_lock(&graph, lock_wait) {
+        Ok(gate) => gate,
+        Err(refused) => return Ok(all_failed(request, refused.to_string())),
+    };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -176,14 +259,7 @@ fn render_request_within(request: &Request, deadline: Duration) -> Result<Receip
                 "board render deadline: the store gather did not finish in {}s",
                 deadline.as_secs()
             );
-            return Ok(Receipt {
-                written: Vec::new(),
-                failed: request
-                    .targets
-                    .iter()
-                    .map(|t| json!({ "path": t.path, "error": error }))
-                    .collect(),
-            });
+            return Ok(all_failed(request, error));
         }
     };
     let public = request.public.is_some();
@@ -766,6 +842,71 @@ mod tests {
         assert!(dir.join("board.html").exists());
         std::env::remove_var("FNO_GRAPH_JSON");
         std::env::remove_var("FNO_AGENTS_WORKER");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The single-flight gate: a held render lock fails every target fast
+    /// with the row and holder named, never waiting out its bound and never
+    /// reaching the gather (the wedged socket would turn a gate bypass into
+    /// the deadline error). A released gate passes, and the same run then
+    /// wedges into the gather deadline instead - the lock freed.
+    #[test]
+    fn the_render_lock_fails_contention_fast_and_frees_on_release() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("fno-board-lock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let graph = dir.join("graph.json");
+        let listener =
+            std::os::unix::net::UnixListener::bind(dir.join("graph.json.store.sock")).unwrap();
+        std::env::set_var("FNO_GRAPH_JSON", &graph);
+        let request = Request {
+            targets: vec![Target {
+                path: dir.join("board.html").to_string_lossy().into_owned(),
+                scope: None,
+            }],
+            vault: None,
+            public: None,
+        };
+        let holder = crate::chokepoint::try_take(
+            &crate::chokepoint::BOARD_RENDER,
+            &render_lock_path(&graph),
+            "test holder",
+        )
+        .unwrap()
+        .expect("the test's lock file is free");
+        let started = std::time::Instant::now();
+        let receipt =
+            render_request_within_locks(&request, Duration::from_secs(1), Duration::from_secs(1))
+                .unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "took {:?}; the waiter fails at its bound, not after a real render wait",
+            started.elapsed()
+        );
+        assert!(receipt.written.is_empty(), "{:?}", receipt.written);
+        assert!(
+            receipt.failed[0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("board-render"),
+            "{:?}",
+            receipt.failed
+        );
+        drop(holder);
+        let receipt =
+            render_request_within_locks(&request, Duration::from_secs(1), Duration::from_secs(1))
+                .unwrap();
+        assert!(
+            receipt.failed[0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("deadline"),
+            "{:?}",
+            receipt.failed
+        );
+        drop(listener);
+        std::env::remove_var("FNO_GRAPH_JSON");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
