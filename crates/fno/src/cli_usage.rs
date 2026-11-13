@@ -49,7 +49,10 @@ pub fn command_path(args: &[OsString]) -> Option<String> {
         .map(|a| a.to_str())
         .skip_while(|a| matches!(a, Some("-J" | "--json")));
     let root = tokens.next()??;
-    if !crate::command_names::live_roots().contains(&root) {
+    if !crate::command_names::live_roots()
+        .iter()
+        .any(|r| *r == root)
+    {
         return None;
     }
     let known = words();

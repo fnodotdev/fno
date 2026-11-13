@@ -339,18 +339,18 @@ fn copy_fields(data: &Map<String, Value>, props: &mut Map<String, Value>) {
                 identifier_value(v)
             };
             if let Some(clean) = clean {
-                put(field, json!(clean));
+                put(*field, json!(clean));
             }
         }
     }
     for field in INT_FIELDS {
         if let Some(v) = data.get(*field).and_then(Value::as_i64) {
-            put(field, json!(v));
+            put(*field, json!(v));
         }
     }
     for field in BOOL_FIELDS {
         if let Some(v) = data.get(*field).and_then(Value::as_bool) {
-            put(field, json!(v));
+            put(*field, json!(v));
         }
     }
     for field in ID_LIST_FIELDS {
@@ -362,7 +362,7 @@ fn copy_fields(data: &Map<String, Value>, props: &mut Map<String, Value>) {
             .map(|v| v.as_str().and_then(identifier_value))
             .collect();
         if let Some(clean) = clean {
-            put(field, json!(clean));
+            put(*field, json!(clean));
         }
     }
 }
