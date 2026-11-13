@@ -720,8 +720,8 @@ fn template_names(text: &str) -> Vec<String> {
 /// board path expanded one target per `work.workspaces` project. Every
 /// malformed shape warns and disables the key for this render; the
 /// `fno config set` door refuses the same shapes at write time.
-fn render_path_template(global: &Value) -> Option<String> {
-    let raw = global.get("backlog").and_then(|b| b.get("render_path"));
+fn render_path_template(block: Option<&Value>) -> Option<String> {
+    let raw = block.and_then(|b| b.get("render_path"));
     let s = match raw {
         None | Some(Value::Null) => return None,
         Some(Value::String(s)) => s,
@@ -840,7 +840,7 @@ fn targets_from_global(global: &Value, unreadable: &[PathBuf]) -> Vec<RenderTarg
         .filter(|t| t.scope != "all")
         .map(|t| t.scope.clone())
         .collect();
-    if let Some(template) = render_path_template(global) {
+    if let Some(template) = render_path_template(block) {
         for project in work_map_names() {
             if named.contains(&project) {
                 continue;
@@ -869,7 +869,7 @@ fn targets_from_global(global: &Value, unreadable: &[PathBuf]) -> Vec<RenderTarg
 /// project file sets the key).
 fn warn_shadowed_local_rows(honored: &[RenderTarget]) {
     let Some(Value::Array(rows)) =
-        super::advance_settings::project_local_backlog_value_at(None, "render_targets")
+        crate::backlog::advance_settings::project_local_backlog_value_at(None, "render_targets")
     else {
         return;
     };
@@ -2254,16 +2254,20 @@ mod tests {
         )
         .unwrap();
         let _n = crate::claims::EnvVarGuard::set("FNO_NO_CANONICAL_CONFIG", "1");
-        let value =
-            super::advance_settings::project_local_backlog_value_at(Some(&root), "render_path");
+        let value = crate::backlog::advance_settings::project_local_backlog_value_at(
+            Some(&root),
+            "render_path",
+        );
         assert_eq!(
             value,
             Some(json!("/tmp/p/{project}.html")),
             "the project file's value is the answer"
         );
         let bare = dir.path().join("bare");
-        let none =
-            super::advance_settings::project_local_backlog_value_at(Some(&bare), "render_targets");
+        let none = crate::backlog::advance_settings::project_local_backlog_value_at(
+            Some(&bare),
+            "render_targets",
+        );
         assert_eq!(none, None, "no project file, no value");
     }
 }
