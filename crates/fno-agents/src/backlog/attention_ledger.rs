@@ -382,7 +382,7 @@ fn revert_count(window: &Window, cwd: &Path, notes: &mut Vec<String>) -> usize {
                 "%H",
             ])
             .spawn()
-            .and_then(|mut child| child.wait_with_output());
+            .and_then(|child| child.wait_with_output());
         match out {
             Ok(out) if out.status.success() => {
                 return String::from_utf8_lossy(&out.stdout)
