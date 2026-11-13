@@ -735,6 +735,12 @@ pub(crate) fn update(channel: &InstallChannel, dry_run: bool, force: bool) -> i3
     if let Err(e) = result {
         return failed("install", &e);
     }
+    // The gh proxy shim: the same install the source door runs; the
+    // update's exit never rides on a PATH nicety.
+    match crate::gh_proxy::install_for_path() {
+        Ok(line) => println!("fno update: {line}"),
+        Err(why) => eprintln!("fno update: WARNING: gh proxy shim not installed: {why}"),
+    }
     println!("fno update: done; {} runs {want}. Restart the daemon and mux to run the new code: fno agents session restart --mux. This ends live mux sessions.", bin.join(FRONT_DOOR).display());
     0
 }

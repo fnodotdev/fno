@@ -421,13 +421,13 @@ fn emit_gh_proxy(rep: &Value, err: bool) {
         Some("stale-shim") => emit(
             err,
             &format!(
-                "fno doctor: gh proxy: {} is not an fno wrapper; a raw gh or a stale copy sits in the shim dir. Run `fno doctor update` (or run fno; the front door refreshes it).",
+                "fno doctor: gh proxy: {} is not an fno wrapper; a raw gh or a stale copy sits in the shim dir. Run `fno doctor update` to install or refresh the shim.",
                 shim.unwrap_or("?")
             ),
         ),
         Some("not-installed") => emit(
             err,
-            "fno doctor: gh proxy: shim not installed; plain gh runs raw. Run `fno doctor update` (or run fno; the front door refreshes it).",
+            "fno doctor: gh proxy: shim not installed; plain gh runs raw. Run `fno doctor update`; it shadows the first gh on PATH with the proxy shim.",
         ),
         _ => {}
     }
