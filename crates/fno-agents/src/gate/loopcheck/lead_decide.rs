@@ -925,7 +925,7 @@ mod stale_team_doc_tests {
         let fno = crate::write_exec_stub(
             dir.path(),
             "fno",
-            "#!/bin/sh\nif [ \"$3\" = drain ]; then sleep 5; printf '{\"undelivered\": 2}\\n'; fi\n",
+            "#!/bin/sh\nif [ \"$4\" = drain ]; then sleep 5; printf '{\"undelivered\": 2}\\n'; fi\n",
         );
         super::stopgate_stamp_fire(150, std::time::Instant::now() + Duration::from_secs(50), 0);
         let mut phases = PhaseClock::new();

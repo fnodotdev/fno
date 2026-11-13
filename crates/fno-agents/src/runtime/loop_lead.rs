@@ -333,9 +333,11 @@ fn scope_undelivered_count_with_timeout(
     scope: &str,
     timeout: std::time::Duration,
 ) -> Result<i64, ScopeDrainError> {
+    let mut argv = crate::door_argv::HQ_DRAIN.to_vec();
+    argv.push(scope);
     let out = crate::loopcheck::bounded_read(
         std::ffi::OsStr::new(fno_bin),
-        &["agents", "hq", "drain", scope],
+        &argv,
         cwd,
         "org drain",
         timeout,

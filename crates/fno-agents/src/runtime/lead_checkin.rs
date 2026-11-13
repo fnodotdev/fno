@@ -966,7 +966,9 @@ fn r_wake_meter(since: Option<&str>) -> Result<Value, String> {
 }
 
 fn r_drain(scope: &str) -> Result<Value, String> {
-    let (_, out, err) = fno_command(&["agents", "hq", "drain", scope])?;
+    let mut argv = crate::door_argv::HQ_DRAIN.to_vec();
+    argv.push(scope);
+    let (_, out, err) = fno_command(&argv)?;
     let payload: Value = serde_json::from_str(out.trim())
         .map_err(|e| format!("drain payload did not parse: {e}: {}", err.trim()))?;
     Ok(payload.get("undelivered").cloned().unwrap_or(Value::Null))
