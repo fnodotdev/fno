@@ -14,7 +14,7 @@ use super::node_ref::{is_wellformed_node_id, ResolutionIndex};
 
 const LABEL: &str = "backlog decisions";
 
-const USAGE: &str = "usage: fno backlog decisions [subject] [--limit N] [--lane law|coord|grant|unattributed] [--state live|retired|expired|superseded|retracted|unscoped|all] [--review-list] [--output PATH] [--format markdown|json] [--json|-J]";
+const USAGE: &str = "usage: fno backlog decisions [subject] [--limit N] [--lane law|coord|grant|unattributed] [--state live|retired|expired|superseded|retracted|unscoped|all] [--review-list] [--log] [--output PATH] [--format markdown|json] [--json|-J]";
 
 /// The state filter's closed set, the deleted Python command's own ValueError
 /// text. A bad `--state` rides the read-failure exit (1), not usage (2):
@@ -73,6 +73,7 @@ struct Options {
     lane: Option<String>,
     state: Option<String>,
     review_list: bool,
+    log: bool,
     output: Option<String>,
     format: Option<String>,
     json: bool,
@@ -87,6 +88,7 @@ impl Default for Options {
             lane: None,
             state: None,
             review_list: false,
+            log: false,
             output: None,
             format: None,
             json: false,
@@ -129,6 +131,12 @@ fn parse_options(argv: &[String]) -> Result<Options, String> {
                     return Err(format!("{flag} takes no value"));
                 }
                 opts.review_list = true;
+            }
+            "--log" => {
+                if inline.is_some() {
+                    return Err(format!("{flag} takes no value"));
+                }
+                opts.log = true;
             }
             "--output" => opts.output = Some(value()?),
             "--format" => opts.format = Some(value()?),
@@ -187,7 +195,7 @@ fn decision_lane(row: &Value) -> &'static str {
 }
 
 #[derive(Debug)]
-enum CoreError {
+pub(crate) enum CoreError {
     /// The store could not be read at all: the Python command's
     /// `cannot read the decision index` exit (1).
     Read(String),
@@ -625,6 +633,12 @@ fn list_core(
     ))
 }
 
+/// Every decision row this project reads, all lifecycles, newest first:
+/// the decision log's source.
+pub(crate) fn all_rows_for_log() -> Result<Vec<Value>, CoreError> {
+    list_core(None, None, Some("all"), &mut None, false).map(|out| out.rows)
+}
+
 /// One subject's `--state live` listing over injected store rows: the read
 /// the think-inspect receipt grounds its decisions section on.
 pub(crate) fn live_rows_over(
@@ -1057,6 +1071,9 @@ pub fn run(argv: &[String]) -> i32 {
 
     if opts.review_list {
         return run_review_list(&opts);
+    }
+    if opts.log {
+        return crate::decision_log::run_log();
     }
 
     if let Some(lane) = opts.lane.as_deref() {

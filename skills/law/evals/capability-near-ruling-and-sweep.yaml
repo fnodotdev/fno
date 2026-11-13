@@ -1,0 +1,23 @@
+# Capability tier: does the reader of the law skill name a near ruling the
+# right way and reach open work that names the changed thing in other words?
+# The door refuses a law while a live ruling near it is unnamed; the two
+# remedies are --supersedes and --keep, and --sweep pulls a node the word
+# match misses. Graded on the two flags and the sweep word.
+id: capability-near-ruling-and-sweep
+tier: capability
+prompt: |
+  Read step 4 of skills/law/SKILL.md. Answer three questions in
+  law-near-answers.md at the repo root, one answer per line, in this order:
+  1. `fno inbox law set` refused because live ruling d-AAAA1111 is near the
+     new law, and the new law replaces it. Write the flag and id you add.
+  2. The same refusal names d-BBBB2222, which stays true beside the new law.
+     Write the flag and id you add.
+  3. The law is about fno-app versions, and an open docs node calls the app
+     "the desktop app". Write the flag and word that sweeps that node.
+grade:
+  - kind: file-exists
+    path: law-near-answers.md
+  - kind: exit
+    command: "python3 -c \"a = open('law-near-answers.md').read(); assert '--supersedes d-AAAA1111' in a, 'answer 1 missing'; assert '--keep d-BBBB2222' in a, 'answer 2 missing'; assert '--sweep desktop' in a, 'answer 3 missing'\""
+timeout_minutes: 10
+tags: [capability, law]
