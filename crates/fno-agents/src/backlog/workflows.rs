@@ -1542,10 +1542,7 @@ fn find_node<'a>(rows: &'a [Value], task_id: &str) -> Option<&'a Value> {
 }
 
 pub(crate) fn active_backend_name() -> String {
-    std::env::var("FNO_TRACKER_BACKEND")
-        .ok()
-        .filter(|b| !b.trim().is_empty())
-        .unwrap_or_else(|| "graph".into())
+    crate::tracker::backend_name(None)
 }
 
 /// Aggregate session_id / cost_usd / cost_sessions / points from the ledger

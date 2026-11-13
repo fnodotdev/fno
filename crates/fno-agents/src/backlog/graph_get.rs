@@ -71,17 +71,15 @@ fn expand_home_prefix(v: &std::ffi::OsStr) -> PathBuf {
     PathBuf::from(v)
 }
 
-/// Whether an external tracker backend is selected, resolved exactly as the
-/// Python side resolves it (`FNO_TRACKER_BACKEND`, default `graph`). Mirrors
+/// Whether an external tracker backend is selected, resolved as
+/// `tracker::backend_name` resolves it (explicit, then env, then the
+/// `tracker.backend` config key, then `graph`). Mirrors
 /// `fno::backlog_view::external_backend_selected` rather than linking that
 /// crate: fno-agents keeps `fno` a dev/test-only dependency (see this crate's
 /// Cargo.toml), so each side re-implements this one-line contract and a test
 /// pins it against the same resolution.
 pub(crate) fn external_backend_selected() -> bool {
-    match std::env::var("FNO_TRACKER_BACKEND") {
-        Ok(v) => !v.trim().is_empty() && v.trim() != "graph",
-        Err(_) => false,
-    }
+    crate::tracker::backend_name(None) != "graph"
 }
 
 /// Match one requested token against `id` first, then `slug`, case-insensitive

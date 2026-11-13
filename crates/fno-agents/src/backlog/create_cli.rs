@@ -439,10 +439,7 @@ fn sorted_source_kinds() -> String {
 }
 
 fn active_backend_name() -> String {
-    std::env::var("FNO_TRACKER_BACKEND")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "graph".to_string())
+    crate::tracker::backend_name(None)
 }
 
 /// One birth record through the native owner, in-process. Returns

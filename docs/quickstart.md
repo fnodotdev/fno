@@ -65,3 +65,7 @@ When you want to approve the design and the plan before any code:
 ## Next
 
 [Workflows](workflows.md) maps each daily task to its command.
+
+Track the work in GitHub Issues or Linear instead of the built-in store?
+
+[Bring your own tracker](guides/external-tracker.md) connects one.

@@ -270,6 +270,12 @@
      }
     },
     {
+     "name": "tracker",
+     "default": {
+      "backend": "graph"
+     }
+    },
+    {
      "name": "guards",
      "default": {
       "preset": "standard"
@@ -1317,6 +1323,15 @@
     {
      "name": "max_net_new",
      "default": null
+    }
+   ]
+  },
+  "TrackerBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "backend",
+     "default": "graph"
     }
    ]
   },
@@ -3368,6 +3383,7 @@
   "target.loop_skills",
   "test.timeout_seconds",
   "test.max_net_new",
+  "tracker.backend",
   "agents.a2a.auto",
   "agents.a2a.turn_ceiling",
   "agents.confirm",
