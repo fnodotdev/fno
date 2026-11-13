@@ -4,6 +4,48 @@ Notable changes to fno, newest first. From 0.4.8 on, each release also has a pag
 
 Releases before 0.4.8 were built in a private repository. Their entries here summarize the release notes from that time. The pull request numbers in the notes up to 0.4.8 point at that repository, so this file leaves them out.
 
+## [0.4.9] - 2026-11-13
+
+135 pull requests since 0.4.8. The headline is fno-app, a desktop app for macOS.
+
+### Added
+
+* Added fno-app, a desktop app for macOS. It is a thin client over the mux. It has a chat view, an Extensions view for plugins, and the orchestration board. The release ships it signed and notarized, and the app follows the macOS appearance.
+* Added `fno agents session move`, which carries a live session to another machine.
+* Added oh-my-pi (omp) as a harness beside earendil pi, and the claude hook chains on pi.
+* Added opencode 2.x support. Serve runs beside 1.x, thread workers run under your grants, and a portal pane shows the live TUI.
+* Added multi-stroke key chords in the mux, and Alt-prefix keys like tmux. The footer reads the live keys and names the prefix once.
+* Added the HQ launch screen to the mux. It is always on, and the empty state paints the animated F[no] mark.
+* Added mod slots. `fno mux graft` realizes a slot, and mods and layouts install by URL from the gallery.
+* Added a scrollback cap of 10,000 lines per pane, with pane memory you can measure.
+* Added a Visual Log reader owned by the fleet, with Approve and Change buttons on the log.
+* Added one chat event type and a ChatTail stream shared by Claude, Codex and opencode.
+* Added a command center in the client. Added an exchange picker that lands a pane on the exchange's row. Added a launchd agent that keeps the web bridge up across reboots.
+* Added opt-in telemetry: a daily usage report and a PostHog event journal. The always-on install count is retired.
+* Added the Homebrew tap fnodotdev/homebrew-fno.
+* Added `fno backlog find --tag` and `--related`, with a tag vocabulary and a backfill command.
+
+### Changed
+
+* Changed the mux grid to run on the Rio terminal engine.
+* Changed every fno refusal to name fno, a way out, and an override, and gate refusals land a spawn_gate_refused row.
+* Changed the merge gates to refuse a red head everywhere. A head with no completed CI run reads unmeasured, never green. A paint PR with no recorded look holds the merge.
+* Changed the plugin catalogs to pin the fno entry to the release tag. The stable branch and the nightly plugin are gone.
+* Changed the release to sync crate versions after promotion on its own.
+* Changed the setup wizard to open at the end of install and on the first bare `fno`.
+* Changed a mail hold to carry an end instead of lasting until cleared.
+
+### Fixed
+
+* Fixed `fno update` failing on a slow install. It warns instead, the heal arm reads the registered checkout, and the cargo route installs the sibling crate.
+* Fixed `fno` failing in the same session that installed the plugin. Fixed the dev stage registering under a name `/plugin marketplace add` cannot see.
+* Fixed daemon wakeups. A missed lead beat now wakes only the idle lead. Burn-watch reads the worktree the node claim names. The boot revival skips a worker a stop command stopped.
+* Fixed a worker name held by an idle spare, which blocked reuse of that name.
+* Fixed the script gate refusing read-only git lines and misreading commented-out lines. The bug blocked the plan validator and the review emitter in worktree sessions. The gate now refuses a push pair only.
+* Fixed headless one-shots lingering in the registry and the mux after they end.
+* Fixed mux rendering: full-block cells paint without seams, and inline attach states truecolor over ssh.
+* Fixed spawn builders ignoring the positional boundary. A bad bootstrap is named at session start. Dispatch resolves a node's checkout through the work map.
+
 ## [0.4.8] - 2026-11-11
 
 The first release from this public repository. 94 pull requests since 0.4.7.
