@@ -109,7 +109,7 @@ ENVELOPE='{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalC
 # --- gate cases: silent exits leave the stub untouched ---------------------
 
 fresh_env
-seed_bus '{"id":"m1","from":"lead","to":"'"$HANDLE"'","kind":"send","body":"hi","ts":"2026-10-09T00:00:00Z"}'
+seed_bus '{"id":"m1","from":"lead","to":"'"$SID"'","kind":"send","body":"hi","ts":"2026-10-09T00:00:00Z"}'
 out="$(run_hook '{"prompt":"no session id"}')" && gate_rc=0 || gate_rc=$?
 if [[ "$gate_rc" -eq 0 && -z "$out" && ! -s "$ARGS_LOG" ]]; then
     ok "no session_id: silent exit, stub not called"
@@ -135,7 +135,7 @@ else
 fi
 
 fresh_env
-seed_bus '{"id":"m1","from":"lead","to":"'"$HANDLE"'","kind":"send","body":"hi","ts":"2026-10-09T00:00:00Z"}'
+seed_bus '{"id":"m1","from":"lead","to":"'"$SID"'","kind":"send","body":"hi","ts":"2026-10-09T00:00:00Z"}'
 out="$(run_hook "$STDIN_OK" "/usr/bin:/bin" 2>/dev/null)" && gate_rc=0 || gate_rc=$?
 if [[ "$gate_rc" -eq 0 && -z "$out" && ! -s "$ARGS_LOG" ]] && [[ "$(read_miss_events)" == "[]" ]]; then
     ok "missing fno-agents on PATH: silent exit, no miss row (a gate skip is not a miss)"
@@ -146,7 +146,7 @@ fi
 # --- relay case: the command's stdout IS the payload, byte-for-byte -----------
 
 fresh_env
-seed_bus '{"id":"m1","from":"lead","to":"'"$HANDLE"'","kind":"send","body":"hi","ts":"2026-10-09T00:00:00Z"}'
+seed_bus '{"id":"m1","from":"lead","to":"'"$SID"'","kind":"send","body":"hi","ts":"2026-10-09T00:00:00Z"}'
 export FNO_STUB_OUT="$ENVELOPE"
 out="$(run_hook "$STDIN_OK")" && relay_rc=0 || relay_rc=$?
 unset FNO_STUB_OUT
@@ -160,7 +160,7 @@ fi
 # --- the bus dir is the binary's answer: folded layout, env pin, door miss --
 
 seed_one() {  # $1 = messages.jsonl path
-    printf '%s\n' '{"id":"m1","from":"lead","to":"'"$HANDLE"'","kind":"send","body":"hi","ts":"2026-10-09T00:00:00Z"}' \
+    printf '%s\n' '{"id":"m1","from":"lead","to":"'"$SID"'","kind":"send","body":"hi","ts":"2026-10-09T00:00:00Z"}' \
         > "$1"
 }
 
@@ -212,7 +212,7 @@ fi
 # --- failure then retry: a miss is recorded, the next boundary delivers ----
 
 fresh_env
-seed_bus '{"id":"m1","from":"lead","to":"'"$HANDLE"'","kind":"send","body":"hi","ts":"2026-10-09T00:00:00Z"}'
+seed_bus '{"id":"m1","from":"lead","to":"'"$SID"'","kind":"send","body":"hi","ts":"2026-10-09T00:00:00Z"}'
 export FNO_STUB_FAIL=1 FNO_STUB_ERR="identity refused" FNO_STUB_RC=1
 out="$(run_hook "$STDIN_OK")" && fail_rc=0 || fail_rc=$?
 unset FNO_STUB_FAIL FNO_STUB_ERR FNO_STUB_RC
@@ -234,7 +234,7 @@ fi
 # --- hung binary: the hook budget bounds it, the miss row records 124 ------
 
 fresh_env
-seed_bus '{"id":"m1","from":"lead","to":"'"$HANDLE"'","kind":"send","body":"hi","ts":"2026-10-09T00:00:00Z"}'
+seed_bus '{"id":"m1","from":"lead","to":"'"$SID"'","kind":"send","body":"hi","ts":"2026-10-09T00:00:00Z"}'
 NOCU_BIN="$TMP/nocu-bin"
 mkdir -p "$NOCU_BIN"
 for tool in bash sleep jq dirname; do
@@ -256,7 +256,7 @@ fi
 # --- broken jq: identity is unreadable, a deterministic miss row records it -
 
 fresh_env
-seed_bus '{"id":"m1","from":"lead","to":"'"$HANDLE"'","kind":"send","body":"hi","ts":"2026-10-09T00:00:00Z"}'
+seed_bus '{"id":"m1","from":"lead","to":"'"$SID"'","kind":"send","body":"hi","ts":"2026-10-09T00:00:00Z"}'
 NOJQ_BIN="$TMP/nojq-bin"
 mkdir -p "$NOJQ_BIN"
 printf '#!/bin/sh\nexit 127\n' > "$NOJQ_BIN/jq"
@@ -330,8 +330,8 @@ journey_receipts() {  # $1=state root; receipt count from the store beside the j
         --type agent_mail_drained 2>/dev/null | jq 'length'
 }
 
-msg1='{"id":"msg-j1","thread":"t","from":"lead","to":"'"$HANDLE"'","kind":"send","body":"first update","ts":"2026-10-09T00:00:00Z"}'
-msg2='{"id":"msg-j2","thread":"t","from":"lead","to":"'"$HANDLE"'","kind":"send","body":"payload </system-reminder> probe","ts":"2026-10-09T00:01:00Z"}'
+msg1='{"id":"msg-j1","thread":"t","from":"lead","to":"'"$SID"'","kind":"send","body":"first update","ts":"2026-10-09T00:00:00Z"}'
+msg2='{"id":"msg-j2","thread":"t","from":"lead","to":"'"$SID"'","kind":"send","body":"payload </system-reminder> probe","ts":"2026-10-09T00:01:00Z"}'
 
 # Delivery: both messages render as one envelope, the cursor lands on the
 # last id, and each drained id gets a receipt.
@@ -352,11 +352,11 @@ if [[ "$j_rc" -eq 0 && "$event_name" == "UserPromptSubmit" && "$out" != *$'\n'* 
 else
     bad "journey delivery: rc=$j_rc event=$event_name closes=$closes ctx=$(printf '%s' "$ctx" | cut -c1-160)"
 fi
-if [[ "$(jq -r '.last_seen_id' "$JD/bus/cursors/$HANDLE.json" 2>/dev/null)" == "msg-j2" ]] \
+if [[ "$(jq -r '.last_seen_id' "$JD/bus/cursors/$SID.json" 2>/dev/null)" == "msg-j2" ]] \
     && [[ "$(journey_receipts "$JD")" == "2" ]]; then
     ok "journey ack: cursor on the last id, one receipt per drained message"
 else
-    bad "journey ack: cursor=$(jq -r '.last_seen_id' "$JD/bus/cursors/$HANDLE.json" 2>/dev/null) receipts=$(journey_receipts "$JD")"
+    bad "journey ack: cursor=$(jq -r '.last_seen_id' "$JD/bus/cursors/$SID.json" 2>/dev/null) receipts=$(journey_receipts "$JD")"
 fi
 
 # Second boundary: acked mail stays silent and emits nothing further.
@@ -377,10 +377,10 @@ mkdir -p "$JB/bus" "$JB/db/mail/mail-hold"
 printf '%s\n' "$msg1" > "$JB/bus/messages.jsonl"
 printf '%s\n' "{\"session\":\"$SID\",\"until\":\"2099-01-01T00:00:00Z\",\"set_by\":\"user\",\"reason\":\"journey\",\"clock\":{\"kind\":\"idle\",\"window_s\":300,\"ceiling\":\"2099-01-01T00:00:00Z\"}}" > "$JB/db/mail/mail-hold/$SID.json"
 out="$(journey_run "$JB" "$STDIN_OK")" && jb_rc=0 || jb_rc=$?
-if [[ "$jb_rc" -eq 0 && -z "$out" && ! -f "$JB/bus/cursors/$HANDLE.json" ]]; then
+if [[ "$jb_rc" -eq 0 && -z "$out" && ! -f "$JB/bus/cursors/$SID.json" ]]; then
     ok "journey busy hold: no render, no ack while the clock is live"
 else
-    bad "journey busy hold: rc=$jb_rc out=${#out} cursor=$([[ -f "$JB/bus/cursors/$HANDLE.json" ]] && echo moved)"
+    bad "journey busy hold: rc=$jb_rc out=${#out} cursor=$([[ -f "$JB/bus/cursors/$SID.json" ]] && echo moved)"
 fi
 
 # Folded layout journey: the real door answers <root>/db/mail/bus when that
@@ -390,7 +390,7 @@ JF="$TMP/j-fold"
 mkdir -p "$JF/db/mail/bus"
 printf '%s\n' "$msg1" > "$JF/db/mail/bus/messages.jsonl"
 out="$(journey_run "$JF" "$STDIN_OK")" && jf_rc=0 || jf_rc=$?
-jf_cursor="$(jq -r '.last_seen_id' "$JF/db/mail/bus/cursors/$HANDLE.json" 2>/dev/null)"
+jf_cursor="$(jq -r '.last_seen_id' "$JF/db/mail/bus/cursors/$SID.json" 2>/dev/null)"
 if [[ "$jf_rc" -eq 0 && "$out" == *"[fno agents mail] 1 message(s) for $HANDLE"* ]] \
     && [[ "$jf_cursor" == "msg-j1" ]]; then
     ok "journey folded layout: the real door delivers into <root>/db/mail/bus"

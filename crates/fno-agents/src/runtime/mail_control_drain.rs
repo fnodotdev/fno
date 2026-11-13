@@ -902,26 +902,4 @@ mod tests {
             assert!(cursor(&bus).contains(&dup));
         });
     }
-
-    /// Two stored sessions share the head `d9daf3e8`; a held row addressed
-    /// to one drains to that session only, and a head-addressed row drains
-    /// to neither (AC5-HP).
-    #[test]
-    fn mail_addr_release_drains_by_session_when_heads_collide() {
-        let (_dir, bus) = bus_fixture("heads");
-        let a = "d9daf3e8-1111-4222-8333-444455556666";
-        let b = "d9daf3e8-7777-4888-9999-aaaabbbbcccc";
-        let row = |id: &str, to: &str| serde_json::json!({"v": 1, "id": id, "from": "lead", "to": to, "kind": "send", "body": "held"});
-        let msgs = vec![
-            row("fmail-00000000000a", a),
-            row("fmail-00000000000b", b),
-            row("fmail-0000000000ee", "d9daf3e8"),
-        ];
-        let key = crate::spawn_context::session_identity_key(a);
-        let ids: Vec<&str> = unread_messages(&bus, &msgs, &key)
-            .iter()
-            .filter_map(|m| m.get("id").and_then(Value::as_str))
-            .collect();
-        assert_eq!(ids, vec!["fmail-00000000000a"]);
-    }
 }

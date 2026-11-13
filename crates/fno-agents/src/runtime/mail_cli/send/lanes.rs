@@ -1463,9 +1463,6 @@ fn live_discovery_hit(token: &str) -> Option<ReachableSession> {
     matches!(state.as_str(), "working" | "watching" | "your-move").then_some(hit)
 }
 
-/// The registered-name lane: dispatch_send first; its unknown-name refusal
-/// falls into the shared name-lane choke point carrying the raw token, where
-/// exit 16 lives at the BOTTOM of the ladder.
 /// The earlier row this send repeats while that row still waits for its
 /// recipient. Only a session-id target keys a send: a name resolves to a
 /// session later, inside the lanes.
@@ -1487,6 +1484,9 @@ fn prior_unreached_send(
     fno_mail::send_key::duplicate_of(&unread, &rows, &key, scheduled)
 }
 
+/// The registered-name lane: dispatch_send first; its unknown-name refusal
+/// falls into the shared name-lane choke point carrying the raw token, where
+/// exit 16 lives at the BOTTOM of the ladder.
 pub(super) fn run_dispatch_then_name_lane(
     args: &SendArgs,
     body: &str,

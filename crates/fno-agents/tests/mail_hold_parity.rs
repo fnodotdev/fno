@@ -166,8 +166,8 @@ fn scrub(text: &str, root: &Path) -> String {
     text.replace(&root.display().to_string(), "ROOT")
 }
 
-const BUS_LOG: &str = r#"{"id":"holdmsg-1","thread":"t","from":"lead","to":"a1b2c3d4","kind":"send","body":"held one","ts":"2026-10-12T09:00:00Z"}
-{"id":"holdmsg-2","thread":"t","from":"lead","to":"a1b2c3d4","kind":"send","body":"held two","ts":"2026-10-12T09:05:00Z"}
+const BUS_LOG: &str = r#"{"id":"holdmsg-1","thread":"t","from":"lead","to":"a1b2c3d4-1111-2222-3333-444455556666","kind":"send","body":"held one","ts":"2026-10-12T09:00:00Z"}
+{"id":"holdmsg-2","thread":"t","from":"lead","to":"a1b2c3d4-1111-2222-3333-444455556666","kind":"send","body":"held two","ts":"2026-10-12T09:05:00Z"}
 "#;
 
 /// An ended hold record, as the fno-mail hold store writes it.

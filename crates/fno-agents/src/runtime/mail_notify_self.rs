@@ -423,10 +423,12 @@ mod tests {
         // lands on the last drained id and each id gets a receipt.
         crate::mail_hold::tests::with_hold_env(|_home| {
             let (_dir, bus) = bus_fixture("deliver");
-            append(&bus, "lead", &handle, "first");
-            append(&bus, "lead", &handle, "second");
+            append(&bus, "lead", session, "first");
+            // A short head two sessions can share never drains.
+            append(&bus, "lead", &handle, "for a sibling");
+            append(&bus, "lead", session, "second");
             assert_eq!(notify(&bus, session), 0);
-            assert_eq!(last_seen(&bus, &handle), msg_id("lead", &handle, "second"));
+            assert_eq!(last_seen(&bus, session), msg_id("lead", session, "second"));
             // The store commit is the write boundary (events.rs write_line):
             // rows come back through the store, never the journal file.
             let events = crate::events::committed_journal_text(
@@ -436,7 +438,7 @@ mod tests {
             assert!(events.contains("\"reason\":\"printed\""));
             assert!(events.contains(&format!(
                 "\"msg_id\":\"{}\"",
-                msg_id("lead", &handle, "second")
+                msg_id("lead", session, "second")
             )));
         });
     }
