@@ -142,3 +142,106 @@ fn a_spawn_reports_its_stuck_stage_once_and_its_first_turn_quietly() {
         None => std::env::remove_var("FNO_CLAIMS_ROOT"),
     }
 }
+
+#[test]
+fn a_synthetic_model_error_is_no_first_turn_and_names_itself_in_the_stage() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("dead.jsonl");
+    let t0 = crate::claims::now_ms();
+    let synthetic = json!({
+        "type": "assistant",
+        "timestamp": stamp(t0 + 11_000),
+        "message": {
+            "role": "assistant",
+            "model": "<synthetic>",
+            "content": [{"type": "text", "text": "There's an issue with the selected model (opus). It may not exist or you may not have access to it. Run /model to pick a different model."}]
+        }
+    });
+    // The synthetic row alone is no first turn: the watch stays open.
+    std::fs::write(&path, format!("{synthetic}\n")).unwrap();
+    assert_eq!(
+        first_turn(&path, t0, t0 + 60_000),
+        None,
+        "a synthetic error row is no first turn"
+    );
+
+    // A real turn after it is found, past the synthetic rows.
+    let real = json!({"type": "assistant", "timestamp": stamp(t0 + 70_000)});
+    std::fs::write(&path, format!("{synthetic}\n{real}\n")).unwrap();
+    assert_eq!(first_turn(&path, t0, t0 + 60_000), Some(t0 + 70_000));
+}
+
+#[test]
+fn a_string_content_synthetic_row_is_evidence_too() {
+    let temp = tempfile::tempdir().unwrap();
+    let t0 = crate::claims::now_ms();
+    let path = temp.path().join("dead.jsonl");
+    std::fs::write(
+        &path,
+        format!(
+            "{}\n",
+            json!({
+                "type": "assistant",
+                "timestamp": stamp(t0 + 11_000),
+                "message": {
+                    "role": "assistant",
+                    "model": "<synthetic>",
+                    "content": "selected model unavailable; try another lane"
+                }
+            })
+        ),
+    )
+    .unwrap();
+    let watch = Watch {
+        child_session: Some("f676976f-dead-beef".into()),
+        ..Default::default()
+    };
+    let (stage, evidence) = stage(&watch, None, Some(&path));
+    assert_eq!(stage, "first prompt");
+    assert!(
+        evidence.contains("unavailable. try another lane"),
+        "{evidence}"
+    );
+    assert!(!evidence.contains(';'), "{evidence}");
+}
+
+#[test]
+fn a_long_synthetic_quote_folds_to_what_the_notice_door_accepts() {
+    let temp = tempfile::tempdir().unwrap();
+    let t0 = crate::claims::now_ms();
+    let path = temp.path().join("dead.jsonl");
+    let long = (1..=30)
+        .map(|n| format!("word{n}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    std::fs::write(
+        &path,
+        format!(
+            "{}\n",
+            json!({
+                "type": "assistant",
+                "timestamp": stamp(t0 + 11_000),
+                "message": {
+                    "role": "assistant",
+                    "model": "<synthetic>",
+                    "content": [{"type": "text", "text": long}]
+                }
+            })
+        ),
+    )
+    .unwrap();
+    let watch = Watch {
+        child_session: Some("dead-beef-cafe".into()),
+        ..Default::default()
+    };
+    // The folded quote itself: 25 words plus the ellipsis.
+    let quote = synthetic_error(&path).expect("synthetic evidence");
+    assert!(quote.ends_with("..."), "{quote}");
+    assert_eq!(quote.split_whitespace().count(), 26, "{quote}");
+    assert!(!quote.contains(';'), "{quote}");
+    // The stage line carries the quote behind its prefix and still folds.
+    let (_, evidence) = stage(&watch, None, Some(&path));
+    assert!(evidence.ends_with("..."), "{evidence}");
+    assert!(evidence.contains("word25"), "{evidence}");
+    assert!(!evidence.contains("word26"), "{evidence}");
+}

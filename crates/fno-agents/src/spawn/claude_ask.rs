@@ -962,6 +962,7 @@ pub fn build_argv(
         argv.push("--model".to_string());
         argv.push(m.to_string());
     }
+    pin_route_model(&mut argv, flags.route.as_ref());
     if !use_stdin {
         // Behind `--` so a leading-flag seed is the prompt positional, not a
         // claude flag; same fence as the Python `_build_argv` (parity).
@@ -974,6 +975,27 @@ pub fn build_argv(
 /// True iff the message must be sent via stdin (exceeds the argv threshold).
 pub fn use_stdin_for(message: &str) -> bool {
     message.len() > ARGV_OVERFLOW_THRESHOLD
+}
+
+/// The route's model pins on argv ahead of the settings env (pane-parity with
+/// inject_route_model_argv): the harness resolves an argv model itself, while
+/// a model that reaches the session only through the settings file goes to the
+/// API verbatim, and a bare tier alias delivered there dies on the first turn.
+/// A caller model already on argv is intent and wins.
+fn pin_route_model(argv: &mut Vec<String>, route: Option<&RouteStamp<'_>>) {
+    let Some(route) = route else {
+        return;
+    };
+    let route_model = route.model.trim();
+    if route_model.is_empty()
+        || argv
+            .iter()
+            .any(|t| t == "--model" || t == "-m" || t.starts_with("--model="))
+    {
+        return;
+    }
+    argv.push("--model".to_string());
+    argv.push(route_model.to_string());
 }
 
 // ===========================================================================
@@ -2893,7 +2915,7 @@ pub fn dispatch_claude_headless(
     // skip (a headless one-shot cannot answer permission prompts).
     let mut argv: Vec<String> = vec!["claude".into(), "-p".into()];
     // A routed one-shot carries the route's settings file, as bg_create does.
-    if let Some(settings) = flags.route.map(|r| r.settings).or(flags.settings) {
+    if let Some(settings) = flags.route.as_ref().map(|r| r.settings).or(flags.settings) {
         argv.push("--settings".to_string());
         argv.push(settings.to_string());
     }
@@ -2910,6 +2932,7 @@ pub fn dispatch_claude_headless(
         argv.push("--model".to_string());
         argv.push(m.to_string());
     }
+    pin_route_model(&mut argv, flags.route.as_ref());
     if let Some(value) = effort.filter(|v| !v.is_empty()) {
         argv.push("--effort".to_string());
         argv.push(value.to_string());
@@ -4089,6 +4112,62 @@ mod tests {
                 "--",
                 "hi"
             ]
+        );
+    }
+
+    #[test]
+    fn a_route_model_pins_on_argv_and_a_caller_model_wins() {
+        let route = RouteStamp {
+            provider: "anthropic",
+            model: "opus",
+            settings: "/tmp/route-settings.json",
+        };
+        let argv = build_argv(
+            "a",
+            "hi",
+            false,
+            None,
+            None,
+            None,
+            HarnessFlags {
+                route: Some(route),
+                ..Default::default()
+            },
+        );
+        let at = argv
+            .iter()
+            .position(|t| t == "--model")
+            .expect("route model lands on argv");
+        assert_eq!(argv.get(at + 1).map(String::as_str), Some("opus"));
+        let fence = argv.iter().position(|t| t == "--").unwrap();
+        assert!(at < fence, "the pin sits flags-first, never in the seed");
+
+        // A caller model is intent and wins; the pin does not stack.
+        let caller = build_argv(
+            "a",
+            "hi",
+            false,
+            Some("claude-opus-5-5"),
+            None,
+            None,
+            HarnessFlags {
+                route: Some(route),
+                ..Default::default()
+            },
+        );
+        let models: Vec<&String> = caller
+            .iter()
+            .zip(caller.iter().skip(1))
+            .filter(|(f, _)| f.as_str() == "--model")
+            .map(|(_, v)| v)
+            .collect();
+        assert_eq!(models, [&"claude-opus-5-5".to_string()]);
+
+        // Unrouted spawns keep today's argv byte-for-byte.
+        assert!(
+            !build_argv("a", "hi", false, None, None, None, HarnessFlags::default())
+                .iter()
+                .any(|t| t == "--model")
         );
     }
 
