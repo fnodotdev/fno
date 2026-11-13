@@ -1,0 +1,5 @@
+Usage: fno agents mail reply [OPTIONS] [BODY_ARG]
+Try 'fno agents mail reply --help' for help.
+
+Error: Unknown argument: '--from-name'. Did you mean '--from'?
+Corrected: fno agents mail reply fmail-HEX --from web --body ack

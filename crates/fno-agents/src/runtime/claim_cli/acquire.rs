@@ -158,7 +158,32 @@ fn usage_flag(name: &str) -> i32 {
     2
 }
 
-fn run_parsed(a: LeafArgs) -> i32 {
+/// The holder default: the caller's own ambient session id, announced on
+/// stderr. Returns false only when no harness identity resolves, after
+/// printing the refusal that names the flag and the way out.
+fn default_holder(holder: &mut String) -> bool {
+    let (ambient_session, _harness) = claims::resolve_identity();
+    match ambient_session {
+        Some(session_id) => {
+            *holder = session_id;
+            eprintln!(
+                "note: --holder defaulted to the ambient session id ({})",
+                holder
+            );
+            true
+        }
+        None => {
+            eprintln!(
+                "validation error: --holder is required when no harness session \
+                 identity is ambient; run inside a harness session or pass \
+                 --holder <session-id>"
+            );
+            false
+        }
+    }
+}
+
+fn run_parsed(mut a: LeafArgs) -> i32 {
     // Lane mode first: a slot is acquired by lane id, never by claim key
     // (cli.py:187-197).
     if let Some(lane) = a.lane.clone() {
@@ -180,8 +205,11 @@ fn run_parsed(a: LeafArgs) -> i32 {
         eprintln!("validation error: KEY is required (or use --lane <id>)");
         return 2;
     };
-    if a.holder.is_empty() {
-        eprintln!("validation error: --holder is required");
+    // The caller's own ambient session id is the honest default: a claim
+    // holder should name who holds it, and inside a harness session
+    // resolve_identity proves exactly that. Ambiguous or absent identity
+    // still refuses, naming the flag and the way out.
+    if a.holder.is_empty() && !default_holder(&mut a.holder) {
         return 2;
     }
     if a.pid_unavailable && a.pid.is_some() {
@@ -223,81 +251,97 @@ fn run_parsed(a: LeafArgs) -> i32 {
         eprintln!("validation error: --pid-unavailable requires --ttl");
         return 2;
     }
-    if let Some(expected) = a.handover_from.clone() {
-        if pid.is_none() && !pid_unavailable {
-            eprintln!(
-                "validation error: --handover-from needs a durable pid (run from \
-                 a harness session) or --pid-unavailable with --ttl; the transient \
-                 CLI pid would leave the claim STALE the moment it exits"
-            );
-            return 2;
-        }
-        let metadata = match parse_metadata_arg(&a.metadata_raw) {
-            Ok(m) => m,
-            Err(msg) => return bad_parameter("--metadata", &msg),
-        };
-        let rebind_root = a.root.clone().or_else(|| node_aware_root(&key));
-        match compare_and_rebind(
-            &key,
-            &expected,
-            &a.holder,
-            a.harness.as_deref(),
-            a.session_id.as_deref(),
-            a.provenance.as_deref(),
-            &a.reason,
-            metadata,
-            pid,
-            pid_unavailable,
-            ttl_ms,
-            rebind_root.as_deref(),
-        ) {
-            Ok(binding) => {
-                if a.bind_only {
-                    println!(
-                        "{}",
-                        serde_json::json!({"claim": binding.claim, "mode": binding.mode})
-                    );
-                    return 0;
-                }
-                if binding.mode == "handover" {
-                    let claim = binding.claim;
-                    if key.starts_with("node:") {
-                        stamp_do_on_acquire(&key, &claim, &a.holder);
-                        // The handover heals what an earlier init refusal
-                        // wrote: the blocked line and the init-authored
-                        // sentinel. Best-effort, after the claim is secured;
-                        // the node guard inside skips non-node keys. The
-                        // manifest ttl derives from the effective lease, so
-                        // an engine-flag ttl is not silently widened to the
-                        // reader's 2h default.
-                        super::manifest_refresh::refresh_manifest_on_handover(
-                            &key,
-                            &a.holder,
-                            if a.ttl.is_empty() {
-                                ttl_ms.map(|ms| format!("{}s", ms / 1000))
-                            } else {
-                                Some(a.ttl.clone())
-                            }
-                            .as_deref(),
-                        );
-                    }
-                    if a.json_output {
-                        println!("{}", claim_json_string(&claim));
-                    } else {
-                        println!("acquired {key} (handover from {expected})");
-                    }
-                    return 0;
-                }
-            }
-            Err(reason) => {
-                eprintln!("handover declined: {reason}");
-                if a.bind_only {
-                    return 3;
-                }
-            }
-        }
+    if let Some(code) = run_handover(&a, &key, pid, pid_unavailable, ttl_ms) {
+        return code;
     }
     ordinary_acquire(&a, &key, pid, pid_unavailable, ttl_ms)
+}
+
+/// The `--handover-from` takeover: a rebind attempt against the named prior
+/// holder. `Some(code)` returns to the caller; `None` falls through to the
+/// ordinary acquire (a declined handover without --bind-only does).
+fn run_handover(
+    a: &LeafArgs,
+    key: &str,
+    pid: Option<u32>,
+    pid_unavailable: bool,
+    ttl_ms: Option<i64>,
+) -> Option<i32> {
+    let expected = a.handover_from.clone()?;
+    if pid.is_none() && !pid_unavailable {
+        eprintln!(
+            "validation error: --handover-from needs a durable pid (run from \
+             a harness session) or --pid-unavailable with --ttl; the transient \
+             CLI pid would leave the claim STALE the moment it exits"
+        );
+        return Some(2);
+    }
+    let metadata = match parse_metadata_arg(&a.metadata_raw) {
+        Ok(m) => m,
+        Err(msg) => return Some(bad_parameter("--metadata", &msg)),
+    };
+    let rebind_root = a.root.clone().or_else(|| node_aware_root(key));
+    match compare_and_rebind(
+        key,
+        &expected,
+        &a.holder,
+        a.harness.as_deref(),
+        a.session_id.as_deref(),
+        a.provenance.as_deref(),
+        &a.reason,
+        metadata,
+        pid,
+        pid_unavailable,
+        ttl_ms,
+        rebind_root.as_deref(),
+    ) {
+        Ok(binding) => {
+            if a.bind_only {
+                println!(
+                    "{}",
+                    serde_json::json!({"claim": binding.claim, "mode": binding.mode})
+                );
+                return Some(0);
+            }
+            if binding.mode == "handover" {
+                let claim = binding.claim;
+                if key.starts_with("node:") {
+                    stamp_do_on_acquire(key, &claim, &a.holder);
+                    // The handover heals what an earlier init refusal
+                    // wrote: the blocked line and the init-authored
+                    // sentinel. Best-effort, after the claim is secured;
+                    // the node guard inside skips non-node keys. The
+                    // manifest ttl derives from the effective lease, so
+                    // an engine-flag ttl is not silently widened to the
+                    // reader's 2h default.
+                    super::manifest_refresh::refresh_manifest_on_handover(
+                        key,
+                        &a.holder,
+                        if a.ttl.is_empty() {
+                            ttl_ms.map(|ms| format!("{}s", ms / 1000))
+                        } else {
+                            Some(a.ttl.clone())
+                        }
+                        .as_deref(),
+                    );
+                }
+                if a.json_output {
+                    println!("{}", claim_json_string(&claim));
+                } else {
+                    println!("acquired {key} (handover from {expected})");
+                }
+                return Some(0);
+            }
+            None
+        }
+        Err(reason) => {
+            eprintln!("handover declined: {reason}");
+            if a.bind_only {
+                return Some(3);
+            }
+            None
+        }
+    }
 }
 
 fn run_lane(a: &LeafArgs, lane: &str) -> i32 {

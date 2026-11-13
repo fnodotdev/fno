@@ -68,6 +68,80 @@ fn usage_error(detail: &str) -> i32 {
     2
 }
 
+/// The two reply forms, spelled the way a corrected command prints them.
+const REPLY_FORMS: &str = "Reply forms: fno agents mail reply --to <msg-id> <body>, or \
+     fno agents mail reply <msg-id> <body>";
+
+/// The msg-id shapes this leaf answers (`fmail-` minted today, `msg-` the
+/// pre-widening ids still resolving off migrated chats rows). A leading
+/// positional carrying one names the target without `--to`.
+fn looks_like_msg_id(token: &str) -> bool {
+    (token.starts_with("fmail-") || token.starts_with("msg-"))
+        && !token.contains(char::is_whitespace)
+}
+
+/// Every flag this leaf parses, so an unknown flag that merely misspells one
+/// (`--from-name` for send's `--from`) names its neighbor instead of a bare
+/// refusal. Longest-first: a prefix hit picks the closest spelling.
+const KNOWN_FLAGS: [&str; 12] = [
+    "--style-exception",
+    "--source-mission",
+    "--sender-session",
+    "--ref-mission",
+    "--cascade-of",
+    "--body-file",
+    "--body",
+    "--from",
+    "--kind",
+    "--json",
+    "--help",
+    "--to",
+];
+
+/// The one known flag the unknown token extends, if any (`--from-name`
+/// extends `--from`). An exact match never lands here (the parse matched).
+fn suggest_flag(token: &str) -> Option<&'static str> {
+    KNOWN_FLAGS
+        .iter()
+        .filter(|f| token.starts_with(**f) && token.len() > f.len())
+        .max_by_key(|f| f.len())
+        .copied()
+}
+
+fn display_arg(a: &str) -> String {
+    if a.contains(' ') {
+        format!("'{a}'")
+    } else {
+        a.to_string()
+    }
+}
+
+/// The refusal for a `-`-prefixed token the parse does not know: it names a
+/// close spelling when one exists and prints the whole command re-spelled
+/// with it, so the agent's next call is a copy-paste, not a re-derivation.
+fn unknown_arg_error(token: &str, args: &[String]) -> i32 {
+    match suggest_flag(token) {
+        Some(flag) => {
+            let mut corrected: Vec<String> = vec!["fno agents mail reply".to_string()];
+            for a in args {
+                corrected.push(if a == token {
+                    flag.to_string()
+                } else {
+                    display_arg(a)
+                });
+            }
+            usage_error(&format!(
+                "Unknown argument: '{token}'. Did you mean '{flag}'?\nCorrected: {}",
+                corrected.join(" ")
+            ))
+        }
+        None => usage_error(&format!(
+            "Unknown argument: '{token}'. 'fno agents mail reply --help' lists the flags."
+        )),
+    }
+}
+
+#[derive(Debug)]
 struct ReplyArgs {
     to: Option<String>,
     kind: String,
@@ -75,6 +149,7 @@ struct ReplyArgs {
     body: Option<String>,
     body_file: Option<PathBuf>,
     positional: Option<String>,
+    positionals: Vec<String>,
     ref_mission: Option<String>,
     source_mission: Option<String>,
     cascade_of: Option<String>,
@@ -92,6 +167,7 @@ fn parse_args(args: &[String]) -> Result<ReplyArgs, i32> {
         body: None,
         body_file: None,
         positional: None,
+        positionals: Vec::new(),
         ref_mission: None,
         source_mission: None,
         cascade_of: None,
@@ -125,17 +201,63 @@ fn parse_args(args: &[String]) -> Result<ReplyArgs, i32> {
             "--style-exception" => out.style_exception = Some(flag_value("--style-exception")?),
             other => {
                 if other.starts_with('-') && other.len() > 1 {
-                    return Err(usage_error(&format!("Unknown argument: '{other}'.")));
+                    return Err(unknown_arg_error(other, args));
                 }
-                if out.positional.is_some() {
-                    return Err(usage_error(&format!(
-                        "Got more than one positional value: '{other}'."
-                    )));
-                }
-                out.positional = Some(other.to_string());
+                out.positionals.push(other.to_string());
             }
         }
     }
+    fold_positionals(out)
+}
+
+/// The raw positionals fold into named fields: a msg-id-shaped leading token
+/// names the target without `--to` (the form agents reach for unaided: the
+/// observed refusals were `reply <id> "body"` and `reply <id> --body`),
+/// everything else stays the body. `--to` plus an id positional names the
+/// message twice: an explicit conflict, never a precedence rule.
+fn fold_positionals(mut out: ReplyArgs) -> Result<ReplyArgs, i32> {
+    let mut body: Option<String> = None;
+    match out.positionals.len() {
+        0 => {}
+        1 => {
+            let p = out.positionals.remove(0);
+            if looks_like_msg_id(&p) {
+                if let Some(to) = &out.to {
+                    return Err(usage_error(&format!(
+                        "Got two reply targets: --to '{to}' and positional '{p}'. \
+                         Name the message once."
+                    )));
+                }
+                out.to = Some(p);
+            } else {
+                body = Some(p);
+            }
+        }
+        2 => {
+            let first = out.positionals.remove(0);
+            let second = out.positionals.remove(0);
+            if !looks_like_msg_id(&first) {
+                return Err(usage_error(&format!(
+                    "Got more than one positional value: '{first}' is not a msg-id. \
+                     The reply target must lead. {REPLY_FORMS}."
+                )));
+            }
+            if let Some(to) = &out.to {
+                return Err(usage_error(&format!(
+                    "Got two reply targets: --to '{to}' and positional '{first}'. \
+                     Name the message once."
+                )));
+            }
+            out.to = Some(first);
+            body = Some(second);
+        }
+        n => {
+            return Err(usage_error(&format!(
+                "Got {n} positional values; at most two (msg-id then body). {REPLY_FORMS}."
+            )));
+        }
+    }
+    out.positional = body;
     Ok(out)
 }
 
@@ -210,7 +332,7 @@ pub fn run(args: &[String]) -> i32 {
         Err(code) => return code,
     };
     let Some(to_msg) = parsed.to.clone() else {
-        return usage_error("Missing option '--to'.");
+        return usage_error(&format!("Missing option '--to'. {REPLY_FORMS}."));
     };
     let body_text = match resolve_body(&parsed) {
         Ok(text) => text,
@@ -848,6 +970,25 @@ mod tests {
         ]))
         .expect("parse");
         assert_eq!(resolve_body(&parsed).unwrap_err(), 1);
+    }
+
+    /// `--to` plus a msg-id positional names the message twice: an explicit
+    /// conflict, never a precedence rule.
+    #[test]
+    fn two_targets_named_is_an_explicit_error() {
+        let err =
+            parse_args(&vec_args(&["--to", "m-1", "fmail-a1b2c3d4e5f6"])).expect_err("conflict");
+        assert_eq!(err, 2);
+    }
+
+    /// An unknown flag that extends a known one suggests it; a stranger gets
+    /// the pointer to --help.
+    #[test]
+    fn unknown_flag_extending_a_known_one_suggests_it() {
+        assert_eq!(suggest_flag("--from-name"), Some("--from"));
+        assert_eq!(suggest_flag("--kindx"), Some("--kind"));
+        assert_eq!(suggest_flag("--raw"), None);
+        assert_eq!(suggest_flag("--to"), None);
     }
 
     /// An unknown kind refuses naming the valid set; a removed kind hints at
