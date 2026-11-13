@@ -288,37 +288,7 @@ pub fn model_lane_refusal(
     if model.is_empty() {
         return None;
     }
-    // Deserialize the inventory answer once: the lane row is typed, so no
-    // string-key read survives this seam (docs/rust-style.md R1).
-    #[derive(serde::Deserialize)]
-    struct Inventory {
-        #[serde(default)]
-        rows: Vec<LaneRow>,
-    }
-    #[derive(serde::Deserialize)]
-    struct LaneRow {
-        #[serde(default)]
-        name: String,
-        #[serde(default)]
-        harness: String,
-        #[serde(default)]
-        model: String,
-        #[serde(default)]
-        route: String,
-    }
-    let inventory = crate::route_gather::run_mode(&json!({"mode": "inventory"}), cwd);
-    let Ok(inventory) = serde_json::from_value::<Inventory>(inventory) else {
-        return None;
-    };
-    let mut lanes: Vec<String> = Vec::new();
-    for row in inventory.rows {
-        let lane_serves_model = row.harness.trim() == harness
-            && row.model.trim() == model
-            && !row.route.trim().is_empty();
-        if lane_serves_model && !row.name.trim().is_empty() {
-            lanes.push(row.name.trim().to_string());
-        }
-    }
+    let lanes = crate::route_gather::lanes_serving(harness, &model, cwd);
     if lanes.is_empty() {
         return None;
     }

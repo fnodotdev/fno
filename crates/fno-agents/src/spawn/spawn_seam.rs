@@ -235,7 +235,9 @@ fn resume_route_pin(
     // reason.
     let axis_pin: Option<(String, String)> = if model_free && route_free {
         match row_model {
-            Some(m) => inventory_lane_serving(row_harness, m, &cwd)
+            Some(m) => crate::route_gather::lanes_serving(row_harness, m, &cwd)
+                .into_iter()
+                .next()
                 .map(|lane| ("--route".to_string(), lane))
                 .or_else(|| Some(("-m".to_string(), m.to_string()))),
             None => None,
@@ -294,41 +296,6 @@ fn resume_route_refusal(
         quote(row_harness),
         route_or_model,
     )
-}
-
-/// The declared lane that serves `model` on `harness`, by name. `None` when
-/// the inventory is unreadable or serves nothing here. The lane read mirrors
-/// `spawn_bare::model_lane_refusal`: a serving row names a route, or it
-/// carries no account and pins nothing.
-fn inventory_lane_serving(harness: &str, model: &str, cwd: &Path) -> Option<String> {
-    #[derive(serde::Deserialize)]
-    struct Inventory {
-        #[serde(default)]
-        rows: Vec<LaneRow>,
-    }
-    #[derive(serde::Deserialize)]
-    struct LaneRow {
-        #[serde(default)]
-        name: String,
-        #[serde(default)]
-        harness: String,
-        #[serde(default)]
-        model: String,
-        #[serde(default)]
-        route: String,
-    }
-    let inventory = crate::route_gather::run_mode(&serde_json::json!({"mode": "inventory"}), cwd);
-    let inventory = serde_json::from_value::<Inventory>(inventory).ok()?;
-    inventory
-        .rows
-        .iter()
-        .find(|r| {
-            r.harness.trim() == harness
-                && r.model.trim() == model
-                && !r.name.trim().is_empty()
-                && !r.route.trim().is_empty()
-        })
-        .map(|r| r.name.trim().to_string())
 }
 
 /// Reserve a worker name while this spawn client runs. The registry holds no

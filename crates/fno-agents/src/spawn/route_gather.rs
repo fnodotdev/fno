@@ -10,6 +10,46 @@ use std::path::Path;
 
 const MODEL_TIERS_TABLE: &str = include_str!("../model_tiers.toml");
 
+/// The declared lanes that serve `model` on `harness`, by name. A serving row
+/// names a route, so the answer carries the lane's account and route too.
+/// Empty when the inventory is unreadable or serves nothing here. The one
+/// inventory read for both callers: the lane gate's refusal list and the
+/// resume pin's route pick.
+pub fn lanes_serving(harness: &str, model: &str, cwd: &Path) -> Vec<String> {
+    #[derive(serde::Deserialize)]
+    struct Inventory {
+        #[serde(default)]
+        rows: Vec<LaneRow>,
+    }
+    #[derive(serde::Deserialize)]
+    struct LaneRow {
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        harness: String,
+        #[serde(default)]
+        model: String,
+        #[serde(default)]
+        route: String,
+    }
+    let inventory = run_mode(&json!({"mode": "inventory"}), cwd);
+    let inventory = serde_json::from_value::<Inventory>(inventory).ok();
+    inventory
+        .map(|inv| {
+            inv.rows
+                .iter()
+                .filter(|r| {
+                    r.harness.trim() == harness
+                        && r.model.trim() == model
+                        && !r.name.trim().is_empty()
+                        && !r.route.trim().is_empty()
+                })
+                .map(|r| r.name.trim().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 const SLOT_COMMANDS: [&str; 5] = ["think", "blueprint", "target", "review", "role"];
 const OBJECTIVES: [&str; 3] = ["cheapest-that-clears", "best-available", "prefer-harness"];
 /// A band's minimum coding percentile; a tier is a MINIMUM, so a model
