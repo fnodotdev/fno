@@ -57,7 +57,10 @@ mod tests {
     fn every_door_argv_row_resolves_to_a_real_command() {
         let tree = include_str!("../../../scripts/ci/native-command-tree.txt");
         for argv in FNO_ARGVS {
-            match argv[0] {
+            let Some((root, _)) = argv.split_first() else {
+                panic!("door argv row is empty");
+            };
+            match root {
                 "agents" => {
                     let args: Vec<OsString> = argv.iter().map(OsString::from).collect();
                     match classify(&args) {
