@@ -121,7 +121,7 @@ pub fn classify_inbox_attention_ledger(args: &[OsString]) -> Option<Vec<OsString
     if args.first()?.to_str()? != "inbox" || args.get(1)?.to_str()? != "attention-ledger" {
         return None;
     }
-    Some(args[2..].to_vec())
+    Some(args.iter().skip(2).cloned().collect())
 }
 
 /// Classify `fno inbox approvals ls|show|decide ...`: the argv tail for
