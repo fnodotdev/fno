@@ -311,10 +311,10 @@ mod tests {
             refused["hookSpecificOutput"]["additionalContext"],
             "heads up"
         );
-        assert!(refused["hookSpecificOutput"].get("updatedInput").is_none());
+        assert!(refused["hookSpecificOutput"]["updatedInput"].is_null());
 
         let advised = merge(&[warn.to_string(), rewrite.to_string()]);
-        assert!(advised.get("decision").is_none());
+        assert!(advised["decision"].is_null());
         let hso = &advised["hookSpecificOutput"];
         assert_eq!(hso["permissionDecision"], "allow");
         assert_eq!(hso["additionalContext"], "heads up\n\nnamed");
