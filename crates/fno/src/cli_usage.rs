@@ -135,7 +135,7 @@ mod tests {
     #[test]
     fn the_path_is_a_known_command_path_and_every_path_is_in_the_inventories() {
         assert_eq!(
-            path(&["backlog", "get", "x-2f27"]).as_deref(),
+            path(&["backlog", "get", "x-aaaa"]).as_deref(),
             Some("backlog get")
         );
         assert_eq!(
@@ -150,7 +150,7 @@ mod tests {
             path(&["mail", "send", "margit", "hi"]).as_deref(),
             Some("mail send")
         );
-        assert_eq!(path(&["backlog", "x-2f27"]).as_deref(), Some("backlog"));
+        assert_eq!(path(&["backlog", "x-aaaa"]).as_deref(), Some("backlog"));
         // A command word inside free text ships nothing: no known path holds it.
         assert_eq!(
             path(&["backlog", "idea", "review", "the", "cache"]).as_deref(),
