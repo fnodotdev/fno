@@ -352,7 +352,7 @@ pub fn refresh_if_stale(state: &Path) {
                     .enable_all()
                     .build()
                 {
-                    let _ = rt.block_on(refresh(&spawn_state));
+                    rt.block_on(refresh(&spawn_state)).ok();
                 }
             });
         }
