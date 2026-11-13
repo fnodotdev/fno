@@ -28,7 +28,6 @@
 //! reparents orphans elsewhere, and a literal `== 1` made every sweep there
 //! print `verdict withheld` forever.
 
-use crate::pid::Pid;
 use crate::pid::{Pid, SignalResult};
 use serde_json::{json, Value};
 use std::collections::HashSet;

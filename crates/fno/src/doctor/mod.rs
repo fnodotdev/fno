@@ -469,7 +469,7 @@ fn run_bounded(argv: &[String], deadline: std::time::Instant) -> Option<(i32, St
                 return Some((status.code().unwrap_or(-1), stdout, stderr));
             }
             Ok(None) if std::time::Instant::now() >= deadline => {
-                let _ = Pid::from_child(&child).signal_group(libc::SIGKILL);
+                Pid::kill_child_group(&child);
                 let _ = child.kill();
                 let _ = child.wait();
                 return None;

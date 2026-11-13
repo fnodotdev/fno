@@ -1,23 +1,25 @@
-# SUMMARY
+# SUMMARY - Pid newtype and one process-FFI module
 
-Node: x-4099. The MacBook mux shows questions asked on the iMac but cannot answer them: the answer must reach the asking machine's question store.
+Node x-57de. Plan: `internal/fno/plans/20261112-pid-newtype-process-ffi-x-57de.md` (quick-plan, route 1 chosen).
 
 ## What landed
 
-Four tasks of the plan (vault plan: `internal/fno/plans/20261030-macbook-mux-shows-questions-asked-imac.md`), one commit each:
+`crates/fno-agents/src/runtime/pid.rs` is the one process-FFI module: `Pid(NonZeroI32)` admitting 1..=i32::MAX, `SignalResult` (Sent / AlreadyGone / Failed(io::Error)), `Creation`, and typed wrappers for every reader (start_time, started_epoch, created_ms, zombie, parent_pid, cwd, open_file_paths, bsd, bsd_checked, task, thread_handles, thread_info, short_bsd). One `KinfoProcScratch`/`KinfoProcHead` declaration, one start-time reader per OS. `build.rs` copies the body verbatim (minus the tests module) to `crates/fno/src/pid.rs`, so both crates resolve `crate::pid`.
 
-1. e5e7123c02 `feat(needs)`: the mux answer door records an answer for a peer copy (refusal removed; delegate still refuses copies by name).
-2. 989f16dbd1 `feat(question-bus)`: the `fleet_question_answer` carrier. Publish, apply-once via `applied_at`, retention aging.
-3. b5f1921817 `fix(attention)`: the ladder marks a copy's answer terminal (`carried` delivery row), so no local clear burns retries.
-4. cbb0e182c9 `docs(architecture)`: the Questions section names the answer carrier and the one-writer split.
+About 110 call sites across both crates now route every kill, probe, killpg and proc_pidinfo/proc_pidpath read through the module. The done-probe grep reads 0 raw sites outside the module. Local const `PROC_PIDLISTTHREADS = 6` covers the constant libc 0.2.191 does not export.
 
 ## Deviations from the plan
 
-- The plan named the carrier column `origin_host`. I named it `answer_host`: the column holds the ANSWERING machine's host (the asker is `origin_machine`), and AC2's `sink: peer:<answerer host>` and the door receipt's `carries_to` derive from it. `origin_host` would read as the asker.
-- Local tests did not run (the repo cargo wrapper refuses local test runs from agent sessions; CI arbitrates). Local proof: `cargo check --lib --tests` green, `cargo fmt --check` green, junk-token sweep of both diffs clean.
-- Diff budget: +421 added lines vs the +300 budget (140%). Per the one-node-one-PR law the PR ships whole and states the overage in the body.
+- Parse-at-entry instead of Pid-taking signatures: public fn signatures are unchanged; each site parses its own raw pid (`Pid::new(..)`, `Pid::try_from(..)`) and keeps its own refuse polarity. This kept the diff mechanical and the wire protocol untouched.
+- census on Linux: the parent_pid leg read `ps` by spawn; it now reads `/proc/<pid>/stat` through the module, same field, no subprocess.
+- orphans cwd read: strict UTF-8 lossy variance unified to the module's reader.
+- gc.rs: an out-of-range pid now reads as not-ours (false). The old cast could wrap negative and reach a kill broadcast form.
+- test_run / machine_load / evals group kills: a 0-pid now refuses instead of signalling the caller's own group. The old `kill(0, sig)` broadcast was never an intended effect.
+- Review round 1 added `Pid::kill_child_group(&Child)`: 17 call sites repeated `from_child(...).signal_group(SIGKILL)` by hand; the helper is the one correct form to copy. Two sites keep distinct semantics (a plain single-process SIGKILL in the keeper-test Drop, and bounded_spawn's kill-then-reap) and stay explicit.
+- `libc::PROC_PIDLISTTHREADS` is not exported by libc 0.2.191; the module carries a local `const PROC_PIDLISTTHREADS: libc::c_int = 6` (stable Darwin ABI value, census's old definition).
 
-## Done probes (CI-measured)
+## Validation
 
-- `cargo test question_bus::tests::a_copy_answer_reaches_the_asking_machine_and_its_close_follows`
-- `cargo test attention_reply::tests::a_copy_answer_row_never_enters_the_local_ladder`
+Local builds compile both crates green (run under the memory-pressure job cap). `cargo test` is left to CI per the fleet-incident law of the day; the pid module's unit tests (AC1-AC5) run there. Gates: `check-file-budget.sh` green (daemon.rs, mux_cli.rs, server.rs all net 0), done-probe grep 0, generated copies verified byte-identical to canonical modulo the generated header and the stripped tests module.
+
+origin/main moved during the run (c7d3477615); per the merge law the PR opens as-is and any conflict resolves by merging main at the GitHub conflict, never a rebase.

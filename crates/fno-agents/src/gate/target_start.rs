@@ -2448,7 +2448,7 @@ fn run_bounded_init(
                 // The child is its own group leader, so the kill reaches the
                 // grandchildren a forking init left behind.
                 timed_out = true;
-                let _ = Pid::from_child(&child).signal_group(libc::SIGKILL);
+                Pid::kill_child_group(&child);
                 break child
                     .wait()
                     .map_err(|e| refuse(format!("fno do target start: init wait failed: {e}")))?;

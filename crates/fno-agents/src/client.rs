@@ -974,14 +974,14 @@ pub async fn restart_daemon(
                 // `stop_claude_pid_confirmed` applies to worker kills.
                 if crate::daemon::pid_is_ours(pid, Some(recorded_start)) {
                     match Pid::try_from(i64::from(pid)).map(|p| p.signal(libc::SIGKILL)) {
-                        Some(SignalResult::Sent) | Some(SignalResult::AlreadyGone) => {}
-                        Some(SignalResult::Failed(reason)) => {
+                        Ok(SignalResult::Sent) | Ok(SignalResult::AlreadyGone) => {}
+                        Ok(SignalResult::Failed(reason)) => {
                             return Err(RestartError::SigkillFailed {
                                 pid,
                                 reason: reason.to_string(),
                             })
                         }
-                        None => {
+                        Err(_) => {
                             return Err(RestartError::SigkillFailed {
                                 pid,
                                 reason: "pid out of range".into(),
@@ -1155,7 +1155,7 @@ pub async fn restart_daemon(
     if escalated {
         let new_pid = start_fresh(home, daemon_bin).await?;
         return Ok(RestartOutcome {
-            old_pid: Some(old_pid),
+            old_pid: Some(old_pid.as_u32()),
             new_pid,
             forced: true,
             note: Some(format!(
@@ -1174,7 +1174,7 @@ pub async fn restart_daemon(
     // than starting a duplicate.
     let new_pid = start_fresh(home, daemon_bin).await?;
     Ok(RestartOutcome {
-        old_pid: Some(old_pid),
+        old_pid: Some(old_pid.as_u32()),
         new_pid,
         forced: false,
         note: None,

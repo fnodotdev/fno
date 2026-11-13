@@ -249,7 +249,7 @@ pub(crate) fn run(r: &Run) -> i32 {
     };
     if code.is_none() {
         // The child leads its own session, so its pid is the group id.
-        let _ = Pid::from_child(&child).signal_group(libc::SIGKILL);
+        Pid::kill_child_group(&child);
         let _ = child.wait();
     }
     let stderr = drain.and_then(|h| h.join().ok()).unwrap_or_default();

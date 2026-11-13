@@ -159,14 +159,14 @@ fn run_attempt(
             Ok(Some(status)) => break Ok(status),
             Ok(None) => {
                 if start.elapsed() >= timeout {
-                    let _ = Pid::from_child(&child).signal_group(libc::SIGKILL);
+                    Pid::kill_child_group(&child);
                     let _ = child.wait();
                     break Err(timeout);
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
             Err(e) => {
-                let _ = Pid::from_child(&child).signal_group(libc::SIGKILL);
+                Pid::kill_child_group(&child);
                 let _ = child.wait();
                 return Err(RunError::Io(e.to_string()));
             }

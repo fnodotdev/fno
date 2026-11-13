@@ -2,7 +2,6 @@
 //! how long. One question, so one module - the four answers below were four
 //! loose helpers in the middle of the stop gate.
 
-use crate::pid::Pid;
 
 /// Slack added beyond the declared watch window so the claim lease outlives the
 /// agent's watcher: a watcher that fires right at its timeout must not
@@ -462,6 +461,7 @@ pub(super) fn local_watch_without_claim(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pid::Pid;
 
     /// A holder-side fixture acquired under an explicit claims root.
     fn live_claim_opts(root: &std::path::Path) -> crate::claims::AcquireOpts {

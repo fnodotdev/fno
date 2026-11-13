@@ -136,7 +136,7 @@ fn bounded_fno(
         if std::time::Instant::now() >= deadline {
             // Negative pid targets the process group set by process_group(0);
             // killpg(pid) spells the same group kill through the typed pid.
-            let _ = Pid::from_child(&child).signal_group(libc::SIGKILL);
+            Pid::kill_child_group(&child);
             let _ = child.wait();
             let _ = out_reader.join();
             let _ = err_reader.join();

@@ -8,7 +8,6 @@
 //! `CLIENT_COMMAND_USAGE` / `RUST_CLIENT_COMMANDS`; `fno agents claim` is still the
 //! only operator CLI for claims.
 
-use crate::pid::Pid;
 use serde_json::Value;
 #[cfg(test)]
 #[cfg(test)]
@@ -1484,6 +1483,7 @@ pub(crate) fn claim_sweep_payload_from_records(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pid::Pid;
 
     struct ClaimsRootRestore(Option<std::ffi::OsString>);
 

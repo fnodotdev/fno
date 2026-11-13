@@ -7,7 +7,6 @@ use crate::claims::{
 };
 #[cfg(test)]
 use crate::claims::{encode_key, read_claim_file};
-use crate::pid::Pid;
 use serde_json::Value;
 
 use std::path::{Path, PathBuf};
@@ -215,6 +214,7 @@ pub fn release_for_stopped_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pid::Pid;
     use crate::claims::{hostname, machine_id, ClaimRecord, SCHEMA_VERSION};
     use tempfile::TempDir;
 

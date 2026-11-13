@@ -96,6 +96,14 @@ impl Pid {
         Pid::new(child.id()).expect("a spawned child's pid always fits 1..=i32::MAX")
     }
 
+    /// SIGKILL the whole process group a spawned `child` leads, ignoring
+    /// "already gone". Spawners setpgid their children, so the child's pid
+    /// is its group's id; grandchildren die with it instead of holding a
+    /// pipe open past the drain thread.
+    pub fn kill_child_group(child: &Child) {
+        let _ = Pid::from_child(child).signal_group(libc::SIGKILL);
+    }
+
     /// This process's own pid (`getpid(2)` never fails and never answers 0
     /// in a user process).
     pub fn current() -> Pid {

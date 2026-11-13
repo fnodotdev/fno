@@ -926,7 +926,7 @@ fn run_run_mode(o: &Opts) -> i32 {
     let outcome: Result<(usize, usize), (&str, String)> = match exit_code {
         None => {
             // The child is its own group leader (setsid), so its pid is the group.
-            let _ = Pid::from_child(&run).signal_group(libc::SIGKILL);
+            Pid::kill_child_group(&run);
             let _ = run.wait();
             Err((
                 "timeout",

@@ -170,7 +170,7 @@ pub(crate) fn run_with_timeout_accepting(
     // SIGKILL to the child's whole group (negative pid). The leader reaps via
     // `child.wait()`; group members die with it.
     fn kill_group(child: &std::process::Child) {
-        let _ = Pid::from_child(&child).signal_group(libc::SIGKILL);
+        Pid::kill_child_group(&child);
     }
     loop {
         match child.try_wait() {

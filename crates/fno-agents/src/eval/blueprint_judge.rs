@@ -359,7 +359,7 @@ pub(crate) fn bounded_wait(
                     // SAFETY: the pid is the child we just spawned; its
                     // process group cannot be ours, so the signal cannot
                     // reach this process.
-                    let _ = Pid::from_child(&child).signal_group(libc::SIGKILL);
+                    Pid::kill_child_group(&child);
                     let _ = child.wait();
                     let err = collect(stderr);
                     let named = format!(

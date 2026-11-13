@@ -291,7 +291,7 @@ impl Client {
             std::thread::sleep(Duration::from_millis(50));
         }
         // The child leads its own group (process_group(0) above).
-        let _ = Pid::from_child(&self.child).signal_group(libc::SIGKILL);
+        Pid::kill_child_group(&self.child);
         let _ = self.child.wait();
     }
 }

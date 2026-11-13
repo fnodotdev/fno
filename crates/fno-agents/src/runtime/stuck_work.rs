@@ -9,7 +9,6 @@
 //! self-describing lines so every reader prints the same text without a
 //! second renderer.
 
-use crate::pid::Pid;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -507,6 +506,7 @@ fn cut(text: &str, cap: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pid::Pid;
     use crate::claims::{encode_key, hostname, machine_id, now_ms, SCHEMA_VERSION};
     use tempfile::TempDir;
 

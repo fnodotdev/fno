@@ -116,7 +116,7 @@ fn run_exec(
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(100)),
             _ => {
                 // The child leads its own group (process_group(0)).
-                let _ = Pid::from_child(&child).signal_group(libc::SIGKILL);
+                Pid::kill_child_group(&child);
                 let _ = child.wait();
                 break None;
             }

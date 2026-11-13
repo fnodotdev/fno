@@ -3904,7 +3904,7 @@ fn pid_confirmed_dead(pid: u32) -> bool {
     }
     if pid.probe() {
         // Reachable => alive, unless it is a zombie: dead-but-unreaped.
-        return crate::census::pid_is_zombie(pid);
+        return crate::census::pid_is_zombie(pid.as_u32());
     }
     matches!(pid.signal(0), crate::pid::SignalResult::AlreadyGone)
 }
