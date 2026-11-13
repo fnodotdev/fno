@@ -5,6 +5,7 @@ use fno_agents::run_outcome::{classify, classify_legacy, legacy_projection};
 fn run_outcome_matches_every_legacy_terminal_predicate() {
     let reasons = [
         TerminationReason::DonePRGreen,
+        TerminationReason::DoneMergedUnsettled,
         TerminationReason::DoneAdvisory,
         TerminationReason::DoneDelivery,
         TerminationReason::DoneBatched,
@@ -30,6 +31,7 @@ fn run_outcome_matches_every_legacy_terminal_predicate() {
 fn every_wire_reason_round_trips_through_the_authoritative_record() {
     let reasons = [
         TerminationReason::DonePRGreen,
+        TerminationReason::DoneMergedUnsettled,
         TerminationReason::DoneAdvisory,
         TerminationReason::DoneDelivery,
         TerminationReason::DoneBatched,
