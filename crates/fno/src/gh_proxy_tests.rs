@@ -148,7 +148,7 @@ fn install_for_path_without_gh_errs() {
     std::fs::create_dir_all(&state).unwrap();
     let _g = EnvGuard::set(&empty, &agents, &state);
     let err = install_for_path().unwrap_err();
-    assert!(err.contains("no gh on PATH"), "{err}");
+    assert!(err.to_string().contains("no gh on PATH"), "{err}");
 }
 
 #[test]

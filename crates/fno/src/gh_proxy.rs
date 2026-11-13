@@ -233,39 +233,60 @@ fn ensure_proxy(root: Option<&Path>, path: &str) -> Result<Option<PathBuf>, Stri
     Ok(Some(root))
 }
 
+/// Why the one install entry refused. Typed because the crate's string
+/// error count is shrink-only (docs/rust-style.md R6); the doctor and
+/// update callers print the Display text.
+#[derive(Debug)]
+pub enum InstallRefusal {
+    NoGh,
+    NoAgents,
+    NoParentDir,
+}
+
+impl std::fmt::Display for InstallRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            Self::NoGh => "no gh on PATH",
+            Self::NoAgents => "no fno-agents binary to exec",
+            Self::NoParentDir => "gh on PATH has no parent dir",
+        };
+        f.write_str(text)
+    }
+}
+
 /// The one install entry: shadow the machine's first-PATH `gh` with the
 /// proxy shim, so plain `gh` on every caller's PATH runs the quota broker.
 /// A dir the installer cannot write falls back to the state root's
 /// `install/bin/github-cli`; the returned line names where the shim sits
 /// and whether a PATH export still stands between it and plain gh. An
 /// `Err` names the blocker (no gh on PATH, no fno-agents to exec).
-pub fn install_for_path() -> Result<String, String> {
+pub fn install_for_path() -> Result<String, InstallRefusal> {
     let path = std::env::var("PATH").unwrap_or_default();
     let Some(delegate) = which("gh", &path) else {
-        return Err("no gh on PATH".into());
+        return Err(InstallRefusal::NoGh);
     };
     let Some(binary) = shim_binary(&path).filter(|p| is_executable(p)) else {
-        return Err("no fno-agents binary to exec".into());
+        return Err(InstallRefusal::NoAgents);
     };
     let dir = delegate
         .parent()
-        .ok_or_else(|| "gh on PATH has no parent dir".to_string())?
+        .ok_or(InstallRefusal::NoParentDir)?
         .to_path_buf();
-    let verb = if is_wrapper(&delegate) {
+    let action = if is_wrapper(&delegate) {
         "refreshed"
     } else {
         "installed"
     };
     if install_shim(&dir, &binary).is_ok() {
         return Ok(format!(
-            "gh proxy shim {verb} at {}; plain gh runs the proxy",
+            "gh proxy shim {action} at {}; plain gh runs the proxy",
             dir.display()
         ));
     }
     // The first-PATH dir refused the write (unwritable, or the loop
     // guard): fall back to the state root's durable home and report the
     // shadow honestly. Doctor's report reads the same verdict.
-    let root = ensure_proxy(None, &path)?.ok_or_else(|| "no fno-agents binary to exec".into())?;
+    let root = ensure_proxy(None, &path)?.ok_or(InstallRefusal::NoAgents)?;
     Ok(format!(
         "gh proxy shim at {}; {} still resolves first on PATH; put the shim dir ahead of it to activate",
         root.display(),
