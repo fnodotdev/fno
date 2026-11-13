@@ -8,7 +8,7 @@ Releases before 0.4.8 were built in a private repository. Their entries here sum
 
 ### Added
 
-* Added the attention ledger: `fno inbox attention-ledger` reports the week's questions per merged PR, repeated subjects, reverts, cycle time and guard refusals from the stores fno already keeps. The lead checkin shows the same numbers as one line and writes the weekly report under the vault's reports dir.
+* Added the attention ledger: `fno inbox attention-ledger` reports the week's orchestration tax. The lead checkin shows the numbers as one line. The weekly report lands under the vault reports dir.
 
 ## [0.4.9] - 2026-11-13
 
