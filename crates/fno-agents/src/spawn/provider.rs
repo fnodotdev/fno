@@ -2416,7 +2416,7 @@ mod tests {
             "/compact",
             "/usr/bin/script x",
             "/diff",
-            "see /fno:docs",
+            "see /fno:review",
             "  review this\n  code  ",
         ] {
             assert_eq!(render_command_seed(seed, "codex"), seed, "seed: {seed}");
