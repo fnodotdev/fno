@@ -4138,7 +4138,7 @@ mod tests {
             .iter()
             .position(|t| t == "--model")
             .expect("route model lands on argv");
-        assert_eq!(argv[at + 1], "opus");
+        assert_eq!(argv.get(at + 1).map(String::as_str), Some("opus"));
         let fence = argv.iter().position(|t| t == "--").unwrap();
         assert!(at < fence, "the pin sits flags-first, never in the seed");
 
