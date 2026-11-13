@@ -237,6 +237,41 @@ pub(crate) fn handle_session_report(
         }
         Some(record)
     };
+    // A claude report whose job head names a different session carries
+    // lineage, not identity (the daemon spare chain passes a dead worker's
+    // env down the process tree). It must not fill an unbound row's primary
+    // id through the name match: the row would be born bound to a session
+    // that never runs it. A resume names the row's own older id and a
+    // non-bg session carries no job head, so neither is refused.
+    let job_short = str_field(p, "job_short");
+    if harness == "claude" && source.as_deref() != Some("resume") {
+        if let Some(job) = job_short.as_deref() {
+            if crate::identity::canonical_handle(&session_id) != job {
+                let entries = crate::daemon::load_registry_asserted(&home.registry_json())
+                    .map(|reg| reg.entries)
+                    .unwrap_or_default();
+                let fills_unbound_primary =
+                    match find_row(&entries, &harness, &session_id, agent_self.as_deref()) {
+                        Some(Find::Named(i)) => entries[i]
+                            .harness_session_id
+                            .as_deref()
+                            .unwrap_or("")
+                            .is_empty(),
+                        _ => false,
+                    };
+                if fills_unbound_primary {
+                    eprintln!(
+                        "session-report: session {session_id} names job head {job}; \
+                         filling no unbound row primary"
+                    );
+                    return Response::ok(
+                        req.id,
+                        json!({"stored": false, "dropped": "launch_head_mismatch"}),
+                    );
+                }
+            }
+        }
+    }
     let launch_child_name = str_field(p, "launch_child_name");
     // A proven pane claim rides as {session, pane_id}; anything else (absent,
     // malformed) is ignored - the report still stores normally, it just
@@ -1432,6 +1467,15 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
     if let Ok(cwd) = std::env::current_dir() {
         params["cwd"] = Value::String(cwd.display().to_string());
     }
+    // The child's own claude-bg job head rides the report: the daemon uses
+    // it to refuse a lineage id filling an unbound row's primary (the daemon
+    // spare chain passes a dead worker's env down the process tree), so the
+    // row is born bound to the session the launch actually produced.
+    if params.get("harness").and_then(Value::as_str) == Some("claude") {
+        if let Some(job) = crate::launch_record::claude_job_short() {
+            params["job_short"] = Value::String(job);
+        }
+    }
     // --origin-only writes the record and sends nothing - EXCEPT for a child
     // that claimed a launch record: the adopt must never lose the parent edge
     // to the origin-only path, so the report rides with the record attached.
@@ -2246,7 +2290,7 @@ mod tests {
         }
         drop(lock);
     }
-    /// x-c217 backstop at the mint: a claimed record amended with the
+    /// Mint backstop for the launch-head bind: a claimed record amended with the
     /// launch's own head adopts only the session that head names. A report
     /// whose session id disagrees with the amended record births no row, so
     /// a polluted reporter can never mint the launch's row under its id.
@@ -2305,6 +2349,43 @@ mod tests {
         assert_eq!(
             rows[0].claude_session_uuid.as_deref(),
             Some("2ee23622-0000-4000-8000-00000000000a")
+        );
+    }
+    /// The launch-head fill guard: a claude report whose job head names a
+    /// different session may not fill an unbound row's primary id through
+    /// the name match. The agreeing id fills the same row.
+    #[test]
+    fn a_lineage_id_fills_no_unbound_row_primary() {
+        let (_d, home) = temp_home("head-fill");
+        seed_registry(
+            &home,
+            json!({
+                "name": "w-bg", "cwd": "/repo", "status": "live",
+                "created_at": "2026-11-13T00:00:00Z",
+                "harness": "claude", "short_id": ""
+            }),
+        );
+        let params = report_params(
+            "claude",
+            "6611e61e-0000-4000-8000-00000000000b",
+            json!({"agent_self": "w-bg", "job_short": "8a6d6680"}),
+        );
+        let body = response_json(&handle_session_report(&home, &emitter(&home), &req(params)));
+        assert_eq!(body["result"]["dropped"], "launch_head_mismatch");
+        assert_eq!(read_rows(&home)[0].harness_session_id, None);
+
+        // The job head's own session fills the same row.
+        let params = report_params(
+            "claude",
+            "8a6d6680-0000-4000-8000-00000000000c",
+            json!({"agent_self": "w-bg", "job_short": "8a6d6680"}),
+        );
+        let body = response_json(&handle_session_report(&home, &emitter(&home), &req(params)));
+        assert_eq!(body["result"]["stored"], true);
+        let rows = read_rows(&home);
+        assert_eq!(
+            rows[0].harness_session_id.as_deref(),
+            Some("8a6d6680-0000-4000-8000-00000000000c")
         );
     }
 }

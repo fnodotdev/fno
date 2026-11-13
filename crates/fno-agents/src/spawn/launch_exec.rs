@@ -192,9 +192,10 @@ fn exec_lane(payload: &Value) -> Result<i32, String> {
 
 /// Stream a child's stdout through line by line, and on the first line that
 /// names a backgrounded session head, amend the launch's pending record
-/// with it. The forward is byte-faithful; the scan is silent on any line
-/// the head parser refuses, and the amendment is one stderr line on a miss
-/// - never a launch failure.
+/// with it. Bytes pass through untouched (the old inherited stdout did no
+/// less), so the scan reads each line lossily and is silent on any line
+/// the head parser refuses; the amendment is one stderr line on a miss -
+/// never a launch failure.
 fn forward_scan<R: std::io::Read, W: std::io::Write>(
     stdout: R,
     out: &mut W,
@@ -203,16 +204,17 @@ fn forward_scan<R: std::io::Read, W: std::io::Write>(
 ) -> Option<String> {
     let mut short = None;
     let mut reader = std::io::BufReader::new(stdout);
-    let mut line = String::new();
+    let mut line = Vec::new();
     loop {
         line.clear();
-        match reader.read_line(&mut line) {
+        match reader.read_until(b'\n', &mut line) {
             Ok(0) => break,
             Ok(_) => {
-                let _ = out.write_all(line.as_bytes());
+                let _ = out.write_all(&line);
                 let _ = out.flush();
                 if short.is_none() {
-                    if let Ok(found) = crate::claude_ask::parse_short_id(&line) {
+                    let text = String::from_utf8_lossy(&line);
+                    if let Ok(found) = crate::claude_ask::parse_short_id(&text) {
                         if crate::launch_record::amend_launch_short_id(root, name, &found) {
                             short = Some(found);
                         }

@@ -265,7 +265,7 @@ fn a_forking_claude_bg_line_is_refused() {
     }
 }
 
-/// x-c217: the launcher amends the pending record with the launch's own
+/// The launcher amends the pending record with the launch's own
 /// head (the short claude printed), and the amended record binds only to
 /// the session that head names. A bystander session in the same cwd - or a
 /// child carrying the worker's inherited name - claims nothing, and the
@@ -325,7 +325,7 @@ fn an_amended_record_binds_only_the_launched_session() {
     );
 }
 
-/// x-c217: a claude bg child whose own job head disagrees with its reported
+/// A claude bg child whose own job head disagrees with its reported
 /// session head carries a leaked marker (the daemon and its spare pass a
 /// dead worker's env down the process tree). It claims nothing - not the
 /// amended record, not an unamended one its inherited name matches - and a
