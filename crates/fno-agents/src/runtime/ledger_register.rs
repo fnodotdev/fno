@@ -1227,16 +1227,23 @@ fn emit_ledger_transition(entry: &Value) {
 /// ride out of the ledger file, so the event store is the record once every
 /// reader folds this kind. Best-effort, like the file append's own
 /// transition event; a missed emit is re-carried by the writer's next fire.
-pub(crate) fn emit_run_recorded(cwd: &Path, source: &str, run: &Value) {
-    let project_events = crate::paths::space_dir(cwd).join("events.jsonl");
-    let global_events = crate::paths_cli::global_events_json(cwd);
-    let event = json!({
+fn run_recorded_envelope(source: &str, run: &Value) -> Value {
+    json!({
         "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
         "type": "run_recorded",
         "source": source,
         "data": { "run": run },
-    });
-    let line = serde_json::to_string(&event).unwrap_or_default();
+    })
+}
+
+/// The init-time started row's source. `run_recorded` declares its sources
+/// in the events schema; any other value refuses the append.
+const STARTED_ROW_SOURCE: &str = "target";
+
+pub(crate) fn emit_run_recorded(cwd: &Path, source: &str, run: &Value) {
+    let project_events = crate::paths::space_dir(cwd).join("events.jsonl");
+    let global_events = crate::paths_cli::global_events_json(cwd);
+    let line = serde_json::to_string(&run_recorded_envelope(source, run)).unwrap_or_default();
     if line.is_empty() {
         eprintln!("run_recorded: serialize failed; row stays file-only");
         return;
@@ -1401,8 +1408,9 @@ pub(crate) fn build_started_entry(
 }
 
 /// The init-time append: parse the manifest, build the started row, append
-/// it, and carry it out as a `run_recorded` event with source `target-start`
-/// so the event store is the record once every reader folds this kind. A
+/// it, and carry it out as a `run_recorded` event so the event store is the
+/// record once every reader folds this kind. The run fold keys on the run,
+/// never the source, so the finish row still wins. A
 /// failure to record is reported on stderr; init never fails for a
 /// measurement miss.
 pub(crate) fn register_target_started(cwd: &Path, manifest: &Path) -> bool {
@@ -1446,7 +1454,7 @@ pub(crate) fn register_target_started(cwd: &Path, manifest: &Path) -> bool {
             return false;
         }
     }
-    emit_run_recorded(cwd, "target-start", &entry);
+    emit_run_recorded(cwd, STARTED_ROW_SOURCE, &entry);
     true
 }
 
@@ -1817,5 +1825,21 @@ mod tests {
             "two fires for s1, the s2 fire and any malformed line never count"
         );
         assert_eq!(count_loop_fires("/nonexistent-root", "s1"), None);
+    }
+
+    #[test]
+    fn started_row_envelope_passes_the_events_schema() {
+        let envelope = run_recorded_envelope(
+            STARTED_ROW_SOURCE,
+            &json!({"fno_id": "t1", "status": "started"}),
+        );
+        let verdict = crate::event_store::validate::validate_envelope(
+            envelope.as_object().expect("envelope is an object"),
+        );
+        assert_eq!(
+            verdict,
+            Ok(()),
+            "init's started row must not refuse at append"
+        );
     }
 }
