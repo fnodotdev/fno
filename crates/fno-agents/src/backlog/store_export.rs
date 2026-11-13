@@ -105,10 +105,10 @@ pub(crate) fn export(remote: &Remote, out: &Path) -> Result<Value, String> {
             .prepare("PRAGMA foreign_key_check")
             .map_err(|e| e.to_string())?;
         let mut found = violations.query([]).map_err(|e| e.to_string())?;
-        let mut per_table = Map::new();
+        let mut per_table = std::collections::BTreeMap::new();
         while let Some(row) = found.next().map_err(|e| e.to_string())? {
             let table: String = row.get(0).map_err(|e| e.to_string())?;
-            *per_table.entry(table).or_insert(0i64) += 1;
+            *per_table.entry(table).or_insert(0) += 1;
         }
         per_table
     };
