@@ -210,8 +210,6 @@ impl Ledger {
 #[derive(Debug, Deserialize)]
 struct NodeRow {
     #[serde(default)]
-    id: String,
-    #[serde(default)]
     created_at: String,
     #[serde(default)]
     completed_at: String,
@@ -303,7 +301,7 @@ fn merged_nodes(notes: &mut Vec<String>) -> Vec<MergedNode> {
     let graph = crate::state_layout::graph_anchor(&root);
     let query = crate::backlog::RowQuery {
         fields: Some(
-            ["id", "created_at", "completed_at", "merge_status"]
+            ["created_at", "completed_at", "merge_status"]
                 .into_iter()
                 .map(str::to_string)
                 .collect(),
