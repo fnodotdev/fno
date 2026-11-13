@@ -342,6 +342,8 @@ pub mod transcript_transfer;
 #[cfg(feature = "full")]
 pub mod tree;
 #[cfg(feature = "full")]
+pub mod ui_usage;
+#[cfg(feature = "full")]
 pub mod uninstall;
 #[cfg(feature = "full")]
 pub(crate) mod update_prebuilt;
