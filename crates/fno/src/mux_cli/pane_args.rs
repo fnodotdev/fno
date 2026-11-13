@@ -686,7 +686,6 @@ pub fn parse_pane_args(
     Ok(ParsedPane { session, json, cmd })
 }
 
-/// `--size 144x40`: columns, then rows, each 1..=1000.
 /// Resolve `pane run --cwd` to an absolute path CLIENT-side. The server is a
 /// detached daemon with its own cwd, so a RELATIVE path would resolve against
 /// the wrong directory there (gemini review). Absolute passes through; a
@@ -711,6 +710,7 @@ pub(crate) fn resolve_run_cwd(
     }
 }
 
+/// `--size 144x40`: columns, then rows, each 1..=1000.
 pub(crate) fn parse_size(v: &str) -> Result<(u16, u16), String> {
     let dim = |s: &str| s.parse::<u16>().ok().filter(|n| (1..=1000).contains(n));
     v.split_once('x')
