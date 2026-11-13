@@ -2315,6 +2315,15 @@ mod tests {
         let template = format!("{}/{{project}}/b.html", dir.path().display());
         let global = json!({"backlog": {"render_path": template}});
         let populated: BTreeSet<String> = ["alpha".to_string()].into_iter().collect();
+        assert_eq!(
+            populated_projects(&[
+                json!({"project": "alpha"}),
+                json!({"project": ""}),
+                json!({"id": "x-1"}),
+            ]),
+            populated,
+            "only non-empty project names join the set"
+        );
         let targets = targets_from_global(&global, &[], Some(&populated));
         assert!(
             targets.iter().any(|t| t.scope == "alpha"),
