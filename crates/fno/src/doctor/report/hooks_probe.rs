@@ -1,5 +1,6 @@
 //! The plugin-hook launch probe (doctor.py:3850-4200).
 
+use crate::pid::Pid;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 
@@ -319,8 +320,8 @@ fn launch_one_hook(command: &str, root_value: &str, shell: &str, root_var: &str)
                 break;
             }
             Ok(None) if std::time::Instant::now() >= deadline => {
-                unsafe {
-                    libc::kill(-(child.id() as i32), libc::SIGKILL);
+                if let Some(pid) = Pid::from_child(child) {
+                    let _ = pid.signal_group(libc::SIGKILL);
                 }
                 let _ = child.wait();
                 rc = None;

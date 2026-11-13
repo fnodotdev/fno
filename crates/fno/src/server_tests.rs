@@ -3328,8 +3328,8 @@ fn detached_child_exit_tombstones_member_and_clears_roster() {
     core.detach_worker_pane(p1).unwrap();
     let child = core.panes[&p1].pty.child_pid().unwrap();
     assert_eq!(
-        unsafe { libc::kill(child as libc::pid_t, libc::SIGKILL) },
-        0
+        Pid::new(child).map(|p| matches!(p.signal(libc::SIGKILL), SignalResult::Sent)),
+        Some(true)
     );
     let deadline = Instant::now() + Duration::from_secs(5);
     while !core.panes[&p1].pty.is_reap_ready() && Instant::now() < deadline {
@@ -5072,12 +5072,11 @@ fn emergency_roster_kills_plain_child_and_spares_keeper_child() {
 
     kill_plain_children(&roster);
     assert!(
-        unsafe { libc::kill(plain_pid as libc::pid_t, 0) } != 0,
+        !Pid::new(plain_pid).is_some_and(|p| p.probe()),
         "plain roster child must be killed"
     );
-    assert_eq!(
-        unsafe { libc::kill(keeper_pid as libc::pid_t, 0) },
-        0,
+    assert!(
+        Pid::new(keeper_pid).is_some_and(|p| p.probe()),
         "keeper roster child must survive"
     );
 

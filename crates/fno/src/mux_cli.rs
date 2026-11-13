@@ -41,6 +41,7 @@ mod restore;
 mod workspace_origin;
 
 pub use self::harness_command::command;
+use crate::pid::{Pid, SignalResult};
 use self::pane_prepare::prepare_pane_bytes;
 use self::pane_submit::{pane_text, run_submit, send_pane_bytes};
 pub use self::workspace_origin::workspace;
@@ -846,7 +847,7 @@ fn identity_mismatch(pid: i32, recorded_start: Option<u64>) -> bool {
     match recorded_start {
         None => false,
         Some(recorded) => {
-            matches!(proto::pid_start_time(pid as u32), Some(live) if live != recorded)
+            matches!(proto::pid_start_time(pid.max(0) as u32), Some(live) if live != recorded)
         }
     }
 }
@@ -913,47 +914,54 @@ fn escalate(session: &str, sock: &Path, context: &str) -> KillOutcome {
     if identity_mismatch(pid, recorded_start) {
         return reused_refusal();
     }
-    if unsafe { libc::kill(pid, 0) } != 0 {
-        // ESRCH is the same definitive "gone" that proto::pid_confirmed_dead
-        // checks; read inline here (rather than a second probe through that
-        // helper) only because this branch also needs the raw errno for the
-        // EPERM refusal message below.
-        let e = std::io::Error::last_os_error();
-        return if e.raw_os_error() == Some(libc::ESRCH) {
+    let holder = match Pid::try_from(i64::from(pid)) {
+        Ok(holder) => holder,
+        Err(_) => return refusal(
+            context,
+            &format!("process {pid} holds the socket but no kernel could hold that pid"),
+            sock,
+        ),
+    };
+    // ESRCH is the same definitive "gone" that proto::pid_confirmed_dead
+    // checks; the typed probe names it directly, and a refused probe keeps
+    // its raw errno for the refusal below.
+    match holder.signal(0) {
+        SignalResult::Sent => {}
+        SignalResult::AlreadyGone => {
             // The holder is already gone: its files are stale, and nothing
             // needs signalling. The SocketGuard never ran, so clean up here.
-            match cleanup_after_death(sock, "is dead") {
+            return match cleanup_after_death(sock, "is dead") {
                 Ok(()) => KillOutcome {
                     path: KillPath::StaleSocket,
                     note: format!("removed stale socket for session {session:?} (server was dead)"),
                 },
                 Err(outcome) => outcome,
-            }
-        } else {
+            };
+        }
+        SignalResult::Failed(e) => {
             // Alive but not signalable by us (EPERM: recycled to a process
             // we lack permission on). Neither this nor pid_confirmed_dead
             // can tell "alive" from "can't tell", so refuse rather than guess.
-            refusal(
+            return refusal(
                 context,
                 &format!("process {pid} holds the socket but cannot be signalled: {e}"),
                 sock,
-            )
-        };
+            );
+        }
     }
     // A refused signal exits at once with its real error: EPERM here (the pid
     // was recycled to a privileged process between the pre-check above and
     // this signal) would otherwise burn both grace windows and end at a
     // "still alive after SIGKILL" refusal naming the wrong cause. ESRCH (the
     // holder died between the checks) falls through: holder_gone confirms it.
-    if unsafe { libc::kill(pid, libc::SIGTERM) } != 0
-        && std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
-    {
-        let e = std::io::Error::last_os_error();
-        return refusal(
-            context,
-            &format!("process {pid} could not be signalled (SIGTERM): {e}"),
-            sock,
-        );
+    if let SignalResult::Failed(e) = holder.signal(libc::SIGTERM) {
+        if e.raw_os_error() != Some(libc::ESRCH) {
+            return refusal(
+                context,
+                &format!("process {pid} could not be signalled (SIGTERM): {e}"),
+                sock,
+            );
+        }
     }
     if holder_gone(pid, sock, SIGTERM_GRACE) {
         return match cleanup_after_death(sock, "died") {
@@ -974,15 +982,14 @@ fn escalate(session: &str, sock: &Path, context: &str) -> KillOutcome {
     }
     // Same read as the SIGTERM rung: refuse on a refused signal instead of
     // polling a grace window out against a process that was never signalled.
-    if unsafe { libc::kill(pid, libc::SIGKILL) } != 0
-        && std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
-    {
-        let e = std::io::Error::last_os_error();
-        return refusal(
-            context,
-            &format!("process {pid} could not be signalled (SIGKILL): {e}"),
-            sock,
-        );
+    if let SignalResult::Failed(e) = holder.signal(libc::SIGKILL) {
+        if e.raw_os_error() != Some(libc::ESRCH) {
+            return refusal(
+                context,
+                &format!("process {pid} could not be signalled (SIGKILL): {e}"),
+                sock,
+            );
+        }
     }
     if holder_gone(pid, sock, SIGKILL_GRACE) {
         return match cleanup_after_death(sock, "died") {
@@ -5608,7 +5615,7 @@ mod tests {
     }
 
     fn alive(pid: u32) -> bool {
-        unsafe { libc::kill(pid as i32, 0) == 0 }
+        Pid::new(pid).is_some_and(|p| p.probe())
     }
     #[test]
     fn kill_server_escalates_to_sigkill_when_sigterm_is_ignored() {

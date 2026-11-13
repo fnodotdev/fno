@@ -17,9 +17,9 @@ struct KeeperProcess(std::process::Child);
 
 impl Drop for KeeperProcess {
     fn drop(&mut self) {
-        // SAFETY: SIGKILL to a process this test spawned.
-        unsafe {
-            libc::kill(self.0.id() as libc::pid_t, libc::SIGKILL);
+        // SIGKILL to a process this test spawned.
+        if let Some(pid) = Pid::from_child(&self.0) {
+            pid.signal(libc::SIGKILL);
         }
         let _ = self.0.wait();
     }

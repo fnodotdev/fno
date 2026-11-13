@@ -22,6 +22,7 @@
 //! Decision 8) - THAT sends `Bye` and exits, superseding Phase 1's rendered
 //! "exited" state.
 
+use crate::pid::{Pid, SignalResult};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -313,14 +314,14 @@ fn kill_plain_children(roster: &HashSet<PaneChild>) {
         .copied()
         .collect::<Vec<_>>();
     for child in &plain {
-        let result = unsafe { libc::kill(child.pid as libc::pid_t, libc::SIGKILL) };
-        if result != 0 {
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() != Some(libc::ESRCH) {
-                crate::mux_log!(error;
-                    "fno mux: emergency SIGKILL failed for pane child {}: {error}",
-                    child.pid
-                );
+        if let Some(pid) = Pid::new(child.pid) {
+            if let SignalResult::Failed(error) = pid.signal(libc::SIGKILL) {
+                if error.raw_os_error() != Some(libc::ESRCH) {
+                    crate::mux_log!(error;
+                        "fno mux: emergency SIGKILL failed for pane child {}: {error}",
+                        child.pid
+                    );
+                }
             }
         }
     }
@@ -330,11 +331,15 @@ fn kill_plain_children(roster: &HashSet<PaneChild>) {
 }
 
 fn reap_plain_child(pid: u32) {
+    let Some(pid) = Pid::new(pid) else {
+        return;
+    };
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut status = 0;
     loop {
-        let result = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) };
-        if result == pid as libc::pid_t {
+        // SAFETY: WNOHANG wait of this process's own pane child.
+        let result = unsafe { libc::waitpid(pid.as_raw(), &mut status, libc::WNOHANG) };
+        if result == pid.as_raw() {
             return;
         }
         if result < 0 {
@@ -2027,7 +2032,9 @@ fn node_id_shaped(s: &str) -> bool {
 /// live holder's claim from being stolen by a permissions error; ESRCH is the
 /// definitive "gone").
 fn pid_alive(pid: u32) -> bool {
-    !crate::proto::pid_confirmed_dead(pid as libc::pid_t)
+    i32::try_from(pid)
+        .map(|pid| !crate::proto::pid_confirmed_dead(pid))
+        .unwrap_or(true) // out of any kernel's range: err toward held
 }
 
 /// Resolve the `fno` binary: `$FNO_BIN`, else the running executable itself (the

@@ -2,6 +2,7 @@
 //! The served window lives in crate::served_liveness. Child of
 //! `agents_view`; parent items resolve through the glob.
 
+use crate::pid::Pid;
 use super::*;
 
 /// A recorded pid is CONFIRMED gone: ESRCH, or reachable but a zombie (dead,
@@ -12,11 +13,11 @@ use super::*;
 /// as unconfirmed rather than as license to signal the caller's own group or
 /// init.
 fn pid_confirmed_dead(pid: u64) -> bool {
-    if pid <= 1 || pid > i32::MAX as u64 {
+    let Some(pid) = Pid::try_from(pid).ok().filter(|p| !p.is_init()) else {
         return false;
-    }
+    };
     // The shared vocabulary; proto's copy owns the zombie-aware read.
-    crate::proto::pid_confirmed_dead(pid as i32)
+    crate::proto::pid_confirmed_dead(pid.as_raw())
 }
 
 /// A recorded pid positively EXISTS: `kill(pid, 0)` succeeds, or fails with
@@ -24,14 +25,11 @@ fn pid_confirmed_dead(pid: u64) -> bool {
 /// which is reachable yet gone. Only ESRCH is an absence, and
 /// `pid_confirmed_dead` owns that answer.
 fn pid_confirmed_alive(pid: u64) -> bool {
-    if pid <= 1 || pid > i32::MAX as u64 {
+    let Some(pid) = Pid::try_from(pid).ok().filter(|p| !p.is_init()) else {
         return false;
-    }
-    // SAFETY: signal 0 performs no delivery, only an existence/permission
-    // check.
-    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    (rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
-        && !crate::proto::pid_is_zombie(pid as i32)
+    };
+    // EPERM reads alive: there, just not ours to signal.
+    pid.exists() && !crate::proto::pid_is_zombie(pid.as_raw())
 }
 
 /// Derive [`Liveness`] for one row. `status` is the raw registry string;

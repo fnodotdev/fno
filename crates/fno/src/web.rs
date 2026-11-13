@@ -18,6 +18,7 @@
 //! Data flow, one direction only:
 //!   vt::Pane --composite--> Frame --broadcast--> bridge --WS/JSON--> browser
 
+use crate::pid::{Pid, SignalResult};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -404,7 +405,7 @@ fn stop_web(session: &str, socket: &Path) -> i32 {
     let Some(pid) = v
         .get("pid")
         .and_then(|p| p.as_u64())
-        .map(|p| p as libc::pid_t)
+        .and_then(|p| Pid::try_from(p).ok())
     else {
         // A state file that names no pid cannot be stopped or validated;
         // it is a corpse by definition.
@@ -418,9 +419,9 @@ fn stop_web(session: &str, socket: &Path) -> i32 {
     // recorded start token that no longer matches proves the pid was reused
     // after the bridge died - signalling it would hit a stranger.
     let recorded = v.get("started").and_then(|s| s.as_u64());
-    let stale = proto::pid_confirmed_dead(pid)
-        || proto::pid_is_zombie(pid)
-        || recorded.is_some_and(|r| proto::pid_start_time(pid as u32).is_none_or(|now| now != r));
+    let stale = proto::pid_confirmed_dead(pid.as_raw())
+        || proto::pid_is_zombie(pid.as_raw())
+        || recorded.is_some_and(|r| pid.start_time().is_none_or(|now| now != r));
     if stale {
         let _ = std::fs::remove_file(&state);
         println!("no live web bridge for session {session:?} (stale state file removed)");
@@ -430,28 +431,26 @@ fn stop_web(session: &str, socket: &Path) -> i32 {
     // Ctrl-C (tokio::signal::ctrl_c), so the same signal closes every browser
     // socket, lets the state file's Drop run, and a SIGTERM would bypass all
     // of it.
-    if unsafe { libc::kill(pid, libc::SIGINT) } != 0 {
-        let e = std::io::Error::last_os_error();
+    if let SignalResult::Failed(e) = pid.signal(libc::SIGINT) {
         eprintln!("fno mux serve --web: cannot signal pid {pid}: {e}");
         return 1;
     }
     // The pid's start token at signal time; if it stops matching during the
     // grace window, the bridge was reaped and the pid reused - the bridge is
     // gone, and the newcomer must not inherit the escalation.
-    let signalled_start = proto::pid_start_time(pid as u32);
+    let signalled_start = pid.start_time();
     let deadline = Instant::now() + WEB_STOP_GRACE;
     while Instant::now() < deadline {
-        let gone = proto::pid_confirmed_dead(pid)
-            || proto::pid_is_zombie(pid)
-            || signalled_start
-                .is_some_and(|s| proto::pid_start_time(pid as u32).is_none_or(|now| now != s));
+        let gone = proto::pid_confirmed_dead(pid.as_raw())
+            || proto::pid_is_zombie(pid.as_raw())
+            || signalled_start.is_some_and(|s| pid.start_time().is_none_or(|now| now != s));
         if gone {
             println!("web bridge for session {session:?} stopped (pid {pid})");
             return 0;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    unsafe { libc::kill(pid, libc::SIGKILL) };
+    pid.signal(libc::SIGKILL);
     println!(
         "web bridge for session {session:?} ignored SIGINT; killed (pid {pid}); \
          the state file it could not remove reads as no bridge"
@@ -486,14 +485,14 @@ pub(crate) fn recorded_pid_is_live(v: &serde_json::Value) -> bool {
     let Some(pid) = v
         .get("pid")
         .and_then(|p| p.as_u64())
-        .map(|p| p as libc::pid_t)
+        .and_then(|p| Pid::try_from(p).ok())
     else {
         return false;
     };
     let recorded = v.get("started").and_then(|s| s.as_u64());
-    !proto::pid_confirmed_dead(pid)
-        && !proto::pid_is_zombie(pid)
-        && recorded.is_none_or(|r| proto::pid_start_time(pid as u32).is_some_and(|now| now == r))
+    !proto::pid_confirmed_dead(pid.as_raw())
+        && !proto::pid_is_zombie(pid.as_raw())
+        && recorded.is_none_or(|r| pid.start_time().is_some_and(|now| now == r))
 }
 
 /// The bridge marker's typed read (`web-<session>.json`, written by
@@ -2214,7 +2213,7 @@ mod tests {
         let mut child = std::process::Command::new("true").spawn().unwrap();
         let pid = child.id();
         child.wait().unwrap();
-        assert!(proto::pid_confirmed_dead(pid as libc::pid_t));
+        assert!(proto::pid_confirmed_dead(pid as i32));
         let state = web_state_path(&socket).unwrap();
         std::fs::write(
             &state,
@@ -2296,7 +2295,7 @@ mod tests {
         let mut child = std::process::Command::new("true").spawn().unwrap();
         let dead_pid = child.id();
         child.wait().unwrap();
-        assert!(proto::pid_confirmed_dead(dead_pid as libc::pid_t));
+        assert!(proto::pid_confirmed_dead(dead_pid as i32));
         assert!(
             tcp_answers("127.0.0.1", port),
             "repro premise: the stranger holds the port"

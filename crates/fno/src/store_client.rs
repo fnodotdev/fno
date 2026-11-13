@@ -14,6 +14,7 @@
 //! never an empty answer: the commands surface the failure as the card's
 //! notice line.
 
+use crate::pid::Pid;
 use crate::keeper_wire::{ErrorKind, KeeperError, KeeperReply, KeeperRequest};
 use crate::keeper_wire::{TAG_REQUEST, TAG_RESPONSE};
 #[cfg(feature = "full")]
@@ -357,11 +358,10 @@ fn exec_call_within(graph: &Path, method: &str, params: Value, deadline: Duratio
     let Some(status) = status else {
         // Deadline fired: take down the whole group and reap, or a
         // long-lived mux server accumulates one zombie per timed-out read.
-        // SAFETY: process_group(0) made the child a group leader, so its
-        // pid is the pgid; killpg signals that group and cannot fail on a
-        // live leader.
-        unsafe {
-            libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
+        // process_group(0) made the child a group leader, so its pid is
+        // the pgid; the typed killpg signals that group.
+        if let Some(pid) = Pid::from_child(child) {
+            let _ = pid.signal_group(libc::SIGKILL);
         }
         let _ = child.wait();
         let _ = reader.join();

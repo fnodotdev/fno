@@ -15,6 +15,7 @@ mod bundle;
 mod human;
 mod report;
 
+use crate::pid::Pid;
 use std::ffi::OsString;
 use std::io::Write;
 
@@ -468,8 +469,8 @@ fn run_bounded(argv: &[String], deadline: std::time::Instant) -> Option<(i32, St
                 return Some((status.code().unwrap_or(-1), stdout, stderr));
             }
             Ok(None) if std::time::Instant::now() >= deadline => {
-                unsafe {
-                    libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+                if let Some(pid) = Pid::from_child(child) {
+                    let _ = pid.signal_group(libc::SIGKILL);
                 }
                 let _ = child.kill();
                 let _ = child.wait();
@@ -1101,7 +1102,7 @@ mod tests {
             .expect("the pid file holds an int");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
-            let alive = unsafe { libc::kill(child_pid, 0) } == 0;
+            let alive = Pid::new(child_pid).is_some_and(|p| p.probe());
             if !alive {
                 break;
             }

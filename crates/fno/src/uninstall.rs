@@ -5,6 +5,7 @@
 //! it must never depend on that wheel. `~/.fno` stays unless `--purge` is
 //! passed and the user types the confirmation word on a terminal.
 
+use crate::pid::Pid;
 use std::io::{BufRead, IsTerminal, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -669,13 +670,15 @@ fn rewrite(path: &Path, text: String) -> Result<String, String> {
 fn stop_daemon(pids: &[u32]) -> Result<String, String> {
     for &pid in pids {
         // SAFETY: kill with a real pid read from pgrep; a gone pid is ESRCH.
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+        if let Some(pid) = Pid::new(pid) {
+            pid.signal(libc::SIGTERM);
+        }
     }
     for _ in 0..50 {
         // SAFETY: signal 0 only probes existence.
         if pids
             .iter()
-            .all(|&p| unsafe { libc::kill(p as libc::pid_t, 0) } != 0)
+            .all(|&p| !Pid::new(p).is_some_and(|q| q.probe()))
         {
             return Ok("stopped".into());
         }

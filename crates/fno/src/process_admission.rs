@@ -6,6 +6,7 @@
 //! agent asked for, and only through that entry's explicit opt-in
 //! ([`admit_agent_spawn`]).
 
+use crate::pid::Pid;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs::OpenOptions;
@@ -1088,8 +1089,8 @@ fn marker_start_time(pid: u32, read: fn(u32) -> Option<u64>) -> Option<u64> {
         if let Some(start) = read(pid) {
             return Some(start);
         }
-        if crate::proto::pid_confirmed_dead(pid as libc::pid_t)
-            || crate::proto::pid_is_zombie(pid as libc::pid_t)
+        if crate::proto::pid_confirmed_dead(pid)
+            || crate::proto::pid_is_zombie(pid)
         {
             return None;
         }
@@ -1135,8 +1136,8 @@ fn marker_count_with(
         if !seen.insert(pid) {
             continue;
         }
-        if crate::proto::pid_confirmed_dead(pid as libc::pid_t)
-            || crate::proto::pid_is_zombie(pid as libc::pid_t)
+        if crate::proto::pid_confirmed_dead(pid)
+            || crate::proto::pid_is_zombie(pid)
         {
             continue;
         }
@@ -1262,7 +1263,9 @@ fn snapshot_macos() -> Result<Vec<ProcessRow>, CensusFailure> {
             io::Error::last_os_error()
         )));
     }
-    let mut pids = vec![0 as libc::pid_t; needed as usize];
+    // pid_t is i32 on every supported target; the raw pid_t cast is the pid
+    // module's alone.
+    let mut pids = vec![0i32; needed as usize];
     let bytes = i32::try_from(pids.len() * std::mem::size_of::<libc::pid_t>())
         .map_err(|_| CensusFailure::Unread("process snapshot is too large".into()))?;
     let found = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
@@ -1291,27 +1294,21 @@ fn snapshot_macos() -> Result<Vec<ProcessRow>, CensusFailure> {
             continue;
         }
         let name = c_name(&name_buf);
-        let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
-        let size = std::mem::size_of::<libc::proc_bsdinfo>();
-        let got = unsafe {
-            libc::proc_pidinfo(
-                pid,
-                libc::PROC_PIDTBSDINFO,
-                0,
-                info.as_mut_ptr().cast(),
-                i32::try_from(size).expect("proc_bsdinfo fits in c_int"),
-            )
+        let Some(p) = Pid::try_from(i64::from(pid)).ok() else {
+            continue;
         };
-        if got != i32::try_from(size).expect("proc_bsdinfo fits in c_int") {
-            // kill(2) inside the death probe below overwrites errno, so read
-            // it first.
-            let error = io::Error::last_os_error();
-            if got == 0 && error.raw_os_error() == Some(libc::ESRCH) {
-                // proc_listallpids is a point-in-time list. A process that
-                // exits between that list and proc_pidinfo is no longer live
-                // capacity, not an incomplete measurement.
-                continue;
-            }
+        // bsd_checked clears errno before the read and reads it on ANY failed
+        // fill: proc_pidinfo's failure return is not uniformly -1, and a stale
+        // errno from an unrelated earlier call must not be honored.
+        let info = match p.bsd_checked() {
+            Ok(info) => info,
+            Err(error) => {
+                if error.raw_os_error() == Some(libc::ESRCH) {
+                    // proc_listallpids is a point-in-time list. A process that
+                    // exits between that list and this read is no longer live
+                    // capacity, not an incomplete measurement.
+                    continue;
+                }
             // A pid that dies between proc_name and this read is gone
             // capacity, not a failed measurement. On macOS a defunct pid
             // answers neither ESRCH here nor ESRCH to kill(2), so positive
@@ -1336,35 +1333,23 @@ fn snapshot_macos() -> Result<Vec<ProcessRow>, CensusFailure> {
                 continue;
             }
             return Err(CensusFailure::Unread(format!(
-                "process snapshot row unavailable for pid={pid} name={name} got={got} errno={error}"
+                "process snapshot row unavailable for pid={pid} name={name} errno={error}"
             )));
         }
-        let info = unsafe { info.assume_init() };
+        };
         rows.push(ProcessRow {
             pid: info.pbi_pid,
             ppid: info.pbi_ppid,
             name,
         });
     }
-    let current_pid = std::process::id() as libc::pid_t;
-    if !rows.iter().any(|row| row.pid == current_pid as u32) {
-        let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
-        let size = std::mem::size_of::<libc::proc_bsdinfo>();
-        let got = unsafe {
-            libc::proc_pidinfo(
-                current_pid,
-                libc::PROC_PIDTBSDINFO,
-                0,
-                info.as_mut_ptr().cast(),
-                i32::try_from(size).expect("proc_bsdinfo fits in c_int"),
-            )
-        };
-        if got != i32::try_from(size).expect("proc_bsdinfo fits in c_int") {
+    let current_pid = Pid::current();
+    if !rows.iter().any(|row| row.pid == current_pid.as_u32()) {
+        let Ok(info) = current_pid.bsd_checked() else {
             return Err(CensusFailure::Unread(
                 "current process missing from process snapshot".into(),
             ));
-        }
-        let info = unsafe { info.assume_init() };
+        };
         rows.push(ProcessRow {
             pid: info.pbi_pid,
             ppid: info.pbi_ppid,
