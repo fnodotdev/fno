@@ -24,7 +24,7 @@ exercised for the Phase 7+ deferral.
 
 ## The frozen wheel (legacy)
 
-PyPI stopped taking fno releases: the last wheel is 0.4.8 and none was built after, so the release needs no PyPI token. The wheel stays up for old installs, and it still works: `uv tool install fno` puts a working front door on PATH, and that front door (0.4.7+) moves the install to `~/.fno/install/bin` on its next call, retiring the uv tool. No wheel is built or uploaded by this repo; the wheel workflow is deleted.
+PyPI stopped taking fno releases. The last wheel is 0.4.8, and none was built after, so the release needs no PyPI token. The wheel stays up for old installs. `uv tool install fno` puts a working front door on PATH. That front door (0.4.7+) moves the install to `~/.fno/install/bin` on its next call and retires the uv tool. No wheel is built or uploaded by this repo. The wheel workflow is deleted.
 
 ## Rust runtime for `fno agents` (default)
 
