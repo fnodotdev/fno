@@ -22,7 +22,7 @@ in System Settings > Privacy & Security > Screen Recording";
 
 /// What the capture covers: the whole display, a rectangle, or one window.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Area {
+pub enum Area {
     Display,
     Rect(u32, u32, u32, u32),
     Window(u64),
@@ -30,7 +30,7 @@ pub(crate) enum Area {
 
 /// One parsed `pane run --shot` call.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ShotSpec {
+pub struct ShotSpec {
     pub out: String,
     pub area: Area,
     pub timeout: Duration,
@@ -65,17 +65,15 @@ pub(crate) enum ShotError {
 }
 
 /// `x,y,w,h`: four non-negative integers, w and h above zero.
-pub(crate) fn parse_rect(v: &str) -> Result<Area, String> {
+pub(crate) fn parse_rect(v: &str) -> Option<Area> {
     let parts: Vec<u32> = v
         .split(',')
         .map(|p| p.trim().parse::<u32>())
         .collect::<Result<_, _>>()
-        .map_err(|_| format!("--rect needs x,y,w,h as four non-negative integers, got {v:?}"))?;
+        .ok()?;
     match parts[..] {
-        [x, y, w, h] if w > 0 && h > 0 => Ok(Area::Rect(x, y, w, h)),
-        _ => Err(format!(
-            "--rect needs x,y,w,h as four non-negative integers (w and h above 0), got {v:?}"
-        )),
+        [x, y, w, h] if w > 0 && h > 0 => Some(Area::Rect(x, y, w, h)),
+        _ => None,
     }
 }
 
@@ -246,11 +244,11 @@ mod tests {
     fn rect_parses_four_integers_and_refuses_the_rest() {
         assert_eq!(
             parse_rect("600,320,1360,832"),
-            Ok(Area::Rect(600, 320, 1360, 832))
+            Some(Area::Rect(600, 320, 1360, 832))
         );
-        assert!(parse_rect("1,2,3").is_err());
-        assert!(parse_rect("1,2,0,4").is_err());
-        assert!(parse_rect("a,b,c,d").is_err());
+        assert!(parse_rect("1,2,3").is_none());
+        assert!(parse_rect("1,2,0,4").is_none());
+        assert!(parse_rect("a,b,c,d").is_none());
     }
 
     #[test]

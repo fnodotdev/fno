@@ -329,7 +329,11 @@ pub fn parse_pane_args(
                         "--rect" | "--window-id" if shot_area.is_some() => {
                             return Err("--rect and --window-id are one choice".into())
                         }
-                        "--rect" => shot_area = Some(pane_shot::parse_rect(v)?),
+                        "--rect" => {
+                            shot_area = Some(pane_shot::parse_rect(v).ok_or_else(|| {
+                                format!("--rect needs x,y,w,h as four non-negative integers (w and h above 0), got {v:?}")
+                            })?)
+                        }
                         "--window-id" => {
                             shot_area =
                                 Some(pane_shot::Area::Window(v.parse().map_err(|_| {
