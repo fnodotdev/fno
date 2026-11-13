@@ -1645,7 +1645,7 @@ pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
         }
         Some(ViewKind::HqEmpty | ViewKind::HqComposer) => {
             super::org_board::open(&mut view);
-            view.board_full = matches!(kind, Some(ViewKind::HqEmpty));
+            view.board_full = true;
             view.sideline_width = view.sideline_width.max(60);
             let b = view.org_board.as_mut().ok_or("org view did not open")?;
             b.fleet = Some(super::org_seats::Fleet {
@@ -1655,8 +1655,25 @@ pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
                 measured_at: chrono::Utc::now().timestamp().max(0) as u64,
             });
             if matches!(kind, Some(ViewKind::HqComposer)) {
+                view.launcher_catalog = Some(super::agent_launcher::CatalogOutcome::Ok(
+                    vec![super::agent_launcher::HarnessChoice {
+                        name: "claude".into(),
+                        native: true,
+                        installed: true,
+                        models: Vec::new(),
+                        more: Vec::new(),
+                        catalog_error: None,
+                        models_error: None,
+                        efforts: Some(Vec::new()),
+                        permission_modes: Some(Vec::new()),
+                        launch_flags: None,
+                    }],
+                    None,
+                    Vec::new(),
+                ));
                 super::org_board::open_composer(&mut view, "");
                 if let Some(l) = view.launcher.as_mut() {
+                    super::agent_launcher::sync_harness_names(l, &view.launcher_catalog);
                     l.draft.message = "write the retry test for the spawn door".to_string();
                     l.draft.cursor_chars = l.draft.message.chars().count();
                 }

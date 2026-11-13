@@ -24,10 +24,20 @@ pub(super) fn summary() -> String {
     if apps.is_empty() {
         return "none".into();
     }
-    let shown: Vec<&str> = apps.iter().take(2).map(String::as_str).collect();
+    let plain: Vec<String> = apps
+        .iter()
+        .take(2)
+        .map(|a| match a.split_once('=') {
+            Some((name, mode)) if mode.trim().eq_ignore_ascii_case("stream") => {
+                format!("{} (streaming)", name.trim())
+            }
+            Some((name, _)) => name.trim().to_string(),
+            None => a.clone(),
+        })
+        .collect();
     match apps.len().saturating_sub(2) {
-        0 => shown.join(", "),
-        more => format!("{}, +{more} more", shown.join(", ")),
+        0 => plain.join(", "),
+        more => format!("{}, +{more} more", plain.join(", ")),
     }
 }
 

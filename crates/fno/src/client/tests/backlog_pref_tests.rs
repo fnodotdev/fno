@@ -65,15 +65,19 @@ fn sideline_menu_lists_backlog_and_leaves_experimental_to_settings() {
     assert_eq!(on.actions[at], AuxAction::Share(share_flow::Act::Start));
 }
 
-// The composer opened from HQ keeps HQ behind it and brings it back on close;
-// the keys that mean something in HQ (`n`, `L`) are plain text inside it.
+// The composer opened from HQ is drawn by HQ and HQ stays the screen; the keys
+// that mean something in HQ (`n`, `L`) are plain text inside it.
 #[test]
 fn n_and_l_typed_in_the_hq_composer_are_text_and_hq_stays_behind() {
     let mut v = two_pane_view();
     org_board::open(&mut v);
     org_board::open_composer(&mut v, "");
     assert!(v.launcher.is_some(), "the composer opened");
-    assert!(v.org_board.is_some(), "HQ is kept behind it");
+    assert_eq!(
+        v.sideline_view,
+        crate::view_store::SidelineView::Org,
+        "HQ stays the screen"
+    );
     let mut sock: Vec<u8> = Vec::new();
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {

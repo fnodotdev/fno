@@ -769,6 +769,55 @@ pub(crate) fn paint(
     width: usize,
     height: usize,
 ) {
+    paint_board(view, cells, rows, cols, width, height);
+    paint_composer(view, cells, rows, cols, width, height);
+}
+
+/// The composer card, drawn over the foot of HQ above its key bar, so a
+/// session starts from HQ without leaving it. Keys reach it through the
+/// launcher, so `n` and `L` type text there.
+fn paint_composer(
+    view: &View,
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    width: usize,
+    height: usize,
+) {
+    let (Some(b), Some(l)) = (&view.org_board, &view.launcher) else {
+        return;
+    };
+    let (width, height) = (width.min(cols), height.min(rows));
+    let lines = l.card_lines(view, width.saturating_sub(2));
+    let foot = height.saturating_sub(b.footer_h(width));
+    let top = foot.saturating_sub(lines.len());
+    // Docked HQ paints into a slice that starts below the strip row, and the
+    // terminal cursor is in screen rows.
+    let y0 = (view.term.0 as usize).saturating_sub(rows);
+    for (k, cl) in lines.iter().enumerate() {
+        let r = top + k;
+        if r >= foot {
+            break;
+        }
+        for c in 0..width {
+            cells[r * cols + c] = Cell::default();
+        }
+        super::paint_legacy_row(cells, r, cols, width, &cl.text, 0);
+        view.decorate_card_line(cells, r, cols, width, cl);
+        if let Some(c) = cl.cursor {
+            view.card_cursor.set(Some(((r + y0) as u16, c as u16)));
+        }
+    }
+}
+
+fn paint_board(
+    view: &View,
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    width: usize,
+    height: usize,
+) {
     let Some(b) = &view.org_board else {
         return;
     };
@@ -1018,21 +1067,9 @@ pub(crate) async fn keys(
     Ok(StdinFlow::Continue)
 }
 
-/// Put HQ back after a composer opened from it closes, with the full-screen
-/// flag it had.
-pub(crate) fn return_to_hq(view: &mut View) {
-    if let Some(full) = view.hq_return.take() {
-        if view.org_board.is_some() {
-            view.board_full = full;
-            view.sideline_view = SidelineView::Org;
-        }
-    }
-}
-
 /// Open the composer prefix+i opens, over HQ: the same launcher and the same
-/// spawn door, so a session started here is one started anywhere. The card
-/// paints in the Agents list, so the sideline shows that while it is open
-/// and [`return_to_hq`] brings HQ back when it closes.
+/// spawn door, so a session started here is one started anywhere. HQ draws
+/// the card ([`paint_composer`]) and stays the screen.
 pub(crate) fn open_composer(view: &mut View, seed: &str) {
     if view.density == super::Density::Slim || view.panel_w() == 0 {
         view.set_notice("widen the sideline to open the composer".into());
@@ -1047,11 +1084,9 @@ pub(crate) fn open_composer(view: &mut View, seed: &str) {
     if let Err(e) = opened {
         view.set_notice(e);
     }
-    // The card paints in the Agents list, so a full-screen HQ would hide it:
-    // step the board back for the length of the composer.
+    // `open_in` parks the sideline on Agents; HQ paints the card itself.
     if view.launcher.is_some() {
-        view.hq_return = Some(view.board_full);
-        view.board_full = false;
+        view.sideline_view = SidelineView::Org;
     }
 }
 

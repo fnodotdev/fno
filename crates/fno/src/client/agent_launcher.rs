@@ -1155,7 +1155,6 @@ pub(crate) fn close(view: &mut View) {
         l.picker = None;
         view.launcher_closed.insert(l.squad, l);
     }
-    super::org_board::return_to_hq(view);
 }
 
 /// Fold one terminal update into the View. Returns the pane to focus when
@@ -1207,7 +1206,6 @@ pub(crate) fn apply_launch_update(view: &mut View, update: AgentLaunchUpdate) ->
         {
             view.launcher = None;
             view.launcher_esc = Default::default();
-            super::org_board::return_to_hq(view);
         }
         view.launcher_closed
             .retain(|_, l| l.armed != Some(request_id));

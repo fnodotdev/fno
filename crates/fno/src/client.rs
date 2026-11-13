@@ -967,8 +967,6 @@ pub(crate) struct View {
     /// `mux.launch_screen`: the screen a launch opens on. HQ itself is
     /// always reachable; this only picks the first one.
     launch_screen: view_store::LaunchScreen,
-    /// Set while the composer was opened from HQ: the board-full flag HQ had.
-    hq_return: Option<bool>,
     /// The persisted experimental toggles (see `experimental`).
     experimental_pane_share: bool,
     share: Option<share_flow::Share>,
@@ -1937,7 +1935,6 @@ impl View {
             org_generation: 0,
             sideline_view: crate::view_store::load_sideline_view(),
             board_full: view_store::load_board_full(),
-            hq_return: None,
             launch_screen: view_store::LaunchScreen::parse(
                 crate::config_defaults::lookup_key(view_store::LaunchScreen::KEY).as_deref(),
             ),
