@@ -141,6 +141,7 @@ fn unknown_arg_error(token: &str, args: &[String]) -> i32 {
     }
 }
 
+#[derive(Debug)]
 struct ReplyArgs {
     to: Option<String>,
     kind: String,
@@ -237,7 +238,8 @@ fn fold_positionals(mut out: ReplyArgs) -> Result<ReplyArgs, i32> {
             let second = out.positionals.remove(0);
             if !looks_like_msg_id(&first) {
                 return Err(usage_error(&format!(
-                    "Got more than one positional value: '{second}'. {REPLY_FORMS}."
+                    "Got more than one positional value: '{first}' is not a msg-id. \
+                     The reply target must lead. {REPLY_FORMS}."
                 )));
             }
             if let Some(to) = &out.to {
