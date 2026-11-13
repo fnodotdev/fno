@@ -16,7 +16,7 @@ fno mux            # in another terminal: the app needs a running mux server
 "$T"
 ```
 
-The `codesign -s -` step gives the binary an ad-hoc signature. No developer account is needed.
+The `codesign -s -` step gives the binary an ad-hoc signature. No developer account is needed. An agent session declares the build: prefix `FNO_BUILD_WHY="<why>"` (mux shots, a bug repro). A human terminal builds freely.
 
 Each app release ships `fno-app-macos-arm64.tar.gz` for Apple Silicon, on its own `fno-app-v<version>` release. It holds `fno-app.app`, signed with a Developer ID, notarized and stapled, so it opens with no prompt. If the release was built without the signing secrets, the bundle is ad-hoc signed instead. Then Gatekeeper asks once. Clear the prompt with `xattr -d com.apple.quarantine fno-app.app`. The app runs the `fno` and `fno-agents` it finds beside itself, then on `PATH`, so install fno first.
 

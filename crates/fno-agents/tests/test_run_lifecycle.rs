@@ -1076,6 +1076,174 @@ fn a_second_cargo_waits_until_the_building_cargo_exits() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// The compile door (law D3323): an agent-origin `cargo build` pid refuses
+/// with exit 86 and the declared form named; a declared build admits and
+/// journals once per cargo; a human-origin cargo (no FNO_AGENT_SELF) is
+/// never gated (D1746); and a `cargo test` subcommand passes the compile
+/// door untouched, because the run door owns test refusals.
+#[test]
+fn agent_compile_refusal_declared_why_and_human_lane_at_the_compile_door() {
+    let root = std::fs::canonicalize(tmp_claims_root("agent-compile")).unwrap();
+    let tree = root.join("a");
+    std::fs::create_dir_all(&tree).unwrap();
+    let home = root.join("agents-home");
+    std::fs::create_dir_all(&home).unwrap();
+    // The journal sits one level under the scratch root, so neither the
+    // door's FNO_AGENTS_HOME-derived state root nor the test process's own
+    // ~/.fno equals its parent: the store routing never fires, and both
+    // processes read and write the same <journal>.db beside it.
+    let journal = root.join("journal/events.jsonl");
+
+    // A real binary named `cargo` that naps (a shebang script would show the
+    // interpreter's argv in ps, which `compile_subcommand_of` never matches).
+    let bin_dir = root.join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let source = root.join("bin/shim.rs");
+    std::fs::write(
+        &source,
+        "fn main() { std::thread::sleep(std::time::Duration::from_secs(120)); }\n",
+    )
+    .unwrap();
+    let shim_path = bin_dir.join("cargo");
+    let built = Command::new("rustc")
+        .arg("-o")
+        .arg(&shim_path)
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(
+        built.status.success(),
+        "rustc failed: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let wait_visible = |pid: u32, arg: &str| {
+        for _ in 0..100 {
+            let out = Command::new("ps")
+                .args(["-p", &pid.to_string(), "-ww", "-o", "command="])
+                .output()
+                .unwrap();
+            let line = String::from_utf8_lossy(&out.stdout);
+            if line.contains("cargo") && line.contains(arg) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        panic!("the cargo shim never surfaced in ps with arg {arg}");
+    };
+
+    // Refused: agent-origin, no declared reason.
+    let mut cargo_build = Command::new(&shim_path).arg("build").spawn().unwrap();
+    wait_visible(cargo_build.id(), "build");
+    let out = build_admit(&root, cargo_build.id(), &tree)
+        .env("FNO_EVENTS_PATH", &journal)
+        .env("FNO_AGENTS_HOME", &home)
+        .output()
+        .expect("run the compile-door refusal");
+    assert_eq!(
+        out.status.code(),
+        Some(86),
+        "the compile refusal exits 86: {:?}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("[cargo build]") && stderr.contains("fno do pr push"),
+        "the refusal names cause and way out: {stderr}"
+    );
+    assert!(
+        stderr.contains("FNO_BUILD_WHY"),
+        "the refusal names the declared form: {stderr}"
+    );
+
+    // Declared: admits, notes once, journals once across two crate calls.
+    let ok = build_admit(&root, cargo_build.id(), &tree)
+        .env("FNO_BUILD_WHY", "mux shots")
+        .env("FNO_EVENTS_PATH", &journal)
+        .env("FNO_AGENTS_HOME", &home)
+        .output()
+        .expect("run the declared build-admit");
+    assert!(
+        ok.status.success(),
+        "a declared build admits: {:?}",
+        String::from_utf8_lossy(&ok.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&ok.stderr).contains("declared build"),
+        "the declared note names the why: {:?}",
+        String::from_utf8_lossy(&ok.stderr)
+    );
+
+    // A second crate call for the same cargo pid journals nothing further.
+    let ok2 = build_admit(&root, cargo_build.id(), &tree)
+        .env("FNO_BUILD_WHY", "mux shots")
+        .env("FNO_EVENTS_PATH", &journal)
+        .env("FNO_AGENTS_HOME", &home)
+        .output()
+        .expect("run the declared build-admit a second time");
+    assert!(
+        ok2.status.success(),
+        "second crate call admits: {:?}",
+        String::from_utf8_lossy(&ok2.stderr)
+    );
+    assert!(
+        !String::from_utf8_lossy(&ok2.stderr).contains("declared build"),
+        "the declared note is said once per cargo: {:?}",
+        String::from_utf8_lossy(&ok2.stderr)
+    );
+
+    // Human lane: same shim, no FNO_AGENT_SELF, never gated (D1746).
+    let human = build_admit(&root, cargo_build.id(), &tree)
+        .env_remove("FNO_AGENT_SELF")
+        .output()
+        .expect("run the human-origin build-admit");
+    assert!(
+        human.status.success(),
+        "a human-typed cargo build is never refused: {:?}",
+        String::from_utf8_lossy(&human.stderr)
+    );
+
+    // Test subcommand: the compile door does not gate it.
+    let mut cargo_test_shim = Command::new(&shim_path).arg("test").spawn().unwrap();
+    wait_visible(cargo_test_shim.id(), "test");
+    let test_lane = build_admit(&root, cargo_test_shim.id(), &tree)
+        .env("FNO_EVENTS_PATH", &journal)
+        .env("FNO_AGENTS_HOME", &home)
+        .output()
+        .expect("run the test-subcommand build-admit");
+    assert!(
+        test_lane.status.success(),
+        "a cargo test subcommand passes the compile door: {:?}",
+        String::from_utf8_lossy(&test_lane.stderr)
+    );
+
+    // The journal: one refused row and one allowed row, keyed cargo build.
+    // The store reader, never a raw file read: rows live behind the SQL
+    // store at the path, not in plain bytes.
+    let rows = fno_agents::event_store::journal_text(&journal, &["test_run"]);
+    assert!(
+        rows.contains("\"stage\":\"refused\"") && rows.contains("agent-compile"),
+        "the refusal journaled: {rows}"
+    );
+    assert!(
+        rows.contains("\"stage\":\"allowed\"") && rows.contains("\"reason\":\"mux shots\""),
+        "the declared build journaled: {rows}"
+    );
+    assert!(
+        rows.contains("\"command_key\":\"cargo build\""),
+        "the rows key under cargo build: {rows}"
+    );
+    assert!(
+        rows.contains("\"worktree\""),
+        "rows carry the worktree: {rows}"
+    );
+
+    let _ = cargo_test_shim.kill();
+    let _ = cargo_test_shim.wait();
+    let _ = cargo_build.kill();
+    let _ = cargo_build.wait();
+    let _ = std::fs::remove_dir_all(&root);
+}
 /// A cargo started under the holding cargo (a test that runs cargo) is
 /// admitted at once and leaves the claim with its ancestor.
 #[test]

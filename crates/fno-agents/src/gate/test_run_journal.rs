@@ -43,6 +43,11 @@ pub(crate) fn command_key(argv: &[String], whole: bool) -> String {
         parts.extend(crate_name.map(str::to_string));
         parts.extend(selector.map(str::to_string));
         parts.join(" ")
+    } else if words.first().map(|w| basename(w)) == Some("cargo") {
+        match crate::test_run::compile_subcommand_of(&words.join(" ")) {
+            Some(sub) => format!("cargo {}", crate::test_run::long_compile_name(sub)),
+            None => "cargo".to_string(),
+        }
     } else {
         words
             .first()
@@ -108,6 +113,15 @@ pub(crate) fn record_refused(run: &Run<'_>, reason: &str, exit_code: i32, pid: u
         "refused",
         json!({ "reason": reason, "exit_code": exit_code, "pid": pid }),
     );
+}
+
+/// One durable row for an agent build the compile door allowed because the
+/// command declared a reason (`FNO_BUILD_WHY=<why>`). The stats fold reads
+/// started/finished pairs only, so an allowed row is neither unfinished work
+/// nor a duration; the reason travels in the row and append() adds the
+/// worktree from the door's cwd.
+pub(crate) fn record_allowed_build(run: &Run<'_>, reason: &str) {
+    append(run, "allowed", json!({ "reason": reason }));
 }
 
 /// Linear-interpolated percentile of an ascending list.
@@ -300,5 +314,69 @@ mod tests {
         assert_eq!(summary.unfinished, 0);
         assert!(summary.durations_ms.is_empty(), "{summary:?}");
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// The allowed-build row is the demand signal's ledger: one row per
+    /// declared agent build, carrying the declared reason and the worktree.
+    /// The stats fold ignores it (no started/finished pair), so an allowed
+    /// row never reads as a duration or as unfinished work.
+    #[test]
+    fn allowed_build_row_carries_reason_and_never_a_duration() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let home = std::env::temp_dir().join(format!(
+            "fno-journal-allowed-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(home.join("agents-home")).unwrap();
+        let journal = home.join("events.jsonl");
+        let _home_guard = crate::claims::EnvVarGuard::set(
+            "FNO_AGENTS_HOME",
+            &home.join("agents-home").display().to_string(),
+        );
+        let _pin =
+            crate::claims::EnvVarGuard::set("FNO_EVENTS_PATH", &journal.display().to_string());
+        let run = Run {
+            run_id: "r1",
+            argv: &argv(&["cargo", "build"]),
+            whole: false,
+        };
+        record_allowed_build(&run, "mux shots");
+        let text = crate::event_store::journal_text(&events_path(), &["test_run"]);
+        assert!(text.contains("\"stage\":\"allowed\""), "{text}");
+        assert!(text.contains("\"reason\":\"mux shots\""), "{text}");
+        assert!(text.contains("cargo build"), "{text}");
+        assert!(text.contains("\"worktree\""), "{text}");
+        // The stats fold ignores an allowed row entirely.
+        let summary = summarize(&text);
+        assert_eq!(summary.unfinished, 0);
+        assert!(summary.durations_ms.is_empty(), "{summary:?}");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// A declared `cargo b` and a `cargo clippy` key under their long
+    /// subcommand names, the same group a `cargo build` keys to.
+    #[test]
+    fn compile_command_keys_fold_aliases() {
+        assert_eq!(command_key(&argv(&["cargo", "b"]), false), "cargo build");
+        assert_eq!(
+            command_key(&argv(&["cargo", "check", "--all-targets"]), false),
+            "cargo check"
+        );
+        assert_eq!(
+            command_key(&argv(&["cargo", "clippy", "--", "-D", "warnings"]), false),
+            "cargo clippy"
+        );
+        // A non-compile cargo subcommand keeps the generic key.
+        assert_eq!(
+            command_key(&argv(&["cargo", "run", "--bin", "fno"]), false),
+            "cargo"
+        );
+        assert_eq!(command_key(&argv(&["cargo", "clean"]), false), "cargo");
     }
 }

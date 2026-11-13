@@ -101,7 +101,7 @@ Do not prefix a getter with `get_`. Use `as_` for a cheap borrow, `to_` for a co
 
 ### R17. cargo fmt and cargo clippy are the tools of record
 
-Run `cargo fmt` and `cargo clippy -- -D warnings`. Why: a formatter ends style debates, and a lint that warns is a lint nobody reads.
+CI runs `cargo fmt --check` and `cargo clippy -- -D warnings` on every PR, so CI is the lint of record. A worker runs `cargo fmt --check` only: local cargo build, check and clippy refuse in an agent session (the compile door, exit 86). A build the turn genuinely needs declares itself with `FNO_BUILD_WHY="<why>"`.
 
 ## Dropped from the sources
 
@@ -121,7 +121,7 @@ The source skills ask for three more things that this repo does not adopt. They 
 | R9 | the same ratchet: `clippy::let_underscore_must_use`. It sees a dropped `Result`; the comment is still review |
 | R14 | the same ratchet: `clippy::undocumented_unsafe_blocks` |
 | R15 | the same ratchet: `clippy::too_many_lines`, at clippy's default of 100 lines |
-| R17 | CI `cargo fmt --check` and `cargo clippy` |
+| R17 | CI `cargo fmt --check` and `cargo clippy`; the compile door refuses an agent's local build, check and clippy |
 | the rest | review |
 
 A gate refusal names the crate, the pattern, the two counts and the rule. The remedy is in the rule above. The gate has no number to raise.

@@ -237,6 +237,145 @@ fn refuses_frozen_build(worktree: &Path) -> bool {
     crate::spawn_gate_admission::gate_agent_origin()
 }
 
+/// The compile-door refusal (law D3323): an agent session's cargo build,
+/// check or clippy refuses like its cargo test. CI builds the pushed head;
+/// the fleet incidents this closes measured 67 rust processes at once across
+/// seven worktrees. A human-typed call is never refused (D1746), and `fno
+/// doctor update`'s install build is the user's fno loading (law
+/// d-829648bb). A live `test:priority` grant lifts the test refusal only:
+/// it grants tests, not compiles.
+const AGENT_COMPILE_LINE: &str = "[cargo build] an agent session compiles nothing on this machine: cargo build, check and clippy refuse here. CI builds the pushed head: commit, push with `fno do pr push`. A build this turn genuinely needs (mux shots, a bug repro) declares itself: prefix the command with `FNO_BUILD_WHY=\"<why>\"` and it runs, journalled.";
+
+/// The cargo subcommands the compile door refuses for an agent session, in
+/// the forms cargo --list advertises (`build, b`, `check, c`).
+const AGENT_COMPILE_SUBCOMMANDS: [&str; 5] = ["build", "b", "check", "c", "clippy"];
+
+/// The advertised alias folded to the long form a journal key reads.
+pub(crate) fn long_compile_name(sub: &str) -> &'static str {
+    match sub {
+        "build" | "b" => "build",
+        "check" | "c" => "check",
+        _ => "clippy",
+    }
+}
+
+/// The refused compile subcommand in a cargo command line, or None: the
+/// first bare token after the cargo basename, against
+/// [`AGENT_COMPILE_SUBCOMMANDS`]. `cargo test`, `cargo run`, `cargo clean`
+/// and every non-cargo head answer None here.
+pub(crate) fn compile_subcommand_of(command: &str) -> Option<&'static str> {
+    let mut words = command.split_whitespace();
+    let head = words.next()?;
+    if head.rsplit('/').next() != Some("cargo") {
+        return None;
+    }
+    let sub = words.find(|w| !w.starts_with('-') && !w.starts_with('+'))?;
+    AGENT_COMPILE_SUBCOMMANDS
+        .iter()
+        .copied()
+        .find(|s| *s == sub)
+}
+
+/// The census table's command line for `pid`, when it shows a cargo.
+fn cargo_command_line(pid: u32) -> Option<String> {
+    let (rows, _) = crate::census::process_table();
+    rows.iter()
+        .find(|r| r.pid == pid)
+        .map(|r| r.command.clone())
+}
+
+/// The census answer for one cargo pid, cached in a tmp marker. Cargo runs
+/// one door call per crate, and a full-table walk per call would tax every
+/// agent compile, the sanctioned doctor-test lane included. One cargo's
+/// argv never changes mid-run, so the first crate's answer serves the rest.
+/// A dead pid's marker sweeps with the beside markers' rule. A pid recycled
+/// inside one sweep horizon keeps the old answer: the accepted shape of the
+/// pid-keyed markers.
+fn cached_cargo_command_line(pid: u32) -> Option<String> {
+    let dir = std::env::temp_dir().join("fno-cargo-subcmd");
+    let path = dir.join(pid.to_string());
+    if let Ok(text) = std::fs::read_to_string(&path) {
+        return Some(text);
+    }
+    let line = cargo_command_line(pid)?;
+    std::fs::create_dir_all(&dir).ok();
+    std::fs::write(&path, &line).ok();
+    sweep_dead_cargo_markers(&dir);
+    Some(line)
+}
+
+/// The declared build reason the command carried, or None. `FNO_BUILD_WHY=x
+/// cargo build` reaches this door without new plumbing: the rustc wrapper
+/// and this door are cargo's descendants, so the var rides cargo's env.
+/// Whitespace-only is undeclared.
+fn declared_build_why() -> Option<String> {
+    std::env::var_os("FNO_BUILD_WHY")
+        .map(|v| v.to_string_lossy().trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// The compile-door verdict for one cargo: Admit, Refused (print the line,
+/// exit 86), or Declared (admit after one journal row).
+enum CompileVerdict {
+    Admit,
+    Refused {
+        subcommand: &'static str,
+    },
+    Declared {
+        subcommand: &'static str,
+        why: String,
+    },
+}
+
+fn compile_verdict(cargo_pid: u32) -> CompileVerdict {
+    // A human-typed cargo never reads as agent origin (D1746), and the
+    // install build is the user's fno loading. Both admit before any read.
+    if install_build() || !crate::spawn_gate_admission::gate_agent_origin() {
+        return CompileVerdict::Admit;
+    }
+    // A command the census cannot read refuses nothing: a recycled pid or a
+    // missed row is not evidence of a compile.
+    let Some(sub) = cached_cargo_command_line(cargo_pid).and_then(|c| compile_subcommand_of(&c))
+    else {
+        return CompileVerdict::Admit;
+    };
+    match declared_build_why() {
+        Some(why) => CompileVerdict::Declared {
+            subcommand: sub,
+            why,
+        },
+        None => CompileVerdict::Refused { subcommand: sub },
+    }
+}
+
+/// The journal argv for a compile row: cargo plus the long subcommand name,
+/// so `command_key` groups `cargo b` with `cargo build`.
+fn compile_journal_argv(sub: &str) -> Vec<String> {
+    vec!["cargo".to_string(), long_compile_name(sub).to_string()]
+}
+
+/// True on this cargo incarnation's first door call. The declared-build
+/// marker records the pid's birth token, so a recycled pid whose marker
+/// outlived its cargo reads stale and journals again. A dead pid's marker
+/// sweeps with the beside markers' rule.
+fn first_for_incarnation(pid: u32) -> bool {
+    let dir = std::env::temp_dir().join("fno-compile-declared");
+    std::fs::create_dir_all(&dir).ok();
+    let path = dir.join(pid.to_string());
+    let Some(birth) = crate::daemon::process_start_time(pid) else {
+        return true;
+    };
+    let birth = birth.to_string();
+    if let Ok(prev) = std::fs::read_to_string(&path) {
+        if prev.trim() == birth {
+            return false;
+        }
+    }
+    std::fs::write(&path, &birth).ok();
+    sweep_dead_cargo_markers(&dir);
+    true
+}
+
 /// The sanctioned queue lane: a whole-suite run (FNO_TEST_FULL=1) may queue,
 /// backgrounded, exactly as the test-run guard's refusal text documents.
 pub(crate) fn full_suite_lane() -> bool {
@@ -1336,6 +1475,46 @@ fn run_build_admit(args: &[String]) -> i32 {
             cargo_pid,
         );
         return SLOT_BUSY;
+    }
+    // The compile refusal (law D3323) sits beside the freeze with the same
+    // reach: a cargo build already running meets it at its next crate, so
+    // setting the law stops an in-flight agent build instead of letting it
+    // run to completion.
+    match compile_verdict(cargo_pid) {
+        CompileVerdict::Refused { subcommand } => {
+            eprintln!("{AGENT_COMPILE_LINE}");
+            let argv = compile_journal_argv(subcommand);
+            crate::test_run_journal::record_refused(
+                &crate::test_run_journal::Run {
+                    run_id: "build-admit",
+                    argv: &argv,
+                    whole: false,
+                },
+                "agent-compile",
+                SLOT_BUSY,
+                cargo_pid,
+            );
+            return SLOT_BUSY;
+        }
+        CompileVerdict::Declared { subcommand, why } => {
+            // A declared build admits and journals once per cargo (cargo
+            // asks once per crate; the birth-token marker reads a recycled
+            // pid as stale). The line is visible too: a worker reading its
+            // own stderr sees what it declared.
+            if first_for_incarnation(cargo_pid) {
+                eprintln!("cargo admission: declared build ({why}); admitted and journalled");
+                let argv = compile_journal_argv(subcommand);
+                crate::test_run_journal::record_allowed_build(
+                    &crate::test_run_journal::Run {
+                        run_id: "build-admit",
+                        argv: &argv,
+                        whole: false,
+                    },
+                    &why,
+                );
+            }
+        }
+        CompileVerdict::Admit => {}
     }
     let holder = format!("cargo:{}:{cargo_pid}", worktree.display());
 
@@ -3010,6 +3189,60 @@ mod tests {
         assert_eq!(held_poll_sleep(Some(0)), Duration::from_millis(500));
         assert_eq!(held_poll_sleep(Some(3)), Duration::from_millis(2000));
         assert_eq!(held_poll_sleep(Some(95)), Duration::from_secs(5));
+    }
+
+    /// Law D3323's compile-refusal parser: the first bare token after the
+    /// cargo basename decides, advertised aliases folded. Every shape a
+    /// worker types, plus the commands that must stay admitted.
+    #[test]
+    fn compile_subcommand_parse_covers_the_shapes_workers_type() {
+        assert_eq!(
+            compile_subcommand_of("cargo build --release"),
+            Some("build")
+        );
+        assert_eq!(
+            compile_subcommand_of("/Users/u/.cargo/bin/cargo check -p fno-agents"),
+            Some("check")
+        );
+        assert_eq!(
+            compile_subcommand_of("cargo +nightly clippy -- -D warnings"),
+            Some("clippy")
+        );
+        assert_eq!(compile_subcommand_of("cargo b"), Some("b"));
+        assert_eq!(compile_subcommand_of("cargo c"), Some("c"));
+        assert_eq!(
+            compile_subcommand_of("cargo --offline build"),
+            Some("build")
+        );
+        assert_eq!(compile_subcommand_of("cargo build --tests"), Some("build"));
+        // Out-of-scope commands stay admitted.
+        assert_eq!(compile_subcommand_of("cargo test -p fno-agents"), None);
+        assert_eq!(compile_subcommand_of("cargo run --bin fno"), None);
+        assert_eq!(compile_subcommand_of("cargo clean"), None);
+        assert_eq!(compile_subcommand_of("cargo doc"), None);
+        assert_eq!(compile_subcommand_of("cargo fmt"), None);
+        assert_eq!(
+            compile_subcommand_of("cargo metadata --format-version 1"),
+            None
+        );
+        assert_eq!(compile_subcommand_of("rustc --crate-name fno_agents"), None);
+        assert_eq!(compile_subcommand_of("sleep 60"), None);
+    }
+
+    /// A whitespace-only declared reason is undeclared: the door refuses a
+    /// build that carries an empty `FNO_BUILD_WHY=`.
+    #[test]
+    fn declared_build_why_rejects_whitespace_only() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let pin = crate::claims::EnvVarGuard::set("FNO_BUILD_WHY", "   ");
+        assert_eq!(declared_build_why(), None);
+        drop(pin);
+        let pin = crate::claims::EnvVarGuard::set("FNO_BUILD_WHY", "mux shots");
+        assert_eq!(declared_build_why(), Some("mux shots".to_string()));
+        drop(pin);
+        std::env::remove_var("FNO_BUILD_WHY");
     }
 
     #[test]
