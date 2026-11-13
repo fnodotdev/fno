@@ -1181,11 +1181,6 @@ pub struct RegistryEntry {
     /// precedent), same X3 passthrough duty as every daemon-stamped field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<HeadlessResult>,
-    /// The child exit code behind [`RegistryEntry::result`], when observed
-    /// by the parent lane's wait; `None` = no observed exit, no invented
-    /// number on the wire. Same additive-optional shape as `result`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exit_code: Option<i32>,
     /// fno's own stop, stamped by the stop handler and the terminal-stop
     /// sweep (schema v32). The work readers treat a harness `stopped` state
     /// as terminal only when this is absent, so a row fno stopped holds as

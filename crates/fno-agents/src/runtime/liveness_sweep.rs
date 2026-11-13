@@ -418,26 +418,21 @@ where
                 // word; quiet but young keeps waiting inside the window.
                 headless_settle_word(entry, now_ms).map(|result| (AgentStatus::Exited, result))
             };
-            let (new_status, new_result, pid_proven, liveness_word) = match settle {
-                None => (None, None, false, measured),
-                Some((status, result)) => (
-                    Some(status),
-                    Some(result),
-                    // A positive process fact when the row recorded one: the
-                    // pid answers gone, so any sweep may write the death.
-                    entry.pid.is_some() && !pid_live(entry),
-                    RowLiveness::Dead,
-                ),
+            let (new_status, new_result) = match settle {
+                None => (None, None),
+                Some((status, result)) => (Some(status), Some(result)),
             };
             changes.push(ReconcileChange {
                 name: entry.name.clone(),
                 new_status,
-                new_liveness: match liveness_word {
-                    RowLiveness::Alive => Some("alive"),
-                    RowLiveness::Dead => Some("dead"),
-                    RowLiveness::Unknown => None,
+                new_liveness: if settle.is_some() {
+                    Some("dead")
+                } else if measured == RowLiveness::Alive {
+                    Some("alive")
+                } else {
+                    None
                 },
-                pid_proven,
+                pid_proven: settle.is_some() && entry.pid.is_some() && !pid_live(entry),
                 new_result,
                 team_revive: false,
             });

@@ -59,7 +59,6 @@ pub fn stamp_exit(home: &AgentsHome, name: &str, exit_code: Option<i32>) {
         }
         entry.status = AgentStatus::Exited;
         entry.result = Some(result);
-        entry.exit_code = exit_code;
     });
     if let Err(error) = stamped {
         eprintln!("headless row stamp skipped (exit): {error}");
@@ -131,15 +130,13 @@ mod tests {
         let row = reg.entries.iter().find(|e| e.name == "t-live").unwrap();
         assert_eq!(row.status, AgentStatus::Live);
         assert_eq!(row.result, None);
-        std::fs::remove_dir_all(home.root()).ok();
-    }
-
-    #[test]
-    fn exit_stamp_on_an_unknown_name_is_a_silent_no_op() {
-        let home = tmp_home("absent");
+        // An unknown name writes nothing at all.
         stamp_exit(&home, "t-never-was", Some(0));
-        let reg = state::load_registry(&home.registry_json()).unwrap();
-        assert!(reg.entries.is_empty());
+        assert!(state::load_registry(&home.registry_json())
+            .unwrap()
+            .entries
+            .iter()
+            .all(|e| e.name != "t-never-was"));
         std::fs::remove_dir_all(home.root()).ok();
     }
 }
