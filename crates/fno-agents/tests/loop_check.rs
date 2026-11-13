@@ -693,10 +693,8 @@ fn batched_unit_without_promise_blocks() {
     assert_eq!(d.termination_reason, None);
 }
 
-/// Promise with an out-of-band MERGED PR terminates the loop even though CI
-/// is red and NO required bot reviewed. The merge is terminal; the stop-hook
-/// must stop re-poking a finished session. A merge with a failing check
-/// reads DoneMergedUnsettled, not DonePRGreen.
+/// Promise with an out-of-band MERGED PR ends the loop despite red CI and no
+/// required bot review; a failing check reads DoneMergedUnsettled.
 #[test]
 fn out_of_band_merged_pr_done() {
     let tmp = TempDir::new().unwrap();
