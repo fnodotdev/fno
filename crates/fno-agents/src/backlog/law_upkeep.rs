@@ -470,6 +470,7 @@ fn uninstall_agent() -> Value {
     let label = label();
     let plist_path = launch_agents_dir().join(crate::launchd_labels::LAW_UPKEEP_PLIST_FILENAME);
     if cfg!(target_os = "macos") {
+        // SAFETY: getuid reads a per-process kernel value; it cannot fail.
         let uid = unsafe { libc::getuid() };
         let outcome = Command::new("launchctl")
             .args(["bootout", &format!("gui/{uid}/{label}")])
@@ -571,7 +572,13 @@ mod tests {
     use super::*;
 
     fn row(fields: Value) -> Value {
-        json!({"decision_id": "d-test0001", "subject": "s"}).merge(fields)
+        let mut base = json!({"decision_id": "d-test0001", "subject": "s"});
+        if let (Some(base), Some(over)) = (base.as_object_mut(), fields.as_object()) {
+            for (k, v) in over {
+                base.insert(k.clone(), v.clone());
+            }
+        }
+        base
     }
 
     #[test]
