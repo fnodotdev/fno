@@ -91,18 +91,17 @@ const PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 "#;
 
 /// Why the pass could not run. Typed, so the door prints one line and the
-/// caller keeps a machine-readable cause.
+/// caller keeps a machine-readable cause. The install door reports its own
+/// failures through the JSON status, never through this enum.
 #[derive(Debug)]
 pub(crate) enum UpkeepError {
     IndexRead(String),
-    Launch(String),
 }
 
 impl std::fmt::Display for UpkeepError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             UpkeepError::IndexRead(e) => write!(f, "the decision index could not be read ({e})"),
-            UpkeepError::Launch(e) => write!(f, "launchd refused ({e})"),
         }
     }
 }
