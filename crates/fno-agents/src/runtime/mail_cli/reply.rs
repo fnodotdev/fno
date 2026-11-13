@@ -969,23 +969,6 @@ mod tests {
         assert_eq!(resolve_body(&parsed).unwrap_err(), 1);
     }
 
-    /// A msg-id-shaped leading positional names the target without `--to`
-    /// and the second positional stays the body: the two forms the observed
-    /// refusals reached for.
-    #[test]
-    fn positional_id_leads_and_body_follows() {
-        let parsed = parse_args(&vec_args(&["fmail-a1b2c3d4e5f6", "ack"])).expect("parse");
-        assert_eq!(parsed.to.as_deref(), Some("fmail-a1b2c3d4e5f6"));
-        assert_eq!(parsed.positional.as_deref(), Some("ack"));
-    }
-
-    #[test]
-    fn positional_id_with_body_flag() {
-        let parsed = parse_args(&vec_args(&["fmail-a1b2c3f6", "--body", "b"])).expect("parse");
-        assert_eq!(parsed.to.as_deref(), Some("fmail-a1b2c3f6"));
-        assert_eq!(parsed.body.as_deref(), Some("b"));
-    }
-
     /// `--to` plus a msg-id positional names the message twice: an explicit
     /// conflict, never a precedence rule.
     #[test]

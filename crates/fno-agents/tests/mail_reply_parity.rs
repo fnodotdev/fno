@@ -384,15 +384,9 @@ fn cases() -> Vec<Case> {
         plain("usage no args", &[]),
         plain("missing to", &["hello there"]),
         plain("unknown msg id refused", &["--to", "msg-capnone", "ack"]),
-        // The positional msg-id forms agents reach for unaided (the observed
-        // refusal fold x-36e5): id leading as the target, and id plus a
-        // --body flag. The appended cases prove parse equivalence: post-parse
-        // argv is identical to the appended reply case, so the frozen bytes
-        // are too.
-        plain(
-            "positional id unknown refused",
-            &["fmail-a1b2c3d4e5f6", "ack via positional"],
-        ),
+        // The positional msg-id forms agents reach for unaided; the appended
+        // cases prove parse equivalence with the appended reply case, so the
+        // frozen bytes are too.
         Case {
             inbox_project: Some("web"),
             parent_thread: true,

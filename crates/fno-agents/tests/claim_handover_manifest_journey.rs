@@ -292,7 +292,7 @@ fn suspect_prior_claim_adopts_as_handover_and_heals_manifest() {
     assert_manifest_unblocked(&manifest);
 }
 
-/// The ambient holder default (the x-5a01 refusal fold): a bare acquire
+/// The ambient holder default (the measured refusal fold): a bare acquire
 /// inside a harness session holds the claim under the caller's own session
 /// id, announced on stderr; a scrubbed shell still refuses, naming the flag
 /// and the way out.
