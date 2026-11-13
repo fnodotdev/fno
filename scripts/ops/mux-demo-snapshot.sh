@@ -312,6 +312,8 @@ mkdir -p "$ROOT/claimroot/.fno/claims"
 # HOME too, for every process: the server reads harness rosters under it,
 # and a real home would list real sessions in the sideline.
 export HOME="$ROOT"
+# Chat transcripts the server reads live here, never under a real home.
+export FNO_CLAUDE_PROJECTS_DIR="$ROOT/transcripts"
 # The keys-tags view shows a preset row, a user row and a two-stroke chord,
 # so it needs a file. Only that view gets one: a preset would move key hints
 # in every other shot. grab-work leaves `g` so the chord can start on it.
@@ -880,7 +882,7 @@ remote = [
      "status": "unknown", "age_s": None, "rss_mb": None, "parent": None},
 ]
 fleet = {"fresh_s": 300, "machines": [
-    machine("demo-u", "u", True, 4, local),
+    machine("demo-u", "demo-host", True, 4, local),
     machine("demo-mac2", "mac2", False, 21, remote),
 ]}
 open(out, "w").write(json.dumps(fleet))
@@ -993,7 +995,7 @@ qs = [
                    "next": "review the provenance card on the next paint PR",
                    "pros": ["the slot holds"], "cons": ["the provenance fields stay unreviewed"]}],
               "origin": {"handle": "scout", "session_id": scout_sid, "name": "scout",
-                         "harness": "claude", "host": "u"},
+                         "harness": "claude", "host": "demo-host"},
               "rung": {"level": "user"},
               "via": [{"level": "lead", "holder_name": "rowan", "evidence": "the demo script reads no machine state"}],
               "context": {"blocked_because": "the paint gate holds the run until the look clears",
@@ -1128,13 +1130,15 @@ if [ -n "$APP" ]; then
   # Hold the seeded world for the desktop app. HOME is the throwaway root, so
   # the app reads the invented transcript below and no real session.
   DEMO_SID="de0e0000-0000-4000-8000-000000000001"
-  TR_APP="$ROOT/.claude/projects/-Users-demo-checkout/$DEMO_SID.jsonl"
+  TR_APP="$FNO_CLAUDE_PROJECTS_DIR/-Users-demo-checkout/$DEMO_SID.jsonl"
   mkdir -p "$(dirname "$TR_APP")"
   {
     printf '%s\n' "{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"$DEMO_SID\",\"timestamp\":\"${TS_BASE}:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"which nodes are ready to land on demo-host?\"}}"
     printf '%s\n' "{\"type\":\"assistant\",\"uuid\":\"a1\",\"sessionId\":\"$DEMO_SID\",\"timestamp\":\"${TS_BASE}:01.000Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Two nodes are ready: x-1a2b0 and x-3c4d1. Both have green checks and one review round.\"}]},\"stop_reason\":\"end_turn\"}"
   } >"$TR_APP"
-  export CLAUDE_CONFIG_DIR="$ROOT/.claude"
+  # The Mods screen lists what is installed: activate the first-party pack so
+  # it shows real rows and previews, not an empty install state.
+  "$FNO" config plugins activate "$REPO_ROOT/plugins/fno-panels" >/dev/null
   "$APP_BIN" --session "$SERVER" --mode chat --chat newest
 elif [ -n "$WEB" ]; then
   "$FNO" mux serve --web --server "$SERVER" --port "$WEB_PORT"

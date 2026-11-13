@@ -1378,7 +1378,7 @@ pub fn run(
     font_size: f32,
 ) {
     Application::new().run(move |cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(1360.0), px(800.0)), cx);
+        let bounds = Bounds::centered(None, size(px(1360.0), px(840.0)), cx);
         let opened = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),

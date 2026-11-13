@@ -241,21 +241,16 @@ pub fn rows(layout: &Layout, board: &Board, now_secs: u64, agents_open: bool) ->
 
 pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stateful<Div> {
     let p = root.palette;
-    // The top band clears the traffic lights the transparent title bar
-    // draws over this pane.
+    // The rows scroll inside a body under a fixed top band, so scrolled rows
+    // never slide under the traffic lights the transparent title bar draws.
     let mut pane = div()
-        .id("left-pane")
+        .id("left-pane-body")
         .flex()
         .flex_col()
-        .flex_none()
-        .w(px(WIDTH))
-        .h_full()
+        .flex_1()
+        .min_h_0()
         .overflow_y_scroll()
-        .pt(px(28.0))
-        .pb_2()
-        .bg(rgb(p.panel))
-        .border_r_1()
-        .border_color(rgb(p.border));
+        .pb_2();
     let rows = rows(&root.layout, &root.board, now_secs, root.agents_open);
     for (i, row) in rows.into_iter().enumerate() {
         let hover = p.hover;
@@ -435,7 +430,18 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
             }
         });
     }
-    pane
+    div()
+        .id("left-pane")
+        .flex()
+        .flex_col()
+        .flex_none()
+        .w(px(WIDTH))
+        .h_full()
+        .pt(px(28.0))
+        .bg(rgb(p.panel))
+        .border_r_1()
+        .border_color(rgb(p.border))
+        .child(pane)
 }
 
 #[cfg(test)]
