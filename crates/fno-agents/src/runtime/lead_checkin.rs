@@ -1957,23 +1957,6 @@ fn render_lines(
     )
 }
 
-/// The attention-ledger checkin lines: one line for an ok reading, the
-/// named failure line for a failed one, nothing without a reading.
-fn attention_ledger_lines(readings: &[Reading]) -> Vec<String> {
-    let Some(reading) = readings.iter().find(|r| r.name == "attention_ledger") else {
-        return vec![];
-    };
-    if !reading.ok {
-        return vec![format!("READER FAILED attention_ledger: {}", reading.error)];
-    }
-    let payload: crate::backlog::attention_ledger::ReadingPayload =
-        match serde_json::from_value(reading.value.clone()) {
-            Ok(p) => p,
-            Err(_) => return vec![],
-        };
-    vec![payload.line]
-}
-
 fn render_lines_with(
     scope: &str,
     readings: &[Reading],
@@ -2353,7 +2336,7 @@ fn render_lines_with(
     lines.extend(posture::lines(readings));
     lines.extend(peer_blocked::lines(readings));
     lines.extend(prompt_parked::lines(readings));
-    lines.extend(attention_ledger_lines(readings));
+    lines.extend(crate::backlog::attention_ledger::checkin_lines(readings));
 
     match failed("refusal_rate") {
         Some(r) => lines.push(format!("READER FAILED refusal_rate: {}", r.error)),
@@ -3263,23 +3246,7 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     // The beat writes the week's report when the file is missing, so the
     // weekly report stays current with no new daemon. Best-effort: a failed
     // write prints one line and never blocks the beat.
-    if let Some(payload) = readings
-        .iter()
-        .find(|r| r.name == "attention_ledger")
-        .filter(|r| r.ok)
-        .and_then(|r| {
-            serde_json::from_value::<crate::backlog::attention_ledger::ReadingPayload>(
-                r.value.clone(),
-            )
-            .ok()
-        })
-    {
-        if let Err(e) =
-            crate::backlog::attention_ledger::write_report_if_missing(&ctx.cwd, &payload.ledger)
-        {
-            eprintln!("lead-checkin: attention ledger report write failed: {e}");
-        }
-    }
+    crate::backlog::attention_ledger::beat_write(&readings, &ctx.cwd);
     // The team line leads: identity first, then the beat's facts. The name
     // comes from the fold's own stamp (org_fold reads the store), so an
     // successor's first beat already shows the carried name.
@@ -3443,6 +3410,8 @@ mod tests {
     }
 
     include!("lead_checkin_readings_tests.rs");
+
+    include!("lead_checkin_attention_ledger_tests.rs");
 
     /// A repo fixture whose escalations dir resolves deterministically through
     /// the vault branch: `[project] id` names the project, `[obsidian]`
@@ -3608,56 +3577,6 @@ mod tests {
         assert!(lines
             .iter()
             .any(|l| l == "READER FAILED session_orders: canon doc unreadable"));
-    }
-
-    /// AC3: an ok attention_ledger reading renders exactly one line starting
-    /// "attention ledger".
-    #[test]
-    fn attention_ledger_ok_reading_renders_one_line() {
-        let data = Map::new();
-        let payload = crate::backlog::attention_ledger::ReadingPayload {
-            week: "2026-W46".into(),
-            line: "attention ledger 2026-W46: no merged PRs (2 asks, 0 merged), 1 repeated subject(s), 0 revert(s), 3 guard refusal(s)".into(),
-            ledger: crate::backlog::attention_ledger::Ledger {
-                week: "2026-W46".into(),
-                questions_filed: 2,
-                merged_prs: 0,
-                questions_per_merged_pr: None,
-                repeated_subjects: 1,
-                reverts: 0,
-                cycle_hours_median: None,
-                cycle_hours_p90: None,
-                guard_refusals: 3,
-                operator_queue_depth: None,
-                notes: vec![],
-            },
-        };
-        let readings = vec![Reading::took(
-            "attention_ledger",
-            serde_json::to_value(payload).unwrap(),
-        )];
-        let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
-        let hits: Vec<_> = lines
-            .iter()
-            .filter(|l| l.starts_with("attention ledger"))
-            .collect();
-        assert_eq!(hits.len(), 1, "exactly one attention ledger line");
-        assert!(hits[0].contains("2026-W46"));
-    }
-
-    /// AC4: a failed attention_ledger reading renders the named failure line
-    /// and nothing panics.
-    #[test]
-    fn attention_ledger_failed_reading_renders_the_failure_line() {
-        let data = Map::new();
-        let readings = vec![Reading::failed(
-            "attention_ledger",
-            "graph store unreadable".to_string(),
-        )];
-        let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
-        assert!(lines
-            .iter()
-            .any(|l| l == "READER FAILED attention_ledger: graph store unreadable"));
     }
 
     #[test]

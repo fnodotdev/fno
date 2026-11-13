@@ -525,6 +525,38 @@ pub fn write_report_if_missing(cwd: &Path, ledger: &Ledger) -> Result<PathBuf, L
     write_report_into(&dir, ledger)
 }
 
+/// The checkin lines the ledger contributes: one line for an ok reading,
+/// the named failure line for a failed one, nothing without a reading.
+pub fn checkin_lines(readings: &[crate::lead_checkin::Reading]) -> Vec<String> {
+    let Some(reading) = readings.iter().find(|r| r.name == "attention_ledger") else {
+        return Vec::new();
+    };
+    if !reading.ok {
+        return vec![format!("READER FAILED attention_ledger: {}", reading.error)];
+    }
+    match serde_json::from_value::<ReadingPayload>(reading.value.clone()) {
+        Ok(p) => vec![p.line],
+        Err(_) => Vec::new(),
+    }
+}
+
+/// The beat's best-effort report write: only when this week's file is
+/// missing, so the weekly report stays current with no new daemon and a
+/// failed write never blocks the beat.
+pub fn beat_write(readings: &[crate::lead_checkin::Reading], cwd: &Path) {
+    let Some(payload) = readings
+        .iter()
+        .find(|r| r.name == "attention_ledger")
+        .filter(|r| r.ok)
+        .and_then(|r| serde_json::from_value::<ReadingPayload>(r.value.clone()).ok())
+    else {
+        return;
+    };
+    if let Err(e) = write_report_if_missing(cwd, &payload.ledger) {
+        eprintln!("lead-checkin: attention ledger report write failed: {e}");
+    }
+}
+
 /// `fno-agents attention-ledger [--json|-J] [--report]`
 pub fn run_cli(args: &[&str]) -> i32 {
     let mut as_json = false;
