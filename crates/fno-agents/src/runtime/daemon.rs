@@ -1229,7 +1229,6 @@ pub async fn run(home: AgentsHome, opts: DaemonOptions) -> Result<(), DaemonErro
         Err(e) => return Err(e),
     };
     crate::truth_probe::start_daemon_warm(&home);
-    crate::rules_source::mark_resident();
     let sock_path = home.supervisor_sock();
     let bound_ino = std::fs::metadata(&sock_path).ok().map(|m| m.ino());
 
@@ -1848,16 +1847,10 @@ async fn dispatch_agent(ctx: &Arc<Ctx>, req: &Request) -> Response {
             run_blocking(ctx, req, sandbox_host::handle_sandbox_plan).await
         }
         Some("truth") => run_blocking(ctx, req, crate::truth_probe::truth_rpc).await,
-        // The spawn-gate probe reading, computed once per cwd per TTL and
-        // served to every mux client's org block over the socket, so the
-        // probe is never a per-client child (the slowness audit's budget).
+        // Probe readings and the rule set, each built once per TTL or store
+        // change and served over the socket, never once per client or call.
         Some("gate-probe") => run_blocking(ctx, req, crate::spawn_gate_probe::gate_probe_rpc).await,
-        // The rule set every PreToolUse fire decides against, built once per
-        // store change instead of once per tool call.
-        Some(crate::rules_source::RULE_SET_COMMAND) => {
-            let serve = |_: &Ctx, r: &Request| crate::rules_source::rule_set_rpc(r);
-            run_blocking(ctx, req, serve).await
-        }
+        Some("rule-set") => run_blocking(ctx, req, crate::rules_source::rule_set_rpc).await,
         Some("reconcile") => run_blocking(ctx, req, handle_reconcile).await,
         // Label rename: the registry transaction under the flock, off-loop.
         Some("rename") => run_blocking(ctx, req, convert::handle_rename).await,

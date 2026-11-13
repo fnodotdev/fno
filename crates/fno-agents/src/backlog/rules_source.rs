@@ -55,16 +55,9 @@ pub struct ServedRules {
     pub unread: Vec<String>,
 }
 
-/// The daemon command that serves [`ServedRules`] for one cwd.
-pub const RULE_SET_COMMAND: &str = "rule-set";
-
-/// Set once in the daemon process: its own fires read the cache directly
-/// instead of calling their own socket.
+/// Set in the daemon by its first `agent.rule-set` answer: from then on its
+/// own fires read the cache directly instead of calling their own socket.
 static RESIDENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-pub fn mark_resident() {
-    RESIDENT.store(true, std::sync::atomic::Ordering::Relaxed);
-}
 
 /// A daemon answer is a cache read; a round trip this slow means it is
 /// wedged, and the caller builds in process instead.
@@ -74,15 +67,19 @@ fn ask_daemon(graph: &Path, cwd: &Path) -> Option<ServedRules> {
     let sock = crate::client::client_sock(&crate::paths::AgentsHome::from_env());
     let result = crate::protocol::blocking_call(
         &sock,
-        &format!("agent.{RULE_SET_COMMAND}"),
+        "agent.rule-set",
         json!({ "cwd": cwd.to_string_lossy(), "graph": graph.to_string_lossy() }),
         ASK_BUDGET,
     )?;
     serde_json::from_value(result).ok()
 }
 
-/// The daemon handler: one cached set per cwd.
-pub fn rule_set_rpc(req: &crate::protocol::Request) -> crate::protocol::Response {
+/// The daemon handler: one cached set per graph and cwd.
+pub(crate) fn rule_set_rpc<C>(
+    _ctx: &C,
+    req: &crate::protocol::Request,
+) -> crate::protocol::Response {
+    RESIDENT.store(true, std::sync::atomic::Ordering::Relaxed);
     let cwd = req
         .params
         .get("cwd")
