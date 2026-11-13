@@ -15,6 +15,7 @@ pub mod bin_install_guard;
 pub mod buddy_statusline;
 pub mod diff_budget;
 pub mod edit_integrity;
+pub mod gate;
 pub mod git_protection;
 pub mod join_partition_guard;
 pub mod lead_guard;
@@ -53,6 +54,7 @@ pub fn dispatch(args: &[String]) -> i32 {
         Some("diff-budget") => diff_budget::run(&args[1..]),
         Some("edit-integrity") => edit_integrity::run(&args[1..]),
         Some("effect-guard") => crate::effect_gate::run_hook(&args[1..]),
+        Some("gate") => gate::run(args.get(1..).unwrap_or(&[])),
         Some("git-protection") => git_protection::run(&args[1..]),
         Some("join-partition-guard") => join_partition_guard::run(&args[1..]),
         Some("lead-guard") => lead_guard::run(&args[1..]),
@@ -75,7 +77,7 @@ pub fn dispatch(args: &[String]) -> i32 {
         Some("write-gate") => write_gate::run(&args[1..]),
         other => {
             eprintln!(
-                "fno-agents hook: unknown entry {other:?}; expected backlog-impostor, bg-process-guard, bin-install-guard, diff-budget, edit-integrity, effect-guard, git-protection, join-partition-guard, lead-guard, posttooluse-bash, pretool, pretooluse-bash, prompt, recursive-grep-guard, rules, save-session, send-message-guard, session-state, subagent-worktree-guard, task-boundary, test-run-guard, transcript-push, worktree-relocation-allow, write-gate or stop"
+                "fno-agents hook: unknown entry {other:?}; expected backlog-impostor, bg-process-guard, bin-install-guard, diff-budget, edit-integrity, effect-guard, gate, git-protection, join-partition-guard, lead-guard, posttooluse-bash, pretool, pretooluse-bash, prompt, recursive-grep-guard, rules, save-session, send-message-guard, session-state, subagent-worktree-guard, task-boundary, test-run-guard, transcript-push, worktree-relocation-allow, write-gate or stop"
             );
             2
         }
@@ -98,14 +100,63 @@ pub(crate) fn events_space(cwd: &std::path::Path) -> PathBuf {
 /// Slurp stdin. A read failure answers the empty string; both hooks treat
 /// empty as allow (an unreadable payload is not a refusal).
 pub(crate) fn read_stdin() -> String {
+    if let Some(injected) = GATE_IO.with(|io| io.borrow().as_ref().map(|io| io.stdin.clone())) {
+        return injected;
+    }
     let mut input = String::new();
     let _ = std::io::stdin().read_to_string(&mut input);
     input
 }
 
+/// One guard's view of the process streams while `hook gate` runs it in
+/// process: the payload it reads and the answer it would have printed.
+struct GateIo {
+    stdin: String,
+    stdout: String,
+}
+
+thread_local! {
+    static GATE_IO: std::cell::RefCell<Option<GateIo>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Run one guard entry with `stdin` as its payload and capture what it
+/// prints through [`emit_line`]. Answers the entry's exit code and stdout.
+pub(crate) fn captured(stdin: &str, entry: impl FnOnce() -> i32) -> (i32, String) {
+    GATE_IO.with(|io| {
+        *io.borrow_mut() = Some(GateIo {
+            stdin: stdin.to_string(),
+            stdout: String::new(),
+        })
+    });
+    let code = entry();
+    let out = GATE_IO
+        .with(|io| io.borrow_mut().take())
+        .map(|io| io.stdout)
+        .unwrap_or_default();
+    (code, out)
+}
+
+/// Print one hook answer line, or hand it to the gate capturing this guard.
+pub(crate) fn emit_line(line: &str) {
+    let held = GATE_IO.with(|io| {
+        let mut io = io.borrow_mut();
+        match io.as_mut() {
+            Some(io) => {
+                io.stdout.push_str(line);
+                io.stdout.push('\n');
+                true
+            }
+            None => false,
+        }
+    });
+    if !held {
+        println!("{line}");
+    }
+}
+
 /// PreToolUse allow: hook result via stdout JSON at exit 0.
 pub(crate) fn emit_allow() -> i32 {
-    println!("{{}}");
+    emit_line("{}");
     0
 }
 
@@ -148,7 +199,7 @@ pub(crate) fn emit_warn(reason: &str) -> i32 {
         },
         "systemMessage": reason
     });
-    println!("{out}");
+    emit_line(&out.to_string());
     0
 }
 
@@ -165,7 +216,7 @@ pub(crate) fn emit_rewrite(updated_input: &serde_json::Value, reason: &str) -> i
         },
         "systemMessage": reason
     });
-    println!("{out}");
+    emit_line(&out.to_string());
     0
 }
 
@@ -180,7 +231,7 @@ pub(crate) fn emit_block(reason: &str) -> i32 {
             "permissionDecisionReason": reason
         }
     });
-    println!("{out}");
+    emit_line(&out.to_string());
     0
 }
 

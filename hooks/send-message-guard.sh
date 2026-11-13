@@ -1,20 +1,10 @@
 #!/usr/bin/env bash
-# fno hook: PreToolUse - SendMessage guard
-# Peer messages between fno sessions ride `fno agents mail send`, not the
-# native SendMessage. Never exec a candidate blindly: an old build answers
-# "unknown command: hook", and a nonzero PreToolUse refuses every tool in the
-# session. Run each, deployed binary first; relay only exit 0.
-stdin=$(cat)
-errfile=$(mktemp -t smg-stderr.XXXXXX) || errfile=/dev/null
-trap 'rm -f "$errfile"' EXIT
-for bin in "$(command -v fno-agents 2>/dev/null)" "${FNO_AGENTS_BIN:-}" \
-    "$PWD"/crates/fno-agents/target/{release,debug}/fno-agents; do
-    [[ -n "$bin" && -x "$bin" ]] || continue
-    if out="$(printf '%s' "$stdin" | "$bin" "hook" "send-message-guard" 2>"$errfile")"; then
-        cat "$errfile" >&2
-        printf '%s\n' "$out"
-        exit 0
-    fi
-done
-echo "send-message-guard: no fno-agents could answer the hook command; allowing" >&2
+# fno hook: PreToolUse - send-message guard (TOMBSTONE)
+# Retired: the one PreToolUse gate runs this in process
+# (hooks/pretool-gate.sh, crates/fno-agents/src/runtime/hook/gate.rs). This
+# no-op stub stays one release so sessions started before the merge - which
+# answer hook config from an init-time snapshot - do not brick every Bash
+# call on a missing script. Delete this stub in a later release.
+# Exit 0 always (hook result is communicated via stdout JSON).
 printf '%s\n' '{}'
+exit 0
