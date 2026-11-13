@@ -315,7 +315,7 @@ pub fn reap_daemon_children() {
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
     set.retain(|pid| {
-        let Ok(pid) = Pid::new(*pid) else {
+        let Some(pid) = Pid::new(*pid) else {
             // A pid the type refuses was never a detached child of ours;
             // drop it from the watch set, as a reaped pid would be.
             return false;
@@ -588,7 +588,7 @@ fn kill_carrier(pid: u32, daemon_tree: &[u32]) -> bool {
     if pgid > 0 && pgid == pid.as_raw() && !shares_daemon {
         // SIGKILL to the group the confirmed carrier leads.
         Pid::try_from(i64::from(pgid))
-            .is_some_and(|g| matches!(g.signal_group(libc::SIGKILL), SignalResult::Sent))
+            .is_ok_and(|g| matches!(g.signal_group(libc::SIGKILL), SignalResult::Sent))
     } else {
         // SIGKILL to the one pid the confirmed carrier named.
         matches!(pid.signal(libc::SIGKILL), SignalResult::Sent)

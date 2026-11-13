@@ -2,7 +2,6 @@
 //! how long. One question, so one module - the four answers below were four
 //! loose helpers in the middle of the stop gate.
 
-
 /// Slack added beyond the declared watch window so the claim lease outlives the
 /// agent's watcher: a watcher that fires right at its timeout must not
 /// race claim expiry.

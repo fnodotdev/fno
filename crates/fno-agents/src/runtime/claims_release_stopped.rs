@@ -214,8 +214,8 @@ pub fn release_for_stopped_session(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pid::Pid;
     use crate::claims::{hostname, machine_id, ClaimRecord, SCHEMA_VERSION};
+    use crate::pid::Pid;
     use tempfile::TempDir;
 
     // A pid the OS does not report as alive (copy of the claims.rs test helper).

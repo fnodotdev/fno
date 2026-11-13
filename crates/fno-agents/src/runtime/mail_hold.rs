@@ -759,7 +759,7 @@ fn parked_dir(handle: &str) -> PathBuf {
 }
 
 fn process_alive(pid: i32) -> bool {
-    Pid::try_from(i64::from(pid)).is_some_and(|p| p.probe())
+    Pid::try_from(i64::from(pid)).is_ok_and(|p| p.probe())
 }
 
 /// The park receipt, on the gate's time rule: a wall or grace clock names

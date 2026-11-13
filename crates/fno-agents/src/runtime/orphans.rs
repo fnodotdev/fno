@@ -888,7 +888,7 @@ pub(crate) fn kill_proc(pid: u32) -> bool {
     // FAILED` microseconds before a stubborn probe died, because the caller's
     // liveness re-check raced this window; the grace here closes that.
     for _ in 0..20 {
-        if !pid_alive(pid) {
+        if !pid_alive(pid.as_u32()) {
             return true;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));

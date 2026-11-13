@@ -13,9 +13,9 @@
 //! The client lazy-starts this detached on first need; running it directly is
 //! for debugging and for the Python wrapper's explicit `daemon` sub-mode.
 
-use crate::pid::Pid;
 use fno_agents::daemon::{run, DaemonOptions};
 use fno_agents::paths::AgentsHome;
+use fno_agents::pid::Pid;
 use std::time::Duration;
 
 fn main() {

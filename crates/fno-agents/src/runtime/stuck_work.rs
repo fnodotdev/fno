@@ -506,8 +506,8 @@ fn cut(text: &str, cap: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pid::Pid;
     use crate::claims::{encode_key, hostname, machine_id, now_ms, SCHEMA_VERSION};
+    use crate::pid::Pid;
     use tempfile::TempDir;
 
     fn dead_pid() -> u32 {
