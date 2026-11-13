@@ -13,6 +13,7 @@ pub mod advance_join;
 pub mod advance_lanes;
 pub mod advance_settings;
 pub mod api;
+pub mod attention_ledger;
 pub mod autobrief;
 pub mod autolink;
 pub mod batch;

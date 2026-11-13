@@ -37,6 +37,7 @@ const ALL_CLIENT_ACTIONS: &[&str] = &[
     "canonical-check",
     "ask",
     "attach",
+    "attention-ledger",
     "authorized-merge",
     "bash-census",
     "board",
@@ -763,6 +764,12 @@ async fn run(
 
     if command == "compaction" {
         return fno_agents::compaction::run_compaction(&args[1..]);
+    }
+
+    // `attention-ledger`: direct dispatch like compaction - the whole read
+    // is local stores, so a daemon hop buys nothing.
+    if command == "attention-ledger" {
+        return fno_agents::backlog::attention_ledger::run_cli(&args[1..]);
     }
 
     // `mail-teach`: the fmail read command's once-per-session lesson state
