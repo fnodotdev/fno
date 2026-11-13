@@ -418,6 +418,14 @@ fn a_fleet_with_no_seat_draws_the_empty_state_and_the_next_step() {
     assert!(wide.contains("Nothing is running yet."), "{wide}");
     assert!(wide.contains("n   start a session"), "{wide}");
     assert!(wide.contains("L   start a lead"), "{wide}");
+    assert!(
+        wide.contains("\u{2588}\u{2588}"),
+        "the pixel mark paints: {wide}"
+    );
     let narrow = text(&b.frame(None, 40, 40, now()).explorer);
     assert!(narrow.contains("Nothing is running yet."), "{narrow}");
+    assert!(
+        narrow.contains("[no]") && !narrow.contains("\u{2588}"),
+        "{narrow}"
+    );
 }
