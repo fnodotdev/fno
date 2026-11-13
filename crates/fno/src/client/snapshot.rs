@@ -1763,12 +1763,12 @@ pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
         | Some(ViewKind::MessagesAsksTopics)
         | None => {}
         Some(ViewKind::Decisions) => {
-            let node = format!("x-{}", 7145);
+            let node = "x-0e5b";
             let rows = serde_json::from_value(serde_json::json!([
-                {"decision_id":"d-1","decision":"Ship the Decisions tab whole","subject":node,"subject_node":node,"subject_pr":"","subject_text":"","decided_by":"jc","authority_source":"operator","quote":"build all of it","ts":"2026-11-03T09:00:00Z","lifecycle":"live","lane":"law","question":"Split the node into three PRs?"},
-                {"decision_id":"d-2","decision":"Hold CI until the ranked PRs land","subject":"fnodotdev/fno#4414","subject_node":"","subject_pr":"#4414","subject_text":"","decided_by":"7c1e9a02-1111-4222-8333-444455556666","decided_by_name":"iris","authority_source":"role","ts":"2026-11-02T15:30:00Z","lifecycle":"live","lane":"coord"},
-                {"decision_id":"d-3","decision":"Retry the push after the rate limit","subject":"push","subject_node":"","subject_pr":"","subject_text":"push","ts":"2026-10-30T11:00:00Z","lifecycle":"expired","lane":"unattributed"},
-                {"decision_id":"d-4","decision":"Use the shared pane for retract","subject":"mux","subject_node":"","subject_pr":"","subject_text":"mux","ts":"2026-10-28T08:15:00Z","lifecycle":"live","lane":"unattributed"}
+                {"decision_id":"d-1","decision":"Meter usage in whole units","subject":node,"subject_node":node,"subject_pr":"","subject_text":"","decided_by":"ada","authority_source":"operator","quote":"count whole units only","ts":"2026-11-03T09:00:00Z","lifecycle":"live","lane":"law","question":"Round partial units up?"},
+                {"decision_id":"d-2","decision":"Hold the build until the queue drains","subject":"example/app#118","subject_node":"","subject_pr":"#118","subject_text":"","decided_by":"7c1e9a02-1111-4222-8333-444455556666","decided_by_name":"bo","authority_source":"role","ts":"2026-11-02T15:30:00Z","lifecycle":"live","lane":"coord"},
+                {"decision_id":"d-3","decision":"Retry the sync after the rate limit","subject":"sync","subject_node":"","subject_pr":"","subject_text":"sync","ts":"2026-10-30T11:00:00Z","lifecycle":"expired","lane":"unattributed"},
+                {"decision_id":"d-4","decision":"Read tide data from one source","subject":"tide-source","subject_node":"","subject_pr":"","subject_text":"tide-source","ts":"2026-10-28T08:15:00Z","lifecycle":"live","lane":"unattributed"}
             ]))
             .map_err(|e| e.to_string())?;
             crate::client::decisions_view::open_rows(&mut view, rows);
