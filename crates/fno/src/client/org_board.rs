@@ -645,7 +645,9 @@ pub(crate) fn set_launch_screen(view: &mut View, screen: LaunchScreen) {
     view.launch_screen = screen;
     if tokio::runtime::Handle::try_current().is_ok() {
         tokio::spawn(async move {
-            let _ = super::config_set::spawn_config_set(LaunchScreen::KEY, screen.word()).await;
+            super::config_set::spawn_config_set(LaunchScreen::KEY, screen.word())
+                .await
+                .unwrap_or_default();
         });
     }
 }

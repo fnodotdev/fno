@@ -44,61 +44,66 @@ pub(crate) const ALL: [SettingsTab; 6] = [
 ];
 
 impl View {
+    /// The General tab, or the apps field while it is open.
+    fn general_rows(&self) -> (Vec<PopupRow>, Vec<AuxAction>) {
+        if let Some(page) = reserve_apps::rows(self) {
+            return page;
+        }
+        let mut rows = Vec::new();
+        let mut actions: Vec<AuxAction> = Vec::new();
+        let toggle = |on: bool, label: &str| PopupRow::Entry {
+            glyph: if on { "☑".into() } else { "☐".into() },
+            label: label.into(),
+            hint: String::new(),
+            enabled: true,
+        };
+        rows.push(PopupRow::Header("display".into()));
+        rows.push(toggle(self.hover_focus, "focus follows mouse"));
+        rows.push(toggle(self.status_on, "status row"));
+        rows.push(toggle(
+            self.resource_meter_on,
+            "resource meter (needs macmon)",
+        ));
+        rows.push(toggle(
+            self.sideline_layout == crate::sideline_color::SidelineLayout::Card,
+            "sideline card layout",
+        ));
+        rows.push(PopupRow::Header("launch".into()));
+        rows.push(toggle(
+            self.launch_screen == crate::view_store::LaunchScreen::Hq,
+            "open HQ on launch",
+        ));
+        rows.push(PopupRow::Header("fleet".into()));
+        rows.push(toggle(self.confirm_lifecycle, "confirm before stop/remove"));
+        rows.push(toggle(
+            hold::reserve_auto_on(),
+            "hold the fleet while a listed app runs",
+        ));
+        rows.push(PopupRow::Entry {
+            glyph: "\u{270e}".into(),
+            label: format!("apps that hold the fleet: {}", reserve_apps::summary()),
+            hint: String::new(),
+            enabled: true,
+        });
+        actions.push(AuxAction::ToggleHoverFocus);
+        actions.push(AuxAction::ToggleStatus);
+        actions.push(AuxAction::ToggleResourceMeter);
+        actions.push(AuxAction::ToggleSidelineLayout);
+        actions.push(AuxAction::ToggleLaunchScreen);
+        actions.push(AuxAction::ToggleConfirmLifecycle);
+        actions.push(AuxAction::ToggleReserveAuto);
+        actions.push(AuxAction::EditReserveApps);
+
+        (rows, actions)
+    }
+
     /// One settings tab's rows and actions (extracted from
     /// `build_settings_modal` so every tab's width can be measured).
     pub(super) fn settings_rows_for(&self, tab: SettingsTab) -> (Vec<PopupRow>, Vec<AuxAction>) {
         let mut rows = Vec::new();
         let mut actions: Vec<AuxAction> = Vec::new();
-        if tab == SettingsTab::General {
-            if let Some(page) = reserve_apps::rows(self) {
-                return page;
-            }
-        }
         match tab {
-            SettingsTab::General => {
-                let toggle = |on: bool, label: &str| PopupRow::Entry {
-                    glyph: if on { "☑".into() } else { "☐".into() },
-                    label: label.into(),
-                    hint: String::new(),
-                    enabled: true,
-                };
-                rows.push(PopupRow::Header("display".into()));
-                rows.push(toggle(self.hover_focus, "focus follows mouse"));
-                rows.push(toggle(self.status_on, "status row"));
-                rows.push(toggle(
-                    self.resource_meter_on,
-                    "resource meter (needs macmon)",
-                ));
-                rows.push(toggle(
-                    self.sideline_layout == crate::sideline_color::SidelineLayout::Card,
-                    "sideline card layout",
-                ));
-                rows.push(PopupRow::Header("launch".into()));
-                rows.push(toggle(
-                    self.launch_screen == crate::view_store::LaunchScreen::Hq,
-                    "open HQ on launch",
-                ));
-                rows.push(PopupRow::Header("fleet".into()));
-                rows.push(toggle(self.confirm_lifecycle, "confirm before stop/remove"));
-                rows.push(toggle(
-                    hold::reserve_auto_on(),
-                    "hold the fleet while a listed app runs",
-                ));
-                rows.push(PopupRow::Entry {
-                    glyph: "\u{270e}".into(),
-                    label: format!("apps that hold the fleet: {}", reserve_apps::summary()),
-                    hint: String::new(),
-                    enabled: true,
-                });
-                actions.push(AuxAction::ToggleHoverFocus);
-                actions.push(AuxAction::ToggleStatus);
-                actions.push(AuxAction::ToggleResourceMeter);
-                actions.push(AuxAction::ToggleSidelineLayout);
-                actions.push(AuxAction::ToggleLaunchScreen);
-                actions.push(AuxAction::ToggleConfirmLifecycle);
-                actions.push(AuxAction::ToggleReserveAuto);
-                actions.push(AuxAction::EditReserveApps);
-            }
+            SettingsTab::General => return self.general_rows(),
             SettingsTab::Theme => {
                 if !matches!(&self.theme_import, theme_import_ui::ThemeImportUi::Idle) {
                     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
