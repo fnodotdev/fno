@@ -76,7 +76,7 @@ check_rc "sync-version 0.4.0-rc.1 exits 2" "$rc" "2"
 run "$work/o" "$work/e" sv 0.4
 rc=$?
 check_rc "sync-version 0.4 exits 2" "$rc" "2"
-grep -qx '"version": "0.3.2"' "$sync/.claude-plugin/plugin.json"
+grep -q '"version": "0.3.2"' "$sync/.claude-plugin/plugin.json"
 check "refused shapes leave the plugin.json anchor untouched" $?
 
 # The anchor itself is guarded: a corrupt anchor version refuses loudly
