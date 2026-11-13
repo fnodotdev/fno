@@ -2950,7 +2950,6 @@ mod tests {
             "w1",
             "w1",
             "0a1b2c3d",
-            "0a1b2c3d",
             uuid,
             wt_str,
             None,
