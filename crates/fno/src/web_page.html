@@ -358,6 +358,7 @@
     if (pinned) screenEl.scrollTop = screenEl.scrollHeight;
   }
 
+  fitBtn.dataset.fno = "fit";
   fitBtn.onclick = () => {
     fitToWidth = !fitToWidth;
     fitBtn.textContent = fitToWidth ? "fit" : "1:1";
@@ -489,6 +490,7 @@
         btn.append(dot);
       }
       btn.append(document.createTextNode(label));
+      btn.dataset.fno = "pane_pick";
       btn.onclick = () => { current = id; renderPicker(); draw(); };
       picker.appendChild(btn);
     }
@@ -607,7 +609,9 @@
   if (SHARE) {
     const coach = () => sharePost("coach", $("share-coach"), () => "note shown to the driver");
     const steer = () => sharePost("steer", $("share-steer"), (b) => `steer s${b.pending} waits for the driver`);
+    $("share-coach-send").dataset.fno = "share_coach";
     $("share-coach-send").onclick = coach;
+    $("share-steer-send").dataset.fno = "share_steer";
     $("share-steer-send").onclick = steer;
     // Enter sends the box it was typed in; the form itself never submits.
     $("share-boxes").onsubmit = (e) => { e.preventDefault(); };
@@ -617,6 +621,16 @@
 
   // ---- websocket ----
   const token = new URLSearchParams(location.search).get("t") || "";
+  // One row per click on a control that names itself (data-fno): the bridge
+  // writes it through the same door the TUI client uses, ids only, and a
+  // click on nothing named ships nothing.
+  document.addEventListener("click", (e) => {
+    const tgt = e.target.closest("[data-fno]");
+    if (!tgt) return;
+    const nav = document.querySelector("nav.fno-nav");
+    const base = nav && nav.dataset.base ? nav.dataset.base : "./";
+    fetch(base + "ui/click?t=" + encodeURIComponent(token), {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify({screen: "web_pane", control: tgt.dataset.fno}), keepalive: true}).catch(() => {});
+  }, true);
   // A pasted per-pane link names its pane : pin the first paint to it
   // instead of whichever frame lands first, then clear the want so the operator
   // can still switch panes by hand afterwards. A want that never paints

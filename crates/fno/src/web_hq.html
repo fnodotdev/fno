@@ -50,7 +50,7 @@ tbody tr{cursor:pointer}tbody tr:hover,tbody tr:focus-visible{background:var(--b
 <body>
 <header class="controls bar"><span class="mark">Ｆ<b>[no]</b> hq</span><span id="age">fno fleet · reading</span>
   <span class="lbl">state</span><div class="counts" id="counts"></div>
-  <span class="lbl">view</span><div class="seg" role="tablist" aria-label="View"><button role="tab" id="tab-synapse" aria-selected="true">synapse</button><button role="tab" id="tab-table" aria-selected="false">table</button><button role="tab" id="tab-decisions" aria-selected="false">decisions</button></div></header>
+  <span class="lbl">view</span><div class="seg" role="tablist" aria-label="View"><button role="tab" id="tab-synapse" data-fno="tab" aria-selected="true">synapse</button><button role="tab" id="tab-table" data-fno="tab" aria-selected="false">table</button><button role="tab" id="tab-decisions" data-fno="tab" aria-selected="false">decisions</button></div></header>
 <div class="wrap">
   <div id="banners"></div>
   <section class="fleet" id="machines" aria-label="Machines"><p class="empty">reading the fleet</p></section>
@@ -118,6 +118,7 @@ function header(model) {
     if (color) {
       c.append(dot(color));
       c.setAttribute("aria-pressed", String(!hiddenStates.has(color)));
+      c.dataset.fno = "legend_toggle";
       c.onclick = () => { hiddenStates.has(color) ? hiddenStates.delete(color) : hiddenStates.add(color); header(model); paint(); cam.tk = fitK(); };
     }
     c.append(el("b", null, n), " " + word);
@@ -149,6 +150,7 @@ function waiting(model) {
     box.append(el("h3", null, host == null ? "this machine" : host));
     for (const q of qs.filter((x) => x.host === host)) {
       const r = el("div", "lk"), t = el("span", "lt");
+      r.dataset.fno = "question_row";
       r.onclick = () => openQuestion(q);
       r.tabIndex = 0;
       r.onkeydown = (e) => { if (e.key === "Enter") openQuestion(q); };
@@ -213,11 +215,13 @@ function answerSection(q) {
   const ordered = opts.slice().sort((a, b) => (b.n === rec) - (a.n === rec) || a.n - b.n);
   for (const o of ordered) {
     const b = add(el("button", "lkb", o.n + ". " + o.text + (o.n === rec ? " (recommended)" : "")));
+    b.dataset.fno = "answer_option";
     b.onclick = () => send({option: o.n});
     list.append(b);
   }
   if (q.kind === "pin") {
     const b = add(el("button", "lkb", "Done"));
+    b.dataset.fno = "answer_done";
     b.onclick = () => send({done: true});
     list.append(b);
   }
@@ -227,6 +231,7 @@ function answerSection(q) {
     words.setAttribute("aria-label", "Answer in words");
     words.placeholder = opts.length ? "Or answer in your own words" : "Your answer";
     const go = add(el("button", "lkb", "Send"));
+    go.dataset.fno = "answer_words";
     go.onclick = () => { if (words.value.trim()) send({words: words.value}); };
     sec.append(words, go);
   }
@@ -285,10 +290,12 @@ function openQuestion(q) {
       if (u.protocol.startsWith("http")) u.searchParams.delete("t");
       const shared = u.href;
       if (/^https?:/.test(url)) { open.target = "_blank"; open.rel = "noopener"; }
+      copy.dataset.fno = "copy";
       copy.onclick = () => copyTo(shared, t);
       d.append(open, copy);
     } else if (cmd) {
       const copy = el("button", "lkb", "Copy");
+      copy.dataset.fno = "copy";
       copy.onclick = () => copyTo(cmd, t);
       d.append(copy);
     }
@@ -397,6 +404,7 @@ function seats(model) {
   for (const m of model.machines) {
     const b = el("button", "chip", m.host + " · " + rows.filter((r) => r.host === m.host).length);
     b.setAttribute("aria-pressed", String(!hiddenHosts.has(m.host)));
+    b.dataset.fno = "host_toggle";
     b.onclick = () => { hiddenHosts.has(m.host) ? hiddenHosts.delete(m.host) : hiddenHosts.add(m.host); seats(model); };
     chips.append(b);
   }
@@ -418,6 +426,7 @@ function paint() {
   });
   document.getElementById("thead").replaceChildren(...COLS.map(([label], i) => {
     const th = el("th", null, label);
+    th.dataset.fno = "sort";
     if (i === sort.col) th.setAttribute("aria-sort", sort.dir > 0 ? "ascending" : "descending");
     th.tabIndex = 0;
     th.onclick = th.onkeydown = (e) => {
@@ -437,6 +446,7 @@ function paint() {
       if (label === "node" && work(r, "title")) td.append(el("span", "sub", work(r, "title")));
       tr.append(td);
     }
+    tr.dataset.fno = "seat_row";
     tr.onclick = () => openSeat(r);
     tr.onkeydown = (e) => { if (e.key === "Enter") openSeat(r); };
     return tr;
@@ -502,6 +512,7 @@ function openSeat(r) {
       // The label never changes; a toast reports the result. Plain http
       // off loopback has no clipboard API, so the failure toast names it and
       // the row shows the link, selected, for a manual copy.
+      copy.dataset.fno = "copy";
       copy.onclick = () => {
         const write = navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(shared) : Promise.reject(new Error("no clipboard"));
         write.then(() => toast("Link copied"), () => { select(); toast("Copy failed"); });
@@ -536,6 +547,7 @@ function closeSeat() {
   drawer.classList.remove("on");
   drawer.setAttribute("aria-hidden", "true");
 }
+document.getElementById("dclose").dataset.fno = "seat_close";
 document.getElementById("dclose").onclick = closeSeat;
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSeat(); });
 document.getElementById("filter").oninput = paint;
@@ -632,7 +644,7 @@ function setLayout(l) {
   stage.querySelectorAll("[data-layout]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.layout === l)));
   try { localStorage.setItem("fnoCommandLayout", l); } catch (e) { /* quiet-ok: no storage only loses the saved layout */ }
 }
-stage.querySelectorAll("[data-layout]").forEach((b) => { b.onclick = () => setLayout(b.dataset.layout); });
+stage.querySelectorAll("[data-layout]").forEach((b) => { b.dataset.fno = "layout"; b.onclick = () => setLayout(b.dataset.layout); });
 const radius = (n) => n.kind === "host" ? 24 : n.kind === "territory" ? 14 : n.kind === "epic" ? 7 : leadName(n.r) ? 11 : 8;
 const inLayout = (n) => n.kind === "host" ? layout !== "constellation" : n.kind === "territory" || n.kind === "epic" ? layout !== "hemispheres" : true;
 const shown = (n) => inLayout(n) && (n.kind === "session" ? visible(n.r) : n.kind === "host" ? !hiddenHosts.has(n.h.host) : true);
@@ -820,6 +832,15 @@ async function load() {
 let wantQuestion = new URLSearchParams(location.search).get("question");
 load();
 setInterval(() => { if (document.visibilityState === "visible") load(); }, 60000);
+
+// One row per click on a control that names itself (data-fno): the bridge
+// writes it through the same door the TUI client uses, ids only, and a
+// click on nothing named ships nothing.
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("[data-fno]");
+  if (!t) return;
+  fetch((nav ? nav.dataset.base : "./") + "ui/click?t=" + encodeURIComponent(token), {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify({screen: "web_hq", control: t.dataset.fno}), keepalive: true}).catch(() => {});
+}, true);
 })();
 </script>
 </body>
