@@ -822,7 +822,7 @@ pub struct Arm {
 /// the child named, so a tick can never call the wrong file rendered.
 fn run_ledger() -> Result<String, String> {
     let output = std::process::Command::new(crate::scrape::fno_bin())
-        .args(crate::daemon_argv::TEAM_LEDGER)
+        .args(crate::door_argv::TEAM_LEDGER)
         .stdin(std::process::Stdio::null())
         .output()
         .map_err(|e| format!("spawn: {e}"))?;
@@ -1556,8 +1556,8 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn team_ledger_spawns_exactly_the_daemon_argv_table_row() {
-        // Law D3141, leg one: the arm spawns the daemon_argv table row
+    fn team_ledger_spawns_exactly_the_door_argv_table_row() {
+        // Law D3141, leg one: the arm spawns the door_argv table row
         // verbatim, so the fno side's resolution leg (which classifies the
         // same rows against the live menu) holds the argv that actually
         // runs. The stub names a real page on stdout (run_ledger's parse
@@ -1594,8 +1594,8 @@ mod tests {
             .collect();
         assert_eq!(
             argv,
-            crate::daemon_argv::TEAM_LEDGER,
-            "the arm's spawned argv must equal the daemon_argv table row"
+            crate::door_argv::TEAM_LEDGER,
+            "the arm's spawned argv must equal the door_argv table row"
         );
     }
 

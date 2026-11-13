@@ -129,7 +129,7 @@ fn cleanup_command(home: &crate::paths::AgentsHome, root: &str) -> std::process:
     let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
     cmd.current_dir(root)
         .env("FNO_AGENTS_HOME", home.root())
-        .args(crate::daemon_argv::WORKTREE_CLEANUP);
+        .args(crate::door_argv::WORKTREE_CLEANUP);
     cmd
 }
 
@@ -572,7 +572,7 @@ impl FleetArms {
                 let _gate = SweepGate(flag);
                 sweeps::trust_answer_sweep(&home, &emitter, now_epoch_secs(), &|pane, key| {
                     std::process::Command::new(crate::scrape::fno_bin())
-                        .args(crate::daemon_argv::PANE_SEND)
+                        .args(crate::door_argv::PANE_SEND)
                         .arg(&pane.to_string())
                         .arg("--raw")
                         .arg(key)
