@@ -488,4 +488,60 @@ mod tests {
         assert!(written.contains("app_installation_id = \"42\""));
         std::env::remove_var("FNO_CONFIG");
     }
+
+    /// Three blocks shipped without model specs in the fields.json models
+    /// table (TelemetryUsageEventsBlock and the two registry descriptors) and
+    /// refused every write under them with "unknown config key" while `get`
+    /// read the same keys. The leaf round-trip is the contract: set accepts,
+    /// the bytes land, and a required-only field set validates.
+    #[test]
+    fn set_accepts_keys_whose_blocks_shipped_late_model_specs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pin = dir.path().join("config.toml");
+        let _env = crate::digest_overlay::ENVIRONMENT_LOCK.lock();
+        std::env::set_var("FNO_CONFIG", &pin);
+        set_values(
+            &[(
+                "telemetry.usage_events.enabled".to_string(),
+                "true".to_string(),
+            )],
+            "global",
+            None,
+        )
+        .expect("usage_events leaf set");
+        set_values(
+            &[(
+                "dispatch.command_registry.check.invocation".to_string(),
+                "$fno:check".to_string(),
+            )],
+            "global",
+            None,
+        )
+        .expect("command_registry entry set");
+        let reviewer = vec![
+            (
+                "review.reviewer_registry.sigma.kind".to_string(),
+                "external-cli".to_string(),
+            ),
+            (
+                "review.reviewer_registry.sigma.requires".to_string(),
+                "none".to_string(),
+            ),
+            (
+                "review.reviewer_registry.sigma.invocation".to_string(),
+                "sigma review".to_string(),
+            ),
+            (
+                "review.reviewer_registry.sigma.asserts".to_string(),
+                "invocation".to_string(),
+            ),
+        ];
+        set_values(&reviewer, "global", None).expect("reviewer_registry entry set");
+        let written = std::fs::read_to_string(&pin).expect("config written");
+        assert!(written.contains("[telemetry.usage_events]"));
+        assert!(written.contains("enabled = true"));
+        assert!(written.contains("[dispatch.command_registry.check]"));
+        assert!(written.contains("[review.reviewer_registry.sigma]"));
+        std::env::remove_var("FNO_CONFIG");
+    }
 }
