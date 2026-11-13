@@ -3371,7 +3371,7 @@ pub(crate) mod tests {
             laws: vec![law_row.clone()],
         };
         let ans = ask_answer(&req);
-        assert!(ans.exact.is_empty(), "{:?}", ans.exact);
+        assert!(ans.exact.is_empty());
 
         // The nearby tier (a named subject sharing tokens) would list it.
         let req = AskRequest {
@@ -3381,7 +3381,7 @@ pub(crate) mod tests {
         };
         let ans = ask_answer(&req);
         assert!(ans.exact.is_empty());
-        assert!(ans.nearby.is_empty(), "{:?}", ans.nearby);
+        assert!(ans.nearby.is_empty());
         assert!(ans.nearby_notice.is_none());
 
         // Cased and fenced spellings mark too; a word that merely appears in
