@@ -79,6 +79,7 @@ pub(super) fn register(reg: &mut Registry) {
     reg.model_after("RenderTargetConfig", normalize_scope);
     reg.after("RenderTargetConfig", &["projection"], known_projection);
     reg.before("BacklogBlock", &["render_targets"], coerce_render_targets);
+    reg.before("BacklogBlock", &["render_path"], validate_render_path);
     reg.after("BacklogBlock", &["staleness_days"], staleness_days_positive);
     reg.after("BacklogBlock", &["id_prefix"], validate_id_prefix);
     reg.after("BacklogBlock", &["id_hex_width"], validate_id_hex_width);
@@ -411,6 +412,46 @@ fn coerce_render_targets(ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
             Ok(Value::Array(Vec::new()))
         }
     }
+}
+
+/// `backlog.render_path`: a `{project}`-templated board path. Optional str,
+/// so non-strings fall through to the schema's type refusal; a string must
+/// carry `{project}` (a fixed path belongs in [[backlog.render_targets]]),
+/// expand no other template, carry no glob, and be absolute or `~/`-rooted.
+fn validate_render_path(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {
+    let Value::String(raw) = &v else {
+        return Ok(v);
+    };
+    let path = py_strip(raw).to_string();
+    if path.is_empty() {
+        return Err(Fail::Value("backlog.render_path must not be empty".into()));
+    }
+    check_no_glob(&path, "backlog.render_path")?;
+    check_path_max(&path, "backlog.render_path")?;
+    let names = super::validators_root::template_vars(&path);
+    if !names.contains(&"project".to_string()) {
+        return Err(Fail::Value(
+            "backlog.render_path must contain {project} (one board per project); a fixed path \
+             belongs in [[backlog.render_targets]]"
+                .into(),
+        ));
+    }
+    let unknown: Vec<&String> = names.iter().filter(|n| n.as_str() != "project").collect();
+    if !unknown.is_empty() {
+        return Err(Fail::Value(format!(
+            "backlog.render_path expands only {{{{project}}}}, got {} in {}",
+            repr_list(&unknown),
+            repr_text(&path)
+        )));
+    }
+    if !is_abs_after_expanduser(&path) {
+        return Err(Fail::Value(format!(
+            "backlog.render_path must be absolute or ~/-rooted (it is written from arbitrary \
+             cwds), got: {}",
+            repr_text(&path)
+        )));
+    }
+    Ok(v)
 }
 
 fn staleness_days_positive(_ctx: &mut Ctx, v: Value) -> Result<Value, Fail> {

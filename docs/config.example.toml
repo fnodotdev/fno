@@ -127,6 +127,8 @@ max_open_ideas = 25
 render_targets = []
 # Render the default board page (~/.fno/cache/pages/graph.html) after graph changes (default true). Set false to stop the store keeper rewriting the page after every burst: only explicit [[backlog.render_targets]] rows render, and `fno backlog view` rebuilds the page on demand before opening. GLOBAL config file only, like render_targets.
 render_default = true
+# Board page template (GLOBAL config file only): the daemon renders one board for every project registered in work.workspaces, expanding {project} in the template. A [[backlog.render_targets]] row scoped to a project overrides the template row for that project. Example: ~/vault/{project}/backlog/backlog.html. See [A local HTML file](backlog-usage.md#a-local-html-file).
+# render_path = <unset>   # optional; no default
 # Seconds an open local board or lead.html tab waits, visible and untouched, before it reloads itself (default 60; 0 is off).
 page_reload_s = 60
 

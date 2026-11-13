@@ -999,6 +999,10 @@
      "default": true
     },
     {
+     "name": "render_path",
+     "default": null
+    },
+    {
      "name": "page_reload_s",
      "default": 60
     }
@@ -3386,6 +3390,7 @@
   "backlog.id_hex_width",
   "backlog.render_targets",
   "backlog.render_default",
+  "backlog.render_path",
   "batch.enabled",
   "batch.max_nodes",
   "batch.max_loc",

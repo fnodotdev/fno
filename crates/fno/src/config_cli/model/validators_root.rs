@@ -799,7 +799,7 @@ fn validate_template_references(_ctx: &mut Ctx, m: &mut Map<String, Value>) -> R
 
 /// `re.finditer(r"(?<!\{)\{([^{}]+)\}(?!\})", text)` group 1; the regex
 /// crate has no lookaround.
-fn template_vars(text: &str) -> Vec<String> {
+pub(crate) fn template_vars(text: &str) -> Vec<String> {
     let chars: Vec<char> = text.chars().collect();
     let mut vars = Vec::new();
     let mut i = 0;

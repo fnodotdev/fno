@@ -34,6 +34,7 @@ fno.config	ProjectBlock	coerce_string_shorthand
 fno.config	InboxBlock	ttl_is_non_negative
 fno.config	BlueprintBlock	max_prs_per_epic_positive
 fno.config	BacklogBlock	_coerce_render_targets
+fno.config	BacklogBlock	_validate_render_path
 fno.config	BacklogBlock	staleness_days_positive
 fno.config	BacklogBlock	validate_id_prefix
 fno.config	BacklogBlock	validate_id_hex_width
