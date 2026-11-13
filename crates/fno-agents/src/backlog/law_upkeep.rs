@@ -255,9 +255,9 @@ pub(crate) fn upkeep_pass(apply: bool) -> Result<Value, UpkeepError> {
                 reason: format!("{state}: {why}"),
                 retracted_by: "law-upkeep".into(),
                 authority_source: if state == "expired" {
-                    "guard"
+                    "guard".to_string()
                 } else {
-                    "reading"
+                    "reading".to_string()
                 },
                 attested_by: None,
                 relayed_by: None,
@@ -603,7 +603,7 @@ mod tests {
             json!({"decision_id": "d-bbb", "subject": "merge main"}),
             json!({"decision_id": "d-ccc", "subject": "other law"}),
         ]);
-        assert_eq!(groups.len(), 1, "{groups}");
+        assert_eq!(groups.len(), 1, "{groups:?}");
         assert_eq!(groups[0]["subject"], "merge main");
         assert_eq!(groups[0]["decision_ids"].as_array().unwrap().len(), 2);
     }
