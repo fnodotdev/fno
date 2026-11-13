@@ -43,6 +43,11 @@ const ASK_TOOLS: [&str; 2] = ["AskUserQuestion", "ExitPlanMode"];
 const ASKING_FALLBACK: &str = "asking the user";
 const PLAN_APPROVAL: &str = "plan approval requested";
 
+/// The reason prefix of the blocked report a Stop sends for an open chat
+/// question. The turn has ended and the composer is free, so the mail quiet
+/// gate reads this row as idle, never as a picker.
+pub(crate) const WAITING_ON_USER: &str = "waiting on the user";
+
 /// `fno-agents hook session-state`: parse, normalize, decide, report.
 pub fn run(args: &[String]) -> i32 {
     let Some((harness, event)) = parse_args(args) else {
@@ -575,7 +580,7 @@ pub(crate) fn report_waiting_on_user(session_id: &str, qids: &[String]) {
     };
     let decision = Decision {
         state: "blocked",
-        reason: format!("waiting on the user: {}", qids.join(", ")),
+        reason: format!("{WAITING_ON_USER}: {}", qids.join(", ")),
         posture: None,
     };
     let seq = crate::MonotonicTimestamp::now().as_nanos();
