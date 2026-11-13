@@ -608,6 +608,14 @@ struct FixtureSpec<'a> {
     allowed_execs: &'static [&'static str],
     /// Optional cap on `git` execs (worktree discovery containment).
     max_git: Option<usize>,
+    /// Judge the control-adjusted p90 and p95 instead of raw p90 and raw max.
+    /// These hooks return before any heavy I/O, so on a shared CI runner
+    /// spawn/scheduling overhead dominates wall time (a control `fno-agents
+    /// --version` read ~60ms p90 raw against ~2ms adjusted in the same pass).
+    /// The control read before and after each sample prices that overhead in;
+    /// a hook that itself grows still grows the adjusted tail, so the gate
+    /// keeps catching real regressions.
+    normalize_runner: bool,
 }
 
 /// Stop payload for a session with a transcript in the fixture base.
@@ -719,20 +727,7 @@ fn run_fixture(name: &str, script: &str, spec: &FixtureSpec<'_>, verify: impl Fn
         Some(b.out.join(format!("{name}.trace")))
     };
 
-    // Runner-relative budgets: these hooks return before any heavy I/O, so on
-    // a shared CI runner spawn/scheduling overhead dominates wall time and one
-    // slow window reds a raw budget (measured: a control `fno-agents
-    // --version` read ~60ms p90 raw against ~2ms adjusted in the same pass).
-    // The control read before and after each sample prices that overhead in;
-    // a hook that itself grows still grows the adjusted tail, so the gate
-    // keeps catching real regressions.
-    let normalize_runner = matches!(
-        name,
-        "guard_bash_no_write"
-            | "hook_budget_bash_pretooluse_dispatch_allow"
-            | "hook_budget_bash_pretooluse_dispatch_git"
-            | "hook_budget_bash_pretooluse_dispatch_gh"
-    );
+    let normalize_runner = spec.normalize_runner;
     let control_trace_path = if normalize_runner && !macos {
         Some(b.out.join(format!("{name}-control.trace")))
     } else {
@@ -995,6 +990,7 @@ fn latency_stop_visitor_claude() {
             // isolated-read check, retry pass) + 1x rev-parse --git-path
             // (delivery-pending scan) + 1x final worktree list.
             max_git: Some(5),
+            normalize_runner: false,
         },
         |code, stdout, stderr| {
             assert_eq!(code, 0, "visitor exit: {stderr}");
@@ -1024,6 +1020,7 @@ fn latency_stop_visitor_no_message() {
             allowed_execs: &["bash", "fno-agents", "git", "fno", "python3", "python"],
             // Same inventory as the with-message visitor above.
             max_git: Some(5),
+            normalize_runner: false,
         },
         |code, stdout, stderr| {
             assert_eq!(code, 0, "visitor exit: {stderr}");
@@ -1056,6 +1053,7 @@ fn latency_stop_target_working() {
             ceiling_ms: 1200.0,
             allowed_execs: &["bash", "fno-agents", "git"],
             max_git: None,
+            normalize_runner: false,
         },
         |_code, stdout, stderr| {
             let v: Value = serde_json::from_str(stdout)
@@ -1100,6 +1098,7 @@ fn latency_stop_target_watching() {
             ceiling_ms: 1200.0,
             allowed_execs: &["bash", "fno-agents", "git"],
             max_git: None,
+            normalize_runner: false,
         },
         |_code, stdout, stderr| {
             // Lease-only idle: the wrapper allows with an empty payload and
@@ -1158,6 +1157,7 @@ fn latency_stop_target_promise_green() {
                 "jq",
             ],
             max_git: None,
+            normalize_runner: false,
         },
         |code, _stdout, stderr| {
             assert_eq!(code, 0, "terminal allow exits 0: {stderr}");
@@ -1226,6 +1226,7 @@ fn hook_budget_bash_pretooluse_dispatch() {
             ceiling_ms: 200.0,
             allowed_execs: &["bash", "cat", "fno-agents", "git", "mktemp", "rm"],
             max_git: None,
+            normalize_runner: true,
         },
         |code, stdout, stderr| {
             assert_eq!(code, 0, "{stderr}");
@@ -1260,6 +1261,7 @@ fn hook_budget_bash_pretooluse_dispatch() {
                 "rm",
             ],
             max_git: Some(5),
+            normalize_runner: false,
         },
         |code, stdout, stderr| {
             assert_eq!(code, 0, "{stderr}");
@@ -1291,6 +1293,7 @@ fn hook_budget_bash_pretooluse_dispatch() {
             ceiling_ms: 300.0,
             allowed_execs: &["bash", "fno-agents", "git"],
             max_git: Some(5),
+            normalize_runner: true,
         },
         |code, stdout, stderr| {
             assert_eq!(code, 0, "{stderr}");
@@ -1314,6 +1317,7 @@ fn hook_budget_bash_pretooluse_dispatch() {
             ceiling_ms: 300.0,
             allowed_execs: &["bash", "fno-agents", "git"],
             max_git: Some(5),
+            normalize_runner: true,
         },
         |code, stdout, stderr| {
             assert_eq!(code, 0, "{stderr}");
@@ -1341,6 +1345,7 @@ fn hook_budget_bash_pretooluse_dispatch() {
             ceiling_ms: 300.0,
             allowed_execs: &["bash", "fno-agents", "git"],
             max_git: Some(5),
+            normalize_runner: true,
         },
         |code, stdout, stderr| {
             assert_eq!(code, 0, "{stderr}");
@@ -1485,6 +1490,7 @@ fn latency_guard_unpromoted_edit() {
             ceiling_ms: 200.0,
             allowed_execs: &["bash", "fno-agents", "git"],
             max_git: None,
+            normalize_runner: false,
         },
         |code, stdout, stderr| {
             assert_eq!(code, 0, "{stderr}");
@@ -1524,6 +1530,7 @@ fn latency_guard_org_edit_deny() {
                 "jq",
             ],
             max_git: None,
+            normalize_runner: false,
         },
         |code, stdout, stderr| {
             assert_eq!(code, 0, "{stderr}");
@@ -1574,6 +1581,7 @@ fn latency_guard_org_plan_allow() {
                 "jq",
             ],
             max_git: None,
+            normalize_runner: false,
         },
         |code, stdout, stderr| {
             assert_eq!(code, 0, "{stderr}");
