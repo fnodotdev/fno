@@ -298,8 +298,8 @@ fn cached_cargo_command_line(pid: u32) -> Option<String> {
         return Some(text);
     }
     let line = cargo_command_line(pid)?;
-    let _ = std::fs::create_dir_all(&dir);
-    let _ = std::fs::write(&path, &line);
+    std::fs::create_dir_all(&dir).ok();
+    std::fs::write(&path, &line).ok();
     sweep_dead_cargo_markers(&dir);
     Some(line)
 }
@@ -360,7 +360,7 @@ fn compile_journal_argv(sub: &str) -> Vec<String> {
 /// sweeps with the beside markers' rule.
 fn first_for_incarnation(pid: u32) -> bool {
     let dir = std::env::temp_dir().join("fno-compile-declared");
-    let _ = std::fs::create_dir_all(&dir);
+    std::fs::create_dir_all(&dir).ok();
     let path = dir.join(pid.to_string());
     let Some(birth) = crate::daemon::process_start_time(pid) else {
         return true;
@@ -371,7 +371,7 @@ fn first_for_incarnation(pid: u32) -> bool {
             return false;
         }
     }
-    let _ = std::fs::write(&path, &birth);
+    std::fs::write(&path, &birth).ok();
     sweep_dead_cargo_markers(&dir);
     true
 }
