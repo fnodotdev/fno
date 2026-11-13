@@ -166,8 +166,8 @@ check((release_dispatch.get("dry_run") or {}).get("type") == "boolean",
 publish_job = release_jobs.get("publish") or {}
 check(publish_job.get("environment") == "release",
       "release.yml's publish job sits behind the release approval environment")
-check((publish_job.get("needs") or []) == ["resolve", "binaries", "wheels"],
-      "release.yml's publish job runs after resolve and the binaries and wheels build workflows")
+check((publish_job.get("needs") or []) == ["resolve", "binaries"],
+      "release.yml's publish job runs after resolve and the binaries build workflow")
 # Channel routing resolved through the resolve job's outputs; the group is
 # per channel and the nightly-dispatched rc cancels the parked candidate.
 publish_if = str(publish_job.get("if", ""))
@@ -182,7 +182,7 @@ check(str((release.get("concurrency") or {}).get("group", "")) == "release-${{ i
 
 # Build workflows are callable and build-only: release.yml calls them and owns
 # every publish leg behind the release-environment approval.
-for wf_name in ("release-binaries.yml", "release-wheels.yml"):
+for wf_name in ("release-binaries.yml",):
     wf = load(f".github/workflows/{wf_name}")
     wf_events = event_map(wf)
     call_inputs = (wf_events.get("workflow_call") or {}).get("inputs") or {}

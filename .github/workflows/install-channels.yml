@@ -116,16 +116,6 @@ jobs:
             expect: pass
             node: ''
             readme: []
-          - id: pypi-uv
-            runs-on: ubuntu-24.04
-            expect: pass
-            node: ''
-            readme: ['uv tool install fno']
-          - id: pypi-uv-pinned
-            runs-on: ubuntu-24.04
-            expect: pass
-            node: ''
-            readme: []
           - id: brew
             runs-on: macos-15
             expect: pass

@@ -22,7 +22,7 @@ labels: bug
 - footnote version (`fno --version`):
 - OS:
 - CLI runtime (Claude Code / Codex / Gemini):
-- Installed from (git clone / PyPI / plugin marketplace):
+- Installed from (git clone / release tarball / Homebrew / legacy wheel / plugin marketplace):
 
 ## Logs or output
 

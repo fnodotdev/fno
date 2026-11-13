@@ -42,9 +42,8 @@ run() { # run <outfile> <errfile> <cmd...>
 
 # ---------------------------------------------------------------- sync-version
 sync="$work/sync"
-mkdir -p "$sync/scripts/release" "$sync/crates/fno/src" "$sync/crates/fno-agents/src" "$sync/crates/fno-mail/src" "$sync/crates/fno-app/src" "$sync/packaging/pypi"
+mkdir -p "$sync/scripts/release" "$sync/crates/fno/src" "$sync/crates/fno-agents/src" "$sync/crates/fno-mail/src" "$sync/crates/fno-app/src"
 cp scripts/release/sync-version.sh "$sync/scripts/release/"
-printf '0.3.2\n' > "$sync/packaging/pypi/VERSION"
 printf '[package]\nname = "fno"\nversion = "0.3.2"\nedition = "2021"\nfno-mail = { path = "../fno-mail", version = "=0.3.2" }\n' > "$sync/crates/fno/Cargo.toml"
 printf '[package]\nname = "fno-mail"\nversion = "0.3.2"\nedition = "2021"\n' > "$sync/crates/fno-mail/Cargo.toml"
 printf '[package]\nname = "fno-app"\nversion = "0.3.2"\nedition = "2021"\n' > "$sync/crates/fno-app/Cargo.toml"
@@ -77,18 +76,18 @@ check_rc "sync-version 0.4.0-rc.1 exits 2" "$rc" "2"
 run "$work/o" "$work/e" sv 0.4
 rc=$?
 check_rc "sync-version 0.4 exits 2" "$rc" "2"
-grep -qx '0.3.2' "$sync/packaging/pypi/VERSION"
-check "refused shapes leave packaging/pypi/VERSION untouched" $?
+grep -q '"version": "0.3.2"' "$sync/.claude-plugin/plugin.json"
+check "refused shapes leave the plugin.json anchor untouched" $?
 
-# The anchor itself is guarded: a corrupt VERSION refuses loudly instead of
-# drifting every surface against a garbage wanted version.
-printf 'not-a-version\n' > "$sync/packaging/pypi/VERSION"
+# The anchor itself is guarded: a corrupt anchor version refuses loudly
+# instead of drifting every surface against a garbage wanted version.
+printf '{\n  "name": "t",\n  "version": "not-a-version"\n}\n' > "$sync/.claude-plugin/plugin.json"
 run "$work/o" "$work/e" sv --check
 rc=$?
-check_rc "--check with a corrupt VERSION anchor exits 1" "$rc" "1"
-grep -q "packaging/pypi/VERSION does not hold" "$work/e"
+check_rc "--check with a corrupt anchor version exits 1" "$rc" "1"
+grep -q "plugin.json does not hold" "$work/e"
 check "the corrupt-anchor refusal names the file" $?
-printf '0.3.2\n' > "$sync/packaging/pypi/VERSION"
+printf '{\n  "name": "t",\n  "version": "0.3.2"\n}\n' > "$sync/.claude-plugin/plugin.json"
 
 # AC3: an rc shape lands as PEP 440 in VERSION/JSON and semver in Cargo.
 run "$work/o" "$work/e" sv 0.4.0rc1
@@ -112,14 +111,12 @@ for c in fno fno-agents fno-mail; do
 done
 grep -q '"version": "0.4.0rc1"' "$sync/.claude-plugin/plugin.json"
 check "plugin.json reads 0.4.0rc1" $?
-grep -qx '0.4.0rc1' "$sync/packaging/pypi/VERSION"
-check "packaging/pypi/VERSION reads 0.4.0rc1" $?
 run "$work/o" "$work/e" sv --check
 rc=$?
 check_rc "--check agrees after an rc bump (exit 0)" "$rc" "0"
 
 # buddy is not in the lockstep: the manifest list omits it, an fno bump leaves
-# it at 0.0.1, and --check passes while its version differs from the wheel.
+# it at 0.0.1, and --check passes while its version differs from the anchor.
 ! grep -q 'plugins/buddy' "$sync/scripts/release/sync-version.sh"
 check "sync-version.sh does not list buddy" $?
 grep -q '"version": "0.0.1"' "$sync/plugins/buddy/.claude-plugin/plugin.json"
