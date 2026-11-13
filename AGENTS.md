@@ -153,7 +153,7 @@ Bug in plan -> fix inline, note in SUMMARY.md. Minor enhancement (<15 min) -> im
 
 - **`fno agents claim`** - the one work-claim primitive with atomic lockfiles. `target init` already claims the node - never `claim acquire` manually. [coordination](docs/architecture/coordination.md).
 - **`fno agents mail` - coordination.** Review inline via `/fno:review` or Codex `$fno:review`. Never use mail or spawn a reviewer. The merge gate enforces review. `review.self_review_required = false` needs a live claim, expires after `review.optout_ttl_minutes`, and disables auto-merge. [review lanes](docs/architecture/review-lanes.md).
-- **`fno inbox decide`** - records a ruling per subject. `fno inbox decisions X` recovers it, newest first. [decision-record](docs/architecture/decision-record.md).
+- **`fno inbox decide`** - records a ruling per subject. `fno inbox decisions X` recovers it, newest first. Every live ruling reads in `decision-log.md` beside the plans dir; `fno backlog decisions --log` prints its path. [decision-record](docs/architecture/decision-record.md).
 - **`fno agents fleet feed`** - one ordered projection of questions.jsonl + the graph store. Rows carry the node id + session id the mux `prefix+e` overlay deep-links through. [activity-feed](docs/architecture/activity-feed.md).
 - **`fno whoami` / `fno whoami status`** - read-only self-introspection; run when confused after compaction.
 - **`fno do target start <node>`** - one-command worktree cold-start (ensure off `origin/main` -> `target init`), idempotent. [target-start-command](docs/architecture/target-start-command.md).

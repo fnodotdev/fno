@@ -1344,6 +1344,10 @@ pub(crate) struct RecordDoor {
     guard: Option<Value>,
     /// Main's date-only `--until` form: the day the rule file expires.
     until: Option<String>,
+    /// Near rulings the recorder keeps beside the new law (`--keep`).
+    keep: Vec<String>,
+    /// Words that pull an open node into the after-write sweep (`--sweep`).
+    sweep: Vec<String>,
 }
 
 /// A law's scope past the recording project, from one door flag. `None` in
@@ -1355,7 +1359,7 @@ pub(crate) enum Widen {
     User(Option<String>),
 }
 
-const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --user[=<name>]] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD|date:<when>|for:<30m|2h|1d>|event:<node>|set:<node>,<node>] [--strength inform|warn|require-ack|block] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
+const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--keep d-x]... [--sweep word]... [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --user[=<name>]] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD|date:<when>|for:<30m|2h|1d>|event:<node>|set:<node>,<node>] [--strength inform|warn|require-ack|block] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
 /// The `--until` grammar: `date`/`for` fix an instant now, `event` waits for one node,
 /// `set` freezes node ids and drains as they close. `count` refuses (no counter yet).
 pub(crate) fn parse_guard(spec: &str, now: chrono::DateTime<chrono::Utc>) -> Result<Value, String> {
@@ -1438,6 +1442,8 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
         between: None,
         guard: None,
         until: None,
+        keep: Vec::new(),
+        sweep: Vec::new(),
     };
     let mut widened_by: Vec<String> = Vec::new();
     let mut positional = 0usize;
@@ -1464,6 +1470,12 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
                 let typed = take(&mut i)?;
                 door.supersedes = Some(crate::numbers::resolve('d', &typed).unwrap_or(typed));
             }
+            "--keep" => {
+                let typed = take(&mut i)?;
+                door.keep
+                    .push(crate::numbers::resolve('d', &typed).unwrap_or(typed));
+            }
+            "--sweep" => door.sweep.push(take(&mut i)?),
             "--graduation" => door.graduation = Some(take(&mut i)?),
             "--graduation-ref" => door.graduation_ref = Some(take(&mut i)?),
             "--read" => door.reads.push(take(&mut i)?),
@@ -2114,6 +2126,16 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
             ));
         }
     }
+    // A near ruling on another subject outlived the law that replaced it
+    // (D3310 beside D3322), so each one is named before the write.
+    if let Ok(index) = decision_index::default_store_live() {
+        let near = crate::law_reach::near_rulings(&index, &door.subject, &decision, &scope);
+        if let Some(message) =
+            crate::law_reach::unnamed_near_refusal(&near, supersedes.as_deref(), &door.keep)
+        {
+            return door_refuse(&message);
+        }
+    }
     let decision_id = mint_decision_id();
     let ts = now_iso();
     // The envelope mirrors the Python `operator_decision` builder: a key
@@ -2212,6 +2234,8 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     if let Some(old) = &auto_superseded {
         eprintln!("superseded {old}");
     }
+    crate::law_reach::sweep_after_law(&decision_id, door.subject.trim(), &decision, &door.sweep);
+    crate::decision_log::refresh();
     // The best-effort rule-time join, on stderr: near laws first, then the
     // open questions the new law may answer.
     let law_row = LawRow {
@@ -3143,7 +3167,7 @@ pub fn run_law_match_str(input: &str) -> i32 {
             }
         }
         MatchRequest::Retract(r) => {
-            return run_retract_door(&r.argv);
+            return crate::decision_log::refresh_after(run_retract_door(&r.argv));
         }
         MatchRequest::History(r) => {
             return run_history_read(&r.argv);
@@ -3152,10 +3176,10 @@ pub fn run_law_match_str(input: &str) -> i32 {
             return crate::law_recheck::run_recheck(&r.argv);
         }
         MatchRequest::Restore(r) => {
-            return crate::law_restore::run_restore(&r.argv);
+            return crate::decision_log::refresh_after(crate::law_restore::run_restore(&r.argv));
         }
         MatchRequest::Renew(r) => {
-            return crate::law_renew::run_renew(&r.argv);
+            return crate::decision_log::refresh_after(crate::law_renew::run_renew(&r.argv));
         }
         MatchRequest::Upkeep(r) => {
             return crate::law_upkeep::run_upkeep(&r.argv);
@@ -3530,6 +3554,8 @@ pub(crate) mod scope_tests {
             between: None,
             guard: None,
             until: None,
+            keep: Vec::new(),
+            sweep: Vec::new(),
         }
     }
 

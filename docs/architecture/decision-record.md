@@ -157,6 +157,16 @@ A decision with no subject at all is reachable only through `fno backlog decisio
 
 The graph projection stamps that mark at write time under the lock. The index is an append-only history from the reader's perspective, so the reader derives `superseded_by` from the rows it scanned.
 
+A same-subject law supersedes the live law on that subject by itself. A contradicting ruling can sit under another subject: on 2026-11-12 the lead ruling D3310 (subject: a node id, fno-app versions in lockstep with fno) stayed live beside the law D3322 (subject `release:fno-app-version`, fno-app has its own version line). So `fno inbox law set` also reads every live law and role ruling in the same scope, subject and decision text together. A ruling that shares six or more topic words, and half of the shorter text, is near. The door refuses until each near ruling is named, by `--supersedes <id>` or by `--keep <id>`. `crates/fno-agents/src/backlog/law_reach.rs` holds the bar and the measurement behind it.
+
+## A law reaches open work
+
+After the write, the door finds the open nodes the law touches. It ranks open nodes by the law's words, rare words weighted higher, and takes at most five. It adds every open node whose text carries a `--sweep <word>`. Each node owned by a live session lock gets one mail from `fno/law-sweep` that names the law, the node, its PR and its plan. A node with no owner session prints one stderr line for the recorder. The word match misses a node that names the changed thing in other words: the fno-web desktop guide (PR 112) never says `fno-app`, so the recorder passes `--sweep desktop`.
+
+## The decision log
+
+`decision-log.md` sits beside the project's plans dir, one level up from it. The law door rewrites it after every write, retract, restore and renew. It lists every live law and role ruling by subject, newest first, then the rulings retired in the last 30 days. `fno backlog decisions --log` rewrites it on demand and prints its path. The store stays the record. The log is where a person reads what was decided.
+
 ## Traced decisions
 
 Every cross-rung ask is one traced decision. The ask, the lead's route (answer-self versus escalate, with the class), the question, the answer, and the correction all link by id. One hop is one `decision_span` row in the project journal. Hops that already have a natural id (the question row, the decision row) carry the same `trace` envelope instead of a second row. The envelope is `{trace_id, span_id, parent_span_id?, actor_session?, actor_kind, comms, recipient_session?, recipient_kind?}`. When the session holds a live role, `actor_kind` is `lead`, and any other resolved session is `worker`. An attended terminal with no session identity is `user`, and daemon or scheduler work is `sweep`. A machine arm with no session of its own reads `sweep` through a launcher stamp. The daemon close sweep and the detached finalize queue stamp `FNO_ACTOR_KIND=sweep` on the child. Any other stamp value is ignored: the stamp names a sweep and never forges a session actor. The class enum is `public-surface`, `irreversible`, `money-security`, `law-change`, `gate-override`, `none`. The spans:
