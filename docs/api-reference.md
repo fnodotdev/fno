@@ -44,7 +44,7 @@ The core pipeline - from idea to shipped PR.
 |-------|---------|-------|---------|
 | `think` | `/fno:think` | inherit | Brainstorming and design exploration with BDD criteria |
 | `blueprint` | `/fno:blueprint "feature"` | inherit | Implementation planning with wave execution strategy. Use `--full` for BDD acceptance criteria. Writes the plan and stops; building starts when you point `/fno:target` at it |
-| `execute` | `/fno:execute` | inherit | Plan execution. Routes between single-session execution (`flat`, default) and wave orchestration (`waves`; alias `/fno:operator`). Supports `--resume` and `--retry <task-id>` |
+| `execute` | `/fno:execute` | inherit | Plan execution. Routes between single-session execution (`flat`, default) and wave orchestration (`waves`). Supports `--resume` and `--retry <task-id>` |
 | `target` | `/fno:target "feature"` | inherit | Autonomous end-to-end pipeline (think, blueprint, execute, review, ship). Also accepts a plan path to skip think/blueprint |
 
 #### target Pipeline Stages
@@ -62,7 +62,7 @@ Input ("feature" or path/to/plan)
 
 #### execute: flat vs waves
 
-| Aspect | `flat` (default) | `waves` (alias `/fno:operator`) |
+| Aspect | `flat` (default) | `waves` |
 |--------|------------------|--------------------|
 | Weight | Lightweight, in-session | Heavy, multi-agent |
 | Orchestration | Reads 00-INDEX.md, runs waves inline | Spawns subagent per task via `fno-agents wave ready` |

@@ -1,0 +1,482 @@
+# Prescribed-command resolution surface. The gate in check-prescribed-commands.py
+# resolves every prescribed fno command, fno-agents command and slash name against
+# the union of this file and scripts/ci/native-command-tree.txt (the
+# generated fno tree; mux lives there).
+#
+# Refresh the blocks below when a surface changes:
+#   [fno] paths the repo text prescribes (the gate's FAIL lines name them;
+#        a longest resolving prefix is enough)
+#   [fno-agents] the client dispatch surface (crates/fno-agents/src/bin/client.rs)
+#   [slash] ls skills/ and commands/ (strip .md)
+[fno]
+agents
+agents admit autonomy
+agents admit capabilities
+agents admit guard
+agents admit provider-cap
+agents admit status
+agents audit claude-fallback
+agents audit drive-authority
+agents audit friction-escalate
+agents audit harness
+agents audit incident
+agents audit stale-escalate
+agents claim
+agents claim acquire
+agents claim backlog
+agents claim list
+agents claim reap
+agents claim refresh
+agents claim release
+agents claim session-pid
+agents claim status
+agents fleet
+agents fleet census
+agents fleet feed
+agents fleet history
+agents fleet needs
+agents fleet orphans
+agents fleet sweep
+agents fleet top
+agents fleet trace
+agents fleet truth
+agents fleet watchdog
+agents hq
+agents hq cancel
+agents hq chart drain
+agents hq chart fold
+agents hq chart manifest-path
+agents hq chart rundown
+agents hq chart shape
+agents hq chart term
+agents hq chart vacancies
+agents hq checkin
+agents hq done
+agents hq escalate
+agents hq faq
+agents hq history
+agents hq init
+agents hq promote
+agents hq refresh-canon
+agents hq roles
+agents hq verdict
+agents internal
+agents internal discovered-json
+agents internal registry-json
+agents internal target-family
+agents loop check
+agents loop consult
+agents loop control
+agents mail
+agents mail ack
+agents mail admin
+agents mail admin drain-self
+agents mail admin hold
+agents mail admin pane-prepare
+agents mail admin sent
+agents mail admin team
+agents mail ask
+agents mail list
+agents mail reply
+agents mail send
+agents mail show
+agents mail unread
+agents registry adopt
+agents registry name
+agents registry reap
+agents registry reconcile
+agents registry register
+agents registry rename
+agents registry retask
+agents registry transcript
+agents registry whoami
+agents session
+agents session attach
+agents session list
+agents session logs
+agents session move
+agents session peek
+agents session recover
+agents session resume
+agents session rm
+agents session status
+agents session stop
+agents session watch
+agents spawn
+agents workspace
+backlog
+backlog add
+backlog admin
+backlog board
+backlog find
+backlog get
+backlog list
+backlog note
+backlog triage
+backlog update
+config
+config accounts
+config active-backlog
+config doctor
+config get
+config history
+config paths
+config plugin
+config plugin install
+config plugins
+config plugins activate
+config plugins deactivate
+config plugins enable
+config plugins gallery
+config plugins inspect
+config plugins install
+config plugins ls
+config plugins open
+config plugins verify
+config project
+config route
+config schema
+config set
+config setup
+config setup auto-wire
+config setup cli-hooks
+config setup cli-hooks-codex
+config setup plan
+config setup post-merge
+config setup run
+config setup shim-check
+config status-sinks
+config unset
+do
+do ci
+do ci status
+do ci tier
+do delivery
+do diff
+do feedback
+do phase
+do plan
+do plan brief
+do plan folder-audit
+do plan migrate-keys
+do plan path
+do plan reconcile-status
+do plan sync
+do plan validate
+do pr
+do pr attestation
+do pr bind-created
+do pr closure-trailer
+do pr coverage-check
+do pr coverage-waive
+do pr create
+do pr evidence-check
+do pr evidence-required
+do pr graphql-exec
+do pr heal
+do pr hold-check
+do pr info
+do pr list
+do pr logs
+do pr merge
+do pr publish-review
+do pr push
+do pr rebase
+do pr review-hold
+do pr ritual
+do pr status
+do pr sync-canonical
+do pr verify
+do pr wait
+do pr watch
+do research
+do resume
+do review
+do review classify
+do review invocations
+do review prior-head
+do review resolve-level
+do show
+do state
+do target
+do target blast-check
+do target check-review-gate
+do target denominator-ratio
+do target init
+do target request-self-review
+do target review-invocation
+do target start
+do target status
+do think dispatch
+do think inspect
+do wizard
+doctor
+doctor builds
+doctor evals
+doctor event
+doctor event audit
+doctor event corrections
+doctor event emit
+doctor event find
+doctor event gate-escape
+doctor event gc
+doctor footprint
+doctor harness
+doctor harness-matrix
+doctor intel
+doctor lanes
+doctor lint
+doctor observer
+doctor reclaim
+doctor scratch
+doctor skill-diff
+doctor telemetry
+doctor test
+doctor update
+inbox
+inbox approvals
+inbox approvals decide
+inbox approvals ls
+inbox board
+inbox day
+inbox decide
+inbox decisions
+inbox law
+inbox notify
+inbox outstanding
+inbox peers
+inbox user
+inbox user ack
+inbox user status
+mail
+mail send
+mux
+restart
+uninstall
+update
+version
+whoami
+
+[fno-agents]
+active-backlog-receipt
+adopt
+announce
+ask
+attach
+attest
+authorized-merge
+backlog
+backlog-orphan-plans
+bash-census
+bg
+birth
+board
+canonical-check
+census
+chats
+claim
+claude
+claude-birth-exec
+codex
+codex-assign-project
+commands
+compaction
+component-verdict
+context-run
+current
+day
+delivery-evaluate
+detect
+digest
+distress-scan
+do
+doctor
+drive
+drive-authority
+env
+evals
+evals-arm
+evals-attempt
+evals-macro
+evals-trend
+evidence-gate
+executor-route
+fallback-chain
+feed
+finalize
+fleet-incident
+fleet-task
+harness-beat
+harness-roster
+headless
+honesty-sweep
+hook
+intel
+judge
+kill
+kill-check
+lead-checkin
+lead-escalation-text
+lead-history
+lead-rundown
+lead-shape
+lead-state
+list
+logs
+loop
+loop-check
+loops
+machine-mail-send
+mail
+mail-backfill
+mail-envelope
+mail-hold
+mail-inject
+mail-notify-self
+mail-receipt
+mail-record
+mail-remote
+mail-teach
+mail-threads
+manifest-eval
+manifest-for-session
+name-codes
+name-mint
+name-parse
+needs
+node-origin
+node-route
+notify-watch
+occupancy-login
+org-fold
+org-remote
+org-vacancies
+orphan-reap
+pane-rebind
+pending-session-row
+permission-tokens
+plan-cli
+plugin-install
+pr
+pr-body-check
+pr-closure-parse
+pr-closure-render
+pr-heal
+pr-park
+pr-push
+pr-rebase
+pr-watch
+pr-worktree
+probe-run
+prove-it-verdicts
+provider-cap
+publish-review
+question-clear
+question-intake
+reap
+reclaim
+reconcile
+recover
+reentry-plan
+registry-commit
+registry-json
+release-notes
+rename
+report
+restart
+resume
+resume-argv
+resume-receipt
+review-coverage
+review-policy
+review-start
+review-summary
+revival-check
+revive-proof
+rm
+roster-reap
+route-slot
+sandbox-probe
+scoreboard
+scratch
+select-read
+session-backfill
+session-report
+session-start-bytes
+source-pin
+spawn
+spawn-axes
+spawn-gate
+spawn-overlay
+spawn-remote
+stalls
+state
+state-root
+status
+stop
+style-check
+subscribe
+surface-check
+sweep
+sync-canonical
+task-context-gate
+task-context-prepare
+team-fold
+team-orphans
+term-ledger
+terminals
+territory-rows
+territory-verdict
+test-delta
+test-run
+thread
+top
+trace
+unknown
+update-journal
+verify-evidence
+version
+visual
+wait
+wave
+worked-nodes
+worker-wake
+worktree-status
+
+[slash]
+agent
+audit
+blueprint
+cache-keepalive
+cancel-target
+command
+design-critic
+dnd
+execute
+fix
+fno-me
+groom
+growth-launch
+harness-commands
+harness-verbs # verb-wording: allow (the shipped slash skill name)
+intel
+law
+lead
+mail
+pr
+review
+setup
+ship
+ship-docs
+speculate
+target
+tdd
+test-audit
+think
+triage
+using-fno
+verify-footnotes
+visual-log-reader
+whoami
+# pr: the retired top-level name, still named in the ship history notes
+# whoami, command: runtime-registered slash spellings, not skill dirs

@@ -1,6 +1,6 @@
 # Automatic post-merge ritual
 
-After self-merging a PR, the same 3-step ritual used to get hand-pasted into a session, with only the per-project path/name/cwd swapped: (1) close + stamp the backlog node, (2) write prose follow-up todos to that project's vault `inbox.md`, (3) triage anything worth doing now into the backlog. The `/fno:post-merge` skill collapses that paste into one command whose paths resolve from settings, never from the invocation.
+After self-merging a PR, the same 3-step ritual used to get hand-pasted into a session, with only the per-project path/name/cwd swapped. The steps: close and stamp the backlog node, write follow-up todos to that project's vault `inbox.md`, and triage anything worth doing now into the backlog. The post-merge skill collapses that paste into one command. Its paths resolve from settings, never from the invocation. Today the spelling is `/fno:ship pr merged`.
 
 ## Is this page for you?
 
@@ -21,7 +21,7 @@ The existing machinery covered ~70% of the ritual but left two gaps:
 
 ## Phase 1 - the skill (shipped)
 
-`/fno:post-merge [pr]` is an LLM skill (not a pure CLI command, because steps 2-3 are judgment over the diff). Sequence:
+The post-merge skill, invoked as `/fno:ship pr merged [pr]` today, is an LLM skill (not a pure CLI command, because steps 2-3 are judgment over the diff). Sequence:
 
 ```
 Step 0  resolve PR        explicit arg, else most-recently-merged for the repo (gh)
@@ -59,11 +59,11 @@ The skill reuses `fno backlog reconcile`, `fno backlog retro run`, and `fno back
 
 The trigger shipped as **one global launchd daemon**, not the per-repo watcher sketched below: the [PR-state watcher](pr-state-watcher.md) polls the backlog graph (not per-repo `gh pr list`) on an interval and is the **sole** post-merge detector. `fno backlog reconcile` no longer dispatches a ritual.
 
-The ritual itself is no longer fired as a headless `/fno:ship pr merged` (or `/fno:post-merge`) LLM session. Its mechanical core is the `fno do pr ritual <pr> --autonomous` command (`crates/fno-agents/src/gate/post_merge/ritual.rs`, reached through `pr-watch ritual`). pr-watch runs it directly as a bounded subprocess from the merged PR's canonical root, or warm-injects the identical command into the live origin session. A session holding a lead role, or with a recent user turn in its transcript, is never borrowed. It takes the cold path. The command owns its own conditional headless judgment leg. No post-merge path wraps the ritual in a second model layer or spawns a `--substrate bg` thread. Every dispatch attempt reserves a `post_merge_dispatch_receipt` (keyed by merge SHA) for attribution. It is observability only and is never a dedup input (the marker + TTL claim remain the idempotency layer).
+The ritual itself is no longer fired as a headless `/fno:ship pr merged` ) LLM session. Its mechanical core is the `fno do pr ritual <pr> --autonomous` command (`crates/fno-agents/src/gate/post_merge/ritual.rs`, reached through `pr-watch ritual`). pr-watch runs it directly as a bounded subprocess from the merged PR's canonical root, or warm-injects the identical command into the live origin session. A session holding a lead role, or with a recent user turn in its transcript, is never borrowed. It takes the cold path. The command owns its own conditional headless judgment leg. No post-merge path wraps the ritual in a second model layer or spawns a `--substrate bg` thread. Every dispatch attempt reserves a `post_merge_dispatch_receipt` (keyed by merge SHA) for attribution. It is observability only and is never a dedup input (the marker + TTL claim remain the idempotency layer).
 
 A GitHub Action cannot host this: the ritual needs local state (`~/.fno/graph.json`, the Obsidian vault, the repo working copy), and `/schedule` cloud agents lack the local creds. Polling locally is required.
 
-The original per-repo-launchd sketch this section replaced is retained only as design history: it polled `gh pr list --state merged` per repo and fired `claude --print --dangerously-skip-permissions "/fno:post-merge <pr>"`. That framework is superseded by the global watcher.
+The original per-repo-launchd sketch this section replaced is retained only as design history: it polled `gh pr list --state merged` per repo and fired `claude --print --dangerously-skip-permissions "the post-merge skill"`. That framework is superseded by the global watcher.
 
 ## Files
 

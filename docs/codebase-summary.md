@@ -193,13 +193,10 @@ Users interact with footnote through slash commands:
 | `/fno:target "feature"` | target | Full autonomous delivery pipeline |
 | `/fno:blueprint "feature"` | blueprint | Create implementation plan |
 | `/fno:execute` | execute | Lightweight single-session execution |
-| `/fno:operator` | operator | Heavy wave orchestration |
 | `/fno:think "feature"` | think | Design exploration |
 | `/fno:review` | review | The owned review lane (inline, attested) |
 | `/fno:fix` | fix | Autonomous fix loop |
-| `/fno:debug` | debug | Scientific method debugging |
 | `/fno:tdd` | tdd | Test-driven development |
-| `/fno:create-pr` | create-pr | PR creation from commits |
 | `/fno:setup` | setup | Interactive settings wizard |
 
 ## State and Runtime Files

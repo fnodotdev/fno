@@ -36,9 +36,9 @@ Provider matrix:
 ```
 cli.py
    ├─ cmd_stop(name)         → Rust runtime only (no Python stop; refuses by name
-   │                           without the fno-agents binary)
+   │                           without that binary)
    ├─ cmd_rm(name, --force)  → Rust runtime only (no Python rm; refuses by name
-   │                           without the fno-agents binary)
+   │                           without that binary)
    ├─ cmd_reconcile(--json)  → dispatch.reconcile_agents()
    └─ cmd_attach(name)       → dispatch.attach_agent(name)
 
