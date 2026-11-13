@@ -849,6 +849,18 @@ fn run_ledger() -> Result<String, String> {
     if !std::path::Path::new(&named).exists() {
         return Err(format!("named path missing: {named}"));
     }
+    // The unfaithful-root defense: a state root the door cannot resolve
+    // faithfully forwards bare `lead ledger`, whose default names lead.html,
+    // a page the /team route never reads. Exit 0 naming it is an error row,
+    // like the missing-page defense above, so a fallback render never reads
+    // as rendered.
+    if std::path::Path::new(&named)
+        .file_name()
+        .and_then(|n| n.to_str())
+        != Some("rundown.html")
+    {
+        return Err(format!("named page is not the rundown page: {named}"));
+    }
     Ok(named)
 }
 
@@ -1585,6 +1597,35 @@ mod tests {
             crate::daemon_argv::TEAM_LEDGER,
             "the arm's spawned argv must equal the daemon_argv table row"
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_default_lead_html_named_as_rendered_is_an_error_row() {
+        // The unfaithful-root defense: a state root the door cannot resolve
+        // faithfully forwards bare `lead ledger`, whose default names
+        // lead.html, a page the /team route never reads. Exit 0 naming it
+        // stays an error row, so a fallback render never reads as rendered.
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior_bin = std::env::var_os("FNO_BIN");
+        let dir = tempfile::tempdir().unwrap();
+        let lead = dir.path().join("lead.html");
+        std::fs::write(&lead, b"<html></html>").unwrap();
+        let stub = crate::write_exec_stub(
+            dir.path(),
+            "fno",
+            &format!("#!/bin/sh\necho \"lead ledger: {}\"\n", lead.display()),
+        );
+        std::env::set_var("FNO_BIN", &stub);
+        let run = run_ledger();
+        match prior_bin {
+            Some(v) => std::env::set_var("FNO_BIN", v),
+            None => std::env::remove_var("FNO_BIN"),
+        }
+        let err = run.unwrap_err();
+        assert!(err.contains("not the rundown page"), "{err}");
     }
 
     #[test]
