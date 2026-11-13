@@ -517,7 +517,7 @@ pub fn write_report_if_missing(cwd: &Path, ledger: &Ledger) -> Result<PathBuf, L
 
 /// The checkin lines the ledger contributes: one line for an ok reading,
 /// the named failure line for a failed one, nothing without a reading.
-pub fn checkin_lines(readings: &[crate::lead_checkin::Reading]) -> Vec<String> {
+pub(crate) fn checkin_lines(readings: &[crate::lead_checkin::Reading]) -> Vec<String> {
     let Some(reading) = readings.iter().find(|r| r.name == "attention_ledger") else {
         return Vec::new();
     };
@@ -533,7 +533,7 @@ pub fn checkin_lines(readings: &[crate::lead_checkin::Reading]) -> Vec<String> {
 /// The beat's best-effort report write: only when this week's file is
 /// missing, so the weekly report stays current with no new daemon and a
 /// failed write never blocks the beat.
-pub fn beat_write(readings: &[crate::lead_checkin::Reading], cwd: &Path) {
+pub(crate) fn beat_write(readings: &[crate::lead_checkin::Reading], cwd: &Path) {
     let Some(payload) = readings
         .iter()
         .find(|r| r.name == "attention_ledger")
