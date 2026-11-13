@@ -230,6 +230,19 @@ struct OpenRow {
     session_id: Option<String>,
 }
 
+/// The old envelope an amend carries over, parsed once at the boundary:
+/// the row's data map for the merge and the route parent for the trace.
+#[derive(serde::Deserialize)]
+struct AmendEnvelope {
+    data: Option<Map<String, Value>>,
+    trace: Option<AmendTrace>,
+}
+
+#[derive(serde::Deserialize)]
+struct AmendTrace {
+    parent_span_id: Option<String>,
+}
+
 /// Latest ask per id minus closes, folded from the machine index. A
 /// malformed line is skipped; the receipt is advisory and dedup is best
 /// effort against the rows that do parse.
@@ -1169,9 +1182,14 @@ already waits ({}). Answer it or clear it; the asker amends it with a \
     // carried (a pin's --ask, its screens, its ladder rung) survive, so the
     // amend fills the row, it never wipes it. Context merges key-by-key for
     // the same reason.
+    let mut carried_parent: Option<String> = None;
     if let Some((_, old)) = &amend {
-        if let Some(old_data) = old.get("data").and_then(Value::as_object) {
-            for (key, value) in old_data {
+        if let Ok(old_parsed) = serde_json::from_value::<AmendEnvelope>(old.clone()) {
+            carried_parent = old_parsed
+                .trace
+                .and_then(|t| t.parent_span_id)
+                .filter(|p| !p.is_empty());
+            for (key, value) in old_parsed.data.into_iter().flatten() {
                 if key == "context" {
                     match data.get_mut("context").and_then(Value::as_object_mut) {
                         Some(new_ctx) => {
@@ -1184,7 +1202,7 @@ already waits ({}). Answer it or clear it; the asker amends it with a \
                         }
                     }
                 } else {
-                    data.entry(key.clone()).or_insert(value.clone());
+                    data.entry(key).or_insert(value);
                 }
             }
         }
@@ -1211,15 +1229,7 @@ already waits ({}). Answer it or clear it; the asker amends it with a \
     };
     // On amend with no fresh answers_ask pointer, the original route parent
     // carries over, so the escalation lineage survives the re-ask.
-    let parent = route_span_id.or_else(|| {
-        amend.as_ref().and_then(|(_, old)| {
-            old.get("trace")
-                .and_then(|t| t.get("parent_span_id"))
-                .and_then(Value::as_str)
-                .filter(|p| !p.is_empty())
-                .map(str::to_string)
-        })
-    });
+    let parent = route_span_id.or(carried_parent);
     data.insert(
         "trace".into(),
         serde_json::to_value(&Trace {
