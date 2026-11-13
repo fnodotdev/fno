@@ -1015,24 +1015,13 @@ pub(crate) struct View {
     tab_drag: Option<TabDrag>,
     /// (v43, G3) A sideline-row placement drag in flight.
     row_drag: Option<RowDrag>,
-    /// A press being held on a sideline row that is NOT a drag source -
-    /// a workspace name row, a section header. Those rows carry menus
-    /// (`open_row_menu` builds one for a squad row), but the long-press arm that
-    /// opens a menu lives inside the `row_drag` branch, and `row_drag_source_at`
-    /// answers only for agent rows. So a hold on a workspace row armed no state
-    /// and the gesture did nothing at all.
-    ///
-    /// Deliberately NOT a widening of `row_drag_source_at`: a workspace row is
-    /// not a placement source, and making it one would offer a drag with nowhere
-    /// to land. This is the hold clock and the pressed row, nothing else.
-    ///
-    /// `(display_row, identity, pressed_at)`. The identity is load-bearing: an
-    /// index alone is not a row. `display_rows()` is rebuilt on every layout
-    /// push, so a row dropped during the hold slides a DIFFERENT row under the
-    /// same number, and the release would open that row's lifecycle menu - Stop
-    /// and Remove pointed at a worker nobody pressed. Re-checked at release
-    /// against [`View::row_identity`], the same discipline `RowDrag` gets from
-    /// `RowSource` and the selector gets from its name re-anchor.
+    /// A press held on a sideline row that is not a drag source (a workspace
+    /// name row, a section header), so the long-press menu still opens there.
+    /// `row_drag_source_at` stays agent-only: a workspace row is no placement
+    /// source. `(display_row, identity, pressed_at)`: the identity is
+    /// load-bearing, because `display_rows()` is rebuilt on every layout push
+    /// and an index alone could slide a different row under the press. It is
+    /// re-checked at release against [`View::row_identity`].
     press_hold: Option<(usize, String, Instant)>,
     /// A pending click-a-card confirm: the node to dispatch and its
     /// display label. While `Some`, keys route to the confirm (Enter dispatches,
@@ -1815,19 +1804,11 @@ use update_menu::{build_update_modal, UpdateProbe};
 
 impl View {
     fn new(term: (u16, u16), session: String, layout: LayoutView) -> Self {
-        // Persisted per-section state wins; pruned to the squads this
-        // layout actually has, so a workspace deleted since the last run is
-        // absent from the map (and so from the next write).
-        // Load only - do NOT prune here. A real attach constructs the View with
-        // an EMPTY placeholder layout and waits for the server's first push, so
-        // pruning against it would delete every persisted entry before the
-        // session ever learns what squads exist. `set_layout` owns the prune,
-        // where a real squad list is in hand.
-        // Load-only: the map holds persisted operator choices, nothing
-        // else. The active-squad "open on first frame" default is no longer
-        // seeded here - it lives in `section_view()`, computed live each frame so
-        // a majority-exited squad can downgrade to LiveOnly as agents exit
-        // (AC3-FR), which a one-time seed snapshot cannot.
+        // Load only, never prune here: a real attach starts with an EMPTY
+        // placeholder layout, so pruning would delete every persisted entry
+        // before the server's first push. `set_layout` owns the prune. The
+        // active-squad default lives in `section_view()`, computed live each
+        // frame, which a one-time seed could not do.
         let section_view = view_store::load();
         // Layout-independent, unlike the section map above, so it is
         // safe to resolve against the empty placeholder layout a real attach
