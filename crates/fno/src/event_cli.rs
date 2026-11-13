@@ -1505,7 +1505,10 @@ pub(crate) fn fold_journal(
     }
     if let Err(e) = crate::event_store::import_all(journal) {
         entry["status"] = serde_json::Value::String("unreadable".into());
-        entry.insert("error".into(), serde_json::Value::String(e.to_string()));
+        entry
+            .as_object_mut()
+            .expect("the coverage entry literal is a json object")
+            .insert("error".into(), serde_json::Value::String(e.to_string()));
         return entry;
     }
     let query = crate::event_store::EventQuery {
@@ -1516,7 +1519,10 @@ pub(crate) fn fold_journal(
         Ok(rows) => rows,
         Err(e) => {
             entry["status"] = serde_json::Value::String("unreadable".into());
-            entry.insert("error".into(), serde_json::Value::String(e.to_string()));
+            entry
+                .as_object_mut()
+                .expect("the coverage entry literal is a json object")
+                .insert("error".into(), serde_json::Value::String(e.to_string()));
             return entry;
         }
     };
