@@ -1,6 +1,8 @@
-//! The git-protection Bash guard. It refuses a push to a protected branch,
-//! `--no-verify` and its core.hooksPath twin, and a direct GraphQL PR read.
-//! It WARNS on a `gh pr create` whose branch names a node and whose command
+//! The git-protection Bash guard. It refuses a push to a protected branch
+//! and `--no-verify` with its core.hooksPath twin. Direct GraphQL PR reads
+//! are a CI check (`scripts/ci/check-no-direct-graphql-pr-read.sh`), never
+//! a hook refusal. It WARNS on a `gh pr create` whose branch names a node
+//! and whose command
 //! shows no composed closure line (the merge-time closure gate still reds
 //! the PR), and on a push that repeats one inside the debounce window or
 //! lands while a GitHub run is in flight (the 2026-11-07 guard-purge
