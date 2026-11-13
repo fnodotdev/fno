@@ -174,7 +174,9 @@ pub fn run(_args: &[String]) -> i32 {
         let (done, wait) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             super::session_state::process("claude", "PreToolUse", &whole);
-            let _ = done.send(());
+            if done.send(()).is_err() {
+                eprintln!("hook gate: session-state report finished after the verdict");
+            }
         });
         wait
     });
@@ -208,7 +210,9 @@ pub fn run(_args: &[String]) -> i32 {
 
     println!("{}", merge(&answers));
     if let Some(wait) = report {
-        let _ = wait.recv_timeout(SIDE_LEG_WAIT);
+        if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) = wait.recv_timeout(SIDE_LEG_WAIT) {
+            eprintln!("hook gate: session-state report still running; dropped");
+        }
     }
     0
 }
@@ -284,6 +288,7 @@ pub(crate) fn merge(answers: &[String]) -> Value {
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use super::merge;
     use serde_json::json;
