@@ -40,7 +40,11 @@ pub fn click(screen: &str, control: &str) {
         return;
     };
     let row = envelope(screen, control);
-    let _ = crate::event_store::append_envelope(&journal, &row.to_string(), None);
+    drop(crate::event_store::append_envelope(
+        &journal,
+        &row.to_string(),
+        None,
+    ));
 }
 
 #[cfg(test)]
@@ -87,11 +91,31 @@ mod tests {
             None => std::env::remove_var("FNO_AGENTS_HOME"),
         }
         assert_eq!(rows.len(), 1, "the refused label ships nothing: {rows:?}");
-        let line: serde_json::Value = serde_json::from_str(&rows[0].line).unwrap();
-        assert_eq!(line["type"], "ui_click");
-        assert_eq!(line["source"], "ui");
-        assert_eq!(line["data"]["screen"], "mux");
-        assert_eq!(line["data"]["control"], "tab_row");
-        assert_eq!(line["data"].as_object().unwrap().len(), 2, "{line}");
+        let row = rows.first().expect("one row");
+        #[derive(serde::Deserialize)]
+        struct Line {
+            r#type: String,
+            source: String,
+            data: LineData,
+        }
+        #[derive(serde::Deserialize)]
+        struct LineData {
+            screen: String,
+            control: String,
+        }
+        let line: Line = serde_json::from_str(&row.line).unwrap();
+        assert_eq!(line.r#type, "ui_click");
+        assert_eq!(line.source, "ui");
+        assert_eq!(line.data.screen, "mux");
+        assert_eq!(line.data.control, "tab_row");
+        let raw: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&row.line).unwrap();
+        let data = raw
+            .into_iter()
+            .find(|(key, _)| key == "data")
+            .map(|(_, value)| value)
+            .and_then(|value| value.as_object())
+            .expect("the envelope carries a data object");
+        assert_eq!(data.len(), 2, "the row carries the two ids only: {data:?}");
     }
 }
