@@ -19,6 +19,10 @@ Each pass reads the world and names the furthest stage it can prove.
 - **harness boot**: a worker row exists, and it has no harness session id yet.
 - **first prompt**: the session started, and its transcript holds no assistant line yet.
 
+The fno worker row appears at session adopt, so a live worker can run for minutes with none. Before it names a claude launch stuck, the watch reads the harness roster (`claude agents --json --all`, every account root, at most once per pass). A live row that carries the launch's name gives the watch its session id. The watch then reads that session's transcript, so a working spawn reaches its first turn instead of an alarm. An unnamed launch has nothing to match on and stays as before.
+
+A refusal closes the watch on both doors. The spawn gate and the node dispatch guard each call `settle_refused`, so a spawn refused with `already-running` or `live-claim` never mails a stuck notice.
+
 The watch finds the worker row by its harness session id once one is known. Before that, it takes the first row the caller spawned on the same harness after the call. If the record has a name, the row must carry it too. A row one launch took is never matched to a second launch.
 
 ## What the caller hears

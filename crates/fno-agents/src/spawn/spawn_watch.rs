@@ -8,6 +8,7 @@
 //! kept as `latency_ms` from the call and one `spawn_first_turn` event that
 //! names substrate and machine. Contract: docs/architecture/spawn-watch.md.
 
+use crate::claude_roster::ClaudeAgentsSnapshot;
 use crate::launch_record::Record;
 use crate::paths::AgentsHome;
 use crate::state::{self, RegistryEntry};
@@ -257,6 +258,25 @@ pub(crate) fn run_pass(
     now: i64,
     runner: crate::burn_watch::Runner<'_>,
 ) -> Result<(), String> {
+    run_pass_with(
+        home,
+        now,
+        runner,
+        &crate::claude_roster::read_all_agents_union,
+    )
+    .map_err(String::from)
+}
+
+/// One pass with the harness roster injected. The roster is read at most once
+/// per pass, and only when a watch still has no row and no session to judge.
+fn run_pass_with(
+    home: &AgentsHome,
+    now: i64,
+    runner: crate::burn_watch::Runner<'_>,
+    roster: &dyn Fn() -> ClaudeAgentsSnapshot,
+) -> Result<(), Box<str>> {
+    let snapshot = std::cell::OnceCell::new();
+    let roster = || snapshot.get_or_init(roster).clone();
     let dir = watch_dir(home);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     adopt(home, now);
@@ -296,13 +316,14 @@ pub(crate) fn run_pass(
             now,
             &emitter,
             &mut *runner,
+            &roster,
         );
         let written = state::write_json_atomic(&path, &watch).map_err(|e| e.to_string());
         if let Err(error) = result.and(written) {
             first_error.get_or_insert_with(|| format!("{}: {error}", path.display()));
         }
     }
-    first_error.map_or(Ok(()), Err)
+    first_error.map_or(Ok(()), |e| Err(e.into()))
 }
 
 /// The worker row: by session id once one is known (law d-e952ed19), then by
@@ -351,6 +372,7 @@ fn judge(
     now: i64,
     emitter: &crate::events::EventEmitter,
     runner: crate::burn_watch::Runner<'_>,
+    roster: &dyn Fn() -> ClaudeAgentsSnapshot,
 ) -> Result<(), String> {
     let row = find_row(watch, registry, taken);
     if let Some(row) = row {
@@ -360,6 +382,16 @@ fn judge(
         if watch.child_session.is_none() {
             watch.child_session = row.harness_session_id.clone();
         }
+    }
+    // A fno registry row lands only when the session adopts, so a live
+    // worker can run for minutes with none. The harness roster is the
+    // witness: a live session of this name is a worker, not a gate stall.
+    if row.is_none()
+        && watch.child_session.is_none()
+        && watch.harness == "claude"
+        && now.saturating_sub(watch.called_at_ms) >= DEADLINE_MS
+    {
+        watch.child_session = roster_session(&roster(), watch);
     }
     let transcript = row.and_then(crate::first_check::transcript).or_else(|| {
         watch
@@ -435,6 +467,19 @@ fn judge(
     watch.stage = Some(stage.to_string());
     watch.notified = true;
     Ok(())
+}
+
+/// The full session id of a live roster row that carries this watch's name.
+/// Only a named launch can match: an unnamed one has nothing to key on, and a
+/// pid-less row of a carries-pids listing is a dead session's last state.
+fn roster_session(snapshot: &ClaudeAgentsSnapshot, watch: &Watch) -> Option<String> {
+    let name = watch.name.as_deref()?;
+    let (ClaudeAgentsSnapshot::Known { rows, .. } | ClaudeAgentsSnapshot::Unknown { rows, .. }) =
+        snapshot;
+    let carries_pids = snapshot.carries_pids();
+    rows.iter()
+        .filter(|r| r.name.as_deref() == Some(name) && r.has_live_process(carries_pids))
+        .find_map(|r| r.session_id.clone())
 }
 
 /// The furthest stage the world proves, with the reading that proves it.
