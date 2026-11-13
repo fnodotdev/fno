@@ -20,3 +20,12 @@ fno config plugins open fno-panels/review-ledger
 ```
 
 On a terminal the table redraws every 5 seconds. Piped, it prints once.
+
+## Preview
+
+The preview shows invented rows in a throwaway demo root. Re-shoot it with a branch-built fno:
+
+```
+scripts/ops/mux-demo-snapshot.sh --format png --mod-pane review-ledger --size 200x44 --out plugins/fno-panels/mods/review-ledger/preview.png
+sips --cropToHeightWidth 262 1432 --cropOffset 66 470 plugins/fno-panels/mods/review-ledger/preview.png
+```
