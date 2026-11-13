@@ -626,8 +626,9 @@ fn project_marker(root: &Path) -> PathBuf {
 }
 
 /// Marker content: the fno version and the UTC stamp, so a reader can tell
-/// a stale marker from a live one.
-fn marker_line() -> String {
+/// a stale marker from a live one. The wizard's marker reuses the shape, so
+/// the sidecar marker family reads the same.
+pub(crate) fn marker_line() -> String {
     format!("fno {} {}", env!("CARGO_PKG_VERSION"), utc_now())
 }
 

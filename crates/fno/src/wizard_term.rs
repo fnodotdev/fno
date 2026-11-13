@@ -12,7 +12,11 @@
 //! apply JSON, `wizard-answers.toml` carries the committed answers keyed by
 //! screen id, and `wizard-lock` carries the pid of the live run. A refusal
 //! at the flag line or the lock writes nothing; a refusal at the stdin gate
-//! writes `status: refused` and nothing else.
+//! writes `status: refused` and nothing else. A finished or skipped run
+//! also writes `wizard-done`, the machine-level marker the bare-`fno`
+//! first-run gate reads: a fresh install (or a cancelled wizard) leaves it
+//! unset, so the person's first bare `fno` runs the wizard once before the
+//! mux picker.
 
 use std::ffi::OsString;
 use std::fs;
@@ -57,6 +61,46 @@ fn answers_path() -> PathBuf {
 
 fn lock_path() -> PathBuf {
     sidecar().join("wizard-lock")
+}
+
+/// The first-run marker, inside the `sidecar/` folder the state-root
+/// inventory already owns: a finished or skipped wizard writes it, so the
+/// bare-`fno` gate fires once per machine, never on every launch.
+fn done_marker_in(state_dir: &std::path::Path) -> PathBuf {
+    state_dir.join("sidecar").join("wizard-done")
+}
+
+fn done_marker_path() -> PathBuf {
+    done_marker_in(&model_catalog::state_dir())
+}
+
+/// True while the machine's wizard has never finished: the bare-`fno`
+/// first-run gate runs the wizard once, then opens the mux. `pub`, not
+/// `pub(crate)`: the front door's bin target reads it across the crate
+/// boundary.
+pub fn first_run_needed() -> bool {
+    !done_marker_path().exists()
+}
+
+#[cfg(test)]
+fn first_run_needed_in(state_dir: &std::path::Path) -> bool {
+    !done_marker_in(state_dir).exists()
+}
+
+/// Best-effort like every sidecar write: a marker that cannot land only
+/// means the gate offers the wizard again next launch, so an error prints
+/// and the wizard's success never depends on this write.
+pub(crate) fn write_done_marker() {
+    let path = done_marker_path();
+    if let Some(dir) = path.parent() {
+        if let Err(e) = fs::create_dir_all(dir) {
+            eprintln!("fno do wizard: cannot create {}: {e}", dir.display());
+            return;
+        }
+    }
+    if let Err(e) = fs::write(&path, setup_run::marker_line()) {
+        eprintln!("fno do wizard: cannot write {}: {e}", path.display());
+    }
 }
 
 fn parse_preset(word: &str) -> Option<Preset> {
@@ -1094,6 +1138,10 @@ pub fn run(tail: &[OsString]) -> i32 {
             answers_file.display()
         ),
     }
+    // Finished (or skipped): the bare-`fno` gate reads this marker, so the
+    // wizard never fires twice. A cancelled or refused run never reaches
+    // this line, so the next bare `fno` offers the wizard again.
+    write_done_marker();
     let report_file = report_path();
     files.push(report_file.display().to_string());
 
@@ -1146,4 +1194,22 @@ pub fn run(tail: &[OsString]) -> i32 {
         println!("wizard-report: {}", report_file.display());
     }
     0
+}
+
+#[cfg(test)]
+mod done_marker_tests {
+    use super::*;
+
+    #[test]
+    fn the_first_run_gate_reads_one_marker_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = done_marker_in(dir.path());
+        assert_eq!(marker, dir.path().join("sidecar").join("wizard-done"));
+        // No marker: the gate fires. After a finished wizard writes it,
+        // the gate stands down.
+        assert!(first_run_needed_in(dir.path()));
+        fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        fs::write(&marker, "fno 1.2.3 stamp").unwrap();
+        assert!(!first_run_needed_in(dir.path()));
+    }
 }
