@@ -1247,6 +1247,8 @@ where
     let config_dir = reentry_plan
         .and_then(|plan| plan.env.get("CLAUDE_CONFIG_DIR"))
         .map(Path::new);
+    let pins = plan_pins(reentry_plan);
+    let pins = (pins.0.as_deref(), pins.1.as_deref());
     let snapshot = read_roster(config_dir);
     if !snapshot.is_known() {
         return live_claude_missing_row(
@@ -1255,6 +1257,7 @@ where
             session_uuid,
             cwd,
             "the claude roster could not be read",
+            pins,
         );
     }
     let Some(row) = snapshot.find(short_id) else {
@@ -1269,7 +1272,16 @@ where
             } else {
                 message
             };
-            return relaunch_exited_claude(home, name, row_name, short_id, session_uuid, cwd, wake);
+            return relaunch_exited_claude(
+                home,
+                name,
+                row_name,
+                short_id,
+                session_uuid,
+                cwd,
+                wake,
+                pins,
+            );
         }
         return live_claude_missing_row(
             name,
@@ -1277,6 +1289,7 @@ where
             session_uuid,
             cwd,
             "the claude roster listing was partial, so a missing row proves nothing",
+            pins,
         );
     };
     let Some(state) = row.state.as_deref().filter(|state| !state.is_empty()) else {
@@ -1286,6 +1299,7 @@ where
             session_uuid,
             cwd,
             "the roster row reports no state",
+            pins,
         );
     };
     let state_lower = state.to_ascii_lowercase();
@@ -1518,6 +1532,7 @@ pub(crate) fn relaunch_exited_claude(
     session_uuid: &str,
     cwd: &str,
     message: Option<&str>,
+    pins: (Option<&str>, Option<&str>),
 ) -> i32 {
     relaunch_exited_claude_with(
         home,
@@ -1527,6 +1542,7 @@ pub(crate) fn relaunch_exited_claude(
         session_uuid,
         cwd,
         message,
+        pins,
         &ClaudeHome::from_env(),
     )
 }
@@ -1541,6 +1557,7 @@ pub(crate) fn relaunch_exited_claude_with(
     session_uuid: &str,
     cwd: &str,
     message: Option<&str>,
+    pins: (Option<&str>, Option<&str>),
     claude_home: &ClaudeHome,
 ) -> i32 {
     let uuid = match exited_relaunch_transcript(claude_home, short_id, session_uuid) {
@@ -1552,6 +1569,7 @@ pub(crate) fn relaunch_exited_claude_with(
                 session_uuid,
                 cwd,
                 "no transcript exists to relaunch from",
+                pins,
             );
         }
     };
@@ -1574,8 +1592,18 @@ pub(crate) fn relaunch_exited_claude_with(
          the transcript on a thread",
         short = short_id
     );
+    let mut argv: Vec<String> = vec![
+        "--bg".to_string(),
+        "--name".to_string(),
+        spawn_name.clone(),
+        "--resume".to_string(),
+        uuid.clone(),
+    ];
+    // The row's launch model/effort ride every relaunch: claude resumes on the
+    // account default without them (resume_pin's discipline).
+    crate::resume_pin::append_axes(&mut argv, pins.0, pins.1);
     let mut command = std::process::Command::new("claude");
-    command.args(["--bg", "--name", &spawn_name, "--resume", &uuid]);
+    command.args(argv);
     if !cwd.is_empty() {
         command.current_dir(cwd);
     }
@@ -1594,23 +1622,56 @@ pub(crate) fn relaunch_exited_claude_with(
 
 /// Exit 16: no live process answered and fno could not relaunch the session
 /// itself. The line names the cause in words and the hand-run relaunch; the
-/// code is documented in `resume --help`.
+/// code is documented in `resume --help`. The pin suffix carries the row's
+/// launch model/effort so the pasted command cannot silently migrate the
+/// session onto the account default.
 fn live_claude_missing_row(
     name: &str,
     short_id: &str,
     session_id: &str,
     cwd: &str,
     cause: &str,
+    pins: (Option<&str>, Option<&str>),
 ) -> i32 {
     let cd = if cwd.is_empty() {
         String::new()
     } else {
         format!("cd {cwd} && ")
     };
+    let pin_args = pin_suffix(pins);
     eprintln!(
-        "fno agents resume: {name} ({short_id}) has no live process, and fno could not relaunch it by itself: {cause}.\nRelaunch it by hand: {cd}claude --bg --name {name} --resume {session_id}"
+        "fno agents resume: {name} ({short_id}) has no live process, and fno could not relaunch it by itself: {cause}.\nRelaunch it by hand: {cd}claude --bg --name {name} --resume {session_id}{pin_args}"
     );
     16
+}
+
+/// ` --model <m> --effort <e>` for the pins a relaunch must carry, "" when
+/// both are absent.
+fn pin_suffix(pins: (Option<&str>, Option<&str>)) -> String {
+    let mut out = String::new();
+    if let Some(model) = pins.0.filter(|m| !m.trim().is_empty()) {
+        out.push_str(&format!(" --model {model}"));
+    }
+    if let Some(effort) = pins.1.filter(|e| !e.trim().is_empty()) {
+        out.push_str(&format!(" --effort {effort}"));
+    }
+    out
+}
+
+/// The model/effort a re-entry plan pins on a relaunch, read back the same
+/// way [`crate::reentry::ReentryPlan::carry_pins`] reads them. A plan that
+/// names none carries nothing.
+fn plan_pins(plan: Option<&crate::reentry::ReentryPlan>) -> (Option<String>, Option<String>) {
+    let value_after = |flag: &str| -> Option<String> {
+        plan.and_then(|p| {
+            p.argv
+                .iter()
+                .position(|t| t == flag)
+                .and_then(|i| p.argv.get(i + 1))
+                .cloned()
+        })
+    };
+    (value_after("--model"), value_after("--effort"))
 }
 
 /// What a delivery after the attach claim can be refused with: the
@@ -2831,6 +2892,7 @@ mod tests {
             uuid,
             wt_str,
             Some("continue the work"),
+            (Some("claude-opus-5"), Some("high")),
             &claude_home,
         );
         restore(&old_path);
@@ -2839,6 +2901,10 @@ mod tests {
         assert!(
             launch.contains("--bg --name w1 --resume 0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9"),
             "{launch}"
+        );
+        assert!(
+            launch.contains("--model claude-opus-5") && launch.contains("--effort high"),
+            "the pins ride the relaunch argv: {launch}"
         );
         let wt_real = std::fs::canonicalize(&wt).unwrap();
         assert!(
@@ -2865,6 +2931,7 @@ mod tests {
             uuid,
             wt_str,
             None,
+            (None, None),
             &claude_home,
         );
         restore(&old_path);
@@ -2883,9 +2950,11 @@ mod tests {
             "w1",
             "w1",
             "0a1b2c3d",
+            "0a1b2c3d",
             uuid,
             wt_str,
             None,
+            (None, None),
             &claude_home,
         );
         assert_eq!(code, 16, "no transcript keeps the refusal");

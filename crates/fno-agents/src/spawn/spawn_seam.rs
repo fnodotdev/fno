@@ -104,9 +104,16 @@ pub fn admit_spawn(args: Vec<String>) -> Result<Vec<String>, i32> {
     refuse_codex_without_git_grant(&args, &here)?;
 
     let home = crate::paths::AgentsHome::from_env();
-    let mut names: HashSet<String> = crate::state::load_registry(&home.registry_json())
-        .map(|r| r.entries.into_iter().map(|e| e.name).collect())
-        .unwrap_or_default();
+    let entries: Vec<crate::state::RegistryEntry> =
+        crate::state::load_registry(&home.registry_json())
+            .map(|r| r.entries)
+            .unwrap_or_default();
+    let mut names: HashSet<String> = entries.iter().map(|e| e.name.clone()).collect();
+    let mut args = args;
+    if let Some(line) = resume_route_pin(&mut args, &entries) {
+        eprintln!("{line}");
+        return Err(2);
+    }
     let typed = flag_value(&args[1..], &["--name"]).is_some();
     // `--print` launches nothing, so it reserves nothing.
     let print = has_flag(&args[1..], "", &["--print"]);
@@ -177,6 +184,151 @@ fn reservable_name(admitted: &crate::spawn_admission::Admission, print: bool) ->
         return None;
     }
     flag_value(admitted.argv.get(1..).unwrap_or(&[]), &["--name"]).filter(|n| !n.is_empty())
+}
+
+/// The resume ask's route pin: a spawn whose argv resumes a session
+/// launches the transcript's own harness and model, never a profile lane's
+/// pick. The row answers by `--name`/first positional, then by the resumed
+/// session id, the same order `revival-check` reads. No row (a fresh
+/// transcript resume) leaves the spawn untouched. The axes the caller left
+/// free take the row's values, so the slot walk sees them occupied and stands
+/// down; a harness that contradicts the row refuses with the corrected
+/// command. `--route`/`-m` the caller named are decisions and stay.
+fn resume_route_pin(
+    args: &mut Vec<String>,
+    entries: &[crate::state::RegistryEntry],
+) -> Option<String> {
+    let tail = || args.get(1..).unwrap_or(&[]);
+    let resume_id = flag_value(tail(), &["--resume", "-r"]).filter(|v| !v.trim().is_empty())?;
+    let name = flag_value(tail(), &["--name"])
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| seed_of(tail()));
+    let row = name
+        .as_deref()
+        .and_then(|n| entries.iter().find(|e| e.name == n))
+        .or_else(|| {
+            entries
+                .iter()
+                .find(|e| e.harness_session_id.as_deref() == Some(resume_id.as_str()))
+        })?;
+    let row_harness = row
+        .harness
+        .as_deref()
+        .map(str::trim)
+        .filter(|h| !h.is_empty())?;
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let given_harness = flag_value(tail(), HARNESS_FLAGS).map(|v| v.trim().to_string());
+    // The pin occupies only axes the caller left free: `--route`/`-m` already
+    // on the argv are decisions, and the model pin is what a profile lane
+    // would otherwise resolve.
+    let model_free = flag_value(tail(), &["--model", "-m"]).is_none();
+    let route_free = flag_value(tail(), &["--route"]).is_none();
+    let row_model = row
+        .requested_model
+        .as_deref()
+        .filter(|m| !m.is_empty())
+        .or_else(|| row.model.as_deref().filter(|m| !m.is_empty()));
+    // One shared route-or-model resolution feeds the injection and the
+    // refusal's corrected command: a declared lane serving this model on this
+    // harness carries the account and route too, so the pin rides
+    // `--route <lane>`; the lane gate refuses a bare `-m` for exactly that
+    // reason.
+    let axis_pin: Option<(String, String)> = if model_free && route_free {
+        match row_model {
+            Some(m) => inventory_lane_serving(row_harness, m, &cwd)
+                .map(|lane| ("--route".to_string(), lane))
+                .or_else(|| Some(("-m".to_string(), m.to_string()))),
+            None => None,
+        }
+    } else {
+        None
+    };
+
+    if let Some(given) = given_harness.as_deref() {
+        if given != row_harness {
+            return Some(resume_route_refusal(row, &resume_id, given, &axis_pin));
+        }
+    }
+    // Mutation last: `tail` borrows `args`, and every read is done.
+    if given_harness.is_none() {
+        args.insert(1, "--harness".to_string());
+        args.insert(2, row_harness.to_string());
+    }
+    if let Some((flag, value)) = axis_pin {
+        args.insert(1, flag);
+        args.insert(2, value);
+    }
+    None
+}
+
+/// The refusal for a resume spawn whose harness contradicts the row. It
+/// carries the working command, not a principle: the paste-back launches the
+/// transcript on its own axes.
+fn resume_route_refusal(
+    row: &crate::state::RegistryEntry,
+    resume_id: &str,
+    given: &str,
+    axis_pin: &Option<(String, String)>,
+) -> String {
+    let quote = crate::client_commands::shlex_quote;
+    let row_harness = row.harness.as_deref().unwrap_or_default();
+    let route_or_model = axis_pin
+        .as_ref()
+        .map(|(flag, value)| format!("{flag} {}", quote(value)))
+        .unwrap_or_default();
+    let cwd_flag = if row.cwd.is_empty() {
+        String::new()
+    } else {
+        format!("--cwd {}", quote(&row.cwd))
+    };
+    format!(
+        "fno agents spawn: --resume {} resumes a {} transcript; -H {} would launch it on the \
+         wrong harness. The corrected form: fno agents spawn --name {} --resume={} {} -H {} {} \
+         --substrate thread",
+        quote(resume_id),
+        quote(row_harness),
+        quote(given),
+        quote(&row.name),
+        quote(resume_id),
+        cwd_flag,
+        quote(row_harness),
+        route_or_model,
+    )
+}
+
+/// The declared lane that serves `model` on `harness`, by name. `None` when
+/// the inventory is unreadable or serves nothing here. The lane read mirrors
+/// `spawn_bare::model_lane_refusal`: a serving row names a route, or it
+/// carries no account and pins nothing.
+fn inventory_lane_serving(harness: &str, model: &str, cwd: &Path) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct Inventory {
+        #[serde(default)]
+        rows: Vec<LaneRow>,
+    }
+    #[derive(serde::Deserialize)]
+    struct LaneRow {
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        harness: String,
+        #[serde(default)]
+        model: String,
+        #[serde(default)]
+        route: String,
+    }
+    let inventory = crate::route_gather::run_mode(&serde_json::json!({"mode": "inventory"}), cwd);
+    let inventory = serde_json::from_value::<Inventory>(inventory).ok()?;
+    inventory
+        .rows
+        .iter()
+        .find(|r| {
+            r.harness.trim() == harness
+                && r.model.trim() == model
+                && !r.name.trim().is_empty()
+                && !r.route.trim().is_empty()
+        })
+        .map(|r| r.name.trim().to_string())
 }
 
 /// Reserve a worker name while this spawn client runs. The registry holds no
@@ -437,6 +589,83 @@ mod tests {
 
     fn argv(tokens: &[&str]) -> Vec<String> {
         tokens.iter().map(|t| t.to_string()).collect()
+    }
+
+    fn resume_row(harness: &str, model: Option<&str>) -> crate::state::RegistryEntry {
+        let mut row = crate::state::RegistryEntry::default();
+        row.name = "t-resumed".to_string();
+        row.harness = Some(harness.to_string());
+        row.model = model.map(str::to_string);
+        row.cwd = "/wt/t-resumed".to_string();
+        row.harness_session_id = Some("11111111-2222-3333-4444-555555555555".to_string());
+        row
+    }
+
+    #[test]
+    fn resume_pin_injects_the_row_harness_and_model_axes_left_free() {
+        let row = resume_row("claude", Some("never-a-declared-model"));
+        let mut args = argv(&[
+            "spawn",
+            "--name",
+            "t-resumed",
+            "--resume=11111111-2222-3333-4444-555555555555",
+            "--cwd",
+            "/wt/t-resumed",
+            "hello",
+        ]);
+        let refusal = resume_route_pin(&mut args, &[row]);
+        assert!(refusal.is_none(), "the pin admits: {refusal:?}");
+        let joined = args.join(" ");
+        assert!(
+            joined.contains("--harness claude"),
+            "the row harness pins: {joined}"
+        );
+        assert!(
+            joined.contains("-m never-a-declared-model"),
+            "the row model pins when no lane serves it: {joined}"
+        );
+    }
+
+    #[test]
+    fn resume_pin_leaves_a_no_row_resume_untouched() {
+        let mut args = argv(&[
+            "spawn",
+            "--name",
+            "t-unknown",
+            "--resume=99999999-2999-3333-4444-555555555555",
+            "hello",
+        ]);
+        let refusal = resume_route_pin(&mut args, &[]);
+        assert!(refusal.is_none(), "no row admits unchanged: {refusal:?}");
+        assert!(
+            !args.contains(&"--harness".to_string()),
+            "no row, no pin: {:?}",
+            args
+        );
+    }
+
+    #[test]
+    fn a_resume_harness_contradiction_refuses_with_the_corrected_command() {
+        let row = resume_row("claude", None);
+        let mut args = argv(&[
+            "spawn",
+            "--name",
+            "t-resumed",
+            "--resume=11111111-2222-3333-4444-555555555555",
+            "-H",
+            "codex",
+            "hello",
+        ]);
+        let err = resume_route_pin(&mut args, &[row])
+            .expect("a harness contradiction refuses with the corrected command");
+        assert!(
+            err.contains("--resume=11111111-2222-3333-4444-555555555555"),
+            "the corrected command carries the glued spelling: {err}"
+        );
+        assert!(
+            err.contains("-H claude") && err.contains("--substrate thread"),
+            "the corrected command carries the row harness and thread lane: {err}"
+        );
     }
 
     #[test]

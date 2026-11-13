@@ -515,11 +515,28 @@ pub fn admit(params: &mut Map<String, Value>) -> Result<(), (String, i32)> {
         .and_then(Value::as_array)
         .is_some_and(|scopes| !scopes.is_empty());
     let non_empty = |key: &str| text(params, key).filter(|s| !s.is_empty());
+    // The resume ask rides harness_args in every legal spelling (the glued
+    // pre-prompt form and the fenced tail both land there), so the seedless
+    // check reads it from the same list the lane check reads --model from.
+    // A hardcoded None here refused every spawn resume of a claude thread
+    // whose transcript needed no fresh seed.
+    let resume_marker = params
+        .get("harness_args")
+        .and_then(Value::as_array)
+        .map(|items| {
+            let toks: Vec<String> = items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect();
+            crate::spawn_admission::flag_value(&toks, &["--resume", "-r"])
+        })
+        .unwrap_or(None);
     if let Some(refusal) = crate::spawn_admission::seedless_thread_refusal(
         Some(harness.as_str()),
         Some(substrate.as_str()),
         text(params, "message").as_deref(),
-        None,
+        resume_marker.as_deref(),
         promoted,
         non_empty("name").as_deref(),
         non_empty("node").as_deref(),
@@ -973,6 +990,34 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.clone()))
             .collect()
+    }
+
+    #[test]
+    fn a_resume_marker_in_the_fence_exempts_the_seedless_claude_thread() {
+        // A spawn resume continues a transcript and needs no fresh seed: the
+        // marker rides harness_args (glued pre-prompt or fenced tail), and the
+        // seedless check reads it there.
+        let mut resumed = params(&[
+            ("provider", json!("claude")),
+            ("substrate", json!("thread")),
+            ("name", json!("w")),
+            (
+                "harness_args",
+                json!(["--resume=11111111-2222-3333-4444-555555555555"]),
+            ),
+        ]);
+        admit(&mut resumed).expect("a resume needs no seed");
+        let mut fresh = params(&[
+            ("provider", json!("claude")),
+            ("substrate", json!("thread")),
+            ("name", json!("w")),
+        ]);
+        let (line, code) = admit(&mut fresh).expect_err("a seedless fresh thread still refuses");
+        assert_eq!(code, 2);
+        assert!(
+            line.contains("refusing a claude thread spawn with no message"),
+            "{line}"
+        );
     }
 
     #[test]
