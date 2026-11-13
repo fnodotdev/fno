@@ -8,8 +8,6 @@
 //! caller never resolved to a control ships nothing, so telemetry fails open
 //! and never blocks input: the writers ignore [`click`]'s outcome.
 
-use std::path::PathBuf;
-
 /// An id is a code constant, so its charset is narrower than the journal's
 /// identifier gate: lowercase words joined by `_`, digits allowed, at most
 /// 64 characters.
