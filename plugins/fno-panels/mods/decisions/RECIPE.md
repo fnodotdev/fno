@@ -13,5 +13,5 @@ Native views are built in, so they cannot be switched off.
 The preview shows the snapshot fixture, which holds invented rows only. Re-shoot it with a branch-built fno:
 
 ```
-scripts/ops/mux-demo-snapshot.sh --format png --view decisions --size 200x44 --out plugins/fno-panels/mods/decisions/preview.png
+scripts/ops/mux-demo-snapshot.sh --format png --view decisions --size 150x16 --out plugins/fno-panels/mods/decisions/preview.png
 ```
