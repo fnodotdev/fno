@@ -227,6 +227,7 @@ struct OpenRow {
     subject: Option<String>,
     node: Option<String>,
     session_id: Option<String>,
+    asker: Option<String>,
 }
 
 /// The old envelope an amend carries over, parsed once at the boundary:
@@ -305,6 +306,7 @@ fn open_rows_from(asked: &Map<String, Value>, closed: &HashSet<String>) -> Vec<O
             subject: str_field(v, "subject").map(str::to_string),
             node: str_field(v, "node").map(str::to_string),
             session_id: str_field(v, "session_id").map(str::to_string),
+            asker: str_field(v, "asker").map(str::to_string),
             id: (*id).clone(),
         });
     }
@@ -938,20 +940,25 @@ judges. Pass each screenshot with --image <path>; the page embeds them under ## 
     // place: a fresh envelope under the SAME question_id, which every fold
     // (index, board projection, recall) already reads as the row's latest
     // state. It never answers anything: the row stays open on its lane.
-    // Same asker means the same asking session: the handle derives from the
-    // session id, so a handle match adds only the same-window collision.
+    // Same asker means the same asking session: session ids decide when both
+    // sides carry one; when either is absent the asker handle decides (the
+    // handle derives from the session id, so a handle match adds only the
+    // same-window collision). A pin filed without a session id still amends.
     let mut amend: Option<(String, Value)> = None;
     if let (Some(s), Some(n)) = (subject.as_deref(), node) {
         let dup = open.iter().find(|row| {
             row.subject.as_deref().map(str::trim) == Some(s) && row.node.as_deref() == Some(n)
         });
         if let Some(row) = dup {
-            let same_session = req
-                .session_id
-                .as_deref()
-                .zip(row.session_id.as_deref())
-                .is_some_and(|(a, b)| a == b);
-            if from_file && same_session {
+            let same_asker = match (req.session_id.as_deref(), row.session_id.as_deref()) {
+                (Some(a), Some(b)) => a == b,
+                _ => req
+                    .asker
+                    .as_deref()
+                    .zip(row.asker.as_deref())
+                    .is_some_and(|(a, b)| a == b),
+            };
+            if from_file && same_asker {
                 let old = asked.get(&row.id).cloned().unwrap_or(Value::Null);
                 amend = Some((row.id.clone(), old));
             } else {
@@ -1776,6 +1783,43 @@ stops
             str_field(&amended, "ask").is_some(),
             "the merge keeps the pin action the file does not name"
         );
+
+        // The production repro: the pin row carries the asker handle but no
+        // session id (the ask door resolved identity without a session), and
+        // the same asker's file re-ask refused as dedup. With a session id
+        // absent the asker handle decides; the pin still upgrades.
+        let mut pin = req("pin without a session id?", &root);
+        pin.subject = Some("subject-c".to_string());
+        pin.node = Some("x-aaaa".to_string());
+        pin.ask = Some("finish the lane".to_string());
+        pin.session_id = None;
+        let pin_answer = run_intake(&pin, &home);
+        assert_eq!(pin_answer.exit_code, 0, "{:?}", pin_answer.lines);
+        let pin_qid = pin_answer.qid.clone().unwrap_or_default();
+
+        let mut reask = req(QUESTION_FILE, &root);
+        reask.subject = Some("subject-c".to_string());
+        reask.node = Some("x-aaaa".to_string());
+        reask.session_id = None;
+        let answer = run_intake(&reask, &home);
+        assert_eq!(answer.exit_code, 0, "{:?}", answer.lines);
+        assert_eq!(
+            answer.qid.as_deref(),
+            Some(pin_qid.as_str()),
+            "the id stays"
+        );
+        assert!(
+            answer.lines.iter().any(|l| l.contains("amended")),
+            "the handle decides when a session id is absent: {:?}",
+            answer.lines
+        );
+        let journal = journal_text(&root);
+        let upgraded: Value = serde_json::from_str(journal.lines().last().unwrap()).unwrap();
+        assert_eq!(str_field(&upgraded, "question_id"), Some(pin_qid.as_str()));
+        assert!(
+            str_field(&upgraded, "ask").is_some(),
+            "the upgrade keeps the pin action"
+        );
     }
 
     #[test]
@@ -1797,6 +1841,25 @@ stops
         assert_eq!(answer.exit_code, 2);
         assert_eq!(answer.refusal.as_deref(), Some("dedup"));
         assert_eq!(journal_text(&root).lines().count(), 1, "nothing written");
+
+        // No session id on either side and a different handle: still a
+        // stranger, still dedup. The handle tier never waves a stranger in.
+        let mut pin = req("pin no sessions?", &root);
+        pin.subject = Some("subject-b2".to_string());
+        pin.node = Some("x-aaaa".to_string());
+        pin.ask = Some("finish the lane".to_string());
+        pin.session_id = None;
+        assert_eq!(run_intake(&pin, &home).exit_code, 0);
+
+        let mut reask = req(QUESTION_FILE, &root);
+        reask.subject = Some("subject-b2".to_string());
+        reask.node = Some("x-aaaa".to_string());
+        reask.session_id = None;
+        reask.asker = Some("worker-2".to_string());
+        let answer = run_intake(&reask, &home);
+        assert_eq!(answer.exit_code, 2);
+        assert_eq!(answer.refusal.as_deref(), Some("dedup"));
+        assert_eq!(journal_text(&root).lines().count(), 2, "nothing written");
     }
 
     #[test]
