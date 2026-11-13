@@ -1,5 +1,5 @@
 //! The attention ledger: the orchestration tax fno's own user pays, one ISO
-//! week at a time (node x-5a74). Per merged PR it counts the questions filed
+//! week at a time. Per merged PR it counts the questions filed
 //! against the user's attention, the asks repeated on one subject, the merged
 //! work later reverted, and the hours from node creation to merge.
 //!
@@ -31,14 +31,13 @@ pub struct QuestionRow {
 /// One merged node the window covers, from the graph store.
 #[derive(Debug, Clone)]
 pub struct MergedNode {
-    pub id: String,
     pub created: DateTime<Utc>,
     pub completed: DateTime<Utc>,
 }
 
 /// The ledger itself. Hours carry one decimal; `None` means no merged PRs in
 /// the window, so no ratio and no cycle numbers exist.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Ledger {
     pub week: String,
     pub questions_filed: usize,
@@ -186,7 +185,6 @@ pub fn render_line(ledger: &Ledger) -> String {
         ledger.reverts,
         ledger.guard_refusals,
         cycle,
-        queue,
     )
 }
 
@@ -325,11 +323,7 @@ fn merged_nodes(notes: &mut Vec<String>) -> Vec<MergedNode> {
         .filter(|r| r.merge_status == "merged")
         .filter_map(
             |r| match (parse_ts(&r.created_at), parse_ts(&r.completed_at)) {
-                (Some(created), Some(completed)) => Some(MergedNode {
-                    id: r.id,
-                    created,
-                    completed,
-                }),
+                (Some(created), Some(completed)) => Some(MergedNode { created, completed }),
                 _ => None,
             },
         )
@@ -457,10 +451,6 @@ pub fn compute(cwd: &Path) -> Result<Ledger, LedgerError> {
 pub fn reports_dir(cwd: &Path) -> PathBuf {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     crate::gate::escalation::vault_dir_with_home(cwd, home.as_deref(), "reports")
-}
-
-fn report_name(window: &Window) -> String {
-    format!("attention-ledger-{}.md", window.label)
 }
 
 /// The weekly report body: the numbers, their windows, and the lower-bound
@@ -627,12 +617,8 @@ mod tests {
         }
     }
 
-    fn m(id: &str, created: DateTime<Utc>, completed: DateTime<Utc>) -> MergedNode {
-        MergedNode {
-            id: id.to_string(),
-            created,
-            completed,
-        }
+    fn m(created: DateTime<Utc>, completed: DateTime<Utc>) -> MergedNode {
+        MergedNode { created, completed }
     }
 
     /// AC1: the fold counts windowed questions and merged nodes and states
@@ -646,7 +632,7 @@ mod tests {
             q("x-2", "another ask", ts(2026, 11, 10, 11)),
             q("x-1", "last week ask", ts(2026, 11, 5, 9)),
         ];
-        let merged = vec![m("x-9", ts(2026, 11, 5, 8), ts(2026, 11, 10, 15))];
+        let merged = vec![m(ts(2026, 11, 5, 8), ts(2026, 11, 10, 15))];
         let l = fold(&w, &questions, &merged, 2, 1, Some(1));
         assert_eq!(l.questions_filed, 3);
         assert_eq!(l.merged_prs, 1);
