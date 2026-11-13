@@ -1,6 +1,6 @@
 # Mux key reference
 
-Generated from `default_bindings` and `preset_rows` in `crates/fno/src/keys.rs`. Do not edit by hand: run `cargo test -p fno --lib regenerate_key_reference -- --ignored` to rewrite it.
+Generated from `default_bindings` and `preset_rows` in `crates/fno/src/keys.rs`. Do not edit by hand: an attended session rewrites it with `fno doctor test rust --manifest-path crates/fno/Cargo.toml --lib regenerate_key_reference -- --ignored`. An agent session runs no local tests: commit, push, and CI, or a test:priority grant.
 
 Each row is one action id. Put the id in `~/.fno/keybindings.json` with a key string to rebind it. The file is one flat object, and `"preset"` is its one reserved key. A value of two to four keys split by spaces (`"g s"`) binds a multi-stroke chord. Its first key must not be bound alone. The mux reloads the file when it changes. The keys below come after the prefix.
 

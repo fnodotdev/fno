@@ -118,11 +118,11 @@ The isolated server also runs its Python helper from the scratch home. One CPU s
 ## Repeat the run
 
 ```bash
-cargo build --release --manifest-path crates/fno/Cargo.toml --example mux_latency
+FNO_BUILD_WHY="mux latency shots" cargo build --release --manifest-path crates/fno/Cargo.toml --example mux_latency
 crates/fno/target/release/examples/mux_latency --fno <release fno>
 crates/fno/target/release/examples/mux_latency --fno <release fno> --scenario C,D,E
 crates/fno/target/release/examples/mux_latency --stages
 fno doctor footprint
 ```
 
-A full run takes 10 to 15 minutes. `--scenario` picks from B, C, D and E, and A and the control always run. Compare a flood across several attaches, because each attach draws a new hash seed. The harness uses its own mux directory and home, so it never touches the live fleet. When the control misses by more than 2 ms, it exits 2 and prints no mux numbers.
+A full run takes 10 to 15 minutes. `--scenario` picks from B, C, D and E, and A and the control always run. Compare a flood across several attaches, because each attach draws a new hash seed. The harness uses its own mux directory and home, so it never touches the live fleet. When the control misses by more than 2 ms, it exits 2 and prints no mux numbers. An agent session declares the build with `FNO_BUILD_WHY="<why>"`. The compile door journals it. A human terminal builds freely.

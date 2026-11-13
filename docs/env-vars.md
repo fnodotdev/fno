@@ -76,6 +76,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_BG` | rs | unclear: crates/fno-agents/src/gate/target_init.rs:591 |
 | `FNO_BIN` | rs | Overrides the Python fno porcelain path at the Rust/Python seam. |
 | `FNO_BOARD_SCOPE` | rs | unclear: crates/fno/src/backlog_view.rs:333 |
+| `FNO_BUILD_WHY` | rs | The declared reason an agent session's cargo build, check or clippy carries (mux shots, a bug repro). The compile door reads it, admits the build, and journals one row under it. Absent or whitespace-only refuses with the compile line. |
 | `FNO_BUS_DIR` | rs | The mail bus dir pin, the top rung of the one ladder: the mail readers (crates/fno-agents/src/runtime/mail_paths.rs) and the dir door (`fno-agents state path dir bus`, crates/fno-agents/src/runtime/state_path.rs) resolve it before `config.paths.bus_dir` and the layout fold. |
 | `FNO_BUS_LOCK_TIMEOUT_SECS` | rs | Overrides the bus-append door's sidecar-lock wait; test escape hatch for the contended-lock refusal. |
 | `FNO_BUS_MAX_BYTES` | rs | Size cap the bus-append door rotates the live log at; malformed degrades to 5 MB. |
