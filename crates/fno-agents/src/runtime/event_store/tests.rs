@@ -535,10 +535,10 @@ fn future_schema_is_refused_by_writers_and_readers_without_downgrade() {
     assert!(matches!(
         query_events(&live, &EventQuery::default()),
         Err(EventStoreError::NewerSchema {
-            found: SCHEMA_VERSION + 1,
-            supported: SCHEMA_VERSION,
+            found,
+            supported,
             ..
-        })
+        }) if found == SCHEMA_VERSION + 1 && supported == SCHEMA_VERSION
     ));
 
     let conn = Connection::open(&store).unwrap();
