@@ -12,6 +12,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::decision_index;
@@ -102,10 +103,23 @@ pub(crate) fn unnamed_near_refusal(
     Some(message)
 }
 
+/// The node fields the sweep reads, parsed once per row.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct NodeRow {
+    id: String,
+    title: String,
+    details: String,
+    status: String,
+    locked_by: String,
+    pr_number: Option<u64>,
+    plan_path: Option<String>,
+}
+
 /// The session id that owns a node, from its lock. A lock that names no
 /// session (a handover placeholder) has no owner to mail.
-fn owner_session(row: &Value) -> Option<&str> {
-    let lock = s(row, "locked_by");
+fn owner_session(row: &NodeRow) -> Option<&str> {
+    let lock = row.locked_by.as_str();
     let id = lock.rsplit(':').next().unwrap_or(lock).trim();
     let uuid = id.len() == 36
         && id.chars().filter(|c| *c == '-').count() == 4
@@ -113,17 +127,18 @@ fn owner_session(row: &Value) -> Option<&str> {
     uuid.then_some(id)
 }
 
-fn node_text(row: &Value) -> String {
-    format!("{} {}", s(row, "title"), s(row, "details"))
+fn node_text(row: &NodeRow) -> String {
+    format!("{} {}", row.title, row.details)
 }
 
 /// The open nodes a law touches: the best word matches over the open board
 /// (rare words weigh more), then every node that carries a `--sweep` word.
-fn touched_nodes<'a>(rows: &'a [Value], law: &str, sweep: &[String]) -> Vec<&'a Value> {
+fn touched_nodes(rows: &[Value], law: &str, sweep: &[String]) -> Vec<NodeRow> {
     let closed = ["done", "superseded", "deferred", "archived", "cancelled"];
-    let open: Vec<&Value> = rows
+    let open: Vec<NodeRow> = rows
         .iter()
-        .filter(|r| !closed.contains(&s(r, "status")))
+        .filter_map(|r| NodeRow::deserialize(r).ok())
+        .filter(|n| !closed.contains(&n.status.as_str()))
         .collect();
     let docs: Vec<BTreeSet<String>> = open.iter().map(|r| topic_words(&node_text(r))).collect();
     let mut df: BTreeMap<&str, f64> = BTreeMap::new();
@@ -158,13 +173,14 @@ fn touched_nodes<'a>(rows: &'a [Value], law: &str, sweep: &[String]) -> Vec<&'a 
     let named: Vec<usize> = (0..open.len())
         .filter(|i| !picked.contains(i))
         .filter(|&i| {
-            let text = node_text(open[i]).to_lowercase();
+            let text = node_text(&open[i]).to_lowercase();
             words.iter().any(|w| text.contains(w.as_str()))
         })
         .take(SWEEP_MAX_NAMED)
         .collect();
     picked.extend(named);
-    picked.into_iter().map(|i| open[i]).collect()
+    let mut slots: Vec<Option<NodeRow>> = open.into_iter().map(Some).collect();
+    picked.into_iter().filter_map(|i| slots[i].take()).collect()
 }
 
 /// The sweep after a law lands: one mail per owned node, one stderr line per
@@ -176,15 +192,15 @@ pub(crate) fn sweep_after_law(decision_id: &str, subject: &str, decision: &str, 
     };
     let label = crate::numbers::display(decision_id);
     for row in touched_nodes(&rows, &format!("{subject} {decision}"), sweep) {
-        let mut work = format!("node {} ({})", s(row, "id"), s(row, "title"));
-        if let Some(pr) = row.get("pr_number").and_then(Value::as_u64) {
+        let mut work = format!("node {} ({})", row.id, row.title);
+        if let Some(pr) = row.pr_number {
             work.push_str(&format!(", PR {pr}"));
         }
-        if !s(row, "plan_path").is_empty() {
-            work.push_str(&format!(", plan {}", s(row, "plan_path")));
+        if let Some(plan) = row.plan_path.as_deref().filter(|p| !p.is_empty()) {
+            work.push_str(&format!(", plan {plan}"));
         }
         // A test process never mails the live fleet.
-        let Some(owner) = owner_session(row).filter(|_| !cfg!(test)) else {
+        let Some(owner) = owner_session(&row).filter(|_| !cfg!(test)) else {
             eprintln!("law: {label} touches {work}. No owner session to mail.");
             continue;
         };
@@ -266,16 +282,16 @@ mod tests {
         rows.extend((0..20).map(|_| node("x-ffff", "ready", "paint the mux status bar", None)));
         let law = "release:fno-app-version fno-app has its own version line, no lockstep";
         let touched = touched_nodes(&rows, law, &[]);
-        let ids: Vec<&str> = touched.iter().map(|r| s(r, "id")).collect();
+        let ids: Vec<&str> = touched.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, vec!["x-aaaa"], "a done node is not open work");
         assert_eq!(
-            owner_session(touched[0]),
+            owner_session(&touched[0]),
             Some("36675be7-6519-45df-8c7e-943731994329")
         );
         let named = touched_nodes(&rows, law, &["Desktop".to_string()]);
         let cccc = named
             .iter()
-            .find(|r| s(r, "id") == "x-cccc")
+            .find(|r| r.id == "x-cccc")
             .expect("a named word sweeps");
         assert_eq!(
             owner_session(cccc),

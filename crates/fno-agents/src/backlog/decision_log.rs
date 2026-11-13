@@ -7,10 +7,39 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use serde::Deserialize;
 use serde_json::Value;
 
 /// A retired ruling stays in the log this long, so a reader sees what died.
 const RETIRED_DAYS: i64 = 30;
+
+/// The listing fields the log prints, read once per row.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct LogRow {
+    decision_id: String,
+    number: Option<String>,
+    lane: String,
+    lifecycle: String,
+    subject: Option<String>,
+    ts: String,
+    authority_source: Option<String>,
+    scope: Option<String>,
+    decision: String,
+    superseded_by: Option<String>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum LogError {
+    #[error("no plans dir resolves for this project")]
+    NoPlansDir,
+    #[error("{0} is outside the test temp dir")]
+    OutsideTestDir(PathBuf),
+    #[error("the decision store is unreadable ({0})")]
+    Store(String),
+    #[error("{0}: {1}")]
+    Io(PathBuf, std::io::Error),
+}
 
 /// The log's path for the project at the working directory.
 pub(crate) fn log_path() -> Option<PathBuf> {
@@ -20,30 +49,16 @@ pub(crate) fn log_path() -> Option<PathBuf> {
     Some(plans.parent()?.join("decision-log.md"))
 }
 
-fn field<'a>(row: &'a Value, key: &str) -> &'a str {
-    row.get(key).and_then(Value::as_str).unwrap_or("")
-}
-
-fn is_ruling(row: &Value) -> bool {
-    matches!(field(row, "lane"), "law" | "unattributed")
-}
-
-fn bullet(row: &Value) -> String {
-    let id = match field(row, "number") {
-        "" => field(row, "decision_id"),
-        n => n,
-    };
-    let day = field(row, "ts").get(..10).unwrap_or("");
+fn bullet(row: &LogRow) -> String {
+    let id = row.number.as_deref().unwrap_or(&row.decision_id);
+    let day = row.ts.get(..10).unwrap_or("");
     let mut line = format!(
         "- **{id}** {day}, {}, {}: {}",
-        field(row, "authority_source"),
-        match field(row, "scope") {
-            "" => "project",
-            s => s,
-        },
-        crate::law_match::one_line(field(row, "decision"), 600)
+        row.authority_source.as_deref().unwrap_or(""),
+        row.scope.as_deref().unwrap_or("project"),
+        crate::law_match::one_line(&row.decision, 600)
     );
-    if let Some(by) = row.get("superseded_by").and_then(Value::as_str) {
+    if let Some(by) = &row.superseded_by {
         line.push_str(&format!(" (superseded by {by})"));
     }
     line
@@ -51,20 +66,21 @@ fn bullet(row: &Value) -> String {
 
 /// The log's markdown over decision rows (newest first, the listing order).
 pub(crate) fn render(rows: &[Value], now: chrono::DateTime<chrono::Utc>) -> String {
-    let rulings: Vec<&Value> = rows.iter().filter(|r| is_ruling(r)).collect();
-    let live: Vec<&Value> = rulings
+    let rulings: Vec<LogRow> = rows
         .iter()
-        .copied()
-        .filter(|r| field(r, "lifecycle") == "live")
+        .filter_map(|r| LogRow::deserialize(r).ok())
+        .filter(|r| matches!(r.lane.as_str(), "law" | "unattributed"))
         .collect();
+    let live: Vec<&LogRow> = rulings.iter().filter(|r| r.lifecycle == "live").collect();
     // Subjects keep the order of their newest live ruling.
     let mut order: Vec<&str> = Vec::new();
-    let mut by_subject: BTreeMap<&str, Vec<&Value>> = BTreeMap::new();
+    let mut by_subject: BTreeMap<&str, Vec<&LogRow>> = BTreeMap::new();
     for row in &live {
-        let subject = match field(row, "subject") {
-            "" => "(no subject)",
-            s => s,
-        };
+        let subject = row
+            .subject
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("(no subject)");
         if !by_subject.contains_key(subject) {
             order.push(subject);
         }
@@ -73,16 +89,10 @@ pub(crate) fn render(rows: &[Value], now: chrono::DateTime<chrono::Utc>) -> Stri
     let cutoff = (now - chrono::Duration::days(RETIRED_DAYS))
         .format("%Y-%m-%dT%H:%M:%SZ")
         .to_string();
-    let retired: Vec<&Value> = rulings
+    let retired: Vec<&LogRow> = rulings
         .iter()
-        .copied()
-        .filter(|r| {
-            matches!(
-                field(r, "lifecycle"),
-                "superseded" | "retracted" | "expired"
-            )
-        })
-        .filter(|r| field(r, "ts") >= cutoff.as_str())
+        .filter(|r| matches!(r.lifecycle.as_str(), "superseded" | "retracted" | "expired"))
+        .filter(|r| r.ts >= cutoff)
         .collect();
     let mut out = format!(
         "---\ntitle: Decision log\ngenerated: {}\nsource: fno backlog decisions\nnote: generated on every law write; regenerate with `fno backlog decisions --log`, never edit\n---\n\n# Decision log\n\n{} live ruling(s) under {} subject(s). Read one with `fno backlog decisions <id>`.\n\n## Live rulings\n",
@@ -102,25 +112,26 @@ pub(crate) fn render(rows: &[Value], now: chrono::DateTime<chrono::Utc>) -> Stri
         out.push_str("None.\n");
     }
     for row in retired {
-        out.push_str(&format!("{} [{}]\n", bullet(row), field(row, "lifecycle")));
+        out.push_str(&format!("{} [{}]\n", bullet(row), row.lifecycle));
     }
     out
 }
 
-/// Rewrite the log. `Err` names what failed.
-pub(crate) fn write_log() -> Result<PathBuf, String> {
-    let path = log_path().ok_or("no plans dir resolves for this project")?;
+/// Rewrite the log.
+pub(crate) fn write_log() -> Result<PathBuf, LogError> {
+    let path = log_path().ok_or(LogError::NoPlansDir)?;
     if cfg!(test) && !crate::paths::under_temp_dir(&path) {
-        return Err(format!("{} is outside the test temp dir", path.display()));
+        return Err(LogError::OutsideTestDir(path));
     }
-    let rows = crate::backlog::decisions_cli::all_rows_for_log()?;
+    let rows = crate::backlog::decisions_cli::all_rows_for_log()
+        .map_err(|e| LogError::Store(format!("{e:?}")))?;
     let text = render(&rows, chrono::Utc::now());
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        std::fs::create_dir_all(dir).map_err(|e| LogError::Io(dir.to_path_buf(), e))?;
     }
     let tmp = path.with_extension("md.tmp");
-    std::fs::write(&tmp, text).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))?;
+    std::fs::write(&tmp, text).map_err(|e| LogError::Io(tmp.clone(), e))?;
+    std::fs::rename(&tmp, &path).map_err(|e| LogError::Io(path.clone(), e))?;
     Ok(path)
 }
 

@@ -195,7 +195,7 @@ fn decision_lane(row: &Value) -> &'static str {
 }
 
 #[derive(Debug)]
-enum CoreError {
+pub(crate) enum CoreError {
     /// The store could not be read at all: the Python command's
     /// `cannot read the decision index` exit (1).
     Read(String),
@@ -635,11 +635,8 @@ fn list_core(
 
 /// Every decision row this project reads, all lifecycles, newest first:
 /// the decision log's source.
-pub(crate) fn all_rows_for_log() -> Result<Vec<Value>, String> {
-    match list_core(None, None, Some("all"), &mut None, false) {
-        Ok(out) => Ok(out.rows),
-        Err(CoreError::Read(reason)) | Err(CoreError::ValueError(reason)) => Err(reason),
-    }
+pub(crate) fn all_rows_for_log() -> Result<Vec<Value>, CoreError> {
+    list_core(None, None, Some("all"), &mut None, false).map(|out| out.rows)
 }
 
 /// One subject's `--state live` listing over injected store rows: the read
