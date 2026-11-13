@@ -739,7 +739,7 @@ mod tests {
         // AC2-EDGE: 0, u32::MAX and i32::MAX + 1 all refuse.
         assert!(Pid::new(0).is_none(), "pid 0 signals the caller's group");
         assert!(Pid::new(u32::MAX).is_none(), "u32::MAX wraps to -1");
-        assert!(Pid::try_from(u64::from(i32::MAX) + 1).is_err());
+        assert!(Pid::try_from((i32::MAX as u64) + 1).is_err());
         assert!(Pid::try_from(0u64).is_err());
         assert!(Pid::try_from(-1i64).is_err(), "negative pids refuse");
         assert!(Pid::try_from(0i64).is_err());
@@ -795,6 +795,7 @@ mod tests {
     fn signal_group_kills_the_childs_group_not_ours() {
         // AC4-HP: a child in its own group dies by killpg; the caller's own
         // group is untouched (this test still running proves it).
+        use std::os::unix::process::CommandExt;
         let mut child = Command::new("sh")
             .args(["-c", "sleep 30"])
             .process_group(0)
@@ -803,7 +804,7 @@ mod tests {
         let pid = Pid::from_child(&child);
         assert!(pid.probe(), "the child is live");
         assert!(
-            std::fs::read_link(format!("/proc/{}/cwd")).is_err()
+            std::fs::read_link(format!("/proc/{}/cwd", pid.as_u32())).is_err()
                 || cfg!(target_os = "macos")
                 || Pid::current().cwd().is_some(),
             "cwd read must not misfire"

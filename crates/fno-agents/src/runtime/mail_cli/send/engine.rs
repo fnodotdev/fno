@@ -109,10 +109,6 @@ pub(super) fn process_alive(pid: u32) -> bool {
     Pid::new(pid).is_some_and(|p| p.exists())
 }
 
-pub(super) fn errno() -> i32 {
-    std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
-}
-
 /// The grace window covers the inject budget,
 /// floored at 2s and capped at the caller's timeout.
 pub(super) fn queue_grace_seconds(lock_timeout: f64) -> f64 {

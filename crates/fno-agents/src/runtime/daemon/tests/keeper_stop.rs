@@ -9,7 +9,7 @@ use crate::daemon::tests::keeper_sweep::{
     expect_row, keeper_sweep_home, load_registry_tolerating_wipe, spawn_killable_keeper,
 };
 use crate::daemon::tests::test_ctx;
-use crate::pid::{Pid, SignalResult};
+use crate::pid::Pid;
 
 fn read_events(home: &AgentsHome) -> Vec<Value> {
     let journal = home.events_jsonl();

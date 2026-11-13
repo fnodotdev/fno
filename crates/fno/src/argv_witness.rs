@@ -71,20 +71,6 @@ fn list_pids() -> Vec<u32> {
 
 /// Process start time in the REGISTRY'S own units: macOS folds
 /// `proc_bsdinfo` to microseconds, Linux keeps the raw `/proc/<pid>/stat`
-/// starttime ticks. Deliberately NOT `probe_pid`: the registry's
-/// `pid_start_time` is a per-host, per-boot quantity compared only for
-/// equality against a value captured for the SAME pid, so it must be read
-/// with the same units `fno-agents`' registry writer used (daemon.rs
-/// `process_start_time`), not converted to epoch ms.
-fn registry_start_time(pid: u32) -> Option<u64> {
-    Pid::new(pid).and_then(|p| p.start_time())
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn registry_start_time(_pid: u32) -> Option<u64> {
-    None
-}
-
 /// POSITIVE falsification of one non-terminal row's liveness by its own
 /// recorded pid. A machine restart writes nothing to the registry,
 /// so every row keeps the status it last had on disk - including "working"
