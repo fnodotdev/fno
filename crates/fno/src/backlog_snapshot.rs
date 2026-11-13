@@ -38,20 +38,14 @@ pub fn run(_rest: &[String]) -> i32 {
             return 2;
         }
     };
-    let failed = render_request(&request);
-    let mut exit = 0;
-    if let Ok(receipt) = &failed {
-        exit = i32::from(!receipt.failed.is_empty());
-    }
-    let receipt_text = failed
-        .as_ref()
-        .ok()
-        .and_then(|r| serde_json::to_string(r).ok());
-    if let Some(line) = receipt_text {
-        println!("{line}");
-    } else if let Err(e) = failed {
-        eprintln!("board-render: {e}");
-        exit = 1;
+    let receipt = render_request(&request);
+    let exit = i32::from(!receipt.failed.is_empty());
+    match serde_json::to_string(&receipt) {
+        Ok(line) => println!("{line}"),
+        Err(e) => {
+            eprintln!("board-render: receipt serialization failed: {e}");
+            return 1;
+        }
     }
     exit
 }
@@ -140,11 +134,11 @@ struct Receipt {
 /// never written half-fresh.
 pub const RENDER_DEADLINE: Duration = std::time::Duration::from_secs(120);
 
-fn render_request(request: &Request) -> Result<Receipt, String> {
+fn render_request(request: &Request) -> Receipt {
     render_request_within(request, RENDER_DEADLINE)
 }
 
-fn render_request_within(request: &Request, deadline: Duration) -> Result<Receipt, String> {
+fn render_request_within(request: &Request, deadline: Duration) -> Receipt {
     render_request_within_locks(request, deadline, RENDER_LOCK_WAIT)
 }
 
@@ -221,7 +215,7 @@ fn render_request_within_locks(
     request: &Request,
     deadline: Duration,
     lock_wait: Duration,
-) -> Result<Receipt, String> {
+) -> Receipt {
     // Leads are read once at render time from the agent registry and
     // stamped: the page header says when the leads were read, and a lead
     // change alone does not re-render the page. A public render drops the
@@ -236,12 +230,15 @@ fn render_request_within_locks(
     // writes; the guard releases on every return path.
     let _render_gate = match acquire_render_lock(&graph, lock_wait) {
         Ok(gate) => gate,
-        Err(refused) => return Ok(all_failed(request, refused.to_string())),
+        Err(refused) => return all_failed(request, refused.to_string()),
     };
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|e| format!("cannot start the async runtime: {e}"))?;
+    {
+        Ok(runtime) => runtime,
+        Err(e) => return all_failed(request, format!("cannot start the async runtime: {e}")),
+    };
     let leads_at = (!agents.is_empty()).then_some(now);
     // The deadline arms the gather alone: it is the leg that hung (four
     // sequential store reads). Target writes after it stay unbounded - each
@@ -808,7 +805,7 @@ mod tests {
             public: None,
         };
         let started = std::time::Instant::now();
-        let receipt = render_request_within(&request, Duration::from_secs(1)).unwrap();
+        let receipt = render_request_within(&request, Duration::from_secs(1));
         assert!(
             started.elapsed() < Duration::from_secs(3),
             "took {:?}, the caller's 3s proof bound",
@@ -836,7 +833,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::env::set_var("FNO_AGENTS_WORKER", &stub);
-        let receipt = render_request_within(&request, Duration::from_secs(10)).unwrap();
+        let receipt = render_request_within(&request, Duration::from_secs(10));
         assert!(receipt.failed.is_empty(), "{:?}", receipt.failed);
         assert_eq!(receipt.written.len(), 1, "{:?}", receipt.written);
         assert!(dir.join("board.html").exists());
@@ -877,8 +874,7 @@ mod tests {
         .expect("the test's lock file is free");
         let started = std::time::Instant::now();
         let receipt =
-            render_request_within_locks(&request, Duration::from_secs(1), Duration::from_secs(1))
-                .unwrap();
+            render_request_within_locks(&request, Duration::from_secs(1), Duration::from_secs(1));
         assert!(
             started.elapsed() < Duration::from_secs(3),
             "took {:?}; the waiter fails at its bound, not after a real render wait",
@@ -895,8 +891,7 @@ mod tests {
         );
         drop(holder);
         let receipt =
-            render_request_within_locks(&request, Duration::from_secs(1), Duration::from_secs(1))
-                .unwrap();
+            render_request_within_locks(&request, Duration::from_secs(1), Duration::from_secs(1));
         assert!(
             receipt.failed[0]["error"]
                 .as_str()
