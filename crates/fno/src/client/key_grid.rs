@@ -304,7 +304,7 @@ mod tests {
     #[test]
     fn agents_footer_names_the_prefix_once_in_plain_words() {
         let rows = grid_rows(KeyView::Agents, 100);
-        assert_eq!(rows[0].text, "ctrl+b, then:");
+        assert_eq!(rows.first().map(|r| r.text.as_str()), Some("ctrl+b, then:"));
         assert!(rows.iter().skip(1).all(|r| !r.text.contains("^B")));
         assert!(rows.len() <= MAX_ROWS);
         assert!(rows
