@@ -225,6 +225,7 @@ pub(crate) fn upkeep_pass(apply: bool) -> Result<Value, UpkeepError> {
     let now = chrono::Utc::now().to_rfc3339();
     let mut report: Vec<Value> = Vec::new();
     let (mut stale, mut expired, mut unknown, mut retracted, mut questioned) = (0, 0, 0, 0, 0);
+    let (mut retracted_stale, mut retracted_expired) = (0, 0);
     for row in index.rows.iter().filter(|r| decision_index::is_law(r)) {
         let guard = guard_verdict(row, entries.as_deref(), &now);
         let verdict = match guard {
@@ -265,6 +266,11 @@ pub(crate) fn upkeep_pass(apply: bool) -> Result<Value, UpkeepError> {
             done = matches!(outcome, RetractOutcome::Done);
             if done {
                 retracted += 1;
+                if state == "stale" {
+                    retracted_stale += 1;
+                } else {
+                    retracted_expired += 1;
+                }
                 action = "retract".into();
             }
         } else if apply && state == "stale" {
@@ -298,12 +304,15 @@ pub(crate) fn upkeep_pass(apply: bool) -> Result<Value, UpkeepError> {
         "expired": expired,
         "unknown": unknown,
         "retracted": retracted,
+        "retracted_stale": retracted_stale,
+        "retracted_expired": retracted_expired,
         "questioned": questioned,
         "duplicates": duplicate_groups(index.rows.as_slice()),
     }))
 }
 
-/// The one-line human summary: empty when nothing needed acting on.
+/// The one-line human summary: empty when nothing needed acting on. Every
+/// count rides the receipt, so the summary reads and never recounts.
 fn summary_line(reading: &Value) -> String {
     let n = |k: &str| {
         reading
@@ -317,18 +326,10 @@ fn summary_line(reading: &Value) -> String {
     format!(
         "laws upkeep: {} stale ({} retracted, {} questioned), {} expired ({} retracted), {} unknown; duplicates: {}",
         n("stale"),
-        reading
-            .pointer("/laws")
-            .and_then(Value::as_array)
-            .map(|a| a.iter().filter(|l| l["retracted"].as_bool() == Some(true) && l["state"].as_str() == Some("stale")).count())
-            .unwrap_or(0),
+        n("retracted_stale"),
         n("questioned"),
         n("expired"),
-        reading
-            .pointer("/laws")
-            .and_then(Value::as_array)
-            .map(|a| a.iter().filter(|l| l["retracted"].as_bool() == Some(true) && l["state"].as_str() == Some("expired")).count())
-            .unwrap_or(0),
+        n("retracted_expired"),
         n("unknown"),
         reading
             .pointer("/duplicates")
