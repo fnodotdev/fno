@@ -204,6 +204,7 @@ pub mod pane_argv;
 pub mod pane_border;
 #[cfg(feature = "full")]
 pub mod pane_cwd;
+pub mod pid;
 #[cfg(feature = "full")]
 mod pane_send_audit;
 #[cfg(feature = "full")]

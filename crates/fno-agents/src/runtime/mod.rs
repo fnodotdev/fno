@@ -203,6 +203,7 @@ pub mod pi_transcript;
 #[cfg(test)]
 #[path = "pi_transcript_tests.rs"]
 pub(crate) mod pi_transcript_tests;
+pub mod pid;
 pub mod process_owner;
 pub mod process_probe;
 pub mod project;

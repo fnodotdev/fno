@@ -42,6 +42,7 @@ fn main() {
     sync_module_copy("backlog/store_conn");
     sync_module_copy("backlog/keeper_wire");
     sync_module_copy("gate/chokepoint");
+    sync_module_copy("runtime/pid");
     sync_module_copy("eval/otel_read");
     sync_module_copy("runtime/registry_read");
     sync_module_copy("gate/effect_map");
