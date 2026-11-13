@@ -625,6 +625,7 @@ fn registry_schema_fields() {
     // here. Populating skipped optionals makes serialization expose the full
     // wire-key inventory; three legacy aliases are deliberately read-only.
     let entry = RegistryEntry {
+        result: None,
         name: "inventory".into(),
         aliases: vec!["alias".into()],
         short_id: "short".into(),

@@ -5,8 +5,8 @@
 //! the lane moves with its body.
 
 use super::{
-    codex_thread_on_done, codex_thread_on_status, is_non_terminal, load_registry_offloaded,
-    state_error_code, thread_spawn_refusal, update_registry_offloaded, Ctx, WARMUP_SEED,
+    codex_thread_on_done, codex_thread_on_status, load_registry_offloaded, state_error_code,
+    thread_spawn_refusal, update_registry_offloaded, Ctx, WARMUP_SEED,
 };
 use crate::codex_thread_entry::build_codex_thread_entry;
 use crate::paths::AgentsHome;
@@ -134,7 +134,7 @@ pub(super) async fn spawn_codex_thread_lane(
                     registry.entries.iter().any(|existing| {
                         existing.role_scope.as_deref() == Some(scope.as_str())
                             && existing.role_level.is_some()
-                            && is_non_terminal(existing.status)
+                            && crate::state::is_non_terminal(existing.status)
                     })
                 });
             if held {
@@ -340,7 +340,7 @@ pub(super) async fn spawn_codex_thread_lane(
         if registry.entries.iter().any(|existing| {
             existing.harness_name() == "codex"
                 && existing.harness_session_id.as_deref() == entry.harness_session_id.as_deref()
-                && is_non_terminal(existing.status)
+                && crate::state::is_non_terminal(existing.status)
         }) {
             return false;
         }
@@ -355,7 +355,7 @@ pub(super) async fn spawn_codex_thread_lane(
                 let held = registry.entries.iter().any(|existing| {
                     existing.role_level.is_some()
                         && existing.role_scope.as_deref() == Some(scope)
-                        && is_non_terminal(existing.status)
+                        && crate::state::is_non_terminal(existing.status)
                 });
                 if held {
                     entry.role_level = None;

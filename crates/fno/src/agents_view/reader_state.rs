@@ -163,10 +163,8 @@ impl ReaderState {
                 .unwrap_or_default(),
             None => Vec::new(),
         };
-        // A headless one-shot (an eval run, a footnote `--once`) has no
-        // pane, thread or resume form, so a row for it is an entry nothing
-        // can open.
-        reg_rows.retain(|r| r.substrate.as_deref() != Some("headless"));
+        // A headless one-shot row now paints as its own kind, with the
+        // result word as its state line: ended, never a stuck lane.
         // fno-truth junior badge: fill the no-badge/Idle gap for a
         // bg /target worker between turns from its claim + loop_check recency.
         if let Some(raw) = &self.reg_raw {

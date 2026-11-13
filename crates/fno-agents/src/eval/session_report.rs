@@ -281,6 +281,7 @@ pub(crate) fn handle_session_report(
         transcript_path.as_deref(),
         source.as_deref(),
         report_cwd.as_deref(),
+        str_field(p, "agent_substrate").as_deref(),
     );
 
     // A claude session no row holds may fork one a row holds. The argv read
@@ -1036,6 +1037,12 @@ fn build_session_report_params(rest: &[String]) -> Result<Value, String> {
                 params.insert(
                     "agent_self".into(),
                     Value::String(it.next().ok_or("--agent-self needs a value")?),
+                );
+            }
+            "--agent-substrate" => {
+                params.insert(
+                    "agent_substrate".into(),
+                    Value::String(it.next().ok_or("--agent-substrate needs a value")?),
                 );
             }
             "--launch-name" => {

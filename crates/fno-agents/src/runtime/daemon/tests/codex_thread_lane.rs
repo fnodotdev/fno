@@ -30,6 +30,7 @@ fn reconcile_settles_an_unhosted_thread_without_a_rollout_to_exited() {
         |_| false,                 // no rollout: the thread never got far enough to persist
         |_| RowLiveness::Unknown,  // no freshness signal: nothing to prove life
         true,                      // roster readable: the flip needs a successful roster read
+        1_700_000_000_000,
     );
     assert_eq!(
         changes[0].new_status,
@@ -73,6 +74,7 @@ fn a_measured_alive_rollout_keeps_a_live_row_and_heals_an_orphaned_one() {
         |_| true,  // the rollout exists and is fresh
         |_| RowLiveness::Alive,
         true,
+        1_700_000_000_000,
     );
     assert_eq!(
         changes[0].new_status, None,

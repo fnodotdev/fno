@@ -638,7 +638,7 @@ fn spawned_lead_name(entries: &[RegistryEntry], worker: &RegistryEntry) -> Optio
         .iter()
         .filter(|e| e.harness_session_id.as_deref() == Some(sid))
         .collect();
-    matches.sort_by_key(|e| !crate::daemon::is_non_terminal(e.status));
+    matches.sort_by_key(|e| !crate::state::is_non_terminal(e.status));
     matches.first().map(|e| e.name.clone())
 }
 
@@ -804,7 +804,7 @@ pub(crate) fn plan(
             .as_deref()
             .and_then(crate::state::rfc3339_like_to_secs)
             .is_some_and(|at| at >= boot);
-        if !crate::daemon::is_non_terminal(e.status) && !exited_after_boot {
+        if !crate::state::is_non_terminal(e.status) && !exited_after_boot {
             continue;
         }
         // A stop someone ran through `fno agents stop` or `claude stop`

@@ -697,6 +697,7 @@ fn reconcile_flips_unreachable_live_to_orphaned_and_recovers_orphaned() {
         |_| false,
         |_| RowLiveness::Alive, // x-5d96 liveness: Alive flips nothing
         true,                   // roster readable: the flip needs a successful roster read
+        1_700_000_000_000,
     );
     assert_eq!(out.orphans, vec!["live-but-gone".to_string()]);
     assert_eq!(out.recovered, vec!["back-from-dead".to_string()]);
@@ -755,6 +756,7 @@ fn reconcile_store_hit_does_not_resurrect_a_pid_dead_row() {
         |_| false,
         |_| RowLiveness::Alive, // x-5d96 liveness: Alive flips nothing
         true,                   // roster readable: the flip needs a successful roster read
+        1_700_000_000_000,
     );
     assert_eq!(
         changes[0].new_status, None,
@@ -794,6 +796,7 @@ fn reconcile_does_not_reap_a_bg_thread_that_is_live_in_claudes_roster() {
         |_| false,
         |_| RowLiveness::Alive, // x-5d96 liveness: Alive flips nothing
         true,                   // roster readable: the flip needs a successful roster read
+        1_700_000_000_000,
     );
     assert_eq!(
         changes[0].new_status, None,
@@ -817,6 +820,7 @@ fn reconcile_does_not_reap_a_bg_thread_that_is_live_in_claudes_roster() {
         // marker outranks absence (law d-10a72d88), so the reap applies on
         // silence, never against evidence
         true, // roster readable: the flip needs a successful roster read
+        1_700_000_000_000,
     );
     assert_eq!(changes[0].new_status, Some(AgentStatus::Exited));
     assert_eq!(out.updated, vec!["think-web-copy".to_string()]);
@@ -978,6 +982,7 @@ fn reconcile_defers_remaining_when_budget_exhausted() {
         |_| false,
         |_| RowLiveness::Alive, // x-5d96 liveness: Alive flips nothing
         true,                   // roster readable: the flip needs a successful roster read
+        1_700_000_000_000,
     );
     assert_eq!(out.deferred, 2, "two trailing entries should defer");
     assert_eq!(changes.len(), 1, "only one entry probed before budget");
@@ -1469,6 +1474,7 @@ fn an_unreadable_roster_never_flips_the_zombie_arm() {
         |_| false,
         |_| RowLiveness::Unknown,
         false, // the roster read itself FAILED
+        1_700_000_000_000,
     );
     assert_eq!(changes[0].new_status, None);
 }

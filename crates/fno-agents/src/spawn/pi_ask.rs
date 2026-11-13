@@ -196,7 +196,14 @@ pub fn dispatch_pi_once(
         .join("logs")
         .join(format!("{name}.jsonl"));
     let timeout = timeout.or(Some(DEFAULT_ONE_SHOT_TIMEOUT));
-    let run = crate::opencode_ask::run_one_shot(harness, &argv, &log_path, timeout, cwd, name)
+    // The row is opt-in (`fno agents spawn --mux`); without it the run keeps
+    // no row and stamps none.
+    let row = (std::env::var(crate::claude_ask::SHOW_ROW_ENV)
+        .ok()
+        .as_deref()
+        == Some("1"))
+    .then_some(home);
+    let run = crate::opencode_ask::run_one_shot(harness, &argv, &log_path, timeout, cwd, name, row)
         .and_then(|stdout| parse_pi_stream(harness, &stdout).map_err(|msg| (1, msg)));
     match run {
         Ok(reply) => AskOutcome::ok_reply(format!("{reply}\n")),

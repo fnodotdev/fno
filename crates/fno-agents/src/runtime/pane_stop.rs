@@ -89,13 +89,15 @@ pub(crate) fn stop_pane_process_confirmed(e: &RegistryEntry) -> PaneStop {
     stop_pane_process_confirmed_with(e, &production_seams())
 }
 
-/// Identified thread views retire by session. Old mux rows without a
-/// session identity need the same process proof as explicit pane workers.
+/// A headless one-shot row is never a pane row, whoever minted it and
+/// whatever stale mux ref it carries: the one-shot contract ends the run,
+/// so the stop arm has nothing to prove and rm retires it without --force.
 pub(crate) fn requires_pane_stop(e: &RegistryEntry) -> bool {
-    e.substrate.as_deref() == Some("pane")
-        || (e.substrate.is_none()
-            && e.mux.is_some()
-            && e.harness_session_id.as_deref().is_none_or(str::is_empty))
+    !e.is_headless_once()
+        && (e.substrate.as_deref() == Some("pane")
+            || (e.substrate.is_none()
+                && e.mux.is_some()
+                && e.harness_session_id.as_deref().is_none_or(str::is_empty)))
 }
 
 /// The one pane-stop body, shared by the reap and `fno agents rm`. Resolves
@@ -1032,6 +1034,28 @@ mod tests {
             pane_id: p,
         });
         e
+    }
+
+    /// A headless one-shot never rides the pane-stop arm: not with a stale
+    /// mux ref, not with a dead pid, not at Spawning. rm retires the row
+    /// without --force; the daemon's live-row gate already excludes
+    /// headless through stop_precedes_removal.
+    #[test]
+    fn a_headless_row_never_rides_the_pane_stop_arm() {
+        let mut e = RegistryEntry::default();
+        e.name = "t-once".into();
+        e.substrate = Some("headless".into());
+        e.mux = Some(crate::state::MuxRef {
+            session: "main".into(),
+            pane_id: 500,
+        });
+        e.pid = Some(7);
+        e.pid_start_time = Some(42);
+        assert!(!requires_pane_stop(&e));
+        e.pid = None;
+        e.status = crate::AgentStatus::Exited;
+        e.exited_at = Some("2026-11-12T00:20:00Z".into());
+        assert!(!requires_pane_stop(&e));
     }
 
     /// Counting harness shared by the escalation tests.

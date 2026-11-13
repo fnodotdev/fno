@@ -50,6 +50,10 @@ pub struct RegistryAgent {
     /// the registry wrote without one. The muse restore pass keys on it so
     /// a headless row never rides the host revive.
     pub substrate: Option<String>,
+    /// The one-shot end word (`finished` / `failed` / `failed-to-start`)
+    /// on a headless row, verbatim from the registry. The view renders it
+    /// as the row's state line, so a finished run reads as ended.
+    pub result: Option<String>,
     /// The spawn-recorded model string, raw. Rendered verbatim - a
     /// recorded value may name an alias rather than a resolved id (the
     /// openrouter ALIASES config), so the sideline never implies resolution.
@@ -1947,6 +1951,21 @@ fn attach_job_id(raw: &str) -> String {
     raw.to_string()
 }
 
+/// The row's additive result word, read typed (R1): a misspelled field
+/// refuses compile here, while the string-key reads around it stay
+/// grandfathered by the value-reads ratchet.
+#[derive(serde::Deserialize)]
+struct RowResultWord {
+    result: Option<String>,
+}
+
+fn row_result_word(row: &serde_json::Value) -> Option<String> {
+    <RowResultWord as serde::Deserialize>::deserialize(row)
+        .ok()
+        .and_then(|r| r.result)
+        .filter(|s| !s.is_empty())
+}
+
 pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgent>, usize)> {
     let doc: serde_json::Value = serde_json::from_str(raw).ok()?;
     let rows = doc
@@ -2312,6 +2331,7 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
                 .map(str::to_string),
+            result: row_result_word(row),
             model,
             route,
             session_id,
@@ -3712,17 +3732,24 @@ unheard_of_field = true
         assert!(!gone[0].external);
     }
     #[test]
-    fn reader_hides_headless_rows() {
+    fn reader_shows_headless_rows_as_their_own_kind() {
         let mut st = ReaderState::default();
         let reg = reg(concat!(
             r#"{"name":"lead","cwd":"/w","status":"live","substrate":"thread"},"#,
-            r#"{"name":"eval-once","cwd":"/w","status":"live","substrate":"headless"}"#
+            r#"{"name":"eval-once","cwd":"/w","status":"live","substrate":"headless"},"#,
+            r#"{"name":"eval-done","cwd":"/w","status":"exited","substrate":"headless","result":"finished"}"#
         ));
         let rows = st
             .tick(stamp(1), || Some(reg), None, || None, Vec::new(), NOW)
             .unwrap();
         let names: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
-        assert_eq!(names, ["lead"], "a headless one-shot never paints a row");
+        assert!(
+            names.contains(&"eval-once"),
+            "a headless run paints as its own kind, not dropped"
+        );
+        let done = rows.iter().find(|r| r.name == "eval-done").unwrap();
+        assert!(done.exited);
+        assert_eq!(done.result.as_deref(), Some("finished"));
     }
     #[test]
     fn reader_roster_only_change_republishes() {

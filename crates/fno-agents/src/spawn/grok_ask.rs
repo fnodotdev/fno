@@ -224,6 +224,8 @@ pub fn dispatch_grok_once(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     crate::claims::stamp_command_env(&mut command, Some(name), "grok", Some(&session_id));
+    // The one-shot identity every consumer keys on.
+    command.env("FNO_AGENT_SUBSTRATE", "headless");
     unsafe {
         command.pre_exec(|| {
             libc::setpgid(0, 0);

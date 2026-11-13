@@ -282,6 +282,14 @@ fn launch_one_hook(command: &str, root_value: &str, shell: &str, root_var: &str)
         .env_remove("PLUGIN_DATA")
         .env_remove("CLAUDE_PLUGIN_DATA")
         .env("FNO_HOME", workdir.path())
+        // The durable spaces root escapes FNO_HOME on purpose (a worktree
+        // must find its repo's space from any cwd), so a hook probe with
+        // cwd inside this tempdir would mint a permanent space dir under
+        // the real spaces root for a cwd that stops existing at the end of
+        // this run - 636 leaked dirs measured before this pin. The pin
+        // keeps every space write inside the tempdir, which vanishes with
+        // it.
+        .env("FNO_SPACES_DIR", workdir.path().join("spaces"))
         .env("CLAUDE_PROJECT_DIR", workdir.path())
         .env(root_var, root_value);
     unsafe {

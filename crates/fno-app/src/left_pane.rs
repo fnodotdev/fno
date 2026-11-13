@@ -134,9 +134,11 @@ pub fn rows(layout: &Layout, board: &Board, now_secs: u64, agents_open: bool) ->
         };
         let state = agent_lattice_state(a);
         let harness = a.harness.as_deref().unwrap_or("pane");
+        // A one-shot's end word outranks the lane status: ended, not stuck.
+        let status = a.result.as_deref().unwrap_or(status_long(state));
         out.push(Row::Item {
             label: a.name.clone(),
-            detail: format!("{harness} · {}", status_long(state)),
+            detail: format!("{harness} · {status}"),
             identity: agent_identity(a),
             state: Some(state),
             question: false,

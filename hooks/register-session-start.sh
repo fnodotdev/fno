@@ -78,6 +78,12 @@ if [[ -n "${FNO_AGENT_SELF:-}" ]]; then
     # report action (the client action list is shrink-only).
     ARGS=(report --kind session --harness "$HARNESS" --agent-self "$FNO_AGENT_SELF")
     [[ -n "$SESSION_ID" ]] && ARGS+=(--session-id "$SESSION_ID")
+    # The lane's own substrate word: the headless lanes stamp it on the child,
+    # and the daemon's mint reads it so the row carries the one-shot identity
+    # the lifecycle arms key on. Absent on pane/thread stamps (their env_wrap
+    # pair already says pane) and on hand-started sessions.
+    SUBSTRATE_ARGS=()
+    [[ -n "${FNO_AGENT_SUBSTRATE:-}" ]] && SUBSTRATE_ARGS+=(--agent-substrate "$FNO_AGENT_SUBSTRATE")
     # Pane substrate only: the spawner writes the row AFTER `mux pane run`
     # returns, so a fast-booting child reports before its row exists. The
     # daemon polls for it under this flag; every other substrate has its row
@@ -87,7 +93,15 @@ if [[ -n "${FNO_AGENT_SELF:-}" ]]; then
     # (a codex start reaching this script with the wrapper's terminal still
     # attached) must read /dev/null instead of hanging on the terminal.
     STDIN_SRC="/dev/null"; [[ ! -t 0 ]] && STDIN_SRC="/dev/stdin"
-    with_timeout 2 "$BIN" "${ARGS[@]}" >/dev/null 2>&1 <"$STDIN_SRC" || true
+    # An exit 2 here is an unknown flag (a stale fno-agents binary reading a
+    # newer hook): the flag parse refuses before anything is stored, so the
+    # retry without it is side-effect-free and the report still lands.
+    if [[ ${#SUBSTRATE_ARGS[@]} -gt 0 ]]; then
+        with_timeout 2 "$BIN" "${ARGS[@]}" "${SUBSTRATE_ARGS[@]}" >/dev/null 2>&1 <"$STDIN_SRC" \
+            || with_timeout 2 "$BIN" "${ARGS[@]}" >/dev/null 2>&1 <"$STDIN_SRC" || true
+    else
+        with_timeout 2 "$BIN" "${ARGS[@]}" >/dev/null 2>&1 <"$STDIN_SRC" || true
+    fi
     exit 0
 fi
 

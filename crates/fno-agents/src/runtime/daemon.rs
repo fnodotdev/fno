@@ -1920,12 +1920,6 @@ pub fn entry_holds_session(e: &RegistryEntry, uuid: &str) -> bool {
         || e.claude_session_uuid.as_deref() == Some(uuid)
 }
 
-/// Non-terminal == has (or expects) a live backend. Exited/PermanentDead are
-/// the only terminal states.
-pub(crate) fn is_non_terminal(s: AgentStatus) -> bool {
-    !matches!(s, AgentStatus::Exited | AgentStatus::PermanentDead)
-}
-
 async fn handle_spawn(ctx: &Ctx, req: &Request) -> Response {
     let p = &req.params;
     let name = match p.get("name").and_then(|v| v.as_str()) {
@@ -5306,6 +5300,7 @@ pub(crate) fn run_reconcile_sweep(
         rollout_exists,
         prober,
         roster_readable,
+        crate::claims::now_ms(),
     );
     changes.append(&mut revivals);
     witness.serve_listing(&entries, &mut changes);

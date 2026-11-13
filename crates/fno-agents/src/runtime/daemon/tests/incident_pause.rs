@@ -136,6 +136,7 @@ fn stale_sweep_suspends_without_consuming_cadence_while_dispatch_paused() {
         |_| false,
         |_| crate::client_commands::RowLiveness::Unknown,
         true,
+        1_700_000_000_000,
     );
     assert!(
         outcome.recovered.contains(&"recovery-probe".to_string()),

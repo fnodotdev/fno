@@ -16,7 +16,7 @@ use super::*;
 /// the rollout mtime.
 pub(super) fn codex_thread_recovery_candidate(entry: &RegistryEntry, now_secs: u64) -> bool {
     codex_thread_resume_identity(entry).ok().flatten().is_some()
-        && is_non_terminal(entry.status)
+        && crate::state::is_non_terminal(entry.status)
         && codex_thread_row_activity_is_fresh(entry, now_secs)
 }
 
@@ -231,7 +231,7 @@ pub(super) async fn recover_codex_threads(ctx: &Ctx) {
                     let skipped = entry.name.clone();
                     let _ = update_registry_offloaded(ctx.home.registry_json(), move |registry| {
                         if let Some(entry) = registry.find_mut(&skipped) {
-                            if is_non_terminal(entry.status) {
+                            if crate::state::is_non_terminal(entry.status) {
                                 entry.status = AgentStatus::Orphaned;
                             }
                         }
@@ -270,7 +270,7 @@ pub(super) async fn recover_codex_threads(ctx: &Ctx) {
                     let recover_name = entry.name.clone();
                     let _ = update_registry_offloaded(ctx.home.registry_json(), move |registry| {
                         if let Some(entry) = registry.find_mut(&recover_name) {
-                            if is_non_terminal(entry.status) {
+                            if crate::state::is_non_terminal(entry.status) {
                                 entry.status = AgentStatus::Orphaned;
                             }
                         }

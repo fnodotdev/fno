@@ -99,6 +99,7 @@ pub mod grok_store;
 pub mod harness_beat;
 pub mod harness_daemon;
 pub mod harness_reader;
+pub mod headless_row;
 pub mod heal;
 pub mod heal_pid;
 pub mod heal_sweep;
