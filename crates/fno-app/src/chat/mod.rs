@@ -3,6 +3,8 @@
 //! stream, so the app parses no transcript of its own. The composer types
 //! into the session's pane through the addressed pane-input path.
 
+pub mod composer;
+pub mod field;
 mod markdown;
 mod model;
 mod view;
@@ -150,7 +152,9 @@ pub struct Chat {
     pub list: ListState,
     /// The tool call whose sheet is open, by row index.
     pub sheet: Option<usize>,
-    pub draft: String,
+    pub draft: composer::Draft,
+    /// The composer's last layout, scroll and drag state.
+    pub field: Rc<field::FieldState>,
     /// Sent turns the transcript has not recorded yet.
     pub pending: Vec<String>,
     pub next_request: u64,
@@ -169,7 +173,8 @@ impl Default for Chat {
             opened_at: Instant::now(),
             list: ListState::new(0, ListAlignment::Bottom, px(800.0)),
             sheet: None,
-            draft: String::new(),
+            draft: composer::Draft::default(),
+            field: Rc::new(field::FieldState::default()),
             pending: Vec::new(),
             next_request: 1,
             composer: Rc::new(Cell::new(Bounds::default())),

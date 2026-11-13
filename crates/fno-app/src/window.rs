@@ -433,7 +433,7 @@ impl Root {
     /// session's own pane, then Enter to that same pane once the harness has
     /// taken it. Focus moving in between changes nothing.
     fn submit_chat(&mut self, cx: &mut Context<Self>) {
-        if self.chat.draft.trim().is_empty() || self.chat.closed.is_some() {
+        if self.chat.draft.text().trim().is_empty() || self.chat.closed.is_some() {
             return;
         }
         let target = self
@@ -448,7 +448,7 @@ impl Root {
             );
             return;
         };
-        let mut text = std::mem::take(&mut self.chat.draft);
+        let mut text = self.chat.draft.take();
         // Unbracketed, each newline would type Enter and submit early.
         if !self.modes.bracketed_paste {
             text = text.replace('\n', " ");
@@ -471,10 +471,6 @@ impl Root {
         })
         .detach();
         self.chat.pending.push(text);
-    }
-
-    pub(super) fn preedit_text(&self) -> &str {
-        self.preedit.as_deref().unwrap_or_default()
     }
 
     pub(super) fn has_focus(&self, window: &Window) -> bool {
@@ -630,7 +626,87 @@ impl Root {
         }
     }
 
-    fn on_key(&mut self, ev: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    /// The caret moved or the text changed: repaint and scroll the caret in.
+    fn chat_moved(&mut self, cx: &mut Context<Self>) {
+        self.chat.field.reveal.set(true);
+        cx.notify();
+    }
+
+    /// Run `f` on the composer's layout, re-shaped first when the draft has
+    /// changed since the last paint.
+    fn with_composer_layout<R>(
+        &self,
+        window: &Window,
+        f: impl FnOnce(&chat::field::Layout) -> R,
+    ) -> Option<R> {
+        let slot = self.chat.field.layout.borrow();
+        let layout = slot.as_ref()?;
+        if layout.is_current(&self.chat.draft) {
+            return Some(f(layout));
+        }
+        Some(f(&layout.reshaped(&self.chat.draft, window)))
+    }
+
+    fn chat_vertical(&mut self, up: bool, extend: bool, window: &Window) {
+        let from = self.chat.draft.caret();
+        let len = self.chat.draft.text().len();
+        let goal = self.chat.field.goal_x.get();
+        let moved = self.with_composer_layout(window, |l| {
+            let goal = goal.unwrap_or_else(|| l.position_for_index(from).x);
+            (l.vertical(from, up, goal, len), goal)
+        });
+        if let Some((to, goal)) = moved {
+            self.chat.field.goal_x.set(Some(goal));
+            self.chat.draft.move_to(to, extend);
+        }
+    }
+
+    fn composer_point(&self, at: Point<Pixels>, window: &Window) -> Option<usize> {
+        let len = self.chat.draft.text().len();
+        self.with_composer_layout(window, |l| l.index_for_point(at - l.origin, len))
+    }
+
+    pub(super) fn composer_down(
+        &mut self,
+        ev: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        window.focus(&self.focus);
+        let Some(at) = self.composer_point(ev.position, window) else {
+            return;
+        };
+        match ev.click_count {
+            1 => self.chat.draft.move_to(at, ev.modifiers.shift),
+            2 => self.chat.draft.select_word_at(at),
+            _ => self.chat.draft.select_all(),
+        }
+        self.chat.field.dragging.set(true);
+        self.chat.field.goal_x.set(None);
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    pub(super) fn composer_drag(
+        &mut self,
+        ev: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.chat.field.dragging.get() || ev.pressed_button != Some(MouseButton::Left) {
+            return;
+        }
+        if let Some(at) = self.composer_point(ev.position, window) {
+            self.chat.draft.move_to(at, true);
+            self.chat_moved(cx);
+        }
+    }
+
+    pub(super) fn composer_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
+        self.chat.field.dragging.set(false);
+    }
+
+    fn on_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let ks = &ev.keystroke;
         let key = Key {
             key: &ks.key,
@@ -643,7 +719,27 @@ impl Root {
         if let Some(action) = keys::shortcut(&key) {
             cx.stop_propagation();
             match action {
+                Shortcut::Command(Command::CopySelection)
+                    if self.main == MainView::Chat && self.chat.draft.has_selection() =>
+                {
+                    let text = self.chat.draft.selected_text().to_string();
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }
                 Shortcut::Command(c) => self.send(ClientMsg::Command(c)),
+                Shortcut::Cut => {
+                    if self.main == MainView::Chat && self.chat.draft.has_selection() {
+                        let text = self.chat.draft.selected_text().to_string();
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                        self.chat.draft.replace_selection("");
+                        self.chat_moved(cx);
+                    }
+                }
+                Shortcut::SelectAll => {
+                    if self.main == MainView::Chat {
+                        self.chat.draft.select_all();
+                        self.chat_moved(cx);
+                    }
+                }
                 Shortcut::Paste => {
                     if let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) {
                         match self.main {
@@ -652,8 +748,8 @@ impl Root {
                                 return;
                             }
                             MainView::Chat => {
-                                self.chat.draft.push_str(&text);
-                                cx.notify();
+                                self.chat.draft.replace_selection(&text);
+                                self.chat_moved(cx);
                             }
                             _ => {
                                 let bytes = keys::paste(&text, self.modes);
@@ -683,23 +779,34 @@ impl Root {
                 }
                 return;
             }
-            if self.preedit.is_some() {
+            if self.chat.draft.marked().is_some() {
                 return;
             }
-            match (ks.key.as_str(), ks.modifiers.shift) {
-                ("enter", false) => self.submit_chat(cx),
-                ("enter", true) => self.chat.draft.push('\n'),
-                ("backspace", _) => {
-                    use unicode_segmentation::UnicodeSegmentation;
-                    let last = self.chat.draft.grapheme_indices(true).next_back();
-                    if let Some((at, _)) = last {
-                        self.chat.draft.truncate(at);
-                    }
-                }
+            let (shift, alt, cmd) = (key.shift, key.alt, key.cmd);
+            let vertical = matches!(ks.key.as_str(), "up" | "down");
+            if !vertical {
+                self.chat.field.goal_x.set(None);
+            }
+            match ks.key.as_str() {
+                "enter" if !shift => self.submit_chat(cx),
+                "enter" => self.chat.draft.replace_selection("\n"),
+                "backspace" => self.chat.draft.backspace(),
+                "delete" => self.chat.draft.delete(),
+                "left" if cmd => self.chat.draft.home(shift),
+                "left" if alt => self.chat.draft.word_left(shift),
+                "left" => self.chat.draft.left(shift),
+                "right" if cmd => self.chat.draft.end(shift),
+                "right" if alt => self.chat.draft.word_right(shift),
+                "right" => self.chat.draft.right(shift),
+                "home" => self.chat.draft.home(shift),
+                "end" => self.chat.draft.end(shift),
+                "up" if cmd => self.chat.draft.doc_start(shift),
+                "down" if cmd => self.chat.draft.doc_end(shift),
+                "up" | "down" => self.chat_vertical(ks.key == "up", shift, window),
                 _ => return,
             }
             cx.stop_propagation();
-            cx.notify();
+            self.chat_moved(cx);
             return;
         }
         if self.main == MainView::Mods && mods::key(self, &key, cx) {
@@ -952,11 +1059,17 @@ fn utf16_len(s: &str) -> usize {
 impl EntityInputHandler for Root {
     fn text_for_range(
         &mut self,
-        _range: Range<usize>,
+        range: Range<usize>,
         adjusted: &mut Option<Range<usize>>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
+        if self.main == MainView::Chat {
+            let d = &self.chat.draft;
+            let r = d.range_from_utf16(&range);
+            *adjusted = Some(d.range_to_utf16(&r));
+            return Some(d.text()[r].to_string());
+        }
         let text = self.preedit.clone().unwrap_or_default();
         *adjusted = Some(0..utf16_len(&text));
         Some(text)
@@ -968,6 +1081,14 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
+        if self.main == MainView::Chat {
+            let d = &self.chat.draft;
+            let range = d.range_to_utf16(&d.selection());
+            return Some(UTF16Selection {
+                range,
+                reversed: d.caret() < d.selection().end,
+            });
+        }
         let end = self.preedit.as_deref().map_or(0, utf16_len);
         Some(UTF16Selection {
             range: end..end,
@@ -980,28 +1101,37 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
+        if self.main == MainView::Chat {
+            let d = &self.chat.draft;
+            return d.marked().map(|m| d.range_to_utf16(&m));
+        }
         self.preedit.as_deref().map(|t| 0..utf16_len(t))
     }
 
     fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.main == MainView::Chat {
+            self.chat.draft.unmark();
+            cx.notify();
+            return;
+        }
         self.set_preedit(None, cx);
     }
 
     fn replace_text_in_range(
         &mut self,
-        _range: Option<Range<usize>>,
+        range: Option<Range<usize>>,
         text: &str,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.set_preedit(None, cx);
         if self.main == MainView::Chat {
             if self.chat.sheet.is_none() && self.chat.closed.is_none() {
-                self.chat.draft.push_str(text);
-                cx.notify();
+                self.chat.draft.replace_utf16(range, text, false, None);
+                self.chat_moved(cx);
             }
             return;
         }
+        self.set_preedit(None, cx);
         if self.main != MainView::Terminal || text.is_empty() {
             return;
         }
@@ -1013,38 +1143,58 @@ impl EntityInputHandler for Root {
 
     fn replace_and_mark_text_in_range(
         &mut self,
-        _range: Option<Range<usize>>,
+        range: Option<Range<usize>>,
         new_text: &str,
-        _new_selected_range: Option<Range<usize>>,
+        new_selected_range: Option<Range<usize>>,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.main == MainView::Chat {
+            if self.chat.sheet.is_none() && self.chat.closed.is_none() {
+                self.chat
+                    .draft
+                    .replace_utf16(range, new_text, true, new_selected_range);
+                self.chat_moved(cx);
+            }
+            return;
+        }
         self.set_preedit(Some(new_text.to_string()), cx);
     }
 
     fn bounds_for_range(
         &mut self,
-        _range_utf16: Range<usize>,
+        range_utf16: Range<usize>,
         element_bounds: Bounds<Pixels>,
-        _window: &mut Window,
+        window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         if self.main == MainView::Chat {
-            // The candidate window opens at the composer's last line.
-            let at = self.chat.composer.get();
-            let line = self.metrics.cell.height;
-            let origin = point(at.origin.x, at.origin.y + at.size.height - line);
-            return Some(Bounds::new(origin, size(px(1.0), line)));
+            let from = self.chat.draft.offset_from_utf16(range_utf16.start);
+            let found = self.with_composer_layout(window, |l| {
+                let at = l.position_for_index(from);
+                Bounds::new(l.origin + at, size(px(1.0), l.line_height()))
+            });
+            // Before the first paint, open at the composer's last line.
+            return found.or_else(|| {
+                let at = self.chat.composer.get();
+                let line = self.metrics.cell.height;
+                let origin = point(at.origin.x, at.origin.y + at.size.height - line);
+                Some(Bounds::new(origin, size(px(1.0), line)))
+            });
         }
         self.cursor_bounds(element_bounds)
     }
 
     fn character_index_for_point(
         &mut self,
-        _point: Point<Pixels>,
-        _window: &mut Window,
+        at: Point<Pixels>,
+        window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
+        if self.main == MainView::Chat {
+            let offset = self.composer_point(at, window)?;
+            return Some(self.chat.draft.offset_to_utf16(offset));
+        }
         None
     }
 }
