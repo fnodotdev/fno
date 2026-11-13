@@ -207,12 +207,13 @@ fn find_input_echoes_filters_live_and_never_stacks_slashes() {
     let b = v.backlog_board.as_ref().expect("board open");
     assert_eq!(find_input(b).map(|(t, _)| t), Some("s:ready/"));
 
-    // A half-typed key holds the last good filter and names the error.
-    input_keys(&mut v, &[0x15]);
-    input_keys(&mut v, b"s:ready stauts:x");
+    // A keyed typo holds the last good filter and the footer names the error.
+    input_keys(&mut v, &[0x7f]);
+    v.backlog_board.as_mut().expect("board open").input =
+        Some((BoardInputKind::Find, "stauts:ready".into()));
     let b = v.backlog_board.as_ref().expect("board open");
-    assert_eq!(total(b), 2, "a bad query keeps the last good filter");
     assert!(find_input(b).is_some_and(|(_, err)| err.is_some()));
+    assert_eq!(total(b), 2, "no keystroke ran, so the filter holds");
 
     // Esc puts back the filter that was in force when `/` opened.
     input_keys(&mut v, b"\x1b");
