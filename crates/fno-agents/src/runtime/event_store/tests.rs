@@ -227,6 +227,7 @@ fn append_envelope_refuses_empty_journal_without_creating_a_store() {
     assert!(
         result
             .unwrap_err()
+            .to_string()
             .contains("empty or name-less journal path"),
         "the refusal must surface through the emit chain"
     );
@@ -346,7 +347,7 @@ fn ephemeral_journal_is_refused_but_sibling_imports() {
         &[json!({"ts": fresh_ts(), "type": "mux_pane_counters",
               "source": "mux", "data": {"panes": []}})],
     );
-    let err = sync(&sibling).unwrap_err();
+    let err = sync(&sibling).unwrap_err().to_string();
     assert!(err.contains("ephemeral"), "err: {err}");
     assert!(
         !store_path(&sibling).exists(),
@@ -522,11 +523,23 @@ fn future_schema_is_refused_by_writers_and_readers_without_downgrade() {
     drop(conn);
 
     let line = checkin("2026-09-10T12:00:00Z", "x-aaaa", "future").to_string();
-    let write_error = append_envelope(&live, &line, None).unwrap_err();
+    let write_error = append_envelope(&live, &line, None).unwrap_err().to_string();
     assert!(write_error.contains("newer than this build understands"));
 
-    let read_error = query_events(&live, &EventQuery::default()).unwrap_err();
+    let read_error = query_events(&live, &EventQuery::default())
+        .unwrap_err()
+        .to_string();
     assert!(read_error.contains("newer than this build understands"));
+
+    // AC2-EDGE: the typed variant a caller can match, same refusal.
+    assert!(matches!(
+        query_events(&live, &EventQuery::default()),
+        Err(EventStoreError::NewerSchema {
+            found,
+            supported,
+            ..
+        }) if found == SCHEMA_VERSION + 1 && supported == SCHEMA_VERSION
+    ));
 
     let conn = Connection::open(&store).unwrap();
     let version: i64 = conn
@@ -572,7 +585,9 @@ fn corrupt_pages_refuse_writes_at_statement_time_and_file_attention() {
     drop(file);
     let line = checkin("2026-09-10T12:00:01Z", "x-aaaa", "damaged").to_string();
     let before = std::fs::read(&store).unwrap();
-    let error = append_envelope(&damaged, &line, None).unwrap_err();
+    let error = append_envelope(&damaged, &line, None)
+        .unwrap_err()
+        .to_string();
     assert!(
         error.contains("database disk image is malformed") && error.contains("write refused"),
         "{error}"
@@ -623,7 +638,9 @@ fn append_envelope_commits_and_reads_back() {
     append_envelope(&live, &named, Some("evt:requested")).unwrap();
     let count_with_named = count_events(&store_path(&live));
     let colliding = checkin("2026-09-17T12:00:00Z", "x-aaaa", "DIFFERENT").to_string();
-    let err = append_envelope(&live, &colliding, Some("evt:requested")).unwrap_err();
+    let err = append_envelope(&live, &colliding, Some("evt:requested"))
+        .unwrap_err()
+        .to_string();
     assert!(err.contains("identity collision"), "err: {err}");
     assert_eq!(count_events(&store_path(&live)), count_with_named);
 }
@@ -636,12 +653,16 @@ fn append_refuses_newline_and_bad_scope_and_bad_ts() {
     let bad_scope = json!({"ts": "2026-09-17T12:00:00Z", "type": "lead_checkin",
         "source": "loop", "data": {"scope": "x-1 ready, two words", "change": "one"}})
     .to_string();
-    let err = append_envelope(&live, &bad_scope, None).unwrap_err();
+    let err = append_envelope(&live, &bad_scope, None)
+        .unwrap_err()
+        .to_string();
     assert!(err.contains("canonical team scope"), "err: {err}");
     let bad_ts = json!({"ts": "not-a-time", "type": "lead_checkin",
         "source": "loop", "data": {"scope": "x-1", "change": "one"}})
     .to_string();
-    let err = append_envelope(&live, &bad_ts, None).unwrap_err();
+    let err = append_envelope(&live, &bad_ts, None)
+        .unwrap_err()
+        .to_string();
     assert!(err.contains("RFC3339"), "err: {err}");
     assert!(
         !store_path(&live).exists(),
@@ -666,14 +687,16 @@ fn wrong_path_rows_validate_and_land() {
         "data": {"session_id": "lead-1", "done": "d", "right": "r",
         "cause": "c", "rule": "x"}})
     .to_string();
-    let err = append_envelope(&live, &short, None).unwrap_err();
+    let err = append_envelope(&live, &short, None)
+        .unwrap_err()
+        .to_string();
     assert!(err.contains("rule_home"), "err: {err}");
     let src = json!({"ts": "2026-11-09T12:00:00Z", "type": "wrong_path",
         "source": "daemon",
         "data": {"session_id": "s", "done": "d", "right": "r", "cause": "c",
         "rule": "x", "rule_home": "h"}})
     .to_string();
-    let err = append_envelope(&live, &src, None).unwrap_err();
+    let err = append_envelope(&live, &src, None).unwrap_err().to_string();
     assert!(err.contains("does not allow source"), "err: {err}");
 }
 
@@ -790,7 +813,9 @@ fn journal_text_checked_errs_on_a_broken_store_and_journal_text_falls_back() {
     let live = dir.path().join("events.jsonl");
     append(&live, &[checkin("2026-09-10T12:00:00Z", "x-aaaa", "live")]);
     std::fs::write(dir.path().join("events.db"), b"not a database").unwrap();
-    let err = journal_text_checked(&live, &EventQuery::of_types(&["lead_checkin"])).unwrap_err();
+    let err = journal_text_checked(&live, &EventQuery::of_types(&["lead_checkin"]))
+        .unwrap_err()
+        .to_string();
     assert!(err.contains("events.db"), "err names the store path: {err}");
     assert_eq!(
         journal_text(&live, &["lead_checkin"]),
@@ -870,8 +895,9 @@ fn journal_text_degrade_answers_from_the_whole_family_oldest_first() {
     // A file at the store path that is long enough to pass the truncated
     // check and not a database: the read errors naming the store.
     std::fs::write(dir.path().join("events.db"), [b'x'; 200]).unwrap();
-    let err =
-        journal_text_checked(&live, &EventQuery::of_types(&["review_attestation"])).unwrap_err();
+    let err = journal_text_checked(&live, &EventQuery::of_types(&["review_attestation"]))
+        .unwrap_err()
+        .to_string();
     assert!(err.contains("events.db"), "err names the store path: {err}");
     let text = journal_text(&live, &["review_attestation"]);
     let lines: Vec<&str> = text.lines().collect();
@@ -1052,7 +1078,9 @@ fn a_lost_row_is_dead_lettered_by_type_and_busy_locks_are_matched() {
         },
     })
     .to_string();
-    let error = append_envelope(&journal, &envelope, None).unwrap_err();
+    let error = append_envelope(&journal, &envelope, None)
+        .unwrap_err()
+        .to_string();
     // The open's schema probe fails NOTADB, so the diagnostic is the bare
     // named() string, not the corrupt-image form.
     assert!(error.contains("file is not a database"), "{error}");

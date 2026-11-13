@@ -84,7 +84,7 @@ pub(super) fn handle_transcript_append(ctx: &Ctx, req: &Request) -> Response {
                     deduped += 1;
                 }
             }
-            Err(msg) => refused.push(msg),
+            Err(msg) => refused.push(msg.to_string()),
         }
     }
     Response::ok(

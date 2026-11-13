@@ -1096,7 +1096,9 @@ pub(crate) fn append_event_line(
     // symlink re-resolve loop, and sibling routing are all retired. The
     // retention class comes from the event type inside the store.
     let line = serde_json::to_string(event).map_err(|e| e.to_string())?;
-    crate::event_store::append_envelope(events_path, &line, None).map(|_| ())
+    crate::event_store::append_envelope(events_path, &line, None)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 fn event_maintenance_dir(events_path: &Path) -> PathBuf {

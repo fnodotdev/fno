@@ -107,6 +107,7 @@ fn read_store(store: &Path) -> Result<String, String> {
         store,
         &crate::event_store::EventQuery::of_types(&["fleet_task", "fleet_task_closed"]),
     )
+    .map_err(|e| e.to_string())
 }
 
 fn fold_open_tasks(raw: &str) -> Vec<Task> {

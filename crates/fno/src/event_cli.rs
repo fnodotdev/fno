@@ -328,7 +328,10 @@ fn run_emit_envelope(args: &[OsString]) -> i32 {
             0
         }
         Err(e) => {
-            if let Some(msg) = e.strip_prefix(crate::event_store::VALIDATE_PREFIX) {
+            if let Some(msg) = e
+                .to_string()
+                .strip_prefix(crate::event_store::VALIDATE_PREFIX)
+            {
                 eprintln!("error: {msg}");
                 3
             } else {
@@ -1502,7 +1505,10 @@ pub(crate) fn fold_journal(
     }
     if let Err(e) = crate::event_store::import_all(journal) {
         entry["status"] = serde_json::Value::String("unreadable".into());
-        entry["error"] = serde_json::Value::String(e);
+        entry
+            .as_object_mut()
+            .expect("the coverage entry literal is a json object")
+            .insert("error".into(), serde_json::Value::String(e.to_string()));
         return entry;
     }
     let query = crate::event_store::EventQuery {
@@ -1513,7 +1519,10 @@ pub(crate) fn fold_journal(
         Ok(rows) => rows,
         Err(e) => {
             entry["status"] = serde_json::Value::String("unreadable".into());
-            entry["error"] = serde_json::Value::String(e);
+            entry
+                .as_object_mut()
+                .expect("the coverage entry literal is a json object")
+                .insert("error".into(), serde_json::Value::String(e.to_string()));
             return entry;
         }
     };

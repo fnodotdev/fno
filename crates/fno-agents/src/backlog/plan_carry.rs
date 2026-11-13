@@ -32,11 +32,92 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+/// The typed failure of one plan-carry seam (R6): the shared primary's own
+/// words until `store_remote` is typed, the SQLite and filesystem sources,
+/// the ssh rescue's refusal, and the two binding refusals a caller matches.
+/// Every variant displays exactly the text the module printed when it
+/// returned `String`, so a refusal line reads the same;
+/// `From<PlanCarryError> for String` keeps external `?` callers compiling.
+#[derive(Debug, thiserror::Error)]
+pub enum PlanCarryError {
+    /// The shared primary (or another string-typed store seam) refused in
+    /// words. `store_remote::is_unreachable` still reads it.
+    #[error("{0}")]
+    Store(String),
+    /// SQLite failed inside the local replica read.
+    #[error("{0}")]
+    Graph(#[from] rusqlite::Error),
+    /// A filesystem operation failed.
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
+    /// The opt-in ssh rescue could not serve the file. Its errors are
+    /// dropped by the rescue loop today; the variant exists so the next
+    /// caller matches instead of guessing.
+    #[error("ssh {alias}: {message}")]
+    Ssh { alias: String, message: String },
+    /// No host has pushed a body for this node anywhere.
+    #[error("no host pushed a plan for it")]
+    NoPlanPushed,
+    /// The pushing host's recorded path sits outside this host's home, so
+    /// the row cannot be placed here.
+    #[error("{from_host} pushed it at {plan_path}, which is outside this host's home")]
+    OutsideHome {
+        from_host: String,
+        plan_path: String,
+    },
+}
+
+impl PlanCarryError {
+    /// Whether the primary is unreachable: the backlog-share tick folds
+    /// this into its `unreachable` mark exactly where it read the string
+    /// before.
+    pub fn is_unreachable(&self) -> bool {
+        match self {
+            Self::Store(text) => crate::store_remote::is_unreachable(text),
+            _ => false,
+        }
+    }
+}
+
+impl From<String> for PlanCarryError {
+    fn from(text: String) -> Self {
+        Self::Store(text)
+    }
+}
+
+impl From<&str> for PlanCarryError {
+    fn from(text: &str) -> Self {
+        Self::Store(text.to_string())
+    }
+}
+
+impl From<crate::backlog::StoreDbError> for PlanCarryError {
+    fn from(error: crate::backlog::StoreDbError) -> Self {
+        Self::Store(error.to_string())
+    }
+}
+
+impl From<PlanCarryError> for String {
+    fn from(error: PlanCarryError) -> String {
+        error.to_string()
+    }
+}
+
+/// The store's "table not there yet" answer: a fresh primary reads as empty
+/// until the first ensure_tables, so the read treats the words as None.
+fn missing_table(e: &str) -> bool {
+    e.contains("no such table")
+}
+
+/// Open nodes keyed by id: the value is the node's bound plan_path (empty
+/// when unbound) for the replica read, or the node's project cwd for the
+/// per-node plans-root resolution. One shape, both reads.
+type NodeMap = BTreeMap<String, String>;
 
 const BODIES: &str = "fno_plan_bodies";
 const SEEN: &str = "fno_plan_seen";
 
-fn ensure_tables(remote: &Remote) -> Result<(), String> {
+fn ensure_tables(remote: &Remote) -> Result<(), PlanCarryError> {
     remote.script(&format!(
         "CREATE TABLE IF NOT EXISTS {BODIES} (\
              node_id TEXT PRIMARY KEY, \
@@ -50,7 +131,8 @@ fn ensure_tables(remote: &Remote) -> Result<(), String> {
              host TEXT NOT NULL, \
              sha TEXT NOT NULL, \
              PRIMARY KEY (node_id, host));"
-    ))
+    ))?;
+    Ok(())
 }
 
 /// What one pass did, for the sync receipt.
@@ -231,14 +313,14 @@ fn with_anchor(path: &Path, recorded: &str) -> String {
 }
 
 /// Host keys in the seen ledger for one node: machines that carried the body.
-fn seen_hosts(remote: &Remote, node: &str) -> Result<Vec<String>, String> {
+fn seen_hosts(remote: &Remote, node: &str) -> Result<Vec<String>, PlanCarryError> {
     let reply = match remote.execute(
         &format!("SELECT host FROM {SEEN} WHERE node_id = ?"),
         &[SqlValue::Text(node.to_string())],
     ) {
         Ok(reply) => reply,
-        Err(e) if e.contains("no such table") => return Ok(Vec::new()),
-        Err(e) => return Err(e),
+        Err(e) if missing_table(&e) => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
     };
     Ok(reply
         .rows
@@ -262,16 +344,25 @@ fn ssh_peers() -> BTreeMap<String, String> {
 
 /// The production transport: one `cat` over ssh, with the shared fail-fast
 /// posture.
-fn ssh_cat(alias: &str, remote_path: &str) -> Result<String, String> {
+fn ssh_cat(alias: &str, remote_path: &str) -> Result<String, PlanCarryError> {
     let out = Command::new("ssh")
         .args(SSH_FAST_OPTIONS)
         .args([alias, "cat", &shell_quote(remote_path)])
         .output()
-        .map_err(|e| format!("ssh {alias}: {e}"))?;
+        .map_err(|e| PlanCarryError::Ssh {
+            alias: alias.to_string(),
+            message: e.to_string(),
+        })?;
     if out.status.success() {
-        return String::from_utf8(out.stdout).map_err(|e| format!("ssh {alias}: {e}"));
+        return String::from_utf8(out.stdout).map_err(|e| PlanCarryError::Ssh {
+            alias: alias.to_string(),
+            message: e.to_string(),
+        });
     }
-    Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    Err(PlanCarryError::Ssh {
+        alias: alias.to_string(),
+        message: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+    })
 }
 
 /// Single-quote for the remote shell: the recorded path is data, never code.
@@ -292,7 +383,7 @@ fn ssh_rescue(
     host: &str,
     home: &Path,
     peers: &BTreeMap<String, String>,
-    ssh: &dyn Fn(&str, &str) -> Result<String, String>,
+    ssh: &dyn Fn(&str, &str) -> Result<String, PlanCarryError>,
 ) -> Option<(PathBuf, String)> {
     let bare = recorded.split('#').next().unwrap_or("").trim();
     if bare.is_empty() {
@@ -330,53 +421,45 @@ fn ssh_rescue(
     None
 }
 
-fn write_atomic(path: &Path, body: &str) -> Result<(), String> {
+fn write_atomic(path: &Path, body: &str) -> Result<(), PlanCarryError> {
     let parent = path.parent().ok_or("plan path has no parent")?;
-    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(parent)?;
     let tmp = parent.join(format!(
         ".{}.carry-{}",
         path.file_name().and_then(|n| n.to_str()).unwrap_or("plan"),
         std::process::id()
     ));
-    std::fs::write(&tmp, body).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+    std::fs::write(&tmp, body)?;
+    Ok(std::fs::rename(&tmp, path)?)
 }
 
 /// Each open node's project cwd: per-node plans-root resolution for the
 /// resident tick, whose replica spans projects.
-fn node_cwds(graph: &Path) -> Result<BTreeMap<String, String>, String> {
+fn node_cwds(graph: &Path) -> Result<NodeMap, PlanCarryError> {
     let conn = crate::backlog::open(graph)?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, COALESCE(cwd, '') FROM nodes WHERE archived_at IS NULL \
+    let mut stmt = conn.prepare(
+        "SELECT id, COALESCE(cwd, '') FROM nodes WHERE archived_at IS NULL \
              AND status NOT IN ('done', 'superseded', 'deferred')",
-        )
-        .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-        .map_err(|e| e.to_string())?;
-    rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    Ok(rows.collect::<Result<_, _>>()?)
 }
 
 /// Open nodes in this host's replica: id -> plan_path (may be empty).
-fn open_nodes(graph: &Path) -> Result<BTreeMap<String, String>, String> {
+fn open_nodes(graph: &Path) -> Result<NodeMap, PlanCarryError> {
     let conn = crate::backlog::open(graph)?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, COALESCE(plan_path, '') FROM nodes WHERE archived_at IS NULL \
+    let mut stmt = conn.prepare(
+        "SELECT id, COALESCE(plan_path, '') FROM nodes WHERE archived_at IS NULL \
              AND status NOT IN ('done', 'superseded', 'deferred')",
-        )
-        .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-        .map_err(|e| e.to_string())?;
-    rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    Ok(rows.collect::<Result<_, _>>()?)
 }
 
 fn primary_rows(
     remote: &Remote,
     host: &str,
-) -> Result<BTreeMap<String, (Row, Option<String>)>, String> {
+) -> Result<BTreeMap<String, (Row, Option<String>)>, PlanCarryError> {
     let reply = remote.execute(
         &format!(
             "SELECT b.node_id, b.plan_path, b.sha, b.from_host, s.sha FROM {BODIES} b \
@@ -400,14 +483,14 @@ fn primary_rows(
 }
 
 /// One node's row and body, or None when no host pushed one.
-fn body_row(remote: &Remote, node: &str) -> Result<Option<(Row, String)>, String> {
+fn body_row(remote: &Remote, node: &str) -> Result<Option<(Row, String)>, PlanCarryError> {
     let reply = match remote.execute(
         &format!("SELECT plan_path, sha, from_host, body FROM {BODIES} WHERE node_id = ?"),
         &[SqlValue::Text(node.to_string())],
     ) {
         Ok(reply) => reply,
-        Err(e) if e.contains("no such table") => return Ok(None),
-        Err(e) => return Err(e),
+        Err(e) if missing_table(&e) => return Ok(None),
+        Err(e) => return Err(e.into()),
     };
     let text = |r: &[SqlValue], i: usize| r.get(i).and_then(SqlValue::text).map(str::to_string);
     Ok(reply.rows.first().and_then(|r| {
@@ -420,7 +503,7 @@ fn body_row(remote: &Remote, node: &str) -> Result<Option<(Row, String)>, String
     }))
 }
 
-fn mark_seen(remote: &Remote, node: &str, host: &str, sha: &str) -> Result<(), String> {
+fn mark_seen(remote: &Remote, node: &str, host: &str, sha: &str) -> Result<(), PlanCarryError> {
     remote
         .execute(
             &format!("INSERT OR REPLACE INTO {SEEN} (node_id, host, sha) VALUES (?, ?, ?)"),
@@ -430,10 +513,17 @@ fn mark_seen(remote: &Remote, node: &str, host: &str, sha: &str) -> Result<(), S
                 SqlValue::Text(sha.to_string()),
             ],
         )
-        .map(|_| ())
+        .map(|_| ())?;
+    Ok(())
 }
 
-fn push(remote: &Remote, node: &str, stored: &str, body: &str, host: &str) -> Result<(), String> {
+fn push(
+    remote: &Remote,
+    node: &str,
+    stored: &str,
+    body: &str,
+    host: &str,
+) -> Result<(), PlanCarryError> {
     let digest = sha(body);
     remote.execute(
         &format!(
@@ -455,15 +545,15 @@ fn push(remote: &Remote, node: &str, stored: &str, body: &str, host: &str) -> Re
 /// One pass over this host's open nodes: push the bodies this host changed,
 /// write the bodies it lacks or has not touched since its last sync.
 pub(crate) fn sync_with(
-    nodes: &BTreeMap<String, String>,
-    cwds: &BTreeMap<String, String>,
+    nodes: &NodeMap,
+    cwds: &NodeMap,
     remote: &Remote,
     host: &str,
     home: &Path,
     plans_root: Option<&Path>,
     peers: &BTreeMap<String, String>,
-    ssh: &dyn Fn(&str, &str) -> Result<String, String>,
-) -> Result<Outcome, String> {
+    ssh: &dyn Fn(&str, &str) -> Result<String, PlanCarryError>,
+) -> Result<Outcome, PlanCarryError> {
     ensure_tables(remote)?;
     let mut primary = primary_rows(remote, host)?;
     let mut out = Outcome::default();
@@ -557,9 +647,9 @@ fn pull_row(
     home: &Path,
     plans_root: Option<&Path>,
     peers: &BTreeMap<String, String>,
-    ssh: &dyn Fn(&str, &str) -> Result<String, String>,
+    ssh: &dyn Fn(&str, &str) -> Result<String, PlanCarryError>,
     out: &mut Outcome,
-) -> Result<(), String> {
+) -> Result<(), PlanCarryError> {
     // Re-read with the body: the row may have moved since the hash read.
     let Some((row, body)) = body_row(remote, node)? else {
         return Ok(());
@@ -609,15 +699,15 @@ pub(crate) fn fetch_with(
     home: &Path,
     plans_root: Option<&Path>,
     peers: &BTreeMap<String, String>,
-    ssh: &dyn Fn(&str, &str) -> Result<String, String>,
-) -> Result<String, String> {
+    ssh: &dyn Fn(&str, &str) -> Result<String, PlanCarryError>,
+) -> Result<String, PlanCarryError> {
     let carried = body_row(remote, node)?;
     let (recorded, from_host) = match &carried {
         Some((row, _)) => (row.plan_path.clone(), row.from_host.clone()),
         None => (bound_plan.trim().to_string(), String::new()),
     };
     if recorded.trim().is_empty() {
-        return Err("no host pushed a plan for it".to_string());
+        return Err(PlanCarryError::NoPlanPushed);
     }
     if let Some((row, body)) = carried {
         let local = plan_file(&row.plan_path, home, plans_root).filter(|p| placeable(p, home));
@@ -642,10 +732,10 @@ pub(crate) fn fetch_with(
             mark_seen(remote, node, host, &row.sha)?;
             return Ok(with_anchor(&path, &row.plan_path));
         }
-        return Err(format!(
-            "{} pushed it at {}, which is outside this host's home",
-            row.from_host, row.plan_path
-        ));
+        return Err(PlanCarryError::OutsideHome {
+            from_host: row.from_host.clone(),
+            plan_path: row.plan_path.clone(),
+        });
     }
     if let Some((path, body)) =
         ssh_rescue(remote, node, &recorded, &from_host, host, home, peers, ssh)
@@ -654,7 +744,7 @@ pub(crate) fn fetch_with(
         mark_seen(remote, node, host, &sha(&body))?;
         return Ok(with_anchor(&path, &recorded));
     }
-    Err("no host pushed a plan for it".to_string())
+    Err(PlanCarryError::NoPlanPushed)
 }
 
 /// The plans root this pass records against: the canonical checkout's own
@@ -666,7 +756,7 @@ fn plans_root_for(anchor: Option<&Path>) -> Option<PathBuf> {
 }
 
 /// The tick's and the sync command's pass, on the configured shared primary.
-pub fn sync(graph: &Path) -> Result<Outcome, String> {
+pub fn sync(graph: &Path) -> Result<Outcome, PlanCarryError> {
     let Some(remote) = crate::store_remote::share_backlog()? else {
         return Ok(Outcome::default());
     };
@@ -686,7 +776,7 @@ pub fn sync(graph: &Path) -> Result<Outcome, String> {
 }
 
 /// Target init's miss: `Ok(None)` when sharing is off.
-pub fn fetch_one(node: &str, bound_plan: &str) -> Result<Option<String>, String> {
+pub fn fetch_one(node: &str, bound_plan: &str) -> Result<Option<String>, PlanCarryError> {
     let Some(remote) = crate::store_remote::share_backlog()? else {
         return Ok(None);
     };
@@ -721,8 +811,8 @@ mod tests {
 
     /// The transport when nothing is configured: every ask fails, and the
     /// rescue treats that as "this peer does not serve the file".
-    fn no_ssh(alias: &str, path: &str) -> Result<String, String> {
-        Err(format!("ssh off: {alias} {path}"))
+    fn no_ssh(alias: &str, path: &str) -> Result<String, PlanCarryError> {
+        Err(format!("ssh off: {alias} {path}").into())
     }
 
     fn bare_peers() -> BTreeMap<String, String> {
@@ -896,7 +986,8 @@ mod tests {
                 &bare_peers(),
                 &no_ssh
             )
-            .unwrap_err(),
+            .unwrap_err()
+            .to_string(),
             "no host pushed a plan for it"
         );
         ensure_tables(&primary.remote).unwrap();
@@ -924,7 +1015,8 @@ mod tests {
             &bare_peers(),
             &no_ssh,
         )
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("outside this host's home"), "{err}");
         // A row naming a dot-dir or a non-plan file under home never lands.
         for evil in [".ssh/authorized_keys.md", "plans/p.sh"] {
@@ -1057,7 +1149,7 @@ mod tests {
         let fetched = |alias: &str, path: &str| {
             assert_eq!(alias, "macbook.lan");
             assert_eq!(path, "/Users/alice/vault/plans/p.md");
-            Ok::<String, String>("rescued".to_string())
+            Ok::<String, PlanCarryError>("rescued".to_string())
         };
         let out = sync_with(
             &b,

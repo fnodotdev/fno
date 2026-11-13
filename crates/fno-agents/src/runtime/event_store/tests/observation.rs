@@ -92,7 +92,9 @@ fn blocks_and_malformed_never_coalesce() {
     // The judge owns the schema now: a guard_decision with no decision is
     // refused at the commit, so the always-audit tolerance is gone and the
     // row never lands to coalesce with anything.
-    let err = append_envelope(&live, &malformed.to_string(), None).unwrap_err();
+    let err = append_envelope(&live, &malformed.to_string(), None)
+        .unwrap_err()
+        .to_string();
     assert!(
         err.contains("missing required data field: decision"),
         "err: {err}"
@@ -104,7 +106,8 @@ fn blocks_and_malformed_never_coalesce() {
 fn concurrent_identical_first_polls_yield_one_transition() {
     let dir = tempfile::tempdir().unwrap();
     let live = dir.path().join("events.jsonl");
-    let receipts: Arc<Mutex<Vec<Result<AppendReceipt, String>>>> = Arc::new(Mutex::new(Vec::new()));
+    let receipts: Arc<Mutex<Vec<Result<AppendReceipt, EventStoreError>>>> =
+        Arc::new(Mutex::new(Vec::new()));
     let barrier = Arc::new(Barrier::new(8));
     let mut handles = Vec::new();
     for i in 0..8 {
@@ -218,7 +221,7 @@ fn unavailable_observation_state_is_an_explicit_failure() {
         .unwrap();
     }
     let broken = append_envelope(&live, &allow(&at("01:00"), "Bash").to_string(), None);
-    let err = broken.unwrap_err();
+    let err = broken.unwrap_err().to_string();
     assert!(err.contains("event_observation_state"), "err: {err}");
     let conn = Connection::open(&store).unwrap();
     let pending: i64 = conn

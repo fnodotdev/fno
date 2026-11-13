@@ -1759,7 +1759,9 @@ pub(crate) fn append_decision_mirror(
     // hashes the stored bytes, never the annotated render.
     let line = crate::event_store::raw_stored_line(path, line)?;
     let event_id = stored_event_id(path, &line)?.unwrap_or_else(|| decision_id.to_string());
-    crate::event_store::append_envelope(path, &line, Some(&event_id)).map(|_| ())
+    crate::event_store::append_envelope(path, &line, Some(&event_id))
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 /// Record one built decision event everywhere the door writes it: the graph
@@ -2454,7 +2456,9 @@ fn append_close(journal: &Path, line: &str, qid: &str) -> Result<(), String> {
     // journal_text re-appends only as its raw stored envelope.
     let line = crate::event_store::raw_stored_line(journal, line)?;
     let event_id = stored_event_id(journal, &line)?.unwrap_or_else(|| format!("close:{qid}"));
-    crate::event_store::append_envelope(journal, &line, Some(&event_id)).map(|_| ())
+    crate::event_store::append_envelope(journal, &line, Some(&event_id))
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 fn question_text(question: &Value) -> String {

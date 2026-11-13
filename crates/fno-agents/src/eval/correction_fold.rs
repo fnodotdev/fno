@@ -1173,8 +1173,8 @@ fn append_rows(
             // A replayed turn re-stamps its detect-time facts, so its envelope
             // differs from the stored one. The first write stands. Stopping
             // here would hold this file and every older file forever.
-            Err(e) if e.contains("identity collision") => receipt.rows_replayed += 1,
-            Err(e) => return Err(e),
+            Err(e) if e.to_string().contains("identity collision") => receipt.rows_replayed += 1,
+            Err(e) => return Err(e.to_string()),
         }
     }
     Ok(())
