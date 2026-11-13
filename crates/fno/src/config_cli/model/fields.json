@@ -1240,6 +1240,31 @@
     }
    ]
   },
+  "ReviewerDescriptor": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "kind",
+     "required": true
+    },
+    {
+     "name": "requires",
+     "required": true
+    },
+    {
+     "name": "invocation",
+     "required": true
+    },
+    {
+     "name": "asserts",
+     "required": true
+    },
+    {
+     "name": "invocations",
+     "default": null
+    }
+   ]
+  },
   "StyleBlock": {
    "extra": "ignore",
    "fields": [
@@ -1596,6 +1621,35 @@
     {
      "name": "blueprint_floor",
      "default": "high"
+    }
+   ]
+  },
+  "DispatchCommandDescriptor": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "invocation",
+     "required": true
+    },
+    {
+     "name": "invocations",
+     "default": null
+    },
+    {
+     "name": "requires",
+     "default": "none"
+    },
+    {
+     "name": "takes_node_id",
+     "default": true
+    },
+    {
+     "name": "asserts",
+     "default": "invocation"
+    },
+    {
+     "name": "session_phase",
+     "default": null
     }
    ]
   },
@@ -2485,6 +2539,27 @@
    ]
   },
   "TelemetryEvalEventsBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "enabled",
+     "default": false
+    },
+    {
+     "name": "host",
+     "default": "https://us.i.posthog.com"
+    },
+    {
+     "name": "token_env",
+     "default": "FNO_POSTHOG_PROJECT_TOKEN"
+    },
+    {
+     "name": "token_file",
+     "default": "~/.fno/secrets/posthog-project-token"
+    }
+   ]
+  },
+  "TelemetryUsageEventsBlock": {
    "extra": "ignore",
    "fields": [
     {
