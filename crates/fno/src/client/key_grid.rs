@@ -40,18 +40,19 @@ fn fixed(rows: &[(&str, &str)]) -> Vec<KeyHint> {
         .collect()
 }
 
-/// The agents cells for `bindings`, each key written as the prefix then the
-/// chord (`^B H`).
+/// The line that names the prefix once, in the words the keys list uses.
+fn lead_line() -> String {
+    format!("{}, then:", crate::keys::prefix_display())
+}
+
+/// The agents cells for `bindings`: the chord key alone, since the lead line
+/// names the prefix once.
 fn agents_hints(bindings: &[crate::keys::KeyBinding]) -> Vec<KeyHint> {
-    let prefix = match crate::keys::prefix_display().strip_prefix("ctrl+") {
-        Some(letter) => format!("^{}", letter.to_ascii_uppercase()),
-        None => crate::keys::prefix_display(),
-    };
     AGENTS_ACTIONS
         .iter()
         .filter_map(|(action, label)| {
             let kb = bindings.iter().find(|kb| kb.action == *action)?;
-            Some((format!("{prefix} {}", kb.disp), label.to_string()))
+            Some((kb.disp.clone(), label.to_string()))
         })
         .collect()
 }
@@ -139,13 +140,16 @@ fn columns(w: usize) -> usize {
 /// wider than its column is cut at the column edge.
 pub(crate) fn grid_rows(view: KeyView, w: usize) -> Vec<TLine> {
     let cols = columns(w);
+    let lead = (view == KeyView::Agents).then(lead_line);
+    let rows = MAX_ROWS - usize::from(lead.is_some());
     let mut cells: Vec<KeyHint> = hints(view);
-    cells.truncate(cols * MAX_ROWS - 1);
+    cells.truncate(cols * rows - 1);
     cells.push(("*".to_string(), "all keys".to_string()));
     let col_w = (w / cols).max(1);
-    cells
-        .chunks(cols)
-        .map(|chunk| {
+    let lead_row = lead.map(|text| TLine::head(text.as_str()).trunc(w));
+    lead_row
+        .into_iter()
+        .chain(cells.chunks(cols).map(|chunk| {
             let mut row = TLine::plain(String::new());
             for (key, label) in chunk {
                 let mut cell = TLine::head(key.as_str());
@@ -153,7 +157,7 @@ pub(crate) fn grid_rows(view: KeyView, w: usize) -> Vec<TLine> {
                 row.push_line(cell.trunc(col_w.saturating_sub(1)).pad_to(col_w));
             }
             row.trim_end()
-        })
+        }))
         .collect()
 }
 
@@ -247,7 +251,10 @@ pub(super) fn footer_keys(view: &mut View, bytes: &[u8]) -> Option<Result<StdinF
     }
     close_footers(view);
     match bytes {
-        [0x02, b'?'] | [b'?'] | [0x1b] => Some(Ok(StdinFlow::Continue)),
+        [b'?'] | [0x1b] => Some(Ok(StdinFlow::Continue)),
+        _ if bytes == [crate::keys::prefix_bytes(), vec![b'?']].concat() => {
+            Some(Ok(StdinFlow::Continue))
+        }
         [b'*'] => {
             view.open_keys_modal();
             Some(Ok(StdinFlow::Continue))
@@ -283,15 +290,36 @@ mod tests {
                 .find(|(_, l)| l == label)
                 .map(|(k, _)| k.clone())
         };
-        assert_eq!(cell("backlog").as_deref(), Some("^B B"));
-        assert_eq!(cell("HQ").as_deref(), Some("^B H"));
+        assert_eq!(cell("backlog").as_deref(), Some("B"));
+        assert_eq!(cell("HQ").as_deref(), Some("H"));
         bindings
             .iter_mut()
             .find(|kb| kb.action == "org-view")
             .unwrap()
             .disp = "Z".into();
         let cells = agents_hints(&bindings);
-        assert!(cells.iter().any(|(k, l)| k == "^B Z" && l == "HQ"));
+        assert!(cells.iter().any(|(k, l)| k == "Z" && l == "HQ"));
+    }
+
+    #[test]
+    fn agents_footer_names_the_prefix_once_in_plain_words() {
+        let rows = grid_rows(KeyView::Agents, 100);
+        assert_eq!(rows[0].text, "ctrl+b, then:");
+        assert!(rows.iter().skip(1).all(|r| !r.text.contains("^B")));
+        assert!(rows.len() <= MAX_ROWS);
+        assert!(rows
+            .last()
+            .is_some_and(|r| r.text.trim_end().ends_with("* all keys")));
+    }
+
+    #[test]
+    fn lead_line_follows_an_alt_prefix() {
+        let (map, warnings) = crate::keys::resolve_keymap(Some("alt+shift+a"), &[]);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            crate::keys::prefix_disp(map.prefix, map.prefix_alt),
+            "alt+shift+a"
+        );
     }
 
     #[test]

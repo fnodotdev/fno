@@ -102,6 +102,21 @@ The overlay owns every keystroke, so bare arrows are free there.
 - `Ctrl-o`: open the row menu on the selected row. An agent row gets the sideline's menu and keys (`x` remove, `p` peek, `m` mail, `s` stop). Tab and workspace rows get their own menus. A plain pane row has none. `Esc` returns to the list. Running an action closes the navigator. Bare letters stay filter text, so the menu is one keypress away.
 - Typing: filter by what the row IS. A hit invisible in the label shows the matched token as a suffix.
 
+## Setting the prefix
+
+Set `mux.prefix` in config. It takes a control key (`ctrl+a`), a single printable key, or an Alt key:
+
+```toml
+[mux]
+prefix = "alt+shift+a"
+```
+
+`alt+a` and `alt+shift+a` follow tmux's model: the terminal sends Esc, then the key, and the mux reads the pair as one key. A bare Esc still reaches the pane after a short quiet wait. `alt+[`, `alt+shift+o` and `alt+<digit>` are refused: the first two start terminal escape sequences and Alt+digit jumps to a tab. A refused prefix keeps `ctrl+b` and says why.
+
+On macOS, Terminal.app and iTerm2 send a composed character for Option (`å` for Option+a) unless you set Option to act as Meta or Esc+. Turn that on in the terminal profile, then write `alt+a`.
+
+The footer (`prefix+?`) names the prefix once: `ctrl+b, then:` above the keys, in the same spelling as the keys list. With an Alt prefix it reads `alt+shift+a, then:`. Chords after the prefix stay single keys.
+
 ## Rebinding the prefix form
 
 `w` is left-hand and out of reach. Move the selector off it with `mux.keys` (config only, no code):

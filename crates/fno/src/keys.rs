@@ -55,6 +55,10 @@ pub const DEFAULT_PREFIX: u8 = 0x02;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Keymap {
     pub prefix: u8,
+    /// The prefix is Alt+`prefix`: the terminal sends `ESC` then the byte
+    /// (tmux's escape-time model). The scanner holds a lone `ESC` in
+    /// `ChordEsc`, so the Alt form needs no second clock.
+    pub prefix_alt: bool,
     /// `(action id, post-prefix byte)`, overriding that action's table default.
     pub rebinds: Vec<(String, u8)>,
     /// `(action id, 2 to 4 post-prefix bytes)`: a multi-stroke chord. The
@@ -70,6 +74,7 @@ impl Default for Keymap {
     fn default() -> Self {
         Keymap {
             prefix: DEFAULT_PREFIX,
+            prefix_alt: false,
             rebinds: Vec::new(),
             sequences: Vec::new(),
         }
@@ -117,6 +122,44 @@ pub fn parse_key(spec: &str) -> Option<u8> {
                 .or_else(|| lower.strip_prefix("c-"))?;
             (rest.chars().count() == 1).then(|| ctrl_letter(rest.chars().next()?))?
         }
+    }
+}
+
+/// Parse a PREFIX spec: any [`parse_key`] key, or `alt+<key>` (also `alt-`,
+/// `m-`, `meta+`) for Esc then that key. `alt+shift+a` is `ESC A`, the way
+/// tmux reads `M-A`. Returns the byte and whether Alt is held.
+pub fn parse_prefix(spec: &str) -> Option<(u8, bool)> {
+    let s = spec.trim();
+    let lower = s.to_ascii_lowercase();
+    let rest = ["alt+", "alt-", "meta+", "meta-", "m-"]
+        .iter()
+        .find_map(|p| lower.strip_prefix(p).map(|_| &s[p.len()..]));
+    let Some(rest) = rest else {
+        return parse_key(s).map(|b| (b, false));
+    };
+    let rest_lower = rest.to_ascii_lowercase();
+    if let Some(letter) = rest_lower
+        .strip_prefix("shift+")
+        .or_else(|| rest_lower.strip_prefix("shift-"))
+    {
+        let mut chars = letter.chars();
+        return match (chars.next(), chars.next()) {
+            (Some(c), None) if c.is_ascii_alphabetic() => {
+                Some((c.to_ascii_uppercase() as u8, true))
+            }
+            _ => None,
+        };
+    }
+    parse_key(rest).map(|b| (b, true))
+}
+
+/// How a prefix prints: [`key_disp`] for a plain key, `alt+shift+a` for
+/// `ESC A`, `alt+a` for `ESC a`. The printed form parses ([`parse_prefix`]).
+pub fn prefix_disp(byte: u8, alt: bool) -> String {
+    match (alt, byte) {
+        (false, _) => key_disp(byte),
+        (true, b'A'..=b'Z') => format!("alt+shift+{}", (byte as char).to_ascii_lowercase()),
+        (true, _) => format!("alt+{}", key_disp(byte)),
     }
 }
 
@@ -241,25 +284,42 @@ pub fn resolve_keymap(
 ) -> (Keymap, Vec<KeymapWarning>) {
     let mut warnings = Vec::new();
     let mut prefix = DEFAULT_PREFIX;
+    let mut prefix_alt = false;
     if let Some(spec) = prefix_spec.map(str::trim).filter(|s| !s.is_empty()) {
-        match parse_key(spec) {
+        match parse_prefix(spec) {
+            // `ESC [` opens every CSI and `ESC O` every SS3 sequence (arrows,
+            // F1-F4): an Alt prefix there would eat them.
+            Some((b @ (b'[' | b'O'), true)) => warnings.push(KeymapWarning(format!(
+                "config.mux.prefix: {} starts terminal escape sequences, so it cannot be the prefix; keeping {}",
+                prefix_disp(b, true),
+                key_disp(DEFAULT_PREFIX)
+            ))),
+            Some((b, true)) if b.is_ascii_digit() => warnings.push(KeymapWarning(format!(
+                "config.mux.prefix: Alt+digit jumps to a tab and cannot be the prefix; keeping {}",
+                key_disp(DEFAULT_PREFIX)
+            ))),
+            Some((b, true)) => {
+                prefix = b;
+                prefix_alt = true;
+            }
             // The same structural rule the rebinds get, and for a sharper
             // reason: `chord()` resolves the prefix BEFORE the `1-9` branch, so
             // a digit prefix does not lose a chord, it removes one tab from a
             // range the modal goes on advertising in full.
-            Some(b) if b.is_ascii_digit() && b != b'0' => warnings.push(KeymapWarning(format!(
+            Some((b, _)) if b.is_ascii_digit() && b != b'0' => warnings.push(KeymapWarning(format!(
                 "config.mux.prefix: 1-9 select tabs and cannot be the prefix; keeping {}",
                 key_disp(DEFAULT_PREFIX)
             ))),
-            Some(b) if terminal_twin(b).is_some() => warnings.push(KeymapWarning(format!(
+            Some((b, _)) if terminal_twin(b).is_some() => warnings.push(KeymapWarning(format!(
                 "config.mux.prefix: {} is the same byte as {}, so it cannot be the prefix; keeping {}",
                 key_disp(b),
                 terminal_twin(b).unwrap_or_default(),
                 key_disp(DEFAULT_PREFIX)
             ))),
-            Some(b) => prefix = b,
+            Some((b, _)) => prefix = b,
             None => warnings.push(KeymapWarning(format!(
-                "config.mux.prefix: cannot read {spec:?} as a key; keeping {}",
+                "config.mux.prefix: cannot read {spec:?} as a key{}; keeping {}",
+                option_key_hint(spec),
                 key_disp(DEFAULT_PREFIX)
             ))),
         }
@@ -331,14 +391,17 @@ pub fn resolve_keymap(
                 slot.1 = 0;
             }
         }
-        if let Some((i, w)) = sequence_conflict(&sequences, &final_map, prefix) {
+        if let Some((i, w)) = sequence_conflict(&sequences, &final_map, prefix, prefix_alt) {
             warnings.push(w);
             sequences.remove(i);
             continue;
         }
         // A key sitting on the prefix byte can never dispatch. Sentinel
         // rows (key 0) hold no chord, so they can sit beside anything.
-        if let Some((action, _)) = final_map.iter().find(|(_, k)| *k == prefix && *k != 0) {
+        if let Some((action, _)) = final_map
+            .iter()
+            .find(|(_, k)| !prefix_alt && *k == prefix && *k != 0)
+        {
             let action = action.clone();
             if let Some(i) = proposed.iter().position(|(a, _)| *a == action) {
                 warnings.push(KeymapWarning(format!(
@@ -355,6 +418,7 @@ pub fn resolve_keymap(
                     key_disp(DEFAULT_PREFIX)
                 )));
                 prefix = DEFAULT_PREFIX;
+                prefix_alt = false;
             }
             continue;
         }
@@ -393,6 +457,7 @@ pub fn resolve_keymap(
     (
         Keymap {
             prefix,
+            prefix_alt,
             rebinds: proposed,
             sequences,
         },
@@ -434,13 +499,14 @@ fn sequence_conflict(
     sequences: &[(String, Vec<u8>)],
     singles: &[(String, u8)],
     prefix: u8,
+    prefix_alt: bool,
 ) -> Option<(usize, KeymapWarning)> {
     sequences.iter().enumerate().find_map(|(i, (action, seq))| {
         let warn =
             |why: String| Some((i, KeymapWarning(format!("config.mux.keys.{action}: {why}"))));
         let lead = seq.first().copied().unwrap_or_default();
         let first = key_disp(lead);
-        if lead == prefix {
+        if lead == prefix && !prefix_alt {
             return warn(format!(
                 "{first} is the prefix, so the chord would never fire"
             ));
@@ -518,9 +584,37 @@ fn keymap() -> Keymap {
         .unwrap_or_else(|| resolve_keymap(None, &[]).0)
 }
 
-/// The prefix byte in force, rendered in the same grammar config accepts.
+/// Whether the prefix in force is Alt+byte (`ESC` then the byte).
+pub fn prefix_alt() -> bool {
+    KEYMAP
+        .read()
+        .ok()
+        .and_then(|keymap| keymap.as_ref().map(|map| map.prefix_alt))
+        .unwrap_or(false)
+}
+
+/// The bytes a terminal sends for the prefix in force.
+pub fn prefix_bytes() -> Vec<u8> {
+    if prefix_alt() {
+        vec![0x1b, prefix()]
+    } else {
+        vec![prefix()]
+    }
+}
+
+/// The prefix in force, rendered in the same grammar config accepts.
 pub fn prefix_display() -> String {
-    key_disp(prefix())
+    prefix_disp(prefix(), prefix_alt())
+}
+
+/// On macOS a terminal sends a composed character for Option unless Option is
+/// set to Meta; name that when a prefix spec holds a non-ASCII character.
+fn option_key_hint(spec: &str) -> &'static str {
+    if cfg!(target_os = "macos") && !spec.is_ascii() {
+        " (macOS sends a composed character for Option; set Option to Meta or Esc+ in your terminal, then write alt+<key>)"
+    } else {
+        ""
+    }
 }
 
 /// After a resize chord fires, bare resize keys (`H/J/K/L`) keep resizing for
@@ -831,7 +925,7 @@ impl Scanner {
             let mut replay = false;
             match std::mem::replace(&mut self.state, State::Normal(0)) {
                 State::Normal(open_idx) => {
-                    if b == prefix() {
+                    if (b, false) == self.prefix_key() {
                         // Prefix disarms first, then chords normally (Locked 5);
                         // a prefix+resize re-arms at its emission site below.
                         self.repeat = None;
@@ -897,7 +991,13 @@ impl Scanner {
                     // prefix key must still enter Prefix, exactly as it did
                     // before the hold (the F2 regression the first cut shipped).
                     seq.push(b);
-                    if GLOBAL_CHORD_PREFIX.starts_with(&seq) {
+                    if self.is_alt_prefix(&seq) {
+                        // The Alt prefix: ESC then its byte, inside the hold,
+                        // so a lone Esc still releases on the quiet window.
+                        self.repeat = None;
+                        flush(&mut plain, &mut out);
+                        self.state = State::Prefix;
+                    } else if GLOBAL_CHORD_PREFIX.starts_with(&seq) {
                         self.state = State::ChordEsc(seq);
                     } else if seq.len() == 2 && seq[1].is_ascii_digit() {
                         // Alt+digit arms the same tab-number buffer
@@ -1019,7 +1119,10 @@ impl Scanner {
                 }
                 State::PrefixEsc(mut seq) => {
                     seq.push(b);
-                    if seq == PASTE_OPEN {
+                    if self.is_alt_prefix(&seq) {
+                        // Prefix-prefix with an Alt prefix: one literal Alt key.
+                        out.push(Event::Forward(seq));
+                    } else if seq == PASTE_OPEN {
                         // AC5-EDGE: a paste-open lands while a chord is
                         // pending - BEL the dangling chord deterministically,
                         // forward the marker, enter paste mode. Paste content
@@ -1157,6 +1260,20 @@ impl Scanner {
     // copy of the keymap.
     fn chord(&self, byte: u8) -> Event {
         chord_for(&self.map(), byte)
+    }
+
+    /// The prefix byte and its Alt flag, from the pinned map when a test set
+    /// one, else the live one.
+    fn prefix_key(&self) -> (u8, bool) {
+        match &self.pinned {
+            Some(map) => (map.prefix, map.prefix_alt),
+            None => (prefix(), prefix_alt()),
+        }
+    }
+
+    fn is_alt_prefix(&self, seq: &[u8]) -> bool {
+        let (b, alt) = self.prefix_key();
+        alt && seq == [0x1b, b]
     }
 
     fn map(&self) -> Keymap {
@@ -1977,7 +2094,7 @@ pub fn selector_hint() -> &'static str {
 /// ctrl-b` would advertise a dead sequence the moment anyone set
 /// `config.mux.prefix`.
 pub fn meta_rows() -> Vec<(String, String, KeySection)> {
-    let p = key_disp(prefix());
+    let p = prefix_display();
     let rows = vec![
         // The digit jump reads arbitrary numbers now, so the row
         // names the resolve doors instead of a nine-tab ceiling: Enter is the
@@ -2180,7 +2297,7 @@ fn select_tab_event(digits: &[u8]) -> Event {
 fn chord_for(map: &Keymap, b: u8) -> Event {
     match b {
         // prefix-prefix = one literal prefix byte, whatever the prefix now is.
-        _ if b == map.prefix => Event::Forward(vec![b]),
+        _ if b == map.prefix && !map.prefix_alt => Event::Forward(vec![b]),
         // 1-based ordinal; the scan loop routes digits into the
         // multi-digit buffer before this table is consulted, so a lone
         // resolution here only serves `resolve_chord` callers.
@@ -3158,5 +3275,63 @@ mod tests {
             map.sequences,
             vec![("split-down".to_string(), vec![0x18, b'a'])]
         );
+    }
+
+    fn alt_map(spec: &str) -> Keymap {
+        let (map, warnings) = resolve_keymap(Some(spec), &[]);
+        assert!(warnings.is_empty(), "{spec}: {warnings:?}");
+        map
+    }
+
+    #[test]
+    fn alt_prefix_specs_parse_and_print_round_trip() {
+        assert_eq!(parse_prefix("alt+a"), Some((b'a', true)));
+        assert_eq!(parse_prefix("alt+shift+a"), Some((b'A', true)));
+        assert_eq!(parse_prefix("M-a"), Some((b'a', true)));
+        assert_eq!(parse_prefix("ctrl+b"), Some((0x02, false)));
+        assert_eq!(parse_prefix("alt+shift+1"), None);
+        for spec in ["alt+a", "alt+shift+a", "alt+ctrl+a", "ctrl+b", "x"] {
+            let (b, alt) = parse_prefix(spec).unwrap();
+            assert_eq!(parse_prefix(&prefix_disp(b, alt)), Some((b, alt)), "{spec}");
+        }
+    }
+
+    #[test]
+    fn alt_prefix_refuses_what_would_eat_escape_sequences() {
+        for spec in ["alt+[", "alt+shift+o", "alt+3"] {
+            let (map, warnings) = resolve_keymap(Some(spec), &[]);
+            assert_eq!(map.prefix, DEFAULT_PREFIX, "{spec}");
+            assert!(!map.prefix_alt, "{spec}");
+            assert_eq!(warnings.len(), 1, "{spec}: {warnings:?}");
+        }
+    }
+
+    #[test]
+    fn alt_prefix_scans_esc_then_key_into_a_chord() {
+        let mut sc = Scanner::with_keymap(alt_map("alt+shift+a"));
+        let t = Instant::now();
+        // Whole key in one read, and split across two reads.
+        assert_eq!(sc.scan(b"\x1bAb", t), vec![Event::TogglePanel]);
+        assert!(sc.scan(b"\x1b", t).is_empty());
+        assert_eq!(sc.scan(b"Ab", t), vec![Event::TogglePanel]);
+        // A bare `A` is no prefix and forwards; so does Esc then another key.
+        assert_eq!(sc.scan(b"A", t), vec![Event::Forward(b"A".to_vec())]);
+        assert_eq!(
+            sc.scan(b"\x1bx", t),
+            vec![Event::Forward(b"\x1bx".to_vec())]
+        );
+        // Alt prefix twice sends one literal Alt+A; ctrl+b is no longer special.
+        assert_eq!(
+            sc.scan(b"\x1bA\x1bA", t),
+            vec![Event::Forward(b"\x1bA".to_vec())]
+        );
+        assert_eq!(sc.scan(&[0x02], t), vec![Event::Forward(vec![0x02])]);
+    }
+
+    #[test]
+    fn lone_esc_still_releases_under_an_alt_prefix() {
+        let mut sc = Scanner::with_keymap(alt_map("alt+a"));
+        assert!(sc.scan(b"\x1b", Instant::now()).is_empty());
+        assert_eq!(sc.flush_chord(), Some(Event::Forward(vec![0x1b])));
     }
 }
