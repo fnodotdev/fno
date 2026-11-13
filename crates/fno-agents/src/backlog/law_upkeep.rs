@@ -186,8 +186,8 @@ fn file_stale_question(
 }
 
 /// Live laws grouped by normalized subject; groups past one are duplicate
-/// proposals, report-only. x-47e0 owns the set audit; this pass only feeds
-/// it evidence.
+/// proposals, report-only. The one-time set audit owns the merge work; this
+/// pass only feeds it evidence.
 fn duplicate_groups(rows: &[Value]) -> Vec<Value> {
     let mut by_subject: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for row in rows.iter().filter(|r| decision_index::is_law(r)) {
