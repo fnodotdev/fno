@@ -1371,8 +1371,9 @@ fn install_fake_claude_cloud(bin_dir: &std::path::Path) {
 /// `[sandbox] provider = "devcontainer"`: a headless spawn asks the daemon for
 /// the plan once, brings the sandbox up with the socket-dir mount, probes the
 /// daemon from inside, and runs the lane under `devcontainer exec` with the
-/// lane env in a file, never the argv (AC3). A failing probe refuses 84
-/// naming the recreate (AC6); a thread spawn refuses 2 naming `--as
+/// lane env in a file, never the argv (AC3). A failing probe refuses 84: a
+/// present socket names the blocked host (AC6), a missing one names the
+/// recreate; a thread spawn refuses 2 naming `--as
 /// headless` (AC4); `none` never calls devcontainer (AC5).
 #[test]
 fn client_spawn_devcontainer_sandboxes_the_headless_lane() {
@@ -1389,7 +1390,8 @@ fn client_spawn_devcontainer_sandboxes_the_headless_lane() {
     std::fs::write(
         fake_path.join("devcontainer"),
         "#!/bin/sh\nprintf '%s\\036' \"$*\" >> \"$DEVCONTAINER_LOG\"\n\
-         case \"$*\" in *'fno-agents status'*) exit \"${PROBE_EXIT:-0}\" ;; esac\n\
+         case \"$*\" in *'fno-agents status'*) exit \"${PROBE_EXIT:-0}\" ;; \
+         *'test -S'*) exit \"${SOCK_EXIT:-0}\" ;; esac\n\
          echo sandboxed\n",
     )
     .unwrap();
@@ -1398,7 +1400,7 @@ fn client_spawn_devcontainer_sandboxes_the_headless_lane() {
         std::fs::Permissions::from_mode(0o755),
     )
     .unwrap();
-    let run = |provider: &str, extra: &[&str], probe_exit: &str| {
+    let run = |provider: &str, extra: &[&str], probe_exit: &str, sock_exit: &str| {
         let root = tmpdir("sandbox-home");
         let home = AgentsHome::at(root.clone());
         std::fs::create_dir_all(home.sandbox_sock_dir()).unwrap();
@@ -1450,6 +1452,7 @@ fn client_spawn_devcontainer_sandboxes_the_headless_lane() {
             .env("FNO_CONFIG", &config)
             .env("DEVCONTAINER_LOG", &log)
             .env("PROBE_EXIT", probe_exit)
+            .env("SOCK_EXIT", sock_exit)
             .env_remove("FNO_SUPERVISOR_SOCKET")
             .env("PATH", path_with(&fake_path))
             .output()
@@ -1459,7 +1462,7 @@ fn client_spawn_devcontainer_sandboxes_the_headless_lane() {
         (out, calls, methods, home)
     };
 
-    let (out, calls, methods, home) = run("devcontainer", &["--once"], "0");
+    let (out, calls, methods, home) = run("devcontainer", &["--once"], "0", "0");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
         methods
@@ -1504,12 +1507,23 @@ fn client_spawn_devcontainer_sandboxes_the_headless_lane() {
         "lane env rides a file: {calls}"
     );
 
-    let (out, _, _, _) = run("devcontainer", &["--once"], "13");
+    // A failing probe where the container still sees the socket file: the
+    // Docker host blocks the socket, and the refusal says no recreate can
+    // help. A missing socket file keeps the recreate recipe.
+    let (out, _, _, _) = run("devcontainer", &["--once"], "13", "0");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(84), "stderr: {stderr}");
+    assert!(
+        stderr.contains("does not pass host unix sockets"),
+        "{stderr}"
+    );
+
+    let (out, _, _, _) = run("devcontainer", &["--once"], "13", "1");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(84), "stderr: {stderr}");
     assert!(stderr.contains("--remove-existing-container"), "{stderr}");
 
-    let (out, calls, methods, _) = run("devcontainer", &["--as", "thread"], "0");
+    let (out, calls, methods, _) = run("devcontainer", &["--as", "thread"], "0", "0");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(2), "stderr: {stderr}");
     assert!(stderr.contains("--as headless"), "{stderr}");
@@ -1518,7 +1532,7 @@ fn client_spawn_devcontainer_sandboxes_the_headless_lane() {
         "{calls} {methods:?}"
     );
 
-    let (_, calls, methods, _) = run("none", &["--once"], "0");
+    let (_, calls, methods, _) = run("none", &["--once"], "0", "0");
     assert!(calls.is_empty(), "none never sandboxes: {calls}");
     assert!(
         !methods.iter().any(|m| m == "agent.sandbox-plan"),

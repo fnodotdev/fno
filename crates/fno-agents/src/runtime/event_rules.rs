@@ -556,8 +556,8 @@ fn turn_filed_question(ctx: &Ctx) -> bool {
     names_open_question(ctx) || session_filed_this_turn(ctx)
 }
 
-/// The `q-xxxxxxxx` ids the text names.
-fn named_qids(text: &str) -> Vec<&str> {
+/// The `q-xxxxxxxx` hash ids the text names.
+fn hash_qids(text: &str) -> Vec<&str> {
     let bytes = text.as_bytes();
     let mut out = Vec::new();
     for (i, _) in text.match_indices("q-") {
@@ -574,12 +574,61 @@ fn named_qids(text: &str) -> Vec<&str> {
     out
 }
 
+/// The `Q123`/`D45` short labels the text names, with the same boundary rule
+/// as [`hash_qids`]. Printers show the label beside the hash, so a reply
+/// points at a filed question through either shape; a `@store` tail stops
+/// the scan and the bare label resolves in the current store.
+fn short_labels(text: &str) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    for (i, b) in bytes.iter().enumerate() {
+        if !matches!(b, b'Q' | b'q' | b'D' | b'd') {
+            continue;
+        }
+        let boundary = |j: Option<&u8>| !j.is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'-');
+        if !boundary(i.checked_sub(1).and_then(|j| bytes.get(j))) {
+            continue;
+        }
+        let digits = bytes
+            .get(i + 1..)
+            .map(|rest| rest.iter().take_while(|b: &&u8| b.is_ascii_digit()).count())
+            .unwrap_or(0);
+        let labelled = (1..=7).contains(&digits)
+            && bytes
+                .get(i + 1 + digits)
+                .is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'-');
+        if labelled {
+            if let Some(label) = text.get(i..i + 1 + digits) {
+                out.push(label.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// The question ids `text` names, as the board keys them: `q-xxxxxxxx`
+/// hashes plus short labels resolved over this machine's number table.
+/// A label nothing holds resolves to nothing and names nothing.
+fn named_qids(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = hash_qids(text).into_iter().map(str::to_string).collect();
+    for token in short_labels(text) {
+        if let Some(key) = crate::numbers::resolve('q', &token) {
+            // A reply can name the hash and its label; one board id, one row.
+            if !out.contains(&key) {
+                out.push(key);
+            }
+        }
+    }
+    out
+}
+
 fn names_open_question(ctx: &Ctx) -> bool {
     !open_questions_named(&ctx.last_message, ctx.home, ctx.journal, ctx.cwd).is_empty()
 }
 
-/// The `q-xxxxxxxx` ids `text` names that are still open on the board,
-/// whoever asked them. The Stop hook flags the session on a non-empty answer,
+/// The questions `text` names that are still open on the board, whoever
+/// asked them, keyed by their `q-xxxxxxxx` hash (a short label resolves to
+/// its hash first). The Stop hook flags the session on a non-empty answer,
 /// and the lead's beat goes quiet on it.
 pub(crate) fn open_questions_named(
     text: &str,
@@ -610,8 +659,8 @@ pub(crate) fn open_questions_named(
         closed.extend(c);
     }
     qids.iter()
-        .filter(|q| asked.contains(**q) && !closed.contains(**q))
-        .map(|q| (*q).to_string())
+        .filter(|q| asked.contains(*q) && !closed.contains(*q))
+        .cloned()
         .collect()
 }
 
@@ -1118,6 +1167,10 @@ mod tests {
         let lock = crate::claims::test_env_lock();
         let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
         let rig = Rig::new(true);
+        // Pin the number table to the rig: the label negative below must
+        // never read the machine's real fno_numbers, where the label used
+        // in that assertion may genuinely exist.
+        std::env::set_var("FNO_STATE_DIR", rig._dir.path());
         // A predecessor lead filed q-1f456994; this session only relays it.
         rig.seed(json!({
             "ts": crate::events::now_rfc3339(),
@@ -1153,8 +1206,72 @@ mod tests {
         );
         assert_eq!(
             named_qids("see q-1f456994, not q-1f4569941 or xq-1f456994"),
-            ["q-1f456994"]
+            ["q-1f456994".to_string()]
         );
+        // No number table in this rig: every short label resolves to
+        // nothing, so the scanner names no id through one.
+        assert_eq!(
+            named_qids("PR 4233 awaits your ruling (Q3546); PR 376 on the QA page"),
+            Vec::<String>::new(),
+            "a label with no number row names nothing"
+        );
+    }
+
+    #[test]
+    fn label_named_open_question_passes_the_rule() {
+        let lock = crate::claims::test_env_lock();
+        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let rig = Rig::new(true);
+        // The number table lives beside the graph anchor under the state
+        // dir; pin both to the rig so the label resolves hermetically.
+        std::env::set_var("FNO_STATE_DIR", rig._dir.path());
+        let hash = "q-1a2b3c4d";
+        let graph = crate::backlog::database_path(&crate::backlog::graph_get::default_graph_path());
+        std::fs::create_dir_all(graph.parent().unwrap()).unwrap();
+        let conn = rusqlite::Connection::open(&graph).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS fno_numbers (\
+             kind TEXT NOT NULL, num INTEGER NOT NULL, key TEXT NOT NULL, \
+             store TEXT NOT NULL, host TEXT NOT NULL, created_at INTEGER NOT NULL, \
+             PRIMARY KEY (store, kind, num), UNIQUE (store, key))",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO fno_numbers \
+             (kind, num, key, store, host, created_at) \
+             VALUES ('q', 3546, ?1, 'local', 'test', 0)",
+            rusqlite::params![hash],
+        )
+        .unwrap();
+        // A predecessor lead filed the question; this reply only points at
+        // it through the printed label (the shape that fired twice on the
+        // guards lead 2026-11-13).
+        rig.seed(json!({
+            "ts": crate::events::now_rfc3339(),
+            "type": "operator_question",
+            "source": "test",
+            "data": {"question_id": hash, "question": "merge 4233?", "asker": "b46c5135"},
+        }));
+        let reply = "PR 4233 awaits your ruling (filed as Q3546). 1. merge 2. hold";
+        let fires = eval_stop_in(&rig.cwd, &rig.journal, &rig.home, &rig.payload(reply));
+        assert!(
+            !fires.iter().any(|f| f.rule == "chat_ask_unfiled"),
+            "a reply pointing at a filed question through its label passes"
+        );
+        assert_eq!(
+            open_questions_named(reply, &rig.home, &rig.journal, &rig.cwd),
+            [hash.to_string()],
+            "the label names the open question by hash"
+        );
+        // Boundary discipline: a longer number and a label inside a word
+        // name nothing, so an unfiled ask still fires.
+        let misses = "see Q35461 and xQ3546 then pick: 1. merge 2. hold. Your call?";
+        let fires = eval_stop_in(&rig.cwd, &rig.journal, &rig.home, &rig.payload(misses));
+        assert!(
+            fires.iter().any(|f| f.rule == "chat_ask_unfiled"),
+            "an ask that names no filed question still blocks"
+        );
+        std::env::remove_var("FNO_STATE_DIR");
     }
 
     #[test]
