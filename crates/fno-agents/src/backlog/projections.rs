@@ -1049,9 +1049,11 @@ fn live_rows(graph: &Path) -> Result<Vec<Value>, String> {
 /// row must hit to materialize. Rows with an empty project match no named
 /// scope on the board, so they join no set here either.
 fn populated_projects(entries: &[Value]) -> BTreeSet<String> {
+    use crate::backlog::row_facts::RowFacts;
     entries
         .iter()
-        .filter_map(|row| row.get("project").and_then(Value::as_str))
+        .filter_map(RowFacts::of)
+        .filter_map(|row| row.project().as_str())
         .filter(|project| !project.is_empty())
         .map(str::to_string)
         .collect()
