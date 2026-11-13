@@ -354,6 +354,28 @@ fn compile_journal_argv(sub: &str) -> Vec<String> {
     vec!["cargo".to_string(), long_compile_name(sub).to_string()]
 }
 
+/// True on this cargo incarnation's first door call. The declared-build
+/// marker records the pid's birth token, so a recycled pid whose marker
+/// outlived its cargo reads stale and journals again. A dead pid's marker
+/// sweeps with the beside markers' rule.
+fn first_for_incarnation(pid: u32) -> bool {
+    let dir = std::env::temp_dir().join("fno-compile-declared");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join(pid.to_string());
+    let Some(birth) = crate::daemon::process_start_time(pid) else {
+        return true;
+    };
+    let birth = birth.to_string();
+    if let Ok(prev) = std::fs::read_to_string(&path) {
+        if prev.trim() == birth {
+            return false;
+        }
+    }
+    let _ = std::fs::write(&path, &birth);
+    sweep_dead_cargo_markers(&dir);
+    true
+}
+
 /// The sanctioned queue lane: a whole-suite run (FNO_TEST_FULL=1) may queue,
 /// backgrounded, exactly as the test-run guard's refusal text documents.
 pub(crate) fn full_suite_lane() -> bool {
@@ -1476,10 +1498,10 @@ fn run_build_admit(args: &[String]) -> i32 {
         }
         CompileVerdict::Declared { subcommand, why } => {
             // A declared build admits and journals once per cargo (cargo
-            // asks once per crate; the marker sweeps itself as cargos exit).
-            // The line is visible too: a worker reading its own stderr sees
-            // what it declared.
-            if first_beside_notice(cargo_pid) {
+            // asks once per crate; the birth-token marker reads a recycled
+            // pid as stale). The line is visible too: a worker reading its
+            // own stderr sees what it declared.
+            if first_for_incarnation(cargo_pid) {
                 eprintln!("cargo admission: declared build ({why}); admitted and journalled");
                 let argv = compile_journal_argv(subcommand);
                 crate::test_run_journal::record_allowed_build(
