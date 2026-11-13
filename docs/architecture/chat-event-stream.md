@@ -40,9 +40,9 @@ One race is left. A Claude subagent meta file that lands after a later row of th
 
 ## The app route
 
-The attention door (`fno mux serve --web --attention-api`) serves the same stream to a phone, a browser or a second machine: `GET /v1/chat/{harness}/{session_id}?since=<seq>`, a WebSocket upgrade. `since` is the `from_seq` rule above and defaults to 0. `subagent=<id>` selects a Claude subagent stream. The door reads in process through the same reader and the same poll loop as the socket, so a batch is at most 256 events and about 8 MiB.
+The attention door (`fno mux serve --web --attention-api`) serves the same stream to a phone, a browser or a second machine: `GET /v1/chat/{harness}/{session_id}?since=<seq>`, a WebSocket upgrade. `since` is the `from_seq` rule above and defaults to 0. `subagent=<id>` selects a Claude subagent stream. The door reads in process. It uses the same reader and poll loop as the socket, so a batch is at most 256 events and about 8 MiB.
 
-Auth takes a sink token in one of two forms. A native client sends `Authorization: Bearer <token>`. A browser cannot set headers, so it offers the subprotocols `fno.v1, bearer.<token>`, and the server selects `fno.v1`. The token never rides the query string. A missing or wrong token completes the upgrade and closes with code 1008 and the reason `invalid token`, so a browser can tell it from a network drop. No event frame goes out first.
+Auth takes a sink token in one of two forms. A native client sends `Authorization: Bearer <token>`. A browser cannot set headers, so it offers the subprotocols `fno.v1, bearer.<token>`, and the server selects `fno.v1`. The token never rides the query string. A missing or wrong token completes the upgrade, then closes with code 1008 and the reason `invalid token`. A browser can tell that from a network drop. No event frame goes out first.
 
 Each batch is one text frame: `{"v": 1, "session": {...}, "events": [...]}`, events in `seq` order. A reader failure sends one `{"v": 1, "error": {"kind": "unsupported_harness" | "not_found" | "io", "message": "..."}}` frame and closes with code 1011. A session with no transcript yet gets `not_found`. The client retries with the same `since`. An idle stream gets a WebSocket ping every 30 seconds. Inbound messages are dropped.
 
