@@ -249,15 +249,41 @@ pub fn arm(home: &crate::paths::AgentsHome, cwd: &Path) -> Result<(), (i32, Stri
             ))
         }
         _ => {
+            // A dead socket and a missing mount read as the same probe exit,
+            // so ask the container which one this is before advising: on
+            // hosts that do not pass host unix sockets through a bind mount
+            // (OrbStack among them) the socket file is there and no recreate
+            // can help, while a missing file is exactly what recreating with
+            // the socket mount fixes.
+            let mut sock_probe = exec_prefix(&launch, cwd);
+            sock_probe.extend([
+                "sh".to_string(),
+                "-c".to_string(),
+                "test -S \"$FNO_SUPERVISOR_SOCKET\"".to_string(),
+            ]);
+            if run(sock_probe)? == 0 {
+                return Err((
+                    84,
+                    format!(
+                        "the container sees the mounted socket at {inside} but nothing \
+                         answers it, and the daemon answered on the host moments ago: this \
+                         Docker host does not pass host unix sockets through the bind \
+                         mount (measured on OrbStack). No recreate can fix that. Restart \
+                         the daemon and retry once; if the probe still refuses, run these \
+                         spawns unsandboxed ([sandbox] provider = \"none\") or move the \
+                         fleet to a Linux Docker host, where bind-mounted sockets answer."
+                    ),
+                ));
+            }
             return Err((
                 84,
                 format!(
-                    "the sandbox cannot reach the daemon at {inside}. Recreate the container \
-                     with the socket mount: devcontainer up --workspace-folder {} \
-                     --remove-existing-container",
+                    "the sandbox cannot reach the daemon at {inside}: the socket directory \
+                     is not in the container. Recreate the container with the socket mount: \
+                     devcontainer up --workspace-folder {} --remove-existing-container",
                     cwd.display()
                 ),
-            ))
+            ));
         }
     }
     let _ = ACTIVE.set((launch, cwd.to_path_buf()));
