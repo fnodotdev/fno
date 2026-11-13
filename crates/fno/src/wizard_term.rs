@@ -75,11 +75,14 @@ fn done_marker_path() -> PathBuf {
 }
 
 /// True while the machine's wizard has never finished: the bare-`fno`
-/// first-run gate runs the wizard once, then opens the mux.
-pub(crate) fn first_run_needed() -> bool {
+/// first-run gate runs the wizard once, then opens the mux. `pub`, not
+/// `pub(crate)`: the front door's bin target reads it across the crate
+/// boundary.
+pub fn first_run_needed() -> bool {
     !done_marker_path().exists()
 }
 
+#[cfg(test)]
 fn first_run_needed_in(state_dir: &std::path::Path) -> bool {
     !done_marker_in(state_dir).exists()
 }
