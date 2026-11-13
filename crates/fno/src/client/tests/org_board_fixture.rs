@@ -16,7 +16,6 @@ fn opened(map: Value, agents: Vec<AgentRow>) -> View {
             focus_node: None,
         },
     );
-    view.experimental_org_board = true;
     view.board_full = true;
     open(&mut view);
     let gen = view.org_generation;
@@ -390,4 +389,35 @@ fn fleet_board_actions() {
         &|m| m["machines"][0]["owner"] = json!("ellery"),
         "mac2 belongs to ellery: work on another person's machine needs team mode",
     );
+}
+
+#[test]
+fn a_fleet_with_no_seat_draws_the_empty_state_and_the_next_step() {
+    let mut view = View::new(
+        (24, 200),
+        "main".into(),
+        LayoutView {
+            squads: Vec::new(),
+            active_squad: 0,
+            panes: Vec::new(),
+            focus: 0,
+            area: (0, 0),
+            agents: Vec::new(),
+            focus_node: None,
+        },
+    );
+    open(&mut view);
+    let b = view.org_board.as_mut().expect("HQ opens with no flag set");
+    b.fleet = Some(crate::client::org_seats::Fleet {
+        machines: Vec::new(),
+        notice: None,
+        seat_error: None,
+        measured_at: now(),
+    });
+    let wide = text(&b.frame(None, 200, 40, now()).right);
+    assert!(wide.contains("Nothing is running yet."), "{wide}");
+    assert!(wide.contains("n   start a session"), "{wide}");
+    assert!(wide.contains("L   start a lead"), "{wide}");
+    let narrow = text(&b.frame(None, 40, 40, now()).explorer);
+    assert!(narrow.contains("Nothing is running yet."), "{narrow}");
 }

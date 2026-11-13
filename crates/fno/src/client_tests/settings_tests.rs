@@ -116,11 +116,7 @@ fn settings_rows() {
         .collect();
     assert_eq!(
         labels,
-        [
-            "fleet org board",
-            "pane share",
-            "other machines · fleet map read every 15s"
-        ]
+        ["pane share", "other machines · fleet map read every 15s"]
     );
     assert_eq!(
         actions,

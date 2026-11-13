@@ -1353,20 +1353,13 @@ impl View {
     }
 }
 
-/// `V`: Agents, Messages, Backlog, then Org while its experimental flag is
-/// on, and back to Agents.
+/// `V`: Agents, Messages, Backlog, then Org, and back to Agents.
 pub(crate) fn cycle_sideline_view(view: &mut View) {
     // A cycle leaves every board behind, the Messages board included: an
     // open one owns the whole surface and would hijack input off its view.
     view.messages_board = None;
     match view.sideline_view {
-        crate::view_store::SidelineView::Backlog if view.experimental_org_board => {
-            super::org_board::open(view);
-        }
-        crate::view_store::SidelineView::Backlog => {
-            view.backlog_board = None;
-            set_sideline_view(view, crate::view_store::SidelineView::Agents);
-        }
+        crate::view_store::SidelineView::Backlog => super::org_board::open(view),
         crate::view_store::SidelineView::Agents | crate::view_store::SidelineView::Decisions => {
             // R15: Messages sits right after Agents in the V cycle.
             super::messages_view::open(view);

@@ -7,9 +7,9 @@
 //! when the time box ends, and every door already reads it.
 //!
 //! `fno agents incident reserve stream|edit [--for 2h]` arms it by hand.
-//! The daemon tick arms it too while OBS, Final Cut Pro, Premiere Pro or
-//! DaVinci Resolve runs, renews it while the app stays open, and lifts it
-//! when the app quits. A reserve never replaces a stop someone armed, the
+//! The daemon tick arms it too while an app on `agents.reserve_apps` runs
+//! (OBS, Final Cut Pro, Premiere Pro and DaVinci Resolve by default), renews
+//! it while the app stays open, and lifts it when the app quits. A reserve never replaces a stop someone armed, the
 //! daemon's reserve never replaces one the user named, and a user who
 //! clears the daemon's reserve keeps it cleared until that app restarts.
 
@@ -53,57 +53,96 @@ pub(crate) fn may_replace(origin: &str, current: Option<&str>) -> bool {
     }
 }
 
-/// An app that reserves the machine while it runs: the bundle path its
-/// executable sits in, the name a person reads, and the preset it arms.
+/// An app that reserves the machine while it runs: the name a person reads
+/// (matched against its bundle and executable names) and the preset it arms.
 struct App {
-    marker: &'static str,
-    name: &'static str,
+    name: String,
     preset: &'static str,
 }
 
-const APPS: &[App] = &[
-    App {
-        marker: "/OBS.app/Contents/MacOS/",
-        name: "OBS",
-        preset: "stream",
-    },
-    App {
-        marker: "/Final Cut Pro.app/Contents/MacOS/",
-        name: "Final Cut Pro",
-        preset: "edit",
-    },
-    App {
-        marker: ".app/Contents/MacOS/Adobe Premiere Pro",
-        name: "Premiere Pro",
-        preset: "edit",
-    },
-    App {
-        marker: "/DaVinci Resolve.app/Contents/MacOS/",
-        name: "DaVinci Resolve",
-        preset: "edit",
-    },
+/// The apps watched when `agents.reserve_apps` is unset. An entry is an app
+/// name; `Name=stream` arms the stream preset, any other entry arms edit.
+pub const DEFAULT_APPS: &[&str] = &[
+    "OBS=stream",
+    "Final Cut Pro",
+    "Premiere Pro",
+    "DaVinci Resolve",
 ];
 
-/// The app whose executable `command` runs. The marker must sit in argv[0],
-/// an absolute path before any flag, so a session whose prompt names a
+fn parse_apps<S: AsRef<str>>(entries: &[S]) -> Vec<App> {
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let (name, preset) = match entry.as_ref().split_once('=') {
+                Some((name, "stream")) => (name, "stream"),
+                Some((name, _)) => (name, "edit"),
+                None => (entry.as_ref(), "edit"),
+            };
+            let name = name.trim();
+            (!name.is_empty()).then(|| App {
+                name: name.to_string(),
+                preset,
+            })
+        })
+        .collect()
+}
+
+/// The watched apps for `cwd`: the configured list, else [`DEFAULT_APPS`].
+fn configured_apps(cwd: &Path) -> Vec<App> {
+    let list = crate::agents_config::config_lookup(cwd, &["agents", "reserve_apps"])
+        .and_then(|v| v.as_array().cloned());
+    match list {
+        Some(items) => {
+            let names: Vec<String> = items
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect();
+            parse_apps(&names)
+        }
+        None => parse_apps(DEFAULT_APPS),
+    }
+}
+
+/// `needle` in `hay`, ignoring case, with no letter or digit beside it: `obs`
+/// is in `OBS` and `OBS Studio` and not in `Jobs`.
+fn has_words(hay: &str, needle: &str) -> bool {
+    let hay = hay.to_lowercase();
+    let needle = needle.to_lowercase();
+    hay.match_indices(&needle).any(|(at, _)| {
+        let before = hay[..at].chars().next_back();
+        let after = hay[at + needle.len()..].chars().next();
+        !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
+    })
+}
+
+/// The app whose executable `command` runs. `command` must start with an
+/// absolute bundle path before any flag, so a session whose prompt names a
 /// bundle path never reads as the app.
-fn app_of(command: &str) -> Option<&'static App> {
+fn app_of<'a>(command: &str, apps: &'a [App]) -> Option<&'a App> {
+    const MARK: &str = ".app/Contents/MacOS/";
     if !command.starts_with('/') {
         return None;
     }
-    APPS.iter().find(|app| {
-        command
-            .find(app.marker)
-            .is_some_and(|at| !command[..at].contains(" -"))
-    })
+    let at = command.find(MARK)?;
+    let head = &command[..at];
+    if head.contains(" -") {
+        return None;
+    }
+    let bundle = head.rsplit('/').next().unwrap_or_default();
+    let exec = command[at + MARK.len()..]
+        .split(" -")
+        .next()
+        .unwrap_or_default();
+    apps.iter()
+        .find(|app| has_words(bundle, &app.name) || has_words(exec, &app.name))
 }
 
 /// The running app that sets the reserve and when its oldest process
 /// started, epoch seconds. A stream app outranks an editor.
-fn detect(procs: &[ProcRow], now_epoch: i64) -> Option<(&'static App, i64)> {
-    let mut best: Option<(&'static App, i64)> = None;
+fn detect<'a>(procs: &[ProcRow], now_epoch: i64, apps: &'a [App]) -> Option<(&'a App, i64)> {
+    let mut best: Option<(&'a App, i64)> = None;
     for row in procs {
-        let Some(app) = app_of(&row.command) else {
+        let Some(app) = app_of(&row.command, apps) else {
             continue;
         };
         let started = now_epoch - row.elapsed_s as i64;
@@ -140,7 +179,8 @@ pub fn auto_tick(
         return None;
     }
     let path = fleet_incident::fleet_stop_path(home);
-    let seen = detect(procs, now_epoch);
+    let apps = configured_apps(cwd);
+    let seen = detect(procs, now_epoch, &apps);
     let current = fleet_incident::read_at(&path);
     let (state, reason, holds) = match (&current, seen) {
         (Verdict::Unavailable(_), _) => return None,
@@ -308,5 +348,32 @@ mod tests {
         );
         assert_eq!(auto_tick(&home, &cwd, &obs, now + 180), None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The list is the config's, and a name matches whole words: `OBS` is
+    /// not `Jobs`, `Premiere Pro` is `Adobe Premiere Pro 2025`, and an entry
+    /// with `=stream` arms the stream preset.
+    #[test]
+    fn the_watched_apps_come_from_a_list_and_match_whole_words() {
+        let apps = parse_apps(&["OBS=stream", "Premiere Pro", " ", "Ableton Live=edit"]);
+        assert_eq!(apps.len(), 3, "a blank entry is dropped");
+        let hit = |cmd: &str| app_of(cmd, &apps).map(|a| (a.name.as_str(), a.preset));
+        assert_eq!(
+            hit("/Applications/OBS.app/Contents/MacOS/OBS"),
+            Some(("OBS", "stream"))
+        );
+        assert_eq!(
+            hit("/Applications/Adobe Premiere Pro 2025/Adobe Premiere Pro 2025.app/Contents/MacOS/Adobe Premiere Pro 2025"),
+            Some(("Premiere Pro", "edit"))
+        );
+        assert_eq!(
+            hit("/Applications/Ableton Live 12.app/Contents/MacOS/Live"),
+            Some(("Ableton Live", "edit"))
+        );
+        assert_eq!(hit("/Applications/Jobs.app/Contents/MacOS/Jobs"), None);
+        assert!(
+            parse_apps::<&str>(&[]).is_empty(),
+            "an empty list watches nothing"
+        );
     }
 }

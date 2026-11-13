@@ -715,6 +715,9 @@ pub(crate) struct View {
     agent_group: AgentGroup,
     machine_tree: machine_tree::MachineTree,
     remote_hosts: remote_hosts::RemoteHosts,
+    /// The open field on the settings General tab that edits the apps which
+    /// hold the fleet (`agents.reserve_apps`).
+    reserve_apps_edit: Option<input_field::InputField>,
     mods: mods::Mods,
     /// The card's `node · PR` header row switch (prefix+Y), persisted.
     show_card_head: bool,
@@ -961,8 +964,10 @@ pub(crate) struct View {
     sideline_view: crate::view_store::SidelineView,
     /// The board's full-screen toggle (persisted in the view store).
     board_full: bool,
+    /// `mux.launch_screen`: the screen a launch opens on. HQ itself is
+    /// always reachable; this only picks the first one.
+    launch_screen: view_store::LaunchScreen,
     /// The persisted experimental toggles (see `experimental`).
-    experimental_org_board: bool,
     experimental_pane_share: bool,
     share: Option<share_flow::Share>,
     share_tx: Option<share_flow::ShareTx>,
@@ -1703,6 +1708,10 @@ pub(crate) enum AuxAction {
     ToggleResourceMeter,
     /// Flip `agents.reserve_auto` (the daemon's OBS / editor reserve).
     ToggleReserveAuto,
+    /// Open the field that edits `agents.reserve_apps`.
+    EditReserveApps,
+    /// Flip `mux.launch_screen` between `agents` and `hq`.
+    ToggleLaunchScreen,
     /// Clear the machine-wide fleet hold the status row names (prefix+U).
     LiftHold,
     ToggleConfirmLifecycle,
@@ -1852,6 +1861,7 @@ impl View {
             agent_group,
             machine_tree: machine_tree::MachineTree::load(),
             remote_hosts: remote_hosts::RemoteHosts::load(),
+            reserve_apps_edit: None,
             mods: Default::default(),
             show_card_head,
             group_by_lead,
@@ -1944,9 +1954,8 @@ impl View {
             org_generation: 0,
             sideline_view: crate::view_store::load_sideline_view(),
             board_full: view_store::load_board_full(),
-            experimental_org_board: view_store::load_experimental_or(
-                view_store::EXPERIMENTAL_ORG_BOARD,
-                true,
+            launch_screen: view_store::LaunchScreen::parse(
+                crate::config_defaults::lookup_key(view_store::LaunchScreen::KEY).as_deref(),
             ),
             experimental_pane_share: view_store::load_experimental(
                 view_store::EXPERIMENTAL_PANE_SHARE,
@@ -8433,6 +8442,8 @@ async fn execute_aux_action(
         | AuxAction::ToggleConfirmLifecycle
         | AuxAction::ToggleResourceMeter
         | AuxAction::ToggleReserveAuto
+        | AuxAction::ToggleLaunchScreen
+        | AuxAction::EditReserveApps
         | AuxAction::ToggleSidelineLayout
         | AuxAction::ApplyTheme(_)
         | AuxAction::RemoteHost(_)
@@ -9401,6 +9412,8 @@ mod nav_rows;
 mod needs_queue;
 #[path = "client/remote_hosts.rs"]
 mod remote_hosts;
+#[path = "client/reserve_apps.rs"]
+mod reserve_apps;
 
 #[path = "client/header_band.rs"]
 pub(crate) mod header_band;

@@ -354,6 +354,31 @@ pub(crate) fn peek_page(lines: &[String]) -> Vec<Line> {
     out
 }
 
+/// What HQ says while the fleet holds no seat: what it shows once work
+/// runs, then the next step. One place, so the first-run copy swaps in one
+/// edit.
+const EMPTY_HEAD: &str = "Nothing is running yet.";
+const EMPTY_BODY: &str = "HQ lists your leads, and the seats under each, once work runs.";
+
+pub(crate) fn empty_state() -> Vec<Line> {
+    let key = |k: &str, what: &str| {
+        Lb::default()
+            .s(format!("   {k}"), TextStyle::Item)
+            .s(format!("   {what}"), TextStyle::Meta)
+            .done()
+    };
+    vec![
+        blank(),
+        Lb::default()
+            .s(format!("   {EMPTY_HEAD}"), TextStyle::Item)
+            .done(),
+        meta(format!("   {EMPTY_BODY}")),
+        blank(),
+        key("n", "start a session: type a task"),
+        key("L", "start a lead"),
+    ]
+}
+
 pub(crate) fn keys_help() -> Vec<Line> {
     [
         " Org keys",
@@ -365,6 +390,8 @@ pub(crate) fn keys_help() -> Vec<Line> {
         "   enter            open a lead \u{b7} attach a seat on this machine",
         "   space x P        peek, stop or portal a seat on this machine",
         "   space P          peek or view a seat on another machine, over ssh",
+        "   n                start a session: the composer prefix+i opens",
+        "   L                start a lead: the composer, seeded with /fno:lead",
         "   s                start a seat on the selected machine \u{b7} esc cancels the prompt",
         "   r                review the PR diff of a seat whose node has a PR",
         "   W opens the HQ web page \u{b7} F full screen \u{b7} V cycle views \u{b7} ? keys \u{b7} esc close",

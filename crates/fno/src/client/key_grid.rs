@@ -109,6 +109,8 @@ pub(crate) fn hints(view: KeyView) -> Vec<KeyHint> {
             ("u", "go up"),
             ("enter", "open or attach"),
             ("space", "peek, stop, portal"),
+            ("n", "new session"),
+            ("L", "start a lead"),
             ("s", "start a seat"),
             ("r", "review PR"),
             ("W", "HQ web page"),

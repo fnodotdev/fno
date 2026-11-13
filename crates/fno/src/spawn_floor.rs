@@ -237,6 +237,19 @@ fn write_target(cwd: &Path) -> Result<(PathBuf, Vec<PathBuf>), FloorError> {
 /// (the mux's settings toggle for `agents.reserve_auto`), refusing when a
 /// project config already sets the key. Returns the file written.
 pub fn set_agents_bool(key: &str, on: bool, cwd: &Path) -> Result<PathBuf, FloorError> {
+    set_agents_item(key, value(on), cwd)
+}
+
+/// [`set_agents_bool`] for a list of strings (`agents.reserve_apps`).
+pub fn set_agents_list(key: &str, items: &[String], cwd: &Path) -> Result<PathBuf, FloorError> {
+    let mut array = toml_edit::Array::new();
+    for item in items {
+        array.push(item.as_str());
+    }
+    set_agents_item(key, value(array), cwd)
+}
+
+fn set_agents_item(key: &str, item: Item, cwd: &Path) -> Result<PathBuf, FloorError> {
     let (target, shadows) = write_target(cwd)?;
     if let Some(shadow) = shadows
         .iter()
@@ -256,7 +269,7 @@ pub fn set_agents_bool(key: &str, on: bool, cwd: &Path) -> Result<PathBuf, Floor
         "[agents]",
         &target,
     )?;
-    agents[key] = value(on);
+    agents[key] = item;
     commit_doc(&target, &doc)?;
     Ok(target)
 }

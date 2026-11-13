@@ -1511,7 +1511,6 @@ shoot from a host where the lanes command answers"
             // The org view at one tab or page: open it the way the key
             // does, run one synchronous fleet read, then select what the
             // shot names. A fleet map with no seat refuses the shot.
-            view.experimental_org_board = true;
             super::backlog_board::toggle_org_view(&mut view);
             view.board_full = true;
             let inputs = runtime.block_on(super::org_seats::gather(
