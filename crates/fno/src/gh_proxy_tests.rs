@@ -67,6 +67,7 @@ fn wrapper_reads_back_as_a_shim_with_or_without_quoting() {
 fn install_backs_up_a_foreign_gh_once_and_drops_the_legacy_link() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("github-cli");
+    std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("gh"), "real gh bytes").unwrap();
     std::fs::write(root.join("fno-gh-proxy"), "old").unwrap();
     let binary = Path::new("/opt/fno/bin/fno-agents");
