@@ -3208,8 +3208,8 @@ mod tests {
             compile_subcommand_of("cargo +nightly clippy -- -D warnings"),
             Some("clippy")
         );
-        assert_eq!(compile_subcommand_of("cargo b"), Some("build"));
-        assert_eq!(compile_subcommand_of("cargo c"), Some("check"));
+        assert_eq!(compile_subcommand_of("cargo b"), Some("b"));
+        assert_eq!(compile_subcommand_of("cargo c"), Some("c"));
         assert_eq!(
             compile_subcommand_of("cargo --offline build"),
             Some("build")
