@@ -61,7 +61,7 @@ mod tests {
             let Some((root, _)) = argv.split_first() else {
                 panic!("door argv row is empty");
             };
-            match root {
+            match *root {
                 "agents" => {
                     let args: Vec<OsString> = argv.iter().map(OsString::from).collect();
                     match classify(&args) {
