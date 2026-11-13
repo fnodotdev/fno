@@ -940,8 +940,7 @@ pub(crate) fn claim_names_current_session(holder: &str, rec: &crate::claims::Cla
         // A launch window that outlived its launcher: the pid probe proves
         // the spawner gone (basis pid-absent) while the TTL grace still
         // runs (state suspect), so the named worker never reached init.
-        // A pid-unavailable suspect (death unproven) stays refused: the
-        // named worker may still be coming (measured live 2026-10-28).
+        // A pid-unavailable suspect stays refused (measured live 2026-10-28).
         let (state, basis) = crate::claim_commands::status_verdict(rec);
         if matches!(state, crate::claims::ClaimState::Suspect)
             && basis == crate::claims::basis::PID_ABSENT
@@ -2839,9 +2838,11 @@ mod adopt_rung_tests {
         ] {
             std::env::remove_var(var);
         }
-        // pid None + TTL window: the classifier answers (suspect, pid-absent)
-        // - the launch window that outlived its launcher.
+        // Recorded spawner pid, provably absent, same machine, TTL in window:
+        // (suspect, pid-absent), the window that outlived its launcher.
         let mut rec = record("spawn-handover:t-dead-w");
+        rec.pid = Some(i32::MAX);
+        rec.host = crate::claims::hostname();
         rec.expires_at = Some(i64::MAX);
         assert!(
             claim_names_current_session(&rec.holder, &rec),
@@ -2850,6 +2851,7 @@ mod adopt_rung_tests {
         // Death unproven (pid-unavailable suspect) keeps the refusal.
         let mut rec = record("spawn-handover:t-live-w");
         rec.pid_unavailable = true;
+        rec.host = crate::claims::hostname();
         rec.expires_at = Some(i64::MAX);
         assert!(!claim_names_current_session(&rec.holder, &rec));
     }
