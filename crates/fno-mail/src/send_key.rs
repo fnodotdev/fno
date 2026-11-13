@@ -87,7 +87,8 @@ pub fn duplicate_of(
     unread
         .iter()
         .rev()
-        .map(|row| MessageRow::of(row))
+        .copied()
+        .map(MessageRow::of)
         .filter(|row| !row.id.is_empty() && SendKey::of_row(row, scheduled) == *key)
         .find(|row| !newest_state(rows, &row.id).is_accepted())
         .map(|row| row.id)
