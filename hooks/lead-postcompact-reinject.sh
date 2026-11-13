@@ -120,13 +120,13 @@ ${OPENER} Your memory is here. Read all of it: ${CANON_PATH}"
         [[ -n "$FAQ_FILE" && -f "$FAQ_FILE" ]] || continue
         CONTEXT="$CONTEXT
 Read this file: ${FAQ_FILE}"
-    done < <(fno agents org faq list --scope "$TEAM_SCOPE" --paths 2>/dev/null || true)
+    done < <(fno agents hq faq list --scope "$TEAM_SCOPE" --paths 2>/dev/null || true)
 fi
 
 # A tenured lead (its scope manifest reports a shape AND names this session)
 # also re-reads the lead skill: the beat, the stop arm and the levers live
 # there. A missing manifest or a foreign session id adds no line.
-LEAD_MANIFEST="$(fno agents org chart manifest-path --harness-session-id "$SID" 2>/dev/null || true)"
+LEAD_MANIFEST="$(fno agents hq chart manifest-path --harness-session-id "$SID" 2>/dev/null || true)"
 if [[ -n "$LEAD_MANIFEST" && -f "$LEAD_MANIFEST" ]]; then
     LEAD_SHAPE="$(sed -n 's/^shape:[[:space:]]*//p' "$LEAD_MANIFEST" | head -1 | tr -d '[:space:]')"
     LEAD_SID="$(sed -n 's/^harness_session_id:[[:space:]]*//p' "$LEAD_MANIFEST" | head -1 | tr -d '[:space:]')"

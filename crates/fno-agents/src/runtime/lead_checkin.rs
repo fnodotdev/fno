@@ -697,7 +697,7 @@ fn r_capacity_pair(footprint_payload: &Value, gate_payload: &Value) -> Result<Va
 }
 
 fn r_team() -> Result<Value, String> {
-    let (_, out, err) = fno_command(&["agents", "org", "--json"])?;
+    let (_, out, err) = fno_command(&["agents", "hq", "--json"])?;
     let payload: Value = serde_json::from_str(out.trim())
         .map_err(|e| format!("org payload did not parse: {e}: {}", err.trim()))?;
     let summary = payload.get("summary").cloned().unwrap_or(json!({}));
@@ -966,7 +966,7 @@ fn r_wake_meter(since: Option<&str>) -> Result<Value, String> {
 }
 
 fn r_drain(scope: &str) -> Result<Value, String> {
-    let (_, out, err) = fno_command(&["agents", "org", "drain", scope])?;
+    let (_, out, err) = fno_command(&["agents", "hq", "drain", scope])?;
     let payload: Value = serde_json::from_str(out.trim())
         .map_err(|e| format!("drain payload did not parse: {e}: {}", err.trim()))?;
     Ok(payload.get("undelivered").cloned().unwrap_or(Value::Null))
@@ -2704,7 +2704,7 @@ fn frontmatter_scope(text: &str) -> Option<&str> {
     None
 }
 
-const FAQ_PROMPT: &str = "fno agents org faq add --question \"...\" --answer \"...\" \
+const FAQ_PROMPT: &str = "fno agents hq faq add --question \"...\" --answer \"...\" \
 --specimen \"<node or PR>, <date>\" --exit \"<the change that retires this>\"";
 
 /// The one `lead_checkin` writer. `source` is the emitting half (`loop` for
@@ -2782,7 +2782,7 @@ fn finish_checkin(
     }
     if emit_requested && !emitted {
         eprintln!(
-            "lead-checkin: beat ran but no lead_checkin row was journalled; fno agents org history will not see it"
+            "lead-checkin: beat ran but no lead_checkin row was journalled; fno agents hq history will not see it"
         );
         return 3;
     }
@@ -2965,7 +2965,7 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     }
     let handoffs_defaulted = ctx.handoffs_dir.as_os_str().is_empty();
     if user_command {
-        // `fno agents org checkin`: the paths the retired Python shell passed,
+        // `fno agents hq checkin`: the paths the retired Python shell passed,
         // resolved here for any the caller left out.
         if ctx.events_paths.is_empty() {
             ctx.events_paths = crate::lead_history::default_journals(&ctx.cwd);
@@ -3010,7 +3010,7 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     if ctx.level.is_none() {
         eprintln!(
             "lead: no team holds {} at any level, so a check-in has nothing to report. A role \
-             needs a level and a scope. Have a lead or the user grant it: fno agents org promote \
+             needs a level and a scope. Have a lead or the user grant it: fno agents hq promote \
              <handle> --scope {}",
             ctx.scope, ctx.scope
         );

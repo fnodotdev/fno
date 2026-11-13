@@ -35,7 +35,7 @@ evals	retired	doctor evals	-
 event	retired	doctor event	-
 help	retired	--help	-
 law	retired	inbox law	-
-lead	retired	agents org	-
+lead	retired	agents hq	-
 lead board	retired	inbox board	-
 lint	retired	doctor lint	-
 loops	retired	agents loop control	-
@@ -54,7 +54,7 @@ research	retired	do research	-
 resume	retired	do resume	-
 retro	retired	backlog retro	-
 review	retired	do review	-
-roles	retired	agents org roles	-
+roles	retired	agents hq roles	-
 route	retired	config route	-
 scoreboard	retired	whoami scoreboard	-
 setup	retired	config setup	-

@@ -2135,7 +2135,7 @@ fn validate_theme(
 pub fn team_line_text(name: Option<&str>, title_txt: &str, scope: &str) -> String {
     match name {
         Some(name) => format!("{name}, {title_txt} ({scope})"),
-        None => "unnamed lead - name it once: fno agents org checkin --name redraw".to_string(),
+        None => "unnamed lead - name it once: fno agents hq checkin --name redraw".to_string(),
     }
 }
 
@@ -2321,7 +2321,7 @@ mod tests {
             );
             assert_eq!(
                 team_line_text(None, "L1 fno", "fno"),
-                "unnamed lead - name it once: fno agents org checkin --name redraw"
+                "unnamed lead - name it once: fno agents hq checkin --name redraw"
             );
         }
 

@@ -552,7 +552,7 @@ fn lead_state_with_projects(
         .count();
     if rival_count > 1 {
         state.unknown_reason = Some(format!(
-            "multiple rival rows hold {scope}; fno agents org shows every team"
+            "multiple rival rows hold {scope}; fno agents hq shows every team"
         ));
     }
     // The manifest keys on the HOLDER's own scope: a holder found through one
@@ -584,7 +584,7 @@ pub fn set_manifest_fields(
     if !path.is_file() {
         return Err(format!(
             "no manifest at {}; declare a field only on a team you have armed with \
-             `fno agents org init --scope`.",
+             `fno agents hq init --scope`.",
             path.display()
         ));
     }
@@ -598,7 +598,7 @@ pub fn set_manifest_fields(
             if named != expect {
                 return Err(format!(
                     "refusing to rewrite {scope:?}: the manifest names session {named}, not \
-                     {expect}. Re-read with `fno agents org` before touching anything."
+                     {expect}. Re-read with `fno agents hq` before touching anything."
                 ));
             }
         }

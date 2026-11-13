@@ -71,7 +71,7 @@ pub(crate) fn rebind(
         if from != old {
             return Err(format!(
                 "--rebind-from names {from}, but the manifest names {old}: the scope's \
-                 session moved under you. Re-read with `fno agents org` before touching \
+                 session moved under you. Re-read with `fno agents hq` before touching \
                  anything."
             ));
         }

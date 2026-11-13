@@ -1226,9 +1226,9 @@ async fn team(Query(q): Query<WsQuery>, State(st): State<AppState>) -> Response 
         let _ = std::fs::write(served_marker(&st.rundown_html), b"");
     }
     let notice = if st.rundown_republish {
-        "fno agents org rundown (a render has started; reload in about a minute)"
+        "fno agents hq rundown (a render has started; reload in about a minute)"
     } else {
-        "rundown.html is not resolvable from this config (a template, ~user, relative or unset $VAR state_dir); fix state_dir or run fno agents org rundown"
+        "rundown.html is not resolvable from this config (a template, ~user, relative or unset $VAR state_dir); fix state_dir or run fno agents hq rundown"
     };
     private_page_response(
         &st.rundown_html,
@@ -1815,7 +1815,7 @@ fn start_team_republish(out: &Path) {
     tokio::spawn(async move {
         let fno = std::env::current_exe().unwrap_or_else(|_| "fno".into());
         let mut cmd = crate::process_admission::tokio_command(&fno);
-        cmd.args(["agents", "org", "rundown", "--out"]).arg(&out);
+        cmd.args(["agents", "hq", "rundown", "--out"]).arg(&out);
         cmd.stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped());
@@ -1858,7 +1858,7 @@ fn start_team_republish(out: &Path) {
             }
         };
         if let Err(e) = result {
-            eprintln!("fno mux web: `fno agents org rundown --out <rundown.html>` failed: {e}");
+            eprintln!("fno mux web: `fno agents hq rundown --out <rundown.html>` failed: {e}");
         }
         TEAM_REPUBLISHING.store(false, Ordering::SeqCst);
     });
@@ -2967,7 +2967,7 @@ console.log("backlog page helpers: 18 cases ok");
             &path,
             Some("right"),
             "right",
-            "fno agents org rundown",
+            "fno agents hq rundown",
             NavPage::Team,
         )
         .await;
@@ -2987,7 +2987,7 @@ console.log("backlog page helpers: 18 cases ok");
             &path,
             Some("wrong"),
             "right",
-            "fno agents org rundown",
+            "fno agents hq rundown",
             NavPage::Team,
         )
         .await;

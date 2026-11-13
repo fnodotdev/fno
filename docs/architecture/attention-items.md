@@ -36,9 +36,9 @@ The knob is `questions.route` in `.fno/config.toml`:
 
 | Value | What happens |
 |---|---|
-| `ladder` (the default) | The row sits with the asker's lead first. `fno agents org escalate` sends no relay mail. |
+| `ladder` (the default) | The row sits with the asker's lead first. `fno agents hq escalate` sends no relay mail. |
 | `direct` | The row goes to the user's board at once, with no rung. |
-| `triage` | As `direct`, and `fno agents org escalate` keeps the triage lead's mail copy. |
+| `triage` | As `direct`, and `fno agents hq escalate` keeps the triage lead's mail copy. |
 
 An unknown value reads as `ladder`, and the escalate nudge names it. The read lives in `crates/fno-agents/src/runtime/lead_escalation.rs`, so the default needs no config entry.
 

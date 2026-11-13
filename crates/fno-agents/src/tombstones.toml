@@ -85,9 +85,9 @@
 # nested under twelve entries. The fno-agents binary keeps its own arms.
 "agents gate" = "nothing - the injection gate was retired with the daemon PTY-inject lane. The spawn gate is `fno agents admit gate`; its read-only verdict is `fno agents admit status`"
 "agents ping" = "nothing - it was a placeholder that printed a notice and exited 0. `fno agents session status` reads daemon liveness"
-"agents team-fold" = "`fno agents org chart fold` - the same role scope fold"
-"agents team-orphans" = "`fno agents org chart vacancies` - the same unfilled-seat read"
-"agents term-ledger" = "`fno agents org chart rundown` - the term ledger page; the raw renderer is `fno agents org chart rundown-raw`"
+"agents team-fold" = "`fno agents hq chart fold` - the same role scope fold"
+"agents team-orphans" = "`fno agents hq chart vacancies` - the same unfilled-seat read"
+"agents term-ledger" = "`fno agents hq chart rundown` - the term ledger page; the raw renderer is `fno agents hq chart rundown-raw`"
 
 # The lint scanned agents/dispatch.py, which left with the dead-code sweep.
 "doctor lint flock-pattern" = "nothing - its one scan target, the Python dispatch module, was deleted"

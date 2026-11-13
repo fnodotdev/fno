@@ -549,7 +549,7 @@ pub fn settle(promotion: Option<&Promotion>, exit: i32, name: &str) -> i32 {
         Some(Ok(answer)) => answer["notices"].as_array().cloned().unwrap_or_default(),
         failed => vec![json!(format!(
             "spawn: promotion settlement failed after launch: {}; {} runs without a confirmed \
-             role. Grant it with fno agents org promote.",
+             role. Grant it with fno agents hq promote.",
             match failed {
                 Some(Err(e)) => e,
                 _ => "no registry row was found".to_string(),

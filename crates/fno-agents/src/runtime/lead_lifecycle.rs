@@ -1,4 +1,4 @@
-//! The user surfaces of the lead lifecycle commands: `fno agents org init`, `cancel`
+//! The user surfaces of the lead lifecycle commands: `fno agents hq init`, `cancel`
 //! and `term`, riding `lead-state --init`, `--cancel` and `--term`. The words
 //! each one prints are the retired Python commands' words, frozen in
 //! `tests/golden/lead_lifecycle/`.
@@ -213,7 +213,7 @@ fn warn_unpromoted_row(scope: &str, cwd: &std::path::Path) {
         eprintln!(
             "lead: warning: manifest armed, but this session resolves to no registry row, so \
              its role cannot be checked. Run `/fno-me` to register, then ask your lead to \
-             grant it: `fno agents org promote <handle> --scope {scope}`."
+             grant it: `fno agents hq promote <handle> --scope {scope}`."
         );
         return;
     };
@@ -231,7 +231,7 @@ fn warn_unpromoted_row(scope: &str, cwd: &std::path::Path) {
     let Some(level) = row.role_level else {
         eprintln!(
             "lead: warning: manifest armed for '{scope}', but this row carries NO role, so \
-             {consequence} Ask your lead to grant it: `fno agents org promote {handle} \
+             {consequence} Ask your lead to grant it: `fno agents hq promote {handle} \
              --scope {scope}`. Never hand that line to the user. {}",
             crate::lead_verdict_inputs::chat_grant_line(scope, handle)
         );
@@ -245,7 +245,7 @@ fn warn_unpromoted_row(scope: &str, cwd: &std::path::Path) {
         "lead: warning: manifest armed for '{scope}', but this row's role is '{label}', which \
          is not that scope. These readers key on an EXACT role_scope, so a role over wider \
          territory does not satisfy them any more than a role over unrelated territory: \
-         {consequence} Ask your lead to re-scope it with `fno agents org promote \
+         {consequence} Ask your lead to re-scope it with `fno agents hq promote \
          {handle} --scope {scope}`."
     );
 }

@@ -111,10 +111,14 @@ reset_events() {
 space_leads() {  # space_leads <dir> - the leads dir of <dir>'s space
   # The space resolver's rule: the canonical repo root (the first `git
   # worktree list` row), else the dir itself, with every / swapped for -,
-  # under <state_dir>/spaces.
+  # under <state_dir>/spaces. The resolver canonicalizes before it slugs
+  # (paths.rs), and darwin's mktemp lands under the /var symlink, so the
+  # fixture canonicalizes the same way or the hook reads a leads dir the
+  # fixture never wrote.
   local root
   root="$(git -C "$1" worktree list --porcelain 2>/dev/null | awk 'NR==1{sub(/^worktree /,"");print}')"
   [ -n "$root" ] || root="$1"
+  root="$(cd "$root" && pwd -P)"
   printf '%s/.fno/spaces/%s/leads\n' "$SBX" "${root//\//-}"
 }
 LEADS_DIR="$(space_leads "$SBX")"
@@ -134,7 +138,7 @@ reset_events
 write_shape pass
 run_hook "$(payload)"
 assert_contains "AC9: orphan nudge fires on shape: pass" "$OUT" "2 worker(s) you spawned are still alive"
-assert_contains "AC9: option 1 names the shape command" "$OUT" "fno agents org chart shape team"
+assert_contains "AC9: option 1 names the shape command" "$OUT" "fno agents hq chart shape team"
 events_has lead_orphan_block && ok "AC9: lead_orphan_block event written" || bad "AC9: no lead_orphan_block event"
 
 # === AC10: no manifest -> the nudge fires (read failure never clears) =========

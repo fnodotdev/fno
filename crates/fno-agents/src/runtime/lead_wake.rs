@@ -114,7 +114,7 @@ fn short_scope(scope: &str) -> String {
 pub(crate) fn wake_text(idle_secs: i64, beat_secs: i64) -> String {
     format!(
         "Automatic lead-wake from the fno daemon: no check-in beat journaled for {}m \
-         (the beat is {}m). Run your check-in now: fno agents org checkin. \
+         (the beat is {}m). Run your check-in now: fno agents hq checkin. \
          A second missed beat in a row tells the operator.",
         mins(idle_secs),
         mins(beat_secs),
