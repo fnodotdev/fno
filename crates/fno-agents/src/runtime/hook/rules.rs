@@ -23,6 +23,7 @@ pub fn run(event: &str) -> i32 {
     let Some(ev) = event_of(event, &hook, &cwd) else {
         return crate::hook::emit_allow();
     };
+    emit_skill_invoked(&cwd, &ev);
     let mut ruling = crate::rules_source::rule(&cwd, &ev);
     if ev.kind == "pre-tool" {
         drop_seen(&mut ruling, ev.session.as_deref());
@@ -48,6 +49,31 @@ pub fn run(event: &str) -> i32 {
         }
         Rendered::Allow => crate::hook::emit_allow(),
     }
+}
+
+/// One `skill_invoked` row for an fno skill: a typed `/fno:x` prompt or a
+/// Skill call. Other skills are a person's own and stay unwritten.
+fn emit_skill_invoked(cwd: &Path, ev: &Event) {
+    let Some(skill) = ev.skill.as_deref().filter(|s| s.starts_with("fno:")) else {
+        return;
+    };
+    let skill: String = skill
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | '-' | '_'))
+        .collect();
+    let via = if ev.kind == "prompt" {
+        "prompt"
+    } else {
+        "tool"
+    };
+    let path =
+        crate::state_path::resolve("events", cwd).unwrap_or_else(|| crate::paths::events_path(cwd));
+    let data = json!({
+        "skill": skill,
+        "harness": ev.harness.as_deref().unwrap_or("unknown"),
+        "via": via,
+    });
+    let _ = crate::events::EventEmitter::new(path, "hook").emit("skill_invoked", &data);
 }
 
 /// The event a payload describes, or `None` for a payload with nothing to

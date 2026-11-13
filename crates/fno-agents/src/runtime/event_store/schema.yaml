@@ -93,6 +93,77 @@ event_types:
         exit: { type: integer, description: "The one-shot's exit code" }
     consumers: [operator, consult]
 
+  - name: cli_command
+    retention: durable
+    description: "One fno or fno-agents command run from the front door: the command path, its exit code and its wall time. The path is menu words only, never an argument. Shipped by the usage events arm."
+    sources: [cli]
+    data:
+      required: [command, exit, duration_ms]
+      properties:
+        command:
+          type: string
+          description: "The command path, one to three menu words (e.g. backlog get); a word not on the menu is never written."
+        exit:
+          type: integer
+          description: "The process exit code."
+        duration_ms:
+          type: integer
+          description: "Wall time from the front door's start to exit."
+    consumers: [operator]
+
+  - name: skill_invoked
+    retention: durable
+    description: "An fno skill invoked in a session: a slash command typed at the prompt or a Skill tool call. Only names with the fno: prefix are written."
+    sources: [hook]
+    data:
+      required: [skill, harness, via]
+      properties:
+        skill:
+          type: string
+          description: "The skill name, e.g. fno:target."
+        harness:
+          type: string
+          description: "The harness the session runs on."
+        via:
+          type: string
+          enum: [prompt, tool]
+          description: "prompt for a typed slash command, tool for a Skill tool call."
+    consumers: [operator]
+
+  - name: pr_opened
+    retention: durable
+    description: "fno do pr create opened a pull request."
+    sources: [target]
+    data:
+      required: [pr]
+      properties:
+        pr:
+          type: integer
+          description: "The PR number gh printed."
+        node:
+          type: string
+          description: "The backlog node the branch names, when it names one."
+    consumers: [operator]
+
+  - name: node_done
+    retention: durable
+    description: "A backlog node closed: fno backlog done, or the reconcile pass after its PR merged."
+    sources: [backlog]
+    data:
+      required: [node_id, via]
+      properties:
+        node_id:
+          type: string
+          description: "The node that closed."
+        via:
+          type: string
+          enum: [done, reconcile]
+          description: "done for fno backlog done, reconcile for a merge-driven close."
+        pr_number:
+          type: integer
+          description: "The merged PR, when one evidenced the close."
+    consumers: [operator]
+
   - name: first_check_notice
     description: "The spawn first-check found no progress and mailed the parent; recorded beside the mail so the consult report's stuck-node fold and every later reader query the store instead of a mailbox. One row per notice."
     sources: [fno-first-check]

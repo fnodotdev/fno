@@ -303,3 +303,8 @@
 {"expect":"invalid","reason":"first_check_notice without the notice index refuses","event":{"ts":"2026-11-06T06:04:00Z","type":"first_check_notice","source":"fno-first-check","data":{"name":"t-worker"}}}
 {"expect":"valid","reason":"retire hold names its reason","event":{"ts":"2026-11-06T12:00:00Z","type":"retire_held_for_boot_revival","source":"daemon","data":{"reason":"no receipt for this boot yet"}}}
 {"expect":"valid","reason":"reseat names the restored role","event":{"ts":"2026-11-06T12:01:00Z","type":"agent_team_reseated","source":"daemon","data":{"scope":"zed","level":2,"holder_session":"11111111-2222-4333-8444-555555555555","grantor":"operator","row":"l2"}}}
+{"expect":"valid","reason":"cli_command happy path","event":{"ts":"2026-11-13T10:00:00Z","type":"cli_command","source":"cli","data":{"command":"backlog get","exit":0,"duration_ms":41}}}
+{"expect":"invalid","reason":"cli_command missing exit","event":{"ts":"2026-11-13T10:00:00Z","type":"cli_command","source":"cli","data":{"command":"backlog get","duration_ms":41}}}
+{"expect":"valid","reason":"skill_invoked happy path","event":{"ts":"2026-11-13T10:00:00Z","type":"skill_invoked","source":"hook","data":{"skill":"fno:target","harness":"claude","via":"tool"}}}
+{"expect":"valid","reason":"pr_opened happy path","event":{"ts":"2026-11-13T10:00:00Z","type":"pr_opened","source":"target","data":{"pr":141,"node":"x-2f27"}}}
+{"expect":"valid","reason":"node_done happy path","event":{"ts":"2026-11-13T10:00:00Z","type":"node_done","source":"backlog","data":{"node_id":"x-2f27","via":"reconcile","pr_number":141}}}

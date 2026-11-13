@@ -576,6 +576,15 @@ pub(crate) fn emit_event(name: &str, data: Value) {
     let _ = emitter.emit(name, &data);
 }
 
+/// One `node_done` row per closed node, for the usage arm.
+pub(crate) fn emit_node_done(node_id: &str, via: &str, pr_number: Option<i64>) {
+    let mut data = json!({"node_id": node_id, "via": via});
+    if let Some(pr) = pr_number {
+        data["pr_number"] = json!(pr);
+    }
+    emit_event("node_done", data);
+}
+
 /// Best-effort operator audit during a drive window: an informational action
 /// (`backlog done`) is allowed but attributed (the active_drive_sessions twin).
 pub(super) fn drive_audit(task_id: &str) {
@@ -670,6 +679,10 @@ pub(super) fn canonical_post_close(
     skip_stamp: bool,
     evidence_pr_url: Option<&str>,
 ) {
+    let pr = super::pr_link::pr_number_from_url(evidence_pr_url);
+    for id in std::iter::once(task_id).chain(cascade_closed.iter().map(String::as_str)) {
+        emit_node_done(id, "done", pr);
+    }
     if let Some(plan) = plan_path {
         if !skip_stamp {
             stamp_and_graduate_plan(plan, evidence_pr_url, session_id);
