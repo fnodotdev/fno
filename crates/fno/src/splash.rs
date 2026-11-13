@@ -255,6 +255,14 @@ static HQ_MARK_EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 /// clock starts at the first call, so the mark plays once per process, the
 /// first time HQ has nothing to list.
 pub(crate) fn hq_mark_clock() -> Option<f64> {
+    // A shoot pins one frame: FNO_DEMO_MARK_AT=<seconds> paints the mark as
+    // it reads at that second, so a frame series can be stitched into a video.
+    if let Some(t) = std::env::var("FNO_DEMO_MARK_AT")
+        .ok()
+        .and_then(|v| v.trim().parse::<f64>().ok())
+    {
+        return (t < MARK_PLAY_SECS).then_some(t);
+    }
     if !animated() {
         return None;
     }
