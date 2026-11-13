@@ -158,6 +158,31 @@ fn usage_flag(name: &str) -> i32 {
     2
 }
 
+/// The holder default: the caller's own ambient session id, announced on
+/// stderr. Returns false only when no harness identity resolves, after
+/// printing the refusal that names the flag and the way out.
+fn default_holder(holder: &mut String) -> bool {
+    let (ambient_session, _harness) = claims::resolve_identity();
+    match ambient_session {
+        Some(session_id) => {
+            *holder = session_id;
+            eprintln!(
+                "note: --holder defaulted to the ambient session id ({})",
+                holder
+            );
+            true
+        }
+        None => {
+            eprintln!(
+                "validation error: --holder is required when no harness session \
+                 identity is ambient; run inside a harness session or pass \
+                 --holder <session-id>"
+            );
+            false
+        }
+    }
+}
+
 fn run_parsed(mut a: LeafArgs) -> i32 {
     // Lane mode first: a slot is acquired by lane id, never by claim key
     // (cli.py:187-197).
@@ -184,25 +209,8 @@ fn run_parsed(mut a: LeafArgs) -> i32 {
     // holder should name who holds it, and inside a harness session
     // resolve_identity proves exactly that. Ambiguous or absent identity
     // still refuses, naming the flag and the way out.
-    if a.holder.is_empty() {
-        let (ambient_session, _harness) = claims::resolve_identity();
-        match ambient_session {
-            Some(session_id) => {
-                a.holder = session_id;
-                eprintln!(
-                    "note: --holder defaulted to the ambient session id ({})",
-                    a.holder
-                );
-            }
-            None => {
-                eprintln!(
-                    "validation error: --holder is required when no harness session \
-                     identity is ambient; run inside a harness session or pass \
-                     --holder <session-id>"
-                );
-                return 2;
-            }
-        }
+    if a.holder.is_empty() && !default_holder(&mut a.holder) {
+        return 2;
     }
     if a.pid_unavailable && a.pid.is_some() {
         eprintln!("validation error: --pid and --pid-unavailable are mutually exclusive");
