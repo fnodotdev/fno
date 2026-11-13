@@ -4,9 +4,9 @@ name: release-app
 # own line (crates/fno-app/Cargo.toml), decoupled from fno: pushing a
 # `fno-app-v<version>` tag builds that version and publishes it as a GitHub
 # release; a manual dispatch is an inspection build that publishes nothing.
-# The tarball holds `fno-app.app`: Developer ID signed, notarized and stapled
-# when the five signing secrets are set (docs/install.md), ad hoc signed
-# otherwise.
+# The tarball holds `fno-app.app`: Developer ID signed when the two certificate
+# secrets are set, and also notarized and stapled when the three App Store
+# Connect secrets are set too (docs/install.md). Ad hoc signed otherwise.
 
 on:
   workflow_dispatch:
@@ -65,16 +65,23 @@ jobs:
           NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
         run: |
           set -euo pipefail
-          if [ -n "$CERT_P12" ] && [ -n "$CERT_PASSWORD" ] \
-            && [ -n "$NOTARY_KEY" ] && [ -n "$NOTARY_KEY_ID" ] && [ -n "$NOTARY_ISSUER" ]; then
-            echo "ready=true" >> "$GITHUB_OUTPUT"
+          sign=false
+          notarize=false
+          if [ -n "$CERT_P12" ] && [ -n "$CERT_PASSWORD" ]; then
+            sign=true
+            if [ -n "$NOTARY_KEY" ] && [ -n "$NOTARY_KEY_ID" ] && [ -n "$NOTARY_ISSUER" ]; then
+              notarize=true
+            else
+              echo "::notice::macOS notarization skipped: the App Store Connect secrets are not set (see docs/install.md); shipping a Developer ID signed, un-notarized fno-app.app."
+            fi
           else
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::macOS signing and notarization skipped: Developer ID secrets are not set (see docs/install.md); shipping an ad hoc signed fno-app.app."
+            echo "::notice::macOS signing skipped: the Developer ID certificate secrets are not set (see docs/install.md); shipping an ad hoc signed fno-app.app."
           fi
+          echo "sign=$sign" >> "$GITHUB_OUTPUT"
+          echo "notarize=$notarize" >> "$GITHUB_OUTPUT"
 
-      - name: Sign, notarize and staple fno-app.app
-        if: steps.signing.outputs.ready == 'true'
+      - name: Sign fno-app.app
+        if: steps.signing.outputs.sign == 'true'
         shell: bash
         env:
           CERT_P12: ${{ secrets.MACOS_CERT_P12_BASE64 }}
@@ -88,13 +95,15 @@ jobs:
           git show "${{ github.sha }}:scripts/release/macos-sign.sh" > "$RUNNER_TEMP/macos-sign.sh"
           sign="bash $RUNNER_TEMP/macos-sign.sh"
           $sign sign fno-app.app
-          $sign notarize fno-app.app
-          $sign staple fno-app.app
+          if [ "${{ steps.signing.outputs.notarize }}" = "true" ]; then
+            $sign notarize fno-app.app
+            $sign staple fno-app.app
+            spctl -a -t exec -vv fno-app.app
+          fi
           $sign cleanup
-          spctl -a -t exec -vv fno-app.app
 
       - name: Ad hoc sign
-        if: steps.signing.outputs.ready != 'true'
+        if: steps.signing.outputs.sign != 'true'
         run: codesign --force --deep -s - fno-app.app
 
       - name: Package tarball

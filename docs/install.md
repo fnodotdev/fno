@@ -182,7 +182,7 @@ When a person runs the wizard, a preset sets the pace. The preset screen opens w
 
 ## Keeping fno on the machine: codesign and updates
 
-On macOS, `fno update` signs each binary it places with the Developer ID identity in your keychain. The identifiers are fixed (dev.fno.fno, dev.fno.fno-agents, and so on), so your macOS permission grants survive every update. Login Items then stops reporting fno as an item from an unidentified developer. Without a Developer ID certificate, fno skips the signing and says so. The real identity checks are `codesign --verify --strict` and the Authority chain in `codesign -dv`. An `spctl -a` rejection on a bare CLI binary comments on the file shape, never on the identity. The Python `fno` console script cannot carry this signature: it is a script, not a Mach-O binary. If the repository holds the secrets below, CI signs and notarizes the macOS release binaries. Without them, CI prints one notice and ships binaries without a Developer ID signature.
+On macOS, `fno update` signs each binary it places with the Developer ID identity in your keychain. The identifiers are fixed (dev.fno.fno, dev.fno.fno-agents, and so on), so your macOS permission grants survive every update. Login Items then stops reporting fno as an item from an unidentified developer. Without a Developer ID certificate, fno skips the signing and says so. The real identity checks are `codesign --verify --strict` and the Authority chain in `codesign -dv`. An `spctl -a` rejection on a bare CLI binary comments on the file shape, never on the identity. The Python `fno` console script cannot carry this signature: it is a script, not a Mach-O binary. If the repository holds the secrets below, CI signs the macOS release binaries when the two certificate secrets are set, and notarizes them when the three App Store Connect secrets are set too. Without the certificate secrets, CI prints one notice and ships binaries without a Developer ID signature.
 
 | Secret | Holds |
 |---|---|
@@ -192,7 +192,7 @@ On macOS, `fno update` signs each binary it places with the Developer ID identit
 | `APPLE_NOTARY_KEY_ID` | The key ID of that API key |
 | `APPLE_NOTARY_ISSUER_ID` | The issuer ID of the App Store Connect team |
 
-The same five secrets sign and notarize `fno-app.app` in the desktop app release job. Set all five. If one is missing, CI skips both steps. A bare binary cannot carry a stapled notarization ticket, so Gatekeeper checks the notarization online.
+The same secrets sign and notarize `fno-app.app` in the desktop app release job. The two certificate secrets alone give a Developer ID signature with the hardened runtime. macOS keys privacy grants to the team, so they stay put across releases even before notarization. Notarization and stapling need the three App Store Connect secrets as well. If those are missing, CI signs, skips notarization, and prints one notice that names what it skipped. A bare binary cannot carry a stapled notarization ticket, so Gatekeeper checks the notarization online.
 
 ## Keeping fno up to date
 

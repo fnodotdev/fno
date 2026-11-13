@@ -24,6 +24,10 @@ plutil -lint "$plist" >/dev/null
 [ "$(plutil -extract CFBundleVersion raw "$plist")" = "0.4.6" ] || { echo "FAIL: bundle version"; exit 1; }
 [ "$(plutil -extract CFBundleIdentifier raw "$plist")" = "dev.fno.fno-app" ] || { echo "FAIL: identifier"; exit 1; }
 
+for key in NSDesktopFolderUsageDescription NSDocumentsFolderUsageDescription NSDownloadsFolderUsageDescription NSRemovableVolumesUsageDescription NSNetworkVolumesUsageDescription NSAppleEventsUsageDescription; do
+  [ -n "$(plutil -extract "$key" raw "$plist")" ] || { echo "FAIL: $key missing"; exit 1; }
+done
+
 # A second run over the same out-dir replaces the bundle cleanly.
 touch "$tmp/out/fno-app.app/stale"
 bash "$script" "$tmp/fno-app" 0.4.7 "$tmp/out" >/dev/null
