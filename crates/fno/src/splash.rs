@@ -37,6 +37,9 @@ const ART_ROWS: u16 = STAMP_ROWS as u16 + 1;
 /// before the first UI paint takes over. Still skippable.
 const FINAL_HOLD: Duration = Duration::from_millis(500);
 
+/// The last beat on the sheet: after it the mark is still.
+const MARK_PLAY_SECS: f64 = 2.25;
+
 /// One splash pixel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Px {
@@ -224,6 +227,54 @@ fn visual_rows(frame: Frame, version: &str, dim: CtColor) -> Vec<Vec<Seg>> {
         rows.push(footer_segs(version, dim));
     }
     rows
+}
+
+/// Width in cells of the art; HQ's empty state needs it to pick the mark.
+pub(crate) const MARK_CELLS: usize = ART_CELLS as usize;
+
+/// The mark as plain cell rows at `t` seconds (`None` = the finished mark):
+/// no color, no footer, so a caller paints it in whatever role it owns.
+pub(crate) fn mark_rows(t: Option<f64>) -> Vec<String> {
+    let frame = t.map_or(FINAL, frame_at);
+    (0..STAMP_ROWS)
+        .map(|r| {
+            let mut row = f_cells(r);
+            row.push_str(&" ".repeat(GAP_CELLS as usize));
+            if let Some(w) = frame.stamp_px {
+                row.push_str(&px_cells(&stamp_row(w, r, frame.brackets)));
+            }
+            row.trim_end().to_string()
+        })
+        .collect()
+}
+
+static HQ_MARK_EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+/// Seconds the HQ mark has been playing, or `None` when it shows the
+/// finished mark: the motion gate says no, or the one play has ended. The
+/// clock starts at the first call, so the mark plays once per process, the
+/// first time HQ has nothing to list.
+pub(crate) fn hq_mark_clock() -> Option<f64> {
+    if !animated() {
+        return None;
+    }
+    let t = HQ_MARK_EPOCH
+        .get_or_init(Instant::now)
+        .elapsed()
+        .as_secs_f64();
+    (t < MARK_PLAY_SECS).then_some(t)
+}
+
+/// When the next beat of the HQ mark lands; `None` once it is still, so a
+/// settled empty state stops waking the client.
+pub(crate) fn hq_mark_next_beat() -> Option<Instant> {
+    let t = hq_mark_clock()?;
+    let epoch = *HQ_MARK_EPOCH.get()?;
+    schedule()
+        .into_iter()
+        .map(|(at, _)| at)
+        .find(|at| *at > t)
+        .map(|at| epoch + Duration::from_secs_f64(at))
 }
 
 /// The inline banner needs the art's width so rows never wrap; height is
@@ -453,6 +504,22 @@ mod tests {
                 Px::Solid,
             ],
         );
+    }
+    #[test]
+    fn mark_rows_grow_from_the_f_alone_to_the_full_mark() {
+        let first = mark_rows(Some(0.0));
+        let last = mark_rows(None);
+        assert_eq!(first.len(), STAMP_ROWS);
+        assert_eq!(last.len(), STAMP_ROWS);
+        assert!(first[0].chars().count() <= 8, "{first:?}");
+        assert_eq!(last[0].chars().count(), MARK_CELLS);
+        assert_eq!(mark_rows(Some(MARK_PLAY_SECS)), last);
+    }
+    #[test]
+    fn a_still_gate_means_no_clock_and_no_wake() {
+        // Tests are not a TTY, so the motion gate is closed.
+        assert_eq!(hq_mark_clock(), None);
+        assert_eq!(hq_mark_next_beat(), None);
     }
     #[test]
     fn a_long_version_never_overflows_the_footer_row() {

@@ -1,6 +1,7 @@
 //! The client loop's frame timer: when to wake an otherwise idle terminal
-//! (nothing else redraws there) so a timed animation advances. Three sources:
-//! the Working-row spin, the metrics skeleton's breathe and the need-input pulse. Re-armed each loop pass; with none running
+//! (nothing else redraws there) so a timed animation advances. Four sources:
+//! the Working-row spin, the metrics skeleton's breathe, the need-input pulse
+//! and HQ's empty-state mark, which plays once and then stops waking. Re-armed each loop pass; with none running
 //! there is no deadline and no wakeup.
 
 use super::*;
@@ -16,10 +17,16 @@ impl View {
         let pulse = crate::lattice::spin_epoch()
             .filter(|_| self.need_input_on_screen())
             .map(|t0| (t0, crate::lattice::SPIN_FRAME_MS));
+        let mark = self
+            .org_board
+            .as_ref()
+            .filter(|b| b.shows_empty_state())
+            .and_then(|_| crate::splash::hq_mark_next_beat());
         spin.into_iter()
             .chain(breathe)
             .chain(pulse)
             .map(|(t0, step)| next_boundary(t0, step))
+            .chain(mark)
             .min()
     }
 

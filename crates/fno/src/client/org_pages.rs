@@ -360,15 +360,45 @@ pub(crate) fn peek_page(lines: &[String]) -> Vec<Line> {
 const EMPTY_HEAD: &str = "Nothing is running yet.";
 const EMPTY_BODY: &str = "HQ lists your leads, and the seats under each, once work runs.";
 
-pub(crate) fn empty_state() -> Vec<Line> {
+/// The mark's indent, matching the text under it.
+const MARK_INDENT: usize = 3;
+
+/// The F[no] mark above the copy: the splash's pixel art where the pane is
+/// wide enough, the one-row wordmark where it is not. Ink is the text color
+/// (`Item`), so every theme and both grounds read it.
+fn empty_mark(width: usize) -> Vec<Line> {
+    let pad = " ".repeat(MARK_INDENT);
+    if width < MARK_INDENT + crate::splash::MARK_CELLS + 1 {
+        return vec![
+            Lb::default()
+                .s(format!("{pad}\u{FF26}"), TextStyle::Title)
+                .s("[no]", TextStyle::Tab)
+                .done(),
+            blank(),
+        ];
+    }
+    let mut out: Vec<Line> = crate::splash::mark_rows(crate::splash::hq_mark_clock())
+        .into_iter()
+        .map(|row| {
+            Lb::default()
+                .s(format!("{pad}{row}"), TextStyle::Item)
+                .done()
+        })
+        .collect();
+    out.push(blank());
+    out
+}
+
+pub(crate) fn empty_state(width: usize) -> Vec<Line> {
     let key = |k: &str, what: &str| {
         Lb::default()
             .s(format!("   {k}"), TextStyle::Item)
             .s(format!("   {what}"), TextStyle::Meta)
             .done()
     };
-    vec![
-        blank(),
+    let mut out = vec![blank()];
+    out.extend(empty_mark(width));
+    out.extend([
         Lb::default()
             .s(format!("   {EMPTY_HEAD}"), TextStyle::Item)
             .done(),
@@ -376,7 +406,8 @@ pub(crate) fn empty_state() -> Vec<Line> {
         blank(),
         key("n", "start a session: type a task"),
         key("L", "start a lead"),
-    ]
+    ]);
+    out
 }
 
 pub(crate) fn keys_help() -> Vec<Line> {

@@ -188,6 +188,16 @@ impl OrgBoard {
     }
 
     /// The selection; a key the last read dropped falls back to the fleet.
+    /// HQ is open on the root with no seat to list: the empty state, mark
+    /// and all, is what paints.
+    pub(crate) fn shows_empty_state(&self) -> bool {
+        self.current() == Item::Root
+            && self
+                .fleet
+                .as_ref()
+                .is_some_and(|f| f.seats().next().is_none())
+    }
+
     pub(crate) fn current(&self) -> Item {
         self.locate(&self.key).unwrap_or(Item::Root)
     }
@@ -363,9 +373,10 @@ impl OrgBoard {
                     super::org_pages::seat(machine, lead, &lead.seats[s], width, now),
                 )
             }
-            Item::Root if f.seats().next().is_none() => {
-                (vec![title("HQ", width)], super::org_pages::empty_state())
-            }
+            Item::Root if f.seats().next().is_none() => (
+                vec![title("HQ", width)],
+                super::org_pages::empty_state(width),
+            ),
             _ => {
                 use super::org_tabs as t;
                 let name = match item {
@@ -423,7 +434,7 @@ impl OrgBoard {
                 .is_some_and(|f| f.seats().next().is_none());
         if idle_root && !split {
             return Frame {
-                explorer: super::org_pages::empty_state()
+                explorer: super::org_pages::empty_state(width)
                     .into_iter()
                     .take(body_h)
                     .collect(),
