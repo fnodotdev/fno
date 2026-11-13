@@ -5,7 +5,7 @@
 #       [--window-size smallest|latest|largest] [--peer 120x40] [--no-fit]
 #       [--hold] [--group <axis>] [--remote-pane] [--web [--web-port <port>]]
 #       [--hold] [--group <axis>] [--remote-pane] [--flat-pins] [--sort <col:dir>] [--layout list] [--lead-nesting] [--holds]
-#       [--install-card data|code]
+#       [--install-card data|code] [--app [--app-theme <theme>]]
 #
 # Builds a throwaway server in a temp state root: its own config, graph,
 # agent registry, view prefs and socket dir. It seeds invented backlog nodes,
@@ -67,6 +67,8 @@ GROUP=""
 REMOTE_PANE=""
 WEB=""
 WEB_PORT=8722
+APP=""
+APP_THEME=""
 FNO_DEMO_FLATPINS=""
 FNO_DEMO_HOLDS=""
 FNO_DEMO_SORT=""
@@ -91,7 +93,9 @@ for a in "$@"; do
     FNO_DEMO_LAYOUT="$a"
   elif [ "$PREV" = "--install-card" ]; then
     INSTALL_CARD="$a"
-  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--web-port" ] || [ "$a" = "--sort" ] || [ "$a" = "--layout" ] || [ "$a" = "--install-card" ]; then
+  elif [ "$PREV" = "--app-theme" ]; then
+    APP_THEME="$a"
+  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--web-port" ] || [ "$a" = "--sort" ] || [ "$a" = "--layout" ] || [ "$a" = "--install-card" ] || [ "$a" = "--app-theme" ]; then
     :
   elif [ "$a" = "--lead-nesting" ]; then
     FNO_DEMO_LEAD_NESTING=1
@@ -105,6 +109,8 @@ for a in "$@"; do
     REMOTE_PANE=1
   elif [ "$a" = "--web" ]; then
     WEB=1
+  elif [ "$a" = "--app" ]; then
+    APP=1
   elif [ "$a" = "--no-fit" ]; then
     FIT=()
   else
@@ -234,6 +240,10 @@ mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.f
   # FNO_DEMO_LAYOUT=list shoots the one-line row instead of the card.
   if [ -n "${FNO_DEMO_LAYOUT:-}" ]; then
     printf '[sideline]\nlayout = "%s"\n' "$FNO_DEMO_LAYOUT"
+  fi
+  # --app-theme pins the palette the desktop app paints, light or dark.
+  if [ -n "$APP_THEME" ]; then
+    printf '[mux]\ntheme = "%s"\n' "$APP_THEME"
   fi
 } >"$ROOT/config.toml"
 # Readers that resolve HOME/.fno/config.toml before FNO_CONFIG see the
@@ -1060,7 +1070,24 @@ sleep 6
 sleep 3
 
 # The flags after ours win. HOME makes the status row read ~/code/checkout.
-if [ -n "$WEB" ]; then
+if [ -n "$APP" ]; then
+  # Hold the seeded world for the desktop app. HOME is the throwaway root, so
+  # the app reads the invented transcript below and no real session.
+  APP_BIN="${FNO_APP_BIN:-fno-app}"
+  if ! command -v "$APP_BIN" >/dev/null 2>&1; then
+    echo "mux-demo-snapshot: --app needs the fno-app binary; set FNO_APP_BIN or put it on PATH" >&2
+    exit 1
+  fi
+  DEMO_SID="de0e0000-0000-4000-8000-000000000001"
+  TR_APP="$ROOT/.claude/projects/-Users-demo-checkout/$DEMO_SID.jsonl"
+  mkdir -p "$(dirname "$TR_APP")"
+  {
+    printf '%s\n' "{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"$DEMO_SID\",\"timestamp\":\"${TS_BASE}:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"which nodes are ready to land on demo-host?\"}}"
+    printf '%s\n' "{\"type\":\"assistant\",\"uuid\":\"a1\",\"sessionId\":\"$DEMO_SID\",\"timestamp\":\"${TS_BASE}:01.000Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Two nodes are ready: x-1a2b0 and x-3c4d1. Both have green checks and one review round.\"}]},\"stop_reason\":\"end_turn\"}"
+  } >"$TR_APP"
+  export CLAUDE_CONFIG_DIR="$ROOT/.claude"
+  "$APP_BIN" --session "$SERVER" --mode chat --chat newest
+elif [ -n "$WEB" ]; then
   "$FNO" mux serve --web --server "$SERVER" --port "$WEB_PORT"
 elif ! "$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 ${FIT[@]+"${FIT[@]}"} --squad checkout "$@"; then
   # A first store fold can answer empty and refuse the shot (measured
