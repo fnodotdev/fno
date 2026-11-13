@@ -695,7 +695,7 @@ jobs:
 
   wheel-upgrade-path:
     name: "container proof: a 0.4.5 wheel reaches the candidate binary"
-    # Runs after the rc publish. PyPI publishes nothing past the frozen
+    # Runs after the rc publish. No registry publishes past the frozen
     # wheel, so both legs reach the candidate through the release tarball:
     # leg A climbs the wheel ladder (uv upgrade -> first-call move) and
     # adopts the candidate tarball; leg B runs the plugin tree's move
