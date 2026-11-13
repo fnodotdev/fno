@@ -1,5 +1,5 @@
 //!
-//! `lead-rundown`: the Rundown page for `fno agents hq rundown`.
+//! `lead-rundown`: the Rundown page for `fno agents hq chart rundown`.
 //!
 //! Python resolves the org (registry adjudication, manifest limbs, the
 //! caller's paths) and hands one org JSON over; the native side owns the
@@ -816,13 +816,13 @@ pub struct Arm {
 
 /// The production runner: the page render, cwd-bound (config, the graph and
 /// the default out path all resolve per cwd). The Rust front is the program:
-/// `org rundown` is its rewrite of `lead ledger` plus the faithful-root
+/// `hq chart rundown` is its rewrite of `lead ledger` plus the faithful-root
 /// `--out`; bare `lead ledger` defaults to lead.html, which the /team route
 /// does not read. Returns the page path
 /// the child named, so a tick can never call the wrong file rendered.
 fn run_ledger() -> Result<String, String> {
     let output = std::process::Command::new(crate::scrape::fno_bin())
-        .args(["agents", "hq", "rundown"])
+        .args(crate::daemon_argv::TEAM_LEDGER)
         .stdin(std::process::Stdio::null())
         .output()
         .map_err(|e| format!("spawn: {e}"))?;
@@ -1540,6 +1540,51 @@ mod tests {
         );
         assert_eq!(log.matches("\"acted\":1").count(), 1, "log: {log}");
         assert!(log.contains("\"interval_s\":300"), "log: {log}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn team_ledger_spawns_exactly_the_daemon_argv_table_row() {
+        // Law D3141, leg one: the arm spawns the daemon_argv table row
+        // verbatim, so the fno side's resolution leg (which classifies the
+        // same rows against the live menu) holds the argv that actually
+        // runs. The stub names a real page on stdout (run_ledger's parse
+        // contract) and drops its own argv beside it for the assertion.
+        let _guard = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let prior_bin = std::env::var_os("FNO_BIN");
+        let dir = tempfile::tempdir().unwrap();
+        let page = dir.path().join("rundown.html");
+        std::fs::write(&page, b"<html></html>").unwrap();
+        let argv_path = dir.path().join("argv.txt");
+        let stub = crate::write_exec_stub(
+            dir.path(),
+            "fno",
+            &format!(
+                "#!/bin/sh\necho \"lead ledger: {}\"\nprintf '%s\\n' \"$@\" > {}\n",
+                page.display(),
+                argv_path.display()
+            ),
+        );
+        std::env::set_var("FNO_BIN", &stub);
+        let run = run_ledger();
+        match prior_bin {
+            Some(v) => std::env::set_var("FNO_BIN", v),
+            None => std::env::remove_var("FNO_BIN"),
+        }
+        let named = run.unwrap_or_else(|e| panic!("run_ledger failed: {e}"));
+        assert_eq!(named, page.display().to_string());
+        let argv: Vec<String> = std::fs::read_to_string(&argv_path)
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(
+            argv,
+            crate::daemon_argv::TEAM_LEDGER,
+            "the arm's spawned argv must equal the daemon_argv table row"
+        );
     }
 
     #[test]

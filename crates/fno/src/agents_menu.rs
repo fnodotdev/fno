@@ -917,4 +917,54 @@ mod tests {
             "agents rows with no single home: {unplaced:#?}"
         );
     }
+
+    /// Law D3141 (command must exist): every daemon arm argv resolves to a
+    /// real command. The arms spawn `crate::scrape::fno_bin()` with a row of
+    /// `fno_agents::daemon_argv::FNO_ARGVS`; the daemon runs for months, so
+    /// a rename that drops a word fails a fleet arm silently until a tick
+    /// log names it. agents rows walk THIS menu - the surface the org->hq
+    /// rename broke for team_ledger. mux rows hold against the
+    /// generated native tree. Rows on other roots (the merge-close arm's
+    /// `backlog reconcile`) stay covered end to end by their arm's own
+    /// tests plus the baseline ratchet, and are asserted here to stay on
+    /// those roots so an unexpected root change cannot sneak in.
+    #[test]
+    fn every_daemon_arm_argv_resolves_to_a_real_command() {
+        let tree = include_str!("../../../scripts/ci/native-command-tree.txt");
+        for argv in fno_agents::daemon_argv::FNO_ARGVS {
+            let root = argv[0];
+            match root {
+                "agents" => {
+                    let args: Vec<OsString> = argv.iter().map(OsString::from).collect();
+                    match classify(&args) {
+                        Some(Agents::Run(_)) => {}
+                        other => panic!(
+                            "daemon arm argv {argv:?} does not resolve through the agents menu: {other:?}"
+                        ),
+                    }
+                }
+                "mux" => {
+                    let words: Vec<&str> = argv
+                        .iter()
+                        .take_while(|w| !w.starts_with('-'))
+                        .copied()
+                        .collect();
+                    let path = words.join(" ");
+                    assert!(
+                        tree.lines()
+                            .any(|l| l.starts_with(&path) && l[path.len()..].starts_with('\t')),
+                        "daemon arm argv {argv:?} is not a native-tree row: {path}"
+                    );
+                }
+                other => panic!("daemon arm argv root {other:?} has no resolver here"),
+            }
+        }
+        // The backlog row carries no menu or tree row: hold it to its root
+        // and verb here, where the baseline ratchet cannot see it.
+        assert_eq!(
+            fno_agents::daemon_argv::MERGE_CLOSE_RECONCILE,
+            &["backlog", "reconcile", "--json"],
+            "the merge-close reconcile argv changed; re-check the door it names"
+        );
+    }
 }

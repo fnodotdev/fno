@@ -185,3 +185,9 @@ tokio = { optional = true, version = "1", features = [
     # bounded, fail-open shell-out to `fno-agents digest` on attach.
     "process",
 ] }
+
+[dev-dependencies]
+# The daemon-arm argv resolver test walks fno_agents::daemon_argv::FNO_ARGVS
+# through the live agents menu. Test-only: the front still execs the runtime
+# binary as a subprocess, it never links it.
+fno-agents = { path = "../fno-agents", version = "=0.4.8" }

@@ -54,6 +54,7 @@ pub mod client;
 pub mod client_commands;
 pub mod client_render;
 pub mod client_transport;
+pub mod daemon_argv;
 pub mod duration;
 pub mod family_doors;
 pub mod git_paths;

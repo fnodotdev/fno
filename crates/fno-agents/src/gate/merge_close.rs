@@ -237,7 +237,7 @@ fn run_reconcile() -> Result<String, String> {
         crate::bounded_cmd::load_scaled_budget_s(RECONCILE_BUDGET_FLOOR_S, RECONCILE_BUDGET_CAP_S);
     let mut cmd = std::process::Command::new(crate::scrape::fno_bin());
     cmd.env(crate::decision_trace::ACTOR_KIND_STAMP_ENV, "sweep")
-        .args(["backlog", "reconcile", "--json"]);
+        .args(crate::daemon_argv::MERGE_CLOSE_RECONCILE);
     let output = crate::bounded_cmd::output_with_timeout_result(cmd, budget_s)
         .map_err(|e| format!("spawn: {e}"))?;
     // A child killed by its budget dies by SIGKILL, which carries no exit
