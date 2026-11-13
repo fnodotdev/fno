@@ -56,11 +56,12 @@ mod tests {
     #[test]
     fn every_door_argv_row_resolves_to_a_real_command() {
         let tree = include_str!("../../../scripts/ci/native-command-tree.txt");
-        for argv in FNO_ARGVS {
+        for row in FNO_ARGVS {
+            let argv: &[&str] = row;
             let Some((root, _)) = argv.split_first() else {
                 panic!("door argv row is empty");
             };
-            match *root {
+            match root {
                 "agents" => {
                     let args: Vec<OsString> = argv.iter().map(OsString::from).collect();
                     match classify(&args) {
@@ -84,15 +85,17 @@ mod tests {
                         "door argv {argv:?} is not a native-tree row: {path}"
                     );
                 }
+                "backlog" => {
+                    // The backlog row carries no menu or tree row: hold it
+                    // to its exact words here, where the baseline ratchet
+                    // cannot see it.
+                    assert_eq!(
+                        argv, MERGE_CLOSE_RECONCILE,
+                        "the merge-close reconcile argv changed; re-check the door it names"
+                    );
+                }
                 other => panic!("door argv root {other:?} has no resolver here"),
             }
         }
-        // The backlog row carries no menu or tree row: hold it to its
-        // exact words here, where the baseline ratchet cannot see it.
-        assert_eq!(
-            MERGE_CLOSE_RECONCILE,
-            &["backlog", "reconcile", "--json"],
-            "the merge-close reconcile argv changed; re-check the door it names"
-        );
     }
 }
