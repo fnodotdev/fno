@@ -152,8 +152,8 @@ fn shoot(session: &str, sock: &Path, spec: ShotSpec) -> Result<PathBuf, ShotErro
     let out = absolute_out(&spec.out)?;
     let status = status_path(&out);
     // A leftover file from an earlier run must never read as this capture's result.
-    let _ = std::fs::remove_file(&out);
-    let _ = std::fs::remove_file(&status);
+    std::fs::remove_file(&out).ok();
+    std::fs::remove_file(&status).ok();
     let out_str = out.to_string_lossy().into_owned();
     let cwd = super::pane_args::resolve_run_cwd(spec.cwd, std::env::current_dir().ok());
     let run = ControlCommand::PaneRun {
@@ -185,24 +185,25 @@ fn shoot(session: &str, sock: &Path, spec: ShotSpec) -> Result<PathBuf, ShotErro
         }
     };
     let Some(code) = await_status(&status, spec.timeout) else {
-        let _ = control_roundtrip(
+        control_roundtrip(
             sock,
             session,
             ControlCommand::PaneKill {
                 pane,
                 hand_off_to: None,
             },
-        );
-        let _ = std::fs::remove_file(&status);
+        )
+        .ok();
+        std::fs::remove_file(&status).ok();
         return Err(ShotError::Timeout {
             server: session.into(),
             secs: spec.timeout.as_secs(),
             pane,
         });
     };
-    let _ = std::fs::remove_file(&status);
+    std::fs::remove_file(&status).ok();
     if code != "0" {
-        let _ = std::fs::remove_file(&out);
+        std::fs::remove_file(&out).ok();
         return Err(ShotError::CaptureFailed {
             status: code,
             server: session.into(),
@@ -254,9 +255,10 @@ mod tests {
     #[test]
     fn argv_carries_the_out_path_as_a_positional() {
         let argv = capture_argv(&Area::Rect(1, 2, 3, 4), "/tmp/a b.png");
-        assert_eq!(argv[4], "/tmp/a b.png");
-        assert!(argv[2].contains("-R1,2,3,4"));
-        assert!(argv[2].contains("echo $? > \"$1.status\""));
+        let script = argv.get(2).map(String::as_str).unwrap_or_default();
+        assert_eq!(argv.get(4).map(String::as_str), Some("/tmp/a b.png"));
+        assert!(script.contains("-R1,2,3,4"));
+        assert!(script.contains("echo $? > \"$1.status\""));
     }
 
     #[test]
