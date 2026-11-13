@@ -55,7 +55,7 @@ const TRANSPARENT: &[&str] = &[
     "!",
 ];
 
-const SHELLS: &[&str] = &["sh", "bash", "zsh", "dash", "ksh"];
+pub(super) const SHELLS: &[&str] = &["sh", "bash", "zsh", "dash", "ksh"];
 
 const REPLACEMENT_HELPER: &str = "bash scripts/lib/loadgen.sh start <label> <seconds> [count]";
 const REPLACEMENT: &str =
@@ -459,7 +459,7 @@ fn has_bound(segment: &[String]) -> bool {
 
 /// The script text a shell was handed with `-c`. Short options bundle:
 /// `bash -lc '...'` is the same call.
-fn payload_of(head: &str, argv: &[String]) -> Option<String> {
+pub(super) fn shell_payload(head: &str, argv: &[String]) -> Option<String> {
     if !SHELLS.contains(&head) {
         return None;
     }
@@ -584,7 +584,7 @@ fn has_background_bound(text: &str, depth: usize) -> bool {
     if segments.len() == 1 {
         let segment = &segments[0];
         let (head, argv) = head_of(segment, false);
-        if let Some(payload) = head.as_deref().and_then(|h| payload_of(h, &argv)) {
+        if let Some(payload) = head.as_deref().and_then(|h| shell_payload(h, &argv)) {
             if !payload.is_empty() {
                 return has_background_bound(&payload, depth + 1);
             }
@@ -838,7 +838,7 @@ fn find_unbounded(
                     }
                 }
             }
-            if let Some(payload) = payload_of(&head, &argv).filter(|p| !p.is_empty()) {
+            if let Some(payload) = shell_payload(&head, &argv).filter(|p| !p.is_empty()) {
                 if let Some(found) = find_unbounded(&payload, bounded, depth + 1)? {
                     return Ok(Some(found));
                 }
