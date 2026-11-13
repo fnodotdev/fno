@@ -14,4 +14,5 @@ The preview shows the snapshot fixture, which holds invented rows only. Re-shoot
 
 ```
 scripts/ops/mux-demo-snapshot.sh --format png --view decisions --size 150x16 --out plugins/fno-panels/mods/decisions/preview.png
+sips --cropToHeightWidth 508 2520 --cropOffset 34 0 plugins/fno-panels/mods/decisions/preview.png
 ```
