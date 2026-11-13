@@ -366,6 +366,18 @@ impl Launcher {
             return out;
         }
         match will_run::line(view) {
+            Ok(_) if self.focus == Focus::Message => {
+                let catalog = &view.launcher_catalog;
+                let plain = format!(
+                    "{} \u{b7} {}",
+                    self.chip_label(Focus::Harness, catalog),
+                    self.chip_label(Focus::Model, catalog)
+                );
+                vec![CardLine {
+                    spans: vec![(0, w, CardHit::WillRun)],
+                    ..CardLine::plain(format!("  {}", crate::chrome::clip(&plain, room)), true)
+                }]
+            }
             Ok(text) => {
                 let shown = if cols(&text) > room {
                     format!(

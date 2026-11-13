@@ -1452,7 +1452,7 @@ pub(crate) fn default_bindings() -> Vec<KeyBinding> {
             "resize-left",
             Cmd(C::ResizeDir(Dir::Left)),
             Panes,
-            "resize left (Ctrl+Left, or bind a key)",
+            "resize left (ctrl+left, or bind a key)",
         ),
         b(
             b'J',
@@ -2117,7 +2117,7 @@ pub fn meta_rows() -> Vec<(String, String, KeySection)> {
         // scanner chord has no row here, so this table cannot lag the
         // dispatch path.
         (
-            "Ctrl+Opt+Left".into(),
+            "ctrl+opt+left".into(),
             "open the sideline row selector".into(),
             KeySection::GlobalNoPrefix,
         ),
@@ -2127,17 +2127,17 @@ pub fn meta_rows() -> Vec<(String, String, KeySection)> {
             KeySection::GlobalNoPrefix,
         ),
         (
-            format!("{p} Ctrl+arrows"),
+            format!("{p} ctrl+arrows"),
             "resize the pane".into(),
             KeySection::GlobalNoPrefix,
         ),
         (
-            format!("{p} Shift+arrows"),
+            format!("{p} shift+arrows"),
             "move the pane".into(),
             KeySection::GlobalNoPrefix,
         ),
         (
-            format!("{p} PgUp"),
+            format!("{p} pgup"),
             "scroll mode: j/k line, PgUp/PgDn page, g/G ends, q/Esc leaves".into(),
             KeySection::GlobalNoPrefix,
         ),
@@ -2413,18 +2413,18 @@ pub fn hardcoded_chords() -> Vec<(&'static str, Event)> {
     use Command as C;
     use Event::*;
     vec![
-        ("Ctrl+Opt+Left", OpenSelector),
-        ("PgUp", ScrollModeOpen),
-        ("Up", Cmd(C::FocusDir(Dir::Up))),
-        ("Down", Cmd(C::FocusDir(Dir::Down))),
-        ("Left", Cmd(C::FocusDir(Dir::Left))),
-        ("Right", Cmd(C::FocusDir(Dir::Right))),
-        ("Ctrl+Up", Cmd(C::ResizeDir(Dir::Up))),
-        ("Ctrl+Down", Cmd(C::ResizeDir(Dir::Down))),
-        ("Ctrl+Left", Cmd(C::ResizeDir(Dir::Left))),
-        ("Ctrl+Right", Cmd(C::ResizeDir(Dir::Right))),
+        ("ctrl+opt+left", OpenSelector),
+        ("pgup", ScrollModeOpen),
+        ("up", Cmd(C::FocusDir(Dir::Up))),
+        ("down", Cmd(C::FocusDir(Dir::Down))),
+        ("left", Cmd(C::FocusDir(Dir::Left))),
+        ("right", Cmd(C::FocusDir(Dir::Right))),
+        ("ctrl+up", Cmd(C::ResizeDir(Dir::Up))),
+        ("ctrl+down", Cmd(C::ResizeDir(Dir::Down))),
+        ("ctrl+left", Cmd(C::ResizeDir(Dir::Left))),
+        ("ctrl+right", Cmd(C::ResizeDir(Dir::Right))),
         (
-            "Shift+Up",
+            "shift+up",
             Cmd(C::MovePane {
                 mover: None,
                 target: None,
@@ -2432,7 +2432,7 @@ pub fn hardcoded_chords() -> Vec<(&'static str, Event)> {
             }),
         ),
         (
-            "Shift+Down",
+            "shift+down",
             Cmd(C::MovePane {
                 mover: None,
                 target: None,
@@ -2440,7 +2440,7 @@ pub fn hardcoded_chords() -> Vec<(&'static str, Event)> {
             }),
         ),
         (
-            "Shift+Left",
+            "shift+left",
             Cmd(C::MovePane {
                 mover: None,
                 target: None,
@@ -2448,7 +2448,7 @@ pub fn hardcoded_chords() -> Vec<(&'static str, Event)> {
             }),
         ),
         (
-            "Shift+Right",
+            "shift+right",
             Cmd(C::MovePane {
                 mover: None,
                 target: None,
@@ -3025,14 +3025,14 @@ mod tests {
         // prefix-free one), so every ladder sequence carries the default
         // prefix byte the Scanner::default binds.
         let mut sequences: Vec<(Vec<u8>, &str)> = vec![
-            (b"\x1b[1;7D".to_vec(), "Ctrl+Opt+Left"),
-            (b"\x02\x1b[5~".to_vec(), "PgUp"),
+            (b"\x1b[1;7D".to_vec(), "ctrl+opt+left"),
+            (b"\x02\x1b[5~".to_vec(), "pgup"),
         ];
         for (final_byte, _dir) in dir_seq {
             let f = final_byte as char;
             sequences.push((format!("\x02\x1b[{f}").into_bytes(), "arrows"));
-            sequences.push((format!("\x02\x1b[1;5{f}").into_bytes(), "Ctrl+arrows"));
-            sequences.push((format!("\x02\x1b[1;2{f}").into_bytes(), "Shift+arrows"));
+            sequences.push((format!("\x02\x1b[1;5{f}").into_bytes(), "ctrl+arrows"));
+            sequences.push((format!("\x02\x1b[1;2{f}").into_bytes(), "shift+arrows"));
         }
         assert_eq!(
             listed.len(),
@@ -3054,11 +3054,11 @@ mod tests {
         let rows = meta_rows();
         let p = key_disp(prefix());
         for display in [
-            "Ctrl+Opt+Left".to_string(),
+            "ctrl+opt+left".to_string(),
             format!("{p} arrows"),
-            format!("{p} Ctrl+arrows"),
-            format!("{p} Shift+arrows"),
-            format!("{p} PgUp"),
+            format!("{p} ctrl+arrows"),
+            format!("{p} shift+arrows"),
+            format!("{p} pgup"),
         ] {
             assert!(
                 rows.iter()
