@@ -256,18 +256,24 @@ fn render_request_within_locks(
                 "board render deadline: the store gather did not finish in {}s",
                 deadline.as_secs()
             );
-            return Ok(all_failed(request, error));
+            return all_failed(request, error);
         }
     };
     let public = request.public.is_some();
     // The board-request links validate before any page renders, so a bad
     // repo or label fails the run and writes nothing.
     let requests = match request.public.as_ref().and_then(|p| p.requests.as_ref()) {
-        Some(r) => Some(r.clone().validated()?),
+        Some(r) => match r.clone().validated() {
+            Ok(validated) => Some(validated),
+            Err(e) => return all_failed(request, e),
+        },
         None => None,
     };
     let mut inputs = match &request.public {
-        Some(spec) => inputs_from_rows(select_public_rows(&gathered.rows, &spec.project)?),
+        Some(spec) => match select_public_rows(&gathered.rows, &spec.project) {
+            Ok(rows) => inputs_from_rows(rows),
+            Err(e) => return all_failed(request, e),
+        },
         None => gathered,
     };
     // The render already pays the graph read; one registry + question read
@@ -307,7 +313,7 @@ fn render_request_within_locks(
                 .push(json!({ "path": target.path, "error": e })),
         }
     }
-    Ok(receipt)
+    receipt
 }
 
 /// The selected row set as read-model inputs: no claims, no roster, flow
