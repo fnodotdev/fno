@@ -276,11 +276,11 @@ pub(crate) fn sweep_after_law(decision_id: &str, subject: &str, decision: &str, 
     for t in touched_nodes(&rows, &law, sweep) {
         let work = work_of(&t);
         let Some(owner) = &t.owner else {
-            eprintln!("law: {label} may change {work}; no owner session to mail.");
+            eprintln!("law: {label} touches {work}. No owner session to mail.");
             continue;
         };
         let text = format!(
-            "Law {label} ({subject}) landed: {}. It may change your {work}. \
+            "Law {label} ({subject}) landed: {}. It can change your {work}. \
              Read it: fno inbox decisions {decision_id}. Align the work, or reply why it stands.",
             crate::law_match::one_line(decision, 200)
         );
@@ -292,7 +292,7 @@ pub(crate) fn sweep_after_law(decision_id: &str, subject: &str, decision: &str, 
         let sender = crate::system_sender::system_name("law-sweep");
         match crate::first_check::send_mail(runner, &sender, owner, &text) {
             Ok(()) => eprintln!("law: {label} mailed the owner of {work}."),
-            Err(e) => eprintln!("law: {label} may change {work}; the mail failed ({e})."),
+            Err(e) => eprintln!("law: {label} touches {work}. The mail failed ({e})."),
         }
     }
 }
