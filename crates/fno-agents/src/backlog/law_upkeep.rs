@@ -451,7 +451,7 @@ fn status_json() -> Value {
     let plist_path = launch_agents_dir().join(crate::launchd_labels::LAW_UPKEEP_PLIST_FILENAME);
     let list_cmd = vec!["launchctl".to_string(), "list".to_string(), label.clone()];
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let loaded = crate::runtime::org_board::budget::run_with_timeout(
+    let loaded = crate::org_board::budget::run_with_timeout(
         &list_cmd,
         &cwd,
         std::time::Duration::from_secs(5),
@@ -488,14 +488,14 @@ fn uninstall_agent() -> Value {
         // A bootout that names no loaded job exits 3 ("No such process"):
         // for an uninstall that is success, not failure. The verdict stays
         // with the plist removal below.
-        let bootout_detail = match crate::runtime::org_board::budget::run_with_timeout_accepting(
+        let bootout_detail = match crate::org_board::budget::run_with_timeout_accepting(
             &bootout_cmd,
             &cwd,
             std::time::Duration::from_secs(5),
             &[0, 3],
         ) {
             Ok(_) => None,
-            Err(e) => Some(format!("launchctl bootout: {e}")),
+            Err(e) => Some(format!("launchctl bootout: {}", e.message())),
         };
         if let Some(detail) = bootout_detail {
             return json!({"status": "failed", "detail": detail});
