@@ -572,6 +572,13 @@ dual_owner_kinds = {
     # door are the writers; schema.yaml carries it for the validator and
     # `doctor event find`, the way session_registered above does.
     "agent_team_reseated",
+    # The usage events arm's rows: the front door, the rules hook, pr create
+    # and the backlog close are the one writers; schema.yaml carries them for
+    # the validator and the usage arm, the way session_registered does.
+    "cli_command",
+    "skill_invoked",
+    "pr_opened",
+    "node_done",
 }
 collisions -= dual_owner_kinds
 if collisions:
