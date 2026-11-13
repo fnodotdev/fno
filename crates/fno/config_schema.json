@@ -4553,7 +4553,7 @@
    "wizard": "never",
    "question": "",
    "default_source": "",
-   "doc": "Board page template (GLOBAL config file only): the daemon renders one board for every project registered in work.workspaces, expanding {project} in the template. A [[backlog.render_targets]] row scoped to a project overrides the template row for that project. Example: ~/vault/{project}/backlog/backlog.html. See [A local HTML file](backlog-usage.md#a-local-html-file)."
+   "doc": "Board page template (GLOBAL config file only): the daemon renders one board for every work.workspaces project that carries nodes, expanding {project} in the template; a project with no nodes yet renders no board. A [[backlog.render_targets]] row scoped to a project overrides the template row for that project. Example: ~/vault/{project}/backlog/backlog.html. See [A local HTML file](backlog-usage.md#a-local-html-file)."
   },
   {
    "path": "backlog.page_reload_s",

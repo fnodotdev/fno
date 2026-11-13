@@ -34,6 +34,7 @@ pub mod key {
     pub const PR_NUMBER: &str = "pr_number";
     pub const ADDITIONAL_PRS: &str = "additional_prs";
     pub const PLAN_PATH: &str = "plan_path";
+    pub const PROJECT: &str = "project";
     pub const CREATED_AT: &str = "created_at";
     pub const SESSIONS: &str = "sessions";
     pub const DETAILS: &str = "details";
@@ -144,6 +145,7 @@ row_slots! {
     pr_number => PR_NUMBER,
     additional_prs => ADDITIONAL_PRS,
     plan_path => PLAN_PATH,
+    project => PROJECT,
     created_at => CREATED_AT,
     parented_at => PARENTED_AT,
     sessions => SESSIONS,
