@@ -97,13 +97,32 @@ pub(crate) fn export(remote: &Remote, out: &Path) -> Result<Value, String> {
             .execute_batch(&field(row, 2))
             .map_err(|e| format!("{}: {e}", field(row, 1)))?;
     }
+    // A primary that does not enforce foreign keys can hold orphan rows, and
+    // the copy carries them faithfully. The receipt names them instead of
+    // leaving them to surface later as a bare constraint failure.
+    let fk_violations = {
+        let mut violations = transaction
+            .prepare("PRAGMA foreign_key_check")
+            .map_err(|e| e.to_string())?;
+        let mut found = violations.query([]).map_err(|e| e.to_string())?;
+        let mut per_table = Map::new();
+        while let Some(row) = found.next().map_err(|e| e.to_string())? {
+            let table: String = row.get(0).map_err(|e| e.to_string())?;
+            *per_table.entry(table).or_insert(0i64) += 1;
+        }
+        per_table
+    };
     transaction.commit().map_err(|e| e.to_string())?;
     connection
         .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE;")
         .map_err(|e| e.to_string())?;
     drop(connection);
     std::fs::rename(&partial, out).map_err(|e| format!("{}: {e}", out.display()))?;
-    Ok(json!({"out": out, "from": remote.url(), "rows": counts}))
+    let mut receipt = json!({"out": out, "from": remote.url(), "rows": counts});
+    if !fk_violations.is_empty() {
+        receipt["foreign_key_violations"] = json!(fk_violations);
+    }
+    Ok(receipt)
 }
 
 fn copy_rows(remote: &Remote, into: &rusqlite::Connection, table: &str) -> Result<u64, String> {
@@ -288,5 +307,26 @@ mod tests {
         let error = export(&primary.remote, &out).unwrap_err();
         assert!(error.contains("big_blobs"), "{error}");
         assert!(error.contains("too large"), "{error}");
+    }
+
+    /// Orphan rows copied from a lax primary still export, and the receipt
+    /// names them per table instead of refusing.
+    #[test]
+    fn an_orphan_row_copies_and_the_receipt_names_it() {
+        let root = tempfile::tempdir().unwrap();
+        let primary = crate::store_remote::test_primary::start();
+        primary
+            .db
+            .lock()
+            .unwrap()
+            .execute_batch(
+                "PRAGMA foreign_keys=OFF;
+                 CREATE TABLE orphans (parent TEXT REFERENCES parents(id));
+                 INSERT INTO orphans VALUES ('missing');",
+            )
+            .unwrap();
+        let out = root.path().join("out.db");
+        let receipt = export(&primary.remote, &out).unwrap();
+        assert_eq!(receipt["foreign_key_violations"]["orphans"], 1, "{receipt}");
     }
 }
