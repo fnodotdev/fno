@@ -159,6 +159,7 @@
       "requested_permission_mode",
       "requested_provider",
       "resolved_sandbox",
+      "result",
       "route_provider_id",
       "route_settings_path",
       "sandbox_posture",

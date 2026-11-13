@@ -1868,12 +1868,13 @@ mod tests {
             now,
         );
         assert_eq!(changes.len(), 1, "the headless arm owns the row");
-        assert_eq!(changes[0].new_status, Some(AgentStatus::Exited));
+        let settle = changes.first().expect("the headless arm owns the row");
+        assert_eq!(settle.new_status, Some(AgentStatus::Exited));
         assert_eq!(
-            changes[0].new_result,
+            settle.new_result,
             Some(state::HeadlessResult::FailedToStart)
         );
-        assert_eq!(changes[0].new_liveness, Some("dead"));
+        assert_eq!(settle.new_liveness, Some("dead"));
         // The applied write carries the word onto the row beside the stamp.
         let titles: std::collections::HashMap<String, Option<String>> =
             std::collections::HashMap::new();
