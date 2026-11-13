@@ -114,6 +114,16 @@ pub fn classify_inbox_outstanding(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(rest.to_vec())
 }
 
+/// Classify `fno inbox attention-ledger [--json|-J] [--report]`: the argv
+/// tail for `fno-agents attention-ledger`. The worker owns the flags and
+/// refuses unknown ones through its usage line.
+pub fn classify_inbox_attention_ledger(args: &[OsString]) -> Option<Vec<OsString>> {
+    if args.first()?.to_str()? != "inbox" || args.get(1)?.to_str()? != "attention-ledger" {
+        return None;
+    }
+    Some(args.iter().skip(2).cloned().collect())
+}
+
 /// Classify `fno inbox approvals ls|show|decide ...`: the argv tail for
 /// `fno-agents compaction approvals`. Any `--help` forwards to the Python
 /// group, which only lists the commands; the runtime owns every other argument.
@@ -170,6 +180,10 @@ const INBOX_ABOUT: &str = "What is waiting on a human: approvals, notify, outsta
 carve-outs and questions, the lead board, decisions, law, and the user conversation queue.";
 
 const INBOX_COMMANDS: &[(&str, &str)] = &[
+    (
+        "attention-ledger",
+        "The week's orchestration tax: questions per merged PR, repeated subjects, reverts, cycle time: attention-ledger [--json] [--report].",
+    ),
     (
         "approvals",
         "Inspect and decide pending approvals for consequential effects.",

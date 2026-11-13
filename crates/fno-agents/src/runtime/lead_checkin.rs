@@ -1425,6 +1425,14 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
         move || idea_children
     });
     take_reading(&mut readings, beat_started, "team", || r_team());
+    take_reading(&mut readings, beat_started, "attention_ledger", {
+        let cwd = ctx.cwd.clone();
+        move || {
+            let ledger =
+                crate::backlog::attention_ledger::compute(&cwd).map_err(|e| e.to_string())?;
+            serde_json::to_value(ledger.reading_payload()).map_err(|e| e.to_string())
+        }
+    });
     take_reading(&mut readings, beat_started, "posture", || {
         posture::reading()
     });
@@ -2328,6 +2336,7 @@ fn render_lines_with(
     lines.extend(posture::lines(readings));
     lines.extend(peer_blocked::lines(readings));
     lines.extend(prompt_parked::lines(readings));
+    lines.extend(crate::backlog::attention_ledger::checkin_lines(readings));
 
     match failed("refusal_rate") {
         Some(r) => lines.push(format!("READER FAILED refusal_rate: {}", r.error)),
@@ -3234,6 +3243,10 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
         &change,
         &lineup,
     );
+    // The beat writes the week's report when the file is missing, so the
+    // weekly report stays current with no new daemon. Best-effort: a failed
+    // write prints one line and never blocks the beat.
+    crate::backlog::attention_ledger::beat_write(&readings, &ctx.cwd);
     // The team line leads: identity first, then the beat's facts. The name
     // comes from the fold's own stamp (org_fold reads the store), so an
     // successor's first beat already shows the carried name.
@@ -3397,6 +3410,8 @@ mod tests {
     }
 
     include!("lead_checkin_readings_tests.rs");
+
+    include!("lead_checkin_attention_ledger_tests.rs");
 
     /// A repo fixture whose escalations dir resolves deterministically through
     /// the vault branch: `[project] id` names the project, `[obsidian]`

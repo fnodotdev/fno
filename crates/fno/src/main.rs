@@ -487,6 +487,10 @@ enum Role {
     /// subcommands; the carried tail is the `fno-agents compaction
     /// outstanding` argv.
     InboxOutstanding(Vec<OsString>),
+    /// `fno inbox attention-ledger [--json|-J] [--report]`: the native
+    /// ledger read; the carried tail is the `fno-agents attention-ledger`
+    /// argv.
+    InboxAttentionLedger(Vec<OsString>),
     /// `fno inbox day start|end`: the native day boundary; the carried tail
     /// is the `fno-agents day` argv.
     InboxDay(Vec<OsString>),
@@ -1673,6 +1677,9 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     if let Some(rest) = fno::inbox_user::classify_inbox_outstanding(args) {
         return Role::InboxOutstanding(rest);
     }
+    if let Some(rest) = fno::inbox_user::classify_inbox_attention_ledger(args) {
+        return Role::InboxAttentionLedger(rest);
+    }
     if let Some(argv) = fno::inbox_user::classify_inbox_day(args) {
         return Role::InboxDay(argv);
     }
@@ -2466,6 +2473,11 @@ fn main() {
         Role::InboxOutstanding(rest) => fno::cli_usage::exit(fno_agents_exec(
             "fno inbox outstanding",
             &["compaction", "outstanding"],
+            &rest,
+        )),
+        Role::InboxAttentionLedger(rest) => std::process::exit(fno_agents_exec(
+            "fno inbox attention-ledger",
+            &["compaction", "attention-ledger"],
             &rest,
         )),
         Role::InboxDay(argv) => {

@@ -4,6 +4,12 @@ Notable changes to fno, newest first. From 0.4.8 on, each release also has a pag
 
 Releases before 0.4.8 were built in a private repository. Their entries here summarize the release notes from that time. The pull request numbers in the notes up to 0.4.8 point at that repository, so this file leaves them out.
 
+## [Unreleased]
+
+### Added
+
+* Added the attention ledger: `fno inbox attention-ledger` reports the week's orchestration tax. The lead checkin shows the numbers as one line. The weekly report lands under the vault reports dir.
+
 ## [0.4.9] - 2026-11-13
 
 135 pull requests since 0.4.8. The headline is fno-app, a desktop app for macOS.
