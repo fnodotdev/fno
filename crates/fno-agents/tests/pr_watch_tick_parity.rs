@@ -27,15 +27,36 @@ if [ "${PR_WATCH_TEST_GH_DELAY:-0}" -gt 0 ]; then sleep "$PR_WATCH_TEST_GH_DELAY
 case " $args " in *" -i "*) printf 'HTTP/2.0 200 OK\r\n\r\n' ;; esac
 case "$args" in
   *rate_limit*) echo '{"resources":{"graphql":{"remaining":4000,"reset":1893456000},"core":{"remaining":4000,"reset":1893456000}}}' ;;
-  *repos/o/r/pulls/7/reviews*) echo '[{"user":{"login":"bot[bot]"},"submitted_at":"2026-10-30T00:00:00Z","state":"COMMENTED"}]' ;;
+  *repos/o/r/pulls/7/reviews*) echo '[{"user":{"login":"bot[bot]"},"submitted_at":"<<REVIEWED>>","state":"COMMENTED"}]' ;;
   *repos/o/r/issues/7/comments*) echo '[]' ;;
   *repos/o/r/pulls/8/reviews*|*repos/o/r/issues/8/comments*) echo '[]' ;;
-  *repos/o/r/pulls/7*) echo '{"number":7,"state":"open","merged_at":null,"merged":false,"draft":false,"created_at":"2026-10-29T00:00:00Z","head":{"sha":"aaa","ref":"f"},"base":{"ref":"main"},"html_url":"https://github.com/o/r/pull/7","merge_commit_sha":null}' ;;
-  *repos/o/r/pulls/8*) echo '{"number":8,"state":"closed","merged_at":"2026-10-30T00:00:00Z","merged":true,"draft":false,"created_at":"2026-10-29T00:00:00Z","head":{"sha":"aaa","ref":"f"},"base":{"ref":"main"},"html_url":"https://github.com/o/r/pull/8","merge_commit_sha":"abc"}' ;;
-  *repos/o/r/pulls*) echo '[{"number":7,"state":"open","draft":false,"created_at":"2026-10-29T00:00:00Z"}]' ;;
+  *repos/o/r/pulls/7*) echo '{"number":7,"state":"open","merged_at":null,"merged":false,"draft":false,"created_at":"<<CREATED>>","head":{"sha":"aaa","ref":"f"},"base":{"ref":"main"},"html_url":"https://github.com/o/r/pull/7","merge_commit_sha":null}' ;;
+  *repos/o/r/pulls/8*) echo '{"number":8,"state":"closed","merged_at":"<<REVIEWED>>","merged":true,"draft":false,"created_at":"<<CREATED>>","head":{"sha":"aaa","ref":"f"},"base":{"ref":"main"},"html_url":"https://github.com/o/r/pull/8","merge_commit_sha":"abc"}' ;;
+  *repos/o/r/pulls*) echo '[{"number":7,"state":"open","draft":false,"created_at":"<<CREATED>>"}]' ;;
   *) echo "{}" ;;
 esac
 "#;
+
+/// The fixture's clock-relative stamps. The verdicts depend on the age
+/// RELATIONSHIPS (the review is newer than the watermark, the PR sits inside
+/// the tick's 14-day max-age horizon), never on the wall clock: fixed dates
+/// aged past that horizon on 2026-11-13 and parked the fixture PR, so the
+/// golden read acted=0 instead of acted=1. Stamps relative to now keep every
+/// relationship and cannot age out.
+fn fixture_stamp(age: chrono::Duration) -> String {
+    (chrono::Utc::now() - age)
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string()
+}
+
+fn write_stub(bin: &std::path::Path) {
+    let created = fixture_stamp(chrono::Duration::hours(24));
+    let reviewed = fixture_stamp(chrono::Duration::hours(12));
+    let stub = GH_STUB
+        .replace("<<CREATED>>", &created)
+        .replace("<<REVIEWED>>", &reviewed);
+    std::fs::write(bin, stub).unwrap();
+}
 
 struct Case {
     label: &'static str,
@@ -96,7 +117,7 @@ fn write_case(root: &Path, case: &Case, leg: &str) -> Home {
     std::fs::create_dir_all(state.join("state")).unwrap();
     std::fs::create_dir_all(&bin).unwrap();
     let stub = bin.join("gh");
-    std::fs::write(&stub, GH_STUB).unwrap();
+    write_stub(&stub);
     let fire = bin.join("fire-ok");
     std::fs::write(&fire, "#!/bin/sh\necho '{\"is_error\": false}'\n").unwrap();
     use std::os::unix::fs::PermissionsExt;
