@@ -1047,7 +1047,9 @@ pub fn provider_quota_states(
 
 /// Append one row through the store shared by Rust and Python readers.
 pub fn append_questions_row(path: &std::path::Path, row: &Value) -> Result<(), String> {
-    crate::event_store::append_envelope(path, &row.to_string(), None).map(|_| ())
+    crate::event_store::append_envelope(path, &row.to_string(), None)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 /// `questions.jsonl` lives beside the agents home (`~/.fno`).

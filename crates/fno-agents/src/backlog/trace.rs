@@ -763,7 +763,9 @@ pub(crate) struct Shared {
 impl Shared {
     pub(crate) fn load(root: &Value) -> Shared {
         let events_path = store_of(root);
-        let store_ok = crate::event_store::import_all(&events_path).map(|_| ());
+        let store_ok = crate::event_store::import_all(&events_path)
+            .map(|_| ())
+            .map_err(|e| e.to_string());
         let reviews = crate::event_store::query_events(
             &events_path,
             &crate::event_store::EventQuery::of_types(&["review_invocation", "review_attestation"]),
@@ -804,6 +806,7 @@ impl Shared {
                     .filter_map(|r| serde_json::from_str(&r.line).ok())
                     .collect()
             })
+            .map_err(|e| e.to_string())
         });
         let reviews = self
             .reviews

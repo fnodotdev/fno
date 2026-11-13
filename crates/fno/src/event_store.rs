@@ -110,6 +110,110 @@ pub const VALIDATE_PREFIX: &str = "event-judged: ";
 
 const HOUR_MS: i64 = 3_600_000;
 const DAY_MS: i64 = 86_400_000;
+/// The typed failure of one event-store seam (R6): the SQLite, filesystem
+/// and JSON sources a caller can match, plus the words string-typed
+/// neighbors (`store_conn`, the live-store fence, the observation gate, the
+/// envelope judge) already printed. Every variant displays exactly the text
+/// the store printed when it returned `String`, so a refusal line reads the
+/// same; `From<EventStoreError> for String` keeps every external caller
+/// compiling unchanged.
+#[derive(Debug, thiserror::Error)]
+pub enum EventStoreError {
+    /// A filesystem operation failed at a named path.
+    #[error("{}: {source}", path.display())]
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    /// SQLite failed. The store path and the operation label, when the site
+    /// carried one, prefix the source's own words; both are `Option` because
+    /// the measured sites run from bare `{source}` through
+    /// `{path}: {label}: {source}`.
+    #[error(
+        "{path_prefix}{context_prefix}{source}",
+        path_prefix = path.as_ref().map(|p| format!("{}: ", p.display())).unwrap_or_default(),
+        context_prefix = context.as_deref().map(|c| format!("{c}: ")).unwrap_or_default()
+    )]
+    Sql {
+        path: Option<PathBuf>,
+        context: Option<String>,
+        source: rusqlite::Error,
+    },
+    /// The store's `user_version` is newer than this build supports.
+    #[error(
+        "events store schema v{found} is newer than this build understands (v{supported}); upgrade fno before touching {}",
+        path.display()
+    )]
+    NewerSchema {
+        found: i64,
+        supported: i64,
+        path: PathBuf,
+    },
+    /// The append envelope was not JSON at all. A JSON value that fails the
+    /// judge stays words under [`VALIDATE_PREFIX`].
+    #[error("{}: envelope is not valid JSON: {source}", path.display())]
+    InvalidEnvelope {
+        path: PathBuf,
+        source: serde_json::Error,
+    },
+    /// A neighbor seam's own words, carried verbatim. Typing those seams is
+    /// later work on the same epic.
+    #[error("{0}")]
+    Text(String),
+}
+
+impl EventStoreError {
+    fn sql(source: rusqlite::Error) -> Self {
+        Self::Sql {
+            path: None,
+            context: None,
+            source,
+        }
+    }
+
+    fn sql_at(path: &Path, source: rusqlite::Error) -> Self {
+        Self::Sql {
+            path: Some(path.to_path_buf()),
+            context: None,
+            source,
+        }
+    }
+
+    fn sql_named(context: impl Into<String>, source: rusqlite::Error) -> Self {
+        Self::Sql {
+            path: None,
+            context: Some(context.into()),
+            source,
+        }
+    }
+
+    fn sql_path_named(path: &Path, context: impl Into<String>, source: rusqlite::Error) -> Self {
+        Self::Sql {
+            path: Some(path.to_path_buf()),
+            context: Some(context.into()),
+            source,
+        }
+    }
+
+    fn io_at(path: &Path, source: std::io::Error) -> Self {
+        Self::Io {
+            path: path.to_path_buf(),
+            source,
+        }
+    }
+}
+
+impl From<String> for EventStoreError {
+    fn from(text: String) -> Self {
+        Self::Text(text)
+    }
+}
+
+impl From<EventStoreError> for String {
+    fn from(error: EventStoreError) -> String {
+        error.to_string()
+    }
+}
 
 /// Whether an event kind belongs to the schema-declared ephemeral class.
 pub fn is_ephemeral_event(kind: &str) -> bool {
@@ -229,7 +333,7 @@ pub fn store_path(journal: &Path) -> PathBuf {
 /// name-less journal comes back as an error naming the input, so a misused
 /// placeholder emitter fails its append instead of materializing `.db` in
 /// whatever directory the process happened to run from.
-pub fn try_store_path(journal: &Path) -> Result<PathBuf, String> {
+pub fn try_store_path(journal: &Path) -> Result<PathBuf, EventStoreError> {
     let live = live_journal(journal);
     let stem = live
         .file_name()
@@ -239,7 +343,8 @@ pub fn try_store_path(journal: &Path) -> Result<PathBuf, String> {
         return Err(format!(
             "empty or name-less journal path {:?}: refusing to derive a cwd-relative store",
             journal
-        ));
+        )
+        .into());
     }
     let stem = stem.strip_suffix(".jsonl").unwrap_or(&stem);
     if let Some(routed) = route_state_root_store(&live, stem) {
@@ -336,16 +441,13 @@ fn strip_rotation_suffix(name: &str) -> Option<String> {
 /// Ingest the rotated generation and then the live journal into the store.
 /// The inode cursor makes the rotation free: the file at `.1` is the inode
 /// that was live, so its cursor resumes where the live file left off.
-pub fn sync(live: &Path) -> Result<SyncReceipt, String> {
+pub fn sync(live: &Path) -> Result<SyncReceipt, EventStoreError> {
     let ephemeral = live
         .file_name()
         .and_then(|n| n.to_str())
         .is_some_and(|n| n.contains(EPHEMERAL_SUFFIX));
     if ephemeral {
-        return Err(format!(
-            "{}: ephemeral journals are never ingested",
-            live.display()
-        ));
+        return Err(format!("{}: ephemeral journals are never ingested", live.display()).into());
     }
     sync_sources(live, &[&rotated_generation(live), live])
 }
@@ -369,7 +471,7 @@ fn ephemeral_sibling(live: &Path) -> PathBuf {
 /// durable, then the ephemeral sibling - into one store, in one transaction.
 /// History import is oldest-first by generation, and the `row_hash` key makes
 /// a retried import after a crash insert zero duplicates.
-pub fn import_all(live: &Path) -> Result<SyncReceipt, String> {
+pub fn import_all(live: &Path) -> Result<SyncReceipt, EventStoreError> {
     // Every retained generation imports, oldest first, then the live file,
     // then the ephemeral sibling - the same order the pre-store segment walk
     // concatenated, so commit-order rows read the same as the old concat.
@@ -380,25 +482,30 @@ pub fn import_all(live: &Path) -> Result<SyncReceipt, String> {
     sync_sources(live, &refs)
 }
 
-pub(crate) fn sync_sources(live: &Path, sources: &[&Path]) -> Result<SyncReceipt, String> {
+pub(crate) fn sync_sources(live: &Path, sources: &[&Path]) -> Result<SyncReceipt, EventStoreError> {
     let store = store_path(live);
     let result = import_sources(&store, sources);
     match result {
         Ok(receipt) => Ok(receipt),
-        Err(error) if corrupt_image(&error) => Err(refuse_corrupt_store(&store, &error)),
-        Err(error) => Err(error),
+        Err(error) => {
+            let text = error.to_string();
+            if corrupt_image(&text) {
+                return Err(refuse_corrupt_store(&store, &text).into());
+            }
+            Err(error)
+        }
     }
 }
 
-fn import_sources(store: &Path, sources: &[&Path]) -> Result<SyncReceipt, String> {
+fn import_sources(store: &Path, sources: &[&Path]) -> Result<SyncReceipt, EventStoreError> {
     if let Some(parent) = store.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", store.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| EventStoreError::io_at(store, e))?;
     }
     let mut conn = open_store(store)?;
     let now_ms = chrono::Utc::now().timestamp_millis();
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|e| format!("{}: {e}", store.display()))?;
+        .map_err(|e| EventStoreError::sql_at(store, e))?;
     let mut total = FileTally::default();
     for source in sources {
         let tally = import_file(&tx, source, store, now_ms)?;
@@ -408,10 +515,10 @@ fn import_sources(store: &Path, sources: &[&Path]) -> Result<SyncReceipt, String
         total.read_bytes += tally.read_bytes;
     }
     observation::sweep_expired_windows(&tx, now_ms)
-        .map_err(|e| format!("{}: {e}", store.display()))?;
-    tx.commit()
-        .map_err(|e| format!("{}: {e}", store.display()))?;
-    prune(&mut conn, now_ms).map_err(|e| format!("{}: {e}", store.display()))?;
+        .map_err(|e| EventStoreError::Text(format!("{}: {e}", store.display())))?;
+    tx.commit().map_err(|e| EventStoreError::sql_at(store, e))?;
+    prune(&mut conn, now_ms)
+        .map_err(|error| EventStoreError::Text(format!("{}: {error}", store.display())))?;
     Ok(SyncReceipt {
         store: store.to_path_buf(),
         ingested: total.ingested,
@@ -424,7 +531,7 @@ fn import_sources(store: &Path, sources: &[&Path]) -> Result<SyncReceipt, String
 /// Open (creating if needed) the store through the store seam, with its
 /// schema ensured (v2 created, or v1 migrated) before the connection is
 /// handed out.
-fn open_store(store: &Path) -> Result<Connection, String> {
+fn open_store(store: &Path) -> Result<Connection, EventStoreError> {
     crate::live_store_fence::refuse_worktree_build_on_operator_store(store)?;
     // No integrity sweep here. quick_check walks every page, so per-open it is
     // O(store size), and this opener sits on the per-fire hook append path: a
@@ -437,7 +544,7 @@ fn open_store(store: &Path) -> Result<Connection, String> {
     if schema_key(&conn, store).map_or(true, |key| !schema_ensured(&key)) {
         ensure_schema(&mut conn, store)?;
         observation::ensure_observation_tables(&conn)
-            .map_err(|e| format!("{}: {e}", store.display()))?;
+            .map_err(|e| EventStoreError::Text(format!("{}: {e}", store.display())))?;
         if let Some(key) = schema_key(&conn, store) {
             ENSURED_SCHEMAS
                 .lock()
@@ -515,31 +622,33 @@ fn refuse_corrupt_store(store: &Path, error: &str) -> String {
 }
 
 /// Read-only handle for history readers; a failure names the store path.
-pub(crate) fn upgrade_role_store(store: &Path) -> Result<(), String> {
+pub(crate) fn upgrade_role_store(store: &Path) -> Result<(), EventStoreError> {
     open_store(store).map(|_| ()).map_err(|error| {
-        if corrupt_image(&error) {
-            refuse_corrupt_store(store, &error)
+        let text = error.to_string();
+        if corrupt_image(&text) {
+            refuse_corrupt_store(store, &text).into()
         } else {
             error
         }
     })
 }
 
-pub fn open_read(store: &Path) -> Result<Connection, String> {
+pub fn open_read(store: &Path) -> Result<Connection, EventStoreError> {
     let conn = crate::store_conn::open_read(store)?;
     refuse_newer_schema(&conn, store)?;
     Ok(conn)
 }
 
-fn refuse_newer_schema(conn: &Connection, store: &Path) -> Result<i64, String> {
+fn refuse_newer_schema(conn: &Connection, store: &Path) -> Result<i64, EventStoreError> {
     let current = conn
         .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
-        .map_err(|e| format!("{}: schema version unreadable: {e}", store.display()))?;
+        .map_err(|e| EventStoreError::sql_path_named(store, "schema version unreadable", e))?;
     if current > SCHEMA_VERSION {
-        return Err(format!(
-            "events store schema v{current} is newer than this build understands (v{SCHEMA_VERSION}); upgrade fno before touching {}",
-            store.display()
-        ));
+        return Err(EventStoreError::NewerSchema {
+            found: current,
+            supported: SCHEMA_VERSION,
+            path: store.to_path_buf(),
+        });
     }
     Ok(current)
 }
@@ -581,7 +690,7 @@ pub const COVERAGE_EPOCH_KEY: &str = "coverage_complete_since_ms";
 /// `user_version`, row counts, and completion metadata are untouched. Every
 /// open also stamps the coverage epoch once (a single indexed select on the
 /// common path).
-pub fn ensure_schema(conn: &mut Connection, store: &Path) -> Result<(), String> {
+pub fn ensure_schema(conn: &mut Connection, store: &Path) -> Result<(), EventStoreError> {
     let current = refuse_newer_schema(conn, store)?;
     let already_v2: bool = current >= SCHEMA_VERSION && events_table_has_event_id(conn);
     if already_v2 {
@@ -600,7 +709,7 @@ pub fn ensure_schema(conn: &mut Connection, store: &Path) -> Result<(), String> 
         .unwrap_or(false);
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|e| format!("{}: migration: {e}", store.display()))?;
+        .map_err(|e| EventStoreError::sql_path_named(store, "migration", e))?;
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS ingest_cursor (
              dev INTEGER NOT NULL,
@@ -616,7 +725,7 @@ pub fn ensure_schema(conn: &mut Connection, store: &Path) -> Result<(), String> 
              value TEXT NOT NULL
          );",
     )
-    .map_err(|e| format!("{}: migration: {e}", store.display()))?;
+    .map_err(|e| EventStoreError::sql_path_named(store, "migration", e))?;
     if has_events && events_table_has_event_id(&tx) {
         // v2-shaped table without the version stamp (a crashed first create):
         // finish the bookkeeping, never rebuild.
@@ -628,12 +737,12 @@ pub fn ensure_schema(conn: &mut Connection, store: &Path) -> Result<(), String> 
         tx.execute_batch(&format!(
             "CREATE TABLE IF NOT EXISTS events {EVENTS_V2_COLUMNS};"
         ))
-        .map_err(|e| format!("{}: migration: {e}", store.display()))?;
+        .map_err(|e| EventStoreError::sql_path_named(store, "migration", e))?;
         create_v2_indexes(&tx)?;
         stamp_v2(&tx)?;
     }
     tx.commit()
-        .map_err(|e| format!("{}: migration: {e}", store.display()))?;
+        .map_err(|e| EventStoreError::sql_path_named(store, "migration", e))?;
     migrate_caused_by(conn)?;
     backfill_envelope_node(conn)?;
     crate::role_migration::upgrade_event_store(conn)?;
@@ -643,7 +752,7 @@ pub fn ensure_schema(conn: &mut Connection, store: &Path) -> Result<(), String> 
 /// Fill `node_id` once on rows imported before [`extract_identity`] read the
 /// envelope-level node. An events_meta row marks it done, so later opens pay
 /// one indexed select.
-fn backfill_envelope_node(conn: &Connection) -> Result<(), String> {
+fn backfill_envelope_node(conn: &Connection) -> Result<(), EventStoreError> {
     const KEY: &str = "envelope_node_backfilled";
     let done = conn
         .query_row(
@@ -663,26 +772,26 @@ fn backfill_envelope_node(conn: &Connection) -> Result<(), String> {
            AND (json_type(line, '$.node_id') = 'text' OR json_type(line, '$.node') = 'text');
          INSERT OR IGNORE INTO events_meta (key, value) VALUES ('{KEY}', '1');"
     ))
-    .map_err(|e| format!("envelope node backfill: {e}"))
+    .map_err(|e| EventStoreError::sql_named("envelope node backfill", e))
 }
 
 /// The caused_by column on a store created before it existed. The ALTER is
 /// PRAGMA-guarded and idempotent; two first opens can race it and the loser
 /// tolerates the winner's duplicate-column answer.
-fn migrate_caused_by(conn: &Connection) -> Result<(), String> {
+fn migrate_caused_by(conn: &Connection) -> Result<(), EventStoreError> {
     let has: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM pragma_table_info('events') WHERE name = 'caused_by'",
             [],
             |r| r.get(0),
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| EventStoreError::sql(e))?;
     if has > 0 {
         return Ok(());
     }
     if let Err(e) = conn.execute_batch("ALTER TABLE events ADD COLUMN caused_by TEXT") {
         if !e.to_string().contains("duplicate column name") {
-            return Err(e.to_string());
+            return Err(EventStoreError::sql(e));
         }
     }
     Ok(())
@@ -691,7 +800,7 @@ fn migrate_caused_by(conn: &Connection) -> Result<(), String> {
 /// Stamp [`COVERAGE_EPOCH_KEY`] with the first-open moment of this build,
 /// once per store. The value is never taken from `MIN(ts_ms)` or an imported
 /// row: imported rows widen what is observed, never what is proven.
-fn stamp_coverage_epoch(conn: &Connection, store: &Path) -> Result<(), String> {
+fn stamp_coverage_epoch(conn: &Connection, store: &Path) -> Result<(), EventStoreError> {
     let present: Option<String> = conn
         .query_row(
             "SELECT value FROM events_meta WHERE key = ?1",
@@ -704,14 +813,14 @@ fn stamp_coverage_epoch(conn: &Connection, store: &Path) -> Result<(), String> {
     }
     let now_ms = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
         Ok(d) => d.as_millis() as i64,
-        Err(e) => return Err(format!("{}: {e}", store.display())),
+        Err(e) => return Err(format!("{}: {e}", store.display()).into()),
     };
     conn.execute(
         "INSERT OR IGNORE INTO events_meta (key, value) VALUES (?1, ?2)",
         params![COVERAGE_EPOCH_KEY, now_ms.to_string()],
     )
     .map(|_| ())
-    .map_err(|e| format!("{}: coverage epoch: {e}", store.display()))
+    .map_err(|e| EventStoreError::sql_path_named(store, "coverage epoch", e))
 }
 
 fn events_table_has_event_id(conn: &Connection) -> bool {
@@ -723,21 +832,21 @@ fn events_table_has_event_id(conn: &Connection) -> bool {
         .unwrap_or(false)
 }
 
-fn create_v2_indexes(tx: &Transaction) -> Result<(), String> {
+fn create_v2_indexes(tx: &Transaction) -> Result<(), EventStoreError> {
     tx.execute_batch(EVENTS_V2_INDEXES)
-        .map_err(|e| format!("migration indexes: {e}"))
+        .map_err(|e| EventStoreError::sql_named("migration indexes", e))
 }
 
-fn stamp_v2(tx: &Transaction) -> Result<(), String> {
+fn stamp_v2(tx: &Transaction) -> Result<(), EventStoreError> {
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)
-        .map_err(|e| format!("migration stamp: {e}"))?;
+        .map_err(|e| EventStoreError::sql_named("migration stamp", e))?;
     tx.execute(
         "INSERT INTO events_meta (key, value) VALUES ('schema_version', ?1)
          ON CONFLICT(key) DO UPDATE SET value = ?1",
         params![SCHEMA_VERSION.to_string()],
     )
     .map(|_| ())
-    .map_err(|e| format!("migration stamp: {e}"))
+    .map_err(|e| EventStoreError::sql_named("migration stamp", e))
 }
 
 /// Rebuild v1 rows into the v2 shape, oldest-first, in the caller's open
@@ -746,15 +855,15 @@ fn stamp_v2(tx: &Transaction) -> Result<(), String> {
 /// `reject_reason`. The monotonic `seq` is assigned in `ts_ms` order (the
 /// journal's own write order within a generation), ties broken by row_hash
 /// so the order is deterministic.
-fn migrate_v1_to_v2(tx: &Transaction, store: &Path) -> Result<(), String> {
+fn migrate_v1_to_v2(tx: &Transaction, store: &Path) -> Result<(), EventStoreError> {
     tx.execute_batch(&format!("CREATE TABLE events_v2 {EVENTS_V2_COLUMNS};"))
-        .map_err(|e| format!("{}: migration: {e}", store.display()))?;
+        .map_err(|e| EventStoreError::sql_path_named(store, "migration", e))?;
     let mut stmt = tx
         .prepare(
             "SELECT row_hash, ts_ms, type, source, scope, reject_reason, line
              FROM events ORDER BY ts_ms, row_hash",
         )
-        .map_err(|e| format!("{}: migration: {e}", store.display()))?;
+        .map_err(|e| EventStoreError::sql_path_named(store, "migration", e))?;
     let rows = stmt
         .query_map([], |r| {
             Ok((
@@ -767,10 +876,10 @@ fn migrate_v1_to_v2(tx: &Transaction, store: &Path) -> Result<(), String> {
                 r.get::<_, String>(6)?,
             ))
         })
-        .map_err(|e| format!("{}: migration: {e}", store.display()))?;
+        .map_err(|e| EventStoreError::sql_path_named(store, "migration", e))?;
     for row in rows {
         let (row_hash, ts_ms, ty, source, scope, reject, line) =
-            row.map_err(|e| format!("{}: migration: {e}", store.display()))?;
+            row.map_err(|e| EventStoreError::sql_path_named(store, "migration", e))?;
         insert_v2_row(
             tx,
             "events_v2",
@@ -785,13 +894,13 @@ fn migrate_v1_to_v2(tx: &Transaction, store: &Path) -> Result<(), String> {
                 line,
             },
         )
-        .map_err(|e| format!("{}: migration: {e}", store.display()))?;
+        .map_err(|e| EventStoreError::sql_path_named(store, "migration", e))?;
     }
     drop(stmt);
     tx.execute("DROP TABLE events", [])
-        .map_err(|e| format!("{}: migration: {e}", store.display()))?;
+        .map_err(|e| EventStoreError::sql_path_named(store, "migration", e))?;
     tx.execute("ALTER TABLE events_v2 RENAME TO events", [])
-        .map_err(|e| format!("{}: migration: {e}", store.display()))?;
+        .map_err(|e| EventStoreError::sql_path_named(store, "migration", e))?;
     create_v2_indexes(tx)?;
     stamp_v2(tx)
 }
@@ -897,14 +1006,14 @@ fn import_file(
     path: &Path,
     store: &Path,
     now_ms: i64,
-) -> Result<FileTally, String> {
-    let sql_error = |error: &dyn std::fmt::Display| {
-        format!("{}: importing {}: {error}", store.display(), path.display())
+) -> Result<FileTally, EventStoreError> {
+    let sql_error = |error: rusqlite::Error| {
+        EventStoreError::sql_path_named(store, format!("importing {}", path.display()), error)
     };
     let meta = match std::fs::metadata(path) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(FileTally::default()),
-        Err(e) => return Err(format!("{}: {e}", path.display())),
+        Err(e) => return Err(EventStoreError::io_at(path, e)),
     };
     let (dev, ino, len) = (meta.dev() as i64, meta.ino() as i64, meta.len());
     let resume: Option<(Vec<u8>, i64)> = tx
@@ -914,7 +1023,7 @@ fn import_file(
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()
-        .map_err(|e| sql_error(&e))?;
+        .map_err(|e| sql_error(e))?;
     // A frozen journal is read on every import. When the cursor already sits
     // at EOF under the same head line, a bounded head read proves there is
     // nothing new; only the cursor's age is refreshed so prune keeps it.
@@ -926,11 +1035,11 @@ fn import_file(
                 "UPDATE ingest_cursor SET updated_ms = ?3 WHERE dev = ?1 AND ino = ?2",
                 params![dev, ino, now_ms],
             )
-            .map_err(|e| sql_error(&e))?;
+            .map_err(|e| sql_error(e))?;
             return Ok(FileTally::default());
         }
     }
-    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let bytes = std::fs::read(path).map_err(|e| EventStoreError::io_at(path, e))?;
     // Offsets are BYTE offsets into the raw file, never into a lossy string:
     // a conversion that resizes bytes would desync the stored cursor.
     let head_hash: Vec<u8> = {
@@ -994,7 +1103,13 @@ fn import_file(
                     continue;
                 }
                 Ok(observation::ObservationGate::Insert) => {}
-                Err(e) => return Err(sql_error(&e)),
+                Err(e) => {
+                    return Err(EventStoreError::Text(format!(
+                        "{}: importing {}: {e}",
+                        store.display(),
+                        path.display()
+                    )))
+                }
             }
         }
         let inserted = insert_v2_row(
@@ -1011,7 +1126,7 @@ fn import_file(
                 line,
             },
         )
-        .map_err(|e| sql_error(&e))?;
+        .map_err(|e| sql_error(e))?;
         tally.ingested += inserted as u64;
     }
     tx.execute(
@@ -1028,7 +1143,7 @@ fn import_file(
             now_ms
         ],
     )
-    .map_err(|e| sql_error(&e))?;
+    .map_err(|e| sql_error(e))?;
     Ok(tally)
 }
 
@@ -1137,12 +1252,12 @@ fn hex(bytes: &[u8]) -> String {
 /// store, and stale ingest cursors fall off. `telemetry` rows expire on their
 /// own gate ([`prune_telemetry_due`]). `durable`, `gate`, rejected, and
 /// migration receipt rows never auto-expire.
-fn prune(conn: &mut Connection, now_ms: i64) -> Result<(), String> {
+fn prune(conn: &mut Connection, now_ms: i64) -> Result<(), EventStoreError> {
     if now_ms.saturating_sub(meta_ms(conn, "last_prune_ms")) >= DAY_MS {
         let cutoff = now_ms.saturating_sub(MINIMUM_EPHEMERAL_TTL_HOURS * HOUR_MS);
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| EventStoreError::sql(e))?;
         // Re-read under the write lock: a concurrent sync that already claimed
         // this pass wins, so two processes never prune at once.
         if now_ms.saturating_sub(meta_ms(&tx, "last_prune_ms")) >= DAY_MS {
@@ -1150,14 +1265,14 @@ fn prune(conn: &mut Connection, now_ms: i64) -> Result<(), String> {
                 "DELETE FROM events WHERE retention_class = 'ephemeral' AND ts_ms < ?1",
                 params![cutoff],
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| EventStoreError::sql(e))?;
             tx.execute(
                 "DELETE FROM ingest_cursor WHERE updated_ms < ?1",
                 params![cutoff],
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| EventStoreError::sql(e))?;
             stamp_meta(&tx, "last_prune_ms", now_ms)?;
-            tx.commit().map_err(|e| e.to_string())?;
+            tx.commit().map_err(|e| EventStoreError::sql(e))?;
         }
     }
     // Best-effort: the ingest already committed, so a busy store here never
@@ -1178,14 +1293,14 @@ fn meta_ms(conn: &Connection, key: &str) -> i64 {
     .unwrap_or(0)
 }
 
-fn stamp_meta(conn: &Connection, key: &str, value: i64) -> Result<(), String> {
+fn stamp_meta(conn: &Connection, key: &str, value: i64) -> Result<(), EventStoreError> {
     conn.execute(
         "INSERT INTO events_meta (key, value) VALUES (?1, ?2)
          ON CONFLICT(key) DO UPDATE SET value = ?2",
         params![key, value.to_string()],
     )
     .map(|_| ())
-    .map_err(|e| e.to_string())
+    .map_err(|e| EventStoreError::sql(e))
 }
 
 /// The true start of the last telemetry pass. Coverage reads its cutoff from
@@ -1220,19 +1335,19 @@ fn telemetry_due(conn: &Connection, now_ms: i64) -> bool {
 /// [`PRUNE_RETRY_MS`] while a backlog is left. The pass is claimed under
 /// the write lock with the backlog mark already set, so a pass that dies
 /// midway is retried rather than forgotten for a day.
-fn prune_telemetry_due(conn: &mut Connection, now_ms: i64) -> Result<(), String> {
+fn prune_telemetry_due(conn: &mut Connection, now_ms: i64) -> Result<(), EventStoreError> {
     if !telemetry_due(conn, now_ms) {
         return Ok(());
     }
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| EventStoreError::sql(e))?;
     if !telemetry_due(&tx, now_ms) {
         return Ok(());
     }
     stamp_meta(&tx, TELEMETRY_PRUNED_KEY, now_ms)?;
     stamp_meta(&tx, TELEMETRY_BACKLOG_KEY, 1)?;
-    tx.commit().map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| EventStoreError::sql(e))?;
     if prune_telemetry(conn, now_ms, TELEMETRY_PRUNE_BUDGET)? {
         stamp_meta(conn, TELEMETRY_BACKLOG_KEY, 0)?;
     }
@@ -1277,14 +1392,14 @@ pub struct RollupRow {
 /// Rollup totals per kind and subject over the days at or after
 /// `since_day` (`YYYY-MM-DD`), most occurrences first. A store no prune has
 /// touched has no table and reads empty.
-pub fn read_rollup(conn: &Connection, since_day: &str) -> Result<Vec<RollupRow>, String> {
+pub fn read_rollup(conn: &Connection, since_day: &str) -> Result<Vec<RollupRow>, EventStoreError> {
     let has_table: i64 = conn
         .query_row(
             "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'event_rollup'",
             [],
             |r| r.get(0),
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| EventStoreError::sql(e))?;
     if has_table == 0 {
         return Ok(Vec::new());
     }
@@ -1294,7 +1409,7 @@ pub fn read_rollup(conn: &Connection, since_day: &str) -> Result<Vec<RollupRow>,
              WHERE day >= ?1 GROUP BY type, subject \
              ORDER BY sum(occurrences) DESC, type, subject",
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| EventStoreError::sql(e))?;
     let rows = stmt
         .query_map(params![since_day], |r| {
             Ok(RollupRow {
@@ -1305,8 +1420,9 @@ pub fn read_rollup(conn: &Connection, since_day: &str) -> Result<Vec<RollupRow>,
                 occurrences: r.get(4)?,
             })
         })
-        .map_err(|e| e.to_string())?;
-    rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
+        .map_err(|e| EventStoreError::sql(e))?;
+    rows.collect::<Result<_, _>>()
+        .map_err(|e| EventStoreError::sql(e))
 }
 
 /// Delete telemetry rows past their horizon, oldest first within each
@@ -1321,9 +1437,10 @@ fn prune_telemetry(
     conn: &mut Connection,
     now_ms: i64,
     budget: std::time::Duration,
-) -> Result<bool, String> {
+) -> Result<bool, EventStoreError> {
     let started = std::time::Instant::now();
-    conn.execute_batch(ROLLUP_DDL).map_err(|e| e.to_string())?;
+    conn.execute_batch(ROLLUP_DDL)
+        .map_err(|e| EventStoreError::sql(e))?;
     let cutoff = now_ms.saturating_sub(TELEMETRY_TTL_HOURS * HOUR_MS);
     let allow_cutoff = now_ms.saturating_sub(GUARD_ALLOW_TTL_HOURS * HOUR_MS);
     let machine_cutoff = now_ms.saturating_sub(MACHINE_WATCH_TTL_HOURS * HOUR_MS);
@@ -1367,13 +1484,13 @@ fn prune_telemetry(
             }
             let tx = conn
                 .transaction_with_behavior(TransactionBehavior::Immediate)
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| EventStoreError::sql(e))?;
             tx.execute(&count_sql, params![kind, cutoff_ms, TELEMETRY_PRUNE_BATCH])
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| EventStoreError::sql(e))?;
             let deleted = tx
                 .execute(&delete_sql, params![kind, cutoff_ms, TELEMETRY_PRUNE_BATCH])
-                .map_err(|e| e.to_string())?;
-            tx.commit().map_err(|e| e.to_string())?;
+                .map_err(|e| EventStoreError::sql(e))?;
+            tx.commit().map_err(|e| EventStoreError::sql(e))?;
             if (deleted as i64) < TELEMETRY_PRUNE_BATCH {
                 break;
             }
@@ -1412,17 +1529,21 @@ pub fn append_envelope(
     journal: &Path,
     envelope_json: &str,
     requested_event_id: Option<&str>,
-) -> Result<AppendReceipt, String> {
+) -> Result<AppendReceipt, EventStoreError> {
     let store = try_store_path(journal)?;
     let line = envelope_json.trim();
     if line.contains('\n') || line.contains('\r') {
         return Err(format!(
             "{}: envelope must be a single line (refused: embedded newline)",
             store.display()
-        ));
+        )
+        .into());
     }
-    let value: serde_json::Value = serde_json::from_str(line)
-        .map_err(|e| format!("{}: envelope is not valid JSON: {e}", store.display()))?;
+    let value: serde_json::Value =
+        serde_json::from_str(line).map_err(|e| EventStoreError::InvalidEnvelope {
+            path: store.to_path_buf(),
+            source: e,
+        })?;
     let obj = value
         .as_object()
         .ok_or_else(|| format!("{}: envelope is not a JSON object", store.display()))?;
@@ -1433,7 +1554,7 @@ pub fn append_envelope(
     // different failure class than a store fault, and Python raises
     // ValidationError only for the former.
     if let Err(msg) = validate::validate_envelope(obj) {
-        return Err(format!("{VALIDATE_PREFIX}{msg}"));
+        return Err(format!("{VALIDATE_PREFIX}{msg}").into());
     }
     let ty = obj
         .get("type")
@@ -1442,13 +1563,10 @@ pub fn append_envelope(
         .ok_or_else(|| format!("{}: envelope has no type", store.display()))?
         .to_string();
     if obj.get("source").and_then(|s| s.as_str()).is_none() {
-        return Err(format!("{}: envelope has no source", store.display()));
+        return Err(format!("{}: envelope has no source", store.display()).into());
     }
     if !matches!(obj.get("data"), Some(serde_json::Value::Object(_))) {
-        return Err(format!(
-            "{}: envelope data is not an object",
-            store.display()
-        ));
+        return Err(format!("{}: envelope data is not an object", store.display()).into());
     }
     let ts_str = obj
         .get("ts")
@@ -1467,7 +1585,8 @@ pub fn append_envelope(
             return Err(format!(
                 "{}: data.scope is not a canonical team scope: {s}",
                 store.display()
-            ));
+            )
+            .into());
         }
     }
 
@@ -1482,7 +1601,7 @@ pub fn append_envelope(
     // fork-heavy contention, and one expired wait must not lose the row.
     // The event id is the sha256 of the line, so a retried append reads
     // back as an idempotent hit, never a duplicate.
-    let mut last_error = String::new();
+    let mut last_error = EventStoreError::Text(String::new());
     for attempt in 0..APPEND_ATTEMPTS {
         match commit_envelope(&store, line, &event_id, &row_hash, &ty, class, obj, ts_ms) {
             Ok(receipt) => {
@@ -1490,7 +1609,7 @@ pub fn append_envelope(
                 return Ok(receipt);
             }
             Err(error) => {
-                let settled = !lock_busy(&error) || attempt + 1 == APPEND_ATTEMPTS;
+                let settled = !lock_busy(&error.to_string()) || attempt + 1 == APPEND_ATTEMPTS;
                 last_error = error;
                 if settled {
                     break;
@@ -1499,9 +1618,10 @@ pub fn append_envelope(
             }
         }
     }
-    report_lost_row(&store, &ty, &last_error);
-    if corrupt_image(&last_error) {
-        return Err(refuse_corrupt_store(&store, &last_error));
+    let text = last_error.to_string();
+    report_lost_row(&store, &ty, &text);
+    if corrupt_image(&text) {
+        return Err(refuse_corrupt_store(&store, &text).into());
     }
     Err(last_error)
 }
@@ -1556,16 +1676,16 @@ fn commit_envelope(
     class: &str,
     obj: &serde_json::Map<String, serde_json::Value>,
     ts_ms: i64,
-) -> Result<AppendReceipt, String> {
+) -> Result<AppendReceipt, EventStoreError> {
     // The commit creates the directory it needs; the caller-side guards
     // (Python's hermetic fence, the shell's opt-in parent guard) already ran.
     if let Some(parent) = store.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", store.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| EventStoreError::io_at(store, e))?;
     }
     let mut conn = open_store(store)?;
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|e| format!("{}: {e}", store.display()))?;
+        .map_err(|e| EventStoreError::sql_at(store, e))?;
     let id = extract_identity(line);
     // Idempotent hit first: a byte-identical retry reads back the stored row
     // and never consults the observation gate (one logical write, not a new
@@ -1578,8 +1698,7 @@ fn commit_envelope(
         )
         .ok();
     if let Some(seq) = existing {
-        tx.commit()
-            .map_err(|e| format!("{}: {e}", store.display()))?;
+        tx.commit().map_err(|e| EventStoreError::sql_at(store, e))?;
         return Ok(AppendReceipt {
             store: store.to_path_buf(),
             event_id: event_id.to_string(),
@@ -1601,7 +1720,8 @@ fn commit_envelope(
         return Err(format!(
             "{}: identity collision on event_id {event_id}: stored envelope differs",
             store.display()
-        ));
+        )
+        .into());
     }
     // A declared poll observation consults the gate before inserting: an
     // identical healthy poll inside its window is counted pending and no
@@ -1618,8 +1738,7 @@ fn commit_envelope(
         ts_ms,
     )? {
         observation::ObservationGate::Suppressed { pending } => {
-            tx.commit()
-                .map_err(|e| format!("{}: {e}", store.display()))?;
+            tx.commit().map_err(|e| EventStoreError::sql_at(store, e))?;
             return Ok(AppendReceipt {
                 store: store.to_path_buf(),
                 event_id: event_id.to_string(),
@@ -1658,7 +1777,7 @@ fn commit_envelope(
                 line,
             ],
         )
-        .map_err(|e| format!("{}: {e}", store.display()))?;
+        .map_err(|e| EventStoreError::sql_at(store, e))?;
     // Positive readback: the row this receipt names must be in the store.
     let (seq, stored_line): (i64, String) = tx
         .query_row(
@@ -1671,10 +1790,10 @@ fn commit_envelope(
         return Err(format!(
             "{}: identity collision on event_id {event_id}: stored envelope differs",
             store.display()
-        ));
+        )
+        .into());
     }
-    tx.commit()
-        .map_err(|e| format!("{}: {e}", store.display()))?;
+    tx.commit().map_err(|e| EventStoreError::sql_at(store, e))?;
     Ok(AppendReceipt {
         store: store.to_path_buf(),
         event_id: event_id.to_string(),
@@ -1842,10 +1961,12 @@ impl EventQuery {
 
 /// Query committed rows in commit order. A failure names the store; there is
 /// no file-scan fallback.
-pub fn query_events(journal: &Path, q: &EventQuery) -> Result<Vec<EventRow>, String> {
+pub fn query_events(journal: &Path, q: &EventQuery) -> Result<Vec<EventRow>, EventStoreError> {
     let conn = open_read(&store_path(journal))?;
     let (sql, args) = q.build_sql(has_recovery_history(&conn)?);
-    let mut stmt = conn.prepare(&sql).map_err(|e| format!("{}: {e}", sql))?;
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| EventStoreError::sql_named(sql.as_str(), e))?;
     let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
     let rows = stmt
         .query_map(refs.as_slice(), |r| {
@@ -1863,9 +1984,9 @@ pub fn query_events(journal: &Path, q: &EventQuery) -> Result<Vec<EventRow>, Str
                 recovery_batch: r.get(10)?,
             })
         })
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| EventStoreError::sql(e))?;
     rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())
+        .map_err(|e| EventStoreError::sql(e))
 }
 
 /// The event id and envelope line of the newest accepted row of one type for
@@ -1877,7 +1998,7 @@ pub fn newest_of_type(
     journal: &Path,
     ty: &str,
     repo: &str,
-) -> Result<Option<(String, String)>, String> {
+) -> Result<Option<(String, String)>, EventStoreError> {
     let store = store_path(journal);
     if !store.is_file() {
         return Ok(None);
@@ -1890,46 +2011,46 @@ pub fn newest_of_type(
     ) {
         Ok(row) => Ok(Some(row)),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e.to_string()),
+        Err(e) => Err(EventStoreError::sql(e)),
     }
 }
 
 /// The newest committed seq, or 0 for an empty store: the high-water mark an
 /// incremental reader bounds one pass by and stores as its next cursor.
-pub fn max_seq(journal: &Path) -> Result<i64, String> {
+pub fn max_seq(journal: &Path) -> Result<i64, EventStoreError> {
     let conn = open_read(&store_path(journal))?;
     conn.query_row("SELECT COALESCE(MAX(seq), 0) FROM events", [], |r| r.get(0))
-        .map_err(|e| e.to_string())
+        .map_err(|e| EventStoreError::sql(e))
 }
 
-fn has_recovery_history(conn: &Connection) -> Result<bool, String> {
+fn has_recovery_history(conn: &Connection) -> Result<bool, EventStoreError> {
     conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='recovery_history')",
         [],
         |r| r.get(0),
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| EventStoreError::sql(e))
 }
 
-fn store_has_events(conn: &Connection) -> Result<bool, String> {
+fn store_has_events(conn: &Connection) -> Result<bool, EventStoreError> {
     conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='events')",
         [],
         |r| r.get(0),
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| EventStoreError::sql(e))
 }
 
 /// The no-store read: the journal that was named. A rotated path must
 /// yield its own bytes, not the live file live_journal folds it into -
 /// folding double-counted the live lines under the rotation's name
 /// and blamed a corrupt live line on the rotation.
-fn read_journal_text_direct(journal: &Path, live: &Path) -> Result<String, String> {
+fn read_journal_text_direct(journal: &Path, live: &Path) -> Result<String, EventStoreError> {
     let direct = if journal.is_file() { journal } else { live };
     match std::fs::read_to_string(direct) {
         Ok(text) => Ok(text),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(err) => Err(format!("{}: {err}", direct.display())),
+        Err(err) => Err(EventStoreError::io_at(direct, err)),
     }
 }
 
@@ -1956,7 +2077,7 @@ pub fn recovery_envelope(row: &EventRow) -> serde_json::Value {
 /// A line read from a sibling store carries a foreign seq, so its verified
 /// resolution fails and the stripped render stands in; for a line without
 /// annotations this is the verbatim input.
-pub fn raw_stored_line(journal: &Path, line: &str) -> Result<String, String> {
+pub fn raw_stored_line(journal: &Path, line: &str) -> Result<String, EventStoreError> {
     let value = match serde_json::from_str::<serde_json::Value>(line) {
         Ok(value) => value,
         Err(_) => return Ok(line.to_string()),
@@ -1989,7 +2110,7 @@ pub fn raw_stored_line(journal: &Path, line: &str) -> Result<String, String> {
             |r| r.get(0),
         )
         .optional()
-        .map_err(|e| format!("{}: {e}", store.display()))?;
+        .map_err(|e| EventStoreError::sql_at(&store, e))?;
     let Some(stored) = stored else {
         return Ok(clean);
     };
@@ -2085,7 +2206,7 @@ pub fn coverage(journal: &Path, since_ms: Option<i64>, types: &[String]) -> Cove
                 requested_since_ms: since_ms,
                 observed_first_ms: None,
                 observed_last_ms: None,
-                reason: Some(e),
+                reason: Some(e.to_string()),
             }
         }
     };
@@ -2216,7 +2337,10 @@ pub fn journal_text(journal: &Path, types: &[&str]) -> String {
         // itself cannot be read leaves the degrade empty: the store failure
         // above is the named cause and the read must not fail twice.
         let fallback = family_fallback_text(&live).unwrap_or_default();
-        eprintln!("{}", degrade_notice(&store_path(&live), &err, &live));
+        eprintln!(
+            "{}",
+            degrade_notice(&store_path(&live), &err.to_string(), &live)
+        );
         fallback
     })
 }
@@ -2228,7 +2352,7 @@ pub fn journal_text(journal: &Path, types: &[&str]) -> String {
 /// journal never serves raw bytes: a stray file imports into the store
 /// first, a refused import is `Err` naming it, and whatever the store still
 /// cannot answer reads as empty.
-pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, String> {
+pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, EventStoreError> {
     let live = live_journal(journal);
     let routed = routed_root_journal(&live);
     let store = store_path(&live);
@@ -2237,7 +2361,9 @@ pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, St
         // (or fixture) left at the retired root. A read checks the ingest
         // cursor read-only first, and only bytes past it open the write
         // transaction import_all runs; a refused import is Err naming it.
-        import_all(&live).map_err(|e| format!("stray import for {}: {e}", live.display()))?;
+        import_all(&live).map_err(|e| {
+            EventStoreError::Text(format!("stray import for {}: {e}", live.display()))
+        })?;
     }
     if !store.is_file() {
         if routed {
@@ -2282,7 +2408,7 @@ pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, St
     let (sql, args) = q.build_sql(recovery);
     let mut stmt = conn
         .prepare(&sql)
-        .map_err(|e| format!("{}: {e}", store.display()))?;
+        .map_err(|e| EventStoreError::sql_at(&store, e))?;
     let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
     let rows = stmt
         .query_map(refs.as_slice(), |r| {
@@ -2303,9 +2429,9 @@ pub fn journal_text_checked(journal: &Path, q: &EventQuery) -> Result<String, St
             }
             Ok(value.to_string())
         })
-        .map_err(|e| format!("{}: {e}", store.display()))?
+        .map_err(|e| EventStoreError::sql_at(&store, e))?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("{}: {e}", store.display()))?;
+        .map_err(|e| EventStoreError::sql_at(&store, e))?;
     let mut text = String::new();
     if routed {
         for line in rows {
@@ -2403,11 +2529,11 @@ fn skip_ok_sql(failure_skips: &[&str]) -> String {
 
 /// The store's max rowid (`seq` is the rowid), or 0 when the store is empty
 /// or unreadable. O(1): the rowid max is the last row of the main btree.
-pub fn store_max_seq(store: &Path) -> Result<i64, String> {
+pub fn store_max_seq(store: &Path) -> Result<i64, EventStoreError> {
     let conn = open_read(&store)?;
     let max: Option<i64> = conn
         .query_row("SELECT MAX(seq) FROM events", [], |r| r.get(0))
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| EventStoreError::sql(e))?;
     Ok(max.unwrap_or(0))
 }
 
@@ -2631,7 +2757,7 @@ fn append_uningested_lines(
     path: &Path,
     tail_allowed: Option<&[String]>,
     tail_typeless_ok: bool,
-) -> Result<(), String> {
+) -> Result<(), EventStoreError> {
     let start: u64 = match std::fs::metadata(path) {
         Ok(meta) => {
             let cursor = conn
@@ -2658,7 +2784,7 @@ fn append_uningested_lines(
     let tail = match read_range(path, start) {
         Ok(tail) => tail,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(err) => return Err(format!("{}: {err}", path.display())),
+        Err(err) => return Err(EventStoreError::io_at(path, err)),
     };
     let complete_end = tail.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
     let mut held = conn
@@ -2666,7 +2792,7 @@ fn append_uningested_lines(
             "SELECT EXISTS(SELECT 1 FROM events WHERE row_hash = ?1)
          OR EXISTS(SELECT 1 FROM event_observation_pending WHERE row_hash = ?1)",
         )
-        .map_err(|e| format!("{}: held probe: {e}", path.display()))?;
+        .map_err(|e| EventStoreError::sql_path_named(path, "held probe", e))?;
     for line_bytes in tail[..complete_end].split(|&b| b == b'\n') {
         let line_bytes = line_bytes.strip_suffix(b"\r").unwrap_or(line_bytes);
         if line_bytes.is_empty() {
@@ -2700,7 +2826,7 @@ fn append_uningested_lines(
 /// generation that is absent is skipped; a file that exists and cannot be
 /// read (a directory parked on the name, invalid UTF-8) is the error it
 /// always was - fail closed, never a silent empty.
-fn family_fallback_text(live: &Path) -> Result<String, String> {
+fn family_fallback_text(live: &Path) -> Result<String, EventStoreError> {
     let mut text = String::new();
     let mut sources = generation_files(live)
         .into_iter()
@@ -2716,7 +2842,7 @@ fn family_fallback_text(live: &Path) -> Result<String, String> {
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(format!("{}: {e}", path.display())),
+            Err(e) => return Err(EventStoreError::io_at(&path, e)),
         }
     }
     Ok(text)
@@ -2840,32 +2966,31 @@ fn json_string_value_after_key(rest: &[u8]) -> Option<&[u8]> {
 /// (tmp file + rename), labeled by the caller as the snapshot it is. Returns
 /// the row count. The store stays authoritative: a failure anywhere removes
 /// the temporary and names the output path.
-pub fn export_jsonl(journal: &Path, out: &Path) -> Result<u64, String> {
+pub fn export_jsonl(journal: &Path, out: &Path) -> Result<u64, EventStoreError> {
     let conn = open_read(&store_path(journal))?;
     let mut stmt = conn
         .prepare("SELECT line FROM events ORDER BY seq")
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| EventStoreError::sql(e))?;
     let rows = stmt
         .query_map([], |r| r.get::<_, String>(0))
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| EventStoreError::sql(e))?;
     let tmp = out.with_extension("jsonl.export-tmp");
     let mut count = 0u64;
-    let write = |tmp: &Path| -> Result<(), String> {
+    let write = |tmp: &Path| -> Result<(), EventStoreError> {
         use std::io::Write;
-        let mut fh = std::fs::File::create(tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
+        let mut fh = std::fs::File::create(tmp).map_err(|e| EventStoreError::io_at(&tmp, e))?;
         for row in rows {
-            let line = row.map_err(|e| e.to_string())?;
-            writeln!(fh, "{line}").map_err(|e| format!("{}: {e}", tmp.display()))?;
+            let line = row.map_err(|e| EventStoreError::sql(e))?;
+            writeln!(fh, "{line}").map_err(|e| EventStoreError::io_at(&tmp, e))?;
             count += 1;
         }
-        fh.sync_all()
-            .map_err(|e| format!("{}: {e}", tmp.display()))?;
+        fh.sync_all().map_err(|e| EventStoreError::io_at(&tmp, e))?;
         Ok(())
     };
     write(&tmp)?;
     if let Err(e) = std::fs::rename(&tmp, out) {
         let _ = std::fs::remove_file(&tmp);
-        return Err(format!("{}: {e}", out.display()));
+        return Err(EventStoreError::io_at(out, e));
     }
     Ok(count)
 }
@@ -2883,22 +3008,35 @@ pub struct GcReceipt {
 /// bypassing the daily gate. `durable`, `gate`, rejected and migration rows
 /// never leave. A journal with no store reads as an empty receipt, and the
 /// store is not created.
-pub fn gc_ephemeral(journal: &Path, cutoff_ms: i64, dry_run: bool) -> Result<GcReceipt, String> {
+pub fn gc_ephemeral(
+    journal: &Path,
+    cutoff_ms: i64,
+    dry_run: bool,
+) -> Result<GcReceipt, EventStoreError> {
     let store = store_path(journal);
     let result = gc_ephemeral_inner(&store, cutoff_ms, dry_run);
     match result {
         Ok(receipt) => Ok(receipt),
-        Err(error) if corrupt_image(&error) => Err(refuse_corrupt_store(&store, &error)),
-        Err(error) => Err(error),
+        Err(error) => {
+            let text = error.to_string();
+            if corrupt_image(&text) {
+                return Err(refuse_corrupt_store(&store, &text).into());
+            }
+            Err(error)
+        }
     }
 }
 
-fn gc_ephemeral_inner(store: &Path, cutoff_ms: i64, dry_run: bool) -> Result<GcReceipt, String> {
+fn gc_ephemeral_inner(
+    store: &Path,
+    cutoff_ms: i64,
+    dry_run: bool,
+) -> Result<GcReceipt, EventStoreError> {
     if !store.exists() {
         return Ok(GcReceipt::default());
     }
     let conn = open_store(store)?;
-    let named = |e: rusqlite::Error| format!("{}: {e}", store.display());
+    let named = |e: rusqlite::Error| EventStoreError::sql_at(store, e);
     let (scanned, malformed) = conn
         .query_row(
             "SELECT count(*), coalesce(sum(reject_reason IS NOT NULL), 0) FROM events",

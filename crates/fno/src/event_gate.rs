@@ -203,9 +203,11 @@ pub(super) fn run(args: &[OsString], json_mode: bool) -> i32 {
     let journal = journal.unwrap_or_else(default_journal);
     let emitted = match duplicate(&journal, &reason, pr, key.as_deref()) {
         Ok(true) => false,
-        Ok(false) => match super::hermetic::check(&journal)
-            .and_then(|_| crate::event_store::append_envelope(&journal, &line, None).map(|_| ()))
-        {
+        Ok(false) => match super::hermetic::check(&journal).and_then(|_| {
+            crate::event_store::append_envelope(&journal, &line, None)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        }) {
             Ok(()) => true,
             Err(error) => {
                 record_failure(&journal, node.as_deref().unwrap_or(""), &reason, &error);

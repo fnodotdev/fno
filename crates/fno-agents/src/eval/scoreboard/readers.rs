@@ -264,7 +264,7 @@ fn one_journal_rows(
                 path_coverage.push(serde_json::json!({
                     "path": path_key,
                     "status": "unreadable",
-                    "error": error,
+                    "error": error.to_string(),
                     "malformed_lines": 0,
                 }));
                 out

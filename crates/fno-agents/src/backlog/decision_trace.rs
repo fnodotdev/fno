@@ -133,7 +133,9 @@ pub fn emit_span_to(
         "source": "target",
         "data": data,
     });
-    crate::event_store::append_envelope(journal, &envelope.to_string(), None).map(|_| ())
+    crate::event_store::append_envelope(journal, &envelope.to_string(), None)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 // --- the mail-record leaf ------------------------------------------------

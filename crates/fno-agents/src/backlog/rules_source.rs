@@ -311,7 +311,7 @@ fn rules_import_inner(file: &str) -> Result<usize, (i32, String)> {
             "data": {"decision_id": law_id, "trigger_kind": "rule", "rule_toml": body},
         });
         crate::event_store::append_envelope(&path, &envelope.to_string(), None)
-            .map_err(|e| (1, e))?;
+            .map_err(|e| (1, e.to_string()))?;
         imported += 1;
     }
     Ok(imported)
