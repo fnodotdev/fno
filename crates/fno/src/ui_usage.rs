@@ -112,7 +112,7 @@ mod tests {
             serde_json::from_str(&row.line).unwrap();
         let data = raw
             .iter()
-            .find(|(key, _)| key == "data")
+            .find(|(key, _)| key.as_str() == "data")
             .and_then(|(_, value)| value.as_object())
             .expect("the envelope carries a data object");
         assert_eq!(data.len(), 2, "the row carries the two ids only: {data:?}");
