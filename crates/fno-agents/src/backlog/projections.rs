@@ -760,7 +760,7 @@ fn render_path_template(block: Option<&Value>) -> Option<String> {
         return None;
     }
     let names = template_names(template);
-    if !(names.len() == 1 && names[0] == "project") {
+    if names.as_slice() != ["project"] {
         eprintln!(
             "Warning: backlog.render_path {template:?} must carry exactly the {{project}} \
              placeholder; ignoring it"
