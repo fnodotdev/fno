@@ -44,43 +44,66 @@ pub(crate) const ALL: [SettingsTab; 6] = [
 ];
 
 impl View {
+    /// The General tab, or the apps field while it is open.
+    fn general_rows(&self) -> (Vec<PopupRow>, Vec<AuxAction>) {
+        if let Some(page) = reserve_apps::rows(self) {
+            return page;
+        }
+        let mut rows = Vec::new();
+        let mut actions: Vec<AuxAction> = Vec::new();
+        let toggle = |on: bool, label: &str| PopupRow::Entry {
+            glyph: if on { "☑".into() } else { "☐".into() },
+            label: label.into(),
+            hint: String::new(),
+            enabled: true,
+        };
+        rows.push(PopupRow::Header("display".into()));
+        rows.push(toggle(self.hover_focus, "focus follows mouse"));
+        rows.push(toggle(self.status_on, "status row"));
+        rows.push(toggle(
+            self.resource_meter_on,
+            "resource meter (needs macmon)",
+        ));
+        rows.push(toggle(
+            self.sideline_layout == crate::sideline_color::SidelineLayout::Card,
+            "sideline card layout",
+        ));
+        rows.push(PopupRow::Header("launch".into()));
+        rows.push(toggle(
+            self.launch_screen == crate::view_store::LaunchScreen::Hq,
+            "open HQ on launch",
+        ));
+        rows.push(PopupRow::Header("fleet".into()));
+        rows.push(toggle(self.confirm_lifecycle, "confirm before stop/remove"));
+        rows.push(toggle(
+            hold::reserve_auto_on(),
+            "hold the fleet while a listed app runs",
+        ));
+        rows.push(PopupRow::Entry {
+            glyph: "\u{270e}".into(),
+            label: format!("apps that hold the fleet: {}", reserve_apps::summary()),
+            hint: String::new(),
+            enabled: true,
+        });
+        actions.push(AuxAction::ToggleHoverFocus);
+        actions.push(AuxAction::ToggleStatus);
+        actions.push(AuxAction::ToggleResourceMeter);
+        actions.push(AuxAction::ToggleSidelineLayout);
+        actions.push(AuxAction::ToggleLaunchScreen);
+        actions.push(AuxAction::ToggleConfirmLifecycle);
+        actions.push(AuxAction::ToggleReserveAuto);
+        actions.push(AuxAction::EditReserveApps);
+
+        (rows, actions)
+    }
+
     /// One settings tab's rows and actions (extracted from
     /// `build_settings_modal` so every tab's width can be measured).
     pub(super) fn settings_rows_for(&self, tab: SettingsTab) -> (Vec<PopupRow>, Vec<AuxAction>) {
         let mut rows = Vec::new();
         let mut actions: Vec<AuxAction> = Vec::new();
         match tab {
-            SettingsTab::General => {
-                let toggle = |on: bool, label: &str| PopupRow::Entry {
-                    glyph: if on { "☑".into() } else { "☐".into() },
-                    label: label.into(),
-                    hint: String::new(),
-                    enabled: true,
-                };
-                rows.push(PopupRow::Header("display".into()));
-                rows.push(toggle(self.hover_focus, "focus follows mouse"));
-                rows.push(toggle(self.status_on, "status row"));
-                rows.push(toggle(
-                    self.resource_meter_on,
-                    "resource meter (needs macmon)",
-                ));
-                rows.push(toggle(
-                    self.sideline_layout == crate::sideline_color::SidelineLayout::Card,
-                    "sideline card layout",
-                ));
-                rows.push(PopupRow::Header("fleet".into()));
-                rows.push(toggle(self.confirm_lifecycle, "confirm before stop/remove"));
-                rows.push(toggle(
-                    hold::reserve_auto_on(),
-                    "hold the fleet while OBS or an editor runs",
-                ));
-                actions.push(AuxAction::ToggleHoverFocus);
-                actions.push(AuxAction::ToggleStatus);
-                actions.push(AuxAction::ToggleResourceMeter);
-                actions.push(AuxAction::ToggleSidelineLayout);
-                actions.push(AuxAction::ToggleConfirmLifecycle);
-                actions.push(AuxAction::ToggleReserveAuto);
-            }
+            SettingsTab::General => return self.general_rows(),
             SettingsTab::Theme => {
                 if !matches!(&self.theme_import, theme_import_ui::ThemeImportUi::Idle) {
                     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -218,6 +241,7 @@ impl View {
             || lane.pick.is_some()
             || lane.is_entry()
             || self.remote_hosts.add.is_some()
+            || self.reserve_apps_edit.is_some()
             || self.mods.url.is_some()
     }
 }
@@ -235,6 +259,7 @@ pub(super) fn switch_tab(view: &mut View, tab: SettingsTab) {
     view.lane.reset();
     theme_import_ui::reset(view);
     remote_hosts::cancel_add(view);
+    reserve_apps::cancel(view);
     mods::reset(view);
     if tab == SettingsTab::Mods {
         mods::refresh(view);
@@ -290,6 +315,7 @@ pub(super) fn back(view: &mut View) -> bool {
         true
     }) || lane_step(&mut view.lane)
         || remote_hosts::cancel_add(view)
+        || reserve_apps::cancel(view)
         || mods::cancel_url(view);
     if !stepped {
         return false;
@@ -314,6 +340,7 @@ pub(super) fn space_toggle(view: &View) -> Option<AuxAction> {
         | AuxAction::ToggleConfirmLifecycle
         | AuxAction::ToggleSidelineLayout
         | AuxAction::ToggleReserveAuto
+        | AuxAction::ToggleLaunchScreen
         | AuxAction::ToggleExperimental(_)
         | AuxAction::Mod(mods::Act::Switch(..))) => Some(a.clone()),
         _ => None,
@@ -339,6 +366,8 @@ pub(super) async fn field_keys(
         f.feed(bytes)
     } else if let Some(f) = view.remote_hosts.add.as_mut() {
         f.feed(bytes)
+    } else if let Some(f) = view.reserve_apps_edit.as_mut() {
+        f.feed(bytes)
     } else if let Some(f) = view.mods.url.as_mut() {
         f.feed(bytes)
     } else {
@@ -356,6 +385,8 @@ pub(super) async fn field_keys(
                     lane_entry::submit(view, text).await?
                 } else if view.remote_hosts.add.is_some() {
                     remote_hosts::submit(view, text).await
+                } else if view.reserve_apps_edit.is_some() {
+                    reserve_apps::submit(view, text)
                 } else if view.mods.url.is_some() {
                     mods::submit(view, text)
                 } else {
@@ -457,6 +488,13 @@ pub(super) async fn run_action(
             view.reopen_settings_keeping_sel();
         }
         AuxAction::ToggleReserveAuto => hold::toggle_reserve_auto(view),
+        AuxAction::EditReserveApps => reserve_apps::open(view),
+        AuxAction::ToggleLaunchScreen => {
+            let next = view.launch_screen.other();
+            super::org_board::set_launch_screen(view, next);
+            view.set_notice(format!("open on launch: {}", next.word()));
+            view.reopen_settings_keeping_sel();
+        }
         AuxAction::ToggleResourceMeter => {
             view.resource_meter_on = !view.resource_meter_on;
             view.resource_meter_gate

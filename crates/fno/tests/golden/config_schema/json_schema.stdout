@@ -1686,6 +1686,11 @@
           "title": "Keys",
           "type": "object"
         },
+        "launch_screen": {
+          "default": "agents",
+          "title": "Launch Screen",
+          "type": "string"
+        },
         "load_readout": {
           "default": "simple",
           "enum": [

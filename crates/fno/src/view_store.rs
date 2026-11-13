@@ -549,8 +549,10 @@ pub fn save_open_target(pick: &str) {
     });
 }
 
-pub const EXPERIMENTAL_ORG_BOARD: &str = "org_board";
-pub const EXPERIMENTAL_ORG_BOARD_SEEN: &str = "org_board_seen";
+/// The retired HQ preference keys. `mux.launch_screen` in config.toml
+/// replaced them; [`take_legacy_org_board`] migrates a stored value once.
+const LEGACY_ORG_BOARD: &str = "org_board";
+const LEGACY_ORG_BOARD_SEEN: &str = "org_board_seen";
 pub const EXPERIMENTAL_PANE_SHARE: &str = "pane_share";
 pub const EXPERIMENTAL_OTHER_MACHINES: &str = "other_machines";
 
@@ -567,20 +569,59 @@ pub fn load_experimental(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Read one experimental toggle with an explicit absent default. The stored
-/// value always wins; absent or corrupt reads `default`. The store keeps
-/// [`load_experimental`]'s off-until-touched contract, so the ship policy
-/// lives at the call site: the org board passes `true` so a fresh install
-/// starts with it on, every other feature keeps the off bias.
-pub fn load_experimental_or(name: &str, default: bool) -> bool {
-    #[cfg(test)]
-    if TEST_PATH.with(|c| c.borrow().is_none()) {
-        return false;
+/// Remove the retired HQ preference from the store and return what the
+/// operator had stored, so the caller can carry an explicit `true` into
+/// `mux.launch_screen` once. `None` when no value was stored.
+pub fn take_legacy_org_board() -> Option<bool> {
+    let held = read_raw().experimental.is_some_and(|v| {
+        v.get(LEGACY_ORG_BOARD).is_some() || v.get(LEGACY_ORG_BOARD_SEEN).is_some()
+    });
+    if !held {
+        return None;
     }
-    read_raw()
-        .experimental
-        .and_then(|v| v.get(name).and_then(|b| b.as_bool()))
-        .unwrap_or(default)
+    let mut stored = None;
+    mutate(|file| {
+        if let Some(serde_json::Value::Object(map)) = file.experimental.as_mut() {
+            stored = map.remove(LEGACY_ORG_BOARD).and_then(|v| v.as_bool());
+            map.remove(LEGACY_ORG_BOARD_SEEN);
+        }
+    });
+    stored
+}
+
+/// The screen a launch opens on, from `mux.launch_screen`. HQ is always
+/// reachable (`H`, `fno agents hq`); this only picks the first screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LaunchScreen {
+    #[default]
+    Agents,
+    Hq,
+}
+
+impl LaunchScreen {
+    pub const KEY: &'static str = "mux.launch_screen";
+
+    /// An absent or unknown value reads as the default, `agents`.
+    pub fn parse(raw: Option<&str>) -> LaunchScreen {
+        match raw.map(|r| r.trim().to_ascii_lowercase()).as_deref() {
+            Some("hq") => LaunchScreen::Hq,
+            _ => LaunchScreen::Agents,
+        }
+    }
+
+    pub fn word(self) -> &'static str {
+        match self {
+            LaunchScreen::Agents => "agents",
+            LaunchScreen::Hq => "hq",
+        }
+    }
+
+    pub fn other(self) -> LaunchScreen {
+        match self {
+            LaunchScreen::Agents => LaunchScreen::Hq,
+            LaunchScreen::Hq => LaunchScreen::Agents,
+        }
+    }
 }
 
 /// Persist one experimental toggle, keeping the others. Best-effort like
@@ -1152,34 +1193,24 @@ mod tests {
         assert!(!load_experimental("pane_share"));
     }
 
-    // The ship default rides the call site, not the store: an absent key
-    // reads whatever default the caller passes, and a stored value always
-    // wins. Corrupt reads the default too.
     #[test]
-    fn load_experimental_or_stored_value_beats_the_caller_default() {
-        let _s = Scratch::new("experimental-or");
-        assert!(
-            load_experimental_or(EXPERIMENTAL_ORG_BOARD, true),
-            "absent reads the passed default"
-        );
-        assert!(
-            !load_experimental_or(EXPERIMENTAL_PANE_SHARE, false),
-            "absent reads the passed default"
-        );
-        save_experimental(EXPERIMENTAL_ORG_BOARD, false);
-        assert!(
-            !load_experimental_or(EXPERIMENTAL_ORG_BOARD, true),
-            "stored false beats a true default"
-        );
-        std::fs::write(
-            view_path(),
-            r#"{"experimental":{"org_board":"yes-please"}}"#,
-        )
-        .unwrap();
-        assert!(
-            load_experimental_or(EXPERIMENTAL_ORG_BOARD, true),
-            "corrupt reads the passed default"
-        );
+    fn take_legacy_org_board_returns_the_stored_value_once() {
+        let _s = Scratch::new("legacy-org-board");
+        assert_eq!(take_legacy_org_board(), None, "absent reads None");
+        save_experimental("org_board", true);
+        save_experimental("org_board_seen", true);
+        save_experimental("pane_share", true);
+        assert_eq!(take_legacy_org_board(), Some(true));
+        assert_eq!(take_legacy_org_board(), None, "a second read finds nothing");
+        assert!(load_experimental("pane_share"), "other toggles survive");
+    }
+
+    #[test]
+    fn launch_screen_reads_hq_and_defaults_to_agents() {
+        assert_eq!(LaunchScreen::parse(Some(" HQ ")), LaunchScreen::Hq);
+        assert_eq!(LaunchScreen::parse(Some("agents")), LaunchScreen::Agents);
+        assert_eq!(LaunchScreen::parse(Some("board")), LaunchScreen::Agents);
+        assert_eq!(LaunchScreen::parse(None), LaunchScreen::Agents);
     }
 
     // The sideline view pref: absent reads agents, a corrupt or unknown

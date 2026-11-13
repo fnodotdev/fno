@@ -1031,59 +1031,7 @@ impl View {
             }
             if let DisplayRow::Card(k) = drow {
                 if let Some(cl) = card_lines.get(*k) {
-                    if cl.dim {
-                        let dim = crate::theme::dim_fg(&self.theme);
-                        for cell in &mut cells[r * cols..r * cols + text_w] {
-                            cell.fg = dim;
-                        }
-                    }
-                    if cl.alert {
-                        let fg = self.theme.needs_you;
-                        for cell in &mut cells[r * cols..r * cols + text_w] {
-                            cell.fg = fg;
-                        }
-                    }
-                    if cl.rule || cl.frame {
-                        let edge = self.theme.border;
-                        let last = cl.text.chars().count().min(text_w).saturating_sub(1);
-                        for c in 0..=last {
-                            if cl.rule || c == 0 || c == last {
-                                if let Some(cell) = cells.get_mut(r * cols + c) {
-                                    cell.fg = edge;
-                                }
-                            }
-                        }
-                    }
-                    for &(a, b, mark) in &cl.marks {
-                        let span = r * cols + a..r * cols + b.min(text_w);
-                        for cell in cells.get_mut(span).into_iter().flatten() {
-                            match mark {
-                                crate::client::agent_launcher::card::Mark::Dim => {
-                                    cell.fg = crate::theme::dim_fg(&self.theme);
-                                }
-                                crate::client::agent_launcher::card::Mark::Bold => {
-                                    cell.flags |= cell_flags::BOLD;
-                                }
-                                crate::client::agent_launcher::card::Mark::Accent => {
-                                    cell.fg = self.theme.ok;
-                                    cell.flags |= cell_flags::BOLD;
-                                }
-                            }
-                        }
-                    }
-                    if let Some((a, b)) = cl.focused.filter(|&(a, b)| a < b.min(text_w)) {
-                        // The agent row's selected fill, on both themes.
-                        let (fg, bg, flags) = crate::theme::chosen_card_style(&self.theme);
-                        let span = r * cols + a..r * cols + b.min(text_w);
-                        for cell in cells.get_mut(span).into_iter().flatten() {
-                            cell.fg = fg;
-                            cell.bg = bg;
-                            cell.flags |= flags;
-                        }
-                    }
-                    if let Some(c) = cl.cursor {
-                        self.card_cursor.set(Some((r as u16, c as u16)));
-                    }
+                    self.decorate_card_line(cells, r, cols, text_w, cl);
                 }
             }
             if mark_caret && text_w >= 1 {
@@ -2281,5 +2229,73 @@ pub(super) fn toggle_full(view: &mut View) {
     view.sideline_full = !view.sideline_full;
     if view.sideline_full {
         view.panel_on = true;
+    }
+}
+
+impl View {
+    /// Paint one composer card line's weights and colors over its text: dim,
+    /// alert, the frame, marks, the focused chip and the editor cursor. The
+    /// sideline and HQ both draw the card through this.
+    pub(super) fn decorate_card_line(
+        &self,
+        cells: &mut [Cell],
+        r: usize,
+        cols: usize,
+        text_w: usize,
+        cl: &crate::client::agent_launcher::card::CardLine,
+    ) {
+        if cl.dim {
+            let dim = crate::theme::dim_fg(&self.theme);
+            for cell in &mut cells[r * cols..r * cols + text_w] {
+                cell.fg = dim;
+            }
+        }
+        if cl.alert {
+            let fg = self.theme.needs_you;
+            for cell in &mut cells[r * cols..r * cols + text_w] {
+                cell.fg = fg;
+            }
+        }
+        if cl.rule || cl.frame {
+            let edge = self.theme.border;
+            let last = cl.text.chars().count().min(text_w).saturating_sub(1);
+            for c in 0..=last {
+                if cl.rule || c == 0 || c == last {
+                    if let Some(cell) = cells.get_mut(r * cols + c) {
+                        cell.fg = edge;
+                    }
+                }
+            }
+        }
+        for &(a, b, mark) in &cl.marks {
+            let span = r * cols + a..r * cols + b.min(text_w);
+            for cell in cells.get_mut(span).into_iter().flatten() {
+                match mark {
+                    crate::client::agent_launcher::card::Mark::Dim => {
+                        cell.fg = crate::theme::dim_fg(&self.theme);
+                    }
+                    crate::client::agent_launcher::card::Mark::Bold => {
+                        cell.flags |= cell_flags::BOLD;
+                    }
+                    crate::client::agent_launcher::card::Mark::Accent => {
+                        cell.fg = self.theme.ok;
+                        cell.flags |= cell_flags::BOLD;
+                    }
+                }
+            }
+        }
+        if let Some((a, b)) = cl.focused.filter(|&(a, b)| a < b.min(text_w)) {
+            // The agent row's selected fill, on both themes.
+            let (fg, bg, flags) = crate::theme::chosen_card_style(&self.theme);
+            let span = r * cols + a..r * cols + b.min(text_w);
+            for cell in cells.get_mut(span).into_iter().flatten() {
+                cell.fg = fg;
+                cell.bg = bg;
+                cell.flags |= flags;
+            }
+        }
+        if let Some(c) = cl.cursor {
+            self.card_cursor.set(Some((r as u16, c as u16)));
+        }
     }
 }

@@ -8,7 +8,7 @@ use super::org_seats::{Fleet, FleetInputs, Lead, Machine, Seat};
 use super::org_tabs::{Entry, Lb, Line};
 use super::*;
 use crate::text_style::{TLine, TextStyle};
-use crate::view_store::{OrgTab, SidelineView};
+use crate::view_store::{LaunchScreen, OrgTab, SidelineView};
 
 pub(crate) type OrgTx = tokio::sync::mpsc::UnboundedSender<(u64, OrgMsg)>;
 
@@ -363,6 +363,9 @@ impl OrgBoard {
                     super::org_pages::seat(machine, lead, &lead.seats[s], width, now),
                 )
             }
+            Item::Root if f.seats().next().is_none() => {
+                (vec![title("HQ", width)], super::org_pages::empty_state())
+            }
             _ => {
                 use super::org_tabs as t;
                 let name = match item {
@@ -413,6 +416,21 @@ impl OrgBoard {
     ) -> Frame {
         let split = width >= MIN_SPLIT;
         let explorer_w = if split { left } else { width };
+        let idle_root = self.current() == Item::Root
+            && self
+                .fleet
+                .as_ref()
+                .is_some_and(|f| f.seats().next().is_none());
+        if idle_root && !split {
+            return Frame {
+                explorer: super::org_pages::empty_state()
+                    .into_iter()
+                    .take(body_h)
+                    .collect(),
+                right_x: None,
+                right: Vec::new(),
+            };
+        }
         let explorer = super::org_tabs::explorer(
             self.fleet.as_ref(),
             &self.entries(),
@@ -513,7 +531,7 @@ impl OrgBoard {
         if matches!(item, Item::Host(_) | Item::Lead(..) | Item::Seat(..)) {
             keys.extend(["s spawn", "u up"]);
         }
-        keys.extend(["W web", "F full", "? keys", "esc close"]);
+        keys.extend(["n new", "L lead", "W web", "F full", "? keys", "esc close"]);
         let mut keys = match self.prompt_line() {
             Some(line) => line,
             None => keys.join(" \u{b7} "),
@@ -591,10 +609,6 @@ fn now() -> u64 {
 }
 
 pub(crate) fn open(view: &mut View) {
-    if !view.experimental_org_board {
-        view.set_notice("fleet org board is off: menu > settings > experimental".into());
-        return;
-    }
     view.org_generation = view.org_generation.wrapping_add(1);
     view.org_board = Some(OrgBoard::new(view.org_generation));
     view.backlog_board = None;
@@ -602,30 +616,47 @@ pub(crate) fn open(view: &mut View) {
     super::backlog_board::set_sideline_view(view, SidelineView::Org);
 }
 
-/// The boot-time first-run show: arm the board for frame one with the
-/// sideline on Org, but never take the keyboard. The interactive
-/// [`open`] keeps its input-owner semantics for explicit opens; a user
-/// booted into the command center still types into their pane. The caller
-/// read the flag, so no notice and no gate here, and the seen marker saves
-/// once so the show happens once.
-pub(crate) fn open_first_run(view: &mut View) {
+/// The boot-time show: arm the board for frame one with the sideline on
+/// Org, but never take the keyboard. The interactive [`open`] keeps its
+/// input-owner semantics for explicit opens; a user booted into HQ still
+/// types into their pane.
+pub(crate) fn open_on_launch(view: &mut View) {
     view.org_generation = view.org_generation.wrapping_add(1);
     view.org_board = Some(OrgBoard::new(view.org_generation));
     view.backlog_board = None;
     super::backlog_board::set_sideline_view(view, SidelineView::Org);
-    crate::view_store::save_experimental(crate::view_store::EXPERIMENTAL_ORG_BOARD_SEEN, true);
 }
 
-/// The boot landing for every launch: the org board ships on by default, and
-/// a store with no seen marker arms the first-run show, so frame one paints
-/// the command center with the keyboard left on the pane. Every later
-/// launch, and any store whose operator turned the flag off, opens on Agents
-/// whatever was persisted.
-pub(crate) fn boot_sideline(view: &mut View) {
-    if view.experimental_org_board
-        && !crate::view_store::load_experimental(crate::view_store::EXPERIMENTAL_ORG_BOARD_SEEN)
+/// Carry a value stored under the retired `org_board` preference into
+/// `mux.launch_screen` once: an explicit on becomes `hq`, an explicit off is
+/// already the default. A key the config already sets wins.
+fn migrate_legacy_pref(view: &mut View) {
+    if crate::view_store::take_legacy_org_board() != Some(true)
+        || crate::config_defaults::lookup_key(LaunchScreen::KEY).is_some()
     {
-        open_first_run(view);
+        return;
+    }
+    view.launch_screen = LaunchScreen::Hq;
+    set_launch_screen(view, LaunchScreen::Hq);
+}
+
+/// Set the launch screen for this session and persist it to config.toml.
+pub(crate) fn set_launch_screen(view: &mut View, screen: LaunchScreen) {
+    view.launch_screen = screen;
+    if tokio::runtime::Handle::try_current().is_ok() {
+        tokio::spawn(async move {
+            super::config_set::spawn_config_set(LaunchScreen::KEY, screen.word())
+                .await
+                .unwrap_or_default();
+        });
+    }
+}
+
+/// The boot landing: HQ when `mux.launch_screen` is `hq`, Agents otherwise.
+pub(crate) fn boot_sideline(view: &mut View) {
+    migrate_legacy_pref(view);
+    if view.launch_screen == LaunchScreen::Hq {
+        open_on_launch(view);
     } else {
         super::backlog_board::set_sideline_view(view, crate::view_store::SidelineView::Agents);
     }
@@ -731,6 +762,55 @@ pub(crate) fn apply_action(view: &mut View, gen: u64, done: Done) {
 }
 
 pub(crate) fn paint(
+    view: &View,
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    width: usize,
+    height: usize,
+) {
+    paint_board(view, cells, rows, cols, width, height);
+    paint_composer(view, cells, rows, cols, width, height);
+}
+
+/// The composer card, drawn over the foot of HQ above its key bar, so a
+/// session starts from HQ without leaving it. Keys reach it through the
+/// launcher, so `n` and `L` type text there.
+fn paint_composer(
+    view: &View,
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    width: usize,
+    height: usize,
+) {
+    let (Some(b), Some(l)) = (&view.org_board, &view.launcher) else {
+        return;
+    };
+    let (width, height) = (width.min(cols), height.min(rows));
+    let lines = l.card_lines(view, width.saturating_sub(2));
+    let foot = height.saturating_sub(b.footer_h(width));
+    let top = foot.saturating_sub(lines.len());
+    // Docked HQ paints into a slice that starts below the strip row, and the
+    // terminal cursor is in screen rows.
+    let y0 = (view.term.0 as usize).saturating_sub(rows);
+    for (k, cl) in lines.iter().enumerate() {
+        let r = top + k;
+        if r >= foot {
+            break;
+        }
+        for c in 0..width {
+            cells[r * cols + c] = Cell::default();
+        }
+        super::paint_legacy_row(cells, r, cols, width, &cl.text, 0);
+        view.decorate_card_line(cells, r, cols, width, cl);
+        if let Some(c) = cl.cursor {
+            view.card_cursor.set(Some(((r + y0) as u16, c as u16)));
+        }
+    }
+}
+
+fn paint_board(
     view: &View,
     cells: &mut [Cell],
     rows: usize,
@@ -889,6 +969,8 @@ pub(crate) async fn keys(
                     super::backlog_board::set_sideline_view(view, SidelineView::Agents);
                 }
             }
+            ModalKey::Byte(b'n') => open_composer(view, ""),
+            ModalKey::Byte(b'L') => open_composer(view, "/fno:lead "),
             ModalKey::Byte(b'V') => super::backlog_board::cycle_sideline_view(view),
             ModalKey::Byte(b'F') => {
                 view.board_full = !view.board_full;
@@ -983,6 +1065,29 @@ pub(crate) async fn keys(
         }
     }
     Ok(StdinFlow::Continue)
+}
+
+/// Open the composer prefix+i opens, over HQ: the same launcher and the same
+/// spawn door, so a session started here is one started anywhere. HQ draws
+/// the card ([`paint_composer`]) and stays the screen.
+pub(crate) fn open_composer(view: &mut View, seed: &str) {
+    if view.density == super::Density::Slim || view.panel_w() == 0 {
+        view.set_notice("widen the sideline to open the composer".into());
+        return;
+    }
+    let opened = if seed.is_empty() {
+        super::agent_launcher::open(view);
+        Ok(())
+    } else {
+        super::agent_launcher::open_with(view, seed.into(), None, String::new())
+    };
+    if let Err(e) = opened {
+        view.set_notice(e);
+    }
+    // `open_in` parks the sideline on Agents; HQ paints the card itself.
+    if view.launcher.is_some() {
+        view.sideline_view = SidelineView::Org;
+    }
 }
 
 /// One key while the spawn prompt is open. Enter queues the spawn or returns

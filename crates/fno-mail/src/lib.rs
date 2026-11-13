@@ -8,6 +8,7 @@ pub mod frame;
 pub mod hold;
 pub mod lane;
 pub mod log;
+pub mod reserve;
 pub mod session;
 pub mod state;
 pub mod turn;

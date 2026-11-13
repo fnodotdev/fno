@@ -7,7 +7,6 @@ use super::*;
 /// One experimental feature the settings tab can toggle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Flag {
-    OrgBoard,
     PaneShare,
     OtherMachines,
 }
@@ -15,7 +14,6 @@ pub(crate) enum Flag {
 /// The toggle states the settings tab and the menu's share rows render.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct Flags {
-    pub(crate) org_board: bool,
     pub(crate) pane_share: bool,
     pub(crate) other_machines: bool,
     /// The card layout nests workers under their lead (prefix+t).
@@ -25,11 +23,10 @@ pub(crate) struct Flags {
 }
 
 impl Flag {
-    pub(crate) const ALL: [Flag; 3] = [Flag::OrgBoard, Flag::PaneShare, Flag::OtherMachines];
+    pub(crate) const ALL: [Flag; 2] = [Flag::PaneShare, Flag::OtherMachines];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Flag::OrgBoard => "fleet org board",
             Flag::PaneShare => "pane share",
             Flag::OtherMachines => "other machines",
         }
@@ -45,7 +42,6 @@ impl Flag {
 
     fn name(self) -> &'static str {
         match self {
-            Flag::OrgBoard => crate::view_store::EXPERIMENTAL_ORG_BOARD,
             Flag::PaneShare => crate::view_store::EXPERIMENTAL_PANE_SHARE,
             Flag::OtherMachines => crate::view_store::EXPERIMENTAL_OTHER_MACHINES,
         }
@@ -53,7 +49,6 @@ impl Flag {
 
     pub(crate) fn on(self, flags: Flags) -> bool {
         match self {
-            Flag::OrgBoard => flags.org_board,
             Flag::PaneShare => flags.pane_share,
             Flag::OtherMachines => flags.other_machines,
         }
@@ -62,7 +57,6 @@ impl Flag {
 
 pub(crate) fn flags(view: &View) -> Flags {
     Flags {
-        org_board: view.experimental_org_board,
         pane_share: view.experimental_pane_share,
         other_machines: view.machine_tree.on,
         group_by_lead: view.group_by_lead,
@@ -71,18 +65,10 @@ pub(crate) fn flags(view: &View) -> Flags {
 }
 
 /// Flip one toggle, persist it, and rebuild the open settings modal so its
-/// rows track it. Turning the org board off while it is showing drops back
-/// to Agents.
+/// rows track it.
 pub(crate) fn toggle(view: &mut View, flag: Flag) {
     let on = !flag.on(flags(view));
     match flag {
-        Flag::OrgBoard => {
-            view.experimental_org_board = on;
-            if !on && view.sideline_view == crate::view_store::SidelineView::Org {
-                view.org_board = None;
-                backlog_board::set_sideline_view(view, crate::view_store::SidelineView::Agents);
-            }
-        }
         Flag::PaneShare => {
             view.experimental_pane_share = on;
             if !on {

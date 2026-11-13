@@ -659,6 +659,7 @@
        "policy": null
       },
       "board_scope": "repo",
+      "launch_screen": "agents",
       "prefix": null,
       "preset": null,
       "keys": {},
@@ -2205,6 +2206,10 @@
      "default": "repo"
     },
     {
+     "name": "launch_screen",
+     "default": "agents"
+    },
+    {
      "name": "report_parent",
      "default": null
     },
@@ -3534,6 +3539,7 @@
   "active_backlog.mission",
   "mux.shell_integration",
   "mux.board_scope",
+  "mux.launch_screen",
   "mux.report_parent",
   "mux.prefix",
   "mux.preset",

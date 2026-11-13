@@ -195,16 +195,6 @@ pub fn seed_steady_state_landing(root: &std::path::Path) {
     );
 }
 
-/// Undo the steady-state seed so the next spawned client reads as a machine's
-/// first run: the first-run landing test's setup, in one named step. The pty
-/// isolator re-seeds unless the root carries the `.no-steady-seed` sentinel,
-/// so the caller writes that first.
-#[allow(dead_code)]
-pub fn clear_first_run_seed(root: &std::path::Path) {
-    let _ = std::fs::remove_file(root.join("iso-agents").join("mux-view.json"));
-    let _ = std::fs::write(root.join(".no-steady-seed"), "");
-}
-
 /// A line of pane text with any leading shell prompts removed. A CR nudge
 /// queued while the shell was still starting prints its prompt after the
 /// next command's echo, so real output can render as `$ set-ok`.

@@ -234,6 +234,22 @@ pub fn lookup(global: Option<&Path>, project: Option<&Path>, key: &str) -> Optio
         .or_else(|| global.and_then(|g| file_value(g, key)))
 }
 
+/// The effective value of one list-of-strings key, project beating global.
+/// `None` when the key is unset or holds anything but an array.
+pub fn lookup_list(key: &str) -> Option<Vec<String>> {
+    let value = lookup_value(
+        Some(&global_config_path()),
+        Some(&project_config_path()),
+        key,
+    )?;
+    let list = value.as_array()?;
+    Some(
+        list.iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect(),
+    )
+}
+
 pub fn lookup_key(key: &str) -> Option<String> {
     lookup(
         Some(&global_config_path()),

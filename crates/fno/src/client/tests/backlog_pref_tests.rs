@@ -48,7 +48,6 @@ fn sideline_menu_lists_backlog_and_leaves_experimental_to_settings() {
         Anchor::Center,
         None,
         experimental::Flags {
-            org_board: true,
             pane_share: true,
             ..Default::default()
         },
@@ -66,83 +65,64 @@ fn sideline_menu_lists_backlog_and_leaves_experimental_to_settings() {
     assert_eq!(on.actions[at], AuxAction::Share(share_flow::Act::Start));
 }
 
+// The composer opened from HQ is drawn by HQ and HQ stays the screen; the keys
+// that mean something in HQ (`n`, `L`) are plain text inside it.
 #[test]
-fn org_board_opens_only_while_its_experimental_flag_is_on() {
+fn n_and_l_typed_in_the_hq_composer_are_text_and_hq_stays_behind() {
     let mut v = two_pane_view();
-    v.experimental_org_board = false;
     org_board::open(&mut v);
-    assert!(v.org_board.is_none(), "off: nothing opens");
-    assert!(
-        v.notice
-            .as_ref()
-            .is_some_and(|(notice, _)| notice.contains("fleet org board is off")),
-        "off: the notice names where to enable it"
+    org_board::open_composer(&mut v, "");
+    assert!(v.launcher.is_some(), "the composer opened");
+    assert_eq!(
+        v.sideline_view,
+        crate::view_store::SidelineView::Org,
+        "HQ stays the screen"
     );
-    v.experimental_org_board = true;
-    org_board::open(&mut v);
-    assert!(v.org_board.is_some(), "on: the board opens");
+    let mut sock: Vec<u8> = Vec::new();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let _ = super::agent_launcher::launcher_keys(&mut v, b"nLn", &mut sock).await;
+    });
+    let draft = &v.launcher.as_ref().expect("still open").draft;
+    assert_eq!(draft.message, "nLn", "n and L type text");
+    assert!(v.org_board.is_some(), "HQ is still there");
+    rt.block_on(async {
+        let _ = super::agent_launcher::launcher_keys(&mut v, b"\x1b", &mut sock).await;
+    });
+    assert!(v.launcher.is_none(), "esc closes the composer");
+    assert_eq!(
+        v.sideline_view,
+        crate::view_store::SidelineView::Org,
+        "and HQ is back"
+    );
 }
 
-// The first-run show arms the board for frame one and lands the sideline on
-// Org, but never takes the keyboard: a user booted into the command center
-// still types into their pane. It saves the seen marker, so the show happens
-// once, and raises no notice: the caller already read the flag.
+// HQ is always reachable: `open` takes no flag. The launch screen only picks
+// what a boot shows first, and a boot into HQ paints the board without taking
+// the keyboard, so a user still types into their pane.
 #[test]
-fn open_first_run_paints_the_board_without_taking_the_keyboard() {
+fn boot_sideline_follows_the_launch_screen_and_keeps_the_pane_keyboard() {
     let prefs = tempfile::tempdir().expect("tempdir");
     crate::view_store::set_test_path(prefs.path());
     let mut v = two_pane_view();
-    v.experimental_org_board = true;
+    org_board::open(&mut v);
+    assert!(v.org_board.is_some(), "HQ opens with no flag set");
+
+    let mut v = two_pane_view();
+    v.launch_screen = crate::view_store::LaunchScreen::Hq;
     let owner_before = v.region_owner;
-    org_board::open_first_run(&mut v);
+    org_board::boot_sideline(&mut v);
     assert!(
         v.org_board.is_some(),
-        "the board is armed for the first paint"
+        "hq: the board is armed for frame one"
     );
     assert_eq!(v.sideline_view, crate::view_store::SidelineView::Org);
     assert_eq!(v.region_owner, owner_before, "input stays on the pane");
-    assert!(
-        v.notice.is_none(),
-        "no flag-off notice on the first-run path"
-    );
     assert!(v.backlog_board.is_none(), "no backlog board rides along");
-    assert!(
-        crate::view_store::load_experimental(crate::view_store::EXPERIMENTAL_ORG_BOARD_SEEN),
-        "the seen marker persists"
-    );
-}
 
-// The boot landing is once-only: a store with the flag on and no marker gets
-// the first-run show, a store whose operator turned the flag off gets Agents
-// with no marker written, and a store that already saw the show gets Agents
-// with the marker left alone.
-#[test]
-fn boot_sideline_shows_once_then_lands_on_agents() {
-    let prefs = tempfile::tempdir().expect("tempdir");
-    crate::view_store::set_test_path(prefs.path());
-    // Fresh store: the show fires and writes the marker.
     let mut v = two_pane_view();
-    v.experimental_org_board = true;
+    v.launch_screen = crate::view_store::LaunchScreen::Agents;
     org_board::boot_sideline(&mut v);
-    assert!(v.org_board.is_some(), "first boot: the show fires");
-    assert_eq!(v.sideline_view, crate::view_store::SidelineView::Org);
-    // Seen store: no second show, and the marker survives untouched.
-    let mut v = two_pane_view();
-    v.experimental_org_board = true;
-    org_board::boot_sideline(&mut v);
-    assert!(v.org_board.is_none(), "second boot: no second show");
+    assert!(v.org_board.is_none(), "agents: nothing opens");
     assert_eq!(v.sideline_view, crate::view_store::SidelineView::Agents);
-    // Flag off: Agents, and the marker stays unwritten so a later explicit
-    // turn-on still earns the show.
-    let prefs2 = tempfile::tempdir().expect("tempdir");
-    crate::view_store::set_test_path(prefs2.path());
-    let mut v = two_pane_view();
-    v.experimental_org_board = false;
-    org_board::boot_sideline(&mut v);
-    assert!(v.org_board.is_none(), "flag off: nothing opens");
-    assert_eq!(v.sideline_view, crate::view_store::SidelineView::Agents);
-    assert!(
-        !crate::view_store::load_experimental(crate::view_store::EXPERIMENTAL_ORG_BOARD_SEEN),
-        "flag off writes no marker"
-    );
 }

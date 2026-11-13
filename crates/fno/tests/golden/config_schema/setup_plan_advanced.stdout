@@ -1810,6 +1810,15 @@
       "doc": "Which projects the mux backlog board shows: repo (default, this checkout's project.id) | all | workspace:<name>, e.g. workspace:main for a workspace holding web, backend and marketing. A scope that cannot resolve falls back to every project, and `fno mux doctor` reports that as a warn naming the remedy. Latched at mux server birth; `fno mux kill-server` re-reads."
     },
     {
+      "path": "mux.launch_screen",
+      "type": "str",
+      "default": "agents",
+      "tier": "advanced",
+      "question": "",
+      "default_source": "default",
+      "doc": "Which screen the mux opens on: agents (default) | hq. HQ, the fleet org board, is always reachable with H or `fno agents hq`; this key only picks what a launch shows first. The settings row writes it."
+    },
+    {
       "path": "mux.report_parent",
       "type": "str (optional)",
       "default": null,
