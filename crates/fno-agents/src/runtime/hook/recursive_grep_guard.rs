@@ -20,10 +20,8 @@
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-use super::bg_process_guard::{is_separator, shlex_tokens, strip_heredocs};
+use super::bg_process_guard::{is_separator, shell_payload, shlex_tokens, strip_heredocs};
 use super::test_run_guard::head_of;
-
-const SHELLS: &[&str] = &["sh", "bash", "zsh", "dash", "ksh"];
 
 const RECURSIVE_LONG: &[&str] = &["--recursive", "--dereference-recursive"];
 
@@ -138,27 +136,6 @@ fn is_recursive_argv(argv: &[String]) -> bool {
         }
     }
     false
-}
-
-/// The script text a shell was handed with `-c`. Short options bundle:
-/// `bash -lc '...'` is the same call.
-fn shell_payload(head: &str, argv: &[String]) -> Option<String> {
-    if !SHELLS.contains(&head) {
-        return None;
-    }
-    argv.iter().enumerate().find_map(|(idx, tok)| {
-        let is_c_bundle = tok.len() >= 2
-            && tok.starts_with('-')
-            && tok.ends_with('c')
-            && tok[1..tok.len() - 1]
-                .chars()
-                .all(|c| c.is_ascii_alphabetic());
-        if is_c_bundle {
-            argv.get(idx + 1).cloned()
-        } else {
-            None
-        }
-    })
 }
 
 /// First command string that runs a recursive grep, or None. Read in command

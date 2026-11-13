@@ -18,10 +18,8 @@
 use serde_json::Value;
 use std::path::PathBuf;
 
-use super::bg_process_guard::{is_separator, shlex_tokens, strip_heredocs};
+use super::bg_process_guard::{is_separator, shell_payload, shlex_tokens, strip_heredocs};
 use super::test_run_guard::head_of;
-
-const SHELLS: &[&str] = &["sh", "bash", "zsh", "dash", "ksh"];
 
 /// Entry: read the payload once, judge, print, always exit 0.
 pub fn run(_args: &[String]) -> i32 {
@@ -73,29 +71,20 @@ fn decide(command: &str) -> Option<String> {
 /// `pkill -f cargo` and `pkill cargo` both answer true while `pkill -l` and
 /// a bare `killall` answer false. A value-taking option's next token can
 /// read as the operand (`pkill -g 42`), which only widens an advisory.
+/// Past the `--` fence every token is an operand (`pkill -f -- -x`).
 fn names_a_target(argv: &[String]) -> bool {
-    argv.iter().any(|t| !t.starts_with('-'))
-}
-
-/// The script text a shell was handed with `-c`. Short options bundle:
-/// `bash -lc '...'` is the same call.
-fn shell_payload(head: &str, argv: &[String]) -> Option<String> {
-    if !SHELLS.contains(&head) {
-        return None;
-    }
-    argv.iter().enumerate().find_map(|(idx, tok)| {
-        let is_c_bundle = tok.len() >= 2
-            && tok.starts_with('-')
-            && tok.ends_with('c')
-            && tok[1..tok.len() - 1]
-                .chars()
-                .all(|c| c.is_ascii_alphabetic());
-        if is_c_bundle {
-            argv.get(idx + 1).cloned()
-        } else {
-            None
+    let mut fenced = false;
+    for t in argv {
+        if fenced {
+            return true;
         }
-    })
+        if t == "--" {
+            fenced = true;
+        } else if !t.starts_with('-') {
+            return true;
+        }
+    }
+    false
 }
 
 /// First command string that runs a broad kill, or None. Read in command
@@ -182,6 +171,8 @@ mod tests {
             "killall -9 node",
             "killall -TERM node",
             "pkill -f x | cat",
+            "pkill -f -- -x",
+            "pkill -- --fast",
             "cat list | killall node",
             "echo hi\npkill cargo",
             "bash -c 'pkill -f cargo'",
