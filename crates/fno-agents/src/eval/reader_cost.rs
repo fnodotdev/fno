@@ -3,6 +3,7 @@
 //! track the machine's load? One inbound caller: `crate::intel::run_intel`
 //! (`fno-agents intel --readers <secs>`). On-demand sampler, never a watcher.
 
+#[cfg(target_os = "macos")]
 use crate::pid::Pid;
 use serde::Serialize;
 

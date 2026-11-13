@@ -5,6 +5,7 @@
 //! case. Read live from the kernel when the child pid still resolves; a dead
 //! pid degrades to the caller's own spawn-cwd fallback rather than failing.
 
+#[cfg(target_os = "macos")]
 use crate::pid::Pid;
 
 /// macOS: the pid module's `PROC_PIDVNODEPATHINFO` read.

@@ -13,6 +13,7 @@
 //! `None` and the arm never fires - Linux allocators trim on their own free
 //! paths.
 
+#[cfg(target_os = "macos")]
 use crate::pid::Pid;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};

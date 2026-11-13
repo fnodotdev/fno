@@ -6,6 +6,7 @@
 //! agent asked for, and only through that entry's explicit opt-in
 //! ([`admit_agent_spawn`]).
 
+#[cfg(target_os = "macos")]
 use crate::pid::Pid;
 use std::collections::{HashMap, HashSet};
 use std::fmt;

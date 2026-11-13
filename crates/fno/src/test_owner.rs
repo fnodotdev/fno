@@ -22,7 +22,7 @@
 /// `crate::pid` copy is the crate's own module, so one body serves both
 /// crates again.
 pub(crate) fn process_start_time(pid: u32) -> Option<u64> {
-    crate::pid::Pid::new(pid).and_then(|p| p.start_time())
+    super::pid::Pid::new(pid).and_then(|p| p.start_time())
 }
 
 /// The current test process's identity in the env shape every spawned

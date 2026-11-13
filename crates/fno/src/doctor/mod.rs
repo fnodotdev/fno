@@ -1005,6 +1005,7 @@ fn cost_check_report() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::{bounded_command_for, nothing_to_fix_message, report};
+    use crate::pid::Pid;
 
     fn os(args: &[&str]) -> Vec<std::ffi::OsString> {
         args.iter().map(std::ffi::OsString::from).collect()
@@ -1100,7 +1101,10 @@ mod tests {
             .expect("the pid file holds an int");
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
-            let alive = Pid::new(child_pid).is_some_and(|p| p.probe());
+            let alive = u32::try_from(child_pid)
+                .ok()
+                .and_then(Pid::new)
+                .is_some_and(|p| p.probe());
             if !alive {
                 break;
             }

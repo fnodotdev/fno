@@ -795,7 +795,7 @@ mod tests {
     fn signal_group_kills_the_childs_group_not_ours() {
         // AC4-HP: a child in its own group dies by killpg; the caller's own
         // group is untouched (this test still running proves it).
-        use std::os::unix::process::CommandExt;
+        use std::os::unix::process::{CommandExt, ExitStatusExt};
         let mut child = Command::new("sh")
             .args(["-c", "sleep 30"])
             .process_group(0)
