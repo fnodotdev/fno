@@ -154,7 +154,7 @@ The install can succeed on a local marketplace whose cache is not the live root.
 ## Locked decisions
 
 1. `fno doctor` is the primary mechanism, not reinstall-on-ship. Detection plus explicit repair beats implicit mutation that races a running pipeline.
-2. Detection is network-free: local git refs + local command trees, no PyPI / crates.io calls. No source checkout or unreadable `origin/main` yields `unknown`. It never invents a distance or false `stale`.
+2. Detection is network-free: local git refs + local command trees, no registry calls. No source checkout or unreadable `origin/main` yields `unknown`. It never invents a distance or false `stale`.
 3. The gate path instructs, it never executes the fix.
 4. Rust freshness requires a cargo binary, embedded `crates_rev`, source `crates/` tip, and a clean build. When these are known, `doctor` compares the embedded revision with the source tip. A mismatch proves Rust staleness. Missing evidence yields `unknown`. `doctor` still reports the resolved binary.
 5. The `installed-rev` marker is written only after a successful install. Absence means "rev unknown", never "fresh".

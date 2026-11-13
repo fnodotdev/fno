@@ -4,14 +4,13 @@ How the four Rust binaries (`fno`, `fno-agents`, `fno-agents-daemon`, `fno-agent
 
 > **Three channels.** The nightly publishes itself. An rc or a stable release is a
 > deliberate act behind the `release` environment approval click (runbook at the
-> end of this doc). Nothing reaches PyPI or crates.io as a side effect of merging.
+> end of this doc). Nothing reaches crates.io as a side effect of merging.
 
 ## Three artifacts, one crate source
 
 | Artifact | Built by | Installed by | Audience |
 |----------|----------|--------------|----------|
 | Standalone binary tarball (`fno`, `fno-agents`, `fno-agents-daemon`, `fno-agents-worker`) | `release-binaries.yml` | `curl -fsSL fno.sh \| sh` into `~/.fno/install/bin`, or Homebrew | every user |
-| Bridge wheel (the same four binaries, no Python code) | `release-wheels.yml` | `pip install fno` / `uv tool install fno` | old wheel installs on their way to the tarball |
 | `fno-agents` crate | `release.yml` (stable promotion) | `cargo install fno-agents` / `cargo add fno-agents` | other Rust projects |
 
 Target platforms: darwin-arm64, darwin-x64, linux-x64, linux-arm64. Windows is
@@ -21,11 +20,11 @@ exercised for the Phase 7+ deferral.
 
 ### Crate names
 
-`fno-agents` (crates.io) and `fno` (PyPI) are the real publish targets. They live in **separate registries** and do not collide with each other. The supervisor crate is `fno-agents`. The front door crate `fno` publishes on crates.io too, for `cargo install fno fno-agents`. That command installs the four binaries into one bin dir.
+`fno-agents` and `fno` on crates.io are the publish targets. The supervisor crate is `fno-agents`. The front door crate `fno` publishes on crates.io too, for `cargo install fno fno-agents`. That command installs the four binaries into one bin dir.
 
-## The bridge wheel
+## The frozen wheel (legacy)
 
-PyPI keeps an `fno` wheel for good, so an old wheel install can always update. The wheel holds no Python package. `packaging/pypi/pyproject.toml` builds it: the four release binaries ride as wheel shared scripts, plus the LICENSE and NOTICE texts. `uv tool install fno` or `pip install fno` therefore puts a working `fno` front door on PATH. On first run that front door moves the install to `~/.fno/install/bin`, and the uv tool is retired once the installed binary is at least 0.4.7. `release-wheels.yml` builds one wheel per platform and runs one bridge smoke against it.
+PyPI stopped taking fno releases: the last wheel is 0.4.8 and none was built after, so the release needs no PyPI token. The wheel stays up for old installs, and it still works: `uv tool install fno` puts a working front door on PATH, and that front door (0.4.7+) moves the install to `~/.fno/install/bin` on its next call, retiring the uv tool. No wheel is built or uploaded by this repo; the wheel workflow is deleted.
 
 ## Rust runtime for `fno agents` (default)
 
@@ -40,7 +39,7 @@ fno agents mail ask worker-A "hello" --harness codex
 
 ## Release channels (the runbook)
 
-Three channels ship through `release.yml`. The nightly is automatic, and each green nightly also opens the day's rc candidate. An rc or a stable release costs exactly one approval click in the `release` environment. The publish secrets live there: `PYPI_API_TOKEN`, `CARGO_REGISTRY_TOKEN`, and `HOMEBREW_TAP_TOKEN`. Autonomy ends at the click.
+Three channels ship through `release.yml`. The nightly is automatic, and each green nightly also opens the day's rc candidate. An rc or a stable release costs exactly one approval click in the `release` environment. The publish secrets live there: `CARGO_REGISTRY_TOKEN` and `HOMEBREW_TAP_TOKEN`. Autonomy ends at the click.
 
 ### Nightly (automatic)
 
@@ -51,7 +50,7 @@ Three channels ship through `release.yml`. The nightly is automatic, and each gr
 ### Release candidate (one click a day)
 
 1. The candidate opens itself. The nightly publish dispatches `channel=rc` at the same green commit. That run builds and parks on the `release` approval. To open one by hand, run `gh workflow run release.yml -f channel=rc` for the newest green main commit. Add `-f sha=<commit>` for a specific one.
-2. Judge it before you click: main green, no open p0, a day of your own use of the nightly. One click, and the approved job uploads `0.4.0rcN` to PyPI and creates the `v0.4.0rcN` tag and pre-release. Candidates on the same base bump `rcN` (`0.4.0rc1`, `0.4.0rc2`, ...). After a stable promotion, the next candidate opens on the next unreleased patch. Main's version can still read the released one. crates.io is stable-only. A plain `pip install` skips rc versions. `FNO_VERSION=0.4.0rcN sh fno.sh` pins one.
+2. Judge it before you click: main green, no open p0, a day of your own use of the nightly. One click, and the approved job creates the `v0.4.0rcN` tag and its pre-release on GitHub. Candidates on the same base bump `rcN` (`0.4.0rc1`, `0.4.0rc2`, ...). After a stable promotion, the next candidate opens on the next unreleased patch. Main's version can still read the released one. crates.io is stable-only. `FNO_VERSION=0.4.0rcN sh fno.sh` pins one.
 3. When a candidate sits unclicked for more than a day, the workflow opens one reminder issue naming the waiting run. It closes itself once a candidate ships. A waiting candidate never stacks: the next candidate parks and the stale pending run is cancelled. The click always holds the newest commit.
 
 ### The release record
@@ -69,17 +68,17 @@ The pin reads the included PRs from `git log --first-parent <base_tag>..<sha>` i
 ### Stable (one click)
 
 1. Promote: `gh workflow run release.yml -f channel=stable`.
-2. The one click uploads `0.4.0` to PyPI and crates.io. Both are permanent: a version cannot be re-uploaded. The click also creates the `v0.4.0` tag as Latest and bumps the Homebrew tap. It moves the `stable` branch and the `fno--v0.4.0` plugin tag. The plugin marketplaces pin those refs, and they move only on stable promotion.
+2. The one click uploads `0.4.0` to crates.io. It is permanent: a version cannot be re-uploaded. The click also creates the `v0.4.0` tag as Latest and bumps the Homebrew tap. It moves the `stable` branch and the `fno--v0.4.0` plugin tag. The plugin marketplaces pin those refs, and they move only on stable promotion.
 3. The job does not push to main: a repository rule rejects it. The nightly and the next candidate skip the released patch on their own. They need no bump. The job opens the version-sync PR for main instead. It cuts `version-sync/v<version>`, runs `scripts/release/sync-version.sh <version>`, self-posts the guard status, and squash-merges once green. For an off-cycle bump, run `scripts/release/sync-version.sh <next>`, land it, then verify with `scripts/release/sync-version.sh --check`.
 
 ### Rehearsal (fork, `dry_run`)
 
-Dispatch `release.yml` on your fork with `dry_run=true` for any channel. The rehearsal runs `cargo publish --dry-run`, skips PyPI and the tap, and creates the GitHub Release as a draft. Give the fork a `release` environment with one required reviewer to exercise the click itself. Never rehearse a real publish in the real repo: the registries are permanent.
+Dispatch `release.yml` on your fork with `dry_run=true` for any channel. The rehearsal runs `cargo publish --dry-run`, skips the tap, and creates the GitHub Release as a draft. Give the fork a `release` environment with one required reviewer to exercise the click itself. Never rehearse a real publish in the real repo: the registry is permanent.
 
 ### First-time setup (one-time)
 
-- [x] Published `fno-agents` on crates.io and `fno` on PyPI over the reserved `0.0.0` placeholders. 0.3.1 shipped first. 0.4.0 went live at the first stable promotion. US7's by-name install and the cargo channel both need the real `fno` published.
-- [x] Set the `release` environment secrets: `PYPI_API_TOKEN` for PyPI, `CARGO_REGISTRY_TOKEN` for crates.io, `HOMEBREW_TAP_TOKEN` for the tap. Absent the tap token, that leg fails soft after PyPI and crates already shipped.
+- [x] Published `fno-agents` and `fno` on crates.io over the reserved `0.0.0` placeholders. 0.3.1 shipped first. 0.4.0 went live at the first stable promotion. The cargo channel needs the real `fno` published.
+- [x] Set the `release` environment secrets: `CARGO_REGISTRY_TOKEN` for crates.io and `HOMEBREW_TAP_TOKEN` for the tap. Absent the tap token, that leg fails soft after crates and the release already shipped.
 - [x] fno.sh channel: wired and served at `https://fno.sh`. The served copy tracks the Worker's pinned tag and updates only at a stable promotion. It can lag a fresh release: it served 0.3.1 after 0.4.0 shipped. The matrix's fno-sh-served row stays expected-fail until that redeploy.
   - **Bump-on-script-change:** the deployed `fno.sh` is byte-identical to this repo's `scripts/install/fno.sh`. The fno-web Worker serves it and owns none of its logic. When this script changes, treat the change as a deliberate, tagged, redeployed event. Promote a stable (creating the `vX.Y.Z` tag). Bump the Worker's `INSTALL_SCRIPT_URL` pin to that tag. Redeploy `fno.sh`. That tag-bump cost is the intended consequence of pinning the served script to a tag.
 - [x] brew channel: the own tap repo is created, with `Formula/fno.rb` built from `scripts/install/homebrew/fno.rb`. The tap serves 0.3.1 for macOS. Each stable promotion re-bumps `url` and `sha256`. The 0.4.0 bump lands with that promotion's tap step. Move the tap by GitHub repo transfer + redirect. Never delete it. Deleting the old repo breaks that redirect, and every installed user resolves through it.

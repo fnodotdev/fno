@@ -27,6 +27,7 @@ Releases before 0.4.8 were built in a private repository. Their entries here sum
 
 ### Changed
 
+* Changed the release to ship no PyPI wheels and to need no PyPI token. The GitHub Release keeps the tarballs, their sha256 files, `fno.sh` and `fno-release.json`. Old wheel installs keep their path: `fno update` upgrades the frozen wheel, then moves the install to the binary install.
 * Changed the mux grid to run on the Rio terminal engine.
 * Changed every fno refusal to name fno, a way out, and an override, and gate refusals land a spawn_gate_refused row.
 * Changed the merge gates to refuse a red head everywhere. A head with no completed CI run reads unmeasured, never green. A paint PR with no recorded look holds the merge.
