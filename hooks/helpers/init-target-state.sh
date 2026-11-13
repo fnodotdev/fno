@@ -1591,92 +1591,16 @@ EOF
       # this node can name it, and naming it exactly is the proof the handover
       # requires. Unset (every hand-started or non-spawn run) => zero args and
       # an ordinary acquire, byte-for-byte as before.
+      # THE one own-session check, shared with the start pre-check: the door
+      # prints the --handover-from flags when THIS session is the claim's
+      # beneficiary; the four inline rungs this replaces are the deleted leg.
+      # The env carrier stays a literal pass ahead of the door so a helper
+      # paired with a pre-door binary keeps the primary spawn path working.
       _HANDOVER_FLAGS=""
       if [[ -n "${FNO_NODE_CLAIM_HOLDER:-}" ]]; then
         _HANDOVER_FLAGS="--handover-from ${FNO_NODE_CLAIM_HOLDER}"
       else
-        # The env var is how the spawner proves the handover, but a spawned
-        # worker can reach init without it. The spawner's claim then reads as
-        # a foreign 15-minute lease and the ordinary acquire refuses its own
-        # beneficiary (measured live 2026-09-09). The disk holder supplies the
-        # value, but a published holder is not proof of successorship: the
-        # claim store answers "who holds" to any reader, so the match is
-        # bound to THIS worker's provenance. The launch-window holder names
-        # its beneficiary, and the identity resolver proves a name is this
-        # session's own; only an exact match adopts the handover, so a
-        # bystander's init cannot take a live claim it was never minted for.
-        _DISK_CLAIM_JSON="$(FNO_CLAIMS_ROOT="$HOME" fno agents claim status "node:${_NODE_ID}" --json --no-roster 2>/dev/null || true)"
-        _DISK_HOLDER="$(printf '%s' "${_DISK_CLAIM_JSON:-}" \
-          | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
-        case "${_DISK_HOLDER:-}" in
-          spawn-handover:*)
-            # The same two rungs the identity resolver trusts: the spawn-time
-            # name export first, then the registry binding whoami exposes.
-            _SELF_NAME="${FNO_WORKER_NAME:-}"
-            if [[ -z "$_SELF_NAME" ]]; then
-              # `fno agents whoami` (the native fno-agents door) emits the
-              # canonical JSON shape whenever stdout is not a tty, which
-              # command substitution always is. Top-level `fno whoami` is the
-              # Rust front's native command: it ignores --json and prints
-              # human text, so this rung used to read an empty name and never
-              # arm. The `|| true` keeps set -e + pipefail from aborting init
-              # when whoami refuses an unregistered session (nonzero exit).
-              _SELF_NAME="$(fno agents whoami 2>/dev/null \
-                | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
-            fi
-            if [[ -n "${_SELF_NAME:-}" && "${_DISK_HOLDER}" == "spawn-handover:${_SELF_NAME}" ]]; then
-              _HANDOVER_FLAGS="--handover-from ${_DISK_HOLDER}"
-            fi
-            if [[ -z "${_HANDOVER_FLAGS:-}" && -n "${_HARNESS_SESSION:-}" ]]; then
-              # The session-id proof: a spawn-side claim records the creating
-              # session two ways - proven identity lands in session_id, and an
-              # ambient-only creator is demoted to dispatched_by_session
-              # metadata until a renew proves it. Either way a window naming
-              # THIS session was minted for it: the disk-read form of the env
-              # carrier. A respawned worker reaches init while its own earlier
-              # process still holds the window (measured live 2026-10-30: the
-              # registry row was not resolvable yet and the pid still alive,
-              # so the name and suspect rungs both missed and the beneficiary
-              # refused its own pre-claim, stranding a claimless manifest).
-              # Case folds like the engine's same_session_id; an exact match
-              # is the only proof, never a prefix.
-              _DISK_CLAIM_SESSION="$(printf '%s' "${_DISK_CLAIM_JSON:-}" \
-                | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
-              if [[ -z "$_DISK_CLAIM_SESSION" ]]; then
-                _DISK_CLAIM_SESSION="$(printf '%s' "${_DISK_CLAIM_JSON:-}" \
-                  | sed -n 's/.*"dispatched_by_session"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
-              fi
-              if [[ -n "$_DISK_CLAIM_SESSION" ]] \
-                 && { [[ "$_DISK_CLAIM_SESSION" == "$_HARNESS_SESSION" ]] \
-                      || { [[ "$_DISK_CLAIM_SESSION" != ses_* && "$_HARNESS_SESSION" != ses_* ]] \
-                           && [[ "$(printf '%s' "$_DISK_CLAIM_SESSION" | tr '[:upper:]' '[:lower:]')" \
-                                 == "$(printf '%s' "$_HARNESS_SESSION" | tr '[:upper:]' '[:lower:]')" ]]; }; }; then
-                _HANDOVER_FLAGS="--handover-from ${_DISK_HOLDER}"
-              fi
-            fi
-            if [[ -z "${_HANDOVER_FLAGS:-}" ]]; then
-              # A launch window that outlived its launcher: the recorded pid
-              # is the spawner's, the pid probe proves it gone (basis
-              # pid-absent), and the TTL grace still runs (state suspect), so
-              # the named worker never reached init and nobody is mid-launch.
-              # The builder dispatched for this node adopts the window through
-              # the takeover door - naming the holder is the takeover's own
-              # proof, and the rebind still refuses an off-host or
-              # changed-underneath row. A live window and a pid-unavailable
-              # suspect (death unproven) keep the bystander refusal above: the
-              # named worker may still be coming (measured live 2026-10-28:
-              # a builder parked on an earlier spawn leg's suspect window and
-              # reached PR holding no claim).
-              _DISK_STATE="$(printf '%s' "${_DISK_CLAIM_JSON:-}" \
-                | sed -n 's/.*"state"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
-              _DISK_BASIS="$(printf '%s' "${_DISK_CLAIM_JSON:-}" \
-                | sed -n 's/.*"basis"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
-              if [[ "${_DISK_STATE:-}" == "suspect" && "${_DISK_BASIS:-}" == "pid-absent" ]]; then
-                _HANDOVER_FLAGS="--handover-from ${_DISK_HOLDER}"
-              fi
-            fi
-            ;;
-        esac
+        _HANDOVER_FLAGS="$(FNO_CLAIMS_ROOT="$HOME" fno agents claim adopt-flags "node:${_NODE_ID}" 2>/dev/null || true)"
       fi
       # Unquoted on purpose: empty => zero args (bash 3.2 set -u safe, unlike an
       # empty "${array[@]}"); the regex guarantees $_SESSION_PID is digits only.

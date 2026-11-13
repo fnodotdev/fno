@@ -131,6 +131,18 @@ Options:
   --help               Show this message and exit.
 ";
 
+const ADOPT_FLAGS: &str = "\
+Usage: fno agents claim adopt-flags KEY
+
+  The one own-session check shared with the start pre-check: prints
+  `--handover-from <holder>` when THIS session is the claim's beneficiary
+  (env carrier, worker name, registry row, recorded session id, suspect
+  window). Prints nothing when no rung passes. Always exit 0.
+
+Options:
+  --help               Show this message and exit.
+";
+
 fn page(op: &str) -> Option<&'static str> {
     Some(match op {
         "acquire" => ACQUIRE,
@@ -140,6 +152,7 @@ fn page(op: &str) -> Option<&'static str> {
         "list" => LIST,
         "reap" => REAP,
         "session-pid" => SESSION_PID,
+        "adopt-flags" => ADOPT_FLAGS,
         _ => return None,
     })
 }
@@ -188,6 +201,7 @@ mod tests {
             "list",
             "reap",
             "session-pid",
+            "adopt-flags",
         ] {
             assert_eq!(answer(op, &argv(&["--help"])), Some(0), "{op}");
             assert_eq!(answer(op, &argv(&["node:x"])), None, "{op}");
