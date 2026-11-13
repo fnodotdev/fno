@@ -1,14 +1,14 @@
-//! The worker-only `gh` proxy the front door installs before it hands a
-//! command to the Python shell.
-//!
-//! The proxy is a two-line shim, `exec <fno-agents> gh "$@"`, in the state
-//! root's `install/bin/github-cli` dir. The front door puts that dir first on PATH,
-//! names it in `FNO_GH_PROXY_DIR`, and drops `FNO_REAL_GH`, so every `gh` the
-//! Python shell or its children run goes through the quota broker. The shim
-//! names fno-agents by absolute path: a reinstall that dropped the old
-//! `fno-gh-proxy` helper once broke gh in every session.
+//! The worker-only `gh` proxy installer. The proxy is a two-line shim,
+//! `exec <fno-agents> gh "$@"`, and `fno doctor update` writes it over the
+//! machine's first-PATH `gh` (the real binary backed up beside it as
+//! `gh.pre-fno`), so plain `gh` on every caller's PATH runs the quota
+//! broker: reads carry the GitHub App token, a stale answer costs an ETag
+//! revalidation instead of core quota, and the fleet budget stays the only
+//! admission layer. A dir the installer cannot write falls back to the
+//! state root's `install/bin/github-cli`, and doctor names the shadow.
+//! The shim names fno-agents by absolute path: a reinstall that dropped
+//! the old `fno-gh-proxy` helper once broke gh in every session.
 
-use std::ffi::OsString;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -17,7 +17,6 @@ pub const PROXY_DIR_ENV: &str = "FNO_GH_PROXY_DIR";
 /// The proxy stamps this into the env of its own successor. It is good for
 /// that one hop only: a descendant that inherits it has its first gh refused.
 pub const PROXY_DEPTH_ENV: &str = "FNO_GH_PROXY_DEPTH";
-const REAL_GH_ENV: &str = "FNO_REAL_GH";
 const LEGACY_SHIM: &str = "#!/bin/sh\nexec fno-gh-proxy \"$@\"\n";
 
 /// The state root's `install/bin/github-cli` dir: `$FNO_STATE_DIR` or `$HOME/.fno`,
@@ -28,15 +27,6 @@ pub fn proxy_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".fno")))?;
     Some(crate::state_layout::place(&root, "bin").join("github-cli"))
-}
-
-/// The config-free proxy home for a state root that cannot be written.
-pub fn fallback_proxy_dir() -> PathBuf {
-    // SAFETY: getuid reads a per-process kernel value; it cannot fail or race.
-    let uid = unsafe { libc::getuid() };
-    std::env::temp_dir()
-        .join(format!("fno-{uid}"))
-        .join("github-cli")
 }
 
 /// `shlex.quote`: bare when every byte is shell-safe, else single-quoted.
@@ -85,26 +75,29 @@ pub fn wrapper(binary: &Path) -> String {
 
 /// Any shim this installer wrote, current or from an older install.
 pub fn is_wrapper(path: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    if text == LEGACY_SHIM {
+    if std::fs::read_to_string(path).ok().as_deref() == Some(LEGACY_SHIM) {
         return true;
     }
-    let Some(line) = text
+    wrapper_target(path).is_some()
+}
+
+/// The binary a wrapper shim execs, when the file reads as one of ours.
+pub fn wrapper_target(path: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(path).ok()?;
+    if text == LEGACY_SHIM {
+        return None;
+    }
+    let line = text
         .strip_prefix("#!/bin/sh\n")
-        .and_then(|rest| rest.lines().next())
-    else {
-        return false;
-    };
-    let Some(binary) = line
-        .strip_prefix("exec ")
-        .and_then(|rest| rest.strip_suffix(" gh \"$@\""))
-        .and_then(shell_unquote)
-    else {
-        return false;
-    };
-    Path::new(&binary).file_name().and_then(|n| n.to_str()) == Some("fno-agents")
+        .and_then(|rest| rest.lines().next())?;
+    let binary = line.strip_prefix("exec ")?.strip_suffix(" gh \"$@\"")?;
+    shell_unquote(binary).map(PathBuf::from)
+}
+
+/// A wrapper whose exec target is gone: every plain gh call on the machine
+/// fails until doctor update re-points or removes the shim.
+pub fn is_dangling(path: &Path) -> bool {
+    wrapper_target(path).is_some_and(|target| !is_executable(&target))
 }
 
 pub(crate) fn is_executable(path: &Path) -> bool {
@@ -178,15 +171,16 @@ fn shim_binary(path: &str) -> Option<PathBuf> {
 }
 
 /// Write the shim into `root`, atomically, backing a foreign `gh` up to
-/// `gh.pre-fno` once. Refuses a delegate that resolves back to the shim.
-pub fn install_shim(root: &Path, binary: &Path, real_gh: &Path) -> Result<(), String> {
+/// `gh.pre-fno` once. Refuses when the exec target is the proxy file
+/// itself, which would loop.
+pub fn install_shim(root: &Path, binary: &Path) -> Result<(), String> {
     let wrapper = wrapper(&std::path::absolute(binary).unwrap_or_else(|_| binary.to_path_buf()));
     std::fs::create_dir_all(root).map_err(|e| format!("{}: {e}", root.display()))?;
     // Retired: the old shim exec'd this link by PATH name.
     let _ = std::fs::remove_file(root.join("fno-gh-proxy"));
     let proxy = root.join("gh");
-    if resolve(real_gh) == resolve(&proxy) {
-        return Err("resolved gh delegate points back to the Footnote proxy".into());
+    if resolve(binary) == resolve(&proxy) {
+        return Err("the shim would exec the proxy itself".into());
     }
     if std::fs::read_to_string(&proxy).ok().as_deref() == Some(wrapper.as_str()) {
         return Ok(());
@@ -218,11 +212,7 @@ pub fn install_shim(root: &Path, binary: &Path, real_gh: &Path) -> Result<(), St
 /// Install the shim in `root` (the state-root dir when `None`). `Ok(None)`
 /// is the degrade: no fno-agents to exec, or a temp-dir binary a durable
 /// shim must not pin, so gh stays unwrapped and the quota policy stands down.
-fn ensure_proxy(
-    root: Option<&Path>,
-    real_gh: &Path,
-    path: &str,
-) -> Result<Option<PathBuf>, String> {
+fn ensure_proxy(root: Option<&Path>, path: &str) -> Result<Option<PathBuf>, String> {
     let Some(binary) = shim_binary(path) else {
         return Ok(None);
     };
@@ -239,73 +229,72 @@ fn ensure_proxy(
     if in_temp(&binary) && !in_temp(&root) {
         return Ok(None);
     }
-    install_shim(&root, &binary, real_gh)?;
+    install_shim(&root, &binary)?;
     Ok(Some(root))
 }
 
-/// The env edits the front door applies before it execs the Python shell:
-/// `Some` sets a key, `None` removes it. An inherited `FNO_GH_PROXY_DIR` is
-/// never honored, so a parent's temp pin cannot win PATH over the durable home.
-pub fn front_door_env() -> Vec<(&'static str, Option<OsString>)> {
-    let path = std::env::var("PATH").unwrap_or_default();
-    let mut edits: Vec<(&'static str, Option<OsString>)> =
-        vec![(PROXY_DEPTH_ENV, None), (PROXY_DIR_ENV, None)];
-    let inherited = std::env::var_os(REAL_GH_ENV)
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from);
-    let Some(delegate) = inherited.or_else(|| which("gh", &path)) else {
-        return edits;
-    };
-    let installed = if is_wrapper(&delegate) {
-        let parent = resolve(delegate.parent().unwrap_or(Path::new("/")));
-        let durable = if parent == resolve(&fallback_proxy_dir()) {
-            // The temp shim is reapable: move the lineage to the durable home.
-            ensure_proxy(None, &delegate, &path).ok().flatten()
-        } else {
-            None
-        };
-        if durable.is_none() {
-            // Refresh the inherited shim in place; on failure it stays as is.
-            let outside = std::env::join_paths(
-                std::env::split_paths(&path)
-                    .filter(|p| !p.as_os_str().is_empty() && resolve(p) != parent),
-            )
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
-            if let Some(real) = which("gh", &outside) {
-                let _ = ensure_proxy(Some(&parent), &real, &outside);
-            }
-            edits.push((PROXY_DIR_ENV, Some(parent.into_os_string())));
-            edits.push((REAL_GH_ENV, None));
-            return edits;
-        }
-        durable
-    } else {
-        ensure_proxy(None, &delegate, &path)
-            .or_else(|_| ensure_proxy(Some(&fallback_proxy_dir()), &delegate, &path))
-            .ok()
-            .flatten()
-    };
-    let Some(dir) = installed else {
-        return edits;
-    };
-    let mut prepended = dir.clone().into_os_string();
-    if !path.is_empty() {
-        prepended.push(":");
-        prepended.push(&path);
-    }
-    edits.push(("PATH", Some(prepended)));
-    edits.push((PROXY_DIR_ENV, Some(resolve(&dir).into_os_string())));
-    edits.push((REAL_GH_ENV, None));
-    edits
+/// Why the one install entry refused. Typed because the crate's string
+/// error count is shrink-only (docs/rust-style.md R6); the doctor and
+/// update callers print the Display text.
+#[derive(Debug)]
+pub enum InstallRefusal {
+    NoGh,
+    NoAgents,
+    NoParentDir,
+    /// The durable state-root install failed; the text is the installer's
+    /// own reason (no HOME, or the dir refused the write).
+    NoStateRoot(String),
 }
 
-/// Apply [`front_door_env`] to the command the front door execs.
-pub fn protect(command: &mut std::process::Command) {
-    for (key, value) in front_door_env() {
-        match value {
-            Some(value) => command.env(key, value),
-            None => command.env_remove(key),
-        };
+impl std::fmt::Display for InstallRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoGh => f.write_str("no gh on PATH"),
+            Self::NoAgents => f.write_str("no fno-agents binary to exec"),
+            Self::NoParentDir => f.write_str("gh on PATH has no parent dir"),
+            Self::NoStateRoot(why) => f.write_str(why),
+        }
     }
+}
+
+/// The one install entry: shadow the machine's first-PATH `gh` with the
+/// proxy shim, so plain `gh` on every caller's PATH runs the quota broker.
+/// A dir the installer cannot write falls back to the state root's
+/// `install/bin/github-cli`; the returned line names where the shim sits
+/// and whether a PATH export still stands between it and plain gh. An
+/// `Err` names the blocker (no gh on PATH, no fno-agents to exec).
+pub fn install_for_path() -> Result<String, InstallRefusal> {
+    let path = std::env::var("PATH").unwrap_or_default();
+    let Some(delegate) = which("gh", &path) else {
+        return Err(InstallRefusal::NoGh);
+    };
+    let Some(binary) = shim_binary(&path).filter(|p| is_executable(p)) else {
+        return Err(InstallRefusal::NoAgents);
+    };
+    let dir = delegate
+        .parent()
+        .ok_or(InstallRefusal::NoParentDir)?
+        .to_path_buf();
+    let action = if is_wrapper(&delegate) {
+        "refreshed"
+    } else {
+        "installed"
+    };
+    if install_shim(&dir, &binary).is_ok() {
+        return Ok(format!(
+            "gh proxy shim {action} at {}; plain gh runs the proxy",
+            dir.display()
+        ));
+    }
+    // The first-PATH dir refused the write (unwritable, or the loop
+    // guard): fall back to the state root's durable home and report the
+    // shadow honestly. Doctor's report reads the same verdict.
+    let root = ensure_proxy(None, &path)
+        .map_err(InstallRefusal::NoStateRoot)?
+        .ok_or(InstallRefusal::NoAgents)?;
+    Ok(format!(
+        "gh proxy shim at {}; {} still resolves first on PATH; put the shim dir ahead of it to activate",
+        root.display(),
+        delegate.display()
+    ))
 }
