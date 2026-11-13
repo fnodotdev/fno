@@ -291,7 +291,7 @@ impl Element for Field {
         _id: Option<&GlobalElementId>,
         _inspector_id: Option<&gpui::InspectorElementId>,
         window: &mut Window,
-        cx: &mut App,
+        _cx: &mut App,
     ) -> (LayoutId, ()) {
         let mut style = Style::default();
         style.size.width = relative(1.).into();
@@ -320,7 +320,6 @@ impl Element for Field {
             let rows = Layout::shape(&text, &[run], 0, font.clone(), font_size, lh, width, window);
             size(width, rows.height())
         });
-        let _ = cx;
         (id, ())
     }
 

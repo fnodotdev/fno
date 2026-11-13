@@ -64,8 +64,11 @@ impl Draft {
     }
 
     fn snap(&self, at: usize) -> usize {
-        let at = at.min(self.text.len());
-        if self.text.is_char_boundary(at) && self.is_grapheme_boundary(at) {
+        let mut at = at.min(self.text.len());
+        while !self.text.is_char_boundary(at) {
+            at -= 1;
+        }
+        if self.is_grapheme_boundary(at) {
             return at;
         }
         let mut best = self.text.len();
