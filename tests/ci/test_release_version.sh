@@ -100,13 +100,13 @@ grep -q '^version = "0.4.0-rc.1"' "$sync/crates/fno-agents/Cargo.toml"
 check "crates/fno-agents/Cargo.toml reads 0.4.0-rc.1" $?
 grep -q '^version = "0.4.0-rc.1"' "$sync/crates/fno-mail/Cargo.toml"
 check "crates/fno-mail/Cargo.toml reads 0.4.0-rc.1" $?
-grep -q '^version = "0.4.0-rc.1"' "$sync/crates/fno-app/Cargo.toml"
-check "crates/fno-app/Cargo.toml reads 0.4.0-rc.1" $?
+grep -q '^version = "0.3.2"' "$sync/crates/fno-app/Cargo.toml"
+check "crates/fno-app/Cargo.toml stays at its own version through an fno bump" $?
 grep -q 'version = "=0.4.0-rc.1"' "$sync/crates/fno-agents/Cargo.toml"
 check "the fno-mail pin in fno-agents reads =0.4.0-rc.1" $?
 grep -q 'version = "=0.4.0-rc.1"' "$sync/crates/fno/Cargo.toml"
 check "the fno-mail pin in fno reads =0.4.0-rc.1" $?
-for c in fno fno-agents fno-mail fno-app; do
+for c in fno fno-agents fno-mail; do
   awk -v pkg="$c" '$0 == "name = \"" pkg "\"" { seen = 1; next } seen && /^version = / { print; exit }' "$sync/crates/$c/Cargo.lock" | grep -q '"0.4.0-rc.1"'
   check "the $c lockfile entry reads 0.4.0-rc.1" $?
 done
@@ -138,7 +138,7 @@ check_rc "--check agrees after a dev bump (exit 0)" "$rc" "0"
 # The stamp must leave a version cargo can actually parse: a PEP 440 spelling
 # reaching a manifest fails every cargo build (the nightly shipped exactly
 # that once). Parse both stamped manifests, not just the text.
-for cf in "$sync/crates/fno/Cargo.toml" "$sync/crates/fno-agents/Cargo.toml" "$sync/crates/fno-mail/Cargo.toml" "$sync/crates/fno-app/Cargo.toml"; do
+for cf in "$sync/crates/fno/Cargo.toml" "$sync/crates/fno-agents/Cargo.toml" "$sync/crates/fno-mail/Cargo.toml"; do
   if cargo metadata --offline --no-deps --format-version 1 --manifest-path "$cf" > "$work/meta.json" 2>>"$work/e"; then
     echo "  ok: cargo metadata parses $(basename "$(dirname "$cf")") at the dev version"
   else

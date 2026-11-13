@@ -69,6 +69,11 @@ CRATE_MANIFESTS=(
   crates/fno/Cargo.toml
   crates/fno-agents/Cargo.toml
   crates/fno-mail/Cargo.toml
+)
+
+# fno-app versions on its own line (its Cargo.toml is never stamped here), but
+# its lockfile pins the path crates above, so each stamp refreshes that lock.
+LOCK_ONLY_MANIFESTS=(
   crates/fno-app/Cargo.toml
 )
 
@@ -93,7 +98,7 @@ if [[ "$arg" == "--check" ]]; then
   # The crate's own entry in its lockfile must carry the stamped version: the
   # `cargo update` that moves it runs || true, so a silent failure (a
   # resolution conflict, for example) would strand the lock a --locked build
-  # refuses. fno-app's lock once stayed behind its manifest exactly this way.
+  # refuses.
   for cf in "${CRATE_MANIFESTS[@]}"; do
     c="$(basename "$(dirname "$cf")")"
     lock="$(dirname "$cf")/Cargo.lock"
@@ -160,6 +165,11 @@ for cf in "${CRATE_MANIFESTS[@]}"; do
   c="$(basename "$(dirname "$cf")")"
   cargo update --manifest-path "$cf" -p "$c" --precise "${semver}" >/dev/null 2>&1 || true
   cargo update --manifest-path "$cf" -p fno-mail >/dev/null 2>&1 || true
+done
+for cf in "${LOCK_ONLY_MANIFESTS[@]}"; do
+  for dep in fno fno-agents fno-mail; do
+    cargo update --manifest-path "$cf" -p "$dep" >/dev/null 2>&1 || true
+  done
 done
 
 # 3. JSON plugin / extension manifests. Every `"version"` key in each of these is

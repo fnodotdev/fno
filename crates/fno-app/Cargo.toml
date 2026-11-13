@@ -1,9 +1,11 @@
 [package]
 name = "fno-app"
-# Versions in lockstep with fno: sync-version.sh stamps it on every release.
+# Own version line, decoupled from fno: sync-version.sh never stamps it.
+# Bump it by hand; the release-app workflow reads it and runs on a
+# fno-app-v<version> tag.
 # Wire compatibility is checked at attach from the server .ver sidecar,
 # never from this version.
-version = "0.4.8"
+version = "0.1.0"
 edition = "2021"
 rust-version = "1.92"
 description = "The fno desktop app: a native GPUI window over a running fno mux server."

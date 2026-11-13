@@ -353,16 +353,6 @@ jobs:
       version: ${{ needs.resolve.outputs.version }}
       ref: ${{ needs.resolve.outputs.sha }}
 
-  app:
-    name: build the desktop app tarball
-    needs: resolve
-    if: needs.resolve.outputs.skip != 'true'
-    uses: ./.github/workflows/release-app.yml
-    secrets: inherit
-    with:
-      version: ${{ needs.resolve.outputs.version }}
-      ref: ${{ needs.resolve.outputs.sha }}
-
   wheels:
     name: build wheels
     needs: resolve
@@ -374,7 +364,7 @@ jobs:
 
   publish-nightly:
     name: publish the nightly pre-release (rolling, replaceable, no registry)
-    needs: [resolve, binaries, app, wheels]
+    needs: [resolve, binaries, wheels]
     if: needs.resolve.outputs.skip != 'true' && needs.resolve.outputs.channel == 'nightly'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -405,7 +395,7 @@ jobs:
           ls -1 dist >/dev/null 2>&1 || { echo "no releaseable artifacts remain"; exit 1; }
           # One sha256sum line per tarball, so `fno update` verifies a release
           # download the way it verifies a bin-cache one.
-          (cd dist && for f in fno-agents-*.tar.gz fno-app-*.tar.gz; do [ -e "$f" ] || continue; sha256sum "$f" > "$f.sha256"; done)
+          (cd dist && for f in fno-agents-*.tar.gz; do [ -e "$f" ] || continue; sha256sum "$f" > "$f.sha256"; done)
           # The floor ships beside the tarballs; the update
           # check and the session-start hook read it (rate-limit-free route).
           printf '{"version": "%s", "min_supported": "%s"}\n' "${{ needs.resolve.outputs.version }}" "$(tr -d '[:space:]' < scripts/release/min-supported)" > dist/fno-release.json
@@ -474,7 +464,7 @@ jobs:
 
   publish:
     name: publish rc / stable (one approval click)
-    needs: [resolve, binaries, app, wheels]
+    needs: [resolve, binaries, wheels]
     if: needs.resolve.outputs.skip != 'true' && needs.resolve.outputs.channel != 'nightly'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -512,7 +502,7 @@ jobs:
           ls -1 dist >/dev/null 2>&1 || { echo "no releaseable artifacts remain"; exit 1; }
           # One sha256sum line per tarball, so `fno update` verifies a release
           # download the way it verifies a bin-cache one.
-          (cd dist && for f in fno-agents-*.tar.gz fno-app-*.tar.gz; do [ -e "$f" ] || continue; sha256sum "$f" > "$f.sha256"; done)
+          (cd dist && for f in fno-agents-*.tar.gz; do [ -e "$f" ] || continue; sha256sum "$f" > "$f.sha256"; done)
           # The floor ships beside the tarballs; the update
           # check and the session-start hook read it (rate-limit-free route).
           printf '{"version": "%s", "min_supported": "%s"}\n' "$VERSION" "$(tr -d '[:space:]' < scripts/release/min-supported)" > dist/fno-release.json
