@@ -16,6 +16,18 @@
   <string>@VERSION@</string>
   <key>LSMinimumSystemVersion</key>
   <string>11.0</string>
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>fno-app lets the shells and agents you run read and write files on your Desktop.</string>
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>fno-app lets the shells and agents you run read and write files in your Documents folder.</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>fno-app lets the shells and agents you run read and write files in your Downloads folder.</string>
+  <key>NSRemovableVolumesUsageDescription</key>
+  <string>fno-app lets the shells and agents you run read and write files on removable drives.</string>
+  <key>NSNetworkVolumesUsageDescription</key>
+  <string>fno-app lets the shells and agents you run read and write files on network volumes.</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>fno-app lets the shells and agents you run control other apps with scripts.</string>
   <key>NSHighResolutionCapable</key>
   <true/>
 </dict>

@@ -129,16 +129,23 @@ jobs:
           NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
         run: |
           set -euo pipefail
-          if [ -n "$CERT_P12" ] && [ -n "$CERT_PASSWORD" ] \
-            && [ -n "$NOTARY_KEY" ] && [ -n "$NOTARY_KEY_ID" ] && [ -n "$NOTARY_ISSUER" ]; then
-            echo "ready=true" >> "$GITHUB_OUTPUT"
+          sign=false
+          notarize=false
+          if [ -n "$CERT_P12" ] && [ -n "$CERT_PASSWORD" ]; then
+            sign=true
+            if [ -n "$NOTARY_KEY" ] && [ -n "$NOTARY_KEY_ID" ] && [ -n "$NOTARY_ISSUER" ]; then
+              notarize=true
+            else
+              echo "::notice::macOS notarization skipped: the App Store Connect secrets are not set (see docs/install.md); shipping Developer ID signed, un-notarized binaries."
+            fi
           else
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::macOS signing and notarization skipped: Developer ID secrets are not set (see docs/install.md); shipping binaries without a Developer ID signature."
+            echo "::notice::macOS signing skipped: the Developer ID certificate secrets are not set (see docs/install.md); shipping binaries without a Developer ID signature."
           fi
+          echo "sign=$sign" >> "$GITHUB_OUTPUT"
+          echo "notarize=$notarize" >> "$GITHUB_OUTPUT"
 
       - name: Sign and notarize macOS binaries
-        if: steps.signing.outputs.ready == 'true'
+        if: steps.signing.outputs.sign == 'true'
         shell: bash
         env:
           CERT_P12: ${{ secrets.MACOS_CERT_P12_BASE64 }}
@@ -163,7 +170,9 @@ jobs:
           $sign sign "${bins[@]}"
           # A bare Mach-O cannot carry a stapled ticket, so Gatekeeper checks
           # the notarization online.
-          $sign notarize "${bins[@]}"
+          if [ "${{ steps.signing.outputs.notarize }}" = "true" ]; then
+            $sign notarize "${bins[@]}"
+          fi
           $sign cleanup
 
       - name: Package tarball
