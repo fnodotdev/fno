@@ -163,14 +163,9 @@ fn cached_rules(graph: &Path, cwd: &Path) -> Result<ServedRules, String> {
         unread: set.unread,
     };
     if let Ok(mut map) = cache.lock() {
-        if map.len() >= CACHE_CWDS && !map.contains_key(&key) {
-            let oldest = map
-                .iter()
-                .min_by_key(|(_, c)| c.built)
-                .map(|(k, _)| k.clone());
-            if let Some(k) = oldest {
-                map.remove(&k);
-            }
+        // A bound, not an LRU: past it the next builds refill the map.
+        if map.len() >= CACHE_CWDS {
+            map.clear();
         }
         map.insert(
             key,
