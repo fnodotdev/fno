@@ -79,6 +79,24 @@ pub enum Action {
     Reconnect,
 }
 
+/// The stable control id a click's [`Action`] ships to the usage events arm
+/// (`fno::ui_usage`). One constant per control, never a label.
+fn click_id(action: &Action) -> &'static str {
+    match action {
+        Action::Send(_) => "send_command",
+        Action::Notice(_) => "notice",
+        Action::Answer { .. } => "answer",
+        Action::Show(_) => "show_view",
+        Action::ToggleAgents => "toggle_agents",
+        Action::ToggleChat(_) => "toggle_chat",
+        Action::OpenSheet(_) => "open_sheet",
+        Action::CloseSheet => "close_sheet",
+        Action::Copy(_) => "copy",
+        Action::SendChat => "send_chat",
+        Action::Reconnect => "reconnect",
+    }
+}
+
 /// Where an answer the user clicked stands. The row shows it in place of its
 /// options until the next read drops the question.
 #[derive(Debug, Clone, PartialEq)]
@@ -331,6 +349,7 @@ impl Root {
     }
 
     pub(super) fn act(&mut self, action: Action, cx: &mut Context<Self>) {
+        fno::ui_usage::click("app", click_id(&action));
         match action {
             Action::Send(cmd) => {
                 // A click on the board shows what it picked; chat and the
@@ -865,6 +884,7 @@ impl Root {
             self.mouse(end, MouseKind::Release(proto::MouseButton::Left), false);
         }
         if let Some(hit) = mouse::hit(x, y, self.cell(), &self.layout.panes) {
+            fno::ui_usage::click("app", "pane");
             let rect = self
                 .layout
                 .panes

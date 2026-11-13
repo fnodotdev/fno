@@ -6,6 +6,15 @@
 
 use super::*;
 
+/// Ship the usage row for a consumed left press. The TUI's only click shape:
+/// a tap is the same report, and drags, wheels and hovers ship nothing, so
+/// every surface that consumes the press names itself once here.
+fn click_press(rep: &crate::mouse::MouseReport, id: &'static str) {
+    if matches!(rep.kind, MouseKind::Press(MouseButton::Left)) {
+        crate::ui_usage::click("mux", id);
+    }
+}
+
 /// The client-local keyboard owner among the visible regions. `Pane` means
 /// the server's focused pane (`layout.focus`) takes typing: the client never
 /// stores a pane id here, so server focus identity is preserved and a layout
@@ -181,6 +190,7 @@ pub(super) async fn mouse_pre_pass(
             && super::esc_close::chip_at(view, rep.row, rep.col)
         {
             view.modal_release_swallow = true;
+            click_press(&rep, "esc_chip");
             if let StdinFlow::Detach = super::esc_close::tap(view, scanner, sock_w).await? {
                 return Ok(StdinFlow::Detach);
             }
@@ -228,12 +238,15 @@ pub(super) async fn mouse_pre_pass(
         // The questions view paints next and owns every cell it covers: off
         // the chip, a click reaches no pane and no sideline row under it.
         if view.question_detail.is_some() {
+            click_press(&rep, "question_detail");
             super::questions::mouse(view, rep);
             continue;
         }
-        if super::file_viewer::drag_mouse(view, rep, sock_w).await?
-            || super::file_viewer::mouse(view, rep)
-        {
+        if super::file_viewer::drag_mouse(view, rep, sock_w).await? {
+            continue;
+        }
+        if super::file_viewer::mouse(view, rep) {
+            click_press(&rep, "file_viewer");
             continue;
         }
         if view.bell.open {
@@ -264,7 +277,11 @@ pub(super) async fn mouse_pre_pass(
         // US3: while the which-key modal is open, the mouse drives it
         // (hover selects, wheel scrolls, click executes or dismisses) and is
         // SWALLOWED - it never reaches a pane or the chrome underneath.
+        // US3: while the which-key modal is open, the mouse drives it
+        // (hover selects, wheel scrolls, click executes or dismisses) and is
+        // SWALLOWED - it never reaches a pane or the chrome underneath.
         if view.keys_modal.is_some() {
+            click_press(&rep, "whichkey");
             if let StdinFlow::Detach =
                 keys_modal::keys_modal_mouse(view, scanner, rep, sock_w).await?
             {
@@ -275,6 +292,7 @@ pub(super) async fn mouse_pre_pass(
         // US2: the row context menu owns the mouse while open (hover
         // selects, click runs, right-press re-anchors) and is swallowed.
         if view.row_menu.is_some() {
+            click_press(&rep, "row_menu");
             row_menu_mouse(view, rep, sock_w).await?;
             continue;
         }
@@ -309,6 +327,7 @@ pub(super) async fn mouse_pre_pass(
             continue;
         }
         if view.org_board.is_some() && view.board_full {
+            click_press(&rep, "board_org");
             if modal_mouse(view, rep) {
                 continue;
             }
@@ -337,6 +356,7 @@ pub(super) async fn mouse_pre_pass(
         // Under an overlay or a board popup the recorded spans describe
         // cells something else now paints, so the tap resolves nothing.
         if view.backlog_board.is_some() && view.board_full {
+            click_press(&rep, "board_backlog");
             if matches!(rep.kind, MouseKind::Press(MouseButton::Left))
                 && view.active_overlay_layout().is_none()
                 && !view.backlog_board.as_ref().is_none_or(|b| b.popup_open())
@@ -934,6 +954,7 @@ pub(super) async fn mouse_pre_pass(
             // the clicked pane receives typing without waiting on the
             // hover-settle the human path usually supplies first.
             if matches!(rep.kind, MouseKind::Press(MouseButton::Left)) {
+                click_press(&rep, "pane");
                 view.region_owner = RegionOwner::Pane;
                 view.hover_pending = None;
                 write_msg(sock_w, &ClientMsg::Command(Command::FocusPane(pane)))

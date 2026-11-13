@@ -841,6 +841,7 @@ fn router(state: AppState) -> Router {
         .route("/command/answer/{id}", post(command_answer_redirect))
         .route("/trace", get(trace))
         .route("/trace/model.json", get(trace_model))
+        .route("/ui/click", post(ui_click))
         .route("/ws", get(ws_handler))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -1595,6 +1596,22 @@ async fn backlog_act(
     };
     let (ok, notice) = run_planned(&st, &id, planned).await;
     act_response(ok, &notice)
+}
+
+/// `POST /ui/click`: one click or tap a served page reports, as the control's
+/// stable id (`data-fno` attribute) and the screen (the page) it landed in.
+/// The page's capture listener resolves the attribute, so a click that no
+/// control names ships nothing. Ids only, never text (D3283); the bridge
+/// writes the row through the same door the TUI client uses, and a dropped
+/// id or failed write tells nobody.
+async fn ui_click(Json(body): Json<serde_json::Value>) -> StatusCode {
+    if let (Some(screen), Some(control)) = (
+        body.get("screen").and_then(|v| v.as_str()),
+        body.get("control").and_then(|v| v.as_str()),
+    ) {
+        crate::ui_usage::click(screen, control);
+    }
+    StatusCode::NO_CONTENT
 }
 
 /// `POST /hq/answer/{id}?t=<token>`: answer one open question from the

@@ -8185,6 +8185,7 @@ async fn apply_hit(
     hit: ChromeHit,
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<(), String> {
+    crate::ui_usage::click("mux", hit.control_id());
     match hit {
         ChromeHit::TopRow(v) => match v {
             crate::view_store::SidelineView::Agents => {
@@ -8561,6 +8562,7 @@ async fn aux_mouse(
         }
         MouseKind::Press(MouseButton::Left) => {
             if settings_modal::tap_tab(view, rep.row, rep.col) {
+                crate::ui_usage::click("mux", "settings_tab");
                 return Ok(StdinFlow::Continue);
             }
             match view.aux_hit(rep.row, rep.col) {
@@ -8568,6 +8570,7 @@ async fn aux_mouse(
                     if !settings_modal::row_tap_allowed(view, t) {
                         return Ok(StdinFlow::Continue);
                     }
+                    crate::ui_usage::click("mux", "menu_entry");
                     if let Some(m) = view.aux.as_mut() {
                         m.popup.select(t);
                     }
@@ -8581,6 +8584,7 @@ async fn aux_mouse(
                 None => {
                     // In-block miss (a header) is swallowed; off-block dismisses.
                     if !view.aux_block_contains(rep.row, rep.col) {
+                        crate::ui_usage::click("mux", "menu_dismiss");
                         view.lane.clear_entry();
                         theme_import_ui::reset(view);
                         view.aux = None;

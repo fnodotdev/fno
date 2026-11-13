@@ -130,6 +130,7 @@ fn rich(
     InteractiveText::new(id, text)
         .on_click(ranges, move |ix, _, cx| {
             if let Some(url) = urls.get(ix).filter(|u| fno::link::is_openable(u)) {
+                fno::ui_usage::click("app", "chat_link");
                 cx.open_url(url);
             }
         })

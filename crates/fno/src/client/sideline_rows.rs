@@ -135,6 +135,43 @@ pub(super) enum ChromeHit {
     Card(agent_launcher::card::CardHit),
 }
 
+impl ChromeHit {
+    /// The stable control id a resolved click ships to the usage events arm
+    /// ([`crate::ui_usage`]). One constant per control, never a label: the
+    /// analytics question is which controls get used, so an id may be
+    /// coarse (every `Cmds` row action reads its first command) but never
+    /// per-instance.
+    pub(super) fn control_id(&self) -> &'static str {
+        match self {
+            ChromeHit::Cmds(cmds) => match cmds.first() {
+                Some(Command::SelectTab(_)) => "tab_row",
+                Some(Command::SelectSquad(_)) => "squad_row",
+                Some(Command::FocusPane(_)) | Some(Command::AttachAgent(_)) => "agent_row",
+                _ => "row_action",
+            },
+            ChromeHit::OpenRemote(_) => "remote_row",
+            ChromeHit::TopRow(_) => "view_word",
+            ChromeHit::NeedInput => "need_input",
+            ChromeHit::Bell(_) => "bell",
+            ChromeHit::Notice(_) => "notice",
+            ChromeHit::OpenCreate => "new_workspace",
+            ChromeHit::ToggleComposer => "composer_toggle",
+            ChromeHit::AddRemoteHost => "add_remote",
+            ChromeHit::CycleSection(_) => "section",
+            ChromeHit::SortColumn(_) => "sort_header",
+            ChromeHit::ToggleIdle(_) => "idle_caret",
+            ChromeHit::CycleDensity => "density",
+            ChromeHit::OpenSidelineMenu { .. } => "menu_open",
+            ChromeHit::OpenFeedDetail(_) => "feed_row",
+            ChromeHit::OpenQuestionDetail(_) => "question_row",
+            ChromeHit::OpenNode(_) => "node_link",
+            ChromeHit::OpenPr(_) => "pr_link",
+            ChromeHit::OpenDraft(_) => "draft_open",
+            ChromeHit::Card(_) => "card",
+        }
+    }
+}
+
 impl View {
     /// Columns the card and the header `+` get: the sideline text width less
     /// the rail border and the one spare cell bands keep.
