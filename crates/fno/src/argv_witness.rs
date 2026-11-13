@@ -170,6 +170,19 @@ pub fn stale_live_attach_ids(reg_raw: &str) -> std::collections::HashSet<String>
 mod tests {
     use super::*;
 
+    /// The registry compares start times for equality against a value the
+    /// fno-agents writer captured for the SAME pid, so the test reads the
+    /// same units the module provides, never an epoch conversion.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn registry_start_time(pid: u32) -> Option<u64> {
+        Pid::new(pid).and_then(|p| p.start_time())
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    fn registry_start_time(_pid: u32) -> Option<u64> {
+        None
+    }
+
     fn reg(rows: &str) -> String {
         format!(r#"{{"schema_version": 6, "agents": [{rows}]}}"#)
     }
