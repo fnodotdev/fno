@@ -977,11 +977,11 @@ fn step_backlog_prefix(exe: &Path, root: &Path, rep: &mut Report) {
 /// The obsidian-driven `backlog.render_path` proposal: global scope, the
 /// vault-templated board path, refused shapes the writer already rejects.
 fn propose_render_path(skips: &mut Vec<String>) -> Option<Proposal> {
-    let doc = global_config_doc();
-    let obs = doc.as_ref().and_then(|d| d.get("obsidian"));
-    let enabled = obs
-        .and_then(|o| o.get("enabled"))
-        .and_then(toml::Value::as_bool)
+    let doc = global_render_path_config();
+    let enabled = doc
+        .as_ref()
+        .and_then(|d| d.obsidian.as_ref())
+        .and_then(|o| o.enabled)
         .unwrap_or(false);
     if !enabled {
         skips.push(
@@ -992,18 +992,43 @@ fn propose_render_path(skips: &mut Vec<String>) -> Option<Proposal> {
     }
     if doc
         .as_ref()
-        .and_then(|d| d.get("backlog"))
-        .and_then(|b| b.get("render_path"))
-        .is_some()
+        .and_then(|d| d.backlog.as_ref())
+        .is_some_and(|b| b.render_path.is_some())
     {
         skips.push("render-path: backlog.render_path is set; setup never overwrites it".into());
         return None;
     }
-    let vault = obs
-        .and_then(|o| o.get("vault"))
-        .and_then(toml::Value::as_str)
+    let vault = doc
+        .as_ref()
+        .and_then(|d| d.obsidian.as_ref())
+        .and_then(|o| o.vault.as_deref())
         .filter(|s| !s.is_empty())?;
     Some(render_path_proposal(vault))
+}
+
+/// The global config deserialized once at its boundary, down to the two
+/// blocks the render-path step reads (R1: a typed read, no field walks).
+#[derive(serde::Deserialize, Default)]
+struct RenderPathGlobalConfig {
+    obsidian: Option<RenderPathObsidian>,
+    backlog: Option<RenderPathBacklog>,
+}
+
+#[derive(serde::Deserialize)]
+struct RenderPathObsidian {
+    enabled: Option<bool>,
+    vault: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct RenderPathBacklog {
+    render_path: Option<String>,
+}
+
+fn global_render_path_config() -> Option<RenderPathGlobalConfig> {
+    let path = crate::config_defaults::global_config_path();
+    let text = std::fs::read_to_string(path).ok()?;
+    toml::from_str(&text).ok()
 }
 
 fn render_path_proposal(vault: &str) -> Proposal {
@@ -1021,13 +1046,6 @@ fn render_path_proposal(vault: &str) -> Proposal {
         reason: "one board per workspace project, rendered by the daemon into the vault".into(),
         source: "default",
     }
-}
-
-fn global_config_doc() -> Option<toml::Table> {
-    let path = crate::config_defaults::global_config_path();
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|t| t.parse::<toml::Table>().ok())
 }
 
 fn step_render_path(exe: &Path, rep: &mut Report) {
