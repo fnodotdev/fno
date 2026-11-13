@@ -30,7 +30,7 @@ fn attention_ledger_ok_reading_renders_one_line() {
         .filter(|l| l.starts_with("attention ledger"))
         .collect();
     assert_eq!(hits.len(), 1, "exactly one attention ledger line");
-    assert!(hits[0].contains("2026-W46"));
+    assert!(hits.first().is_some_and(|l| l.contains("2026-W46")));
 }
 
 /// AC4: a failed attention_ledger reading renders the named failure line

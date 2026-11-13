@@ -124,23 +124,17 @@ pub fn fold(
         .map(|m| (m.completed - m.created).num_seconds() as f64 / 3600.0)
         .collect();
     cycle.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let pick = |rank: usize| -> Option<f64> {
-        if cycle.is_empty() {
-            return None;
-        }
-        let idx = rank.saturating_sub(1).min(cycle.len() - 1);
-        Some((cycle[idx] * 10.0).round() / 10.0)
+    let round1 = |v: f64| (v * 10.0).round() / 10.0;
+    let median = match cycle.len() {
+        0 => None,
+        n if n % 2 == 1 => cycle.get(n / 2).map(|v| round1(*v)),
+        n => match (cycle.get(n / 2 - 1), cycle.get(n / 2)) {
+            (Some(a), Some(b)) => Some(round1((a + b) / 2.0)),
+            _ => None,
+        },
     };
-    let median = if cycle.is_empty() {
-        None
-    } else if cycle.len() % 2 == 1 {
-        pick(cycle.len() / 2 + 1)
-    } else {
-        let a = cycle[cycle.len() / 2 - 1];
-        let b = cycle[cycle.len() / 2];
-        Some(((a + b) / 2.0 * 10.0).round() / 10.0)
-    };
-    let p90 = pick((cycle.len() as f64 * 0.9).ceil() as usize);
+    let p90_rank = (cycle.len() as f64 * 0.9).ceil() as usize;
+    let p90 = cycle.get(p90_rank.saturating_sub(1)).map(|v| round1(*v));
 
     Ledger {
         week: window.label.clone(),
@@ -387,7 +381,8 @@ fn revert_count(window: &Window, cwd: &Path, notes: &mut Vec<String>) -> usize {
                 "--format",
                 "%H",
             ])
-            .output();
+            .spawn()
+            .and_then(|mut child| child.wait_with_output());
         match out {
             Ok(out) if out.status.success() => {
                 return String::from_utf8_lossy(&out.stdout)
