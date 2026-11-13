@@ -41,8 +41,8 @@ fn fixed(rows: &[(&str, &str)]) -> Vec<KeyHint> {
 }
 
 /// The line that names the prefix once, in the words the keys list uses.
-fn lead_line() -> String {
-    format!("{}, then:", crate::keys::prefix_display())
+fn lead_text(prefix: &str) -> String {
+    format!("{prefix}, then:")
 }
 
 /// The agents cells for `bindings`: the chord key alone, since the lead line
@@ -140,7 +140,7 @@ fn columns(w: usize) -> usize {
 /// wider than its column is cut at the column edge.
 pub(crate) fn grid_rows(view: KeyView, w: usize) -> Vec<TLine> {
     let cols = columns(w);
-    let lead = (view == KeyView::Agents).then(lead_line);
+    let lead = (view == KeyView::Agents).then(|| lead_text(&crate::keys::prefix_display()));
     let rows = MAX_ROWS - usize::from(lead.is_some());
     let mut cells: Vec<KeyHint> = hints(view);
     cells.truncate(cols * rows - 1);
@@ -316,10 +316,9 @@ mod tests {
     fn lead_line_follows_an_alt_prefix() {
         let (map, warnings) = crate::keys::resolve_keymap(Some("alt+shift+a"), &[]);
         assert!(warnings.is_empty(), "{warnings:?}");
-        assert_eq!(
-            crate::keys::prefix_disp(map.prefix, map.prefix_alt),
-            "alt+shift+a"
-        );
+        let prefix = crate::keys::prefix_disp(map.prefix, map.prefix_alt);
+        assert_eq!(lead_text(&prefix), "alt+shift+a, then:");
+        assert_eq!(lead_text("ctrl+a"), "ctrl+a, then:");
     }
 
     #[test]
