@@ -1735,11 +1735,21 @@ fn composer_card_paint_rows() {
         "the chip rows fold at rest: {rest:?}"
     );
     assert!(
-        rest.iter().any(|t| t.contains("$ ")),
-        "the command line paints at rest: {rest:?}"
+        !rest
+            .iter()
+            .any(|t| t.contains("$ ") || t.contains("--no-wait")),
+        "the raw command stays folded at rest: {rest:?}"
+    );
+    assert!(
+        rest.iter().any(|t| t.contains("claude \u{b7} ")),
+        "harness and model read in plain words at rest: {rest:?}"
     );
     v.launcher.as_mut().unwrap().focus = Focus::Permission;
     let texts = card_texts(&v);
+    assert!(
+        texts.iter().any(|t| t.contains("$ fno agents spawn")),
+        "the command line shows once unfolded: {texts:?}"
+    );
     for chip in ["auto", "claude", "default"] {
         assert!(
             texts.iter().any(|t| t.contains(chip)),

@@ -208,6 +208,8 @@ What a file answer can do: close the question, reach the asker, unblock the node
 
 Every path requires a bearer token that matches a configured sink's `token_env` value. The token identifies the sink, never a person. A refused request lands no row. The statuses are `401` for a bad token, `404` for an unknown id, and `409` for a closed item. `422` covers a bad shape, an out-of-range option, `done` on a question, and more than one choice.
 
+The door also serves `GET /v1`, a version document that lists every `/v1` route, and `GET /v1/chat/{harness}/{session_id}`, a WebSocket of one worker's chat events. Both take the same sink token. [chat-event-stream](chat-event-stream.md#the-app-route) has the frame shape and the two auth forms.
+
 An accepted answer appends the same `attention_answer` row the arm writes. The authority stays `sink`. The idempotency key and any Tailscale Serve identity header ride the row as provenance. The endpoint then runs the same `fno inbox outstanding clear` the mux overlay runs. First answer wins. A retry under the same `idempotency_key` replays the receipt and lands no second row. A different key lands a superseded marker that changes nothing. When a clear fails, the row stays durable. The question then needs a terminal close, and the arm retries its own lane.
 
 ## The HQ page answer

@@ -212,6 +212,40 @@ pub fn handle_get(io: &mut dyn ApiIo, id: &str) -> (u16, Value) {
     }
 }
 
+/// The one sink token check every `/v1` route shares. The two 401 bodies are
+/// the contract clients read, so they live here once.
+pub(crate) fn authorize<'a>(
+    sinks: &'a [SinkAuth],
+    token: Option<&str>,
+) -> Result<&'a SinkAuth, (u16, Value)> {
+    let Some(token) = token else {
+        return Err(problem(
+            401,
+            "unauthorized",
+            "a bearer sink token is required".into(),
+        ));
+    };
+    sinks
+        .iter()
+        .find(|s| crate::web::constant_time_eq(s.token.as_bytes(), token.as_bytes()))
+        .ok_or_else(|| {
+            problem(
+                401,
+                "unauthorized",
+                "the bearer token matches no configured sink".into(),
+            )
+        })
+}
+
+/// The `Authorization: Bearer` token, when the header carries one.
+pub(crate) fn bearer(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::to_string)
+}
+
 /// POST /v1/attention/items/{id}/answer. Auth first, then validation, then
 /// the row, then the clear: a refused shape never lands a row, a landed row
 /// is durable even when the clear fails.
@@ -223,19 +257,9 @@ pub fn handle_answer(
     identity: Option<&str>,
     body: &[u8],
 ) -> (u16, Value) {
-    let Some(token) = token else {
-        return problem(
-            401,
-            "unauthorized",
-            "a bearer sink token is required".into(),
-        );
-    };
-    let Some(sink) = sinks.iter().find(|s| s.token == token) else {
-        return problem(
-            401,
-            "unauthorized",
-            "the bearer token matches no configured sink".into(),
-        );
+    let sink = match authorize(sinks, token) {
+        Ok(sink) => sink,
+        Err(refusal) => return refusal,
     };
     let req: AnswerRequest = match serde_json::from_slice(body) {
         Ok(r) => r,
@@ -614,9 +638,10 @@ pub fn router() -> axum::Router {
         .route("/v1/attention/items", get(list))
         .route("/v1/attention/items/{id}/answer", post(answer))
         .route("/v1/attention/items/{id}", get(get_one))
+        .merge(crate::chat_ws::router(crate::chat_events::ChatRoots::host()))
 }
 
-fn to_response(r: (u16, Value)) -> axum::response::Response {
+pub(crate) fn to_response(r: (u16, Value)) -> axum::response::Response {
     use axum::http::StatusCode;
     use axum::response::{IntoResponse, Json};
     let status = StatusCode::from_u16(r.0).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
@@ -650,11 +675,7 @@ async fn answer(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> axum::response::Response {
-    let token: Option<String> = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .map(str::to_string);
+    let token = bearer(&headers);
     let identity: Option<String> = headers
         .get("tailscale-user-login")
         .and_then(|v| v.to_str().ok())

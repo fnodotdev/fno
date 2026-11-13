@@ -2,16 +2,32 @@
 //! until the client closes. The reader polls files and sqlite in
 //! `spawn_blocking`, so the core loop never sees this connection.
 
-use crate::chat_events::{ChatRoots, SessionReader};
+use crate::chat_events::{pump, BatchSink, ChatReadError, ChatRoots, SessionReader, IDLE_POLL};
 use crate::proto::chat_event::{ChatEvent, SessionKey};
 use crate::proto::{check_attach_version, err_code, write_msg, ServerMsg};
-use std::time::Duration;
 use tokio::net::UnixStream;
 
-const IDLE_POLL: Duration = Duration::from_millis(250);
-const BATCH_EVENTS: usize = 256;
-/// Well under `MAX_MSG_BYTES`, so a batch of inline images still fits.
-const BATCH_BYTES: usize = 8 * 1024 * 1024;
+struct SocketSink<'a> {
+    stream: &'a mut UnixStream,
+    session: SessionKey,
+}
+
+impl BatchSink for SocketSink<'_> {
+    async fn send(&mut self, batch: Vec<ChatEvent>) -> bool {
+        let msg = ServerMsg::ChatEvents {
+            session: self.session.clone(),
+            events: batch,
+        };
+        write_msg(self.stream, &msg).await.is_ok()
+    }
+
+    async fn idle(&mut self) -> bool {
+        tokio::select! {
+            _ = tokio::time::sleep(IDLE_POLL) => true,
+            _ = super::wait_for_peer_close(self.stream) => false,
+        }
+    }
+}
 
 pub(super) async fn serve(
     mut stream: UnixStream,
@@ -28,67 +44,26 @@ pub(super) async fn serve(
     let key = session.clone();
     let opened =
         tokio::task::spawn_blocking(move || SessionReader::open(&key, &roots, from_seq)).await;
-    let mut reader = match opened {
+    let reader = match opened {
         Ok(Ok(reader)) => reader,
         Ok(Err(error)) => return refuse(&mut stream, error).await,
         Err(_) => return,
     };
-    loop {
-        let polled = tokio::task::spawn_blocking(move || {
-            let result = reader.poll();
-            (reader, result)
-        })
-        .await;
-        let Ok((back, result)) = polled else { return };
-        reader = back;
-        let events = match result {
-            Ok(events) => events,
-            Err(error) => return refuse(&mut stream, error).await,
-        };
-        if events.is_empty() {
-            tokio::select! {
-                _ = tokio::time::sleep(IDLE_POLL) => continue,
-                _ = super::wait_for_peer_close(&mut stream) => return,
-            }
-        }
-        for batch in batches(events) {
-            let msg = ServerMsg::ChatEvents {
-                session: session.clone(),
-                events: batch,
-            };
-            if write_msg(&mut stream, &msg).await.is_err() {
-                return; // the client is gone
-            }
-        }
+    let mut sink = SocketSink {
+        stream: &mut stream,
+        session,
+    };
+    if let Err(error) = pump(reader, &mut sink).await {
+        refuse(&mut stream, error).await;
     }
 }
 
-async fn refuse(stream: &mut UnixStream, error: crate::chat_events::ChatReadError) {
+async fn refuse(stream: &mut UnixStream, error: ChatReadError) {
     let msg = ServerMsg::Err {
         code: err_code::BAD_REQUEST,
         msg: error.to_string(),
     };
     let _ = write_msg(stream, &msg).await;
-}
-
-/// Split by count and by encoded size.
-fn batches(events: Vec<ChatEvent>) -> Vec<Vec<ChatEvent>> {
-    let mut out = Vec::new();
-    let mut batch = Vec::new();
-    let mut bytes = 0;
-    for event in events {
-        let size = serde_json::to_vec(&event).map(|v| v.len()).unwrap_or(0);
-        if !batch.is_empty() && (batch.len() == BATCH_EVENTS || bytes + size > BATCH_BYTES) {
-            out.push(std::mem::take(&mut batch));
-            bytes = 0;
-        }
-        bytes += size;
-        batch.push(event);
-    }
-    if !batch.is_empty() {
-        out.push(batch);
-    }
-    out
 }
 
 #[cfg(test)]

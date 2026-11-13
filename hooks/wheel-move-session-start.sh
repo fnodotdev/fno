@@ -21,6 +21,7 @@ export PATH
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HOOK_DIR/../scripts/lib/with-timeout.sh" 2>/dev/null || exit 0
 source "$HOOK_DIR/lib/fno-bin.sh" 2>/dev/null || exit 0
+source "$HOOK_DIR/lib/version-compare.sh" 2>/dev/null || exit 0
 
 STATE="${FNO_STATE_DIR:-$HOME/.fno}"
 
@@ -60,10 +61,7 @@ floor_line() {
   local ver
   ver="$("$FNO_BIN" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[^ ]*' | head -1)"
   [[ -n "$ver" ]] || return 0
-  # Below the floor means ver sorts before floor AND differs from it: head -1
-  # takes the lowest, and warning when the lowest is NOT ver fires on every
-  # machine newer than the floor (a 0.4.8 install warned against a 0.4.5 floor).
-  if [[ "$(printf '%s\n%s\n' "$ver" "$floor" | sort -V | head -1)" == "$ver" && "$ver" != "$floor" ]]; then
+  if version_below_floor "$ver" "$floor"; then
     echo "fno $ver is below the supported floor $floor. Run: fno update"
   fi
 }

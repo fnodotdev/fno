@@ -65,6 +65,9 @@ pub struct Key<'a> {
 pub enum Shortcut {
     Command(Command),
     Paste,
+    /// Cut and select-all act on the chat composer only.
+    Cut,
+    SelectAll,
     Quit,
     /// cmd-1 shows the chat, cmd-2 the orchestration board, cmd-3 the
     /// mods, cmd-4 the terminal.
@@ -84,6 +87,8 @@ pub fn shortcut(k: &Key) -> Option<Shortcut> {
         ("w", _) => Shortcut::Command(Command::ClosePane),
         ("c", _) => Shortcut::Command(Command::CopySelection),
         ("v", _) => Shortcut::Paste,
+        ("x", _) => Shortcut::Cut,
+        ("a", _) => Shortcut::SelectAll,
         ("q", _) => Shortcut::Quit,
         ("1", _) => Shortcut::View(1),
         ("2", _) => Shortcut::View(2),
@@ -251,6 +256,8 @@ mod tests {
         assert_eq!(shown("2"), MainView::Orchestration);
         assert_eq!(shown("1"), MainView::Chat);
         assert_eq!(shown("4"), MainView::Terminal);
+        assert_eq!(shortcut(&cmd("x")), Some(Shortcut::Cut));
+        assert_eq!(shortcut(&cmd("a")), Some(Shortcut::SelectAll));
     }
 
     #[test]

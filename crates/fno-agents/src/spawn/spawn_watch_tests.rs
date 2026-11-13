@@ -11,6 +11,42 @@ fn stamp(ms: i64) -> String {
         .to_rfc3339()
 }
 
+fn no_roster() -> ClaudeAgentsSnapshot {
+    ClaudeAgentsSnapshot::known(Vec::new())
+}
+
+fn live_row(name: &str, sid: &str) -> crate::claude_roster::ClaudeAgentRow {
+    let mut row = crate::claude_roster::ClaudeAgentRow::new("4ac2b5b1", Some("busy"));
+    row.pid = Some(33159);
+    row.name = Some(name.into());
+    row.session_id = Some(sid.into());
+    row
+}
+
+#[test]
+fn a_live_roster_session_is_a_worker_not_a_gate_stall() {
+    let watch = Watch {
+        name: Some("t-docs".into()),
+        harness: "claude".into(),
+        ..Default::default()
+    };
+    let live = ClaudeAgentsSnapshot::known(vec![live_row("t-docs", "sid-1")]);
+    assert_eq!(roster_session(&live, &watch).as_deref(), Some("sid-1"));
+    let other = ClaudeAgentsSnapshot::known(vec![live_row("t-other", "sid-2")]);
+    assert_eq!(roster_session(&other, &watch), None);
+    let mut dead = live_row("t-docs", "sid-1");
+    dead.pid = None;
+    let mut alive = live_row("t-x", "sid-3");
+    alive.pid = Some(1);
+    let dead_listing = ClaudeAgentsSnapshot::known(vec![dead, alive]);
+    assert_eq!(roster_session(&dead_listing, &watch), None);
+    let unnamed = Watch {
+        name: None,
+        ..watch
+    };
+    assert_eq!(roster_session(&live, &unnamed), None);
+}
+
 #[test]
 fn a_spawn_reports_its_stuck_stage_once_and_its_first_turn_quietly() {
     let _lock = crate::claims::test_env_lock()
@@ -98,15 +134,15 @@ fn a_spawn_reports_its_stuck_stage_once_and_its_first_turn_quietly() {
         notices.push(argv[9].clone());
         (0, "accepted-new-turn".to_string(), String::new())
     };
-    run_pass(&home, t0 + 60_000, &mut deliver).unwrap();
+    run_pass_with(&home, t0 + 60_000, &mut deliver, &no_roster).unwrap();
 
     std::fs::write(watch_dir(&home).join("corrupt.json"), "{broken").unwrap();
     assert!(
-        run_pass(&home, t0 + DEADLINE_MS, &mut deliver).is_err(),
+        run_pass_with(&home, t0 + DEADLINE_MS, &mut deliver, &no_roster).is_err(),
         "an unreadable watch is reported"
     );
     std::fs::remove_file(watch_dir(&home).join("corrupt.json")).unwrap();
-    run_pass(&home, t0 + DEADLINE_MS + 60_000, &mut deliver).unwrap();
+    run_pass_with(&home, t0 + DEADLINE_MS + 60_000, &mut deliver, &no_roster).unwrap();
 
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert!(
