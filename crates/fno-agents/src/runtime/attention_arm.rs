@@ -1151,10 +1151,19 @@ fn bounce_not_ready_with(
             deferred += 1;
             continue;
         }
+        // The doors that work: a file re-ask on the same subject and
+        // node amends the open question in place, and the asking session
+        // withdraws with a BARE clear (an --answer clear is the user's lane
+        // and refuses the agent). The old wording sent askers into both
+        // refusals with no way out.
         let body = format!(
-            "Question {} is missing: {}. Re-ask with the fields (docs/architecture/attention-items.md) or clear it.",
+            "Question {} is missing: {}. Re-ask with a full question file on the same \
+subject and node (--question-file): your ask amends the open question in place, \
+same id. Shape: docs/architecture/attention-items.md. Or withdraw it: \
+fno inbox outstanding clear {}.",
             item.id,
-            item.missing.join(", ")
+            item.missing.join(", "),
+            item.id
         );
         // The id saves on every attempt: a send that fails or is killed
         // must not re-mail the same asker on every later beat (AC3-HP).
@@ -2310,6 +2319,35 @@ mod tests {
         });
         assert_eq!(deferred, 1);
         assert!(!dir.join("bounced.json").exists(), "nothing was sent");
+    }
+
+    #[test]
+    fn the_bounce_names_the_amend_door_that_works() {
+        // The old body said "re-ask ... or clear it", and both doors
+        // refused the asker. The mail must name doors that open.
+        let items = not_ready_items();
+        let dir = bounce_dir("amend-door");
+        std::fs::create_dir_all(&dir).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let bodies: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+        let send = |_a: &str, body: &str| {
+            bodies.borrow_mut().push(body.to_string());
+            true
+        };
+        let deferred = bounce_not_ready_with(&items, &dir, deadline, &send);
+        let bodies = bodies.into_inner();
+        assert_eq!(deferred, 0);
+        assert_eq!(bodies.len(), 1);
+        assert!(
+            bodies[0].contains("amends the open question in place"),
+            "the mail names the amend door: {}",
+            bodies[0]
+        );
+        assert!(
+            bodies[0].contains("fno inbox outstanding clear"),
+            "the mail names the withdrawal form: {}",
+            bodies[0]
+        );
     }
 
     /// In-memory IO for the tick body tests.

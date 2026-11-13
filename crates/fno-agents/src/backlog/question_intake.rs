@@ -226,6 +226,8 @@ struct OpenRow {
     blocks: usize,
     subject: Option<String>,
     node: Option<String>,
+    asker: Option<String>,
+    session_id: Option<String>,
 }
 
 /// Latest ask per id minus closes, folded from the machine index. A
@@ -282,6 +284,8 @@ fn open_rows(index: &Path) -> Vec<OpenRow> {
                 .to_string(),
             subject: str_field(&v, "subject").map(str::to_string),
             node: str_field(&v, "node").map(str::to_string),
+            asker: str_field(&v, "asker").map(str::to_string),
+            session_id: str_field(&v, "session_id").map(str::to_string),
             id,
         })
         .collect();
@@ -905,20 +909,48 @@ judges. Pass each screenshot with --image <path>; the page embeds them under ## 
     // One read serves the dedup and the supersede after the write: the
     // open rows a re-ask closes are the ones this read saw.
     let open = open_rows(&index);
+    // The amend door: the not-ready bounce tells the asker to
+    // re-ask with the fields, but the dedup refused that re-ask and a
+    // user-lane clear refuses the agent, so the asker had no way out. The
+    // same asker re-asking with a question file amends the open row in
+    // place: a fresh envelope under the SAME question_id, which every fold
+    // (index, board projection, recall) already reads as the row's latest
+    // state. It never answers anything: the row stays open on its lane.
+    let mut amend: Option<(String, Value)> = None;
     if let (Some(s), Some(n)) = (subject.as_deref(), node) {
         let dup = open.iter().find(|row| {
             row.subject.as_deref().map(str::trim) == Some(s) && row.node.as_deref() == Some(n)
         });
         if let Some(row) = dup {
-            answer.lines.push(format!(
-                "outstanding: refused: an open question on subject '{s}' and node '{n}' \
-already waits ({}). Answer it or clear it; do not ask twice.",
-                row.id
-            ));
-            answer.refusal = Some("dedup".to_string());
-            answer.open_id = Some(row.id.clone());
-            answer.exit_code = 2;
-            return answer;
+            let same_session = req
+                .session_id
+                .as_deref()
+                .zip(row.session_id.as_deref())
+                .is_some_and(|(a, b)| a == b);
+            let same_handle = req
+                .asker
+                .as_deref()
+                .zip(row.asker.as_deref())
+                .is_some_and(|(a, b)| !a.trim().is_empty() && a.trim() == b.trim());
+            if from_file && (same_session || same_handle) {
+                let old = question_rows(&index)
+                    .0
+                    .get(&row.id)
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                amend = Some((row.id.clone(), old));
+            } else {
+                answer.lines.push(format!(
+                    "outstanding: refused: an open question on subject '{s}' and node '{n}' \
+already waits ({}). Answer it or clear it; the asker amends it with a \
+--question-file re-ask on this subject and node; do not ask twice.",
+                    row.id
+                ));
+                answer.refusal = Some("dedup".to_string());
+                answer.open_id = Some(row.id.clone());
+                answer.exit_code = 2;
+                return answer;
+            }
         }
     }
 
@@ -991,7 +1023,10 @@ already waits ({}). Answer it or clear it; do not ask twice.",
     }
 
     let mut data = Map::new();
-    let qid = mint_id();
+    let qid = match &amend {
+        Some((id, _)) => id.clone(),
+        None => mint_id(),
+    };
     data.insert("question_id".into(), json!(&qid));
     data.insert("question".into(), json!(stored_question));
     for (key, value) in [
@@ -1130,6 +1165,30 @@ already waits ({}). Answer it or clear it; do not ask twice.",
     if !context.is_empty() {
         data.insert("context".into(), Value::Object(context));
     }
+    // The amend merge: the re-ask's file is the truth; keys only the old row
+    // carried (a pin's --ask, its screens, its ladder rung) survive, so the
+    // amend fills the row, it never wipes it. Context merges key-by-key for
+    // the same reason.
+    if let Some((_, old)) = &amend {
+        if let Some(old_data) = old.get("data").and_then(Value::as_object) {
+            for (key, value) in old_data {
+                if key == "context" {
+                    match data.get_mut("context").and_then(Value::as_object_mut) {
+                        Some(new_ctx) => {
+                            for (ck, cv) in value.as_object().into_iter().flatten() {
+                                new_ctx.entry(ck.clone()).or_insert(cv.clone());
+                            }
+                        }
+                        None => {
+                            data.insert("context".into(), value.clone());
+                        }
+                    }
+                } else {
+                    data.entry(key.clone()).or_insert(value.clone());
+                }
+            }
+        }
+    }
 
     // One envelope, two sinks: the journal and the recall index must carry
     // the identical line, so the ts is stamped once. The journal is the
@@ -1150,12 +1209,23 @@ already waits ({}). Answer it or clear it; do not ask twice.",
         Some(h) => (Some(h.clone()), Some("lead")),
         None => (None, Some("user")),
     };
+    // On amend with no fresh answers_ask pointer, the original route parent
+    // carries over, so the escalation lineage survives the re-ask.
+    let parent = route_span_id.or_else(|| {
+        amend.as_ref().and_then(|(_, old)| {
+            old.get("trace")
+                .and_then(|t| t.get("parent_span_id"))
+                .and_then(Value::as_str)
+                .filter(|p| !p.is_empty())
+                .map(str::to_string)
+        })
+    });
     data.insert(
         "trace".into(),
         serde_json::to_value(&Trace {
             trace_id: node.unwrap_or("none").to_string(),
             span_id: qid.clone(),
-            parent_span_id: route_span_id,
+            parent_span_id: parent,
             actor_session: req.session_id.clone(),
             actor_kind: actor_kind_in(home, req.session_id.as_deref(), "question"),
             comms: "question",
@@ -1212,10 +1282,18 @@ would mint a second id for the same question."
     let graph = crate::backlog::database_path(&crate::graph_get::default_graph_path());
     let _ = crate::numbers::mint_now(&graph, &qid);
     let shown = crate::numbers::display(&qid);
-    answer.lines.push(format!(
-        "outstanding: recorded {shown}. The user answers it on the question board, \
+    if amend.is_some() {
+        answer.lines.push(format!(
+            "outstanding: amended {shown} in place: the open question on this subject \
+and node took the new context; the id stays. The user answers it on the question \
+board, and the answer closes it. To withdraw it yourself: fno inbox outstanding clear {shown}"
+        ));
+    } else {
+        answer.lines.push(format!(
+            "outstanding: recorded {shown}. The user answers it on the question board, \
 and the answer closes it. To withdraw it yourself: fno inbox outstanding clear {shown}"
-    ));
+        ));
+    }
     // The probe line: the asker leaves knowing whether a machine will
     // close this ask, and what key to add when none derived.
     if probe_word == "none" {
@@ -1642,6 +1720,69 @@ stops
             .is_some_and(|id| id.starts_with("q-")));
         // Nothing new recorded.
         assert_eq!(journal_text(&root).lines().count(), 1);
+    }
+
+    #[test]
+    fn a_same_asker_question_file_reask_amends_the_open_row_in_place() {
+        // The amend door: the pin skipped the context gate, the bounce
+        // demanded the fields, and the file re-ask must amend, not refuse.
+        let _env = crate::law_match::scope_tests::DoorEnv::new();
+        let home = tmp_home("amend");
+        let root = tmp_root("amend");
+        let mut first = req("should we switch the lane?", &root);
+        first.subject = Some("subject-a".to_string());
+        first.node = Some("x-aaaa".to_string());
+        first.ask = Some("finish the lane".to_string());
+        let first_answer = run_intake(&first, &home);
+        assert_eq!(first_answer.exit_code, 0, "{:?}", first_answer.lines);
+        let qid = first_answer.qid.clone().unwrap_or_default();
+
+        let mut second = req(QUESTION_FILE, &root);
+        second.subject = Some("subject-a".to_string());
+        second.node = Some("x-aaaa".to_string());
+        let answer = run_intake(&second, &home);
+        assert_eq!(answer.exit_code, 0, "{:?}", answer.lines);
+        assert_eq!(answer.refusal, None);
+        assert_eq!(answer.qid.as_deref(), Some(qid.as_str()), "the id stays");
+        assert!(
+            answer.lines.iter().any(|l| l.contains("amended")),
+            "the receipt names the amend: {:?}",
+            answer.lines
+        );
+        let journal = journal_text(&root);
+        assert_eq!(journal.lines().count(), 2, "one ask, one amend envelope");
+        let amended: Value = serde_json::from_str(journal.lines().last().unwrap()).unwrap();
+        assert_eq!(str_field(&amended, "question_id"), Some(qid.as_str()));
+        assert_eq!(
+            amended["data"]["context"]["blocked_because"].as_str(),
+            Some("the reconcile fix and the merge_close fix are both Python edits"),
+            "the amend fills the missing context field"
+        );
+        assert!(
+            str_field(&amended, "ask").is_some(),
+            "the merge keeps the pin action the file does not name"
+        );
+    }
+
+    #[test]
+    fn a_stranger_question_file_reask_still_refuses_as_dedup() {
+        let home = tmp_home("amend-stranger");
+        let root = tmp_root("amend-stranger");
+        let mut first = req("pin again?", &root);
+        first.subject = Some("subject-b".to_string());
+        first.node = Some("x-aaaa".to_string());
+        first.ask = Some("finish the lane".to_string());
+        assert_eq!(run_intake(&first, &home).exit_code, 0);
+
+        let mut second = req(QUESTION_FILE, &root);
+        second.subject = Some("subject-b".to_string());
+        second.node = Some("x-aaaa".to_string());
+        second.asker = Some("worker-2".to_string());
+        second.session_id = Some("s2".to_string());
+        let answer = run_intake(&second, &home);
+        assert_eq!(answer.exit_code, 2);
+        assert_eq!(answer.refusal.as_deref(), Some("dedup"));
+        assert_eq!(journal_text(&root).lines().count(), 1, "nothing written");
     }
 
     #[test]
