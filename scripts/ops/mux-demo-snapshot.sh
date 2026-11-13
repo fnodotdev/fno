@@ -122,6 +122,14 @@ export FNO_DEMO_FLATPINS FNO_DEMO_SORT FNO_DEMO_LAYOUT FNO_DEMO_LEAD_NESTING FNO
 # bash 3.2 (stock macOS) reads an empty array under set -u as unbound.
 set -- ${ARGS[@]+"${ARGS[@]}"}
 
+# Refuse before the seed runs: a missing app binary would otherwise surface
+# only after the world is built.
+APP_BIN="${FNO_APP_BIN:-fno-app}"
+if [ -n "$APP" ] && ! command -v "$APP_BIN" >/dev/null 2>&1; then
+  echo "mux-demo-snapshot: --app needs the fno-app binary; set FNO_APP_BIN or put it on PATH" >&2
+  exit 1
+fi
+
 cleanup() {
   for p in "${PANES[@]+"${PANES[@]}"}"; do
     "$FNO" mux pane kill "$p" --server "$SERVER" >/dev/null 2>&1 || true
@@ -234,16 +242,16 @@ mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.f
     'plan = "GLM Coding Plan Max"' \
     'priority = 40'
   # FNO_DEMO_PREFIX=alt+shift+a shoots the keys list and footer with that prefix.
-  if [ -n "${FNO_DEMO_PREFIX:-}" ]; then
-    printf '[mux]\nprefix = "%s"\n' "$FNO_DEMO_PREFIX"
+  # --app-theme pins the palette the desktop app paints, light or dark. Both
+  # keys live in one [mux] table: TOML refuses a second header.
+  if [ -n "${FNO_DEMO_PREFIX:-}" ] || [ -n "$APP_THEME" ]; then
+    printf '[mux]\n'
+    [ -z "${FNO_DEMO_PREFIX:-}" ] || printf 'prefix = "%s"\n' "$FNO_DEMO_PREFIX"
+    [ -z "$APP_THEME" ] || printf 'theme = "%s"\n' "$APP_THEME"
   fi
   # FNO_DEMO_LAYOUT=list shoots the one-line row instead of the card.
   if [ -n "${FNO_DEMO_LAYOUT:-}" ]; then
     printf '[sideline]\nlayout = "%s"\n' "$FNO_DEMO_LAYOUT"
-  fi
-  # --app-theme pins the palette the desktop app paints, light or dark.
-  if [ -n "$APP_THEME" ]; then
-    printf '[mux]\ntheme = "%s"\n' "$APP_THEME"
   fi
 } >"$ROOT/config.toml"
 # Readers that resolve HOME/.fno/config.toml before FNO_CONFIG see the
@@ -1073,11 +1081,6 @@ sleep 3
 if [ -n "$APP" ]; then
   # Hold the seeded world for the desktop app. HOME is the throwaway root, so
   # the app reads the invented transcript below and no real session.
-  APP_BIN="${FNO_APP_BIN:-fno-app}"
-  if ! command -v "$APP_BIN" >/dev/null 2>&1; then
-    echo "mux-demo-snapshot: --app needs the fno-app binary; set FNO_APP_BIN or put it on PATH" >&2
-    exit 1
-  fi
   DEMO_SID="de0e0000-0000-4000-8000-000000000001"
   TR_APP="$ROOT/.claude/projects/-Users-demo-checkout/$DEMO_SID.jsonl"
   mkdir -p "$(dirname "$TR_APP")"
