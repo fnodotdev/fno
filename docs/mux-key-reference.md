@@ -14,7 +14,7 @@ Each row is one action id. Put the id in `~/.fno/keybindings.json` with a key st
 | `focus-down` | `j` | `j` | `j` | focus down |
 | `focus-up` | `k` | `k` | `k` | focus up |
 | `focus-right` | `l` | `_` | `l` | focus right |
-| `resize-left` | unbound | unbound | unbound | resize left (Ctrl+Left, or bind a key) |
+| `resize-left` | unbound | unbound | unbound | resize left (ctrl+left, or bind a key) |
 | `resize-down` | `J` | `J` | `J` | resize down |
 | `resize-up` | `K` | `K` | `K` | resize up |
 | `resize-right` | `L` | `L` | `L` | resize right |
