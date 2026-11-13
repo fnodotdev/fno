@@ -4337,16 +4337,17 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
         let (source, stage) = fresh_stage(&base);
         let stage_parent = stage.parent().unwrap().to_path_buf();
-        // First build copies; the stamp records head + tree print. An
-        // unchanged tree at the same head skips the copy; any tree change
-        // (here: a new file) moves the print and forces a rebuild.
-        let (_, first) = build_stage_as(&source, &stage_parent, Profile::Full).unwrap();
-        assert!(first > 0, "the first build copies the tree");
-        let (_, second) = build_stage_as(&source, &stage_parent, Profile::Full).unwrap();
-        assert_eq!(second, 0, "an unchanged tree skips the copy");
+        // fresh_stage already built the stage from this tree, so its stamp
+        // names the same head and print: the copy skips. Any tree change
+        // (here: a new file) moves the print and forces a rebuild, and the
+        // next unchanged build skips again.
+        let (_, unchanged) = build_stage_as(&source, &stage_parent, Profile::Full).unwrap();
+        assert_eq!(unchanged, 0, "an unchanged tree skips the copy");
         fs::write(source.join("skip-probe.md"), b"probe").unwrap();
-        let (_, third) = build_stage_as(&source, &stage_parent, Profile::Full).unwrap();
-        assert!(third > 0, "a tree change forces a rebuild");
+        let (_, rebuilt) = build_stage_as(&source, &stage_parent, Profile::Full).unwrap();
+        assert!(rebuilt > 0, "a tree change forces a rebuild");
+        let (_, again) = build_stage_as(&source, &stage_parent, Profile::Full).unwrap();
+        assert_eq!(again, 0, "the rebuilt stage skips on the next build");
         let _ = stage;
         let _ = fs::remove_dir_all(&base);
     }
