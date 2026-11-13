@@ -3453,11 +3453,14 @@
         "eval_events": {
           "$ref": "#/$defs/TelemetryEvalEventsBlock"
         },
-        "usage_report": {
-          "$ref": "#/$defs/TelemetryUsageReportBlock"
-        },
         "otlp": {
           "$ref": "#/$defs/TelemetryOtlpBlock"
+        },
+        "usage_events": {
+          "$ref": "#/$defs/TelemetryUsageEventsBlock"
+        },
+        "usage_report": {
+          "$ref": "#/$defs/TelemetryUsageReportBlock"
         }
       },
       "title": "TelemetryBlock",
@@ -3490,17 +3493,6 @@
       "title": "TelemetryEvalEventsBlock",
       "type": "object"
     },
-    "TelemetryUsageReportBlock": {
-      "properties": {
-        "enabled": {
-          "default": true,
-          "title": "Enabled",
-          "type": "boolean"
-        }
-      },
-      "title": "TelemetryUsageReportBlock",
-      "type": "object"
-    },
     "TelemetryOtlpBlock": {
       "description": "OTLP log export. ``headers_env`` names the env var holding the auth headers.",
       "properties": {
@@ -3526,6 +3518,44 @@
         }
       },
       "title": "TelemetryOtlpBlock",
+      "type": "object"
+    },
+    "TelemetryUsageEventsBlock": {
+      "description": "Usage analytics: allowlisted journal rows (event kind, command, refusal code, harness, model, duration, exit, machine) ship to PostHog as events, identifiers only. ``token_env`` names the env var holding the project token; ``token_file`` names a mode-0600 file holding it, read at each beat.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "host": {
+          "default": "https://us.i.posthog.com",
+          "title": "Host",
+          "type": "string"
+        },
+        "token_env": {
+          "default": "FNO_POSTHOG_PROJECT_TOKEN",
+          "title": "Token Env",
+          "type": "string"
+        },
+        "token_file": {
+          "default": "~/.fno/secrets/posthog-project-token",
+          "title": "Token File",
+          "type": "string"
+        }
+      },
+      "title": "TelemetryUsageEventsBlock",
+      "type": "object"
+    },
+    "TelemetryUsageReportBlock": {
+      "properties": {
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        }
+      },
+      "title": "TelemetryUsageReportBlock",
       "type": "object"
     },
     "TestBlock": {
