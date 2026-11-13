@@ -422,24 +422,12 @@ pub fn run(tail: &[String]) -> i32 {
         return 0;
     }
     let Some(args) = FindArgs::parse(tail) else {
-        eprintln!(
-            "fno backlog find: usage: fno backlog find <query> [-d DOMAIN] [-p PROJECT] \
-             [-s STATUS] [--source-kind KIND] [-t TAG]... [--fts] [-L LIMIT] [-J], or \
-             fno backlog find --related <id> (--help for detail)"
-        );
+        eprintln!("{FIND_USAGE}");
         return 2;
     };
-    // A typo'd tag refuses with the allowed values, never a silent zero.
-    let mut tags = Vec::new();
-    for t in &args.tags {
-        match super::fields::normalize_tag(t) {
-            Ok(tag) => tags.push(tag),
-            Err(e) => {
-                eprintln!("fno backlog find: {e}");
-                return 2;
-            }
-        }
-    }
+    let Some(tags) = normalized_tags(&args.tags) else {
+        return 2;
+    };
     // The Python surface refused here with the guarded metadata reader's
     // message (an external tracker has its own UI; a stale local render is
     // the leak the seam closes). Same bytes, same exit.
@@ -516,11 +504,12 @@ pub fn run(tail: &[String]) -> i32 {
         }
     }
     if matched.is_empty() {
-        if args.query.is_empty() {
-            eprintln!("fno backlog find: no node carries {}", tags.join(" + "));
+        let what = if args.query.is_empty() {
+            tags.join(" + ")
         } else {
-            eprintln!("fno backlog find: no matches for {:?}", args.query);
-        }
+            format!("{:?}", args.query)
+        };
+        eprintln!("fno backlog find: no matches for {what}");
         return 1;
     }
     if args.json_out {
@@ -539,6 +528,26 @@ pub fn run(tail: &[String]) -> i32 {
         );
     }
     0
+}
+
+const FIND_USAGE: &str = "fno backlog find: usage: fno backlog find <query> [-d DOMAIN] \
+    [-p PROJECT] [-s STATUS] [--source-kind KIND] [-t TAG]... [--fts] [-L LIMIT] [-J], or \
+    fno backlog find --related <id> (--help for detail)";
+
+/// The `--tag` values, normalized. A typo'd tag prints the refusal with the
+/// allowed values and returns None, never a silent zero.
+fn normalized_tags(raw: &[&str]) -> Option<Vec<String>> {
+    let mut tags = Vec::new();
+    for t in raw {
+        match super::fields::normalize_tag(t) {
+            Ok(tag) => tags.push(tag),
+            Err(e) => {
+                eprintln!("fno backlog find: {e}");
+                return None;
+            }
+        }
+    }
+    Some(tags)
 }
 
 /// `--related <id>`: the anchor resolves through the exact tiers, then

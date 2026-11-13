@@ -1384,7 +1384,7 @@ pub(crate) fn create_node(
         // low one waits on the `admin backfill-tags` review list.
         for g in super::tags::classify(&node) {
             if g.confidence == super::tags::Confidence::High {
-                if let Some(tags) = node["tags"].as_array_mut() {
+                if let Some(tags) = node.pointer_mut("/tags").and_then(Value::as_array_mut) {
                     tags.push(json!(g.tag));
                 }
             }

@@ -47,6 +47,133 @@ fn split(e: &Value) -> (Vec<String>, Vec<Guess>) {
     (high.into_iter().map(|g| g.tag).collect(), low)
 }
 
+/// What one read of the graph proposes: the sure tags to write per node,
+/// the unsure guesses for a human, and the facets with no guess at all.
+#[derive(Default)]
+struct Proposal {
+    stamp: BTreeMap<String, Vec<String>>,
+    review: Vec<(String, String, Guess)>,
+    untagged: Vec<(String, String, &'static str)>,
+}
+
+fn propose(rows: &[Value]) -> Proposal {
+    let mut p = Proposal::default();
+    for e in rows.iter().filter(|e| is_open(e)) {
+        let id = text_at(e, "id").unwrap_or("?").to_string();
+        let title = text_at(e, "title").unwrap_or("").to_string();
+        let (high, low) = split(e);
+        for facet in REQUIRED_FACETS {
+            let guessed = high
+                .iter()
+                .chain(low.iter().map(|g| &g.tag))
+                .any(|t| t.split_once(':').is_some_and(|(f, _)| f == facet));
+            if !super::tags::has_facet(e, facet) && !guessed {
+                p.untagged.push((id.clone(), title.clone(), facet));
+            }
+        }
+        if !high.is_empty() {
+            p.stamp.insert(id.clone(), high);
+        }
+        p.review
+            .extend(low.into_iter().map(|g| (id.clone(), title.clone(), g)));
+    }
+    p
+}
+
+/// Write the sure tags under the graph lock; a facet the row gained since
+/// the read is kept. Returns the count written, or the exit code.
+fn write(graph: &std::path::Path, stamp: &BTreeMap<String, Vec<String>>) -> Result<usize, i32> {
+    let mut written = 0usize;
+    let applied = graph_store::mutate_rows(
+        graph,
+        std::time::Duration::from_secs(5),
+        None,
+        None,
+        |working| {
+            for node in working.iter_mut() {
+                let Some(add) = text_at(node, "id").and_then(|id| stamp.get(id)) else {
+                    continue;
+                };
+                let Some(obj) = node.as_object_mut() else {
+                    continue;
+                };
+                let mut tags: Vec<Value> = match obj.remove("tags") {
+                    Some(Value::Array(a)) => a,
+                    _ => Vec::new(),
+                };
+                for t in add {
+                    let facet = t.split_once(':').map_or("", |(f, _)| f);
+                    let has = tags
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .any(|have| have.split_once(':').is_some_and(|(f, _)| f == facet));
+                    if !has {
+                        tags.push(json!(t));
+                        written += 1;
+                    }
+                }
+                obj.insert("tags".into(), Value::Array(tags));
+            }
+            Ok(true)
+        },
+    );
+    match applied {
+        Ok(_) => Ok(written),
+        Err(err) => {
+            eprintln!("Error: {err}");
+            Err(1)
+        }
+    }
+}
+
+fn report(p: &Proposal, apply: bool, written: usize, json_out: bool) {
+    let stamped: usize = p.stamp.values().map(Vec::len).sum();
+    if json_out {
+        let review: Vec<Value> = p
+            .review
+            .iter()
+            .map(|(id, title, g)| json!({"id": id, "title": title, "guess": g.tag, "why": g.why}))
+            .collect();
+        let no_guess: Vec<Value> = p
+            .untagged
+            .iter()
+            .map(|(id, title, facet)| json!({"id": id, "title": title, "facet": facet}))
+            .collect();
+        let out = json!({
+            "dry_run": !apply,
+            "high_confidence_tags": stamped,
+            "written": written,
+            "nodes": p.stamp.len(),
+            "review": review,
+            "no_guess": no_guess,
+        });
+        println!("{out}");
+        return;
+    }
+    println!(
+        "review list ({} low-confidence guesses; tag these by hand):",
+        p.review.len()
+    );
+    for (id, title, g) in &p.review {
+        println!("  {id}\tguess {}\t{}\t{title}", g.tag, g.why);
+    }
+    println!(
+        "no guess ({} facets the classifier could not place):",
+        p.untagged.len()
+    );
+    for (id, title, facet) in &p.untagged {
+        println!("  {id}\t{facet}\t{title}");
+    }
+    if apply {
+        println!("wrote {written} tags on {} nodes", p.stamp.len());
+    } else {
+        println!(
+            "dry run: {stamped} high-confidence tags on {} nodes; pass --apply to write",
+            p.stamp.len()
+        );
+    }
+}
+
 pub fn run(tail: &[String]) -> i32 {
     let mut apply = false;
     let mut json_out = false;
@@ -72,117 +199,16 @@ pub fn run(tail: &[String]) -> i32 {
         eprintln!("Error: the backlog graph could not be read");
         return 1;
     };
-    let mut stamp: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut review: Vec<(String, String, Guess)> = Vec::new();
-    let mut untagged: Vec<(String, String, &str)> = Vec::new();
-    for e in rows.iter().filter(|e| is_open(e)) {
-        let id = text_at(e, "id").unwrap_or("?").to_string();
-        let title = text_at(e, "title").unwrap_or("").to_string();
-        let (high, low) = split(e);
-        for facet in REQUIRED_FACETS {
-            let carried = super::tags::has_facet(e, facet);
-            let guessed = high
-                .iter()
-                .chain(low.iter().map(|g| &g.tag))
-                .any(|t| t.split_once(':').is_some_and(|(f, _)| f == facet));
-            if !carried && !guessed {
-                untagged.push((id.clone(), title.clone(), facet));
-            }
+    let proposal = propose(&rows);
+    let written = if apply && !proposal.stamp.is_empty() {
+        match write(&graph, &proposal.stamp) {
+            Ok(n) => n,
+            Err(code) => return code,
         }
-        if !high.is_empty() {
-            stamp.insert(id.clone(), high);
-        }
-        review.extend(low.into_iter().map(|g| (id.clone(), title.clone(), g)));
-    }
-
-    let mut written = 0usize;
-    if apply && !stamp.is_empty() {
-        let applied = graph_store::mutate_rows(
-            &graph,
-            std::time::Duration::from_secs(5),
-            None,
-            None,
-            |working| {
-                for node in working.iter_mut() {
-                    let Some(add) = text_at(node, "id").and_then(|id| stamp.get(id)) else {
-                        continue;
-                    };
-                    let Some(obj) = node.as_object_mut() else {
-                        continue;
-                    };
-                    let mut tags: Vec<Value> = match obj.remove("tags") {
-                        Some(Value::Array(a)) => a,
-                        _ => Vec::new(),
-                    };
-                    for t in add {
-                        // The row may have gained the facet since the read.
-                        let facet = t.split_once(':').map_or("", |(f, _)| f);
-                        let has = tags
-                            .iter()
-                            .filter_map(Value::as_str)
-                            .any(|have| have.split_once(':').is_some_and(|(f, _)| f == facet));
-                        if !has {
-                            tags.push(json!(t));
-                            written += 1;
-                        }
-                    }
-                    obj.insert("tags".into(), Value::Array(tags));
-                }
-                Ok(true)
-            },
-        );
-        if let Err(err) = applied {
-            eprintln!("Error: {err}");
-            return 1;
-        }
-    }
-
-    let stamped_count: usize = stamp.values().map(Vec::len).sum();
-    if json_out {
-        let review_json: Vec<Value> = review
-            .iter()
-            .map(|(id, title, g)| json!({"id": id, "title": title, "guess": g.tag, "why": g.why}))
-            .collect();
-        let untagged_json: Vec<Value> = untagged
-            .iter()
-            .map(|(id, title, facet)| json!({"id": id, "title": title, "facet": facet}))
-            .collect();
-        let report = json!({
-            "dry_run": !apply,
-            "high_confidence_tags": stamped_count,
-            "written": written,
-            "nodes": stamp.len(),
-            "review": review_json,
-            "no_guess": untagged_json,
-        });
-        println!(
-            "{}",
-            serde_json::to_string(&report).unwrap_or_else(|_| "{}".into())
-        );
-        return 0;
-    }
-    println!(
-        "review list ({} low-confidence guesses; tag these by hand):",
-        review.len()
-    );
-    for (id, title, g) in &review {
-        println!("  {id}\tguess {}\t{}\t{title}", g.tag, g.why);
-    }
-    println!(
-        "no guess ({} facets the classifier could not place):",
-        untagged.len()
-    );
-    for (id, title, facet) in &untagged {
-        println!("  {id}\t{facet}\t{title}");
-    }
-    if apply {
-        println!("wrote {written} tags on {} nodes", stamp.len());
     } else {
-        println!(
-            "dry run: {stamped_count} high-confidence tags on {} nodes; pass --apply to write",
-            stamp.len()
-        );
-    }
+        0
+    };
+    report(&proposal, apply, written, json_out);
     0
 }
 

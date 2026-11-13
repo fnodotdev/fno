@@ -363,17 +363,19 @@ mod tests {
     #[test]
     fn the_classifier_stamps_high_only_on_a_clear_lead_and_never_over_a_human_tag() {
         let mux = json!({"title": "mux pane keeper loses the portal on restart", "project": "fno"});
-        let guesses = classify(&mux);
-        assert_eq!(guesses[0].tag, "area:mux");
-        assert_eq!(guesses[0].confidence, Confidence::High);
-        assert_eq!(guesses[1].tag, "audience:user");
-        assert_eq!(guesses[1].confidence, Confidence::High);
+        let shape = |e: &Value| -> Vec<(String, Confidence)> {
+            classify(e)
+                .into_iter()
+                .map(|g| (g.tag, g.confidence))
+                .collect()
+        };
+        let high = |tag: &str| (tag.to_string(), Confidence::High);
+        assert_eq!(shape(&mux), [high("area:mux"), high("audience:user")]);
 
         let flaky = json!({"title": "flaky shard rerun in ci", "project": "fno"});
-        let g = classify(&flaky);
         assert_eq!(
-            (g[0].tag.as_str(), g[1].tag.as_str()),
-            ("area:ci", "audience:contributor")
+            shape(&flaky),
+            [high("area:ci"), high("audience:contributor")]
         );
 
         let vague = json!({"title": "make the thing better", "project": "etl"});
