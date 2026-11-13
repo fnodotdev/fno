@@ -150,3 +150,26 @@ fn install_for_path_without_gh_errs() {
     let err = install_for_path().unwrap_err();
     assert!(err.contains("no gh on PATH"), "{err}");
 }
+
+#[test]
+fn a_wrapper_whose_exec_target_vanished_reads_dangling() {
+    let dir = tempfile::tempdir().unwrap();
+    let bindir = dir.path().join("bin");
+    std::fs::create_dir_all(&bindir).unwrap();
+    let real = fixture(&bindir, "gh", "real gh bytes");
+    let agents = fixture(dir.path(), "fno-agents", "#!/bin/sh");
+    install_shim(&bindir, &agents).unwrap();
+    assert_eq!(
+        wrapper_target(&real)
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "fno-agents"
+    );
+    assert!(!is_dangling(&real));
+    std::fs::remove_file(&agents).unwrap();
+    assert!(is_dangling(&real));
+    assert!(is_wrapper(&real), "still ours, just dangling");
+}

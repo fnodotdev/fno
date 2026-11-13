@@ -403,6 +403,13 @@ fn emit_gh_proxy(rep: &Value, err: bool) {
     let shim = rep.get("gh_proxy_shim").and_then(Value::as_str);
     let path_gh = rep.get("path_gh").and_then(Value::as_str);
     match rep.get("gh_proxy").and_then(Value::as_str) {
+        Some("dangling") => emit(
+            err,
+            &format!(
+                "fno doctor: gh proxy: {} execs a binary that is gone; every plain gh call fails until it is restored. Run `fno doctor update` to re-point or remove the shim.",
+                path_gh.unwrap_or("?")
+            ),
+        ),
         Some("active") => emit(
             err,
             &format!(

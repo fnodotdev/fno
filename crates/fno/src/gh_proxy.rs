@@ -75,26 +75,29 @@ pub fn wrapper(binary: &Path) -> String {
 
 /// Any shim this installer wrote, current or from an older install.
 pub fn is_wrapper(path: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    if text == LEGACY_SHIM {
+    if std::fs::read_to_string(path).ok().as_deref() == Some(LEGACY_SHIM) {
         return true;
     }
-    let Some(line) = text
+    wrapper_target(path).is_some()
+}
+
+/// The binary a wrapper shim execs, when the file reads as one of ours.
+pub fn wrapper_target(path: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(path).ok()?;
+    if text == LEGACY_SHIM {
+        return None;
+    }
+    let line = text
         .strip_prefix("#!/bin/sh\n")
-        .and_then(|rest| rest.lines().next())
-    else {
-        return false;
-    };
-    let Some(binary) = line
-        .strip_prefix("exec ")
-        .and_then(|rest| rest.strip_suffix(" gh \"$@\""))
-        .and_then(shell_unquote)
-    else {
-        return false;
-    };
-    Path::new(&binary).file_name().and_then(|n| n.to_str()) == Some("fno-agents")
+        .and_then(|rest| rest.lines().next())?;
+    let binary = line.strip_prefix("exec ")?.strip_suffix(" gh \"$@\"")?;
+    shell_unquote(binary).map(PathBuf::from)
+}
+
+/// A wrapper whose exec target is gone: every plain gh call on the machine
+/// fails until doctor update re-points or removes the shim.
+pub fn is_dangling(path: &Path) -> bool {
+    wrapper_target(path).is_some_and(|target| !is_executable(&target))
 }
 
 pub(crate) fn is_executable(path: &Path) -> bool {

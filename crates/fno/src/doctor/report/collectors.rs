@@ -367,7 +367,12 @@ fn gh_proxy_report() -> Vec<(String, Value)> {
     let first_is_shim = first
         .as_ref()
         .is_some_and(|p| crate::gh_proxy::is_wrapper(Path::new(p)));
-    let state = if first_is_shim {
+    let first_dangling = first
+        .as_ref()
+        .is_some_and(|p| crate::gh_proxy::is_dangling(Path::new(p)));
+    let state = if first_is_shim && first_dangling {
+        "dangling"
+    } else if first_is_shim {
         "active"
     } else if shim_live {
         "shadowed"
