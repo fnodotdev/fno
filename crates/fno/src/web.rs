@@ -1603,14 +1603,16 @@ async fn backlog_act(
 /// The page's capture listener resolves the attribute, so a click that no
 /// control names ships nothing. Ids only, never text (D3283); the bridge
 /// writes the row through the same door the TUI client uses, and a dropped
-/// id or failed write tells nobody.
-async fn ui_click(Json(body): Json<serde_json::Value>) -> StatusCode {
-    if let (Some(screen), Some(control)) = (
-        body.get("screen").and_then(|v| v.as_str()),
-        body.get("control").and_then(|v| v.as_str()),
-    ) {
-        crate::ui_usage::click(screen, control);
-    }
+/// id or failed write tells nobody. The body parses once into this struct
+/// (R1); a body missing a field never reaches the handler.
+#[derive(serde::Deserialize)]
+struct UiClickBody {
+    screen: String,
+    control: String,
+}
+
+async fn ui_click(Json(body): Json<UiClickBody>) -> StatusCode {
+    crate::ui_usage::click(&body.screen, &body.control);
     StatusCode::NO_CONTENT
 }
 

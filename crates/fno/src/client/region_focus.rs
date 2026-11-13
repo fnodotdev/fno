@@ -1051,7 +1051,7 @@ pub(super) async fn apply_hit(
 
 /// One mouse report while an aux popup is open (US4/US5): hover selects, a left
 /// click runs the entry (propagating detach), a click off the popup dismisses.
-pub(super) async fn aux_mouse(
+async fn aux_mouse(
     view: &mut View,
     rep: crate::mouse::MouseReport,
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),

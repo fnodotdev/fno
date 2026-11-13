@@ -1285,10 +1285,10 @@ mod pane_paint;
 // under the file-budget ratchet.
 mod esc_close;
 mod region_focus;
-// The resolved-click consumer and the aux popup's mouse handler moved to
-// region_focus under the file-budget ratchet; the siblings call them bare.
+// The resolved-click consumer moved to region_focus under the file-budget
+// ratchet; the sibling modules call it bare through this import.
 pub(crate) use needs_view::needs_overlay_lines;
-use region_focus::{apply_hit, aux_mouse};
+use region_focus::apply_hit;
 
 /// The move-tab / move-pane destination picker's state (cursored by
 ///). Was a bare `(MoveSrc, Vec<u64>)` tuple, which had nowhere to keep a
