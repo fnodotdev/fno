@@ -111,10 +111,9 @@ mod tests {
         let raw: serde_json::Map<String, serde_json::Value> =
             serde_json::from_str(&row.line).unwrap();
         let data = raw
-            .into_iter()
+            .iter()
             .find(|(key, _)| key == "data")
-            .map(|(_, value)| value)
-            .and_then(|value| value.as_object())
+            .and_then(|(_, value)| value.as_object())
             .expect("the envelope carries a data object");
         assert_eq!(data.len(), 2, "the row carries the two ids only: {data:?}");
     }
