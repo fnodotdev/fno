@@ -1663,42 +1663,51 @@ mod fold_tests {
 
     #[test]
     fn fold_catchup_roots_leads_with_the_registered_checkout() {
-        let reg = PathBuf::from("/repo/reg");
+        // Real dirs: the fold keeps only roots that exist on disk.
+        let tmp = tempfile::tempdir().unwrap();
+        let reg = tmp.path().join("reg");
+        let stale = tmp.path().join("stale");
+        let other = tmp.path().join("other");
+        for dir in [&reg, &stale, &other] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
         let cwds = vec![
-            "/repo/reg".to_string(),
-            "/repo/stale".to_string(),
-            "/other/x".to_string(),
+            reg.display().to_string(),
+            stale.display().to_string(),
+            other.display().to_string(),
         ];
         let origins = |p: &Path| {
-            if p == Path::new("/repo/reg") || p == Path::new("/repo/stale") {
+            if p == reg || p == stale {
                 Some("u1".to_string())
             } else {
                 Some("u2".to_string())
             }
         };
         let roots = fold_catchup_roots(cwds, Some(reg.clone()), &origins);
-        assert_eq!(roots, vec![reg.clone(), PathBuf::from("/other/x")]);
+        assert_eq!(roots, vec![reg.clone(), other.clone()]);
     }
 
     #[test]
     fn fold_catchup_roots_without_registration_passes_sidecars_through() {
+        let tmp = tempfile::tempdir().unwrap();
+        let stale = tmp.path().join("stale");
+        let other = tmp.path().join("other");
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
         let cwds = vec![
-            "/repo/stale".to_string(),
-            "/other/x".to_string(),
-            "/repo/stale".to_string(),
+            stale.display().to_string(),
+            other.display().to_string(),
+            stale.display().to_string(),
         ];
         let origins = |p: &Path| {
-            if p == Path::new("/repo/stale") {
+            if p == stale {
                 Some("u1".to_string())
             } else {
                 Some("u2".to_string())
             }
         };
         let roots = fold_catchup_roots(cwds, None, &origins);
-        assert_eq!(
-            roots,
-            vec![PathBuf::from("/repo/stale"), PathBuf::from("/other/x")]
-        );
+        assert_eq!(roots, vec![stale.clone(), other.clone()]);
     }
 
     #[test]
