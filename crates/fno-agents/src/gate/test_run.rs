@@ -284,6 +284,26 @@ fn cargo_command_line(pid: u32) -> Option<String> {
         .map(|r| r.command.clone())
 }
 
+/// The census answer for one cargo pid, cached in a tmp marker. Cargo runs
+/// one door call per crate, and a full-table walk per call would tax every
+/// agent compile, the sanctioned doctor-test lane included. One cargo's
+/// argv never changes mid-run, so the first crate's answer serves the rest.
+/// A dead pid's marker sweeps with the beside markers' rule. A pid recycled
+/// inside one sweep horizon keeps the old answer: the accepted shape of the
+/// pid-keyed markers.
+fn cached_cargo_command_line(pid: u32) -> Option<String> {
+    let dir = std::env::temp_dir().join("fno-cargo-subcmd");
+    let path = dir.join(pid.to_string());
+    if let Ok(text) = std::fs::read_to_string(&path) {
+        return Some(text);
+    }
+    let line = cargo_command_line(pid)?;
+    let _ = std::fs::create_dir_all(&dir);
+    let _ = std::fs::write(&path, &line);
+    sweep_dead_cargo_markers(&dir);
+    Some(line)
+}
+
 /// The declared build reason the command carried, or None. `FNO_BUILD_WHY=x
 /// cargo build` reaches this door without new plumbing: the rustc wrapper
 /// and this door are cargo's descendants, so the var rides cargo's env.
@@ -315,7 +335,8 @@ fn compile_verdict(cargo_pid: u32) -> CompileVerdict {
     }
     // A command the census cannot read refuses nothing: a recycled pid or a
     // missed row is not evidence of a compile.
-    let Some(sub) = cargo_command_line(cargo_pid).and_then(|c| compile_subcommand_of(&c)) else {
+    let Some(sub) = cached_cargo_command_line(cargo_pid).and_then(|c| compile_subcommand_of(&c))
+    else {
         return CompileVerdict::Admit;
     };
     match declared_build_why() {
