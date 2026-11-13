@@ -7,8 +7,8 @@ name: release
 # approval click (autonomy ends at the click). The nightly job's only commit
 # lives on the rolling `nightly` tag itself - the plugin-version stamp - so the
 # plugin channel resolves to a version distinct from stable's; main never
-# moves. Builds are delegated to release-binaries.yml and release-wheels.yml
-# as reusable workflows; the publish legs they used to carry now live here.
+# moves. Builds are delegated to release-binaries.yml as a reusable workflow;
+# the publish legs it used to carry now live here.
 #
 # Channels:
 #   nightly  - scheduled daily (or dispatch): picks the newest main commit
@@ -19,14 +19,14 @@ name: release
 #   rc       - the daily candidate: once the scheduled nightly publishes,
 #              it dispatches channel=rc at the same green sha (or dispatch
 #              by hand, with or without inputs.sha) and the run stops at
-#              the `release` environment approval. PyPI + GitHub Release +
+#              the `release` environment approval. The GitHub Release +
 #              the v<base>rcN tag all happen in the approved job. The daily
 #              cadence is the point: a fresh candidate every day, so a
 #              release costs one click and no release ever stacks a year
 #              of PRs. When the newest candidate tag already carries the
 #              picked sha, the run skips - a quiet day opens nothing.
 #   stable   - dispatch only: promotes the newest v*rc* tag (or
-#              inputs.sha) in the approved job: PyPI, crates.io, the tag,
+#              inputs.sha) in the approved job: crates.io, the tag,
 #              the GitHub Release, the Homebrew tap, and the catalog pin
 #              the plugin marketplaces resolve (a squash PR the job opens
 #              and auto-merges). Main is not pushed directly: a
@@ -41,7 +41,7 @@ name: release
 # internal/fno/releases/<version>.md for the user to trim.
 #
 # Rehearse on a fork with dry_run=true: cargo publish runs with --dry-run,
-# PyPI and the tap are skipped, and the GitHub Release is created as a draft.
+# the tap is skipped, and the GitHub Release is created as a draft.
 
 on:
   schedule:
@@ -155,9 +155,8 @@ jobs:
             # The runs endpoint's server-side filters (branch, event, the
             # success conclusion) answer from a stale index: on 2026-10-01
             # they named a Sep 8 sha as the newest green run while 24 newer
-            # green runs existed, and the nightly shipped that stale sha -
-            # whose wheel smoke predates the accepted-refusal arm - so no
-            # nightly shipped. The same filtered listing flip-flopped fresh
+            # green runs existed, and the nightly shipped that stale sha, so
+            # no nightly shipped. The same filtered listing flip-flopped fresh
             # and stale within minutes when probed. List unfiltered and
             # select branch, event, and conclusion client-side.
             if ! rust_shas="$(BRANCH="$default_branch" gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/rust-ci.yml/runs?per_page=100" --jq '.workflow_runs[] | select(.head_branch == $ENV.BRANCH and .event == "push" and .conclusion == "success") | .head_sha')"; then
@@ -353,18 +352,9 @@ jobs:
       version: ${{ needs.resolve.outputs.version }}
       ref: ${{ needs.resolve.outputs.sha }}
 
-  wheels:
-    name: build wheels
-    needs: resolve
-    if: needs.resolve.outputs.skip != 'true'
-    uses: ./.github/workflows/release-wheels.yml
-    with:
-      version: ${{ needs.resolve.outputs.version }}
-      ref: ${{ needs.resolve.outputs.sha }}
-
   publish-nightly:
     name: publish the nightly pre-release (rolling, replaceable, no registry)
-    needs: [resolve, binaries, wheels]
+    needs: [resolve, binaries]
     if: needs.resolve.outputs.skip != 'true' && needs.resolve.outputs.channel == 'nightly'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -387,11 +377,9 @@ jobs:
           path: dist
 
       - name: Drop the files that never ship
-        # Windows is built but not released. Drop any universal py3-none-any
-        # wheel too: a release wheel must always carry a bundled binary, so a
-        # none-any artifact means the build hook no-op'd (codex P2 on PR #351).
+        # Windows is built but not released.
         run: |
-          rm -f dist/*windows*.tar.gz dist/*win*.whl dist/*-none-any.whl
+          rm -f dist/*windows*.tar.gz
           ls -1 dist >/dev/null 2>&1 || { echo "no releaseable artifacts remain"; exit 1; }
           # One sha256sum line per tarball, so `fno update` verifies a release
           # download the way it verifies a bin-cache one.
@@ -440,7 +428,7 @@ jobs:
             --target "$stamped" \
             --title "nightly ${version}" \
             --notes "$notes" \
-            dist/*.tar.gz dist/*.tar.gz.sha256 dist/*.whl scripts/install/fno.sh dist/fno-release.json
+            dist/*.tar.gz dist/*.tar.gz.sha256 scripts/install/fno.sh dist/fno-release.json
 
           echo "nightly ${version} published at ${stamped}"
 
@@ -464,12 +452,12 @@ jobs:
 
   publish:
     name: publish rc / stable (one approval click)
-    needs: [resolve, binaries, wheels]
+    needs: [resolve, binaries]
     if: needs.resolve.outputs.skip != 'true' && needs.resolve.outputs.channel != 'nightly'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # THE click. Every publish leg sits in this one job, so one approval
-    # releases one job: PyPI, crates.io, the tag, the GitHub Release, the tap
+    # releases one job: crates.io, the tag, the GitHub Release, the tap
     # and the catalog pin the plugin marketplaces resolve.
     environment: release
     permissions:
@@ -498,7 +486,7 @@ jobs:
 
       - name: Drop the files that never ship
         run: |
-          rm -f dist/*windows*.tar.gz dist/*win*.whl dist/*-none-any.whl
+          rm -f dist/*windows*.tar.gz
           ls -1 dist >/dev/null 2>&1 || { echo "no releaseable artifacts remain"; exit 1; }
           # One sha256sum line per tarball, so `fno update` verifies a release
           # download the way it verifies a bin-cache one.
@@ -508,19 +496,6 @@ jobs:
           printf '{"version": "%s", "min_supported": "%s"}\n' "$VERSION" "$(tr -d '[:space:]' < scripts/release/min-supported)" > dist/fno-release.json
           echo "publishing:"
           ls -1 dist
-
-      - name: Install uv
-        if: ${{ inputs.dry_run != true }}
-        uses: astral-sh/setup-uv@v3
-
-      - name: PyPI
-        if: ${{ inputs.dry_run != true }}
-        env:
-          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-        run: |
-          set -euo pipefail
-          test -n "$UV_PUBLISH_TOKEN" || { echo "PYPI_API_TOKEN not set; refusing to publish"; exit 1; }
-          uv publish --check-url https://pypi.org/simple/ dist/*.whl
 
       - name: crates.io (stable only)
         if: env.CHANNEL == 'stable'
@@ -640,15 +615,15 @@ jobs:
           set -euo pipefail
           # A fine-grained PAT with write to the SEPARATE tap repo - the default
           # GITHUB_TOKEN cannot push cross-repo. Absent it, this leg fails soft
-          # (PyPI + crates + the release already shipped); set the secret to
+          # (crates + the release already shipped); set the secret to
           # enable the brew channel.
           if [ -z "${TAP_TOKEN:-}" ]; then
-            echo "::warning::HOMEBREW_TAP_TOKEN not set - skipping tap update (PyPI + crates already published)."
+            echo "::warning::HOMEBREW_TAP_TOKEN not set - skipping tap update (crates + the release already published)."
             exit 0
           fi
           echo "fno version: ${VERSION}"
           git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/fnodotdev/homebrew-fno.git" tap \
-            || { echo "::error::tap clone failed - grant HOMEBREW_TAP_TOKEN write access to fnodotdev/homebrew-fno (the tap moved off bllshttng/homebrew-fno; PyPI + crates already shipped; rerun this job after widening the token scope)"; exit 1; }
+            || { echo "::error::tap clone failed - grant HOMEBREW_TAP_TOKEN write access to fnodotdev/homebrew-fno (the tap moved off bllshttng/homebrew-fno; crates + the release already shipped; rerun this job after widening the token scope)"; exit 1; }
           # The seed is the structure source: copy it over the tap formula
           # before the patch, so the tap's url shape and install block move
           # with this repo's seed on every release instead of diverging.
@@ -708,7 +683,7 @@ jobs:
           if [ -z "$pr" ]; then
             pr=$(gh pr create --head "$branch" \
               --title "chore(release): sync main's version to ${VERSION}" \
-              --body "Stamps the wheel VERSION, the crate manifests and lockfiles and the plugin manifests to ${VERSION}, the version just promoted to ${TAG}. release-version.sh skips released v<src> tags, so the nightly math moves past ${VERSION} while main carries it; the rc base passes it only when a later bump lands.")
+              --body "Stamps the crate manifests and lockfiles and the plugin manifests to ${VERSION}, the version just promoted to ${TAG}. release-version.sh skips released v<src> tags, so the nightly math moves past ${VERSION} while main carries it; the rc base passes it only when a later bump lands.")
           fi
           head=$(git rev-parse HEAD)
           git merge-base --is-ancestor "origin/${DEFAULT_BRANCH}" HEAD
@@ -720,10 +695,12 @@ jobs:
 
   wheel-upgrade-path:
     name: "container proof: a 0.4.5 wheel reaches the candidate binary"
-    # Runs after the rc publish: leg A resolves the candidate from PyPI
-    # (UV_PRERELEASE=allow), leg B fetches the rc tarball from the release.
-    # The stable promotion reads this job: a red proof holds 0.4.7 under
-    # the sequencing law's check-before-tagging rule.
+    # Runs after the rc publish. PyPI publishes nothing past the frozen
+    # wheel, so both legs reach the candidate through the release tarball:
+    # leg A climbs the wheel ladder (uv upgrade -> first-call move) and
+    # adopts the candidate tarball; leg B runs the plugin tree's move
+    # producer. The stable promotion reads this job: a red proof holds the
+    # candidate under the sequencing law's check-before-tagging rule.
     needs: [resolve, publish]
     if: needs.resolve.outputs.skip != 'true' && needs.resolve.outputs.channel == 'rc' && inputs.dry_run != true
     runs-on: ubuntu-24.04
@@ -738,8 +715,8 @@ jobs:
         # pin step below applies the resolved sha through plain git instead.
 
       - name: Pin proof ref
-        # Plain-git pin, same pattern as the release-binaries and
-        # release-wheels builds: fetches exactly the resolved commit from
+        # Plain-git pin, same pattern as the release-binaries build: fetches
+        # exactly the resolved commit from
         # origin and detaches on it, so the proof runs the pinned source
         # with no action-level ref.
         env:
