@@ -36,6 +36,12 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TerminationReason {
     DonePRGreen,
+    /// The PR merged (a human, the queue, or a worker) while checks at its
+    /// head had not passed: some pending, some failing. The merge IS the
+    /// delivery, so it ships, frees the claim and closes the node like
+    /// `DonePRGreen`, but it never reads as green and never arms a merge.
+    /// The message names the counts.
+    DoneMergedUnsettled,
     DoneAdvisory,
     DoneDelivery,
     /// A batch-lane member (batch-lane Wave 2/3): its commits live on a shared
@@ -121,11 +127,32 @@ impl TerminationReason {
         matches!(
             self,
             TerminationReason::DonePRGreen
+                | TerminationReason::DoneMergedUnsettled
                 | TerminationReason::DoneAdvisory
                 | TerminationReason::DoneDelivery
                 | TerminationReason::DoneBatched
         )
     }
+}
+
+/// The run-summary line for a merged PR whose head had checks that had not
+/// passed. `None` when everything passed, so the caller keeps `DonePRGreen`.
+fn merged_unsettled_message(pr: i64, counts: Option<(usize, usize)>) -> Option<String> {
+    let (pending, failing) = counts?;
+    if pending + failing == 0 {
+        return None;
+    }
+    let mut parts = Vec::new();
+    if pending > 0 {
+        parts.push(format!("{pending} pending"));
+    }
+    if failing > 0 {
+        parts.push(format!("{failing} failing"));
+    }
+    Some(format!(
+        "PR #{pr} merged with checks not passed at its head ({}); merged, not green",
+        parts.join(", ")
+    ))
 }
 
 pub use crate::review_freshness::{
@@ -919,14 +946,31 @@ pub(crate) fn decide_with_payload(
             }
             if shortcut_holds {
                 let (reason, terminal_reason, terminal_name) = match node_terminal {
-                    DoneNodeTerminal::Merged(pr_number) => (
-                        format!(
-                            "node {node} done and PR #{pr_number} recorded merged in the graph store; retiring the fire without the REST read",
-                            node = node_id.as_deref().unwrap_or(""),
-                        ),
-                        TerminationReason::DonePRGreen,
-                        "DonePRGreen",
-                    ),
+                    DoneNodeTerminal::Merged(pr_number) => {
+                        let unsettled = merged_unsettled_message(
+                            pr_number as i64,
+                            pr_read::merged_checks_counts(
+                                parsed.gh_bin.as_ref(),
+                                &cwd,
+                                pr_number as i64,
+                            ),
+                        );
+                        match unsettled {
+                            Some(msg) => (
+                                msg,
+                                TerminationReason::DoneMergedUnsettled,
+                                "DoneMergedUnsettled",
+                            ),
+                            None => (
+                                format!(
+                                    "node {node} done and PR #{pr_number} recorded merged in the graph store; retiring the fire without the REST read",
+                                    node = node_id.as_deref().unwrap_or(""),
+                                ),
+                                TerminationReason::DonePRGreen,
+                                "DonePRGreen",
+                            ),
+                        }
+                    }
                     DoneNodeTerminal::NoPr => (
                         format!(
                             "node {} done with no PR record; promise accepted as advisory without the REST read",
@@ -2029,7 +2073,21 @@ pub(crate) fn decide_with_payload(
                         None => done_msg,
                     };
                     let done_msg = with_half_fails(footnotes.on_reason(done_msg));
-                    term_row("DonePRGreen", &done_msg);
+                    // A merge over checks that had not passed is delivered but
+                    // never green: it gets its own outcome naming the counts.
+                    let (done_msg, term_name, term_reason) = match (pr_info.state
+                        == PrState::Merged)
+                        .then(|| merged_unsettled_message(pr_info.number, pr_info.merged_unpassed))
+                        .flatten()
+                    {
+                        Some(msg) => (
+                            msg,
+                            "DoneMergedUnsettled",
+                            TerminationReason::DoneMergedUnsettled,
+                        ),
+                        None => (done_msg, "DonePRGreen", TerminationReason::DonePRGreen),
+                    };
+                    term_row(term_name, &done_msg);
                     fire_row(
                         "allow",
                         if intent == Intent::Promise {
@@ -2042,7 +2100,7 @@ pub(crate) fn decide_with_payload(
                             "done_probes": probe_results
                         })),
                     );
-                    return terminal("allow", Some(TerminationReason::DonePRGreen), &done_msg);
+                    return terminal("allow", Some(term_reason), &done_msg);
                 }
 
                 // DoneAwaitingMerge (ruling hold): a team's dispatch_hold on

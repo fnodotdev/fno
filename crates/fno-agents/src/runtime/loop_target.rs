@@ -258,6 +258,7 @@ impl Queue for TargetQueue {
 pub(crate) fn exit_code_for_reason(reason: &TerminationReason) -> i32 {
     match reason {
         TerminationReason::DonePRGreen
+        | TerminationReason::DoneMergedUnsettled
         | TerminationReason::DoneAdvisory
         | TerminationReason::DoneDelivery
         | TerminationReason::DoneBatched

@@ -730,7 +730,7 @@ if [[ -f "$STATE_FILE" ]]; then
     if jq -nRe --arg sid "$_STALE_SESSION_ID" --argjson cancelled "$_CANCELLED" '
         first(inputs | fromjson? | select(type == "object" and .type == "session_finalized")
           | .data | select(type == "object" and .session_id == $sid)
-          | select((.termination_reason | IN("DonePRGreen", "DoneAdvisory", "DoneDelivery",
+          | select((.termination_reason | IN("DonePRGreen", "DoneMergedUnsettled", "DoneAdvisory", "DoneDelivery",
                 "DoneBatched", "DoneAwaitingMerge", "DoneUnreviewed", "DoneAwaitingReview",
                 "DoneAwaitingRuling", "DonePlanned", "NoWork"))
               or (.termination_reason == "Interrupted" and $cancelled))

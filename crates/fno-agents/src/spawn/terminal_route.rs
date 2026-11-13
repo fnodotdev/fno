@@ -33,7 +33,12 @@ use std::path::Path;
 /// Ledger reasons that prove the node can deliver: the budget ladder's
 /// progress signal (a node that shipped before gets a lead question on its
 /// second budget trip; a node that never shipped is stuck).
-const DELIVERED_REASONS: &[&str] = &["DonePRGreen", "DoneAdvisory", "DoneDelivery"];
+const DELIVERED_REASONS: &[&str] = &[
+    "DonePRGreen",
+    "DoneMergedUnsettled",
+    "DoneAdvisory",
+    "DoneDelivery",
+];
 
 /// What finalize knows at the terminal; the decision joins these to the
 /// ledger and the journals.

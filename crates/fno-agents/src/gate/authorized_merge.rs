@@ -1064,20 +1064,7 @@ fn decide_with_warnings<P: Probes>(
                     }
                 }
             }
-            "red" => {
-                return Err(match request.authority.as_deref() {
-                    Some("durable_grant") => Outcome::Held {
-                        reason: "checks are red; the healer or the worker owns the next push"
-                            .to_string(),
-                        warnings: Vec::new(),
-                    },
-                    _ => Outcome::Failed {
-                        reason: "checks are red; require_checks_pass forbids merging without green"
-                            .to_string(),
-                        warnings: Vec::new(),
-                    },
-                })
-            }
+            "red" => return Err(red_checks_outcome(request)),
             // A pending read fell through with only an advisory warning, a
             // PR merged while its rerun was still in flight, and main went
             // red (2026-11-10). Pending holds; arm and unknown keep their
@@ -1093,6 +1080,14 @@ fn decide_with_warnings<P: Probes>(
             }
             _ => {}
         }
+    }
+    // A red head never merges, whatever `require_checks_pass` says. Every fno
+    // merge door (the command, the pr-watch drain, the finalize arm) runs this
+    // walk, and the finalize arm carries `require_checks: false` on purpose, so
+    // the red refusal cannot ride that flag. Pending and unmeasured heads stay
+    // warnings (law D3173).
+    if !request.require_checks && checks.verdict == "red" {
+        return Err(red_checks_outcome(request));
     }
     let strategy = probes.strategy(cwd);
     // Reaching here with `approved == Some(false)` means the only door through
@@ -1408,12 +1403,9 @@ pub fn preview_walk<P: Probes>(probes: &P, request: &Request, facts: &PrFacts) -
     }
 
     // (9) the CI verdict gate, same precondition as the effect path.
-    if request.require_checks && checks.verdict == "red" {
+    if checks.verdict == "red" {
         let word = ci_blocker_word(&checks.verdict, request.supplied_counts.as_ref());
-        let detail = format!(
-            "checks are {}; require_checks_pass forbids merging without green",
-            checks.verdict
-        );
+        let detail = format!("checks are {}; a red head never merges", checks.verdict);
         if checks.verdict == "red" && request.authority.as_deref() == Some("durable_grant") {
             // The durable-grant lane holds on red (a working session pushes
             // fixes); the interactive lane refuses. Class follows the lane.
@@ -1585,6 +1577,21 @@ fn process_warnings<P: Probes>(
         )));
     }
     (warnings, visual_hold)
+}
+
+/// The refusal for a red head. The durable-grant lane holds (a working
+/// session pushes the fix); every other lane fails.
+fn red_checks_outcome(request: &Request) -> Outcome {
+    match request.authority.as_deref() {
+        Some("durable_grant") => Outcome::Held {
+            reason: "checks are red; the healer or the worker owns the next push".to_string(),
+            warnings: Vec::new(),
+        },
+        _ => Outcome::Failed {
+            reason: "checks are red; a red head never merges".to_string(),
+            warnings: Vec::new(),
+        },
+    }
 }
 
 /// The status-side name for a non-green verdict: the KIND of red, never a

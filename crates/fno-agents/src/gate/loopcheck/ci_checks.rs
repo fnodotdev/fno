@@ -47,6 +47,24 @@ pub(crate) fn classify_checks_payload(
     Ok((conclusion, failing_check_names(&filtered), pending))
 }
 
+/// `(pending, failing)` check counts over a `gh pr checks --json` payload, on
+/// the same dedup and coverage filter as the classifier. A merged PR reads
+/// these to say how many checks had not passed when it landed.
+pub(crate) fn unpassed_check_counts(checks: &Value) -> (usize, usize) {
+    let filtered = without_coverage_statuses(&latest_per_name(checks));
+    let mut pending = 0;
+    let mut failing = 0;
+    for check in filtered.as_array().into_iter().flatten() {
+        let bucket = check["bucket"].as_str().unwrap_or("").to_lowercase();
+        match bucket.as_str() {
+            "pass" | "skipping" => {}
+            "fail" => failing += 1,
+            _ => pending += 1,
+        }
+    }
+    (pending, failing)
+}
+
 pub(super) fn compute_ci_conclusion(checks: &Value) -> Result<CiConclusion, String> {
     let arr = match checks.as_array() {
         Some(a) => a,
@@ -227,5 +245,22 @@ mod tests {
         // A cancelled hold alone is no failure at all.
         let only_cancel = json!([{"name": "channel (fno-sh-fresh)", "bucket": "cancel"}]);
         assert!(!outside_hold_only(&only_cancel));
+    }
+
+    #[test]
+    fn a_merged_pr_names_its_unpassed_checks() {
+        let payload = json!([
+            {"name": "a", "bucket": "pass"},
+            {"name": "b", "bucket": "pending"},
+            {"name": "c", "bucket": "pending"},
+            {"name": "d", "bucket": "fail"}
+        ]);
+        assert_eq!(unpassed_check_counts(&payload), (2, 1));
+        assert_eq!(
+            merged_unsettled_message(9, Some((2, 1))).as_deref(),
+            Some("PR #9 merged with checks not passed at its head (2 pending, 1 failing); merged, not green")
+        );
+        assert_eq!(merged_unsettled_message(9, Some((0, 0))), None);
+        assert_eq!(merged_unsettled_message(9, None), None);
     }
 }
