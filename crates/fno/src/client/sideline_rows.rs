@@ -146,7 +146,7 @@ impl ChromeHit {
             ChromeHit::Cmds(cmds) => match cmds.first() {
                 Some(Command::SelectTab(_)) => "tab_row",
                 Some(Command::SelectSquad(_)) => "squad_row",
-                Some(Command::FocusPane(_)) | Some(Command::AttachAgent(_)) => "agent_row",
+                Some(Command::FocusPane(_)) | Some(Command::AttachAgent { .. }) => "agent_row",
                 _ => "row_action",
             },
             ChromeHit::OpenRemote(_) => "remote_row",

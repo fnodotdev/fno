@@ -981,7 +981,7 @@ pub(super) async fn mouse_pre_pass(
 /// share: the mouse press path and the selector's Enter. Cmds go to
 /// the wire; Notice is a local one-liner; Confirm arms the one-keypress
 /// dispatch prompt; OpenCreate opens the name-input overlay.
-async fn apply_hit(
+pub(super) async fn apply_hit(
     view: &mut View,
     hit: ChromeHit,
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
@@ -1051,7 +1051,7 @@ async fn apply_hit(
 
 /// One mouse report while an aux popup is open (US4/US5): hover selects, a left
 /// click runs the entry (propagating detach), a click off the popup dismisses.
-async fn aux_mouse(
+pub(super) async fn aux_mouse(
     view: &mut View,
     rep: crate::mouse::MouseReport,
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
