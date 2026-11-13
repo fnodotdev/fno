@@ -717,6 +717,9 @@ mod tests {
             "operator_decision",
             // The hook emits this in Python; Rust only stages fixtures of it.
             "loop_check_watch_idle",
+            // The hooks append this as a raw line (`hook::emit_guard_row`),
+            // never through `.emit`; the usage export test stages one.
+            "guard_decision",
         ];
         let test_only: BTreeSet<&str> = TEST_ONLY_EMIT_KINDS.iter().copied().collect();
 
