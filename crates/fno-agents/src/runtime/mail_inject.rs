@@ -887,9 +887,8 @@ fn session_hold(
                 .as_deref()
                 .is_some_and(|r| r.starts_with(crate::hook::session_state::WAITING_ON_USER))
     });
-    if !ended_on_question
-        && crate::wait::effective_state(entry, now_secs).0 == crate::wait::EffState::Blocked
-    {
+    let (eff, source) = crate::wait::effective_state(entry, now_secs);
+    if eff == crate::wait::EffState::Blocked && !(source == "hook" && ended_on_question) {
         let reason = entry
             .inside_leg
             .as_ref()
