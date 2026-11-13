@@ -10,8 +10,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::client_commands::RowLiveness;
-use crate::daemon::{is_codex_thread_entry, is_non_terminal};
+use crate::daemon::is_codex_thread_entry;
 use crate::provider::ReachabilityProbeError;
+use crate::state::is_non_terminal;
 use crate::state::{self, RegistryEntry};
 use crate::AgentStatus;
 
@@ -1693,6 +1694,8 @@ mod tests {
             new_status: Some(AgentStatus::Live),
             new_liveness: Some("alive"),
             pid_proven: false,
+            new_result: None,
+
             team_revive: true,
         };
         let titles: std::collections::HashMap<String, Option<String>> =

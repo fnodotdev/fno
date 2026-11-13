@@ -5,8 +5,7 @@
 //! hook's buffered flush.
 
 use super::{
-    entry_holds_session, inside_leg_state_str, is_non_terminal, now_rfc3339_like,
-    update_registry_offloaded,
+    entry_holds_session, inside_leg_state_str, now_rfc3339_like, update_registry_offloaded,
 };
 use crate::codex_thread::TurnReceipt;
 use crate::events::EventEmitter;
@@ -42,7 +41,7 @@ pub(super) fn codex_thread_on_done(
                     // the two writes race on the offloaded queue, and only
                     // a non-terminal row reads Live (the same rule the
                     // recovery pass applies to its own writes).
-                    if is_non_terminal(entry.status) {
+                    if crate::state::is_non_terminal(entry.status) {
                         entry.status = crate::AgentStatus::Live;
                         entry.last_message_at = Some(now_rfc3339_like());
                     }

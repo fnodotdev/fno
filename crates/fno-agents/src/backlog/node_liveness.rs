@@ -450,7 +450,7 @@ fn restartable_worker(home: &AgentsHome, id: &str) -> Option<String> {
                 .as_deref()
                 .is_some_and(|s| s.len() >= 8)
         })
-        .filter(|e| !crate::daemon::is_non_terminal(e.status))
+        .filter(|e| !crate::state::is_non_terminal(e.status))
         .filter(|e| !(matches!(e.status, crate::AgentStatus::Exited) && e.stop.is_some()))
         .last()
         .map(|e| e.name.clone())

@@ -782,6 +782,15 @@ fn legacy_row_status() -> AgentStatus {
     AgentStatus::Live
 }
 
+/// Non-terminal == has (or expects) a live backend. Exited/PermanentDead are
+/// the only terminal states.
+pub fn is_non_terminal(s: AgentStatus) -> bool {
+    !matches!(
+        s,
+        crate::AgentStatus::Exited | crate::AgentStatus::PermanentDead
+    )
+}
+
 /// Why a one-shot headless run ended. A closed vocabulary (R2), serialized
 /// kebab-case on the row: `finished` (the child exited clean), `failed`
 /// (the child exited nonzero), `failed-to-start` (no harness session ever

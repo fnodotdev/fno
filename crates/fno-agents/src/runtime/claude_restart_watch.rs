@@ -79,7 +79,7 @@ fn candidate(e: &RegistryEntry, closed_nodes: &std::collections::HashSet<String>
     e.harness_name() == "claude"
         && e.substrate.as_deref() == Some("thread")
         && e.mux.is_none()
-        && crate::daemon::is_non_terminal(e.status)
+        && crate::state::is_non_terminal(e.status)
         && !matches!(e.status, AgentStatus::Spawning | AgentStatus::Restarting)
         && e.harness_session_id
             .as_deref()

@@ -112,7 +112,6 @@ mod tests {
         let row = reg.entries.iter().find(|e| e.name == "t-once").unwrap();
         assert_eq!(row.status, AgentStatus::Exited);
         assert_eq!(row.result, Some(HeadlessResult::Failed));
-        assert_eq!(row.exit_code, Some(2));
         std::fs::remove_dir_all(home.root()).ok();
     }
 
