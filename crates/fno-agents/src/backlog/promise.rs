@@ -391,7 +391,17 @@ where
     // Condition C: the promised ship count vs. merged refs. Only the rare
     // multi-ship plan pays for gh I/O here; a 1-PR plan never reaches it.
     if let Some(expected) = expected.filter(|e| *e >= 2) {
-        let (merged, failure) = count_merged_refs(&refs, expected, cwd, query);
+        let (mut merged, mut failure) = count_merged_refs(&refs, expected, cwd, query);
+        if merged < expected {
+            // A plan delivered through child nodes (an umbrella) ships under
+            // the children's PRs: count those toward the promise too.
+            let kids = child_pr_refs(node_id, &refs);
+            if !kids.is_empty() {
+                let mut all = refs.clone();
+                all.extend(kids);
+                (merged, failure) = count_merged_refs(&all, expected, cwd, query);
+            }
+        }
         if merged < expected {
             let retryable = failure.as_ref().map(|f| f.retryable()).unwrap_or(false);
             if retryable {
@@ -440,6 +450,40 @@ where
     }
 
     ok_verdict(None)
+}
+
+/// PR refs recorded on the direct children of `parent_id`, minus numbers the
+/// parent already lists. An unreadable graph yields none: the gate then
+/// judges the parent's own refs alone.
+fn child_pr_refs(parent_id: &str, own: &[(i64, Option<String>)]) -> Vec<(i64, Option<String>)> {
+    if parent_id.is_empty() {
+        return Vec::new();
+    }
+    let Ok(entries) = crate::backlog::decisions_cli::read_graph_entries() else {
+        return Vec::new();
+    };
+    child_refs_in(&entries, parent_id, own)
+}
+
+fn child_refs_in(
+    entries: &[Value],
+    parent_id: &str,
+    own: &[(i64, Option<String>)],
+) -> Vec<(i64, Option<String>)> {
+    let mut seen: Vec<i64> = own.iter().map(|(n, _)| *n).collect();
+    let mut out = Vec::new();
+    for child in entries
+        .iter()
+        .filter(|e| e.get("parent").and_then(Value::as_str) == Some(parent_id))
+    {
+        for (num, url) in node_pr_refs(child) {
+            if !seen.contains(&num) {
+                seen.push(num);
+                out.push((num, url));
+            }
+        }
+    }
+    out
 }
 
 fn promise_refusal_b(node_id: &str, plan_display: &str, detail: &str) -> String {
@@ -883,6 +927,22 @@ mod tests {
             Ok(("MERGED".into(), None))
         });
         assert!(v.satisfied(), "{:?}", v.reason);
+    }
+
+    #[test]
+    fn child_prs_count_toward_an_umbrellas_promised_ships() {
+        let entries = vec![
+            serde_json::json!({"id": "ab-1", "pr_number": 37}),
+            serde_json::json!({"id": "ab-2", "parent": "ab-0", "pr_number": 50,
+                "pr_url": "https://github.com/o/r/pull/50"}),
+            serde_json::json!({"id": "ab-3", "parent": "ab-0", "pr_number": 76,
+                "additional_prs": [{"number": 37}]}),
+            serde_json::json!({"id": "ab-4", "parent": "ab-9", "pr_number": 99}),
+        ];
+        let own = vec![(37, None)];
+        let kids = child_refs_in(&entries, "ab-0", &own);
+        let nums: Vec<i64> = kids.iter().map(|(n, _)| *n).collect();
+        assert_eq!(nums, vec![50, 76]);
     }
 
     #[test]
