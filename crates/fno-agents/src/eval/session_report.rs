@@ -1460,7 +1460,9 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
     // row is born bound to the session the launch actually produced.
     if harness.as_deref() == Some("claude") {
         if let Some(job) = crate::launch_record::claude_job_short() {
-            params["job_short"] = Value::String(job);
+            if let Some(obj) = params.as_object_mut() {
+                obj.insert("job_short".to_string(), Value::String(job));
+            }
         }
     }
     // --origin-only writes the record and sends nothing - EXCEPT for a child
@@ -2317,7 +2319,7 @@ mod tests {
         };
         let body = report(&record);
         assert_eq!(body["result"]["stored"], false);
-        assert_eq!(body["result"]["dropped"], "launch_head_mismatch");
+        assert_eq!(dropped_reason(&body), Some("launch_head_mismatch"));
         assert!(read_rows(&home).is_empty(), "no row births on mismatch");
         // The launched session's own report adopts the same record.
         let params = report_params(
@@ -2332,9 +2334,10 @@ mod tests {
         assert_eq!(body["result"]["stored"], true);
         let rows = read_rows(&home);
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].name, "w-bg");
+        let row = rows.first().expect("the minted row");
+        assert_eq!(row.name, "w-bg");
         assert_eq!(
-            rows[0].claude_session_uuid.as_deref(),
+            row.claude_session_uuid.as_deref(),
             Some("2ee23622-0000-4000-8000-00000000000a")
         );
     }
@@ -2358,8 +2361,10 @@ mod tests {
             json!({"agent_self": "w-bg", "job_short": "8a6d6680"}),
         );
         let body = response_json(&handle_session_report(&home, &emitter(&home), &req(params)));
-        assert_eq!(body["result"]["dropped"], "launch_head_mismatch");
-        assert_eq!(read_rows(&home)[0].harness_session_id, None);
+        assert_eq!(dropped_reason(&body), Some("launch_head_mismatch"));
+        let rows = read_rows(&home);
+        let row = rows.first().expect("the seeded row");
+        assert_eq!(row.harness_session_id, None);
 
         // The job head's own session fills the same row.
         let params = report_params(
@@ -2370,8 +2375,9 @@ mod tests {
         let body = response_json(&handle_session_report(&home, &emitter(&home), &req(params)));
         assert_eq!(body["result"]["stored"], true);
         let rows = read_rows(&home);
+        let row = rows.first().expect("the filled row");
         assert_eq!(
-            rows[0].harness_session_id.as_deref(),
+            row.harness_session_id.as_deref(),
             Some("8a6d6680-0000-4000-8000-00000000000c")
         );
 
@@ -2389,7 +2395,15 @@ mod tests {
             &emitter(&home2),
             &req(params),
         ));
-        assert_eq!(body["result"]["dropped"], "launch_head_mismatch");
+        assert_eq!(dropped_reason(&body), Some("launch_head_mismatch"));
         assert!(read_rows(&home2).is_empty());
+    }
+
+    /// The dropped reason a report answer names, read without the
+    /// bracket-index syntax the clippy ratchet holds out of new code.
+    fn dropped_reason(body: &Value) -> Option<&str> {
+        body.get("result")
+            .and_then(|r| r.get("dropped"))
+            .and_then(Value::as_str)
     }
 }

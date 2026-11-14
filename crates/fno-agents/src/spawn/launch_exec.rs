@@ -81,76 +81,10 @@ fn exec_lane(payload: &Value) -> Result<i32, String> {
             PathBuf::from(field)
         }
     };
+    let tokens = compose_argv(payload, &harness, &cwd)?;
+    write_dispatch_record(payload, &harness, &name, &launcher_session, &cwd)?;
 
-    // The lane self-resolves beside the inventory fold, so the ask carries
-    // the resolved axes (provider, model), never a row projection.
-    let lane = crate::route_gather::lane_for_axes(
-        payload
-            .get("provider")
-            .and_then(Value::as_str)
-            .unwrap_or(""),
-        payload
-            .get("model")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim(),
-        &cwd,
-    );
-    let alias = lane
-        .as_ref()
-        .and_then(|row| row.get("name"))
-        .and_then(Value::as_str);
-    // The lane's settings file writes BEFORE the record: a launch whose
-    // settings compose fails must not leave a pending record holding the
-    // lane.
-    let settings_path = write_lane_settings(payload, &cwd, alias)?;
-
-    // The line fills before the record: a template that cannot fill is a
-    // refusal, and it must not leave a pending record holding the lane.
-    let template = crate::spawn_compose::resolve_template(
-        &harness,
-        lane.as_ref().and_then(|row| row.get("launch")),
-        None,
-    )?;
-    let mut values = crate::spawn_compose::fill_values(payload);
-    values.insert("settings".to_string(), settings_path.unwrap_or_default());
-    let tokens = crate::spawn_compose::fill_launch(&template, &values)?;
-    if tokens.is_empty() {
-        return Err("the filled argv is empty".into());
-    }
-
-    // The record before the exec: between exec and the session report no row
-    // exists, so the record is the seat the lane counts. An exec that fails
-    // after the write leaves the record holding the lane until its window
-    // lapses - the fail-safe direction, never the burst.
-    let home = crate::paths::AgentsHome::from_env();
-    crate::launch_record::write_record(
-        home.root(),
-        crate::launch_record::Launch {
-            harness: harness.clone(),
-            resume: None,
-            name: Some(name.clone()),
-            node: payload
-                .get("node")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            slot: payload
-                .get("slot")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            provider: payload
-                .get("provider")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            cwd: cwd.to_string_lossy().into_owned(),
-        },
-        &launcher_session,
-        payload.get("launcher_harness").and_then(Value::as_str),
-        &str_field(payload, "launcher_cwd"),
-        crate::claims::now_ms(),
-    )
-    .map_err(|error| format!("launch record: {error}"))?;
-
+    let program = tokens.first().expect("the filled argv is nonempty").clone();
     let mut command = Command::new(&tokens[0]);
     command.args(&tokens[1..]).current_dir(&cwd);
     // A separate supervisor per config dir: the account's own env rides the
@@ -176,19 +110,102 @@ fn exec_lane(payload: &Value) -> Result<i32, String> {
     let mut child = command
         .stdout(std::process::Stdio::piped())
         .spawn()
-        .map_err(|error| format!("exec {}: {error}", tokens[0]))?;
+        .map_err(|error| format!("exec {}: {error}", program))?;
     // The launcher reads the launch's own output while streaming it through:
-    // the first `backgrounded · <head> · <name>` line names the session the
+    // the first `backgrounded \u{b7} <head> \u{b7} <name>` line names the session the
     // launch produced, and the launcher stamps it onto the pending record so
     // the claim binds by the launched session id, never by cwd or recency.
     if let Some(stdout) = child.stdout.take() {
         let mut out = std::io::stdout();
-        forward_scan(stdout, &mut out, &name, &home.root());
+        forward_scan(stdout, &mut out, &name, &home_for_dispatch().root());
     }
     let status = child
         .wait()
-        .map_err(|error| format!("wait {}: {error}", tokens[0]))?;
+        .map_err(|error| format!("wait {}: {error}", program))?;
     Ok(status.code().unwrap_or(1))
+}
+
+/// The home the dispatch paths share. One binding so the spawn tail reads
+/// beside the record write it partners.
+fn home_for_dispatch() -> crate::paths::AgentsHome {
+    crate::paths::AgentsHome::from_env()
+}
+
+/// The lane's composed argv: the lane self-resolves beside the inventory
+/// fold, so the ask carries the resolved axes (provider, model), never a
+/// row projection. The settings file writes BEFORE the record: a launch
+/// whose settings compose fails must not leave a pending record holding
+/// the lane. The line fills before the record: a template that cannot fill
+/// is a refusal, and it must not leave a pending record holding the lane.
+fn compose_argv(payload: &Value, harness: &str, cwd: &Path) -> Result<Vec<String>, String> {
+    let lane = crate::route_gather::lane_for_axes(
+        payload
+            .get("provider")
+            .and_then(Value::as_str)
+            .unwrap_or(""),
+        payload
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim(),
+        cwd,
+    );
+    let alias = lane
+        .as_ref()
+        .and_then(|row| row.get("name"))
+        .and_then(Value::as_str);
+    let settings_path = write_lane_settings(payload, cwd, alias)?;
+    let template = crate::spawn_compose::resolve_template(
+        harness,
+        lane.as_ref().and_then(|row| row.get("launch")),
+        None,
+    )?;
+    let mut values = crate::spawn_compose::fill_values(payload);
+    values.insert("settings".to_string(), settings_path.unwrap_or_default());
+    let tokens = crate::spawn_compose::fill_launch(&template, &values)?;
+    if tokens.is_empty() {
+        return Err("the filled argv is empty".into());
+    }
+    Ok(tokens)
+}
+
+/// The record before the exec: between exec and the session report no row
+/// exists, so the record is the seat the lane counts. An exec that fails
+/// after the write leaves the record holding the lane until its window
+/// lapses - the fail-safe direction, never the burst.
+fn write_dispatch_record(
+    payload: &Value,
+    harness: &str,
+    name: &str,
+    launcher_session: &str,
+    cwd: &Path,
+) -> Result<(), String> {
+    crate::launch_record::write_record(
+        home_for_dispatch().root(),
+        crate::launch_record::Launch {
+            harness: harness.to_string(),
+            resume: None,
+            name: Some(name.to_string()),
+            node: payload
+                .get("node")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            slot: payload
+                .get("slot")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            provider: payload
+                .get("provider")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            cwd: cwd.to_string_lossy().into_owned(),
+        },
+        launcher_session,
+        payload.get("launcher_harness").and_then(Value::as_str),
+        &str_field(payload, "launcher_cwd"),
+        crate::claims::now_ms(),
+    )
+    .map_err(|error| format!("launch record: {error}"))
 }
 
 /// Stream a child's stdout through line by line, and on the first line that
@@ -211,8 +228,8 @@ fn forward_scan<R: std::io::Read, W: std::io::Write>(
         match reader.read_until(b'\n', &mut line) {
             Ok(0) => break,
             Ok(_) => {
-                let _ = out.write_all(&line);
-                let _ = out.flush();
+                out.write_all(&line).ok();
+                out.flush().ok();
                 if short.is_none() {
                     let text = String::from_utf8_lossy(&line);
                     if let Ok(found) = crate::claude_ask::parse_short_id(&text) {
