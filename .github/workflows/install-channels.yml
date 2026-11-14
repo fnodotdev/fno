@@ -154,7 +154,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The fno-sh-fresh row tests live deploy state (the fno-web Worker's
+      # INSTALL_SCRIPT_URL pin), which no PR changes; a release cut redden it
+      # on every branch at once. It runs on schedule and dispatch only.
       - name: 'row: ${{ matrix.row.id }}'
+        if: github.event_name != 'pull_request' || matrix.row.id != 'fno-sh-fresh'
         shell: bash
         env:
           # The smoke rows download release assets through fno.sh and fno
