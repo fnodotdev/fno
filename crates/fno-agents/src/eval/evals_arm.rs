@@ -329,6 +329,12 @@ fn close_bank_task(o: &Opts, reason: &str) {
 /// the open-node scan so one open node holds every later filing.
 const COHORT_NODE_KEY: &str = "evals-cohort-split";
 
+/// The one declaration field the tick reads.
+#[derive(serde::Deserialize)]
+struct CohortsPin {
+    bank_rev: String,
+}
+
 /// The tick's pin check, independent of the launch decision: a bank change
 /// voids the declared split, and the redeclaration is a person's act, so the
 /// tick files one keyed node the day it happens. A missing or unparseable
@@ -339,12 +345,15 @@ fn file_cohort_split_node(o: &Opts) {
         return;
     };
     let decl_path = repo.join("evals/bank/cohorts.yaml");
-    let Ok(decl) = crate::eval_attempt::load_cohorts_yaml(&decl_path.to_string_lossy()) else {
+    let Ok(text) = std::fs::read_to_string(&decl_path) else {
         return;
     };
-    let Some(pinned) = decl.get("bank_rev").and_then(Value::as_str) else {
+    // R1: the one field the tick reads, typed at the boundary; a missing or
+    // non-string pin reads like the malformed declaration it is.
+    let Ok(pin) = serde_yaml_ng::from_str::<CohortsPin>(&text) else {
         return;
     };
+    let pinned = pin.bank_rev;
     if pinned.is_empty() || crate::eval_attempt::bank_same(&repo.to_string_lossy(), pinned, "HEAD")
     {
         return;
