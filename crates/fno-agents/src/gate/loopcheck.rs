@@ -228,8 +228,8 @@ pub(crate) use bot_verdict::bot_verdict;
 use bot_verdict::{clean_pass_review, usage_limit_comment_by};
 pub(crate) use bounded_run::{
     bounded_read, bounded_read_diagnostic, bounded_read_env, bounded_read_env_unadmitted,
-    bounded_read_forced, bounded_read_unadmitted, git_bounded, log_bounded_read_error,
-    BoundedOutput, GhReadError,
+    bounded_read_forced, bounded_read_unadmitted, bounded_read_without, git_bounded,
+    log_bounded_read_error, BoundedOutput, GhReadError,
 };
 use bounded_run::{probe_gh_bin, run_bounded, BoundedRun, GhProbeOutcome, ReadErrorKind};
 use budget::{check_budget, resolve_account_cap, BudgetTrip};
@@ -2667,11 +2667,15 @@ pub(crate) fn decide_with_payload(
                     && !anonymous
                     && (failed_stderr.contains("HTTP 403") || failed_stderr.contains("HTTP 429"))
                 {
+                    // The channel is unattributed: the failed read rode the
+                    // stop-gate transport (Default auth posture), which may
+                    // or may not have carried the installation token.
                     let _ = crate::gh_budget::record_refusal(
                         &budget_ledger,
                         now.timestamp_millis(),
                         // This branch only fires on a secondary verdict.
                         "secondary",
+                        "unknown",
                     );
                 }
                 // A core-0 probe on a failed non-GraphQL read is the same

@@ -424,6 +424,9 @@ pub(crate) fn iso_utc(epoch_secs: i64) -> String {
 /// only: the refusal names this machine's keychain, not the account, so it
 /// writes no shared hold.
 pub(crate) fn record_refusal_as(stderr: &str, anonymous: bool) {
+    // The caller is the GraphQL broker: its POST is never injected (a
+    // graphql argv is not a read argv), so the refused call always rode
+    // the user token and the hold is keyed "user".
     if !stderr.contains("HTTP 403") && !stderr.contains("HTTP 429") {
         return;
     }
@@ -449,7 +452,8 @@ pub(crate) fn record_refusal_as(stderr: &str, anonymous: bool) {
             kind = "secondary";
         }
     }
-    if let Err(e) = crate::gh_budget::record_refusal_real(crate::gh_budget::now_ms(), kind) {
+    if let Err(e) = crate::gh_budget::record_refusal_real(crate::gh_budget::now_ms(), kind, "user")
+    {
         eprintln!("gh budget: refusal not recorded: {e}");
     }
 }
