@@ -48,7 +48,8 @@ export CLAUDE_PLUGIN_ROOT="$REPO_ROOT"
 export FNO_HOOK_CONTEXT=1
 export TMPDIR="$SBX/tmp"
 mkdir -p "$TMPDIR"
-export PATH="$(dirname "$AGENTS_BIN"):$PATH"
+PATH="$(dirname "$AGENTS_BIN"):$PATH"
+export PATH
 
 # Warm the binary once: page-in and first-touch dir creation are cold-start
 # cost, not the contract under test. A different session id, so its artifact
