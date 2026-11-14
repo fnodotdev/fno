@@ -874,7 +874,9 @@ fn login(options: &Options, external: &dyn External) -> (i32, Receipt) {
 fn quarantine_slot_file(slot_dir: &Path) {
     let file = slot_dir.join(FILE_SOURCE);
     if file.exists() {
-        let _ = fs::rename(&file, slot_dir.join(".credentials.json.superseded"));
+        if let Err(e) = fs::rename(&file, slot_dir.join(".credentials.json.superseded")) {
+            eprintln!("warning: could not set aside {}: {e}", file.display());
+        }
     }
 }
 
