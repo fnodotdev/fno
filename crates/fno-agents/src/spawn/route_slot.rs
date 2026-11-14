@@ -935,7 +935,6 @@ fn states_leg(payload: &Value) -> Value {
         let mut judged: Option<Value> = None;
         let slot_out = resolve_slot_walk(&slot_payload, &mut judged);
         let out_view: de::WalkOut = parse(&slot_out);
-        let candidate = out_view.candidate.as_ref();
         let candidate_tail: de::CandidateTail = out_view
             .candidate
             .as_ref()
@@ -1148,12 +1147,13 @@ fn states_leg(payload: &Value) -> Value {
                             .as_ref()
                             .and_then(|e| e.get(&account))
                             .and_then(Value::as_str)
-                            .unwrap_or("unknown"),
+                            .unwrap_or("unknown")
+                            .to_string(),
                     )
                 } else {
                     None
                 };
-                let src = detail_tail.window.as_deref().filter(|s| !s.is_empty());
+                let src = detail_tail.window.clone().filter(|s| !s.is_empty());
                 (s, w, ident, src)
             }
         };

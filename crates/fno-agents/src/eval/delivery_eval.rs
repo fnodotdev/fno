@@ -474,14 +474,14 @@ fn load_company_work(plan_path: &Path) -> Result<(bool, CompanyWork), String> {
     let mt: de::MappingTail = parse_map(&mapping);
     validate_frontmatter(&mt, &mapping)?;
     let active = mt.completion.as_deref() == Some("delivery");
-    let work = match mt.company_work {
+    let work = match mt.company_work.as_ref() {
         None | Some(Value::Null) => CompanyWork {
             work_order: None,
             deliverables: Vec::new(),
             effects: Vec::new(),
             evidence: Vec::new(),
         },
-        Some(company) => parse_company_work(&company)?,
+        Some(company) => parse_company_work(company)?,
     };
     if let Some((order_node, _)) = &work.work_order {
         if plan_node_value(&mt)? != *order_node {

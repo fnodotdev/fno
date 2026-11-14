@@ -27,7 +27,6 @@ pub(crate) fn parse<T: DeserializeOwned + Default>(v: &Value) -> T {
 /// get the same one-lookahead lenient parse as [`parse`]. A key of the wrong
 /// shape reads None, exactly as the map's own `.get()` did.
 pub(crate) fn parse_map<T: DeserializeOwned + Default>(m: &serde_json::Map<String, Value>) -> T {
-    use serde::de::IntoDeserializer;
     T::deserialize(serde::de::value::MapDeserializer::new(
         m.iter().map(|(k, v)| (k.as_str(), v)),
     ))

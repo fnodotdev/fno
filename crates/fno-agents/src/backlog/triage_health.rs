@@ -1381,7 +1381,7 @@ pub(crate) fn health_report(
         let Some(proj) = parse::<de::NodeTail>(e).project else {
             continue;
         };
-        let Some(root) = super::triage::project_root_from_settings(proj.as_deref()) else {
+        let Some(root) = super::triage::project_root_from_settings(Some(proj.as_str())) else {
             continue;
         };
         let ev: de::NodeTail = parse(e);
