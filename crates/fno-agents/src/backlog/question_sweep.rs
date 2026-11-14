@@ -149,7 +149,14 @@ fn decided_keys() -> std::collections::BTreeMap<String, (String, String)> {
         }
         let subject = s(row, "subject");
         if !subject.is_empty() && !crate::law_match::matches_node_id_shape(&subject) {
-            out.entry(format!("subject:{subject}")).or_insert((id, ts));
+            // The store reads in no promised order, so the newest row wins:
+            // the fold closes an ask only on a decision newer than the ask.
+            let slot = out
+                .entry(format!("subject:{subject}"))
+                .or_insert((id.clone(), ts.clone()));
+            if ts > slot.1 {
+                *slot = (id, ts);
+            }
         }
     }
     out

@@ -169,8 +169,12 @@ pub fn sync_at(
             let id = s(row, "decision_id");
             let path = dir.join(format!("{MEMORY_PREFIX}{id}.md"));
             let text = format!(
-                "---\nname: {MEMORY_PREFIX}{id}\ndescription: fno decision {}\nmetadata:\n  type: feedback\n  fno_decision: {id}\n---\n\n{}\n",
-                line(row, numbers).trim_start_matches("- "),
+                "---\nname: {MEMORY_PREFIX}{id}\ndescription: {}\nmetadata:\n  type: feedback\n  fno_decision: {id}\n---\n\n{}\n",
+                // A JSON string is a valid YAML scalar, and the line holds `: `.
+                serde_json::json!(format!(
+                    "fno decision {}",
+                    line(row, numbers).trim_start_matches("- ")
+                )),
                 s(row, "decision")
             );
             if std::fs::read_to_string(&path).ok().as_deref() != Some(&text) && write(&path, &text)
@@ -235,6 +239,11 @@ pub fn sync() -> Synced {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
         return Synced::default();
     };
+    // A door test reaches here through the log refresh; it must never
+    // rewrite the developer's own rules files or memory.
+    if cfg!(test) && !crate::paths::under_temp_dir(&home) {
+        return Synced::default();
+    }
     let Ok(index) = crate::decision_index::default_store_live() else {
         return Synced::default();
     };
