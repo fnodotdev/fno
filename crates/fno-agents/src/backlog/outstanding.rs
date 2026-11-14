@@ -790,8 +790,9 @@ pub fn collect(src: &Sources, verdicts: Result<Vec<Value>, String>) -> Result<Ou
     })
 }
 
-/// The open escalation notes, the same `*.md` set `fno-agents needs` reads,
-/// less any note that restates an open journal ask (same subject and node).
+/// The open escalation notes, the same set `fno-agents needs` projects: status
+/// `open` (one `escalation::is_open` test), less any note that restates an open
+/// journal ask (same subject and node).
 fn escalation_slugs(cwd: &Path, questions: &[Question]) -> Vec<String> {
     let mut slugs: Vec<String> = std::fs::read_dir(crate::escalation::dir(cwd))
         .map(|entries| {
@@ -803,6 +804,9 @@ fn escalation_slugs(cwd: &Path, questions: &[Question]) -> Vec<String> {
                     let note = std::fs::read_to_string(&p)
                         .map(|text| crate::escalation::parse(&text))
                         .unwrap_or_default();
+                    if !crate::escalation::is_open(&note) {
+                        return None;
+                    }
                     let restated = questions.iter().any(|q| {
                         crate::escalation::same_question(
                             note.subject.as_deref(),

@@ -658,7 +658,7 @@ fn item_from_question_row(row: &Value, ts: &str) -> Option<AttentionItem> {
 /// One escalation note becomes a `question` item with `class` and `deadline`.
 fn item_from_note(slug: &str, text: &str) -> Option<AttentionItem> {
     let esc = crate::escalation::parse(text);
-    if esc.status != "open" {
+    if !crate::escalation::is_open(&esc) {
         return None;
     }
     let options: Vec<ItemOption> = esc
