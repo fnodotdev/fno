@@ -57,6 +57,10 @@ pub struct Found {
 #[derive(Debug, Clone)]
 pub struct Detect {
     pub markers_present: bool,
+    /// The machine's live `auto_merge.enabled`, when its config sets one.
+    /// The screens preselect it, so finishing the wizard never flips a
+    /// grant the person already made.
+    pub auto_merge: Option<bool>,
     pub band: Option<i64>,
     pub harnesses: Vec<Found>,
     pub env_keys: Vec<(&'static str, &'static str)>,
@@ -68,6 +72,7 @@ impl Detect {
     pub fn fresh() -> Detect {
         Detect {
             markers_present: false,
+            auto_merge: None,
             band: None,
             harnesses: Vec::new(),
             env_keys: Vec::new(),
@@ -148,7 +153,7 @@ pub const SCREENS: [Screen; 19] = [
     Screen {
         id: "models",
         when: When::ModelsPending,
-        stops: [false, true, true],
+        stops: [false, false, true],
     },
     Screen {
         id: "keys",
@@ -158,7 +163,7 @@ pub const SCREENS: [Screen; 19] = [
     Screen {
         id: "budget",
         when: When::Always,
-        stops: [false, true, true],
+        stops: [false, false, true],
     },
     Screen {
         id: "review-merge",
@@ -168,7 +173,7 @@ pub const SCREENS: [Screen; 19] = [
     Screen {
         id: "interview",
         when: When::Always,
-        stops: [false, true, true],
+        stops: [false, false, true],
     },
     Screen {
         id: "services",
@@ -188,12 +193,12 @@ pub const SCREENS: [Screen; 19] = [
     Screen {
         id: "messaging",
         when: When::Always,
-        stops: [false, true, true],
+        stops: [false, false, true],
     },
     Screen {
         id: "projects",
         when: When::Always,
-        stops: [false, true, true],
+        stops: [false, false, true],
     },
     Screen {
         id: "join",
@@ -389,7 +394,7 @@ fn confirm_flow(
                 if state.back_allowed() {
                     return Flow::Back;
                 }
-                pr.note(screen, "writes have started; back is off");
+                pr.note(screen, "Setup already wrote changes. You cannot go back.");
             }
         }
     }
@@ -411,7 +416,7 @@ fn pick_flow(
                 if state.back_allowed() {
                     return Flow::Back;
                 }
-                pr.note(screen, "writes have started; back is off");
+                pr.note(screen, "Setup already wrote changes. You cannot go back.");
             }
         }
     }
@@ -433,7 +438,7 @@ fn ticks_flow(
                 if state.back_allowed() {
                     return Flow::Back;
                 }
-                pr.note(screen, "writes have started; back is off");
+                pr.note(screen, "Setup already wrote changes. You cannot go back.");
             }
         }
     }
@@ -441,6 +446,34 @@ fn ticks_flow(
 
 fn slot(state: &State) -> usize {
     state.preset.map(Preset::slot).unwrap_or(1)
+}
+
+/// A screen asks the person when its preset stops there. The preset screen
+/// always asks, because no preset exists before it answers.
+fn asks(screen: &Screen, state: &State) -> bool {
+    screen.id == "preset" || screen.stops.get(slot(state)).copied().unwrap_or(false)
+}
+
+/// (this step, all steps) over the screens that ask the person. The total
+/// moves when a later answer adds or drops a screen, so the number is the
+/// count under the answers given so far.
+fn step_counts(state: &State) -> (usize, usize) {
+    let done = state
+        .trail
+        .iter()
+        .filter(|id| {
+            SCREENS
+                .iter()
+                .any(|s| s.id == **id && asks(s, state) && s.id != "apply" && s.id != "done")
+        })
+        .count();
+    let ahead = SCREENS
+        .get(state.index + 1..)
+        .unwrap_or_default()
+        .iter()
+        .filter(|s| s.when.holds(state) && asks(s, state) && s.id != "apply" && s.id != "done")
+        .count();
+    (done, done + ahead)
 }
 
 /// Walk one screen. Skipped screens record and fall through in the same
@@ -461,6 +494,10 @@ pub fn step(state: &mut State, pr: &mut dyn Prompter, pb: &mut dyn Probes) -> Ne
     state.screens.push((screen.id, "shown"));
     state.trail.push(screen.id);
     let stops = screen.stops[slot(state)];
+    if stops && !matches!(screen.id, "apply" | "done") {
+        let (n, m) = step_counts(state);
+        pr.note(screen.id, &format!("Step {n} of {m}"));
+    }
     let outcome = match screen.id {
         "preflight" => screen_preflight(state, pr),
         "rerun" => screen_rerun(state, pr, stops),
@@ -505,12 +542,12 @@ fn screen_preflight(state: &State, pr: &mut dyn Prompter) -> Outcome {
     if state.detect.markers_present {
         pr.note(
             "preflight",
-            "this machine already carries a setup marker; the run below only fills gaps",
+            "This machine has a record of an earlier setup. Setup fills in only what is missing.",
         );
     } else {
         pr.note(
             "preflight",
-            "clear: a terminal, a parseable config and a free run lock are the host's to check",
+            "No earlier setup found on this machine. Setup starts now.",
         );
     }
     Outcome::Forward
@@ -529,7 +566,7 @@ fn screen_rerun(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcom
             .insert("rerun", Answer::Text(options[0].into()));
         pr.note(
             "rerun",
-            "verify and keep: every check reruns and nothing that passes is rewritten",
+            "Setup runs every check again. It keeps each setting that passes.",
         );
         return Outcome::Forward;
     }
@@ -554,18 +591,25 @@ fn screen_rerun(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcom
 fn screen_preset(state: &mut State, pr: &mut dyn Prompter) -> Outcome {
     // This screen always asks: an auto-run cannot choose a posture
     // before the posture exists. The `when` gate keeps it off a rerun.
-    let shown = state.preset.unwrap_or(Preset::Balanced);
-    for (k, v) in expansion(shown) {
-        pr.note("preset", &format!("{k}: {v}"));
-    }
-    let options = ["aggressive", "balanced", "user-reviewed"];
+    // The one thing the three postures change for the person is who
+    // merges, so the question asks that and each option says what happens.
+    let options = [
+        "Yes. Agents merge their own PRs once review and CI pass. Setup picks safe answers and asks little.",
+        "No. I merge every PR myself. Setup asks the usual questions.",
+        "No. I merge every PR myself. Setup asks every question and picks nothing for me.",
+    ];
+    let default = if state.detect.auto_merge == Some(true) {
+        0
+    } else {
+        1
+    };
     match pick_flow(
         state,
         pr,
         "preset",
-        "Which posture should this run follow?",
+        "Should agents merge their own PRs once review and CI pass?",
         &options,
-        1,
+        default,
     ) {
         Flow::Answered(i) => {
             let chosen = Preset::from_slot(i);
@@ -586,7 +630,7 @@ fn screen_look(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome
         pr.note(
             "look",
             &format!(
-                "setup already looked: {} harness(es) on this machine",
+                "Setup already looked at this machine. It found {} harness(es).",
                 state.detect.harnesses.len()
             ),
         );
@@ -602,7 +646,10 @@ fn screen_look(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome
             state.detect.env_keys.clear();
             state.detect.harnesses.clear();
             state.answers.insert("look", Answer::No);
-            pr.note("look", "measurements dropped; nothing further is read here");
+            pr.note(
+                "look",
+                "Setup dropped what it measured. It reads nothing more from this machine.",
+            );
             Outcome::Forward
         }
         Flow::Back => Outcome::Back,
@@ -706,7 +753,7 @@ fn screen_harnesses(
                 .insert("harnesses", Answer::Picked(Vec::new()));
             pr.note(
                 "harnesses",
-                "no harness picked; footnote stays read-only until one is wired",
+                "You picked no harness. Footnote stays read-only until you add one.",
             );
             return Outcome::Forward;
         }
@@ -777,7 +824,7 @@ fn screen_models(
         state.answers.insert("models", Answer::Picked(Vec::new()));
         pr.note(
             "models",
-            "no model catalog loaded; every harness keeps its current model",
+            "Setup found no model list. Each harness keeps its current model.",
         );
         return Outcome::Forward;
     }
@@ -819,7 +866,7 @@ fn screen_models(
             Probe::Pass { ms: _ } => entries.push(format!("{h}={model}")),
             Probe::Fail(reason) => pr.note(
                 "models",
-                &format!("{h} keeps its current model; {model} failed its check ({reason})"),
+                &format!("{h} keeps its current model. The check for {model} failed: {reason}"),
             ),
         }
     }
@@ -837,7 +884,9 @@ fn screen_keys(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome
         let Some(env) = env_for(&state.detect, &h) else {
             pr.note(
                 "keys",
-                &format!("no key env found for {h}; add it before apply"),
+                &format!(
+                    "Setup found no API key for {h}. Add the key before you apply the changes."
+                ),
             );
             continue;
         };
@@ -875,7 +924,7 @@ fn screen_budget(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outco
         state.answers.insert("budget", Answer::No);
         pr.note(
             "budget",
-            "no worker band was measured; the current cap stays",
+            "Setup could not measure how many workers this machine can run. The current limit stays.",
         );
         return Outcome::Forward;
     };
@@ -921,7 +970,7 @@ fn screen_review_merge(state: &mut State, pr: &mut dyn Prompter, stops: bool) ->
             state,
             pr,
             "review-merge",
-            "Keep the self-review posture before a PR merges?",
+            "Should each agent review its own code before it opens a PR?",
             posture_default,
         ) {
             Flow::Answered(true) => true,
@@ -933,7 +982,10 @@ fn screen_review_merge(state: &mut State, pr: &mut dyn Prompter, stops: bool) ->
     let merge_default = match state.answers.get("merge") {
         Some(Answer::Yes) => true,
         Some(Answer::No) => false,
-        _ => matches!(state.preset, Some(Preset::Aggressive)),
+        _ => state
+            .detect
+            .auto_merge
+            .unwrap_or(matches!(state.preset, Some(Preset::Aggressive))),
     };
     let merge = if !stops {
         merge_default
@@ -959,7 +1011,7 @@ fn screen_review_merge(state: &mut State, pr: &mut dyn Prompter, stops: bool) ->
         // A prior pass may have seeded self_review; leaving it would keep
         // proposing the posture the user just declined.
         state.answers.remove("review");
-        pr.note("review-merge", "the review posture stays as configured");
+        pr.note("review-merge", "Your review setting stays as it is.");
     }
     state
         .answers
@@ -1305,7 +1357,10 @@ fn screen_messaging(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Ou
     if picked.is_empty() {
         pr.note(
             "messaging",
-            &format!("later: {}", crate::setup_messaging::REENTER),
+            &format!(
+                "To set up messaging later, run: {}",
+                crate::setup_messaging::REENTER
+            ),
         );
     }
     state.answers.insert("messaging", Answer::Picked(picked));
@@ -1322,7 +1377,7 @@ fn screen_projects(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Out
         state.answers.insert("scan", Answer::No);
         pr.note(
             "projects",
-            "not a git repo; the project layer needs one - registration skipped",
+            "This folder is not a git repository. Setup skips project registration.",
         );
         return Outcome::Forward;
     }
@@ -1372,7 +1427,7 @@ fn screen_projects(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Out
     if !register {
         pr.note(
             "projects",
-            "this checkout stays unregistered; nothing else is scanned",
+            "Setup does not register this folder. It scans nothing else.",
         );
     }
     state
@@ -1387,7 +1442,7 @@ fn screen_projects(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Out
 fn screen_join(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome {
     pr.note("join", "Nothing has changed yet.");
     for row in pending(state) {
-        pr.note("join", &format!("{}: {} = {}", row.id, row.key, row.value));
+        pr.note("join", &format!("{} = {}", row.key, row.value));
     }
     let yes_default = !matches!(state.preset, Some(Preset::UserReviewed));
     let yes = if !stops {
@@ -1416,18 +1471,12 @@ fn screen_join(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome
 fn screen_review(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome {
     let rows = pending(state);
     if rows.is_empty() {
-        pr.note("review", "nothing to write; the config stays as it is");
+        pr.note("review", "Nothing to write. Your config stays as it is.");
         return Outcome::Forward;
     }
-    pr.note(
-        "review",
-        "one grouped write: every row below lands together",
-    );
+    pr.note("review", "Setup writes all lines below in one step.");
     for row in &rows {
-        pr.note(
-            "review",
-            &format!("{}: {} = {}", row.id, row.key, row.value),
-        );
+        pr.note("review", &format!("{} = {}", row.key, row.value));
     }
     let yes_default = !matches!(state.preset, Some(Preset::UserReviewed));
     let yes = if !stops {
@@ -1454,7 +1503,7 @@ fn screen_apply(state: &State, pr: &mut dyn Prompter) -> Outcome {
     }
     pr.note(
         "apply",
-        "the terminal host runs each step here, one result line per row",
+        "Setup now runs each step. It prints one result line per step.",
     );
     Outcome::Forward
 }
@@ -1463,12 +1512,12 @@ fn screen_done(state: &State, pr: &mut dyn Prompter) -> Outcome {
     if state.skip_all {
         pr.note(
             "done",
-            "saved for later: the harness gate never passed, so the done marker is withheld",
+            "No harness passed its check, so setup is not marked finished. Fix the harness, then run: fno do wizard",
         );
     } else {
         pr.note(
             "done",
-            "the terminal host prints the report, the backup path and one next action here",
+            "Setup prints a report, the backup path and the next step.",
         );
     }
     Outcome::Forward
@@ -1662,31 +1711,62 @@ pub fn pending(state: &State) -> Vec<Proposal> {
     rows
 }
 
-/// What each preset decides, shown on the preset screen before the pick.
-pub fn expansion(preset: Preset) -> Vec<(&'static str, &'static str)> {
-    match preset {
-        Preset::Aggressive => vec![
-            ("decides", "everything with safe answers"),
-            ("harnesses", "every detected one"),
-            ("models", "the first catalog lane per harness"),
-            ("services", "all three"),
-            ("auto-merge", "on after review and CI"),
-        ],
-        Preset::Balanced => vec![
-            ("decides", "the safe middle"),
-            ("harnesses", "the detected ones with credentials"),
-            ("models", "each harness keeps its current model"),
-            ("services", "the PR watcher and the groom"),
-            ("auto-merge", "off"),
-        ],
-        Preset::UserReviewed => vec![
-            ("decides", "nothing without you"),
-            ("harnesses", "none ticked"),
-            ("models", "each harness keeps its current model"),
-            ("services", "none"),
-            ("auto-merge", "off"),
-        ],
+/// Hold every proposed write that would replace a value the config already
+/// carries behind one confirm line showing `old -> new`. A "no" (or a
+/// cancel) drops the row, so the existing value stays; a row for a key the
+/// config does not set yet, or sets to the same value, writes unasked.
+pub fn confirm_overwrites(
+    pr: &mut dyn Prompter,
+    rows: Vec<Proposal>,
+    current: &dyn Fn(&str) -> Option<String>,
+) -> Vec<Proposal> {
+    let mut kept = Vec::with_capacity(rows.len());
+    for row in rows {
+        let old = if row.scope == "global" {
+            current(&row.key).filter(|old| *old != row.value)
+        } else {
+            None
+        };
+        let Some(old) = old else {
+            kept.push(row);
+            continue;
+        };
+        let prompt = format!("Change {}: {} -> {}?", row.key, old, row.value);
+        if matches!(pr.confirm("confirm-changes", &prompt, false), Conf::Yes) {
+            kept.push(row);
+        } else {
+            pr.note("confirm-changes", &format!("Kept {} = {}.", row.key, old));
+        }
     }
+    kept
+}
+
+/// What the skip door writes: the balanced preset's own answers, for every
+/// key the config does not set already. A key the config sets stays as it is.
+pub fn skip_defaults(current: &dyn Fn(&str) -> Option<String>) -> Vec<Proposal> {
+    let rows = [
+        (
+            "auto_merge.enabled",
+            "false",
+            "the balanced preset leaves auto-merge off",
+        ),
+        (
+            "review.posture",
+            "self_review",
+            "each agent reviews its own code before a PR opens",
+        ),
+    ];
+    rows.iter()
+        .filter(|(key, _, _)| current(key).is_none())
+        .map(|(key, value, reason)| Proposal {
+            id: "skip",
+            key: (*key).into(),
+            value: (*value).into(),
+            scope: "global",
+            reason: (*reason).into(),
+            source: "wizard",
+        })
+        .collect()
 }
 
 #[cfg(test)]

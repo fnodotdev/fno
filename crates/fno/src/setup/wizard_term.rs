@@ -74,17 +74,62 @@ fn done_marker_path() -> PathBuf {
     done_marker_in(&model_catalog::state_dir())
 }
 
-/// True while the machine's wizard has never finished: the bare-`fno`
-/// first-run gate runs the wizard once, then opens the mux. `pub`, not
+/// True while the machine's wizard has never finished and the machine has
+/// never been set up: the bare-`fno` first-run gate runs the wizard once,
+/// then opens the mux. A machine that already carries config predates the
+/// wizard marker, so the gate stamps it and stands down. `pub`, not
 /// `pub(crate)`: the front door's bin target reads it across the crate
 /// boundary.
 pub fn first_run_needed() -> bool {
-    !done_marker_path().exists()
+    let state_dir = model_catalog::state_dir();
+    if !first_run_needed_in(&state_dir) {
+        return false;
+    }
+    if machine_configured_in(&state_dir) {
+        write_done_marker();
+        return false;
+    }
+    true
 }
 
-#[cfg(test)]
 fn first_run_needed_in(state_dir: &std::path::Path) -> bool {
     !done_marker_in(state_dir).exists()
+}
+
+/// A machine counts as set up when its global config sets any key, or an
+/// older setup run left its done marker or a joined profile behind.
+fn machine_configured_in(state_dir: &std::path::Path) -> bool {
+    let sidecar = state_dir.join("sidecar");
+    if sidecar.join("setup-done").exists() || sidecar.join("setup-profile.toml").exists() {
+        return true;
+    }
+    fs::read_to_string(state_dir.join("config.toml"))
+        .map(|text| {
+            text.lines().any(|line| {
+                let line = line.trim();
+                !line.is_empty() && !line.starts_with('#')
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// The live value of a dotted key in the global config, as the text the
+/// wizard's rows carry. `None` when the file, the key, or a scalar value
+/// is missing.
+fn global_config_value(key: &str) -> Option<String> {
+    let text = fs::read_to_string(crate::config_defaults::global_config_path()).ok()?;
+    let root = text.parse::<toml::Value>().ok()?;
+    let mut cur = &root;
+    for part in key.split('.') {
+        cur = cur.get(part)?;
+    }
+    match cur {
+        toml::Value::String(s) => Some(s.clone()),
+        toml::Value::Boolean(_) | toml::Value::Integer(_) | toml::Value::Float(_) => {
+            Some(cur.to_string())
+        }
+        _ => None,
+    }
 }
 
 /// Best-effort like every sidecar write: a marker that cannot land only
@@ -136,6 +181,8 @@ enum Key {
     Backspace,
     Char(char),
     CtrlC,
+    /// Ctrl-S: skip the whole wizard with safe defaults.
+    Skip,
     Space,
 }
 
@@ -156,6 +203,7 @@ fn read_key_press() -> Option<Key> {
             KeyCode::Backspace => Key::Backspace,
             KeyCode::Char(' ') => Key::Space,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Key::CtrlC,
+            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => Key::Skip,
             KeyCode::Char(c) => Key::Char(c),
             // Home, End, function and media keys: not part of the flow, so
             // the read loop waits for the next press instead of mapping them.
@@ -215,6 +263,8 @@ struct TermPrompter {
     raw: bool,
     back_live: bool,
     json: bool,
+    /// Set when the person chose to skip the whole wizard.
+    skip: bool,
 }
 
 impl Prompter for TermPrompter {
@@ -262,11 +312,11 @@ impl Prompter for TermPrompter {
         }
     }
 
-    fn note(&mut self, screen: &'static str, text: &str) {
+    fn note(&mut self, _screen: &'static str, text: &str) {
         if self.json {
             return;
         }
-        term_line(self.raw, &format!("[{screen}] {text}"));
+        term_line(self.raw, text);
     }
 
     fn progress(&mut self, screen: &'static str, label: &str) {
@@ -287,13 +337,17 @@ impl TermPrompter {
 
     fn confirm_raw(&mut self, prompt: &str, default: bool) -> Conf {
         let d = if default { "Y/n" } else { "y/N" };
-        let mut hint = String::from("enter = default, esc = cancel");
+        let mut hint = String::from("enter = default, esc = cancel, ctrl-s = skip setup");
         if self.back_live {
             hint.push_str(", b or left = back");
         }
         term_line(true, &format!("{prompt} ({d})  [{hint}]"));
         loop {
             match read_key_press() {
+                Some(Key::Skip) => {
+                    self.skip = true;
+                    return Conf::Cancel;
+                }
                 None | Some(Key::Esc) | Some(Key::CtrlC) => return Conf::Cancel,
                 Some(Key::Char('y' | 'Y')) => return Conf::Yes,
                 Some(Key::Char('n' | 'N')) => return Conf::No,
@@ -317,10 +371,14 @@ impl TermPrompter {
                 "y" | "Y" | "yes" => return Conf::Yes,
                 "n" | "N" | "no" => return Conf::No,
                 "b" | "back" if self.back_live => return Conf::Back,
+                "skip" => {
+                    self.skip = true;
+                    return Conf::Cancel;
+                }
                 "cancel" | "q" | "quit" => return Conf::Cancel,
                 _ => {
                     let words = if self.back_live {
-                        "y, n, back or cancel"
+                        "y, n, back, skip or cancel"
                     } else {
                         "y, n or cancel"
                     };
@@ -335,7 +393,8 @@ impl TermPrompter {
         let mut query = String::new();
         let mut drawn = 0usize;
         let mut sel = default.min(options.len().saturating_sub(1));
-        let mut hint = String::from("up/down = move, enter = choose, esc = cancel");
+        let mut hint =
+            String::from("up/down = move, enter = choose, esc = cancel, ctrl-s = skip setup");
         if self.back_live {
             hint.push_str(", b or left = back");
         }
@@ -364,6 +423,10 @@ impl TermPrompter {
                 &mut drawn,
             );
             match read_key_press() {
+                Some(Key::Skip) => {
+                    self.skip = true;
+                    return Pick::Cancel;
+                }
                 None | Some(Key::Esc) | Some(Key::CtrlC) => return Pick::Cancel,
                 Some(Key::Up) => sel = sel.saturating_sub(1),
                 Some(Key::Down) => {
@@ -424,6 +487,10 @@ impl TermPrompter {
             if (answer == "b" || answer == "back") && self.back_live {
                 return Pick::Back;
             }
+            if answer == "skip" {
+                self.skip = true;
+                return Pick::Cancel;
+            }
             if answer == "cancel" || answer == "q" || answer == "quit" {
                 return Pick::Cancel;
             }
@@ -442,7 +509,8 @@ impl TermPrompter {
         let mut query = String::new();
         let mut drawn = 0usize;
         let mut sel = 0usize;
-        let mut hint = String::from("space = toggle, enter = confirm, esc = cancel");
+        let mut hint =
+            String::from("space = toggle, enter = confirm, esc = cancel, ctrl-s = skip setup");
         if self.back_live {
             hint.push_str(", b or left = back");
         }
@@ -471,6 +539,10 @@ impl TermPrompter {
                 &mut drawn,
             );
             match read_key_press() {
+                Some(Key::Skip) => {
+                    self.skip = true;
+                    return Ticks::Cancel;
+                }
                 None | Some(Key::Esc) | Some(Key::CtrlC) => return Ticks::Cancel,
                 Some(Key::Space) => {
                     if let Some(oi) = view.get(sel) {
@@ -509,6 +581,10 @@ impl TermPrompter {
             };
             if answer.is_empty() {
                 return Ticks::Ok((0..options.len()).filter(|i| ticks[*i]).collect());
+            }
+            if answer == "skip" {
+                self.skip = true;
+                return Ticks::Cancel;
             }
             if answer == "cancel" || answer == "q" || answer == "quit" {
                 return Ticks::Cancel;
@@ -549,6 +625,12 @@ impl TermPrompter {
         let mut value = String::new();
         loop {
             match read_key_press() {
+                Some(Key::Skip) => {
+                    self.skip = true;
+                    let _ = queue!(out, Print("\r\n"));
+                    let _ = out.flush();
+                    return Hidden::Cancel;
+                }
                 None | Some(Key::Esc) | Some(Key::CtrlC) => {
                     let _ = queue!(out, Print("\r\n"));
                     let _ = out.flush();
@@ -646,11 +728,11 @@ impl LockGuard {
     fn take(path: PathBuf) -> Result<LockGuard, ()> {
         if let Ok(text) = fs::read_to_string(&path) {
             eprintln!(
-                "fno do wizard: another wizard run may be live: pid {}",
+                "Another setup run may be live (process {}). Setup stops here.",
                 text.trim()
             );
             eprintln!(
-                "remove {} if that run is gone, then start again.",
+                "If that run is gone, delete {} and start again.",
                 path.display()
             );
             return Err(());
@@ -681,6 +763,7 @@ fn real_detect() -> wizard::Detect {
     let mut detect = wizard::Detect::fresh();
     detect.markers_present =
         setup_profile::profile_path().exists() || setup_profile::in_progress_flag().exists();
+    detect.auto_merge = global_config_value("auto_merge.enabled").and_then(|v| v.parse().ok());
     detect.band = setup_detect::budget_clause().and_then(|c| setup_detect::parse_budget_clause(&c));
     detect.harnesses = detect_harnesses();
     let (keys, models) = catalog_keys_and_models();
@@ -775,21 +858,21 @@ impl RealProbes {
         argv.push("Reply with the one word ok.");
         if !self.quiet {
             let with = model.map(|m| format!(" {m}")).unwrap_or_default();
-            term_line(self.raw, &format!("  probing {harness}{with} ..."));
+            term_line(self.raw, &format!("Testing {harness}{with} ..."));
         }
         let started = std::time::Instant::now();
         match setup_detect::bounded_for(&argv, Duration::from_secs(60)) {
             Ok(_) => {
                 let ms = started.elapsed().as_millis() as u64;
                 if !self.quiet {
-                    term_line(self.raw, &format!("  {harness}: pass ({ms}ms)"));
+                    term_line(self.raw, &format!("{harness} passed in {ms} ms."));
                 }
                 Probe::Pass { ms }
             }
             Err(e) => {
                 let why = probe_reason(&e);
                 if !self.quiet {
-                    term_line(self.raw, &format!("  {harness}: fail ({why})"));
+                    term_line(self.raw, &format!("{harness} failed: {why}"));
                 }
                 Probe::Fail(why)
             }
@@ -900,6 +983,40 @@ fn refuse_word(message: &str) -> i32 {
     2
 }
 
+/// The skip door: the person pressed the skip key on some screen. Write the
+/// safe defaults the config does not already set, stamp the done marker,
+/// and name the command that reopens the wizard. Always exit 0, so the
+/// front door goes on to the mux.
+fn skip_setup(exe: &std::path::Path, rid: &str, raw: bool, json: bool) -> i32 {
+    let rows = wizard::skip_defaults(&global_config_value);
+    if !rows.is_empty() {
+        let global = crate::config_defaults::global_config_path();
+        match setup_profile::backup(&global) {
+            Ok(Some(path)) => term_line(
+                raw,
+                &format!("Backed up your config to {}.", path.display()),
+            ),
+            Ok(None) => {}
+            Err(e) => term_line(
+                raw,
+                &format!("Backup failed: {e}. Setup goes on without it."),
+            ),
+        }
+        setup_run::apply_wizard_pending(exe, &setup_run::repo_root(), rid, &rows);
+    }
+    write_done_marker();
+    write_report(&json!({
+        "status": "skipped",
+        "run_id": rid,
+        "host": "wizard",
+        "files_written": rows.iter().map(|r| r.key.clone()).collect::<Vec<_>>(),
+    }));
+    if !json {
+        println!("You skipped setup. To go through it later, run: fno do wizard");
+    }
+    0
+}
+
 /// The entry point behind `fno do wizard`. Exit codes: 0 finished, 130 the
 /// person cancelled, 2 refused (bad flag, no terminal, stale lock, bad
 /// profile). Plain mode ends with the `wizard-report: ` sentinel so a pane
@@ -966,8 +1083,8 @@ pub fn run(tail: &[OsString]) -> i32 {
             "apply": serde_json::Value::Null,
             "refused": "stdin is not a terminal",
         }));
-        println!("fno do wizard needs a person on stdin.");
-        println!("For an unattended machine: fno config setup run --dry-run --json");
+        println!("Setup needs a terminal where a person types.");
+        println!("To set up a machine with no person present, run: fno config setup run --dry-run --json");
         return 2;
     }
 
@@ -1036,6 +1153,7 @@ pub fn run(tail: &[OsString]) -> i32 {
         raw,
         back_live: false,
         json,
+        skip: false,
     };
     let mut pb = RealProbes {
         exe: exe.clone(),
@@ -1050,6 +1168,10 @@ pub fn run(tail: &[OsString]) -> i32 {
             Next::SkipToDone | Next::Done => break false,
         }
     };
+
+    if cancelled && pr.skip {
+        return skip_setup(&exe, &rid, raw, json);
+    }
 
     if cancelled {
         let cancelled_report = json!({
@@ -1080,7 +1202,7 @@ pub fn run(tail: &[OsString]) -> i32 {
         );
         if !json {
             println!();
-            println!("Cancelled. The config is untouched.");
+            println!("You cancelled setup. Setup changed no config.");
         }
         if json {
             println!(
@@ -1104,12 +1226,19 @@ pub fn run(tail: &[OsString]) -> i32 {
         if let Some((profile, diff_rows)) = &profile_join {
             apply_join = setup_run::apply_wizard_join(&exe, profile, diff_rows, &rid);
         }
+        let rows = wizard::confirm_overwrites(&mut pr, rows, &global_config_value);
         if !rows.is_empty() {
             let global = crate::config_defaults::global_config_path();
             match setup_profile::backup(&global) {
-                Ok(Some(path)) => term_line(raw, &format!("backup: {}", path.display())),
+                Ok(Some(path)) => term_line(
+                    raw,
+                    &format!("Backed up your config to {}.", path.display()),
+                ),
                 Ok(None) => {}
-                Err(e) => term_line(raw, &format!("backup failed, continuing: {e}")),
+                Err(e) => term_line(
+                    raw,
+                    &format!("Backup failed: {e}. Setup goes on without it."),
+                ),
             }
             apply_wizard =
                 setup_run::apply_wizard_pending(&exe, &setup_run::repo_root(), &rid, &rows);
@@ -1180,10 +1309,10 @@ pub fn run(tail: &[OsString]) -> i32 {
 
     if !json {
         println!();
-        println!("Setup wizard finished.");
-        println!("Next: {next_action}");
-        println!("Report:  {}", report_file.display());
-        println!("Answers: {}", answers_file.display());
+        println!("Setup finished.");
+        println!("Next step: {next_action}");
+        println!("Report file:  {}", report_file.display());
+        println!("Answers file: {}", answers_file.display());
     }
     if json {
         println!(
@@ -1194,6 +1323,30 @@ pub fn run(tail: &[OsString]) -> i32 {
         println!("wizard-report: {}", report_file.display());
     }
     0
+}
+
+#[cfg(test)]
+mod configured_machine_tests {
+    use super::*;
+
+    #[test]
+    fn a_machine_with_config_or_an_old_marker_is_never_first_run() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!machine_configured_in(dir.path()));
+        fs::write(dir.path().join("config.toml"), "# only a comment\n\n").unwrap();
+        assert!(!machine_configured_in(dir.path()));
+        fs::write(
+            dir.path().join("config.toml"),
+            "[auto_merge]\nenabled = true\n",
+        )
+        .unwrap();
+        assert!(machine_configured_in(dir.path()));
+
+        let marker_only = tempfile::tempdir().unwrap();
+        fs::create_dir_all(marker_only.path().join("sidecar")).unwrap();
+        fs::write(marker_only.path().join("sidecar").join("setup-done"), "x").unwrap();
+        assert!(machine_configured_in(marker_only.path()));
+    }
 }
 
 #[cfg(test)]

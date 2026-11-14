@@ -359,6 +359,25 @@ impl Drop for Reveal {
     }
 }
 
+static PLAYED_BEFORE_WIZARD: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Play the mark once, before the first-run wizard, so a new user meets the
+/// brand first. The mux client's own splash then stands down for this
+/// process. No key skips it here: stdin belongs to the wizard that follows.
+pub fn play_before_wizard() {
+    let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+    else {
+        return;
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
+    let theme = Theme::default_theme();
+    rt.block_on(run(&mut rx, &tx, &theme));
+    PLAYED_BEFORE_WIZARD.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// Draw the splash before the first UI paint. `rx` is the raw stdin
 /// channel: any byte skips to the last frame. The chunk that ended the
 /// animation is handed back through `tx` WHOLE, so typed-ahead input and
@@ -369,6 +388,10 @@ pub async fn run(
     tx: &tokio::sync::mpsc::Sender<Vec<u8>>,
     theme: &Theme,
 ) {
+    // The first-run gate already played the mark before the wizard.
+    if PLAYED_BEFORE_WIZARD.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
     if !art_fits() {
         // Nowhere to draw the art without wrapping; do not spend the beat
         // sheet on nothing.

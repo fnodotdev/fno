@@ -151,6 +151,7 @@ impl Probes for FixedProbes {
 fn fresh_detect() -> Detect {
     Detect {
         markers_present: false,
+        auto_merge: None,
         band: Some(4),
         harnesses: vec![
             Found {
@@ -237,8 +238,9 @@ fn screen_order_and_skips_follow_the_presets() {
     assert!(rows
         .iter()
         .any(|r| r.key == "auto_merge.enabled" && r.value == "false"));
-    // The preset pick offers three postures with balanced defaulted; the
-    // model pick appends Leave unchanged last and defaults to it.
+    // The preset pick offers three choices with the middle one defaulted
+    // (no live auto-merge grant to preselect); the models screen asks
+    // nothing under balanced, so no model pick appears.
     let preset_offer = pr
         .offers
         .iter()
@@ -246,13 +248,10 @@ fn screen_order_and_skips_follow_the_presets() {
         .unwrap();
     assert_eq!(preset_offer.options, 3);
     assert_eq!(preset_offer.index, Some(1));
-    let model_offer = pr
+    assert!(pr
         .offers
         .iter()
-        .find(|o| o.kind == "select" && o.screen == "models")
-        .unwrap();
-    assert_eq!(model_offer.options, 3);
-    assert_eq!(model_offer.index, Some(2));
+        .all(|o| !(o.kind == "select" && o.screen == "models")));
 
     // User-reviewed: every stop is asked, the review screen offers No by
     // default, the flow ends in Cancel, and no service or auto-merge row
@@ -397,8 +396,9 @@ fn back_navigation_and_the_write_latch() {
     // interview's back re-asks review-merge; re-shown screens offer the
     // committed answer as the default - the merge ask flips from false to
     // true.
-    let mut state = State::new(Some(Preset::Balanced), fresh_detect(), false);
+    let mut state = State::new(Some(Preset::UserReviewed), fresh_detect(), false);
     let mut pr = Script::queued(vec![
+        Que::C(Conf::Yes),             // look: allow
         Que::T(Ticks::Ok(vec![0, 2])), // harnesses: claude + codex
         Que::P(Pick::Ok(2)),           // models: claude keeps its model
         Que::P(Pick::Ok(2)),           // models: codex keeps its model
@@ -438,9 +438,10 @@ fn back_navigation_and_the_write_latch() {
 
     // A host restoring a mid-run session: writes already started, so the
     // first back is refused with a note and the screen asks again.
-    let mut state = State::new(Some(Preset::Balanced), fresh_detect(), false);
+    let mut state = State::new(Some(Preset::UserReviewed), fresh_detect(), false);
     state.writes_started = true;
     let mut pr = Script::queued(vec![
+        Que::C(Conf::Yes),             // look: allow
         Que::T(Ticks::Back),           // harnesses: refused
         Que::T(Ticks::Ok(vec![0, 2])), // harnesses again
         Que::P(Pick::Ok(2)),           // models: claude
@@ -471,15 +472,16 @@ fn back_navigation_and_the_write_latch() {
         2,
         "the refused back re-asked the checklist"
     );
-    assert!(pr.notes.iter().any(|n| n.contains("back is off")));
+    assert!(pr.notes.iter().any(|n| n.contains("cannot go back")));
 
     // A declined posture on back clears the stale answer: Yes at
     // review-merge seeds self_review, then Back from the interview
     // re-asks the screen. A No there must clear the seeded answer, so no
     // review.posture proposal is built and the note names the kept
     // posture.
-    let mut state = State::new(Some(Preset::Balanced), fresh_detect(), false);
+    let mut state = State::new(Some(Preset::UserReviewed), fresh_detect(), false);
     let mut pr = Script::queued(vec![
+        Que::C(Conf::Yes),             // look: allow
         Que::T(Ticks::Ok(vec![0, 2])), // harnesses: claude + codex
         Que::P(Pick::Ok(2)),           // models: claude keeps its model
         Que::P(Pick::Ok(2)),           // models: codex keeps its model
@@ -509,7 +511,7 @@ fn back_navigation_and_the_write_latch() {
     assert!(pr
         .notes
         .iter()
-        .any(|n| n.contains("the review posture stays as configured")));
+        .any(|n| n.contains("Your review setting stays as it is.")));
     assert!(
         pending(&state).iter().all(|r| r.key != "review.posture"),
         "the declined posture must not stay proposed"
@@ -517,4 +519,32 @@ fn back_navigation_and_the_write_latch() {
     assert!(pending(&state)
         .iter()
         .any(|r| r.key == "auto_merge.enabled" && r.value == "false"));
+}
+
+#[test]
+fn skip_and_overwrite_never_touch_a_key_the_config_sets() {
+    // Skip proposes only keys the config leaves unset.
+    let set = |k: &str| (k == "auto_merge.enabled").then(|| "true".to_string());
+    let rows = skip_defaults(&set);
+    assert!(rows.iter().all(|r| r.key != "auto_merge.enabled"));
+    assert!(rows.iter().any(|r| r.key == "review.posture"));
+    assert_eq!(skip_defaults(&|_: &str| None).len(), 2);
+
+    // A row that would replace a set value waits behind an old -> new
+    // confirm; declining keeps the old value.
+    let mut pr = Script::queued(vec![Que::C(Conf::No)]);
+    let kept = confirm_overwrites(&mut pr, skip_defaults(&|_: &str| None), &set_all_true);
+    assert_eq!(
+        kept.len(),
+        1,
+        "the auto_merge.enabled row was held and declined"
+    );
+    assert!(pr
+        .notes
+        .iter()
+        .any(|n| n.contains("Kept auto_merge.enabled = true.")));
+}
+
+fn set_all_true(key: &str) -> Option<String> {
+    (key == "auto_merge.enabled").then(|| "true".to_string())
 }
