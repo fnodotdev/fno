@@ -1519,8 +1519,8 @@ fn process_warnings<P: Probes>(
     // unreadable changed-file list is docs_surface_unknown, never a
     // verdict, so it warns on the merge door too). Preview keeps the
     // warning: `fno do pr status` stays a read receipt, and a body edit is
-    // a one-minute remedy. Visual declines outrank it; the loser rides the
-    // caller's warnings.
+    // a one-minute remedy. Visual declines outrank it; when a look holds,
+    // the docs hold re-fires on the next attempt after the look clears.
     let mut docs_hold = None;
     match crate::docs_gate::docs_gate_blocker(probes, cwd, facts) {
         Some(blocker)

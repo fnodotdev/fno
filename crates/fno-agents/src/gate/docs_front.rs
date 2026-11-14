@@ -41,6 +41,8 @@ enum DocsError {
     Refused(String),
     /// State the action needed could not be read: page absent, JSON bad.
     Read(String),
+    /// The gate script's interpreter is absent: `node` is not on PATH.
+    MissingBin(String),
 }
 
 impl DocsError {
@@ -48,6 +50,7 @@ impl DocsError {
         match self {
             DocsError::Usage(_) | DocsError::Refused(_) => 2,
             DocsError::Read(_) => 4,
+            DocsError::MissingBin(_) => 127,
         }
     }
 }
@@ -58,6 +61,7 @@ impl std::fmt::Display for DocsError {
             DocsError::Usage(m) => write!(f, "{m}"),
             DocsError::Refused(m) => write!(f, "{m}"),
             DocsError::Read(m) => write!(f, "{m}"),
+            DocsError::MissingBin(m) => write!(f, "{m}"),
         }
     }
 }
@@ -74,7 +78,7 @@ struct LiveReleases {
 }
 
 const HELP_ROWS: &[(&str, &str)] = &[
-    ("bind <page> [--release T] [--nav G] [--pr N] [--web P]", "Stamp the front matter the fno-web release gate judges, then rerun the gate with --apply. A page whose since: names a live tag becomes <page>.next.mdx with since: and replaces: (the live page is never edited); a draft gets since: (explicit --release, else the newest since: among pages whose tag is not yet live, else a refusal naming --release), plus --nav/--pr when given. Exit 0 applied, 2 refusal, 4 page/live-list unreadable, 127 node missing."),
+    ("bind <page> [--release T] [--nav G] [--pr N] [--web P]", "Stamp the front matter the fno-web release gate judges, then rerun the gate with --apply. A page whose since: names a live tag becomes <page>.next.mdx with since: and replaces: (the live page is never edited); a draft gets since: (explicit --release, else the newest since: among pages whose vX.Y.Z tag is not yet live (product tags always name --release), else a refusal naming --release), plus --nav/--pr when given. Exit 0 applied, 2 refusal, 4 page/live-list unreadable, 127 node missing."),
     ("surface [--diff-base B]", "Print the changed files (B...HEAD plus the dirty tree, default B=origin/main) that touch a user surface, through the merge gate's own matcher. Empty output means the diff is not user-facing. Always exits 0."),
     ("gate [--apply] [--web P]", "Run fno-web's scripts/docs-release-gate.mjs: check (exit 1 on drift) or --apply (move live twins, then pages into or out of the nav). The script's exit passes through; 127 when node is missing."),
 ];
@@ -485,6 +489,14 @@ fn bind(tail: &[String]) -> Result<i32, DocsError> {
         })?,
     };
 
+    if let Some(pr) = flags.pr.as_deref() {
+        if !pr.chars().all(|c| c.is_ascii_digit()) {
+            return Err(DocsError::Usage(format!(
+                "fno do docs bind: --pr {pr} is not a PR number"
+            )));
+        }
+    }
+
     if is_live {
         let file_name = page_path
             .file_name()
@@ -525,13 +537,7 @@ fn bind(tail: &[String]) -> Result<i32, DocsError> {
             page = with_field(&page, "nav", nav);
         }
         if let Some(pr) = flags.pr.as_deref() {
-            if pr.chars().all(|c| c.is_ascii_digit()) {
-                page = with_field(&page, "pr", pr);
-            } else {
-                return Err(DocsError::Usage(format!(
-                    "fno do docs bind: --pr {pr} is not a PR number"
-                )));
-            }
+            page = with_field(&page, "pr", pr);
         }
         if page != text {
             std::fs::write(&page_path, page).map_err(|e| {
@@ -560,7 +566,7 @@ fn run_gate(web: &Path, apply: bool) -> Result<i32, DocsError> {
     command.current_dir(web);
     let status = command.status().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            DocsError::Usage(format!(
+            DocsError::MissingBin(format!(
                 "fno do docs: node is missing; the gate script needs it (install node, or run {} by hand)",
                 script.display()
             ))
