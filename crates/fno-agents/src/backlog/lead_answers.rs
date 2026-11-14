@@ -384,14 +384,30 @@ pub(crate) fn held_reading(scope: &str) -> Result<Value, String> {
         .ok_or("items.json names no questions_dir")?;
     let mut pages = read_question_pages(std::path::Path::new(dir))?;
     pages.sort_by(|a, b| a.0.cmp(&b.0));
-    let rows = held_from_pages(&pages, scope);
-    Ok(json!({"open": rows.len(), "rows": rows}))
+    let items: Vec<Value> = index
+        .get("items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let (quiet, due): (Vec<Value>, Vec<Value>) = held_from_pages(&pages, scope, &items, now as i64)
+        .into_iter()
+        .partition(|r| !r["quiet"].is_null());
+    Ok(json!({"open": due.len(), "quiet": quiet.len(), "rows": due}))
 }
 
 /// The pure fold: open pages whose question_id the stem names and whose
 /// team equals this check-in's canonical scope, oldest first. Rows carry
-/// what the render needs to name the decide command.
-pub(crate) fn held_from_pages(pages: &[(String, String)], scope: &str) -> Vec<Value> {
+/// what the render needs to name the decide command. Each row joins the
+/// arm's cached item by id: `quiet` is `snoozed` or `deadline` while the
+/// question waits on either, and `overdue` names what a past deadline means
+/// (the words the escalation reader uses). A page with no cached item reads
+/// as due, so a missing join never hides a question.
+pub(crate) fn held_from_pages(
+    pages: &[(String, String)],
+    scope: &str,
+    items: &[Value],
+    now: i64,
+) -> Vec<Value> {
     let canon = crate::territory::canonical_scope(scope);
     let mut rows: Vec<(u64, Value)> = Vec::new();
     for (stem, text) in pages {
@@ -416,6 +432,36 @@ pub(crate) fn held_from_pages(pages: &[(String, String)], scope: &str) -> Vec<Va
             .cloned()
             .filter(|b| !b.is_empty() && b != "none")
             .or_else(|| Some(front.node.clone()).filter(|n| !n.is_empty() && n != "none"));
+        let item = items
+            .iter()
+            .find(|i| i.get("id").and_then(Value::as_str) == Some(front.question_id.as_str()));
+        let field = |k: &str| item.and_then(|i| i.get(k)).and_then(Value::as_str);
+        let state = item.map(|_| {
+            crate::attention::quiet_from(
+                field("created_at").unwrap_or(&front.asked_at),
+                field("deadline"),
+                field("snoozed_until"),
+                now,
+            )
+        });
+        let quiet = match &state {
+            Some(crate::attention::Quiet::Snoozed(_)) => Some("snoozed"),
+            Some(crate::attention::Quiet::BeforeDeadline(_)) => Some("deadline"),
+            _ => None,
+        };
+        let recommended = item
+            .and_then(|i| i.get("recommendation"))
+            .and_then(|r| r.get("option"))
+            .and_then(Value::as_u64);
+        let overdue = matches!(state, Some(crate::attention::Quiet::Due { .. })).then(|| {
+            match (field("class"), field("on_silence"), recommended) {
+                (Some("irreversible"), _, _) => "overdue: waits (irreversible)".to_string(),
+                (_, Some("take-recommended"), Some(n)) if n >= 1 => {
+                    format!("overdue: take option {n} and record it")
+                }
+                _ => "overdue: waits (on_silence wait)".to_string(),
+            }
+        });
         rows.push((
             epoch,
             json!({
@@ -424,6 +470,8 @@ pub(crate) fn held_from_pages(pages: &[(String, String)], scope: &str) -> Vec<Va
                 "question": front.title,
                 "ts": front.asked_at,
                 "epoch": epoch,
+                "quiet": quiet,
+                "overdue": overdue,
             }),
         ));
     }
@@ -606,17 +654,24 @@ fn reading_rows(
 
 /// The held render block: the decide and clear commands one line per question.
 pub(crate) fn held_lines(readings: &[crate::lead_checkin::Reading]) -> Vec<String> {
-    let (error, _value, rows) = reading_rows(readings, "held");
+    let (error, value, rows) = reading_rows(readings, "held");
     let mut lines = Vec::new();
     if let Some(e) = error {
         lines.push(format!("READER FAILED held: {e}"));
         return lines;
     }
+    let quiet = value.get("quiet").and_then(Value::as_u64).unwrap_or(0);
+    let quiet_line = format!(
+        "held: {quiet} quiet until their deadline or snooze (fno inbox outstanding lists them)"
+    );
     // This team's questions: the rows carry node, question id and ask
     // time; a row with a node names the decide command, a row with none names
     // the clear command.
     if rows.is_empty() {
         lines.push("held: none".into());
+        if quiet > 0 {
+            lines.push(quiet_line);
+        }
         return lines;
     }
     lines.push(format!("held: {} question(s) for this team", rows.len()));
@@ -633,6 +688,12 @@ pub(crate) fn held_lines(readings: &[crate::lead_checkin::Reading]) -> Vec<Strin
         let shown = crate::numbers::display(&qid);
         let suffix =
             crate::question_probe::check_suffix(cache.get(crate::numbers::canonical(&qid)), now);
+        let overdue = row
+            .get("overdue")
+            .and_then(Value::as_str)
+            .map(|o| format!(" - {o}"))
+            .unwrap_or_default();
+        let suffix = format!("{suffix}{overdue}");
         let node = row
             .get("node")
             .and_then(Value::as_str)
@@ -646,6 +707,9 @@ pub(crate) fn held_lines(readings: &[crate::lead_checkin::Reading]) -> Vec<Strin
                 crate::question_clear::chat_answer_line(&qid)
             )),
         }
+    }
+    if quiet > 0 {
+        lines.push(quiet_line);
     }
     lines
 }
@@ -931,7 +995,7 @@ mod tests {
                 Some("x-3"),
             ),
         ];
-        let rows = held_from_pages(&pages, "x-b");
+        let rows = held_from_pages(&pages, "x-b", &[], 0);
         assert_eq!(rows.len(), 2, "AC11-HP: only x-b's open pages: {rows:?}");
         assert_eq!(
             rows[0].get("question_id").and_then(|v| v.as_str()),
@@ -944,6 +1008,38 @@ mod tests {
         );
         // The node-less row reads as null so the render names the clear command.
         assert_eq!(rows[0].get("node"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn a_snoozed_question_is_counted_quiet_and_an_overdue_one_names_its_default() {
+        let pages = vec![
+            held_page("q-snz", "x-b", "open", "2026-11-13T08:00:00Z", Some("x-1")),
+            held_page("q-due", "x-b", "open", "2026-11-12T08:00:00Z", Some("x-2")),
+        ];
+        let items = vec![
+            json!({"id": "q-snz", "created_at": "2026-11-13T08:00:00Z",
+                "deadline": "2026-11-19T09:00:00Z", "on_silence": "wait",
+                "snoozed_until": "2026-11-20T09:00:00Z"}),
+            json!({"id": "q-due", "created_at": "2026-11-12T08:00:00Z",
+                "deadline": "2026-11-14T08:00:00Z", "on_silence": "take-recommended",
+                "recommendation": {"option": 1, "why": "w"}}),
+        ];
+        let now = chrono::DateTime::parse_from_rfc3339("2026-11-14T09:00:00Z")
+            .unwrap()
+            .timestamp();
+        let rows = held_from_pages(&pages, "x-b", &items, now);
+        let by = |id: &str| {
+            rows.iter()
+                .find(|r| r["question_id"] == id)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(by("q-snz")["quiet"], "snoozed");
+        assert_eq!(by("q-due")["quiet"], Value::Null);
+        assert_eq!(
+            by("q-due")["overdue"],
+            "overdue: take option 1 and record it"
+        );
     }
 
     fn held_page(
