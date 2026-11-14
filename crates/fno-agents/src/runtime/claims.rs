@@ -1541,8 +1541,9 @@ fn resolve_identity_from(get: impl Fn(&str) -> Option<String>) -> (Option<String
 ///             the ancestry walk stamps that one server pid on every session.
 ///             A claim carrying it and a session last active two days earlier
 ///             read `Live` (basis `live`) while the session witness answered
-///             `unresolved`, and the claim filled its territory cap (node
-///             x-b3fb repro). The list is keyed by harness NAME, and the
+///             `unresolved`, and the claim filled its territory cap
+///             (reproduced 2026-11-13 against the live server). The list is
+///             keyed by harness NAME, and the
 ///             fleet's opencode runs as one server, so the name moves ON. The
 ///             2026-09-04 per-invocation reading stays true of `opencode run`;
 ///             for it the session evidence now decides instead of the pid.
