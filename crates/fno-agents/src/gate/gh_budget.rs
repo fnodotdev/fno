@@ -1662,6 +1662,8 @@ mod tests {
         // then.
         record_refusal(&path, t0 + 60_000, "core", "user").unwrap();
         let v = admit(&path, &user_read, t0 + 61_000, 450);
+        assert!(v.admitted, "the first call under the hold is the probe");
+        let v = admit(&path, &user_read, t0 + 62_000, 450);
         assert_eq!(
             v.cause,
             Some("backoff"),
@@ -1680,6 +1682,8 @@ mod tests {
         let path = tmp.path().join("budget.json");
         let t0 = 1_760_000_000_000i64;
         record_refusal(&path, t0, "core", "user").unwrap();
+        let v = admit(&path, &argv(&["api", "user"]), t0 + 20_000, 450);
+        assert!(v.admitted, "the half-open probe passes");
         let v = admit(&path, &argv(&["api", "user"]), t0 + 35_000, 450);
         assert!(!v.admitted);
         let line = v.refusal.unwrap();
