@@ -933,7 +933,7 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
         let caption = if installed(c) {
             "An example with invented rows."
         } else {
-            "An example with invented rows, so you can see the shape before you add it."
+            "An example with invented rows, so you can see the shape before you install it."
         };
         out = out
             .child(ui::section("Preview", &p))

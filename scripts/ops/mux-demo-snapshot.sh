@@ -1221,6 +1221,7 @@ if [ -n "$APP" ]; then
   cp "$REPO_ROOT/plugins/fno-panels/mods/review-ledger/preview.png" "$EXTRAS/mods/open-work/preview.png"
   printf '# Open work\n\n## What it shows\n\nOne row per open node: its id and title.\n' > "$EXTRAS/mods/open-work/RECIPE.md"
   mkdir -p "$EXTRAS/mods/clock"
+  cp "$REPO_ROOT/scripts/ops/demo-assets/clock-preview.png" "$EXTRAS/mods/clock/preview.png"
   printf '# Clock\n\n## What it shows\n\nThe date and time, one line a second.\n' > "$EXTRAS/mods/clock/RECIPE.md"
   cat > "$EXTRAS/plugin.yaml" <<'YAML'
 id: demo-extras
@@ -1241,6 +1242,7 @@ mods:
   - id: clock
     title: Clock
     summary: A clock in a pane, for the corner of a wide layout.
+    preview: mods/clock/preview.png
     recipe: mods/clock/RECIPE.md
     run: [sh, -c, "while :; do date; sleep 1; done"]
 YAML
