@@ -3357,7 +3357,7 @@ fn pair_route_answers(pairs: &[String], answers: &mut serde_json::Map<String, Va
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let grace_secs = fno_agents::agents_config::retire_grace_secs(&cwd) as i64;
     let mut store = fno_agents::gc_inventory::HarnessStoreIndex::default();
-    for pair in &pairs {
+    for pair in pairs {
         let Some((harness, sid)) = pair.split_once(':') else {
             answers.insert(
                 pair.clone(),
