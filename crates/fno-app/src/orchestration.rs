@@ -75,10 +75,25 @@ fn table(root: &Root) -> Div {
     names.sort();
     names.dedup();
     let hosts = names.len() > 1;
+    // Machine and Seat take their widest value, capped, so the title keeps
+    // the rest of the row.
+    let host_w = names
+        .iter()
+        .map(|n| n.chars().count())
+        .max()
+        .unwrap_or(0)
+        .clamp(7, 14);
+    let seat_w = machines
+        .iter()
+        .flat_map(|m| m.leads.iter().flat_map(|l| &l.seats))
+        .map(|s| s.name.chars().count())
+        .max()
+        .unwrap_or(0)
+        .clamp(4, 18);
     // The title column takes the rest of the row. Mono cells measure exactly,
     // so the title is cut whole to that many cells: the sidebar, the
     // questions column, the gaps, the glyph and the fixed columns come off.
-    let fixed = 2 + 18 + 9 + NODE_W + if hosts { 14 } else { 0 };
+    let fixed = 2 + seat_w + 9 + NODE_W + if hosts { host_w } else { 0 };
     // One gap between each pair of cells, and the row's own side padding.
     let gaps = if hosts { 5.0 } else { 4.0 };
     let rest = root.width - px(super::left_pane::WIDTH) - px(QUESTIONS_W) - px(24.0 + 24.0);
@@ -94,11 +109,11 @@ fn table(root: &Root) -> Div {
         .px_3()
         .child(div().w(adv * 2.0).flex_none());
     if hosts {
-        heads = heads.child(head("Machine", 14));
+        heads = heads.child(head("Machine", host_w));
     }
     out = out.child(
         heads
-            .child(head("Seat", 18))
+            .child(head("Seat", seat_w))
             .child(head("Status", 9))
             .child(head("Node", NODE_W))
             .child(head("Title", 0)),
@@ -119,10 +134,10 @@ fn table(root: &Root) -> Div {
                     .child(status_glyph(seat.status).to_string()),
             );
             if hosts {
-                row = row.child(col(host.clone(), 14, Role::Meta, root, adv));
+                row = row.child(col(host.clone(), host_w, Role::Meta, root, adv));
             }
             out = out.child(
-                row.child(col(seat.name.clone(), 18, Role::Name, root, adv))
+                row.child(col(seat.name.clone(), seat_w, Role::Name, root, adv))
                     .child(col(seat.status.to_string(), 9, Role::Meta, root, adv))
                     .child(col(
                         work.map(|w| w.id.clone()).unwrap_or_default(),

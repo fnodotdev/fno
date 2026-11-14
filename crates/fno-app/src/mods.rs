@@ -672,7 +672,7 @@ fn more(root: &Root, cx: &mut Context<Root>) -> Div {
                     ui::button("ext-install", "Install from URL", Button::Quiet, &p)
                         .on_click(on(Act::Install, cx)),
                 )
-                .child(ui::kbd("I", &p))
+                .child(ui::kbd("I", &p).mr_3())
                 .when(page.gallery == Gallery::Idle, |d| {
                     d.child(
                         ui::button("ext-browse", "Browse published packs", Button::Quiet, &p)

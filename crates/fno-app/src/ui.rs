@@ -201,13 +201,11 @@ pub fn tag(t: impl Into<SharedString>, color: u32, p: &Palette) -> Div {
         .child(t.into())
 }
 
-/// A key hint: the keys in the quietest level on a raised chip.
+/// A key hint: the keys inline in the quietest level, with no chip, so it
+/// never reads as a button.
 pub fn kbd(keys: impl Into<SharedString>, p: &Palette) -> Div {
     div()
         .flex_none()
-        .px(px(4.0))
-        .rounded(px(3.0))
-        .bg(rgb(p.raised))
         .font_family(MONO)
         .text_size(px(SMALL))
         .text_color(rgb(p.faint))

@@ -478,15 +478,18 @@ printf -- '---\nstatus: ready\n---\n# Rate limit the checkout api per key\n' >"$
 
 # Pane text: an invented transcript per harness, shown by a process that
 # never prints a prompt. The cursor is hidden, so no block reads as a glyph.
+# Lines stay under 56 columns: the desktop app's narrowest pane fits that.
 E=$'\033'
 # Each harness's screen: a transcript on top, its own footer at the bottom.
 cat >"$ROOT/text/claude.txt" <<EOF
 ${E}[2m> rate limit the checkout api per key${E}[0m
 
-${E}[97m⏺${E}[0m Read ${E}[1msrc/checkout/handler.ts${E}[0m, ${E}[1msrc/middleware/limits.ts${E}[0m
+${E}[97m⏺${E}[0m Read ${E}[1msrc/checkout/handler.ts${E}[0m and
+  ${E}[1msrc/middleware/limits.ts${E}[0m
 
-${E}[97m⏺${E}[0m The handler has no limit today. I will add a token bucket per api
-  key: 60 requests a minute, and a 429 with Retry-After when it empties.
+${E}[97m⏺${E}[0m The handler has no limit today. I will add a token
+  bucket per api key: 60 requests a minute, and a 429
+  with Retry-After when it empties.
 
 ${E}[97m⏺${E}[0m ${E}[1mUpdate${E}[0m(src/middleware/limits.ts)
   ⎿  Added ${E}[32m42${E}[0m lines, removed ${E}[31m3${E}[0m lines

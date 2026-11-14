@@ -747,7 +747,8 @@ pub(crate) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> Di
         .child(rows)
         .children(pending.collect::<Vec<_>>())
         .children(status(root))
-        .children(composer(root, window, cx));
+        // A block gap keeps the last turn off the composer.
+        .children(composer(root, window, cx).map(|c| c.mt_3()));
     if let Some(s) = sheet(root, cx) {
         out = out.child(s);
     }
