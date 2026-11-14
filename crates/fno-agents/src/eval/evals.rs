@@ -495,9 +495,8 @@ pub(crate) fn superseded_nodes(graph: &std::path::Path) -> std::collections::BTr
         .unwrap_or_default()
 }
 
-/// The cohort split gate's outcome, one variant per caller decision:
-/// Fresh grades through with its line, Void is a stale pin, Invalid is any
-/// other door refusal.
+/// The cohort split gate's outcome: Fresh grades through with its line,
+/// Void is a stale pin, Invalid is any other door refusal.
 enum CohortVerdict {
     Fresh(String),
     Void(String),
