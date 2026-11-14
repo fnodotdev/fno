@@ -1,21 +1,11 @@
 #!/usr/bin/env bash
-# fno hook: UserPromptSubmit - wake resume protocol
-# A bare wake word ("go", "continue", ...) on a session whose target run is
-# still open injects the resume protocol: run state plus the turn-end rules.
-# This is the wake half of node x-3bb2's fix: the stop gate already governs
-# the turn end; nothing governed the wake.
-# The fno-agents `wake-context` door owns the whole decision (wake word,
-# registry row, live manifest, session match, closed-run refusal); the shim
-# adds only the cheap bash word gate so most prompts skip the binary call,
-# and relays the door's one block as additionalContext. Every failure exits
-# 0 and prints nothing: nothing optional sits on the foreground path
-# (law d-bad5a42f).
-#
-# Claude config only: the prompt-submit entry is claude hooks.json, the same
-# one-release limitation node-bind-prompt-submit.sh documents.
-#
-# SILENT unless the door injects: UserPromptSubmit hook stdout is added to
-# model context, so per-prompt chatter is context cost.
+# fno hook: UserPromptSubmit - wake resume protocol (x-3bb2).
+# A bare wake word on a session with an OPEN target run injects the resume
+# protocol; the fno-agents `wake-context` door owns the decision (wake word,
+# registry row, live manifest, session match, closed run), the shim adds the
+# cheap bash word gate and relays the door's block. Silent on every miss:
+# nothing optional fails closed on the foreground path (law d-bad5a42f).
+# Claude config only, the bind hook's documented limitation.
 
 set -uo pipefail
 
