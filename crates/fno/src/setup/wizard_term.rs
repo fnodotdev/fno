@@ -1125,7 +1125,7 @@ pub fn run(tail: &[OsString]) -> i32 {
             if skip {
                 "install or log in to one harness, then rerun: fno do wizard".to_string()
             } else {
-                "/fno:target \"<your first feature>\"".to_string()
+                super::first_step::for_repo()
             }
         });
 

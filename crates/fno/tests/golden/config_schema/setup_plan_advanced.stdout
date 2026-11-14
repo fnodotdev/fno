@@ -1621,6 +1621,15 @@
       "doc": "Enable the global PR-state watcher daemon."
     },
     {
+      "path": "ci.declared_none",
+      "type": "bool",
+      "default": false,
+      "tier": "advanced",
+      "question": "",
+      "default_source": "",
+      "doc": "This repo has no CI on purpose. The loop then reads no checks on a PR instead of blocking on 'no CI checks found'. Default false. Set with fno config set ci.declared_none true."
+    },
+    {
       "path": "ci_tier.enabled",
       "type": "bool",
       "default": false,
