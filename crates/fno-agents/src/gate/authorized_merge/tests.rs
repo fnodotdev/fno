@@ -3448,7 +3448,7 @@ fn process_warnings_preserve_evidence_beside_legitimate_preview_blockers() {
             .iter()
             .map(|w| w.code.as_str())
             .collect::<Vec<_>>(),
-        expected[1..].to_vec() // the docs warning became the hold reason
+        expected // the docs warning names the hold and still rides the list
     );
     fake.coverage_exit = Some(3);
     fake.checks = Some("red".into());
