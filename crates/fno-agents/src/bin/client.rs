@@ -1803,11 +1803,12 @@ fn state_root_grant(params: &Value, lane: &SpawnLane<'_>) -> Result<(), i32> {
     // already refuse an unknown provider with exit 2 and the supported list,
     // which is the message that reader needs. Refusing first with grant advice
     // would shadow it with a diagnosis of the wrong problem.
-    if lane.substrate != "pane" && KNOWN_PROVIDERS.contains(&lane.provider) {
+    let provider = lane.provider;
+    if lane.substrate != "pane" && KNOWN_PROVIDERS.contains(&provider) {
         let declared_substrate = lane.public_substrate;
         let roots = fno_agents::claude_ask::state_dirs_from_env();
         if let Err(refusal) =
-            fno_agents::spawn_gate::state_root_grant_gate(lane.provider, declared_substrate, &roots)
+            fno_agents::spawn_gate::state_root_grant_gate(provider, declared_substrate, &roots)
         {
             fno_agents::spawn_gate::emit_refusal_event(
                 &refusal,
