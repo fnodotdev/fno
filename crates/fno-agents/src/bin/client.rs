@@ -2122,7 +2122,7 @@ fn validate_spawn_placement(params: &Value, substrate: &str) -> Result<(), Strin
              opens one, so the placement has nothing to place"
             .into());
     }
-    if placement_requested && portal.is_none() && substrate != "pane" {
+    if placement_requested && portal.is_none() && !portal_new && substrate != "pane" {
         return Err(
             "--workspace/-s, --split/-x, --at, and --tab apply only to the pane lane \
              (thread/headless have no pane geometry)"
