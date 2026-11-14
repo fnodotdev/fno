@@ -328,7 +328,8 @@ pub(crate) fn wait_review(
 /// Durations parse from the CLI's raw strings (`15m`, `60`).
 pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
     let cwd_str = payload.get("cwd").and_then(Value::as_str).unwrap_or("");
-    let pr = payload.get("pr").and_then(Value::as_u64).unwrap_or(0);
+    // The flag arguments validate first: a usage error answers before the
+    // resolve spends a read.
     let field = |key: &str, default: f64| -> f64 {
         match payload.get(key) {
             Some(Value::String(s)) => parse_duration(s),
@@ -356,7 +357,15 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
             "fno do pr wait: --until must be one of settled/red/green/review\n".into(),
         );
     }
+    // The bare spelling (pr 0) resolves the current branch's PR once, up
+    // front, over the same branch-scoped read bare `pr info` uses; a resolve
+    // failure is a usage refusal naming the explicit spelling, never a
+    // 404-per-tick loop against PR 0.
     let cwd = Path::new(cwd_str);
+    let pr = match super::lists::operand_pr_number(payload, cwd, "fno do pr wait") {
+        Ok(pr) => pr,
+        Err(reason) => return (2, String::new(), format!("{}\n", reason.text)),
+    };
     let sleeper = |s: f64| std::thread::sleep(std::time::Duration::from_secs_f64(s));
     let start = Instant::now();
     let clock = move || start.elapsed().as_secs_f64();
@@ -1408,5 +1417,27 @@ exit 1
         // The exit code is the no-new-review timeout; the assertion above is
         // the contract. Guard the destructure so the intent stays visible.
         let _ = code;
+    }
+
+    #[test]
+    fn a_bare_wait_in_a_checkout_with_no_pr_refuses_instead_of_polling_pr_zero() {
+        // PR 0 404s on every tick; the old loop burned its whole timeout on
+        // the same error. The bare spelling now resolves the branch's PR once
+        // up front, and a checkout that names no PR refuses with the explicit
+        // spelling before the first tick.
+        let dir = std::env::temp_dir().join(format!("fno-pr-wait-bare-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let payload = json!({
+            "cwd": dir.to_string_lossy(),
+            "pr": 0,
+            "until": "settled",
+            "timeout": "2s",
+            "interval": "1s",
+        });
+        let (code, stdout, stderr) = run_wait(&payload);
+        assert_eq!(code, 2);
+        assert!(stdout.is_empty());
+        assert!(stderr.contains("fno do pr wait <number>"), "{stderr}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

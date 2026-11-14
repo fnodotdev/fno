@@ -1559,7 +1559,12 @@ pub(crate) fn cache_env_lock() -> std::sync::MutexGuard<'static, ()> {
 /// projections, the same rows the merge command's covered path ignores.
 pub(crate) fn status_ci(payload: &Value) -> (i32, String, String) {
     let cwd_str = payload.get("cwd").and_then(Value::as_str).unwrap_or("");
-    let pr = payload.get("pr").and_then(Value::as_u64).unwrap_or(0);
+    let pr = match lists::operand_pr_number(payload, Path::new(cwd_str), "fno do pr status") {
+        Ok(pr) => pr,
+        Err(reason) => {
+            return (1, String::new(), format!("{}\n", reason.text));
+        }
+    };
     let drop_coverage = payload
         .get("drop_coverage")
         .and_then(Value::as_bool)

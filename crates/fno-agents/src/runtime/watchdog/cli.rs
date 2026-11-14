@@ -11,6 +11,7 @@ use super::{unknown_provider_report, Verdict, KEEPER, LEAVE, RECOVERABLE, VERDIC
 use crate::backlog::worked::FleetRow;
 use serde_json::{json, Value};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 const USAGE: &str = "usage: fno agents watchdog [--json] [--apply] [--apply-all] [--only VERDICT] [--since DURATION] [--cwd DIR] [--session-id UUID] [--mail HANDLE]";
 
@@ -64,6 +65,11 @@ fn print_json(value: &Value) {
     println!("{value}");
 }
 
+/// The manual report's build budget. The tick carries a deadline of its own;
+/// the dry run once ran unbounded, and a stalled shared-primary read parked
+/// it past 120s with no output at all.
+const MANUAL_REPORT_BUDGET_S: f64 = 90.0;
+
 /// The default surface: session verdicts stay behind `--apply` and `--only`, and
 /// are never rendered as the operator's answer.
 fn run_unfinished_report(now: f64, json_out: bool, mail_to: Option<&str>) -> i32 {
@@ -74,7 +80,19 @@ fn run_unfinished_report(now: f64, json_out: bool, mail_to: Option<&str>) -> i32
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
         );
     }
-    let snapshot = super::unfinished::build_report(&roots, now);
+    let started = Instant::now();
+    eprintln!(
+        "unfinished report: {} root(s), budget {:.0}s",
+        roots.len(),
+        MANUAL_REPORT_BUDGET_S
+    );
+    let deadline = started + Duration::from_secs_f64(MANUAL_REPORT_BUDGET_S);
+    let snapshot = super::unfinished::build_report_with_deadline(&roots, now, Some(deadline));
+    eprintln!(
+        "unfinished report: built in {:.1}s, complete={}",
+        started.elapsed().as_secs_f64(),
+        snapshot.complete
+    );
     let recipient = mail_to.map_or_else(config_mail_to, str::to_string);
     let note = |line: &str| eprintln!("{line}");
     let mut payload =

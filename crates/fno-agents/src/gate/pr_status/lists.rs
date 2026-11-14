@@ -107,6 +107,34 @@ pub(crate) fn resolve_current_pr_number(
     number.ok_or_else(|| format!("no pull requests found for branch {branch}"))
 }
 
+/// The status door ops' PR operand. An explicit number wins. Zero is the bare
+/// spelling, and it resolves the current branch's PR over the same
+/// branch-scoped read [`resolve_current_pr_number`] serves, so a fresh PR is
+/// watchable from its own worktree without a number. The `Err` names the
+/// explicit spelling that pins the number.
+pub(crate) fn operand_pr_number(
+    payload: &Value,
+    cwd: &Path,
+    usage: &str,
+) -> Result<u64, super::RestReason> {
+    let pr = payload.get("pr").and_then(Value::as_u64).unwrap_or(0);
+    if pr > 0 {
+        return Ok(pr);
+    }
+    let repo = payload
+        .get("repo")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    resolve_current_pr_number(Some(cwd), repo.as_deref()).map_err(|reason| {
+        super::RestReason::new(
+            &format!(
+                "{usage}: {reason}; this checkout names no PR, so pass one: `{usage} <number> ...`"
+            ),
+            "",
+        )
+    })
+}
+
 fn cwd_or_dot(cwd: Option<&Path>) -> PathBuf {
     cwd.map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))

@@ -221,11 +221,38 @@ fn wait_wake_timeout(cwd: &Path) -> String {
     format!("{minutes}m")
 }
 
-/// The first all-digits tail token, the positional PR operand.
+/// The flags whose next tail token is their value. `pr_operand` skips those
+/// values so `--interval 60` never reads as PR 60.
+const VALUE_FLAGS: &[&str] = &[
+    "--until",
+    "--timeout",
+    "--interval",
+    "--repo",
+    "--expect-head",
+    "--head",
+    "--pr-number",
+    "--job",
+    "--lines",
+];
+
+/// The first all-digits tail token that is not a flag value, the positional
+/// PR operand.
 fn pr_operand(tail: &[String]) -> Option<u64> {
-    tail.iter()
-        .find(|arg| !arg.is_empty() && arg.chars().all(|c| c.is_ascii_digit()))
-        .and_then(|arg| arg.parse().ok())
+    let mut skip_value = false;
+    for arg in tail {
+        if skip_value {
+            skip_value = false;
+            continue;
+        }
+        if VALUE_FLAGS.contains(&arg.as_str()) {
+            skip_value = true;
+            continue;
+        }
+        if !arg.is_empty() && arg.chars().all(|c| c.is_ascii_digit()) {
+            return arg.parse().ok();
+        }
+    }
+    None
 }
 
 /// `--expect-head SHA` pins the read: the payload carries the sha the door
@@ -548,5 +575,29 @@ mod graphql_exec_argv_tests {
         let (purpose, rest) = parse_purpose(&tail).unwrap();
         assert_eq!(purpose, "coverage");
         assert_eq!(rest, argv(&["api", "--purpose", "x"]));
+    }
+}
+
+#[cfg(test)]
+mod operand_tests {
+    use super::pr_operand;
+
+    fn argv(words: &[&str]) -> Vec<String> {
+        words.iter().map(|w| w.to_string()).collect()
+    }
+
+    #[test]
+    fn a_bare_flag_value_never_reads_as_the_pr_operand() {
+        // The bare wait's common shape: the interval value is all digits and
+        // used to be read as PR 60, silently answering another PR.
+        let tail = argv(&["--until", "review", "--timeout", "5s", "--interval", "60"]);
+        assert_eq!(pr_operand(&tail), None);
+    }
+
+    #[test]
+    fn a_leading_positional_number_still_reads_as_the_operand() {
+        assert_eq!(pr_operand(&argv(&["219"])), Some(219));
+        assert_eq!(pr_operand(&argv(&["--until", "settled", "219"])), Some(219));
+        assert_eq!(pr_operand(&argv(&[])), None);
     }
 }
