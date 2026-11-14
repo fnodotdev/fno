@@ -298,8 +298,7 @@ fn a_void_cohort_split_files_one_node_and_an_open_node_holds_the_next() {
     assert_eq!(logged.lines().count(), 1);
     assert!(logged.contains("--origin-evidence evals-cohort-split"));
 
-    // A current pin files nothing: the redeclare names HEAD, and the
-    // declaration file is excluded from the pin diff.
+    // A current pin files nothing: the redeclare names HEAD.
     let head = git(&["rev-parse", "HEAD"]);
     std::fs::write(
         bank.join("cohorts.yaml"),

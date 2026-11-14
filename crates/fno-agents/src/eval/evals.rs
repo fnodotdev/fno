@@ -855,12 +855,10 @@ mod tests {
             &serde_json::json!({"ok": true, "bank_unchanged": false}),
             Some(0),
         );
-        match void {
-            CohortVerdict::Void(text) => {
-                assert!(text.contains("the bank has changed since"));
-            }
-            _ => panic!("expected Void"),
-        }
+        let CohortVerdict::Void(text) = void else {
+            panic!("expected Void")
+        };
+        assert!(text.contains("the bank has changed since"));
         let fresh = |unchanged: serde_json::Value| {
             super::cohort_verdict(
                 &serde_json::json!({"ok": true, "bank_unchanged": unchanged}),
@@ -876,19 +874,15 @@ mod tests {
             &serde_json::json!({"error": "unknown cohort id: nope"}),
             Some(0),
         );
-        match refused {
-            CohortVerdict::Invalid(text) => {
-                assert!(text.contains("cohort split refused: unknown cohort id"));
-            }
-            _ => panic!("expected Invalid"),
-        }
+        let CohortVerdict::Invalid(text) = refused else {
+            panic!("expected Invalid")
+        };
+        assert!(text.contains("cohort split refused: unknown cohort id"));
         let door_down = super::cohort_verdict(&serde_json::json!({}), Some(3));
-        match door_down {
-            CohortVerdict::Invalid(text) => {
-                assert!(text.contains("native cohort door failed (3)"));
-            }
-            _ => panic!("expected Invalid"),
-        }
+        let CohortVerdict::Invalid(text) = door_down else {
+            panic!("expected Invalid")
+        };
+        assert!(text.contains("native cohort door failed (3)"));
     }
 
     #[test]
