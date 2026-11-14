@@ -5445,9 +5445,9 @@ fn section_is_live(layout: &LayoutView, key: &SectionKey) -> bool {
 /// the state.
 fn view_caret(v: SectionView) -> char {
     match v {
-        SectionView::Expanded => '▾',
-        SectionView::LiveOnly => '▿',
-        SectionView::Collapsed => '▸',
+        SectionView::Expanded => '▼',
+        SectionView::LiveOnly => '▽',
+        SectionView::Collapsed => '▶',
     }
 }
 

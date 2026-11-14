@@ -190,7 +190,7 @@ fn sideline_selection_scrolls_into_view_and_paints_the_band() {
         "the selected row scrolls into view and inverts"
     );
     assert_ne!(
-        frame.cells[0].c, '\u{25be}',
+        frame.cells[0].c, '\u{25bc}',
         "the squad header scrolled off the top"
     );
 }
@@ -571,7 +571,7 @@ fn sideline_marks_active_squad_and_focused_agent_row() {
     // Display row 0 -> outer row 1 (the strip owns outer row 0): the active
     // squad header caret is amber.
     let caret = frame.cells[cols];
-    assert_eq!(caret.c, '▾', "active expanded squad shows the caret");
+    assert_eq!(caret.c, '▼', "active expanded squad shows the caret");
     assert_eq!(caret.fg, LATTICE_ACCENT, "active squad caret is accented");
 
     // Display row 1 -> outer row 2: the focused agent row is a full-width

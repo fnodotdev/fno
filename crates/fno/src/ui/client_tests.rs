@@ -1862,7 +1862,7 @@ fn tab_strip_scoped_to_content_area_row0_is_sideline() {
         frame.cells[agents_start].c, 'A',
         "row 0 starts the Agents word at its span"
     );
-    assert_eq!(frame.cells[cols].c, '▾', "row 1 col 0 is the squad-1 caret");
+    assert_eq!(frame.cells[cols].c, '▼', "row 1 col 0 is the squad-1 caret");
     // The divider column runs full height, including row 0.
     assert_eq!(frame.cells[panel_w - 1].c, '│', "divider at row 0");
     // The strip's first span (the pinned Ｆ[no] mark) begins at panel_w; the
@@ -1905,14 +1905,12 @@ fn two_squad_layout(active_squad: u64) -> LayoutView {
 fn view_new_seeds_expanded_with_active_squad() {
     let view = two_pane_view();
     assert!(view.squad_view(1) == SectionView::Expanded);
-    assert!(view.squad_view(2) == SectionView::Collapsed);
+    assert!(view.squad_view(2) == SectionView::Expanded);
 }
 
-// AC1-HP + Locked 3 (x-c5ee): the active squad defaults Expanded and an
-// inactive squad with no explicit choice defaults Collapsed. The default is
-// computed live in `section_view`, so switching the active squad re-points
-// which one opens with no map write - the squad you leave folds back to its
-// header (attention-first), it is not force-collapsed.
+// Every squad with no explicit choice defaults Expanded. The default is
+// computed live in `section_view`, so switching the active squad never folds
+// the one you left: only a click or `l`/`h` folds a workspace.
 #[test]
 fn squad_expand_rows() {
     let mut view = two_pane_view();
@@ -1922,8 +1920,8 @@ fn squad_expand_rows() {
         "the active squad defaults expanded"
     );
     assert!(
-        view.squad_view(1) == SectionView::Collapsed,
-        "an inactive squad with no explicit choice defaults collapsed"
+        view.squad_view(1) == SectionView::Expanded,
+        "an inactive squad with no explicit choice defaults expanded"
     );
 
     let mut view = two_pane_view();
@@ -1955,8 +1953,8 @@ fn squad_expand_rows() {
     let mut view = two_pane_view();
     assert_eq!(
         view.squad_view(2),
-        SectionView::Collapsed,
-        "squad 2 starts at the inactive default"
+        SectionView::Expanded,
+        "squad 2 starts open, active or not"
     );
     view.set_layout(LayoutView {
         squads: vec![meta(1, "footnote", 2, 1), meta(2, "notes", 1, 0)],
@@ -1970,7 +1968,7 @@ fn squad_expand_rows() {
     assert_eq!(
         view.squad_view(2),
         SectionView::Expanded,
-        "activating a squad mid-session expands it"
+        "activating a squad mid-session leaves it open"
     );
 }
 
@@ -2630,28 +2628,28 @@ fn cycle_rows() {
 // elsewhere paints no `✗` count and advances to Collapsed on the next
 // click - it can never wedge in a state that now hides nothing.
 
-// The caret discriminates all three states - hollow `▿` for live-only
-// against filled `▾` for expanded, so the middle state is never
+// The caret discriminates all three states - hollow `▽` for live-only
+// against filled `▼` for expanded, so the middle state is never
 // indistinguishable from the full one.
 #[test]
 fn caret_rows() {
     let mut view = view_with_dead_interleaved();
-    assert!(frame_text(&view.compose()).contains("▾*footnote"));
+    assert!(frame_text(&view.compose()).contains("▼*footnote"));
     view.cycle_squad(1);
     assert!(
-        frame_text(&view.compose()).contains("▿*footnote"),
+        frame_text(&view.compose()).contains("▽*footnote"),
         "live-only carries the hollow caret"
     );
     view.cycle_squad(1);
-    assert!(frame_text(&view.compose()).contains("▸*footnote"));
+    assert!(frame_text(&view.compose()).contains("▶*footnote"));
 
     let mut view = two_pane_view();
     let text = frame_text(&view.compose());
-    assert!(text.contains("▾*footnote"), "expanded active carries *");
-    assert!(text.contains("▸ notes"), "inactive carries no *");
+    assert!(text.contains("▼*footnote"), "expanded active carries *");
+    assert!(text.contains("▼ notes"), "inactive carries no *");
     view.cycle_squad(1);
     let text = frame_text(&view.compose());
-    assert!(text.contains("▸*footnote"), "collapsed active keeps *");
+    assert!(text.contains("▶*footnote"), "collapsed active keeps *");
 
     let orphan = |name: &str, exited: bool| AgentRow {
         reach: Reach::Locate,
@@ -2662,11 +2660,11 @@ fn caret_rows() {
     };
     let mut view = view_with_agents(vec![orphan("a", false), orphan("b", true)]);
     view.expand_pull_sections(); // (x-c5ee) ~ elsewhere now defaults Collapsed
-    assert!(frame_text(&view.compose()).contains("▾~ elsewhere"));
+    assert!(frame_text(&view.compose()).contains("▼~ elsewhere"));
     view.cycle_section(SectionKey::Elsewhere);
-    assert!(frame_text(&view.compose()).contains("▿~ elsewhere"));
+    assert!(frame_text(&view.compose()).contains("▽~ elsewhere"));
     view.cycle_section(SectionKey::Elsewhere);
-    assert!(frame_text(&view.compose()).contains("▸~ elsewhere"));
+    assert!(frame_text(&view.compose()).contains("▶~ elsewhere"));
 
     let view = View::new(
         (30, 100),
@@ -2687,8 +2685,8 @@ fn caret_rows() {
     // line 2, spacer line 3, squad 2 line 4.
     assert!(lines[0].contains("A   M"), "{:?}", lines[0]);
     assert!(lines[1].contains("sort: status"), "{:?}", lines[1]);
-    assert!(lines[2].contains("▾*empty"), "{:?}", lines[2]);
-    assert!(lines[4].contains("▸ notes"), "no tab rows in between");
+    assert!(lines[2].contains("▼*empty"), "{:?}", lines[2]);
+    assert!(lines[4].contains("▼ notes"), "no tab rows in between");
 }
 
 // The Backlog section is binary in both directions: a card has no exited state,
@@ -2925,7 +2923,7 @@ async fn selector_l_and_h_set_explicit_view_states() {
     assert_eq!(v.squad_view(1), SectionView::Expanded);
 }
 
-// AC2-EDGE: a zero-tab active squad expands to a bare `▾` caret - no tab
+// AC2-EDGE: a zero-tab active squad expands to a bare `▼` caret - no tab
 // rows, no panic.
 
 // AC2-UI: the status row names the active squad iff more than one squad
@@ -5899,7 +5897,8 @@ fn client_compose_agent_rows_render_under_squads_with_badges() {
         focus_node: None,
     });
     view.expand_pull_sections(); // (x-c5ee) ~ elsewhere now defaults Collapsed
-                                 // Room for the status word and the identity suffixes (x-177c columns).
+    view.set_squad_view(2, SectionView::Collapsed);
+    // Room for the status word and the identity suffixes (x-177c columns).
     view.sideline_width = 60;
     let frame = view.compose();
     let text = frame_text(&frame);
@@ -5911,7 +5910,7 @@ fn client_compose_agent_rows_render_under_squads_with_badges() {
     // (R15), so every display row shifted down one. The state glyph is the
     // status WORD now: Blocked reads `Input`, exited reads `Stop` (x-177c).
     assert!(lines[0].contains("Agents"), "{:?}", lines[0]);
-    assert!(lines[1].contains("\u{25be}*footnote"), "{:?}", lines[1]);
+    assert!(lines[1].contains("\u{25bc}*footnote"), "{:?}", lines[1]);
     assert!(
         lines[2].contains("Input") && lines[2].contains("peer"),
         "{:?}",
@@ -5922,7 +5921,7 @@ fn client_compose_agent_rows_render_under_squads_with_badges() {
         "{:?}",
         lines[3]
     );
-    assert!(lines[5].contains("\u{25b8} notes"), "{:?}", lines[5]);
+    assert!(lines[5].contains("\u{25b6} notes"), "{:?}", lines[5]);
     assert!(lines[7].contains("+ workspace"), "{:?}", lines[7]);
     assert!(lines[9].contains("~ elsewhere"), "{:?}", lines[9]);
     assert!(lines[10].contains("bg-watch"), "{:?}", lines[10]);
@@ -5984,7 +5983,7 @@ fn band_rows() {
             meta(2, "notes", 1, 0),
             meta(3, "quiet", 1, 0),
         ],
-        active_squad: 1, // only footnote auto-expands; 2/3 stay collapsed
+        active_squad: 1, // 2/3 are folded by hand below
         panes,
         focus: 11,
         area: (29, 72),
@@ -5996,6 +5995,8 @@ fn band_rows() {
         ],
         focus_node: None,
     });
+    view.set_squad_view(2, SectionView::Collapsed);
+    view.set_squad_view(3, SectionView::Collapsed);
     let lines: Vec<String> = frame_text(&view.compose())
         .lines()
         .map(str::to_string)
@@ -6010,7 +6011,7 @@ fn band_rows() {
 
     // Collapsed inactive `notes`: 1 blocked + 1 working -> `▲1 ●1`, with the
     // ▲ (more severe) ahead of the ● in the strip.
-    let notes = find("\u{25b8} notes");
+    let notes = find("\u{25b6} notes");
     assert!(
         notes.contains("\u{25b2}1") && notes.contains("\u{25cf}1"),
         "notes counts \u{25b2}1 \u{25cf}1: {notes:?}"
@@ -6022,7 +6023,7 @@ fn band_rows() {
 
     // Collapsed `quiet`: its only agent is exited -> `✗1` (dead stays counted,
     // never silently dropped).
-    let quiet = find("\u{25b8} quiet");
+    let quiet = find("\u{25b6} quiet");
     assert!(
         quiet.contains("\u{2717}1"),
         "quiet keeps its exited count \u{2717}1: {quiet:?}"
@@ -6031,7 +6032,7 @@ fn band_rows() {
     // Always-on: the ACTIVE, EXPANDED `footnote` header ALSO shows its count
     // (`▲1`) - counts read in every view state, unlike the old collapsed-only
     // glyph which suppressed on expand.
-    let footnote = find("\u{25be}*footnote"); // ▾*footnote (expanded caret)
+    let footnote = find("\u{25bc}*footnote"); // ▼*footnote (expanded caret)
     assert!(
         footnote.contains("\u{25b2}1"),
         "expanded squad still shows counts: {footnote:?}"
@@ -6129,7 +6130,7 @@ fn band_rows() {
         .collect();
     let footnote = lines
         .iter()
-        .find(|l| l.contains("\u{25be}*footnote"))
+        .find(|l| l.contains("\u{25bc}*footnote"))
         .unwrap();
     for g in ['\u{25b2}', '\u{2713}', '\u{25cf}', '\u{25cb}', '\u{2717}'] {
         assert!(
@@ -6497,9 +6498,9 @@ fn client_compose_agents_first_omits_tab_rows_and_highlights_squad() {
     // (x-cd67 US1; the strip row owns line 0 since R15) squad 1 leads line
     // 1, squad 2 follows on line 3.
     assert!(lines[0].contains("A   M"), "{:?}", lines[0]);
-    assert!(lines[1].contains("▾*footnote"), "{:?}", lines[1]);
+    assert!(lines[1].contains("▼*footnote"), "{:?}", lines[1]);
     assert!(
-        lines[3].contains("▸ notes"),
+        lines[3].contains("▼ notes"),
         "next squad follows the spacer, no tab rows: {:?}",
         lines[3]
     );
