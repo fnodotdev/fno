@@ -182,7 +182,7 @@ The typed lanes (`inject_with_submit` in `crates/fno-agents/src/runtime/mail_inj
 
 Two consequences:
 
-- The raw door's multi-line refusal ("an unframed payload must be a single line") is gone. Its premise was that a second line rides in as a second submitted turn. Flattening removed that harm. The held-mail drain (hold.py `release` -> `_deliver_live`) was the caller this stranded. Its digest now delivers, and it stays audited as a raw inject. A single-line unframed payload is still a command (starts with `/` or `$`, decision d-f6570dc9).
+- The raw door's multi-line refusal ("an unframed payload must be a single line") is gone. Its premise was that a second line rides in as a second submitted turn. Flattening removed that harm. The held-mail drain (hold.py `release` -> `_deliver_live`) was the caller this stranded. Its digest now delivers, and it stays audited as a raw inject. A single-line unframed payload is still a command (starts with `/` or `$`, decision D1211 (d-f6570dc9)).
 - The confirm marker derives from the typed text up to the first glyph. That is the same first line `text.lines().next()` always gave, so transcript confirms are unchanged.
 
 ## The quiet wait, the one extra Enter, and the withdraw (C11, C12, C14)
