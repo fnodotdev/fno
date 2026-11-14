@@ -29,9 +29,13 @@ fn s<'a>(row: &'a Value, key: &str) -> &'a str {
 }
 
 fn reaches(row: &Value, layer: &str) -> bool {
-    row.get("reach")
-        .and_then(Value::as_array)
-        .is_some_and(|r| r.iter().any(|v| v.as_str() == Some(layer)))
+    #[derive(Default, serde::Deserialize)]
+    #[serde(default)]
+    struct Reach {
+        reach: Vec<String>,
+    }
+    let reach: Reach = serde::Deserialize::deserialize(row).unwrap_or_default();
+    reach.reach.iter().any(|r| r == layer)
 }
 
 /// Parse `--reach store,rules,memory`, refusing a filtered row the static

@@ -469,10 +469,34 @@ pub const AUTHORITY_SOURCES: &[&str] = &["operator", "chat_attested", "role", "a
 /// live in the role migration table; any other value outside the enum reads
 /// empty, so it lands in no lane.
 pub fn authority_of(row: &Value) -> &'static str {
-    let raw = row
-        .get("authority_source")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    authority_in(RowFacts::of(row).authority_source.unwrap_or(""))
+}
+
+/// The decision fields the lane and expiry readers use, read once from a
+/// row. An absent or null field reads `None`; a row of the wrong shape
+/// reads every field `None`.
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct RowFacts<'a> {
+    #[serde(borrow)]
+    authority_source: Option<&'a str>,
+    #[serde(borrow)]
+    ts: Option<&'a str>,
+    #[serde(borrow)]
+    decision_id: Option<&'a str>,
+    #[serde(borrow)]
+    question_id: Option<&'a str>,
+    #[serde(borrow)]
+    subject: Option<&'a str>,
+}
+
+impl<'a> RowFacts<'a> {
+    fn of(row: &'a Value) -> Self {
+        serde::Deserialize::deserialize(row).unwrap_or_default()
+    }
+}
+
+fn authority_in(raw: &str) -> &'static str {
     if crate::role_migration::is_legacy_role_authority(raw) {
         return "role";
     }
@@ -485,14 +509,11 @@ pub fn authority_of(row: &Value) -> &'static str {
 
 /// The one authority-to-lane map every reader and door shares.
 pub fn decision_lane(row: &Value) -> &'static str {
-    match authority_of(row) {
+    let facts = RowFacts::of(row);
+    match authority_in(facts.authority_source.unwrap_or("")) {
         "agent" | "role" => "coord",
         "beastmode" => "grant",
-        "operator" | "chat_attested"
-            if row.get("ts").and_then(Value::as_str).unwrap_or("") >= LAW_LANE_CUTOVER =>
-        {
-            "law"
-        }
+        "operator" | "chat_attested" if facts.ts.unwrap_or("") >= LAW_LANE_CUTOVER => "law",
         _ => "unattributed",
     }
 }
@@ -577,15 +598,11 @@ const STANDING_ANSWERS: &[&str] = &[
 /// coordination row, or any answer to a question. A standing decision
 /// carries neither and stays live until it is retracted or superseded.
 pub fn expiry_defaults_to_subject(row: &Value) -> bool {
-    let id = row.get("decision_id").and_then(Value::as_str).unwrap_or("");
-    if STANDING_ANSWERS.contains(&id) {
+    let facts = RowFacts::of(row);
+    if STANDING_ANSWERS.contains(&facts.decision_id.unwrap_or("")) {
         return false;
     }
-    decision_lane(row) == "coord"
-        || row
-            .get("question_id")
-            .and_then(Value::as_str)
-            .is_some_and(|q| !q.trim().is_empty())
+    decision_lane(row) == "coord" || facts.question_id.is_some_and(|q| !q.trim().is_empty())
 }
 
 /// A refused door setting (`--expiry`, `--reach`, `--challenges`): the
@@ -640,14 +657,53 @@ pub fn node_closure(node: &Value) -> Option<String> {
     if crate::backlog_ready::node_is_open(node) {
         return None;
     }
-    let at = node
-        .get("completed_at")
-        .filter(|v| crate::backlog_ready::truthy(Some(v)))
-        .or_else(|| node.get("supersession").and_then(|s| s.get("verified_at")))
-        .and_then(Value::as_str)
-        .unwrap_or("None");
-    let id = node.get("id").and_then(Value::as_str).unwrap_or("");
-    Some(format!("node {id} closed at {at}"))
+    let facts = NodeFacts::of(node);
+    let at = match facts.completed_at {
+        Some(v) if crate::backlog_ready::truthy(Some(&v)) => v.as_str().map(str::to_string),
+        _ => facts
+            .supersession
+            .and_then(|s| s.verified_at)
+            .map(str::to_string),
+    };
+    let id = facts.id.unwrap_or("");
+    Some(format!(
+        "node {id} closed at {}",
+        at.as_deref().unwrap_or("None")
+    ))
+}
+
+/// The node fields closure evidence reads, read once from a graph row.
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct NodeFacts<'a> {
+    #[serde(borrow)]
+    id: Option<&'a str>,
+    completed_at: Option<Value>,
+    #[serde(borrow)]
+    supersession: Option<Superseded<'a>>,
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct Superseded<'a> {
+    #[serde(borrow)]
+    verified_at: Option<&'a str>,
+}
+
+impl<'a> NodeFacts<'a> {
+    fn of(node: &'a Value) -> Self {
+        serde::Deserialize::deserialize(node).unwrap_or_default()
+    }
+}
+
+/// A stated `expiry_ref`, typed at the read.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum Expiry {
+    Never,
+    Date { at: String },
+    Node { node_id: String },
+    Pr { repository: String, number: i64 },
 }
 
 /// The lifecycle of an expiry that needs no graph: `never` is live, and a
@@ -656,11 +712,10 @@ pub fn timed_lifecycle(
     expiry: &Value,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Option<(&'static str, Option<String>)> {
-    match expiry.get("kind").and_then(Value::as_str)? {
-        "never" => Some(("live", None)),
-        "date" => {
-            let at = expiry.get("at").and_then(Value::as_str)?;
-            let at = chrono::DateTime::parse_from_rfc3339(at).ok()?;
+    match <Expiry as serde::Deserialize>::deserialize(expiry).ok()? {
+        Expiry::Never => Some(("live", None)),
+        Expiry::Date { at } => {
+            let at = chrono::DateTime::parse_from_rfc3339(&at).ok()?;
             Some(if at <= now {
                 ("expired", Some(format!("date {} passed", at.to_rfc3339())))
             } else {
@@ -674,22 +729,15 @@ pub fn timed_lifecycle(
 /// The node id a row's expiry names by exact id, stated or defaulted.
 fn expiry_node_id(row: &Value) -> Option<String> {
     if let Some(expiry) = row.get("expiry_ref").filter(|r| r.is_object()) {
-        if expiry.get("kind").and_then(Value::as_str) != Some("node") {
-            return None;
-        }
-        return expiry
-            .get("node_id")
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        return match <Expiry as serde::Deserialize>::deserialize(expiry) {
+            Ok(Expiry::Node { node_id }) => Some(node_id),
+            _ => None,
+        };
     }
     if !expiry_defaults_to_subject(row) {
         return None;
     }
-    let subject = row
-        .get("subject")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim();
+    let subject = RowFacts::of(row).subject.unwrap_or("").trim();
     crate::law_match::matches_node_id_shape(subject).then(|| subject.to_string())
 }
 
@@ -726,7 +774,7 @@ pub fn drop_expired(index: &mut Index, graph: &Path) {
         };
         for node in rows {
             if node_closure(&node).is_some() {
-                if let Some(id) = node.get("id").and_then(Value::as_str) {
+                if let Some(id) = NodeFacts::of(&node).id {
                     closed.insert(id.to_string());
                 }
             }

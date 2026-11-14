@@ -1805,6 +1805,21 @@ fn stored_event_id(path: &Path, line: &str) -> Result<Option<String>, String> {
     }
 }
 
+/// The decision settings a clear carries in its provenance, read once.
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct ClearKnobs {
+    supersedes: Option<String>,
+    keep: Vec<String>,
+    expiry: Option<String>,
+}
+
+impl ClearKnobs {
+    fn of(provenance: &Value) -> Self {
+        serde::Deserialize::deserialize(provenance).unwrap_or_default()
+    }
+}
+
 pub(crate) fn make_decision(
     req: &ClearRequest,
     qid: &str,
@@ -1951,28 +1966,23 @@ pub(crate) fn make_decision(
             decision.insert("rationale".into(), json!(answer));
         }
     }
+    let knobs = ClearKnobs::of(&req.provenance);
+    let subject_now = decision
+        .get("subject")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     // An agent answer near a live ruling names it first, the way every write
     // door does. The user's own board answer is never refused here.
     if !operator_can_grant(req) {
-        let supersedes = req.provenance.get("supersedes").and_then(Value::as_str);
-        let keep: Vec<String> = req
-            .provenance
-            .get("keep")
-            .and_then(Value::as_array)
-            .map(|k| {
-                k.iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default();
-        let subject = decision
-            .get("subject")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        if let Some(message) =
-            crate::law_reach::door_near_refusal(subject, answer, "global", supersedes, &keep)
-        {
+        let supersedes = knobs.supersedes.as_deref();
+        if let Some(message) = crate::law_reach::door_near_refusal(
+            &subject_now,
+            answer,
+            "global",
+            supersedes,
+            &knobs.keep,
+        ) {
             return Err(message);
         }
         if let Some(target) = supersedes {
@@ -1982,12 +1992,7 @@ pub(crate) fn make_decision(
     // An answer ends with its subject by default, whoever gave it: the node
     // when one exists, else the PR a door subject names. `--expiry` states
     // another end, and `never` keeps the answer as a standing decision.
-    let subject_now = decision
-        .get("subject")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    if let Some(spec) = req.provenance.get("expiry").and_then(Value::as_str) {
+    if let Some(spec) = knobs.expiry.as_deref() {
         let base = match node {
             Some(node) if !spec.starts_with("pr") => node,
             _ => subject_now.as_str(),

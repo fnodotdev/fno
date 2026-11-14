@@ -314,9 +314,10 @@ pub fn assemble(
         if let Some(until) = row.get("until").and_then(Value::as_str) {
             scope_line.push_str(&format!("\nexpires = \"{}\"", toml_escape(until)));
         }
-        let at_skill = row
-            .get("at_skill")
-            .and_then(Value::as_str)
+        let selector = Selector::of(row);
+        let at_skill = selector
+            .at_skill
+            .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty());
         // A decision that names its skill fires there every time (tier 0),
@@ -849,14 +850,25 @@ fn conflict_losers(rows: &[Value], project: Option<&str>) -> BTreeSet<String> {
 
 /// A decision row's string filters, carried onto its rule.
 fn row_filters(row: &Value) -> BTreeMap<String, String> {
-    row.get("filters")
-        .and_then(Value::as_object)
-        .map(|m| {
-            m.iter()
-                .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
-                .collect()
-        })
-        .unwrap_or_default()
+    Selector::of(row)
+        .filters
+        .into_iter()
+        .filter_map(|(k, v)| Some((k, v.as_str()?.to_string())))
+        .collect()
+}
+
+/// Where and for whom a decision row fires, read once from the row.
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct Selector {
+    at_skill: Option<String>,
+    filters: BTreeMap<String, Value>,
+}
+
+impl Selector {
+    fn of(row: &Value) -> Self {
+        serde::Deserialize::deserialize(row).unwrap_or_default()
+    }
 }
 
 /// Whether a rule's filters hold for the calling session.
