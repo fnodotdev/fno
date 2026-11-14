@@ -119,6 +119,10 @@ pub trait Outside {
     fn login(&self, root: &Path, id: &str) -> i32;
     /// Both stdin and stdout are a terminal, so a browser login can run.
     fn terminal(&self) -> bool;
+    /// The login keychain is readable (unlocked on demand over SSH).
+    fn ensure_keychain(&self) -> Result<(), crate::claude_vault::KeychainLocked> {
+        Ok(())
+    }
     /// One `account_switched` event with these fields.
     fn emit(&self, fields: Map<String, Value>);
     fn now(&self) -> f64;
@@ -153,6 +157,13 @@ impl Outside for SystemOutside {
     }
     fn terminal(&self) -> bool {
         self.interactive && std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
+    }
+    fn ensure_keychain(&self) -> Result<(), crate::claude_vault::KeychainLocked> {
+        if self.interactive {
+            crate::claude_vault::ensure_keychain_unlocked()
+        } else {
+            Ok(())
+        }
     }
     fn emit(&self, fields: Map<String, Value>) {
         let Some(path) = crate::agents_config::state_dir(&self.cwd).map(|d| d.join("events.jsonl"))
@@ -699,6 +710,11 @@ pub fn use_account(
 
     let managed = record.auth == "managed";
     if managed {
+        if record.harness.as_harness() == Harness::Claude {
+            if let Err(reason) = outside.ensure_keychain() {
+                return run.fail(&format!("error: {reason}"));
+            }
+        }
         let root = crate::accounts::slot::store_root(cwd).unwrap_or_default();
         // --login skips the stored-login check: a stored login can be live but
         // serve the wrong account, and only the two-step vault login proves
