@@ -325,6 +325,73 @@ fn close_bank_task(o: &Opts, reason: &str) {
     );
 }
 
+/// The origin key the cohort-split redeclaration ask files under, deduped by
+/// the open-node scan so one open node holds every later filing.
+const COHORT_NODE_KEY: &str = "evals-cohort-split";
+
+/// The tick's pin check, independent of the launch decision: a bank change
+/// voids the declared split, and the redeclaration is a person's act, so the
+/// tick files one keyed node the day it happens instead of letting the next
+/// scheduled run die on it. A missing or unparseable declaration returns
+/// silently (the run gate's warning covers those); a readable pin whose bank
+/// diff is non-empty files once. An unreadable graph files nothing, the same
+/// posture as the regression-node filing: a duplicate is the worse error.
+fn file_cohort_split_node(o: &Opts) {
+    let Some(repo) = bank_repo(o) else {
+        return;
+    };
+    let decl_path = repo.join("evals/bank/cohorts.yaml");
+    let Ok(decl) = crate::eval_attempt::load_cohorts_yaml(&decl_path.to_string_lossy()) else {
+        return;
+    };
+    let Some(pinned) = decl.get("bank_rev").and_then(Value::as_str) else {
+        return;
+    };
+    if pinned.is_empty() || crate::eval_attempt::bank_same(&repo.to_string_lossy(), pinned, "HEAD")
+    {
+        return;
+    }
+    let graph = o
+        .graph
+        .clone()
+        .unwrap_or_else(|| crate::backlog::settings::graph_path_at(&repo));
+    let Some(open) = open_regression_keys(&graph, COHORT_NODE_KEY) else {
+        return;
+    };
+    if open.contains(COHORT_NODE_KEY) {
+        return;
+    }
+    let mut cmd = Command::new(&o.fno_bin);
+    cmd.current_dir(&repo);
+    cmd.args([
+        "backlog",
+        "idea",
+        "Cohort split void: redeclare evals/bank/cohorts.yaml at the current bank",
+        "--type",
+        "bug",
+        "--difficulty",
+        "low",
+        "--source-kind",
+        "from_observation",
+        "--origin-evidence",
+        COHORT_NODE_KEY,
+        // A daemon cannot answer the fold-or-separate prompt, and the
+        // origin key decides which node a task owns.
+        "--separate",
+        "-J",
+        "--details",
+        &format!(
+            "The declared cohort split pins bank rev {} but the bank changed since, so the split is void. Redeclare bank_rev in evals/bank/cohorts.yaml against the current bank, then re-run: fno doctor evals run --tier regression -y",
+            &pinned[..12.min(pinned.len())]
+        ),
+    ])
+    .stdin(Stdio::null());
+    match crate::bounded_cmd::output_with_timeout_result(cmd, 30) {
+        Ok(out) if out.status.success() => {}
+        _ => eprintln!("evals-arm: cohort-split redeclaration node refused"),
+    }
+}
+
 /// Journal `evals_stale`, file the bank's attention row, then notify at
 /// most once per schedule window, the deleted phase's contract: the dedup
 /// ts is read BEFORE emitting (this very row must not swallow the mail),
@@ -518,6 +585,12 @@ fn run_tick_mode(
             "history carries no readable regression timestamp",
         );
     }
+
+    // The pin check rides every tick past the claim and age reads,
+    // independent of the launch decision: a bank change files the ask the
+    // day it happens, not schedule-days later.
+    file_cohort_split_node(o);
+
     if !summary.never_ran && age_days.map_or(false, |a| a <= o.schedule_days as f64) {
         close_bank_task(o, "bank-fresh");
         return receipt(
