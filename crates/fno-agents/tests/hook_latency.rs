@@ -1394,16 +1394,20 @@ fn hook_budget_claude_pretool_gate() {
                 assert_eq!(code, 0, "{stderr}");
                 let response: Value = serde_json::from_str(stdout.trim())
                     .unwrap_or_else(|error| panic!("{stdout:?} is not JSON: {error}"));
-                let decision = &response["hookSpecificOutput"]["permissionDecision"];
+                let at = |pointer: &str| response.pointer(pointer).and_then(Value::as_str);
+                let decision = at("/hookSpecificOutput/permissionDecision");
                 match deny_reason {
                     Some(reason) => {
-                        assert_eq!(decision, "deny", "{command}: {stdout} {stderr}");
-                        assert!(response["hookSpecificOutput"]["permissionDecisionReason"]
-                            .as_str()
+                        assert_eq!(decision, Some("deny"), "{command}: {stdout} {stderr}");
+                        assert!(at("/hookSpecificOutput/permissionDecisionReason")
                             .unwrap_or_default()
                             .contains(reason));
                     }
-                    None => assert_ne!(decision, "deny", "{command} must allow: {stdout} {stderr}"),
+                    None => assert_ne!(
+                        decision,
+                        Some("deny"),
+                        "{command} must allow: {stdout} {stderr}"
+                    ),
                 }
             },
         );
