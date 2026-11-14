@@ -451,20 +451,29 @@ fn parse_flags(tail: &[String]) -> Result<Flags, DocsError> {
     Ok(flags)
 }
 
-/// Bind one page: stamp or twin its front matter, then rerun the gate.
-fn bind(tail: &[String]) -> Result<i32, DocsError> {
-    let flags = parse_flags(tail)?;
-    let Some(page_raw) = tail.first() else {
-        return Err(DocsError::Usage(
-            "fno do docs bind: name the page (fno do docs bind <page> --help for the flags)".into(),
-        ));
+/// Split the leading page positional off the bind tail. The page comes
+/// before the flags, so `docs bind <page> --nav <group>` parses the flags
+/// over the remainder and never reads the page as a flag.
+fn peel_page(tail: &[String]) -> Result<Option<(String, &[String])>, DocsError> {
+    let Some(first) = tail.first() else {
+        return Ok(None);
     };
-    let page_raw = page_raw.clone();
-    if page_raw.starts_with("--") {
+    if first.starts_with("--") {
         return Err(DocsError::Usage(
             "fno do docs bind: name the page before the flags".into(),
         ));
     }
+    Ok(Some((first.clone(), &tail[1..])))
+}
+
+/// Bind one page: stamp or twin its front matter, then rerun the gate.
+fn bind(tail: &[String]) -> Result<i32, DocsError> {
+    let Some((page_raw, flag_tail)) = peel_page(tail)? else {
+        return Err(DocsError::Usage(
+            "fno do docs bind: name the page (fno do docs bind <page> --help for the flags)".into(),
+        ));
+    };
+    let flags = parse_flags(flag_tail)?;
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let web = web_root(&cwd, flags.web.as_deref())?;
     let docs = web.join(DOCS_DIR);
@@ -758,5 +767,25 @@ mod tests {
         assert_eq!(path, docs.join("guides/x.mdx"));
         assert!(page_paths(docs, "guides/x").is_err());
         assert!(page_paths(docs, "").is_err());
+    }
+
+    #[test]
+    fn bind_reads_the_page_positional_before_the_flags() {
+        let tail: Vec<String> = ["guides/x.mdx", "--nav", "Guides", "--pr", "4327"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (page, flag_tail) = peel_page(&tail).unwrap().expect("a page leads the tail");
+        assert_eq!(page, "guides/x.mdx");
+        assert_eq!(flag_tail, &tail[1..]);
+        // Flags first: the refusal names the shape, never "unknown flag".
+        let flags_first: Vec<String> = ["--nav", "Guides"].iter().map(|s| s.to_string()).collect();
+        let err = peel_page(&flags_first).unwrap_err().to_string();
+        assert!(
+            err.contains("name the page before the flags"),
+            "the refusal names the shape: {err}"
+        );
+        // No page at all: the caller prints the usage line.
+        assert!(peel_page(&[]).unwrap().is_none());
     }
 }
