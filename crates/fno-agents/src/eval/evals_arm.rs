@@ -353,14 +353,14 @@ fn file_cohort_split_node(o: &Opts) {
         return;
     };
     let pinned = pin.bank_rev;
-    if pinned.is_empty() || crate::eval_attempt::bank_same(&repo.to_string_lossy(), pinned, "HEAD")
+    if pinned.is_empty() || crate::eval_attempt::bank_same(&repo.to_string_lossy(), &pinned, "HEAD")
     {
         return;
     }
     let graph = o
         .graph
         .clone()
-        .unwrap_or_else(|| crate::backlog::settings::graph_path_at(&repo));
+        .unwrap_or_else(|| crate::backlog::settings::graph_path_at(Some(repo.as_path())));
     let Some(open) = open_regression_keys(&graph, COHORT_NODE_KEY) else {
         return;
     };
@@ -757,11 +757,12 @@ fn graded_failures(rows: &[Value]) -> std::collections::BTreeMap<String, String>
     out
 }
 
-/// Origin keys of the open regression nodes. None on an unreadable graph: the
-/// caller then files nothing, because a duplicate per run is the worse error
-/// and a task still failing gets its node on the next run.
-fn open_regression_keys(graph: &Path) -> Option<std::collections::BTreeSet<String>> {
-    let rows = origin_key_rows(graph, NODE_KEY_PREFIX).ok()?;
+/// Origin keys of the open nodes under one origin-key prefix. None on an
+/// unreadable graph: the caller then files nothing, because a duplicate per
+/// run is the worse error and a task still failing gets its node on the next
+/// run.
+fn open_regression_keys(graph: &Path, prefix: &str) -> Option<std::collections::BTreeSet<String>> {
+    let rows = origin_key_rows(graph, prefix).ok()?;
     Some(
         rows.iter()
             .filter(|n| {
@@ -835,7 +836,7 @@ pub(crate) fn file_failure_nodes(
     let graph = graph
         .map(Path::to_path_buf)
         .unwrap_or_else(|| crate::backlog::settings::graph_path_at(repo));
-    let Some(open) = open_regression_keys(&graph) else {
+    let Some(open) = open_regression_keys(&graph, NODE_KEY_PREFIX) else {
         return (Vec::new(), failures.into_keys().collect());
     };
     let (mut filed, mut refused) = (Vec::new(), Vec::new());

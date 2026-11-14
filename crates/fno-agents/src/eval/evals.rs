@@ -865,9 +865,12 @@ mod tests {
                 Some(0),
             )
         };
-        assert!(matches!(fresh(true), CohortVerdict::Fresh(_)));
         assert!(matches!(
-            fresh(serde_json::Value::Null),
+            fresh(serde_json::json!(true)),
+            CohortVerdict::Fresh(_)
+        ));
+        assert!(matches!(
+            fresh(serde_json::json!(null)),
             CohortVerdict::Fresh(_)
         ));
         let refused = super::cohort_verdict(
