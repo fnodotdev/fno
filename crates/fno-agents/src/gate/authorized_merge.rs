@@ -942,6 +942,20 @@ fn decide_with_warnings<P: Probes>(
             });
         }
     }
+    // Arm holds a pending head whatever `require_checks` says. `--auto` waits
+    // only on the checks the ruleset REQUIRES: on a repo that requires one
+    // check, an armed PR with eleven others running merges at once, and a
+    // run that then fails lands on main. The finalize arm passes
+    // `require_checks: false`, so this cannot ride that flag.
+    if request.effect == Effect::Arm && checks.verdict == "pending" {
+        return Err(Outcome::Held {
+            reason: "checks are pending; arming auto-merge waits only on the checks the \
+                     ruleset requires, so the PR could land while its own CI still runs; \
+                     the next settle arms it"
+                .to_string(),
+            warnings: Vec::new(),
+        });
+    }
     if request.require_checks {
         match checks.verdict.as_str() {
             "green" => {
@@ -1082,9 +1096,9 @@ fn decide_with_warnings<P: Probes>(
             "red" => return Err(red_checks_outcome(request)),
             // A pending read fell through with only an advisory warning, a
             // PR merged while its rerun was still in flight, and main went
-            // red (2026-11-10). Pending holds; arm and unknown keep their
-            // fall-through (GitHub's queue waits out required things; a
-            // docs-only PR with no check-run CI keeps its merge door).
+            // red (2026-11-10). Pending holds on merge, and on arm above.
+            // Unknown keeps its fall-through (a docs-only PR with no
+            // check-run CI keeps its merge door; law D3173).
             "pending" if request.effect == Effect::Merge => {
                 return Err(Outcome::Held {
                     reason: "checks are pending; require_checks_pass merges only the \
