@@ -1562,7 +1562,7 @@ pub(crate) fn status_ci(payload: &Value) -> (i32, String, String) {
     let pr = match lists::operand_pr_number(payload, Path::new(cwd_str), "fno do pr status") {
         Ok(pr) => pr,
         Err(reason) => {
-            return (1, String::new(), format!("status-ci: {reason}\n"));
+            return (1, String::new(), format!("{}\n", reason.text));
         }
     };
     let drop_coverage = payload

@@ -224,8 +224,7 @@ fn status_read(payload: &Value) -> (i32, String, String) {
     let pr = match super::lists::operand_pr_number(payload, cwd, "fno do pr status") {
         Ok(pr) => pr,
         Err(reason) => {
-            let (_code, out, lines) =
-                super::compose::error_payload("0", &super::RestReason::new(&reason, ""));
+            let (_code, out, lines) = super::compose::error_payload("0", &reason);
             let stdout = format!("{}\n", serde_json::to_string(&out).unwrap_or_default());
             return (4, stdout, format!("{}\n", lines.join("\n")));
         }

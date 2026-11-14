@@ -112,7 +112,11 @@ pub(crate) fn resolve_current_pr_number(
 /// branch-scoped read [`resolve_current_pr_number`] serves, so a fresh PR is
 /// watchable from its own worktree without a number. The `Err` names the
 /// explicit spelling that pins the number.
-pub(crate) fn operand_pr_number(payload: &Value, cwd: &Path, usage: &str) -> Result<u64, String> {
+pub(crate) fn operand_pr_number(
+    payload: &Value,
+    cwd: &Path,
+    usage: &str,
+) -> Result<u64, super::RestReason> {
     let pr = payload.get("pr").and_then(Value::as_u64).unwrap_or(0);
     if pr > 0 {
         return Ok(pr);
@@ -122,7 +126,12 @@ pub(crate) fn operand_pr_number(payload: &Value, cwd: &Path, usage: &str) -> Res
         .and_then(Value::as_str)
         .map(str::to_owned);
     resolve_current_pr_number(Some(cwd), repo.as_deref()).map_err(|reason| {
-        format!("{usage}: {reason}; this checkout names no PR, so pass one: `{usage} <number> ...`")
+        super::RestReason::new(
+            &format!(
+                "{usage}: {reason}; this checkout names no PR, so pass one: `{usage} <number> ...`"
+            ),
+            "",
+        )
     })
 }
 

@@ -278,7 +278,7 @@ pub(crate) fn run_logs_door(payload: &Value) -> (i32, String, String) {
     let pr = match super::lists::operand_pr_number(payload, cwd, "fno do pr logs") {
         Ok(pr) => pr,
         Err(reason) => {
-            return (4, String::new(), format!("fno do pr logs: {reason}\n"));
+            return (4, String::new(), format!("{}\n", reason.text));
         }
     };
     let job = payload

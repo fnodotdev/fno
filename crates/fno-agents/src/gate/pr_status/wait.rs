@@ -364,7 +364,7 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
     let cwd = Path::new(cwd_str);
     let pr = match super::lists::operand_pr_number(payload, cwd, "fno do pr wait") {
         Ok(pr) => pr,
-        Err(reason) => return (2, String::new(), format!("{reason}\n")),
+        Err(reason) => return (2, String::new(), format!("{}\n", reason.text)),
     };
     let sleeper = |s: f64| std::thread::sleep(std::time::Duration::from_secs_f64(s));
     let start = Instant::now();
