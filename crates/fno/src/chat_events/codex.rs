@@ -143,7 +143,7 @@ fn image_from_url(url: String) -> ImageRef {
         .strip_prefix("data:")
         .and_then(|rest| rest.split_once(";base64,"))
     {
-        return ImageRef::from_base64(mime.to_string(), data.to_string());
+        return super::image_from_base64(mime.to_string(), data.to_string());
     }
     ImageRef::Url { url }
 }
