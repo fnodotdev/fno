@@ -47,7 +47,9 @@ pub fn run_renew(argv: &[String]) -> i32 {
         }
     }
     let (Some(token), Some(until)) = (token, until) else {
-        eprintln!("fno inbox decisions renew: a law and --until are required\n{RENEW_USAGE}");
+        eprintln!(
+            "fno inbox decisions renew: a decision id and --until are required\n{RENEW_USAGE}"
+        );
         return 2;
     };
     let until = match parse_until(&until) {

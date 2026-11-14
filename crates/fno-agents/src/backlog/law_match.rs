@@ -1308,7 +1308,7 @@ fn scope_split_answer_in(
         // byte-stable.
         Err(reason) => {
             eprintln!(
-                "fno inbox decisions: project unresolvable ({reason}); no project law hidden"
+                "fno inbox decisions: project unresolvable ({reason}); no project decision hidden"
             );
             None
         }
