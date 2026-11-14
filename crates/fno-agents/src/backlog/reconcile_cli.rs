@@ -1477,14 +1477,19 @@ fn route_outside_merge_look(record: &MergeDriftRecord, repo: &str) {
         );
         return;
     };
-    let recent = record
+    let Some(merged_at) = record
         .merged_at
         .as_deref()
         .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
-        .is_some_and(|at| {
-            (chrono::Utc::now() - at.with_timezone(&chrono::Utc)).num_days() < LOOK_WINDOW_DAYS
-        });
-    if !recent {
+    else {
+        eprintln!(
+            "look request not routed: PR {} has no readable merged_at",
+            record.pr_number
+        );
+        return;
+    };
+    let age = chrono::Utc::now() - merged_at.with_timezone(&chrono::Utc);
+    if age > chrono::Duration::days(LOOK_WINDOW_DAYS) {
         return;
     }
     let pr = record.pr_number as u64;
@@ -1521,6 +1526,7 @@ fn route_outside_merge_look(record: &MergeDriftRecord, repo: &str) {
                 &blocker.detail,
             );
         }
+        Some(blocker) if blocker.code == "visual_declined" => {}
         Some(blocker) => eprintln!(
             "look request not routed: PR {pr} gate read {}: {}",
             blocker.code, blocker.detail
