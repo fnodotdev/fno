@@ -71,15 +71,15 @@ pub fn text(t: impl Into<SharedString>, r: Role, p: &Palette) -> Div {
 }
 
 /// One line that ends in an ellipsis when its box runs out, never a clip
-/// mid-glyph. The box takes what the row leaves it.
+/// mid-glyph. The box takes what the row leaves it. It truncates rather
+/// than line-clamps: a clamp wraps against the few pixels a scroll
+/// column's min-content pass offers, and shows three letters.
 pub fn clamp(t: impl Into<SharedString>, r: Role, p: &Palette) -> Div {
-    div().flex_1().min_w_0().overflow_hidden().child(
-        role(div(), r, p)
-            .w_full()
-            .line_clamp(1)
-            .text_ellipsis()
-            .child(t.into()),
-    )
+    div()
+        .flex_1()
+        .min_w_0()
+        .overflow_hidden()
+        .child(role(div(), r, p).w_full().truncate().child(t.into()))
 }
 
 /// A fixed-width cell `chars` advances wide, in a role. Numbers align right,
@@ -230,6 +230,17 @@ pub fn fit(widths: &[usize], width: usize, gap: usize) -> usize {
     widths.len()
 }
 
+/// `t` cut to `chars` mono cells, the last one an ellipsis when it was cut.
+/// The chrome is monospace, so a count of cells is an exact width.
+pub fn cut(t: &str, chars: usize) -> String {
+    if t.chars().count() <= chars {
+        return t.to_string();
+    }
+    let mut out: String = t.chars().take(chars.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
 /// One SF Mono advance at `size`: the width of a cell in the chrome's grid.
 pub fn advance(window: &gpui::Window, size: f32) -> Pixels {
     let text = window.text_system();
@@ -253,5 +264,8 @@ mod tests {
         assert_eq!(fit(&widths, 3, 2), 0, "a fact never shows cut");
         // A short late column does not jump ahead of a long one that missed.
         assert_eq!(fit(&[12, 2], 11, 1), 0);
+        // A cut text keeps its cell count, with the ellipsis in the last.
+        assert_eq!(cut("Keep the mail store", 8), "Keep th…");
+        assert_eq!(cut("short", 8), "short");
     }
 }

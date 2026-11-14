@@ -11,6 +11,8 @@ use fno::app_api::lattice::{lattice_glyph, LatticeState};
 
 /// A node id's width in advances: an 11-character id shows whole.
 const NODE_W: usize = 11;
+/// The questions column's width.
+const QUESTIONS_W: f32 = 440.0;
 
 /// A failed read in the error color. Before the first read the body says
 /// "reading…" instead, so this shows nothing.
@@ -73,6 +75,14 @@ fn table(root: &Root) -> Div {
     names.sort();
     names.dedup();
     let hosts = names.len() > 1;
+    // The title column takes the rest of the row. Mono cells measure exactly,
+    // so the title is cut whole to that many cells: the sidebar, the
+    // questions column, the gaps, the glyph and the fixed columns come off.
+    let fixed = 2 + 18 + 9 + NODE_W + if hosts { 14 } else { 0 };
+    let cols = if hosts { 6.0 } else { 5.0 };
+    let rest = root.width - px(super::left_pane::WIDTH) - px(QUESTIONS_W) - px(24.0 + 16.0 + 24.0);
+    let rest = rest - adv * fixed as f32 - px(8.0) * cols;
+    let title_w = (rest / adv).floor().max(4.0) as usize;
     let head = |t: &str, chars: usize| col(t.to_string(), chars, Role::Hint, root, adv);
     let mut heads = div()
         .flex()
@@ -121,7 +131,10 @@ fn table(root: &Root) -> Div {
                         adv,
                     ))
                     .child(col(
-                        work.and_then(|w| w.title.clone()).unwrap_or_default(),
+                        ui::cut(
+                            &work.and_then(|w| w.title.clone()).unwrap_or_default(),
+                            title_w,
+                        ),
                         0,
                         Role::Body,
                         root,
@@ -277,7 +290,7 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
         .child(column("board-table").flex_1().min_w_0().child(table(root)))
         .child(
             column("board-feed")
-                .w(px(440.0))
+                .w(px(QUESTIONS_W))
                 .flex_none()
                 .pr_4()
                 .child(feed(root, cx)),

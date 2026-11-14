@@ -153,6 +153,8 @@ pub struct Root {
     pub(super) ext: mods::Page,
     /// One SF Mono advance at the body size, measured each frame.
     pub(super) adv: Pixels,
+    /// The window's width, measured each frame.
+    pub(super) width: Pixels,
     /// The input handler's uncommitted text.
     preedit: Option<String>,
     _reader: Option<Task<()>>,
@@ -220,6 +222,7 @@ impl Root {
             session: session.clone(),
             ext: mods::Page::default(),
             adv: px(ui::BODY * 0.6),
+            width: px(1360.0),
             chat: Chat::default(),
             pinned,
             preedit: None,
@@ -1013,18 +1016,16 @@ impl Root {
                         .bg(rgb(p.border)),
                 );
             }
-            let dim = (id != self.layout.focus && rects_len > 1)
-                .then(|| div().absolute().size_full().bg(rgba(p.bg << 8 | 0x66)));
-            out = out.child(
-                div()
-                    .absolute()
-                    .left(x)
-                    .top(y)
-                    .w(w)
-                    .h(h)
-                    .child(AnyView::from(view).cached(gpui::StyleRefinement::default().size_full()))
-                    .children(dim),
-            );
+            let place = |d: gpui::Div| d.absolute().left(x).top(y).w(w).h(h);
+            out =
+                out.child(place(div()).child(
+                    AnyView::from(view).cached(gpui::StyleRefinement::default().size_full()),
+                ));
+            // A sibling painted after the pane, so the cached view cannot
+            // paint over it.
+            if id != self.layout.focus && rects_len > 1 {
+                out = out.child(place(div()).bg(rgba(p.bg << 8 | 0x73)));
+            }
         }
         out
     }
@@ -1321,6 +1322,7 @@ impl Render for Root {
             });
         }
         self.adv = ui::advance(window, ui::BODY);
+        self.width = window.viewport_size().width;
         let main = match self.main {
             MainView::Chat => self.chat_view(window, cx).into_any_element(),
             MainView::Terminal => self.terminal(cx).into_any_element(),

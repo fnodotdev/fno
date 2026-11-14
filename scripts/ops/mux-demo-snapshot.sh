@@ -681,16 +681,18 @@ fi
 cat >"$ROOT/fleetbin/agents-stub.py" <<'PY'
 import json, os, socket, struct, sys
 path, sids = sys.argv[1], sys.argv[2:5]
+# The last column is seconds since the agent last acted, so no two read alike.
 rows = [
-    ("archer", sids[1], 8130, 402000),
-    ("scout", sids[0], 4497, 184000),
-    ("reviewer", sids[2], 312, 21000),
-    ("pager", None, 126, 52000),
-    ("scribe", None, 88, 9000),
+    ("archer", sids[1], 8130, 402000, 64),
+    ("scout", sids[0], 4497, 184000, 380),
+    ("reviewer", sids[2], 312, 21000, 175),
+    ("pager", None, 126, 52000, 840),
+    ("scribe", None, 88, 9000, 2290),
 ]
 agents = []
-for name, sid, cost, tokens in rows:
-    row = {"name": name, "session_cost_cents": cost, "session_tokens": tokens}
+for name, sid, cost, tokens, age in rows:
+    row = {"name": name, "session_cost_cents": cost, "session_tokens": tokens,
+           "last_activity_age_s": age}
     if sid:
         row["harness_session_id"] = sid
     agents.append(row)
@@ -1216,6 +1218,8 @@ if [ -n "$APP" ]; then
   mkdir -p "$EXTRAS/mods/open-work"
   cp "$REPO_ROOT/plugins/fno-panels/mods/review-ledger/preview.png" "$EXTRAS/mods/open-work/preview.png"
   printf '# Open work\n\n## What it shows\n\nOne row per open node: its id and title.\n' > "$EXTRAS/mods/open-work/RECIPE.md"
+  mkdir -p "$EXTRAS/mods/clock"
+  printf '# Clock\n\n## What it shows\n\nThe date and time, one line a second.\n' > "$EXTRAS/mods/clock/RECIPE.md"
   cat > "$EXTRAS/plugin.yaml" <<'YAML'
 id: demo-extras
 version: 0.1.0
@@ -1235,6 +1239,8 @@ mods:
   - id: clock
     title: Clock
     summary: A clock in a pane, for the corner of a wide layout.
+    preview: mods/open-work/preview.png
+    recipe: mods/clock/RECIPE.md
     run: [sh, -c, "while :; do date; sleep 1; done"]
 YAML
   "$FNO" config plugins activate "$EXTRAS" >/dev/null

@@ -344,7 +344,7 @@ pub(super) fn render(
                 .px_3()
                 .py_1()
                 .child(ui::text(why, ui::Role::Fact, &p)),
-            Row::More { hidden } => ui::clickable(ui::row(i, false, &p), &p)
+            Row::More { hidden } => ui::clickable(ui::row(i, false, &p).w(px(WIDTH)), &p)
                 .on_click(cx.listener(|root, _, _, cx| root.act(Action::ToggleAgents, cx)))
                 .child(div().w(adv * 2.0).flex_none())
                 .child(ui::text(
@@ -376,7 +376,7 @@ pub(super) fn render(
                     (None, true) => ("◇".to_string(), p.warn),
                     (None, false) => (String::new(), p.faint),
                 };
-                let mut item = ui::row(i, cursor, &p).child(
+                let mut item = ui::row(i, cursor, &p).w(px(WIDTH)).child(
                     div()
                         .w(adv * 2.0)
                         .flex_none()
@@ -430,15 +430,27 @@ pub(super) fn render(
                     // A question, a session or a machine: the title takes
                     // the room, and one quiet fact sits at the right edge.
                     None => {
-                        let mut d = item.child(ui::clamp(label, ui::Role::Name, &p));
-                        if let Mark::Current(word) = mark {
-                            d = d.child(ui::tag(word, p.muted, &p));
+                        // Mono cells measure exactly: the title gets what the
+                        // fact, the tag and the gaps leave, cut whole.
+                        let detail = ui::cut(&detail, 18);
+                        let word = match mark {
+                            Mark::Current(word) => Some(word),
+                            _ => None,
+                        };
+                        let mut taken = px(24.0) + adv * 2.0 + gap * 2.0;
+                        taken += small * detail.chars().count() as f32;
+                        if let Some(w) = word {
+                            taken += small * w.len() as f32 + px(10.0) + gap;
+                        }
+                        let room = ((px(WIDTH) - taken) / adv).floor().max(4.0) as usize;
+                        let mut d =
+                            item.child(ui::clamp(ui::cut(&label, room), ui::Role::Name, &p));
+                        if let Some(w) = word {
+                            d = d.child(ui::tag(w, p.muted, &p));
                         }
                         d.child(
                             ui::role(div(), ui::Role::Fact, &p)
                                 .flex_none()
-                                .max_w(small * 18.0)
-                                .overflow_hidden()
                                 .whitespace_nowrap()
                                 .child(detail),
                         )
