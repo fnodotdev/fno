@@ -1069,6 +1069,61 @@ pub(crate) fn diff_rows(before: &[Value], after: &[Value]) -> Vec<String> {
         .collect()
 }
 
+/// The prepare-half pair in one pass over the rows: the changed-id diff of
+/// `diff_rows(before, after)` and the content version of
+/// `content_version(after)`, computed with no per-row String. The raw
+/// serialization fast path becomes a structural compare (the serializer is
+/// injective, so equal bytes and equal Values are the same question), and
+/// the version hashes the serializer's bytes through the sink instead of
+/// building them. Byte-identical outputs; a one-field update on a 7k-row
+/// store stops re-serializing the whole graph three times per mutation.
+pub(crate) fn diff_and_version(before: &[Value], after: &[Value]) -> (Vec<String>, String) {
+    use sha2::{Digest, Sha256};
+
+    let mut hash = Sha256::new();
+    for row in after {
+        crate::graph_store::write_python_pretty_json_into(row, &mut hash);
+        hash.update([0]);
+    }
+    let version = format!("sqlite:{:x}", hash.finalize());
+
+    fn by_index(rows: &[Value]) -> std::collections::BTreeMap<&str, usize> {
+        rows.iter()
+            .enumerate()
+            .filter(|(_, row)| row.is_object())
+            .filter_map(|(i, row)| RowFacts::id_of(row).map(|id| (id, i)))
+            .collect()
+    }
+    let before_index = by_index(before);
+    let after_index = by_index(after);
+    let mut ids: Vec<&str> = before_index
+        .keys()
+        .chain(after_index.keys())
+        .copied()
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let changed = ids
+        .into_iter()
+        .filter(|id| match (before_index.get(*id), after_index.get(*id)) {
+            // Only a structurally unequal pair pays for the canonical form:
+            // an explicit null and an absent key serialize differently and
+            // compare canonically equal, so the canonical compare stays the
+            // load-bearing one.
+            (Some(&b), Some(&a)) => match (before.get(b), after.get(a)) {
+                (Some(row_b), Some(row_a)) => {
+                    row_b != row_a && canonical_row(row_b) != canonical_row(row_a)
+                }
+                _ => true,
+            },
+            (None, None) => false,
+            _ => true,
+        })
+        .map(str::to_string)
+        .collect();
+    (changed, version)
+}
+
 pub(crate) struct WriteReport {
     present_ids: Vec<String>,
     deleted_ids: Vec<String>,
