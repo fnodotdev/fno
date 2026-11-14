@@ -38,18 +38,9 @@ pub(crate) use crate::node_branch::node_ids as branch_node_ids;
 /// only the status lagged, so such a row reads its conclusion, never
 /// pending-forever. A run with either fact alone is still in flight.
 pub(crate) fn terminal_facts_landed(check: &Value) -> bool {
-    let concluded = !check
-        .get("conclusion")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .is_empty();
-    let timed = ["completed_at", "completedAt"].iter().any(|key| {
-        !check
-            .get(*key)
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .is_empty()
-    });
+    let concluded = s_str(check, "conclusion").is_some_and(|v| !v.is_empty());
+    let timed = s_str(check, "completed_at").is_some_and(|v| !v.is_empty())
+        || s_str(check, "completedAt").is_some_and(|v| !v.is_empty());
     concluded && timed
 }
 
