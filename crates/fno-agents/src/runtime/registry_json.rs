@@ -26,6 +26,28 @@ pub fn run_registry_json(rest: &[String], home: &AgentsHome) -> i32 {
     0
 }
 
+/// The row fields this projection reads, deserialized once per row
+/// (rust-style R1): the stored row is schema-open, so the registry holds
+/// `Value`s, but this projection reads a fixed field set. A row that fails
+/// to deserialize (not an object, a malformed field) reads as an all-None
+/// row the same way a non-object `Value` answered `.get(..)` with `None`.
+#[derive(Default, serde::Deserialize)]
+struct ProjectedRow {
+    name: Option<String>,
+    harness: Option<String>,
+    harness_session_id: Option<String>,
+    status: Option<String>,
+    role_level: Option<Value>,
+    role_scope: Option<String>,
+    cwd: Option<String>,
+    spawned_by_session: Option<String>,
+    spawned_by_harness: Option<String>,
+    lineage_reason: Option<String>,
+    origin: Option<String>,
+    liveness: Option<String>,
+    liveness_measured_at: Option<String>,
+}
+
 /// The pure registry-json projection (no I/O); [`run_registry_json`] writes
 /// its output. One row per registry row: the stored keys Python's
 /// `cmd_registry_json` emitted, plus `cwd` (the context hook keys the lead
@@ -41,26 +63,26 @@ pub(crate) fn registry_json_logic(rows: &[Value]) -> Value {
     let agents: Vec<Value> = rows
         .iter()
         .map(|row| {
-            let harness = row.get("harness").and_then(Value::as_str).unwrap_or("");
-            let session_id = resume_session_id(row, harness);
-            let word = row.get("liveness").and_then(Value::as_str);
-            let measured_at = row.get("liveness_measured_at").and_then(Value::as_str);
+            let r: ProjectedRow = serde_json::from_value(row.clone()).unwrap_or_default();
+            let session_id = resume_session_id(row, r.harness.as_deref().unwrap_or(""));
+            let word = r.liveness.as_deref();
+            let measured_at = r.liveness_measured_at.as_deref();
             json!({
-                "name": row.get("name").and_then(Value::as_str),
+                "name": r.name,
                 "session_id": if session_id.is_empty() {
                     Value::Null
                 } else {
                     Value::String(session_id.to_string())
                 },
-                "harness_session_id": row.get("harness_session_id").and_then(Value::as_str),
-                "status": row.get("status").and_then(Value::as_str).unwrap_or("live"),
-                "role_level": row.get("role_level").cloned().unwrap_or(Value::Null),
-                "role_scope": row.get("role_scope").and_then(Value::as_str),
-                "cwd": row.get("cwd").and_then(Value::as_str),
-                "spawned_by_session": row.get("spawned_by_session").and_then(Value::as_str),
-                "spawned_by_harness": row.get("spawned_by_harness").and_then(Value::as_str),
-                "lineage_reason": row.get("lineage_reason").and_then(Value::as_str),
-                "origin": row.get("origin").and_then(Value::as_str),
+                "harness_session_id": r.harness_session_id,
+                "status": r.status.unwrap_or_else(|| "live".to_string()),
+                "role_level": r.role_level.unwrap_or(Value::Null),
+                "role_scope": r.role_scope,
+                "cwd": r.cwd,
+                "spawned_by_session": r.spawned_by_session,
+                "spawned_by_harness": r.spawned_by_harness,
+                "lineage_reason": r.lineage_reason,
+                "origin": r.origin,
                 "liveness": crate::row_truth::served_fresh_liveness(word, measured_at),
                 "liveness_basis": crate::row_truth::served_liveness_basis(word, measured_at),
             })
