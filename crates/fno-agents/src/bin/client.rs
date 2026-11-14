@@ -352,10 +352,7 @@ fn main() {
     fno_agents::usage_events::exit_cli(code);
 }
 
-async fn run(
-    args: Vec<String>,
-    mut spawn_timing: Option<fno_agents::spawn_seam::SpawnTiming>,
-) -> i32 {
+async fn run(args: Vec<String>, spawn_timing: Option<fno_agents::spawn_seam::SpawnTiming>) -> i32 {
     if args.is_empty() {
         print_help();
         return 0;
