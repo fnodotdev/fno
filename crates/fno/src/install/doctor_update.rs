@@ -1628,7 +1628,13 @@ pub(crate) fn sync_source_checkout(source: &Path, dry_run: bool) -> Result<(), S
         );
         return Ok(());
     }
-    match git(&["fetch", "--quiet"], 120) {
+    // One retry: a fetch that fails once on a loaded host must not leave the
+    // check reading a stale upstream ref and calling a diverged checkout fresh.
+    let mut fetched = git(&["fetch", "--quiet"], 120);
+    if !matches!(fetched, Ok((0, _, _))) {
+        fetched = git(&["fetch", "--quiet"], 120);
+    }
+    match fetched {
         Ok((0, _, _)) => {}
         Ok((code, _, err)) => eprintln!(
             "fno doctor update: git fetch exited {code} ({}); checking against the last fetched {upstream}",
@@ -1638,9 +1644,14 @@ pub(crate) fn sync_source_checkout(source: &Path, dry_run: bool) -> Result<(), S
             "fno doctor update: git fetch did not finish ({e}); checking against the last fetched {upstream}"
         ),
     }
-    let behind = git_in(&repo, &["rev-list", "--count", "HEAD..@{u}"])
-        .and_then(|n| n.parse::<u64>().ok())
-        .unwrap_or(0);
+    let Some(behind) =
+        git_in(&repo, &["rev-list", "--count", "HEAD..@{u}"]).and_then(|n| n.parse::<u64>().ok())
+    else {
+        return Err(format!(
+            "fno doctor update: refused: cannot count how far {} is behind {upstream}.",
+            repo.display()
+        ));
+    };
     if behind == 0 {
         return Ok(());
     }
