@@ -2783,6 +2783,7 @@ fn a_paint_pr_merges_on_a_missing_look_and_holds_on_a_declined_page() {
     {
         fake.facts = Some(PrFacts {
             head_sha: head.clone(),
+            body: Some("Docs: fno-web#1\n".to_string()),
             ..open_facts()
         });
         let req = Request {
@@ -3435,7 +3436,7 @@ fn process_warnings_preserve_evidence_beside_legitimate_preview_blockers() {
     // law D2707's enforcement arm there (docs_line_missing, Held class).
     let merge_outcome = run(&fake, &req);
     assert!(
-        matches!(&merge_outcome, Outcome::Held { reason, .. } if reason.contains("docs_line_missing")),
+        matches!(&merge_outcome, Outcome::Held { reason, .. } if reason.contains("no `Docs:` line")),
         "{merge_outcome:?}"
     );
     assert_eq!(
@@ -3507,7 +3508,7 @@ fn docs_line_missing_holds_merge_and_passes_with_a_docs_line() {
         },
     );
     assert!(
-        matches!(&held, Outcome::Held { reason, .. } if reason.contains("docs_line_missing")),
+        matches!(&held, Outcome::Held { reason, .. } if reason.contains("no `Docs:` line")),
         "{held:?}"
     );
     // The same facts pass with a Docs: line naming the doc PR.
