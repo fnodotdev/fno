@@ -198,35 +198,41 @@ fn wake_grace_restarts_the_streak_once_per_wake() {
     let journal = dir.path().join("events.jsonl");
     let sid = "f-run-1";
 
+    // The CHECKED emitter: a lost write must fail the test here, naming the
+    // cause, never read downstream as a silent no-grace.
+
     // No wake row: no grace, streak untouched.
-    emit_to_both(
+    emit_to_both_checked(
         &journal,
         &journal,
         "loop_check",
         serde_json::json!({ "session_id": sid, "fp": "a|none|none|none" }),
-    );
+    )
+    .unwrap();
     assert!(!woke_since_last_fire(&journal, sid));
 
     // A wake row after the fire: grace. emit_to_both stamps the envelope
     // ts, so ordering is real write order.
     std::thread::sleep(std::time::Duration::from_millis(5));
-    emit_to_both(
+    emit_to_both_checked(
         &journal,
         &journal,
         "wake",
         serde_json::json!({ "session_id": sid }),
-    );
+    )
+    .unwrap();
     assert!(woke_since_last_fire(&journal, sid));
 
     // The fire after the wake spends the grace: the newest loop_check row
     // is newer than the newest wake, so the streak behaves as before.
     std::thread::sleep(std::time::Duration::from_millis(5));
-    emit_to_both(
+    emit_to_both_checked(
         &journal,
         &journal,
         "loop_check",
         serde_json::json!({ "session_id": sid, "fp": "a|none|none|none" }),
-    );
+    )
+    .unwrap();
     assert!(
         !woke_since_last_fire(&journal, sid),
         "the grace is one fire per wake, not standing immunity"
@@ -236,17 +242,19 @@ fn wake_grace_restarts_the_streak_once_per_wake() {
     // data.session_id the gate reads with.
     let other = tempfile::tempdir().unwrap();
     let other_journal = other.path().join("events.jsonl");
-    emit_to_both(
+    emit_to_both_checked(
         &other_journal,
         &other_journal,
         "loop_check",
         serde_json::json!({ "session_id": sid }),
-    );
-    emit_to_both(
+    )
+    .unwrap();
+    emit_to_both_checked(
         &other_journal,
         &other_journal,
         "wake",
         serde_json::json!({ "session_id": "f-run-2" }),
-    );
+    )
+    .unwrap();
     assert!(!woke_since_last_fire(&other_journal, sid));
 }
