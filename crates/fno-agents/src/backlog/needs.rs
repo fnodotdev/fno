@@ -1440,6 +1440,24 @@ pub(crate) fn settled_questions(
                 }
             }
         }
+        // 5. decided: a live decision names this ask by question id, or by
+        // its exact subject when that subject is no node id. A user-class
+        // ask waits for the user, so a decision someone else filed never
+        // closes it.
+        if reason.is_none() && !user_only(data) {
+            let asked_at = data.get("ts").and_then(Value::as_str).unwrap_or("");
+            let by_subject = (!subject.is_empty())
+                .then(|| facts.decided.get(&format!("subject:{subject}")))
+                .flatten()
+                .filter(|(_, ts)| ts.as_str() > asked_at);
+            let decided = facts
+                .decided
+                .get(crate::numbers::canonical(qid))
+                .or(by_subject);
+            if let Some((id, _)) = decided {
+                reason = Some(format!("decided: {id}"));
+            }
+        }
         if let Some(reason) = reason {
             out.push((qid.clone(), reason));
         }

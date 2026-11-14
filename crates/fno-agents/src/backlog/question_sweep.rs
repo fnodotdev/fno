@@ -106,7 +106,45 @@ pub(crate) struct RungFacts {
     /// daemon's `question-probes.json`. A missing or unreadable cache is
     /// an empty map: an unread probe never closes a row.
     pub probes: std::collections::BTreeMap<String, crate::question_probe::ProbeReading>,
+    /// question id, or `subject:<subject>` for a subject that is no node id
+    /// -> the live decision that answers it.
+    pub decided: std::collections::BTreeMap<String, (String, String)>,
     pub raw: String,
+}
+
+/// The live decisions keyed by what they answer: their question id, and
+/// their subject when it names no node. An unreadable store answers none.
+fn decided_keys() -> std::collections::BTreeMap<String, (String, String)> {
+    let mut out = std::collections::BTreeMap::new();
+    let Ok(index) = crate::decision_index::default_store_live() else {
+        return out;
+    };
+    let s = |r: &serde_json::Value, k: &str| {
+        r.get(k)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .unwrap_or("")
+            .to_string()
+    };
+    for row in &index.rows {
+        let id = s(row, "decision_id");
+        if id.is_empty() {
+            continue;
+        }
+        let ts = s(row, "ts");
+        let qid = s(row, "question_id");
+        if !qid.is_empty() {
+            out.insert(
+                crate::numbers::canonical(&qid).to_string(),
+                (id.clone(), ts.clone()),
+            );
+        }
+        let subject = s(row, "subject");
+        if !subject.is_empty() && !crate::law_match::matches_node_id_shape(&subject) {
+            out.entry(format!("subject:{subject}")).or_insert((id, ts));
+        }
+    }
+    out
 }
 
 /// The real reading: graph statuses plus the question journal family.
@@ -120,6 +158,7 @@ pub(crate) fn read_closed_rung_facts(cwd: &Path, home: &AgentsHome) -> RungFacts
     facts.probes = crate::question_probe::cache_path_for(home)
         .map(|path| crate::question_probe::load_cache(&path))
         .unwrap_or_default();
+    facts.decided = decided_keys();
     facts
 }
 
