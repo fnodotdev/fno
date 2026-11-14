@@ -45,3 +45,32 @@ fn per_session_host_node_claim_no_ttl_live_pid_stays_live() {
         (ClaimState::Live, basis::LIVE)
     );
 }
+
+/// The measured shape behind opencode's shared-host membership: one server
+/// pid answers for every session, so a finished session's claim must read its
+/// verdict from the session witness, never from the still-running server.
+#[test]
+fn opencode_node_claim_dead_session_absent_witness_stales_despite_live_server_pid() {
+    let now = now_ms();
+    let mut rec = shared_host_record(Some("opencode"), now, Some(now + 3_600_000));
+    rec.session_id = Some("ses_dead_gull".into());
+    let witness = |_rec: &ClaimRecord| SessionLiveness::Absent;
+    assert_eq!(
+        classify_with_basis_and_exclusivity(&rec, Some(now), &probe_pid, None, Some(&witness)),
+        (ClaimState::Stale, basis::SESSION_ABSENT)
+    );
+}
+
+/// An opencode claim the witness cannot resolve reads Suspect, never Live:
+/// the recorded pid is the shared server, whose liveness proves nothing.
+#[test]
+fn opencode_node_claim_unresolved_witness_suspects_not_live() {
+    let now = now_ms();
+    let mut rec = shared_host_record(Some("opencode"), now, Some(now + 3_600_000));
+    rec.session_id = Some("ses_unknown".into());
+    let witness = |_rec: &ClaimRecord| SessionLiveness::Unresolved;
+    assert_eq!(
+        classify_with_basis_and_exclusivity(&rec, Some(now), &probe_pid, None, Some(&witness)),
+        (ClaimState::Suspect, basis::PID_SHARED)
+    );
+}
