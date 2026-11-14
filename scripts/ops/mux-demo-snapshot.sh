@@ -694,6 +694,7 @@ for name, sid, cost, tokens in rows:
         row["harness_session_id"] = sid
     agents.append(row)
 body = json.dumps({"id": 1, "result": {"agents": agents}}).encode()
+err = json.dumps({"id": 1, "error": "demo stub answers agent.list only"}).encode()
 if os.path.exists(path):
     os.unlink(path)
 srv = socket.socket(socket.AF_UNIX)
@@ -704,12 +705,20 @@ while True:
     head = conn.recv(4)
     if len(head) == 4:
         want = struct.unpack("<I", head)[0]
-        while want > 0:
-            chunk = conn.recv(want)
+        req = b""
+        while len(req) < want:
+            chunk = conn.recv(want - len(req))
             if not chunk:
                 break
-            want -= len(chunk)
-        conn.sendall(struct.pack("<I", len(body)) + body)
+            req += chunk
+        # Only agent.list is answered; every other call is refused so the
+        # server falls back to its own file reads for them.
+        try:
+            method = json.loads(req).get("method")
+        except ValueError:
+            method = None
+        out = body if method == "agent.list" else err
+        conn.sendall(struct.pack("<I", len(out)) + out)
     conn.close()
 PY
 python3 "$ROOT/fleetbin/agents-stub.py" "$FNO_AGENTS_HOME/supervisor.sock" "${SIDS[@]}" >/dev/null 2>&1 &
