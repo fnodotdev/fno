@@ -18,6 +18,11 @@ use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::Path;
 
+#[path = "mail_threads_de.rs"]
+mod de;
+
+use crate::lenient_de::parse;
+
 /// Senders the read model drops (R8): the mail-hold digest is a delivery,
 /// never a thread.
 fn is_hold_sender(sender: &str) -> bool {
@@ -28,7 +33,8 @@ fn is_hold_sender(sender: &str) -> bool {
 pub(crate) fn registry_rows() -> Vec<Value> {
     crate::registry_store::read(&AgentsHome::from_env().registry_json())
         .ok()
-        .and_then(|v| v.get("agents").and_then(Value::as_array).cloned())
+        .and_then(|v| parse::<de::RegistryTail>(&v).agents)
+        .and_then(|a| a.as_array().cloned())
         .unwrap_or_default()
 }
 
@@ -39,12 +45,13 @@ pub(crate) fn registry_lookup<'a>(rows: &'a [Value], key: &str) -> Option<&'a Va
         return None;
     }
     rows.iter().find(|row| {
-        row.get("fno_id").and_then(Value::as_str) == Some(key)
-            || row.get("harness_session_id").and_then(Value::as_str) == Some(key)
-            || row.get("session_id").and_then(Value::as_str) == Some(key)
-            || row.get("name").and_then(Value::as_str) == Some(key)
-            || row
-                .get("aliases")
+        let r = parse::<de::RegistryRowTail>(row);
+        r.fno_id.as_deref() == Some(key)
+            || r.harness_session_id.as_deref() == Some(key)
+            || r.session_id.as_deref() == Some(key)
+            || r.name.as_deref() == Some(key)
+            || r.aliases
+                .as_ref()
                 .and_then(Value::as_array)
                 .is_some_and(|a| a.iter().filter_map(Value::as_str).any(|s| s == key))
     })
@@ -53,12 +60,11 @@ pub(crate) fn registry_lookup<'a>(rows: &'a [Value], key: &str) -> Option<&'a Va
 /// The key a registry row answers to: its fno_id when one stands, else the
 /// session id (law d-e952ed19: a name is a label, the id is the key).
 fn registry_key(row: &Value) -> Option<String> {
-    row.get("fno_id")
-        .and_then(Value::as_str)
+    let r: de::RegistryRowTail = parse(row);
+    r.fno_id
         .filter(|s| !s.is_empty())
-        .or_else(|| row.get("harness_session_id").and_then(Value::as_str))
-        .or_else(|| row.get("session_id").and_then(Value::as_str))
-        .map(str::to_string)
+        .or(r.harness_session_id)
+        .or(r.session_id)
 }
 
 /// The resolved key for a mail address: its registry row's key, else - when
@@ -124,7 +130,12 @@ fn store_aliases(texts: &[String], registry: &[Value]) -> BTreeMap<String, Strin
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        if v.get("type").and_then(Value::as_str) != Some("message") {
+        if parse::<de::BusLineTail>(&v)
+            .ty
+            .as_ref()
+            .and_then(Value::as_str)
+            != Some("message")
+        {
             continue;
         }
         let field = |f: &str| v.get(f).and_then(Value::as_str).unwrap_or("").to_string();
@@ -188,13 +199,12 @@ fn fold(key: String, aliases: &BTreeMap<String, String>, registry: &[Value]) -> 
 
 /// The broadcast scope an announce row answers to (the chats store's rule).
 fn scope_of(line: &Value) -> String {
-    line.get("meta")
-        .and_then(|m| m.get("scope"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
+    let l: de::BusLineTail = parse(line);
+    l.meta
+        .as_ref()
+        .and_then(|m| parse::<de::MetaTail>(m).scope)
         .or_else(|| {
-            line.get("to")
-                .and_then(Value::as_str)
+            l.to.as_deref()
                 .and_then(|t| t.strip_prefix("fleet:"))
                 .map(str::to_string)
         })
@@ -204,17 +214,18 @@ fn scope_of(line: &Value) -> String {
 /// True while an announce row still stands: no usable `expires`, or one in
 /// the future.
 fn standing(line: &Value, now: u64) -> bool {
-    match expires_at(line) {
+    match expires_at(line).as_deref() {
         Some(e) => crate::state::rfc3339_like_to_secs(e).is_none_or(|t| t > now),
         None => true,
     }
 }
 
-fn expires_at(line: &Value) -> Option<&str> {
-    line.get("meta")
-        .and_then(|meta| meta.get("expires_at"))
-        .and_then(Value::as_str)
-        .or_else(|| line.get("expires").and_then(Value::as_str))
+fn expires_at(line: &Value) -> Option<String> {
+    let l: de::BusLineTail = parse(line);
+    l.meta
+        .as_ref()
+        .and_then(|meta| parse::<de::MetaTail>(meta).expires_at)
+        .or(l.expires)
 }
 
 /// Each message's delivery state, folded from the store's delivery lines in
@@ -232,11 +243,12 @@ fn delivery_states(
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        if v.get("type").and_then(Value::as_str) != Some("delivery") {
+        let l: de::BusLineTail = parse(&v);
+        if l.ty.as_ref().and_then(Value::as_str) != Some("delivery") {
             continue;
         }
-        let id = v.get("id").and_then(Value::as_str).unwrap_or("");
-        let how = v.get("how").and_then(Value::as_str).unwrap_or("");
+        let id = l.id.as_deref().unwrap_or("");
+        let how = l.how.as_deref().unwrap_or("");
         if id.is_empty() || how.is_empty() {
             continue;
         }
@@ -252,7 +264,8 @@ fn delivery_states(
                 false,
             ),
             word => {
-                match DeliveryState::from_json(&json!({"state": word, "reason": v.get("reason")})) {
+                match DeliveryState::from_json(&json!({"state": word, "reason": l.reason.as_ref()}))
+                {
                     Some(state) => (state, false),
                     None => (DeliveryState::from_legacy(word), true),
                 }
@@ -282,11 +295,12 @@ fn failure_counts(texts: &[String]) -> std::collections::HashMap<String, u64> {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        if v.get("type").and_then(Value::as_str) == Some("delivery")
-            && v.get("how").and_then(Value::as_str) == Some("failed")
+        let l: de::BusLineTail = parse(&v);
+        if l.ty.as_ref().and_then(Value::as_str) == Some("delivery")
+            && l.how.as_deref() == Some("failed")
         {
-            if let Some(id) = v.get("id").and_then(Value::as_str) {
-                *out.entry(id.to_string()).or_default() += 1;
+            if let Some(id) = l.id {
+                *out.entry(id).or_default() += 1;
             }
         }
     }
@@ -299,15 +313,14 @@ fn state_word(
     states: &std::collections::HashMap<String, fno_mail::state::DeliveryState>,
     v: &Value,
 ) -> &'static str {
-    let id = v.get("id").and_then(Value::as_str).unwrap_or("");
+    let l: de::BusLineTail = parse(v);
+    let id = l.id.as_deref().unwrap_or("");
     match states.get(id) {
         Some(state) => state.word(),
-        None => fno_mail::state::DeliveryState::from_legacy(
-            v.get("delivery")
-                .and_then(Value::as_str)
-                .unwrap_or("durable"),
-        )
-        .word(),
+        None => {
+            fno_mail::state::DeliveryState::from_legacy(l.delivery.as_deref().unwrap_or("durable"))
+                .word()
+        }
     }
 }
 
@@ -356,12 +369,13 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
                 unreadable += 1;
                 continue;
             };
-            if v.get("type").and_then(Value::as_str) != Some("message") {
+            let l: de::BusLineTail = parse(&v);
+            if l.ty.as_ref().and_then(Value::as_str) != Some("message") {
                 continue; // a delivery receipt, not a conversation row
             }
-            let from = v.get("from").and_then(Value::as_str).unwrap_or("");
-            let from_session = v.get("from_session").and_then(Value::as_str).unwrap_or("");
-            let to = v.get("to").and_then(Value::as_str).unwrap_or("");
+            let from = l.from.as_deref().unwrap_or("");
+            let from_session = l.from_session.as_deref().unwrap_or("");
+            let to = l.to.as_deref().unwrap_or("");
             if is_hold_sender(from) {
                 continue; // R8: the digest never appears
             }
@@ -391,7 +405,7 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
             if !to_is_broadcast {
                 note(&mut participants, &to_key, reg_to, None);
             }
-            let ts = v.get("ts").and_then(Value::as_str).unwrap_or("");
+            let ts = l.ts.as_deref().unwrap_or("");
             let seen_keys: Vec<&String> = if to_is_broadcast {
                 vec![&from_key]
             } else {
@@ -406,32 +420,32 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
                 }
             }
             let system_row = crate::system_sender::is_system_sender(from);
-            let raw_body = v.get("body").and_then(Value::as_str).unwrap_or("");
+            let raw_body = l.body.as_deref().unwrap_or("");
             let body = crate::mail_header::display_body(raw_body);
             let mut row = json!({
-                "id": v.get("id").and_then(Value::as_str).unwrap_or(""),
-                "ts": v.get("ts").and_then(Value::as_str).unwrap_or(""),
+                "id": l.id.as_deref().unwrap_or(""),
+                "ts": l.ts.as_deref().unwrap_or(""),
                 "from": crate::system_sender::canonical(from),
                 "from_key": from_key,
                 "to_key": to_key,
                 "to": to,
                 "summary": crate::mail_header::summary_of(&body),
-                "subject": v.get("subject").and_then(Value::as_str),
+                "subject": l.subject.as_deref(),
                 "body": body,
                 "expires": expires_at(&v),
-                "in_reply_to": v.get("in_reply_to").and_then(Value::as_str),
-                "delivery": v.get("delivery").and_then(Value::as_str),
+                "in_reply_to": l.in_reply_to.as_deref(),
+                "delivery": l.delivery.as_deref(),
                 "state": state_word(&states, &v),
-                "state_reason": v.get("id").and_then(Value::as_str)
+                "state_reason": l.id.as_deref()
                     .and_then(|id| states.get(id))
                     .and_then(|s| s.reason()),
-                "state_failures": v.get("id").and_then(Value::as_str)
+                "state_failures": l.id.as_deref()
                     .and_then(|id| failures.get(id))
                     .copied()
                     .unwrap_or(0),
                 "system": system_row,
             });
-            match v.get("kind").and_then(Value::as_str) {
+            match l.kind.as_deref() {
                 Some("announce") => {
                     let scope = scope_of(&v);
                     let sender_is_incident =
@@ -455,12 +469,14 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
                         system.entry(to_key.clone()).or_default().push(row.clone());
                     } else {
                         let receiver_scope = reg_to
-                            .and_then(|r| r.get("role_scope"))
-                            .and_then(Value::as_str);
+                            .map(parse::<de::RegistryRowTail>)
+                            .as_ref()
+                            .and_then(|r| r.role_scope.as_deref());
                         let sender_scope = reg_from
-                            .and_then(|r| r.get("role_scope"))
-                            .and_then(Value::as_str);
-                        let ts = v.get("ts").and_then(Value::as_str).unwrap_or("");
+                            .map(parse::<de::RegistryRowTail>)
+                            .as_ref()
+                            .and_then(|r| r.role_scope.as_deref());
+                        let ts = l.ts.as_deref().unwrap_or("");
                         if let Some(scope) = sender_scope.filter(|_| !system_row) {
                             vote(&mut scope_votes, &to_key, scope, ts);
                         }
@@ -478,13 +494,12 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
         let keys = {
             let mut k: Vec<String> = rows
                 .iter()
-                .filter_map(|r| r.get("from_key").and_then(Value::as_str))
+                .filter_map(|r| parse::<de::BusLineTail>(r).from_key)
                 .chain(
                     rows.iter()
-                        .filter_map(|r| r.get("to_key").and_then(Value::as_str)),
+                        .filter_map(|r| parse::<de::BusLineTail>(r).to_key),
                 )
-                .filter(|k| participants.contains_key(*k))
-                .map(str::to_string)
+                .filter(|k| participants.contains_key(k.as_str()))
                 .collect();
             k.sort_unstable();
             k.dedup();
@@ -499,12 +514,13 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
     // still holds, else the scope it mailed most, latest on a tie.
     for (key, p) in participants.iter_mut() {
         let reg = registry_lookup(registry, key);
-        let held = reg
-            .and_then(|r| r.get("role_scope"))
-            .and_then(Value::as_str)
+        let reg_v = reg.map(parse::<de::RegistryRowTail>);
+        let held = reg_v
+            .as_ref()
+            .and_then(|r| r.role_scope.as_deref())
             .filter(|_| {
-                reg.and_then(|r| r.get("liveness")).and_then(Value::as_str) != Some("alive")
-                    && reg.and_then(|r| r.get("status")).and_then(Value::as_str) != Some("live")
+                reg_v.as_ref().map(|r| r.liveness.as_deref()) != Some(Some("alive"))
+                    && reg_v.as_ref().map(|r| r.status.as_deref()) != Some(Some("live"))
             });
         let scope: Option<String> = held
             .map(str::to_string)
@@ -518,7 +534,7 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
             // registry row (a leaked test fixture) or a dead agent whose scope
             // is gone reads as Archive, never as live-list pollution. The
             // operator's own journal voice stays out of the bucket.
-            let live = p.get("live").and_then(Value::as_bool).unwrap_or(false);
+            let live = parse::<de::ParticipantTail>(p).live.unwrap_or(false);
             if !live && key != "user" {
                 if let Some(obj) = p.as_object_mut() {
                     obj.insert("archive_scope".into(), json!("unresolved"));
@@ -539,19 +555,17 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
         .into_iter()
         .map(|(pair, mut rows)| {
             rows.sort_by(|a, b| {
-                a.get("ts")
-                    .and_then(Value::as_str)
-                    .cmp(&b.get("ts").and_then(Value::as_str))
+                parse::<de::BusLineTail>(a)
+                    .ts
+                    .cmp(&parse::<de::BusLineTail>(b).ts)
             });
             let keys: Vec<String> = pair.split('\u{1}').map(str::to_string).collect();
             let first = keys.first().cloned().unwrap_or_default();
             let second = keys.get(1).cloned().unwrap_or_else(|| first.clone());
             let last_ts = rows
                 .last()
-                .and_then(|r| r.get("ts"))
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string();
+                .map(|r| parse::<de::BusLineTail>(r).ts.unwrap_or_default())
+                .unwrap_or_default();
             json!({
                 "chat_id": crate::chats::chat_id_for_pair(&first, &second),
                 "participants": keys,
@@ -561,9 +575,9 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
         })
         .collect();
     threads.sort_by(|a, b| {
-        a.get("last_ts")
-            .and_then(Value::as_str)
-            .cmp(&b.get("last_ts").and_then(Value::as_str))
+        parse::<de::BusLineTail>(a)
+            .last_ts
+            .cmp(&parse::<de::BusLineTail>(b).last_ts)
     });
     // The You section rides the same projection: one row per session whose
     // transcript carries typed turns, named through the registry when it
@@ -598,29 +612,29 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
 /// message's own `from` name, the display fallback when no registry row
 /// ever names the key; the id stays the key (d-6e0bf89b).
 fn participant_row(key: &str, reg: Option<&Value>, extra: Option<&str>) -> Value {
+    let reg_v = reg.map(parse::<de::RegistryRowTail>);
     json!({
         "key": key,
-        "name": reg
-            .and_then(|r| r.get("name")).and_then(Value::as_str)
+        "name": reg_v
+            .as_ref()
+            .and_then(|r| r.name.as_deref())
             .filter(|_| !crate::system_sender::is_system_sender(key))
             .or_else(|| extra
                 .filter(|n| !n.is_empty() && !crate::system_sender::is_system_sender(key)))
             .unwrap_or(key),
-        "session_id": reg.and_then(|r| r.get("harness_session_id"))
-            .and_then(Value::as_str),
-        "fno_id": reg.and_then(|r| r.get("fno_id")).and_then(Value::as_str),
-        "harness": reg.and_then(|r| r.get("harness")).and_then(Value::as_str),
-        "model": reg.and_then(|r| r.get("model")).and_then(Value::as_str),
-        "effort": reg.and_then(|r| r.get("effort")).and_then(Value::as_str),
-        "node": reg.and_then(|r| r.get("node")).and_then(Value::as_str),
-        "live": reg.is_some_and(|r| {
-            r.get("liveness").and_then(Value::as_str) == Some("alive")
-                || r.get("status").and_then(Value::as_str) == Some("live")
+        "session_id": reg_v.as_ref().and_then(|r| r.harness_session_id.as_deref()),
+        "fno_id": reg_v.as_ref().and_then(|r| r.fno_id.as_deref()),
+        "harness": reg_v.as_ref().and_then(|r| r.harness.as_deref()),
+        "model": reg_v.as_ref().and_then(|r| r.model.as_deref()),
+        "effort": reg_v.as_ref().and_then(|r| r.effort.as_deref()),
+        "node": reg_v.as_ref().and_then(|r| r.node.as_deref()),
+        "live": reg_v.as_ref().is_some_and(|r| {
+            r.liveness.as_deref() == Some("alive") || r.status.as_deref() == Some("live")
         }),
-        "role_scope": reg.and_then(|r| r.get("role_scope")).and_then(Value::as_str),
-        "role_level": reg.and_then(|r| r.get("role_level")).and_then(Value::as_u64),
-        "created_at": reg.and_then(|r| r.get("created_at")).and_then(Value::as_str),
-        "exited_at": reg.and_then(|r| r.get("exited_at")).and_then(Value::as_str),
+        "role_scope": reg_v.as_ref().and_then(|r| r.role_scope.as_deref()),
+        "role_level": reg_v.as_ref().and_then(|r| r.role_level),
+        "created_at": reg_v.as_ref().and_then(|r| r.created_at.as_deref()),
+        "exited_at": reg_v.as_ref().and_then(|r| r.exited_at.as_deref()),
         "system": crate::system_sender::is_system_sender(key),
         "archive_scope": Value::Null,
     })
@@ -645,17 +659,16 @@ fn note(
             // the registry actually supplies a name, so a nameless row
             // cannot clobber the fallback. With no row, a row still named by
             // its id takes a later sighting's real name.
-            let named = v.get("name").and_then(Value::as_str) != Some(key);
+            let vv: de::ParticipantTail = parse(v);
+            let named = vv.name.as_deref() != Some(key);
             let reg_name = row
-                .and_then(|r| r.get("name"))
-                .and_then(Value::as_str)
+                .and_then(parse::<de::RegistryRowTail>)
+                .name
                 .filter(|_| !crate::system_sender::is_system_sender(key));
             if row.is_some() && (!named || reg_name.is_some()) {
                 *v = participant_row(key, row, None);
             } else if row.is_none()
-                && v.get("name")
-                    .and_then(Value::as_str)
-                    .is_some_and(|n| key.starts_with(n))
+                && vv.name.as_deref().is_some_and(|n| key.starts_with(n))
                 && !crate::system_sender::is_system_sender(key)
             {
                 if let Some(name) = extra.filter(|n| !n.is_empty() && !key.starts_with(n)) {
@@ -669,12 +682,13 @@ fn note(
 /// The name a message's own header signs, when the header carries the
 /// message's id: the send door rendered it, so the body did not forge it.
 fn header_name(v: &Value) -> Option<String> {
-    let id = v.get("id").and_then(Value::as_str)?;
-    let first = v.get("body").and_then(Value::as_str)?.lines().next()?;
+    let l: de::BusLineTail = parse(v);
+    let id = l.id.as_deref()?;
+    let first = l.body.as_deref()?.lines().next()?;
     let turn = crate::mail_header::header_turns(first).into_iter().next()?;
-    let sender = turn.get("sender").and_then(Value::as_str)?;
-    (turn.get("id").and_then(Value::as_str) == Some(id) && !sender.is_empty())
-        .then(|| sender.to_string())
+    let t: de::TurnTail = parse(&turn);
+    let sender = t.sender.as_deref()?;
+    (t.id.as_deref() == Some(id) && !sender.is_empty()).then(|| sender.to_string())
 }
 
 /// One counterparty-scope vote for R3: count per scope, latest ts on a tie.
@@ -815,20 +829,22 @@ pub(crate) fn fold_fleet_rows(
         .filter_map(|k| projection.get(*k).and_then(Value::as_array))
         .flatten()
         .chain(
-            projection
-                .get("system")
+            parse::<de::SystemTail>(projection)
+                .system
+                .as_ref()
                 .and_then(Value::as_object)
                 .into_iter()
                 .flat_map(|m| m.values()),
         )
         .filter_map(|t| {
-            t.get("rows")
+            parse::<de::BusLineTail>(t)
+                .rows
+                .as_ref()
                 .and_then(Value::as_array)
                 .or_else(|| t.as_array())
         })
         .flatten()
-        .filter_map(|r| r.get("id").and_then(Value::as_str))
-        .map(str::to_string)
+        .filter_map(|r| parse::<de::BusLineTail>(r).id)
         .collect();
     let mut pairs: BTreeMap<(String, String), Vec<Value>> = BTreeMap::new();
     let mut last_seen: BTreeMap<String, String> = BTreeMap::new();
@@ -890,8 +906,7 @@ pub(crate) fn fold_fleet_rows(
     if let Some(parts) = obj.get_mut("participants").and_then(Value::as_array_mut) {
         let known: std::collections::HashSet<String> = parts
             .iter()
-            .filter_map(|p| p.get("key").and_then(Value::as_str))
-            .map(str::to_string)
+            .filter_map(|p| parse::<de::ParticipantTail>(p).key)
             .collect();
         for (key, ts) in last_seen.into_iter().filter(|(k, _)| !known.contains(k)) {
             parts.push(
@@ -902,7 +917,7 @@ pub(crate) fn fold_fleet_rows(
     }
     if let Some(threads) = obj.get_mut("threads").and_then(Value::as_array_mut) {
         for ((a, b), rows) in pairs {
-            let last_ts = rows.last().and_then(|r| r.get("ts")).cloned();
+            let last_ts = rows.last().map(|r| parse::<de::BusLineTail>(r).ts.clone());
             threads.push(json!({
                 "chat_id": crate::chats::chat_id_for_pair(&a, &b),
                 "participants": [a, b],
@@ -911,9 +926,9 @@ pub(crate) fn fold_fleet_rows(
             }));
         }
         threads.sort_by(|a, b| {
-            a.get("last_ts")
-                .and_then(Value::as_str)
-                .cmp(&b.get("last_ts").and_then(Value::as_str))
+            parse::<de::BusLineTail>(a)
+                .last_ts
+                .cmp(&parse::<de::BusLineTail>(b).last_ts)
         });
     }
 }
@@ -1101,11 +1116,12 @@ fn journal_reply_at(
 ) -> Result<String, String> {
     let chats_dir = crate::chats::chats_dir();
     let (chat, parent_row) = find_chat_for_message(&chats_dir, parent)?;
-    let thread = parent_row
-        .get("thread")
-        .and_then(Value::as_str)
+    let parent_view: de::BusLineTail = parse(&parent_row);
+    let thread = parent_view
+        .thread
+        .clone()
         .filter(|thread| !thread.is_empty())
-        .unwrap_or(parent);
+        .unwrap_or_else(|| parent.to_string());
     let id = crate::announce::new_msg_id();
     let reply = json!({
         "v": 1,
@@ -1123,12 +1139,9 @@ fn journal_reply_at(
         "body": body,
     });
     crate::announce::append_line(bus, &reply, &chats_dir)?;
-    append_projected_reply(
-        &chat,
-        &reply,
-        parent_row.get("chat_id").and_then(Value::as_str),
-    )
-    .map_err(|error| format!("reply {id} is on the bus, but chat projection failed: {error}"))?;
+    append_projected_reply(&chat, &reply, parent_view.chat_id.as_deref()).map_err(|error| {
+        format!("reply {id} is on the bus, but chat projection failed: {error}")
+    })?;
     Ok(id)
 }
 
@@ -1145,7 +1158,7 @@ fn find_chat_for_message(chats: &Path, id: &str) -> Result<(std::path::PathBuf, 
             let Ok(row) = serde_json::from_str::<Value>(line) else {
                 continue;
             };
-            if row.get("id").and_then(Value::as_str) == Some(id) {
+            if parse::<de::BusLineTail>(&row).id.as_deref() == Some(id) {
                 return Ok((path, row));
             }
         }
@@ -1225,11 +1238,12 @@ fn run_details(args: &[String]) -> i32 {
         }
         Some(v) => v.clone(),
     };
-    let sid = row
-        .get("harness_session_id")
-        .and_then(Value::as_str)
+    let row_view: de::RegistryRowTail = parse(&row);
+    let sid = row_view
+        .harness_session_id
+        .as_deref()
         .unwrap_or(session.as_str());
-    let harness = row.get("harness").and_then(Value::as_str).unwrap_or("");
+    let harness = row_view.harness.as_deref().unwrap_or("");
     let activity = transcript_activity(sid, harness);
     let tokens = activity.as_ref().map(|(t, _)| {
         json!({
