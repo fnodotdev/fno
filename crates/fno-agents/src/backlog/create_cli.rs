@@ -983,6 +983,32 @@ pub(crate) fn warn_similar_nodes(node: &Value, entries: &[Value], minted_id: &st
     lines.push(
         "consolidate: `fno backlog supersede` / `fno backlog update` the existing node".to_string(),
     );
+    #[derive(serde::Deserialize, Default)]
+    struct OpenNode {
+        status: Option<String>,
+        plan_path: Option<String>,
+        contained_in: Option<String>,
+        pr_number: Option<i64>,
+    }
+    let planless = |cid: &str| {
+        entries
+            .iter()
+            .find(|e| crate::lead_checkin::s_str(e, "id") == Some(cid))
+            .is_some_and(|e| {
+                let node: OpenNode = serde_json::from_value(e.clone()).unwrap_or_default();
+                matches!(
+                    node.status.as_deref(),
+                    Some("idea" | "triage" | "ready" | "next")
+                ) && node.plan_path.as_deref().is_none_or(str::is_empty)
+                    && node.contained_in.as_deref().is_none_or(str::is_empty)
+                    && node.pr_number.is_none()
+            })
+    };
+    if let Some((cid, _, _)) = candidates.iter().find(|(cid, _, _)| planless(cid)) {
+        lines.push(format!(
+            "batch: {cid} is open with no plan, so both could ship as one PR: `fno backlog contain {cid} {minted_id}`"
+        ));
+    }
     eprintln!("{}", lines.join("\n"));
 }
 
