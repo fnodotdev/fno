@@ -18,7 +18,7 @@ The server listens on a Unix socket at `~/.fno/mux/<session>.sock`. The director
 
 A long-lived client sends `Attach { proto, build, rows, cols, cwd }` as its first message. `proto` is the `PROTO_VERSION` the client was built against. `build` is its own version string, used only in error text. The server answers with the layout and frames, or with an error that names both versions.
 
-A one-shot caller (a script that sends one command) sends `Control { proto, build, verb }` instead. The server answers with exactly one reply and closes. It registers no client and streams no frames. The field is named `verb` on the wire and has kept that name across builds.
+A one-shot caller (a script that sends one command) sends `Control { proto, build, verb }` instead. The server answers with exactly one reply and closes. It registers no client and streams no frames. The field is named `verb` on the wire and has kept that name across builds. <!-- verb-wording: allow -->
 
 `Query` and `KillServer` are the only messages allowed before the handshake. Their JSON shapes are frozen. Do not depend on any other message being accepted before `Attach` or `Control`.
 
