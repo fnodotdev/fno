@@ -1942,6 +1942,37 @@ fn run_observed<P: Probes>(
     }
 }
 
+/// Mail the look request for a merged paint PR to the territory lead. The
+/// lead resolves from the bound node: a team whose scope answers the node's
+/// territory holds it, resolved at send time. The merge door and the
+/// reconcile sweep that finds a merge the door never saw both call this.
+pub(crate) fn mail_look_request(cwd: &Path, pr: u64, head_sha: &str, detail: &str) -> bool {
+    #[derive(serde::Deserialize)]
+    struct BoundNode {
+        id: String,
+    }
+    let bound =
+        pr_bound_entry(cwd, pr).and_then(|node| serde_json::from_value::<BoundNode>(node).ok());
+    let Some(bound) = bound else {
+        eprintln!("look request not mailed: PR {pr} binds no node");
+        return false;
+    };
+    let text = format!(
+        "look request: PR {pr} merged at {} with no recorded look at that head. Publish its shots on the project's Visual Log page (decisions D2511 and D3268). {detail}",
+        head_sha.get(..8).unwrap_or(head_sha),
+    );
+    match crate::runtime::lead_mail::send("merge-gate", &bound.id, &text) {
+        Ok(holders) => {
+            eprintln!("look request mailed to {}", holders.join(", "));
+            true
+        }
+        Err(error) => {
+            eprintln!("look request not mailed: {error}");
+            false
+        }
+    }
+}
+
 fn effect<P: Probes>(probes: &P, request: &Request, authorized: &Authorized) -> Outcome {
     let cwd = request.cwd.as_path();
     let number = authorized.facts.number;
@@ -2566,34 +2597,7 @@ refusing to assume no review is running"
 
     fn look_request(&self, cwd: &Path, facts: &PrFacts, detail: &str) -> bool {
         let _step = step_timer::step("look_request");
-        // The territory lead resolves from the bound node: a team whose scope
-        // answers the node's territory holds it, resolved at send time.
-        #[derive(serde::Deserialize)]
-        struct BoundNode {
-            id: String,
-        }
-        let bound = pr_bound_entry(cwd, facts.number)
-            .and_then(|node| serde_json::from_value::<BoundNode>(node).ok());
-        let Some(bound) = bound else {
-            eprintln!("look request not mailed: PR {} binds no node", facts.number);
-            return false;
-        };
-        let text = format!(
-            "look request: PR {} merged at {} with no recorded look at that head. Publish its shots on the project's Visual Log page (decisions D2511 and D3268). {}",
-            facts.number,
-            &facts.head_sha[..8],
-            detail
-        );
-        match crate::runtime::lead_mail::send("merge-gate", &bound.id, &text) {
-            Ok(holders) => {
-                eprintln!("look request mailed to {}", holders.join(", "));
-                true
-            }
-            Err(error) => {
-                eprintln!("look request not mailed: {error}");
-                false
-            }
-        }
+        mail_look_request(cwd, facts.number, &facts.head_sha, detail)
     }
 
     fn slot_retested(&self, cwd: &Path, base_ref: &str, pr: u64) -> bool {
