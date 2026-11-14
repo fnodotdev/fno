@@ -67,9 +67,29 @@ The pin reads the included PRs from `git log --first-parent <base_tag>..<sha>` i
 
 ### Stable (one click)
 
-1. Promote: `gh workflow run release.yml -f channel=stable`.
-2. The one click uploads `0.4.0` to crates.io. It is permanent: a version cannot be re-uploaded. The click also creates the `v0.4.0` tag as Latest and bumps the Homebrew tap. It moves the `stable` branch and the `fno--v0.4.0` plugin tag. The plugin marketplaces pin those refs, and they move only on stable promotion.
-3. The job does not push to main: a repository rule rejects it. The nightly and the next candidate skip the released patch on their own. They need no bump. The job opens the version-sync PR for main instead. It cuts `version-sync/v<version>`, runs `scripts/release/sync-version.sh <version>`, self-posts the guard status, and squash-merges once green. For an off-cycle bump, run `scripts/release/sync-version.sh <next>`, land it, then verify with `scripts/release/sync-version.sh --check`.
+1. Promote: `gh workflow run release.yml -f channel=stable`. With no `sha`, it promotes the newest `v*rc*` tag.
+2. The one click runs one job. In order, it uploads `fno` and `fno-agents` to crates.io, creates the `v<version>` tag and GitHub Release as Latest, opens the plugin catalog pin PR, bumps the Homebrew tap, and opens the version-sync PR for main. A crates.io upload is permanent: a version cannot be re-uploaded. A re-run skips a version already on crates.io and re-uploads the release assets.
+3. The job does not push to main: a repository rule rejects it. The nightly and the next candidate skip the released patch on their own. The version-sync PR cuts `version-sync/v<version>`, runs `scripts/release/sync-version.sh <version>`, self-posts the guard status, and squash-merges once green. For an off-cycle bump, run `scripts/release/sync-version.sh <next>`, land it, then verify with `scripts/release/sync-version.sh --check`.
+
+### After stable publishes (the checklist)
+
+Run this list the same hour the stable job finishes. The release is not done until every row holds.
+
+| Row | How to check | If it is wrong |
+|---|---|---|
+| crates.io | `fno` and `fno-agents` read the new version on crates.io | Re-run the publish job; published versions skip |
+| GitHub Release | `gh release view v<version>` is Latest with 9 assets | Re-run the publish job |
+| Release notes | The release body is the curated changelog, not the generated PR list | `gh release edit v<version> --notes-file <file>` |
+| Plugin pin | `.claude-plugin/marketplace.json` on main pins `v<version>` | Open a PR from `plugin-pin/v<version>` |
+| Version sync | `scripts/release/sync-version.sh --check` passes on main at `<version>` | Open a PR from `version-sync/v<version>` |
+| Homebrew | `fnodotdev/homebrew-fno` `Formula/fno.rb` reads `version "<version>"` | Re-run the publish job, or bump the formula with `scripts/release/update-homebrew-formula.py` |
+| fno.sh | `curl -s https://fno.sh` serves the `v<version>` script | Bump `INSTALL_SCRIPT_URL` in fno-web, then redeploy the `fno-sh` Worker |
+
+The fno.sh row blocks every fno PR. The `channel (fno-sh-fresh)` CI row compares the served script with the newest stable tag. From the moment the tag exists until fno.sh is redeployed, that row fails on every PR head, so nothing can merge. Bump and redeploy fno.sh first.
+
+A fno.sh deploy ships the whole `fno-sh` Worker. fno.sh is the install path and a small site. A deploy from fno-web `main` also ships every site change that landed since the last deploy. Before a deploy, compare what `main` holds under `fno-sh/` with what fno.sh serves. Deploy from the last deployed commit plus the pin bump when `main` carries a site change that still waits on a decision.
+
+The stable job opens two PRs with `GITHUB_TOKEN`. The repository setting "Allow GitHub Actions to create and approve pull requests" must be on. When it is off, both steps print a warning with a compare link and the job continues.
 
 ### Rehearsal (fork, `dry_run`)
 
@@ -79,12 +99,12 @@ Dispatch `release.yml` on your fork with `dry_run=true` for any channel. The reh
 
 - [x] Published `fno-agents` and `fno` on crates.io over the reserved `0.0.0` placeholders. 0.3.1 shipped first. 0.4.0 went live at the first stable promotion. The cargo channel needs the real `fno` published.
 - [x] Set the `release` environment secrets: `CARGO_REGISTRY_TOKEN` for crates.io and `HOMEBREW_TAP_TOKEN` for the tap. Absent the tap token, that leg fails soft after crates and the release already shipped.
-- [x] fno.sh channel: wired and served at `https://fno.sh`. The served copy tracks the Worker's pinned tag and updates only at a stable promotion. It can lag a fresh release: it served 0.3.1 after 0.4.0 shipped. The matrix's fno-sh-served row stays expected-fail until that redeploy.
+- [x] fno.sh channel: wired and served at `https://fno.sh`. The served copy tracks the Worker's pinned tag and updates only at a stable promotion. It can lag a fresh release: it served 0.3.1 after 0.4.0 shipped, and 0.4.8 after 0.4.9 shipped. The `channel (fno-sh-fresh)` row fails on every PR until that redeploy. See [After stable publishes](#after-stable-publishes-the-checklist).
   - **Bump-on-script-change:** the deployed `fno.sh` is byte-identical to this repo's `scripts/install/fno.sh`. The fno-web Worker serves it and owns none of its logic. When this script changes, treat the change as a deliberate, tagged, redeployed event. Promote a stable (creating the `vX.Y.Z` tag). Bump the Worker's `INSTALL_SCRIPT_URL` pin to that tag. Redeploy `fno.sh`. That tag-bump cost is the intended consequence of pinning the served script to a tag.
 - [x] brew channel: the own tap repo is created, with `Formula/fno.rb` built from `scripts/install/homebrew/fno.rb`. The tap serves 0.3.1 for macOS. Each stable promotion re-bumps `url` and `sha256`. The 0.4.0 bump lands with that promotion's tap step. Move the tap by GitHub repo transfer + redirect. Never delete it. Deleting the old repo breaks that redirect, and every installed user resolves through it.
 
 Version lockstep is no longer hand-maintained. `scripts/release/sync-version.sh` is the single propagation point. Its `--check` is the drift guard. If any surface lags the release version, the check fails.
 
-The one exception is `buddy`: it versions on its own (0.0.1 today). Its marketplace entry tracks `main`, not the `stable` ref. A buddy release is a PR that bumps `plugins/buddy/.claude-plugin/plugin.json`, never an fno stable promotion.
+The one exception is `buddy`: it versions on its own (0.0.1 today). Its marketplace entry tracks `main`, not the release tag. A buddy release is a PR that bumps `plugins/buddy/.claude-plugin/plugin.json`, never an fno stable promotion.
 
 The `fno-mail` library crate versions on its own too. It restarted at 0.1.0. `fno` and `fno-agents` take it by caret range (`version = "0.1"`), so `sync-version.sh` never stamps it. Bump `crates/fno-mail/Cargo.toml` in the PR that changes its API. Under 0.x a breaking change bumps the minor, and then the caret ranges in both consumers move with it. If its version is already on crates.io, a stable release skips the `fno-mail` publish. The `crates-publish` dry run then builds `fno` and `fno-agents` against that published copy. An API change with no bump fails the PR, not the release. `fno` and `fno-agents` stay on one number: the updater proves a download by equal versions.
