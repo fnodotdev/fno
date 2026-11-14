@@ -342,6 +342,45 @@ fn move_held_questions(
     (moved, errors)
 }
 
+/// Ask the node's lead once whether each stale user-class ask still stands.
+/// The ask stays open on the user's board; `question-nudged.json` under the
+/// home records each id so a later sweep never repeats the message.
+fn nudge_stale_user_asks(
+    home: &AgentsHome,
+    stale: Vec<(String, serde_json::Value, String)>,
+    ladder: &LadderDoors,
+) -> Vec<String> {
+    let path = home.root().join("question-nudged.json");
+    let mut seen: std::collections::BTreeSet<String> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
+    let mut nudged = Vec::new();
+    for (qid, data, node) in stale {
+        if seen.contains(&qid) {
+            continue;
+        }
+        let cwd = PathBuf::from(data["cwd"].as_str().unwrap_or("").trim());
+        let Some(rung) = (ladder.place)(&cwd, Some(node.as_str()), None) else {
+            continue;
+        };
+        let question = data["question"].as_str().unwrap_or("");
+        let text = format!(
+            "node {node} closed while the user still owes {qid}. Does the ask still stand? \
+Withdraw it with fno inbox outstanding clear {qid}, or leave it. {question}"
+        );
+        (ladder.wake)(&rung, &qid, Some(node.as_str()), &text);
+        seen.insert(qid.clone());
+        nudged.push(qid);
+    }
+    if !nudged.is_empty() {
+        if let Ok(text) = serde_json::to_string(&seen) {
+            let _ = std::fs::write(&path, text);
+        }
+    }
+    nudged
+}
+
 /// [`question_sweep`] with the reading injected, so tests drive the stamp,
 /// the fold, and the writes against fixtures instead of the live graph.
 /// `pub(crate)`: the reading type is crate-private, so the crate's public
@@ -375,6 +414,14 @@ pub(crate) fn question_sweep_in(
     let held = crate::needs::questions_for_the_lead(&facts.raw, &facts, &settled);
     let (moved, move_errors) = move_held_questions(held, &index, now, ladder);
     errors.extend(move_errors);
+    let nudged = nudge_stale_user_asks(
+        home,
+        crate::needs::stale_user_asks(&facts.raw, &facts),
+        ladder,
+    );
+    if !nudged.is_empty() {
+        let _ = emitter.emit("question_sweep_nudged", &json!({"ids": nudged}));
+    }
     if settled.is_empty()
         && task_ids.is_empty()
         && legacy_ids.is_empty()

@@ -1553,6 +1553,29 @@ pub(crate) fn questions_for_the_lead(
     out
 }
 
+/// Open user-class asks whose node set reads terminal: `(id, data, node)`.
+/// The sweep never closes one (the user still owes it), so it asks the
+/// node's lead once whether the ask still stands.
+pub(crate) fn stale_user_asks(
+    raw: &str,
+    facts: &crate::question_sweep::RungFacts,
+) -> Vec<(String, Value, String)> {
+    let (asked, closed) = open_question_rows(raw);
+    let mut out: Vec<(String, Value, String)> = asked
+        .into_iter()
+        .filter(|(qid, data)| !closed.contains(qid) && user_only(data))
+        .filter_map(|(qid, data)| {
+            let node = closed_node(&question_nodes(&data), facts)?
+                .first()?
+                .0
+                .to_string();
+            Some((qid, data, node))
+        })
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
 /// A question's node set: the `node` field plus every `blocks` entry.
 fn question_nodes(data: &Value) -> Vec<String> {
     let mut nodes: Vec<String> = data
