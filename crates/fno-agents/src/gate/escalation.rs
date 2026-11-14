@@ -454,9 +454,16 @@ pub fn phone_text(e: &Escalation) -> (String, String) {
     (title, body)
 }
 
+/// A note waits on a human only while its status reads `open`; resolved,
+/// answered, withdrawn and draft notes are history. Every reader of the open
+/// set (the attention projection and `inbox outstanding`) asks this one test.
+pub fn is_open(e: &Escalation) -> bool {
+    e.status == "open"
+}
+
 /// Open and past the deadline.
 pub fn overdue(e: &Escalation, now: chrono::DateTime<chrono::Utc>) -> bool {
-    if e.status != "open" {
+    if !is_open(e) {
         return false;
     }
     chrono::DateTime::parse_from_rfc3339(&e.deadline)
@@ -500,6 +507,15 @@ mod tests {
         assert!(!q(Some("s"), Some("x-1"), Some("s"), Some("x-2")));
         assert!(!q(None, Some("x-1"), None, Some("x-1")));
         assert!(!q(Some("s"), None, Some("s"), None));
+    }
+
+    #[test]
+    fn only_an_open_status_waits_on_a_human() {
+        let note = |status: &str| parse(&format!("---\nstatus: {status}\n---\n# t\n"));
+        assert!(is_open(&note("open")));
+        for done in ["resolved", "answered", "withdrawn", "draft"] {
+            assert!(!is_open(&note(done)), "{done} must not count as open");
+        }
     }
 
     const EXAMPLE: &str = r#"---
