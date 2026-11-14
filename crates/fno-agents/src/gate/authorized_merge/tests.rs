@@ -1132,8 +1132,9 @@ fn a_green_pr_whose_ci_predates_main_retests_then_waits_out_the_pending_new_head
 /// flight. The pending verdict fell through `require_checks_pass` with only
 /// an advisory warning, and main went red on the merged head. The newest
 /// attempt's settled green is the merge precondition; pending is a hold.
-/// Arm keeps its fall-through: it hands the PR to GitHub's queue, which
-/// waits out requirements that are required.
+/// Arm holds too: `--auto` waits only on the checks the ruleset requires,
+/// and fnodotdev/fno requires one, so an armed PR with other checks still
+/// running merges at once.
 #[test]
 fn a_pending_ci_read_holds_the_merge_until_the_newest_attempt_settles() {
     let mut fake = Fake {
@@ -1151,7 +1152,7 @@ fn a_pending_ci_read_holds_the_merge_until_the_newest_attempt_settles() {
         "{outcome:?}"
     );
 
-    // Preview still answers, and arm still hands off: neither lands a merge.
+    // Preview still answers: it lands nothing.
     let preview = run(
         &fake,
         &Request {
@@ -1160,14 +1161,20 @@ fn a_pending_ci_read_holds_the_merge_until_the_newest_attempt_settles() {
         },
     );
     assert_eq!(preview.word(), "authorized", "{preview:?}");
-    let armed = run(
-        &fake,
-        &Request {
-            require_checks: true,
-            ..request(Effect::Arm)
-        },
-    );
-    assert_eq!(armed.word(), "armed", "{armed:?}");
+    for require_checks in [true, false] {
+        let armed = run(
+            &fake,
+            &Request {
+                require_checks,
+                ..request(Effect::Arm)
+            },
+        );
+        assert_eq!(armed.word(), "held", "{armed:?}");
+        assert!(
+            armed.detail().contains("arming auto-merge waits only"),
+            "{armed:?}"
+        );
+    }
 
     // The unknown verdict stays fall-through: a PR with no check-run CI at
     // all (docs-only) must keep its merge door.
@@ -1600,14 +1607,13 @@ fn process_conditions_warn_on_merge_arm_and_preview_pending_holds() {
                 ..request(effect)
             };
             let outcome = run(&fake, &req);
-            if code == "ci_pending" && effect == Effect::Merge {
-                // The one cell the warning does not cover: a pending read
-                // holds the merge door until the newest attempt settles.
+            if code == "ci_pending" && matches!(effect, Effect::Merge | Effect::Arm) {
+                // The cells the warning does not cover: a pending read holds
+                // the merge door until the newest attempt settles, and holds
+                // the arm because `--auto` waits only on required checks.
                 assert_eq!(outcome.word(), "held", "{code}: {outcome:?}");
                 assert!(
-                    outcome
-                        .detail()
-                        .contains("checks are pending; require_checks_pass"),
+                    outcome.detail().contains("checks are pending; "),
                     "{outcome:?}"
                 );
                 continue;

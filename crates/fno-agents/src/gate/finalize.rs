@@ -2100,9 +2100,10 @@ fn arm_auto_merge(cwd: &Path, approved: bool, source: Option<&str>) -> (bool, Op
             effect: Effect::Arm,
             approved: Some(approved),
             auto_merge_source: source.map(str::to_owned),
-            // `--auto` IS waiting for the checks, so the queue enforces them
-            // server-side. Reading `require_checks_pass` here would let a config
-            // value turn arming into a no-op.
+            // `--auto` waits only on the checks the ruleset requires, so the
+            // shared walk holds a pending head itself. Reading
+            // `require_checks_pass` here would let a config value turn arming
+            // into a no-op.
             require_checks: false,
             // The owner captures the head independently of review coverage.
             covered_head: None,
