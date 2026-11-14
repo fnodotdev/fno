@@ -4,7 +4,7 @@ The mux serves one agent session's conversation as typed chat events. A chat cli
 
 ## The type
 
-`crates/fno/src/proto/chat_event.rs` holds the one shape for every harness.
+`crates/fno-proto/src/chat_event.rs` holds the one shape for every harness.
 
 - `SessionKey { harness, session_id, subagent }` names one stream. A subagent is its own stream, so two files never mix in one sequence.
 - `ChatEvent { seq, at_ms, source, body }`. `seq` starts at 0 for each stream and has no gaps. `source` is the byte offset of the line, or the store row id.
