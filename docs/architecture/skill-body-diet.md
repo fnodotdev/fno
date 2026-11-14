@@ -4,7 +4,7 @@ A structural pattern for keeping `SKILL.md` files lean by extracting per-topic d
 
 ## Measured in payload bytes, never lines
 
-The unit of measure is the **UTF-8 payload byte count** of the always-loaded body. Add to it the **selected-reference payload** of a representative run (the references its triggers fire). Physical line counts are the wrong instrument in both directions. Physical line counts are the wrong instrument in both directions. One dense 900-byte prose line carries more instruction than ten sparse list lines. A 400-line file of long paragraphs can outweigh a 600-line file of short ones. A diet that moved 12 KB out of the root but left the reference loading on every run moved nothing. The diet is finished at two marks: the bytes a representative run reads went down, and the behavior receipts still hold.
+The unit of measure is the **UTF-8 payload byte count** of the always-loaded body. Add to it the **selected-reference payload** of a representative run (the references its triggers fire). Physical line counts are the wrong instrument in both directions. One dense 900-byte prose line carries more instruction than ten sparse list lines. A 400-line file of long paragraphs can outweigh a 600-line file of short ones. A diet that moved 12 KB out of the root but left the reference loading on every run moved nothing. The diet is finished at two marks: the bytes a representative run reads went down, and the behavior receipts still hold.
 
 Compaction preserves authority statements and positive receipts: a moved block's specimens, refusal quotes, and measured numbers travel with it verbatim. The root keeps the invariant, the reference keeps the evidence.
 
@@ -114,9 +114,7 @@ Other long skills should follow the same pattern when they cross the threshold. 
 
 - `skills/blueprint/SKILL.md` (currently in the same range as pre-diet target)
 - `skills/execute/references/waves.md` (full wave-orchestration body)
-- Anything else that crosses 500 lines of body without strong load-bearing-every-invocation justification
-
-A future enhancement could be `scripts/validate-skill-size.sh`: a pre-commit hook that errors when any `SKILL.md` exceeds 500 lines without an explicit `# size-exempt: <reason>` directive in frontmatter. Out of scope for the initial diet.
+- Any other root whose always-loaded payload passes about 16 KB without a load-bearing-every-invocation reason
 
 ## Audience split (optional follow-up)
 
