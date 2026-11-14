@@ -12,10 +12,14 @@
 //! attribution owners); this module never reads state files or the network.
 
 use crate::harness::{AsHarness, Harness};
+use crate::lenient_de::parse;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::sync::OnceLock;
+
+#[path = "route_slot_de.rs"]
+mod de;
 
 const SLOT_LANES_TABLE: &str = include_str!("../slot_lanes.toml");
 
@@ -270,13 +274,14 @@ fn row_capacity(row: &Value, harness_detail: Option<&Value>) -> (String, String,
     // missing from the detail reads unknown, never the harness-wide best.
     if account.is_empty() {
         let (state, window) = match detail.as_object() {
-            Some(obj) => (
-                obj.get("state")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown"),
-                obj.get("window").and_then(Value::as_str).unwrap_or(""),
-            ),
-            None => (detail.as_str().unwrap_or("unknown"), ""),
+            Some(_) => {
+                let d: de::CapacityDetail = parse(detail);
+                (
+                    d.state.as_deref().unwrap_or("unknown"),
+                    d.window.unwrap_or_default(),
+                )
+            }
+            None => (detail.as_str().unwrap_or("unknown"), String::new()),
         };
         let mut s = state.trim().to_lowercase();
         if s.is_empty() {
@@ -284,10 +289,12 @@ fn row_capacity(row: &Value, harness_detail: Option<&Value>) -> (String, String,
         }
         // The harness-wide aggregate is the subject here; it carries no single
         // observation age, so no age token is rendered.
-        (s, window.to_string(), String::new())
+        (s, window, String::new())
     } else {
-        let mut state = detail
-            .get("accounts")
+        let d: de::CapacityDetail = parse(detail);
+        let mut state = d
+            .accounts
+            .as_ref()
             .and_then(|a| a.get(&account))
             .and_then(Value::as_str)
             .unwrap_or("unknown")
@@ -298,19 +305,16 @@ fn row_capacity(row: &Value, harness_detail: Option<&Value>) -> (String, String,
         }
         // The row's OWN account names the evidence. The harness-wide `window`
         // is only the fallback for an older payload without per-account maps.
-        let per_account_source = detail
-            .get("sources")
+        let per_account_source = d
+            .sources
+            .as_ref()
             .and_then(|s| s.get(&account))
             .and_then(Value::as_str);
         let window = match per_account_source {
             Some(src) => src.to_string(),
-            None => detail
-                .get("window")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string(),
+            None => d.window.unwrap_or_default(),
         };
-        let age = match detail.get("observed_at").and_then(Value::as_object) {
+        let age = match d.observed_at.as_ref().and_then(Value::as_object) {
             Some(obs) => match obs.get(&account) {
                 Some(v) => age_label(v.as_f64()),
                 None => String::new(),
@@ -468,12 +472,13 @@ struct InvRow {
 
 fn inv_row(v: &Value) -> InvRow {
     let band = row_value(v, "band").to_lowercase();
+    let tail: de::InvRowTail = parse(v);
     InvRow {
         name: row_value(v, "name"),
         harness: row_value(v, "harness"),
         model: row_value(v, "model"),
-        percentile: v.get("percentile").and_then(Value::as_f64),
-        cost: v.get("cost_per_mtok_in").and_then(Value::as_f64),
+        percentile: tail.percentile,
+        cost: tail.cost_per_mtok_in,
         effort: row_value(v, "effort"),
         band,
         raw: v.clone(),
@@ -543,19 +548,20 @@ fn order_candidates(mut rows: Vec<InvRow>, objective: &str, prefer_harness: &str
 /// capacity map, which reads every row unknown-permitted: the incumbent is
 /// the declared pick, never a live-capacity one.
 pub(crate) fn grid_leg(payload: &Value, _rung_base: &str, chain: &mut Vec<Value>) -> Value {
-    let capacity = match payload.get("capacity") {
-        Some(v) => v.clone(),
+    let p: de::SlotPayload = parse(payload);
+    let capacity = match p.capacity.clone() {
+        Some(v) => v,
         None => crate::route_capacity::capacity(
-            &payload.get("inventory").cloned().unwrap_or(json!({})),
+            &p.inventory.clone().unwrap_or_else(|| json!({})),
             &slot_cwd(),
             slot_now(),
             None,
         ),
     };
-    let node = payload.get("node").cloned().unwrap_or(Value::Null);
-    let band_raw = node
-        .get("difficulty")
-        .and_then(Value::as_str)
+    let band_raw = p
+        .node
+        .as_ref()
+        .and_then(|n| n.difficulty.as_deref())
         .map(|s| s.trim().to_lowercase())
         .unwrap_or_default();
     let band = if BAND_RANK_KEYS.contains(&band_raw.as_str()) {
@@ -564,9 +570,10 @@ pub(crate) fn grid_leg(payload: &Value, _rung_base: &str, chain: &mut Vec<Value>
         // Round up under uncertainty: the failure is asymmetric.
         "high".to_string()
     };
-    let prio = node
-        .get("priority")
-        .and_then(Value::as_str)
+    let prio = p
+        .node
+        .as_ref()
+        .and_then(|n| n.priority.as_deref())
         .map(|s| s.trim().to_lowercase())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "p2".to_string());
@@ -575,13 +582,11 @@ pub(crate) fn grid_leg(payload: &Value, _rung_base: &str, chain: &mut Vec<Value>
         chain.push(json!("grid=invalid-input"));
         return none(chain.clone());
     }
-    let inventory = payload.get("inventory").cloned().unwrap_or(json!({}));
-    let declared = inventory
-        .get("declared")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let inv_rows: Vec<Value> = inventory
-        .get("rows")
+    let inv_view: de::InventoryTail = p.inventory.as_ref().map(|i| parse(i)).unwrap_or_default();
+    let declared = inv_view.declared.unwrap_or(false);
+    let inv_rows: Vec<Value> = inv_view
+        .rows
+        .as_ref()
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
@@ -598,41 +603,37 @@ pub(crate) fn grid_leg(payload: &Value, _rung_base: &str, chain: &mut Vec<Value>
     } else {
         band.clone()
     };
-    let mut objective = inventory
-        .get("objective")
-        .and_then(Value::as_str)
-        .unwrap_or("cheapest-that-clears")
-        .to_string();
-    let role = payload
-        .get("role")
-        .and_then(Value::as_str)
+    let mut objective = inv_view
+        .objective
+        .clone()
+        .unwrap_or_else(|| "cheapest-that-clears".to_string());
+    let role = p
+        .role
+        .as_deref()
         .map(|s| s.trim().to_lowercase())
         .unwrap_or_default();
     if role == "planning" {
         candidate_band = "high".to_string();
         chain.push(json!("grid role(planning) floors band(high)"));
     }
-    let protected_role = payload
-        .get("protected_role")
-        .and_then(Value::as_str)
+    let protected_role = p
+        .protected_role
+        .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty());
     if let Some(prot) = protected_role {
-        let floor = payload
-            .get("protected_role_floor")
-            .and_then(Value::as_str)
-            .unwrap_or("high");
+        let floor = p.protected_role_floor.as_deref().unwrap_or("high");
         if band_rank(&candidate_band) < band_rank(floor) {
             candidate_band = floor.to_string();
         }
         objective = "best-available".to_string();
         chain.push(json!(format!("grid protected-role({prot}) floor={floor}")));
     }
-    let substrate = payload.get("substrate").and_then(Value::as_str);
-    let permission_mode = payload.get("permission_mode").and_then(Value::as_str);
-    let constrain = payload
-        .get("constrain_harness")
-        .and_then(Value::as_str)
+    let substrate = p.substrate.as_deref();
+    let permission_mode = p.permission_mode.as_deref();
+    let constrain = p
+        .constrain_harness
+        .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty());
     let mut rows: Vec<InvRow> = Vec::new();
@@ -648,13 +649,10 @@ pub(crate) fn grid_leg(payload: &Value, _rung_base: &str, chain: &mut Vec<Value>
     if let Some(h) = constrain {
         chain.push(json!(format!("grid constrained to harness({h})")));
     }
-    let command = payload
-        .get("work_command")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let command = p.work_command.as_deref().unwrap_or("");
     rows.retain(|r| !crate::capability_leaves::lane_cannot_loop(&r.harness, command));
     let before_filters = rows.len();
-    let thread_seatable = payload.get("thread_seatable").cloned().unwrap_or(json!({}));
+    let thread_seatable = p.thread_seatable.clone().unwrap_or_else(|| json!({}));
     rows.retain(|r| candidate_supported(&r.harness, substrate, permission_mode, &thread_seatable));
     if substrate.map_or(false, |s| !s.trim().is_empty())
         || permission_mode.map_or(false, |s| !s.trim().is_empty())
@@ -671,10 +669,7 @@ pub(crate) fn grid_leg(payload: &Value, _rung_base: &str, chain: &mut Vec<Value>
     }
     // A declared row whose harness fno cannot drive REFUSES by name; it is a
     // fact the receipt carries, never a silent skip.
-    let installed = payload
-        .get("harness_installed")
-        .cloned()
-        .unwrap_or(json!({}));
+    let installed = p.harness_installed.clone().unwrap_or_else(|| json!({}));
     let mut keep: Vec<InvRow> = Vec::new();
     for r in rows {
         let ok = r.harness.is_empty()
@@ -709,13 +704,9 @@ pub(crate) fn grid_leg(payload: &Value, _rung_base: &str, chain: &mut Vec<Value>
         chain.push(json!("grid=no-band-candidate"));
         return none(chain.clone());
     }
-    let prefer = inventory
-        .get("prefer_harness")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
+    let prefer = inv_view.prefer_harness.clone().unwrap_or_default();
     clearing = order_candidates(clearing, &objective, &prefer);
-    let effort_ok = payload.get("effort_ok").cloned().unwrap_or(json!({}));
+    let effort_ok = p.effort_ok.clone().unwrap_or_else(|| json!({}));
     for row in clearing.iter().chain(unbanded.iter()) {
         let detail = capacity.get(&row.harness);
         let (mut state, window, _age) = row_capacity(&row.raw, detail);
@@ -780,15 +771,16 @@ pub(crate) fn grid_leg(payload: &Value, _rung_base: &str, chain: &mut Vec<Value>
 /// harness when asked. Degrades below the floor rather than blocking.
 fn tier_leg(payload: &Value) -> Value {
     let mut chain: Vec<Value> = Vec::new();
-    let band = payload
-        .get("tier")
-        .and_then(Value::as_str)
+    let pv: de::SlotPayload = parse(payload);
+    let band = pv
+        .tier
+        .as_deref()
         .map(|s| s.trim().to_lowercase())
         .unwrap_or_default();
     chain.push(json!(format!("tier({band})")));
-    let provider = payload
-        .get("provider")
-        .and_then(Value::as_str)
+    let provider = pv
+        .provider
+        .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty());
     if let Some(p) = provider {
@@ -798,9 +790,10 @@ fn tier_leg(payload: &Value) -> Value {
         chain.push(json!("unknown-tier -> provider default"));
         return tier_none(chain);
     }
-    let inventory = payload.get("inventory").cloned().unwrap_or(json!({}));
-    let inv_rows: Vec<Value> = inventory
-        .get("rows")
+    let inv_view: de::InventoryTail = pv.inventory.as_ref().map(|i| parse(i)).unwrap_or_default();
+    let inv_rows: Vec<Value> = inv_view
+        .rows
+        .as_ref()
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
@@ -823,14 +816,11 @@ fn tier_leg(payload: &Value) -> Value {
         .filter(|r| band_rank(&r.band) >= floor_rank)
         .cloned()
         .collect();
-    let objective = inventory
-        .get("objective")
-        .and_then(Value::as_str)
+    let objective = inv_view
+        .objective
+        .as_deref()
         .unwrap_or("cheapest-that-clears");
-    let prefer = inventory
-        .get("prefer_harness")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let prefer = inv_view.prefer_harness.as_deref().unwrap_or("");
     if !clearing.is_empty() {
         clearing = order_candidates(clearing, objective, prefer);
         let row = &clearing[0];
@@ -885,21 +875,20 @@ fn lanes_list_fault(rung_base: &str, lanes_raw: &Value) -> Option<String> {
 /// The readout leg: every planned lane's live capacity state, for display.
 /// No selection, no terminal; a lane naming no row reads no-such-row.
 fn states_leg(payload: &Value) -> Value {
-    let rung_base = payload
-        .get("rung_base")
-        .and_then(Value::as_str)
-        .unwrap_or("agents.profiles");
-    let capacity = match payload.get("capacity") {
+    let p: de::SlotPayload = parse(payload);
+    let policy_tail: de::PolicyTail = p.policy.as_ref().map(|v| parse(v)).unwrap_or_default();
+    let rung_base = p.rung_base.as_deref().unwrap_or("agents.profiles");
+    let capacity = match p.capacity.clone() {
         Some(v) => v.clone(),
         None => crate::route_capacity::capacity(
-            &payload.get("inventory").cloned().unwrap_or(json!({})),
+            &p.inventory.clone().unwrap_or_else(|| json!({})),
             &slot_cwd(),
             slot_now(),
             None,
         ),
     };
-    let profile = payload.get("profile").cloned().unwrap_or(Value::Null);
-    let lanes_raw = payload.get("lanes_raw").cloned().unwrap_or(json!([]));
+    let profile = p.profile.clone().unwrap_or(Value::Null);
+    let lanes_raw = p.lanes_raw.clone().unwrap_or_else(|| json!([]));
     let mut chain: Vec<Value> = Vec::new();
     let mut lanes_raw = lanes_raw;
     let mut prefix: Vec<Value> = Vec::new();
@@ -928,7 +917,7 @@ fn states_leg(payload: &Value) -> Value {
     // walk judges the map it is given and never probes.
     let walk_verdict = |payload: &Value| -> (Value, &'static str, Value, Option<Value>) {
         let mut slot_payload = payload.clone();
-        let explicit_capacity = slot_payload.get("capacity").is_some();
+        let explicit_capacity = p.capacity.is_some();
         if let Some(obj) = slot_payload.as_object_mut() {
             obj.remove("mode");
             if explicit_capacity {
@@ -942,17 +931,20 @@ fn states_leg(payload: &Value) -> Value {
         }
         let mut judged: Option<Value> = None;
         let slot_out = resolve_slot_walk(&slot_payload, &mut judged);
-        let candidate = slot_out.get("candidate");
-        let lane_rung = candidate
-            .and_then(|c| c.get("lane_rung"))
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let out_view: de::WalkOut = parse(&slot_out);
+        let candidate = out_view.candidate.as_ref();
+        let candidate_tail: de::CandidateTail = out_view
+            .candidate
+            .as_ref()
+            .map(|c| parse(c))
+            .unwrap_or_default();
+        let lane_rung = candidate_tail.lane_rung.as_deref().unwrap_or("");
         // The verdict names WHY nothing is placed: a policy refusal is a
         // hold, never "exhausted", and capacity is held, not broken.
         let routing = if !lane_rung.is_empty() {
             "armed"
         } else {
-            match slot_out.get("reason_kind").and_then(Value::as_str) {
+            match out_view.reason_kind.as_deref() {
                 Some("policy-refusal") => "policy-held",
                 Some("capacity-queue") | Some("capacity-exhausted") | Some("capacity-unknown") => {
                     "capacity-held"
@@ -962,7 +954,7 @@ fn states_leg(payload: &Value) -> Value {
         };
         let mut facts = json!({});
         if let Some(obj) = facts.as_object_mut() {
-            let pol = candidate.and_then(|c| c.get("policy"));
+            let pol = candidate_tail.policy.as_ref();
             let get = |k: &str| {
                 pol.and_then(|p| p.get(k))
                     .and_then(Value::as_str)
@@ -975,18 +967,12 @@ fn states_leg(payload: &Value) -> Value {
             // held readout still names the access that held it.
             let (oa, src) = if oa.is_empty() {
                 (
-                    payload
-                        .get("policy")
-                        .and_then(|p| p.get("operator_access"))
-                        .and_then(Value::as_str)
+                    policy_tail
+                        .operator_access
+                        .as_deref()
                         .unwrap_or("")
                         .to_string(),
-                    if payload
-                        .get("policy")
-                        .and_then(|p| p.get("enforce_inventory"))
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                    {
+                    if policy_tail.enforce_inventory.unwrap_or(false) {
                         "config routing.enforce_inventory".to_string()
                     } else {
                         String::new()
@@ -1004,8 +990,9 @@ fn states_leg(payload: &Value) -> Value {
                     obj.insert("policy_source".into(), json!(src));
                 }
             }
-            let skips: Vec<Value> = slot_out
-                .get("chain")
+            let skips: Vec<Value> = out_view
+                .chain
+                .as_ref()
                 .and_then(Value::as_array)
                 .map(|c| {
                     c.iter()
@@ -1019,14 +1006,12 @@ fn states_leg(payload: &Value) -> Value {
             }
         }
         let would_take = if !lane_rung.is_empty() {
-            let lane = candidate
-                .and_then(|c| c.get("lane"))
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let lane = candidate_tail.lane.as_deref().unwrap_or("");
             json!(format!("{lane_rung} {lane}"))
         } else {
-            slot_out
-                .get("chain")
+            out_view
+                .chain
+                .as_ref()
                 .and_then(Value::as_array)
                 .and_then(|c| c.last())
                 .cloned()
@@ -1043,16 +1028,15 @@ fn states_leg(payload: &Value) -> Value {
         }
         out
     };
-    if let Some(bd) = profile
-        .get("by_difficulty")
+    let profile_tail: de::ProfileTail = parse(&profile);
+    if let Some(bd) = profile_tail
+        .by_difficulty
+        .as_ref()
         .and_then(Value::as_object)
         .filter(|bd| !bd.is_empty())
     {
         let (diff_key, diff_reason) = {
-            let node_difficulty = payload
-                .get("node")
-                .and_then(|n| n.get("difficulty"))
-                .and_then(Value::as_str);
+            let node_difficulty = p.node.as_ref().and_then(|n| n.difficulty.as_deref());
             effective_difficulty(node_difficulty)
         };
         diff_note = diff_reason;
@@ -1070,7 +1054,7 @@ fn states_leg(payload: &Value) -> Value {
                     }));
                 }
             }
-            if let Some(ovl_lanes) = ovl.get("lanes") {
+            if let Some(ovl_lanes) = parse::<de::OverlayTail>(ovl).lanes {
                 match ovl_lanes.as_array() {
                     Some(arr) if !arr.is_empty() => lanes_raw = Value::Array(arr.clone()),
                     _ => {
@@ -1102,21 +1086,18 @@ fn states_leg(payload: &Value) -> Value {
     if lanes_arr.is_empty() {
         // The no-lanes verdict: what a spawn would fall back to. No walk ran,
         // so the policy lines stay unset exactly like an unarmed slot.
-        let inv = payload.get("inventory").cloned().unwrap_or(json!({}));
-        let rows = inv.get("rows").and_then(Value::as_array);
-        let would_take = if inv
-            .get("declared")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-            && rows.map_or(false, |r| !r.is_empty())
-        {
-            json!(format!(
-                "no lanes; grid over {} rows",
-                rows.map_or(0, |r| r.len())
-            ))
-        } else {
-            json!("no lanes; no inventory; harness default")
-        };
+        let inv_view: de::InventoryTail =
+            p.inventory.as_ref().map(|i| parse(i)).unwrap_or_default();
+        let rows = inv_view.rows.as_ref().and_then(Value::as_array);
+        let would_take =
+            if inv_view.declared.unwrap_or(false) && rows.map_or(false, |r| !r.is_empty()) {
+                json!(format!(
+                    "no lanes; grid over {} rows",
+                    rows.map_or(0, |r| r.len())
+                ))
+            } else {
+                json!("no lanes; no inventory; harness default")
+            };
         return with_facts(json!({
             "status": "states", "lane_states": [], "chain": chain,
             "would_take": would_take, "routing": routing,
@@ -1125,8 +1106,9 @@ fn states_leg(payload: &Value) -> Value {
     if let Some(reason) = diff_note {
         prefix.push(json!(format!("slot note {rung_base} {reason}")));
     }
-    let declared_rows = payload
-        .get("declared_rows")
+    let declared_rows = p
+        .declared_rows
+        .as_ref()
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
@@ -1155,10 +1137,12 @@ fn states_leg(payload: &Value) -> Value {
                 let (s, w, _age) = row_capacity(r, detail);
                 // Display evidence: the attribution owner's verdict for the
                 // row's named account, and where the observation came from.
+                let detail_tail: de::CapacityDetail = detail.map(|d| parse(d)).unwrap_or_default();
                 let ident = if !account.is_empty() && route.is_empty() {
                     Some(
-                        detail
-                            .and_then(|d| d.get("evidence"))
+                        detail_tail
+                            .evidence
+                            .as_ref()
                             .and_then(|e| e.get(&account))
                             .and_then(Value::as_str)
                             .unwrap_or("unknown"),
@@ -1166,10 +1150,7 @@ fn states_leg(payload: &Value) -> Value {
                 } else {
                     None
                 };
-                let src = detail
-                    .and_then(|d| d.get("window"))
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.is_empty());
+                let src = detail_tail.window.as_deref().filter(|s| !s.is_empty());
                 (s, w, ident, src)
             }
         };
@@ -1207,10 +1188,11 @@ fn states_leg(payload: &Value) -> Value {
 /// journals it, the public inventory surface prints it, and the audit compares
 /// receipts against it - so the algorithm cannot fork across the seam.
 fn payload_fingerprint(payload: &Value) -> String {
+    let p: de::SlotPayload = parse(payload);
     let facts = json!({
-        "rows": payload.get("declared_rows").cloned().unwrap_or(json!({})),
-        "policy": payload.get("policy").cloned().unwrap_or(json!({})),
-        "slots": payload.get("slot_by_command").cloned().unwrap_or(json!({})),
+        "rows": p.declared_rows.clone().unwrap_or_else(|| json!({})),
+        "policy": p.policy.clone().unwrap_or_else(|| json!({})),
+        "slots": p.slot_by_command.clone().unwrap_or_else(|| json!({})),
     });
     let mut h = Sha256::new();
     h.update(serde_json::to_string(&crate::route_gather::canonical(&facts)).unwrap_or_default());
@@ -1260,9 +1242,9 @@ fn vendor_maps(
     serde_json::Map<String, Value>,
     serde_json::Map<String, Value>,
 ) {
-    let explicit = ["vendor_caps", "vendor_counts", "vendor_count_errors"]
-        .iter()
-        .any(|key| payload.get(*key).is_some());
+    let vp: de::SlotPayload = parse(payload);
+    let explicit =
+        vp.vendor_caps.is_some() || vp.vendor_counts.is_some() || vp.vendor_count_errors.is_some();
     let gathered = (!explicit).then(|| {
         let registry = crate::paths::AgentsHome::from_env_opt().map(|home| home.registry_json());
         crate::spawn_gate_lanes::vendor_lane_readings(&slot_cwd(), registry.as_deref())
@@ -1292,7 +1274,8 @@ fn slot_now() -> f64 {
 
 fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
     let mut chain: Vec<Value> = Vec::new();
-    let mode = payload.get("mode").and_then(Value::as_str).unwrap_or("");
+    let p: de::SlotPayload = parse(payload);
+    let mode = p.mode.as_deref().unwrap_or("");
     if mode == "tier" {
         return tier_leg(payload);
     }
@@ -1302,20 +1285,20 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
     if mode == "states" {
         return states_leg(payload);
     }
-    let rung_base = payload
-        .get("rung_base")
-        .and_then(Value::as_str)
+    let rung_base = p
+        .rung_base
+        .as_deref()
         .unwrap_or("agents.profiles")
         .to_string();
-    let profile = payload.get("profile").cloned().unwrap_or(Value::Null);
+    let profile = p.profile.clone().unwrap_or(Value::Null);
     // An explicit capacity stays honored (the existing Rust tests' seam); a
     // payload without one is computed here, from the same state file and
     // config the Python resolver used to read.
-    let (mut capacity, capacity_computed) = match payload.get("capacity") {
+    let (mut capacity, capacity_computed) = match p.capacity.clone() {
         Some(v) => (v.clone(), false),
         None => (
             crate::route_capacity::capacity(
-                &payload.get("inventory").cloned().unwrap_or(json!({})),
+                &p.inventory.clone().unwrap_or_else(|| json!({})),
                 &slot_cwd(),
                 slot_now(),
                 None,
@@ -1323,21 +1306,15 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
             true,
         ),
     };
-    let gate_bypassed = payload
-        .get("gate_bypassed")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let explicit_lane = payload
-        .get("explicit_lane")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let substrate = payload.get("substrate").and_then(Value::as_str);
-    let permission_mode = payload.get("permission_mode").and_then(Value::as_str);
-    let constrain_harness = payload
-        .get("constrain_harness")
-        .and_then(Value::as_str)
+    let gate_bypassed = p.gate_bypassed.unwrap_or(false);
+    let explicit_lane = p.explicit_lane.unwrap_or(false);
+    let substrate = p.substrate.as_deref();
+    let permission_mode = p.permission_mode.as_deref();
+    let constrain_harness = p
+        .constrain_harness
+        .as_deref()
         .filter(|s| !s.trim().is_empty());
-    let thread_seatable = payload.get("thread_seatable").cloned().unwrap_or(json!({}));
+    let thread_seatable = p.thread_seatable.clone().unwrap_or_else(|| json!({}));
 
     // --- strict inventory policy ---------------------------------------------
     // When routing.enforce_inventory is set, the effective work kind picks
@@ -1345,19 +1322,16 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
     // CONFIG-declared lanes can answer. The grid, the built-in fallback and
     // the harness default are all out of the decision path; a request the
     // slot cannot answer is a named refusal, never an ambient default.
-    let strict_policy = payload.get("policy").cloned().unwrap_or(json!({}));
-    let enforce = strict_policy
-        .get("enforce_inventory")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let policy_tail: de::PolicyTail = p.policy.as_ref().map(|v| parse(v)).unwrap_or_default();
+    let enforce = policy_tail.enforce_inventory.unwrap_or(false);
     let mut strict_ctx: Option<(String, String)> = None; // (operator_access, slot command)
     let mut rung_base = rung_base;
     let mut profile = profile;
-    let mut lanes_raw_value = payload.get("lanes_raw").cloned().unwrap_or(json!([]));
+    let mut lanes_raw_value = p.lanes_raw.clone().unwrap_or_else(|| json!([]));
     if enforce {
-        let operator_access = strict_policy
-            .get("operator_access")
-            .and_then(Value::as_str)
+        let operator_access = policy_tail
+            .operator_access
+            .as_deref()
             .map(|s| s.trim().to_lowercase())
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "unknown".to_string());
@@ -1371,9 +1345,9 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
                 "routing.operator_access is not local|remote|unknown",
             );
         }
-        let work_command = payload
-            .get("work_command")
-            .and_then(Value::as_str)
+        let work_command = p
+            .work_command
+            .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string)
@@ -1382,20 +1356,22 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
         if let Some(note) = note {
             chain.push(json!(note));
         }
-        let slot = payload
-            .get("slot_by_command")
+        let slot = p
+            .slot_by_command
+            .as_ref()
             .and_then(Value::as_object)
             .and_then(|s| s.get(slot_command.as_str()));
         match slot {
             Some(s) => {
-                rung_base = s
-                    .get("rung_base")
-                    .and_then(Value::as_str)
+                let entry: de::SlotEntry = parse(s);
+                rung_base = entry
+                    .rung_base
+                    .as_deref()
                     .filter(|v| !v.is_empty())
                     .unwrap_or(&format!("agents.profiles.{slot_command}"))
                     .to_string();
-                profile = s.get("profile").cloned().unwrap_or(json!({}));
-                lanes_raw_value = s.get("lanes_raw").cloned().unwrap_or(json!([]));
+                profile = entry.profile.clone().unwrap_or_else(|| json!({}));
+                lanes_raw_value = entry.lanes_raw.clone().unwrap_or_else(|| json!([]));
             }
             None => {
                 rung_base = format!("agents.profiles.{slot_command}");
@@ -1405,7 +1381,11 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
         }
         strict_ctx = Some((operator_access, slot_command));
     }
-    let by_difficulty = profile.get("by_difficulty").cloned().unwrap_or(json!({}));
+    let profile_tail: de::ProfileTail = parse(&profile);
+    let by_difficulty = profile_tail
+        .by_difficulty
+        .clone()
+        .unwrap_or_else(|| json!({}));
     let by_difficulty_obj = by_difficulty.as_object();
 
     if !by_difficulty.is_null() && by_difficulty_obj.is_none() {
@@ -1434,10 +1414,7 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
     let mut overlay_lanes_keys: Option<(String, String)> = None;
     if let Some(bd) = by_difficulty_obj.filter(|bd| !bd.is_empty()) {
         let (diff_key, diff_reason) = {
-            let node_difficulty = payload
-                .get("node")
-                .and_then(|n| n.get("difficulty"))
-                .and_then(Value::as_str);
+            let node_difficulty = p.node.as_ref().and_then(|n| n.difficulty.as_deref());
             effective_difficulty(node_difficulty)
         };
         let overlay = bd.get(&diff_key);
@@ -1451,7 +1428,7 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
                     return none(chain);
                 }
             }
-            if let Some(ovl_lanes) = ovl.get("lanes") {
+            if let Some(ovl_lanes) = parse::<de::OverlayTail>(ovl).lanes {
                 match ovl_lanes.as_array() {
                     Some(arr) if !arr.is_empty() => {
                         lanes_raw = Value::Array(arr.clone());
@@ -1488,21 +1465,21 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
     // typed flag already occupies the axis. Config defaults do NOT outrank
     // lanes; only a typed flag does, because these value fields are argv-only
     // facts (spawn_defaults.py never sets them from config injection).
-    let explicit_model_name = payload
-        .get("explicit_model_value")
-        .and_then(Value::as_str)
+    let explicit_model_name = p
+        .explicit_model_value
+        .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    let explicit_route_name = payload
-        .get("explicit_route_value")
-        .and_then(Value::as_str)
+    let explicit_route_name = p
+        .explicit_route_value
+        .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    let explicit_vendor_name = payload
-        .get("explicit_vendor_value")
-        .and_then(Value::as_str)
+    let explicit_vendor_name = p
+        .explicit_vendor_value
+        .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
@@ -1547,11 +1524,7 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
         chain.push(json!(format!(
             "slot {rung_base} has no lanes; grid over inventory"
         )));
-        if payload
-            .get("model_occupied")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
+        if p.model_occupied.unwrap_or(false) {
             chain.push(json!("grid=model-axis-occupied"));
             return none(chain);
         }
@@ -1571,13 +1544,14 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
         ),
         None => crate::route_gather::lanes_source_for(&slot_cwd(), &rung_base),
     };
-    let from = source.get("from").and_then(Value::as_str).unwrap_or("");
+    let src_view: de::LanesSource = parse(&source);
+    let from = src_view.from.as_deref().unwrap_or("");
     if !from.is_empty() {
         lanes_line.push_str(&format!(" (lanes from {from}"));
-        let overridden: Vec<&str> = source
-            .get("overrides")
-            .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        let overridden: Vec<&str> = src_view
+            .overrides
+            .as_ref()
+            .map(|a| a.iter().filter_map(|v| v.as_deref()).collect())
             .unwrap_or_default();
         if !overridden.is_empty() {
             lanes_line.push_str(&format!("; overrides {}", overridden.join(", ")));
@@ -1621,8 +1595,9 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
         None => return none(chain),
     };
 
-    let declared_rows = payload
-        .get("declared_rows")
+    let declared_rows = p
+        .declared_rows
+        .as_ref()
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
@@ -1641,19 +1616,14 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
     // dispatch seam and the readout's preview walk arm this; an
     // explicit-capacity payload never refreshes (the walk judges the map it
     // is given).
-    let capacity_refresh_armed = capacity_computed
-        && payload
-            .get("capacity_refresh")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
+    let capacity_refresh_armed = capacity_computed && p.capacity_refresh.unwrap_or(false);
     if capacity_refresh_armed && on_unknown == "skip" {
         let outdated = outdated_lane_count(&plan, &rows, &capacity);
         if outdated > 0 {
             // The readout's arm travels through the states leg, which bounds
             // its probe tighter than the dispatch seam's 60s.
-            let timeout = payload
-                .get("capacity_refresh_timeout_secs")
-                .and_then(Value::as_u64)
+            let timeout = p
+                .capacity_refresh_timeout_secs
                 .map(std::time::Duration::from_secs)
                 .unwrap_or(crate::route_capacity::REFRESH_TIMEOUT);
             chain.push(json!(match crate::route_capacity::refresh_usage_readings(
@@ -1662,7 +1632,7 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
             ) {
                 Some(refreshed) => {
                     capacity = crate::route_capacity::capacity(
-                        &payload.get("inventory").cloned().unwrap_or(json!({})),
+                        &p.inventory.clone().unwrap_or_else(|| json!({})),
                         &slot_cwd(),
                         slot_now(),
                         Some(&refreshed),
@@ -1720,9 +1690,8 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
             };
             // utc_now_hour pins the clock for tests; the dispatch seam and
             // the readout never set it, so production judges the real hour.
-            let hour = payload
-                .get("utc_now_hour")
-                .and_then(Value::as_u64)
+            let hour = p
+                .utc_now_hour
                 .map(|h| (h % 24) as u8)
                 .unwrap_or_else(utc_hour_now);
             if !hour_in_utc_window(hour, start, end) {
@@ -1743,10 +1712,7 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
             )));
             continue;
         }
-        let command = payload
-            .get("work_command")
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let command = p.work_command.as_deref().unwrap_or("");
         if crate::capability_leaves::lane_cannot_loop(&harness, command) {
             chain.push(json!(format!(
                 "slot skip {} harness {harness:?} cannot close the {command} loop",
@@ -1815,8 +1781,9 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
                 // lane route contradicting that vendor would check one
                 // coordinate and bill another, so it refuses before anything
                 // launches.
-                if let Some(rec_vendor) = payload
-                    .get("account_record_vendors")
+                if let Some(rec_vendor) = p
+                    .account_record_vendors
+                    .as_ref()
                     .and_then(|v| v.get(&account))
                     .and_then(Value::as_str)
                     .filter(|s| !s.is_empty())
@@ -1872,8 +1839,10 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
             )));
         }
         let harness_detail = capacity.get(&harness);
-        let evidence = harness_detail
-            .and_then(|d| d.get("evidence"))
+        let detail_tail: de::CapacityDetail = harness_detail.map(|d| parse(d)).unwrap_or_default();
+        let evidence = detail_tail
+            .evidence
+            .as_ref()
             .and_then(Value::as_object)
             .cloned()
             .unwrap_or_default();
@@ -1915,10 +1884,7 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
         }
         let (mut state, window, age) = row_capacity(&row, harness_detail);
         if state == "exhausted" || state == "blocked" {
-            if let Some(resets) = harness_detail
-                .and_then(|d| d.get("resets"))
-                .and_then(Value::as_object)
-            {
+            if let Some(resets) = detail_tail.resets.as_ref().and_then(Value::as_object) {
                 let candidates: Vec<f64> = resets
                     .iter()
                     .filter(|(k, _)| account.is_empty() || k.as_str() == account)
@@ -2055,9 +2021,9 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
         let mut queue_refusal = json!({
             "status": "refused",
             "reason": "slot_exhausted",
-            "verb": payload
-                .get("rung_base")
-                .and_then(Value::as_str)
+            "verb": p
+                .rung_base
+                .as_deref()
                 .unwrap_or("agents.profiles")
                 .strip_prefix("agents.profiles.")
                 .unwrap_or(""),
@@ -2172,9 +2138,11 @@ fn pick(
     evidence.insert("capacity".into(), json!(state));
     evidence.insert("window".into(), json!(window));
     if !account.is_empty() && route.is_empty() {
-        let ident = capacity
-            .get(&harness)
-            .and_then(|d| d.get("evidence"))
+        let detail_tail: de::CapacityDetail =
+            capacity.get(&harness).map(|d| parse(d)).unwrap_or_default();
+        let ident = detail_tail
+            .evidence
+            .as_ref()
             .and_then(|e| e.get(&account))
             .and_then(Value::as_str)
             .unwrap_or("unknown");
@@ -2411,16 +2379,18 @@ pub fn run_route_slot_capture(args: &[String]) -> (i32, String, String) {
         Err(fail) => return fail,
     };
     // The Python transport sends the command only as argv[1] with the payload on
-    // stdin, so the journal op rides inside the payload, not in argv.
-    if payload.get("op").and_then(Value::as_str) == Some("journal") {
+    // stdin, so the journal op and the mode vocabulary ride inside the payload,
+    // not in argv. One parse answers all of them.
+    let p: de::SlotPayload = parse(&payload);
+    if p.op.as_deref() == Some("journal") {
         return run_route_slot_journal(&payload);
     }
     // The gather modes answer in route_gather before the walk; `inventory`
     // here is the GATHER's fold (the doctor leg keeps its explicit
     // `known_harnesses` payload and flows to the walk as before).
-    let mode = payload.get("mode").and_then(Value::as_str).unwrap_or("");
+    let mode = p.mode.as_deref().unwrap_or("");
     if matches!(mode, "policy" | "dispatch_model")
-        || (mode == "inventory" && payload.get("known_harnesses").is_none())
+        || (mode == "inventory" && p.known_harnesses.is_none())
     {
         let out = crate::route_gather::run_mode(&payload, &slot_cwd());
         return (0, format!("{out}\n"), String::new());
@@ -2441,15 +2411,7 @@ pub fn run_route_slot_capture(args: &[String]) -> (i32, String, String) {
         );
     }
     if mode == "config-route" {
-        let argv: Vec<String> = payload
-            .get("argv")
-            .and_then(Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let argv = p.argv.clone().unwrap_or_default();
         return crate::config_route::run_capture(&argv);
     }
     let filled = crate::route_gather::fill(&payload, &slot_cwd());
@@ -2495,7 +2457,8 @@ fn read_route_slot_payload(args: &[String]) -> Result<Value, (i32, String, Strin
 /// No file is created: the store is the only surface the receipt lands on.
 /// The caller passes the resolved journal path: the binary reads no config.
 pub fn run_route_slot_journal(payload: &Value) -> (i32, String, String) {
-    let path = match payload.get("path").and_then(Value::as_str) {
+    let p: de::SlotPayload = parse(payload);
+    let path = match p.path.as_deref() {
         Some(p) => std::path::PathBuf::from(p),
         None => {
             return (
@@ -2505,7 +2468,7 @@ pub fn run_route_slot_journal(payload: &Value) -> (i32, String, String) {
             )
         }
     };
-    let data = match payload.get("event").and_then(Value::as_object) {
+    let data = match p.event.as_ref().and_then(Value::as_object) {
         Some(m) => Value::Object(m.clone()),
         None => {
             return (
@@ -2554,9 +2517,11 @@ pub fn run_route_slot_journal(payload: &Value) -> (i32, String, String) {
 /// separates it from the Python gate's rows. Best effort, always: a dead
 /// journal never blocks a spawn and never changes a refusal.
 pub(crate) fn journal_routing_refusal(payload: &Value, out: &Value) {
-    let refused = out.get("candidate").map(Value::is_null).unwrap_or(false)
+    let p: de::SlotPayload = parse(payload);
+    let o: de::WalkOut = parse(out);
+    let refused = o.candidate.as_ref().map(Value::is_null).unwrap_or(false)
         && matches!(
-            out.get("verdict").and_then(Value::as_str),
+            o.verdict.as_deref(),
             Some("capacity-held") | Some("policy-held")
         );
     if !refused {
@@ -2569,21 +2534,20 @@ pub(crate) fn journal_routing_refusal(payload: &Value, out: &Value) {
     let Some(path) = crate::state_path::resolve("events", &cwd) else {
         return;
     };
-    let queue = out.get("reason_kind").and_then(Value::as_str) == Some("capacity-queue");
-    let (reason, detail) = if let Some(t) = out.get("refusal_terminal") {
+    let queue = o.reason_kind.as_deref() == Some("capacity-queue");
+    let (reason, detail) = if let Some(t) = &o.refusal_terminal {
         (
-            t.get("class").and_then(Value::as_str).unwrap_or("unknown"),
-            t.get("text").and_then(Value::as_str).unwrap_or(""),
+            t.class.as_deref().unwrap_or("unknown"),
+            t.text.as_deref().unwrap_or(""),
         )
-    } else if let Some(p) = out.get("exhausted_payload") {
+    } else if let Some(pl) = &o.exhausted_payload {
         // The queue terminal composes its structured payload instead of a
         // refusal_terminal; its reason rides there and the chain's last line
         // is the human detail.
         (
-            p.get("reason")
-                .and_then(Value::as_str)
-                .unwrap_or("slot_exhausted"),
-            out.get("chain")
+            pl.reason.as_deref().unwrap_or("slot_exhausted"),
+            o.chain
+                .as_ref()
                 .and_then(Value::as_array)
                 .and_then(|c| c.last())
                 .and_then(Value::as_str)
@@ -2592,8 +2556,9 @@ pub(crate) fn journal_routing_refusal(payload: &Value, out: &Value) {
     } else {
         ("unknown", "")
     };
-    let chain = out
-        .get("chain")
+    let chain = o
+        .chain
+        .as_ref()
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or(&[]);
@@ -2602,7 +2567,7 @@ pub(crate) fn journal_routing_refusal(payload: &Value, out: &Value) {
         ("detail", json!(detail)),
         ("gate", json!("routing")),
     ];
-    if let Some(vb) = payload.get("rung_base").and_then(Value::as_str) {
+    if let Some(vb) = p.rung_base.as_deref() {
         fields.push((
             "verb",
             json!(vb.strip_prefix("agents.profiles.").unwrap_or(vb)),
@@ -2610,14 +2575,14 @@ pub(crate) fn journal_routing_refusal(payload: &Value, out: &Value) {
     }
     fields.push(("lanes", Value::Array(lanes_from_chain(chain))));
     fields.push(("exit_code", json!(if queue { 78 } else { 2 })));
-    if let Some(v) = payload.get("substrate").filter(|v| !v.is_null()) {
+    if let Some(v) = p.substrate.as_ref().filter(|v| !v.is_null()) {
         fields.push(("substrate", v.clone()));
     }
     // plan_path rides nested in node_payload, not at the payload top level.
-    if let Some(v) = payload
-        .get("node")
-        .and_then(|n| n.get("plan_path"))
-        .and_then(Value::as_str)
+    if let Some(v) = p
+        .node
+        .as_ref()
+        .and_then(|n| n.plan_path.as_deref())
         .filter(|s| !s.is_empty())
     {
         fields.push(("plan_path", json!(v)));
@@ -2729,24 +2694,19 @@ pub fn run_route_slot_audit(args: &[String]) -> (i32, String, String) {
 /// the plan, so a negative audit is diagnostic, not just non-zero.
 pub fn audit_verify(snapshot: &Value) -> (Value, i32) {
     let mut boundaries: Vec<Value> = Vec::new();
-    let policy = snapshot.get("policy").cloned().unwrap_or(json!({}));
-    let enforced = policy
-        .get("enforce_inventory")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let fingerprint = snapshot
-        .get("fingerprint")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
+    let snap: de::AuditSnapshot = parse(snapshot);
+    let policy_tail: de::PolicyTail = snap.policy.as_ref().map(|v| parse(v)).unwrap_or_default();
+    let enforced = policy_tail.enforce_inventory.unwrap_or(false);
+    let fingerprint = snap.fingerprint.as_deref().unwrap_or("").to_string();
     if !enforced {
         boundaries.push(json!({
             "boundary": "routing-not-enforced",
             "detail": "config routing.enforce_inventory is off; no armed policy to verify",
         }));
     }
-    let sessions = snapshot
-        .get("sessions")
+    let sessions = snap
+        .sessions
+        .as_ref()
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
@@ -2758,15 +2718,16 @@ pub fn audit_verify(snapshot: &Value) -> (Value, i32) {
     }
     let mut verified: Vec<Value> = Vec::new();
     for s in &sessions {
-        let sid = s.get("session_id").and_then(Value::as_str).unwrap_or("");
+        let sv: de::SessionTail = parse(s);
+        let sid = sv.session_id.as_deref().unwrap_or("");
         if sid.is_empty() {
             boundaries.push(json!({
                 "boundary": "missing-session-id",
-                "detail": s.get("name").and_then(Value::as_str).unwrap_or("?"),
+                "detail": sv.name.as_deref().unwrap_or("?"),
             }));
             continue;
         }
-        let account = s.get("account").and_then(Value::as_str).unwrap_or("");
+        let account = sv.account.as_deref().unwrap_or("");
         if account.is_empty() {
             boundaries.push(json!({
                 "boundary": "missing-account-identity",
@@ -2774,10 +2735,7 @@ pub fn audit_verify(snapshot: &Value) -> (Value, i32) {
             }));
             continue;
         }
-        let receipt_fp = s
-            .get("receipt_fingerprint")
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let receipt_fp = sv.receipt_fingerprint.as_deref().unwrap_or("");
         if receipt_fp.is_empty() {
             boundaries.push(json!({
                 "boundary": "no-receipt",
@@ -2794,8 +2752,8 @@ pub fn audit_verify(snapshot: &Value) -> (Value, i32) {
             }));
             continue;
         }
-        let model = s.get("model").and_then(Value::as_str).unwrap_or("");
-        let basis = s.get("model_basis").and_then(Value::as_str).unwrap_or("");
+        let model = sv.model.as_deref().unwrap_or("");
+        let basis = sv.model_basis.as_deref().unwrap_or("");
         if model.is_empty() || basis != "verified" {
             boundaries.push(json!({
                 "boundary": "unobserved-requested-model",
@@ -2805,10 +2763,7 @@ pub fn audit_verify(snapshot: &Value) -> (Value, i32) {
             }));
             continue;
         }
-        let requested = s
-            .get("requested_model")
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let requested = sv.requested_model.as_deref().unwrap_or("");
         if !requested.is_empty() && requested != model {
             boundaries.push(json!({
                 "boundary": "misrouted-model",
@@ -2821,7 +2776,7 @@ pub fn audit_verify(snapshot: &Value) -> (Value, i32) {
         match view_evidence(s, sid, &fingerprint) {
             Ok(()) => verified.push(json!({
                 "session_id": sid,
-                "harness": s.get("harness").and_then(Value::as_str).unwrap_or(""),
+                "harness": sv.harness.as_deref().unwrap_or(""),
                 "account": account,
                 "model": model,
                 "model_basis": basis,
@@ -2853,15 +2808,17 @@ pub fn audit_verify(snapshot: &Value) -> (Value, i32) {
 /// it names. A worker or peer assertion is not operator confirmation; this
 /// record exists only because the operator recorded it.
 fn view_evidence(session: &Value, sid: &str, fingerprint: &str) -> Result<(), Value> {
-    let records = session
-        .get("view_records")
+    let sv: de::SessionTail = parse(session);
+    let records = sv
+        .view_records
+        .as_ref()
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
     let wanted_subject = format!("routing-view:{sid}");
-    let record = records
-        .iter()
-        .find(|r| r.get("subject").and_then(Value::as_str) == Some(wanted_subject.as_str()));
+    let record = records.iter().find(|r| {
+        parse::<de::ViewRecordTail>(r).subject.as_deref() == Some(wanted_subject.as_str())
+    });
     let record = match record {
         None => {
             return Err(json!({
@@ -2874,17 +2831,15 @@ fn view_evidence(session: &Value, sid: &str, fingerprint: &str) -> Result<(), Va
         }
         Some(r) => r,
     };
-    let lifecycle = record
-        .get("lifecycle")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let rv: de::ViewRecordTail = parse(record);
+    let lifecycle = rv.lifecycle.as_deref().unwrap_or("");
     if lifecycle != "live" {
         return Err(json!({
             "boundary": "view-record-not-live",
             "detail": format!("routing-view:{sid} is {lifecycle:?}; a retracted or superseded confirmation verifies nothing"),
         }));
     }
-    let text = record.get("decision").and_then(Value::as_str).unwrap_or("");
+    let text = rv.decision.as_deref().unwrap_or("");
     let body: Value = match serde_json::from_str(text) {
         Ok(v) => v,
         Err(_) => {
@@ -2894,14 +2849,15 @@ fn view_evidence(session: &Value, sid: &str, fingerprint: &str) -> Result<(), Va
             }))
         }
     };
-    let view = body.get("view").and_then(Value::as_str).unwrap_or("");
+    let bv: de::ViewBodyTail = parse(&body);
+    let view = bv.view.as_deref().unwrap_or("");
     if view != "claude-native" && view != "codex-native" {
         return Err(json!({
             "boundary": "view-record-bad-view",
             "detail": format!("routing-view:{sid} names view {view:?}; expected claude-native or codex-native"),
         }));
     }
-    let harness = session.get("harness").and_then(Value::as_str).unwrap_or("");
+    let harness = sv.harness.as_deref().unwrap_or("");
     let native = native_view_for(harness);
     if native != Some(view) {
         return Err(json!({
@@ -2912,7 +2868,7 @@ fn view_evidence(session: &Value, sid: &str, fingerprint: &str) -> Result<(), Va
             ),
         }));
     }
-    if body.get("fingerprint").and_then(Value::as_str) != Some(fingerprint) {
+    if bv.fingerprint.as_deref() != Some(fingerprint) {
         return Err(json!({
             "boundary": "view-fingerprint-mismatch",
             "detail": format!(
@@ -2920,7 +2876,7 @@ fn view_evidence(session: &Value, sid: &str, fingerprint: &str) -> Result<(), Va
             ),
         }));
     }
-    let recorded_sid = body.get("session_id").and_then(Value::as_str).unwrap_or("");
+    let recorded_sid = bv.session_id.as_deref().unwrap_or("");
     if recorded_sid != sid {
         return Err(json!({
             "boundary": "view-session-mismatch",
@@ -3006,12 +2962,9 @@ pub(crate) fn audit_load_snapshot(
 ) -> Result<Value, String> {
     use std::collections::BTreeMap;
 
-    let fingerprint = config_facts
-        .get("fingerprint")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    let policy = config_facts.get("policy").cloned().unwrap_or(json!({}));
+    let cf: de::ConfigFacts = parse(config_facts);
+    let fingerprint = cf.fingerprint.as_deref().unwrap_or("").to_string();
+    let policy = cf.policy.clone().unwrap_or_else(|| json!({}));
     let cutoff = chrono::Utc::now() - chrono::Duration::seconds(since_seconds);
     let within = |ts: &str| -> bool {
         chrono::DateTime::parse_from_rfc3339(ts)
@@ -3037,19 +2990,21 @@ pub(crate) fn audit_load_snapshot(
         let Ok(row) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        let rv: de::EventRow = parse(&row);
         // Envelope rows type the row; the imported flat rows carry `kind`.
-        if row
-            .get("type")
-            .or_else(|| row.get("kind"))
-            .and_then(Value::as_str)
-            != Some("spawn_defaults_applied")
-        {
+        // `type` keeps presence semantics: a present-null type never falls
+        // through to `kind`, exactly as the raw `get().or_else()` read did.
+        let ty_str = match rv.ty.as_ref() {
+            Some(t) => t.as_str(),
+            None => rv.kind.as_deref(),
+        };
+        if ty_str != Some("spawn_defaults_applied") {
             continue;
         }
-        if !within(row.get("ts").and_then(Value::as_str).unwrap_or("")) {
+        if !within(rv.ts.as_deref().unwrap_or("")) {
             continue;
         }
-        let data = row.get("data");
+        let data = rv.data.as_ref();
         let field = |key: &str| -> &str {
             data.and_then(|d| d.get(key))
                 .or_else(|| row.get(key))
@@ -3081,40 +3036,32 @@ pub(crate) fn audit_load_snapshot(
     )
     .map_err(|error| error.0)?;
     for row in decision_rows {
-        let kind = row.get("_event_type").and_then(Value::as_str).unwrap_or("");
+        let rv: de::EventRow = parse(&row);
+        let kind = rv._event_type.as_deref().unwrap_or("");
         if kind == "decision_retracted" {
-            if let Some(target) = row.get("target_decision_id").and_then(Value::as_str) {
+            if let Some(target) = rv.target_decision_id.as_deref() {
                 if !target.is_empty() {
                     retired.insert(target.to_string(), ());
                 }
             }
             continue;
         }
-        let subject = row.get("subject").and_then(Value::as_str).unwrap_or("");
+        let subject = rv.subject.as_deref().unwrap_or("");
         if !subject.starts_with("routing-view:") {
             continue;
         }
         // A ruling naming another in `supersedes` retires it, the same
         // derivation the Python decisions reader applies.
-        if let Some(superseded) = row.get("supersedes").and_then(Value::as_str) {
+        if let Some(superseded) = rv.supersedes.as_deref() {
             if !superseded.is_empty() {
                 retired.insert(superseded.to_string(), ());
             }
         }
         candidates.push((
             subject.to_string(),
-            row.get("decision")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string(),
-            row.get("ts")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string(),
-            row.get("decision_id")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string(),
+            rv.decision.as_deref().unwrap_or("").to_string(),
+            rv.ts.as_deref().unwrap_or("").to_string(),
+            rv.decision_id.as_deref().unwrap_or("").to_string(),
         ));
     }
     for (subject, decision, ts, did) in candidates {
